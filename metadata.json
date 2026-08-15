@@ -1,0 +1,6 @@
+{
+  "name": "نظام سحاب لإدارة المدارس ERP",
+  "description": "نظام ERP سحابي متكامل لإدارة المدارس والمعاهد التعليمية باحترافية عالية وهوية عربية فاخرة.",
+  "requestFramePermissions": [],
+  "majorCapabilities": ["MAJOR_CAPABILITY_SERVER_SIDE_GEMINI_API"]
+}

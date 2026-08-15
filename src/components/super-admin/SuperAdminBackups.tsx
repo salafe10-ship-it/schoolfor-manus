@@ -1,0 +1,630 @@
+import { AlertTriangle, CheckCircle2, Clock, Database, Download, HardDrive, HelpCircle, Play, RefreshCw, Server, ShieldAlert, Sliders, Sparkles, X } from 'lucide-react';
+import React, { useState } from 'react';
+interface SuperAdminBackupsProps {
+  schools: any[];
+  logAction: (action: string, details: string, section?: string) => void;
+  triggerNotification: (msg: string, type: 'success' | 'danger' | 'warning' | 'info') => void;
+}
+
+export default function SuperAdminBackups({
+  schools = [],
+  logAction,
+  triggerNotification
+}: SuperAdminBackupsProps) {
+
+  // Mock list of database backups/snapshots
+  const [backups, setBackups] = useState<any[]>([
+    { id: 'snap_01', name: 'النسخة التلقائية اليومية - سنوية النور', type: 'scheduled', schoolName: 'مدارس النور النموذجية', size: '1.2 GB', hash: 'SHA256:7f4a...2c90', createdAt: '2026-06-26 04:00', status: 'verified' },
+    { id: 'snap_02', name: 'نسخة ما قبل ترقية الحسابات - الفرسان', type: 'manual', schoolName: 'مدارس الفرسان العالمية', size: '820 MB', hash: 'SHA256:90cb...112e', createdAt: '2026-06-25 18:14', status: 'verified' },
+    { id: 'snap_03', name: 'نسخة ما بعد استيراد ملفات الطلاب', type: 'manual', schoolName: 'مدارس النور النموذجية', size: '1.1 GB', hash: 'SHA256:bb10...88ab', createdAt: '2026-06-24 10:25', status: 'verified' }
+  ]);
+
+  // Modal and wizard states
+  const [isCreatingBackup, setIsCreatingBackup] = useState(false);
+  const [backupProgress, setBackupProgress] = useState(0);
+  const [showScheduleModal, setShowScheduleModal] = useState(false);
+  const [showRestoreModal, setShowRestoreModal] = useState(false);
+  const [showIntegrityModal, setShowIntegrityModal] = useState(false);
+  const [showDrillModal, setShowDrillModal] = useState(false);
+
+  // Active snapshot target
+  const [selectedSnapshot, setSelectedSnapshot] = useState<any | null>(null);
+
+  // New Backup manual state
+  const [selectedSchoolId, setSelectedSchoolId] = useState<string>(schools[0]?.id || 'school_1');
+  const [backupNote, setBackupNote] = useState('');
+
+  // Schedule automated backup state
+  const [scheduleConfig, setScheduleConfig] = useState({
+    frequency: 'daily', // hourly, daily, weekly, monthly
+    retentionCount: 30, // keep 30 copies
+    destination: 'AWS S3 (Riyadh)',
+    encryptKey: 'AES-256-SystemBuiltin'
+  });
+
+  // Integrity Check report state
+  const [integrityReport, setIntegrityReport] = useState<any | null>(null);
+
+  // Disaster Recovery Drill state
+  const [drillState, setDrillState] = useState({
+    status: 'idle', // idle, active, completed
+    step: 0,
+    logs: [] as string[]
+  });
+
+  // -------------------------------------------------------------
+  // HANDLERS
+  // -------------------------------------------------------------
+
+  // Run Immediate Backup creation simulator
+  const handleCreateBackup = (e: React.FormEvent) => {
+    e.preventDefault();
+    setIsCreatingBackup(true);
+    setBackupProgress(5);
+
+    const schoolObj = schools.find(s => s.id === selectedSchoolId);
+    const targetName = schoolObj ? schoolObj.name : 'قاعدة البيانات المركزية';
+
+    // Simulated progress loop
+    const interval = setInterval(() => {
+      setBackupProgress(prev => {
+        if (prev >= 100) {
+          clearInterval(interval);
+          
+          // Add new snapshot
+          const newSnap = {
+            id: `snap_${Date.now()}`,
+            name: backupNote || `نسخة احتياطية يدوية - ${schoolObj?.schoolShortName || 'مستأجر'}`,
+            type: 'manual',
+            schoolName: targetName,
+            size: `${(200 + Math.random() * 900).toFixed(0)} MB`,
+            hash: `SHA256:${Math.random().toString(36).substring(2, 10)}...${Math.random().toString(36).substring(2, 6)}`,
+            createdAt: new Date().toISOString().replace('T', ' ').substring(0, 16),
+            status: 'verified'
+          };
+
+          setBackups(prevSnaps => [newSnap, ...prevSnaps]);
+          setIsCreatingBackup(false);
+          setBackupNote('');
+          
+          logAction('CREATE_BACKUP', `إنشاء نسخة احتياطية فورية يدوية لقاعدة بيانات: [${targetName}] بأمان`, 'النسخ والإنقاذ');
+          triggerNotification(`تم إنشاء لقطة الحفظ (Database Snapshot) لـ ${schoolObj?.schoolShortName} وتأمين تخزينها في S3 ✅`, 'success');
+          
+          return 0;
+        }
+        return prev + 15;
+      });
+    }, 400);
+  };
+
+  // Run integrity verification check
+  const handleCheckIntegrity = (snapshot: any) => {
+    setSelectedSnapshot(snapshot);
+    setShowIntegrityModal(true);
+    setIntegrityReport({ status: 'analyzing', logs: ['بدء قراءة ترويسة نسخة الحفظ...', 'حساب كود SHA256 لمطابقة التوقيع الرقمي...'] });
+
+    setTimeout(() => {
+      setIntegrityReport((prev: any) => ({
+        ...prev,
+        logs: [...prev.logs, `بنية ملف الترخيص مستقرة. كود المطابقة متطابق: [${snapshot.hash}].`, 'التحقق من جداول المستأجرين (schema alignment)...']
+      }));
+    }, 1000);
+
+    setTimeout(() => {
+      setIntegrityReport({
+        status: 'success',
+        logs: [
+          'بدء قراءة ترويسة نسخة الحفظ...',
+          'حساب كود SHA256 لمطابقة التوقيع الرقمي...',
+          `بنية ملف الترخيص مستقرة. كود المطابقة متطابق: [${snapshot.hash}].`,
+          'التحقق من جداول المستأجرين (schema alignment)...',
+          'تحليل كتل المزامنة المالية والقيود المحاسبية سليم.',
+          'النتيجة الكلية: النسخة سليمة وصالحة للاستعادة بنسبة ١٠٠٪ دون فقدان.'
+        ],
+        details: {
+          checksum: 'متطابق OK',
+          tablesChecked: 148,
+          integrityScore: '100%'
+        }
+      });
+      triggerNotification(`اكتمل فحص سلامة نسخة الحفظ بنجاح وتأكيد موثوقيتها`, 'success');
+    }, 2500);
+  };
+
+  // Run Backup Restore Simulator
+  const handleRestoreBackup = () => {
+    if (!selectedSnapshot) return;
+
+    setShowRestoreModal(false);
+    triggerNotification(`جاري تحضير استعادة قاعدة البيانات إلى نقطة حفظ [${selectedSnapshot.createdAt}]...`, 'info');
+
+    logAction('RESTORE_BACKUP_INIT', `طلب استعادة قاعدة البيانات من اللقطة: ${selectedSnapshot.name}`, 'شؤون السيرفرات');
+
+    setTimeout(() => {
+      logAction('RESTORE_BACKUP_SUCCESS', `اكتمل استعادة قاعدة البيانات بنجاح من لقطة: ${selectedSnapshot.name}`, 'النسخ والإنقاذ');
+      triggerNotification(`تم استعادة النسخة بنجاح وإعادة تشغيل محركات البيانات المعزولة ✅`, 'success');
+      setSelectedSnapshot(null);
+    }, 3000);
+  };
+
+  // Schedule configuration save
+  const handleSaveSchedule = (e: React.FormEvent) => {
+    e.preventDefault();
+    logAction(
+      'UPDATE_BACKUP_SCHEDULE', 
+      `تحديث جدولة النسخ: دورية [${scheduleConfig.frequency}]، الحفاظ على [${scheduleConfig.retentionCount}] نسخة، التشفير [${scheduleConfig.encryptKey}]`, 
+      'النسخ والإنقاذ'
+    );
+    triggerNotification('تم تحديث وحفظ تفضيلات الجدولة التلقائية للنسخ السحابي', 'success');
+    setShowScheduleModal(false);
+  };
+
+  // Download snapshot simulation
+  const handleDownloadBackup = (snapshot: any) => {
+    const s3Url = `https://s3.me-central1.amazonaws.com/edupro-backups/snapshots/${snapshot.id}.sql.gz?X-Amz-Algorithm=AWS4-HMAC-SHA256&X-Amz-Expires=3600`;
+    try {
+      navigator.clipboard.writeText(s3Url);
+      triggerNotification('تم نسخ رابط التحميل الآمن S3 المؤقت للحافظة 🔗', 'success');
+    } catch (err) {}
+    alert(`🔗 الرابط المؤقت المشفر لتحميل النسخة متاح وصالح لمدة ساعة:\n\n${s3Url}`);
+    logAction('DOWNLOAD_BACKUP_LINK', `توليد رابط تحميل آمن مؤقت للنسخة: [${snapshot.name}]`, 'النسخ والإنقاذ');
+  };
+
+  // Disaster Recovery Failover Drill Simulator
+  const handleRunDrill = () => {
+    setDrillState({ status: 'active', step: 1, logs: ['[طوارئ] بدء محاكاة انقطاع الاتصال التام بمركز بيانات سحابة الرياض الرئيسية...'] });
+
+    setTimeout(() => {
+      setDrillState(prev => ({
+        status: 'active',
+        step: 2,
+        logs: [...prev.logs, '[طوارئ] رصد انقطاع DNS وتحويل البث تلقائياً للبوابة الاحتياطية (Jeddah Region)...']
+      }));
+    }, 1500);
+
+    setTimeout(() => {
+      setDrillState(prev => ({
+        status: 'active',
+        step: 3,
+        logs: [...prev.logs, '[طوارئ] تفعيل النسخة المكررة الحية (Read-Replica DB Promotion) لتصبح قاعدة البيانات الرئيسية الفعالة.']
+      }));
+    }, 3000);
+
+    setTimeout(() => {
+      setDrillState(prev => ({
+        status: 'completed',
+        step: 4,
+        logs: [
+          ...prev.logs,
+          '[طوارئ] اكتمال استعادة اتصال الأنظمة بنسبة ١٠٠٪ وتصفير زمن الانقطاع.',
+          '[طوارئ] النتيجة: تم تفادي انقطاع خدمات المدارس بالكامل بنجاح واستقرار.'
+        ]
+      }));
+      logAction('RUN_DISASTER_RECOVERY_DRILL', 'إجراء محاكاة وبرومة طوارئ لإنقاذ السحابة ونقل البوابات بنجاح دون فقدان', 'شؤون السيرفرات والبنى');
+      triggerNotification('نجاح بروف طوارئ الكوارث والتحويل التلقائي للسيرفرات الاحتياطية ✅', 'success');
+    }, 4500);
+  };
+
+  const resetDrillState = () => {
+    setDrillState({ status: 'idle', step: 0, logs: [] });
+  };
+
+  return (
+    <div className="space-y-6 text-right animate-in fade-in duration-200" dir="rtl">
+      
+      {/* Search and Action Bar */}
+      <div className="bg-slate-900 border border-slate-800 p-4 rounded-3xl flex flex-col md:flex-row gap-4 justify-between items-center">
+        
+        {/* Actions button */}
+        <div className="flex gap-2 w-full md:w-auto">
+          <button
+            onClick={() => setShowScheduleModal(true)}
+            className="flex-1 md:flex-initial bg-slate-950 border border-slate-800 hover:border-slate-700 text-amber-400 hover:text-amber-300 font-extrabold text-xs px-4 py-2.5 transition-all cursor-pointer flex items-center justify-center gap-1.5 shadow"
+          >
+            <Clock className="w-4 h-4" />
+            <span>جدولة النسخ والتدوير السحابي</span>
+          </button>
+
+          <button
+            onClick={() => setShowDrillModal(true)}
+            className="flex-1 md:flex-initial bg-rose-950/40 hover:bg-rose-950/80 border border-rose-900 text-rose-400 font-extrabold text-xs px-4 py-2.5 transition-all cursor-pointer flex items-center justify-center gap-1.5 shadow"
+          >
+            <ShieldAlert className="w-4 h-4 text-rose-400 animate-pulse" />
+            <span>محاكاة خطة الطوارئ (DR Drill)</span>
+          </button>
+        </div>
+
+        {/* Manual Instant Backup Wizard Form */}
+        <form onSubmit={handleCreateBackup} className="flex flex-col sm:flex-row items-center gap-2 w-full md:max-w-xl bg-gradient-to-b from-[#fffefc] via-[#fbf8f0] to-[#f5eeea] border-2 border-[#d4af37]/30 hover:border-[#d4af37] rounded-3xl p-4 sm:p-5 shadow-md transition-all duration-300">
+          <select
+            value={selectedSchoolId}
+            disabled={isCreatingBackup}
+            onChange={(e) => setSelectedSchoolId(e.target.value)}
+            className="w-full sm:w-1/3 bg-slate-950 border border-slate-800 px-2.5 py-2.5 text-xs text-white placeholder-slate-500 focus:outline-none transition-all font-bold"
+          >
+            <option value="all">كل السحابة والمستأجرين</option>
+            {schools.map(s => (
+              <option key={s.id} value={s.id}>{s.schoolShortName}</option>
+            ))}
+          </select>
+
+          <input
+            type="text"
+            placeholder="ملاحظة أو سبب النسخ اليدوي العاجل..."
+            disabled={isCreatingBackup}
+            value={backupNote}
+            required
+            onChange={(e) => setBackupNote(e.target.value)}
+            className="w-full sm:w-1/2 bg-slate-950 border border-slate-800 px-3 py-2.5 text-xs text-white placeholder-slate-500 focus:outline-none transition-all"
+          />
+
+          <button
+            type="submit"
+            disabled={isCreatingBackup}
+            className="w-full sm:w-auto bg-amber-600 hover:bg-amber-500 text-white font-extrabold text-xs px-4 py-2.5 flex items-center justify-center gap-1.5 cursor-pointer disabled:opacity-50 transition-colors"
+          >
+            {isCreatingBackup ? (
+              <>
+                <RefreshCw className="w-4 h-4 animate-spin" />
+                <span>جاري النسخ...</span>
+              </>
+            ) : (
+              <>
+                <Play className="w-4 h-4" />
+                <span>لقطة فورية</span>
+              </>
+            )}
+          </button>
+        </form>
+
+      </div>
+
+      {/* Progress display if creating backup */}
+      {isCreatingBackup && (
+        <div className="bg-slate-900 border border-amber-900/60 p-5 space-y-3 shadow-lg">
+          <div className="flex justify-between text-xs font-bold">
+            <span className="text-slate-300">جاري عمل نسخة قاعدة البيانات الفورية (Dumping Postgres to gzip)...</span>
+            <span className="text-amber-400 font-mono font-black">{backupProgress}%</span>
+          </div>
+          <div className="h-3 bg-slate-950 rounded-full overflow-hidden border border-slate-850">
+            <div 
+              className="h-full bg-amber-500 rounded-full transition-all duration-300" 
+              style={{ width: `${backupProgress}%` }}
+            />
+          </div>
+          <p className="text-[10px] text-slate-500 leading-relaxed">
+            يرجى عدم إغلاق نافذة العمليات، جاري ضغط الجداول وتشفير الحزم بمفتاح AES-256 للتخزين في مستودع النسخ السحابي المعزول بأمان تام.
+          </p>
+        </div>
+      )}
+
+      {/* Snapshots Table List */}
+      <div className="bg-slate-900 border border-slate-800 rounded-3xl overflow-hidden shadow-xl">
+        <div className="p-4 bg-slate-950/60 border-b border-slate-800 flex justify-between items-center text-xs">
+          <span className="font-black text-white">سجل لقطات حفظ قواعد البيانات (Database Snapshots Directory)</span>
+          <span className="bg-slate-900 px-2.5 py-1 rounded text-slate-400 font-mono font-bold">
+            العدد الإجمالي: {backups.length}
+          </span>
+        </div>
+
+        <div className="overflow-x-auto">
+          <table className="w-full text-right text-xs">
+            <thead className="bg-slate-950 text-slate-400 font-extrabold uppercase border-b border-slate-800">
+              <tr>
+                <th className="p-4 text-center w-8">#</th>
+                <th className="p-4">اسم لقطة الحفظ / الملاحظة</th>
+                <th className="p-4">المنشأة التعليمية المستهدفة</th>
+                <th className="p-4 text-center">نوع النسخة</th>
+                <th className="p-4 font-mono text-center">حجم الملف</th>
+                <th className="p-4">التوقيع الرقمي (SHA256)</th>
+                <th className="p-4">تاريخ ووقت النسخ</th>
+                <th className="p-4 text-center w-52">العمليات والتعافي</th>
+              </tr>
+            </thead>
+            <tbody className="divide-y divide-slate-800/60 text-slate-300">
+              {backups.map((snap, idx) => (
+                <tr key={snap.id} className="hover:bg-slate-950/40 transition-colors">
+                  <td className="p-4 text-center text-slate-500 font-mono font-bold w-8">{idx + 1}</td>
+                  
+                  {/* Name */}
+                  <td className="p-4 font-extrabold text-white">
+                    <div className="flex items-center gap-1.5">
+                      <Database className="w-3.5 h-3.5 text-amber-400 shrink-0" />
+                      <span>{snap.name}</span>
+                    </div>
+                  </td>
+
+                  {/* School */}
+                  <td className="p-4 font-bold text-slate-400">
+                    {snap.schoolName}
+                  </td>
+
+                  {/* Type */}
+                  <td className="p-4 text-center">
+                    <span className={`px-2 py-0.5 rounded text-[8px] font-black inline-block ${
+                      snap.type === 'scheduled' 
+                        ? 'bg-amber-950 text-amber-400 border border-amber-900/40' 
+                        : 'bg-amber-950 text-amber-400 border border-amber-900/40'
+                    }`}>
+                      {snap.type === 'scheduled' ? 'تلقائي مجدول' : 'يدوي طارئ'}
+                    </span>
+                  </td>
+
+                  {/* Size */}
+                  <td className="p-4 text-center font-mono font-bold text-slate-300">
+                    {snap.size}
+                  </td>
+
+                  {/* SHA Hash */}
+                  <td className="p-4 font-mono text-[10px] text-slate-500 select-all">
+                    {snap.hash}
+                  </td>
+
+                  {/* Time */}
+                  <td className="p-4 text-slate-400">
+                    {snap.createdAt}
+                  </td>
+
+                  {/* Operations */}
+                  <td className="p-4 text-center">
+                    <div className="flex items-center justify-center gap-1.5">
+                      
+                      {/* Check Integrity */}
+                      <button
+                        onClick={() => handleCheckIntegrity(snap)}
+                        className="px-2.5 py-1.5 rounded-lg bg-slate-950 border border-slate-800 hover:border-slate-700 text-amber-400 hover:text-amber-300 font-bold transition-all text-[10px] cursor-pointer"
+                        title="فحص سلامة النسخة والمطابقة"
+                      >
+                        فحص السلامة
+                      </button>
+
+                      {/* Download */}
+                      <button
+                        onClick={() => handleDownloadBackup(snap)}
+                        className="p-1.5 rounded-lg bg-slate-950 border border-slate-800 hover:border-slate-700 text-slate-400 hover:text-white transition-colors cursor-pointer"
+                        title="توليد رابط تحميل آمن"
+                      >
+                        <Download className="w-3.5 h-3.5" />
+                      </button>
+
+                      {/* Restore */}
+                      <button
+                        onClick={() => {
+                          setSelectedSnapshot(snap);
+                          setShowRestoreModal(true);
+                        }}
+                        className="p-1.5 rounded-lg bg-amber-950/40 border border-amber-900/50 hover:bg-amber-950 text-amber-400 hover:text-amber-300 transition-colors cursor-pointer"
+                        title="استعادة قاعدة البيانات"
+                      >
+                        <RefreshCw className="w-3.5 h-3.5" />
+                      </button>
+
+                    </div>
+                  </td>
+
+                </tr>
+              ))}
+            </tbody>
+          </table>
+        </div>
+      </div>
+
+      {/* -------------------------------------------------------------
+          MODALS & WIZARDS DECLARATIONS
+      ------------------------------------------------------------- */}
+
+      {/* Modal A: Schedule Config */}
+      {showScheduleModal && (
+        <div className="fixed inset-0 bg-slate-950/85 backdrop-blur-sm flex items-center justify-center z-50 p-4">
+          <div className="bg-slate-900 border border-slate-800 rounded-3xl shadow-2xl max-w-md w-full overflow-hidden text-right animate-in fade-in zoom-in-95 duration-200">
+            <div className="bg-slate-950 border-b border-slate-850 p-5 flex justify-between items-center">
+              <button onClick={() => setShowScheduleModal(false)} className="text-slate-400 bg-slate-900 p-1.5 rounded-lg border border-slate-800"><X className="w-4 h-4" /></button>
+              <h3 className="text-sm font-black text-white">إعداد وجدولة تدوير النسخ التلقائي</h3>
+            </div>
+
+            <form onSubmit={handleSaveSchedule} className="p-6 space-y-4">
+              <div className="space-y-3">
+                
+                <div className="space-y-1">
+                  <label className="text-xs font-bold text-slate-400 block mb-1">دورية النسخ التلقائي المتكرر:</label>
+                  <select
+                    value={scheduleConfig.frequency}
+                    onChange={(e) => setScheduleConfig({...scheduleConfig, frequency: e.target.value})}
+                    className="w-full bg-slate-950 border border-slate-800 rounded-lg px-3 py-2 text-xs text-white font-bold"
+                  >
+                    <option value="hourly">كل ساعة (لقطات المعاملات المستمرة Transaction Logs)</option>
+                    <option value="daily">كل يوم (النسخ الليلي العام)</option>
+                    <option value="weekly">كل أسبوع (عزل أسبوعي تاريخي)</option>
+                    <option value="monthly">شهرياً (شؤون الامتثال والتقارير الختامية)</option>
+                  </select>
+                </div>
+
+                <div className="space-y-1">
+                  <label className="text-xs font-bold text-slate-400 block mb-1">عدد نسخ الحفظ التاريخية للاحتفاظ بها (Retention Count):</label>
+                  <input
+                    type="number"
+                    value={scheduleConfig.retentionCount}
+                    onChange={(e) => setScheduleConfig({...scheduleConfig, retentionCount: parseInt(e.target.value) || 30})}
+                    className="w-full bg-slate-950 border border-slate-800 rounded-lg px-3 py-2 text-xs text-white font-mono"
+                  />
+                  <span className="text-[9px] text-slate-500 block">سيتم تدوير وحذف النسخ الأقدم تلقائياً بعد استنفاد الحد الأقصى لتوفير التخزين.</span>
+                </div>
+
+                <div className="space-y-1">
+                  <label className="text-xs font-bold text-slate-400 block mb-1">مستودع التخزين السحابي المستهدف (Target S3 bucket):</label>
+                  <select
+                    value={scheduleConfig.destination}
+                    onChange={(e) => setScheduleConfig({...scheduleConfig, destination: e.target.value})}
+                    className="w-full bg-slate-950 border border-slate-800 rounded-lg px-3 py-2 text-xs text-white"
+                  >
+                    <option value="AWS S3 (Riyadh)">سحابة الرياض AWS Riyadh - bucket_primary_b2</option>
+                    <option value="AWS S3 (Jeddah)">سحابة جدة AWS Jeddah - bucket_secondary_b3</option>
+                    <option value="GCP Cloud Storage (Dhahran)">سحابة الظهران جوجل - bucket_gcp_me_central1</option>
+                  </select>
+                </div>
+
+              </div>
+
+              <div className="pt-4 border-t border-slate-800 flex justify-end gap-2 text-xs">
+                <button type="button" onClick={() => setShowScheduleModal(false)} className="px-4 py-2 border border-slate-800 hover:bg-slate-800 text-slate-400">إلغاء</button>
+                <button type="submit" className="bg-amber-600 hover:bg-amber-500 text-white font-extrabold px-5 py-2 rounded-xl">اعتماد وجدولة النسخ ⚡</button>
+              </div>
+            </form>
+          </div>
+        </div>
+      )}
+
+      {/* Modal B: Safe Restore Backup with strict confirmation */}
+      {showRestoreModal && selectedSnapshot && (
+        <div className="fixed inset-0 bg-slate-950/85 backdrop-blur-sm flex items-center justify-center z-50 p-4">
+          <div className="bg-slate-900 border-2 border-rose-900 rounded-3xl shadow-2xl max-w-md w-full overflow-hidden text-right animate-in fade-in zoom-in-95 duration-200">
+            <div className="bg-rose-950/30 border-b border-rose-900/40 p-5 flex justify-between items-center text-rose-400">
+              <button onClick={() => setShowRestoreModal(false)} className="text-slate-400 hover:text-white bg-slate-950 p-1.5 rounded-lg border border-slate-850"><X className="w-4 h-4" /></button>
+              <h3 className="text-sm font-black flex items-center gap-1.5">
+                <ShieldAlert className="w-5 h-5 text-rose-400 animate-bounce" />
+                تحذير حرج: استعادة قاعدة البيانات
+              </h3>
+            </div>
+
+            <div className="p-6 space-y-4">
+              <p className="text-xs text-slate-300 leading-relaxed">
+                أنت على وشك استبدال وتجاوز قاعدة البيانات الحية الحالية لمستأجر المنشأة وإعادتها لنقطة الحفظ <strong className="text-white">[{selectedSnapshot.createdAt}]</strong>. سيؤدي هذا لمحو التغييرات اللاحقة المأسسة بعد هذا التاريخ للفرع.
+              </p>
+
+              <div className="p-3 bg-rose-950/20 border border-rose-900/30 text-[10px] text-rose-300">
+                ⚠️ يتطلب هذا الخيار تدوين وتخويل مدير النظام المركزي للتأكيد.
+              </div>
+
+              <div className="pt-4 border-t border-slate-800 flex justify-end gap-2 text-xs">
+                <button type="button" onClick={() => setShowRestoreModal(false)} className="px-4 py-2 border border-slate-850 hover:bg-slate-800 text-slate-400">إلغاء الأمر</button>
+                <button 
+                  type="button" 
+                  onClick={handleRestoreBackup}
+                  className="bg-rose-600 hover:bg-rose-500 text-white font-extrabold px-5 py-2 shadow-md"
+                >
+                  تأكيد واستعادة قاعدة البيانات 🗑️
+                </button>
+              </div>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* Modal C: Integrity Check Report view */}
+      {showIntegrityModal && selectedSnapshot && integrityReport && (
+        <div className="fixed inset-0 bg-slate-950/85 backdrop-blur-sm flex items-center justify-center z-50 p-4">
+          <div className="bg-slate-900 border border-slate-800 rounded-3xl shadow-2xl max-w-md w-full overflow-hidden text-right animate-in fade-in zoom-in-95 duration-200">
+            <div className="bg-slate-950 border-b border-slate-850 p-5 flex justify-between items-center">
+              <button onClick={() => { setSelectedSnapshot(null); setShowIntegrityModal(false); }} className="text-slate-400 bg-slate-900 p-1.5 rounded-lg border border-slate-800"><X className="w-4 h-4" /></button>
+              <h3 className="text-sm font-black text-white flex items-center gap-1.5">
+                <Sparkles className="w-4 h-4 text-amber-400" />
+                تقرير سلامة وفحص نسخة الحفظ
+              </h3>
+            </div>
+
+            <div className="p-6 space-y-4">
+              <div className="space-y-1">
+                <span className="text-[10px] font-bold text-slate-400 uppercase">لقطة الحفظ المفحوصة:</span>
+                <p className="text-xs font-bold text-white bg-slate-950 px-3.5 py-2.5 rounded-lg border border-slate-850">{selectedSnapshot.name}</p>
+              </div>
+
+              <div className="bg-slate-950 border border-slate-850 p-4 space-y-1.5 text-left font-mono text-[10px] text-slate-300 h-40 overflow-y-auto select-text" dir="ltr">
+                {integrityReport.logs.map((log: string, i: number) => (
+                  <div key={i} className={log.includes('النتيجة الكلية:') ? 'text-emerald-400 font-black' : ''}>{log}</div>
+                ))}
+              </div>
+
+              {integrityReport.status === 'success' && (
+                <div className="grid grid-cols-3 gap-3 pt-2.5">
+                  <div className="p-2 bg-slate-950/40 border border-slate-850 rounded-lg text-center">
+                    <span className="text-[9px] text-slate-500 font-bold block">مجموع التوقيع</span>
+                    <p className="text-[10px] text-emerald-400 font-mono font-bold mt-1">سليم OK</p>
+                  </div>
+                  <div className="p-2 bg-slate-950/40 border border-slate-850 rounded-lg text-center">
+                    <span className="text-[9px] text-slate-500 font-bold block">الجداول المفحوصة</span>
+                    <p className="text-[10px] text-amber-400 font-mono font-bold mt-1">١٤٨ جدول</p>
+                  </div>
+                  <div className="p-2 bg-slate-950/40 border border-slate-850 rounded-lg text-center">
+                    <span className="text-[9px] text-slate-500 font-bold block">نسبة الموثوقية</span>
+                    <p className="text-[10px] text-amber-400 font-mono font-bold mt-1">١٠٠٪</p>
+                  </div>
+                </div>
+              )}
+
+              <div className="pt-4 border-t border-slate-800 flex justify-end">
+                <button
+                  type="button"
+                  onClick={() => { setSelectedSnapshot(null); setShowIntegrityModal(false); }}
+                  className="bg-slate-950 hover:bg-slate-800 text-white border border-slate-800 px-5 py-2 text-xs font-bold"
+                >
+                  إغلاق التقرير المرجعي
+                </button>
+              </div>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* Modal D: Disaster Recovery failover drill simulator */}
+      {showDrillModal && (
+        <div className="fixed inset-0 bg-slate-950/85 backdrop-blur-sm flex items-center justify-center z-50 p-4">
+          <div className="bg-slate-900 border-2 border-rose-900 rounded-3xl shadow-2xl max-w-xl w-full overflow-hidden text-right animate-in fade-in zoom-in-95 duration-200">
+            <div className="bg-rose-950/30 border-b border-rose-900/40 p-5 flex justify-between items-center text-rose-400">
+              <button onClick={() => { resetDrillState(); setShowDrillModal(false); }} className="text-slate-400 hover:text-white bg-slate-950 p-1.5 rounded-lg border border-slate-850"><X className="w-4 h-4" /></button>
+              <h3 className="text-sm font-black flex items-center gap-1.5">
+                <ShieldAlert className="w-5 h-5 text-rose-400 animate-pulse" />
+                محاكاة بروفة التعافي من كوارث انقطاع السيرفرات (SaaS Failover Drill)
+              </h3>
+            </div>
+
+            <div className="p-6 space-y-4">
+              <p className="text-xs text-slate-300 leading-relaxed">
+                يقوم هذا الخيار بعمل اختبار ومحاكاة لإنقاذ السحابة في حال انقطاع التغذية والكهرباء بالكامل عن مركز بيانات الرياض السحابي الرئيسي (Riyadh Outage Scenario)، وتحويل كافة المستأجرين تلقائياً إلى مركز بيانات جدة دون فقدان للجلسات أو تلف في البيانات.
+              </p>
+
+              {drillState.status !== 'idle' && (
+                <div className="bg-slate-950 border border-slate-850 p-4 space-y-1.5 text-left font-mono text-[10px] text-rose-300 h-44 overflow-y-auto" dir="ltr">
+                  {drillState.logs.map((log, i) => (
+                    <div key={i} className={log.includes('النتيجة:') || log.includes('اكتمل') ? 'text-emerald-400 font-black' : ''}>{log}</div>
+                  ))}
+                </div>
+              )}
+
+              <div className="pt-4 border-t border-slate-800 flex justify-end gap-2 text-xs">
+                <button 
+                  type="button" 
+                  onClick={() => { resetDrillState(); setShowDrillModal(false); }} 
+                  disabled={drillState.status === 'active'}
+                  className="px-4 py-2 border border-slate-850 hover:bg-slate-800 text-slate-400"
+                >
+                  إغلاق النافذة
+                </button>
+                
+                {drillState.status === 'idle' ? (
+                  <button 
+                    type="button" 
+                    onClick={handleRunDrill}
+                    className="bg-rose-600 hover:bg-rose-500 text-white font-black px-6 py-2 shadow-md"
+                  >
+                    بدء محاكاة طوارئ الكوارث ⚡
+                  </button>
+                ) : drillState.status === 'completed' ? (
+                  <div className="bg-emerald-950 text-emerald-400 border border-emerald-900/60 px-3 py-2 font-bold flex items-center gap-1">
+                    <CheckCircle2 className="w-4 h-4" />
+                    <span>تم إجراء الاختبار واجتياز الامتثال بنجاح</span>
+                  </div>
+                ) : (
+                  <div className="bg-slate-950 text-slate-400 border border-slate-850 px-4 py-2 font-mono flex items-center gap-2">
+                    <RefreshCw className="w-3.5 h-3.5 animate-spin text-rose-400" />
+                    <span>جاري تحويل السيرفرات والبوابات الاحتياطية...</span>
+                  </div>
+                )}
+              </div>
+            </div>
+          </div>
+        </div>
+      )}
+
+    </div>
+  );
+}

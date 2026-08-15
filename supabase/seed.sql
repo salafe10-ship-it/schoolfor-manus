@@ -1,0 +1,3 @@
+-- Enterprise foundation seed placeholder.
+-- Intentionally empty: business tables, policies, buckets, RPCs, and users
+-- are created only in later approved missions.

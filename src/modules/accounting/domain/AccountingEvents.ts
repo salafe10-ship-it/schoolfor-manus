@@ -1,0 +1,18 @@
+export enum AccountingEventType {
+  STUDENT_FEE_COLLECTION = 'STUDENT_FEE_COLLECTION',
+  PAYROLL_PROCESSING = 'PAYROLL_PROCESSING',
+  INVENTORY_PURCHASE = 'INVENTORY_PURCHASE',
+  SALES_TRANSACTION = 'SALES_TRANSACTION',
+  TRANSPORTATION_SUBSCRIPTION = 'TRANSPORTATION_SUBSCRIPTION',
+  LIBRARY_FINE = 'LIBRARY_FINE',
+  UNIFORM_SALE = 'UNIFORM_SALE',
+  ASSET_DEPRECIATION = 'ASSET_DEPRECIATION'
+}
+
+export interface AccountingEvent {
+  type: AccountingEventType;
+  tenantId: string;
+  amount: number;
+  date: Date;
+  metadata: Record<string, any>;
+}

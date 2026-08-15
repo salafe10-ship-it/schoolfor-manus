@@ -1,0 +1,76 @@
+import { COAAccountTemplate } from '../types';
+
+export const SchoolCOATemplate: COAAccountTemplate[] = [
+    // 1 Assets
+    { id: 'acc_1', code: '1000', name: 'الأصول', nature: 'asset', level: 1, isActive: true, isLeaf: false, balance: 0 },
+    { id: 'acc_11', code: '1100', name: 'الأصول المتداولة', nature: 'asset', level: 2, parentAccountId: 'acc_1', isActive: true, isLeaf: false, balance: 0 },
+    { id: 'acc_111', code: '1110', name: 'الصندوق الرئيسي', nature: 'asset', level: 3, parentAccountId: 'acc_11', isActive: true, isLeaf: true, balance: 0 },
+    { id: 'acc_112', code: '1120', name: 'الصناديق الفرعية', nature: 'asset', level: 3, parentAccountId: 'acc_11', isActive: true, isLeaf: true, balance: 0 },
+    { id: 'acc_113', code: '1130', name: 'البنوك', nature: 'asset', level: 3, parentAccountId: 'acc_11', isActive: true, isLeaf: true, balance: 0 },
+    { id: 'acc_114', code: '1140', name: 'النقدية بالطريق', nature: 'asset', level: 3, parentAccountId: 'acc_11', isActive: true, isLeaf: true, balance: 0 },
+    { id: 'acc_115', code: '1150', name: 'الذمم المدينة', nature: 'asset', level: 3, parentAccountId: 'acc_11', isActive: true, isLeaf: true, balance: 0 },
+    { id: 'acc_116', code: '1160', name: 'الرسوم الدراسية المستحقة', nature: 'asset', level: 3, parentAccountId: 'acc_11', isActive: true, isLeaf: true, balance: 0 },
+    { id: 'acc_117', code: '1170', name: 'الطلاب المدينون', nature: 'asset', level: 3, parentAccountId: 'acc_11', isActive: true, isLeaf: true, balance: 0 },
+    { id: 'acc_118', code: '1180', name: 'المخزون', nature: 'asset', level: 3, parentAccountId: 'acc_11', isActive: true, isLeaf: true, balance: 0 },
+    { id: 'acc_119', code: '1190', name: 'المصروفات المقدمة', nature: 'asset', level: 3, parentAccountId: 'acc_11', isActive: true, isLeaf: true, balance: 0 },
+    { id: 'acc_120', code: '1200', name: 'العهد', nature: 'asset', level: 3, parentAccountId: 'acc_11', isActive: true, isLeaf: true, balance: 0 },
+    { id: 'acc_12', code: '1200', name: 'الأصول غير المتداولة', nature: 'asset', level: 2, parentAccountId: 'acc_1', isActive: true, isLeaf: false, balance: 0 },
+    { id: 'acc_121', code: '1210', name: 'الأراضي', nature: 'asset', level: 3, parentAccountId: 'acc_12', isActive: true, isLeaf: true, balance: 0 },
+    { id: 'acc_122', code: '1220', name: 'المباني', nature: 'asset', level: 3, parentAccountId: 'acc_12', isActive: true, isLeaf: true, balance: 0 },
+    { id: 'acc_123', code: '1230', name: 'التحسينات', nature: 'asset', level: 3, parentAccountId: 'acc_12', isActive: true, isLeaf: true, balance: 0 },
+    { id: 'acc_124', code: '1240', name: 'الأثاث', nature: 'asset', level: 3, parentAccountId: 'acc_12', isActive: true, isLeaf: true, balance: 0 },
+    { id: 'acc_125', code: '1250', name: 'أجهزة الحاسب', nature: 'asset', level: 3, parentAccountId: 'acc_12', isActive: true, isLeaf: true, balance: 0 },
+    { id: 'acc_126', code: '1260', name: 'المعامل', nature: 'asset', level: 3, parentAccountId: 'acc_12', isActive: true, isLeaf: true, balance: 0 },
+    { id: 'acc_127', code: '1270', name: 'السيارات', nature: 'asset', level: 3, parentAccountId: 'acc_12', isActive: true, isLeaf: true, balance: 0 },
+    { id: 'acc_128', code: '1280', name: 'الأجهزة التعليمية', nature: 'asset', level: 3, parentAccountId: 'acc_12', isActive: true, isLeaf: true, balance: 0 },
+    { id: 'acc_129', code: '1290', name: 'مجمع الإهلاك', nature: 'asset', level: 3, parentAccountId: 'acc_12', isActive: true, isLeaf: true, balance: 0 },
+    
+    // 2 Liabilities
+    { id: 'acc_2', code: '2000', name: 'الالتزامات', nature: 'liability', level: 1, isActive: true, isLeaf: false, balance: 0 },
+    { id: 'acc_21', code: '2100', name: 'الالتزامات المتداولة', nature: 'liability', level: 2, parentAccountId: 'acc_2', isActive: true, isLeaf: false, balance: 0 },
+    { id: 'acc_211', code: '2110', name: 'الموردون', nature: 'liability', level: 3, parentAccountId: 'acc_21', isActive: true, isLeaf: true, balance: 0 },
+    { id: 'acc_212', code: '2120', name: 'الرواتب المستحقة', nature: 'liability', level: 3, parentAccountId: 'acc_21', isActive: true, isLeaf: true, balance: 0 },
+    { id: 'acc_213', code: '2130', name: 'المصروفات المستحقة', nature: 'liability', level: 3, parentAccountId: 'acc_21', isActive: true, isLeaf: true, balance: 0 },
+    { id: 'acc_214', code: '2140', name: 'الأمانات', nature: 'liability', level: 3, parentAccountId: 'acc_21', isActive: true, isLeaf: true, balance: 0 },
+    { id: 'acc_215', code: '2150', name: 'الضرائب والرسوم', nature: 'liability', level: 3, parentAccountId: 'acc_21', isActive: true, isLeaf: true, balance: 0 },
+    { id: 'acc_22', code: '2200', name: 'الالتزامات طويلة الأجل', nature: 'liability', level: 2, parentAccountId: 'acc_2', isActive: true, isLeaf: false, balance: 0 },
+    { id: 'acc_221', code: '2210', name: 'القروض', nature: 'liability', level: 3, parentAccountId: 'acc_22', isActive: true, isLeaf: true, balance: 0 },
+    { id: 'acc_222', code: '2220', name: 'التمويل', nature: 'liability', level: 3, parentAccountId: 'acc_22', isActive: true, isLeaf: true, balance: 0 },
+
+    // 3 Equity
+    { id: 'acc_3', code: '3000', name: 'حقوق الملكية', nature: 'equity', level: 1, isActive: true, isLeaf: false, balance: 0 },
+    { id: 'acc_31', code: '3100', name: 'رأس المال', nature: 'equity', level: 2, parentAccountId: 'acc_3', isActive: true, isLeaf: true, balance: 0 },
+    { id: 'acc_32', code: '3200', name: 'الاحتياطي', nature: 'equity', level: 2, parentAccountId: 'acc_3', isActive: true, isLeaf: true, balance: 0 },
+    { id: 'acc_33', code: '3300', name: 'الأرباح المحتجزة', nature: 'equity', level: 2, parentAccountId: 'acc_3', isActive: true, isLeaf: true, balance: 0 },
+    { id: 'acc_34', code: '3400', name: 'فائض العام', nature: 'equity', level: 2, parentAccountId: 'acc_3', isActive: true, isLeaf: true, balance: 0 },
+
+    // 4 Revenue
+    { id: 'acc_4', code: '4000', name: 'الإيرادات', nature: 'revenue', level: 1, isActive: true, isLeaf: false, balance: 0 },
+    { id: 'acc_41', code: '4100', name: 'الرسوم الدراسية', nature: 'revenue', level: 2, parentAccountId: 'acc_4', isActive: true, isLeaf: true, balance: 0 },
+    { id: 'acc_42', code: '4200', name: 'رسوم التسجيل', nature: 'revenue', level: 2, parentAccountId: 'acc_4', isActive: true, isLeaf: true, balance: 0 },
+    { id: 'acc_43', code: '4300', name: 'رسوم النقل', nature: 'revenue', level: 2, parentAccountId: 'acc_4', isActive: true, isLeaf: true, balance: 0 },
+    { id: 'acc_44', code: '4400', name: 'رسوم الكتب', nature: 'revenue', level: 2, parentAccountId: 'acc_4', isActive: true, isLeaf: true, balance: 0 },
+    { id: 'acc_45', code: '4500', name: 'رسوم الزي', nature: 'revenue', level: 2, parentAccountId: 'acc_4', isActive: true, isLeaf: true, balance: 0 },
+    { id: 'acc_46', code: '4600', name: 'رسوم الامتحانات', nature: 'revenue', level: 2, parentAccountId: 'acc_4', isActive: true, isLeaf: true, balance: 0 },
+    { id: 'acc_47', code: '4700', name: 'رسوم الأنشطة', nature: 'revenue', level: 2, parentAccountId: 'acc_4', isActive: true, isLeaf: true, balance: 0 },
+    { id: 'acc_48', code: '4800', name: 'الإيرادات الأخرى', nature: 'revenue', level: 2, parentAccountId: 'acc_4', isActive: true, isLeaf: true, balance: 0 },
+
+    // 5 Expenses
+    { id: 'acc_5', code: '5000', name: 'المصروفات', nature: 'expense', level: 1, isActive: true, isLeaf: false, balance: 0 },
+    { id: 'acc_51', code: '5100', name: 'الرواتب والأجور', nature: 'expense', level: 2, parentAccountId: 'acc_5', isActive: true, isLeaf: true, balance: 0 },
+    { id: 'acc_52', code: '5200', name: 'التأمينات', nature: 'expense', level: 2, parentAccountId: 'acc_5', isActive: true, isLeaf: true, balance: 0 },
+    { id: 'acc_53', code: '5300', name: 'الكهرباء', nature: 'expense', level: 2, parentAccountId: 'acc_5', isActive: true, isLeaf: true, balance: 0 },
+    { id: 'acc_54', code: '5400', name: 'المياه', nature: 'expense', level: 2, parentAccountId: 'acc_5', isActive: true, isLeaf: true, balance: 0 },
+    { id: 'acc_55', code: '5500', name: 'الإنترنت', nature: 'expense', level: 2, parentAccountId: 'acc_5', isActive: true, isLeaf: true, balance: 0 },
+    { id: 'acc_56', code: '5600', name: 'الهاتف', nature: 'expense', level: 2, parentAccountId: 'acc_5', isActive: true, isLeaf: true, balance: 0 },
+    { id: 'acc_57', code: '5700', name: 'الصيانة', nature: 'expense', level: 2, parentAccountId: 'acc_5', isActive: true, isLeaf: true, balance: 0 },
+    { id: 'acc_58', code: '5800', name: 'الوقود', nature: 'expense', level: 2, parentAccountId: 'acc_5', isActive: true, isLeaf: true, balance: 0 },
+    { id: 'acc_59', code: '5900', name: 'النظافة', nature: 'expense', level: 2, parentAccountId: 'acc_5', isActive: true, isLeaf: true, balance: 0 },
+    { id: 'acc_510', code: '51000', name: 'الأمن', nature: 'expense', level: 2, parentAccountId: 'acc_5', isActive: true, isLeaf: true, balance: 0 },
+    { id: 'acc_511', code: '51100', name: 'القرطاسية', nature: 'expense', level: 2, parentAccountId: 'acc_5', isActive: true, isLeaf: true, balance: 0 },
+    { id: 'acc_512', code: '51200', name: 'الدعاية والإعلان', nature: 'expense', level: 2, parentAccountId: 'acc_5', isActive: true, isLeaf: true, balance: 0 },
+    { id: 'acc_513', code: '51300', name: 'الإهلاك', nature: 'expense', level: 2, parentAccountId: 'acc_5', isActive: true, isLeaf: true, balance: 0 },
+    { id: 'acc_514', code: '51400', name: 'المصروفات الإدارية', nature: 'expense', level: 2, parentAccountId: 'acc_5', isActive: true, isLeaf: true, balance: 0 },
+    { id: 'acc_515', code: '51500', name: 'المصروفات التشغيلية', nature: 'expense', level: 2, parentAccountId: 'acc_5', isActive: true, isLeaf: true, balance: 0 },
+    { id: 'acc_516', code: '51600', name: 'المصروفات الأخرى', nature: 'expense', level: 2, parentAccountId: 'acc_5', isActive: true, isLeaf: true, balance: 0 }
+];

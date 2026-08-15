@@ -1,0 +1,830 @@
+@import url('https://fonts.googleapis.com/css2?family=Cairo:wght@300;400;500;600;700;800&family=JetBrains+Mono:wght@400;500;600&display=swap');
+@import "tailwindcss";
+
+@variant dark (&:where(.dark, .dark *));
+
+@theme {
+  --font-sans: "Cairo", "Inter", ui-sans-serif, system-ui, sans-serif;
+  --font-mono: "JetBrains Mono", ui-monospace, monospace;
+  
+  --color-brand-primary: #1c120c; /* Deep obsidian copper mahogany */
+  --color-brand-secondary: #d4af37; /* Metallic Luxury Gold */
+  --color-brand-emerald: #10b981; /* Emerald 500 */
+  --color-brand-gold: #f7d174; /* Shiny Cream Gold */
+  --color-brand-rose: #e11d48; /* Rose 600 */
+}
+
+/* Custom styles for high-fidelity administrative system */
+html, body {
+  font-family: var(--font-sans);
+  background-color: #130b04;
+  color: #f7eee1;
+  direction: rtl; /* Force RTL natively for this Arabic Enterprise app */
+  scroll-behavior: smooth;
+}
+
+/* Custom scrollbar */
+::-webkit-scrollbar {
+  width: 6px;
+  height: 6px;
+}
+
+::-webkit-scrollbar-track {
+  background: #f1f5f9;
+}
+
+::-webkit-scrollbar-thumb {
+  background: #cbd5e1;
+  border-radius: 4px;
+}
+
+::-webkit-scrollbar-thumb:hover {
+  background: #94a3b8;
+}
+
+/* Custom animation classes */
+@keyframes pulseGlow {
+  0%, 100% {
+    opacity: 0.6;
+  }
+  50% {
+    opacity: 1;
+  }
+}
+
+.pulse-glow {
+  animation: pulseGlow 2s infinite ease-in-out;
+}
+
+/* Print-optimized media query to hide background noise and print only the active voucher/document */
+@media print {
+  html, body {
+    background-color: #ffffff !important;
+    background: #ffffff !important;
+    color: #000000 !important;
+    font-size: 11pt !important;
+    margin: 0 !important;
+    padding: 0 !important;
+    overflow: visible !important;
+    height: auto !important;
+    direction: rtl !important;
+  }
+  
+  /* Hide everything inside root by default */
+  body > #root * {
+    visibility: hidden !important;
+  }
+  
+  /* Reset and display any ancestor that contains the printable area */
+  *:has(.printable-area) {
+    visibility: visible !important;
+    display: block !important;
+    position: static !important;
+    overflow: visible !important;
+    max-height: none !important;
+    max-width: none !important;
+    height: auto !important;
+    width: auto !important;
+    background: transparent !important;
+    background-color: transparent !important;
+    border: none !important;
+    box-shadow: none !important;
+    padding: 0 !important;
+    margin: 0 !important;
+    transform: none !important;
+    animation: none !important;
+    backdrop-filter: none !important;
+  }
+  
+  /* Style the printable area to flow naturally on standard A4 pages */
+  .printable-area, .printable-area * {
+    visibility: visible !important;
+  }
+  
+  .printable-area {
+    display: block !important;
+    position: relative !important;
+    width: 100% !important;
+    max-width: 100% !important;
+    height: auto !important;
+    margin: 0 !important;
+    padding: 1.5cm !important;
+    box-shadow: none !important;
+    border: none !important;
+    background: #ffffff !important;
+    background-color: #ffffff !important;
+    color: #000000 !important;
+  }
+
+  /* Force standard black text for readability during print */
+  .printable-area text, 
+  .printable-area p, 
+  .printable-area span, 
+  .printable-area div, 
+  .printable-area td, 
+  .printable-area th, 
+  .printable-area h1, 
+  .printable-area h2, 
+  .printable-area h3, 
+  .printable-area h4 {
+    color: #000000 !important;
+    background: transparent !important;
+    background-color: transparent !important;
+  }
+  
+  .no-print, .no-print * {
+    display: none !important;
+    visibility: hidden !important;
+  }
+}
+
+/* ==========================================================================
+   THEME ENGINE (DARK / LIGHT SYSTEM OVERRIDES)
+   ========================================================================== */
+
+/* Root and Body Global Reset */
+html.dark, .dark {
+  background-color: #0b0f19 !important; /* Premium custom deep charcoal slate blue */
+  color: #f8fafc !important;
+}
+
+html.dark body {
+  background-color: #0b0f19 !important;
+  color: #f8fafc !important;
+}
+
+/* Scrollbar Dark Overrides */
+.dark ::-webkit-scrollbar-track {
+  background: #0b0f19 !important;
+}
+.dark ::-webkit-scrollbar-thumb {
+  background: #1e293b !important;
+  border-radius: 4px;
+}
+.dark ::-webkit-scrollbar-thumb:hover {
+  background: #334155 !important;
+}
+
+/* Core backgrounds & cards */
+.dark .bg-slate-50 {
+  background-color: #0b0f19 !important;
+}
+.dark .bg-slate-100 {
+  background-color: #0f172a !important; /* Slightly lighter depth */
+}
+.dark .bg-slate-200 {
+  background-color: #1e293b !important;
+}
+.dark .bg-white {
+  background-color: #151c2c !important; /* Elegant slate card depth */
+}
+.dark .bg-gray-50 {
+  background-color: #0b0f19 !important;
+}
+.dark .bg-gray-100 {
+  background-color: #0f172a !important;
+}
+
+/* General Text Elements */
+.dark .text-slate-900 {
+  color: #f8fafc !important;
+}
+.dark .text-slate-800 {
+  color: #f1f5f9 !important;
+}
+.dark .text-slate-700 {
+  color: #cbd5e1 !important;
+}
+.dark .text-slate-600 {
+  color: #94a3b8 !important;
+}
+.dark .text-slate-500 {
+  color: #94a3b8 !important;
+}
+.dark .text-slate-400 {
+  color: #64748b !important;
+}
+
+.dark .text-gray-900 {
+  color: #f8fafc !important;
+}
+.dark .text-gray-800 {
+  color: #f1f5f9 !important;
+}
+.dark .text-gray-700 {
+  color: #cbd5e1 !important;
+}
+.dark .text-gray-600 {
+  color: #94a3b8 !important;
+}
+
+/* Borders and dividers */
+.dark .border-slate-200 {
+  border-color: #1e293b !important;
+}
+.dark .border-slate-300 {
+  border-color: #334155 !important;
+}
+.dark .border-slate-100 {
+  border-color: #0f172a !important;
+}
+.dark .border-gray-200 {
+  border-color: #1e293b !important;
+}
+.dark .border-gray-100 {
+  border-color: #0f172a !important;
+}
+.dark .divide-slate-100 > * + * {
+  border-color: #1e293b !important;
+}
+.dark .divide-slate-200 > * + * {
+  border-color: #1e293b !important;
+}
+
+/* Table overrides */
+.dark table {
+  background-color: #151c2c !important;
+}
+.dark th {
+  background-color: #1e293b !important;
+  color: #f8fafc !important;
+  border-color: #334155 !important;
+}
+.dark td {
+  border-color: #1e293b !important;
+}
+.dark tr:hover {
+  background-color: rgba(30, 41, 59, 0.4) !important;
+}
+.dark .bg-slate-50\/70 {
+  background-color: rgba(30, 41, 59, 0.7) !important;
+}
+
+/* Forms, inputs, selections, textareas */
+.dark input[type="text"],
+.dark input[type="number"],
+.dark input[type="password"],
+.dark input[type="email"],
+.dark input[type="search"],
+.dark input[type="date"],
+.dark select,
+.dark textarea {
+  background-color: #1e293b !important;
+  color: #f8fafc !important;
+  border-color: #334155 !important;
+}
+.dark input::placeholder, 
+.dark select::placeholder,
+.dark textarea::placeholder {
+  color: #64748b !important;
+}
+
+/* Interactive Highlights & Badges */
+.dark .bg-indigo-50 {
+  background-color: #1e1b4b !important;
+  color: #e0e7ff !important;
+}
+.dark .text-indigo-600 {
+  color: #818cf8 !important;
+}
+.dark .bg-amber-50 {
+  background-color: #451a03 !important;
+  color: #fef3c7 !important;
+}
+.dark .text-amber-600 {
+  color: #fbbf24 !important;
+}
+.dark .bg-emerald-50 {
+  background-color: #022c22 !important;
+  color: #d1fae5 !important;
+}
+.dark .text-emerald-600 {
+  color: #34d399 !important;
+}
+
+/* Login gateway portal theme adaptation when in LIGHT mode */
+html:not(.dark) .min-h-screen.bg-slate-950 {
+  background-color: #f8fafc !important;
+  background-image: radial-gradient(circle at top right, #f1f5f9 0%, #f8fafc 100%) !important;
+}
+html:not(.dark) .min-h-screen.bg-slate-950 .absolute.inset-0 {
+  display: none !important;
+}
+html:not(.dark) .min-h-screen.bg-slate-950 .text-slate-100 {
+  color: #0f172a !important;
+}
+html:not(.dark) .min-h-screen.bg-slate-950 .text-white {
+  color: #0f172a !important;
+}
+html:not(.dark) .min-h-screen.bg-slate-950 .text-indigo-400 {
+  color: #4f46e5 !important;
+}
+html:not(.dark) .min-h-screen.bg-slate-950 .bg-indigo-950\/40 {
+  background-color: #f0fdfa !important;
+  border-color: #ccfbf1 !important;
+}
+html:not(.dark) .min-h-screen.bg-slate-950 .bg-slate-900\/60 {
+  background-color: #ffffff !important;
+  border-color: #cbd5e1 !important;
+  box-shadow: 0 10px 15px -3px rgba(0, 0, 0, 0.05), 0 4px 6px -2px rgba(0, 0, 0, 0.05) !important;
+}
+html:not(.dark) .min-h-screen.bg-slate-950 .bg-slate-900\/80 {
+  background-color: #f1f5f9 !important;
+  border-color: #e2e8f0 !important;
+}
+html:not(.dark) .min-h-screen.bg-slate-950 .text-slate-300 {
+  color: #334155 !important;
+}
+html:not(.dark) .min-h-screen.bg-slate-950 .text-slate-400 {
+  color: #64748b !important;
+}
+html:not(.dark) .min-h-screen.bg-slate-950 .bg-slate-900 {
+  background-color: #f1f5f9 !important;
+  border-color: #cbd5e1 !important;
+}
+html:not(.dark) .min-h-screen.bg-slate-950 .text-emerald-450 {
+  color: #059669 !important;
+}
+html:not(.dark) .min-h-screen.bg-slate-950 .border-slate-800 {
+  border-color: #e2e8f0 !important;
+}
+html:not(.dark) .min-h-screen.bg-slate-950 .border-slate-800\/80 {
+  border-color: #e2e8f0 !important;
+}
+html:not(.dark) .min-h-screen.bg-slate-950 .text-emerald-400 {
+  color: #059669 !important;
+}
+html:not(.dark) .min-h-screen.bg-slate-950 .bg-emerald-950\/50 {
+  background-color: #ecfdf5 !important;
+  border-color: #a7f3d0 !important;
+}
+html:not(.dark) .min-h-screen.bg-slate-950 .text-sky-450 {
+  color: #0284c7 !important;
+}
+html:not(.dark) .min-h-screen.bg-slate-950 .bg-sky-950\/65 {
+  background-color: #f0f9ff !important;
+  border-color: #bae6fd !important;
+}
+html:not(.dark) .min-h-screen.bg-slate-950 .bg-slate-800 {
+  background-color: #f1f5f9 !important;
+  border-color: #cbd5e1 !important;
+  color: #475569 !important;
+}
+html:not(.dark) .min-h-screen.bg-slate-950 .bg-indigo-650 {
+  background-color: #4f46e5 !important;
+}
+
+/* Charts and graphics compatibility */
+.dark svg text {
+  fill: #cbd5e1 !important;
+}
+.dark .recharts-default-tooltip {
+  background-color: #151c2c !important;
+  border-color: #334155 !important;
+  color: #f8fafc !important;
+}
+.dark .recharts-legend-item-text {
+  color: #cbd5e1 !important;
+}
+
+/* ==========================================================================
+   ULTRA-HIGH CONTRAST LIGHT MODE OVERRIDES
+   ========================================================================== */
+
+html:not(.dark) {
+  background-color: #f8fafc !important;
+  color: #0f172a !important;
+}
+
+html:not(.dark) body {
+  background-color: #f8fafc !important;
+  color: #0f172a !important;
+}
+
+/* Light Mode Text Contrast Boosts */
+html:not(.dark) .text-slate-900,
+html:not(.dark) .text-gray-900 {
+  color: #090d16 !important; /* Deepest black-slate for maximum contrast */
+}
+
+html:not(.dark) .text-slate-800,
+html:not(.dark) .text-gray-800 {
+  color: #0f172a !important;
+}
+
+html:not(.dark) .text-slate-700,
+html:not(.dark) .text-gray-700 {
+  color: #1e293b !important;
+}
+
+html:not(.dark) .text-slate-600,
+html:not(.dark) .text-gray-600 {
+  color: #27364b !important; /* Substantial slate-600 upgraded to slate-800 equivalent */
+}
+
+html:not(.dark) .text-slate-500,
+html:not(.dark) .text-gray-500 {
+  color: #3b4b61 !important; /* Secondary text upgraded for readability */
+}
+
+html:not(.dark) .text-slate-400,
+html:not(.dark) .text-gray-400 {
+  color: #4b5a70 !important; /* Caption/faint text boosted to be fully legible */
+}
+
+html:not(.dark) .text-slate-300,
+html:not(.dark) .text-gray-300 {
+  color: #5d6d84 !important;
+}
+
+/* Financial & Numeric Data Readability */
+html:not(.dark) .font-mono {
+  font-weight: 700 !important; /* Solid weight for numbers */
+  color: #0c111d !important;
+}
+
+/* Table Header Custom Styling */
+html:not(.dark) th {
+  background-color: #e2e8f0 !important; /* Prominent but quiet blue-gray header background */
+  color: #0f172a !important; /* High contrast text */
+  font-weight: 800 !important; /* Extra bold */
+  border-bottom: 2px solid #94a3b8 !important; /* Solid dark divider line */
+  text-align: right;
+  padding: 12px 16px !important;
+}
+
+html:not(.dark) td {
+  color: #0f172a !important;
+  border-bottom: 1px solid #cbd5e1 !important; /* Clear row separation */
+  font-weight: 600 !important; /* Semi-bold for high legibility */
+}
+
+html:not(.dark) tr:hover {
+  background-color: #f1f5f9 !important; /* Soft distinct row hover feedback */
+}
+
+/* Background & Card Elevation */
+html:not(.dark) .bg-slate-50, 
+html:not(.dark) .bg-gray-50 {
+  background-color: #f8fafc !important;
+}
+
+html:not(.dark) .bg-slate-100, 
+html:not(.dark) .bg-gray-100 {
+  background-color: #e2e8f0 !important;
+}
+
+html:not(.dark) .bg-white {
+  background-color: #ffffff !important;
+  border: 1px solid #cbd5e1 !important; /* Defined crispy card borders */
+  box-shadow: 0 4px 6px -1px rgba(15, 23, 42, 0.08), 0 2px 4px -1px rgba(15, 23, 42, 0.04) !important;
+}
+
+/* Interactive Components & Buttons */
+html:not(.dark) button.bg-white {
+  background-color: #ffffff !important;
+  color: #0f172a !important;
+  border: 1.5px solid #cbd5e1 !important;
+  font-weight: 700 !important;
+}
+
+html:not(.dark) button.bg-slate-100,
+html:not(.dark) button.bg-gray-100 {
+  background-color: #cbd5e1 !important;
+  color: #0f172a !important;
+  border: 1.5px solid #94a3b8 !important;
+  font-weight: 700 !important;
+}
+
+/* Clearer Inputs */
+html:not(.dark) input[type="text"],
+html:not(.dark) input[type="number"],
+html:not(.dark) input[type="password"],
+html:not(.dark) input[type="email"],
+html:not(.dark) input[type="search"],
+html:not(.dark) input[type="date"],
+html:not(.dark) select,
+html:not(.dark) textarea {
+  background-color: #ffffff !important;
+  color: #0f172a !important;
+  border: 1.5px solid #475569 !important; /* Thick, clear border */
+  font-weight: 600 !important;
+}
+
+html:not(.dark) input::placeholder,
+html:not(.dark) textarea::placeholder {
+  color: #475569 !important; /* Legible placeholder */
+}
+
+/* High Contrast Badges in Light Mode */
+html:not(.dark) .bg-indigo-50 {
+  background-color: #e0e7ff !important;
+  color: #1e1b4b !important;
+  font-weight: 700 !important;
+}
+
+html:not(.dark) .bg-emerald-50 {
+  background-color: #d1fae5 !important;
+  color: #022c22 !important;
+  font-weight: 700 !important;
+}
+
+html:not(.dark) .bg-amber-50 {
+  background-color: #fef3c7 !important;
+  color: #451a03 !important;
+  font-weight: 700 !important;
+}
+
+html:not(.dark) .bg-red-50 {
+  background-color: #fee2e2 !important;
+  color: #7f1d1d !important;
+  font-weight: 700 !important;
+}
+
+/* ==========================================================================
+   SuperAdmin Dual-Theme High-Contrast System (Light Mode overrides)
+   ========================================================================== */
+html:not(.dark) #super-admin-portal {
+  background-color: #f8fafc !important;
+  color: #1e293b !important;
+}
+
+html:not(.dark) #super-admin-portal h1,
+html:not(.dark) #super-admin-portal h2,
+html:not(.dark) #super-admin-portal h3,
+html:not(.dark) #super-admin-portal h4,
+html:not(.dark) #super-admin-portal h5 {
+  color: #0f172a !important;
+}
+
+html:not(.dark) #super-admin-portal p,
+html:not(.dark) #super-admin-portal span:not(.text-emerald-400):not(.text-indigo-400):not(.text-sky-400):not(.text-cyan-400):not(.text-rose-400):not(.text-amber-400),
+html:not(.dark) #super-admin-portal div:not(.text-emerald-400):not(.text-indigo-400):not(.text-sky-400):not(.text-cyan-400):not(.text-rose-400):not(.text-amber-400) {
+  /* Dynamic text colors */
+}
+
+html:not(.dark) #super-admin-portal .text-white,
+html:not(.dark) #super-admin-portal .text-slate-100,
+html:not(.dark) #super-admin-portal .text-slate-200 {
+  color: #0f172a !important;
+}
+
+html:not(.dark) #super-admin-portal .text-slate-300,
+html:not(.dark) #super-admin-portal .text-slate-400 {
+  color: #334155 !important;
+}
+
+html:not(.dark) #super-admin-portal .text-slate-500 {
+  color: #64748b !important;
+}
+
+/* Cards & Panels Overrides */
+html:not(.dark) #super-admin-portal .bg-slate-900,
+html:not(.dark) #super-admin-portal .bg-slate-900\/80,
+html:not(.dark) #super-admin-portal .bg-slate-900\/85,
+html:not(.dark) #super-admin-portal .bg-slate-900\/60,
+html:not(.dark) #super-admin-portal .bg-slate-950,
+html:not(.dark) #super-admin-portal .bg-slate-950\/80,
+html:not(.dark) #super-admin-portal .bg-slate-950\/60,
+html:not(.dark) #super-admin-portal .bg-slate-900\/40,
+html:not(.dark) #super-admin-portal .bg-slate-900\/30,
+html:not(.dark) #super-admin-portal .bg-slate-900\/50,
+html:not(.dark) #super-admin-portal .bg-slate-950\/30,
+html:not(.dark) #super-admin-portal .bg-slate-950\/40,
+html:not(.dark) #super-admin-portal .bg-slate-850\/30,
+html:not(.dark) #super-admin-portal .bg-slate-850\/40,
+html:not(.dark) #super-admin-portal .bg-slate-950\/25,
+html:not(.dark) #super-admin-portal .bg-indigo-950\/25 {
+  background-color: #ffffff !important;
+  color: #1e293b !important;
+  border-color: #e2e8f0 !important;
+  box-shadow: 0 4px 6px -1px rgba(0, 0, 0, 0.05), 0 2px 4px -1px rgba(0, 0, 0, 0.03) !important;
+}
+
+html:not(.dark) #super-admin-portal .bg-gradient-to-r {
+  background-image: linear-gradient(to right, #f1f5f9, #f8fafc) !important;
+  border-color: #e2e8f0 !important;
+}
+
+/* Borders Overrides */
+html:not(.dark) #super-admin-portal .border-slate-800,
+html:not(.dark) #super-admin-portal .border-slate-850,
+html:not(.dark) #super-admin-portal .border-slate-900 {
+  border-color: #e2e8f0 !important;
+}
+
+/* Accent Text Coloring for Contrast */
+html:not(.dark) #super-admin-portal .text-emerald-400 {
+  color: #10b981 !important; /* Rich Green */
+}
+
+html:not(.dark) #super-admin-portal .text-indigo-400 {
+  color: #4f46e5 !important; /* Rich Indigo */
+}
+
+html:not(.dark) #super-admin-portal .text-sky-400 {
+  color: #0284c7 !important; /* Rich Sky Blue */
+}
+
+html:not(.dark) #super-admin-portal .text-cyan-400 {
+  color: #0891b2 !important; /* Rich Cyan */
+}
+
+html:not(.dark) #super-admin-portal .text-rose-400 {
+  color: #f43f5e !important; /* Rich Rose/Red */
+}
+
+html:not(.dark) #super-admin-portal .text-amber-400,
+html:not(.dark) #super-admin-portal .text-amber-500 {
+  color: #d97706 !important; /* Rich Amber/Orange */
+}
+
+/* High Contrast Badges Overrides */
+html:not(.dark) #super-admin-portal .bg-indigo-950\/40,
+html:not(.dark) #super-admin-portal .bg-indigo-950 {
+  background-color: #e0e7ff !important;
+  color: #3730a3 !important;
+  border-color: #c7d2fe !important;
+}
+
+html:not(.dark) #super-admin-portal .bg-emerald-950\/30,
+html:not(.dark) #super-admin-portal .bg-emerald-950 {
+  background-color: #d1fae5 !important;
+  color: #065f46 !important;
+  border-color: #a7f3d0 !important;
+}
+
+html:not(.dark) #super-admin-portal .bg-rose-950\/40,
+html:not(.dark) #super-admin-portal .bg-rose-950\/30,
+html:not(.dark) #super-admin-portal .bg-rose-950 {
+  background-color: #fee2e2 !important;
+  color: #991b1b !important;
+  border-color: #fca5a5 !important;
+}
+
+html:not(.dark) #super-admin-portal .bg-amber-950\/40,
+html:not(.dark) #super-admin-portal .bg-amber-950\/30,
+html:not(.dark) #super-admin-portal .bg-amber-950 {
+  background-color: #fef3c7 !important;
+  color: #92400e !important;
+  border-color: #fde68a !important;
+}
+
+html:not(.dark) #super-admin-portal .bg-slate-950 {
+  background-color: #f1f5f9 !important;
+  color: #334155 !important;
+  border-color: #cbd5e1 !important;
+}
+
+/* Inputs, Selects & Forms Overrides */
+html:not(.dark) #super-admin-portal input,
+html:not(.dark) #super-admin-portal select,
+html:not(.dark) #super-admin-portal textarea {
+  background-color: #ffffff !important;
+  color: #0f172a !important;
+  border: 1.5px solid #cbd5e1 !important;
+  font-weight: 500 !important;
+}
+
+html:not(.dark) #super-admin-portal input::placeholder,
+html:not(.dark) #super-admin-portal textarea::placeholder {
+  color: #64748b !important;
+}
+
+/* Tables Styling Overrides */
+html:not(.dark) #super-admin-portal table {
+  background-color: #ffffff !important;
+  border-color: #e2e8f0 !important;
+}
+
+html:not(.dark) #super-admin-portal thead tr,
+html:not(.dark) #super-admin-portal thead th {
+  background-color: #f8fafc !important;
+  color: #334155 !important;
+  border-bottom: 2px solid #e2e8f0 !important;
+}
+
+html:not(.dark) #super-admin-portal tbody tr {
+  border-bottom: 1px solid #f1f5f9 !important;
+  background-color: #ffffff !important;
+}
+
+html:not(.dark) #super-admin-portal tbody tr:hover {
+  background-color: #f8fafc !important;
+}
+
+html:not(.dark) #super-admin-portal tbody tr.bg-indigo-950\/30,
+html:not(.dark) #super-admin-portal tbody tr.bg-slate-950\/40 {
+  background-color: #f5f3ff !important;
+}
+
+html:not(.dark) #super-admin-portal .divide-y > :not([hidden]) ~ :not([hidden]) {
+  border-color: #f1f5f9 !important;
+}
+
+/* Custom Scrollbar for SuperAdmin under Light Mode */
+html:not(.dark) #super-admin-portal ::-webkit-scrollbar-track {
+  background: #f8fafc !important;
+}
+
+html:not(.dark) #super-admin-portal ::-webkit-scrollbar-thumb {
+  background: #cbd5e1 !important;
+}
+
+html:not(.dark) #super-admin-portal ::-webkit-scrollbar-thumb:hover {
+  background: #94a3b8 !important;
+}
+
+/* ==========================================================================
+   SuperAdmin Unified Enterprise Button & Interaction System
+   ========================================================================== */
+
+/* Dark mode and general primary button styles */
+#super-admin-portal button.bg-indigo-600,
+#super-admin-portal .bg-indigo-600 {
+  background-color: #4f46e5 !important;
+  color: #ffffff !important;
+  font-weight: 800 !important;
+  transition: all 0.2s cubic-bezier(0.4, 0, 0.2, 1) !important;
+  box-shadow: 0 4px 10px rgba(79, 70, 229, 0.15) !important;
+}
+
+#super-admin-portal button.bg-indigo-600:hover,
+#super-admin-portal .bg-indigo-600:hover {
+  background-color: #4338ca !important;
+  transform: translateY(-1.5px) !important;
+  box-shadow: 0 6px 15px rgba(79, 70, 229, 0.3) !important;
+}
+
+#super-admin-portal button.bg-indigo-600:active,
+#super-admin-portal .bg-indigo-600:active {
+  transform: translateY(0px) !important;
+}
+
+/* Red / Danger buttons (e.g. Delete, Freeze) */
+#super-admin-portal button.bg-rose-600,
+#super-admin-portal button.bg-red-600,
+#super-admin-portal .bg-rose-600,
+#super-admin-portal .bg-red-600 {
+  background-color: #dc2626 !important;
+  color: #ffffff !important;
+  font-weight: 800 !important;
+  transition: all 0.2s cubic-bezier(0.4, 0, 0.2, 1) !important;
+  box-shadow: 0 4px 10px rgba(220, 38, 38, 0.15) !important;
+}
+
+#super-admin-portal button.bg-rose-600:hover,
+#super-admin-portal button.bg-red-600:hover,
+#super-admin-portal .bg-rose-600:hover,
+#super-admin-portal .bg-red-600:hover {
+  background-color: #b91c1c !important;
+  transform: translateY(-1.5px) !important;
+  box-shadow: 0 6px 15px rgba(220, 38, 38, 0.3) !important;
+}
+
+/* Light mode specific button styles to ensure high contrast & crisp text */
+html:not(.dark) #super-admin-portal button.bg-indigo-600,
+html:not(.dark) #super-admin-portal .bg-indigo-600,
+html:not(.dark) #super-admin-portal button[type="submit"] {
+  background-color: #4f46e5 !important;
+  color: #ffffff !important;
+}
+
+html:not(.dark) #super-admin-portal button.bg-indigo-600:hover,
+html:not(.dark) #super-admin-portal .bg-indigo-600:hover,
+html:not(.dark) #super-admin-portal button[type="submit"]:hover {
+  background-color: #3730a3 !important;
+}
+
+/* Light mode warning/danger buttons */
+html:not(.dark) #super-admin-portal button.bg-rose-600,
+html:not(.dark) #super-admin-portal button.bg-red-600,
+html:not(.dark) #super-admin-portal .bg-rose-600,
+html:not(.dark) #super-admin-portal .bg-red-600 {
+  background-color: #dc2626 !important;
+  color: #ffffff !important;
+}
+
+html:not(.dark) #super-admin-portal button.bg-rose-600:hover,
+html:not(.dark) #super-admin-portal button.bg-red-600:hover,
+html:not(.dark) #super-admin-portal .bg-rose-600:hover,
+html:not(.dark) #super-admin-portal .bg-red-600:hover {
+  background-color: #991b1b !important;
+}
+
+/* Light Mode Secondary/Print/Export Buttons with elegant borders */
+html:not(.dark) #super-admin-portal button:not(.bg-indigo-600):not(.bg-rose-600):not(.bg-red-600):not([type="submit"]):not(.text-white) {
+  background-color: #f1f5f9 !important;
+  color: #1e293b !important;
+  border: 1px solid #cbd5e1 !important;
+}
+
+html:not(.dark) #super-admin-portal button:not(.bg-indigo-600):not(.bg-rose-600):not(.bg-red-600):not([type="submit"]):not(.text-white):hover {
+  background-color: #e2e8f0 !important;
+  color: #0f172a !important;
+}
+
+/* Ensure font family and smooth scaling on hover */
+#super-admin-portal button {
+  font-family: inherit !important;
+}

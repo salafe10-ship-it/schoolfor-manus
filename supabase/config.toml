@@ -1,0 +1,27 @@
+# Local Supabase CLI configuration only.
+# This file intentionally contains no schema, policy, bucket, RPC, or user definitions.
+project_id = "edupro-enterprise"
+
+[api]
+enabled = true
+port = 54321
+
+[db]
+port = 54322
+
+[studio]
+enabled = true
+port = 54323
+
+[inbucket]
+enabled = true
+port = 54324
+
+[storage]
+enabled = true
+
+[auth]
+enabled = true
+
+[edge_runtime]
+enabled = true

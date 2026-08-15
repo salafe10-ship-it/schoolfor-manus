@@ -1,0 +1,460 @@
+import { AlertTriangle, CheckCircle, Copy, Database, Edit2, ExternalLink, Globe, Link, Plus, RefreshCw, Search, ShieldCheck, Trash2, Lock, ShieldAlert } from 'lucide-react';
+import React, { useState } from 'react';
+import { getTrustedSchoolUrl, getSSLCertificateStatus, openTrustedSchoolPortal } from '../../utils/EnterpriseDomainUtils';
+
+interface SuperAdminDomainsProps {
+  schools: any[];
+  setSchools: React.Dispatch<React.SetStateAction<any[]>>;
+  logAction: (action: string, details: string, section?: string) => void;
+  triggerNotification: (msg: string, type: 'success' | 'danger' | 'warning' | 'info') => void;
+}
+
+export default function SuperAdminDomains({
+  schools = [],
+  setSchools,
+  logAction,
+  triggerNotification
+}: SuperAdminDomainsProps) {
+  const [selectedSchool, setSelectedSchool] = useState<any | null>(null);
+  const [showDomainModal, setShowDomainModal] = useState(false);
+  const [showSubdomainModal, setShowSubdomainModal] = useState(false);
+
+  // Form states
+  const [customDomain, setCustomDomain] = useState('');
+  const [subdomain, setSubdomain] = useState('');
+  const [sslStatus, setSslStatus] = useState<'pending' | 'valid' | 'none'>('valid');
+
+  // Test Link Simulation State
+  const [testingId, setTestingId] = useState<string | null>(null);
+  const [testResult, setTestResult] = useState<Record<string, { status: 'healthy' | 'error', latency: number, time: string }>>({});
+
+  // Subdomain uniqueness validation
+  const checkSubdomainAvailability = (sub: string, schoolId?: string) => {
+    if (!sub) return false;
+    const exists = schools.some(s => s.id !== schoolId && s.subdomain?.toLowerCase() === sub.toLowerCase());
+    return !exists;
+  };
+
+  // Action: Map Custom Domain
+  const handleMapCustomDomain = (e: React.FormEvent) => {
+    e.preventDefault();
+    if (!selectedSchool || !customDomain) return;
+
+    // Save changes
+    setSchools(prev => prev.map(s => s.id === selectedSchool.id ? { 
+      ...s, 
+      domain: customDomain,
+      schoolUrl: `https://${customDomain}`
+    } : s));
+
+    logAction(
+      'MAP_CUSTOM_DOMAIN',
+      `ربط وتوجيه نطاق خاص للمدرسة ${selectedSchool.name}: https://${customDomain}`,
+      'إدارة أسماء النطاقات والروابط'
+    );
+
+    triggerNotification(`تم ربط النطاق الخاص https://${customDomain} بنجاح، شهادة SSL قيد التوطين تلقائياً 🛡️`, 'success');
+    setShowDomainModal(false);
+    setCustomDomain('');
+  };
+
+  // Action: Change Subdomain
+  const handleUpdateSubdomain = (e: React.FormEvent) => {
+    e.preventDefault();
+    if (!selectedSchool || !subdomain) return;
+
+    // Check duplication
+    const isAvailable = checkSubdomainAvailability(subdomain, selectedSchool.id);
+    if (!isAvailable) {
+      triggerNotification('اسم النطاق الفرعي هذا مستخدم مسبقاً لمستأجر آخر! يرجى اختيار اسم فريد.', 'danger');
+      return;
+    }
+
+    setSchools(prev => prev.map(s => s.id === selectedSchool.id ? { 
+      ...s, 
+      subdomain: subdomain,
+      schoolUrl: `https://${subdomain}.erpcloud.com`
+    } : s));
+
+    logAction(
+      'UPDATE_SUBDOMAIN',
+      `تحديث النطاق الفرعي لـ ${selectedSchool.name} ليصبح: ${subdomain}.erpcloud.com`,
+      'إدارة أسماء النطاقات والروابط'
+    );
+
+    triggerNotification(`تم تحديث النطاق الفرعي للرابط ليصبح https://${subdomain}.erpcloud.com بنجاح 🔗`, 'success');
+    setShowSubdomainModal(false);
+    setSubdomain('');
+  };
+
+  // Action: Copy Link to Clipboard
+  const handleCopyLink = async (url: string) => {
+    try {
+      if (navigator.clipboard && navigator.clipboard.writeText) {
+        await navigator.clipboard.writeText(url);
+        triggerNotification('تم نسخ رابط المدرسة بنجاح.', 'success');
+        return;
+      }
+      const textArea = document.createElement("textarea");
+      textArea.value = url;
+      textArea.style.position = "fixed";
+      textArea.style.opacity = "0";
+      document.body.appendChild(textArea);
+      textArea.focus();
+      textArea.select();
+      const successful = document.execCommand('copy');
+      document.body.removeChild(textArea);
+      if (successful) {
+        triggerNotification('تم نسخ رابط المدرسة بنجاح.', 'success');
+      } else {
+        throw new Error('execCommand failed');
+      }
+    } catch (err) {
+      triggerNotification('تعذر النسخ التلقائي. يرجى النسخ اليدوي للرابط: ' + url, 'danger');
+    }
+  };
+
+  // Action: Test Link Readiness (Live Diagnostics Simulation)
+  const handleTestLink = (school: any) => {
+    setTestingId(school.id);
+    
+    // Simulate API network check
+    setTimeout(() => {
+      const isHealthy = Math.random() > 0.05; // 95% success simulation
+      const latency = Math.round(15 + Math.random() * 45); // 15ms - 60ms
+      const now = new Date().toLocaleTimeString('ar-EG');
+
+      setTestResult(prev => ({
+        ...prev,
+        [school.id]: {
+          status: isHealthy ? 'healthy' : 'error',
+          latency: latency,
+          time: now
+        }
+      }));
+
+      setTestingId(null);
+      
+      if (isHealthy) {
+        triggerNotification(`رابط مدرسة ${school.name} سليم وجاهز للاستقبال • الاستجابة: ${latency}ms 🟢`, 'success');
+      } else {
+        triggerNotification(`خطأ في توجيه خوادم مدرسة ${school.name} • يرجى مراجعة سجل النطاقات DNS 🔴`, 'danger');
+      }
+    }, 1500);
+  };
+
+  // Action: Regenerate Link DNS Routes
+  const handleRegenerateDNS = (school: any) => {
+    triggerNotification(`جاري إعادة توليد وضبط خوادم Nginx / Cloudflare للمستأجر ${school.name}...`, 'info');
+    
+    setTimeout(() => {
+      logAction(
+        'REGENERATE_DNS_ROUTES',
+        `إعادة توليد روابط المسار الافتراضي للنطاقات للمدرسة: ${school.name}`,
+        'إدارة أسماء النطاقات والروابط'
+      );
+      triggerNotification(`تم إعادة توليد شهادات SSL ومسارات DNS لـ ${school.name} بنجاح ✅`, 'success');
+    }, 2000);
+  };
+
+  return (
+    <div id="super-admin-domains" className="space-y-6 text-right">
+      
+      {/* Alert Header Banner */}
+      <div className="bg-slate-900 border border-amber-500/20 p-4 flex items-start gap-3">
+        <Globe className="w-5 h-5 text-amber-400 mt-0.5 shrink-0" />
+        <div className="space-y-1">
+          <h4 className="text-xs font-black text-slate-100">مركز الحوكمة والتحكم في النطاقات والروابط</h4>
+          <p className="text-[10px] text-slate-400 leading-relaxed">
+            يدعم النظام حركية التوجيه الذاتي للنطاقات من خلال ربط أسماء النطاقات الفرعية (Subdomains) على خادمنا الرئيسي <span className="font-mono text-amber-500">*.erpcloud.com</span> أو تفويض نطاق خاص بالكامل للمؤسسة (Custom Domain). شهادات التشفير SSL وحقن جداول خوادم التوجيه تتم آلياً في الخلفية.
+          </p>
+        </div>
+      </div>
+
+      {/* Main Domains Management Console */}
+      <div className="bg-slate-900 border border-slate-800 overflow-hidden shadow-xl">
+        <div className="p-4 border-b border-slate-800 bg-slate-950 flex justify-between items-center flex-wrap gap-2">
+          <h3 className="text-xs font-black text-white flex items-center gap-2">
+            <Link className="w-4 h-4 text-amber-400" />
+            روابط ونطاقات المدارس المستضيفة ({schools.length})
+          </h3>
+          <span className="text-[10px] text-amber-400 bg-amber-950/40 border border-amber-900/60 px-3 py-1 rounded-full font-extrabold">
+            توجيه ومصادقة النطاقات DNS & SSL Router
+          </span>
+        </div>
+
+        <div className="overflow-x-auto">
+          <table className="w-full text-right text-xs">
+            <thead>
+              <tr className="bg-slate-950 text-slate-400 border-b border-slate-800">
+                <th className="p-4 font-black text-center w-8">#</th>
+                <th className="p-4 font-black">اسم المدرسة والمستأجر</th>
+                <th className="p-4 font-black">النطاق الفرعي (Subdomain)</th>
+                <th className="p-4 font-black">النطاق الخاص (Custom Domain)</th>
+                <th className="p-4 font-black">حالة الربط والـ SSL</th>
+                <th className="p-4 font-black">الرابط النشط الحالي</th>
+                <th className="p-4 font-black">آخر اختبار صحة</th>
+                <th className="p-4 font-black text-center">التحكم في النطاق والـ DNS</th>
+              </tr>
+            </thead>
+            <tbody className="divide-y divide-slate-800/60">
+              {schools.map((school, idx) => {
+                const trustedUrl = getTrustedSchoolUrl(school);
+                const sslCert = getSSLCertificateStatus(school.domain || school.subdomain);
+                const result = testResult[school.id];
+                const isTesting = testingId === school.id;
+
+                return (
+                  <tr key={school.id} className="hover:bg-slate-850/40 transition-colors">
+                    <td className="p-4 text-center text-slate-500 font-mono font-bold w-8">{idx + 1}</td>
+                    <td className="p-4 font-bold text-slate-100">
+                      <div className="flex items-center gap-2">
+                        <span className="text-xl">{school.logo || '🏫'}</span>
+                        <span>{school.name}</span>
+                      </div>
+                    </td>
+                    <td className="p-4 font-mono font-bold text-slate-300">
+                      {school.subdomain ? `${school.subdomain}.erpcloud.com` : 'غير محدد'}
+                    </td>
+                    <td className="p-4 font-mono font-bold text-amber-400">
+                      {school.domain ? (
+                        <span className="flex items-center gap-1">
+                          <Globe className="w-3.5 h-3.5 shrink-0" />
+                          {school.domain}
+                        </span>
+                      ) : (
+                        <span className="text-slate-600 text-[10px]">لا يوجد نطاق مخصص</span>
+                      )}
+                    </td>
+                    <td className="p-4">
+                      <div className="space-y-1">
+                        <span className="inline-flex items-center gap-1 px-2.5 py-0.5 rounded-full text-[9px] font-black border bg-emerald-950/40 text-emerald-400 border-emerald-900/60">
+                          <ShieldCheck className="w-3.5 h-3.5" />
+                          SSL موثوق وآمن (HTTPS)
+                        </span>
+                        <div className="text-[8px] text-slate-500 font-mono" dir="ltr">
+                          Issuer: {sslCert.issuer.split('/')[0]}
+                        </div>
+                      </div>
+                    </td>
+                    <td className="p-4">
+                      <div className="flex items-center gap-1.5 font-mono text-slate-300 dir-ltr text-left">
+                        <span className="truncate max-w-[220px] text-[11px] text-amber-300 font-bold" dir="ltr">{trustedUrl}</span>
+                        <button
+                          onClick={() => handleCopyLink(trustedUrl)}
+                          className="text-slate-400 hover:text-white p-1 hover:bg-slate-800 rounded transition-all cursor-pointer shrink-0"
+                          title="نسخ الرابط المباشر الآمن"
+                        >
+                          <Copy className="w-3.5 h-3.5" />
+                        </button>
+                      </div>
+                    </td>
+                    <td className="p-4">
+                      {isTesting ? (
+                        <span className="text-amber-400 flex items-center gap-1 animate-pulse font-bold text-[10px]">
+                          <RefreshCw className="w-3.5 h-3.5 animate-spin" />
+                          جاري الفحص...
+                        </span>
+                      ) : result ? (
+                        <div className="space-y-0.5">
+                          <span className={`inline-flex items-center gap-1 text-[10px] font-black ${
+                            result.status === 'healthy' ? 'text-emerald-400' : 'text-red-400'
+                          }`}>
+                            <span className={`w-1.5 h-1.5 rounded-full ${result.status === 'healthy' ? 'bg-emerald-500' : 'bg-red-500'}`} />
+                            {result.status === 'healthy' ? `مستقر (${result.latency}ms)` : 'غير متصل'}
+                          </span>
+                          <div className="text-[8px] text-slate-500 font-bold">{result.time}</div>
+                        </div>
+                      ) : (
+                        <span className="text-slate-600 text-[10px]">لم يتم الفحص بعد</span>
+                      )}
+                    </td>
+                    <td className="p-4">
+                      <div className="flex items-center justify-center gap-1.5">
+                        <button
+                          onClick={() => {
+                            setSelectedSchool(school);
+                            setSubdomain(school.subdomain || '');
+                            setShowSubdomainModal(true);
+                          }}
+                          className="bg-slate-800 hover:bg-slate-700 text-slate-300 p-1.5 rounded-lg border border-slate-700 text-[10px] font-bold cursor-pointer"
+                          title="تعديل النطاق الفرعي"
+                        >
+                          النطاق الفرعي
+                        </button>
+                        <button
+                          onClick={() => {
+                            setSelectedSchool(school);
+                            setCustomDomain(school.domain || '');
+                            setShowDomainModal(true);
+                          }}
+                          className="bg-slate-800 hover:bg-slate-700 text-amber-400 p-1.5 rounded-lg border border-slate-700 text-[10px] font-bold cursor-pointer"
+                          title="تخصيص نطاق خاص"
+                        >
+                          ربط نطاق خاص
+                        </button>
+                        <button
+                          onClick={() => handleTestLink(school)}
+                          className="bg-slate-800 hover:bg-slate-700 text-emerald-400 p-1.5 rounded-lg border border-slate-700 text-[10px] font-bold cursor-pointer"
+                          title="اختبار الاتصال وصحة المسار"
+                        >
+                          اختبار الرابط
+                        </button>
+                        <button
+                          onClick={() => handleRegenerateDNS(school)}
+                          className="bg-slate-800 hover:bg-slate-700 text-amber-500 p-1.5 rounded-lg border border-slate-700 text-[10px] font-bold cursor-pointer"
+                          title="إعادة بناء المسارات السحابية"
+                        >
+                          إعادة توليد
+                        </button>
+                        <button
+                          type="button"
+                          onClick={() => openTrustedSchoolPortal(school)}
+                          className="bg-amber-600 hover:bg-amber-700 text-white p-1.5 px-2 rounded-lg border border-amber-500 text-[10px] font-bold cursor-pointer inline-flex items-center gap-1 shadow-sm"
+                          title="فتح رابط بوابة المدرسة الموثوقة"
+                        >
+                          <ExternalLink className="w-3 h-3" />
+                          فتح
+                        </button>
+                      </div>
+                    </td>
+                  </tr>
+                );
+              })}
+            </tbody>
+          </table>
+        </div>
+      </div>
+
+      {/* --- CUSTOM DOMAIN MODAL --- */}
+      {showDomainModal && selectedSchool && (
+        <div className="fixed inset-0 z-50 bg-slate-950/80 backdrop-blur-xs flex items-center justify-center p-4">
+          <form onSubmit={handleMapCustomDomain} className="bg-slate-900 border border-slate-800 w-full max-w-md p-6 space-y-4">
+            <h3 className="text-sm font-black text-white flex items-center gap-2">
+              <Globe className="w-5 h-5 text-amber-400" />
+              ربط نطاق خاص مخصص (Custom Domain)
+            </h3>
+            <p className="text-[11px] text-slate-400 leading-relaxed">
+              يرجى إدخال اسم النطاق الخاص بالمؤسسة التعليمية بالكامل. تأكد من توجيه سجلات <span className="text-amber-500 font-mono font-bold">A Record</span> في موزع النطاقات DNS الخاص بكم إلى عنوان IP خادمنا السحابي الموحد.
+            </p>
+
+            <div className="space-y-3 text-right">
+              <div>
+                <label className="text-[10px] font-bold text-slate-400 block mb-1">اسم النطاق المباشر (FQDN)</label>
+                <div className="relative">
+                  <input
+                    type="text"
+                    required
+                    placeholder="e.g. alnoorschools.edu.sa"
+                    value={customDomain}
+                    onChange={(e) => setCustomDomain(e.target.value)}
+                    className="w-full bg-slate-950 text-slate-100 border border-slate-850 p-2.5 pl-10 text-xs font-mono focus:ring-1 focus:ring-amber-500 focus:outline-hidden"
+                  />
+                  <Globe className="w-4 h-4 text-slate-600 absolute left-3 top-3" />
+                </div>
+              </div>
+
+              <div>
+                <label className="text-[10px] font-bold text-slate-400 block mb-1">حالة تشفير الشهادة الأمنية</label>
+                <select
+                  value={sslStatus}
+                  onChange={(e) => setSslStatus(e.target.value as any)}
+                  className="w-full bg-slate-950 text-slate-100 border border-slate-850 p-2.5 text-xs focus:ring-1 focus:ring-amber-500"
+                >
+                  <option value="valid">شهادة مجانية تلقائية Let's Encrypt SSL (موصى بها)</option>
+                  <option value="none">بدون شهادة أمنية مخصصة</option>
+                </select>
+              </div>
+            </div>
+
+            <div className="flex gap-2">
+              <button
+                type="submit"
+                className="flex-1 bg-amber-600 hover:bg-amber-700 text-white text-xs font-black py-2.5 transition-all cursor-pointer"
+              >
+                ربط النطاق وتأصيل المسارات 🌐
+              </button>
+              <button
+                type="button"
+                onClick={() => setShowDomainModal(false)}
+                className="px-4 bg-slate-800 hover:bg-slate-700 text-slate-300 text-xs font-bold py-2.5 transition-all cursor-pointer border border-slate-700"
+              >
+                إلغاء
+              </button>
+            </div>
+          </form>
+        </div>
+      )}
+
+      {/* --- SUBDOMAIN MODAL --- */}
+      {showSubdomainModal && selectedSchool && (
+        <div className="fixed inset-0 z-50 bg-slate-950/80 backdrop-blur-xs flex items-center justify-center p-4">
+          <form onSubmit={handleUpdateSubdomain} className="bg-slate-900 border border-slate-800 w-full max-w-md p-6 space-y-4">
+            <h3 className="text-sm font-black text-white flex items-center gap-2">
+              <Link className="w-5 h-5 text-amber-400" />
+              تعديل النطاق الفرعي السحابي للمدرسة
+            </h3>
+            <p className="text-[11px] text-slate-400 leading-relaxed">
+              سيتم تغيير مسار رابط المستأجر الموحد. تأكد من أن النطاق الفرعي الجديد لم يتم حجزه مسبقاً لمدرسة أخرى.
+            </p>
+
+            <div className="space-y-3 text-right">
+              <div>
+                <label className="text-[10px] font-bold text-slate-400 block mb-1">مسار النطاق الفرعي المباشر</label>
+                <div className="flex items-center gap-1.5 bg-slate-950 border border-slate-850 p-1">
+                  <span className="text-slate-500 font-mono text-xs select-none px-2">https://</span>
+                  <input
+                    type="text"
+                    required
+                    pattern="[a-z0-9\-]+"
+                    placeholder="alnoor"
+                    value={subdomain}
+                    onChange={(e) => setSubdomain(e.target.value.toLowerCase())}
+                    className="flex-1 bg-transparent text-slate-100 p-2 text-xs font-mono focus:outline-hidden"
+                  />
+                  <span className="text-slate-500 font-mono text-xs select-none px-2">.erpcloud.com</span>
+                </div>
+                <p className="text-[8px] text-slate-500 mt-1">حروف صغيرة وأرقام وعلامة الشرطة (-) فقط.</p>
+              </div>
+
+              {subdomain && (
+                <div className="p-3 bg-slate-950 flex items-center justify-between text-[11px]">
+                  <span className="text-slate-400">حالة توافر المسار الفرعي:</span>
+                  {checkSubdomainAvailability(subdomain, selectedSchool.id) ? (
+                    <span className="text-emerald-400 font-bold flex items-center gap-1">
+                      <CheckCircle className="w-4 h-4" />
+                      متاح وجاهز للاستغلال
+                    </span>
+                  ) : (
+                    <span className="text-red-400 font-bold flex items-center gap-1">
+                      <AlertTriangle className="w-4 h-4 animate-bounce" />
+                      محجوز لمستأجر آخر!
+                    </span>
+                  )}
+                </div>
+              )}
+            </div>
+
+            <div className="flex gap-2">
+              <button
+                type="submit"
+                disabled={!checkSubdomainAvailability(subdomain, selectedSchool.id)}
+                className="flex-1 bg-amber-600 hover:bg-amber-700 disabled:opacity-40 text-white text-xs font-black py-2.5 transition-all cursor-pointer"
+              >
+                تحديث مسار البوابة الفرعية ⛓️
+              </button>
+              <button
+                type="button"
+                onClick={() => setShowSubdomainModal(false)}
+                className="px-4 bg-slate-800 hover:bg-slate-700 text-slate-300 text-xs font-bold py-2.5 transition-all cursor-pointer border border-slate-700"
+              >
+                إلغاء
+              </button>
+            </div>
+          </form>
+        </div>
+      )}
+
+    </div>
+  );
+}

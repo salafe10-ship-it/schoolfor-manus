@@ -1,0 +1,101 @@
+[
+  {
+    "id": "acad_per_2026_09",
+    "calendarId": "acad_cal_2026",
+    "name": "2026-09",
+    "startDate": "2026-09-01",
+    "endDate": "2026-09-30",
+    "isActive": true,
+    "isClosed": false
+  },
+  {
+    "id": "acad_per_2026_10",
+    "calendarId": "acad_cal_2026",
+    "name": "2026-10",
+    "startDate": "2026-10-01",
+    "endDate": "2026-10-31",
+    "isActive": true,
+    "isClosed": false
+  },
+  {
+    "id": "acad_per_2026_11",
+    "calendarId": "acad_cal_2026",
+    "name": "2026-11",
+    "startDate": "2026-11-01",
+    "endDate": "2026-11-30",
+    "isActive": true,
+    "isClosed": false
+  },
+  {
+    "id": "acad_per_2026_12",
+    "calendarId": "acad_cal_2026",
+    "name": "2026-12",
+    "startDate": "2026-12-01",
+    "endDate": "2026-12-31",
+    "isActive": true,
+    "isClosed": false
+  },
+  {
+    "id": "acad_per_2027_01",
+    "calendarId": "acad_cal_2026",
+    "name": "2027-01",
+    "startDate": "2027-01-01",
+    "endDate": "2027-01-31",
+    "isActive": true,
+    "isClosed": false
+  },
+  {
+    "id": "acad_per_2027_02",
+    "calendarId": "acad_cal_2026",
+    "name": "2027-02",
+    "startDate": "2027-02-01",
+    "endDate": "2027-02-28",
+    "isActive": true,
+    "isClosed": false
+  },
+  {
+    "id": "acad_per_2027_03",
+    "calendarId": "acad_cal_2026",
+    "name": "2027-03",
+    "startDate": "2027-03-01",
+    "endDate": "2027-03-31",
+    "isActive": true,
+    "isClosed": false
+  },
+  {
+    "id": "acad_per_2027_04",
+    "calendarId": "acad_cal_2026",
+    "name": "2027-04",
+    "startDate": "2027-04-01",
+    "endDate": "2027-04-30",
+    "isActive": true,
+    "isClosed": false
+  },
+  {
+    "id": "acad_per_2027_05",
+    "calendarId": "acad_cal_2026",
+    "name": "2027-05",
+    "startDate": "2027-05-01",
+    "endDate": "2027-05-31",
+    "isActive": true,
+    "isClosed": false
+  },
+  {
+    "id": "acad_per_2027_06",
+    "calendarId": "acad_cal_2026",
+    "name": "2027-06",
+    "startDate": "2027-06-01",
+    "endDate": "2027-06-30",
+    "isActive": true,
+    "isClosed": false
+  },
+  {
+    "id": "period_test_1",
+    "schoolId": "school_test_1",
+    "name": "الفصل الأول 1447",
+    "startDate": "2026-08-01",
+    "endDate": "2026-12-31",
+    "isClosed": false,
+    "accountingPeriodId": "acc_period_1"
+  }
+]
