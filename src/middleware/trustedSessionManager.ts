@@ -1,5 +1,5 @@
 import { clearTrustedSession, isSessionExpired } from './trustedAuthentication';
-import type { TrustedSchoolPresentation } from './trustedSchoolIdentity';
+import type { TrustedBranchPresentation, TrustedSchoolPresentation } from './trustedSchoolIdentity';
 
 export type SessionStorage = Pick<Storage, 'getItem' | 'setItem' | 'removeItem'>;
 
@@ -10,6 +10,9 @@ export type TrustedSessionUser = {
   schoolId: string;
   role: string;
   school?: TrustedSchoolPresentation;
+  branchId?: string;
+  branch?: TrustedBranchPresentation;
+  academicYear?: string;
 };
 
 export type SessionResponse = {
@@ -43,12 +46,19 @@ function normalizeUser(value: unknown): TrustedSessionUser {
   const email = String(value.email || '').trim();
   const schoolId = String(value.schoolId || value.school_id || '').trim();
   const role = String(value.role || '').trim();
+  const branchId = String(value.branchId || value.branch_id || '').trim();
+  const academicYear = String(value.academicYear || value.academic_year || '').trim();
   const name = String(value.name || email).trim();
   if (!id || !email || !schoolId || !role) throw new TrustedSessionError('INVALID_SESSION');
   const school = isRecord(value.school) && String(value.school.id || '').trim() === schoolId
     ? value.school as TrustedSchoolPresentation
     : undefined;
-  return { id, email, name, schoolId, role, ...(school ? { school } : {}) };
+  const branch = isRecord(value.branch)
+    && String(value.branch.id || '').trim() === branchId
+    && String(value.branch.schoolId || value.branch.school_id || '').trim() === schoolId
+    ? value.branch as TrustedBranchPresentation
+    : undefined;
+  return { id, email, name, schoolId, role, ...(school ? { school } : {}), ...(branchId ? { branchId } : {}), ...(branch ? { branch } : {}), ...(academicYear ? { academicYear } : {}) };
 }
 
 function readResponseBody(value: unknown): Record<string, any> {
@@ -79,14 +89,43 @@ export class TrustedSessionManager {
   private refreshFlight: Promise<TrustedSessionUser> | null = null;
   private lifecycleVersion = 0;
 
+  private readonly persistentStorage: SessionStorage;
+  private readonly transientStorage: SessionStorage;
+  private activeStorage: SessionStorage;
+  private readonly request: SessionRequest;
+  constructor(persistentStorage: SessionStorage, request: unknown);
+  constructor(persistentStorage: SessionStorage, transientStorage: SessionStorage, request?: SessionRequest);
   constructor(
-    private readonly storage: SessionStorage,
-    private readonly request: SessionRequest = (input, init) => fetch(input, init)
-  ) {}
+    persistentStorage: SessionStorage,
+    transientStorageOrRequest: unknown = persistentStorage,
+    request: SessionRequest = (input, init) => fetch(input, init)
+  ) {
+    this.persistentStorage = persistentStorage;
+    if (typeof transientStorageOrRequest === 'function') {
+      this.transientStorage = persistentStorage;
+      this.request = transientStorageOrRequest as SessionRequest;
+    } else {
+      this.transientStorage = transientStorageOrRequest as SessionStorage;
+      this.request = request;
+    }
+    this.activeStorage = persistentStorage;
+  }
+  private get storage(): SessionStorage {
+    return this.activeStorage;
+  }
 
   getAccessToken(): string | null {
-    const token = this.storage.getItem(ACCESS_TOKEN_KEY);
-    return token && token.trim() ? token : null;
+    const persistentToken = this.persistentStorage.getItem(ACCESS_TOKEN_KEY);
+    if (persistentToken && persistentToken.trim()) {
+      this.activeStorage = this.persistentStorage;
+      return persistentToken;
+    }
+    const transientToken = this.transientStorage.getItem(ACCESS_TOKEN_KEY);
+    if (transientToken && transientToken.trim()) {
+      this.activeStorage = this.transientStorage;
+      return transientToken;
+    }
+    return null;
   }
 
   getRefreshToken(): string | null {
@@ -148,10 +187,12 @@ export class TrustedSessionManager {
     return responseUser(payload);
   }
 
-  async login(identifier: string, password: string): Promise<TrustedSessionUser> {
+  async login(identifier: string, password: string, rememberMe = true): Promise<TrustedSessionUser> {
     if (!identifier.trim() || !password) throw new TrustedSessionError('INVALID_SESSION');
+    this.activeStorage = rememberMe ? this.persistentStorage : this.transientStorage;
+    clearTrustedSession(rememberMe ? this.transientStorage : this.persistentStorage);
     const version = this.lifecycleVersion;
-    const payload = await this.postJson('/api/auth/login', { email: identifier, password });
+    const payload = await this.postJson('/api/auth/login', { identifier, password });
     const session = responseSession(payload);
     this.saveSession(session.token, session.refreshToken, session.expiresAt, version);
     return session.user;

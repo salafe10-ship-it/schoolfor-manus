@@ -59,11 +59,12 @@ describe('DB-002 persistence source-of-truth boundary', () => {
     expect(audit).toContain('Append-only audit logs cannot be updated');
     expect(audit).toContain('Append-only audit logs cannot be deleted');
     expect(audit).not.toContain(".from('audit_logs')\n          .update");
-    expect(migration).toContain('Student migration failed');
-    expect(migration).toContain('Exam migration failed');
-    expect(migration).toContain('Student Affairs migration did not complete');
-    expect(auxiliaryMigration).toContain('student_documents migration failed');
+    expect(migration).toContain('UnitOfWork.runInTransaction');
+    expect(migration).toContain('transaction will be rolled back');
+    expect(migration).toContain('success: false');
+    expect(auxiliaryMigration).toContain('throw err');
     expect(seed).toContain('insertOrThrow');
-    expect(seed).toContain('Seed insert failed');
+    expect(seed).toContain('A PostgreSQL transaction driver is required');
+    expect(seed).toContain('success: false');
   });
 });

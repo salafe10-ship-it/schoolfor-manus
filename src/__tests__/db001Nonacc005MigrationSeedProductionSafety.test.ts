@@ -27,8 +27,10 @@ describe('DB-001-NONACC-005 migration and seed production safety audit', () => {
     const migration = source('src/database/migrations/init.ts');
     const seed = source('src/database/seed/init.ts');
 
-    expect(migration).not.toContain('runInTransaction');
-    expect(seed).not.toContain('runInTransaction');
+    expect(migration).toContain('UnitOfWork.runInTransaction');
+    expect(migration).toContain('transaction will be rolled back');
+    expect(seed).toContain('UnitOfWork.runInTransaction');
+    expect(seed).toContain('seeding refused to prevent partial writes');
   });
 
   it('confirms this audit does not execute migration or seed', () => {

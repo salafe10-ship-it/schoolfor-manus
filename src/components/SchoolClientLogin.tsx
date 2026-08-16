@@ -22,8 +22,8 @@ import { School } from '../types';
 
 interface SchoolClientLoginProps {
   selectedSchool: School;
-  onSchoolLogin: (username: string, password: string) => void;
-  onForgotPassword?: (identifier: string) => void | Promise<void>;
+  onSchoolLogin: (username: string, password: string, rememberMe: boolean) => void | Promise<void>;
+  onForgotPassword?: (identifier: string) => boolean | Promise<boolean>;
   onSwitchToSuperAdminLogin?: () => void;
   triggerNotification: (msg: string, type: 'success' | 'warning' | 'info') => void;
   theme: 'light' | 'dark';
@@ -48,50 +48,37 @@ export default function SchoolClientLogin({
   const [showPassword, setShowPassword] = useState(false);
   const [rememberMe, setRememberMe] = useState(true);
 
-  // Loading animation state
   const [isLoggingIn, setIsLoggingIn] = useState(false);
-  const [loginProgress, setLoginProgress] = useState(0);
 
-  const handleLoginSubmit = (e: React.FormEvent) => {
+  const handleLoginSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
     if (!username.trim()) {
-      triggerNotification('يرجى إدخال اسم المستخدم الحقيقي للوصول للنظام', 'warning');
+      triggerNotification('يرجى إدخال اسم المستخدم أو البريد الإلكتروني للوصول للنظام', 'warning');
       return;
     }
     if (!password.trim()) {
       triggerNotification('يرجى إدخال كلمة المرور الخاصة بك', 'warning');
       return;
     }
-
     setIsLoggingIn(true);
-    setLoginProgress(0);
-
-    let progress = 0;
-    const interval = setInterval(() => {
-      progress += 25;
-      setLoginProgress(progress);
-
-      if (progress >= 100) {
-        clearInterval(interval);
-        setTimeout(() => {
-          setIsLoggingIn(false);
-          onSchoolLogin(username, password);
-        }, 200);
-      }
-    }, 150);
+    try {
+      await onSchoolLogin(username.trim(), password, rememberMe);
+    } finally {
+      setIsLoggingIn(false);
+    }
   };
-
   const handleForgotPassword = async () => {
-    const identifier = username.trim() || recoveryEmail.trim();
-    if (!identifier) {
+    const email = recoveryEmail.trim();
+    if (!email) {
       setShowRecoveryRequest(true);
+      triggerNotification('أدخل اسم المستخدم أو البريد الإلكتروني المسجل لاستعادة كلمة المرور.', 'info');
       return;
     }
     if (onForgotPassword) {
       setIsSendingRecovery(true);
       try {
-        await onForgotPassword(identifier);
-        setShowRecoveryRequest(false);
+        const success = await onForgotPassword(email);
+        if (success) setShowRecoveryRequest(false);
       } finally {
         setIsSendingRecovery(false);
       }
@@ -165,7 +152,7 @@ export default function SchoolClientLogin({
 
           <div className="bg-gradient-to-r from-[#d4af37] via-[#fef08a] to-[#8b6508] text-slate-950 px-4 py-2 font-black text-xs flex items-center gap-2 border border-amber-200">
             <Award className="w-4 h-4 text-slate-950" />
-            <span>EduPro Enterprise • الجودة والتميز</span>
+            <span>SchoolForManus • الجودة والتميز</span>
           </div>
         </div>
 
@@ -256,7 +243,7 @@ export default function SchoolClientLogin({
           <h1 className={`text-2xl sm:text-3xl font-black mt-3 tracking-tight ${
             isDark ? 'text-white' : 'text-[#2d1e0c]'
           }`}>
-            EduPro Enterprise ERP
+            SchoolForManus
           </h1>
           <div className="text-xs font-black text-[#8b6508] dark:text-amber-400 tracking-widest mt-0.5 uppercase">
             School Management System
@@ -299,15 +286,19 @@ export default function SchoolClientLogin({
             
             {/* Username Field */}
             <div className="space-y-1">
-              <label className={`text-xs font-black block pr-1 ${isDark ? 'text-amber-300' : 'text-[#5c4015]'}`}>
-                اسم المستخدم
+                    <label htmlFor='login-identifier' className={`text-xs font-black block pr-1 ${isDark ? 'text-amber-300' : 'text-[#5c4015]'}`}>
+                اسم المستخدم أو البريد الإلكتروني
               </label>
               <div className="relative">
                 <input 
+                  id='login-identifier'
+                  name='identifier'
                   type="text"
+                  inputMode="text"
+                  autoComplete='username'
                   value={username}
                   onChange={(e) => setUsername(e.target.value)}
-                  placeholder="أدخل اسم المستخدم"
+                  placeholder="أدخل اسم المستخدم أو البريد الإلكتروني"
                   required
                   className={`w-full border text-xs font-bold pr-10 pl-4 py-3 outline-none transition-all shadow-inner ${
                     isDark 
@@ -325,12 +316,15 @@ export default function SchoolClientLogin({
 
             {/* Password Field */}
             <div className="space-y-1">
-              <label className={`text-xs font-black block pr-1 ${isDark ? 'text-amber-300' : 'text-[#5c4015]'}`}>
+              <label htmlFor='login-password' className={`text-xs font-black block pr-1 ${isDark ? 'text-amber-300' : 'text-[#5c4015]'}`}>
                 كلمة المرور
               </label>
               <div className="relative">
                 <input 
+                  id='login-password'
+                  name='password'
                   type={showPassword ? "text" : "password"}
+                  autoComplete='current-password'
                   value={password}
                   onChange={(e) => setPassword(e.target.value)}
                   placeholder="أدخل كلمة المرور"
@@ -348,6 +342,8 @@ export default function SchoolClientLogin({
                 </span>
                 <button
                   type="button"
+                  aria-label={showPassword ? 'إخفاء كلمة المرور' : 'إظهار كلمة المرور'}
+                  aria-pressed={showPassword}
                   onClick={() => setShowPassword(!showPassword)}
                   className={`absolute inset-y-0 left-3 flex items-center cursor-pointer ${
                     isDark ? 'text-amber-400 hover:text-white' : 'text-[#8b6508] hover:text-[#3d2b0f]'
@@ -399,16 +395,19 @@ export default function SchoolClientLogin({
                     استعادة كلمة المرور
                   </p>
                   <p className={`mt-1 text-xs font-bold ${isDark ? 'text-slate-300' : 'text-[#6b4b1f]'}`}>
-                    أدخل البريد المسجل لنرسل لك رابطًا آمنًا لإعادة التعيين.
+                    أدخل اسم المستخدم أو البريد الإلكتروني المسجل لنرسل لك رابطًا آمنًا لإعادة التعيين.
                   </p>
                 </div>
                 <input
-                  type="email"
+                  id='recovery-identifier'
+                  name='recoveryIdentifier'
+                  type="text"
+                  inputMode="text"
                   value={recoveryEmail}
                   onChange={(e) => setRecoveryEmail(e.target.value)}
-                  placeholder="البريد الإلكتروني المسجل"
-                  aria-label="البريد الإلكتروني لاستعادة كلمة المرور"
-                  autoComplete="email"
+                  placeholder="اسم المستخدم أو البريد الإلكتروني المسجل"
+                  aria-label="اسم المستخدم أو البريد الإلكتروني لاستعادة كلمة المرور"
+                  autoComplete="username"
                   className={`w-full rounded-lg border px-3 py-2.5 text-sm outline-none ${
                     isDark
                       ? 'border-amber-500/40 bg-slate-900 text-white placeholder-slate-400 focus:border-amber-300'
@@ -441,14 +440,12 @@ export default function SchoolClientLogin({
             {/* Login Action Button */}
             <div className="pt-3">
               {isLoggingIn ? (
-                <div className="w-full bg-[#3d2b14] dark:bg-amber-950/80 text-[#fef08a] p-3.5 text-center font-bold text-xs space-y-2 border border-amber-500/40">
+                <div aria-live="polite" className="w-full bg-[#3d2b14] dark:bg-amber-950/80 text-[#fef08a] p-3.5 text-center font-bold text-xs space-y-2 border border-amber-500/40">
                   <div className="flex items-center justify-center gap-2">
                     <span className="w-2 h-2 rounded-full bg-[#fef08a] animate-ping" />
                     <span>جاري التحقق وتسجيل الدخول...</span>
                   </div>
-                  <div className="w-full bg-slate-800 h-1.5 rounded-full overflow-hidden">
-                    <div className="bg-gradient-to-r from-[#d4af37] to-[#fef08a] h-full transition-all duration-150" style={{ width: `${loginProgress}%` }} />
-                  </div>
+
                 </div>
               ) : (
                 <button
@@ -552,7 +549,7 @@ export default function SchoolClientLogin({
         <div className={`text-center text-[11px] font-bold mt-3 ${
           isDark ? 'text-slate-400' : 'text-[#5c4015]'
         }`}>
-          جميع الحقوق محفوظة © 2026 EduPro Enterprise School ERP
+          جميع الحقوق محفوظة © 2026 SchoolForManus School Management System
         </div>
       </footer>
 

@@ -40,7 +40,7 @@ const ROLE_DEFINITIONS: Record<string, string[]> = {
     'financial:read', 'financial:write', 'inventory:view', 'inventory:write', 'audit:read', 'student:read', 'student:print', 'student:export'
   ],
   cashier: ['dashboard:view', 'invoice:view', 'invoice:insert', 'invoice:print', 'financial:read', 'audit:read'],
-  student_affairs: ['dashboard:view', 'student:view', 'student:insert', 'student:edit', 'student:delete', 'student:export', 'student:print', 'student:import', 'student:read', 'student:write', 'Student.Registration.Create', 'Student.Guardian.Link', 'Student.Number.Override', 'Student.Duplicate.Override', 'attendance:view', 'attendance:insert', 'attendance:edit', 'attendance:export', 'attendance:print'],
+  student_affairs: ['dashboard:view', 'student:view', 'student:insert', 'student:edit', 'student:delete', 'student:export', 'student:print', 'student:import', 'student:read', 'student:write', 'Student.Registration.Create', 'Student.Guardian.Link', 'Student.Number.Override', 'Student.Duplicate.Override', 'Admission.Read', 'Admission.Write', 'attendance:view', 'attendance:insert', 'attendance:edit', 'attendance:export', 'attendance:print'],
   hr_manager: ['dashboard:view', 'hr:view', 'hr:insert', 'hr:edit', 'hr:delete', 'hr:approve', 'hr:cancel', 'hr:post', 'hr:export', 'hr:print', 'attendance:view', 'attendance:insert', 'attendance:edit'],
   control: ['dashboard:view', 'exam:view', 'exam:insert', 'exam:edit', 'exam:delete', 'exam:approve', 'exam:cancel', 'exam:post', 'exam:export', 'exam:print', 'exam:read', 'exam:write'],
   warehouse_keeper: ['dashboard:view', 'warehouse:view', 'warehouse:insert', 'warehouse:edit', 'warehouse:export', 'warehouse:print'],

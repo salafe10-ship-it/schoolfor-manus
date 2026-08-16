@@ -51,6 +51,9 @@ describe('Wave 1B trusted session manager', () => {
     const manager = new TrustedSessionManager(storage, request);
 
     await expect(manager.login('user@example.com', 'correct')).resolves.toMatchObject({ schoolId: 'school-1' });
+    expect(request).toHaveBeenCalledWith('/api/auth/login', expect.objectContaining({
+      body: JSON.stringify({ identifier: 'user@example.com', password: 'correct' })
+    }));
     expect(storage.getItem(trustedSessionStorageKeys.accessToken)).toBe('access-1');
     expect(storage.getItem(trustedSessionStorageKeys.refreshToken)).toBe('refresh-1');
     expect(storage.getItem(trustedSessionStorageKeys.expiresAt)).toBe('4102444800');

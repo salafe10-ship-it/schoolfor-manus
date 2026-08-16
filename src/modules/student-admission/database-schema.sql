@@ -4,6 +4,7 @@ CREATE TABLE admission_inquiries (
     id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
     tenant_id UUID NOT NULL,
     school_id UUID NOT NULL,
+    branch_id UUID NOT NULL,
     student_name VARCHAR(255) NOT NULL,
     date_of_birth DATE NOT NULL,
     status VARCHAR(50) NOT NULL DEFAULT 'INQUIRY',
@@ -22,10 +23,12 @@ DROP POLICY IF EXISTS admission_inquiries_isolation_policy ON admission_inquirie
 CREATE POLICY admission_inquiries_isolation_policy ON admission_inquiries
     FOR ALL
     USING (
-        tenant_id::text = (auth.jwt()->'app_metadata'->>'school_id')
+        tenant_id::text = (auth.jwt()->'app_metadata'->>'tenant_id')
         AND school_id::text = (auth.jwt()->'app_metadata'->>'school_id')
+        AND branch_id::text = (auth.jwt()->'app_metadata'->>'branch_id')
     )
     WITH CHECK (
-        tenant_id::text = (auth.jwt()->'app_metadata'->>'school_id')
+        tenant_id::text = (auth.jwt()->'app_metadata'->>'tenant_id')
         AND school_id::text = (auth.jwt()->'app_metadata'->>'school_id')
+        AND branch_id::text = (auth.jwt()->'app_metadata'->>'branch_id')
     );

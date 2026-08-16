@@ -2,6 +2,7 @@
 
 export interface SubmitAdmissionInquiryRequestDto {
   schoolId: string;
+  branchId: string;
   studentName: string;
   dateOfBirth: string; // ISO Date String
 }

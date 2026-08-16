@@ -19,6 +19,7 @@ const GeneralLedgerPortal = React.lazy(() => import('./components/GeneralLedgerP
 import AccountingErrorBoundary from './components/AccountingErrorBoundary';
 const TreasuryPlatformPortal = React.lazy(() => import('./components/TreasuryPlatformPortal'));
 const StudentAffairsPortal = React.lazy(() => import('./components/StudentAffairsPortal'));
+const AdmissionsPortal = React.lazy(() => import('./components/AdmissionsPortal'));
 const AcademicAffairsPortal = React.lazy(() => import('./components/AcademicAffairsPortal'));
 import SmartPortalGateway from './components/SmartPortalGateway';
 import SchoolClientLogin from './components/SchoolClientLogin';
@@ -141,7 +142,7 @@ export const copyTextToClipboard = async (text: string): Promise<boolean> => {
 
 export default function App() {
   const { currencyConfig, format: formatCurrency, saveCurrency } = useCurrency();
-  const sessionManager = useMemo(() => new TrustedSessionManager(window.localStorage), []);
+  const sessionManager = useMemo(() => new TrustedSessionManager(window.localStorage, window.sessionStorage), []);
   const [passwordRecovery, setPasswordRecovery] = useState<{ accessToken: string; refreshToken: string } | null>(() => {
     if (typeof window === 'undefined') return null;
     const hash = new URLSearchParams(window.location.hash.replace(/^#/, ''));
@@ -540,6 +541,10 @@ export default function App() {
     setTrustedSessionUser(user);
     setSelectedSchool(targetSchool);
     setCurrentRole(trustedRole);
+    const trustedBranch = user.branch && user.branch.schoolId === user.schoolId
+      ? { id: user.branch.id, schoolId: user.branch.schoolId, name: user.branch.name, city: user.branch.city, manager: '', studentCount: 0, teacherCount: 0 }
+      : null;
+    setSelectedBranch(trustedBranch);
     setIsSuperAdminPortalActive(trustedRole === 'SuperAdmin');
     setActiveSection(trustedRole === 'SuperAdmin' ? 'super_stats' : 'dashboard');
     return targetSchool;
@@ -910,18 +915,16 @@ export default function App() {
   };
 
   // Portal Authentication Controllers
-  const authenticateAndOpenSession = async (identifier: string, password: string) => {
+  const authenticateAndOpenSession = async (identifier: string, password: string, rememberMe = true) => {
     if (!identifier.trim() || !password) {
       triggerNotification('يرجى إدخال بيانات الدخول كاملة', 'warning');
       return;
     }
 
     try {
-      const user = await sessionManager.login(identifier, password);
+      const user = await sessionManager.login(identifier, password, rememberMe);
       const targetSchool = applyTrustedSessionUser(user);
       const trustedRole = user.role as UserRole;
-      const relatedBranches = branches.filter(b => b.schoolId === targetSchool.id);
-      setSelectedBranch(relatedBranches[0] || null);
       setCurrentPortal(trustedRole === 'SuperAdmin' ? 'admin' : 'school');
 
       logAction('PORTAL_LOGIN', `تم تسجيل الدخول الموثوق إلى ${targetSchool.name}`, 'المصادقة والأمان');
@@ -932,22 +935,24 @@ export default function App() {
     }
   };
 
-  const handleSchoolLogin = (username: string, password: string) => {
-    void authenticateAndOpenSession(username, password);
+  const handleSchoolLogin = (username: string, password: string, rememberMe = true) => {
+    return authenticateAndOpenSession(username, password, rememberMe);
   };
 
-  const handleForgotPassword = async (identifier: string) => {
+  const handleForgotPassword = async (identifier: string): Promise<boolean> => {
     try {
       const response = await fetch('/api/auth/recovery', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ email: identifier })
+        body: JSON.stringify({ identifier })
       });
       const payload = await response.json().catch(() => null);
       if (!response.ok || !payload?.success) throw new Error(payload?.message || 'تعذر إرسال رابط الاستعادة.');
-      triggerNotification('تم إرسال رابط الاستعادة إلى البريد المسجل. الرابط صالح لمدة 60 دقيقة.', 'success');
+      triggerNotification('إذا كانت البيانات صحيحة فسيتم إرسال رابط الاستعادة بأمان. الرابط صالح لمدة 60 دقيقة.', 'success');
+      return true;
     } catch (error: any) {
-      triggerNotification(error?.message || 'تعذر إرسال رابط الاستعادة.', 'warning');
+      triggerNotification('تعذر إرسال رابط الاستعادة.', 'warning');
+      return false;
     }
   };
 
@@ -1752,8 +1757,9 @@ export default function App() {
                       المنطقة الحالية: <b className="text-[#fce79a] font-black">
                         {activeSection === 'dashboard' ? 'لوحة التحكم والمؤشرات' :
                          activeSection === 'academic' ? 'إدارة الشؤون الأكاديمية والخطط' :
-                         activeSection === 'students' ? 'شؤون الطلاب والأكاديمية' :
-                         activeSection === 'teachers' ? 'شؤون المعلمين والموظفين' :
+                          activeSection === 'students' ? 'شؤون الطلاب والأكاديمية' :
+                          activeSection === 'admissions' ? 'القبول والتسجيل وصندوق الاستفسارات' :
+                          activeSection === 'teachers' ? 'شؤون المعلمين والموظفين' :
                          activeSection === 'accounts' ? 'الحسابات العامة والقيود' :
                          activeSection === 'student_accounts' ? 'حسابات الطلاب المالية' :
                          activeSection === 'financial_reports' ? 'التقارير المالية والختامية' :
@@ -1819,6 +1825,7 @@ export default function App() {
                 invoices={invoices}
                 setActiveSection={setActiveSection}
                 selectedSchool={selectedSchool}
+                selectedBranch={selectedBranch}
                 currentRole={currentRole}
                 triggerNotification={triggerNotification}
                 isClientMode={isClientMode}
@@ -1959,6 +1966,18 @@ export default function App() {
                 invoices={invoices}
                 setInvoices={setInvoices}
               />
+            )}
+
+            {activeSection === 'admissions' && (
+              <React.Suspense fallback={<div className="p-8 text-center text-slate-500">جاري تحميل صندوق القبول والتسجيل...</div>}>
+                <AdmissionsPortal
+                  selectedSchool={selectedSchool}
+                  selectedBranch={selectedBranch}
+                  currentRole={currentRole}
+                  triggerNotification={triggerNotification}
+                  onExit={() => setActiveSection('dashboard')}
+                />
+              </React.Suspense>
             )}
 
             {/* ========================================================== */}

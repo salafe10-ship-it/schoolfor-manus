@@ -34,6 +34,7 @@ import { tenantEngine } from "./src/tenant/TenantEngine.js";
 import { PERMISSIONS } from "./src/authorization/PermissionRegistry.js";
 import {
   authenticateTrustedUser,
+  resolveTrustedLoginIdentifier,
   refreshTrustedSession,
   extractBearerToken,
   verifyTrustedSession,
@@ -63,6 +64,8 @@ import { tenantScopedDatabaseFilePath } from "./src/security/tenantScopedFilePat
 import { generateStudentExport, STUDENT_EXPORT_CONTENT_TYPE } from "./src/modules/student-export/application/StudentExportService.js";
 import { createStartupReadiness } from "./server/infrastructure/StartupReadiness.js";
 import { FallbackStorage } from "./src/database/repositories/FallbackStorage.js";
+import { AdmissionInquiry, AdmissionStatus } from './src/modules/student-admission/domain/AdmissionInquiry.js';
+import { SupabaseAdmissionInquiryRepository } from './src/modules/student-admission/repository/SupabaseAdmissionInquiryRepository.js';
 
 function parseStudentQueryInteger(value: unknown, field: string, defaultValue: number, maximum: number): number {
   if (value === undefined || value === '') return defaultValue;
@@ -254,8 +257,8 @@ async function startServer() {
   app.post("/api/auth/login", authLimiter, async (req, res, next) => {
     try {
       (req as any).perf004Trace?.mark('authentication_started');
-      const { email, username, password } = req.body || {};
-      const identifier = email || username;
+      const { identifier: requestedIdentifier, email, username, password } = req.body || {};
+      const identifier = requestedIdentifier || email || username;
       if (typeof identifier !== 'string' || !identifier.trim() || typeof password !== 'string' || !password) {
         return next(new AuthenticationError("بيانات الدخول غير صحيحة"));
       }
@@ -280,7 +283,10 @@ async function startServer() {
             role: identity.role,
             name: identity.name,
             email: identity.email,
-            school: identity.school
+            school: identity.school,
+            branch: identity.branch,
+            branch_id: identity.branchId,
+            academic_year: identity.academicYear
           }
         },
         message: "تم إنشاء جلسة موثوقة بنجاح."
@@ -297,16 +303,30 @@ async function startServer() {
   // exposes or accepts a service-role credential in the browser.
   app.post("/api/auth/recovery", authLimiter, async (req, res, next) => {
     try {
-      const email = req.body?.email;
-      if (typeof email !== 'string' || !email.trim() || !email.includes('@')) {
-        return next(new AuthenticationError("أدخل بريدًا إلكترونيًا صالحًا"));
+      const { identifier: requestedIdentifier, email, username } = req.body || {};
+      const identifier = requestedIdentifier || email || username;
+      if (typeof identifier !== 'string' || !identifier.trim()) {
+        return next(new AuthenticationError("أدخل اسم المستخدم أو البريد الإلكتروني"));
       }
       const supabase = getSupabaseClient();
       if (!supabase) return next(new ExternalServiceError("خدمة المصادقة غير مهيأة."));
-      const { error } = await supabase.auth.resetPasswordForEmail(email.trim());
+
+      let resolvedEmail: string;
+      try {
+        resolvedEmail = (await resolveTrustedLoginIdentifier(supabase, identifier)).email;
+      } catch (error) {
+        // Keep the response generic so recovery never reveals account existence.
+        if (error instanceof TrustedAuthenticationError) {
+          disableAuthCaching(res);
+          return res.json({ success: true, message: "إذا كانت البيانات صحيحة فسيتم إرسال رابط الاستعادة." });
+        }
+        throw error;
+      }
+
+      const { error } = await supabase.auth.resetPasswordForEmail(resolvedEmail);
       if (error) return next(new ExternalServiceError("تعذر إرسال رابط الاستعادة."));
       disableAuthCaching(res);
-      res.json({ success: true, message: "تم إرسال رابط الاستعادة." });
+      res.json({ success: true, message: "إذا كانت البيانات صحيحة فسيتم إرسال رابط الاستعادة." });
     } catch (error) {
       next(error);
     }
@@ -358,7 +378,10 @@ async function startServer() {
             role: identity.role,
             name: identity.name,
             email: identity.email,
-            school: identity.school
+            school: identity.school,
+            branch: identity.branch,
+            branch_id: identity.branchId,
+            academic_year: identity.academicYear
           }
         },
         message: "تم تجديد الجلسة الموثوقة."
@@ -444,6 +467,180 @@ async function startServer() {
       next(error);
     }
   }
+
+  function admissionRequestContext(req: express.Request) {
+    const context = (req as any).tenantContext;
+    if (!context || !context.tenantId || !context.schoolId || !context.branchId) {
+      throw new ValidationError('Trusted admission tenant context is required.');
+    }
+    return context;
+  }
+
+  function createAdmissionRepository(req: express.Request) {
+    return new SupabaseAdmissionInquiryRepository(
+      getSupabaseClientForAccessToken((req as any).trustedAccessToken)
+    );
+  }
+
+  function serializeAdmissionInquiry(inquiry: AdmissionInquiry) {
+    return {
+      id: inquiry.id,
+      studentName: inquiry.props.studentName,
+      dateOfBirth: inquiry.props.dateOfBirth.toISOString().slice(0, 10),
+      status: inquiry.props.status,
+      createdAt: inquiry.props.createdAt.toISOString()
+    };
+  }
+
+  function admissionAuditRole(role: string): 'SuperAdmin' | 'SchoolAdmin' | 'Teacher' | 'Accountant' | 'Parent' {
+    const normalized = role.trim().toLowerCase();
+    if (normalized === 'superadmin') return 'SuperAdmin';
+    if (normalized === 'teacher') return 'Teacher';
+    if (normalized === 'accountant') return 'Accountant';
+    if (normalized === 'parent') return 'Parent';
+    return 'SchoolAdmin';
+  }
+
+  async function recordAdmissionAudit(
+    req: express.Request,
+    context: { tenantId: string; schoolId: string; branchId: string; userId: string; role: string },
+    action: string,
+    inquiryId: string,
+    details: Record<string, unknown> = {}
+  ) {
+    await AuditRepository.create(context.schoolId, {
+      userId: context.userId,
+      userName: (req as any).user?.name || (req as any).user?.email || context.userId,
+      userRole: admissionAuditRole(context.role),
+      action,
+      module: 'Admissions',
+      ipAddress: req.ip || 'unknown',
+      endpoint: req.originalUrl,
+      httpMethod: req.method,
+      result: 'success',
+      severity: 'low',
+      details: JSON.stringify({
+        inquiryId,
+        tenantId: context.tenantId,
+        schoolId: context.schoolId,
+        branchId: context.branchId,
+        role: context.role,
+        ...details
+      })
+    });
+  }
+
+  app.get('/api/admissions/inquiries', authenticateRequest, requirePermission(PERMISSIONS.ADMISSION_READ), async (req, res, next) => {
+    try {
+      const context = await resolveStudentTenantContext(req);
+      const page = parseStudentQueryInteger(req.query.page, 'page', 1, 1000000);
+      const limit = parseStudentQueryInteger(req.query.limit, 'limit', 25, 100);
+      const statusValue = parseStudentQueryString(req.query.status, 'status');
+      if (statusValue && !Object.values(AdmissionStatus).includes(statusValue as AdmissionStatus)) {
+        throw new ValidationError('Admission status filter is not supported.');
+      }
+      const inquiries = await createAdmissionRepository(req).findByScope({
+        tenantId: context.tenantId,
+        schoolId: context.schoolId,
+        branchId: context.branchId
+      });
+      const filtered = statusValue
+        ? inquiries.filter((item) => item.props.status === statusValue)
+        : inquiries;
+      const totalCount = filtered.length;
+      const data = filtered.slice((page - 1) * limit, page * limit).map(serializeAdmissionInquiry);
+      return res.json({
+        success: true,
+        data,
+        meta: { page, limit, totalCount, totalPages: Math.ceil(totalCount / limit) }
+      });
+    } catch (err) {
+      return next(err);
+    }
+  });
+
+  app.post('/api/admissions/inquiries', authenticateRequest, requirePermission(PERMISSIONS.ADMISSION_WRITE), async (req, res, next) => {
+    try {
+      const context = await resolveStudentTenantContext(req);
+      const studentName = req.body?.studentName;
+      const dateOfBirthValue = req.body?.dateOfBirth;
+      if (typeof studentName !== 'string' || !studentName.trim()) {
+        throw new ValidationError('Student name is required.');
+      }
+      if (typeof dateOfBirthValue !== 'string' || !dateOfBirthValue.trim()) {
+        throw new ValidationError('Date of birth is required.');
+      }
+      const dateOfBirth = new Date(dateOfBirthValue);
+      if (Number.isNaN(dateOfBirth.getTime())) {
+        throw new ValidationError('Date of birth is invalid.');
+      }
+      const age = new Date().getFullYear() - dateOfBirth.getFullYear();
+      if (age < 3 || age > 18) {
+        throw new ValidationError('Student age is not eligible for admission.');
+      }
+      const inquiry = AdmissionInquiry.create({
+        tenantId: context.tenantId,
+        schoolId: context.schoolId,
+        branchId: context.branchId,
+        studentName: studentName.trim(),
+        dateOfBirth
+      });
+      await createAdmissionRepository(req).save(inquiry);
+      await recordAdmissionAudit(req, context, 'ADMISSION_INQUIRY_SUBMITTED', inquiry.id, {
+        status: inquiry.props.status
+      });
+      return res.status(201).json({
+        success: true,
+        data: serializeAdmissionInquiry(inquiry)
+      });
+    } catch (err) {
+      return next(err);
+    }
+  });
+
+  app.patch('/api/admissions/inquiries/:id/status', authenticateRequest, requirePermission(PERMISSIONS.ADMISSION_WRITE), async (req, res, next) => {
+    try {
+      const context = await resolveStudentTenantContext(req);
+      const nextStatus = req.body?.status;
+      if (
+        typeof nextStatus !== 'string' ||
+        !Object.values(AdmissionStatus).includes(nextStatus as AdmissionStatus)
+      ) {
+        throw new ValidationError('Admission status is invalid.');
+      }
+      const inquiry = await createAdmissionRepository(req).findByIdInScope(req.params.id, {
+        tenantId: context.tenantId,
+        schoolId: context.schoolId,
+        branchId: context.branchId
+      });
+      if (!inquiry) {
+        return res.status(404).json({
+          success: false,
+          errorCode: 'ADMISSION_NOT_FOUND',
+          message: 'Admission inquiry was not found in the trusted scope.'
+        });
+      }
+      const previousStatus = inquiry.props.status;
+      try {
+        inquiry.transitionTo(nextStatus as AdmissionStatus);
+      } catch (error) {
+        throw new ValidationError(
+          error instanceof Error ? error.message : 'Admission transition is invalid.'
+        );
+      }
+      await createAdmissionRepository(req).save(inquiry);
+      await recordAdmissionAudit(req, context, 'ADMISSION_STATUS_TRANSITION', inquiry.id, {
+        from: previousStatus,
+        to: inquiry.props.status
+      });
+      return res.json({
+        success: true,
+        data: serializeAdmissionInquiry(inquiry)
+      });
+    } catch (err) {
+      return next(err);
+    }
+  });
 
   async function resolveActiveStudentTerm(context: {
     tenantId: string;
@@ -584,7 +781,7 @@ async function startServer() {
       data: {
         status: "healthy",
         timestamp: new Date().toISOString(),
-        service: "EduPro Enterprise ERP Full-Stack Engine",
+        service: "SchoolForManus School Management System",
         architecture: "Express.js + React Vite SPA + PostgreSQL Simulation Model",
         tenantIsolationMode: "Row-Level Security (RLS) Active"
       },
@@ -1794,7 +1991,7 @@ ${JSON.stringify(snapshot)}
 
   // Bind to the dynamic cloud environment port (or fallback to 3000)
   app.listen(Number(PORT), "0.0.0.0", () => {
-    EnterpriseLogger.info(`EduPro Enterprise ERP Server listening on port ${PORT}`, "ServerBootstrap");
+    EnterpriseLogger.info(`SchoolForManus server listening on port ${PORT}`, "ServerBootstrap");
   });
 }
 

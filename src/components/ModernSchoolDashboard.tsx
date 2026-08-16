@@ -39,7 +39,7 @@ import {
   Globe,
   Headphones
 } from 'lucide-react';
-import { School, UserRole } from '../types';
+import { Branch, School, UserRole } from '../types';
 
 interface ModernSchoolDashboardProps {
   students: any[];
@@ -47,6 +47,7 @@ interface ModernSchoolDashboardProps {
   invoices: any[];
   setActiveSection: (sec: string) => void;
   selectedSchool: School;
+  selectedBranch: Branch | null;
   currentRole: UserRole;
   triggerNotification: (msg: string, type: 'info' | 'warning' | 'success') => void;
   isClientMode?: boolean;
@@ -58,6 +59,7 @@ export default function ModernSchoolDashboard({
   invoices = [],
   setActiveSection,
   selectedSchool,
+  selectedBranch,
   currentRole,
   triggerNotification,
   isClientMode = false
@@ -92,8 +94,8 @@ export default function ModernSchoolDashboard({
   }, []);
 
   // Calculate live dynamic counts based on props with fallback enterprise numbers
-  const totalStudentsCount = students.length > 0 ? students.length.toLocaleString('ar-EG') : '2,450';
-  const totalTeachersCount = teachers.length > 0 ? teachers.length.toLocaleString('ar-EG') : '185';
+  const totalStudentsCount = students.length > 0 ? students.length.toLocaleString('ar-EG') : '—';
+  const totalTeachersCount = teachers.length > 0 ? teachers.length.toLocaleString('ar-EG') : '—';
   
   // Quick Action Handler
   const handleNav = (section: string, label: string) => {
@@ -145,7 +147,7 @@ export default function ModernSchoolDashboard({
           </div>
           <div>
             <h1 className="text-xl sm:text-2xl font-black bg-gradient-to-r from-[#ffe5a3] via-[#fce79a] to-[#d4af37] bg-clip-text text-transparent drop-shadow-sm">
-              EduPro Enterprise ERP
+              SchoolForManus
             </h1>
             <p className="text-[11px] text-amber-200/80 font-bold tracking-wide">
               مركز القيادة وإدارة المدارس
@@ -158,7 +160,7 @@ export default function ModernSchoolDashboard({
           {/* Academic Year */}
           <div className="bg-[#2a1d13]/90 border border-[#d4af37]/30 hover:border-[#f7d174] px-4 py-2 rounded-2xl flex items-center gap-2 text-xs font-bold text-amber-100 shadow-inner transition-all">
             <Calendar className="w-4 h-4 text-amber-400" />
-            <span>2024 - 2025</span>
+            <span>{selectedSchool.academicYear || 'غير محدد'}</span>
             <span className="text-[10px] text-amber-300/70">العام الدراسي</span>
           </div>
 
@@ -166,7 +168,7 @@ export default function ModernSchoolDashboard({
           <div className="bg-[#2a1d13]/90 border border-[#d4af37]/30 hover:border-[#f7d174] px-4 py-2 rounded-2xl flex items-center gap-2 text-xs font-bold text-amber-100 shadow-inner transition-all">
             <Building2 className="w-4 h-4 text-amber-400" />
             <span>{selectedSchool.name || 'المدرسة النموذجية'}</span>
-            <span className="text-[10px] text-amber-300/70">الفرع الرئيسي</span>
+            <span className="text-[10px] text-amber-300/70">{selectedBranch?.name || 'جميع الفروع'}</span>
           </div>
 
           {/* Date & Live Clock */}

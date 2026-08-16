@@ -29,6 +29,8 @@ export const PERMISSIONS = {
   FINANCIAL_WRITE: 'Financial.Write',
   INVENTORY_READ: 'Inventory.View',
   INVENTORY_WRITE: 'Inventory.Write',
+  ADMISSION_READ: 'Admission.Read',
+  ADMISSION_WRITE: 'Admission.Write',
   AI_FORECAST: 'Ai.Forecast',
   AI_CHAT: 'Ai.Chat'
 } as const;

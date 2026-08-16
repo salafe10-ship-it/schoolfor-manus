@@ -59,7 +59,7 @@ export default function PasswordRecoveryScreen({
       <form onSubmit={submit} className="w-full max-w-md space-y-5 rounded-2xl border border-amber-500/30 bg-slate-900 p-7 shadow-2xl">
         <div className="space-y-2 text-center">
           <h1 className="text-2xl font-black text-amber-300">تعيين كلمة مرور جديدة</h1>
-          <p className="text-sm text-slate-300">استخدم كلمة مرور جديدة لحساب EduPro.</p>
+          <p className="text-sm text-slate-300">استخدم كلمة مرور جديدة لحساب SchoolForManus.</p>
         </div>
 
         <label className="block space-y-2 text-sm font-bold">

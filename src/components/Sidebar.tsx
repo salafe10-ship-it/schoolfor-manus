@@ -1,4 +1,4 @@
-import { Activity, Award, BarChart3, BookOpen, BrainCircuit, Building2, Bus, CalendarCheck, ChevronLeft, ChevronRight, Coins, Container, Cpu, CreditCard, DatabaseZap, FileBadge2, FileSpreadsheet, Globe, Globe2, GraduationCap, HardDriveDownload, HeartHandshake, LayoutTemplate, Menu, MessageSquareDot, Network, Receipt, Server, Settings2, ShieldCheck, Shirt, ShoppingBag, Sparkles, Target, UserSquare, Users, WalletCards, Workflow, Zap } from 'lucide-react';
+import { Activity, Award, BarChart3, BookOpen, BrainCircuit, Building2, Bus, CalendarCheck, ChevronLeft, ChevronRight, Coins, Container, Cpu, CreditCard, DatabaseZap, FileBadge2, FileSpreadsheet, Globe, Globe2, GraduationCap, HardDriveDownload, HeartHandshake, LayoutTemplate, Menu, MessageSquareDot, Network, Receipt, Server, Settings2, ShieldCheck, Shirt, ShoppingBag, Sparkles, Target, UserPlus, UserSquare, Users, WalletCards, Workflow, Zap } from 'lucide-react';
 /**
  * @license
  * SPDX-License-Identifier: Apache-2.0
@@ -70,6 +70,7 @@ export default function Sidebar({
       items: [
         { id: 'academic', label: 'الشؤون الأكاديمية والخطط', icon: BookOpen },
         { id: 'students', label: 'شؤون الطلاب', icon: GraduationCap },
+        { id: 'admissions', label: 'القبول والتسجيل', icon: UserPlus },
         { id: 'parents', label: 'أولياء الأمور', icon: UserSquare },
         { id: 'attendance', label: 'الحضور والانصراف', icon: CalendarCheck },
         { id: 'exams', label: 'الامتحانات والنتائج', icon: FileBadge2 },
@@ -167,6 +168,7 @@ export default function Sidebar({
         const schoolModules = JSON.parse(savedModules);
         const mapToCenterKey: Record<string, string> = {
           'students': 'students',
+          'admissions': 'students',
           'parents': 'students',
           'attendance': 'students',
           'exams': 'exams',
@@ -200,6 +202,7 @@ export default function Sidebar({
 
     const map: Record<string, string> = {
       'students': 'students',
+      'admissions': 'students',
       'parents': 'students',
       'attendance': 'students',
       'exams': 'exams',
@@ -271,6 +274,7 @@ export default function Sidebar({
                 'ai_assistant': { catId: 'dashboard', scrId: 'ai_assistant' },
                 'branches': { catId: 'dashboard', scrId: 'branches' },
                 'students': { catId: 'students', scrId: 'browse_students' },
+                'admissions': { catId: 'students', scrId: 'admissions_inbox' },
                 'parents': { catId: 'parent', scrId: 'parent_directory' },
                 'attendance': { catId: 'attendance', scrId: 'daily_roll' },
                 'exams': { catId: 'exams', scrId: 'exams_dashboard' },

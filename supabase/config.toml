@@ -1,6 +1,6 @@
 # Local Supabase CLI configuration only.
 # This file intentionally contains no schema, policy, bucket, RPC, or user definitions.
-project_id = "edupro-enterprise"
+project_id = "wjhraxvxvvthxqlpyohh"
 
 [api]
 enabled = true

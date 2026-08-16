@@ -690,6 +690,7 @@ describe('DOC-003 StudentDocumentsPortal', () => {
     fireEvent.click(screen.getByRole('button', { name: 'رفض' }));
     expect(fetchMock.mock.calls.filter(([, init]) => (init as RequestInit | undefined)?.method === 'POST')).toHaveLength(1);
     resolveMutation(response({ success: true, data: { documentId: document.id } }));
+    await waitFor(() => expect(notify).toHaveBeenCalledWith(expect.stringContaining('لم تُثبت النتيجة النهائية'), 'warning'));
   });
 
   it('requires cancellable confirmation for archive and binds it to the selected document', async () => {
@@ -724,6 +725,7 @@ describe('DOC-003 StudentDocumentsPortal', () => {
     fireEvent.click(confirm);
     await waitFor(() => expect(fetchMock.mock.calls.filter(([, init]) => (init as RequestInit | undefined)?.method === 'POST')).toHaveLength(1));
     resolveMutation(response({ success: true, data: { documentId: document.id } }));
+    await waitFor(() => expect(notify).toHaveBeenCalledWith(expect.stringContaining('لم تُثبت النتيجة النهائية'), 'warning'));
   });
 
   it('cancels a destructive confirmation when the target is cleared by a filter change', async () => {
@@ -742,6 +744,7 @@ describe('DOC-003 StudentDocumentsPortal', () => {
     fireEvent.click(screen.getByRole('button', { name: 'أرشفة' }));
     fireEvent.change(screen.getByPlaceholderText('العنوان أو المرجع'), { target: { value: 'تغيير النطاق' } });
     expect(screen.queryByRole('dialog', { name: 'أرشفة المستند' })).toBeNull();
+    await waitFor(() => expect(screen.getByText('مستند الفلتر')).not.toBeNull());
     expect(fetchMock.mock.calls.filter(([, init]) => (init as RequestInit | undefined)?.method === 'POST')).toHaveLength(0);
   });
 

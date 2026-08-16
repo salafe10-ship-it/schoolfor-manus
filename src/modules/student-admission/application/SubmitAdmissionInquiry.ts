@@ -5,6 +5,7 @@ import { TenantContext } from '../../shared-kernel/types/TenantContext';
 export interface SubmitAdmissionInquiryCommand {
   tenantId: string;
   schoolId: string;
+  branchId: string;
   studentName: string;
   dateOfBirth: Date;
 }

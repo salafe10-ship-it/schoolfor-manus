@@ -41,12 +41,13 @@ describe('Student Affairs database RLS policy contract', () => {
     assertTenantPolicy(coreSql, 'audit_logs', 'audit_logs_tenant_isolation_policy');
   });
 
-  it('requires the same trusted claim for admission tenant_id and school_id', () => {
+  it('requires distinct trusted tenant, school and branch claims', () => {
     expect(admissionSql).toContain('ALTER TABLE admission_inquiries ENABLE ROW LEVEL SECURITY');
     expect(admissionSql).toContain('FOR ALL');
     expect(admissionSql).toContain('WITH CHECK');
-    expect(admissionSql).toContain("tenant_id::text = (auth.jwt()->'app_metadata'->>'school_id')");
-    expect(admissionSql).toContain("school_id::text = (auth.jwt()->'app_metadata'->>'school_id')");
+    expect(admissionSql).toMatch(/tenant_id::text = \(auth\.jwt\(\)->'app_metadata'->>'tenant_id'\)/);
+    expect(admissionSql).toMatch(/school_id::text = \(auth\.jwt\(\)->'app_metadata'->>'school_id'\)/);
+    expect(admissionSql).toMatch(/branch_id::text = \(auth\.jwt\(\)->'app_metadata'->>'branch_id'\)/);
   });
 
   it('does not depend on client-controlled current_setting tenant values', () => {

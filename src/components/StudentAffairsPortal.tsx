@@ -22,6 +22,13 @@ type StudentTimelineEvent = {
   user?: string;
 };
 
+function escapeHtml(value: unknown): string {
+  return String(value ?? '')
+    .replace(/&/g, '&amp;')
+    .replace(/</g, '&lt;')
+    .replace(/>/g, '&gt;');
+}
+
 interface StudentAffairsPortalProps {
   students: Student[];
   setStudents: React.Dispatch<React.SetStateAction<Student[]>>;
@@ -649,21 +656,22 @@ export default function StudentAffairsPortal({
       return;
     }
 
+    printWindow.opener = null;
     const rowsHTML = filteredStudents.map((st, idx) => `
       <tr>
         <td style="padding: 8px; border: 1px solid #ddd; text-align: center;">${idx + 1}</td>
-        <td style="padding: 8px; border: 1px solid #ddd; text-align: center;">${st.studentCode || st.academicId || ''}</td>
-        <td style="padding: 8px; border: 1px solid #ddd; font-weight: bold;">${st.name}</td>
-        <td style="padding: 8px; border: 1px solid #ddd; text-align: center;">${st.classroom || ''} (${st.section || 'أ'})</td>
-        <td style="padding: 8px; border: 1px solid #ddd;">${st.parentName || ''}</td>
-        <td style="padding: 8px; border: 1px solid #ddd; text-align: center;">${st.status === 'suspended' ? 'موقوف' : 'نشط'}</td>
+        <td style='padding: 8px; border: 1px solid #ddd; text-align: center;'>${escapeHtml(st.studentCode || '')}</td>
+        <td style='padding: 8px; border: 1px solid #ddd; font-weight: bold;'>${escapeHtml(st.name)}</td>
+        <td style='padding: 8px; border: 1px solid #ddd; text-align: center;'>${escapeHtml(st.classroom || '')} (${escapeHtml(st.section || 'أ')})</td>
+        <td style='padding: 8px; border: 1px solid #ddd;'>${escapeHtml(st.parentName || '')}</td>
+        <td style='padding: 8px; border: 1px solid #ddd; text-align: center;'>${escapeHtml(st.status === 'suspended' ? 'موقوف' : 'نشط')}</td>
       </tr>
     `).join('');
 
     printWindow.document.write(`
       <html dir="rtl" lang="ar">
         <head>
-          <title>طباعة كشف الطلاب المعروض حاليًا - ${selectedSchool.name || 'EduPro Enterprise ERP'}</title>
+          <title>طباعة كشف الطلاب المعروض حاليًا - ${escapeHtml(selectedSchool.name || 'SchoolForManus')}</title>
           <style>
             body { font-family: 'Segoe UI', Tahoma, Arial, sans-serif; padding: 20px; direction: rtl; }
             h1 { text-align: center; color: #1c120c; margin-bottom: 5px; }
@@ -676,7 +684,7 @@ export default function StudentAffairsPortal({
         <body>
           <div class="header-info">
             <div>
-              <h2>${selectedSchool.name || 'مدرسة EduPro Enterprise النموذجية'}</h2>
+                <h2>${escapeHtml(selectedSchool.name || 'SchoolForManus')}</h2>
               <div>إدارة شؤون الطلاب والنتائج الأكاديمية</div>
             </div>
             <div style="text-align: left;">
@@ -1758,7 +1766,7 @@ export default function StudentAffairsPortal({
                <div className="bg-gradient-to-br from-[#1c120c] via-[#2a1d13] to-[#120a04] text-white rounded-3xl p-5 border-2 border-[#d4af37] shadow-xl relative overflow-hidden">
                 <div className="flex items-center justify-between pb-3 border-b border-[#d4af37]/40 mb-4">
                   <div>
-                    <h4 className="text-sm font-black text-amber-300">{selectedSchool.name || 'مدرسة EduPro Enterprise'}</h4>
+                    <h4 className="text-sm font-black text-amber-300">{selectedSchool.name || 'SchoolForManus'}</h4>
                     <span className="text-[9px] text-amber-100/70 font-mono">بطاقة تعريف طالب معتمدة</span>
                   </div>
                   <span className="text-xs font-black font-mono text-amber-400 bg-amber-950/80 px-3 py-1 rounded-full border border-amber-400/30">

@@ -21,6 +21,15 @@ export class SubmitAdmissionInquiryServiceImplementation implements SubmitAdmiss
     // 1. Authorization
     await this.permissionService.checkPermission(context, Resource.ADMISSION_INQUIRY, Action.CREATE);
 
+
+    const trustedBranchId = (context as TenantContext & { branchId?: string }).branchId;
+
+    // Tenant and school scope must come from the trusted request context.
+    // Command scope fields are compatibility inputs and never override trusted identity.
+    if (command.tenantId !== context.tenantId || command.schoolId !== context.schoolId || !trustedBranchId || command.branchId !== trustedBranchId) {
+      throw new SecurityException('Admission inquiry scope does not match the trusted tenant context.');
+    }
+
     // 2. Validation (Business Rules)
     if (!command.studentName || command.studentName.trim().length === 0) {
       throw new Error('Student name is required.');
@@ -37,6 +46,7 @@ export class SubmitAdmissionInquiryServiceImplementation implements SubmitAdmiss
     const inquiry = AdmissionInquiry.create({
       tenantId: command.tenantId,
       schoolId: command.schoolId,
+      branchId: command.branchId,
       studentName: command.studentName,
       dateOfBirth: command.dateOfBirth
     });
@@ -51,7 +61,7 @@ export class SubmitAdmissionInquiryServiceImplementation implements SubmitAdmiss
       action: 'SUBMIT_INQUIRY',
       resource: 'ADMISSION_INQUIRY',
       resourceId: inquiry.id,
-      newData: { studentName: command.studentName }
+      newData: { studentName: command.studentName, branchId: command.branchId }
     });
     
     await this.auditRepository.save(auditLog);

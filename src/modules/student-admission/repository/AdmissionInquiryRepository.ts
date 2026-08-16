@@ -2,7 +2,13 @@
 import { AdmissionInquiry } from '../domain/AdmissionInquiry';
 import { Repository } from '../../shared-kernel/domain/Repository';
 
+export interface AdmissionInquiryScope {
+  tenantId: string;
+  schoolId: string;
+  branchId: string;
+}
+
 export interface AdmissionInquiryRepository extends Repository<AdmissionInquiry> {
-  findByTenant(tenantId: string): Promise<AdmissionInquiry[]>;
-  findBySchool(schoolId: string): Promise<AdmissionInquiry[]>;
+  findByScope(scope: AdmissionInquiryScope): Promise<AdmissionInquiry[]>;
+  findByIdInScope(id: string, scope: AdmissionInquiryScope): Promise<AdmissionInquiry | null>;
 }

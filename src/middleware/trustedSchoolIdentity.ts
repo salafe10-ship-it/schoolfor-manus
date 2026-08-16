@@ -68,3 +68,47 @@ export async function resolveTrustedSchoolPresentation(
   const school = toTrustedSchoolPresentation(data as SchoolRecord);
   return school.id === trustedSchoolId ? school : null;
 }
+
+export type TrustedBranchPresentation = {
+  id: string;
+  schoolId: string;
+  name: string;
+  city: string;
+};
+type BranchRecord = {
+  id: string;
+  school_id?: string | null;
+  name?: string | null;
+  address?: Record<string, unknown> | null;
+  status?: string | null;
+  deleted_at?: string | null;
+};
+export function toTrustedBranchPresentation(record: BranchRecord): TrustedBranchPresentation {
+  const id = String(record.id || '').trim();
+  const schoolId = String(record.school_id || '').trim();
+  const name = String(record.name || id).trim();
+  const address = record.address && typeof record.address === 'object' ? record.address : {};
+  const city = String(address.city || address.town || '').trim();
+  if (!id || !schoolId || !name) throw new Error('Trusted branch record is incomplete.');
+  return { id, schoolId, name, city };
+}
+export async function resolveTrustedBranchPresentation(
+  supabase: SupabaseClient,
+  branchId: string,
+  schoolId: string
+ ): Promise<TrustedBranchPresentation | null> {
+  const trustedBranchId = String(branchId || '').trim();
+  const trustedSchoolId = String(schoolId || '').trim();
+  if (!trustedBranchId || !trustedSchoolId) return null;
+  const { data, error } = await supabase
+    .from('branches')
+    .select('id, school_id, name, address, status, deleted_at')
+    .eq('id', trustedBranchId)
+    .eq('school_id', trustedSchoolId)
+    .eq('status', 'active')
+    .is('deleted_at', null)
+    .maybeSingle();
+  if (error || !data) return null;
+  const branch = toTrustedBranchPresentation(data as BranchRecord);
+  return branch.id === trustedBranchId && branch.schoolId === trustedSchoolId ? branch : null;
+}

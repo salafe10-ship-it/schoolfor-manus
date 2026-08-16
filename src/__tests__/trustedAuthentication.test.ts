@@ -3,6 +3,8 @@ import type { User as SupabaseUser } from '@supabase/supabase-js';
 import {
   authenticateTrustedUser,
   clearTrustedSession,
+  isEmailIdentifier,
+  resolveTrustedLoginIdentifier,
   extractBearerToken,
   extractTrustedIdentity,
   isSessionExpired,
@@ -15,37 +17,26 @@ import {
 const baseUser = (metadata: Record<string, unknown> = {}): SupabaseUser => ({
   id: 'user-1',
   email: 'user@example.com',
-  app_metadata: { school_id: 'school-1', role: 'SchoolAdmin', ...metadata },
+  app_metadata: { school_id: 'school-1', branch_id: 'branch-1', role: 'SchoolAdmin', ...metadata },
   user_metadata: { school_id: 'client-selected-school', role: 'SuperAdmin' },
   aud: 'authenticated',
   created_at: new Date().toISOString()
 });
 
-const fakeClient = ({
-  loginError = null,
-  user = baseUser(),
-  session = { access_token: 'access-token', refresh_token: 'refresh-token', expires_at: 2000 },
-  school = { id: 'school-1' },
-  schoolError = null
-}: any = {}): any => ({
-  auth: {
-    signInWithPassword: vi.fn().mockResolvedValue({
-      data: loginError ? { user: null, session: null } : { user, session },
-      error: loginError
-    }),
-    getUser: vi.fn().mockResolvedValue({ data: { user }, error: loginError }),
-    refreshSession: vi.fn().mockResolvedValue({
-      data: loginError ? { user: null, session: null } : { user, session },
-      error: loginError
-    })
-  },
-  from: vi.fn(() => ({
-    select: vi.fn(() => ({
-      eq: vi.fn(() => ({ maybeSingle: vi.fn().mockResolvedValue({ data: school, error: schoolError }) }))
-    }))
-  }))
-});
+const fakeClient = ({ loginError = null, user = baseUser(), session = { access_token: 'access-token', refresh_token: 'refresh-token', expires_at: 2000 }, school = { id: 'school-1', display_name: 'Test School', status: 'active' }, schoolError = null, branch = { id: 'branch-1', school_id: 'school-1', name: 'Main Branch', address: { city: 'Riyadh' }, status: 'active', deleted_at: null }, branchError = null }: any = {}): any => ({ auth: { signInWithPassword: vi.fn().mockResolvedValue({ data: loginError ? { user: null, session: null } : { user, session }, error: loginError }), getUser: vi.fn().mockResolvedValue({ data: { user }, error: loginError }), refreshSession: vi.fn().mockResolvedValue({ data: loginError ? { user: null, session: null } : { user, session }, error: loginError }) }, from: vi.fn((table: string) => { const filters: Record<string, unknown> = {}; const query: any = { select: vi.fn(() => query), eq: vi.fn((column: string, value: unknown) => { filters[column] = value; return query; }), is: vi.fn((column: string, value: unknown) => { filters[column] = value; return query; }), maybeSingle: vi.fn().mockImplementation(async () => { if (table === 'schools') return { data: school, error: schoolError }; if (table === 'branches') { const matches = Boolean(branch && branch.id === filters.id && branch.school_id === filters.school_id && branch.status === 'active' && branch.deleted_at === null); return { data: matches ? branch : null, error: branchError }; } return { data: null, error: null }; }) }; return query; }) });
 
+const usernameClient = (row: Record<string, unknown> | null, options: { user?: SupabaseUser; school?: any; branch?: any } = {}): any => {
+  const client = fakeClient({ user: options.user || baseUser(), school: options.school, branch: options.branch });
+  const filters: Record<string, unknown> = {};
+  const query: any = {
+    select: vi.fn(() => query),
+    eq: vi.fn((column: string, value: unknown) => { filters[column] = value; return query; }),
+    limit: vi.fn(async () => ({ data: row ? [row] : [], error: null }))
+  };
+  const originalFrom = client.from;
+  client.from = vi.fn((table: string) => table === 'users' ? query : originalFrom(table));
+  return { client, filters };
+};
 describe('Wave 1A trusted authentication foundation', () => {
   it('normalizes only supported application roles', () => {
     expect(normalizeTrustedRole('school-admin')).toBe('SchoolAdmin');
@@ -105,5 +96,50 @@ describe('Wave 1A trusted authentication foundation', () => {
     ['edupro_token', 'edupro_refresh_token', 'edupro_session_school_id'].forEach(key => storage.set(key, 'value'));
     clearTrustedSession(adapter);
     expect(storage.size).toBe(0);
+  });
+});
+
+describe('Login identifier resolution', () => {
+  it('accepts an email identifier and passes only the normalized email to Supabase Auth', async () => {
+    expect(isEmailIdentifier('user@example.com')).toBe(true);
+    const client = fakeClient();
+    await authenticateTrustedUser(client, ' USER@EXAMPLE.COM ', 'correct');
+    expect(client.auth.signInWithPassword).toHaveBeenCalledWith({ email: 'user@example.com', password: 'correct' });
+  });
+
+  it('resolves a username server-side before Supabase Auth without including password in the lookup', async () => {
+    const { client, filters } = usernameClient({ email: 'user@example.com', school_id: 'school-1' });
+    const result = await authenticateTrustedUser(client, 'schooladmin', 'correct');
+    expect(result.identity).toMatchObject({ id: 'user-1', schoolId: 'school-1' });
+    expect(client.auth.signInWithPassword).toHaveBeenCalledWith({ email: 'user@example.com', password: 'correct' });
+    expect(filters).toEqual({ username: 'schooladmin' });
+    expect(Object.keys(filters)).not.toContain('password');
+  });
+
+  it('denies a username mapped to a different school after Supabase authentication', async () => {
+    const { client } = usernameClient({ email: 'other@example.com', school_id: 'school-2' });
+    await expect(authenticateTrustedUser(client, 'schooladmin', 'correct')).rejects.toMatchObject({ code: 'INVALID_SCHOOL' });
+  });
+
+  it('fails closed for an unknown username without attempting Supabase Auth', async () => {
+    const { client } = usernameClient(null);
+    await expect(resolveTrustedLoginIdentifier(client, 'missing-user')).rejects.toMatchObject({ code: 'INVALID_CREDENTIALS' });
+    expect(client.auth.signInWithPassword).not.toHaveBeenCalled();
+  });
+});
+
+describe('Trusted branch scope', () => {
+  it('denies a SchoolAdmin without a trusted branch scope', async () => {
+    const user = baseUser({ branch_id: undefined });
+    await expect(authenticateTrustedUser(fakeClient({ user }), 'user@example.com', 'correct')).rejects.toMatchObject({ code: 'INVALID_BRANCH' });
+  });
+  it('allows a SchoolAdmin with a valid branch belonging to the same school', async () => {
+    const result = await authenticateTrustedUser(fakeClient(), 'user@example.com', 'correct');
+    expect(result.identity).toMatchObject({ schoolId: 'school-1', branchId: 'branch-1', role: 'SchoolAdmin', branch: { id: 'branch-1', schoolId: 'school-1' } });
+  });
+  it('denies a SchoolAdmin whose branch belongs to another school', async () => {
+    const user = baseUser({ branch_id: 'branch-2' });
+    const client = fakeClient({ user, branch: { id: 'branch-2', school_id: 'school-2', name: 'Other School Branch', address: { city: 'Jeddah' }, status: 'active', deleted_at: null } });
+    await expect(authenticateTrustedUser(client, 'user@example.com', 'correct')).rejects.toMatchObject({ code: 'INVALID_BRANCH' });
   });
 });
