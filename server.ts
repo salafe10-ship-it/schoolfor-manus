@@ -536,23 +536,21 @@ async function startServer() {
       const page = parseStudentQueryInteger(req.query.page, 'page', 1, 1000000);
       const limit = parseStudentQueryInteger(req.query.limit, 'limit', 25, 100);
       const statusValue = parseStudentQueryString(req.query.status, 'status');
+      const search = parseStudentQueryString(req.query.search, 'search');
       if (statusValue && !Object.values(AdmissionStatus).includes(statusValue as AdmissionStatus)) {
         throw new ValidationError('Admission status filter is not supported.');
       }
-      const inquiries = await createAdmissionRepository(req).findByScope({
+      const result = await createAdmissionRepository(req).findPageByScope({
         tenantId: context.tenantId,
         schoolId: context.schoolId,
-        branchId: context.branchId
-      });
-      const filtered = statusValue
-        ? inquiries.filter((item) => item.props.status === statusValue)
-        : inquiries;
-      const totalCount = filtered.length;
-      const data = filtered.slice((page - 1) * limit, page * limit).map(serializeAdmissionInquiry);
+        branchId: context.branchId,
+        ...(search ? { search } : {})
+      }, page, limit, statusValue || undefined);
+      const data = result.items.map(serializeAdmissionInquiry);
       return res.json({
         success: true,
         data,
-        meta: { page, limit, totalCount, totalPages: Math.ceil(totalCount / limit) }
+        meta: { page, limit, totalCount: result.totalCount, totalPages: Math.ceil(result.totalCount / limit) }
       });
     } catch (err) {
       return next(err);

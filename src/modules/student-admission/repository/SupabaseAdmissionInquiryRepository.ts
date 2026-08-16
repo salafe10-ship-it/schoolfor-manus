@@ -36,15 +36,50 @@ export class SupabaseAdmissionInquiryRepository implements AdmissionInquiryRepos
   }
 
   async findByScope(scope: AdmissionInquiryScope): Promise<AdmissionInquiry[]> {
-    const { data, error } = await this.requireClient()
+    let query = this.requireClient()
       .from('admission_inquiries')
       .select('*')
       .eq('tenant_id', scope.tenantId)
       .eq('school_id', scope.schoolId)
       .eq('branch_id', scope.branchId)
       .order('created_at', { ascending: false });
+    const search = scope.search?.trim();
+    if (search) {
+      const uuidPattern = /^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i;
+      query = uuidPattern.test(search)
+        ? query.eq('id', search)
+        : query.ilike('student_name', `%${search}%`);
+    }
+    const { data, error } = await query;
     if (error) throw new Error('Failed to read admission inquiries: ' + error.message);
     return ((data ?? []) as AdmissionInquiryRow[]).map((row) => this.toDomain(row));
+  }
+
+  async findPageByScope(scope: AdmissionInquiryScope, page: number, limit: number, status?: string): Promise<{ items: AdmissionInquiry[]; totalCount: number }> {
+    const safePage = Number.isInteger(page) && page > 0 ? page : 1;
+    const safeLimit = Number.isInteger(limit) && limit > 0 ? Math.min(limit, 100) : 25;
+    let query = this.requireClient()
+      .from('admission_inquiries')
+      .select('*', { count: 'exact' })
+      .eq('tenant_id', scope.tenantId)
+      .eq('school_id', scope.schoolId)
+      .eq('branch_id', scope.branchId)
+      .order('created_at', { ascending: false })
+      .range((safePage - 1) * safeLimit, safePage * safeLimit - 1);
+    const search = scope.search?.trim();
+    if (search) {
+      const uuidPattern = /^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i;
+      query = uuidPattern.test(search)
+        ? query.eq('id', search)
+        : query.ilike('student_name', `%${search}%`);
+    }
+    if (status) query = query.eq('status', status);
+    const { data, count, error } = await query;
+    if (error) throw new Error('Failed to read paginated admission inquiries: ' + error.message);
+    return {
+      items: ((data ?? []) as AdmissionInquiryRow[]).map((row) => this.toDomain(row)),
+      totalCount: Number.isInteger(count) ? count : 0
+    };
   }
 
   async findByIdInScope(id: string, scope: AdmissionInquiryScope): Promise<AdmissionInquiry | null> {

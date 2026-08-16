@@ -20,7 +20,7 @@ describe('Student admission route contract', () => {
     expect(route).toContain("authenticateRequest");
     expect(route).toContain('requirePermission(PERMISSIONS.ADMISSION_READ)');
     expect(route).toContain('resolveStudentTenantContext(req)');
-    expect(route).toContain('findByScope');
+    expect(route).toContain('findPageByScope');
   });
 
   it('registers write and status transition routes with the write permission', () => {
@@ -57,6 +57,16 @@ describe('Student admission route contract', () => {
     expect(repositorySource).toContain(".eq('school_id', scope.schoolId)");
     expect(repositorySource).toContain(".eq('branch_id', scope.branchId)");
     expect(repositorySource).toContain(".eq('id', id)");
+  });
+
+  it('proves inbox search is forwarded to the scoped server-side repository', () => {
+    const readRoute = serverSource.slice(
+      serverSource.indexOf("app.get('/api/admissions/inquiries'"),
+      serverSource.indexOf("app.post('/api/admissions/inquiries'")
+    );
+    expect(readRoute).toContain("req.query.search");
+    expect(readRoute).toContain("search");
+    expect(repositorySource).toContain("query.ilike('student_name'");
   });
 
   it('registers the admission permission codes and grants them to student affairs', () => {
