@@ -3,6 +3,7 @@ import type { TransactionSession } from '../transactions/TransactionContracts';
 import type { TenantContext } from '../../tenant/TenantContext';
 import { DatabaseError, ValidationError } from '../../utils/errors';
 import type { Perf004TraceLike } from '../../performance/Perf004LatencyDiagnostics';
+import type { SupabaseClient } from '@supabase/supabase-js';
 
 export type StudentReadDiagnostic = {
   requestId: string;
@@ -273,12 +274,133 @@ async function queryCanonicalStudents(
   }
 }
 
+async function queryCanonicalStudentsFromSupabase(
+  supabase: SupabaseClient,
+  context: TenantContext,
+  params: CanonicalStudentReadParams,
+  maximumLimit = 100
+): Promise<{ rows: Record<string, unknown>[]; totalCount: number }> {
+  const page = normalizePage(params.page);
+  const limit = normalizeLimit(params.limit, maximumLimit);
+  const offset = (page - 1) * limit;
+  const requestedSortBy = params.sortBy || 'registrationDate';
+  const sortColumn = SORT_COLUMNS[requestedSortBy];
+  if (!sortColumn) throw new ValidationError('حقل الترتيب المطلوب غير معتمد.');
+  if (params.sortOrder !== undefined && params.sortOrder !== 'asc' && params.sortOrder !== 'desc') {
+    throw new ValidationError('اتجاه الترتيب غير معتمد.');
+  }
+
+  let eligibleStudentIds: string[] | undefined;
+  if (params.classroom || params.section) {
+    let enrollmentQuery = supabase
+      .from('enrollments')
+      .select('student_id')
+      .eq('tenant_id', context.tenantId)
+      .eq('school_id', context.schoolId)
+      .or(`branch_id.is.null,branch_id.eq.${context.branchId}`)
+      .is('deleted_at', null)
+      .in('enrollment_status', ['pending', 'active']);
+    if (params.classroom) enrollmentQuery = enrollmentQuery.eq('class_reference', params.classroom);
+    if (params.section) enrollmentQuery = enrollmentQuery.eq('section_reference', params.section);
+    const { data: enrollmentRows, error: enrollmentError } = await enrollmentQuery;
+    if (enrollmentError) throw enrollmentError;
+    eligibleStudentIds = [...new Set((enrollmentRows || []).map(row => String((row as { student_id?: unknown }).student_id || '')).filter(Boolean))];
+    if (eligibleStudentIds.length === 0) return { rows: [], totalCount: 0 };
+  }
+
+  let studentQuery = supabase
+    .from('students')
+    .select('id,tenant_id,school_id,branch_id,student_number,legal_first_name,legal_middle_name,legal_last_name,preferred_name,date_of_birth,gender,nationality,status,version,created_at,deleted_at', { count: 'exact' })
+    .eq('tenant_id', context.tenantId)
+    .eq('school_id', context.schoolId)
+    .eq('branch_id', context.branchId)
+    .is('deleted_at', null);
+  if (eligibleStudentIds) studentQuery = studentQuery.in('id', eligibleStudentIds);
+  if (params.status) studentQuery = studentQuery.eq('status', params.status === 'accepted' ? 'admitted' : params.status);
+  if (params.gender) studentQuery = studentQuery.eq('gender', params.gender);
+  const search = sqlSearchTerm(params.quickSearch);
+  if (search) {
+    const safeSearch = search.replace(/[%,()\\]/g, '');
+    if (safeSearch) {
+      const pattern = `*${safeSearch}*`;
+      studentQuery = studentQuery.or([
+        `student_number.ilike.${pattern}`,
+        `legal_first_name.ilike.${pattern}`,
+        `legal_middle_name.ilike.${pattern}`,
+        `legal_last_name.ilike.${pattern}`,
+        `preferred_name.ilike.${pattern}`
+      ].join(','));
+    }
+  }
+
+  const { data: studentRows, error: studentError, count } = await studentQuery
+    .order(sortColumn, { ascending: params.sortOrder === 'asc' })
+    .range(offset, offset + limit - 1);
+  if (studentError) throw studentError;
+
+  const rows = (studentRows || []) as Array<Record<string, unknown>>;
+  const studentIds = rows.map(row => String(row.id || '')).filter(Boolean);
+  const guardianLinks: Array<Record<string, unknown>> = [];
+  if (studentIds.length) {
+    const { data, error } = await supabase
+      .from('student_guardians')
+      .select('id,version,tenant_id,school_id,branch_id,guardian_id,student_id,relationship_type,status,deleted_at,is_primary,created_at')
+      .eq('tenant_id', context.tenantId)
+      .eq('school_id', context.schoolId)
+      .or(`branch_id.is.null,branch_id.eq.${context.branchId}`)
+      .in('student_id', studentIds)
+      .eq('status', 'active')
+      .is('deleted_at', null);
+    if (error) throw error;
+    guardianLinks.push(...((data || []) as Array<Record<string, unknown>>));
+  }
+
+  const guardianIds = [...new Set(guardianLinks.map(row => String(row.guardian_id || '')).filter(Boolean))];
+  const guardianById = new Map<string, Record<string, unknown>>();
+  if (guardianIds.length) {
+    const { data, error } = await supabase
+      .from('guardians')
+      .select('id,version,tenant_id,school_id,branch_id,legal_first_name,legal_middle_name,legal_last_name,phone,status,deleted_at')
+      .eq('tenant_id', context.tenantId)
+      .eq('school_id', context.schoolId)
+      .in('id', guardianIds)
+      .eq('status', 'active')
+      .is('deleted_at', null);
+    if (error) throw error;
+    for (const row of (data || []) as Array<Record<string, unknown>>) guardianById.set(String(row.id), row);
+  }
+
+  const mappedRows = rows.map(row => {
+    const links = guardianLinks
+      .filter(link => String(link.student_id || '') === String(row.id || ''))
+      .sort((left, right) => Number(right.is_primary === true) - Number(left.is_primary === true) || String(left.created_at || '').localeCompare(String(right.created_at || '')));
+    const link = links[0];
+    const guardian = link ? guardianById.get(String(link.guardian_id || '')) : undefined;
+    return mapCanonicalStudentRow({
+      ...row,
+      guardian_id: guardian?.id || null,
+      guardian_version: guardian?.version || null,
+      guardian_relationship_id: link?.id || null,
+      guardian_relationship_version: link?.version || null,
+      parent_name: guardian ? [guardian.legal_first_name, guardian.legal_middle_name, guardian.legal_last_name].filter(Boolean).join(' ') : null,
+      parent_phone: guardian?.phone || null,
+      guardian_relation: link?.relationship_type || null,
+      class_reference: null,
+      section_reference: null,
+      total_count: count || 0
+    } as unknown as CanonicalStudentRow);
+  });
+
+  return { rows: mappedRows, totalCount: count || 0 };
+}
+
 export class CanonicalStudentReadRepository {
   public static async advancedSearch(
     params: CanonicalStudentReadParams,
     trustedContext?: TenantContext,
     diagnosticTrace?: Perf004TraceLike,
-    studentReadDiagnostic?: StudentReadDiagnostic
+    studentReadDiagnostic?: StudentReadDiagnostic,
+    supabase?: SupabaseClient
   ): Promise<{
     data: Record<string, unknown>[];
     totalCount: number;
@@ -288,7 +410,9 @@ export class CanonicalStudentReadRepository {
     const context = trustedContext;
     if (!context) throw new DatabaseError('Trusted tenant context is required before Student repository access.');
     if (!UnitOfWork.hasTransactionDriver()) {
-      throw new DatabaseError('Canonical Student reads require the configured PostgreSQL transaction driver.');
+      if (!supabase) throw new DatabaseError('Canonical Student reads require a trusted Supabase client or PostgreSQL transaction driver.');
+      const result = await queryCanonicalStudentsFromSupabase(supabase, context, params, 100);
+      return { data: result.rows, totalCount: result.totalCount, page: normalizePage(params.page), limit: normalizeLimit(params.limit) };
     }
     studentReadDiagnostic?.log('canonical_repository', 'REACHED');
 
@@ -326,12 +450,15 @@ export class CanonicalStudentReadRepository {
   public static async exportSearch(
     params: Omit<CanonicalStudentReadParams, 'page' | 'limit'>,
     trustedContext?: TenantContext,
-    diagnosticTrace?: Perf004TraceLike
+    diagnosticTrace?: Perf004TraceLike,
+    supabase?: SupabaseClient
   ): Promise<{ data: Record<string, unknown>[]; totalCount: number }> {
     const context = trustedContext;
     if (!context) throw new DatabaseError('Trusted tenant context is required before Student export access.');
     if (!UnitOfWork.hasTransactionDriver()) {
-      throw new DatabaseError('Canonical Student exports require the configured PostgreSQL transaction driver.');
+      if (!supabase) throw new DatabaseError('Canonical Student exports require a trusted Supabase client or PostgreSQL transaction driver.');
+      const result = await queryCanonicalStudentsFromSupabase(supabase, context, { ...params, page: 1, limit: 5001 }, 5001);
+      return { data: result.rows, totalCount: result.totalCount };
     }
 
     const exportParams: CanonicalStudentReadParams = { ...params, page: 1, limit: 5001 };

@@ -58,12 +58,13 @@ class DefaultTenantDataProvider implements TenantDataProvider {
     if (!UnitOfWork.hasTransactionDriver()) return null;
 
     const userId = clean(identity.id);
+    const tenantId = clean(identity.tenantId);
     const schoolId = clean(identity.schoolId);
     const role = clean(identity.role);
-    if (!userId || !schoolId || !role) throw new TenantIsolationError('MISSING_TENANT', 'لا يمكن إنشاء سياق مستأجر بدون هوية موثوقة.');
+    if (!userId || !tenantId || !schoolId || !role) throw new TenantIsolationError('MISSING_TENANT', 'لا يمكن إنشاء سياق مستأجر بدون هوية موثوقة.');
 
     const trustedContext = {
-      tenantId: schoolId,
+      tenantId,
       schoolId,
       branchId: clean(identity.branchId),
       academicYear: clean(identity.academicYear),
@@ -114,7 +115,7 @@ class DefaultTenantDataProvider implements TenantDataProvider {
                  AND deleted_at IS NULL AND status IN ('planned', 'active')
                  AND ($3::uuid IS NULL OR branch_id IS NULL OR branch_id = $3::uuid)
              ), '[]'::json) AS academic_years`,
-        [schoolId, schoolId, clean(identity.branchId) || null]
+        [tenantId, schoolId, clean(identity.branchId) || null]
       );
 
       diagnosticTrace?.mark('tenant_postgres_query_completed');
@@ -147,7 +148,7 @@ class DefaultTenantDataProvider implements TenantDataProvider {
         userName: identity.name || identity.email,
         ipAddress: 'internal',
         affectedTables: ['schools', 'branches', 'academic_years'],
-        tenantId: schoolId,
+        tenantId,
         diagnosticTrace
       },
       readSnapshot,
@@ -239,11 +240,66 @@ class DefaultTenantDataProvider implements TenantDataProvider {
 export class TenantContextResolver {
   constructor(private readonly provider: TenantDataProvider = new DefaultTenantDataProvider()) {}
 
-  async resolve(identity: TrustedIdentity | null | undefined, accessToken?: string, diagnosticTrace?: Perf004TraceLike): Promise<TenantContext> {
+  async resolveForRead(identity: TrustedIdentity | null | undefined, accessToken?: string, diagnosticTrace?: Perf004TraceLike): Promise<TenantContext> {
     const userId = clean(identity?.id);
+    const tenantId = clean(identity?.tenantId);
     const schoolId = clean(identity?.schoolId);
     const role = clean(identity?.role);
-    if (!userId || !schoolId || !role) {
+    if (!userId || !tenantId || !schoolId || !role) {
+      throw new TenantIsolationError('MISSING_TENANT', 'لا يمكن إنشاء سياق قراءة بدون هوية موثوقة.');
+    }
+
+    const snapshotProvider = this.provider as TenantDataProvider;
+    const snapshot = snapshotProvider.resolveSnapshot
+      ? await snapshotProvider.resolveSnapshot(identity as TrustedIdentity, diagnosticTrace)
+      : null;
+    const schoolValid = snapshot
+      ? snapshot.schoolExists
+      : accessToken
+        ? await this.provider.schoolExists(tenantId, schoolId, accessToken)
+        : await this.provider.schoolExists(tenantId, schoolId);
+    if (!schoolValid) throw new TenantIsolationError('INVALID_TENANT', 'المدرسة المرتبطة بالهوية غير موجودة.');
+
+    const branchIds = snapshot
+      ? snapshot.branchIds
+      : accessToken
+        ? await this.provider.listBranches(tenantId, schoolId, accessToken)
+        : await this.provider.listBranches(tenantId, schoolId);
+    const branchId = clean(identity?.branchId);
+    if (!branchId) throw new TenantIsolationError('MISSING_BRANCH', 'لا يوجد فرع موثوق محدد لهذه الجلسة.');
+    if (!branchIds.includes(branchId)) throw new TenantIsolationError('INVALID_BRANCH', 'الفرع لا ينتمي إلى المدرسة الموثوقة.');
+
+    const requestedAcademicYear = clean(identity?.academicYear);
+    if (requestedAcademicYear) {
+      const academicYears = snapshot
+        ? snapshot.academicYears
+        : accessToken
+          ? await this.provider.listAcademicYears(tenantId, schoolId, branchId, accessToken)
+          : await this.provider.listAcademicYears(tenantId, schoolId, branchId);
+      const academicYearRecord = academicYears.find(year => year.id === requestedAcademicYear || year.name === requestedAcademicYear);
+      if (!academicYearRecord || academicYearRecord.isActive === false) {
+        throw new TenantIsolationError('INVALID_ACADEMIC_YEAR', 'السنة الدراسية الموثوقة غير صالحة.');
+      }
+      if (academicYearRecord.tenantId && academicYearRecord.tenantId !== tenantId) {
+        throw new TenantIsolationError('INVALID_ACADEMIC_YEAR', 'السنة الدراسية لا تنتمي إلى المستأجر الموثوق.');
+      }
+      if (academicYearRecord.schoolId && academicYearRecord.schoolId !== schoolId) {
+        throw new TenantIsolationError('INVALID_ACADEMIC_YEAR', 'السنة الدراسية لا تنتمي إلى المدرسة الموثوقة.');
+      }
+      if (academicYearRecord.branchId && academicYearRecord.branchId !== branchId) {
+        throw new TenantIsolationError('INVALID_ACADEMIC_YEAR', 'السنة الدراسية لا تنتمي إلى الفرع الموثوق.');
+      }
+    }
+
+    return { tenantId, schoolId, branchId, academicYear: requestedAcademicYear, userId, role };
+  }
+
+  async resolve(identity: TrustedIdentity | null | undefined, accessToken?: string, diagnosticTrace?: Perf004TraceLike): Promise<TenantContext> {
+    const userId = clean(identity?.id);
+    const tenantId = clean(identity?.tenantId);
+    const schoolId = clean(identity?.schoolId);
+    const role = clean(identity?.role);
+    if (!userId || !tenantId || !schoolId || !role) {
       throw new TenantIsolationError('MISSING_TENANT', 'لا يمكن إنشاء سياق مستأجر بدون هوية موثوقة.');
     }
     const snapshotProvider = this.provider as TenantDataProvider;
@@ -253,18 +309,18 @@ export class TenantContextResolver {
       : null;
     const schoolValid = snapshot
       ? snapshot.schoolExists
-      : accessToken
-        ? await this.provider.schoolExists(schoolId, schoolId, accessToken)
-        : await this.provider.schoolExists(schoolId, schoolId);
+        : accessToken
+          ? await this.provider.schoolExists(tenantId, schoolId, accessToken)
+          : await this.provider.schoolExists(tenantId, schoolId);
     if (!schoolValid) {
       throw new TenantIsolationError('INVALID_TENANT', 'المدرسة المرتبطة بالهوية غير موجودة.');
     }
 
     const branchIds = snapshot
       ? snapshot.branchIds
-      : accessToken
-        ? await this.provider.listBranches(schoolId, schoolId, accessToken)
-        : await this.provider.listBranches(schoolId, schoolId);
+        : accessToken
+          ? await this.provider.listBranches(tenantId, schoolId, accessToken)
+          : await this.provider.listBranches(tenantId, schoolId);
     const requestedBranch = clean(identity?.branchId);
     const branchId = requestedBranch || (branchIds.length === 1 ? branchIds[0] : '');
     if (!branchId) throw new TenantIsolationError('MISSING_BRANCH', 'لا يوجد فرع موثوق محدد لهذه الجلسة.');
@@ -272,9 +328,9 @@ export class TenantContextResolver {
 
     const academicYears = snapshot
       ? snapshot.academicYears
-      : accessToken
-        ? await this.provider.listAcademicYears(schoolId, schoolId, branchId, accessToken)
-        : await this.provider.listAcademicYears(schoolId, schoolId, branchId);
+        : accessToken
+          ? await this.provider.listAcademicYears(tenantId, schoolId, branchId, accessToken)
+          : await this.provider.listAcademicYears(tenantId, schoolId, branchId);
     const requestedAcademicYear = clean(identity?.academicYear);
     const activeYears = academicYears.filter(year => year.isActive !== false);
     const academicYearRecord = requestedAcademicYear
@@ -287,7 +343,7 @@ export class TenantContextResolver {
       );
     }
     if (academicYearRecord.isActive === false) throw new TenantIsolationError('INVALID_ACADEMIC_YEAR', 'السنة الدراسية مغلقة أو غير فعالة.');
-    if (academicYearRecord.tenantId && academicYearRecord.tenantId !== schoolId) {
+    if (academicYearRecord.tenantId && academicYearRecord.tenantId !== tenantId) {
       throw new TenantIsolationError('INVALID_ACADEMIC_YEAR', 'السنة الدراسية لا تنتمي إلى المستأجر الموثوق.');
     }
     if (academicYearRecord.schoolId && academicYearRecord.schoolId !== schoolId) {
@@ -297,7 +353,7 @@ export class TenantContextResolver {
       throw new TenantIsolationError('INVALID_ACADEMIC_YEAR', 'السنة الدراسية لا تنتمي إلى الفرع الموثوق.');
     }
 
-    const context = { tenantId: schoolId, schoolId, branchId, academicYear: academicYearRecord.id, userId, role };
+    const context = { tenantId, schoolId, branchId, academicYear: academicYearRecord.id, userId, role };
     diagnosticTrace?.mark('tenant_engine_completed');
     return context;
   }
@@ -306,6 +362,10 @@ export class TenantContextResolver {
 export const tenantContextResolver = new TenantContextResolver();
 
 export class TenantEngine {
+  resolveForRead(identity: TrustedIdentity | null | undefined, accessToken?: string, diagnosticTrace?: Perf004TraceLike): Promise<TenantContext> {
+    return tenantContextResolver.resolveForRead(identity, accessToken, diagnosticTrace);
+  }
+
   resolve(identity: TrustedIdentity | null | undefined, accessToken?: string, diagnosticTrace?: Perf004TraceLike): Promise<TenantContext> {
     return tenantContextResolver.resolve(identity, accessToken, diagnosticTrace);
   }
@@ -313,7 +373,10 @@ export class TenantEngine {
   validate(context: TenantContext): TenantContext {
     const values = [context.tenantId, context.schoolId, context.branchId, context.academicYear, context.userId, context.role];
     if (values.some(value => !clean(value))) throw new TenantIsolationError('INVALID_CONTEXT', 'سياق المستأجر غير مكتمل.');
-    if (context.tenantId !== context.schoolId) throw new TenantIsolationError('TENANT_SCHOOL_MISMATCH', 'معرف المستأجر لا يطابق معرف المدرسة.');
+    // A tenant may own one or more schools. Equality is not a valid invariant.
+    // Scope membership is enforced by the resolved database-backed provider and
+    // the comparisons in assertRequestTarget below.
+
     return context;
   }
 

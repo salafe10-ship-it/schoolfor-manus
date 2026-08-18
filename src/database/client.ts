@@ -142,8 +142,9 @@ export class DatabaseConnectionManager {
           }
         });
 
-        // Verify connection with a simple query
-        const { error } = await tempClient.from('schools').select('id').limit(1);
+        // Verify Supabase/Auth reachability without querying a protected table.
+        // Anonymous readiness probes must not depend on RLS-scoped data rows.
+        const { error } = await tempClient.auth.getSession();
         if (error) {
           throw error;
         }
@@ -165,8 +166,11 @@ export class DatabaseConnectionManager {
         attempt++;
         this.metrics.reconnectAttempts = attempt;
         const errorMsg = err?.message || String(err);
-        this.metrics.lastError = errorMsg;
-        EnterpriseLogger.warn(`⚠️ [DB Connection Manager]: Attempt ${attempt} failed: ${errorMsg}`, "DBConnectionManager");
+        const causeMessage = err?.cause?.message ? String(err.cause.message) : '';
+        this.metrics.lastError = causeMessage ? `${errorMsg} (${causeMessage})` : errorMsg;
+        EnterpriseLogger.warn(`⚠️ [DB Connection Manager]: Attempt ${attempt} failed: ${errorMsg}`, "DBConnectionManager", {
+          cause: causeMessage || undefined
+        });
 
         if (attempt >= maxAttempts) {
           break;
@@ -202,6 +206,42 @@ export class DatabaseConnectionManager {
  */
 export function getSupabaseClient(): SupabaseClient | null {
   return DatabaseConnectionManager.getInstance().getClient();
+}
+
+/**
+ * Waits for the shared Supabase connection to become ready before serving
+ * authentication or trusted-session requests. The synchronous getter above is
+ * intentionally retained for legacy read paths; security-sensitive routes
+ * must use this readiness-aware accessor so a startup race cannot become a
+ * false "service unavailable" response.
+ */
+export async function getSupabaseClientReady(): Promise<SupabaseClient | null> {
+  return DatabaseConnectionManager.getInstance().connectWithRetry(5, 300, 2000);
+}
+
+/**
+ * Revokes the current Supabase Auth session using only the public anon key and
+ * the caller's bearer token. The service-role key is never required or exposed.
+ */
+export async function revokeSupabaseSession(accessToken: string): Promise<void> {
+  const supabaseUrl = process.env.SUPABASE_URL?.trim();
+  const supabaseKey = process.env.SUPABASE_ANON_KEY?.trim();
+  const token = accessToken.trim();
+  if (!token || !supabaseUrl || !supabaseKey || supabaseUrl.includes('your-project') || supabaseKey.includes('your-anon-key')) {
+    throw new Error('Supabase Auth is not configured.');
+  }
+
+  const response = await fetch(`${supabaseUrl.replace(/\/$/, '')}/auth/v1/logout`, {
+    method: 'POST',
+    headers: {
+      apikey: supabaseKey,
+      Authorization: `Bearer ${token}`
+    },
+    signal: AbortSignal.timeout(getSupabaseRequestTimeoutMs())
+  });
+  if (!response.ok && response.status !== 204) {
+    throw new Error('Supabase Auth logout failed.');
+  }
 }
 
 /**

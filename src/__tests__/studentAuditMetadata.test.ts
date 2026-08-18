@@ -38,6 +38,29 @@ describe('Student Affairs trusted audit metadata', () => {
     });
   });
 
+  it('accepts a trusted tenant that owns a different school without collapsing the scopes', () => {
+    const metadata = createTrustedStudentAuditMetadata({
+      user: {
+        id: 'trusted-user',
+        email: 'trusted@example.com',
+        name: 'Trusted User',
+        tenantId: 'tenant-1',
+        schoolId: 'school-1',
+        role: 'SchoolAdmin'
+      },
+      tenantContext: {
+        tenantId: 'tenant-1',
+        schoolId: 'school-1',
+        branchId: 'branch-1',
+        academicYear: '',
+        userId: 'trusted-user',
+        role: 'SchoolAdmin'
+      }
+    });
+
+    expect(metadata).toMatchObject({ userId: 'trusted-user', userRole: 'SchoolAdmin' });
+  });
+
   it('rejects an identity and tenant context mismatch', () => {
     expect(() => createTrustedStudentAuditMetadata({
       user: {

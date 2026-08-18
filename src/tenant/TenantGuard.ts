@@ -7,7 +7,8 @@ export function assertTenantContext(context?: TenantContext): TenantContext {
   if (!resolved.tenantId || !resolved.schoolId || !resolved.branchId || !resolved.academicYear) {
     throw new TenantIsolationError('MISSING_TENANT', 'لا يسمح بتنفيذ العملية بدون سياق مستأجر كامل.');
   }
-  if (resolved.tenantId !== resolved.schoolId) throw new TenantIsolationError('TENANT_SCHOOL_MISMATCH', 'تعارض بين المستأجر والمدرسة.');
+  // A tenant may own multiple schools. Membership is validated upstream by
+  // TenantEngine against trusted database scope; equality is not required.
   return resolved;
 }
 

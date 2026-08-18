@@ -1,3 +1,5 @@
+import { StudentDocumentRepository } from '../repositories/StudentDocumentRepository';
+import type { SupabaseClient } from '@supabase/supabase-js';
 import { StudentRepository } from '../repositories/StudentRepository';
 import { CanonicalStudentReadRepository, type StudentReadDiagnostic } from '../repositories/CanonicalStudentReadRepository';
 import { UnitOfWork } from '../UnitOfWork';
@@ -269,12 +271,13 @@ export class StudentService {
     },
     trustedContext?: TenantContext,
     diagnosticTrace?: Perf004TraceLike,
-    studentReadDiagnostic?: StudentReadDiagnostic
+    studentReadDiagnostic?: StudentReadDiagnostic,
+    supabase?: SupabaseClient
   ): Promise<any> {
     // Student reads must use the same trusted PostgreSQL source of truth as SOP-001 writes.
     // Keep the legacy schoolId argument for API compatibility; tenant scope comes from the
     // authenticated TenantContext inside CanonicalStudentReadRepository.
-    return await CanonicalStudentReadRepository.advancedSearch(params, trustedContext, diagnosticTrace, studentReadDiagnostic);
+    return await CanonicalStudentReadRepository.advancedSearch(params, trustedContext, diagnosticTrace, studentReadDiagnostic, supabase);
   }
 
   /**

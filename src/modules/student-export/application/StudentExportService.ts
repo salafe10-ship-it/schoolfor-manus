@@ -4,6 +4,7 @@ import { CanonicalStudentReadRepository, type CanonicalStudentReadParams } from 
 import type { TenantContext } from '../../../tenant/TenantContext';
 import type { AuditMetadata } from '../../../types';
 import { ValidationError } from '../../../utils/errors';
+import type { SupabaseClient } from '@supabase/supabase-js';
 
 export const STUDENT_EXPORT_MAX_ROWS = 5000;
 export const STUDENT_EXPORT_CONTENT_TYPE = 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet';
@@ -61,9 +62,10 @@ export async function generateStudentExport(
   tenantContext: TenantContext,
   audit: AuditMetadata,
   requestId: string,
-  correlationId: string
+  correlationId: string,
+  supabase?: SupabaseClient
 ): Promise<StudentExportResult> {
-  const result = await CanonicalStudentReadRepository.exportSearch(filters, tenantContext);
+  const result = await CanonicalStudentReadRepository.exportSearch(filters, tenantContext, undefined, supabase);
   if (result.totalCount === 0) {
     throw new ValidationError('لا توجد نتائج مطابقة لإنشاء ملف التصدير.');
   }

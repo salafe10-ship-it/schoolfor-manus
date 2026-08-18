@@ -175,7 +175,7 @@ export default function StudentAffairsPortal({
       ...(searchStatus !== 'all' ? { status: searchStatus } : {}),
       ...(searchClass !== 'all' ? { section: searchClass } : {})
     };
-    const loadTimer = window.setTimeout(() => StudentRepository.list(selectedSchool.id, query, controller.signal)
+    const loadTimer = window.setTimeout(() => StudentRepository.list(query, controller.signal)
       .then(response => {
         if (cancelled) return;
         const rows = Array.isArray(response?.data)
@@ -1517,11 +1517,13 @@ export default function StudentAffairsPortal({
                     </div>
                     <button 
                       type="button"
-                      onClick={() => setFormData({ ...formData, avatarUrl: 'https://images.unsplash.com/photo-1534528741775-53994a69daeb?w=150' })}
-                      className="bg-gradient-to-r from-[#9a6a1d] to-[#d4af37] text-slate-950 font-black text-xs px-4 py-2 rounded-xl flex items-center gap-1.5 shadow-sm cursor-pointer"
+                      disabled
+                      aria-disabled="true"
+                      title="رفع صورة الطالب غير متاح حتى اعتماد مسار التخزين الموثوق"
+                      className="bg-slate-200 text-slate-500 font-black text-xs px-4 py-2 rounded-xl flex items-center gap-1.5 border border-slate-300 cursor-not-allowed"
                     >
                       <Camera className="w-4 h-4" />
-                      <span>اختر صورة</span>
+                      <span>رفع صورة (غير متاح)</span>
                     </button>
                   </div>
 

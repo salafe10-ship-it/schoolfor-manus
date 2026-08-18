@@ -187,7 +187,9 @@ function normalizeCommand(command: StudentRegistrationCommand, requestIdempotenc
 function assertContext(context: TenantContext): void {
   const values = [context.tenantId, context.schoolId, context.branchId, context.academicYear, context.userId, context.role];
   if (values.some(value => typeof value !== 'string' || !value.trim())) throw new ValidationError('Trusted tenant context is incomplete.');
-  if (context.tenantId !== context.schoolId) throw new ValidationError('Trusted tenant and school context do not match.');
+  // Tenant and school are independent scopes; membership is validated by the
+  // trusted tenant resolver and preserved in every canonical write.
+
 }
 
 function serverId(value: string | undefined): string {

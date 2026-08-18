@@ -18,11 +18,12 @@ export function createDatabaseRolePermissionLoader() {
     if (!UnitOfWork.hasTransactionDriver()) {
       return null;
     }
-    const tenantId = String(identity.schoolId || '').trim();
+    const tenantId = String(identity.tenantId || '').trim();
+    const schoolId = String(identity.schoolId || '').trim();
     const userId = String(identity.id || '').trim();
-    if (!tenantId || !userId) throw new Error('Trusted identity is incomplete for role resolution.');
+    if (!tenantId || !schoolId || !userId) throw new Error('Trusted identity is incomplete for role resolution.');
     return UnitOfWork.runInTransaction(
-      tenantId,
+      schoolId,
       {
         operationName: 'Trusted database role resolution',
         userId,
@@ -64,13 +65,13 @@ export function createDatabaseRolePermissionLoader() {
               AND p.status = 'active'
               AND (p.tenant_id IS NULL OR p.tenant_id = $1::uuid)
             ORDER BY r.role_key, p.permission_key`,
-          [tenantId, userId, tenantId, identity.branchId || null]
+          [tenantId, userId, schoolId, identity.branchId || null]
         );
         return result.rows;
       },
       {
         tenantId,
-        schoolId: tenantId,
+        schoolId,
         branchId: identity.branchId || '',
         academicYear: identity.academicYear || '',
         userId,

@@ -8,8 +8,8 @@ const route = serverSource.slice(serverSource.indexOf('app.get("/api/students/ex
 describe('STU-AFFAIRS-P1-006-03 export route contract', () => {
   it('uses authentication, dedicated authorization, trusted tenant resolution, and server XLSX generation', () => {
     expect(route).toContain('authenticateRequest');
-    expect(route).toContain('requirePermission(PERMISSIONS.STUDENT_EXPORT)');
-    expect(route).toContain('resolveStudentTenantContext(req)');
+    expect(route).toContain('requirePermissionOnly(PERMISSIONS.STUDENT_EXPORT)');
+    expect(route).toContain('resolveStudentReadTenantContext(req)');
     expect(route).toContain('generateStudentExport');
     expect(route).toContain('STUDENT_EXPORT_CONTENT_TYPE');
   });

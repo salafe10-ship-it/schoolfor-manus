@@ -1,4 +1,6 @@
 import { afterEach, describe, expect, it, vi } from 'vitest';
+import { readFileSync } from 'node:fs';
+import { resolve } from 'node:path';
 import {
   createSupabaseTimeoutFetch,
   DEFAULT_SUPABASE_REQUEST_TIMEOUT_MS,
@@ -10,6 +12,12 @@ describe('Supabase startup readiness isolation', () => {
     vi.unstubAllGlobals();
     vi.unstubAllEnvs();
     vi.useRealTimers();
+  });
+
+  it('does not use an anonymous SELECT on an RLS-protected table for readiness', () => {
+    const source = readFileSync(resolve(process.cwd(), 'src/database/client.ts'), 'utf8');
+    expect(source).toContain('tempClient.auth.getSession()');
+    expect(source).not.toContain("tempClient.from('schools').select('id').limit(1)");
   });
 
   it('uses a finite default timeout and accepts a positive override', () => {

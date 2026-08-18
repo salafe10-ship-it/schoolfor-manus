@@ -4,6 +4,7 @@ export type AuthorizationIdentity = {
   id?: string;
   email?: string;
   name?: string;
+  tenantId?: string;
   schoolId?: string;
   branchId?: string;
   academicYear?: string;
@@ -69,7 +70,7 @@ export class RoleResolver {
   }
 
   private identityKey(identity: AuthorizationIdentity | null | undefined): string {
-    return `${String(identity?.id || '').trim()}|${String(identity?.schoolId || '').trim()}|${String(identity?.branchId || '').trim()}`;
+    return `${String(identity?.tenantId || '').trim()}|${String(identity?.id || '').trim()}|${String(identity?.schoolId || '').trim()}|${String(identity?.branchId || '').trim()}`;
   }
 
   private databaseAssignment(identity: AuthorizationIdentity | null | undefined) {

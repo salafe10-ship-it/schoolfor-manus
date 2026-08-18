@@ -16,7 +16,12 @@ import { StudentRepository } from "./src/database/repositories/StudentRepository
 import { ExamsRepository } from "./src/database/repositories/ExamsRepository.js";
 import { AuditRepository } from "./src/database/repositories/AuditRepository.js";
 import { StudentService } from "./src/database/services/StudentService.js";
-import { getSupabaseClient, getSupabaseClientForAccessToken } from "./src/database/client.js";
+import {
+  getSupabaseClient,
+  getSupabaseClientReady,
+  getSupabaseClientForAccessToken,
+  revokeSupabaseSession
+} from "./src/database/client.js";
 import { EnterpriseLogger } from "./src/database/services/EnterpriseLogger.js";
 import {
   ValidationError,
@@ -262,7 +267,7 @@ async function startServer() {
       if (typeof identifier !== 'string' || !identifier.trim() || typeof password !== 'string' || !password) {
         return next(new AuthenticationError("بيانات الدخول غير صحيحة"));
       }
-      const supabase = getSupabaseClient();
+      const supabase = await getSupabaseClientReady();
       if (!supabase) {
         return next(new ExternalServiceError("خدمة المصادقة غير مهيأة. لا يمكن إنشاء جلسة آمنة."));
       }
@@ -308,7 +313,7 @@ async function startServer() {
       if (typeof identifier !== 'string' || !identifier.trim()) {
         return next(new AuthenticationError("أدخل اسم المستخدم أو البريد الإلكتروني"));
       }
-      const supabase = getSupabaseClient();
+      const supabase = await getSupabaseClientReady();
       if (!supabase) return next(new ExternalServiceError("خدمة المصادقة غير مهيأة."));
 
       let resolvedEmail: string;
@@ -359,7 +364,7 @@ async function startServer() {
       if (typeof req.body?.refreshToken !== 'string' || !req.body.refreshToken.trim()) {
         return next(new AuthenticationError("تعذر تجديد الجلسة"));
       }
-      const supabase = getSupabaseClient();
+      const supabase = await getSupabaseClientReady();
       if (!supabase) {
         return next(new ExternalServiceError("خدمة المصادقة غير مهيأة. لا يمكن تجديد الجلسة."));
       }
@@ -394,6 +399,21 @@ async function startServer() {
     }
   });
 
+  app.post("/api/auth/logout", authLimiter, async (req, res, next) => {
+    try {
+      const token = extractBearerToken(req.headers.authorization);
+      if (!token) return next(new AuthenticationError("تعذر إنهاء الجلسة"));
+      await revokeSupabaseSession(token);
+      disableAuthCaching(res);
+      return res.status(204).end();
+    } catch (error) {
+      EnterpriseLogger.warn("Supabase Auth logout failed.", "Authentication", {
+        error: error instanceof Error ? error.message : "unknown"
+      });
+      return next(new ExternalServiceError("تعذر إنهاء الجلسة"));
+    }
+  });
+
   // ==========================================
   // MIDDLEWARES: BACKEND SECURITY & JWT AUTH
   // ==========================================
@@ -405,7 +425,7 @@ async function startServer() {
       return next(new AuthenticationError("غير مصرح به. يرجى إرسال التوكن للتحقق من الصلاحية (Authorization Bearer Token missing)."));
     }
     // Verify signature, expiration, and identity using Supabase Auth.
-    const supabase = getSupabaseClient();
+    const supabase = await getSupabaseClientReady();
     if (!supabase) {
       return next(new AuthenticationError("خدمة المصادقة غير مهيأة."));
     }
@@ -459,6 +479,14 @@ async function startServer() {
     return context;
   }
 
+  async function resolveStudentReadTenantContext(req: express.Request) {
+    const identity = (req as any).user;
+    const context = await tenantEngine.resolveForRead(identity, (req as any).trustedAccessToken, (req as any).perf004Trace);
+    tenantEngine.assertRequestTarget(context, requestTarget(req));
+    (req as any).tenantContext = context;
+    return context;
+  }
+
   async function resolveStudentTenantMiddleware(req: express.Request, _res: express.Response, next: express.NextFunction) {
     try {
       await resolveStudentTenantContext(req);
@@ -466,6 +494,15 @@ async function startServer() {
     } catch (error) {
       next(error);
     }
+  }
+
+  function canonicalEnrollmentWorkflowRequired(res: express.Response, operation: string) {
+    return res.status(409).json({
+      success: false,
+      errorCode: 'ENROLLMENT_CANONICAL_WORKFLOW_REQUIRED',
+      message: `عملية ${operation} موقوفة حتى تمر عبر مسار Enrollment الكانوني وسجل الحالة والتدقيق. لم يتم تعديل أي سجل.`,
+      meta: { persistence: 'canonical-enrollment-required', operation }
+    });
   }
 
   function admissionRequestContext(req: express.Request) {
@@ -768,6 +805,66 @@ async function startServer() {
     res.json({ success: true, data: { user }, message: "الجلسة الموثوقة فعالة." });
   });
 
+  // Dashboard metrics are read-only, request-scoped, and RLS-backed.
+  // The endpoint never accepts tenant, school, or branch identifiers from the client.
+  app.get('/api/dashboard/metrics', authenticateRequest, requirePermissionOnly(PERMISSIONS.DASHBOARD_VIEW), async (req, res, next) => {
+    try {
+      const identity = (req as any).user as {
+        tenantId?: string;
+        schoolId?: string;
+        branchId?: string;
+      };
+      if (!identity?.tenantId || !identity.schoolId || !identity.branchId) {
+        throw new AuthenticationError('هوية Dashboard الموثوقة غير مكتملة.');
+      }
+      const supabase = getSupabaseClientForAccessToken((req as any).trustedAccessToken);
+      if (!supabase) {
+        throw new DatabaseError('Dashboard metrics Supabase client is unavailable.');
+      }
+
+      const [studentsResult, enrollmentsResult] = await Promise.all([
+        supabase.from('students').select('id', { count: 'exact', head: true }),
+        supabase.from('enrollments').select('id', { count: 'exact', head: true })
+      ]);
+      if (studentsResult.error) throw studentsResult.error;
+      if (enrollmentsResult.error) throw enrollmentsResult.error;
+
+      const liveMetric = (count: number | null, source: string) => ({
+        status: 'live' as const,
+        count: count ?? 0,
+        source
+      });
+      const unavailableMetric = (message: string) => ({
+        status: 'unavailable' as const,
+        count: null,
+        source: null,
+        message
+      });
+
+      res.setHeader('Cache-Control', 'no-store');
+      return res.json({
+        success: true,
+        data: {
+          scope: {
+            tenantId: identity.tenantId,
+            schoolId: identity.schoolId,
+            branchId: identity.branchId
+          },
+          students: liveMetric(studentsResult.count, 'public.students (RLS)'),
+          enrollments: liveMetric(enrollmentsResult.count, 'public.enrollments (RLS)'),
+          attendance: unavailableMetric('لا يوجد مصدر حضور حي منشور في مخطط Supabase الحالي.'),
+          teachers: unavailableMetric('لا يوجد جدول معلمين حي مربوط بعقد Dashboard الحالي.'),
+          finance: unavailableMetric('لا يوجد مصدر مالي حي مربوط بعقد Dashboard الحالي.'),
+          exams: unavailableMetric('لا يوجد مصدر امتحانات حي مربوط بعقد Dashboard الحالي.'),
+          notifications: unavailableMetric('لا يوجد مصدر Notifications حي مربوط بعقد Dashboard الحالي.'),
+          activities: unavailableMetric('لا يوجد Query نشاط حي مربوط بعقد Dashboard الحالي.')
+        }
+      });
+    } catch (error) {
+      return next(error instanceof DatabaseError ? error : new DatabaseError('تعذر تحميل مؤشرات Dashboard الحية.', error));
+    }
+  });
+
   // ==========================================
   // ENTERPRISE API ROUTES
   // ==========================================
@@ -1053,16 +1150,16 @@ async function startServer() {
   });
 
   // Student Data Export — true XLSX, server-side, tenant-scoped, bounded.
-  app.get("/api/students/export", authenticateRequest, requirePermission(PERMISSIONS.STUDENT_EXPORT), async (req, res, next) => {
+  app.get("/api/students/export", authenticateRequest, requirePermissionOnly(PERMISSIONS.STUDENT_EXPORT), async (req, res, next) => {
     const requestId = randomUUID();
     const correlationId = randomUUID();
     let context: any;
     let filters: any;
     try {
-      context = await resolveStudentTenantContext(req);
+      context = await resolveStudentReadTenantContext(req);
       filters = parseStudentExportFilters(req.query);
       const audit = createTrustedStudentAuditMetadata(req as any);
-      const result = await generateStudentExport(filters, context, audit, requestId, correlationId);
+      const result = await generateStudentExport(filters, context, audit, requestId, correlationId, getSupabaseClientForAccessToken((req as any).trustedAccessToken) || undefined);
 
       await recordStudentExportAudit(req, context, 'SUCCESSFUL', requestId, correlationId, result.rowCount);
       res
@@ -1107,11 +1204,28 @@ async function startServer() {
         limit: parseStudentQueryInteger(limit, 'limit', 50, 100)
       };
 
+      let tenantContextPassed = false;
+      let tenantValidationPassed = false;
+      let tenantContext;
+      try {
+        tenantContext = await resolveStudentReadTenantContext(req);
+        tenantContextPassed = true;
+        studentReadDiagnostic.log('tenant_context', 'PASS');
+        tenantEngine.assertRequestTarget(tenantContext, requestTarget(req));
+        tenantValidationPassed = true;
+        studentReadDiagnostic.log('tenant_validation', 'PASS');
+        (req as any).tenantContext = tenantContext;
+      } catch (error) {
+        if (!tenantContextPassed) studentReadDiagnostic.log('tenant_context', 'FAIL', 'TENANT_RESOLUTION_OR_VALIDATION');
+        else if (!tenantValidationPassed) studentReadDiagnostic.log('tenant_validation', 'FAIL', 'TENANT_REQUEST_TARGET');
+        throw error;
+      }
+
       const result = await UnitOfWork.runInTransaction(
         schoolId,
         {
           operationName: 'Canonical Student Read',
-          tenantId: schoolId,
+          tenantId: tenantContext.tenantId,
           userId: identity.id,
           userName: identity.name || identity.email,
           ipAddress: req.ip || 'unknown',
@@ -1119,33 +1233,15 @@ async function startServer() {
           diagnosticTrace: (req as any).perf004Trace
         },
         async () => {
-          let tenantContextPassed = false;
-          let tenantValidationPassed = false;
           try {
-            const tenantContext = tenantEngine.validate(await tenantEngine.resolve(identity, (req as any).trustedAccessToken, (req as any).perf004Trace));
-            tenantContextPassed = true;
-            studentReadDiagnostic.log('tenant_context', 'PASS');
-            tenantEngine.assertRequestTarget(tenantContext, requestTarget(req));
-            tenantValidationPassed = true;
-            studentReadDiagnostic.log('tenant_validation', 'PASS');
-            (req as any).tenantContext = tenantContext;
             studentReadDiagnostic.log('student_service', 'REACHED');
-            return StudentService.advancedSearch(schoolId, searchParams, tenantContext, (req as any).perf004Trace, studentReadDiagnostic);
+            return await StudentService.advancedSearch(schoolId, searchParams, tenantContext, (req as any).perf004Trace, studentReadDiagnostic, getSupabaseClientForAccessToken((req as any).trustedAccessToken) || undefined);
           } catch (error) {
-            if (!tenantContextPassed) studentReadDiagnostic.log('tenant_context', 'FAIL', 'TENANT_RESOLUTION_OR_VALIDATION');
-            else if (!tenantValidationPassed) studentReadDiagnostic.log('tenant_validation', 'FAIL', 'TENANT_REQUEST_TARGET');
-            else studentReadDiagnostic.log('student_service', 'FAIL', 'STUDENT_READ_SERVICE');
+            studentReadDiagnostic.log('student_service', 'FAIL', 'STUDENT_READ_SERVICE');
             throw error;
           }
         },
-        {
-          tenantId: schoolId,
-          schoolId,
-          branchId: identity.branchId || '',
-          academicYear: identity.academicYear || '',
-          userId: identity.id,
-          role: identity.role
-        }
+        tenantContext
       );
 
       (req as any).perf004Trace?.mark('serialization_started');
@@ -1384,29 +1480,10 @@ async function startServer() {
     } catch (error) { next(error); }
   });
 
-  app.post("/api/students/bulk", authenticateRequest, requirePermission(PERMISSIONS.STUDENT_WRITE), async (req, res, next) => {
-    try {
-      const { operation, items } = req.body;
-      const schoolId = (req as any).user.schoolId;
-
-      const meta = createTrustedStudentAuditMetadata(req as any);
-
-      const result = await StudentService.executeBulkOperation(schoolId, operation, items, meta);
-
-      res.json({
-        success: true,
-        data: result,
-        message: "Bulk transaction completed successfully.",
-        meta: {
-          processedCount: result.processedCount
-        }
-      });
-    } catch (err: any) {
-      if (err instanceof ValidationError) {
-        return next(err);
-      }
-      next(new DatabaseError("Bulk insert rolled back. Transaction aborted.", err.message));
-    }
+  app.post("/api/students/bulk", authenticateRequest, requirePermission(PERMISSIONS.STUDENT_WRITE), resolveStudentTenantMiddleware, async (req, res, next) => {
+    void req;
+    void next;
+    return canonicalEnrollmentWorkflowRequired(res, 'العملية الجماعية للطلاب');
   });
 
   app.delete("/api/students/:id", authenticateRequest, requirePermission(PERMISSIONS.STUDENT_DELETE), async (req, res, next) => {
@@ -1437,55 +1514,25 @@ async function startServer() {
     }
   });
 
-  // STUDENT TRANSFERS (Class, Section, Stage, Branch)
+  // Legacy Enrollment mutations are fail-closed until their canonical workflow exists.
+  // Authentication, permission, and trusted tenant resolution still run before refusal.
+  // No Student aggregate or legacy audit record is mutated by these routes.
   app.post("/api/students/:id/transfer", authenticateRequest, requirePermission(PERMISSIONS.STUDENT_WRITE), resolveStudentTenantMiddleware, async (req, res, next) => {
-    try {
-      const schoolId = (req as any).user.schoolId;
-      const meta = createTrustedStudentAuditMetadata(req as any);
-
-      const result = await StudentService.transferStudent(schoolId, req.params.id, req.body, meta);
-      res.json({
-        success: true,
-        data: result,
-        message: "Student transferred successfully."
-      });
-    } catch (err: any) {
-      next(new DatabaseError("Failed to transfer student", err.message));
-    }
+    void req;
+    void next;
+    return canonicalEnrollmentWorkflowRequired(res, 'النقل الأكاديمي أو بين الفروع');
   });
 
-  // ANNUAL GRADE PROMOTION
   app.post("/api/students/:id/promote", authenticateRequest, requirePermission(PERMISSIONS.STUDENT_WRITE), resolveStudentTenantMiddleware, async (req, res, next) => {
-    try {
-      const schoolId = (req as any).user.schoolId;
-      const meta = createTrustedStudentAuditMetadata(req as any);
-
-      const result = await StudentService.promoteStudent(schoolId, req.params.id, req.body, meta);
-      res.json({
-        success: true,
-        data: result,
-        message: "Student promoted to next grade successfully."
-      });
-    } catch (err: any) {
-      next(new DatabaseError("Failed to promote student", err.message));
-    }
+    void req;
+    void next;
+    return canonicalEnrollmentWorkflowRequired(res, 'الترقية السنوية');
   });
 
-  // STUDENT RE-ENROLLMENT
   app.post("/api/students/:id/re-enroll", authenticateRequest, requirePermission(PERMISSIONS.STUDENT_WRITE), resolveStudentTenantMiddleware, async (req, res, next) => {
-    try {
-      const schoolId = (req as any).user.schoolId;
-      const meta = createTrustedStudentAuditMetadata(req as any);
-
-      const result = await StudentService.reEnrollStudent(schoolId, req.params.id, req.body, meta);
-      res.json({
-        success: true,
-        data: result,
-        message: "Student re-enrolled successfully."
-      });
-    } catch (err: any) {
-      next(new DatabaseError("Failed to re-enroll student", err.message));
-    }
+    void req;
+    void next;
+    return canonicalEnrollmentWorkflowRequired(res, 'إعادة القيد');
   });
 
   // GRADUATION
@@ -1500,20 +1547,11 @@ async function startServer() {
   });
 
   // DISMISSAL / SUSPENSION
+  // Dismissal is also held until the canonical academic-status workflow is available.
   app.post("/api/students/:id/dismiss", authenticateRequest, requirePermission(PERMISSIONS.STUDENT_WRITE), resolveStudentTenantMiddleware, async (req, res, next) => {
-    try {
-      const schoolId = (req as any).user.schoolId;
-      const meta = createTrustedStudentAuditMetadata(req as any);
-
-      const result = await StudentService.dismissStudent(schoolId, req.params.id, req.body, meta);
-      res.json({
-        success: true,
-        data: result,
-        message: "Student dismissal / suspension registered successfully."
-      });
-    } catch (err: any) {
-      next(new DatabaseError("Failed to register student dismissal", err.message));
-    }
+    void req;
+    void next;
+    return canonicalEnrollmentWorkflowRequired(res, 'الفصل أو التعليق الأكاديمي');
   });
 
   // ARCHIVE

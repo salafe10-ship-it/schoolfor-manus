@@ -56,9 +56,10 @@ function requireContext(context: TenantContext): void {
   if (values.some(value => typeof value !== 'string' || !value.trim())) {
     throw new ValidationError('Trusted tenant context is incomplete.');
   }
-  if (context.tenantId !== context.schoolId) {
-    throw new ValidationError('Trusted tenant and school context do not match.');
-  }
+  // A tenant may own multiple schools; membership is enforced by the trusted
+  // context resolver and every SQL predicate keeps tenant, school, and branch
+  // scope separate.
+
 }
 
 function text(value: unknown, field: string, required = false): string | null {

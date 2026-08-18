@@ -49,13 +49,12 @@ describe('STU-AFFAIRS-P1-006-26 unknown Bulk operation fail-closed contract', ()
     expect(block).not.toContain("'restore'");
   });
 
-  it('does not wrap the fail-closed validation error as a database 500', () => {
+  it('fails closed at the route boundary before invoking legacy bulk mutation', () => {
     const route = bulkRouteBlock();
-    const validationCatch = route.indexOf('if (err instanceof ValidationError)');
-    const databaseWrap = route.indexOf('new DatabaseError("Bulk insert rolled back. Transaction aborted."');
-    expect(validationCatch).toBeGreaterThan(-1);
-    expect(validationCatch).toBeLessThan(databaseWrap);
-    expect(route).toContain('return next(err);');
+    expect(route).toContain('resolveStudentTenantMiddleware');
+    expect(route).toContain('canonicalEnrollmentWorkflowRequired');
+    expect(route).not.toContain('StudentService.executeBulkOperation');
+    expect(route).toContain("'العملية الجماعية للطلاب'");
   });
 
   it('does not provide a success envelope for unknown operations', () => {

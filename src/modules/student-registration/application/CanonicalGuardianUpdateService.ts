@@ -87,9 +87,9 @@ function assertContext(context: GuardianUpdateContext): void {
   if (values.some(value => typeof value !== 'string' || !value.trim())) {
     throw new ValidationError('Trusted tenant context is incomplete.', { errorCode: 'STU-GUARD-004', reason: 'MISSING_TRUSTED_CONTEXT' });
   }
-  if (context.tenantId !== context.schoolId) {
-    throw new ValidationError('Trusted tenant and school context do not match.', { errorCode: 'STU-GUARD-004', reason: 'INVALID_TRUSTED_SCOPE' });
-  }
+  // A tenant may own multiple schools; trusted membership and SQL scope checks
+  // keep tenant, school, and branch boundaries independent.
+
 }
 
 function assertNoClientScope(command: GuardianUpdateCommand): void {

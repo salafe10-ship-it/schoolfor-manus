@@ -54,11 +54,11 @@ describe('DB-SEC-002 trusted transaction context', () => {
     const session = await driver.begin({
       transactionId: 'dbsec002-tx',
       tenantId: 'tenant-a',
-      schoolId: 'tenant-a',
+      schoolId: 'school-a',
       operationName: 'DB-SEC-002 test',
       trustedContext: {
         tenantId: 'tenant-a',
-        schoolId: 'tenant-a',
+        schoolId: 'school-a',
         branchId: 'branch-a',
         academicYear: 'year-a',
         userId: 'user-a',
@@ -73,7 +73,7 @@ describe('DB-SEC-002 trusted transaction context', () => {
     expect(localContextCalls[0].sql).toContain('set_config($11, $12, true)');
     expect(localContextCalls[0].parameters).toEqual([
       ['app.tenant_id', 'tenant-a'],
-      ['app.school_id', 'tenant-a'],
+      ['app.school_id', 'school-a'],
       ['app.branch_id', 'branch-a'],
       ['app.academic_year', 'year-a'],
       ['app.user_id', 'user-a'],
@@ -87,7 +87,7 @@ describe('DB-SEC-002 trusted transaction context', () => {
     expect(client.released).toBe(true);
   });
 
-  it('fails closed for a tenant/school mismatch and releases the connection', async () => {
+  it('fails closed for a missing tenant or school scope and releases the connection', async () => {
     const client = new CaptureClient();
     const driver = new PostgresTransactionDriver(new CapturePool(client) as never);
 
@@ -96,7 +96,7 @@ describe('DB-SEC-002 trusted transaction context', () => {
       tenantId: 'tenant-a',
       schoolId: 'school-a',
       operationName: 'DB-SEC-002 invalid context',
-      trustedContext: { tenantId: 'tenant-a', schoolId: 'school-b' }
+      trustedContext: { tenantId: 'tenant-a', schoolId: '' }
     })).rejects.toThrow('Trusted tenant context is missing or invalid');
 
     expect(client.calls.map(call => call.sql)).toEqual(['BEGIN', 'ROLLBACK']);
@@ -120,7 +120,7 @@ describe('DB-SEC-002 trusted transaction context', () => {
       async () => undefined,
       {
         tenantId: 'tenant-a',
-        schoolId: 'tenant-a',
+        schoolId: 'school-a',
         branchId: 'branch-a',
         academicYear: 'year-a',
         userId: 'user-a',
@@ -130,7 +130,7 @@ describe('DB-SEC-002 trusted transaction context', () => {
 
     expect(driver.options?.trustedContext).toEqual({
       tenantId: 'tenant-a',
-      schoolId: 'tenant-a',
+      schoolId: 'school-a',
       branchId: 'branch-a',
       academicYear: 'year-a',
       userId: 'user-a',

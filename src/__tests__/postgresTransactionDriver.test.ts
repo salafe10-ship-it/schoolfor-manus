@@ -17,11 +17,11 @@ describe('PostgresTransactionDriver trusted context', () => {
     const session = await driver.begin({
       transactionId: 'tx-perf-005',
       tenantId: 'tenant-a',
-      schoolId: 'tenant-a',
+      schoolId: 'school-a',
       operationName: 'PERF-005 test',
       trustedContext: {
         tenantId: 'tenant-a',
-        schoolId: 'tenant-a',
+        schoolId: 'school-a',
         branchId: 'branch-a',
         academicYear: 'year-a',
         userId: 'user-a',
@@ -36,7 +36,7 @@ describe('PostgresTransactionDriver trusted context', () => {
     expect(contextCalls[0][0]).toContain('set_config($11, $12, true)');
     expect(contextCalls[0][1]).toEqual([
       'app.tenant_id', 'tenant-a',
-      'app.school_id', 'tenant-a',
+      'app.school_id', 'school-a',
       'app.branch_id', 'branch-a',
       'app.academic_year', 'year-a',
       'app.user_id', 'user-a',
@@ -48,15 +48,15 @@ describe('PostgresTransactionDriver trusted context', () => {
     await session.release();
   });
 
-  it('fails closed before any trusted context command for an invalid tenant/school pair', async () => {
+  it('fails closed before any trusted context command for a missing tenant or school scope', async () => {
     const { client, driver } = createDriverHarness();
 
     await expect(driver.begin({
       transactionId: 'tx-perf-005-invalid',
       tenantId: 'tenant-a',
-      schoolId: 'school-b',
+      schoolId: 'school-a',
       operationName: 'PERF-005 invalid',
-      trustedContext: { tenantId: 'tenant-a', schoolId: 'school-b' }
+      trustedContext: { tenantId: 'tenant-a', schoolId: '' }
     })).rejects.toThrow('Trusted tenant context is missing or invalid.');
 
     expect(client.query.mock.calls.filter(([sql]) => String(sql).startsWith('SELECT set_config'))).toHaveLength(0);

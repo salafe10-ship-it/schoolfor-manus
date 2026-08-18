@@ -136,7 +136,7 @@ export class PostgresTransactionDriver implements TransactionDriver {
     diagnosticTrace?: { mark(stage: string): void; count?(name: string, increment?: number): void },
     diagnosticPrefix = ''
   ): Promise<void> {
-    if (!context.tenantId || !context.schoolId || context.tenantId !== context.schoolId) {
+    if (!context.tenantId || !context.schoolId) {
       throw new Error('Trusted tenant context is missing or invalid.');
     }
 

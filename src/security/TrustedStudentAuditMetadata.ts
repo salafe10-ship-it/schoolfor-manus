@@ -24,7 +24,7 @@ export function createTrustedStudentAuditMetadata(request: TrustedStudentRequest
   if (
     identity.id !== tenant.userId ||
     identity.schoolId !== tenant.schoolId ||
-    tenant.tenantId !== tenant.schoolId ||
+    (identity.tenantId && identity.tenantId !== tenant.tenantId) ||
     identity.role !== tenant.role
   ) {
     throw new Error('Trusted identity and tenant context do not match.');

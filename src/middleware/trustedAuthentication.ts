@@ -11,12 +11,14 @@ export type TrustedIdentity = {
   id: string;
   email: string;
   name: string;
+  /** Server-resolved from public.users after Auth; absent on raw claims by design. */
+  tenantId?: string;
   schoolId: string;
   role: UserRole;
   school?: TrustedSchoolPresentation;
   branchId?: string;
   branch?: TrustedBranchPresentation;
-  /** Optional tenant claims, sourced only from Supabase app_metadata. */
+  /** Optional academic-year claim; final scope is validated server-side. */
   academicYear?: string;
 };
 
@@ -64,14 +66,12 @@ export function isEmailIdentifier(value: string): boolean {
 
 export type TrustedLoginIdentifier = {
   email: string;
-  resolvedSchoolId?: string;
 };
 
 /**
  * Resolve a non-email login identifier without ever handling the password.
- * The username column is intentionally optional at this stage: if the current
- * database does not expose it, the lookup fails closed and the report must
- * classify Username login as requiring a schema/RPC proposal.
+ * The pre-Auth lookup crosses the database boundary only through the narrow
+ * SECURITY DEFINER RPC; public.users is never opened to anon for direct reads.
  */
 export async function resolveTrustedLoginIdentifier(
   supabase: SupabaseClient,
@@ -83,21 +83,22 @@ export async function resolveTrustedLoginIdentifier(
   const normalized = identifier.trim();
   if (isEmailIdentifier(normalized)) return { email: normalized.toLowerCase() };
 
-  const { data, error } = await supabase
-    .from('users')
-    .select('email, school_id')
-    .eq('username', normalized)
-    .limit(2);
-  if (error || !Array.isArray(data) || data.length !== 1) {
+  const { data, error } = await supabase.rpc('dbsec004_resolve_login_username', {
+    p_username: normalized
+  });
+  if (error || typeof data !== 'string' || !data.trim()) {
     throw new TrustedAuthenticationError('INVALID_CREDENTIALS');
   }
-  const row = data[0] as { email?: unknown; school_id?: unknown };
-  const email = typeof row.email === 'string' ? row.email.trim().toLowerCase() : '';
-  if (!email) throw new TrustedAuthenticationError('INVALID_CREDENTIALS');
-  const resolvedSchoolId = typeof row.school_id === 'string' && row.school_id.trim()
-    ? row.school_id.trim()
-    : undefined;
-  return { email, ...(resolvedSchoolId ? { resolvedSchoolId } : {}) };
+  return { email: data.trim().toLowerCase() };
+}
+
+async function resolveTrustedTenantId(supabase: SupabaseClient): Promise<string> {
+  const { data, error } = await supabase.rpc('dbsec004_current_tenant_id');
+  const tenantId = typeof data === 'string' ? data.trim() : '';
+  if (error || !tenantId) {
+    throw new TrustedAuthenticationError('INVALID_IDENTITY', 'المستأجر الموثوق غير متاح لهذه الجلسة.');
+  }
+  return tenantId;
 }
 
 export function extractBearerToken(authHeader: unknown): string | null {
@@ -180,16 +181,14 @@ export async function authenticateTrustedUser(
   }
 
   const identity = extractTrustedIdentity(data.user);
-  if (loginIdentifier.resolvedSchoolId && identity.schoolId !== loginIdentifier.resolvedSchoolId) {
-    throw new TrustedAuthenticationError('INVALID_SCHOOL');
-  }
+  const tenantId = await resolveTrustedTenantId(supabase);
   if (requestedSchoolId && identity.schoolId !== requestedSchoolId) {
     throw new TrustedAuthenticationError('INVALID_SCHOOL');
   }
   const school = await assertTrustedSchoolExists(supabase, identity.schoolId);
 
   const scopedIdentity = await assertTrustedBranchScope(supabase, identity);
-  return { identity: { ...scopedIdentity, school }, session: data.session };
+  return { identity: { ...scopedIdentity, tenantId, school }, session: data.session };
 }
 
 async function assertTrustedSchoolExists(
@@ -223,9 +222,10 @@ export async function refreshTrustedSession(
     throw new TrustedAuthenticationError('INVALID_CREDENTIALS');
   }
   const identity = extractTrustedIdentity(data.user);
+  const tenantId = await resolveTrustedTenantId(supabase);
   const school = await assertTrustedSchoolExists(supabase, identity.schoolId);
   const scopedIdentity = await assertTrustedBranchScope(supabase, identity);
-  return { identity: { ...scopedIdentity, school }, session: data.session };
+  return { identity: { ...scopedIdentity, tenantId, school }, session: data.session };
 }
 
 export async function verifyTrustedSession(
@@ -236,7 +236,8 @@ export async function verifyTrustedSession(
   const { data: { user }, error } = await supabase.auth.getUser(token);
   if (error || !user) throw new TrustedAuthenticationError('INVALID_CREDENTIALS');
   const identity = extractTrustedIdentity(user);
+  const tenantId = await resolveTrustedTenantId(supabase);
   const school = await assertTrustedSchoolExists(supabase, identity.schoolId);
   const scopedIdentity = await assertTrustedBranchScope(supabase, identity);
-  return { ...scopedIdentity, school };
+  return { ...scopedIdentity, tenantId, school };
 }

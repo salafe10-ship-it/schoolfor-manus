@@ -162,8 +162,8 @@ export const StudentRepository = {
     return response.json();
   },
 
-  async list(schoolId: string, options: { page?: number; limit?: number; search?: string; status?: string; section?: string; sortBy?: string; sortOrder?: 'asc' | 'desc' } = {}, signal?: AbortSignal): Promise<any> {
-    const params = new URLSearchParams({ schoolId });
+  async list(options: { page?: number; limit?: number; search?: string; status?: string; section?: string; sortBy?: string; sortOrder?: 'asc' | 'desc' } = {}, signal?: AbortSignal): Promise<any> {
+    const params = new URLSearchParams();
     Object.entries(options).forEach(([key, value]) => {
       if (value !== undefined && value !== '') params.set(key, String(value));
     });

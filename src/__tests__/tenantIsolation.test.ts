@@ -9,18 +9,18 @@ import { TenantContextResolver, TenantDataProvider } from '../tenant/TenantEngin
 import { assertRepositoryScope } from '../tenant/TenantGuard';
 
 const identity = {
-  id: 'user-1', email: 'user@example.com', name: 'User', role: 'Teacher' as const, schoolId: 'school-1',
+  id: 'user-1', email: 'user@example.com', name: 'User', role: 'Teacher' as const, tenantId: 'tenant-1', schoolId: 'school-1',
   branchId: 'branch-1', academicYear: 'year-2026'
 };
 const context = {
-  tenantId: 'school-1', schoolId: 'school-1', branchId: 'branch-1', academicYear: 'year-2026', userId: 'user-1', role: 'Teacher'
+  tenantId: 'tenant-1', schoolId: 'school-1', branchId: 'branch-1', academicYear: 'year-2026', userId: 'user-1', role: 'Teacher'
 };
 
 function provider(): TenantDataProvider {
   return {
-    schoolExists: vi.fn(async schoolId => schoolId === 'school-1'),
-    listBranches: vi.fn(async schoolId => schoolId === 'school-1' ? ['branch-1', 'branch-2'] : []),
-    listAcademicYears: vi.fn(async schoolId => schoolId === 'school-1' ? [{ id: 'year-2026', name: '2026/2027', isActive: true }] : [])
+    schoolExists: vi.fn(async (tenantId, schoolId) => tenantId === 'tenant-1' && schoolId === 'school-1'),
+    listBranches: vi.fn(async (tenantId, schoolId) => tenantId === 'tenant-1' && schoolId === 'school-1' ? ['branch-1', 'branch-2'] : []),
+    listAcademicYears: vi.fn(async (tenantId, schoolId) => tenantId === 'tenant-1' && schoolId === 'school-1' ? [{ id: 'year-2026', name: '2026/2027', isActive: true, tenantId, schoolId }] : [])
   };
 }
 
@@ -35,15 +35,15 @@ describe('Wave 1D tenant isolation foundation', () => {
       schoolExists: vi.fn(async (_tenantId, _schoolId, accessToken) => accessToken === 'verified-token'),
       listBranches: vi.fn(async (_tenantId, _schoolId, accessToken) => accessToken === 'verified-token' ? ['branch-1'] : []),
       listAcademicYears: vi.fn(async (_tenantId, _schoolId, _branchId, accessToken) => accessToken === 'verified-token'
-        ? [{ id: 'year-2026', isActive: true, tenantId: 'school-1', schoolId: 'school-1', branchId: 'branch-1' }]
+        ? [{ id: 'year-2026', isActive: true, tenantId: 'tenant-1', schoolId: 'school-1', branchId: 'branch-1' }]
         : [])
     };
 
     await expect(new TenantContextResolver(authenticatedProvider).resolve(identity, 'verified-token'))
       .resolves.toEqual(context);
-    expect(authenticatedProvider.schoolExists).toHaveBeenCalledWith('school-1', 'school-1', 'verified-token');
-    expect(authenticatedProvider.listBranches).toHaveBeenCalledWith('school-1', 'school-1', 'verified-token');
-    expect(authenticatedProvider.listAcademicYears).toHaveBeenCalledWith('school-1', 'school-1', 'branch-1', 'verified-token');
+    expect(authenticatedProvider.schoolExists).toHaveBeenCalledWith('tenant-1', 'school-1', 'verified-token');
+    expect(authenticatedProvider.listBranches).toHaveBeenCalledWith('tenant-1', 'school-1', 'verified-token');
+    expect(authenticatedProvider.listAcademicYears).toHaveBeenCalledWith('tenant-1', 'school-1', 'branch-1', 'verified-token');
   });
 
   it('rejects invalid tenant, branch, and academic year values', async () => {
@@ -55,8 +55,8 @@ describe('Wave 1D tenant isolation foundation', () => {
 
   it('passes the trusted tenant, school, and branch scope to the canonical academic provider', async () => {
     const scopedProvider: TenantDataProvider = {
-      schoolExists: vi.fn(async (tenantId, schoolId) => tenantId === 'school-1' && schoolId === 'school-1'),
-      listBranches: vi.fn(async (tenantId, schoolId) => tenantId === 'school-1' && schoolId === 'school-1' ? ['branch-1'] : []),
+      schoolExists: vi.fn(async (tenantId, schoolId) => tenantId === 'tenant-1' && schoolId === 'school-1'),
+      listBranches: vi.fn(async (tenantId, schoolId) => tenantId === 'tenant-1' && schoolId === 'school-1' ? ['branch-1'] : []),
       listAcademicYears: vi.fn(async (tenantId, schoolId, branchId) => [{
         id: 'year-2026',
         name: '2026/2027',
@@ -68,9 +68,19 @@ describe('Wave 1D tenant isolation foundation', () => {
     };
 
     await expect(new TenantContextResolver(scopedProvider).resolve(identity)).resolves.toMatchObject(context);
-    expect(scopedProvider.schoolExists).toHaveBeenCalledWith('school-1', 'school-1');
-    expect(scopedProvider.listBranches).toHaveBeenCalledWith('school-1', 'school-1');
-    expect(scopedProvider.listAcademicYears).toHaveBeenCalledWith('school-1', 'school-1', 'branch-1');
+    expect(scopedProvider.schoolExists).toHaveBeenCalledWith('tenant-1', 'school-1');
+    expect(scopedProvider.listBranches).toHaveBeenCalledWith('tenant-1', 'school-1');
+    expect(scopedProvider.listAcademicYears).toHaveBeenCalledWith('tenant-1', 'school-1', 'branch-1');
+  });
+
+  it('keeps tenant and school scope distinct while rejecting a foreign school lookup', async () => {
+    const foreignSchoolProvider: TenantDataProvider = {
+      schoolExists: vi.fn(async (tenantId, schoolId) => tenantId === 'tenant-1' && schoolId === 'school-2'),
+      listBranches: vi.fn(async () => ['branch-2']),
+      listAcademicYears: vi.fn(async () => [{ id: 'year-2026', isActive: true, tenantId: 'tenant-1', schoolId: 'school-2', branchId: 'branch-2' }])
+    };
+    await expect(new TenantContextResolver(foreignSchoolProvider).resolve({ ...identity, schoolId: 'school-2', branchId: 'branch-2' }))
+      .resolves.toMatchObject({ tenantId: 'tenant-1', schoolId: 'school-2' });
   });
 
   it('rejects an academic year returned with a foreign tenant or branch scope', async () => {

@@ -960,7 +960,22 @@ export default function App() {
     void authenticateAndOpenSession(username, password);
   };
 
-  const handleLogout = () => {
+  const handleLogout = async () => {
+    // Revoke the server-side Supabase Auth session before clearing local state.
+    // Local logout still runs when the network is unavailable so protected UI
+    // cannot remain accessible from the current browser context.
+    const accessToken = sessionManager.getAccessToken();
+    if (accessToken) {
+      try {
+        await fetch('/api/auth/logout', {
+          method: 'POST',
+          headers: { Authorization: `Bearer ${accessToken}` }
+        });
+      } catch {
+        // The local session is still cleared below; no internal error is shown.
+      }
+    }
+
     // Terminate Session, clear Tokens and Auth cache
     sessionManager.logout();
     setTrustedSessionUser(null);
@@ -1633,13 +1648,7 @@ export default function App() {
             currentRole={currentRole}
             notifications={notifications}
             clearNotifications={() => setNotifications([])}
-            userName={
-              currentRole === 'SuperAdmin' ? 'سليمان غازي' :
-              currentRole === 'SchoolAdmin' ? 'سليمان بن غازي' :
-              currentRole === 'Teacher' ? 'أ. أحمد الشمري' :
-              currentRole === 'Accountant' ? 'أ. مسفر الغامدي' :
-              currentRole === 'Parent' ? 'أبو خالد الميمان' : 'مستخدم مدرسي'
-            }
+            userName={trustedSessionUser?.name || 'مستخدم المدرسة'}
             onLogout={handleLogout}
             theme={theme}
             onThemeToggle={toggleTheme}
@@ -1802,10 +1811,10 @@ export default function App() {
                   <div className="relative z-10 space-y-1.5">
                     <div className="flex items-center gap-2 flex-wrap text-[10px] text-amber-300 font-black">
                       <span className="px-2 py-0.5 bg-[#170e07] rounded border border-[#d4af37]/40 text-[#fce79a]">
-                        دليل التوجيه المؤسسي الذكي • عبدالسلام سوفت
+                        دليل التوجيه المؤسسي الذكي • SchoolForManus
                       </span>
                       <span>•</span>
-                      <span>منظومة عبدالسلام سوفت لإدارة الفروع التعليمية المتكاملة (ERP Enterprise Solvency Console)</span>
+                      <span>                        منصة SchoolForManus لإدارة المدارس والمؤسسات التعليمية المتكاملة</span>
                     </div>
                     <h3 className="text-sm font-black text-[#fce79a]">
                       بوابة ومحاكي {selectedSchool.name} الموحدة • رخصة رقم {selectedSchool.licenseNumber}

@@ -169,7 +169,7 @@ export default function Topbar({
               <span className="w-1.5 h-1.5 rounded-full bg-emerald-400 animate-pulse" />
             </h1>
             <span className="text-[10px] text-amber-300 font-extrabold flex items-center gap-1 mt-1">
-              منظومة عبدالسلام سوفت ERP ✦
+              SchoolForManus • إدارة المدارس
             </span>
           </div>
         </div>
@@ -213,56 +213,52 @@ export default function Topbar({
           </div>
         </div>
 
-        {/* Branch Selector Dropdown */}
+        {/* Branch scope: School users see the trusted branch as read-only. */}
         <div className="hidden sm:flex items-center gap-1.5">
-          <div className="relative">
-            <select
-              id="branch-selector"
-              value={selectedBranch ? selectedBranch.id : 'all'}
-              onChange={(e) => {
-                if (e.target.value === 'all') {
-                  onBranchChange(null);
-                } else {
-                  const b = branches.find(br => br.id === e.target.value);
-                  if (b) onBranchChange(b);
-                }
-              }}
-              className="appearance-none bg-[#2a1d13] border border-[#d4af37]/30 text-amber-100 text-xs font-bold pr-8 pl-8 py-2 focus:outline-none focus:ring-2 focus:ring-[#d4af37]/40 cursor-pointer text-right transition-all hover:bg-[#38271a]"
-            >
-              <option value="all" className="bg-[#1c120c] text-amber-100">📍 كل فروع المدرسة</option>
-              {branches.map((b) => (
-                <option key={b.id} value={b.id} className="bg-[#1c120c] text-amber-100">
-                  📍 {b.name}
-                </option>
-              ))}
-            </select>
-            <div className="absolute inset-y-0 right-2.5 flex items-center pointer-events-none text-amber-400">
+          {currentRole === 'SuperAdmin' && !isClientMode ? (
+            <div className="relative">
+              <select
+                id="branch-selector"
+                value={selectedBranch ? selectedBranch.id : 'all'}
+                onChange={(e) => {
+                  if (e.target.value === 'all') {
+                    onBranchChange(null);
+                  } else {
+                    const b = branches.find(br => br.id === e.target.value);
+                    if (b) onBranchChange(b);
+                  }
+                }}
+                className="appearance-none bg-[#2a1d13] border border-[#d4af37]/30 text-amber-100 text-xs font-bold pr-8 pl-8 py-2 focus:outline-none focus:ring-2 focus:ring-[#d4af37]/40 cursor-pointer text-right transition-all hover:bg-[#38271a]"
+              >
+                <option value="all" className="bg-[#1c120c] text-amber-100">📍 كل فروع المدرسة</option>
+                {branches.map((b) => (
+                  <option key={b.id} value={b.id} className="bg-[#1c120c] text-amber-100">
+                    📍 {b.name}
+                  </option>
+                ))}
+              </select>
+              <div className="absolute inset-y-0 right-2.5 flex items-center pointer-events-none text-amber-400">
+                <Layers className="w-3.5 h-3.5 text-amber-400" />
+              </div>
+              <div className="absolute inset-y-0 left-2.5 flex items-center pointer-events-none text-amber-300/60">
+                <ChevronDown className="w-3.5 h-3.5" />
+              </div>
+            </div>
+          ) : (
+            <div id="trusted-branch-display" className="flex items-center gap-2 bg-[#2a1d13] border border-[#d4af37]/30 px-4 py-2 text-xs font-black text-amber-100 select-none shadow-2xs">
               <Layers className="w-3.5 h-3.5 text-amber-400" />
+              <span>{selectedBranch?.name || 'الفرع الموثوق'}</span>
+              <span className="text-[9px] text-emerald-300 bg-emerald-950/60 px-2 py-0.5 rounded border border-emerald-800 font-black mr-1.5">سياق موثوق ✅</span>
             </div>
-            <div className="absolute inset-y-0 left-2.5 flex items-center pointer-events-none text-amber-300/60">
-              <ChevronDown className="w-3.5 h-3.5" />
-            </div>
-          </div>
+          )}
         </div>
 
-        {/* Academic Year Selector Dropdown */}
+        {/* Academic year is a trusted identity attribute, not a client-side filter. */}
         <div className="hidden sm:flex items-center gap-1.5">
-          <div className="relative">
-            <select
-              id="academic-year-selector"
-              defaultValue={selectedSchool.academicYear || '2026/2027'}
-              className="appearance-none bg-[#2a1d13] border border-[#d4af37]/30 text-amber-100 text-xs font-bold pr-8 pl-8 py-2 focus:outline-none focus:ring-2 focus:ring-[#d4af37]/40 cursor-pointer text-right transition-all hover:bg-[#38271a]"
-            >
-              <option value="2026/2027" className="bg-[#1c120c] text-amber-100">📅 العام الدراسي 2026/2027</option>
-              <option value="2025/2026" className="bg-[#1c120c] text-amber-100">📅 العام الدراسي 2025/2026</option>
-              <option value="2024/2025" className="bg-[#1c120c] text-amber-100">📅 العام الدراسي 2024/2025</option>
-            </select>
-            <div className="absolute inset-y-0 right-2.5 flex items-center pointer-events-none text-amber-400">
-              <Calendar className="w-3.5 h-3.5 text-amber-400" />
-            </div>
-            <div className="absolute inset-y-0 left-2.5 flex items-center pointer-events-none text-amber-300/60">
-              <ChevronDown className="w-3.5 h-3.5" />
-            </div>
+          <div id="trusted-academic-year-display" className="flex items-center gap-2 bg-[#2a1d13] border border-[#d4af37]/30 px-4 py-2 text-xs font-black text-amber-100 select-none shadow-2xs">
+            <Calendar className="w-3.5 h-3.5 text-amber-400" />
+            <span>{selectedSchool.academicYear || 'العام الدراسي غير محدد'}</span>
+            <span className="text-[9px] text-amber-300/70">من الهوية الموثوقة</span>
           </div>
         </div>
       </div>

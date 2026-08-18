@@ -23,6 +23,21 @@ describe('STU-STATUS-003 lifecycle release boundary discovery', () => {
     expect(registration).toContain("'applicant'");
   });
 
+  it('proves legacy Enrollment mutations fail closed before any StudentService write', () => {
+    const server = read('server.ts');
+    for (const route of ['/api/students/:id/transfer', '/api/students/:id/promote', '/api/students/:id/re-enroll', '/api/students/:id/dismiss']) {
+      const start = server.indexOf(`app.post("${route}"`);
+      expect(start).toBeGreaterThanOrEqual(0);
+      const nextRoute = server.indexOf('app.', start + 8);
+      const block = server.slice(start, nextRoute > start ? nextRoute : start + 900);
+      expect(block).toContain('canonicalEnrollmentWorkflowRequired');
+      expect(block).not.toContain('StudentService.transferStudent');
+      expect(block).not.toContain('StudentService.promoteStudent');
+      expect(block).not.toContain('StudentService.reEnrollStudent');
+      expect(block).not.toContain('StudentService.dismissStudent');
+    }
+  });
+
   it('proves canonical schema vocabulary and one-current-status constraint', () => {
     const migration = read('supabase/migrations/202608061000_academic_status_engine.sql');
     expect(migration).toContain("status IN ('applicant', 'admitted', 'active', 'suspended', 'withdrawn', 'graduated', 'archived')");
