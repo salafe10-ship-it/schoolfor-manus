@@ -7,6 +7,7 @@ import { ChevronDown, Database, MessageSquare, Send, ShieldCheck, Sparkles, Tras
 import { EnterpriseLogger } from '../database/services/EnterpriseLogger';
 import React, { useState, useRef, useEffect } from 'react';
 import { motion, AnimatePresence } from 'motion/react';
+import { getTrustedAccessToken } from '../utils/auth';
 
 interface Message {
   id: string;
@@ -216,7 +217,7 @@ export default function AIAssistantPortal() {
 
     // Otherwise try reaching real API
     try {
-      const token = localStorage.getItem("edupro_token");
+      const token = getTrustedAccessToken();
       const response = await fetch('/api/ai/chat', {
         method: 'POST',
         headers: {

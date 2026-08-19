@@ -14,6 +14,7 @@ import EnterpriseActionToolbar from './shared/EnterpriseActionToolbar';
 import { EnterpriseAuditLogger } from '../utils/EnterpriseAuditLogger';
 import AccountingIntegrityDemo from '../certification/AccountingIntegrityDemo';
 import { StudentAffairsValidationFramework } from '../validation/StudentAffairsValidationFramework';
+import { getTrustedAccessToken } from '../utils/auth';
 
 interface StudentFinancialPortalProps {
   students: Student[];
@@ -247,7 +248,7 @@ export default function StudentFinancialPortal({
     const response = await fetch('/api/financial/database', {
       method: 'POST',
       headers: {
-        'Authorization': `Bearer ${localStorage.getItem('edupro_token') || ''}`,
+        'Authorization': `Bearer ${getTrustedAccessToken()}`,
         'Content-Type': 'application/json'
       },
       body: JSON.stringify(payload)
@@ -264,7 +265,7 @@ export default function StudentFinancialPortal({
       try {
         const response = await fetch('/api/financial/database', {
           headers: {
-            'Authorization': `Bearer ${localStorage.getItem('edupro_token') || ''}`
+        'Authorization': `Bearer ${getTrustedAccessToken()}`
           }
         });
         const res = await response.json();
@@ -291,7 +292,7 @@ export default function StudentFinancialPortal({
           await fetch('/api/financial/database', {
             method: 'POST',
             headers: {
-              'Authorization': `Bearer ${localStorage.getItem('edupro_token') || ''}`,
+        'Authorization': `Bearer ${getTrustedAccessToken()}`,
               'Content-Type': 'application/json'
             },
             body: JSON.stringify({

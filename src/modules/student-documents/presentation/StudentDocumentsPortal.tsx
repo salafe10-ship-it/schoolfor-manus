@@ -2,6 +2,7 @@ import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import type { FormEvent } from 'react';
 import { Archive, CheckCircle2, ChevronLeft, ChevronRight, Clock3, Eye, FilePlus2, FileText, History, Loader2, LockKeyhole, RefreshCw, Search, ShieldAlert, X, XCircle } from 'lucide-react';
 import type { Student, UserRole } from '../../../types';
+import { getTrustedAccessToken } from '../../../utils/auth';
 
 type StudentDocumentRow = {
   id: string;
@@ -52,7 +53,7 @@ const verificationLabels: Record<string, string> = {
 };
 
 function authHeaders(idempotency = false): Record<string, string> {
-  const token = typeof window === 'undefined' ? '' : window.localStorage.getItem('edupro_token') || '';
+  const token = getTrustedAccessToken();
   return {
     Accept: 'application/json',
     ...(token ? { Authorization: `Bearer ${token}` } : {}),

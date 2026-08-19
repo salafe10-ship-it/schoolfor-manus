@@ -19,6 +19,7 @@ import {
 
 import { Student, Teacher, SchoolClass } from '../types';
 import EnterpriseActionToolbar from './shared/EnterpriseActionToolbar';
+import { getTrustedAccessToken } from '../utils/auth';
 
 // Initial Seed Data for the Exams and Results Module
 const DEFAULT_EXAM_SETTINGS = {
@@ -487,7 +488,7 @@ export default function ExamsResultsModule({
         exams_reviewed_stages_subjects: currentReviewedStagesSubjects,
         exams_stage_approval_status: currentStageApprovalStatus
       };
-      const token = localStorage.getItem("edupro_token");
+      const token = getTrustedAccessToken();
       const response = await fetch('/api/exams/database', {
         method: 'POST',
         headers: { 
@@ -517,7 +518,7 @@ export default function ExamsResultsModule({
   const handleForceSync = async () => {
     setIsDbSyncing(true);
     try {
-      const token = localStorage.getItem("edupro_token");
+      const token = getTrustedAccessToken();
       const response = await fetch('/api/exams/database', {
         headers: {
           'Authorization': token ? `Bearer ${token}` : ''
@@ -575,7 +576,7 @@ export default function ExamsResultsModule({
     const fetchDbOnMount = async () => {
       setIsDbSyncing(true);
       try {
-        const token = localStorage.getItem("edupro_token");
+        const token = getTrustedAccessToken();
         const response = await fetch('/api/exams/database', {
           headers: {
             'Authorization': token ? `Bearer ${token}` : ''

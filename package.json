@@ -5,8 +5,8 @@
   "type": "module",
   "scripts": {
     "dev": "tsx server.ts",
-    "build": "vite build && esbuild server.ts --bundle --platform=node --format=cjs --packages=external --sourcemap --outfile=dist/server.cjs",
-    "build:spa": "vite build",
+    "build": "vite build --configLoader runner && node scripts/build-server.mjs",
+    "build:spa": "vite build --configLoader runner",
     "start": "node dist/server.cjs",
     "start:spa": "vite preview --port ${PORT:-10000} --host 0.0.0.0",
     "clean": "rm -rf dist server.js",
@@ -14,6 +14,9 @@
     "lint": "tsc --noEmit",
     "db:migrate": "tsx src/database/scripts/migrate.ts",
     "db:seed": "tsx src/database/scripts/seed.ts",
+    "provisioning:bootstrap": "tsx scripts/provisioning-bootstrap.ts",
+    "provisioning:admin": "tsx scripts/provisioning-admin.ts",
+    "provisioning:platform-admin": "tsx scripts/provisioning-platform-admin.ts",
     "test": "vitest",
     "test:coverage": "vitest run --coverage"
   },

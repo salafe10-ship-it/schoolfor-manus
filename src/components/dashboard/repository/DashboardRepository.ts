@@ -1,3 +1,5 @@
+import { getTrustedAccessToken } from '../../../utils/auth';
+
 export type DashboardMetric = {
   status: 'live' | 'unavailable';
   count: number | null;
@@ -22,7 +24,7 @@ export type DashboardMetrics = {
 };
 
 const getHeaders = (): HeadersInit => {
-  const token = localStorage.getItem('edupro_token') || '';
+  const token = getTrustedAccessToken();
   return {
     'Content-Type': 'application/json',
     Authorization: token ? `Bearer ${token}` : ''

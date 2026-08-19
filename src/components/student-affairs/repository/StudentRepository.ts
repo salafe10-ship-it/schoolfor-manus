@@ -1,21 +1,15 @@
+import { authenticatedRequest } from '../../../utils/authenticatedRequest';
+
 /**
  * Student Repository Layer
  * Handles direct network and server API communication (acting as the client repository talking to Supabase / Database through backend proxies).
  */
 
-const getHeaders = () => {
-  const token = localStorage.getItem("edupro_token") || "";
-  return {
-    "Content-Type": "application/json",
-    "Authorization": token ? `Bearer ${token}` : ""
-  };
-};
-
 export const StudentRepository = {
   async updateGuardian(studentId: string, payload: Record<string, unknown>): Promise<any> {
-    const response = await fetch(`/api/students/${encodeURIComponent(studentId)}/guardian`, {
+    const response = await authenticatedRequest(`/api/students/${encodeURIComponent(studentId)}/guardian`, {
       method: "PATCH",
-      headers: getHeaders(),
+      headers: { "Content-Type": "application/json" },
       body: JSON.stringify(payload)
     });
     const data = await response.json().catch(() => ({}));
@@ -26,21 +20,22 @@ export const StudentRepository = {
   },
 
   async saveStudent(studentData: any): Promise<any> {
-    const response = await fetch("/api/students", {
+    const response = await authenticatedRequest("/api/students", {
       method: "POST",
-      headers: getHeaders(),
+      headers: { "Content-Type": "application/json" },
       body: JSON.stringify(studentData)
     });
+    const data = await response.json().catch(() => ({}));
     if (!response.ok) {
-      throw new Error("REPOS_FAIL: فشلت عملية حفظ القيد في قاعدة البيانات الحقيقية للخادم");
+      throw new Error(data.message || data.error || "تعذر حفظ سجل الطالب في الخادم.");
     }
-    return response.json();
+    return data;
   },
 
   async softDeleteStudent(studentId: string): Promise<any> {
-    const response = await fetch(`/api/students/${studentId}?action=soft`, {
+    const response = await authenticatedRequest(`/api/students/${studentId}?action=soft`, {
       method: "DELETE",
-      headers: getHeaders()
+      headers: { "Content-Type": "application/json" }
     });
     if (!response.ok) {
       const errData = await response.json().catch(() => ({}));
@@ -50,9 +45,9 @@ export const StudentRepository = {
   },
 
   async bulkCreateStudents(studentsList: any[]): Promise<any> {
-    const response = await fetch("/api/students/bulk", {
+    const response = await authenticatedRequest("/api/students/bulk", {
       method: "POST",
-      headers: getHeaders(),
+      headers: { "Content-Type": "application/json" },
       body: JSON.stringify(studentsList)
     });
     if (!response.ok) {
@@ -62,9 +57,9 @@ export const StudentRepository = {
   },
 
   async transferStudent(studentId: string, payload: { classroom: string; section: string; stageId?: string; branchId?: string }): Promise<any> {
-    const response = await fetch(`/api/students/${studentId}/transfer`, {
+    const response = await authenticatedRequest(`/api/students/${studentId}/transfer`, {
       method: "POST",
-      headers: getHeaders(),
+      headers: { "Content-Type": "application/json" },
       body: JSON.stringify(payload)
     });
     if (!response.ok) {
@@ -75,9 +70,9 @@ export const StudentRepository = {
   },
 
   async promoteStudent(studentId: string, payload: { targetClassroom: string; targetStageId: string; carryOverFees: number }): Promise<any> {
-    const response = await fetch(`/api/students/${studentId}/promote`, {
+    const response = await authenticatedRequest(`/api/students/${studentId}/promote`, {
       method: "POST",
-      headers: getHeaders(),
+      headers: { "Content-Type": "application/json" },
       body: JSON.stringify(payload)
     });
     if (!response.ok) {
@@ -88,9 +83,9 @@ export const StudentRepository = {
   },
 
   async reEnrollStudent(studentId: string, payload: { classroom: string; section: string }): Promise<any> {
-    const response = await fetch(`/api/students/${studentId}/re-enroll`, {
+    const response = await authenticatedRequest(`/api/students/${studentId}/re-enroll`, {
       method: "POST",
-      headers: getHeaders(),
+      headers: { "Content-Type": "application/json" },
       body: JSON.stringify(payload)
     });
     if (!response.ok) {
@@ -101,9 +96,9 @@ export const StudentRepository = {
   },
 
   async graduateStudent(studentId: string): Promise<any> {
-    const response = await fetch(`/api/students/${studentId}/graduate`, {
+    const response = await authenticatedRequest(`/api/students/${studentId}/graduate`, {
       method: "POST",
-      headers: getHeaders()
+      headers: { "Content-Type": "application/json" }
     });
     if (!response.ok) {
       const errData = await response.json().catch(() => ({}));
@@ -113,9 +108,9 @@ export const StudentRepository = {
   },
 
   async archiveStudent(studentId: string, archive: boolean): Promise<any> {
-    const response = await fetch(`/api/students/${studentId}/archive`, {
+    const response = await authenticatedRequest(`/api/students/${studentId}/archive`, {
       method: "POST",
-      headers: getHeaders(),
+      headers: { "Content-Type": "application/json" },
       body: JSON.stringify({ archive })
     });
     if (!response.ok) {
@@ -126,9 +121,9 @@ export const StudentRepository = {
   },
 
   async dismissStudent(studentId: string, payload: { type: 'temporary' | 'permanent'; reason: string; decisionNumber: string; authority: string; date: string }): Promise<any> {
-    const response = await fetch(`/api/students/${studentId}/dismiss`, {
+    const response = await authenticatedRequest(`/api/students/${studentId}/dismiss`, {
       method: "POST",
-      headers: getHeaders(),
+      headers: { "Content-Type": "application/json" },
       body: JSON.stringify(payload)
     });
     if (!response.ok) {
@@ -139,9 +134,9 @@ export const StudentRepository = {
   },
 
   async restoreStudent(studentId: string): Promise<any> {
-    const response = await fetch(`/api/students/${studentId}?action=restore`, {
+    const response = await authenticatedRequest(`/api/students/${studentId}?action=restore`, {
       method: "DELETE",
-      headers: getHeaders()
+      headers: { "Content-Type": "application/json" }
     });
     if (!response.ok) {
       const errData = await response.json().catch(() => ({}));
@@ -151,9 +146,9 @@ export const StudentRepository = {
   },
 
   async permanentDeleteStudent(studentId: string): Promise<any> {
-    const response = await fetch(`/api/students/${studentId}?action=permanent`, {
+    const response = await authenticatedRequest(`/api/students/${studentId}?action=permanent`, {
       method: "DELETE",
-      headers: getHeaders()
+      headers: { "Content-Type": "application/json" }
     });
     if (!response.ok) {
       const errData = await response.json().catch(() => ({}));
@@ -167,9 +162,9 @@ export const StudentRepository = {
     Object.entries(options).forEach(([key, value]) => {
       if (value !== undefined && value !== '') params.set(key, String(value));
     });
-    const response = await fetch(`/api/students?${params.toString()}`, {
+    const response = await authenticatedRequest(`/api/students?${params.toString()}`, {
       method: "GET",
-      headers: getHeaders(),
+      headers: { "Content-Type": "application/json" },
       signal
     });
     if (!response.ok) {
@@ -183,9 +178,9 @@ export const StudentRepository = {
     Object.entries(options).forEach(([key, value]) => {
       if (value !== undefined && value !== '') params.set(key, String(value));
     });
-    const response = await fetch(`/api/students/export?${params.toString()}`, {
+    const response = await authenticatedRequest(`/api/students/export?${params.toString()}`, {
       method: 'GET',
-      headers: getHeaders(),
+      headers: { "Content-Type": "application/json" },
       signal
     });
     if (!response.ok) {

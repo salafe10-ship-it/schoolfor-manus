@@ -29,6 +29,7 @@ import {
   parseApprovedConnectionIdentity,
   type ApprovedConnectionIdentity
 } from '../security/stagingDiagnosticInvocation';
+import { getTrustedAccessToken } from '../utils/auth';
 interface SystemHealthCenterProps {
   schools: any[];
   students: any[];
@@ -88,7 +89,7 @@ export default function SystemHealthCenter({
   const runStagingConnectionDiagnostic = async () => {
     setIsLoadingStagingDiagnostic(true);
     try {
-      const token = localStorage.getItem('edupro_token');
+      const token = getTrustedAccessToken();
       if (!token) {
         setStagingDiagnosticAvailable(false);
         setStagingDiagnosticIdentity(null);

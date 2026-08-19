@@ -1,6 +1,7 @@
 import React, { useCallback, useEffect, useMemo, useState } from 'react';
 import { AlertCircle, CheckCircle2, ChevronLeft, ChevronRight, Clock3, Filter, Loader2, RefreshCw, Search, ShieldCheck, UserPlus, XCircle } from 'lucide-react';
 import type { Branch, School, UserRole } from '../types';
+import { getTrustedAccessToken } from '../utils/auth';
 
 type AdmissionStatus = 'INQUIRY' | 'VERIFIED' | 'FEE_PAID' | 'ENROLLED' | 'REJECTED';
 
@@ -52,8 +53,7 @@ const NEXT_STATUSES: Record<AdmissionStatus, AdmissionStatus[]> = {
 };
 
 function token(): string | null {
-  if (typeof window === 'undefined') return null;
-  const value = window.localStorage.getItem('edupro_token') || window.sessionStorage.getItem('edupro_token');
+  const value = getTrustedAccessToken();
   return value?.trim() || null;
 }
 

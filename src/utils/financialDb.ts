@@ -11,7 +11,7 @@ export async function fetchFinancialDb(): Promise<FinancialData | null> {
   try {
     const response = await fetch('/api/financial/database', {
       headers: {
-        'Authorization': `Bearer ${localStorage.getItem('edupro_token') || ''}`,
+        'Authorization': `Bearer ${getTrustedAccessToken()}`,
         'Content-Type': 'application/json'
       }
     });
@@ -32,7 +32,7 @@ export async function saveFinancialDb(data: FinancialData): Promise<boolean> {
     const response = await fetch('/api/financial/database', {
       method: 'POST',
       headers: {
-        'Authorization': `Bearer ${localStorage.getItem('edupro_token') || ''}`,
+        'Authorization': `Bearer ${getTrustedAccessToken()}`,
         'Content-Type': 'application/json'
       },
       body: JSON.stringify(data)
@@ -45,3 +45,4 @@ export async function saveFinancialDb(data: FinancialData): Promise<boolean> {
   }
   return false;
 }
+import { getTrustedAccessToken } from './auth';

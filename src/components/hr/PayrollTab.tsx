@@ -4,6 +4,7 @@ import React, { useState, useEffect } from 'react';
 import { HREmployee, HRPenalty, HRAdvance, HRBonus, HRSettings } from './types';
 import { SQLTransactionEngine } from '../../database/transactions/transactionManager';
 import { SQLCommandBuilder } from '../../database/transactions/SQLCommand';
+import { getTrustedAccessToken } from '../../utils/auth';
 
 interface PayrollTabProps {
   employees: HREmployee[];
@@ -207,7 +208,7 @@ export default function PayrollTab({
         fetch('/api/financial/database', {
           method: 'POST',
           headers: {
-            'Authorization': `Bearer ${localStorage.getItem('edupro_token') || ''}`,
+            'Authorization': `Bearer ${getTrustedAccessToken()}`,
             'Content-Type': 'application/json'
           },
           body: JSON.stringify({

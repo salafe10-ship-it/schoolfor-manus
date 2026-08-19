@@ -1,0 +1,17 @@
+services:
+  - type: web
+    name: schoolfor-manus-staging
+    runtime: node
+    plan: starter
+    buildCommand: npm run build
+    startCommand: npm start
+    healthCheckPath: /api/health
+    envVars:
+      - key: EDUPRO_ENVIRONMENT
+        value: staging
+      - key: SUPABASE_URL
+        value: https://wjhraxvxvvthxqlpyohh.supabase.co
+      - key: SUPABASE_ANON_KEY
+        sync: false
+      - key: SUPABASE_SERVICE_ROLE_KEY
+        sync: false

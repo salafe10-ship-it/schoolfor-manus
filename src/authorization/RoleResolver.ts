@@ -1,4 +1,4 @@
-import { permissionRegistry } from './PermissionRegistry';
+import { permissionRegistry, PERMISSIONS } from './PermissionRegistry';
 
 export type AuthorizationIdentity = {
   id?: string;
@@ -62,11 +62,18 @@ export const ROLE_PERMISSIONS: Record<string, string[]> = Object.fromEntries(
 
 export class RoleResolver {
   private databaseLoader: DatabaseRolePermissionLoader | null = null;
+  private platformDatabaseLoader: DatabaseRolePermissionLoader | null = null;
   private readonly databaseAssignments = new Map<string, { roleKey: string; permissions: ReadonlySet<string>; expiresAt: number }>();
+  private readonly platformAssignments = new Map<string, { roleKey: string; permissions: ReadonlySet<string>; expiresAt: number }>();
 
   public configureDatabaseLoader(loader: DatabaseRolePermissionLoader | null): void {
     this.databaseLoader = loader;
     this.databaseAssignments.clear();
+  }
+
+  public configurePlatformDatabaseLoader(loader: DatabaseRolePermissionLoader | null): void {
+    this.platformDatabaseLoader = loader;
+    this.platformAssignments.clear();
   }
 
   private identityKey(identity: AuthorizationIdentity | null | undefined): string {
@@ -77,6 +84,20 @@ export class RoleResolver {
     const entry = this.databaseAssignments.get(this.identityKey(identity));
     if (!entry || entry.expiresAt <= Date.now()) {
       if (entry) this.databaseAssignments.delete(this.identityKey(identity));
+      return null;
+    }
+    return entry;
+  }
+
+  private platformIdentityKey(identity: AuthorizationIdentity | null | undefined): string {
+    return String(identity?.id || '').trim();
+  }
+
+  private platformDatabaseAssignment(identity: AuthorizationIdentity | null | undefined) {
+    const key = this.platformIdentityKey(identity);
+    const entry = this.platformAssignments.get(key);
+    if (!entry || entry.expiresAt <= Date.now()) {
+      if (entry) this.platformAssignments.delete(key);
       return null;
     }
     return entry;
@@ -97,7 +118,9 @@ export class RoleResolver {
     const permissions = new Set<string>();
     for (const assignment of assignments) {
       const permission = permissionRegistry.normalize(assignment.permissionKey);
-      if (!permission || permission === '*') throw new InvalidRoleError('Database role assignment contains an unknown or wildcard permission.');
+      if (!permission || permission === '*' || permission === PERMISSIONS.PLATFORM_ADMIN) {
+        throw new InvalidRoleError('Tenant role assignment contains an unknown, wildcard, or platform permission.');
+      }
       permissions.add(permission);
     }
     this.databaseAssignments.set(this.identityKey(identity), {
@@ -107,8 +130,45 @@ export class RoleResolver {
     });
   }
 
+  async ensurePlatformDatabasePermissions(identity: AuthorizationIdentity | null | undefined): Promise<void> {
+    if (!this.platformDatabaseLoader) return;
+    if (!identity?.id) throw new InvalidRoleError('Trusted auth_user_id is incomplete.');
+    if (this.platformDatabaseAssignment(identity)) return;
+    const assignments = await this.platformDatabaseLoader(identity);
+    if (assignments === null) return;
+    if (!assignments.length) throw new InvalidRoleError('No active platform role assignment.');
+    const roleKeys = [...new Set(assignments.map(assignment => String(assignment.roleKey || '').trim().toLowerCase()).filter(Boolean))].sort();
+    if (!roleKeys.length || roleKeys.some(role => role !== 'platformadmin')) {
+      throw new InvalidRoleError('Platform role assignment is not canonical.');
+    }
+    const permissions = new Set<string>();
+    for (const assignment of assignments) {
+      const permission = permissionRegistry.normalize(assignment.permissionKey);
+      if (!permission || permission === '*' || permission !== PERMISSIONS.PLATFORM_ADMIN) {
+        throw new InvalidRoleError('Platform role assignment must contain explicit Platform.Admin only.');
+      }
+      permissions.add(permission);
+    }
+    this.platformAssignments.set(this.platformIdentityKey(identity), {
+      roleKey: roleKeys[0],
+      permissions,
+      expiresAt: Date.now() + 30_000
+    });
+  }
+
+  async resolveTenantPermissions(identity: AuthorizationIdentity | null | undefined): Promise<ReadonlySet<string>> {
+    await this.ensureDatabasePermissions(identity);
+    return this.getPermissions(identity);
+  }
+
+  async resolvePlatformPermissions(identity: AuthorizationIdentity | null | undefined): Promise<ReadonlySet<string>> {
+    await this.ensurePlatformDatabasePermissions(identity);
+    return this.getPlatformPermissions(identity);
+  }
+
   clearDatabaseAssignments(): void {
     this.databaseAssignments.clear();
+    this.platformAssignments.clear();
   }
 
   resolveRole(identity: AuthorizationIdentity | null | undefined): string {
@@ -123,7 +183,19 @@ export class RoleResolver {
     const databaseAssignment = this.databaseAssignment(identity);
     if (databaseAssignment) return databaseAssignment.permissions;
     const role = this.resolveRole(identity);
-    return new Set(ROLE_PERMISSIONS[role]);
+    return new Set(ROLE_PERMISSIONS[role].filter(permission => permission !== PERMISSIONS.PLATFORM_ADMIN));
+  }
+
+  resolvePlatformRole(identity: AuthorizationIdentity | null | undefined): string {
+    return this.platformDatabaseAssignment(identity)?.roleKey || '';
+  }
+
+  getPlatformPermissions(identity: AuthorizationIdentity | null | undefined): ReadonlySet<string> {
+    return this.platformDatabaseAssignment(identity)?.permissions || new Set<string>();
+  }
+
+  isPlatformAdmin(identity: AuthorizationIdentity | null | undefined): boolean {
+    return this.getPlatformPermissions(identity).has(PERMISSIONS.PLATFORM_ADMIN);
   }
 
   isSuperAdmin(identity: AuthorizationIdentity | null | undefined): boolean {

@@ -2,6 +2,7 @@ import { AlertTriangle, Calendar, ChevronDown, ChevronUp, Filter, Hash, HelpCirc
 import React from 'react';
 import { Stage, Grade } from '../../types';
 import { EnterpriseLogger } from '../../database/services/EnterpriseLogger';
+import { getTrustedAccessToken } from '../../utils/auth';
 
 interface StudentSearchPanelProps {
   searchQuery: string;
@@ -437,7 +438,7 @@ export default function StudentSearchPanel({
                 const selectedCount = Object.values(selectedIds).filter(Boolean).length;
                 if (confirm(`هل تريد بالتأكيد ترحيل إجراء الحذف الجماعي لـ ${selectedCount} طلاب محددين؟`)) {
                   setIsLoading(true);
-                  const token = localStorage.getItem("edupro_token");
+                  const token = getTrustedAccessToken();
                   const deletePromises = Object.keys(selectedIds)
                     .filter(id => selectedIds[id])
                     .map(id => fetch(`/api/students/${id}`, { 

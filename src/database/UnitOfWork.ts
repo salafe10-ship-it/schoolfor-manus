@@ -81,6 +81,7 @@ export interface TransactionContext {
   // Metadata for audit logs / TransactionService
   metadata?: {
     operationName: string;
+    scope?: 'tenant' | 'platform';
     userId: string;
     userName: string;
     ipAddress: string;
@@ -218,6 +219,7 @@ export class UnitOfWork {
               : 'transaction_started');
           const beginOptions: TransactionBeginOptions = {
             transactionId: context.id,
+            scope: 'tenant',
             tenantId: metadata.tenantId,
             schoolId,
             operationName: metadata.operationName,
@@ -231,6 +233,47 @@ export class UnitOfWork {
             : metadata.operationName === 'TenantEngine authenticated lookup'
               ? 'tenant_transaction_acquired'
               : 'transaction_acquired');
+        }
+        const result = await work();
+        await this.commit();
+        return result;
+      } catch (error) {
+        if (this.isTransactionActive()) {
+          await this.rollback();
+        }
+        throw error;
+      }
+    });
+  }
+
+  /**
+   * Runs a deployment/platform-scoped transaction without fabricating tenant or school scope.
+   * Platform RBAC reads and writes must use this boundary and must never inherit tenant context.
+   */
+  public static async runPlatformInTransaction<T>(
+    metadata: Omit<NonNullable<TransactionContext['metadata']>, 'tenantContext' | 'scope'> & { scope: 'platform' },
+    work: () => Promise<T> | T,
+  ): Promise<T> {
+    const activeContext = this.getActiveContextInternal();
+    if (activeContext?.isActive) {
+      throw new Error('Nested UnitOfWork is prohibited.');
+    }
+
+    const context = this.createContext('', metadata);
+    return this.transactionStorage.run(context, async () => {
+      try {
+        if (this.transactionDriver) {
+          metadata.diagnosticTrace?.mark('platform_transaction_requested');
+          metadata.diagnosticTrace?.mark('platform_transaction_started');
+          const beginOptions: TransactionBeginOptions = {
+            transactionId: context.id,
+            scope: 'platform',
+            operationName: metadata.operationName,
+            diagnosticTrace: metadata.diagnosticTrace,
+            diagnosticPrefix: 'platform_',
+          };
+          context.databaseTransaction = await this.transactionDriver.begin(beginOptions);
+          metadata.diagnosticTrace?.mark('platform_transaction_acquired');
         }
         const result = await work();
         await this.commit();

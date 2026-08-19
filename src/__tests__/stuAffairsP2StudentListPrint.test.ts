@@ -11,12 +11,15 @@ describe('STU-AFFAIRS-P2-006-66 Student list print truthfulness', () => {
   it('blocks loading, error, and empty print attempts', () => {
     expect(printBlock).toContain('if (isLoadingStudents)');
     expect(printBlock).toContain('if (studentLoadError)');
-    expect(printBlock).toContain('if (filteredStudents.length === 0)');
+    expect(printBlock).toContain('if (printableStudents.length === 0)');
     expect(printBlock).toContain('انتظر اكتمال تحميل الصفوف الحالية قبل الطباعة.');
     expect(printBlock).toContain('لا يمكن الطباعة أثناء وجود خطأ');
   });
 
   it('prints the current filtered page and uses truthful browser-print wording', () => {
+    expect(printBlock).toContain('const printableStudents = selectedStudentIds.length > 0');
+    expect(printBlock).toContain('const rowsHTML = printableStudents.map');
+    expect(printBlock).toContain('إجمالي الكشف: ${printableStudents.length} طالب');
     expect(printBlock).toContain('filteredStudents.map');
     expect(printBlock).toContain('طباعة كشف الطلاب المعروض حاليًا');
     expect(printBlock).toContain('ليست تقريرًا رسميًا شاملًا');

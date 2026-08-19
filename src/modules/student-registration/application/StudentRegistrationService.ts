@@ -251,6 +251,12 @@ export class StudentRegistrationService {
     requestContext: RegistrationRequestContext = {}
   ): Promise<StudentRegistrationResult> {
     assertContext(context);
+    if (!UnitOfWork.hasTransactionDriver()) {
+      throw new DatabaseError('Student registration requires a configured PostgreSQL transaction driver; no persistence was attempted.', {
+        errorCode: 'STU-PERSISTENCE-001',
+        reason: 'DATABASE_TRANSACTION_DRIVER_UNAVAILABLE'
+      });
+    }
     const input = normalizeCommand(command, requestContext.idempotencyKey);
     const requestFingerprint = studentFingerprint(input);
     if (input.studentNumber) assertPermission(context, PERMISSIONS.STUDENT_NUMBER_OVERRIDE, 'Manual student number override is not permitted.');

@@ -21,8 +21,10 @@ export interface TransactionSession {
 
 export interface TransactionBeginOptions {
   transactionId: string;
-  tenantId: string;
-  schoolId: string;
+  /** Platform transactions intentionally omit tenant/school scope. */
+  scope?: 'tenant' | 'platform';
+  tenantId?: string;
+  schoolId?: string;
   operationName: string;
   requestId?: string;
   correlationId?: string;

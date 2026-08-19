@@ -1,9 +1,8 @@
 import tailwindcss from '@tailwindcss/vite';
 import react from '@vitejs/plugin-react';
-import {fileURLToPath} from 'node:url';
 import {defineConfig} from 'vite';
 
-const projectRoot = fileURLToPath(new URL('.', import.meta.url));
+const projectRoot = process.cwd();
 
 export default defineConfig(() => {
   return {

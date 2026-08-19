@@ -5,9 +5,11 @@ import {
   requirePermission as authorizePermission,
   requireAnyPermission as authorizeAnyPermission,
   requireRole as authorizeRole,
+  requirePlatformPermission as authorizePlatformPermission,
   ROLE_PERMISSIONS
 } from './authorization.js';
 import { tenantValidationMiddleware } from './tenantValidation.js';
+import { PERMISSIONS } from '../authorization/PermissionRegistry.js';
 
 function withTenantValidation(middleware: (req: express.Request, res: express.Response, next: express.NextFunction) => any) {
   return async (req: express.Request, res: express.Response, next: express.NextFunction) => {
@@ -40,7 +42,13 @@ export function requirePermission(permission: string) {
  * second transaction.
  */
 export function requirePermissionOnly(permission: string) {
-  return authorizePermission(permission);
+  return permission === PERMISSIONS.PLATFORM_ADMIN
+    ? authorizePlatformPermission(permission)
+    : authorizePermission(permission);
+}
+
+export function requirePlatformPermission(permission: string) {
+  return authorizePlatformPermission(permission);
 }
 
 export function requireAnyPermission(permissions: string[]) {

@@ -29,7 +29,7 @@ describe('Wave 1C authorization foundation', () => {
 
   it('keeps platform authorization separate from school-admin wildcard access', () => {
     const engine = new AuthorizationEngine();
-    expect(engine.can(superadmin, PERMISSIONS.PLATFORM_ADMIN)).toBe(true);
+    expect(engine.can(superadmin, PERMISSIONS.PLATFORM_ADMIN)).toBe(false);
     expect(engine.can({ ...teacher, role: 'SchoolAdmin' }, PERMISSIONS.PLATFORM_ADMIN)).toBe(false);
   });
 

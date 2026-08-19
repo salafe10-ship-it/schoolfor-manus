@@ -181,4 +181,12 @@ describe('SOP-001 Student Registration', () => {
     await expect(new StudentRegistrationService().register({ ...context, branchId: '' }, command, { idempotencyKey: 'registration-003' })).rejects.toThrow('Trusted tenant context is incomplete');
     expect(driver.session).toBeUndefined();
   });
+
+  it('fails closed when PostgreSQL persistence is unavailable', async () => {
+    await expect(new StudentRegistrationService().register(context, command, { idempotencyKey: 'registration-no-driver' }))
+      .rejects.toMatchObject({
+        statusCode: 500,
+        details: { errorCode: 'STU-PERSISTENCE-001', reason: 'DATABASE_TRANSACTION_DRIVER_UNAVAILABLE' }
+      });
+  });
 });

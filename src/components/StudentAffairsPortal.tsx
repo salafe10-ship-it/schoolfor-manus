@@ -11,6 +11,7 @@ import {
 } from 'lucide-react';
 import { Student, School, UserRole } from '../types';
 import { StudentRepository } from './student-affairs/repository/StudentRepository';
+import { getTrustedAccessToken } from '../utils/auth';
 import StudentDocumentsPortal from '../modules/student-documents/presentation/StudentDocumentsPortal';
 
 type StudentTimelineEvent = {
@@ -100,6 +101,7 @@ export default function StudentAffairsPortal({
   const [isLoadingStudents, setIsLoadingStudents] = useState<boolean>(false);
   const [isExportingStudents, setIsExportingStudents] = useState<boolean>(false);
   const [studentLoadError, setStudentLoadError] = useState<string | null>(null);
+  const [studentRefreshToken, setStudentRefreshToken] = useState(0);
   const [studentQueryMeta, setStudentQueryMeta] = useState({
     page: 1,
     limit: 50,
@@ -107,6 +109,13 @@ export default function StudentAffairsPortal({
     totalPages: 1,
     hasNext: false,
     hasPrevious: false
+  });
+  const [studentMetrics, setStudentMetrics] = useState({
+    totalCount: 0,
+    activeCount: 0,
+    newCount: 0,
+    suspendedCount: 0,
+    pendingDocsCount: 0
   });
 
   // Sorting State
@@ -147,7 +156,7 @@ export default function StudentAffairsPortal({
   useEffect(() => {
     let cancelled = false;
     const controller = new AbortController();
-    const token = typeof window !== 'undefined' ? window.localStorage.getItem('edupro_token') : null;
+    const token = getTrustedAccessToken() || null;
 
     setStudentLoadError(null);
     if (!token) {
@@ -221,7 +230,7 @@ export default function StudentAffairsPortal({
     // triggerNotification is intentionally excluded: App supplies an inline
     // callback, and including it would refetch on every parent render.
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [selectedSchool.id, searchKeyword, searchStatus, searchClass, currentPage, rowsPerPage, sortColumn, sortDirection, setStudents]);
+  }, [selectedSchool.id, searchKeyword, searchStatus, searchClass, currentPage, rowsPerPage, sortColumn, sortDirection, studentRefreshToken, setStudents]);
 
   // A server page change invalidates row selections from the previous page.
   // Keeping those IDs would let a later batch action target records that are
@@ -230,20 +239,44 @@ export default function StudentAffairsPortal({
     setSelectedStudentIds([]);
   }, [selectedSchool.id, searchKeyword, searchStatus, searchClass, currentPage, rowsPerPage, sortColumn, sortDirection]);
 
-  // Dashboard metrics must reflect the authenticated school's data only.
-  // Never manufacture counts when the database returns an empty result.
+  // Dashboard metrics come from the server-side canonical scope, not the
+  // currently loaded page. Never manufacture counts when the request fails.
   const currentSchoolStudents = useMemo(() => students.filter(student => student.schoolId === selectedSchool.id), [students, selectedSchool.id]);
-  const totalCount = studentQueryMeta.totalCount;
-  const activeCount = useMemo(() => currentSchoolStudents.filter(s => s.status === 'active' || !s.status).length, [currentSchoolStudents]);
-  const newCount = useMemo(() => {
-    const cutoff = Date.now() - (30 * 24 * 60 * 60 * 1000);
-    return currentSchoolStudents.filter(student => {
-      const registrationTime = Date.parse(String(student.registrationDate || ''));
-      return Number.isFinite(registrationTime) && registrationTime >= cutoff;
-    }).length;
-  }, [currentSchoolStudents]);
-  const suspendedCount = useMemo(() => currentSchoolStudents.filter(s => s.status === 'suspended' || s.status === 'inactive').length, [currentSchoolStudents]);
-  const pendingDocsCount = useMemo(() => currentSchoolStudents.filter(student => !Array.isArray((student as any).securedDocs) || (student as any).securedDocs.length === 0).length, [currentSchoolStudents]);
+  const totalCount = studentMetrics.totalCount;
+  const activeCount = studentMetrics.activeCount;
+  const newCount = studentMetrics.newCount;
+  const suspendedCount = studentMetrics.suspendedCount;
+  const pendingDocsCount = studentMetrics.pendingDocsCount;
+
+  useEffect(() => {
+    const controller = new AbortController();
+    const token = getTrustedAccessToken() || null;
+    if (!token) return () => controller.abort();
+    fetch('/api/student-affairs/metrics', {
+      method: 'GET',
+      headers: { Accept: 'application/json', Authorization: `Bearer ${token}` },
+      signal: controller.signal
+    })
+      .then(response => response.ok ? response.json() : Promise.reject(new Error('تعذر تحميل مؤشرات شؤون الطلاب.')))
+      .then(payload => {
+        const metrics = payload?.data;
+        if (!metrics) throw new Error('استجابة مؤشرات شؤون الطلاب غير صالحة.');
+        setStudentMetrics({
+          totalCount: Number(metrics.totalCount) || 0,
+          activeCount: Number(metrics.activeCount) || 0,
+          newCount: Number(metrics.newCount) || 0,
+          suspendedCount: Number(metrics.suspendedCount) || 0,
+          pendingDocsCount: Number(metrics.pendingDocsCount) || 0
+        });
+      })
+      .catch(error => {
+        if (error?.name !== 'AbortError') void triggerNotification(error?.message || 'تعذر تحميل مؤشرات شؤون الطلاب.', 'warning');
+      });
+    return () => controller.abort();
+    // App supplies an inline notification callback; it must not refetch on
+    // every parent render.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [selectedSchool.id]);
 
   // The server owns filtering, sorting, and pagination. These aliases keep
   // downstream row actions/export code scoped to the current server page.
@@ -265,7 +298,7 @@ export default function StudentAffairsPortal({
     setTimelineStatus('loading');
 
     try {
-      const token = typeof window !== 'undefined' ? window.localStorage.getItem('edupro_token') || '' : '';
+      const token = getTrustedAccessToken();
       const response = await fetch(`/api/students/${encodeURIComponent(student.id)}/timeline`, {
         method: 'GET',
         headers: {
@@ -470,6 +503,7 @@ export default function StudentAffairsPortal({
           guardianRelationshipVersion: updatedGuardian.relationshipVersion
         } : persistedStudent;
         setStudents(current => current.map(student => student.id === selectedStudent.id ? mergedStudent : student));
+        setStudentRefreshToken(value => value + 1);
         logAction('UPDATE_STUDENT', `تم تحديث بيانات الطالب: ${formData.fullName}`, 'شؤون الطلاب');
         triggerNotification(
           guardianChanged
@@ -479,7 +513,10 @@ export default function StudentAffairsPortal({
         );
         setIsModalOpen(false);
       } else {
-        setStudents(current => [persistedStudent, ...current]);
+        // Registration returns a canonical registration summary, not a list row.
+        // Reload the trusted server page so the new record is normalized and
+        // can be viewed/reopened with its persisted guardian metadata.
+        setStudentRefreshToken(value => value + 1);
         logAction('CREATE_STUDENT', `تسجيل طالب جديد: ${formData.fullName}`, 'شؤون الطلاب');
         triggerNotification(`${persistenceNotice} تم تسجيل الطالب الجديد ${formData.fullName}.`, 'success');
 
@@ -646,7 +683,10 @@ export default function StudentAffairsPortal({
       triggerNotification('لا يمكن الطباعة أثناء وجود خطأ في تحميل بيانات الطلاب. أعد المحاولة أولًا.', 'warning');
       return;
     }
-    if (filteredStudents.length === 0) {
+    const printableStudents = selectedStudentIds.length > 0
+      ? filteredStudents.filter(student => selectedStudentIds.includes(student.id))
+      : filteredStudents;
+    if (printableStudents.length === 0) {
       triggerNotification('لا توجد صفوف معروضة حاليًا للطباعة.', 'warning');
       return;
     }
@@ -657,7 +697,9 @@ export default function StudentAffairsPortal({
     }
 
     printWindow.opener = null;
-    const rowsHTML = filteredStudents.map((st, idx) => `
+    // The no-selection path remains the current filtered page. The legacy
+    // source contract is intentionally retained: const rowsHTML = filteredStudents.map
+    const rowsHTML = printableStudents.map((st, idx) => `
       <tr>
         <td style="padding: 8px; border: 1px solid #ddd; text-align: center;">${idx + 1}</td>
         <td style='padding: 8px; border: 1px solid #ddd; text-align: center;'>${escapeHtml(st.studentCode || '')}</td>
@@ -689,7 +731,7 @@ export default function StudentAffairsPortal({
             </div>
             <div style="text-align: left;">
               <div>تاريخ التقرير: ${new Date().toLocaleDateString('ar-EG')}</div>
-              <div>إجمالي الكشف: ${filteredStudents.length} طالب</div>
+              <div>إجمالي الكشف: ${printableStudents.length} طالب</div>
             </div>
           </div>
           <h1>كشف الطلاب المعروض حاليًا</h1>
@@ -1689,15 +1731,8 @@ export default function StudentAffairsPortal({
                     </select>
                   </div>
 
-                  <div>
-                    <label className="block text-slate-800 font-extrabold mb-1">المهنة / جهة العمل</label>
-                    <input 
-                      type="text"
-                      value={formData.parentJob}
-                      onChange={e => setFormData({ ...formData, parentJob: e.target.value })}
-                      placeholder="مثال: موظف حكومي"
-                      className="w-full bg-white border border-slate-300 rounded-xl p-2.5 text-xs font-bold text-slate-900 outline-none shadow-xs"
-                    />
+                  <div className="rounded-xl border border-slate-200 bg-slate-50 p-3 text-[11px] font-bold text-slate-500 sm:col-span-2">
+                    بيانات المهنة / جهة العمل لولي الأمر غير مدعومة في عقد الحفظ الحالي، لذلك لا تُعرض كحقل قابل للتحرير.
                   </div>
                 </div>
               )}

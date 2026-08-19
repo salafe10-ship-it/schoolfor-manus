@@ -71,6 +71,7 @@ import { createStartupReadiness } from "./server/infrastructure/StartupReadiness
 import { FallbackStorage } from "./src/database/repositories/FallbackStorage.js";
 import { AdmissionInquiry, AdmissionStatus } from './src/modules/student-admission/domain/AdmissionInquiry.js';
 import { SupabaseAdmissionInquiryRepository } from './src/modules/student-admission/repository/SupabaseAdmissionInquiryRepository.js';
+import { ErpProvisioningService } from './src/modules/identity/application/ErpProvisioningService.js';
 
 function parseStudentQueryInteger(value: unknown, field: string, defaultValue: number, maximum: number): number {
   if (value === undefined || value === '') return defaultValue;
@@ -105,6 +106,120 @@ function createStudentReadDiagnostic(res: express.Response): StudentReadDiagnost
   };
   res.once('finish', () => log('http_response', res.statusCode >= 200 && res.statusCode < 300 ? 'PASS' : 'FAIL', `HTTP_${res.statusCode}`));
   return { requestId, correlationId, log };
+}
+
+type SafeAuthTrace = {
+  startedAt: number;
+  authorizationPresent: 'YES' | 'NO';
+  tokenLength: number;
+  tokenExtraction: 'SUCCESS' | 'FAIL';
+  supabaseVerification: 'SUCCESS' | 'FAIL';
+  userIdPresent: 'YES' | 'NO';
+  trustedIdentity: 'SUCCESS' | 'FAIL';
+  tenantContext: 'SUCCESS' | 'FAIL';
+  schoolContext: 'SUCCESS' | 'FAIL';
+  branchContext: 'SUCCESS' | 'FAIL';
+  permission: 'SUCCESS' | 'FAIL';
+  roleResolutionStarted: 'YES' | 'NO';
+  roleFound: 'YES' | 'NO';
+  roleActive: 'YES' | 'NO';
+  roleNamePresent: 'YES' | 'NO';
+  permissionResolutionStarted: 'YES' | 'NO';
+  requiredPermission: string;
+  studentViewFound: 'YES' | 'NO';
+  studentViewActive: 'YES' | 'NO';
+  tenantScopeValid: 'YES' | 'NO';
+  rejectionStage: string;
+};
+
+function authTraceEnabled(): boolean {
+  return process.env.AUTH_TRACE_ENABLED === 'true' && process.env.EDUPRO_ENVIRONMENT !== 'production';
+}
+
+function supabaseProjectRef(): string {
+  const value = String(process.env.SUPABASE_URL || '').trim();
+  try {
+    const host = new URL(value).hostname;
+    const match = host.match(/^([a-z0-9]+)\.supabase\.co$/i);
+    return match?.[1] || 'UNKNOWN';
+  } catch {
+    return 'UNKNOWN';
+  }
+}
+
+function startSafeAuthTrace(req: express.Request, res: express.Response): SafeAuthTrace | undefined {
+  if (!authTraceEnabled() || req.method !== 'GET' || req.path !== '/api/students') return undefined;
+  const trace: SafeAuthTrace = {
+    startedAt: Date.now(),
+    authorizationPresent: 'NO',
+    tokenLength: 0,
+    tokenExtraction: 'FAIL',
+    supabaseVerification: 'FAIL',
+    userIdPresent: 'NO',
+    trustedIdentity: 'FAIL',
+    tenantContext: 'FAIL',
+    schoolContext: 'FAIL',
+    branchContext: 'FAIL',
+    permission: 'FAIL',
+    roleResolutionStarted: 'NO',
+    roleFound: 'NO',
+    roleActive: 'NO',
+    roleNamePresent: 'NO',
+    permissionResolutionStarted: 'NO',
+    requiredPermission: 'Student.View',
+    studentViewFound: 'NO',
+    studentViewActive: 'NO',
+    tenantScopeValid: 'NO',
+    rejectionStage: 'request',
+  };
+  (req as any).safeAuthTrace = trace;
+  res.once('finish', () => {
+    const fields = {
+      request_received: 'YES',
+      authorization_present: trace.authorizationPresent,
+      token_length: trace.tokenLength,
+      token_extraction: trace.tokenExtraction,
+      supabase_verification: trace.supabaseVerification,
+      user_id_present: trace.userIdPresent,
+      trusted_identity: trace.trustedIdentity,
+      tenant_context: trace.tenantContext,
+      school_context: trace.schoolContext,
+      branch_context: trace.branchContext,
+      permission: trace.permission,
+      role_resolution_started: trace.roleResolutionStarted,
+      role_found: trace.roleFound,
+      role_active: trace.roleActive,
+      role_name_present: trace.roleNamePresent,
+      permission_resolution_started: trace.permissionResolutionStarted,
+      required_permission: trace.requiredPermission,
+      student_view_found: trace.studentViewFound,
+      student_view_active: trace.studentViewActive,
+      tenant_scope_valid: trace.tenantScopeValid,
+      rejection_stage: trace.rejectionStage,
+      http_status: res.statusCode,
+      duration_ms: Date.now() - trace.startedAt,
+      supabase_project_ref: supabaseProjectRef(),
+    };
+    EnterpriseLogger.info('AUTH-TRACE', 'AuthTrace', fields);
+    EnterpriseLogger.info('PERMISSION-TRACE', 'PermissionTrace', {
+      request_received: fields.request_received,
+      user_id_present: fields.user_id_present,
+      tenant_id_present: trace.tenantScopeValid,
+      role_resolution_started: trace.roleResolutionStarted,
+      role_found: trace.roleFound,
+      role_active: trace.roleActive,
+      role_name_present: trace.roleNamePresent,
+      permission_resolution_started: trace.permissionResolutionStarted,
+      required_permission: trace.requiredPermission,
+      student_view_found: trace.studentViewFound,
+      student_view_active: trace.studentViewActive,
+      tenant_scope_valid: trace.tenantScopeValid,
+      permission_result: trace.permission,
+      rejection_stage: trace.rejectionStage,
+      http_status: fields.http_status,
+    });
+  });
+  return trace;
 }
 
 function parseStudentSortBy(value: unknown): string {
@@ -214,6 +329,7 @@ async function startServer() {
 
   app.use(express.json());
   app.use((req, res, next) => {
+    startSafeAuthTrace(req, res);
     if (req.method === 'GET' && req.path === '/api/students') {
       const trace = createPerf004Trace(
         req.get('x-perf-004-probe') === '1' || req.get('x-perf-008-probe') === '1'
@@ -419,14 +535,22 @@ async function startServer() {
   // ==========================================
   async function authenticateRequest(req: express.Request, res: express.Response, next: express.NextFunction) {
     (req as any).perf004Trace?.mark('authentication_started');
+    const authTrace = (req as any).safeAuthTrace as SafeAuthTrace | undefined;
     // 1. Receive Bearer JWT Token from Authorization header
     const token = extractBearerToken(req.headers.authorization);
+    if (authTrace) {
+      authTrace.authorizationPresent = typeof req.headers.authorization === 'string' && req.headers.authorization.length > 0 ? 'YES' : 'NO';
+      authTrace.tokenLength = token?.length || 0;
+      authTrace.tokenExtraction = token ? 'SUCCESS' : 'FAIL';
+      if (!token) authTrace.rejectionStage = 'token_extraction';
+    }
     if (!token) {
       return next(new AuthenticationError("غير مصرح به. يرجى إرسال التوكن للتحقق من الصلاحية (Authorization Bearer Token missing)."));
     }
     // Verify signature, expiration, and identity using Supabase Auth.
     const supabase = await getSupabaseClientReady();
     if (!supabase) {
+      if (authTrace) authTrace.rejectionStage = 'supabase_client';
       return next(new AuthenticationError("خدمة المصادقة غير مهيأة."));
     }
 
@@ -434,9 +558,21 @@ async function startServer() {
     try {
       (req as any).perf004Trace?.count?.('authRemoteCalls');
       (req as any).perf004Trace?.count?.('httpRemoteCalls');
-      identity = await verifyTrustedSession(supabase, token);
+      // Tenant resolution inside dbsec004_current_tenant_id() depends on
+      // auth.uid(), so the verification lookup must carry this already
+      // verified bearer token. Auth verification itself remains unchanged.
+      identity = await verifyTrustedSession(getSupabaseClientForAccessToken(token) || supabase, token);
+      if (authTrace) {
+        authTrace.supabaseVerification = 'SUCCESS';
+        authTrace.userIdPresent = identity?.id ? 'YES' : 'NO';
+        authTrace.trustedIdentity = identity ? 'SUCCESS' : 'FAIL';
+        authTrace.schoolContext = identity?.schoolId ? 'SUCCESS' : 'FAIL';
+        authTrace.branchContext = identity?.branchId ? 'SUCCESS' : 'FAIL';
+        if (!identity) authTrace.rejectionStage = 'trusted_identity';
+      }
       (req as any).perf004Trace?.mark('authentication_completed');
     } catch (err: any) {
+      if (authTrace) authTrace.rejectionStage = 'supabase_verification';
       if (err instanceof TrustedAuthenticationError) {
         return next(new AuthenticationError("غير مصرح به. الهوية غير صالحة."));
       }
@@ -471,6 +607,47 @@ async function startServer() {
     next();
   }
 
+  // Narrow, admin-only provisioning entry point. It never provisions from
+  // login or frontend state; scope comes from the trusted request identity.
+  app.post('/api/admin/provisioning', authenticateRequest, requirePermissionOnly(PERMISSIONS.PLATFORM_ADMIN), async (req, res, next) => {
+    const operation = req.body?.operation;
+    const identity = (req as any).user;
+    const correlationId = randomUUID();
+    try {
+      if (operation !== 'bootstrap_catalog' && operation !== 'provision_identity') {
+        throw new ValidationError('عملية provisioning غير معتمدة.');
+      }
+      const context = await tenantEngine.resolveForRead(identity, (req as any).trustedAccessToken, (req as any).perf004Trace);
+      if (!context?.tenantId || !context.schoolId || !context.branchId || !identity?.id) {
+        throw new AuthenticationError('السياق الموثوق للتهيئة غير مكتمل.');
+      }
+      EnterpriseLogger.info('Admin provisioning request started', 'ProvisioningActivation', {
+        operation, actor_present: 'YES', target_present: operation === 'provision_identity' ? 'YES' : 'NO',
+        tenant_present: 'YES', school_present: 'YES', branch_present: 'YES', correlationId
+      });
+      if (operation === 'provision_identity') {
+        // There is intentionally no trusted target-user resolver in the current
+        // architecture. Never treat a browser-supplied identifier as authority.
+        throw new ValidationError('لا يوجد مسار موثوق لتحديد مستخدم Auth المستهدف حاليًا.');
+      }
+      const result = await ErpProvisioningService.bootstrapCatalog({
+        tenantId: context.tenantId,
+        schoolId: context.schoolId,
+        actorUserId: undefined
+      });
+      EnterpriseLogger.info('Admin provisioning request committed', 'ProvisioningActivation', {
+        operation, success: true, outcome: 'commit', permission_count: result.permissionCount, correlationId
+      });
+      return res.json({ success: true, operation, permissionCount: result.permissionCount, correlationId });
+    } catch (error) {
+      EnterpriseLogger.error('Admin provisioning request failed', 'ProvisioningActivation', {
+        operation: typeof operation === 'string' ? operation : 'unknown', success: false, outcome: 'rollback', correlationId,
+        error: error instanceof Error ? error.message : 'unknown'
+      });
+      return next(error);
+    }
+  });
+
   async function resolveStudentTenantContext(req: express.Request) {
     const identity = (req as any).user;
     const context = tenantEngine.validate(await tenantEngine.resolve(identity, (req as any).trustedAccessToken, (req as any).perf004Trace));
@@ -484,6 +661,13 @@ async function startServer() {
     const context = await tenantEngine.resolveForRead(identity, (req as any).trustedAccessToken, (req as any).perf004Trace);
     tenantEngine.assertRequestTarget(context, requestTarget(req));
     (req as any).tenantContext = context;
+    const authTrace = (req as any).safeAuthTrace as SafeAuthTrace | undefined;
+    if (authTrace) {
+      authTrace.tenantContext = context?.tenantId ? 'SUCCESS' : 'FAIL';
+      authTrace.schoolContext = context?.schoolId ? 'SUCCESS' : 'FAIL';
+      authTrace.branchContext = context?.branchId ? 'SUCCESS' : 'FAIL';
+      if (!context?.tenantId || !context?.schoolId) authTrace.rejectionStage = 'tenant_context';
+    }
     return context;
   }
 
@@ -865,6 +1049,64 @@ async function startServer() {
     }
   });
 
+  // Student Affairs Screen 01 metrics. Scope is derived exclusively from the
+  // trusted authenticated identity; the client cannot provide scope values.
+  app.get('/api/student-affairs/metrics', authenticateRequest, requirePermissionOnly(PERMISSIONS.STUDENT_READ), async (req, res, next) => {
+    try {
+      const identity = (req as any).user as { tenantId?: string; schoolId?: string; branchId?: string };
+      if (!identity?.tenantId || !identity.schoolId || !identity.branchId) {
+        throw new AuthenticationError('هوية شؤون الطلاب الموثوقة غير مكتملة.');
+      }
+      const supabase = getSupabaseClientForAccessToken((req as any).trustedAccessToken);
+      if (!supabase) throw new DatabaseError('Student Affairs metrics Supabase client is unavailable.');
+
+      const branchScope = `branch_id.eq.${identity.branchId},branch_id.is.null`;
+      const base = (withCount = false) => supabase
+        .from('students')
+        .select('id', withCount ? { count: 'exact', head: true } : undefined)
+        .eq('tenant_id', identity.tenantId as string)
+        .eq('school_id', identity.schoolId as string)
+        .or(branchScope)
+        .is('deleted_at', null);
+      const cutoff = new Date(Date.now() - (30 * 24 * 60 * 60 * 1000)).toISOString();
+
+      const [total, active, recent, suspended, studentsForDocs, documents] = await Promise.all([
+        base(true),
+        base(true).eq('status', 'active'),
+        base(true).gte('created_at', cutoff),
+        base(true).in('status', ['suspended', 'inactive']),
+        base().select('id'),
+        supabase.from('student_documents')
+          .select('student_id')
+          .eq('tenant_id', identity.tenantId as string)
+          .eq('school_id', identity.schoolId as string)
+          .or(branchScope)
+          .is('deleted_at', null)
+          .neq('lifecycle_status', 'archived')
+      ]);
+      for (const result of [total, active, recent, suspended, studentsForDocs, documents]) {
+        if (result.error) throw result.error;
+      }
+      const documentedStudentIds = new Set((documents.data || []).map(row => row.student_id));
+      const pendingDocsCount = (studentsForDocs.data || []).filter(row => !documentedStudentIds.has(row.id)).length;
+
+      res.setHeader('Cache-Control', 'no-store');
+      return res.json({
+        success: true,
+        data: {
+          totalCount: total.count || 0,
+          activeCount: active.count || 0,
+          newCount: recent.count || 0,
+          suspendedCount: suspended.count || 0,
+          pendingDocsCount,
+          source: 'canonical-postgres-routed-by-trusted-context'
+        }
+      });
+    } catch (error) {
+      return next(error instanceof DatabaseError ? error : new DatabaseError('تعذر تحميل مؤشرات شؤون الطلاب.', error));
+    }
+  });
+
   // ==========================================
   // ENTERPRISE API ROUTES
   // ==========================================
@@ -1182,6 +1424,11 @@ async function startServer() {
   // Students Database API
   app.get("/api/students", authenticateRequest, requirePermissionOnly(PERMISSIONS.STUDENT_READ), async (req, res, next) => {
     const studentReadDiagnostic = createStudentReadDiagnostic(res);
+    const authTrace = (req as any).safeAuthTrace as SafeAuthTrace | undefined;
+    if (authTrace) {
+      authTrace.permission = 'SUCCESS';
+      authTrace.rejectionStage = 'none';
+    }
     studentReadDiagnostic.log('auth', 'PASS');
     studentReadDiagnostic.log('Student.Read', 'PASS');
     try {
@@ -1975,6 +2222,10 @@ ${JSON.stringify(snapshot)}
   // ========================================================
   app.use(async (err: any, req: express.Request, res: express.Response, next: express.NextFunction) => {
     const statusCode = err.statusCode || 500;
+    const authTrace = (req as any).safeAuthTrace as SafeAuthTrace | undefined;
+    if (authTrace && authTrace.rejectionStage === 'request') {
+      authTrace.rejectionStage = statusCode === 401 ? 'authentication' : statusCode === 403 ? 'permission' : 'request_error';
+    }
     const errorCode = err.errorCode || "INTERNAL_SERVER_ERROR";
     const message = err.message || "حدث خطأ غير متوقع في الخادم.";
     const details = err.details || null;
@@ -2010,8 +2261,16 @@ ${JSON.stringify(snapshot)}
     });
   });
 
+  // The bundled server is the production entry point used by `npm start`.
+  // Do not let a missing NODE_ENV turn that entry point into a Vite dev server.
+  // `tsx server.ts` remains the development entry point and keeps Vite middleware.
+  const isProduction =
+    process.env.NODE_ENV === "production" ||
+    process.env.npm_lifecycle_event === "start" ||
+    path.basename(process.argv[1] ?? "") === "server.cjs";
+
   // Serve Frontend with Vite Dev Server in Development or static files in Production
-  if (process.env.NODE_ENV !== "production") {
+  if (!isProduction) {
     const vite = await createViteServer({
       server: { middlewareMode: true },
       appType: "spa",

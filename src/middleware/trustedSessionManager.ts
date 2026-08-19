@@ -1,4 +1,4 @@
-import { clearTrustedSession, isSessionExpired } from './trustedAuthentication';
+import { clearTrustedSession } from './trustedAuthentication';
 import type { TrustedBranchPresentation, TrustedSchoolPresentation } from './trustedSchoolIdentity';
 
 export type SessionStorage = Pick<Storage, 'getItem' | 'setItem' | 'removeItem'>;
@@ -35,6 +35,7 @@ export class TrustedSessionError extends Error {
 const ACCESS_TOKEN_KEY = 'edupro_token';
 const REFRESH_TOKEN_KEY = 'edupro_refresh_token';
 const EXPIRES_AT_KEY = 'edupro_session_expires_at';
+const ACCESS_TOKEN_EXPIRY_SKEW_SECONDS = 30;
 
 function isRecord(value: unknown): value is Record<string, any> {
   return typeof value === 'object' && value !== null;
@@ -139,6 +140,11 @@ export class TrustedSessionManager {
     return Number.isFinite(value) ? value : undefined;
   }
 
+  isAccessTokenExpiringSoon(now = Math.floor(Date.now() / 1000)): boolean {
+    const expiresAt = this.getExpiresAt();
+    return typeof expiresAt === 'number' && now + ACCESS_TOKEN_EXPIRY_SKEW_SECONDS >= expiresAt;
+  }
+
   private saveSession(token: string, refreshToken: string | undefined, expiresAt: number | undefined, version: number): void {
     if (version !== this.lifecycleVersion) throw new TrustedSessionError('LOGGED_OUT');
     if (!token.trim()) throw new TrustedSessionError('INVALID_SESSION');
@@ -229,7 +235,7 @@ export class TrustedSessionManager {
     const token = this.getAccessToken();
     if (!token) throw new TrustedSessionError('MISSING_SESSION');
 
-    if (isSessionExpired(this.getExpiresAt())) {
+    if (this.isAccessTokenExpiringSoon()) {
       return this.refreshForVersion(version);
     }
 
