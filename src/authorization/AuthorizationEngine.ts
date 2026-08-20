@@ -76,7 +76,7 @@ export class AuthorizationEngine {
     let permissions: ReadonlySet<string>;
     try {
       role = this.resolver.resolveRole(identity);
-      const cacheKey = `tenant:${role}`;
+      const cacheKey = `tenant:${identity?.tenantId || ''}:${identity?.id || ''}:${identity?.schoolId || ''}:${identity?.branchId || ''}:${role}`;
       permissions = this.tenantCache.get(cacheKey) || this.resolver.getPermissions(identity);
       if (!this.tenantCache.get(cacheKey)) this.tenantCache.set(cacheKey, permissions);
     } catch (error) {

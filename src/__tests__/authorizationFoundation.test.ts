@@ -50,6 +50,24 @@ describe('Wave 1C authorization foundation', () => {
     expect(decisions.map(decision => decision.allowed)).toEqual([true, true, false]);
   });
 
+  it('does not reuse cached tenant permissions across identities with the same role', async () => {
+    const resolver = new RoleResolver();
+    resolver.configureDatabaseLoader(async identity => identity.id === 'alice'
+      ? [{ roleKey: 'student_affairs', permissionKey: PERMISSIONS.STUDENT_READ }]
+      : [{ roleKey: 'student_affairs', permissionKey: PERMISSIONS.STUDENT_WRITE }]);
+    const engine = new AuthorizationEngine(resolver, new PermissionCache(60_000));
+    const alice = { id: 'alice', tenantId: 'tenant-1', schoolId: 'school-1', role: 'student_affairs' };
+    const bob = { id: 'bob', tenantId: 'tenant-1', schoolId: 'school-1', role: 'student_affairs' };
+
+    await resolver.resolveTenantPermissions(alice);
+    await resolver.resolveTenantPermissions(bob);
+
+    expect(engine.authorizeTenant(alice, PERMISSIONS.STUDENT_READ).allowed).toBe(true);
+    expect(engine.authorizeTenant(alice, PERMISSIONS.STUDENT_WRITE).allowed).toBe(false);
+    expect(engine.authorizeTenant(bob, PERMISSIONS.STUDENT_WRITE).allowed).toBe(true);
+    expect(engine.authorizeTenant(bob, PERMISSIONS.STUDENT_READ).allowed).toBe(false);
+  });
+
   it('generates a complete authorization denial audit event', async () => {
     clearAuthorizationAuditEvents();
     const captured: any[] = [];
