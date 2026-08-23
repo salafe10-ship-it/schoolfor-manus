@@ -2,7 +2,6 @@ import { AlertTriangle, BookOpen, Calculator, Check, CheckCircle2, ChevronLeft, 
 import React from 'react';
 import { AccountingContext } from '../../../components/GeneralLedgerPortal';
 import { EnterpriseAuditLogger } from '../../../utils/EnterpriseAuditLogger';
-import { FallbackStorage } from '../../../database/repositories/FallbackStorage';
 
 export const ReceiptVoucherTab = () => {
   const {
@@ -73,14 +72,17 @@ export const ReceiptVoucherTab = () => {
   handleImportExcelSimulate, handleDownloadTemplate, handlePrintAssetCard, handlePrintDepreciationSchedule,
   findOriginalDocument, handleReportAccountClick, handleJournalEntryClick,
   isAccountOrDescendant, getProcessedAccounts,
-  formatCurrency, triggerNotification
+  formatCurrency, triggerNotification, persistCanonicalFinancialSnapshot, canonicalFinancialStatus, canonicalFinancialWriteMode
 } = React.useContext(AccountingContext);
+  const canonicalWriteReady = canonicalFinancialStatus === 'ready'
+    && canonicalFinancialWriteMode === 'ledger_ready'
+    && typeof persistCanonicalFinancialSnapshot === 'function';
 
-  const handleAddReceiptVoucher = (e: React.FormEvent) => {
+  const handleAddReceiptVoucher = async (e: React.FormEvent) => {
     e.preventDefault();
 
-    if (FallbackStorage.isCanonicalPersistenceRequired()) {
-      triggerNotification('تعذر اعتماد سند القبض: الحفظ المحاسبي المركزي غير موصول بهذا المسار بعد.', 'warning');
+    if (!canonicalWriteReady) {
+      triggerNotification('تعذر اعتماد سند القبض: المصدر الحالي snapshot للقراءة فقط، ولم تعتمد خدمة دفتر الأستاذ الكانونية.', 'warning');
       return;
     }
 
@@ -94,6 +96,15 @@ export const ReceiptVoucherTab = () => {
     const rvId = `RV-2026-${String(nextIdNum).padStart(4, '0')}`;
     const jvId = `JV-2026-RV-${String(nextIdNum).padStart(4, '0')}`;
 
+    const revenueAccountCode = receiptVoucherForm.operationType === 'رسوم حافلة' ? '4300' :
+                               receiptVoucherForm.operationType === 'رسوم أنشطة' ? '4400' :
+                               receiptVoucherForm.operationType === 'أخرى' ? '4500' : '4101';
+    const debitAccountCode = receiptVoucherForm.receivingAccount;
+    if (!debitAccountCode || !accounts.some((account: any) => account.code === debitAccountCode) || !accounts.some((account: any) => account.code === revenueAccountCode)) {
+      triggerNotification('تعذر اعتماد سند القبض: يجب اختيار حساب قبض وحساب إيراد موثقين في شجرة الحسابات.', 'warning');
+      return;
+    }
+
     // 1. Create Receipt Voucher object
     const newRv = {
       id: rvId,
@@ -105,6 +116,7 @@ export const ReceiptVoucherTab = () => {
       operationType: receiptVoucherForm.operationType,
       paymentMethod: receiptVoucherForm.paymentMethod,
       receivingAccount: receiptVoucherForm.receivingAccount,
+      revenueAccount: revenueAccountCode,
       amount: amt,
       against: receiptVoucherForm.against,
       attachmentName: receiptVoucherForm.attachmentName,
@@ -117,18 +129,14 @@ export const ReceiptVoucherTab = () => {
     };
 
     // 2. Create Journal Entry object
-    const revenueAccountCode = receiptVoucherForm.operationType === 'رسوم حافلة' ? '4300' : 
-                               receiptVoucherForm.operationType === 'رسوم أنشطة' ? '4400' : 
-                               receiptVoucherForm.operationType === 'أخرى' ? '4500' : '4101';
-    
-    const debitAccountCode = receiptVoucherForm.receivingAccount || '1101';
-
     const newJv = {
       id: jvId,
       date: receiptVoucherForm.date || new Date().toISOString().split('T')[0],
       description: `توطين قيد سند القبض رقم ${rvId} - ${receiptVoucherForm.receivedFrom}`,
       debitSum: amt,
       creditSum: amt,
+      debitTotal: amt,
+      creditTotal: amt,
       status: 'مرحل',
       isSystemGenerated: true,
       receiptVoucherId: rvId,
@@ -168,14 +176,21 @@ export const ReceiptVoucherTab = () => {
     const updatedRvs = [newRv, ...receiptVouchers];
     const updatedJvs = [newJv, ...journalEntries];
 
-    // 4. Update state & storage
+    // 4. Never fall back to localStorage for a financial voucher.
+    try {
+      await persistCanonicalFinancialSnapshot({
+        receiptVouchers: updatedRvs,
+        journalEntries: updatedJvs,
+        chartOfAccounts: updatedAccounts
+      });
+    } catch (error: any) {
+      triggerNotification(`تعذر حفظ سند القبض مركزياً: ${error?.message || 'خطأ غير معروف'}`, 'warning');
+      return;
+    }
+
     setReceiptVouchers(updatedRvs);
     setJournalEntries(updatedJvs);
     setAccounts(updatedAccounts);
-
-    localStorage.setItem('erp_receipt_vouchers_v2', JSON.stringify(updatedRvs));
-    localStorage.setItem('erp_journal_entries_v2', JSON.stringify(updatedJvs));
-    localStorage.setItem('erp_chart_of_accounts_v2', JSON.stringify(updatedAccounts));
 
     // Reset Form
     setReceiptVoucherForm({
@@ -204,7 +219,7 @@ export const ReceiptVoucherTab = () => {
       device: 'نظام الإدارة المالية المركزي'
     });
 
-    triggerNotification(`✓ تم إنشاء وترحيل سند القبض ${rvId} بنجاح وتوليد القيد المزدوج الموزون!`, 'success');
+    triggerNotification(`تم إنشاء وترحيل سند القبض ${rvId} عبر خدمة دفتر الأستاذ الكانونية.`, 'success');
   };
 
 
@@ -506,7 +521,7 @@ const handlePrintRV = (rv: any) => {
               </div>
               <div className="bg-emerald-50 border border-emerald-100 rounded-lg p-2 px-3 flex items-center gap-2">
                 <span className="w-2.5 h-2.5 rounded-full bg-emerald-500 animate-pulse"></span>
-                <span className="font-extrabold text-emerald-800 text-[10px]">الربط المحاسبي الموحد: نشط وتلقائي</span>
+                <span className="font-extrabold text-amber-800 text-[10px]">المصدر المركزي متصل للقراءة فقط — الترحيل متوقف</span>
               </div>
             </div>
 
@@ -741,11 +756,18 @@ const handlePrintRV = (rv: any) => {
                   <div className="pt-3">
                     <button 
                       type="submit"
+                      disabled={!canonicalWriteReady}
+                      aria-disabled={!canonicalWriteReady}
                       className="w-full bg-gradient-to-r from-emerald-600 to-teal-600 hover:from-emerald-700 hover:to-teal-700 text-white font-black py-3 rounded-lg flex items-center justify-center gap-2 shadow-md hover:shadow-lg cursor-pointer transition-all active:scale-[0.99]"
                     >
                       <Coins className="w-4 h-4" />
-                      <span>ترحيل السند وتوليد قيد الإيراد الفوري والمزدوج 🖹</span>
+                      <span>{canonicalWriteReady ? 'ترحيل السند عبر دفتر الأستاذ الكانوني 🖹' : 'الترحيل غير متاح — خدمة دفتر الأستاذ غير معتمدة'}</span>
                     </button>
+                    {!canonicalWriteReady && (
+                      <p role="alert" className="mt-2 text-[10px] font-bold text-amber-700">
+                        المعاينة متاحة فقط؛ لا يتم حفظ سند قبض أو قيد مزدوج قبل اعتماد مسار مركزي كامل.
+                      </p>
+                    )}
                   </div>
                 </form>
               </div>
@@ -764,11 +786,11 @@ const handlePrintRV = (rv: any) => {
                     </li>
                     <li className="flex items-start gap-2">
                       <span className="bg-slate-200 text-emerald-800 p-0.5 px-1.5 rounded text-[10px] font-mono mt-0.5">02</span>
-                      <span><strong>قيد فوري مزدوج:</strong> عند حفظ السند، سيقوم محرك العمليات تلقائياً بإنشاء قيد محاسبي يوازن بين حساب الصندوق المستلم (مدين) وإيراد الرسوم (دائن).</span>
+                      <span><strong>المعاينة فقط:</strong> لا يتم إنشاء قيد مزدوج أو ترحيل سند قبل اعتماد خدمة دفتر الأستاذ الكانونية.</span>
                     </li>
                     <li className="flex items-start gap-2">
                       <span className="bg-slate-200 text-emerald-800 p-0.5 px-1.5 rounded text-[10px] font-mono mt-0.5">03</span>
-                      <span><strong>التدقيق الداخلي:</strong> يتم تذييل السند بتوقيع المعالج كـ <em>(سليمان غازي)</em> مع حظر تحوير أو شطب السندات للامتثال للمعايير الليبية المعتمدة.</span>
+                      <span><strong>التدقيق الداخلي:</strong> لن يُمنح السند رقم اعتماد أو أثر تدقيق نهائي قبل حفظه في المصدر المركزي المعتمد.</span>
                     </li>
                   </ul>
                   <div className="pt-2">

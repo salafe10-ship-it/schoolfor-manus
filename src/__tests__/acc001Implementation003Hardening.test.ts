@@ -20,8 +20,10 @@ describe('ACC-001-IMPLEMENTATION-003 accounting hardening', () => {
     const payment = read('src/modules/accounting/presentation/PaymentVoucherTab.tsx');
     const app = read('src/App.tsx');
 
-    expect(receipt).toContain('FallbackStorage.isCanonicalPersistenceRequired()');
-    expect(payment).toContain('FallbackStorage.isCanonicalPersistenceRequired()');
+    expect(receipt).toContain("canonicalFinancialWriteMode === 'ledger_ready'");
+    expect(payment).toContain("canonicalFinancialWriteMode === 'ledger_ready'");
+    expect(receipt).not.toContain("localStorage.setItem('erp_receipt_vouchers_v2'");
+    expect(payment).not.toContain("localStorage.setItem('erp_payment_vouchers_v2'");
     expect(app).toContain('تعذر إصدار الفاتورة: يلزم ربط مسار الفوترة بالحفظ المحاسبي المركزي أولاً.');
   });
 

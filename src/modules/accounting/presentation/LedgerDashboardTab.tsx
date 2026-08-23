@@ -69,8 +69,10 @@ export const LedgerDashboardTab = () => {
   handleImportExcelSimulate, handleDownloadTemplate, handlePrintAssetCard, handlePrintDepreciationSchedule,
   findOriginalDocument, handleReportAccountClick, handleJournalEntryClick,
   isAccountOrDescendant, getProcessedAccounts,
-  formatCurrency, triggerNotification
+  formatCurrency, triggerNotification, canonicalFinancialStatus, canonicalFinancialVersion, canonicalFinancialWriteMode, refreshCanonicalFinancialData
 } = React.useContext(AccountingContext);
+
+  const dashboardFinancialsAreCanonical = canonicalFinancialStatus === 'ready' && canonicalFinancialWriteMode === 'ledger_ready';
 
   const financialTotals = useMemo(() => {
     const reportAccounts = getProcessedAccounts ? getProcessedAccounts() : accounts;
@@ -96,11 +98,14 @@ export const LedgerDashboardTab = () => {
   }, [accounts, getProcessedAccounts]);
 
   const handleRefreshData = () => {
+    if (canonicalFinancialStatus !== 'ready') {
+      triggerNotification('لا يمكن تحديث المؤشرات قبل اتصال المصدر المالي المركزي.', 'warning');
+      return;
+    }
     setRefreshing(true);
-    setTimeout(() => {
-      setRefreshing(false);
-      triggerNotification('✓ تم تحديث ومزامنة جميع البيانات المالية والتقارير بنجاح!', 'success');
-    }, 800);
+    refreshCanonicalFinancialData();
+    setRefreshing(false);
+    triggerNotification(`✓ تمت مطالبة المصدر المركزي بإعادة التحميل — الإصدار الحالي ${canonicalFinancialVersion || 'غير محدد'}.`, 'success');
   };
 
   return (
@@ -112,7 +117,7 @@ export const LedgerDashboardTab = () => {
               <div className="flex items-center gap-2">
                 <h2 className="text-xs font-black text-slate-800">لوحة المؤشرات والتحليل المالي</h2>
                 <span className="font-mono text-[9px] bg-slate-200/60 text-slate-600 px-2 py-0.5 rounded font-bold">
-                  آخر تحديث للبيانات: 2026-05-13
+                  المصدر المالي: الإصدار {canonicalFinancialVersion || 'غير محدد'}
                 </span>
               </div>
               <button 
@@ -134,7 +139,7 @@ export const LedgerDashboardTab = () => {
                   <div className="text-2xl font-black text-emerald-600 tracking-tight" dir="ltr">
                     {formatCurrency(financialTotals.revenues, false)}
                   </div>
-                  <span className="text-[9px] text-emerald-500 font-extrabold">✓ قيود مرحت بالاستاذ</span>
+                  <span className="text-[9px] text-amber-600 font-extrabold">{dashboardFinancialsAreCanonical ? '✓ قيود مرحّلة بالأستاذ' : 'نسخة snapshot — غير متحقق'}</span>
                 </div>
               </div>
 
@@ -145,7 +150,7 @@ export const LedgerDashboardTab = () => {
                   <div className="text-2xl font-black text-rose-600 tracking-tight" dir="ltr">
                     {formatCurrency(financialTotals.expenses, false)}
                   </div>
-                  <span className="text-[9px] text-rose-500 font-extrabold block">⚙ رواتب + تشغيل المدارس</span>
+                  <span className="text-[9px] text-amber-600 font-extrabold block">{dashboardFinancialsAreCanonical ? '⚙ حركات موثقة' : 'المصدر للعرض فقط'}</span>
                 </div>
               </div>
 
@@ -156,7 +161,7 @@ export const LedgerDashboardTab = () => {
                   <div className="text-2xl font-black text-emerald-700 tracking-tight" dir="ltr">
                     {formatCurrency(financialTotals.netResult, false)}
                   </div>
-                  <span className="text-[9px] text-slate-400 font-bold">باقي الأرباح رهن التوزيع</span>
+                  <span className="text-[9px] text-slate-400 font-bold">{dashboardFinancialsAreCanonical ? 'باقي الأرباح رهن التوزيع' : 'النتيجة غير معتمدة'}</span>
                 </div>
               </div>
 
@@ -167,7 +172,7 @@ export const LedgerDashboardTab = () => {
                   <div className="text-2xl font-black text-amber-600 tracking-tight" dir="ltr">
                     {formatCurrency(financialTotals.liquidity, false)}
                   </div>
-                  <span className="text-[9px] text-amber-600 font-bold">💳 متاح للصرف والتحكم اليومي</span>
+                  <span className="text-[9px] text-amber-600 font-bold">{dashboardFinancialsAreCanonical ? '💳 متاح للصرف والتحكم اليومي' : '⛔ لا يُسمح بالصرف — المصدر للقراءة فقط'}</span>
                 </div>
               </div>
             </div>
@@ -186,9 +191,9 @@ export const LedgerDashboardTab = () => {
                   {/* Item 1 */}
                   <div className="flex justify-between items-center py-3">
                     <span className="text-slate-600 font-semibold">• توازن ميزان المراجعة :</span>
-                    <span className="flex items-center gap-1.5 font-bold text-emerald-600 bg-emerald-50 px-2.5 py-1 rounded-md border border-emerald-100">
-                      <span className="w-1.5 h-1.5 rounded-full bg-emerald-500" />
-                      متوازن ✓
+                    <span className={`flex items-center gap-1.5 font-bold px-2.5 py-1 rounded-md border ${dashboardFinancialsAreCanonical ? 'text-emerald-600 bg-emerald-50 border-emerald-100' : 'text-amber-700 bg-amber-50 border-amber-200'}`}>
+                      <span className={`w-1.5 h-1.5 rounded-full ${dashboardFinancialsAreCanonical ? 'bg-emerald-500' : 'bg-amber-500'}`} />
+                      {dashboardFinancialsAreCanonical ? 'متوازن ✓' : 'غير متحقق — قراءة فقط'}
                     </span>
                   </div>
 
@@ -203,8 +208,8 @@ export const LedgerDashboardTab = () => {
                   {/* Item 3 */}
                   <div className="flex justify-between items-center py-3">
                     <span className="text-slate-600 font-semibold">• اتجاه المصروفات الزائدة :</span>
-                    <span className="text-emerald-700 font-bold bg-emerald-50 px-2.5 py-1 rounded-md border border-emerald-100">
-                      ضمن النطاق المعتمد
+                    <span className={`font-bold px-2.5 py-1 rounded-md border ${dashboardFinancialsAreCanonical ? 'text-emerald-700 bg-emerald-50 border-emerald-100' : 'text-amber-700 bg-amber-50 border-amber-200'}`}>
+                      {dashboardFinancialsAreCanonical ? 'ضمن النطاق المعتمد' : 'غير متحقق'}
                     </span>
                   </div>
 
@@ -236,7 +241,9 @@ export const LedgerDashboardTab = () => {
                     />
                     {/* Active gradient value ring based on live calculation */}
                     {(() => {
-                      const percentage = Math.max(0, Math.min(100, Math.round(((financialTotals.netResult) / (financialTotals.revenues || 1)) * 100)));
+                      const percentage = dashboardFinancialsAreCanonical
+                        ? Math.max(0, Math.min(100, Math.round(((financialTotals.netResult) / (financialTotals.revenues || 1)) * 100)))
+                        : 0;
                       const circumference = 2 * Math.PI * 64;
                       const offset = circumference - (percentage / 100) * circumference;
                       return (
@@ -254,9 +261,9 @@ export const LedgerDashboardTab = () => {
                   </svg>
                   <div className="absolute text-center">
                     <span className="text-3xl font-black text-slate-800 font-mono block">
-                      {Math.max(0, Math.min(100, Math.round(((financialTotals.netResult) / (financialTotals.revenues || 1)) * 100)))}%
+                      {dashboardFinancialsAreCanonical ? `${Math.max(0, Math.min(100, Math.round(((financialTotals.netResult) / (financialTotals.revenues || 1)) * 100)))}%` : 'غير متحقق'}
                     </span>
-                    <span className="text-[10px] text-slate-500 font-bold block mt-0.5">نسبة صافي الربح الحالي</span>
+                    <span className="text-[10px] text-slate-500 font-bold block mt-0.5">{dashboardFinancialsAreCanonical ? 'نسبة صافي الربح الحالي' : 'المؤشر غير معتمد'}</span>
                   </div>
                 </div>
 

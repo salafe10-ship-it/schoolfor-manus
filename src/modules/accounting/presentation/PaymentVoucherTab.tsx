@@ -2,7 +2,6 @@ import { AlertTriangle, BookOpen, Calculator, Check, CheckCircle2, ChevronLeft, 
 import React from 'react';
 import { AccountingContext } from '../../../components/GeneralLedgerPortal';
 import { EnterpriseAuditLogger } from '../../../utils/EnterpriseAuditLogger';
-import { FallbackStorage } from '../../../database/repositories/FallbackStorage';
 
 export const PaymentVoucherTab = () => {
   const {
@@ -77,14 +76,17 @@ export const PaymentVoucherTab = () => {
   handleImportExcelSimulate, handleDownloadTemplate, handlePrintAssetCard, handlePrintDepreciationSchedule,
   findOriginalDocument, handleReportAccountClick, handleJournalEntryClick,
   isAccountOrDescendant, getProcessedAccounts,
-  formatCurrency, triggerNotification
+  formatCurrency, triggerNotification, persistCanonicalFinancialSnapshot, canonicalFinancialStatus, canonicalFinancialWriteMode
 } = React.useContext(AccountingContext);
+  const canonicalWriteReady = canonicalFinancialStatus === 'ready'
+    && canonicalFinancialWriteMode === 'ledger_ready'
+    && typeof persistCanonicalFinancialSnapshot === 'function';
 
-  const handleAddPaymentVoucher = (e: React.FormEvent) => {
+  const handleAddPaymentVoucher = async (e: React.FormEvent) => {
     e.preventDefault();
 
-    if (FallbackStorage.isCanonicalPersistenceRequired()) {
-      triggerNotification('تعذر اعتماد سند الصرف: الحفظ المحاسبي المركزي غير موصول بهذا المسار بعد.', 'warning');
+    if (!canonicalWriteReady) {
+      triggerNotification('تعذر اعتماد سند الصرف: المصدر الحالي snapshot للقراءة فقط، ولم تعتمد خدمة دفتر الأستاذ الكانونية.', 'warning');
       return;
     }
 
@@ -97,6 +99,12 @@ export const PaymentVoucherTab = () => {
     const nextIdNum = paymentVouchers.length + 1;
     const pvId = `PV-2026-${String(nextIdNum).padStart(4, '0')}`;
     const jvId = `JV-2026-PV-${String(nextIdNum).padStart(4, '0')}`;
+    const creditAccountCode = paymentVoucherForm.paidFromAccount;
+    const debitAccountCode = paymentVoucherForm.paidToAccount;
+    if (!creditAccountCode || !debitAccountCode || !accounts.some((account: any) => account.code === creditAccountCode) || !accounts.some((account: any) => account.code === debitAccountCode)) {
+      triggerNotification('تعذر اعتماد سند الصرف: يجب اختيار حساب مصدر وحساب مستفيد موثقين في شجرة الحسابات.', 'warning');
+      return;
+    }
 
     // 1. Create Payment Voucher object
     const newPv = {
@@ -104,8 +112,8 @@ export const PaymentVoucherTab = () => {
       date: paymentVoucherForm.date || new Date().toISOString().split('T')[0],
       beneficiary: paymentVoucherForm.beneficiary,
       costCenter: paymentVoucherForm.costCenter || 'primary',
-      paidFromAccount: paymentVoucherForm.paidFromAccount || '1101',
-      paidToAccount: paymentVoucherForm.paidToAccount || '5270',
+      paidFromAccount: paymentVoucherForm.paidFromAccount,
+      paidToAccount: paymentVoucherForm.paidToAccount,
       amount: amt,
       against: paymentVoucherForm.against,
       paymentMethod: paymentVoucherForm.paymentMethod,
@@ -119,15 +127,14 @@ export const PaymentVoucherTab = () => {
     };
 
     // 2. Create Journal Entry object
-    const creditAccountCode = paymentVoucherForm.paidFromAccount || '1101';
-    const debitAccountCode = paymentVoucherForm.paidToAccount || '5270';
-
     const newJv = {
       id: jvId,
       date: paymentVoucherForm.date || new Date().toISOString().split('T')[0],
       description: `توطين قيد سند صرف رقم ${pvId} - لصالح ${paymentVoucherForm.beneficiary}`,
       debitSum: amt,
       creditSum: amt,
+      debitTotal: amt,
+      creditTotal: amt,
       status: 'مرحل',
       isSystemGenerated: true,
       paymentVoucherId: pvId,
@@ -167,14 +174,21 @@ export const PaymentVoucherTab = () => {
     const updatedPvs = [newPv, ...paymentVouchers];
     const updatedJvs = [newJv, ...journalEntries];
 
-    // 4. Update state & storage
+    // 4. Never fall back to localStorage for a financial voucher.
+    try {
+      await persistCanonicalFinancialSnapshot({
+        paymentVouchers: updatedPvs,
+        journalEntries: updatedJvs,
+        chartOfAccounts: updatedAccounts
+      });
+    } catch (error: any) {
+      triggerNotification(`تعذر حفظ سند الصرف مركزياً: ${error?.message || 'خطأ غير معروف'}`, 'warning');
+      return;
+    }
+
     setPaymentVouchers(updatedPvs);
     setJournalEntries(updatedJvs);
     setAccounts(updatedAccounts);
-
-    localStorage.setItem('erp_payment_vouchers_v2', JSON.stringify(updatedPvs));
-    localStorage.setItem('erp_journal_entries_v2', JSON.stringify(updatedJvs));
-    localStorage.setItem('erp_chart_of_accounts_v2', JSON.stringify(updatedAccounts));
 
     // Reset Form
     setPaymentVoucherForm({
@@ -201,7 +215,7 @@ export const PaymentVoucherTab = () => {
       device: 'نظام الإدارة المالية المركزي'
     });
 
-    triggerNotification(`✓ تم إنشاء وترحيل سند الصرف ${pvId} بنجاح وتوليد القيد المزدوج الموزون!`, 'success');
+    triggerNotification(`تم إنشاء وترحيل سند الصرف ${pvId} عبر خدمة دفتر الأستاذ الكانونية.`, 'success');
   };
 
 
@@ -682,11 +696,18 @@ const handlePrintPV = (pv: any) => {
                   <div className="pt-3">
                     <button 
                       type="submit"
+                      disabled={!canonicalWriteReady}
+                      aria-disabled={!canonicalWriteReady}
                       className="w-full bg-gradient-to-r from-rose-600 to-red-650 hover:from-rose-700 hover:to-red-700 text-white font-black py-3 rounded-lg flex items-center justify-center gap-2 shadow-md hover:shadow-lg cursor-pointer transition-all active:scale-[0.99]"
                     >
                       <Coins className="w-4 h-4 text-white" />
-                      <span>صرف المستخلص وتوطين القيد المزدوج فوراً 🖹</span>
+                      <span>{canonicalWriteReady ? 'ترحيل سند الصرف عبر دفتر الأستاذ الكانوني 🖹' : 'الترحيل غير متاح — خدمة دفتر الأستاذ غير معتمدة'}</span>
                     </button>
+                    {!canonicalWriteReady && (
+                      <p role="alert" className="mt-2 text-[10px] font-bold text-amber-700">
+                        المعاينة متاحة فقط؛ لا يتم حفظ سند صرف أو قيد مزدوج قبل اعتماد مسار مركزي كامل.
+                      </p>
+                    )}
                   </div>
                 </form>
               </div>

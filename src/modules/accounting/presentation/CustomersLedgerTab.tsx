@@ -67,8 +67,17 @@ export const CustomersLedgerTab = () => {
   handleImportExcelSimulate, handleDownloadTemplate, handlePrintAssetCard, handlePrintDepreciationSchedule,
   findOriginalDocument, handleReportAccountClick, handleJournalEntryClick,
   isAccountOrDescendant, getProcessedAccounts,
-  formatCurrency, students
+  formatCurrency, students, invoices
 } = React.useContext(AccountingContext);
+
+  const invoiceTotalsByStudent = new Map<string, number>();
+  (Array.isArray(invoices) ? invoices : []).forEach((invoice: any) => {
+    const studentId = invoice?.studentId;
+    if (!studentId) return;
+    const remaining = Number(invoice.remainingAmount ?? invoice.balanceDue ?? invoice.amount ?? 0);
+    if (!Number.isFinite(remaining)) return;
+    invoiceTotalsByStudent.set(studentId, (invoiceTotalsByStudent.get(studentId) || 0) + Math.max(0, remaining));
+  });
 
   return (
     <>
@@ -92,16 +101,15 @@ export const CustomersLedgerTab = () => {
                 </thead>
                 <tbody className="divide-y divide-slate-100 font-semibold text-slate-800">
                   {students.map(s => {
-                    // Simulated random due fees for the sake of presentation
-                    const dueAmt = s.gender === 'male' ? 3200 : 1500;
+                    const dueAmt = invoiceTotalsByStudent.get(s.id);
                     return (
                       <tr key={s.id} className="hover:bg-slate-50/70">
-                        <td className="px-6 py-3 font-mono font-black text-indigo-700">{s.academicId || 'SA-9012'}</td>
+                        <td className="px-6 py-3 font-mono font-black text-indigo-700">{s.academicId || '—'}</td>
                         <td className="px-6 py-3 font-black">{s.name}</td>
-                        <td className="px-6 py-3 text-slate-500">{s.parentName} ({s.parentPhone})</td>
-                        <td className="px-6 py-3 text-center text-slate-600">{s.classroom || 'الأول الابتدائي'}</td>
+                        <td className="px-6 py-3 text-slate-500">{s.parentName || 'غير متوفر'}{s.parentPhone ? ` (${s.parentPhone})` : ''}</td>
+                        <td className="px-6 py-3 text-center text-slate-600">{s.classroom || 'غير محدد'}</td>
                         <td className="px-6 py-3 text-left font-mono font-black text-slate-950" dir="ltr">
-                          {dueAmt.toLocaleString()} {currency}
+                          {dueAmt === undefined ? 'غير متحقق' : `${dueAmt.toLocaleString()} ${currency}`}
                         </td>
                       </tr>
                     );

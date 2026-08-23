@@ -74,7 +74,7 @@ export const ChartOfAccountsTab = () => {
     formatCurrency, logAction,
     handleCalcPress, handleCreateNewCoaClick, handleEditCoaClick, handleCancelCoa, handleSaveCoa,
     handleDeleteCoa, handleExpandAllCoa, handleCollapseAllCoa, handleExportCoaExcel, handlePrintCoaTree,
-    handleImportCoaCSV,
+    handleImportCoaCSV, persistCanonicalFinancialSnapshot, canonicalFinancialStatus,
   } = React.useContext(AccountingContext);
 
   return (
@@ -1087,10 +1087,20 @@ export const ChartOfAccountsTab = () => {
                         const isReconciled = currentAccount.isReconciled;
                         const lastDate = currentAccount.lastReconciliationDate;
 
-                        const allChecked = reconcileChecks['line1'] && reconcileChecks['line2'] && reconcileChecks['line3'];
+                        const reconciliableLines = getNormalizedJournalEntries()
+                          .flatMap((entry: any) => (entry.lines || [])
+                            .filter((line: any) => line.accountCode === currentAccount.code)
+                            .map((line: any) => ({ ...line, entryId: entry.id, date: entry.date, description: entry.description })))
+                          .slice(0, 20);
+                        const allChecked = reconciliableLines.length > 0
+                          && reconciliableLines.every((_: any, index: number) => reconcileChecks[`line${index + 1}`]);
 
-                        const handleConfirmReconciliation = () => {
-                          setAccounts(prev => prev.map(a => {
+                        const handleConfirmReconciliation = async () => {
+                          if (canonicalFinancialStatus !== 'ready' || typeof persistCanonicalFinancialSnapshot !== 'function') {
+                            triggerNotification('تعذر حفظ التسوية: المصدر المحاسبي المركزي غير جاهز.', 'warning');
+                            return;
+                          }
+                          const updatedAccounts = accounts.map(a => {
                             if (a.code === currentAccount.code) {
                               return {
                                 ...a,
@@ -1099,10 +1109,15 @@ export const ChartOfAccountsTab = () => {
                               };
                             }
                             return a;
-                          }));
-
-                          triggerNotification(`✓ تم إجراء التسوية والمطابقة المصرفية للحساب #${currentAccount.code} بنجاح!`, 'success');
-                          logAction('RECONCILE_BANK_ACCOUNT', `إجراء المطابقة والتسوية الدفترية مع كشف الحساب الخارجي لحساب #${currentAccount.code}`, 'الحسابات العامة');
+                          });
+                          try {
+                            await persistCanonicalFinancialSnapshot({ chartOfAccounts: updatedAccounts });
+                            setAccounts(updatedAccounts);
+                            triggerNotification(`✓ تم حفظ التسوية والمطابقة المصرفية للحساب #${currentAccount.code} مركزياً.`, 'success');
+                            logAction('RECONCILE_BANK_ACCOUNT', `حفظ المطابقة الدفترية المركزية للحساب #${currentAccount.code}`, 'الحسابات العامة');
+                          } catch (error: any) {
+                            triggerNotification(`تعذر حفظ التسوية مركزياً: ${error?.message || 'خطأ غير معروف'}`, 'warning');
+                          }
                         };
 
                         return (
@@ -1131,70 +1146,27 @@ export const ChartOfAccountsTab = () => {
                               قارن القيود الدفترية الداخلية مع كشف المعاملات المصرفية الواردة من مصرف الوحدة/الخزينة المعتمد، وقم بتحديد المعاملات المتطابقة بالأسفل:
                             </div>
 
-                            {/* Mock Ledger lines to check */}
+                            {/* Central journal lines to check */}
                             <div className="space-y-2 text-[10px]">
-                              <div 
-                                onClick={() => setReconcileChecks(p => ({ ...p, line1: !p.line1 }))}
-                                className={`flex justify-between items-center p-3 border rounded-xl cursor-pointer transition-all ${
-                                  reconcileChecks['line1'] ? 'bg-indigo-50/40 border-indigo-200' : 'bg-white hover:bg-slate-50 border-slate-200'
-                                }`}
-                              >
-                                <div className="flex items-center gap-2.5">
-                                  <input 
-                                    type="checkbox" 
-                                    checked={!!reconcileChecks['line1']} 
-                                    onChange={() => {}} // handled by div onClick
-                                    className="rounded text-indigo-650"
-                                  />
-                                  <div>
-                                    <span className="font-extrabold text-slate-800 block">إيداع إلكتروني: رسوم دراسية الطلاب عبر بوابة الدفع</span>
-                                    <span className="text-slate-400 font-mono text-[9px]">المرجع: BK-92841 | التاريخ: 2026-06-22</span>
+                              {reconciliableLines.length > 0 ? reconciliableLines.map((line: any, index: number) => {
+                                const amount = Number(line.debit || line.credit || 0);
+                                const incoming = Number(line.debit || 0) > 0;
+                                const key = `line${index + 1}`;
+                                return (
+                                  <div key={`${line.entryId}-${index}`} onClick={() => setReconcileChecks(p => ({ ...p, [key]: !p[key] }))} className={`flex justify-between items-center p-3 border rounded-xl cursor-pointer transition-all ${reconcileChecks[key] ? 'bg-indigo-50/40 border-indigo-200' : 'bg-white hover:bg-slate-50 border-slate-200'}`}>
+                                    <div className="flex items-center gap-2.5">
+                                      <input type="checkbox" checked={!!reconcileChecks[key]} onChange={() => {}} className="rounded text-indigo-650" />
+                                      <div>
+                                        <span className="font-extrabold text-slate-800 block">{line.description || line.entryId}</span>
+                                        <span className="text-slate-400 font-mono text-[9px]">المرجع: {line.entryId} | التاريخ: {line.date || 'غير محدد'}</span>
+                                      </div>
+                                    </div>
+                                    <span className={`font-mono font-black ${incoming ? 'text-emerald-700' : 'text-rose-600'}`}>{incoming ? '+' : '-'}{amount.toLocaleString()} {currency}</span>
                                   </div>
-                                </div>
-                                <span className="font-mono font-black text-emerald-700">+12,500.00 د.ل</span>
-                              </div>
-
-                              <div 
-                                onClick={() => setReconcileChecks(p => ({ ...p, line2: !p.line2 }))}
-                                className={`flex justify-between items-center p-3 border rounded-xl cursor-pointer transition-all ${
-                                  reconcileChecks['line2'] ? 'bg-indigo-50/40 border-indigo-200' : 'bg-white hover:bg-slate-50 border-slate-200'
-                                }`}
-                              >
-                                <div className="flex items-center gap-2.5">
-                                  <input 
-                                    type="checkbox" 
-                                    checked={!!reconcileChecks['line2']} 
-                                    onChange={() => {}} 
-                                    className="rounded text-indigo-650"
-                                  />
-                                  <div>
-                                    <span className="font-extrabold text-slate-800 block">صرف نقدي: تسديد فاتورة شركة البيان للقرطاسية</span>
-                                    <span className="text-slate-400 font-mono text-[9px]">المرجع: BK-88192 | التاريخ: 2026-06-21</span>
-                                  </div>
-                                </div>
-                                <span className="font-mono font-black text-rose-600">-4,500.00 د.ل</span>
-                              </div>
-
-                              <div 
-                                onClick={() => setReconcileChecks(p => ({ ...p, line3: !p.line3 }))}
-                                className={`flex justify-between items-center p-3 border rounded-xl cursor-pointer transition-all ${
-                                  reconcileChecks['line3'] ? 'bg-indigo-50/40 border-indigo-200' : 'bg-white hover:bg-slate-50 border-slate-200'
-                                }`}
-                              >
-                                <div className="flex items-center gap-2.5">
-                                  <input 
-                                    type="checkbox" 
-                                    checked={!!reconcileChecks['line3']} 
-                                    onChange={() => {}} 
-                                    className="rounded text-indigo-650"
-                                  />
-                                  <div>
-                                    <span className="font-extrabold text-slate-800 block">حوالة واردة: تغدية الحساب من المجمع التعليمي</span>
-                                    <span className="text-slate-400 font-mono text-[9px]">المرجع: BK-77218 | التاريخ: 2026-06-20</span>
-                                  </div>
-                                </div>
-                                <span className="font-mono font-black text-emerald-700">+15,000.00 د.ل</span>
-                              </div>
+                                );
+                              }) : (
+                                <div className="rounded-xl border border-dashed border-amber-300 bg-amber-50 p-4 text-center font-bold text-amber-900">لا توجد قيود موثقة قابلة للمطابقة لهذا الحساب.</div>
+                              )}
                             </div>
 
                             {/* Reconciliation actions */}
@@ -2069,7 +2041,6 @@ export const ChartOfAccountsTab = () => {
                       const violations: string[] = [];
                       const validCostCenters = ['cc_kg', 'cc_primary', 'cc_middle', 'cc_high', 'kindergarten', 'primary', 'middle', 'secondary', 'all', 'stage_kg', 'stage_primary', 'stage_middle', 'stage_high'];
                       const validBranches = ['branch_1_1', 'branch_1_2', 'branch_2_1', 'branch_3_1', 'الفرع الرئيسي', 'الفرع الرئيسي - طرابلس', 'الفرع الغربي'];
-                      const validSchools = ['school_1', 'school_2', 'school_3', 'مدرسة الأسرة الحديثة - فرع طرابلس', 'مجمع المدارس الموحد'];
 
                       journalEntries.forEach(jv => {
                         const lines = jv.lines || [];
@@ -2106,9 +2077,9 @@ export const ChartOfAccountsTab = () => {
                           violations.push(`القيد (${jv.id}): يخص فرع مالي غير معتمد (${jvBranch}).`);
                         }
 
-                        const jvSchool = jv.schoolId || jv.school || 'school_1';
-                        if (jvSchool && !validSchools.includes(jvSchool)) {
-                          violations.push(`القيد (${jv.id}): يخص مدرسة تشغيلية خاطئة (${jvSchool}).`);
+                        const jvSchool = String(jv.schoolId || jv.school || '').trim();
+                        if (!jvSchool) {
+                          violations.push(`القيد (${jv.id}): لا يحمل معرف المدرسة؛ لا يمكن إثبات نطاقه التشغيلي.`);
                         }
                       });
 
@@ -2159,10 +2130,7 @@ export const ChartOfAccountsTab = () => {
                                       fixedBranch = 'الفرع الرئيسي - طرابلس';
                                     }
 
-                                    let fixedSchool = jv.schoolId || jv.school;
-                                    if (fixedSchool && !validSchools.includes(fixedSchool)) {
-                                      fixedSchool = 'school_1';
-                                    }
+                                    const fixedSchool = jv.schoolId || jv.school;
 
                                     const fixedLines = lines.map((l: any) => {
                                       let fixedCc = l.costCenter;
@@ -2211,9 +2179,11 @@ export const ChartOfAccountsTab = () => {
                                   triggerNotification('✓ تمت معالجة وإصلاح كافة قيود حركات اليومية العالقة تلقائياً ومطابقة فروعها ومدارسها!', 'success');
                                   logAction('AUTO_FIX_JOURNAL_VIOLATIONS', 'معالجة وتصفير انحرافات حركات اليومية العامة تلقائياً بمساعد التدقيق المالي', 'الحسابات العامة');
                                 }}
-                                className="bg-rose-600 hover:bg-rose-700 text-white font-extrabold text-[8px] px-3 py-1.5 rounded transition-all shrink-0 cursor-pointer"
+                                disabled
+                                title="المعالجة الآلية متوقفة حتى اعتماد نطاق المدرسة وخدمة دفتر الأستاذ الكانونية"
+                                className="bg-slate-300 text-slate-600 font-extrabold text-[8px] px-3 py-1.5 rounded transition-all shrink-0 cursor-not-allowed"
                               >
-                                معالجة آلية وتطابق القيود ⚡
+                                المعالجة الآلية متوقفة — يلزم نطاق موثق
                               </button>
                             </div>
                           )}

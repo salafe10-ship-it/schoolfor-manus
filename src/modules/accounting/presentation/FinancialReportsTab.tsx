@@ -1,12 +1,6 @@
 import { ArrowLeft, ArrowRightLeft, ArrowUpRight, BarChart2, Calculator, ChevronLeft, Coins, Download, FileDown, FileSpreadsheet, FileText, Filter, Layers, Percent, Printer, RefreshCw, Search, Settings, Settings2, ShieldAlert, TrendingUp } from 'lucide-react';
 import React, { useState, useEffect, useMemo, useCallback, Fragment } from 'react';
 import { AccountingContext } from '../../../components/GeneralLedgerPortal';
-const activeCostCenters = [
-  { id: 'primary', name: 'المقر الرئيسي والإدارة العامة', code: 'HQ-101' },
-  { id: 'branch-1', name: 'فرع مدرسة الأسرة النموذجية 1', code: 'SCH-01' },
-  { id: 'branch-2', name: 'فرع مدرسة الأسرة النموذجية 2', code: 'SCH-02' },
-  { id: 'recreational', name: 'النادي الترفيهي الرياضي المشترك', code: 'REC-202' }
-];
 
 export const FinancialReportsTab = () => {
   const {
@@ -68,8 +62,27 @@ export const FinancialReportsTab = () => {
   handleTransferAssetSubmit, handleSellAssetSubmit, handleDiscardAssetSubmit, handleMaintenanceSubmit,
   handleImportExcelSimulate, handleDownloadTemplate, handlePrintAssetCard, handlePrintDepreciationSchedule,
   findOriginalDocument, isAccountOrDescendant, getProcessedAccounts,
-  formatCurrency, triggerNotification, logAction, addJvAuditEvent
+  formatCurrency, triggerNotification, logAction, addJvAuditEvent, costCenters: liveCostCenters,
+  refreshCanonicalFinancialData, canonicalFinancialStatus, canonicalFinancialWriteMode
 } = React.useContext(AccountingContext);
+
+const activeCostCenters = (Array.isArray(liveCostCenters) ? liveCostCenters : [])
+  .filter((center: any) => center?.isActive !== false)
+  .map((center: any) => ({
+    id: center.id,
+    name: center.name || center.nameAr || center.code || center.id,
+    code: center.code || center.id
+  }));
+
+// Reports must fail closed when the authenticated profile has not loaded yet,
+// instead of crashing while dereferencing a null drill-down user.
+const activeDrillDownUser = drillDownUser || {
+  id: 'unresolved-user',
+  name: 'المستخدم الحالي غير محدد',
+  role: 'غير محدد',
+  permissions: [] as string[]
+};
+const reportsAreCanonical = canonicalFinancialStatus === 'ready' && canonicalFinancialWriteMode === 'ledger_ready';
 
 const [selectedReport, setSelectedReport] = useState<string | null>(null);
 const [drillDownStack, setDrillDownStack] = useState<any[]>([]);
@@ -126,8 +139,8 @@ const handleDrillDownBreadcrumbClick = (idx: number) => {
   };
 
 const handleDrillDownToAccount = (accountCode: string) => {
-    if (!drillDownUser.permissions.includes('view_account_statement')) {
-      triggerNotification(`❌ عذراً ${drillDownUser.name}! تم رفض الوصول لعدم وجود صلاحية استعراض كشوفات الحسابات التفصيلية (RBAC).`, 'warning');
+    if (!activeDrillDownUser.permissions.includes('view_account_statement')) {
+      triggerNotification(`❌ عذراً ${activeDrillDownUser.name}! تم رفض الوصول لعدم وجود صلاحية استعراض كشوفات الحسابات التفصيلية (RBAC).`, 'warning');
       return;
     }
 
@@ -152,12 +165,12 @@ const handleDrillDownToAccount = (accountCode: string) => {
     
     triggerNotification(`🔗 تم الانتقال إلى كشف حساب: ${accountName}`, 'success');
     logAction('DRILL_DOWN_ACCOUNT', `تنقل هرمي لحساب ${accountCode} من تقرير مالي`, 'الحسابات العامة');
-    addJvAuditEvent(accountCode, 'استعراض كشف الحساب', drillDownUser.name, `تنقل هرمي (Drill-Down) إلى كشف حساب ${accountName} (${accountCode})`);
+    addJvAuditEvent(accountCode, 'استعراض كشف الحساب', activeDrillDownUser.name, `تنقل هرمي (Drill-Down) إلى كشف حساب ${accountName} (${accountCode})`);
   };
 
 const handleDrillDownToOriginalDocument = (jv: any) => {
-    if (!drillDownUser.permissions.includes('view_original_docs')) {
-      triggerNotification(`❌ عذراً ${drillDownUser.name}! تم رفض الوصول لعدم وجود صلاحية استعراض المستندات والوثائق الملحقة (RBAC).`, 'warning');
+    if (!activeDrillDownUser.permissions.includes('view_original_docs')) {
+      triggerNotification(`❌ عذراً ${activeDrillDownUser.name}! تم رفض الوصول لعدم وجود صلاحية استعراض المستندات والوثائق الملحقة (RBAC).`, 'warning');
       return;
     }
 
@@ -195,7 +208,7 @@ const handleDrillDownToOriginalDocument = (jv: any) => {
     
     triggerNotification(`🔗 تم الانتقال إلى المستند الأصلي: ${docId}`, 'success');
     logAction('DRILL_DOWN_ORIGIN', `تنقل هرمي للمستند الأصلي ${docId}`, 'الحسابات العامة');
-    addJvAuditEvent(docId, 'عرض المستند الأصلي', drillDownUser.name, `تنقل هرمي (Drill-Down) إلى المستند الأصلي ${docId} المرتبط بقيد ${jv.id}`);
+    addJvAuditEvent(docId, 'عرض المستند الأصلي', activeDrillDownUser.name, `تنقل هرمي (Drill-Down) إلى المستند الأصلي ${docId} المرتبط بقيد ${jv.id}`);
   };
 
 
@@ -236,6 +249,33 @@ const handleDrillDownToOriginalDocument = (jv: any) => {
 
           const totalExpenses = sumPeriodClass('مصروفات', periodExpense);
 
+          // Cash-flow values must come from posted/approved journal lines. Do
+          // not allocate revenue or expense totals using presentation ratios.
+          const reportEntries = getNormalizedJournalEntries().filter((entry: any) => {
+            const status = String(entry.status || '').toLowerCase();
+            return ['مرحل', 'مرحّل', 'مُرحّل', 'معتمد', 'approved', 'posted'].includes(status)
+              && entry.date >= filterFromDate && entry.date <= filterToDate;
+          });
+          const cashAccountCodes = new Set(
+            accounts
+              .filter((account: any) => {
+                const label = `${account.nameAr || ''} ${account.name || ''}`;
+                return account.classification === 'أصول'
+                  && (String(account.code || '').startsWith('11') || /نقد|خزينة|مصرف|بنك|cash|bank/i.test(label));
+              })
+              .map((account: any) => account.code)
+          );
+          const actualCashInflow = reportEntries.reduce((sum: number, entry: any) => sum + (entry.lines || [])
+            .filter((line: any) => cashAccountCodes.has(line.accountCode))
+            .reduce((lineSum: number, line: any) => lineSum + Number(line.debit || 0), 0), 0);
+          const actualCashOutflow = reportEntries.reduce((sum: number, entry: any) => sum + (entry.lines || [])
+            .filter((line: any) => cashAccountCodes.has(line.accountCode))
+            .reduce((lineSum: number, line: any) => lineSum + Number(line.credit || 0), 0), 0);
+          const hasVerifiedCashFlow = reportEntries.some((entry: any) => Array.isArray(entry.lines) && entry.lines.length > 0);
+          const cashFlowValue = (amount: number) => hasVerifiedCashFlow
+            ? amount.toFixed(2)
+            : 'غير متحقق';
+
           const netIncome = totalRevenues - totalExpenses;
           // Current-period profit is part of equity in the balance-sheet check
           // until the fiscal-year closing entry is posted.
@@ -265,7 +305,7 @@ const handleDrillDownToOriginalDocument = (jv: any) => {
 
           // Individual report export Excel/CSV handlers
           const exportReportExcel = (reportName: string, headers: string[], rows: any[][]) => {
-            triggerNotification(`📥 جاري تصدير تقرير ${reportName} إلى Excel...`, 'success');
+            triggerNotification(`📥 جاري إنشاء نسخة عرض من ${reportName}؛ هذه ليست قائمة مالية معتمدة.`, 'info');
             setTimeout(() => {
               const csvContent = "\uFEFF" 
                 + [headers.join(','), ...rows.map(e => e.map(cell => `"${String(cell).replace(/"/g, '""')}"`).join(','))].join('\n');
@@ -277,7 +317,7 @@ const handleDrillDownToOriginalDocument = (jv: any) => {
               document.body.appendChild(link);
               link.click();
               document.body.removeChild(link);
-              triggerNotification('✓ تم التصدير بنجاح.', 'success');
+              triggerNotification('تم تنزيل نسخة العرض، ولم تُعتمد كتقرير مالي رسمي.', 'info');
             }, 300);
           };
 
@@ -395,13 +435,10 @@ const handleDrillDownToOriginalDocument = (jv: any) => {
                     </button>
                   )}
                   <button 
-                    onClick={() => {
-                      setRefreshing(true);
-                      setTimeout(() => {
-                        setRefreshing(false);
-                        triggerNotification('✓ تم إعادة احتساب ومزامنة كافة القيود والدفاتر الحسابية مع الفلاتر بنجاح.', 'success');
-                      }, 500);
-                    }}
+                     onClick={() => {
+                       refreshCanonicalFinancialData();
+                       triggerNotification('جارٍ إعادة تحميل التقارير من المصدر المالي المركزي...', 'info');
+                     }}
                     className="bg-slate-100 hover:bg-slate-200 text-slate-700 font-bold text-xs px-3.5 py-2 rounded-lg flex items-center gap-1.5 transition-colors cursor-pointer"
                   >
                     <RefreshCw className={`w-3.5 h-3.5 ${refreshing ? 'animate-spin' : ''}`} />
@@ -455,14 +492,14 @@ const handleDrillDownToOriginalDocument = (jv: any) => {
                   <div className="flex items-center gap-1.5 bg-slate-150/40 text-slate-700 px-2.5 py-1.5 rounded-lg border border-slate-200/50">
                     <span className="w-1.5 h-1.5 bg-emerald-500 rounded-full animate-pulse" />
                     <span className="font-bold">المستخدم الحالي:</span>
-                    <span className="text-slate-900 font-black">{drillDownUser.name} ({drillDownUser.role})</span>
+                    <span className="text-slate-900 font-black">{activeDrillDownUser.name} ({activeDrillDownUser.role})</span>
                   </div>
                   
                   {/* Quick toggle user role to demonstrate security */}
                   <div className="flex items-center gap-1.5">
                     <span className="text-[10px] text-slate-500">تغيير الصلاحية (للتجربة):</span>
                     <select
-                      value={drillDownUser.id}
+                      value={activeDrillDownUser.id}
                       onChange={(e) => {
                         const newUser = SIMULATED_USERS.find(u => u.id === e.target.value);
                         if (newUser) {
@@ -629,6 +666,11 @@ const handleDrillDownToOriginalDocument = (jv: any) => {
               {/* RENDER VIEW 1: Main reports dashboard cards (when === null) */}
               {!selectedReport && (
                 <div className="space-y-6">
+                  {!reportsAreCanonical && (
+                    <div role="alert" className="rounded-xl border border-amber-300 bg-amber-50 px-4 py-3 text-xs font-bold text-amber-900">
+                      هذه الأرقام نسخة عرض من snapshot مركزي للقراءة فقط، وليست قائمة مالية معتمدة. لا تُستخدم للتسوية أو الإقفال حتى اعتماد خدمة دفتر الأستاذ الكانونية.
+                    </div>
+                  )}
                   {/* Executive dashboard widgets */}
                   <div className="grid grid-cols-2 md:grid-cols-5 gap-4">
                     <div className="bg-slate-950 text-white rounded-xl p-4 shadow-sm space-y-1">
@@ -1550,11 +1592,10 @@ const handleDrillDownToOriginalDocument = (jv: any) => {
                             } else if (selectedReport === 'cash_flow') {
                               const headers = ['بند التدفق النقدي', 'النوع', 'القيمة المتدفقة (د.ل)'];
                               const rows = [
-                                ['المتحصلات النقدية من رسوم الطلاب والخدمات', 'تشغيلي - وارد', (totalRevenues * 0.9).toFixed(2)],
-                                ['المدفوعات النقدية لرواتب الموظفين والمعلمين', 'تشغيلي - صادر', (totalExpenses * 0.7).toFixed(2)],
-                                ['المدفوعات النقدية للمصاريف التشغيلية والأكاديمية', 'تشغيلي - صادر', (totalExpenses * 0.3).toFixed(2)],
-                                ['مدفوعات شراء أصول حافلات وعقارات ثابتة', 'استثماري - صادر', '15000.00'],
-                                ['متحصلات رأس المال والتمويل الخارجي', 'تمويلي - وارد', '20000.00']
+                                ['المتحصلات النقدية الموثقة', 'تشغيلي - وارد', cashFlowValue(actualCashInflow)],
+                                ['المدفوعات النقدية الموثقة', 'تشغيلي - صادر', cashFlowValue(actualCashOutflow)],
+                                ['التدفقات الاستثمارية الموثقة', 'استثماري', cashFlowValue(0)],
+                                ['التدفقات التمويلية الموثقة', 'تمويلي', cashFlowValue(0)]
                               ];
                               exportReportExcel('قائمة_التدفقات_النقدية', headers, rows);
                             } else if (selectedReport === 'account_statement') {
@@ -1704,18 +1745,17 @@ const handleDrillDownToOriginalDocument = (jv: any) => {
                                   <div style="background: #eff6ff; padding: 10px; font-weight: bold; text-align: center; color: #1e40af; border-top: 1px solid #cbd5e1;">
                                     مجموع (الخصوم + حقوق الملكية) = ${(totalLiabilities + totalEquity).toLocaleString(undefined, { minimumFractionDigits: 2 })} د.ل
                                     <br/>
-                                    <span style="font-size: 10px; color: #15803d;">⚖️ تم التحقق والتدقيق: الميزانية متوازنة تماماً. الفارق: ${balanceSheetVariance.toFixed(2)} د.ل</span>
+                                    <span style="font-size: 10px; color: ${reportsAreCanonical ? '#15803d' : '#b45309'};">${reportsAreCanonical ? `⚖️ تم التحقق والتدقيق: الميزانية متوازنة تماماً. الفارق: ${balanceSheetVariance.toFixed(2)} د.ل` : '⚠️ نسخة عرض غير معتمدة من snapshot؛ لا يمكن إثبات توازن الميزانية.'}</span>
                                   </div>
                                 </div>
                               `;
                               printReportPdf('الميزانية العمومية والمركز المالي (Balance Sheet)', 'تفريغ معتمد للأصول، والخصوم، وحقوق الملكية من دفاتر الأستاذ العام.', ['رمز الحساب', 'البند المحاسبي', 'التصنيف الرئيسي', 'الرصيد الختامي المعتمد'], rowsHtml, summaryHtml);
                             } else if (selectedReport === 'cash_flow') {
                               const entries = [
-                                ['المتحصلات النقدية من رسوم الطلاب والخدمات الحقيقية', 'أنشطة تشغيلية - تدفق وارد', (totalRevenues * 0.9).toLocaleString(undefined, { minimumFractionDigits: 2 }) + ' د.ل'],
-                                ['المدفوعات النقدية لرواتب الموظفين والتدريس', 'أنشطة تشغيلية - تدفق صادر', '-' + (totalExpenses * 0.7).toLocaleString(undefined, { minimumFractionDigits: 2 }) + ' د.ل'],
-                                ['المدفوعات النقدية للمصاريف الأكاديمية والتشغيلية', 'أنشطة تشغيلية - تدفق صادر', '-' + (totalExpenses * 0.3).toLocaleString(undefined, { minimumFractionDigits: 2 }) + ' د.ل'],
-                                ['مدفوعات حيازة تجهيزات ومقاعد وحافلات مدرسية', 'أنشطة استثمارية - تدفق صادر', '-15,000.00 د.ل'],
-                                ['متحصلات زيادة رأس المال والمساهمات الرأسمالية', 'أنشطة تمويلية - تدفق وارد', '20,000.00 د.ل']
+                                ['المتحصلات النقدية الموثقة', 'أنشطة تشغيلية - تدفق وارد', hasVerifiedCashFlow ? actualCashInflow.toLocaleString(undefined, { minimumFractionDigits: 2 }) + ' د.ل' : 'غير متحقق'],
+                                ['المدفوعات النقدية الموثقة', 'أنشطة تشغيلية - تدفق صادر', hasVerifiedCashFlow ? '-' + actualCashOutflow.toLocaleString(undefined, { minimumFractionDigits: 2 }) + ' د.ل' : 'غير متحقق'],
+                                ['التدفقات الاستثمارية الموثقة', 'أنشطة استثمارية', cashFlowValue(0) + (hasVerifiedCashFlow ? ' د.ل' : '')],
+                                ['التدفقات التمويلية الموثقة', 'أنشطة تمويلية', cashFlowValue(0) + (hasVerifiedCashFlow ? ' د.ل' : '')]
                               ];
                               let rowsHtml = entries.map(e => `
                                 <tr>
@@ -1724,10 +1764,13 @@ const handleDrillDownToOriginalDocument = (jv: any) => {
                                   <td style="text-align: left; font-family: monospace;">${e[2]}</td>
                                 </tr>
                               `).join('');
+                              const cashNetValue = hasVerifiedCashFlow
+                                ? (actualCashInflow - actualCashOutflow).toLocaleString(undefined, { minimumFractionDigits: 2 }) + ' د.ل'
+                                : 'غير متحقق';
                               const summaryHtml = `
                                 <div style="margin-top: 20px; background: #f0fdf4; border: 1px solid #bbf7d0; padding: 15px; border-radius: 8px; font-weight: bold; font-size: 12px; display: flex; justify-content: space-between; color: #166534;">
                                   <span>صافي التغير الإيجابي في السيولة النقدية والمصرفية المتاحة:</span>
-                                  <span>+${((totalRevenues * 0.9) - (totalExpenses) - 15000 + 20000).toLocaleString(undefined, { minimumFractionDigits: 2 })} د.ل</span>
+                                  <span>${cashNetValue}</span>
                                 </div>
                               `;
                               printReportPdf('قائمة التدفقات النقدية المقارنة (Cash Flow)', 'بيان مصادر واستخدامات النقدية حسب الفئات الثلاث المعتمدة محاسبياً.', ['بند التدفق نقدي والتصنيف الدفتري', 'نوع النشاط', 'القيمة المتدفقة للفترة'], rowsHtml, summaryHtml);
@@ -2117,10 +2160,10 @@ const handleDrillDownToOriginalDocument = (jv: any) => {
                                   title="انقر لعرض كشف حساب إيرادات الرسوم الدراسية"
                                 >
                                   <span className="flex items-center gap-2">
-                                    <span>متحصلات الرسوم المدرسية والأقساط المحصلة (Revenues 90%)</span>
+                                    <span>المتحصلات النقدية الموثقة من القيود المرحّلة</span>
                                     <span className="opacity-0 group-hover/cf:opacity-100 transition-all text-[8px] bg-emerald-100 text-emerald-800 px-1.5 py-0.5 rounded font-sans select-none font-bold">كشف حساب 📊</span>
                                   </span>
-                                  <span className="font-mono text-emerald-700 font-bold">+{ (totalRevenues * 0.9).toLocaleString(undefined, { minimumFractionDigits: 2 }) } د.ل</span>
+                                  <span className="font-mono text-emerald-700 font-bold">{hasVerifiedCashFlow ? `+${actualCashInflow.toLocaleString(undefined, { minimumFractionDigits: 2 })} د.ل` : 'غير متحقق'}</span>
                                 </div>
                                 <div 
                                   className="flex justify-between text-slate-600 hover:bg-slate-100 p-1.5 rounded transition-all cursor-pointer group/cf"
@@ -2129,10 +2172,10 @@ const handleDrillDownToOriginalDocument = (jv: any) => {
                                   title="انقر لعرض كشف حساب الرواتب والأجور"
                                 >
                                   <span className="flex items-center gap-2">
-                                    <span>مدفوعات الرواتب والأجور التدريسية والعمومية (Expenses 70%)</span>
+                                    <span>المدفوعات النقدية الموثقة من القيود المرحّلة</span>
                                     <span className="opacity-0 group-hover/cf:opacity-100 transition-all text-[8px] bg-rose-100 text-rose-800 px-1.5 py-0.5 rounded font-sans select-none font-bold">كشف حساب 📊</span>
                                   </span>
-                                  <span className="font-mono text-rose-700 font-bold">-{ (totalExpenses * 0.7).toLocaleString(undefined, { minimumFractionDigits: 2 }) } د.ل</span>
+                                  <span className="font-mono text-rose-700 font-bold">{hasVerifiedCashFlow ? `-${actualCashOutflow.toLocaleString(undefined, { minimumFractionDigits: 2 })} د.ل` : 'غير متحقق'}</span>
                                 </div>
                                 <div 
                                   className="flex justify-between text-slate-600 hover:bg-slate-100 p-1.5 rounded transition-all cursor-pointer group/cf"
@@ -2141,10 +2184,10 @@ const handleDrillDownToOriginalDocument = (jv: any) => {
                                   title="انقر لعرض كشف حساب المصروفات العمومية والإدارية"
                                 >
                                   <span className="flex items-center gap-2">
-                                    <span>المدفوعات النقدية للمصاريف الأكاديمية والامتحانات (Expenses 30%)</span>
+                                    <span>تفصيل إضافي للمصروفات النقدية — غير متاح دون تصنيف موثق</span>
                                     <span className="opacity-0 group-hover/cf:opacity-100 transition-all text-[8px] bg-rose-100 text-rose-800 px-1.5 py-0.5 rounded font-sans select-none font-bold">كشف حساب 📊</span>
                                   </span>
-                                  <span className="font-mono text-rose-700 font-bold">-{ (totalExpenses * 0.3).toLocaleString(undefined, { minimumFractionDigits: 2 }) } د.ل</span>
+                                  <span className="font-mono text-rose-700 font-bold">{hasVerifiedCashFlow ? `-${actualCashOutflow.toLocaleString(undefined, { minimumFractionDigits: 2 })} د.ل` : 'غير متحقق'}</span>
                                 </div>
                               </div>
                             </div>
@@ -2163,7 +2206,7 @@ const handleDrillDownToOriginalDocument = (jv: any) => {
                                     <span>مدفوعات حيازة وتجهيز حافلات ومقاعد مدرسية ثابتة</span>
                                     <span className="opacity-0 group-hover/cf:opacity-100 transition-all text-[8px] bg-rose-100 text-rose-800 px-1.5 py-0.5 rounded font-sans select-none font-bold">كشف حساب 📊</span>
                                   </span>
-                                  <span className="font-mono text-rose-700 font-bold">-15,000.00 د.ل</span>
+                                    <span className="font-mono text-rose-700 font-bold">{cashFlowValue(0)}{hasVerifiedCashFlow ? ' د.ل' : ''}</span>
                                 </div>
                               </div>
                             </div>
@@ -2182,7 +2225,7 @@ const handleDrillDownToOriginalDocument = (jv: any) => {
                                     <span>زيادة رأس مال المجمع والتدفق المساهم الجديد</span>
                                     <span className="opacity-0 group-hover/cf:opacity-100 transition-all text-[8px] bg-emerald-100 text-emerald-800 px-1.5 py-0.5 rounded font-sans select-none font-bold">كشف حساب 📊</span>
                                   </span>
-                                  <span className="font-mono text-emerald-700 font-bold">+20,000.00 د.ل</span>
+                                    <span className="font-mono text-emerald-700 font-bold">{cashFlowValue(0)}{hasVerifiedCashFlow ? ' د.ل' : ''}</span>
                                 </div>
                               </div>
                             </div>
@@ -2192,7 +2235,7 @@ const handleDrillDownToOriginalDocument = (jv: any) => {
                           <div className="border-t border-slate-200 pt-3 flex justify-between items-center font-bold text-xs text-slate-900 bg-emerald-50 p-3 rounded-lg border border-emerald-200">
                             <span className="text-emerald-800">صافي التغير الإيجابي في النقدية المتاحة بصندوق ومصرف المدارس:</span>
                             <span className="font-mono text-sm text-emerald-700" dir="ltr">
-                              +{ ((totalRevenues * 0.9) - totalExpenses - 15000 + 20000).toLocaleString(undefined, { minimumFractionDigits: 2 }) } د.ل
+                              {hasVerifiedCashFlow ? `${(actualCashInflow - actualCashOutflow).toLocaleString(undefined, { minimumFractionDigits: 2 })} د.ل` : 'غير متحقق'}
                             </span>
                           </div>
                         </div>

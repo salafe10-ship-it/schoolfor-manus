@@ -51,8 +51,8 @@ export const FixedAssetsTab = () => {
   paymentVouchers, setPaymentVouchers, paymentVoucherForm, setPaymentVoucherForm, selectedPaymentVoucher, setSelectedPaymentVoucher,
   showPaymentDetailModal, setShowPaymentDetailModal, paymentSearch, setPaymentSearch,
   paymentCostCenterFilter, setPaymentCostCenterFilter, bankTransferForm, setBankTransferForm,
-  fixedAssets, setFixedAssets, selectedAssetId, setSelectedAssetId, activeAssetTab, setAssetDetailTab,
-  isAssetEditing, setIsEditAssetMode, isNewAssetMode, setIsNewAssetMode,
+  fixedAssets, setFixedAssets, selectedAssetId, setSelectedAssetId, activeAssetTab, setActiveAssetTab,
+  isEditAssetMode, setIsEditAssetMode, isNewAssetMode, setIsNewAssetMode,
   assetSearchQuery, setAssetSearchQuery, assetCategoryFilter, setAssetCategoryFilter,
   assetStatusFilter, setAssetStatusFilter, assetCostCenterFilter, setAssetCostCenterFilter,
   assetForm, setAssetForm, maintenanceForm, setMaintenanceForm, transferForm, setTransferForm,
@@ -69,8 +69,9 @@ export const FixedAssetsTab = () => {
   handleImportExcelSimulate, handleDownloadTemplate, handlePrintAssetCard, handlePrintDepreciationSchedule,
   findOriginalDocument, handleReportAccountClick, handleJournalEntryClick,
   isAccountOrDescendant, getProcessedAccounts,
-  formatCurrency
+  formatCurrency, canonicalFinancialStatus, canonicalFinancialWriteMode
 } = React.useContext(AccountingContext);
+  const fixedAssetWritesAreCanonical = canonicalFinancialStatus === 'ready' && canonicalFinancialWriteMode === 'ledger_ready';
   
   const [assetActionModal, setAssetActionModal] = useState<'none' | 'maintenance' | 'transfer' | 'sale' | 'discard' | 'print_card' | 'print_schedule'>('none');
   const [selectedAssetsForAction, setSelectedAssetsForAction] = useState<string>('all_assets');
@@ -81,7 +82,7 @@ export const FixedAssetsTab = () => {
     if (asset) {
       setAssetForm({ ...asset });
     }
-    setAssetDetailTab('details');
+    setActiveAssetTab('basic');
   };
 
 
@@ -106,10 +107,11 @@ export const FixedAssetsTab = () => {
                 <button
                   type="button"
                   onClick={handleImportExcelSimulate}
-                  className="bg-emerald-600 hover:bg-emerald-700 text-white font-black px-3 py-2 rounded-lg flex items-center gap-1.5 cursor-pointer text-xs shadow-xs"
+                  disabled={!fixedAssetWritesAreCanonical}
+                  className="bg-emerald-600 hover:bg-emerald-700 text-white font-black px-3 py-2 rounded-lg flex items-center gap-1.5 cursor-pointer text-xs shadow-xs disabled:cursor-not-allowed disabled:bg-slate-300"
                 >
                   <FileSpreadsheet className="w-3.5 h-3.5" />
-                  <span>استيراد جماعي Excel</span>
+                  <span>{fixedAssetWritesAreCanonical ? 'استيراد جماعي Excel' : 'الاستيراد غير متاح — قراءة فقط'}</span>
                 </button>
 
                 <button
@@ -126,7 +128,10 @@ export const FixedAssetsTab = () => {
                 <div className="flex items-center bg-slate-100 p-1.5 rounded-lg border border-slate-200">
                   <button
                     type="button"
-                    onClick={() => setFixedAssetViewMode('management')}
+                    onClick={() => {
+                      setFixedAssetViewMode('management');
+                      if (!activeAssetTab || activeAssetTab === 'all_assets') setActiveAssetTab('basic');
+                    }}
                     className={`px-4 py-2 rounded-md font-bold text-xs transition-all duration-150 cursor-pointer flex items-center gap-1.5 ${
                       fixedAssetViewMode === 'management'
                         ? 'bg-white text-indigo-700 shadow-sm'
@@ -138,7 +143,11 @@ export const FixedAssetsTab = () => {
                   </button>
                   <button
                     type="button"
-                    onClick={() => setFixedAssetViewMode('reports')}
+                    onClick={() => {
+                      setFixedAssetViewMode('reports');
+                      setFixedAssetReportType('all_assets');
+                      setActiveAssetTab('all_assets');
+                    }}
                     className={`px-4 py-2 rounded-md font-bold text-xs transition-all duration-150 cursor-pointer flex items-center gap-1.5 ${
                       fixedAssetViewMode === 'reports'
                         ? 'bg-white text-indigo-700 shadow-sm'
@@ -157,9 +166,9 @@ export const FixedAssetsTab = () => {
               <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
                 {/* Alert 1: Warranty & Maintenance */}
                 {(() => {
-                  const mAsset = fixedAssets.find(a => a.maintenanceLogs && assetForm.maintenanceLogs && assetForm.maintenanceLogs.length > 0) || fixedAssets[0];
-                  const mName = mAsset ? mAsset.name : 'أوتوبيسات هيونداي';
-                  const mCode = mAsset ? mAsset.id : 'FA-01';
+                  const mAsset = fixedAssets.find(a => a.maintenanceLogs && a.maintenanceLogs.length > 0);
+                  const mName = mAsset ? mAsset.name : 'لا يوجد أصل موثق للصيانة';
+                  const mCode = mAsset ? mAsset.id : '—';
                   return (
                     <div className="bg-amber-50/50 border border-amber-200 rounded-xl p-3.5 flex items-start gap-3">
                       <div className="bg-amber-100 text-amber-800 p-2 rounded-lg">
@@ -168,7 +177,7 @@ export const FixedAssetsTab = () => {
                       <div>
                         <h4 className="font-extrabold text-slate-900 mb-0.5">خطط صيانة الأصول والمتابعة</h4>
                         <p className="text-[10px] text-slate-500 font-semibold leading-relaxed">
-                          الأصل {mName} ({mCode}) يخضع لخطط تتبع الصيانة الدورية ومطابقة مخرجات الفحص لضمان استمرارية التشغيل.
+                          {mAsset ? `الأصل ${mName} (${mCode}) يخضع لخطط تتبع الصيانة الدورية.` : 'لا توجد سجلات صيانة موثقة في المصدر المركزي لهذا النطاق.'}
                         </p>
                       </div>
                     </div>
@@ -177,10 +186,10 @@ export const FixedAssetsTab = () => {
 
                 {/* Alert 2: Useful Life Near End */}
                 {(() => {
-                  const depAsset = fixedAssets.find(a => (a.accDep / (a.cost || 1)) >= 0.5) || [1] || fixedAssets[0];
-                  const depRatio = depAsset ? Math.round((depAsset.accDep / (depAsset.cost || 1)) * 100) : 80;
-                  const depName = depAsset ? depAsset.name : 'منظومة معمل الكيمياء';
-                  const depCode = depAsset ? depAsset.id : 'FA-02';
+                  const depAsset = fixedAssets.find(a => Number(a.accDep) > 0 && (Number(a.accDep) / (Number(a.cost) || 1)) >= 0.5);
+                  const depRatio = depAsset ? Math.round((Number(depAsset.accDep) / (Number(depAsset.cost) || 1)) * 100) : 0;
+                  const depName = depAsset ? depAsset.name : 'لا يوجد أصل موثق قريب من نهاية عمره';
+                  const depCode = depAsset ? depAsset.id : '—';
                   return (
                     <div className="bg-rose-50/50 border border-rose-200 rounded-xl p-3.5 flex items-start gap-3">
                       <div className="bg-rose-100 text-rose-800 p-2 rounded-lg">
@@ -189,7 +198,7 @@ export const FixedAssetsTab = () => {
                       <div>
                         <h4 className="font-extrabold text-slate-900 mb-0.5">تنبيهات استهلاك وإهلاك الأصول</h4>
                         <p className="text-[10px] text-slate-500 font-semibold leading-relaxed">
-                          الأصل {depName} ({depCode}) استهلك {depRatio}% من عمره الإنتاجي وقيمته التاريخية؛ تبقى مدة محدودة لإعادة تقييمه أو تكهينه.
+                          {depAsset ? `الأصل ${depName} (${depCode}) استهلك ${depRatio}% من عمره الإنتاجي.` : 'لا توجد بيانات استهلاك موثقة تكفي لإصدار تنبيه.'}
                         </p>
                       </div>
                     </div>
@@ -197,14 +206,14 @@ export const FixedAssetsTab = () => {
                 })()}
 
                 {/* Alert 3: GL Connection Status */}
-                <div className="bg-emerald-50/50 border border-emerald-200 rounded-xl p-3.5 flex items-start gap-3">
-                  <div className="bg-emerald-100 text-emerald-800 p-2 rounded-lg">
+                <div className={`${fixedAssetWritesAreCanonical ? 'bg-emerald-50/50 border-emerald-200' : 'bg-amber-50/50 border-amber-200'} border rounded-xl p-3.5 flex items-start gap-3`}>
+                      <div className={`${fixedAssetWritesAreCanonical ? 'bg-emerald-100 text-emerald-800' : 'bg-amber-100 text-amber-800'} p-2 rounded-lg`}>
                     <CheckCircle2 className="w-4 h-4" />
                   </div>
                   <div>
-                    <h4 className="font-extrabold text-emerald-900 mb-0.5">ربط القيود التلقائي (GL)</h4>
-                    <p className="text-[10px] text-emerald-700 font-semibold leading-relaxed">
-                      النظام متصل بالأستاذ العام بالكامل. يتم قيد وترحيل قيود استهلاك القسط الثابت، فواتير صيانة الأصول، وسندات بيعها وتصفيتها محاسبياً فوراً وبشكل متكامل.
+                        <h4 className="font-extrabold text-slate-900 mb-0.5">حالة ربط القيود بالأستاذ العام</h4>
+                        <p className="text-[10px] text-slate-700 font-semibold leading-relaxed">
+                          {fixedAssetWritesAreCanonical ? 'المصدر المالي المركزي متصل؛ لا يعتمد ترحيل أي حركة أصول إلا بعد حفظ قيد موثق.' : 'المصدر الحالي snapshot للقراءة فقط؛ تم إيقاف ترحيل واستيراد أي حركة أصول.'}
                     </p>
                   </div>
                 </div>
@@ -221,7 +230,7 @@ export const FixedAssetsTab = () => {
                     <div className="flex items-center justify-between border-b border-slate-100 pb-2">
                       <span className="font-black text-xs text-slate-900">سجل جرد ومطابقة الأصول</span>
                       <span className="bg-slate-100 font-mono text-[10px] text-slate-600 px-2 py-0.5 rounded-full font-bold">
-                        إجمالي: {assetForm.length}
+                        إجمالي: {fixedAssets.length}
                       </span>
                     </div>
 
@@ -242,8 +251,8 @@ export const FixedAssetsTab = () => {
                       <div>
                         <label className="block text-slate-500 mb-1 font-bold">التصنيف:</label>
                         <select
-                          value={assetSearchQuery}
-                          onChange={(e) => setAssetSearchQuery(e.target.value)}
+                          value={assetCategoryFilter}
+                          onChange={(e) => setAssetCategoryFilter(e.target.value)}
                           className="w-full bg-slate-50 border border-slate-200 rounded-lg p-1.5 font-bold focus:outline-none"
                         >
                           <option value="all">كل التصنيفات</option>
@@ -257,8 +266,8 @@ export const FixedAssetsTab = () => {
                       <div>
                         <label className="block text-slate-500 mb-1 font-bold">حالة الأصل:</label>
                         <select
-                          value={assetSearchQuery}
-                          onChange={(e) => setAssetSearchQuery(e.target.value)}
+                          value={assetStatusFilter}
+                          onChange={(e) => setAssetStatusFilter(e.target.value)}
                           className="w-full bg-slate-50 border border-slate-200 rounded-lg p-1.5 font-bold focus:outline-none"
                         >
                           <option value="all">كل الحالات</option>
@@ -274,9 +283,10 @@ export const FixedAssetsTab = () => {
                       <button
                         type="button"
                         onClick={() => {
-                          ('');
-                          ('all');
-                          ('all');
+                          setAssetSearchQuery('');
+                          setAssetCategoryFilter('all');
+                          setAssetStatusFilter('all');
+                          setAssetCostCenterFilter('all');
                           triggerNotification('🔄 تم تحديث السجل وإعادة تعيين فلاتر التصفية والتطابق.', 'success');
                         }}
                         className="text-indigo-600 hover:text-indigo-800 text-[10px] font-black flex items-center gap-1 cursor-pointer hover:underline"
@@ -290,9 +300,9 @@ export const FixedAssetsTab = () => {
                   {/* Asset Cards List */}
                   <div className="space-y-2.5 max-h-[500px] overflow-y-auto pr-1">
                     {fixedAssets.filter(asset => {
-                        const matchesSearch = asset.name.toLowerCase().includes(assetSearchQuery.toLowerCase()) ||
-                                              asset.code.toLowerCase().includes(assetSearchQuery.toLowerCase()) ||
-                                              asset.id.toLowerCase().includes(assetSearchQuery.toLowerCase());
+                        const matchesSearch = String(asset.name || '').toLowerCase().includes(assetSearchQuery.toLowerCase()) ||
+                                              String(asset.code || '').toLowerCase().includes(assetSearchQuery.toLowerCase()) ||
+                                              String(asset.id || '').toLowerCase().includes(assetSearchQuery.toLowerCase());
                         const matchesCat = assetCategoryFilter === 'all' || asset.category === assetCategoryFilter;
                         const matchesStatus = assetStatusFilter === 'all' || asset.status === assetStatusFilter;
                         return matchesSearch && matchesCat && matchesStatus;
@@ -350,7 +360,7 @@ export const FixedAssetsTab = () => {
                         );
                       })}
 
-                    {assetForm.length === 0 && (
+                    {fixedAssets.length === 0 && (
                       <div className="text-center p-8 bg-slate-50 rounded-xl border border-dashed border-slate-300">
                         <span className="text-slate-400 font-bold">لم يتم العثور على أصول مطابقة للفلاتر.</span>
                       </div>
@@ -415,7 +425,7 @@ export const FixedAssetsTab = () => {
                     <div className="flex flex-wrap items-center gap-1.5">
                       <button
                         type="button"
-                        onClick={handleSaveAsset}
+                        onClick={handleNewAsset}
                         className="bg-indigo-600 hover:bg-indigo-750 text-white font-bold px-3 py-2 rounded-lg flex items-center gap-1 cursor-pointer"
                       >
                         <Plus className="w-3.5 h-3.5" />
@@ -429,9 +439,8 @@ export const FixedAssetsTab = () => {
                             const asset = fixedAssets.find(a => a.id === (typeof selectedAssetId === 'string' ? selectedAssetId : assetForm.id));
                             if (asset) {
                               setAssetForm({ ...asset });
-                              (true);
-                              setIsEditAssetMode(false);
-    setIsNewAssetMode(false);
+                              setIsEditAssetMode(true);
+                              setIsNewAssetMode(false);
                             }
                           }}
                           disabled={assetForm.status === 'تم بيعه' || assetForm.status === 'مستبعد'}
@@ -456,10 +465,7 @@ export const FixedAssetsTab = () => {
                           type="button"
                           onClick={() => {
                             setIsEditAssetMode(false);
-    setIsNewAssetMode(false);
-                            setIsEditAssetMode(false);
-    setIsNewAssetMode(false);
-                            /* */
+                            setIsNewAssetMode(false);
                           }}
                           className="bg-slate-100 hover:bg-slate-200 text-slate-600 font-bold px-3 py-2 rounded-lg cursor-pointer"
                         >
@@ -510,9 +516,9 @@ export const FixedAssetsTab = () => {
                         onChange={(e) => {
                           const action = e.target.value;
                           if (action === 'depreciate') {
-                            handlePostAssetDepreciation/* */
+                            void handlePostAssetDepreciation(assetForm.id);
                           } else if (action === 'recalculate') {
-                            handleRecalculateAssetDepreciation/* */
+                            void handleRecalculateAssetDepreciation(assetForm.id);
                           } else if (action === 'maintenance') {
                             setMaintenanceForm({
                               type: 'دورية',
@@ -587,7 +593,7 @@ export const FixedAssetsTab = () => {
                           <button
                             key={tab.id}
                             type="button"
-                            onClick={() => setAssetDetailTab(tab.id as any)}
+                            onClick={() => setActiveAssetTab(tab.id as any)}
                             className={`px-4 py-3 font-bold text-xs flex items-center gap-1.5 transition-colors duration-150 cursor-pointer border-b-2 ${
                               isTabActive
                                 ? 'border-indigo-600 bg-white text-indigo-700'
@@ -624,7 +630,7 @@ export const FixedAssetsTab = () => {
                               <label className="block text-slate-700 font-bold mb-1">كود تتبع الباركود والمطابقة:</label>
                               <input
                                 type="text"
-                                disabled={!isAssetEditing}
+                              disabled={!isEditAssetMode}
                                 value={assetForm.code}
                                 onChange={(e) => setAssetForm({ ...assetForm, code: e.target.value })}
                                 className="w-full bg-slate-50 border border-slate-200 rounded-lg p-2.5 font-bold font-mono text-left disabled:bg-slate-100 disabled:text-slate-600"
@@ -634,7 +640,7 @@ export const FixedAssetsTab = () => {
                             <div>
                               <label className="block text-slate-700 font-bold mb-1">تصنيف الأصول الرئيسي:</label>
                               <select
-                                disabled={!isAssetEditing}
+                              disabled={!isEditAssetMode}
                                 value={assetForm.category}
                                 onChange={(e) => setAssetForm({ ...assetForm, category: e.target.value })}
                                 className="w-full bg-slate-50 border border-slate-200 rounded-lg p-2.5 font-bold disabled:bg-slate-100"
@@ -652,7 +658,7 @@ export const FixedAssetsTab = () => {
                               <label className="block text-slate-700 font-bold mb-1">اسم الأصل الثابت التفصيلي:</label>
                               <input
                                 type="text"
-                                disabled={!isAssetEditing}
+                              disabled={!isEditAssetMode}
                                 value={assetForm.name}
                                 onChange={(e) => setAssetForm({ ...assetForm, name: e.target.value })}
                                 placeholder="مثال: أوتوبيس نقل طلاب 30 راكب موديل 2024"
@@ -664,7 +670,7 @@ export const FixedAssetsTab = () => {
                               <label className="block text-slate-700 font-bold mb-1">المجموعة الفرعية والنوع:</label>
                               <input
                                 type="text"
-                                disabled={!isAssetEditing}
+                              disabled={!isEditAssetMode}
                                 value={assetForm.group}
                                 onChange={(e) => setAssetForm({ ...assetForm, group: e.target.value })}
                                 placeholder="مثال: وسائل نقل الطلبة والطواقم"
@@ -678,7 +684,7 @@ export const FixedAssetsTab = () => {
                               <label className="block text-slate-700 font-bold mb-1">الشركة المصنعة (Brand):</label>
                               <input
                                 type="text"
-                                disabled={!isAssetEditing}
+                              disabled={!isEditAssetMode}
                                 value={assetForm.manufacturer}
                                 onChange={(e) => setAssetForm({ ...assetForm, manufacturer: e.target.value })}
                                 className="w-full bg-slate-50 border border-slate-200 rounded-lg p-2.5 font-bold disabled:bg-slate-100"
@@ -689,7 +695,7 @@ export const FixedAssetsTab = () => {
                               <label className="block text-slate-700 font-bold mb-1">الموديل (Model):</label>
                               <input
                                 type="text"
-                                disabled={!isAssetEditing}
+                              disabled={!isEditAssetMode}
                                 value={assetForm.model}
                                 onChange={(e) => setAssetForm({ ...assetForm, model: e.target.value })}
                                 className="w-full bg-slate-50 border border-slate-200 rounded-lg p-2.5 font-bold disabled:bg-slate-100"
@@ -700,7 +706,7 @@ export const FixedAssetsTab = () => {
                               <label className="block text-slate-700 font-bold mb-1">الرقم التسلسلي المصنعي (Serial):</label>
                               <input
                                 type="text"
-                                disabled={!isAssetEditing}
+                              disabled={!isEditAssetMode}
                                 value={assetForm.serialNo}
                                 onChange={(e) => setAssetForm({ ...assetForm, serialNo: e.target.value })}
                                 className="w-full bg-slate-50 border border-slate-200 rounded-lg p-2.5 font-bold font-mono text-left disabled:bg-slate-100"
@@ -713,7 +719,7 @@ export const FixedAssetsTab = () => {
                               <label className="block text-slate-700 font-bold mb-1">الفرع الموطن:</label>
                               <input
                                 type="text"
-                                disabled={!isAssetEditing}
+                              disabled={!isEditAssetMode}
                                 value={assetForm.branch}
                                 onChange={(e) => setAssetForm({ ...assetForm, branch: e.target.value })}
                                 className="w-full bg-slate-50 border border-slate-200 rounded-lg p-2.5 font-bold disabled:bg-slate-100"
@@ -724,7 +730,7 @@ export const FixedAssetsTab = () => {
                               <label className="block text-slate-700 font-bold mb-1">موقع التواجد الفعلي:</label>
                               <input
                                 type="text"
-                                disabled={!isAssetEditing}
+                              disabled={!isEditAssetMode}
                                 value={assetForm.location}
                                 onChange={(e) => setAssetForm({ ...assetForm, location: e.target.value })}
                                 placeholder="مثال: المبنى الدراسي الرئيسي - قاعة الاجتماعات"
@@ -736,7 +742,7 @@ export const FixedAssetsTab = () => {
                               <label className="block text-slate-700 font-bold mb-1">الموظف المسؤول (حامل العهدة):</label>
                               <input
                                 type="text"
-                                disabled={!isAssetEditing}
+                              disabled={!isEditAssetMode}
                                 value={assetForm.responsible}
                                 onChange={(e) => setAssetForm({ ...assetForm, responsible: e.target.value })}
                                 className="w-full bg-slate-50 border border-slate-200 rounded-lg p-2.5 font-bold disabled:bg-slate-100"
@@ -756,7 +762,7 @@ export const FixedAssetsTab = () => {
                               <label className="block text-slate-700 font-bold mb-1">تكلفة الشراء التاريخية (Cost):</label>
                               <input
                                 type="number"
-                                disabled={!isAssetEditing}
+                              disabled={!isEditAssetMode}
                                 value={assetForm.cost}
                                 onChange={(e) => setAssetForm({ ...assetForm, cost: e.target.value })}
                                 className="w-full bg-slate-50 border border-slate-200 rounded-lg p-2.5 font-bold font-mono focus:outline-none text-indigo-700 disabled:bg-slate-100"
@@ -767,7 +773,7 @@ export const FixedAssetsTab = () => {
                               <label className="block text-slate-700 font-bold mb-1">إضافات وتطوير رأسمالي (Capital Exp):</label>
                               <input
                                 type="number"
-                                disabled={!isAssetEditing}
+                              disabled={!isEditAssetMode}
                                 value={assetForm.capitalExp}
                                 onChange={(e) => setAssetForm({ ...assetForm, capitalExp: e.target.value })}
                                 className="w-full bg-slate-50 border border-slate-200 rounded-lg p-2.5 font-bold font-mono focus:outline-none disabled:bg-slate-100"
@@ -778,7 +784,7 @@ export const FixedAssetsTab = () => {
                               <label className="block text-slate-700 font-bold mb-1">القيمة كخردة مستردة (Scrap Value):</label>
                               <input
                                 type="number"
-                                disabled={!isAssetEditing}
+                              disabled={!isEditAssetMode}
                                 value={assetForm.scrapValue}
                                 onChange={(e) => setAssetForm({ ...assetForm, scrapValue: e.target.value })}
                                 className="w-full bg-slate-50 border border-slate-200 rounded-lg p-2.5 font-bold font-mono focus:outline-none disabled:bg-slate-100"
@@ -791,7 +797,7 @@ export const FixedAssetsTab = () => {
                               <label className="block text-slate-700 font-bold mb-1">تاريخ الشراء الأساسي:</label>
                               <input
                                 type="date"
-                                disabled={!isAssetEditing}
+                                disabled={!isEditAssetMode}
                                 value={assetForm.purchaseDate}
                                 onChange={(e) => setAssetForm({ ...assetForm, purchaseDate: e.target.value })}
                                 className="w-full bg-slate-50 border border-slate-200 rounded-lg p-2.5 font-bold disabled:bg-slate-100"
@@ -802,7 +808,7 @@ export const FixedAssetsTab = () => {
                               <label className="block text-slate-700 font-bold mb-1">المورد البائع:</label>
                               <input
                                 type="text"
-                                disabled={!isAssetEditing}
+                                disabled={!isEditAssetMode}
                                 value={assetForm.supplier}
                                 onChange={(e) => setAssetForm({ ...assetForm, supplier: e.target.value })}
                                 className="w-full bg-slate-50 border border-slate-200 rounded-lg p-2.5 font-bold disabled:bg-slate-100"
@@ -813,7 +819,7 @@ export const FixedAssetsTab = () => {
                               <label className="block text-slate-700 font-bold mb-1">رقم الفاتورة المرجعي:</label>
                               <input
                                 type="text"
-                                disabled={!isAssetEditing}
+                                disabled={!isEditAssetMode}
                                 value={assetForm.invoiceNo}
                                 onChange={(e) => setAssetForm({ ...assetForm, invoiceNo: e.target.value })}
                                 className="w-full bg-slate-50 border border-slate-200 rounded-lg p-2.5 font-bold disabled:bg-slate-100 font-mono text-left"
@@ -828,7 +834,7 @@ export const FixedAssetsTab = () => {
                               <div>
                                 <label className="block text-slate-500 font-bold mb-1">حساب الأصل الرئيسي (مدين):</label>
                                 <select
-                                  disabled={!isAssetEditing}
+                                  disabled={!isEditAssetMode}
                                   value={assetForm.assetAccount}
                                   onChange={(e) => setAssetForm({ ...assetForm, assetAccount: e.target.value })}
                                   className="w-full bg-slate-50 border border-slate-200 p-2 font-bold rounded-lg disabled:bg-slate-100"
@@ -842,7 +848,7 @@ export const FixedAssetsTab = () => {
                               <div>
                                 <label className="block text-slate-500 font-bold mb-1">حساب مجمع الإهلاك (دائن):</label>
                                 <select
-                                  disabled={!isAssetEditing}
+                                  disabled={!isEditAssetMode}
                                   value={assetForm.accDepAccount}
                                   onChange={(e) => setAssetForm({ ...assetForm, accDepAccount: e.target.value })}
                                   className="w-full bg-slate-50 border border-slate-200 p-2 font-bold rounded-lg disabled:bg-slate-100"
@@ -855,7 +861,7 @@ export const FixedAssetsTab = () => {
                               <div>
                                 <label className="block text-slate-500 font-bold mb-1">حساب مصروف إهلاك الأصول:</label>
                                 <select
-                                  disabled={!isAssetEditing}
+                                  disabled={!isEditAssetMode}
                                   value={assetForm.depExpenseAccount}
                                   onChange={(e) => setAssetForm({ ...assetForm, depExpenseAccount: e.target.value })}
                                   className="w-full bg-slate-50 border border-slate-200 p-2 font-bold rounded-lg disabled:bg-slate-100"
@@ -1233,8 +1239,11 @@ export const FixedAssetsTab = () => {
                   <div className="flex flex-wrap items-center gap-2">
                     <label className="font-black text-slate-800 text-xs">نموذج التقرير:</label>
                     <select
-                      value={assetSearchQuery}
-                      onChange={(e) => setAssetSearchQuery(e.target.value)}
+                      value={fixedAssetReportType}
+                      onChange={(e) => {
+                        setFixedAssetReportType(e.target.value);
+                        setActiveAssetTab(e.target.value);
+                      }}
                       className="bg-slate-100 border border-slate-200 p-2 px-3 font-bold rounded-lg focus:outline-none cursor-pointer text-xs"
                     >
                       <option value="all_assets">📋 سجل وجرد الأصول الثابتة الشامل</option>
@@ -1785,7 +1794,7 @@ export const FixedAssetsTab = () => {
                         <div className="flex gap-2 pt-4 border-t border-slate-100">
                           <button
                             type="button"
-                            onClick={handleSaveAsset}
+                            onClick={handleMaintenanceSubmit}
                             className="bg-indigo-600 hover:bg-indigo-750 text-white font-bold p-2.5 px-5 rounded-lg flex-1 cursor-pointer"
                           >
                             ترحيل صيانة وسند صرف 💸
@@ -1873,7 +1882,7 @@ export const FixedAssetsTab = () => {
                         <div className="flex gap-2 pt-4 border-t border-slate-100">
                           <button
                             type="button"
-                            onClick={handleSaveAsset}
+                            onClick={handleTransferAssetSubmit}
                             className="bg-indigo-600 hover:bg-indigo-750 text-white font-bold p-2.5 px-5 rounded-lg flex-1 cursor-pointer"
                           >
                             تثبيت نقل الأصل والعهدة 🚚
@@ -1951,7 +1960,7 @@ export const FixedAssetsTab = () => {
                         <div className="flex gap-2 pt-4 border-t border-slate-100">
                           <button
                             type="button"
-                            onClick={handleSaveAsset}
+                            onClick={handleSellAssetSubmit}
                             className="bg-indigo-600 hover:bg-indigo-750 text-white font-bold p-2.5 px-5 rounded-lg flex-1 cursor-pointer"
                           >
                             ترحيل عملية البيع وسند القبض 💰
@@ -2018,7 +2027,7 @@ export const FixedAssetsTab = () => {
                         <div className="flex gap-2 pt-4 border-t border-slate-100">
                           <button
                             type="button"
-                            onClick={handleSaveAsset}
+                            onClick={handleDiscardAssetSubmit}
                             className="bg-rose-600 hover:bg-rose-700 text-white font-bold p-2.5 px-5 rounded-lg flex-1 cursor-pointer"
                           >
                             ترحيل شطب الأصل وقيد الخسائر اليومية ❌
@@ -2123,14 +2132,17 @@ export const FixedAssetsTab = () => {
                                           .border-t { border-top: 1px solid #ddd; }
                                         </style>
                                       </head>
-                                      <body onload="window.print/* */ window.close/* */">
+                                      <body>
                                         <div class="print-box">${printContent}</div>
                                       </body>
                                     </html>
                                   `);
-                                  printWindow.document.close/* */
+                                  printWindow.document.close();
+                                  printWindow.focus();
+                                  printWindow.print();
+                                  printWindow.close();
                                 } else {
-                                  window.print/* */
+                                  window.print();
                                 }
                               }
                             }}
@@ -2255,14 +2267,17 @@ export const FixedAssetsTab = () => {
                                           .font-mono { font-family: monospace; }
                                         </style>
                                       </head>
-                                      <body onload="window.print/* */ window.close/* */">
+                                      <body>
                                         <div class="border">${printContent}</div>
                                       </body>
                                     </html>
                                   `);
-                                  printWindow.document.close/* */
+                                  printWindow.document.close();
+                                  printWindow.focus();
+                                  printWindow.print();
+                                  printWindow.close();
                                 } else {
-                                  window.print/* */
+                                  window.print();
                                 }
                               }
                             }}
@@ -2295,4 +2310,3 @@ export const FixedAssetsTab = () => {
     </>
   );
 };
-

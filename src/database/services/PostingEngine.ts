@@ -811,18 +811,18 @@ export class PostingEngine {
       }
     }
 
-    // 5. التحقق من School ID (عدم وجود School ID خاطئ)
-    const validSchools = ['school_1', 'school_2', 'school_3', 'مدرسة الأسرة الحديثة - فرع طرابلس', 'مجمع المدارس الموحد'];
-    const entrySchool = (entry as any).schoolId || (entry as any).school;
-    if (entrySchool) {
-      if (!validSchools.includes(entrySchool)) {
-        throw new Error(`مدرسة القيد (${entrySchool}) المحددة في القيد ${entry.id} غير صحيحة أو غير موجودة بنظام المدارس`);
-      }
+    // 5. التحقق من School ID من السياق الموثوق فقط.
+    // لا نستخدم قائمة معرفات ثابتة ولا نسمح بإكمال القيد عند غياب النطاق.
+    const trustedSchoolId = String(schoolId || '').trim();
+    const entrySchool = String((entry as any).schoolId || (entry as any).school || '').trim();
+    if (!trustedSchoolId) {
+      throw new Error(`لا يمكن ترحيل القيد ${entry.id} دون معرف مدرسة موثوق من السياق الحالي`);
     }
-    if (schoolId) {
-      if (!validSchools.includes(schoolId)) {
-        throw new Error(`المعرف المدرسي للبيئة (${schoolId}) في القيد ${entry.id} غير صحيح أو غير موجود بنظام المدارس`);
-      }
+    if (!entrySchool) {
+      throw new Error(`القيد ${entry.id} لا يحمل معرف المدرسة؛ تم إيقافه لحماية عزل البيانات`);
+    }
+    if (entrySchool !== trustedSchoolId) {
+      throw new Error(`مدرسة القيد (${entrySchool}) لا تطابق مدرسة السياق الحالي (${trustedSchoolId})`);
     }
   }
 

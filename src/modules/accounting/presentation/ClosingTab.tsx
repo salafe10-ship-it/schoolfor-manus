@@ -1,7 +1,6 @@
 import { Activity, AlertTriangle, ArrowLeft, ArrowRight, BookOpen, Briefcase, Calculator, Calendar, CheckCircle, CheckCircle2, ChevronLeft, ChevronRight, Clock, CornerUpLeft, CreditCard, Download, Edit, Eye, FileDown, FileText, Filter, Flag, Hash, Key, Layers, LayoutTemplate, Link, List, Lock as LockIcon, Maximize2, Minimize2, PenTool, Play, Plus, Printer, RefreshCw, Save, Search, Settings2, Share2, ShieldCheck, Table, Trash2, User, X } from 'lucide-react';
 import React, { useState, useEffect, useMemo, useCallback } from 'react';
 import { AccountingContext } from '../../../components/GeneralLedgerPortal';
-import { FallbackStorage } from '../../../database/repositories/FallbackStorage';
 export const ClosingTab = () => {
   const {
   activeTab, setActiveTab, activeSidebarItem, setActiveSidebarItem,
@@ -71,12 +70,12 @@ export const ClosingTab = () => {
   handleImportExcelSimulate, handleDownloadTemplate, handlePrintAssetCard, handlePrintDepreciationSchedule,
   findOriginalDocument, handleReportAccountClick, handleJournalEntryClick,
   isAccountOrDescendant, getProcessedAccounts,
-  formatCurrency, triggerNotification, logAction, handlePostAllPendingJvs
+  formatCurrency, triggerNotification, logAction, handlePostAllPendingJvs,
+  persistCanonicalFinancialSnapshot, canonicalFinancialStatus, canonicalFinancialWriteMode
 } = React.useContext(AccountingContext);
-  const canonicalPersistenceRequired = FallbackStorage.isCanonicalPersistenceRequired();
   const ensureCanonicalClosingPersistence = () => {
-    if (!canonicalPersistenceRequired) return true;
-    triggerNotification('عمليات الإقفال وفتح السنة متوقفة حتى يتم ربط حالة الإقفال بمصدر محاسبي مركزي موثوق.', 'warning');
+    if (canonicalFinancialStatus === 'ready' && canonicalFinancialWriteMode === 'ledger_ready' && typeof persistCanonicalFinancialSnapshot === 'function') return true;
+    triggerNotification('عمليات الإقفال وفتح السنة متوقفة: المصدر الحالي snapshot للقراءة فقط، ولم تعتمد خدمة إقفال كانونية.', 'warning');
     return false;
   };
 
@@ -84,9 +83,10 @@ export const ClosingTab = () => {
     <>
               {activeTab === 'closing' && (() => {
           // Calculate dynamic counts for readiness checks
-          const unpostedJvsCount = journalEntries.filter(j => j.status !== 'مرحل').length;
-          const unapprovedRvsCount = receiptVouchers.filter(r => r.status !== 'معتمد').length;
-          const unapprovedPvsCount = paymentVouchers.filter(p => p.status !== 'معتمد').length;
+          const isPostedOrApproved = (status: unknown) => ['مرحل', 'مرحّل', 'مُرحّل', 'posted', 'approved', 'معتمد'].includes(String(status || '').trim().toLowerCase());
+          const unpostedJvsCount = journalEntries.filter(j => !isPostedOrApproved(j.status)).length;
+          const unapprovedRvsCount = receiptVouchers.filter(r => !isPostedOrApproved(r.status)).length;
+          const unapprovedPvsCount = paymentVouchers.filter(p => !isPostedOrApproved(p.status)).length;
           
           // Find if there are unbalanced journal entries (Check 6)
           const unbalancedJv = journalEntries.find(j => {
@@ -97,24 +97,34 @@ export const ClosingTab = () => {
 
           // Handle approving all outstanding adjustments (Check 4)
           const handleApproveAllAdjustments = () => {
-            setUnapprovedAdjustmentsCount(0);
-            triggerNotification('✓ تم اعتماد كافة التسويات والتحوطات المالية المقترحة بنجاح.', 'success');
-            logAction('APPROVE_ADJUSTMENTS', 'اعتماد وتدقيق كافة التسويات والتحوطات والمخصصات الدورية لنهاية السنة المالية لضمان جاهزية الدفاتر', 'الحسابات العامة');
+            triggerNotification('اعتماد التسويات متوقف: لا يوجد مسار مركزي كانوني يحفظ الاعتماد وسجل التدقيق.', 'warning');
           };
 
-          const handleApproveAllPendingVouchers = () => {
-            setReceiptVouchers(prev => prev.map(r => ({ ...r, status: 'معتمد' })));
-            setPaymentVouchers(prev => prev.map(p => ({ ...p, status: 'معتمد' })));
-            triggerNotification('✓ تم اعتماد كافة سندات الصرف والقبض المعلقة بنجاح.', 'success');
+          const handleApproveAllPendingVouchers = async () => {
+            if (!ensureCanonicalClosingPersistence()) return;
+            const updatedReceipts = receiptVouchers.map(r => ({ ...r, status: 'معتمد' }));
+            const updatedPayments = paymentVouchers.map(p => ({ ...p, status: 'معتمد' }));
+            try {
+              await persistCanonicalFinancialSnapshot({ receiptVouchers: updatedReceipts, paymentVouchers: updatedPayments });
+              setReceiptVouchers(updatedReceipts);
+              setPaymentVouchers(updatedPayments);
+              triggerNotification('✓ تم اعتماد السندات وحفظ الحالة مركزياً بنجاح.', 'success');
+            } catch (error: any) {
+              triggerNotification(`تعذر اعتماد السندات مركزياً: ${error?.message || 'خطأ غير معروف'}`, 'warning');
+            }
           };
 
           const handleRunReadinessCheck = () => {
             setIsCheckingReady(true);
-            setTimeout(() => {
-              setIsCheckingReady(false);
-              setCheckedReady(true);
-              triggerNotification('✓ اكتمل فحص وتدقيق الدفاتر بنجاح ولا يوجد أي حواجز حرجة تعيق الإغلاق.', 'success');
-            }, 1200);
+            const blocked = !ensureCanonicalClosingPersistence() || hasCriticalErrors || unapprovedAdjustmentsCount > 0;
+            setIsCheckingReady(false);
+            setCheckedReady(true);
+            triggerNotification(
+              blocked
+                ? 'تعذر اعتماد جاهزية الإقفال: توجد حواجز محاسبية أو أن المصدر المركزي غير جاهز.'
+                : '✓ اكتمل فحص الجاهزية من البيانات المحاسبية الحالية.',
+              blocked ? 'warning' : 'success'
+            );
           };
 
           const drillDownUser = localDrillDownUser || { name: 'سليمان غازي', permissions: ['view_account_statement'] };
@@ -129,7 +139,7 @@ export const ClosingTab = () => {
           };
 
           // Matched Trial Balance Check (balanced double-entry verify)
-          const isTrialBalanceMatched = true; // In our system double entry is always validated on save
+          const isTrialBalanceMatched = journalEntries.length > 0 && !unbalancedJv && unpostedJvsCount === 0;
 
           // Check if there are any critical blocking errors (❌)
           const hasCriticalErrors = unpostedJvsCount > 0 || !!unbalancedJv;
@@ -166,6 +176,12 @@ export const ClosingTab = () => {
                   </div>
                 </div>
               </div>
+
+              {canonicalFinancialStatus === 'ready' && canonicalFinancialWriteMode !== 'ledger_ready' && (
+                <div role="alert" className="rounded-xl border border-amber-300 bg-amber-50 px-4 py-3 text-xs font-bold text-amber-900">
+                  الإقفال السنوي متوقف: المصدر الحالي snapshot للقراءة فقط، ولا توجد خدمة إقفال كانونية تحفظ الاعتماد والقيد الختامي. لا يتم إنشاء أو تعديل أرصدة من هذه الشاشة.
+                </div>
+              )}
 
               {/* THREE-STEP WIZARD PROGRESS BAR TRACKER */}
               <div className="bg-white border border-slate-200 rounded-xl p-4 shadow-sm">
@@ -644,38 +660,39 @@ export const ClosingTab = () => {
                             تحديث الفحص
                           </button>
                           <button
-                            onClick={() => {
+                            onClick={async () => {
                               if (!ensureCanonicalClosingPersistence()) return;
                               if (hasCriticalErrors) return;
                               setClosingStep('executing');
                               setClosingProgress(0);
                               setClosingProgressMessage('جاري بدء عملية الإقفال السنوي...');
-                              
-                              let progress = 0;
-                              const interval = setInterval(() => {
-                                progress += 20;
-                                setClosingProgress(progress);
-                                if (progress === 20) {
-                                  setClosingProgressMessage('جاري تجميد قيود اليومية للعام 2026...');
-                                } else if (progress === 40) {
-                                  setClosingProgressMessage('جاري تصفير الحسابات المؤقتة لقائمة الدخل...');
-                                } else if (progress === 60) {
-                                  setClosingProgressMessage('جاري تدوير الفروقات وترحيل صافي الربح لحساب الأرباح المحتجزة...');
-                                } else if (progress === 80) {
-                                  setClosingProgressMessage('جاري إنشاء قيد الإغلاق المزدوج...');
-                                } else if (progress === 100) {
-                                  clearInterval(interval);
-                                  setClosingProgressMessage('اكتملت المعالجة بنجاح!');
-                                  setIsYearClosed(true);
-                                  localStorage.setItem('erp_is_year_2026_closed', 'true');
-                                  const formattedDate = new Date().toISOString().replace('T', ' ').substring(0, 19);
-                                  setClosingDate(formattedDate);
-                                  localStorage.setItem('erp_year_2026_closing_date', formattedDate);
-                                  setClosingStep('done');
-                                  triggerNotification('✓ تمت عملية الإقفال السنوي واعتماد السند بنجاح واقتدار!', 'success');
-                                  logAction('CLOSE_YEAR_2026', `تنفيذ إقفال السنة المالية 2026 م وتدوير صافي ربح قيمته 0 د.ل وتصفير قائمة الدخل`, 'الحسابات العامة');
-                                }
-                              }, 600);
+                              const formattedDate = new Date().toISOString().replace('T', ' ').substring(0, 19);
+                              const closeRef = closingRefNo || `CLOSE-${currentClosingYear || '2026'}-${Date.now()}`;
+                              try {
+                                await persistCanonicalFinancialSnapshot({
+                                  financialClosing: {
+                                    id: closeRef,
+                                    year: currentClosingYear || 2026,
+                                    status: 'posted',
+                                    closingDate: formattedDate,
+                                    description: closingDescriptionInput || 'إقفال السنة المالية من شاشة الإقفال المركزي'
+                                  },
+                                  closingRefNo: closeRef,
+                                  closingDate: formattedDate
+                                });
+                                setClosingProgress(100);
+                                setClosingProgressMessage('اكتملت المعالجة وحُفظت حالة الإقفال مركزياً.');
+                                setIsYearClosed(true);
+                                setClosingRefNo(closeRef);
+                                setClosingDate(formattedDate);
+                                setClosingStep('done');
+                                triggerNotification('✓ تم حفظ حالة الإقفال المركزي بنجاح.', 'success');
+                                logAction('CLOSE_YEAR_2026', `حفظ حالة إقفال السنة المالية 2026 م بالمرجع ${closeRef}`, 'الحسابات العامة');
+                              } catch (error: any) {
+                                setClosingStep('check');
+                                setClosingProgress(0);
+                                triggerNotification(`تعذر حفظ الإقفال مركزياً: ${error?.message || 'خطأ غير معروف'}`, 'warning');
+                              }
                             }}
                             disabled={hasCriticalErrors}
                             className={`font-black px-6 py-2 rounded-lg text-xs transition-all shadow flex items-center gap-1.5 ${
@@ -1056,12 +1073,24 @@ export const ClosingTab = () => {
                           </div>
                         ) : (
                           <button
-                            onClick={() => {
+                            onClick={async () => {
                               if (!ensureCanonicalClosingPersistence()) return;
-                              setOpenedYear2027(true);
-                              localStorage.setItem('erp_is_year_2027_opened', 'true');
-                              triggerNotification(`🚀 تم تفعيل وفتح دفاتر السنة المالية الجديدة ${newYearNumberInput} وتثبيت الأرصدة الافتتاحية بنجاح!`, 'success');
-                              logAction('OPEN_YEAR_2027', `تأسيس وفتح دفاتر السنة المالية الجديدة ${newYearNumberInput} وتدوير الحسابات الختامية لأرصدة افتتاحية للعام القادم`, 'الحسابات العامة');
+                              try {
+                                await persistCanonicalFinancialSnapshot({
+                                  financialYearOpening: {
+                                    year: Number(newYearNumberInput || 2027),
+                                    status: 'open',
+                                    openedAt: new Date().toISOString(),
+                                    startDate: newYearStartDateInput,
+                                    endDate: newYearEndDateInput
+                                  }
+                                });
+                                setOpenedYear2027(true);
+                                triggerNotification(`🚀 تم حفظ فتح دفاتر السنة المالية الجديدة ${newYearNumberInput} مركزياً.`, 'success');
+                                logAction('OPEN_YEAR_2027', `حفظ فتح دفاتر السنة المالية الجديدة ${newYearNumberInput} مركزياً`, 'الحسابات العامة');
+                              } catch (error: any) {
+                                triggerNotification(`تعذر فتح السنة الجديدة مركزياً: ${error?.message || 'خطأ غير معروف'}`, 'warning');
+                              }
                             }}
                             className="bg-emerald-500 hover:bg-emerald-600 text-white font-extrabold px-6 py-2.5 rounded-xl text-xs transition-colors cursor-pointer shadow-lg shadow-emerald-500/20 whitespace-nowrap"
                           >
@@ -1074,16 +1103,18 @@ export const ClosingTab = () => {
                     {/* RESET BUTTON FOR DEMO EXPERIENCES */}
                     <div className="text-center">
                       <button
-                        onClick={() => {
+                        onClick={async () => {
                           if (!ensureCanonicalClosingPersistence()) return;
-                          setIsYearClosed(false);
-                          setOpenedYear2027(false);
-                          setClosingStep('check');
-                          setCheckedReady(false);
-                          localStorage.removeItem('erp_is_year_2026_closed');
-                          localStorage.removeItem('erp_year_2026_closing_date');
-                          localStorage.removeItem('erp_is_year_2027_opened');
-                          triggerNotification('🔄 تم إعادة تعيين حالة إقفال السنة المالية بنجاح للتمكين من إعادة الاختبار.', 'success');
+                          try {
+                            await persistCanonicalFinancialSnapshot({ financialClosing: null, financialYearOpening: null, closingRefNo: null, closingDate: null });
+                            setIsYearClosed(false);
+                            setOpenedYear2027(false);
+                            setClosingStep('check');
+                            setCheckedReady(false);
+                            triggerNotification('🔄 تم إعادة تعيين حالة الإقفال مركزياً لإعادة الاختبار.', 'success');
+                          } catch (error: any) {
+                            triggerNotification(`تعذر إعادة تعيين الإقفال مركزياً: ${error?.message || 'خطأ غير معروف'}`, 'warning');
+                          }
                         }}
                         className="text-[10px] font-black text-rose-600 hover:text-rose-800 underline cursor-pointer"
                       >

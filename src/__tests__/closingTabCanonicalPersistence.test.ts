@@ -8,8 +8,9 @@ describe('closing tab canonical persistence contract', () => {
       path.resolve(process.cwd(), 'src/modules/accounting/presentation/ClosingTab.tsx'),
       'utf8',
     );
-    expect(file).toContain("FallbackStorage.isCanonicalPersistenceRequired()");
-    expect(file).toContain("عمليات الإقفال وفتح السنة متوقفة حتى يتم ربط حالة الإقفال بمصدر محاسبي مركزي موثوق.");
+    expect(file).toContain("canonicalFinancialWriteMode === 'ledger_ready'");
+    expect(file).toContain('الإقفال السنوي متوقف: المصدر الحالي snapshot للقراءة فقط');
+    expect(file).toContain('عمليات الإقفال وفتح السنة متوقفة: المصدر الحالي snapshot للقراءة فقط');
     expect((file.match(/ensureCanonicalClosingPersistence\(\)/g) || []).length).toBeGreaterThanOrEqual(3);
   });
 });

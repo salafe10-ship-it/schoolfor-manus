@@ -10,7 +10,7 @@ import EnterpriseActionToolbar from './shared/EnterpriseActionToolbar';
 import { EnterpriseAuditLogger } from '../utils/EnterpriseAuditLogger';
 import { PermissionsManagementModule, MODULES_SCHEMA } from './PermissionsManagementModule';
 import { AccountingContext, type AccountNode } from '../modules/accounting/presentation/AccountingContext';
-import { getTrustedAccessToken } from '../utils/auth';
+import { authenticatedRequest } from '../utils/authenticatedRequest';
 export { AccountingContext };
 export type { AccountNode };
 
@@ -111,6 +111,7 @@ export default function GeneralLedgerPortal({
   const [paymentVouchers, setPaymentVouchers] = useState<any[]>([]);
   const [receiptVoucherForm, setReceiptVoucherForm] = useState<any>({});
   const [paymentVoucherForm, setPaymentVoucherForm] = useState<any>({});
+  const [bankTransfers, setBankTransfers] = useState<any[]>([]);
           const [receiptSearch, setReceiptSearch] = useState<string>('');
   const [receiptCostCenterFilter, setReceiptCostCenterFilter] = useState<string>('');
   const [paymentSearch, setPaymentSearch] = useState<string>('');
@@ -121,17 +122,17 @@ export default function GeneralLedgerPortal({
   const [isEditAssetMode, setIsEditAssetMode] = useState<boolean>(false);
   const [isNewAssetMode, setIsNewAssetMode] = useState<boolean>(false);
   const [assetSearchQuery, setAssetSearchQuery] = useState<string>('');
-  const [assetCategoryFilter, setAssetCategoryFilter] = useState<string>('');
-  const [assetStatusFilter, setAssetStatusFilter] = useState<string>('');
-  const [assetCostCenterFilter, setAssetCostCenterFilter] = useState<string>('');
+  const [assetCategoryFilter, setAssetCategoryFilter] = useState<string>('all');
+  const [assetStatusFilter, setAssetStatusFilter] = useState<string>('all');
+  const [assetCostCenterFilter, setAssetCostCenterFilter] = useState<string>('all');
   const [assetForm, setAssetForm] = useState<any>({});
   const [maintenanceForm, setMaintenanceForm] = useState<any>({});
   const [transferForm, setTransferForm] = useState<any>({});
   const [saleForm, setSaleForm] = useState<any>({});
   const [discardForm, setDiscardForm] = useState<any>({});
   const [activeAssetModal, setActiveAssetModal] = useState<string | null>(null);
-  const [fixedAssetReportType, setFixedAssetReportType] = useState<string>('all');
-  const [fixedAssetViewMode, setFixedAssetViewMode] = useState<string>('list');
+  const [fixedAssetReportType, setFixedAssetReportType] = useState<string>('all_assets');
+  const [fixedAssetViewMode, setFixedAssetViewMode] = useState<string>('management');
   const [budgets, setBudgets] = useState<any[]>([]);
 
 
@@ -194,19 +195,47 @@ export default function GeneralLedgerPortal({
   // Removed duplicated state definitions
 
   const loadJvForView = (jvId: string) => {
-    console.log('Loading JV:', jvId);
+    setSelectedJvId(jvId);
+    setActiveJvTab('list');
   };
-  const handlePrintReceiptDirect = (voucher: any) => {
-    console.log('Printing receipt:', voucher);
+  const printVoucherDirect = (voucher: any, title: string) => {
+    if (!voucher?.id) {
+      triggerNotification('تعذر الطباعة: السند المحدد غير موثق.', 'warning');
+      return;
+    }
+    const printWindow = window.open('', '_blank', 'noopener,noreferrer');
+    if (!printWindow) {
+      triggerNotification('تعذر فتح نافذة الطباعة. اسمح بالنوافذ المنبثقة للموقع ثم أعد المحاولة.', 'warning');
+      return;
+    }
+    const safe = (value: unknown) => String(value ?? '—').replace(/[&<>"']/g, char => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[char] || char));
+    printWindow.document.write(`<!doctype html><html dir="rtl"><head><meta charset="utf-8"><title>${safe(title)} ${safe(voucher.id)}</title><style>body{font-family:Arial,sans-serif;padding:32px;color:#172033}h1{border-bottom:2px solid #d4af37;padding-bottom:12px}table{width:100%;border-collapse:collapse;margin-top:24px}td{border:1px solid #ccd3df;padding:10px}td:first-child{font-weight:bold;background:#f8f5ee;width:35%}@media print{button{display:none}}</style></head><body><h1>${safe(title)}</h1><table><tr><td>رقم السند</td><td>${safe(voucher.id)}</td></tr><tr><td>التاريخ</td><td>${safe(voucher.date)}</td></tr><tr><td>المبلغ</td><td>${safe(voucher.amount)} ${safe(currency)}</td></tr><tr><td>البيان</td><td>${safe(voucher.against)}</td></tr><tr><td>الحساب</td><td>${safe(voucher.receivingAccount || voucher.paidFromAccount || voucher.paidToAccount)}</td></tr><tr><td>الحالة</td><td>${safe(voucher.status)}</td></tr></table><script>window.onload=()=>window.print();</script></body></html>`);
+    printWindow.document.close();
   };
-  const handlePrintPaymentDirect = (voucher: any) => {
-    console.log('Printing payment:', voucher);
-  };
+  const handlePrintReceiptDirect = (voucher: any) => printVoucherDirect(voucher, 'سند قبض موثق');
+  const handlePrintPaymentDirect = (voucher: any) => printVoucherDirect(voucher, 'سند صرف موثق');
 
-  const handlePrintDepreciationSchedule = () => { console.log('Print depreciation schedule'); };
-  const findOriginalDocument = (id: string) => { console.log('Find original document', id); };
-  const handleReportAccountClick = (acc: string) => { console.log('Report account click', acc); };
-  const handleJournalEntryClick = (jvId: string) => { console.log('Journal entry click', jvId); };
+  const handlePrintDepreciationSchedule = (assetId?: string) => {
+    if (!canonicalFinancialStatus || canonicalFinancialStatus !== 'ready') {
+      triggerNotification('تعذر طباعة جدول الإهلاك: المصدر المركزي غير جاهز.', 'warning');
+      return;
+    }
+    const asset = fixedAssets.find(item => item.id === assetId);
+    if (!asset) {
+      triggerNotification('لا يوجد أصل موثق لإصدار جدول إهلاكه.', 'warning');
+      return;
+    }
+    printVoucherDirect({ id: asset.id, date: new Date().toISOString().slice(0, 10), amount: asset.netValue, against: `جدول إهلاك الأصل ${asset.name}`, status: 'موثق' }, 'جدول إهلاك أصل');
+  };
+  const findOriginalDocument = (id: string) => {
+    const found = [...receiptVouchers, ...paymentVouchers, ...journalEntries].find((item: any) => item.id === id);
+    if (!found) triggerNotification(`لم يتم العثور على مستند موثق بالمرجع ${id}.`, 'warning');
+  };
+  const handleReportAccountClick = (acc: string) => {
+    setActiveTab('financial_reports');
+    setFilterAccount(acc);
+  };
+  const handleJournalEntryClick = (jvId: string) => loadJvForView(jvId);
   const isAccountOrDescendant = (acc: string, parent: string) => {
     if (!acc || !parent) return false;
 
@@ -345,21 +374,477 @@ export default function GeneralLedgerPortal({
 
     return sourceAccounts;
   };
-  const handleCalcPress = (expr: string) => { console.log('Calc press', expr); };
-  const handleBankTransferSubmit = () => { console.log('Bank transfer submitted'); };
-  const handleSelectAsset = (a: string) => { };
-  const handleNewAsset = () => { };
-  const handleSaveAsset = () => { };
-  const handleDeleteAsset = (a: string) => { };
-  const handleRecalculateAssetDepreciation = (a: string) => { };
-  const handlePostAssetDepreciation = (a: string) => { };
-  const handleTransferAssetSubmit = (a: any) => { };
-  const handleSellAssetSubmit = (a: any) => { };
-  const handleDiscardAssetSubmit = (a: any) => { };
-  const handleMaintenanceSubmit = (a: any) => { };
-  const handleImportExcelSimulate = () => { };
-  const handleDownloadTemplate = () => { };
-  const handlePrintAssetCard = (a: string) => { };
+  const handleCalcPress = (expr: string) => {
+    const normalized = String(expr || '').replace(/[^0-9+\-*/().\s]/g, '');
+    if (!normalized.trim()) {
+      setCalcResult(0);
+      return;
+    }
+    try {
+      const result = Function(`"use strict"; return (${normalized})`)();
+      if (!Number.isFinite(result)) throw new Error('invalid result');
+      setCalcExpr(expr);
+      setCalcResult(Number(result));
+    } catch {
+      triggerNotification('تعذر حساب التعبير: الصيغة غير صالحة.', 'warning');
+    }
+  };
+  const handleBankTransferSubmit = async (event?: React.FormEvent) => {
+    event?.preventDefault();
+    if (!canonicalFinancialWriteReady) {
+      triggerNotification('لم تعتمد الحوالة: المصدر المالي الحالي للقراءة فقط ولا توجد خدمة دفتر أستاذ كانونية معتمدة.', 'warning');
+      return;
+    }
+
+    const sourceAccountCode = String(bankTransferForm.sourceAccount || '').trim();
+    const destinationAccountCode = String(bankTransferForm.destinationAccount || '').trim();
+    const amount = Number(bankTransferForm.amount);
+    const sourceAccount = accounts.find(account => account.code === sourceAccountCode);
+    const destinationAccount = accounts.find(account => account.code === destinationAccountCode);
+    const sourceBalance = Number(sourceAccount?.balance ?? 0);
+
+    if (!sourceAccount || !destinationAccount || sourceAccountCode === destinationAccountCode) {
+      triggerNotification('اختر حسابي مصدر ومستقبل مختلفين وموثقين في دليل الحسابات.', 'warning');
+      return;
+    }
+    if (!Number.isFinite(amount) || amount <= 0) {
+      triggerNotification('أدخل مبلغ حوالة موجبًا وقابلًا للتحقق.', 'warning');
+      return;
+    }
+    if (Number.isFinite(sourceBalance) && sourceBalance < amount) {
+      triggerNotification('لا يمكن اعتماد الحوالة: رصيد حساب المصدر أقل من المبلغ المطلوب.', 'warning');
+      return;
+    }
+
+    const sequence = `${Date.now()}`.slice(-8);
+    const date = new Date().toISOString().slice(0, 10);
+    const transferId = `BT-${date.replaceAll('-', '')}-${sequence}`;
+    const journalId = `JV-${date.replaceAll('-', '')}-BT-${sequence}`;
+    const description = String(bankTransferForm.purpose || `تحويل داخلي من ${sourceAccountCode} إلى ${destinationAccountCode}`).trim();
+    const transfer = {
+      id: transferId,
+      date,
+      sourceAccount: sourceAccountCode,
+      destinationAccount: destinationAccountCode,
+      amount,
+      reference: String(bankTransferForm.reference || transferId).trim(),
+      purpose: description,
+      status: 'معتمد',
+      journalEntryId: journalId,
+      createdAt: new Date().toISOString()
+    };
+    const journalEntry = {
+      id: journalId,
+      date,
+      description: `حوالة بنكية داخلية ${transfer.reference}: ${description}`,
+      status: 'مرحل',
+      type: 'بسيط',
+      debitTotal: amount,
+      creditTotal: amount,
+      isSystemGenerated: true,
+      bankTransferId: transferId,
+      lines: [
+        { id: `${journalId}-D`, accountCode: destinationAccountCode, accountName: destinationAccount.name, debit: amount, credit: 0 },
+        { id: `${journalId}-C`, accountCode: sourceAccountCode, accountName: sourceAccount.name, debit: 0, credit: amount }
+      ],
+      createdAt: new Date().toISOString()
+    };
+    const updatedAccounts = accounts.map(account => {
+      if (account.code !== sourceAccountCode && account.code !== destinationAccountCode) return account;
+      const delta = account.code === destinationAccountCode ? amount : -amount;
+      return {
+        ...account,
+        balance: Number(account.balance || 0) + delta,
+        debitMovements: Number(account.debitMovements || 0) + (account.code === destinationAccountCode ? amount : 0),
+        creditMovements: Number(account.creditMovements || 0) + (account.code === sourceAccountCode ? amount : 0)
+      };
+    });
+
+    try {
+      await persistCanonicalFinancialSnapshot({
+        chartOfAccounts: updatedAccounts,
+        bankTransfers: [transfer, ...bankTransfers],
+        journalEntries: [journalEntry, ...journalEntries]
+      });
+      setAccounts(updatedAccounts);
+      setBankTransfers(previous => [transfer, ...previous]);
+      setJournalEntries(previous => [journalEntry, ...previous]);
+      setBankTransferForm({});
+      triggerNotification(`اعتمدت الحوالة ${transferId} ورُحّل قيدها ${journalId} مركزيًا.`, 'success');
+    } catch (error: any) {
+      triggerNotification(error?.message || 'تعذر اعتماد الحوالة مركزيًا؛ لم تتغير البيانات.', 'warning');
+    }
+  };
+  const handleSelectAsset = (assetId: string) => {
+    const asset = fixedAssets.find(item => item.id === assetId);
+    if (!asset) {
+      triggerNotification('الأصل المحدد غير موجود في المصدر المركزي.', 'warning');
+      return;
+    }
+    setSelectedAssetId(assetId);
+    setAssetForm({ ...asset });
+  };
+  const handleNewAsset = () => {
+    setIsNewAssetMode(true);
+    setIsEditAssetMode(true);
+    setAssetForm({ id: '', code: '', name: '', category: '', cost: 0, accDep: 0, netValue: 0, status: 'نشط / قيد التشغيل' });
+  };
+  const findAccountForAssetAction = (code: unknown) => accounts.find(account => account.code === String(code || '').trim());
+  const adjustAccountsForLines = (sourceAccounts: any[], lines: any[], direction = 1) => sourceAccounts.map(account => {
+    const accountLines = lines.filter(line => line.accountCode === account.code);
+    if (accountLines.length === 0) return account;
+    const debit = accountLines.reduce((sum, line) => sum + Number(line.debit || 0), 0) * direction;
+    const credit = accountLines.reduce((sum, line) => sum + Number(line.credit || 0), 0) * direction;
+    const net = account.natureType === 'دائن' ? credit - debit : debit - credit;
+    return {
+      ...account,
+      balance: Number(account.balance || 0) + net,
+      debitMovements: Number(account.debitMovements || 0) + debit,
+      creditMovements: Number(account.creditMovements || 0) + credit
+    };
+  });
+  const persistAssetAction = async (updatedAssets: any[], patch: Record<string, any> = {}) => {
+    await persistCanonicalFinancialSnapshot({ fixedAssets: updatedAssets, ...patch });
+    setFixedAssets(updatedAssets);
+  };
+  const handleSaveAsset = async () => {
+    if (canonicalFinancialStatus !== 'ready') {
+      triggerNotification('لم يتم حفظ الأصل: المصدر المالي المركزي غير جاهز.', 'warning');
+      return;
+    }
+    const name = String(assetForm.name || '').trim();
+    const code = String(assetForm.code || '').trim();
+    const cost = Number(assetForm.cost || 0);
+    if (!name || !code || !Number.isFinite(cost) || cost <= 0) {
+      triggerNotification('أدخل اسم الأصل ورمزه وتكلفة اقتناء موجبة قبل الحفظ.', 'warning');
+      return;
+    }
+    const id = String(assetForm.id || `FA-${new Date().getFullYear()}-${Date.now().toString().slice(-6)}`);
+    const capitalExp = Number(assetForm.capitalExp || 0);
+    const accDep = Math.max(0, Number(assetForm.accDep || 0));
+    const savedAsset = {
+      ...assetForm,
+      id,
+      code,
+      name,
+      cost,
+      capitalExp: Number.isFinite(capitalExp) ? capitalExp : 0,
+      accDep,
+      netValue: Math.max(0, cost + (Number.isFinite(capitalExp) ? capitalExp : 0) - accDep),
+      status: assetForm.status || 'نشط / قيد التشغيل',
+      createdAt: assetForm.createdAt || new Date().toISOString(),
+      updatedAt: new Date().toISOString()
+    };
+    const updatedAssets = fixedAssets.some(asset => asset.id === id)
+      ? fixedAssets.map(asset => asset.id === id ? savedAsset : asset)
+      : [savedAsset, ...fixedAssets];
+    try {
+      await persistAssetAction(updatedAssets);
+      setAssetForm(savedAsset);
+      setSelectedAssetId(id);
+      setIsNewAssetMode(false);
+      setIsEditAssetMode(false);
+      setActiveAssetModal(null);
+      triggerNotification(`تم حفظ الأصل ${id} في المصدر المالي المركزي.`, 'success');
+    } catch (error: any) {
+      triggerNotification(error?.message || 'تعذر حفظ الأصل مركزيًا؛ لم تتغير البيانات.', 'warning');
+    }
+  };
+  const handleDeleteAsset = async (assetId: string) => {
+    const asset = fixedAssets.find(item => item.id === assetId);
+    if (!asset || canonicalFinancialStatus !== 'ready') {
+      triggerNotification('تعذر استبعاد الأصل: الأصل غير موثق أو المصدر المركزي غير جاهز.', 'warning');
+      return;
+    }
+    const updatedAsset = {
+      ...asset,
+      status: 'مستبعد',
+      updatedAt: new Date().toISOString(),
+      operations: [...(asset.operations || []), { id: `OP-${Date.now()}`, type: 'استبعاد الأصل', date: new Date().toISOString().slice(0, 10), details: 'استبعاد إداري آمن؛ يلزم قيد مالي مستقل قبل التسوية.' }]
+    };
+    try {
+      await persistAssetAction(fixedAssets.map(item => item.id === assetId ? updatedAsset : item));
+      setAssetForm(updatedAsset);
+      triggerNotification(`تم استبعاد الأصل ${assetId} إداريًا مع حفظ سجل التدقيق.`, 'success');
+    } catch (error: any) {
+      triggerNotification(error?.message || 'تعذر استبعاد الأصل مركزيًا.', 'warning');
+    }
+  };
+  const handleRecalculateAssetDepreciation = async (assetId: string) => {
+    const asset = fixedAssets.find(item => item.id === assetId);
+    if (!asset || canonicalFinancialStatus !== 'ready') {
+      triggerNotification('تعذر إعادة الاحتساب: الأصل غير موثق أو المصدر المركزي غير جاهز.', 'warning');
+      return;
+    }
+    const costBasis = Number(asset.cost || 0) + Number(asset.capitalExp || 0);
+    const scrap = Math.max(0, Number(asset.scrapValue || 0));
+    const life = Math.max(1, Number(asset.usefulLife || 5));
+    const annual = Math.max(0, (costBasis - scrap) / life);
+    const purchaseYear = new Date(asset.purchaseDate || asset.date || new Date()).getFullYear();
+    const elapsed = Math.min(life, Math.max(0, new Date().getFullYear() - purchaseYear + 1));
+    const accDep = Math.min(costBasis - scrap, annual * elapsed);
+    const updatedAsset = { ...asset, accDep, netValue: Math.max(scrap, costBasis - accDep), updatedAt: new Date().toISOString(), lastDepreciationCalculation: new Date().toISOString() };
+    try {
+      await persistAssetAction(fixedAssets.map(item => item.id === assetId ? updatedAsset : item));
+      setAssetForm(updatedAsset);
+      triggerNotification(`أعيد احتساب إهلاك ${assetId} بقيمة ${accDep.toFixed(2)} ${currency} مركزيًا.`, 'success');
+    } catch (error: any) {
+      triggerNotification(error?.message || 'تعذر حفظ إعادة الاحتساب.', 'warning');
+    }
+  };
+  const handlePostAssetDepreciation = async (assetId: string) => {
+    const asset = fixedAssets.find(item => item.id === assetId);
+    const expenseAccount = findAccountForAssetAction(asset?.depExpenseAccount);
+    const accumulatedAccount = findAccountForAssetAction(asset?.accDepAccount);
+    if (!asset || canonicalFinancialStatus !== 'ready') {
+      triggerNotification('تعذر ترحيل الإهلاك: الأصل غير موثق أو المصدر المركزي غير جاهز.', 'warning');
+      return;
+    }
+    if (!expenseAccount || !accumulatedAccount) {
+      triggerNotification('لم يُرحّل الإهلاك: عيّن حساب مصروف الإهلاك وحساب مجمع الإهلاك من دليل الحسابات.', 'warning');
+      return;
+    }
+    const year = new Date().getFullYear();
+    const alreadyPosted = (asset.depreciationPostings || []).some((posting: any) => Number(posting.year) === year && posting.status === 'posted');
+    if (alreadyPosted) {
+      triggerNotification(`قسط الإهلاك للسنة ${year} مرحّل مسبقًا لهذا الأصل.`, 'warning');
+      return;
+    }
+    const costBasis = Number(asset.cost || 0) + Number(asset.capitalExp || 0);
+    const annual = Math.max(0, (costBasis - Number(asset.scrapValue || 0)) / Math.max(1, Number(asset.usefulLife || 5)));
+    const amount = Math.min(Math.max(0, Number(asset.netValue || costBasis) - Number(asset.scrapValue || 0)), annual);
+    if (amount <= 0) {
+      triggerNotification('لا يوجد قسط إهلاك موجب قابل للترحيل لهذا الأصل.', 'warning');
+      return;
+    }
+    const journalId = `JV-${year}-FADEP-${Date.now().toString().slice(-8)}`;
+    const lines = [
+      { id: `${journalId}-D`, accountCode: expenseAccount.code, accountName: expenseAccount.name, debit: amount, credit: 0 },
+      { id: `${journalId}-C`, accountCode: accumulatedAccount.code, accountName: accumulatedAccount.name, debit: 0, credit: amount }
+    ];
+    const journalEntry = { id: journalId, date: new Date().toISOString().slice(0, 10), description: `إهلاك أصل ثابت ${asset.name} للسنة ${year}`, status: 'مرحل', type: 'بسيط', debitTotal: amount, creditTotal: amount, isSystemGenerated: true, fixedAssetId: asset.id, lines, createdAt: new Date().toISOString() };
+    const updatedAsset = { ...asset, accDep: Number(asset.accDep || 0) + amount, netValue: Math.max(Number(asset.scrapValue || 0), Number(asset.netValue || costBasis) - amount), depreciationPostings: [...(asset.depreciationPostings || []), { year, amount, journalId, status: 'posted' }], updatedAt: new Date().toISOString() };
+    const updatedAccounts = adjustAccountsForLines(accounts, lines);
+    try {
+      await persistAssetAction(fixedAssets.map(item => item.id === assetId ? updatedAsset : item), { chartOfAccounts: updatedAccounts, journalEntries: [journalEntry, ...journalEntries] });
+      setAccounts(updatedAccounts);
+      setJournalEntries(previous => [journalEntry, ...previous]);
+      setAssetForm(updatedAsset);
+      triggerNotification(`رُحّل قيد إهلاك ${asset.id} بمبلغ ${amount.toFixed(2)} ${currency}.`, 'success');
+    } catch (error: any) {
+      triggerNotification(error?.message || 'تعذر ترحيل قيد الإهلاك مركزيًا.', 'warning');
+    }
+  };
+  const handleTransferAssetSubmit = async () => {
+    const asset = fixedAssets.find(item => item.id === (selectedAssetId || assetForm.id));
+    if (!asset || canonicalFinancialStatus !== 'ready') {
+      triggerNotification('تعذر نقل الأصل: الأصل غير موثق أو المصدر المركزي غير جاهز.', 'warning');
+      return;
+    }
+    const toBranch = String(assetForm.toBranch || transferForm.toBranch || '').trim();
+    const toDept = String(assetForm.toDept || transferForm.toDept || '').trim();
+    const toResponsible = String(assetForm.toResponsible || transferForm.toResponsible || '').trim();
+    if (!toBranch || !toDept || !toResponsible) {
+      triggerNotification('أكمل الفرع والموقع والمسؤول الجديد قبل تثبيت النقل.', 'warning');
+      return;
+    }
+    const date = String(assetForm.date || transferForm.date || new Date().toISOString().slice(0, 10));
+    const log = { id: `TR-${Date.now()}`, date, fromBranch: asset.branch || '', toBranch, fromDept: asset.location || '', toDept, fromResponsible: asset.responsible || '', toResponsible, notes: assetForm.notes || transferForm.notes || '', status: 'posted' };
+    const updatedAsset = { ...asset, branch: toBranch, location: toDept, responsible: toResponsible, transferLogs: [...(asset.transferLogs || []), log], operations: [...(asset.operations || []), { id: log.id, type: 'نقل الأصل', date, details: `${log.fromBranch}/${log.fromDept} → ${toBranch}/${toDept}` }], updatedAt: new Date().toISOString() };
+    try {
+      await persistAssetAction(fixedAssets.map(item => item.id === asset.id ? updatedAsset : item));
+      setAssetForm(updatedAsset);
+      setActiveAssetModal(null);
+      triggerNotification(`تم تثبيت نقل الأصل ${asset.id} مركزيًا.`, 'success');
+    } catch (error: any) {
+      triggerNotification(error?.message || 'تعذر حفظ نقل الأصل.', 'warning');
+    }
+  };
+  const handleMaintenanceSubmit = async () => {
+    const asset = fixedAssets.find(item => item.id === (selectedAssetId || assetForm.id));
+    if (!asset || canonicalFinancialStatus !== 'ready') {
+      triggerNotification('تعذر تسجيل الصيانة: الأصل غير موثق أو المصدر المركزي غير جاهز.', 'warning');
+      return;
+    }
+    const cost = Number(assetForm.cost ?? maintenanceForm.cost ?? 0);
+    if (!Number.isFinite(cost) || cost < 0) {
+      triggerNotification('أدخل تكلفة صيانة صحيحة غير سالبة.', 'warning');
+      return;
+    }
+    const date = String(assetForm.date || maintenanceForm.date || new Date().toISOString().slice(0, 10));
+    const log = { id: `MNT-${Date.now()}`, type: assetForm.type || maintenanceForm.type || 'دورية', cost, supplier: assetForm.supplier || maintenanceForm.supplier || '', date, nextDate: assetForm.nextDate || maintenanceForm.nextDate || '', statusAfter: assetForm.statusAfter || maintenanceForm.statusAfter || 'غير محدد', notes: assetForm.notes || maintenanceForm.notes || '', status: 'posted' };
+    let updatedJournalEntries = journalEntries;
+    let updatedAccounts = accounts;
+    let paymentVouchersPatch = paymentVouchers;
+    if (cost > 0) {
+      const expenseAccount = findAccountForAssetAction(assetForm.maintenanceExpenseAccount || '5230');
+      const cashAccount = findAccountForAssetAction(assetForm.paymentAccount || '1102');
+      if (!expenseAccount || !cashAccount) {
+        triggerNotification('لم تُرحّل الصيانة: عيّن حساب مصروف الصيانة وحساب الدفع في دليل الحسابات.', 'warning');
+        return;
+      }
+      const journalId = `JV-${new Date().getFullYear()}-FA-MNT-${Date.now().toString().slice(-8)}`;
+      const voucherId = `PV-${new Date().getFullYear()}-FA-MNT-${Date.now().toString().slice(-8)}`;
+      const lines = [
+        { id: `${journalId}-D`, accountCode: expenseAccount.code, accountName: expenseAccount.name, debit: cost, credit: 0 },
+        { id: `${journalId}-C`, accountCode: cashAccount.code, accountName: cashAccount.name, debit: 0, credit: cost }
+      ];
+      const entry = { id: journalId, date, description: `صيانة أصل ثابت ${asset.name}`, status: 'مرحل', type: 'بسيط', debitTotal: cost, creditTotal: cost, isSystemGenerated: true, fixedAssetId: asset.id, lines, createdAt: new Date().toISOString() };
+      const voucher = { id: voucherId, date, amount: cost, against: `صيانة ${asset.name}`, paidFromAccount: cashAccount.code, expenseAccount: expenseAccount.code, status: 'مرحل', journalEntryId: journalId, fixedAssetId: asset.id, createdAt: new Date().toISOString() };
+      updatedJournalEntries = [entry, ...journalEntries];
+      paymentVouchersPatch = [voucher, ...paymentVouchers];
+      updatedAccounts = adjustAccountsForLines(accounts, lines);
+    }
+    const updatedAsset = { ...asset, maintenanceLogs: [...(asset.maintenanceLogs || []), log], operations: [...(asset.operations || []), { id: log.id, type: 'صيانة الأصل', date, details: log.notes || `صيانة ${log.type}` }], updatedAt: new Date().toISOString() };
+    try {
+      await persistAssetAction(fixedAssets.map(item => item.id === asset.id ? updatedAsset : item), { chartOfAccounts: updatedAccounts, journalEntries: updatedJournalEntries, paymentVouchers: paymentVouchersPatch });
+      setAccounts(updatedAccounts);
+      setJournalEntries(updatedJournalEntries);
+      setPaymentVouchers(paymentVouchersPatch);
+      setAssetForm(updatedAsset);
+      setActiveAssetModal(null);
+      triggerNotification(`تم تسجيل صيانة الأصل ${asset.id} ${cost > 0 ? 'وترحيل سند الصرف' : ''} مركزيًا.`, 'success');
+    } catch (error: any) {
+      triggerNotification(error?.message || 'تعذر حفظ الصيانة مركزيًا.', 'warning');
+    }
+  };
+  const handleSellAssetSubmit = async () => {
+    const asset = fixedAssets.find(item => item.id === (selectedAssetId || assetForm.id));
+    const salePrice = Number(assetForm.price ?? saleForm.price ?? 0);
+    const grossCost = Number(asset?.cost || 0) + Number(asset?.capitalExp || 0);
+    const accumulated = Number(asset?.accDep || 0);
+    const cashAccount = findAccountForAssetAction(assetForm.receivingAccount || saleForm.receivingAccount || '1102');
+    const assetAccount = findAccountForAssetAction(asset?.assetAccount);
+    const accumulatedAccount = findAccountForAssetAction(asset?.accDepAccount);
+    const gainLossAccount = findAccountForAssetAction(assetForm.gainLossAccount || saleForm.gainLossAccount) || accounts.find(account => /ربح|خسار|gain|loss/i.test(`${account.name || ''} ${account.nameAr || ''}`));
+    if (!asset || canonicalFinancialStatus !== 'ready' || !Number.isFinite(salePrice) || salePrice <= 0) {
+      triggerNotification('أدخل سعر بيع موجبًا وتأكد من جاهزية الأصل والمصدر المركزي.', 'warning');
+      return;
+    }
+    if (!cashAccount || !assetAccount || !accumulatedAccount || !gainLossAccount) {
+      triggerNotification('لم تُرحّل عملية البيع: عيّن حساب النقد، الأصل، مجمع الإهلاك، وحساب الربح/الخسارة.', 'warning');
+      return;
+    }
+    const difference = salePrice + accumulated - grossCost;
+    const journalId = `JV-${new Date().getFullYear()}-FASALE-${Date.now().toString().slice(-8)}`;
+    const lines = [
+      { id: `${journalId}-CASH`, accountCode: cashAccount.code, accountName: cashAccount.name, debit: salePrice, credit: 0 },
+      { id: `${journalId}-ACCDEP`, accountCode: accumulatedAccount.code, accountName: accumulatedAccount.name, debit: accumulated, credit: 0 },
+      ...(difference < 0 ? [{ id: `${journalId}-LOSS`, accountCode: gainLossAccount.code, accountName: gainLossAccount.name, debit: Math.abs(difference), credit: 0 }] : []),
+      { id: `${journalId}-ASSET`, accountCode: assetAccount.code, accountName: assetAccount.name, debit: 0, credit: grossCost },
+      ...(difference > 0 ? [{ id: `${journalId}-GAIN`, accountCode: gainLossAccount.code, accountName: gainLossAccount.name, debit: 0, credit: difference }] : [])
+    ];
+    const entry = { id: journalId, date: String(assetForm.date || saleForm.date || new Date().toISOString().slice(0, 10)), description: `بيع الأصل الثابت ${asset.name}`, status: 'مرحل', type: 'مركب', debitTotal: lines.reduce((sum, line) => sum + Number(line.debit || 0), 0), creditTotal: lines.reduce((sum, line) => sum + Number(line.credit || 0), 0), isSystemGenerated: true, fixedAssetId: asset.id, lines, createdAt: new Date().toISOString() };
+    const updatedAsset = { ...asset, status: 'تم بيعه', netValue: 0, sale: { price: salePrice, buyer: assetForm.buyer || saleForm.buyer || '', date: entry.date, journalId }, operations: [...(asset.operations || []), { id: journalId, type: 'بيع الأصل', date: entry.date, details: `تم البيع بمبلغ ${salePrice}` }], updatedAt: new Date().toISOString() };
+    const updatedAccounts = adjustAccountsForLines(accounts, lines);
+    const receipt = { id: `RV-${journalId.slice(3)}`, date: entry.date, amount: salePrice, against: `بيع الأصل ${asset.name}`, receivingAccount: cashAccount.code, revenueAccount: gainLossAccount.code, status: 'مرحل', journalEntryId: journalId, fixedAssetId: asset.id, createdAt: new Date().toISOString() };
+    try {
+      await persistAssetAction(fixedAssets.map(item => item.id === asset.id ? updatedAsset : item), { chartOfAccounts: updatedAccounts, journalEntries: [entry, ...journalEntries], receiptVouchers: [receipt, ...receiptVouchers] });
+      setAccounts(updatedAccounts); setJournalEntries(previous => [entry, ...previous]); setReceiptVouchers(previous => [receipt, ...previous]); setAssetForm(updatedAsset); setActiveAssetModal(null);
+      triggerNotification(`تم بيع الأصل ${asset.id} وترحيل قيد البيع وسند القبض.`, 'success');
+    } catch (error: any) { triggerNotification(error?.message || 'تعذر ترحيل عملية البيع مركزيًا.', 'warning'); }
+  };
+  const handleDiscardAssetSubmit = async () => {
+    const asset = fixedAssets.find(item => item.id === (selectedAssetId || assetForm.id));
+    const grossCost = Number(asset?.cost || 0) + Number(asset?.capitalExp || 0);
+    const accumulated = Number(asset?.accDep || 0);
+    const assetAccount = findAccountForAssetAction(asset?.assetAccount);
+    const accumulatedAccount = findAccountForAssetAction(asset?.accDepAccount);
+    const lossAccount = findAccountForAssetAction(assetForm.lossAccount || discardForm.lossAccount);
+    if (!asset || canonicalFinancialStatus !== 'ready' || !assetAccount || !accumulatedAccount || !lossAccount) {
+      triggerNotification('لم يُرحّل الاستبعاد: عيّن حساب الأصل ومجمع الإهلاك والخسائر وتأكد من جاهزية المصدر.', 'warning');
+      return;
+    }
+    const netLoss = Math.max(0, grossCost - accumulated);
+    const journalId = `JV-${new Date().getFullYear()}-FADISC-${Date.now().toString().slice(-8)}`;
+    const lines = [
+      { id: `${journalId}-ACCDEP`, accountCode: accumulatedAccount.code, accountName: accumulatedAccount.name, debit: accumulated, credit: 0 },
+      { id: `${journalId}-LOSS`, accountCode: lossAccount.code, accountName: lossAccount.name, debit: netLoss, credit: 0 },
+      { id: `${journalId}-ASSET`, accountCode: assetAccount.code, accountName: assetAccount.name, debit: 0, credit: grossCost }
+    ];
+    const entry = { id: journalId, date: String(assetForm.date || discardForm.date || new Date().toISOString().slice(0, 10)), description: `استبعاد وتكهين الأصل ${asset.name}`, status: 'مرحل', type: 'مركب', debitTotal: grossCost, creditTotal: grossCost, isSystemGenerated: true, fixedAssetId: asset.id, lines, createdAt: new Date().toISOString() };
+    const updatedAsset = { ...asset, status: 'مستبعد', accDep: accumulated, netValue: 0, operations: [...(asset.operations || []), { id: journalId, type: 'استبعاد الأصل', date: entry.date, details: assetForm.notes || discardForm.notes || 'استبعاد وتكهين موثق' }], updatedAt: new Date().toISOString() };
+    const updatedAccounts = adjustAccountsForLines(accounts, lines);
+    try {
+      await persistAssetAction(fixedAssets.map(item => item.id === asset.id ? updatedAsset : item), { chartOfAccounts: updatedAccounts, journalEntries: [entry, ...journalEntries] });
+      setAccounts(updatedAccounts); setJournalEntries(previous => [entry, ...previous]); setAssetForm(updatedAsset); setActiveAssetModal(null);
+      triggerNotification(`تم استبعاد الأصل ${asset.id} وترحيل قيد الخسارة.`, 'success');
+    } catch (error: any) { triggerNotification(error?.message || 'تعذر ترحيل الاستبعاد مركزيًا.', 'warning'); }
+  };
+  const handleImportExcelSimulate = () => {
+    if (!canonicalFinancialWriteReady) {
+      triggerNotification('تعذر الاستيراد: المصدر المالي الحالي snapshot للقراءة فقط ولا توجد خدمة ترحيل كانونية معتمدة.', 'warning');
+      return;
+    }
+    const input = document.createElement('input');
+    input.type = 'file';
+    input.accept = '.xlsx,.xls,.csv,text/csv,application/vnd.openxmlformats-officedocument.spreadsheetml.sheet';
+    input.onchange = async () => {
+      const file = input.files?.[0];
+      if (!file) return;
+      if (file.size > 10 * 1024 * 1024) {
+        triggerNotification('تعذر الاستيراد: الحد الأقصى لحجم الملف 10 ميجابايت.', 'warning');
+        return;
+      }
+      try {
+        const XLSX = await import('xlsx');
+        const workbook = XLSX.read(await file.arrayBuffer(), { type: 'array' });
+        const firstSheet = workbook.Sheets[workbook.SheetNames[0]];
+        const rows = XLSX.utils.sheet_to_json<Record<string, any>>(firstSheet, { defval: '' });
+        const read = (row: Record<string, any>, keys: string[]) => {
+          const key = Object.keys(row).find(candidate => keys.includes(candidate.trim().toLowerCase()));
+          return key ? row[key] : '';
+        };
+        const importedAssets: any[] = [];
+        const errors: string[] = [];
+        rows.forEach((row, index) => {
+          const name = String(read(row, ['name', 'asset name', 'اسم الأصل', 'اسم الأصل الثابت']) || '').trim();
+          const code = String(read(row, ['code', 'asset code', 'الكود', 'رمز الأصل']) || '').trim();
+          const cost = Number(String(read(row, ['cost', 'historical cost', 'التكلفة', 'التكلفة التاريخية']) || '').replace(/,/g, ''));
+          if (!name || !code || !Number.isFinite(cost) || cost <= 0) {
+            errors.push(`السطر ${index + 2}: الاسم والرمز والتكلفة الموجبة مطلوبة`);
+            return;
+          }
+          if (fixedAssets.some(asset => asset.code === code) || importedAssets.some(asset => asset.code === code)) {
+            errors.push(`السطر ${index + 2}: رمز الأصل ${code} مكرر`);
+            return;
+          }
+          const capitalExp = Number(String(read(row, ['capital expenditure', 'capitalexp', 'الإضافات الرأسمالية']) || 0).replace(/,/g, '')) || 0;
+          const accDep = Number(String(read(row, ['accumulated depreciation', 'accdep', 'مجمع الإهلاك']) || 0).replace(/,/g, '')) || 0;
+          importedAssets.push({
+            id: `FA-IMP-${Date.now().toString().slice(-6)}-${index + 1}`,
+            code,
+            name,
+            category: String(read(row, ['category', 'التصنيف']) || 'غير مصنف').trim(),
+            cost,
+            capitalExp,
+            accDep: Math.max(0, accDep),
+            netValue: Math.max(0, cost + capitalExp - accDep),
+            purchaseDate: String(read(row, ['purchase date', 'date', 'تاريخ الشراء', 'التاريخ']) || new Date().toISOString().slice(0, 10)),
+            status: 'نشط / قيد التشغيل',
+            importedAt: new Date().toISOString()
+          });
+        });
+        if (errors.length > 0 || importedAssets.length === 0) {
+          triggerNotification(errors.slice(0, 3).join(' | ') || 'لم توجد صفوف صالحة للاستيراد.', 'warning');
+          return;
+        }
+        const updatedAssets = [...importedAssets, ...fixedAssets];
+        await persistCanonicalFinancialSnapshot({ fixedAssets: updatedAssets });
+        setFixedAssets(updatedAssets);
+        triggerNotification(`تم استيراد ${importedAssets.length} أصلًا وحفظها مركزيًا بعد التحقق.`, 'success');
+      } catch (error: any) {
+        triggerNotification(error?.message || 'تعذر قراءة الملف أو حفظ الأصول مركزيًا؛ لم تتغير البيانات.', 'warning');
+      }
+    };
+    input.click();
+  };
+  const handleDownloadTemplate = () => handleDownloadLedgerTemplate();
+  const handlePrintAssetCard = (assetId: string) => {
+    const asset = fixedAssets.find(item => item.id === assetId);
+    if (!asset) return triggerNotification('لا يوجد أصل موثق لطباعة بطاقته.', 'warning');
+    printVoucherDirect({ id: asset.id, date: new Date().toISOString().slice(0, 10), amount: asset.netValue, against: asset.name, status: asset.status }, 'بطاقة أصل ثابت');
+  };
 
 
   // The state definitions were duplicated, removed the first block.
@@ -369,9 +854,17 @@ export default function GeneralLedgerPortal({
 
   // Missing handlers
   const handleSelectReport = (report: string) => { setSelectedReport(report); };
-  const handleDrillDownBreadcrumbClick = (breadcrumb: any) => { console.log('Breadcrumb click', breadcrumb); };
-  const handleDrillDownToAccount = (accountId: string) => { console.log('Drilldown to account', accountId); };
-  const handleDrillDownToOriginalDocument = (docId: string) => { console.log('Drilldown to doc', docId); };
+  const handleDrillDownBreadcrumbClick = (breadcrumb: any) => {
+    if (breadcrumb?.level) setActiveTab(breadcrumb.level === 'report_view' ? 'financial_reports' : activeTab);
+  };
+  const handleDrillDownToAccount = (accountId: string) => {
+    setSelectedAccountCode(accountId);
+    setActiveTab('financial_reports');
+    triggerNotification(`تم فتح كشف الحساب ${accountId} من السجل المحاسبي الموثق.`, 'info');
+  };
+  const handleDrillDownToOriginalDocument = (docId: string) => {
+    findOriginalDocument(docId);
+  };
   // Removed duplicated handler definitions.
 
 
@@ -576,15 +1069,22 @@ export default function GeneralLedgerPortal({
   const [canonicalFinancialStatus, setCanonicalFinancialStatus] = useState<'loading' | 'ready' | 'blocked'>('loading');
   const [canonicalFinancialMessage, setCanonicalFinancialMessage] = useState('جارٍ ربط الأستاذ العام بالمصدر المالي الموحد...');
   const [canonicalSnapshotHasAccounts, setCanonicalSnapshotHasAccounts] = useState(false);
+  const [canonicalFinancialData, setCanonicalFinancialData] = useState<Record<string, any>>({});
+  const [canonicalFinancialVersion, setCanonicalFinancialVersion] = useState(0);
+  const [canonicalFinancialRefreshNonce, setCanonicalFinancialRefreshNonce] = useState(0);
+  // LUNA safety boundary: the current endpoint is a versioned snapshot, not
+  // an approved Receipt/Payment -> Journal -> GL writer.
+  const canonicalFinancialWriteMode: string = 'snapshot_read_only';
+  const canonicalFinancialWriteReady = canonicalFinancialStatus === 'ready' && canonicalFinancialWriteMode === 'ledger_ready';
 
   useEffect(() => {
     let active = true;
 
     const loadCanonicalFinancialSnapshot = async () => {
       try {
-        const response = await fetch('/api/financial/database', {
+        const response = await authenticatedRequest('/api/financial/database', {
           headers: {
-            'Authorization': `Bearer ${getTrustedAccessToken()}`
+            'Accept': 'application/json'
           },
           cache: 'no-store'
         });
@@ -595,7 +1095,18 @@ export default function GeneralLedgerPortal({
 
         const data = result.data || {};
         const canonicalJournalEntries = Array.isArray(data.journalEntries) ? data.journalEntries : [];
-        const canonicalReceiptVouchers = Array.isArray(data.receiptVouchers) ? data.receiptVouchers : [];
+        const canonicalStudentReceiptVouchers = Array.isArray(data.studentReceiptVouchers) ? data.studentReceiptVouchers : [];
+        // Student Financials stores student receipts under studentReceiptVouchers,
+        // while the general-ledger read model uses receiptVouchers. Prefer the
+        // explicit GL stream and use the student stream only when it is the only
+        // canonical receipt source available.
+        const canonicalReceiptVouchers = Array.isArray(data.receiptVouchers)
+          ? data.receiptVouchers
+          : canonicalStudentReceiptVouchers;
+        const canonicalPaymentVouchers = Array.isArray(data.paymentVouchers) ? data.paymentVouchers : [];
+        const canonicalBankTransfers = Array.isArray(data.bankTransfers) ? data.bankTransfers : [];
+        const canonicalSuppliers = Array.isArray(data.suppliers) ? data.suppliers : [];
+        const canonicalFixedAssets = Array.isArray(data.fixedAssets) ? data.fixedAssets : [];
         const canonicalAccounts = Array.isArray(data.chartOfAccounts) ? data.chartOfAccounts : [];
 
         if (!active) return;
@@ -605,6 +1116,20 @@ export default function GeneralLedgerPortal({
         // from the actual posted source.
         setJournalEntries(canonicalJournalEntries);
         setReceiptVouchers(canonicalReceiptVouchers);
+        setPaymentVouchers(canonicalPaymentVouchers);
+        setBankTransfers(canonicalBankTransfers);
+        setSuppliers(canonicalSuppliers);
+        setFixedAssets(canonicalFixedAssets);
+        setCanonicalFinancialData({
+          ...data,
+          studentReceiptVouchers: canonicalStudentReceiptVouchers,
+          receiptVouchers: canonicalReceiptVouchers,
+          paymentVouchers: canonicalPaymentVouchers,
+          bankTransfers: canonicalBankTransfers,
+          suppliers: canonicalSuppliers,
+          fixedAssets: canonicalFixedAssets
+        });
+        setCanonicalFinancialVersion(Number(result.meta?.version || 0));
 
         if (canonicalAccounts.length > 0) {
           setCanonicalSnapshotHasAccounts(true);
@@ -667,11 +1192,17 @@ export default function GeneralLedgerPortal({
         }
 
         setCanonicalFinancialStatus('ready');
-        setCanonicalFinancialMessage(`المصدر المالي الموحد متصل — ${canonicalJournalEntries.length} قيد و${canonicalReceiptVouchers.length} سند قبض موثق`);
+        setCanonicalFinancialMessage(`المصدر المالي المركزي متصل للقراءة فقط — ${canonicalJournalEntries.length} قيد و${canonicalReceiptVouchers.length} سند قبض و${canonicalPaymentVouchers.length} سند صرف معروض؛ الترحيل والإقفال غير متاحين حتى اعتماد خدمة دفتر الأستاذ.`);
       } catch (error: any) {
         if (!active) return;
         setJournalEntries([]);
         setReceiptVouchers([]);
+        setPaymentVouchers([]);
+        setBankTransfers([]);
+        setSuppliers([]);
+        setFixedAssets([]);
+        setCanonicalFinancialData({});
+        setCanonicalFinancialVersion(0);
         setCanonicalSnapshotHasAccounts(false);
         setAccounts(previous => previous.map(account => ({ ...account, balance: 0 })));
         setCanonicalFinancialStatus('blocked');
@@ -683,12 +1214,105 @@ export default function GeneralLedgerPortal({
     return () => {
       active = false;
     };
-  }, [selectedSchool?.id]);
+  }, [selectedSchool?.id, canonicalFinancialRefreshNonce]);
+
+  const refreshCanonicalFinancialData = () => {
+    setCanonicalFinancialStatus('loading');
+    setCanonicalFinancialMessage('جارٍ إعادة تحميل المصدر المالي المركزي...');
+    setCanonicalFinancialRefreshNonce(previous => previous + 1);
+  };
+
+  /**
+   * Persist a complete, versioned financial snapshot through the authenticated
+   * server route. Accounting screens must use this adapter instead of
+   * localStorage or optimistic "saved" notifications.
+   */
+  const persistCanonicalFinancialSnapshot = async (patch: Record<string, any> = {}) => {
+    if (canonicalFinancialStatus !== 'ready') {
+      throw new Error('الحفظ المالي متوقف حتى يتوفر المصدر المحاسبي المركزي الموثوق.');
+    }
+    if (canonicalFinancialWriteMode !== 'ledger_ready') {
+      throw new Error('الكتابة المالية متوقفة: المصدر الحالي snapshot للقراءة فقط، ولم تعتمد خدمة دفتر الأستاذ الكانونية.');
+    }
+    if (!selectedSchool?.id) {
+      throw new Error('لا يمكن حفظ الحركة المالية دون مدرسة موثوقة.');
+    }
+
+    const nextPayload = {
+      ...canonicalFinancialData,
+      invoices: canonicalFinancialData.invoices ?? invoices,
+      chartOfAccounts: canonicalFinancialData.chartOfAccounts ?? accounts,
+      journalEntries: canonicalFinancialData.journalEntries ?? journalEntries,
+      receiptVouchers: canonicalFinancialData.receiptVouchers ?? receiptVouchers,
+      paymentVouchers: canonicalFinancialData.paymentVouchers ?? paymentVouchers,
+      bankTransfers: canonicalFinancialData.bankTransfers ?? bankTransfers,
+      suppliers: canonicalFinancialData.suppliers ?? suppliers,
+      fixedAssets: canonicalFinancialData.fixedAssets ?? fixedAssets,
+      ...patch
+    };
+
+    const normalizeStatus = (value: unknown) => {
+      const status = String(value || 'draft').trim().toLowerCase();
+      if (['مرحل', 'مرحّل', 'مُرحّل', 'posted'].includes(status)) return 'posted';
+      if (['معتمد', 'approved'].includes(status)) return 'approved';
+      if (['ملغى', 'ملغي', 'cancelled', 'void'].includes(status)) return 'cancelled';
+      if (['محفوظ', 'saved'].includes(status)) return 'saved';
+      return 'draft';
+    };
+    const requestPayload = {
+      ...nextPayload,
+      receiptVouchers: Array.isArray(nextPayload.receiptVouchers)
+        ? nextPayload.receiptVouchers.map((voucher: any) => ({ ...voucher, status: normalizeStatus(voucher.status) }))
+        : [],
+      studentReceiptVouchers: Array.isArray(nextPayload.studentReceiptVouchers)
+        ? nextPayload.studentReceiptVouchers.map((voucher: any) => ({ ...voucher, status: normalizeStatus(voucher.status) }))
+        : [],
+      paymentVouchers: Array.isArray(nextPayload.paymentVouchers)
+        ? nextPayload.paymentVouchers.map((voucher: any) => ({ ...voucher, status: normalizeStatus(voucher.status) }))
+        : [],
+      journalEntries: Array.isArray(nextPayload.journalEntries)
+        ? nextPayload.journalEntries.map((entry: any) => ({
+            ...entry,
+            status: normalizeStatus(entry.status),
+            debitTotal: Number(entry.debitTotal ?? entry.debitSum ?? 0),
+            creditTotal: Number(entry.creditTotal ?? entry.creditSum ?? 0)
+          }))
+        : []
+    };
+
+    const response = await authenticatedRequest('/api/financial/database', {
+      method: 'POST',
+      headers: {
+        'Accept': 'application/json',
+        'Content-Type': 'application/json'
+      },
+      body: JSON.stringify({ ...requestPayload, expectedVersion: canonicalFinancialVersion })
+    });
+    const result = await response.json().catch(() => ({}));
+    if (!response.ok || !result.success) {
+      throw new Error(result.message || `تعذر حفظ المصدر المالي (${response.status})`);
+    }
+
+    const nextVersion = Number(result.meta?.version);
+    if (!Number.isSafeInteger(nextVersion)) {
+      throw new Error('تم قبول العملية دون إصدار مالي قابل للتحقق.');
+    }
+    setCanonicalFinancialData(nextPayload);
+    setCanonicalFinancialVersion(nextVersion);
+    setCanonicalFinancialMessage(`المصدر المالي الموحد متصل — الإصدار ${nextVersion}، ${Array.isArray(nextPayload.journalEntries) ? nextPayload.journalEntries.length : 0} قيد موثق`);
+    return result;
+  };
 
   // Helper to sync local state to FallbackStorage, run the PostingEngine action, and sync back
   const runWithPostingEngine = async (
     action: (schoolId: string) => Promise<any>
   ): Promise<any> => {
+    if (canonicalPersistenceRequired) {
+      throw new Error('مسار الأستاذ العام المحلي غير مسموح به مع تفعيل الحفظ المركزي.');
+    }
+    if (!selectedSchool?.id) {
+      throw new Error('لا يمكن تنفيذ حركة محاسبية دون مدرسة موثوقة.');
+    }
     // 1. Ensure FallbackStorage is initialized
     await FallbackStorage.initialize();
 
@@ -732,7 +1356,7 @@ export default function GeneralLedgerPortal({
     FallbackStorage.saveJournalEntries(dbJournalEntries);
 
     // 3. Execute the PostingEngine action
-    const result = await action('school_1');
+    const result = await action(selectedSchool.id);
 
     // 4. Retrieve updated data from FallbackStorage
     const updatedDbAccounts = FallbackStorage.getAccounts();
@@ -845,7 +1469,8 @@ export default function GeneralLedgerPortal({
     
     receiptVouchers.forEach((rv: any) => {
       const hasJv = list.some(j => j.receiptVoucherId === rv.id || j.id === `JV-RV-${rv.id}` || j.description.includes(rv.id));
-      if (!hasJv) {
+      const revenueAccount = rv.revenueAccount || rv.creditAccount;
+      if (!hasJv && rv.receivingAccount && revenueAccount && Number(rv.amount) > 0) {
         list.push({
           id: `JV-RV-${rv.id}`,
           date: rv.date,
@@ -859,8 +1484,8 @@ export default function GeneralLedgerPortal({
           updatedAt: `${rv.date} 08:05`,
           receiptVoucherId: rv.id,
           lines: [
-            { id: `l-rv-${rv.id}-1`, accountCode: rv.receivingAccount, accountName: accounts.find(a => a.code === rv.receivingAccount)?.nameAr || 'الصندوق الرئيسي', description: rv.against, debit: rv.amount, credit: 0, costCenter: rv.costCenter },
-            { id: `l-rv-${rv.id}-2`, accountCode: '4101', accountName: 'إيرادات الرسوم الدراسية الموحدة', description: rv.against, debit: 0, credit: rv.amount, costCenter: rv.costCenter }
+            { id: `l-rv-${rv.id}-1`, accountCode: rv.receivingAccount, accountName: accounts.find(a => a.code === rv.receivingAccount)?.nameAr || '', description: rv.against, debit: rv.amount, credit: 0, costCenter: rv.costCenter },
+            { id: `l-rv-${rv.id}-2`, accountCode: revenueAccount, accountName: accounts.find(a => a.code === revenueAccount)?.nameAr || '', description: rv.against, debit: 0, credit: rv.amount, costCenter: rv.costCenter }
           ]
         });
       }
@@ -868,7 +1493,7 @@ export default function GeneralLedgerPortal({
 
     paymentVouchers.forEach((pv: any) => {
       const hasJv = list.some(j => j.paymentVoucherId === pv.id || j.id === `JV-PV-${pv.id}` || j.description.includes(pv.id));
-      if (!hasJv) {
+      if (!hasJv && pv.paidToAccount && pv.paidFromAccount && Number(pv.amount) > 0) {
         list.push({
           id: `JV-PV-${pv.id}`,
           date: pv.date,
@@ -882,8 +1507,8 @@ export default function GeneralLedgerPortal({
           updatedAt: `${pv.date} 09:10`,
           paymentVoucherId: pv.id,
           lines: [
-            { id: `l-pv-${pv.id}-1`, accountCode: pv.paidToAccount, accountName: accounts.find(a => a.code === pv.paidToAccount)?.nameAr || 'مصروفات تشغيلية', description: pv.against, debit: pv.amount, credit: 0, costCenter: pv.costCenter },
-            { id: `l-pv-${pv.id}-2`, accountCode: pv.paidFromAccount, accountName: accounts.find(a => a.code === pv.paidFromAccount)?.nameAr || 'الصندوق الرئيسي', description: pv.against, debit: 0, credit: pv.amount, costCenter: pv.costCenter }
+            { id: `l-pv-${pv.id}-1`, accountCode: pv.paidToAccount, accountName: accounts.find(a => a.code === pv.paidToAccount)?.nameAr || '', description: pv.against, debit: pv.amount, credit: 0, costCenter: pv.costCenter },
+            { id: `l-pv-${pv.id}-2`, accountCode: pv.paidFromAccount, accountName: accounts.find(a => a.code === pv.paidFromAccount)?.nameAr || '', description: pv.against, debit: 0, credit: pv.amount, costCenter: pv.costCenter }
           ]
         });
       }
@@ -902,31 +1527,27 @@ export default function GeneralLedgerPortal({
         const rvId = rvIdMatch ? rvIdMatch[1] : entry.receiptVoucherId;
         const rv = receiptVouchers.find(v => v.id === rvId);
         
-        const debitAcc = rv?.receivingAccount || '1101';
-        const creditAcc = '4101';
+        const debitAcc = rv?.receivingAccount;
+        const creditAcc = rv?.revenueAccount || rv?.creditAccount;
         const amt = entry.debitTotal || rv?.amount || 0;
         const cc = rv?.costCenter || 'primary';
-        
-        lines.push({ id: `cl-rv-1`, accountCode: debitAcc, accountName: accounts.find(a => a.code === debitAcc)?.nameAr || 'الصندوق الرئيسي', description: entry.description, debit: amt, credit: 0, costCenter: cc });
-        lines.push({ id: `cl-rv-2`, accountCode: creditAcc, accountName: accounts.find(a => a.code === creditAcc)?.nameAr || 'إيرادات المدارس', description: entry.description, debit: 0, credit: amt, costCenter: cc });
+        if (debitAcc && creditAcc && Number(amt) > 0) {
+          lines.push({ id: `cl-rv-1`, accountCode: debitAcc, accountName: accounts.find(a => a.code === debitAcc)?.nameAr || '', description: entry.description, debit: amt, credit: 0, costCenter: cc });
+          lines.push({ id: `cl-rv-2`, accountCode: creditAcc, accountName: accounts.find(a => a.code === creditAcc)?.nameAr || '', description: entry.description, debit: 0, credit: amt, costCenter: cc });
+        }
       } else if (isPv || entry.paymentVoucherId) {
         const pvIdMatch = entry.description.match(/سند صرف (PV-\d+-\d+)/);
         const pvId = pvIdMatch ? pvIdMatch[1] : entry.paymentVoucherId;
         const pv = paymentVouchers.find(v => v.id === pvId);
         
-        const debitAcc = pv?.paidToAccount || '5210';
-        const creditAcc = pv?.paidFromAccount || '1101';
+        const debitAcc = pv?.paidToAccount;
+        const creditAcc = pv?.paidFromAccount;
         const amt = entry.debitTotal || pv?.amount || 0;
         const cc = pv?.costCenter || 'primary';
-        
-        lines.push({ id: `cl-pv-1`, accountCode: debitAcc, accountName: accounts.find(a => a.code === debitAcc)?.nameAr || 'مصروفات تشغيلية', description: entry.description, debit: amt, credit: 0, costCenter: cc });
-        lines.push({ id: `cl-pv-2`, accountCode: creditAcc, accountName: accounts.find(a => a.code === creditAcc)?.nameAr || 'الصندوق الرئيسي', description: entry.description, debit: 0, credit: amt, costCenter: cc });
-      } else {
-        const debAcc = '1101';
-        const credAcc = '4101';
-        const amt = entry.debitTotal || 0;
-        lines.push({ id: `cl-fb-1`, accountCode: debAcc, accountName: accounts.find(a => a.code === debAcc)?.nameAr || '', description: entry.description, debit: amt, credit: 0, costCenter: 'primary' });
-        lines.push({ id: `cl-fb-2`, accountCode: credAcc, accountName: accounts.find(a => a.code === credAcc)?.nameAr || '', description: entry.description, debit: 0, credit: amt, costCenter: 'primary' });
+        if (debitAcc && creditAcc && Number(amt) > 0) {
+          lines.push({ id: `cl-pv-1`, accountCode: debitAcc, accountName: accounts.find(a => a.code === debitAcc)?.nameAr || '', description: entry.description, debit: amt, credit: 0, costCenter: cc });
+          lines.push({ id: `cl-pv-2`, accountCode: creditAcc, accountName: accounts.find(a => a.code === creditAcc)?.nameAr || '', description: entry.description, debit: 0, credit: amt, costCenter: cc });
+        }
       }
       
       return {
@@ -944,8 +1565,8 @@ export default function GeneralLedgerPortal({
   
   // Step 2 -> Step 3 Drilldown
   const handleDrillDownToJournalEntry = (jvId: string) => {
-    if (!drillDownUser.permissions.includes('view_jv')) {
-      triggerNotification(`❌ عذراً ${drillDownUser.name}! تم رفض الوصول لعدم وجود صلاحية استعراض تفاصيل قيود اليومية العامة (RBAC).`, 'warning');
+    if (!drillDownUser?.permissions?.includes('view_jv')) {
+      triggerNotification(`❌ عذراً ${drillDownUser?.name || 'المستخدم الحالي'}! تم رفض الوصول لعدم وجود صلاحية استعراض تفاصيل قيود اليومية العامة (RBAC).`, 'warning');
       return;
     }
 
@@ -970,7 +1591,7 @@ export default function GeneralLedgerPortal({
     
     triggerNotification(`🔗 تم الانتقال إلى تفاصيل القيد: ${jvId}`, 'success');
     logAction('DRILL_DOWN_JV', `تنقل هرمي للقيد رقم ${jvId} من كشف الحساب`, 'الحسابات العامة');
-    addJvAuditEvent(jvId, 'استعراض تفاصيل القيد', drillDownUser.name, `تنقل هرمي (Drill-Down) إلى تفاصيل القيد رقم ${jvId}`);
+    addJvAuditEvent(jvId, 'استعراض تفاصيل القيد', drillDownUser?.name || 'المستخدم الحالي غير محدد', `تنقل هرمي (Drill-Down) إلى تفاصيل القيد رقم ${jvId}`);
   };
 
   // Step 3 -> Step 4 Drilldown
@@ -1233,15 +1854,15 @@ export default function GeneralLedgerPortal({
 
   const hasUserPermission = (permissionId: string) => {
     if (!drillDownUser) return false;
-    if (drillDownUser.permissions.includes('*') || drillDownUser.role?.includes('كامل الصلاحيات') || drillDownUser.id === 'user_001') {
+    if (drillDownUser?.permissions?.includes('*') || drillDownUser?.role?.includes('كامل الصلاحيات') || drillDownUser?.id === 'user_001') {
       return true;
     }
-    return drillDownUser.permissions.includes(permissionId);
+    return Boolean(drillDownUser?.permissions?.includes(permissionId));
   };
 
   const isItemPermitted = (itemId: string) => {
     if (!drillDownUser) return false;
-    if (drillDownUser.permissions.includes('*') || drillDownUser.role?.includes('كامل الصلاحيات') || drillDownUser.id === 'user_001') {
+    if (drillDownUser?.permissions?.includes('*') || drillDownUser?.role?.includes('كامل الصلاحيات') || drillDownUser?.id === 'user_001') {
       return true;
     }
 
@@ -1282,7 +1903,7 @@ export default function GeneralLedgerPortal({
 
   // Global report export Excel/CSV handler
   const exportReportExcel = (reportName: string, headers: string[], rows: any[][]) => {
-    triggerNotification(`📥 جاري تصدير تقرير ${reportName} إلى Excel...`, 'success');
+    triggerNotification(`📥 جاري إنشاء نسخة عرض من ${reportName}؛ هذه ليست قائمة مالية معتمدة.`, 'info');
     setTimeout(() => {
       const csvContent = "\uFEFF" 
         + [headers.join(','), ...rows.map(e => e.map(cell => `"${String(cell).replace(/"/g, '""')}"`).join(','))].join('\n');
@@ -1294,8 +1915,65 @@ export default function GeneralLedgerPortal({
       document.body.appendChild(link);
       link.click();
       document.body.removeChild(link);
-      triggerNotification('✓ تم التصدير بنجاح.', 'success');
+      triggerNotification('تم تنزيل نسخة العرض، ولم تُعتمد كتقرير مالي رسمي.', 'info');
     }, 300);
+  };
+
+  const requireCanonicalLedgerAction = (actionName: string) => {
+    if (canonicalFinancialStatus !== 'ready') {
+      triggerNotification(`تعذر تنفيذ ${actionName}: المصدر المحاسبي المركزي غير جاهز أو غير موثوق.`, 'warning');
+      return false;
+    }
+    if (canonicalFinancialWriteMode !== 'ledger_ready') {
+      triggerNotification(`تعذر تنفيذ ${actionName}: المصدر الحالي snapshot للقراءة فقط، ولا توجد خدمة دفتر أستاذ كانونية معتمدة.`, 'warning');
+      return false;
+    }
+    return true;
+  };
+
+  const handlePrintLedgerView = () => {
+    if (!requireCanonicalLedgerAction('الطباعة')) return;
+    window.print();
+  };
+
+  const handleExportLedgerExcel = () => {
+    if (!requireCanonicalLedgerAction('تصدير الأستاذ العام')) return;
+    const rows = getNormalizedJournalEntries().flatMap((entry: any) => (entry.lines || []).map((line: any) => [
+      entry.date || '', entry.id || '', entry.description || '', line.accountCode || '', line.accountName || '',
+      Number(line.debit || 0).toFixed(2), Number(line.credit || 0).toFixed(2), line.costCenter || ''
+    ]));
+    exportReportExcel('الأستاذ_العام', ['التاريخ', 'رقم القيد', 'البيان', 'رمز الحساب', 'اسم الحساب', 'مدين', 'دائن', 'مركز التكلفة'], rows);
+  };
+
+  const handleExportLedgerPdf = () => {
+    if (!requireCanonicalLedgerAction('تصدير PDF')) return;
+    window.print();
+  };
+
+  const handleImportLedgerExcel = () => {
+    if (canonicalFinancialWriteMode !== 'ledger_ready') {
+      triggerNotification('استيراد الحسابات والقيود متوقف: المصدر الحالي snapshot للقراءة فقط ولا توجد خدمة ترحيل كانونية معتمدة.', 'warning');
+      return;
+    }
+    setActiveTab('trial_balance');
+    setActiveSidebarItem('trial_balance');
+    setShowCoaImportModal(true);
+    triggerNotification('اختر ملف الاستيراد من نافذة شجرة الحسابات ثم راجعه قبل أي حفظ مركزي.', 'info');
+  };
+
+  const handleDownloadLedgerTemplate = () => {
+    const headers = ['التاريخ', 'البيان', 'رمز الحساب المدين', 'رمز الحساب الدائن', 'المبلغ', 'مركز التكلفة'];
+    const csvContent = '\uFEFF' + headers.join(',') + '\n';
+    const blob = new Blob([csvContent], { type: 'text/csv;charset=utf-8;' });
+    const url = URL.createObjectURL(blob);
+    const link = document.createElement('a');
+    link.href = url;
+    link.download = 'قالب_استيراد_قيود_الأستاذ_العام.csv';
+    document.body.appendChild(link);
+    link.click();
+    link.remove();
+    URL.revokeObjectURL(url);
+    triggerNotification('تم تنزيل قالب هيكلي فقط — لا يتم ترحيل أي حركة من خلاله.', 'info');
   };
 
   // ===================================================================
@@ -2404,7 +3082,7 @@ export default function GeneralLedgerPortal({
       description: newJV.description,
       debitTotal: amt,
       creditTotal: amt,
-      status: 'مسودة' as const,
+      status: 'مرحل' as const,
       type: 'بسيط' as const,
       createdByUser: 'سليمان غازي',
       createdAt: new Date().toISOString(),
@@ -2417,17 +3095,16 @@ export default function GeneralLedgerPortal({
     };
 
     try {
-      // First prepend the draft to current local state so runWithPostingEngine sees it
-      setJournalEntries(prev => [newEntry, ...prev]);
-
-      await runWithPostingEngine(async (schoolId) => {
-        await PostingEngine.postJournalEntry(schoolId, jvCode, {
-          userId: 'mgr_sulaiman',
-          userName: 'سليمان غازي',
-          userRole: 'Manager',
-          ipAddress: '192.168.1.144'
-        });
+      if (canonicalFinancialStatus !== 'ready') {
+        throw new Error('المصدر المالي المركزي غير جاهز لحفظ القيد.');
+      }
+      const updatedAccounts = adjustAccountsForLines(accounts, newEntry.lines);
+      await persistCanonicalFinancialSnapshot({
+        journalEntries: [newEntry, ...journalEntries],
+        chartOfAccounts: updatedAccounts
       });
+      setJournalEntries(prev => [newEntry, ...prev]);
+      setAccounts(updatedAccounts);
 
       addJvAuditEvent(jvCode, 'قيد مزدوج تلقائي', 'سليمان غازي', `إنشاء قيد مزدوج يدوي ${jvCode} وترحيله فورياً عبر PostingEngine`);
       logAction('JOURNAL_ENTRY', `قيد مزدوج يدوي ${jvCode}: ${newJV.description} بقيمة ${amt.toLocaleString()} د.ل`, 'الحسابات العامة');
@@ -2546,43 +3223,25 @@ export default function GeneralLedgerPortal({
     }
 
     try {
-      // 1. Update local UI state
-      if (isNew) {
-        setJournalEntries(prev => [finalJv, ...prev]);
-      } else {
-        setJournalEntries(prev => prev.map(j => j.id === finalJv.id ? finalJv : j));
+      if (canonicalFinancialStatus !== 'ready') {
+        throw new Error('المصدر المالي المركزي غير جاهز لحفظ القيد.');
       }
+      const persistedStatus = targetStatus === 'مرحل' ? 'مرحل' : targetStatus === 'معتمد' ? 'معتمد' : 'مسودة';
+      const persistedJv = { ...finalJv, status: persistedStatus };
+      const nextEntries = isNew
+        ? [persistedJv, ...journalEntries]
+        : journalEntries.map(j => j.id === persistedJv.id ? persistedJv : j);
+      const updatedAccounts = persistedStatus === 'مرحل' || persistedStatus === 'معتمد'
+        ? adjustAccountsForLines(accounts, persistedJv.lines)
+        : accounts;
+      await persistCanonicalFinancialSnapshot({ journalEntries: nextEntries, chartOfAccounts: updatedAccounts });
+      setJournalEntries(nextEntries);
+      setAccounts(updatedAccounts);
 
-      const targetStatus = activeJvState.status;
-
-      // 2. If user chose 'مرحل' status, execute posting through PostingEngine
-      if (targetStatus === 'مرحل') {
-        await runWithPostingEngine(async (schoolId) => {
-          await PostingEngine.postJournalEntry(schoolId, finalJv.id, {
-            userId: 'mgr_sulaiman',
-            userName: 'سليمان غازي',
-            userRole: 'Manager',
-            ipAddress: '192.168.1.144'
-          });
-        });
-
-        addJvAuditEvent(finalJv.id, isNew ? 'إنشاء وترحيل قيد' : 'تعديل وترحيل قيد', 'سليمان غازي', `حفظ القيد وترحيله بنجاح وإجمالي ${debitTotal.toLocaleString()} د.ل`);
-        logAction('JOURNAL_ENTRY', `حفظ وترحيل قيد ${finalJv.id}: ${finalJv.description} بقيمة ${debitTotal.toLocaleString()}`, 'الحسابات العامة');
-        triggerNotification(`✓ تم حفظ وترحيل القيد ${finalJv.id} بنجاح للأستاذ العام الموحد`, 'success');
-        
-        const postedJv = { ...finalJv, status: 'مرحل' as const };
-        setActiveJvState(postedJv);
-      } else {
-        // Just save as draft / approved without updating balances or ledger lines
-        await runWithPostingEngine(async () => {});
-
-        addJvAuditEvent(finalJv.id, isNew ? 'إنشاء قيد' : 'تعديل قيد', 'سليمان غازي', `حفظ القيد بحالة ${targetStatus} وإجمالي ${debitTotal.toLocaleString()} د.ل`);
-        logAction('JOURNAL_ENTRY', `حفظ قيد ${finalJv.id}: ${finalJv.description} بقيمة ${debitTotal.toLocaleString()}`, 'الحسابات العامة');
-        triggerNotification(`✓ تم حفظ القيد ${finalJv.id} بنجاح كـ (${targetStatus})`, 'success');
-        
-        const savedJv = { ...finalJv, status: targetStatus };
-        setActiveJvState(savedJv);
-      }
+      addJvAuditEvent(finalJv.id, persistedStatus === 'مرحل' ? (isNew ? 'إنشاء وترحيل قيد' : 'تعديل وترحيل قيد') : (isNew ? 'إنشاء قيد' : 'تعديل قيد'), 'سليمان غازي', `حفظ القيد مركزيًا بحالة ${persistedStatus} وإجمالي ${debitTotal.toLocaleString()} د.ل`);
+      logAction('JOURNAL_ENTRY', `حفظ قيد ${finalJv.id}: ${finalJv.description} بقيمة ${debitTotal.toLocaleString()}`, 'الحسابات العامة');
+      triggerNotification(`✓ تم حفظ القيد ${finalJv.id} مركزيًا كـ (${persistedStatus})`, 'success');
+      setActiveJvState(persistedJv);
 
       setJvEditMode('view');
       setSelectedJvId(finalJv.id);
@@ -2607,29 +3266,37 @@ export default function GeneralLedgerPortal({
         }
 
         try {
-          await runWithPostingEngine(async (schoolId) => {
-            await PostingEngine.reversePostJournalEntry(schoolId, jvId, {
-              userId: 'mgr_sulaiman',
-              userName: 'سليمان غازي',
-              userRole: 'Manager',
-              ipAddress: '192.168.1.144'
-            });
-          });
-
-          // Mark original JV as cancelled/voided, saving cancel details to preserve accounting sequence
+          if (canonicalFinancialStatus !== 'ready') {
+            throw new Error('المصدر المالي المركزي غير جاهز لإلغاء القيد.');
+          }
           const voidedAt = new Date().toLocaleDateString('ar-LY') + ' ' + new Date().toLocaleTimeString('ar-LY');
-          setJournalEntries(prev => prev.map(item => {
-            if (item.id === jvId) {
-              return {
-                ...item,
-                status: 'ملغى' as any,
-                voidReason: cancelReason,
-                voidedBy: 'سليمان غازي',
-                voidedAt
-              };
-            }
-            return item;
+          const reversalId = `${jvId}-REV-${Date.now().toString().slice(-6)}`;
+          const reversalLines = (jv.lines || []).map((line: any, index: number) => ({
+            ...line,
+            id: `${reversalId}-${index + 1}`,
+            debit: Number(line.credit || 0),
+            credit: Number(line.debit || 0),
+            description: `عكس: ${line.description || jv.description || ''}`
           }));
+          const reversalEntry = {
+            id: reversalId,
+            date: new Date().toISOString().slice(0, 10),
+            description: `قيد عكسي لإلغاء ${jvId}: ${cancelReason}`,
+            status: 'مرحل',
+            type: jv.type || 'مركب',
+            debitTotal: Number(jv.creditTotal || 0),
+            creditTotal: Number(jv.debitTotal || 0),
+            isSystemGenerated: true,
+            reversalOf: jvId,
+            lines: reversalLines,
+            createdAt: new Date().toISOString()
+          };
+          const cancelledEntry = { ...jv, status: 'ملغى' as any, voidReason: cancelReason, voidedBy: 'سليمان غازي', voidedAt, reversalEntryId: reversalId };
+          const updatedEntries = [reversalEntry, ...journalEntries.map(item => item.id === jvId ? cancelledEntry : item)];
+          const updatedAccounts = adjustAccountsForLines(accounts, reversalLines);
+          await persistCanonicalFinancialSnapshot({ journalEntries: updatedEntries, chartOfAccounts: updatedAccounts });
+          setJournalEntries(updatedEntries);
+          setAccounts(updatedAccounts);
 
           // Log in unified EnterpriseAuditLogger
           EnterpriseAuditLogger.log({
@@ -2642,7 +3309,7 @@ export default function GeneralLedgerPortal({
             device: 'نظام الإدارة المالية المركزي'
           });
 
-          triggerNotification(`✓ تم إلغاء القيد المحاسبي ${jvId} وتوليد قيد التسوية العكسي بنجاح!`, 'success');
+          triggerNotification(`✓ تم إلغاء القيد ${jvId} وتوليد القيد العكسي ${reversalId} مركزيًا.`, 'success');
           setIsJvFullscreen(false);
           setSelectedJvId(null);
         } catch (error: any) {
@@ -2654,8 +3321,12 @@ export default function GeneralLedgerPortal({
 
     if (window.confirm(`⚠️ هل أنت متأكد من حذف القيد ${jvId} نهائياً؟`)) {
       try {
-        // If draft/draft, it was never posted, so no balances are changed in general ledger
-        setJournalEntries(prev => prev.filter(j => j.id !== jvId));
+        if (canonicalFinancialStatus !== 'ready') {
+          throw new Error('المصدر المالي المركزي غير جاهز لحذف المسودة.');
+        }
+        const updatedEntries = journalEntries.filter(j => j.id !== jvId);
+        await persistCanonicalFinancialSnapshot({ journalEntries: updatedEntries });
+        setJournalEntries(updatedEntries);
 
         addJvAuditEvent(jvId, 'حذف قيد', 'سليمان غازي', `حذف القيد نهائياً`);
         logAction('JOURNAL_ENTRY', `حذف قيد يومية ${jvId}`, 'الحسابات العامة');
@@ -2679,20 +3350,20 @@ export default function GeneralLedgerPortal({
     }
 
     try {
-      await runWithPostingEngine(async (schoolId) => {
-        await PostingEngine.postJournalEntry(schoolId, jvId, {
-          userId: 'mgr_sulaiman',
-          userName: 'سليمان غازي',
-          userRole: 'Manager',
-          ipAddress: '192.168.1.144'
-        });
-      });
+      if (canonicalFinancialStatus !== 'ready') {
+        throw new Error('المصدر المالي المركزي غير جاهز لترحيل القيد.');
+      }
+      const updatedJv = { ...jv, status: 'مرحل' as const, updatedAt: new Date().toISOString() };
+      const updatedEntries = journalEntries.map(item => item.id === jvId ? updatedJv : item);
+      const updatedAccounts = adjustAccountsForLines(accounts, jv.lines || []);
+      await persistCanonicalFinancialSnapshot({ journalEntries: updatedEntries, chartOfAccounts: updatedAccounts });
+      setJournalEntries(updatedEntries);
+      setAccounts(updatedAccounts);
 
       addJvAuditEvent(jvId, 'ترحيل قيد', 'سليمان غازي', `ترحيل القيد وربطه كلياً بميزان المراجعة والأستاذ العام`);
       logAction('JOURNAL_ENTRY', `ترحيل قيد ${jvId}`, 'الحسابات العامة');
       triggerNotification(`✓ تم ترحيل القيد المحاسبي ${jvId} لدفتر الأستاذ العام الموحد`, 'success');
       
-      const updatedJv = { ...jv, status: 'مرحل' as const };
       setActiveJvState(updatedJv);
     } catch (error: any) {
       triggerNotification(`فشل الترحيل المالي: ${error.message || String(error)}`, 'warning');
@@ -2709,20 +3380,20 @@ export default function GeneralLedgerPortal({
     }
 
     try {
-      await runWithPostingEngine(async (schoolId) => {
-        await PostingEngine.unpostJournalEntry(schoolId, jvId, {
-          userId: 'mgr_sulaiman',
-          userName: 'سليمان غازي',
-          userRole: 'Manager',
-          ipAddress: '192.168.1.144'
-        });
-      });
+      if (canonicalFinancialStatus !== 'ready') {
+        throw new Error('المصدر المالي المركزي غير جاهز لإلغاء ترحيل القيد.');
+      }
+      const updatedJv = { ...jv, status: 'مسودة' as const, updatedAt: new Date().toISOString() };
+      const updatedEntries = journalEntries.map(item => item.id === jvId ? updatedJv : item);
+      const updatedAccounts = adjustAccountsForLines(accounts, jv.lines || [], -1);
+      await persistCanonicalFinancialSnapshot({ journalEntries: updatedEntries, chartOfAccounts: updatedAccounts });
+      setJournalEntries(updatedEntries);
+      setAccounts(updatedAccounts);
 
       addJvAuditEvent(jvId, 'إلغاء ترحيل قيد', 'سليمان غازي', `إلغاء ترحيل القيد وعكس أرصدته من الأستاذ المساعد`);
       logAction('JOURNAL_ENTRY', `إلغاء ترحيل قيد ${jvId}`, 'الحسابات العامة');
       triggerNotification(`↩ تم إلغاء ترحيل القيد ${jvId} ونقله للمسودات للتحرير`, 'success');
       
-      const updatedJv = { ...jv, status: 'مسودة' as const };
       setActiveJvState(updatedJv);
     } catch (error: any) {
       triggerNotification(`فشل إلغاء الترحيل: ${error.message || String(error)}`, 'warning');
@@ -2776,10 +3447,16 @@ export default function GeneralLedgerPortal({
     }
 
     // 5. Check School ID (School ID خاطئ)
-    const validSchools = ['school_1', 'school_2', 'school_3', 'مدرسة الأسرة الحديثة - فرع طرابلس', 'مجمع المدارس الموحد'];
-    const jvSchool = jv.schoolId || jv.school || selectedSchool?.id || 'school_1';
-    if (jvSchool && !validSchools.includes(jvSchool)) {
-      return { isValid: false, error: `مدرسة القيد (${jvSchool}) المحددة غير صحيحة أو غير موجودة بنظام المدارس` };
+    const trustedSchoolId = String(selectedSchool?.id || '').trim();
+    const jvSchool = String(jv.schoolId || jv.school || '').trim();
+    if (!trustedSchoolId) {
+      return { isValid: false, error: 'لا يمكن التحقق من القيد دون معرف مدرسة موثوق من الجلسة الحالية' };
+    }
+    if (!jvSchool) {
+      return { isValid: false, error: `القيد ${jv.id || ''} لا يحمل معرف المدرسة؛ تم إيقافه لحماية عزل البيانات` };
+    }
+    if (jvSchool !== trustedSchoolId) {
+      return { isValid: false, error: `مدرسة القيد (${jvSchool}) لا تطابق مدرسة الجلسة الحالية (${trustedSchoolId})` };
     }
 
     return { isValid: true };
@@ -2801,7 +3478,7 @@ export default function GeneralLedgerPortal({
       title: "الهيكل المالي",
       items: [
         { id: 'trial_balance', label: 'شجرة الحسابات', targetTab: 'trial_balance', icon: Layers },
-        { id: 'cost_centers', label: 'مراكز التكلفة', targetTab: 'trial_balance', icon: Percent },
+        { id: 'cost_centers', label: 'مراكز التكلفة', targetTab: 'cost_centers', icon: Percent },
       ]
     },
     {
@@ -2817,7 +3494,7 @@ export default function GeneralLedgerPortal({
       title: "الأستاذ المساعد",
       items: [
         { id: 'customers', label: 'ذمم الطلاب', targetTab: 'customers', icon: Users },
-        { id: 'suppliers', label: 'حسابات الموردين', targetTab: 'suppliers', icon: Users, badge: '٣ شركات' },
+        { id: 'suppliers', label: 'حسابات الموردين', targetTab: 'suppliers', icon: Users, badge: suppliers.length > 0 ? String(suppliers.length) : undefined },
         { id: 'fixed_assets', label: 'الأصول الثابتة', targetTab: 'fixed_assets', icon: Building2 },
       ]
     },
@@ -2853,7 +3530,7 @@ export default function GeneralLedgerPortal({
     
     // Add premium sensory/informative toasts for sub-views
     if (item.id === 'cost_centers') {
-      triggerNotification('✓ تم عرض دليل الحسابات الموحد - مراكز التكلفة الأربعة نشطة وتعمل تلقائياً بالكامل', 'success');
+      triggerNotification('✓ تم فتح دليل مراكز التكلفة من المصدر المركزي للمدرسة الحالية.', 'success');
     } else if (item.id === 'general_ledger_rep') {
       setSelectedReport('general_ledger');
       triggerNotification('📊 دفتر الأستاذ العام: استعرض القيود المرحلة والتسويات المعتمدة والبحث اللحظي', 'info');
@@ -2878,11 +3555,29 @@ export default function GeneralLedgerPortal({
     setShowAddAccountModal(true);
     setCoaMode('create');
     setNewAccount({ code: '', name: '', type: 'فرعي', classification: 'أصول', balance: 0 });
+    setCoaForm({ code: '', nameAr: '', nameEn: '', parentAccountId: '', type: 'فرعي', classification: 'أصول', natureType: 'مدين', costCenterId: '', isActive: true, notes: '' });
     triggerNotification('اضغط على "حفظ" بعد إدخال البيانات الجديدة', 'info');
   };
 
   const handleEditCoaClick = () => {
+    const selected = accounts.find(account => account.code === selectedAccountCode);
+    if (!selected) {
+      triggerNotification('اختر حساباً موثقاً من شجرة الحسابات قبل التعديل.', 'warning');
+      return;
+    }
     setCoaMode('edit');
+    setCoaForm({
+      code: selected.code,
+      nameAr: selected.nameAr,
+      nameEn: selected.nameEn,
+      parentAccountId: selected.parentAccountId || '',
+      type: selected.type,
+      classification: selected.classification,
+      natureType: selected.natureType,
+      costCenterId: selected.costCenterId || '',
+      isActive: selected.isActive,
+      notes: selected.notes || ''
+    });
     triggerNotification('جاري تحرير بيانات الحساب، يرجى الحذر عند تعديل الأكواد', 'info');
   };
 
@@ -2892,14 +3587,63 @@ export default function GeneralLedgerPortal({
     triggerNotification('تم إلغاء العملية بنجاح', 'info');
   };
 
-  const handleSaveCoa = () => {
-    // Basic implementation of save
-    setCoaMode('view');
-    triggerNotification('تم حفظ الحساب بنجاح', 'success');
+  const handleSaveCoa = async (event?: React.FormEvent) => {
+    event?.preventDefault();
+    if (!canonicalFinancialWriteReady) {
+      triggerNotification('تعذر حفظ الحساب: المصدر المالي الحالي للقراءة فقط ولا توجد خدمة دفتر أستاذ كانونية معتمدة.', 'warning');
+      return;
+    }
+    const code = String(coaForm.code || '').trim();
+    const nameAr = String(coaForm.nameAr || '').trim();
+    if (!code || !nameAr) {
+      triggerNotification('يجب إدخال كود الحساب واسمه العربي قبل الحفظ.', 'warning');
+      return;
+    }
+    const editing = coaMode === 'edit';
+    const existing = accounts.find(account => account.code === code);
+    if (!editing && existing) {
+      triggerNotification('كود الحساب موجود مسبقاً ولا يمكن تكراره.', 'warning');
+      return;
+    }
+    const baseAccount = existing || accounts.find(account => account.code === selectedAccountCode);
+    const accountNode: AccountNode = {
+      id: baseAccount?.id || `coa-${code}`,
+      code,
+      name: nameAr,
+      nameAr,
+      nameEn: String(coaForm.nameEn || nameAr),
+      parentAccountId: coaForm.parentAccountId || undefined,
+      type: coaForm.type === 'رئيسي' ? 'رئيسي' : 'فرعي',
+      classification: coaForm.classification || 'أصول',
+      level: Number(coaForm.parentAccountId ? (baseAccount?.level || 2) : (baseAccount?.level || 1)),
+      natureType: coaForm.natureType === 'دائن' ? 'دائن' : 'مدين',
+      costCenterId: coaForm.costCenterId || undefined,
+      isActive: coaForm.isActive !== false,
+      notes: String(coaForm.notes || ''),
+      balance: Number(baseAccount?.balance || 0),
+      currency: baseAccount?.currency || currency
+    };
+    const updatedAccounts = editing
+      ? accounts.map(account => account.code === selectedAccountCode ? accountNode : account)
+      : [...accounts, accountNode];
+    if (editing && !accounts.some(account => account.code === selectedAccountCode)) {
+      triggerNotification('تعذر تحديد الحساب الأصلي المراد تعديله.', 'warning');
+      return;
+    }
+    try {
+      await persistCanonicalFinancialSnapshot({ chartOfAccounts: updatedAccounts });
+      setAccounts(updatedAccounts);
+      setCoaMode('view');
+      triggerNotification('تم حفظ الحساب في المصدر المحاسبي المركزي بنجاح.', 'success');
+    } catch (error: any) {
+      triggerNotification(`تعذر حفظ الحساب مركزياً: ${error?.message || 'خطأ غير معروف'}`, 'warning');
+    }
   };
 
   const accountingContextValue = {
-    students,
+    students, invoices, selectedSchool, costCenters,
+  canonicalFinancialStatus, canonicalFinancialMessage, canonicalFinancialVersion, canonicalFinancialWriteMode,
+  persistCanonicalFinancialSnapshot, refreshCanonicalFinancialData,
     activeTab, setActiveTab, activeSidebarItem, setActiveSidebarItem,
     refreshing, setRefreshing, currency, setCurrency, activeSaving, setActiveSaving,
     simAmount, setSimAmount, simCostCenter, setSimCostCenter, isStrictEnforcement, setIsStrictEnforcement,
@@ -2944,6 +3688,7 @@ export default function GeneralLedgerPortal({
     jvAuditTrail, setJvAuditTrail, jvAttachmentsList, setJvAttachmentsList,
     jvTableMaximized, setJvTableMaximized, receiptVouchers, setReceiptVouchers,
     paymentVouchers, setPaymentVouchers, receiptVoucherForm, setReceiptVoucherForm,
+    bankTransfers, setBankTransfers,
     paymentVoucherForm, setPaymentVoucherForm, selectedReceiptVoucher, setSelectedReceiptVoucher,
     showReceiptDetailModal, setShowReceiptDetailModal, selectedPaymentVoucher, setSelectedPaymentVoucher,
     showPaymentDetailModal, setShowPaymentDetailModal, receiptSearch, setReceiptSearch,
@@ -2986,11 +3731,11 @@ export default function GeneralLedgerPortal({
           </div>
         }
         onExit={setActiveSection ? () => setActiveSection('dashboard') : undefined}
-        onPrint={() => {}}
-        onExportPdf={() => {}}
-        onExportExcel={() => {}}
-        onImportExcel={() => {}}
-        onDownloadTemplate={() => {}}
+        onPrint={handlePrintLedgerView}
+        onExportPdf={handleExportLedgerPdf}
+        onExportExcel={handleExportLedgerExcel}
+        onImportExcel={handleImportLedgerExcel}
+        onDownloadTemplate={handleDownloadLedgerTemplate}
       />
       <div
         role="status"
@@ -3013,10 +3758,42 @@ export default function GeneralLedgerPortal({
         {/* ========================================================== */}
         {/* VIEW 1: MAIN LEDGER DASHBOARD (Matching screenshot EXACTLY) */}
         {/* ========================================================== */}
-                {activeTab === 'dashboard' && (
+        {activeTab === 'dashboard' && (
           <React.Suspense fallback={<div className="p-8 text-center text-slate-500 animate-pulse">جاري تحميل لوحة المؤشرات...</div>}>
             <LedgerDashboardTab />
           </React.Suspense>
+        )}
+
+        {activeTab === 'cost_centers' && (
+          <section className="space-y-5 animate-fade-in" aria-label="دليل مراكز التكلفة">
+            <div className="flex flex-wrap items-center justify-between gap-3 border-b border-[#d4af37]/30 pb-4">
+              <div>
+                <h2 className="text-xl font-black text-slate-950">دليل مراكز التكلفة</h2>
+                <p className="mt-1 text-xs font-semibold text-slate-500">المراكز المعروضة مصدرها النطاق المالي المركزي للمدرسة الحالية.</p>
+              </div>
+              <span className={`rounded-full px-3 py-1 text-[11px] font-black ${canonicalFinancialStatus === 'ready' ? 'bg-emerald-100 text-emerald-800' : 'bg-rose-100 text-rose-800'}`}>
+                {canonicalFinancialStatus === 'ready' ? 'snapshot متصل — قراءة فقط' : 'غير متحقق'}
+              </span>
+            </div>
+            {Array.isArray(costCenters) && costCenters.length > 0 ? (
+              <div className="grid gap-4 md:grid-cols-2 xl:grid-cols-3">
+                {costCenters.filter((center: any) => center?.isActive !== false).map((center: any) => (
+                  <article key={center.id} className="rounded-2xl border border-slate-200 bg-white p-5 shadow-sm">
+                    <div className="flex items-center justify-between gap-3">
+                      <span className="rounded-lg bg-amber-50 px-2 py-1 font-mono text-xs font-black text-amber-800">{center.code || center.id}</span>
+                      <span className="text-[10px] font-bold text-emerald-700">نشط</span>
+                    </div>
+                    <h3 className="mt-4 text-base font-black text-slate-900">{center.name || center.nameAr || 'مركز غير مسمى'}</h3>
+                    <p className="mt-2 text-xs text-slate-500">{center.parentCostCenterId ? `يتبع: ${center.parentCostCenterId}` : 'مركز رئيسي'}</p>
+                  </article>
+                ))}
+              </div>
+            ) : (
+              <div className="rounded-2xl border border-amber-300 bg-amber-50 p-8 text-center text-sm font-black text-amber-900">
+                لا توجد مراكز تكلفة موثقة في المصدر المركزي لهذا النطاق.
+              </div>
+            )}
+          </section>
         )}
 
         {/* ========================================================== */}
