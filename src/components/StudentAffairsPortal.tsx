@@ -347,7 +347,7 @@ export default function StudentAffairsPortal({
       preferredName: '',
       studentCode: '',
       nationalId: '',
-      gender: 'ذكر',
+      gender: '',
       birthDate: '',
       birthPlace: '',
       stage: '',
@@ -362,7 +362,7 @@ export default function StudentAffairsPortal({
       parentName: '',
       parentPhone: '',
       parentNationalId: '',
-      parentRelation: 'أب',
+      parentRelation: '',
       parentJob: '',
       avatarUrl: '',
       notes: ''
