@@ -631,8 +631,10 @@ export const ClosingTab = () => {
                             <div className="grid grid-cols-2 gap-2 text-[10px] font-mono font-bold text-slate-650 bg-white/60 p-2 rounded border border-slate-100">
                               <div>إجمالي الحركات المدينة: {accounts.filter(a => a.type === 'فرعي' && (a.classification === 'أصول' || a.classification === 'مصروفات')).reduce((s,a) => s + a.balance, 0).toLocaleString()} د.ل</div>
                               <div>إجمالي الحركات الدائنة: {accounts.filter(a => a.type === 'فرعي' && (a.classification === 'خصوم' || a.classification === 'حقوق ملكية' || a.classification === 'إيرادات')).reduce((s,a) => s + a.balance, 0).toLocaleString()} د.ل</div>
-                              <div className="col-span-2 text-center text-emerald-700 font-extrabold border-t border-slate-100 pt-1 mt-1 text-[11px]">
-                                الفارق الحالي: 0.00 د.ل (تطابق تام ومكتمل بنسبة 100%)
+                              <div className={`col-span-2 text-center font-extrabold border-t border-slate-100 pt-1 mt-1 text-[11px] ${canonicalFinancialWriteMode === 'ledger_ready' ? 'text-emerald-700' : 'text-amber-700'}`}>
+                                {canonicalFinancialWriteMode === 'ledger_ready'
+                                  ? 'الفارق الحالي: 0.00 د.ل (تطابق تام ومكتمل بنسبة 100%)'
+                                  : 'الفارق غير متحقق — snapshot للقراءة فقط ولا توجد قائمة إقفال كانونية.'}
                               </div>
                             </div>
                           </div>
@@ -644,9 +646,11 @@ export const ClosingTab = () => {
                         <div className="space-y-1 text-right">
                           <h4 className="text-xs font-black text-slate-800">تأكيد شروط ترحيل وإقفال السنة</h4>
                           <p className="text-[10px] text-slate-500">
-                            {hasCriticalErrors 
-                              ? '🚨 يوجد أخطاء محاسبية حرجة (باللون الأحمر) تمنع إقفال السنة المالية. يرجى ترحيل القيود المعلقة.' 
-                              : '✓ جميع الشروط والمطابقات الأساسية ممتازة ومكتملة. النظام مهيأ محاسبياً للإقفال النهائي.'}
+                            {hasCriticalErrors
+                              ? '🚨 يوجد أخطاء محاسبية حرجة (باللون الأحمر) تمنع إقفال السنة المالية. يرجى ترحيل القيود المعلقة.'
+                              : canonicalFinancialWriteMode === 'ledger_ready'
+                                ? '✓ جميع الشروط والمطابقات الأساسية ممتازة ومكتملة. النظام مهيأ محاسبياً للإقفال النهائي.'
+                                : '⚠️ الفحص للعرض فقط؛ لا يمكن إثبات جاهزية الإقفال قبل اعتماد دفتر الأستاذ الكانوني.'}
                           </p>
                         </div>
                         <div className="flex gap-2">

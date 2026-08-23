@@ -74,8 +74,14 @@ export const ChartOfAccountsTab = () => {
     formatCurrency, logAction,
     handleCalcPress, handleCreateNewCoaClick, handleEditCoaClick, handleCancelCoa, handleSaveCoa,
     handleDeleteCoa, handleExpandAllCoa, handleCollapseAllCoa, handleExportCoaExcel, handlePrintCoaTree,
-    handleImportCoaCSV, persistCanonicalFinancialSnapshot, canonicalFinancialStatus,
+    handleImportCoaCSV, persistCanonicalFinancialSnapshot, canonicalFinancialStatus, canonicalFinancialWriteMode,
   } = React.useContext(AccountingContext);
+  const chartWritesAreCanonical = canonicalFinancialStatus === 'ready' && canonicalFinancialWriteMode === 'ledger_ready';
+  const guardChartWrite = (actionName: string) => {
+    if (chartWritesAreCanonical) return true;
+    triggerNotification(`تعذر تنفيذ ${actionName}: شجرة الحسابات للقراءة فقط حتى اعتماد دفتر الأستاذ الكانوني.`, 'warning');
+    return false;
+  };
 
   return (
     <>
@@ -99,11 +105,12 @@ export const ChartOfAccountsTab = () => {
                 <button
                   type="button"
                   onClick={handleCreateNewCoaClick}
+                  disabled={!chartWritesAreCanonical}
                   className="bg-white hover:bg-slate-50 text-indigo-650 font-bold text-[11px] px-3 py-2 rounded-lg flex items-center gap-1.5 border border-slate-200 hover:border-slate-300 transition-all duration-150 shadow-xs cursor-pointer"
                   title="إنشاء كود مالي جديد"
                 >
                   <Plus className="w-3.5 h-3.5" />
-                  <span>جديد (F2)</span>
+                  <span>{chartWritesAreCanonical ? 'جديد (F2)' : 'جديد — قراءة فقط'}</span>
                 </button>
 
                 <button
@@ -120,16 +127,18 @@ export const ChartOfAccountsTab = () => {
                       ? 'bg-amber-50 text-amber-850 border-amber-250 hover:bg-amber-100/50' 
                       : 'bg-white hover:bg-slate-50 text-slate-700 border-slate-200 hover:border-slate-300'
                   }`}
+                  disabled={coaMode === 'view' && !chartWritesAreCanonical}
                   title="تعديل بيانات الحساب المحدد"
                 >
                   <Edit3 className="w-3.5 h-3.5" />
-                  <span>{coaMode !== 'view' ? 'إلغاء التعديل' : 'تعديل'}</span>
+                    <span>{coaMode !== 'view' ? 'إلغاء التعديل' : chartWritesAreCanonical ? 'تعديل' : 'تعديل — قراءة فقط'}</span>
                 </button>
 
                 {coaMode !== 'view' && (
                   <button
                     type="button"
                     onClick={handleSaveCoa}
+                    disabled={!chartWritesAreCanonical}
                     className="bg-indigo-650 hover:bg-indigo-700 text-white font-bold text-[11px] px-3 py-2 rounded-lg flex items-center gap-1.5 border border-indigo-650 shadow-xs transition-all duration-150 cursor-pointer"
                     title="حفظ التغييرات الحالية"
                   >
@@ -141,7 +150,7 @@ export const ChartOfAccountsTab = () => {
                 <button
                   type="button"
                   onClick={handleDeleteCoa}
-                  disabled={coaMode !== 'view'}
+                  disabled={coaMode !== 'view' || !chartWritesAreCanonical}
                   className="bg-white hover:bg-rose-50 text-rose-650 hover:border-rose-250 disabled:opacity-40 font-bold text-[11px] px-3 py-2 rounded-lg flex items-center gap-1.5 border border-slate-200 transition-all duration-150 shadow-xs cursor-pointer"
                   title="حذف الحساب المحدد"
                 >
@@ -176,11 +185,12 @@ export const ChartOfAccountsTab = () => {
                 <button
                   type="button"
                   onClick={() => setShowCoaImportModal(true)}
+                  disabled={!chartWritesAreCanonical}
                   className="bg-slate-100 hover:bg-slate-200 text-slate-700 font-bold text-[11px] px-2.5 py-2 rounded-lg flex items-center gap-1 border border-slate-200 transition-all duration-150"
                   title="استيراد الحسابات من ملف CSV/Excel"
                 >
                   <Upload className="w-3.5 h-3.5 text-slate-500" />
-                  <span>استيراد CSV</span>
+                  <span>{chartWritesAreCanonical ? 'استيراد CSV' : 'استيراد — قراءة فقط'}</span>
                 </button>
 
                 <button
@@ -802,6 +812,7 @@ export const ChartOfAccountsTab = () => {
                         }
 
                         const handleSaveInlineBudget = () => {
+                          if (!guardChartWrite('تعديل الموازنة')) return;
                           setAccounts(prev => prev.map(a => {
                             if (a.code === currentAccount.code) {
                               return { ...a, annualBudget: inlineBudgetVal };
@@ -920,6 +931,7 @@ export const ChartOfAccountsTab = () => {
                         const isBalanced = totalSplit === 100;
 
                         const handleSaveSplits = () => {
+                          if (!guardChartWrite('تثبيت أبعاد مراكز التكلفة')) return;
                           if (!isBalanced) {
                             triggerNotification('فشل الحفظ: يجب أن يكون مجموع نسب التوزيع مساوياً لـ 100% تماماً.', 'warning');
                             return;
@@ -1096,10 +1108,8 @@ export const ChartOfAccountsTab = () => {
                           && reconciliableLines.every((_: any, index: number) => reconcileChecks[`line${index + 1}`]);
 
                         const handleConfirmReconciliation = async () => {
-                          if (canonicalFinancialStatus !== 'ready' || typeof persistCanonicalFinancialSnapshot !== 'function') {
-                            triggerNotification('تعذر حفظ التسوية: المصدر المحاسبي المركزي غير جاهز.', 'warning');
-                            return;
-                          }
+                          if (!guardChartWrite('حفظ التسوية المصرفية')) return;
+                          if (typeof persistCanonicalFinancialSnapshot !== 'function') return;
                           const updatedAccounts = accounts.map(a => {
                             if (a.code === currentAccount.code) {
                               return {
@@ -1529,6 +1539,7 @@ export const ChartOfAccountsTab = () => {
 
             // Interactive Auto-Fixer for parent sums
             const handleAutoFixParentBalances = () => {
+              if (!guardChartWrite('إعادة احتساب أرصدة التجميع')) return;
               // For each parent, sum its children and set parent balance
               setAccounts(prev => {
                 const updated = [...prev];
@@ -1868,7 +1879,9 @@ export const ChartOfAccountsTab = () => {
                               <p className="text-[9px] text-rose-700 font-bold">تنبيه: يوجد فجوة مالية بالدليل بمقدار {Math.abs(totalAssets - (totalLiabilities + totalEquity)).toLocaleString()} د.ل!</p>
                               <button 
                                 type="button"
+                                disabled={!chartWritesAreCanonical}
                                 onClick={() => {
+                                  if (!guardChartWrite('التوازن التلقائي')) return;
                                   // Fix by putting difference in equity or matching
                                   const diff = totalAssets - (totalLiabilities + totalEquity);
                                   setAccounts(prev => prev.map(a => {
@@ -2017,7 +2030,9 @@ export const ChartOfAccountsTab = () => {
                               <span className="text-[9px] text-amber-800 font-semibold">تفعيلها يتيح تدقيق العمليات.</span>
                               <button
                                 type="button"
+                                disabled={!chartWritesAreCanonical}
                                 onClick={() => {
+                                  if (!guardChartWrite('تنشيط الحسابات المتأثرة')) return;
                                   setAccounts(prev => prev.map(a => {
                                     if (!a.isActive && a.balance !== 0) {
                                       return { ...a, isActive: true };
@@ -2206,6 +2221,7 @@ export const ChartOfAccountsTab = () => {
 
         {coaWorkspaceMode === 'spreadsheet' && (() => {
           const handleSaveSpreadLine = (accCode: string, fields: any) => {
+            if (!guardChartWrite('تعديل الحساب الجماعي')) return;
             setAccounts(prev => prev.map(a => {
               if (a.code === accCode) {
                 return {
@@ -2422,6 +2438,7 @@ export const ChartOfAccountsTab = () => {
           
           const handleWizardSubmit = (e: React.FormEvent) => {
             e.preventDefault();
+            if (!guardChartWrite('توليد الحسابات الفرعية')) return;
             
             if (!wizardBaseName.trim()) {
               triggerNotification('فشل: يرجى إدخال اسم الحساب الأساسي لتوليد الفروع.', 'warning');

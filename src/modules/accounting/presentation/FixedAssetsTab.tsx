@@ -426,10 +426,11 @@ export const FixedAssetsTab = () => {
                       <button
                         type="button"
                         onClick={handleNewAsset}
-                        className="bg-indigo-600 hover:bg-indigo-750 text-white font-bold px-3 py-2 rounded-lg flex items-center gap-1 cursor-pointer"
+                        disabled={!fixedAssetWritesAreCanonical}
+                        className="bg-indigo-600 hover:bg-indigo-750 text-white font-bold px-3 py-2 rounded-lg flex items-center gap-1 cursor-pointer disabled:opacity-40 disabled:cursor-not-allowed"
                       >
                         <Plus className="w-3.5 h-3.5" />
-                        <span>جديد (F2)</span>
+                        <span>{fixedAssetWritesAreCanonical ? 'جديد (F2)' : 'جديد — قراءة فقط'}</span>
                       </button>
 
                       {!isNewAssetMode ? (
@@ -443,7 +444,7 @@ export const FixedAssetsTab = () => {
                               setIsNewAssetMode(false);
                             }
                           }}
-                          disabled={assetForm.status === 'تم بيعه' || assetForm.status === 'مستبعد'}
+                          disabled={!fixedAssetWritesAreCanonical || assetForm.status === 'تم بيعه' || assetForm.status === 'مستبعد'}
                           className="bg-slate-100 hover:bg-slate-200 text-slate-800 border border-slate-200 font-bold px-3 py-2 rounded-lg flex items-center gap-1 cursor-pointer disabled:opacity-50"
                         >
                           <Edit3 className="w-3.5 h-3.5" />
@@ -453,6 +454,7 @@ export const FixedAssetsTab = () => {
                         <button
                           type="button"
                           onClick={handleSaveAsset}
+                          disabled={!fixedAssetWritesAreCanonical}
                           className="bg-emerald-600 hover:bg-emerald-700 text-white font-bold px-4 py-2 rounded-lg flex items-center gap-1 cursor-pointer"
                         >
                           <Save className="w-3.5 h-3.5" />
@@ -476,7 +478,7 @@ export const FixedAssetsTab = () => {
                       <button
                         type="button"
                         onClick={() => handleDeleteAsset(assetForm.id)}
-                          disabled={!assetForm.id}
+                          disabled={!fixedAssetWritesAreCanonical || !assetForm.id}
                         className="bg-rose-50 hover:bg-rose-100 text-rose-600 border border-rose-150 font-bold px-3 py-2 rounded-lg flex items-center gap-1 cursor-pointer disabled:opacity-50"
                       >
                         <Trash2 className="w-3.5 h-3.5" />

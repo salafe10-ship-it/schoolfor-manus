@@ -43,4 +43,18 @@ describe('ACC-001-IMPLEMENTATION-003 accounting hardening', () => {
     expect(reports).toContain('handleDrillDownToAccount(line.accountCode)');
     expect(reports).not.toContain("onClick={() => ('trial_balance')}");
   });
+
+  it('blocks remaining local write affordances while the ledger is snapshot-only', () => {
+    const portal = read('src/components/GeneralLedgerPortal.tsx');
+    const journal = read('src/modules/accounting/presentation/JournalEntriesTab.tsx');
+    const receipt = read('src/modules/accounting/presentation/ReceiptVoucherTab.tsx');
+    const payment = read('src/modules/accounting/presentation/PaymentVoucherTab.tsx');
+
+    expect(portal).toContain('onImportExcel={canonicalFinancialWriteReady ? handleImportLedgerExcel : undefined}');
+    expect(portal).toContain('التحويل غير متاح — المصدر للقراءة فقط');
+    expect(journal).toContain('journalWritesAreCanonical');
+    expect(journal).toContain('guardJournalWrite(\'اعتماد القيد\')');
+    expect(receipt).toContain('إلغاء سند القبض متوقف: المصدر للقراءة فقط');
+    expect(payment).toContain('إلغاء سند الصرف متوقف: المصدر للقراءة فقط');
+  });
 });

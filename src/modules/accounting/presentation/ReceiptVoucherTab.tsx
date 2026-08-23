@@ -972,6 +972,10 @@ const handlePrintRV = (rv: any) => {
                               {v.status !== 'ملغى' && (
                                 <button 
                                   onClick={() => {
+                                    if (!canonicalWriteReady) {
+                                      triggerNotification('إلغاء سند القبض متوقف: المصدر للقراءة فقط ولا يوجد مسار عكسي كانوني.', 'warning');
+                                      return;
+                                    }
                                     if (confirm(`هل أنت متأكد من إلغاء سند القبض ${v.id}؟ سيتم تصفير أثره المحاسبي وإلغاء القيد`)) {
                                       const cancelReason = window.prompt("الرجاء إدخال سبب إلغاء سند القبض:");
                                       if (!cancelReason || cancelReason.trim() === "") {
@@ -1023,8 +1027,9 @@ const handlePrintRV = (rv: any) => {
                                       triggerNotification(`✓ تم إلغاء سند القبض ${v.id} وتوطين القيد العكسي كلياً!`, 'warning');
                                     }
                                   }}
-                                  className="text-red-500 hover:bg-red-50 p-1.5 rounded-lg font-extrabold text-[10px] flex items-center"
-                                  title="إلغاء السند وعكس القيد"
+                                  disabled={!canonicalWriteReady}
+                                  className="text-red-500 hover:bg-red-50 p-1.5 rounded-lg font-extrabold text-[10px] flex items-center disabled:opacity-40 disabled:cursor-not-allowed"
+                                  title={canonicalWriteReady ? 'إلغاء السند وعكس القيد' : 'الإلغاء متوقف — المصدر المالي للقراءة فقط'}
                                 >
                                   <Trash2 className="w-3.5 h-3.5" />
                                 </button>

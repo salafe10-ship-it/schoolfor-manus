@@ -508,10 +508,7 @@ export default function GeneralLedgerPortal({
     setFixedAssets(updatedAssets);
   };
   const handleSaveAsset = async () => {
-    if (canonicalFinancialStatus !== 'ready') {
-      triggerNotification('لم يتم حفظ الأصل: المصدر المالي المركزي غير جاهز.', 'warning');
-      return;
-    }
+    if (!requireCanonicalFinancialWrite('حفظ الأصل')) return;
     const name = String(assetForm.name || '').trim();
     const code = String(assetForm.code || '').trim();
     const cost = Number(assetForm.cost || 0);
@@ -552,7 +549,7 @@ export default function GeneralLedgerPortal({
   };
   const handleDeleteAsset = async (assetId: string) => {
     const asset = fixedAssets.find(item => item.id === assetId);
-    if (!asset || canonicalFinancialStatus !== 'ready') {
+    if (!asset || !canonicalFinancialWriteReady) {
       triggerNotification('تعذر استبعاد الأصل: الأصل غير موثق أو المصدر المركزي غير جاهز.', 'warning');
       return;
     }
@@ -572,7 +569,7 @@ export default function GeneralLedgerPortal({
   };
   const handleRecalculateAssetDepreciation = async (assetId: string) => {
     const asset = fixedAssets.find(item => item.id === assetId);
-    if (!asset || canonicalFinancialStatus !== 'ready') {
+    if (!asset || !canonicalFinancialWriteReady) {
       triggerNotification('تعذر إعادة الاحتساب: الأصل غير موثق أو المصدر المركزي غير جاهز.', 'warning');
       return;
     }
@@ -596,7 +593,7 @@ export default function GeneralLedgerPortal({
     const asset = fixedAssets.find(item => item.id === assetId);
     const expenseAccount = findAccountForAssetAction(asset?.depExpenseAccount);
     const accumulatedAccount = findAccountForAssetAction(asset?.accDepAccount);
-    if (!asset || canonicalFinancialStatus !== 'ready') {
+    if (!asset || !canonicalFinancialWriteReady) {
       triggerNotification('تعذر ترحيل الإهلاك: الأصل غير موثق أو المصدر المركزي غير جاهز.', 'warning');
       return;
     }
@@ -637,7 +634,7 @@ export default function GeneralLedgerPortal({
   };
   const handleTransferAssetSubmit = async () => {
     const asset = fixedAssets.find(item => item.id === (selectedAssetId || assetForm.id));
-    if (!asset || canonicalFinancialStatus !== 'ready') {
+    if (!asset || !canonicalFinancialWriteReady) {
       triggerNotification('تعذر نقل الأصل: الأصل غير موثق أو المصدر المركزي غير جاهز.', 'warning');
       return;
     }
@@ -717,7 +714,7 @@ export default function GeneralLedgerPortal({
     const assetAccount = findAccountForAssetAction(asset?.assetAccount);
     const accumulatedAccount = findAccountForAssetAction(asset?.accDepAccount);
     const gainLossAccount = findAccountForAssetAction(assetForm.gainLossAccount || saleForm.gainLossAccount) || accounts.find(account => /ربح|خسار|gain|loss/i.test(`${account.name || ''} ${account.nameAr || ''}`));
-    if (!asset || canonicalFinancialStatus !== 'ready' || !Number.isFinite(salePrice) || salePrice <= 0) {
+    if (!asset || !canonicalFinancialWriteReady || !Number.isFinite(salePrice) || salePrice <= 0) {
       triggerNotification('أدخل سعر بيع موجبًا وتأكد من جاهزية الأصل والمصدر المركزي.', 'warning');
       return;
     }
@@ -751,7 +748,7 @@ export default function GeneralLedgerPortal({
     const assetAccount = findAccountForAssetAction(asset?.assetAccount);
     const accumulatedAccount = findAccountForAssetAction(asset?.accDepAccount);
     const lossAccount = findAccountForAssetAction(assetForm.lossAccount || discardForm.lossAccount);
-    if (!asset || canonicalFinancialStatus !== 'ready' || !assetAccount || !accumulatedAccount || !lossAccount) {
+    if (!asset || !canonicalFinancialWriteReady || !assetAccount || !accumulatedAccount || !lossAccount) {
       triggerNotification('لم يُرحّل الاستبعاد: عيّن حساب الأصل ومجمع الإهلاك والخسائر وتأكد من جاهزية المصدر.', 'warning');
       return;
     }
@@ -1076,6 +1073,11 @@ export default function GeneralLedgerPortal({
   // an approved Receipt/Payment -> Journal -> GL writer.
   const canonicalFinancialWriteMode: string = 'snapshot_read_only';
   const canonicalFinancialWriteReady = canonicalFinancialStatus === 'ready' && canonicalFinancialWriteMode === 'ledger_ready';
+  const requireCanonicalFinancialWrite = (actionName: string) => {
+    if (canonicalFinancialWriteReady) return true;
+    triggerNotification(`تعذر تنفيذ ${actionName}: المصدر الحالي للقراءة فقط ولا توجد خدمة دفتر أستاذ كانونية معتمدة.`, 'warning');
+    return false;
+  };
 
   useEffect(() => {
     let active = true;
@@ -1307,7 +1309,7 @@ export default function GeneralLedgerPortal({
   const runWithPostingEngine = async (
     action: (schoolId: string) => Promise<any>
   ): Promise<any> => {
-    if (canonicalPersistenceRequired) {
+    if (canonicalPersistenceRequired || !canonicalFinancialWriteReady) {
       throw new Error('مسار الأستاذ العام المحلي غير مسموح به مع تفعيل الحفظ المركزي.');
     }
     if (!selectedSchool?.id) {
@@ -1989,6 +1991,7 @@ export default function GeneralLedgerPortal({
   // Delete account with strict accounting validations
   const handleDeleteCoa = async () => {
     if (!selectedAccountCode) return;
+    if (!requireCanonicalFinancialWrite('حذف الحساب')) return;
 
     const accToDelete = accounts.find(a => a.code === selectedAccountCode);
     if (!accToDelete) return;
@@ -2083,6 +2086,7 @@ export default function GeneralLedgerPortal({
 
   // Custom CSV import logic
   const handleImportCoaCSV = () => {
+    if (!requireCanonicalFinancialWrite('استيراد الحسابات')) return;
     if (!coaImportText.trim()) {
       triggerNotification('يرجى لصق بيانات CSV صالحة للاستيراد', 'warning');
       return;
@@ -2539,12 +2543,12 @@ export default function GeneralLedgerPortal({
     document.body.appendChild(link);
     link.click();
     document.body.removeChild(link);
-    triggerNotification('✓ تم تصدير الدليل المحاسبي بصيغة Excel/CSV المتوافقة بنجاح!', 'success');
+    triggerNotification('📥 تم تنزيل نسخة عرض من الدليل المحاسبي؛ هذه ليست قائمة أو نسخة مالية معتمدة.', 'info');
   };
 
   // 1. TRIAL BALANCE EXPORT/PRINT
   const handleExportTrialBalanceExcel = () => {
-    triggerNotification('📥 جاري تصدير ميزان المراجعة الشامل إلى Excel...', 'success');
+      triggerNotification('📥 جاري تنزيل نسخة عرض من ميزان المراجعة؛ المصدر الحالي للقراءة فقط.', 'info');
     setTimeout(() => {
       const headers = ['رمز الحساب', 'اسم الحساب المحاسبي', 'التصنيف', 'طبيعة الحساب', 'أرصدة مدينة (ر.س)', 'أرصدة دائنة (ر.س)'];
       let totalDebit = 0;
@@ -2581,7 +2585,7 @@ export default function GeneralLedgerPortal({
       document.body.appendChild(link);
       link.click();
       document.body.removeChild(link);
-      triggerNotification('✓ تم تصدير ميزان المراجعة بنجاح.', 'success');
+      triggerNotification('📥 تم تنزيل نسخة عرض من ميزان المراجعة؛ لا تمثل ترحيلاً أو اعتماداً مركزياً.', 'info');
     }, 600);
   };
 
@@ -2695,7 +2699,7 @@ export default function GeneralLedgerPortal({
 
   // 2. INCOME STATEMENT EXPORT/PRINT
   const handleExportIncomeStatementExcel = () => {
-    triggerNotification('📥 جاري تصدير بيان كشف الدخل إلى Excel...', 'success');
+      triggerNotification('📥 جاري تنزيل نسخة عرض من بيان الدخل؛ المصدر الحالي للقراءة فقط.', 'info');
     setTimeout(() => {
       const revenueAccounts = accounts.filter(a => a.classification === 'إيرادات');
       const expenseAccounts = accounts.filter(a => a.classification === 'مصروفات');
@@ -2734,7 +2738,7 @@ export default function GeneralLedgerPortal({
       document.body.appendChild(link);
       link.click();
       document.body.removeChild(link);
-      triggerNotification('✓ تم تصدير بيان كشف الدخل بنجاح.', 'success');
+      triggerNotification('📥 تم تنزيل نسخة عرض من بيان الدخل؛ لا تمثل قائمة مالية معتمدة.', 'info');
     }, 600);
   };
 
@@ -2863,7 +2867,7 @@ export default function GeneralLedgerPortal({
 
   // 3. BALANCE SHEET EXPORT/PRINT
   const handleExportBalanceSheetExcel = () => {
-    triggerNotification('📥 جاري تصدير الميزانية العمومية إلى Excel...', 'success');
+      triggerNotification('📥 جاري تنزيل نسخة عرض من الميزانية العمومية؛ المصدر الحالي للقراءة فقط.', 'info');
     setTimeout(() => {
       const assetAccounts = accounts.filter(a => a.classification === 'أصول');
       const liabilityAccounts = accounts.filter(a => a.classification === 'خصوم');
@@ -2910,7 +2914,7 @@ export default function GeneralLedgerPortal({
       document.body.appendChild(link);
       link.click();
       document.body.removeChild(link);
-      triggerNotification('✓ تم تصدير الميزانية العمومية بنجاح.', 'success');
+      triggerNotification('📥 تم تنزيل نسخة عرض من الميزانية العمومية؛ لا تمثل قائمة مالية معتمدة.', 'info');
     }, 600);
   };
 
@@ -3067,6 +3071,7 @@ export default function GeneralLedgerPortal({
   // Add Custom Journal Entry
   const handleAddJV = async (e: React.FormEvent) => {
     e.preventDefault();
+    if (!requireCanonicalFinancialWrite('إنشاء القيد')) return;
     const amt = parseFloat(newJV.amount);
     if (!newJV.description || isNaN(amt) || amt <= 0) {
       triggerNotification('الرجاء مراجعة بيانات القيد المزدوج وقيمته', 'warning');
@@ -3131,6 +3136,7 @@ export default function GeneralLedgerPortal({
   
   
   const handleSaveJv = async () => {
+    if (!requireCanonicalFinancialWrite('حفظ القيد')) return;
     let updatedLines = [...activeJvState.lines];
     let type = activeJvState.type;
     let debitTotal = 0;
@@ -3251,6 +3257,7 @@ export default function GeneralLedgerPortal({
   };
 
   const handleDeleteJv = async (jvId: string) => {
+    if (!requireCanonicalFinancialWrite('حذف أو إلغاء القيد')) return;
     const jv = journalEntries.find(j => j.id === jvId);
     if (!jv) return;
 
@@ -3341,6 +3348,7 @@ export default function GeneralLedgerPortal({
   };
 
   const handlePostJv = async (jvId: string) => {
+    if (!requireCanonicalFinancialWrite('ترحيل القيد')) return;
     const jv = journalEntries.find(j => j.id === jvId);
     if (!jv) return;
 
@@ -3371,6 +3379,7 @@ export default function GeneralLedgerPortal({
   };
 
   const handleUnpostJv = async (jvId: string) => {
+    if (!requireCanonicalFinancialWrite('إلغاء ترحيل القيد')) return;
     const jv = journalEntries.find(j => j.id === jvId);
     if (!jv) return;
 
@@ -3643,6 +3652,7 @@ export default function GeneralLedgerPortal({
   const accountingContextValue = {
     students, invoices, selectedSchool, costCenters,
   canonicalFinancialStatus, canonicalFinancialMessage, canonicalFinancialVersion, canonicalFinancialWriteMode,
+  requireCanonicalFinancialWrite,
   persistCanonicalFinancialSnapshot, refreshCanonicalFinancialData,
     activeTab, setActiveTab, activeSidebarItem, setActiveSidebarItem,
     refreshing, setRefreshing, currency, setCurrency, activeSaving, setActiveSaving,
@@ -3734,7 +3744,7 @@ export default function GeneralLedgerPortal({
         onPrint={handlePrintLedgerView}
         onExportPdf={handleExportLedgerPdf}
         onExportExcel={handleExportLedgerExcel}
-        onImportExcel={handleImportLedgerExcel}
+        onImportExcel={canonicalFinancialWriteReady ? handleImportLedgerExcel : undefined}
         onDownloadTemplate={handleDownloadLedgerTemplate}
       />
       <div
@@ -4272,6 +4282,12 @@ export default function GeneralLedgerPortal({
               <p className="text-xs text-slate-500 mt-1">تداول السيولة بين الصندوق الفرعي كاش وبين الحساب الجاري للمدرسة بالمصارف</p>
             </div>
 
+            {!canonicalFinancialWriteReady && (
+              <div role="alert" className="rounded-xl border border-amber-200 bg-amber-50 px-4 py-3 text-xs font-bold text-amber-900">
+                الحوالات البنكية متوقفة: المصدر المالي الحالي للقراءة فقط ولا توجد خدمة حوالات أو قيد كانوني معتمد للحفظ.
+              </div>
+            )}
+
             <div className="p-6 shadow-xs max-w-2xl mx-auto bg-gradient-to-b from-[#fffefc] via-[#fbf8f0] to-[#f5eeea] border-2 border-[#d4af37]/30 rounded-3xl">
               <form onSubmit={handleBankTransferSubmit} className="space-y-4">
                 <div className="grid grid-cols-2 gap-4">
@@ -4279,6 +4295,7 @@ export default function GeneralLedgerPortal({
                     <label className="block text-slate-700 font-bold mb-1">من الحساب (دائن / المصدر):</label>
                     <select 
                       value={bankTransferForm.sourceAccount}
+                      disabled={!canonicalFinancialWriteReady}
                       onChange={(e) => setBankTransferForm(prev => ({ ...prev, sourceAccount: e.target.value }))}
                       className="w-full bg-transparent border border-slate-300 rounded-lg p-2.5 font-bold"
                     >
@@ -4292,6 +4309,7 @@ export default function GeneralLedgerPortal({
                     <label className="block text-slate-700 font-bold mb-1">إلى الحساب (مدين / المستقبل):</label>
                     <select 
                       value={bankTransferForm.destinationAccount}
+                      disabled={!canonicalFinancialWriteReady}
                       onChange={(e) => setBankTransferForm(prev => ({ ...prev, destinationAccount: e.target.value }))}
                       className="w-full bg-transparent border border-slate-300 rounded-lg p-2.5 font-bold"
                     >
@@ -4308,6 +4326,7 @@ export default function GeneralLedgerPortal({
                     type="number" 
                     required
                     value={bankTransferForm.amount}
+                    disabled={!canonicalFinancialWriteReady}
                     onChange={(e) => setBankTransferForm(prev => ({ ...prev, amount: e.target.value }))}
                     className="w-full bg-transparent border border-slate-300 rounded-lg p-2.5 font-mono font-black text-sm text-left"
                     placeholder="0.00"
@@ -4316,20 +4335,22 @@ export default function GeneralLedgerPortal({
 
                 <div>
                   <label className="block text-slate-700 font-bold mb-1">رقم الحوالة المرجعي / المستند السري للدفع:</label>
-                  <input 
-                    type="text" 
-                    value={bankTransferForm.reference}
-                    onChange={(e) => setBankTransferForm(prev => ({ ...prev, reference: e.target.value }))}
+                    <input
+                      type="text"
+                      value={bankTransferForm.reference}
+                      disabled={!canonicalFinancialWriteReady}
+                      onChange={(e) => setBankTransferForm(prev => ({ ...prev, reference: e.target.value }))}
                     className="w-full bg-transparent border border-slate-300 rounded-lg p-2.5 font-mono"
                   />
                 </div>
 
                 <div>
                   <label className="block text-slate-700 font-bold mb-1">أغراض التحويل والمستند التوضيحي:</label>
-                  <input 
-                    type="text" 
-                    value={bankTransferForm.purpose}
-                    onChange={(e) => setBankTransferForm(prev => ({ ...prev, purpose: e.target.value }))}
+                    <input
+                      type="text"
+                      value={bankTransferForm.purpose}
+                      disabled={!canonicalFinancialWriteReady}
+                      onChange={(e) => setBankTransferForm(prev => ({ ...prev, purpose: e.target.value }))}
                     className="w-full bg-transparent border border-slate-300 rounded-lg p-2.5 font-semibold"
                   />
                 </div>
@@ -4337,10 +4358,11 @@ export default function GeneralLedgerPortal({
                 <div className="pt-3">
                   <button 
                     type="submit"
-                    className="w-full bg-[#c58a22] hover:bg-amber-700 text-white font-black py-3 rounded-lg flex items-center justify-center gap-2 shadow cursor-pointer transition-all"
+                    disabled={!canonicalFinancialWriteReady}
+                    className="w-full bg-[#c58a22] hover:bg-amber-700 text-white font-black py-3 rounded-lg flex items-center justify-center gap-2 shadow cursor-pointer transition-all disabled:opacity-40 disabled:cursor-not-allowed"
                   >
                     <ArrowRightLeft className="w-4 h-4" />
-                    <span>بدء التحويل وتحديث المركز المالي للمصارف 🖹</span>
+                    <span>{canonicalFinancialWriteReady ? 'بدء التحويل وتحديث المركز المالي للمصارف 🖹' : 'التحويل غير متاح — المصدر للقراءة فقط'}</span>
                   </button>
                 </div>
               </form>

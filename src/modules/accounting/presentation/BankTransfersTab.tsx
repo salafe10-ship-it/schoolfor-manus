@@ -75,6 +75,9 @@ export const BankTransfersTab = () => {
     <div className="p-4 bg-white rounded-xl border border-slate-200">
       <h3 className="text-sm font-bold text-slate-800">حوالات وسندات التحويل البنكي الداخلي</h3>
       <p className="text-xs text-slate-500 mt-1">تداول السيولة بين الصندوق الفرعي كاش وبين الحساب الجاري للمدرسة بالمصارف.</p>
+      <div role="alert" className="mt-4 rounded-lg border border-amber-200 bg-amber-50 px-3 py-2 text-xs font-semibold text-amber-900">
+        الحوالات البنكية متوقفة حالياً: لا توجد خدمة حوالات أو قيد كانوني معتمد للحفظ، وهذه الشاشة للعرض والتوثيق فقط.
+      </div>
     </div>
   );
 };
