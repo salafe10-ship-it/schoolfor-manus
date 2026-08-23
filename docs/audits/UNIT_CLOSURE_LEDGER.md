@@ -14,8 +14,8 @@
 | 06 | Attendance | `PENDING` | — |
 | 07 | Exams & Results | `PENDING SOL GATE` | توجد إصلاحات واختبارات سابقة؛ يلزم تقرير الوحدة الكامل. |
 | 08 | Fees / Student Finance | `PENDING SOL GATE` | توجد إصلاحات واختبارات سابقة؛ يلزم تقرير الوحدة الكامل. |
-| 09 | General Finance / Accounting | `PENDING` | — |
-| 10 | General Ledger | `PENDING SOL GATE` | توجد إصلاحات واختبارات سابقة؛ يلزم تقرير الوحدة الكامل. |
+| 09 | General Finance / Accounting | `BLOCKED — SOURCE OF TRUTH REQUIRED` | إعادة الفحص المحاسبي: 10 ملفات/10 اختبارات ناجحة، لكن لا يوجد مخطط PostgreSQL محاسبي كانوني أو عقد مالك معتمد. راجع `acc-002-general-accounting-discovery-audit.md`. |
+| 10 | General Ledger | `BLOCKED — OWNER CONTRACT REQUIRED` | القراءة/الحواجز الأمنية مثبتة، بينما الترحيل والكتابة والإقفال والتقارير الكانونية غير قابلة للاعتماد قبل ACC-001/ACC-002. |
 | 11 | HR | `PENDING SOL GATE` | توجد إصلاحات واختبارات سابقة؛ يلزم تقرير الوحدة الكامل. |
 | 12 | Payroll | `PENDING` | — |
 | 13 | Inventory | `PENDING SOL GATE` | توجد إصلاحات واختبارات سابقة؛ يلزم تقرير الوحدة الكامل. |

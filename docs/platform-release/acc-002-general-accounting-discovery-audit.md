@@ -8,6 +8,12 @@ Discovery only. No Accounting policy, schema, SQL, migration, RLS, seed, UI, or 
 
 `ACC-002 = BLOCKED — ACCOUNTING SOURCE OF TRUTH, CANONICAL WRITE, AND OWNER CONTRACT ARE NOT RELEASE-READY`
 
+## Recheck — 2026-08-23
+
+- The accounting regression slice was rerun: `10 files / 10 tests — PASS`.
+- Passing tests confirm fail-closed guards, canonical-read contracts, RBAC read boundaries, no synthetic opening balances, and posting/unposting safety contracts.
+- The recheck did not change the release decision: no approved PostgreSQL accounting schema or owner-approved posting contract was found, so no financial implementation or production mutation was made.
+
 The repository contains a broad accounting UI and several partial services/repositories, but the evidence does not support certifying General Accounting for real financial operations.
 
 ## Surface inventory
@@ -133,4 +139,3 @@ The existing ACC-001 decision package must resolve:
 `Accounting Owner Contract → canonical schema/writer mission → focused accounting tests → staging transaction evidence → final release validation`.
 
 No Accounting implementation should start from the current UI or fallback repositories without that sequence.
-
