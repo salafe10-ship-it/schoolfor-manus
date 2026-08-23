@@ -1,5 +1,7 @@
 import { authenticatedRequest } from '../../../utils/authenticatedRequest';
 
+const inFlightStudentLists = new Map<string, Promise<any>>();
+
 /**
  * Student Repository Layer
  * Handles direct network and server API communication (acting as the client repository talking to Supabase / Database through backend proxies).
@@ -179,17 +181,25 @@ export const StudentRepository = {
     Object.entries(options).forEach(([key, value]) => {
       if (value !== undefined && value !== '') params.set(key, String(value));
     });
-    const response = await authenticatedRequest(`/api/students?${params.toString()}`, {
+    const requestKey = params.toString();
+    const existing = inFlightStudentLists.get(requestKey);
+    if (existing) return existing;
+    const request = authenticatedRequest(`/api/students?${requestKey}`, {
       method: "GET",
       headers: { "Content-Type": "application/json" },
-      cache: "no-store",
-      signal
-    });
-    if (!response.ok) {
-      const errorData = await response.json().catch(() => ({}));
-      throw new Error(errorData.message || errorData.error || `فشل جلب بيانات الطلاب من الخادم (${response.status})`);
-    }
-    return response.json();
+      cache: "no-store"
+    }).then(async response => {
+      if (!response.ok) {
+        const errorData = await response.json().catch(() => ({}));
+        throw new Error(errorData.message || errorData.error || `فشل جلب بيانات الطلاب من الخادم (${response.status})`);
+      }
+      return response.json();
+    }).finally(() => inFlightStudentLists.delete(requestKey));
+    inFlightStudentLists.set(requestKey, request);
+    // The shared request is intentionally not aborted by one unmounting view;
+    // this prevents duplicate concurrent reads during React navigation.
+    void signal;
+    return request;
   },
 
   async exportStudents(options: { search?: string; status?: string; section?: string; sortBy?: string; sortOrder?: 'asc' | 'desc' } = {}, signal?: AbortSignal): Promise<{ blob: Blob; fileName: string }> {

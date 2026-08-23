@@ -1831,8 +1831,26 @@ async function startServer() {
     }
   });
 
-  // Students Database API
-  app.get("/api/students", authenticateRequest, requirePermissionOnly(PERMISSIONS.STUDENT_READ), async (req, res, next) => {
+  // Students Database API. UnitOfWork currently carries a process-scoped
+  // transaction context, so concurrent canonical reads must be serialized;
+  // otherwise a navigation-triggered duplicate request can enter a nested
+  // UnitOfWork and fail with a misleading tenant/read error.
+  let studentReadQueue = Promise.resolve();
+  app.get("/api/students", async (_req, res, next) => {
+    const previous = studentReadQueue;
+    let release!: () => void;
+    studentReadQueue = new Promise<void>(resolve => { release = resolve; });
+    await previous;
+    let released = false;
+    const releaseOnce = () => {
+      if (released) return;
+      released = true;
+      release();
+    };
+    res.once('finish', releaseOnce);
+    res.once('close', releaseOnce);
+    next();
+  }, authenticateRequest, requirePermissionOnly(PERMISSIONS.STUDENT_READ), async (req, res, next) => {
     res.setHeader('Cache-Control', 'no-store, no-cache, must-revalidate');
     res.setHeader('Pragma', 'no-cache');
     const studentReadDiagnostic = createStudentReadDiagnostic(res);

@@ -449,38 +449,15 @@ export default function App() {
   const [isSuperAdminPortalActive, setIsSuperAdminPortalActive] = useState<boolean>(false);
   const [activeSection, setActiveSection] = useState<string>('super_dashboard');
 
-  // Hydrate the shared student collection when a trusted school session is
-  // active and the user is actually entering Student Affairs. Dashboard
-  // rendering must not issue a student-read request that the current role
-  // cannot perform.
+  // Student Affairs owns its canonical paginated read. Do not hydrate the
+  // shared collection here as well: doing so duplicates GET /api/students
+  // during navigation and can overlap the server transaction context.
   useEffect(() => {
-    if (activeSection !== 'students' || !['school', 'admin'].includes(currentPortal) ||
-      !selectedSchool?.id || !sessionManager.getAccessToken() ||
-      !canAccessSection(trustedSessionUser, 'students', { currentPortal })) {
+    if (activeSection !== 'students') {
       return;
     }
-
-    const controller = new AbortController();
-    StudentApiRepository.list({ page: 1, limit: 100, sortBy: 'name', sortOrder: 'asc' }, controller.signal)
-      .then(response => {
-        const rows = Array.isArray(response?.data)
-          ? response.data
-          : Array.isArray(response)
-            ? response
-            : [];
-        setStudents(current => [
-          ...current.filter(student => student.schoolId !== selectedSchool.id),
-          ...(rows as Student[])
-        ]);
-      })
-      .catch(error => {
-        if (error?.name !== 'AbortError') {
-          EnterpriseLogger.warn('Shared student hydration failed', 'App', { error: error?.message || String(error) });
-        }
-      });
-
-    return () => controller.abort();
-  }, [activeSection, currentPortal, selectedSchool?.id, sessionManager, trustedSessionUser]);
+    return undefined;
+  }, [activeSection]);
 
   // Auto switch activeSection to school dashboard when in Client Mode if currently on central admin route
   useEffect(() => {
