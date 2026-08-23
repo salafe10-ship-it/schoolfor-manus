@@ -77,6 +77,7 @@ export class VoucherRepository implements IBaseRepository<Voucher> {
     }
 
     // Fallback Read
+    FallbackStorage.assertCanonicalPersistence('voucher by id read');
     const vouchers = FallbackStorage.getVouchers();
     return vouchers.find(v => v.id === id && (v as any).schoolId === schoolId) || null;
   }
@@ -113,6 +114,7 @@ export class VoucherRepository implements IBaseRepository<Voucher> {
     }
 
     // Fallback Read
+    FallbackStorage.assertCanonicalPersistence('voucher list read');
     let vouchers = FallbackStorage.getVouchers().filter(v => (v as any).schoolId === schoolId);
     if (options?.type) {
       vouchers = vouchers.filter(v => v.type === options.type);
@@ -453,6 +455,7 @@ export class VoucherRepository implements IBaseRepository<Voucher> {
   }
 
   private async validateDateAndAccount(schoolId: string, dateStr: string, accountId: string): Promise<void> {
+    FallbackStorage.assertCanonicalPersistence('voucher fiscal and account validation read');
     // 1. Validate Fiscal Years & Periods
     const fiscalYears = FallbackStorage.getFiscalYears().filter(fy => fy.schoolId === schoolId);
     const date = new Date(dateStr);

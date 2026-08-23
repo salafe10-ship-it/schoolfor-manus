@@ -31,13 +31,16 @@ describe('STU-AFFAIRS-P1 save and persistence contract', () => {
   it('keeps registration on the trusted canonical transaction path', () => {
     expect(serverSource).toContain('resolveStudentTenantContext(req)');
     expect(serverSource).toContain('studentRegistrationService.register');
-    expect(serverSource).toContain('requirePermission(PERMISSIONS.STUDENT_WRITE)');
-    expect(serverSource).toContain('toCanonicalRegistrationCommand(context, studentData)');
+    expect(serverSource).toContain('requirePermission(PERMISSIONS.STUDENT_REGISTRATION_CREATE)');
+    expect(serverSource).toContain('toCanonicalRegistrationCommand(tenantContext, (req.body || {}) as Record<string, any>)');
+    expect(repositorySource).toContain('"/api/student-registration"');
+    expect(repositorySource).toContain('"Idempotency-Key": idempotencyKey');
   });
 
   it('uses the same active token source for direct Student Affairs requests', () => {
     const searchPanelSource = readFileSync('src/components/student-affairs/StudentSearchPanel.tsx', 'utf8');
-    expect(searchPanelSource).toContain('getTrustedAccessToken');
+    expect(searchPanelSource).toContain('StudentRepository');
+    expect(repositorySource).toContain('authenticatedRequest');
     expect(searchPanelSource).not.toContain('localStorage.getItem("edupro_token")');
   });
 

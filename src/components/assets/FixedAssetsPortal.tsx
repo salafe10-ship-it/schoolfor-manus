@@ -48,6 +48,7 @@ export default function FixedAssetsPortal() {
       }
     } catch (e) {
       console.error('Failed to load fixed assets:', e);
+      addToast('الأصول الثابتة متوقفة حتى يتم ربط مصدرها المحاسبي المركزي.', 'warning');
     }
   };
 

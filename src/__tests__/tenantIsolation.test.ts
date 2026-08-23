@@ -5,7 +5,7 @@ import { requirePermission } from '../middleware/auth';
 import { clearTenantAuditEvents, getTenantAuditEvents, setTenantAuditSink } from '../tenant/TenantAuditHooks';
 import { TenantAwareCache } from '../tenant/TenantAwareCache';
 import { runWithTenantContext, getTenantContext } from '../tenant/TenantContext';
-import { TenantContextResolver, TenantDataProvider } from '../tenant/TenantEngine';
+import { TenantContextResolver, TenantDataProvider, tenantEngine } from '../tenant/TenantEngine';
 import { assertRepositoryScope } from '../tenant/TenantGuard';
 
 const identity = {
@@ -139,12 +139,13 @@ describe('Wave 1D tenant isolation foundation', () => {
   });
 
   it('applies API isolation after authorization and rejects tenant spoofing', async () => {
+    vi.spyOn(tenantEngine, 'resolve').mockResolvedValue({ ...context });
     clearTenantAuditEvents();
     const captured: any[] = [];
     setTenantAuditSink(event => { captured.push(event); });
     const next = vi.fn();
     const req = {
-      user: { ...identity, schoolId: 'school_1', branchId: 'branch_1_1', academicYear: 'acad_cal_2026' },
+      user: { ...identity, schoolId: 'school_1', branchId: 'branch_1_1', academicYear: '' },
       originalUrl: '/api/students', method: 'GET', headers: { 'x-school-id': 'school-2' }, query: {}, body: {}, ip: '127.0.0.1'
     } as unknown as express.Request;
     await requirePermission(PERMISSIONS.STUDENT_READ)(req, {} as express.Response, next);
@@ -154,14 +155,15 @@ describe('Wave 1D tenant isolation foundation', () => {
   });
 
   it('allows a valid protected endpoint and injects the trusted context', async () => {
+    vi.spyOn(tenantEngine, 'resolve').mockResolvedValue({ ...context });
     const next = vi.fn();
     const req = {
-      user: { ...identity, schoolId: 'school_1', branchId: 'branch_1_1', academicYear: 'acad_cal_2026' },
+      user: { ...identity, schoolId: 'school_1', branchId: 'branch_1_1', academicYear: '' },
       originalUrl: '/api/students', method: 'GET', headers: {}, query: {}, body: {}, ip: '127.0.0.1'
     } as unknown as express.Request;
     await requirePermission(PERMISSIONS.STUDENT_READ)(req, {} as express.Response, next);
     expect(next).toHaveBeenCalledTimes(1);
     expect(next.mock.calls[0][0]).toBeUndefined();
-    expect((req as any).tenantContext).toMatchObject({ schoolId: 'school_1', branchId: 'branch_1_1', academicYear: 'acad_cal_2026' });
+    expect((req as any).tenantContext).toMatchObject({ schoolId: 'school-1', branchId: 'branch-1', academicYear: 'year-2026' });
   });
 });

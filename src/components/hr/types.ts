@@ -90,7 +90,7 @@ export interface HRPenalty {
   date: string;
   amount: number; // deducted amount or days
   reason: string;
-  status: 'applied' | 'waived';
+  status: 'pending' | 'applied' | 'waived';
 }
 
 export interface HRAdvance {
@@ -111,7 +111,7 @@ export interface HRBonus {
   amount: number;
   date: string;
   reason: string;
-  status: 'applied' | 'paid';
+  status: 'pending' | 'applied' | 'paid';
 }
 
 export interface HRPerformance {

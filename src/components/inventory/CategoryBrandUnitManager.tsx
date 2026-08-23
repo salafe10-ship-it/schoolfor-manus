@@ -9,25 +9,11 @@ interface CategoryBrandUnitManagerProps {
 export default function CategoryBrandUnitManager({ triggerNotification }: CategoryBrandUnitManagerProps) {
   const [activeSubTab, setActiveSubTab] = useState<'categories' | 'brands' | 'units'>('categories');
 
-  const [categories, setCategories] = useState<InventoryCategory[]>([
-    { id: 'cat_electronics', schoolId: 'school_1', name: 'أجهزة وإلكترونيات تعليمية', description: 'أجهزة البروجكتور والشاشات التفاعلية والحواسيب' },
-    { id: 'cat_furniture', schoolId: 'school_1', name: 'أثاث ومستلزمات الفصول', description: 'المقاعد، الطاولات، السبورات، الخزائن' },
-    { id: 'cat_books', schoolId: 'school_1', name: 'كتب ومناهج دراسية', description: 'الكتب الدراسية المعتمدة لجميع المراحل' },
-    { id: 'cat_lab', schoolId: 'school_1', name: 'مختبرات ومعامل علوم', description: 'أدوات الكيمياء والفيزياء ومجاهر الأحياء' },
-  ]);
+  const [categories, setCategories] = useState<InventoryCategory[]>([]);
 
-  const [brands, setBrands] = useState<any[]>([
-    { id: 'brand_sony', name: 'سوني Sony', origin: 'اليابان', itemsCount: 12 },
-    { id: 'brand_dell', name: 'ديل Dell', origin: 'الولايات المتحدة', itemsCount: 25 },
-    { id: 'brand_oxford', name: 'أوكسفورد Oxford', origin: 'المملكة المتحدة', itemsCount: 40 },
-  ]);
+  const [brands, setBrands] = useState<any[]>([]);
 
-  const [units, setUnits] = useState<InventoryUnit[]>([
-    { id: 'unit_pcs', schoolId: 'school_1', name: 'قطعة', symbol: 'قطعة' },
-    { id: 'unit_set', schoolId: 'school_1', name: 'طقم / مجسم', symbol: 'طقم' },
-    { id: 'unit_box', schoolId: 'school_1', name: 'صندوق / كرتون', symbol: 'صندوق' },
-    { id: 'unit_book', schoolId: 'school_1', name: 'كتاب / دفتر', symbol: 'كتاب' },
-  ]);
+  const [units, setUnits] = useState<InventoryUnit[]>([]);
 
   const notify = (msg: string, type: 'success' | 'warning' | 'info' | 'danger' = 'info') => {
     if (triggerNotification) triggerNotification(msg, type);
@@ -74,7 +60,7 @@ export default function CategoryBrandUnitManager({ triggerNotification }: Catego
               onClick={() => {
                 const name = prompt('أدخل اسم التصنيف الجديد:');
                 if (name) {
-                  setCategories([...categories, { id: `cat_${Date.now()}`, schoolId: 'school_1', name, description: 'تصنيف رئيسي معتمد' }]);
+                  setCategories([...categories, { id: `cat_${Date.now()}`, schoolId: 'school_1', name, description: '' }]);
                   notify(`✓ تم إضافة التصنيف (${name}) بنجاح`, 'success');
                 }
               }}
@@ -105,7 +91,7 @@ export default function CategoryBrandUnitManager({ triggerNotification }: Catego
               onClick={() => {
                 const name = prompt('أدخل اسم العلامة التجارية الجديدة:');
                 if (name) {
-                  setBrands([...brands, { id: `brand_${Date.now()}`, name, origin: 'عالمي', itemsCount: 0 }]);
+                  setBrands([...brands, { id: `brand_${Date.now()}`, name, origin: '', itemsCount: 0 }]);
                   notify(`✓ تم إضافة العلامة التجارية (${name}) بنجاح`, 'success');
                 }
               }}

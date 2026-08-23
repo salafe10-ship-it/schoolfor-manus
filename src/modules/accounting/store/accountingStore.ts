@@ -1,6 +1,9 @@
 import { create } from 'zustand';
+import { FallbackStorage } from '../../../database/repositories/FallbackStorage';
 
 const initialTab = 'dashboard';
+const readCanonicalLocal = (key: string): string | null =>
+  FallbackStorage.isCanonicalPersistenceRequired() ? null : localStorage.getItem(key);
 
 export const useAccountingStore = create<any>((set, get) => ({
   activeTab: initialTab || 'dashboard',
@@ -19,7 +22,7 @@ export const useAccountingStore = create<any>((set, get) => ({
   setSimCostCenter: (val) => set({ simCostCenter: typeof val === 'function' ? val(get().simCostCenter) : val }),
   isStrictEnforcement: true,
   setIsStrictEnforcement: (val) => set({ isStrictEnforcement: typeof val === 'function' ? val(get().isStrictEnforcement) : val }),
-  accounts: (() => { const local = localStorage.getItem('erp_chart_of_accounts_v2'); return local ? JSON.parse(local) : []; })(),
+  accounts: (() => { const local = readCanonicalLocal('erp_chart_of_accounts_v2'); return local ? JSON.parse(local) : []; })(),
   setAccounts: (val) => set({ accounts: typeof val === 'function' ? val(get().accounts) : val }),
   suppliers: [
     { id: 'sup_1', name: 'شركة البيان للمطبوعات والكتب', category: 'الكتب والوسائل التعليمية', balance: 3200.00, contact: '0912183921', status: 'نشط' },
@@ -27,7 +30,7 @@ export const useAccountingStore = create<any>((set, get) => ({
     { id: 'sup_3', name: 'شركة الفاف للشحن والنقل البري', category: 'النقل والوقود للرحلات الحافلية', balance: 2800.00, contact: '0917736192', status: 'تحت التسوية' },
   ],
   setSuppliers: (val) => set({ suppliers: typeof val === 'function' ? val(get().suppliers) : val }),
-  journalEntries: (() => { const local = localStorage.getItem('erp_journal_entries_v2'); return local ? JSON.parse(local) : []; })(),
+  journalEntries: (() => { const local = readCanonicalLocal('erp_journal_entries_v2'); return local ? JSON.parse(local) : []; })(),
   setJournalEntries: (val) => set({ journalEntries: typeof val === 'function' ? val(get().journalEntries) : val }),
   showAddAccountModal: false,
   setShowAddAccountModal: (val) => set({ showAddAccountModal: typeof val === 'function' ? val(get().showAddAccountModal) : val }),
@@ -97,11 +100,11 @@ export const useAccountingStore = create<any>((set, get) => ({
   setTrialBalanceLevel: (val) => set({ trialBalanceLevel: typeof val === 'function' ? val(get().trialBalanceLevel) : val }),
   trialBalanceMode: 'nested',
   setTrialBalanceMode: (val) => set({ trialBalanceMode: typeof val === 'function' ? val(get().trialBalanceMode) : val }),
-  localRoles: (() => { const saved = localStorage.getItem('erp_roles_list_v1'); return saved ? JSON.parse(saved) : []; })(),
+  localRoles: (() => { const saved = readCanonicalLocal('erp_roles_list_v1'); return saved ? JSON.parse(saved) : []; })(),
   setLocalRoles: (val) => set({ localRoles: typeof val === 'function' ? val(get().localRoles) : val }),
-  localUsers: (() => { const saved = localStorage.getItem('erp_users_list_v1'); return saved ? JSON.parse(saved) : []; })(),
+  localUsers: (() => { const saved = readCanonicalLocal('erp_users_list_v1'); return saved ? JSON.parse(saved) : []; })(),
   setLocalUsers: (val) => set({ localUsers: typeof val === 'function' ? val(get().localUsers) : val }),
-  localPermissionsAuditLog: (() => { const saved = localStorage.getItem('erp_permissions_audit_log_v1'); return saved ? JSON.parse(saved) : []; })(),
+  localPermissionsAuditLog: (() => { const saved = readCanonicalLocal('erp_permissions_audit_log_v1'); return saved ? JSON.parse(saved) : []; })(),
   setLocalPermissionsAuditLog: (val) => set({ localPermissionsAuditLog: typeof val === 'function' ? val(get().localPermissionsAuditLog) : val }),
   closingStep: 'check',
   setClosingStep: (val) => set({ closingStep: typeof val === 'function' ? val(get().closingStep) : val }),
@@ -116,17 +119,17 @@ export const useAccountingStore = create<any>((set, get) => ({
   closingAuditLog: [],
   setClosingAuditLog: (val) => set({ closingAuditLog: typeof val === 'function' ? val(get().closingAuditLog) : val }),
   isYearClosed: (function() { const func = () => {
-    return localStorage.getItem('erp_is_year_2026_closed') === 'true';
+    return readCanonicalLocal('erp_is_year_2026_closed') === 'true';
   }; return func(); })(),
   setIsYearClosed: (val) => set({ isYearClosed: typeof val === 'function' ? val(get().isYearClosed) : val }),
   closingRefNo: 'CLS-2026-001',
   setClosingRefNo: (val) => set({ closingRefNo: typeof val === 'function' ? val(get().closingRefNo) : val }),
   closingDate: (function() { const func = () => {
-    return localStorage.getItem('erp_year_2026_closing_date') || '';
+    return readCanonicalLocal('erp_year_2026_closing_date') || '';
   }; return func(); })(),
   setClosingDate: (val) => set({ closingDate: typeof val === 'function' ? val(get().closingDate) : val }),
   openedYear2027: (function() { const func = () => {
-    return localStorage.getItem('erp_is_year_2027_opened') === 'true';
+    return readCanonicalLocal('erp_is_year_2027_opened') === 'true';
   }; return func(); })(),
   setOpenedYear2027: (val) => set({ openedYear2027: typeof val === 'function' ? val(get().openedYear2027) : val }),
   currentClosingYear: '2026',
@@ -145,7 +148,7 @@ export const useAccountingStore = create<any>((set, get) => ({
   setShowPostClosingTrialBalance: (val) => set({ showPostClosingTrialBalance: typeof val === 'function' ? val(get().showPostClosingTrialBalance) : val }),
   unapprovedAdjustmentsCount: 1,
   setUnapprovedAdjustmentsCount: (val) => set({ unapprovedAdjustmentsCount: typeof val === 'function' ? val(get().unapprovedAdjustmentsCount) : val }),
-  localDrillDownUser: (() => { const saved = localStorage.getItem('erp_users_list_v1'); if (saved) { try { return JSON.parse(saved)[0]; } catch(e){} } return null; })(),
+  localDrillDownUser: (() => { const saved = readCanonicalLocal('erp_users_list_v1'); if (saved) { try { return JSON.parse(saved)[0]; } catch(e){} } return null; })(),
   setLocalDrillDownUser: (val) => set({ localDrillDownUser: typeof val === 'function' ? val(get().localDrillDownUser) : val }),
   drillDownHistory: [
     { level: 'reports', title: 'التقارير المالية' }
@@ -260,9 +263,9 @@ export const useAccountingStore = create<any>((set, get) => ({
   setJvAttachmentsList: (val) => set({ jvAttachmentsList: typeof val === 'function' ? val(get().jvAttachmentsList) : val }),
   jvTableMaximized: false,
   setJvTableMaximized: (val) => set({ jvTableMaximized: typeof val === 'function' ? val(get().jvTableMaximized) : val }),
-  receiptVouchers: (() => { const local = localStorage.getItem('erp_receipt_vouchers_v2'); return local ? JSON.parse(local) : []; })(),
+  receiptVouchers: (() => { const local = readCanonicalLocal('erp_receipt_vouchers_v2'); return local ? JSON.parse(local) : []; })(),
   setReceiptVouchers: (val) => set({ receiptVouchers: typeof val === 'function' ? val(get().receiptVouchers) : val }),
-  paymentVouchers: (() => { const local = localStorage.getItem('erp_payment_vouchers_v2'); return local ? JSON.parse(local) : []; })(),
+  paymentVouchers: (() => { const local = readCanonicalLocal('erp_payment_vouchers_v2'); return local ? JSON.parse(local) : []; })(),
   setPaymentVouchers: (val) => set({ paymentVouchers: typeof val === 'function' ? val(get().paymentVouchers) : val }),
   receiptVoucherForm: {
     date: new Date().toISOString().split('T')[0],
@@ -316,7 +319,7 @@ export const useAccountingStore = create<any>((set, get) => ({
     purpose: 'إيداع إيرادات النقدية اليومية المحصلة في المصرف الجاري'
   },
   setBankTransferForm: (val) => set({ bankTransferForm: typeof val === 'function' ? val(get().bankTransferForm) : val }),
-  fixedAssets: (() => { const saved = localStorage.getItem('erp_fixed_assets_v2'); return saved ? JSON.parse(saved) : []; })(),
+  fixedAssets: (() => { const saved = readCanonicalLocal('erp_fixed_assets_v2'); return saved ? JSON.parse(saved) : []; })(),
   setFixedAssets: (val) => set({ fixedAssets: typeof val === 'function' ? val(get().fixedAssets) : val }),
   selectedAssetId: 'FA-01',
   setSelectedAssetId: (val) => set({ selectedAssetId: typeof val === 'function' ? val(get().selectedAssetId) : val }),

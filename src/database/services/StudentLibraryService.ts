@@ -12,7 +12,7 @@ export class StudentLibraryService {
     const libraryAccount = {
       id: libraryId,
       studentId,
-      libraryCardNumber: `LC-${Math.floor(10000 + Math.random() * 90000)}`,
+      libraryCardNumber: `LC-${libraryId}`,
       status: 'active',
       booksBorrowedCount: 0,
       unpaidFines: 0.00
@@ -24,6 +24,7 @@ export class StudentLibraryService {
    * Validates if a student has any active library commitments (borrowed books or unpaid fines).
    */
   public static checkLibraryCommitments(studentId: string, reasons: string[]): void {
+    FallbackStorage.assertCanonicalPersistence('student library commitments read');
     const libAccount = FallbackStorage.getStudentLibraryAccounts().find(l => l.studentId === studentId);
     if (libAccount) {
       if (libAccount.booksBorrowedCount > 0) {
@@ -39,6 +40,7 @@ export class StudentLibraryService {
    * Enlists the deletion of a student's library account.
    */
   public static enlistDeleteLibraryAccount(studentId: string): void {
+    FallbackStorage.assertCanonicalPersistence('student library account deletion lookup');
     const lib = FallbackStorage.getStudentLibraryAccounts().find(l => l.studentId === studentId);
     if (lib) {
       StudentLibraryAccountRepository.enlistDeleteStudentLibraryAccount(lib.id);

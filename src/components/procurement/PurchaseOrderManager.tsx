@@ -30,42 +30,34 @@ export default function PurchaseOrderManager({
 
   const handleOpenNew = () => {
     setEditingPO({
-      poNo: `PO-2026-${Math.floor(1000 + Math.random() * 9000)}`,
+      poNo: '',
       poDate: new Date().toISOString().split('T')[0],
-      expectedDeliveryDate: new Date(Date.now() + 10 * 86400000).toISOString().split('T')[0],
-      vendorId: 'sup_sony',
-      vendorName: 'شركة سوني العالمية - التوريدات التعليمية',
-      warehouseId: 'branch_1_1',
-      paymentTerms: 'الدفع بعد 30 يوماً من الفحص والاستلام المعتمد',
-      deliveryTerms: 'تسليم أرض المستودع الرئيسي مع التركيب والضمان',
-      status: 'approved',
-      lines: [
-        {
-          id: `pol_${Date.now()}_1`,
-          itemCode: 'SKU-E-001',
-          itemName: 'أجهزة بروجكتور فائقة الجودة سوني UHD',
-          unit: 'جهاز',
-          quantityRequested: 10,
-          quantityOrdered: 10,
-          quantityReceived: 0,
-          estimatedUnitPrice: 3000,
-          actualUnitPrice: 3000,
-          taxRate: 15,
-          taxAmount: 4500,
-          totalAmount: 34500
-        }
-      ],
-      subtotal: 30000,
-      taxAmount: 4500,
+      expectedDeliveryDate: '',
+      vendorId: '',
+      vendorName: '',
+      warehouseId: '',
+      paymentTerms: '',
+      deliveryTerms: '',
+      status: 'draft',
+      lines: [],
+      subtotal: 0,
+      taxAmount: 0,
       discountAmount: 0,
-      grandTotal: 34500
+      grandTotal: 0
     });
     setShowModal(true);
   };
 
   const handleSubmitForm = (e: React.FormEvent) => {
     e.preventDefault();
-    if (!editingPO || !editingPO.poNo) return;
+    if (!editingPO || !editingPO.poNo) {
+      notify('يرجى إدخال رقم أمر الشراء قبل الحفظ', 'warning');
+      return;
+    }
+    if (!editingPO.vendorId || !editingPO.warehouseId || !editingPO.lines?.length) {
+      notify('لا يمكن حفظ أمر شراء دون مورد ومستودع وبند واحد على الأقل', 'warning');
+      return;
+    }
 
     const poToSave: PurchaseOrder = {
       id: editingPO.id || `po_${Date.now()}`,
@@ -73,17 +65,17 @@ export default function PurchaseOrderManager({
       poNo: editingPO.poNo,
       poDate: editingPO.poDate || new Date().toISOString().split('T')[0],
       expectedDeliveryDate: editingPO.expectedDeliveryDate || new Date().toISOString().split('T')[0],
-      vendorId: editingPO.vendorId || 'sup_generic',
-      vendorName: editingPO.vendorName || 'مورد عام',
-      warehouseId: editingPO.warehouseId || 'branch_1_1',
-      paymentTerms: editingPO.paymentTerms || '30 يوماً',
-      deliveryTerms: editingPO.deliveryTerms || 'أرض المستودع',
-      status: editingPO.status as PurchaseOrderStatus || 'approved',
+      vendorId: editingPO.vendorId,
+      vendorName: editingPO.vendorName || '',
+      warehouseId: editingPO.warehouseId,
+      paymentTerms: editingPO.paymentTerms || '',
+      deliveryTerms: editingPO.deliveryTerms || '',
+      status: editingPO.status as PurchaseOrderStatus || 'draft',
       lines: editingPO.lines || [],
-      subtotal: editingPO.subtotal || 0,
-      taxAmount: editingPO.taxAmount || 0,
-      discountAmount: editingPO.discountAmount || 0,
-      grandTotal: editingPO.grandTotal || 0,
+      subtotal: editingPO.subtotal ?? 0,
+      taxAmount: editingPO.taxAmount ?? 0,
+      discountAmount: editingPO.discountAmount ?? 0,
+      grandTotal: editingPO.grandTotal ?? 0,
       createdAt: editingPO.createdAt || new Date().toISOString(),
       updatedAt: new Date().toISOString()
     };

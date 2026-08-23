@@ -203,7 +203,11 @@ const handleDrillDownToOriginalDocument = (jv: any) => {
     <>
               {activeTab === 'financial_reports' && (() => {
           // Prepare dynamic accounts with calculations
-          const reportAccounts = getProcessedAccounts();
+          const reportAccounts = getProcessedAccounts({
+            fromDate: filterFromDate,
+            toDate: filterToDate,
+            costCenter: filterCostCenter
+          });
 
           // Calculate core aggregates for the summary dashboard
           const totalAssets = reportAccounts
@@ -218,16 +222,24 @@ const handleDrillDownToOriginalDocument = (jv: any) => {
             .filter(a => a.classification === 'حقوق ملكية' && a.level === 1)
             .reduce((sum, a) => sum + (a.endingBalance || 0), 0);
 
-          const totalRevenues = reportAccounts
-            .filter(a => a.classification === 'إيرادات' && a.level === 1)
-            .reduce((sum, a) => sum + (a.endingBalance || 0), 0);
+          const periodRevenue = (account: any) => Number(account.creditMovements || 0) - Number(account.debitMovements || 0);
+          const periodExpense = (account: any) => Number(account.debitMovements || 0) - Number(account.creditMovements || 0);
+          const isLeafAccount = (account: any) => account.type === 'فرعي' || account.type === 'leaf' || Number(account.level) >= 3;
+          const sumPeriodClass = (classification: string, movement: (account: any) => number) => {
+            const leafAccounts = reportAccounts.filter(a => a.classification === classification && isLeafAccount(a));
+            const accountsToSum = leafAccounts.length > 0
+              ? leafAccounts
+              : reportAccounts.filter(a => a.classification === classification && a.level === 1);
+            return accountsToSum.reduce((sum, account) => sum + movement(account), 0);
+          };
+          const totalRevenues = sumPeriodClass('إيرادات', periodRevenue);
 
-          const totalExpenses = reportAccounts
-            .filter(a => a.classification === 'مصروفات' && a.level === 1)
-            .reduce((sum, a) => sum + (a.endingBalance || 0), 0);
+          const totalExpenses = sumPeriodClass('مصروفات', periodExpense);
 
           const netIncome = totalRevenues - totalExpenses;
-          const balanceSheetVariance = Math.abs(totalAssets - (totalLiabilities + totalEquity));
+          // Current-period profit is part of equity in the balance-sheet check
+          // until the fiscal-year closing entry is posted.
+          const balanceSheetVariance = Math.abs(totalAssets - (totalLiabilities + totalEquity + netIncome));
 
           // Handle automatic financial period dates update
           const handlePeriodChange = (period: string) => {
@@ -359,7 +371,7 @@ const handleDrillDownToOriginalDocument = (jv: any) => {
           };
 
           return (
-            <div className="space-y-6 animate-fade-in text-xs text-slate-800">
+            <div className="financial-reports-reference space-y-6 animate-fade-in text-xs text-slate-800">
               {/* Header block */}
               <div className="flex flex-col md:flex-row justify-between items-start md:items-center border-b border-slate-200 pb-4 gap-4">
                 <div>
@@ -650,7 +662,9 @@ const handleDrillDownToOriginalDocument = (jv: any) => {
                     <div className="col-span-2 md:col-span-1 bg-blue-50 border border-blue-200 rounded-xl p-4 shadow-sm flex flex-col justify-center">
                       <div className="flex items-center gap-1.5 justify-center">
                         <span className="w-2.5 h-2.5 rounded-full bg-emerald-500 animate-ping"></span>
-                        <p className="text-[10px] text-blue-800 font-black">ميزانية المجمع متطابقة</p>
+                        <p className={`text-[10px] font-black ${balanceSheetVariance < 0.01 ? 'text-blue-800' : 'text-rose-700'}`}>
+                          {balanceSheetVariance < 0.01 ? 'ميزانية المجمع متطابقة' : 'تحتاج الميزانية إلى تسوية'}
+                        </p>
                       </div>
                       <p className="text-[9px] text-slate-400 text-center mt-1">فارق الميزانية: {balanceSheetVariance.toFixed(2)} د.ل</p>
                     </div>
@@ -1924,7 +1938,7 @@ const handleDrillDownToOriginalDocument = (jv: any) => {
                                       <span className="text-slate-400 font-mono text-[9px]">({a.code})</span>
                                       <span className="opacity-0 group-hover/row:opacity-100 transition-all text-[8px] bg-emerald-200 text-emerald-800 px-1.5 py-0.5 rounded font-sans select-none font-extrabold">كشف حساب 📊</span>
                                     </span>
-                                    <span className="font-mono text-emerald-700 font-semibold" dir="ltr">{a.endingBalance.toLocaleString(undefined, { minimumFractionDigits: 2 })} د.ل</span>
+                                    <span className="font-mono text-emerald-700 font-semibold" dir="ltr">{periodRevenue(a).toLocaleString(undefined, { minimumFractionDigits: 2 })} د.ل</span>
                                   </div>
                                 ))}
                             </div>
@@ -1950,7 +1964,7 @@ const handleDrillDownToOriginalDocument = (jv: any) => {
                                       <span className="text-slate-400 font-mono text-[9px]">({a.code})</span>
                                       <span className="opacity-0 group-hover/row:opacity-100 transition-all text-[8px] bg-rose-200 text-rose-800 px-1.5 py-0.5 rounded font-sans select-none font-extrabold">كشف حساب 📊</span>
                                     </span>
-                                    <span className="font-mono text-rose-700 font-semibold" dir="ltr">{a.endingBalance.toLocaleString(undefined, { minimumFractionDigits: 2 })} د.ل</span>
+                                    <span className="font-mono text-rose-700 font-semibold" dir="ltr">{periodExpense(a).toLocaleString(undefined, { minimumFractionDigits: 2 })} د.ل</span>
                                   </div>
                                 ))}
                             </div>
@@ -2226,7 +2240,11 @@ const handleDrillDownToOriginalDocument = (jv: any) => {
                             </thead>
                             <tbody className="divide-y divide-slate-100">
                               {(() => {
-                                const reportAccounts = getProcessedAccounts();
+                                const reportAccounts = getProcessedAccounts({
+                                  fromDate: filterFromDate,
+                                  toDate: filterToDate,
+                                  costCenter: filterCostCenter
+                                });
                                 const targetAcc = reportAccounts.find(a => a.code === filterAccount || a.id === filterAccount);
                                 if (!targetAcc) {
                                   return (

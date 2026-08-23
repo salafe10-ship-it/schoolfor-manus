@@ -22,12 +22,16 @@ import {
  * Full integration with Unit of Work (UoW) Pattern.
  */
 export class AccountsReceivableRepository {
+  private static assertAuthoritativePersistence(operation: string): void {
+    FallbackStorage.assertCanonicalPersistence(`accounts receivable ${operation}`);
+  }
 
   // =========================================================================
   // 1. ReceivableAccount CRUD
   // =========================================================================
 
   public static async getAccountById(schoolId: string, id: string): Promise<ReceivableAccount | null> {
+    this.assertAuthoritativePersistence('account read');
     let accounts = FallbackStorage.getReceivableAccounts();
     if (UnitOfWork.isTransactionActive()) {
       accounts = UnitOfWork.getPendingAll('receivable_accounts', accounts);
@@ -42,6 +46,7 @@ export class AccountsReceivableRepository {
   }
 
   public static async getAccountByStudentId(schoolId: string, studentId: string): Promise<ReceivableAccount | null> {
+    this.assertAuthoritativePersistence('account read');
     let accounts = FallbackStorage.getReceivableAccounts();
     if (UnitOfWork.isTransactionActive()) {
       accounts = UnitOfWork.getPendingAll('receivable_accounts', accounts);
@@ -51,6 +56,7 @@ export class AccountsReceivableRepository {
   }
 
   public static async getAllAccounts(schoolId: string, options?: { status?: ReceivableStatus }): Promise<ReceivableAccount[]> {
+    this.assertAuthoritativePersistence('accounts read');
     let accounts = FallbackStorage.getReceivableAccounts();
     if (UnitOfWork.isTransactionActive()) {
       accounts = UnitOfWork.getPendingAll('receivable_accounts', accounts);
@@ -63,6 +69,7 @@ export class AccountsReceivableRepository {
   }
 
   public static async createAccount(schoolId: string, account: Partial<ReceivableAccount>): Promise<ReceivableAccount> {
+    this.assertAuthoritativePersistence('account write');
     let accounts = FallbackStorage.getReceivableAccounts();
     if (UnitOfWork.isTransactionActive()) {
       accounts = UnitOfWork.getPendingAll('receivable_accounts', accounts);
@@ -103,6 +110,7 @@ export class AccountsReceivableRepository {
   }
 
   public static async updateAccount(schoolId: string, id: string, item: Partial<ReceivableAccount>): Promise<ReceivableAccount> {
+    this.assertAuthoritativePersistence('account update');
     let accounts = FallbackStorage.getReceivableAccounts();
     if (UnitOfWork.isTransactionActive()) {
       accounts = UnitOfWork.getPendingAll('receivable_accounts', accounts);
@@ -144,6 +152,7 @@ export class AccountsReceivableRepository {
   // =========================================================================
 
   public static async getTransactionById(schoolId: string, id: string): Promise<ReceivableTransaction | null> {
+    this.assertAuthoritativePersistence('transaction read');
     let txs = FallbackStorage.getReceivableTransactions();
     if (UnitOfWork.isTransactionActive()) {
       txs = UnitOfWork.getPendingAll('receivable_transactions', txs);
@@ -157,6 +166,7 @@ export class AccountsReceivableRepository {
   }
 
   public static async getTransactionsByAccountId(schoolId: string, accountId: string): Promise<ReceivableTransaction[]> {
+    this.assertAuthoritativePersistence('transactions read');
     let txs = FallbackStorage.getReceivableTransactions();
     if (UnitOfWork.isTransactionActive()) {
       txs = UnitOfWork.getPendingAll('receivable_transactions', txs);
@@ -165,6 +175,7 @@ export class AccountsReceivableRepository {
   }
 
   public static async createTransaction(schoolId: string, item: Partial<ReceivableTransaction>): Promise<ReceivableTransaction> {
+    this.assertAuthoritativePersistence('transaction write');
     let txs = FallbackStorage.getReceivableTransactions();
     if (UnitOfWork.isTransactionActive()) {
       txs = UnitOfWork.getPendingAll('receivable_transactions', txs);
@@ -217,6 +228,7 @@ export class AccountsReceivableRepository {
   }
 
   public static async updateTransaction(schoolId: string, id: string, item: Partial<ReceivableTransaction>): Promise<ReceivableTransaction> {
+    this.assertAuthoritativePersistence('transaction update');
     let txs = FallbackStorage.getReceivableTransactions();
     if (UnitOfWork.isTransactionActive()) {
       txs = UnitOfWork.getPendingAll('receivable_transactions', txs);
@@ -252,6 +264,7 @@ export class AccountsReceivableRepository {
   // =========================================================================
 
   public static async getBalanceByAccountId(schoolId: string, accountId: string): Promise<ReceivableBalance | null> {
+    this.assertAuthoritativePersistence('balance read');
     let balances = FallbackStorage.getReceivableBalances();
     if (UnitOfWork.isTransactionActive()) {
       balances = UnitOfWork.getPendingAll('receivable_balances', balances);
@@ -261,6 +274,7 @@ export class AccountsReceivableRepository {
   }
 
   public static async saveBalance(schoolId: string, item: ReceivableBalance): Promise<ReceivableBalance> {
+    this.assertAuthoritativePersistence('balance write');
     let balances = FallbackStorage.getReceivableBalances();
     if (UnitOfWork.isTransactionActive()) {
       balances = UnitOfWork.getPendingAll('receivable_balances', balances);
@@ -293,6 +307,7 @@ export class AccountsReceivableRepository {
   // =========================================================================
 
   public static async createAllocation(schoolId: string, item: Partial<ReceivableAllocation>): Promise<ReceivableAllocation> {
+    this.assertAuthoritativePersistence('allocation write');
     let allocations = FallbackStorage.getReceivableAllocations();
     if (UnitOfWork.isTransactionActive()) {
       allocations = UnitOfWork.getPendingAll('receivable_allocations', allocations);
@@ -330,6 +345,7 @@ export class AccountsReceivableRepository {
   // =========================================================================
 
   public static async createSettlement(schoolId: string, item: Partial<ReceivableSettlement>): Promise<ReceivableSettlement> {
+    this.assertAuthoritativePersistence('settlement write');
     let settlements = FallbackStorage.getReceivableSettlements();
     if (UnitOfWork.isTransactionActive()) {
       settlements = UnitOfWork.getPendingAll('receivable_settlements', settlements);
@@ -368,6 +384,7 @@ export class AccountsReceivableRepository {
   // =========================================================================
 
   public static async createAdjustment(schoolId: string, item: Partial<ReceivableAdjustment>): Promise<ReceivableAdjustment> {
+    this.assertAuthoritativePersistence('adjustment write');
     let adjustments = FallbackStorage.getReceivableAdjustments();
     if (UnitOfWork.isTransactionActive()) {
       adjustments = UnitOfWork.getPendingAll('receivable_adjustments', adjustments);
@@ -406,6 +423,7 @@ export class AccountsReceivableRepository {
   }
 
   public static async updateAdjustmentStatus(schoolId: string, id: string, status: 'approved' | 'rejected', approvedBy: string): Promise<ReceivableAdjustment> {
+    this.assertAuthoritativePersistence('adjustment update');
     let adjustments = FallbackStorage.getReceivableAdjustments();
     if (UnitOfWork.isTransactionActive()) {
       adjustments = UnitOfWork.getPendingAll('receivable_adjustments', adjustments);
@@ -432,6 +450,7 @@ export class AccountsReceivableRepository {
   // =========================================================================
 
   public static async createWriteOff(schoolId: string, item: Partial<ReceivableWriteOff>): Promise<ReceivableWriteOff> {
+    this.assertAuthoritativePersistence('write-off');
     let writeOffs = FallbackStorage.getReceivableWriteOffs();
     if (UnitOfWork.isTransactionActive()) {
       writeOffs = UnitOfWork.getPendingAll('receivable_write_offs', writeOffs);

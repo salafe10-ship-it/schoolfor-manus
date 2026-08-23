@@ -86,7 +86,7 @@ export default function SmartPortalGateway({
   initialTab = 'school'
 }: SmartPortalGatewayProps) {
   const [activeTab, setActiveTab] = useState<'school' | 'admin'>(initialTab);
-  const [selectedSchoolId] = useState<string>(schools[0]?.id || 'school_1');
+  const [selectedSchoolId] = useState<string>(schools[0]?.id || '');
   
   // Login credentials state
   const [username, setUsername] = useState('');
@@ -104,12 +104,12 @@ export default function SmartPortalGateway({
   // Get active selected school object for dynamic branding
   const currentSchool = useMemo(() => {
     return schools.find(s => s.id === selectedSchoolId) || schools[0] || {
-      id: 'school_1',
-      name: 'مدارس النور الأهلية النموذجية',
-      logo: '✨',
-      licenseNumber: 'L-2026-900',
-      academicYear: '2026/2027',
-      motto: 'نظام إدارة التعلم والعمليات المدرسية الذكية'
+      id: '',
+      name: 'مدرسة غير محددة',
+      logo: '🏫',
+      licenseNumber: 'غير متحقق',
+      academicYear: 'غير متحقق',
+      motto: 'بيانات المنشأة غير متاحة من مصدر موثوق'
     };
   }, [schools, selectedSchoolId]);
 
@@ -233,7 +233,7 @@ export default function SmartPortalGateway({
           <div className="hidden sm:flex items-center gap-2 bg-slate-900/90 border border-slate-800 px-3 py-1.5 text-[11px] text-slate-300">
             <span className="w-2 h-2 rounded-full bg-emerald-500 animate-pulse" />
             <span className="font-bold text-slate-300">الاتصال الآمن:</span>
-            <span className="text-emerald-400 font-extrabold font-mono">100% SSL Active</span>
+            <span className="text-slate-400 font-extrabold font-mono">SSL غير متحقق</span>
           </div>
 
           {/* Mode Switcher Tab (Only if NOT forced in Client Mode) */}

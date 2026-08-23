@@ -17,6 +17,7 @@ export class CollectionsValidator {
    * Validates a collection receipt before creation or updating.
    */
   public static validateReceipt(schoolId: string, receipt: Partial<CollectionReceipt>): void {
+    FallbackStorage.assertCanonicalPersistence('collection receipt validation source read');
     const errors: Record<string, string> = {};
 
     if (!receipt.receivableAccountId) {
@@ -126,6 +127,7 @@ export class CollectionsValidator {
    * Validates a collection allocation before recording.
    */
   public static validateAllocation(schoolId: string, allocation: Partial<CollectionAllocation>): void {
+    FallbackStorage.assertCanonicalPersistence('collection allocation validation source read');
     const errors: Record<string, string> = {};
 
     if (!allocation.collectionId) {

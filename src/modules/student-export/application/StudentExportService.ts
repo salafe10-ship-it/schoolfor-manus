@@ -1,5 +1,4 @@
 import * as XLSX from 'xlsx';
-import { AuditRepository } from '../../../database/repositories/AuditRepository';
 import { CanonicalStudentReadRepository, type CanonicalStudentReadParams } from '../../../database/repositories/CanonicalStudentReadRepository';
 import type { TenantContext } from '../../../tenant/TenantContext';
 import type { AuditMetadata } from '../../../types';
@@ -72,21 +71,6 @@ export async function generateStudentExport(
   if (result.totalCount > STUDENT_EXPORT_MAX_ROWS) {
     throw new ValidationError(`تجاوزت نتائج التصدير الحد الأقصى المسموح وهو ${STUDENT_EXPORT_MAX_ROWS} سجل.`);
   }
-
-  await AuditRepository.create(tenantContext.schoolId, {
-    userId: audit.userId,
-    userName: audit.userName,
-    userRole: audit.userRole as any,
-    action: 'STUDENT_EXPORT_ACCEPTED',
-    module: 'Student Affairs',
-    ipAddress: audit.ipAddress,
-    endpoint: '/api/students/export',
-    httpMethod: 'GET',
-    correlationId,
-    result: 'accepted',
-    severity: 'low',
-    details: JSON.stringify({ operation: 'Student Data Export', rowCount: result.totalCount, requestId, correlationId })
-  });
 
   const buffer = buildStudentExportXlsx(result.data);
   return { buffer, rowCount: result.totalCount, fileName: studentExportFileName() };

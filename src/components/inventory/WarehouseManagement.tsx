@@ -11,12 +11,8 @@ interface WarehouseManagementProps {
 }
 
 export default function WarehouseManagement({ triggerNotification }: WarehouseManagementProps) {
-  const [warehouses, setWarehouses] = useState<InventoryWarehouse[]>([
-    { id: 'branch_1_1', schoolId: 'school_1', name: 'المستودع الرئيسي العام', location: 'المبنى الرئيسي - القبو A1', manager: 'أ. يحيى بن معجب الشهري' },
-    { id: 'branch_1_2', schoolId: 'school_1', name: 'مستودع الكتب والقرطاسية', location: 'مجمع البنات - الطابق الأول B2', manager: 'أ. مريم العتيبي' },
-    { id: 'branch_1_3', schoolId: 'school_1', name: 'مستودع الأثاث والتجهيزات', location: 'الورشة المركزية - مستودع C3', manager: 'أ. إبراهيم الهذلي' },
-    { id: 'branch_1_4', schoolId: 'school_1', name: 'مستودع المختبرات والتقنية', location: 'معامل العلوم والتكنولوجيا D4', manager: 'د. خالد الزهراني' },
-  ]);
+  // لا تُعرض مستودعات أو مسؤولون وهميون؛ تُحمّل القائمة من المستودع المركزي عند ربطه.
+  const [warehouses, setWarehouses] = useState<InventoryWarehouse[]>([]);
 
   const [showAddModal, setShowAddModal] = useState(false);
   const [editingWh, setEditingWh] = useState<Partial<InventoryWarehouse> | null>(null);
@@ -27,7 +23,10 @@ export default function WarehouseManagement({ triggerNotification }: WarehouseMa
 
   const handleSave = (e: React.FormEvent) => {
     e.preventDefault();
-    if (!editingWh || !editingWh.name) return;
+    if (!editingWh || !editingWh.name?.trim() || !editingWh.location?.trim() || !editingWh.manager?.trim()) {
+      notify('اسم المستودع والموقع وأمين المستودع حقول مطلوبة وموثقة', 'warning');
+      return;
+    }
 
     if (editingWh.id) {
       setWarehouses(warehouses.map(w => w.id === editingWh.id ? (editingWh as InventoryWarehouse) : w));
@@ -37,8 +36,8 @@ export default function WarehouseManagement({ triggerNotification }: WarehouseMa
         id: `wh_${Date.now()}`,
         schoolId: 'school_1',
         name: editingWh.name || '',
-        location: editingWh.location || 'المبنى الرئيسي',
-        manager: editingWh.manager || 'أمين المستودع'
+        location: editingWh.location.trim(),
+        manager: editingWh.manager.trim()
       };
       setWarehouses([...warehouses, newWh]);
       notify(`✓ تم إضافة المستودع الجديد (${newWh.name}) بنجاح`, 'success');

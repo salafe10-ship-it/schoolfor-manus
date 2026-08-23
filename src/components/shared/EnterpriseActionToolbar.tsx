@@ -79,7 +79,7 @@ export default function EnterpriseActionToolbar({
   const subtitle = subtitleMap[title] || 'لوحة الإجراءات المتكاملة لنظام إدارة المدرسة';
 
   return (
-    <div className={`bg-gradient-to-r from-[#1c120c] via-[#2d1e12] to-[#1a100a] text-white rounded-3xl p-4 sm:p-5 border-2 border-[#d4af37]/40 shadow-2xl flex flex-wrap items-center justify-between gap-4 relative overflow-hidden z-30 ${minimal ? 'mb-4' : 'mb-6'}`}>
+    <div className={`enterprise-action-toolbar bg-gradient-to-r from-[#1c120c] via-[#2d1e12] to-[#1a100a] text-white rounded-3xl p-4 sm:p-5 border-2 border-[#d4af37]/40 shadow-2xl flex flex-wrap items-center justify-between gap-4 relative overflow-hidden z-30 ${minimal ? 'mb-4' : 'mb-6'}`}>
       <div className="absolute top-0 right-1/4 w-96 h-20 bg-[#d4af37]/10 blur-3xl pointer-events-none" />
       {/* Right Section: Compact Title and KPI Stats */}
       {!minimal && (

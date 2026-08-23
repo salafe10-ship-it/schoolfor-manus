@@ -26,6 +26,9 @@ export interface FinancialReportSnapshot {
 }
 
 export class FinancialReportingRepository {
+  private static assertAuthoritativePersistence(operation: string): void {
+    FallbackStorage.assertCanonicalPersistence(`financial reporting ${operation}`);
+  }
 
   /**
    * Save a financial snapshot to database or fallback local storage
@@ -69,7 +72,8 @@ export class FinancialReportingRepository {
       }
     }
 
-    // Fallback Local Storage
+    this.assertAuthoritativePersistence('snapshot write');
+    // Fallback storage is allowed only in explicitly unconfigured local mode.
     const key = `school_snapshots_${schoolId}`;
     const snapshots = this.getLocalSnapshots(schoolId);
     
@@ -110,6 +114,7 @@ export class FinancialReportingRepository {
       }
     }
 
+    this.assertAuthoritativePersistence('snapshot read');
     const list = this.getLocalSnapshots(schoolId);
     return list.find(s => s.id === snapshotId) || null;
   }
@@ -138,6 +143,7 @@ export class FinancialReportingRepository {
       }
     }
 
+    this.assertAuthoritativePersistence('snapshots read');
     return this.getLocalSnapshots(schoolId);
   }
 

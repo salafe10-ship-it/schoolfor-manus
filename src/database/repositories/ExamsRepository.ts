@@ -172,9 +172,11 @@ export class ExamsRepository implements IBaseRepository<any> {
         EnterpriseLogger.error("Failed to fetch exams database from Supabase:", "ExamsRepository", { error: err?.message || err });
       }
     } else {
+      FallbackStorage.assertCanonicalPersistence('exams database read');
       return FallbackStorage.getExams();
     }
 
+    FallbackStorage.assertCanonicalPersistence('exams database read after central failure');
     return {};
   }
 

@@ -17,10 +17,10 @@ export interface SmartButtonProps extends React.ButtonHTMLAttributes<HTMLButtonE
 }
 
 export function SmartButton({ label, icon, isLoading, variant = 'primary', disabled, className = '', ...props }: SmartButtonProps) {
-  const base = "flex items-center justify-center gap-2 px-4 py-2.5 font-bold text-xs transition-all duration-200 border cursor-pointer select-none active:scale-[0.98]";
+  const base = "flex min-h-10 items-center justify-center gap-2 px-4 py-2.5 rounded-xl font-bold text-xs transition-all duration-200 border cursor-pointer select-none active:scale-[0.98]";
   const variants = {
-    primary: "bg-amber-600 hover:bg-amber-700 text-white border-amber-700 shadow-sm",
-    secondary: "hover:bg-transparent text-slate-700 border-slate-200 dark:bg-slate-800 dark:text-slate-200 dark:border-slate-700 dark:hover:bg-slate-700",
+    primary: "bg-gradient-to-r from-[#9a6a1d] to-[#d4af37] hover:brightness-105 text-[#1c120c] border-[#f7d174]/50 shadow-md",
+    secondary: "bg-[#fffefc] hover:bg-[#f8f5ee] text-slate-700 border-slate-200 dark:bg-slate-800 dark:text-slate-200 dark:border-slate-700 dark:hover:bg-slate-700",
     danger: "bg-rose-50 hover:bg-rose-100 text-rose-700 border-rose-200 dark:bg-rose-950/40 dark:text-rose-300 dark:border-rose-900",
     success: "bg-emerald-600 hover:bg-emerald-700 text-white border-emerald-700 shadow-sm",
     ghost: "bg-transparent hover:bg-slate-100 text-slate-600 border-transparent dark:text-slate-300 dark:hover:bg-slate-800"
@@ -49,7 +49,7 @@ export interface SmartCardProps {
 
 export function SmartCard({ title, subtitle, children, actions, className = '' }: SmartCardProps) {
   return (
-    <div className={`dark:bg-slate-900 border border-slate-200/80 dark:border-slate-800 p-6 flex flex-col gap-4 ${className}`}>
+    <div className={`rounded-2xl bg-[#fffefc] dark:bg-slate-900 border border-slate-200/80 dark:border-slate-800 p-6 flex flex-col gap-4 shadow-sm ${className}`}>
       {(title || actions) && (
         <div className="flex items-center justify-between pb-3 border-b border-slate-100 dark:border-slate-800">
           <div>
@@ -84,7 +84,7 @@ export function SmartKPICard({ title, value, change, isPositive = true, icon, co
   };
 
   return (
-    <div className="dark:bg-slate-900 border border-slate-200/80 dark:border-slate-800 p-5 flex items-center justify-between">
+    <div className="rounded-2xl bg-[#fffefc] dark:bg-slate-900 border border-slate-200/80 dark:border-slate-800 p-5 flex items-center justify-between shadow-sm">
       <div className="space-y-1">
         <span className="text-xs font-semibold text-slate-500 dark:text-slate-400">{title}</span>
         <div className="text-2xl font-black text-slate-900 dark:text-white tracking-tight">{value}</div>
@@ -94,7 +94,7 @@ export function SmartKPICard({ title, value, change, isPositive = true, icon, co
           </div>
         )}
       </div>
-      <div className={`w-12 h-12 flex items-center justify-center border ${themes[colorTheme]}`}>
+        <div className={`w-12 h-12 rounded-xl flex items-center justify-center border ${themes[colorTheme]}`}>
         {icon}
       </div>
     </div>
@@ -111,7 +111,7 @@ export interface SmartSearchProps {
 
 export function SmartSearch({ value, onChange, placeholder = "بحث شامل...", onFilterClick }: SmartSearchProps) {
   return (
-    <div className="flex items-center gap-3 w-full max-w-md bg-gradient-to-b from-[#fffefc] via-[#fbf8f0] to-[#f5eeea] border-2 border-[#d4af37]/30 hover:border-[#d4af37] rounded-3xl p-4 sm:p-5 shadow-md transition-all duration-300">
+    <div className="flex items-center gap-3 w-full max-w-md bg-gradient-to-b from-[#fffefc] via-[#fbf8f0] to-[#f5eeea] border border-[#d4af37]/35 hover:border-[#d4af37] rounded-2xl p-3.5 shadow-md transition-all duration-300">
       <div className="relative flex-1">
         <Search className="absolute right-3.5 top-1/2 -translate-y-1/2 w-4 h-4 text-slate-400" />
         <input
@@ -125,7 +125,7 @@ export function SmartSearch({ value, onChange, placeholder = "بحث شامل...
       {onFilterClick && (
         <button
           onClick={onFilterClick}
-          className="bg-gradient-to-r from-[#2a1d13] via-[#3a2719] to-[#2a1d13] text-amber-200 font-extrabold"
+          className="min-h-10 min-w-10 rounded-xl bg-gradient-to-r from-[#2a1d13] via-[#3a2719] to-[#2a1d13] text-amber-200 font-extrabold"
           title="تصفية متقدمة"
         >
           <Filter className="w-4 h-4" />
@@ -149,7 +149,7 @@ export function SmartDialog({ isOpen, onClose, title, children, maxWidth = 'max-
 
   return (
     <div className="fixed inset-0 z-50 flex items-center justify-center bg-slate-900/60 backdrop-blur-sm p-4 animate-fadeIn">
-      <div className={`dark:bg-slate-900 dark:border-slate-800 shadow-2xl w-full ${maxWidth} overflow-hidden flex flex-col max-h-[90vh]`}>
+      <div className={`rounded-2xl bg-[#fffefc] border border-[#d4af37]/35 dark:bg-slate-900 dark:border-slate-800 shadow-2xl w-full ${maxWidth} overflow-hidden flex flex-col max-h-[90vh]`}>
         <div className="flex items-center justify-between px-6 py-4 border-b border-slate-100 dark:border-slate-800 bg-slate-50/50 dark:bg-slate-900">
           <h3 className="font-bold text-slate-900 dark:text-white text-base">{title}</h3>
           <button

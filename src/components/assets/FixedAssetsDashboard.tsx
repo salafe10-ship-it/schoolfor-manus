@@ -112,7 +112,7 @@ export default function FixedAssetsDashboard({
           </div>
           <div className="mt-3 pt-3 border-t border-white/10 flex justify-between items-center text-[11px]">
             <span className="text-slate-300 font-bold">حالة السلامة المالية:</span>
-            <span className="font-bold text-emerald-300 bg-emerald-500/20 px-2 py-0.5 rounded-md border border-emerald-500/30">100% مطابقة</span>
+            <span className="font-bold text-emerald-300 bg-emerald-500/20 px-2 py-0.5 rounded-md border border-emerald-500/30">{totalAssets > 0 ? 'مطابقة غير متحققة' : 'غير متحقق'}</span>
           </div>
         </div>
       </div>

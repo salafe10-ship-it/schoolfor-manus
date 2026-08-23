@@ -394,11 +394,7 @@ export default function SystemHealthCenter({
 
   // Governance: Workflow Rules
   const [activeWorkflow, setActiveWorkflow] = useState<string>('fees');
-  const [workflows, setWorkflows] = useState([
-    { id: 'fees', name: 'اعتماد خطط السداد والخصومات الاستثنائية', status: 'نشط', levels: 3, approvers: ['المحاسب المالي', 'مدير الفرع', 'مدير النظام (Admin)'] },
-    { id: 'exams', name: 'اعتماد وقفل درجات الكنترول النهائي', status: 'نشط', levels: 2, approvers: ['رئيس لجنة الكنترول', 'مدير المدرسة'] },
-    { id: 'hiring', name: 'توظيف الكوادر الأكاديمية والرواتب العليا', status: 'نشط', levels: 4, approvers: ['مسؤول الموارد البشرية', 'المدير المالي', 'مدير المدرسة', 'المطور العام (SaaS)'] },
-  ]);
+  const [workflows, setWorkflows] = useState<any[]>([]);
 
   // Business Rules States
   const [siblingDiscount, setSiblingDiscount] = useState<number>(15);
@@ -408,16 +404,8 @@ export default function SystemHealthCenter({
   const [isBusinessRulesSaving, setIsBusinessRulesSaving] = useState<boolean>(false);
 
   // Automation Recipes
-  const [automationRecipes, setAutomationRecipes] = useState([
-    { id: 'abs_alert', title: 'إرسال تنبيه غياب تلقائي', trigger: 'عند تسجيل غياب الطالب لـ 3 أيام متتالية', action: 'إرسال رسالة SMS وWhatsApp فورية لولي الأمر', active: true },
-    { id: 'fee_remind', title: 'تذكير السداد التلقائي', trigger: 'قبل 5 أيام من استحقاق القسط الدراسي', action: 'جدولة بريد إلكتروني وتنبيه في حساب ولي الأمر والاتصال التلقائي', active: true },
-    { id: 'grade_publish', title: 'تنبيه اعتماد النتائج والشهادات', trigger: 'عند اعتماد درجات الكنترول رسمياً من الإدارة', action: 'إرسال إشعارات دفع وتجهيز ملف الشهادة الذكي للتحميل', active: false },
-    { id: 'payroll_post', title: 'الترحيل التلقائي لرواتب المعلمين', trigger: 'في تمام الساعة 11:59 مساءً من يوم 25 من كل شهر ميلادي', action: 'توليد قيود الرواتب والاستحقاقات وتحديث الحسابات العامة', active: true },
-  ]);
-  const [automationLogs, setAutomationLogs] = useState<string[]>([
-    `[${new Date().toLocaleTimeString('ar-SA')}] تم تشغيل محرك الأتمتة المجدولة بنجاح.`,
-    `[${new Date().toLocaleTimeString('ar-SA')}] فحص الفواتير المستحقة: تم العثور على 4 فواتير متأخرة وتوجيه تنبيهات السداد بنجاح.`,
-  ]);
+  const [automationRecipes, setAutomationRecipes] = useState<any[]>([]);
+  const [automationLogs, setAutomationLogs] = useState<string[]>([]);
   const [isSimulatingAutomation, setIsSimulatingAutomation] = useState<boolean>(false);
 
   // Report & Template Designer State
@@ -428,11 +416,7 @@ export default function SystemHealthCenter({
 
   // Version Control & Time Travel Auditor
   const [selectedAuditRecord, setSelectedAuditRecord] = useState<any | null>(null);
-  const [auditRecords, setAuditRecords] = useState([
-    { id: 'aud_1', table: 'students', action: 'تعديل السيرة السلوكية للدرجات', user: 'أ. مريم العتيبي (معلمة)', time: 'منذ 10 دقائق', ip: '192.168.1.104', before: { name: 'ماجد الحربي', grade: 'الأول الثانوي', score: '45%' }, after: { name: 'ماجد الحربي', grade: 'الأول الثانوي', score: '92% (اعتماد المراجعة)' }, details: 'تعديل درجات اختبار مادة الفيزياء بعد المراجعة اليدوية لرصد تظلم الطالب.' },
-    { id: 'aud_2', table: 'journal_entries', action: 'تعديل قيد تسوية مالي', user: 'أ. خالد الحربي (محاسب)', time: 'منذ ساعتين', ip: '10.0.4.15', before: { debit: '15,000 ريال (حساب غير معرف)', credit: '15,000 ريال' }, after: { debit: '15,000 ريال (البنك الأهلي)', credit: '15,000 ريال' }, details: 'تعديل الحساب المدين للقيد المحاسبي لضمان التوجيه لمركز التكلفة الصحيح.' },
-    { id: 'aud_3', table: 'schools', action: 'تحديث تراخيص الـ SaaS والمستندات', user: 'SuperAdmin (المطور العام)', time: 'أمس', ip: '185.122.40.11', before: { plan: 'الباقة الأساسية', storage: '10 GB' }, after: { plan: 'باقة الأكاديمية الاحترافية', storage: '100 GB' }, details: 'الترقية التلقائية بعد تأكيد المدفوعات عبر بوابات الربط الإلكتروني.' },
-  ]);
+  const [auditRecords, setAuditRecords] = useState<any[]>([]);
 
   // Point-in-Time Recovery Slider
   const [pitrMinutes, setPitrMinutes] = useState<number>(0);
@@ -441,19 +425,13 @@ export default function SystemHealthCenter({
   // SaaS Backup Vault states
   const [isBackingUp, setIsBackingUp] = useState<boolean>(false);
   const [backupProgress, setBackupProgress] = useState<number>(0);
-  const [backupFiles, setBackupFiles] = useState([
-    { name: 'backup_school_1_snapshot_20260702_01.sql', size: '14.2 MB', date: 'اليوم، 01:00 ص', key: 'AES-256-Encrypted' },
-    { name: 'backup_school_1_snapshot_20260701_00.sql', size: '14.1 MB', date: 'أمس، 12:00 ص', key: 'AES-256-Encrypted' },
-  ]);
+  const [backupFiles, setBackupFiles] = useState<any[]>([]);
 
   // Security Penetration Scanner States
-  const [securityScore, setSecurityScore] = useState<number>(100);
+  const [securityScore, setSecurityScore] = useState<number>(0);
   const [isSecScanning, setIsSecScanning] = useState<boolean>(false);
   const [secScanProgress, setSecScanProgress] = useState<number>(0);
-  const [securityLogs, setSecurityLogs] = useState<string[]>([
-    `[${new Date().toLocaleTimeString('ar-SA')}] تم فحص جدران الحماية للـ API وعزل المدارس: آمنة تماماً.`,
-    `[${new Date().toLocaleTimeString('ar-SA')}] التحقق من فلاتر إدخال النصوص وحظر الـ SQL Injection: ممتاز.`
-  ]);
+  const [securityLogs, setSecurityLogs] = useState<string[]>([]);
 
   // SOP Help Manuals screen state
   const [selectedSopScreen, setSelectedSopScreen] = useState<string>('students');
@@ -468,38 +446,23 @@ export default function SystemHealthCenter({
   const [retentionDays, setRetentionDays] = useState<number>(90);
   const [isArchiving, setIsArchiving] = useState<boolean>(false);
   const [archivingProgress, setArchivingProgress] = useState<number>(0);
-  const [activeLogsCount, setActiveLogsCount] = useState<number>(14820);
-  const [archivedLogsCount, setArchivedLogsCount] = useState<number>(35200);
-  const [archivedLogs, setArchivedLogs] = useState<any[]>([
-    { id: 'arc_1', action: 'تسجيل دخول مستخدم', schoolId: 'SCH-82', user: 'أحمد الغامدي (مدير مدرسة)', date: '2026-03-12', details: 'تسجيل دخول ناجح من IP 192.168.1.45' },
-    { id: 'arc_2', action: 'إنشاء فاتورة رسوم', schoolId: 'SCH-105', user: 'خالد الحربي (محاسب)', date: '2026-02-28', details: 'فاتورة رقم #INV-9021 بقيمة 4,500 ريال لطالب #ST-90' },
-    { id: 'arc_3', action: 'تعديل درجات اختبار', schoolId: 'SCH-22', user: 'مريم العتيبي (معلمة)', date: '2026-01-15', details: 'تعديل درجات مادة الكيمياء للصف الأول الثانوي' },
-    { id: 'arc_4', action: 'ترحيل قيد يومي', schoolId: 'SCH-45', user: 'سليمان الراجحي (مدير مدرسة)', date: '2025-12-05', details: 'ترحيل قيد رقم #JV-4820 بقيمة 12,500 ريال' }
-  ]);
+  const [activeLogsCount, setActiveLogsCount] = useState<number>(0);
+  const [archivedLogsCount, setArchivedLogsCount] = useState<number>(0);
+  const [archivedLogs, setArchivedLogs] = useState<any[]>([]);
   const [archiveSearch, setArchiveSearch] = useState<string>('');
 
   // C. Read Replicas
   const [readReplicasEnabled, setReadReplicasEnabled] = useState<boolean>(false);
   const [replicaServerHealthy, setReplicaServerHealthy] = useState<boolean>(true);
-  const [replicaLogs, setReplicaLogs] = useState<any[]>([
-    { id: 1, type: 'SELECT', table: 'students', target: 'Read Replica [Replica-1]', duration: '8ms' },
-    { id: 2, type: 'SELECT', table: 'journal_entries', target: 'Read Replica [Replica-1]', duration: '12ms' },
-    { id: 3, type: 'INSERT', table: 'receipt_vouchers', target: 'Primary Database [Write]', duration: '34ms' },
-    { id: 4, type: 'SELECT', table: 'financial_reports', target: 'Read Replica [Replica-2]', duration: '19ms' }
-  ]);
+  const [replicaLogs, setReplicaLogs] = useState<any[]>([]);
 
   // D. Redis Caching
   const [redisCacheEnabled, setRedisCacheEnabled] = useState<boolean>(false);
-  const [cacheMemory, setCacheMemory] = useState<number>(14.2); // MB
-  const [redisLogs, setRedisLogs] = useState<any[]>([
-    { id: 'r1', key: 'school_settings_102', type: 'HIT', desc: 'إعدادات المدرسة الأساسية والفرع الرئيسي', time: '1.2ms' },
-    { id: 'r2', key: 'user_permissions_admin', type: 'HIT', desc: 'مصفوفة صلاحيات المستخدم النشط ودور المشرف', time: '0.8ms' },
-    { id: 'r3', key: 'financial_balances_SCH90', type: 'BYPASS_SECURE', desc: 'ميزانية المدرسة والقيود اليومية والذمم - حظر مؤقت لتفادي البيانات القديمة', time: '22.4ms' },
-    { id: 'r4', key: 'chart_of_accounts_SCH14', type: 'HIT', desc: 'شجرة الحسابات ودليل الحسابات المتكامل', time: '1.5ms' }
-  ]);
+  const [cacheMemory, setCacheMemory] = useState<number>(0); // لا تُقاس دون موصل مركزي
+  const [redisLogs, setRedisLogs] = useState<any[]>([]);
 
   // --- 1. PERFORMANCE LOAD TESTING STATE ---
-  const [selectedSchoolScale, setSelectedSchoolScale] = useState<number>(1500);
+  const [selectedSchoolScale, setSelectedSchoolScale] = useState<number>(0);
   const [isTestRunning, setIsTestRunning] = useState<boolean>(false);
   const [testProgress, setTestProgress] = useState<number>(0);
   const [testStage, setTestStage] = useState<string>('');
@@ -507,11 +470,11 @@ export default function SystemHealthCenter({
   
   // Real-time metrics during simulation
   const [liveMetrics, setLiveMetrics] = useState({
-    latency: 22, // ms
-    tps: 450,    // transactions per second
-    cpu: 18,     // %
-    ram: 2.4,    // GB
-    dbLoad: 12,  // %
+    latency: 0, // غير متحقق
+    tps: 0,
+    cpu: 0,
+    ram: 0,
+    dbLoad: 0,
     successOps: 0,
     failedOps: 0
   });
@@ -522,7 +485,7 @@ export default function SystemHealthCenter({
 
   // --- 2. SYSTEM HEALTH CHECK STATE ---
   const [isHealthChecking, setIsHealthChecking] = useState<boolean>(false);
-  const [healthScore, setHealthScore] = useState<number>(98);
+  const [healthScore, setHealthScore] = useState<number>(0);
   const [healthProgress, setHealthProgress] = useState<number>(0);
   const [healthReport, setHealthReport] = useState<any | null>(null);
   const [healthSearchQuery, setHealthSearchQuery] = useState<string>('');
@@ -530,6 +493,8 @@ export default function SystemHealthCenter({
 
   // Load baseline charts when loading the component
   useEffect(() => {
+    // لا تُنشأ مؤشرات تاريخية اصطناعية عند فتح الوحدة.
+    return;
     // Generate some mock historical server metrics
     const baseline: any[] = [];
     for (let i = 1; i <= 10; i++) {
@@ -656,6 +621,9 @@ export default function SystemHealthCenter({
 
   // Run System Health Check
   const handleStartHealthCheck = () => {
+    triggerNotification('خدمة مراقبة صحة النظام المركزية غير متاحة؛ لم يُجرَ فحص أو تُسجّل نتيجة وهمية.', 'warning');
+    return;
+
     setIsHealthChecking(true);
     setHealthProgress(0);
     setHealthReport(null);
@@ -778,7 +746,8 @@ export default function SystemHealthCenter({
 
   // Safe Simulation optimization trigger
   const handleOptimizeSystem = () => {
-    triggerNotification('جاري تفعيل التحسينات الوقائية وتحديث الفهارس الافتراضية وتحسين الاستعلامات...', 'info');
+    triggerNotification('خدمة تحسين النظام المركزية غير متاحة؛ لم تُعدّل فهارس أو مؤشرات محليًا.', 'warning');
+    return;
     setTimeout(() => {
       if (healthReport) {
         // Safe fix of simulated warnings
@@ -801,7 +770,7 @@ export default function SystemHealthCenter({
         });
       }
       setHealthScore(100);
-      triggerNotification('تم تحديث فهارس الأداء الافتراضية بنجاح! نسبة كفاءة النظام الحالية 100% ⚡', 'success');
+      triggerNotification('تم تحديث فهارس الأداء عبر الخدمة المركزية بنجاح ⚡', 'success');
     }, 1500);
   };
 
@@ -1034,12 +1003,12 @@ export default function SystemHealthCenter({
                 <div>
                   <span className="text-[10px] font-black text-slate-400 dark:text-slate-500 block uppercase tracking-wider">متوسط زمن الاستجابة</span>
                   <span className="text-xl sm:text-2xl font-black text-slate-900 dark:text-white mt-1 block font-mono">
-                    {liveMetrics.latency} <span className="text-xs font-semibold text-slate-400 dark:text-slate-500">ملي ثانية</span>
+                    {liveMetrics.latency > 0 ? liveMetrics.latency : 'غير متحقق'} {liveMetrics.latency > 0 && <span className="text-xs font-semibold text-slate-400 dark:text-slate-500">ملي ثانية</span>}
                   </span>
                   <div className="flex items-center gap-1.5 mt-2">
-                    <span className={`w-2 h-2 rounded-full ${liveMetrics.latency < 50 ? 'bg-emerald-500' : liveMetrics.latency < 100 ? 'bg-amber-500' : 'bg-rose-500'}`} />
+                    <span className={`w-2 h-2 rounded-full ${liveMetrics.latency === 0 ? 'bg-slate-400' : liveMetrics.latency < 50 ? 'bg-emerald-500' : liveMetrics.latency < 100 ? 'bg-amber-500' : 'bg-rose-500'}`} />
                     <span className="text-[9px] text-slate-500 font-black">
-                      {liveMetrics.latency < 50 ? 'ممتاز جداً ⚡' : liveMetrics.latency < 100 ? 'متوسط ⚠️' : 'ضغط ثقيل 🛑'}
+                      {liveMetrics.latency === 0 ? 'غير متحقق لغياب القياس' : liveMetrics.latency < 50 ? 'ممتاز جداً ⚡' : liveMetrics.latency < 100 ? 'متوسط ⚠️' : 'ضغط ثقيل 🛑'}
                     </span>
                   </div>
                 </div>
@@ -1052,11 +1021,11 @@ export default function SystemHealthCenter({
                 <div>
                   <span className="text-[10px] font-black text-slate-400 dark:text-slate-500 block uppercase tracking-wider">الإنتاجية القصوى (TPS)</span>
                   <span className="text-xl sm:text-2xl font-black text-slate-900 dark:text-white mt-1 block font-mono">
-                    {liveMetrics.tps.toLocaleString('ar-EG')} <span className="text-xs font-semibold text-slate-400 dark:text-slate-500">عملية/ث</span>
+                    {liveMetrics.tps > 0 ? liveMetrics.tps.toLocaleString('ar-EG') : 'غير متحقق'} {liveMetrics.tps > 0 && <span className="text-xs font-semibold text-slate-400 dark:text-slate-500">عملية/ث</span>}
                   </span>
                   <div className="flex items-center gap-1.5 mt-2">
                     <TrendingUp className="w-3.5 h-3.5 text-amber-500" />
-                    <span className="text-[9px] text-slate-500 font-black">معدل تنفيذ آمن للعمليات</span>
+                    <span className="text-[9px] text-slate-500 font-black">{liveMetrics.tps > 0 ? 'معدل تنفيذ آمن للعمليات' : 'بانتظار قياس مركزي'}</span>
                   </div>
                 </div>
                 <div className="w-12 h-12 bg-yellow-50 dark:bg-yellow-950/50 text-yellow-600 dark:text-yellow-400 flex items-center justify-center shrink-0">
@@ -1437,28 +1406,28 @@ export default function SystemHealthCenter({
                     <div className="bg-transparent dark:bg-slate-850 p-4 border border-slate-100 dark:border-slate-800/60 text-right">
                       <span className="text-slate-400 block text-[10px] font-black uppercase">الوحدات المفحوصة</span>
                       <span className="text-xl font-black text-slate-950 dark:text-white mt-1.5 block font-mono">
-                        {healthReport ? healthReport.totalCheckedModules : 14} <span className="text-[10px] text-slate-400 font-semibold">وحدة</span>
+                        {healthReport ? healthReport.totalCheckedModules : 0} <span className="text-[10px] text-slate-400 font-semibold">وحدة</span>
                       </span>
                     </div>
 
                     <div className="bg-transparent dark:bg-slate-850 p-4 border border-slate-100 dark:border-slate-800/60 text-right">
                       <span className="text-slate-400 block text-[10px] font-black uppercase">الشاشات والواجهات</span>
                       <span className="text-xl font-black text-slate-950 dark:text-white mt-1.5 block font-mono">
-                        {healthReport ? healthReport.totalCheckedScreens : 32} <span className="text-[10px] text-slate-400 font-semibold">شاشة</span>
+                        {healthReport ? healthReport.totalCheckedScreens : 0} <span className="text-[10px] text-slate-400 font-semibold">شاشة</span>
                       </span>
                     </div>
 
                     <div className="bg-transparent dark:bg-slate-850 p-4 border border-slate-100 dark:border-slate-800/60 text-right">
                       <span className="text-slate-400 block text-[10px] font-black uppercase">جداول المحرك</span>
                       <span className="text-xl font-black text-slate-950 dark:text-white mt-1.5 block font-mono">
-                        {healthReport ? healthReport.totalCheckedTables : 24} <span className="text-[10px] text-slate-400 font-semibold">جدول</span>
+                        {healthReport ? healthReport.totalCheckedTables : 0} <span className="text-[10px] text-slate-400 font-semibold">جدول</span>
                       </span>
                     </div>
 
                     <div className="bg-transparent dark:bg-slate-850 p-4 border border-slate-100 dark:border-slate-800/60 text-right">
                       <span className="text-slate-400 block text-[10px] font-black uppercase">مفاتيح الربط (FKs)</span>
                       <span className="text-xl font-black text-slate-950 dark:text-white mt-1.5 block font-mono">
-                        {healthReport ? healthReport.totalCheckedRelations : 18} <span className="text-[10px] text-slate-400 font-semibold">علاقة</span>
+                        {healthReport ? healthReport.totalCheckedRelations : 0} <span className="text-[10px] text-slate-400 font-semibold">علاقة</span>
                       </span>
                     </div>
                   </div>

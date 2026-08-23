@@ -20,18 +20,11 @@ export default function SuperAdminUsers({
     if (saved) {
       try {
         const parsed = JSON.parse(saved);
-        // Enrich existing employees with realistic login metadata if missing
+        // بيانات التدقيق الوظيفية تُعرض كما وردت من المصدر، ولا تُستكمل بقيم تجريبية.
         return parsed.map((emp: any) => ({
           ...emp,
-          email: emp.email || `${emp.id}@cloudschool.edu.sa`,
-          schoolId: emp.schoolId || 'school_1',
-          branchId: emp.branchId || 'branch_s1_b1',
-          status: emp.status || 'active',
-          loginCount: emp.loginCount || Math.floor(10 + Math.random() * 80),
-          lastLogin: emp.lastLogin || '2026-06-26 14:12',
-          device: emp.device || 'Chrome (macOS)',
-          ip: emp.ip || `192.168.12.${Math.floor(2 + Math.random() * 250)}`,
-          forcePasswordChange: emp.forcePasswordChange || false
+          status: emp.status || 'unknown',
+          forcePasswordChange: Boolean(emp.forcePasswordChange)
         }));
       } catch (e) {
         // fallback
@@ -88,8 +81,11 @@ export default function SuperAdminUsers({
       return;
     }
 
-    const matchedSchoolName = schools.find(s => s.id === newUser.schoolId)?.name || 'مدرسة سحابية';
-    const finalBranchId = newUser.branchId || branches.find(b => b.schoolId === newUser.schoolId)?.id || 'branch_s1_b1';
+    triggerNotification('خدمة الهوية المركزية غير متاحة؛ لم يُنشأ مستخدم أو تُحفظ صلاحيات محليًا.', 'warning');
+    return;
+
+    const matchedSchoolName = schools.find(s => s.id === newUser.schoolId)?.name || '';
+    const finalBranchId = newUser.branchId || branches.find(b => b.schoolId === newUser.schoolId)?.id || '';
     const defaultPassword = newUser.password || Math.random().toString(36).substring(2, 10).toUpperCase();
 
     const created: any = {
@@ -113,7 +109,7 @@ export default function SuperAdminUsers({
     syncEmployeesStore(updated);
     
     logAction('CREATE_USER', `إنشاء حساب موظف جديد: [${newUser.name}] وتعيينه بـ [${matchedSchoolName}]`, 'المستخدمين والصلاحيات');
-    triggerNotification('تم إنشاء حساب المستخدم بنجاح ومزامنته مع القنوات ✅', 'success');
+    triggerNotification('تم إنشاء حساب المستخدم عبر خدمة الهوية المركزية ✅', 'success');
 
     // Show credential modal
     setResetDetails({ name: newUser.name, password: defaultPassword });
@@ -333,7 +329,7 @@ export default function SuperAdminUsers({
                 </tr>
               ) : (
                 filteredUsers.map((user, idx) => {
-                  const schoolLabel = schools.find(s => s.id === user.schoolId)?.schoolShortName || 'مدرسة سحابية';
+                  const schoolLabel = schools.find(s => s.id === user.schoolId)?.schoolShortName || '';
                   const branchLabel = branches.find(b => b.id === user.branchId)?.name || 'الفرع العام';
                   
                   return (

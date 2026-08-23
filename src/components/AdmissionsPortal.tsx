@@ -1,7 +1,7 @@
 import React, { useCallback, useEffect, useMemo, useState } from 'react';
 import { AlertCircle, CheckCircle2, ChevronLeft, ChevronRight, Clock3, Filter, Loader2, RefreshCw, Search, ShieldCheck, UserPlus, XCircle } from 'lucide-react';
 import type { Branch, School, UserRole } from '../types';
-import { getTrustedAccessToken } from '../utils/auth';
+import { authenticatedRequest } from '../utils/authenticatedRequest';
 
 type AdmissionStatus = 'INQUIRY' | 'VERIFIED' | 'FEE_PAID' | 'ENROLLED' | 'REJECTED';
 
@@ -52,11 +52,6 @@ const NEXT_STATUSES: Record<AdmissionStatus, AdmissionStatus[]> = {
   REJECTED: []
 };
 
-function token(): string | null {
-  const value = getTrustedAccessToken();
-  return value?.trim() || null;
-}
-
 async function responseMessage(response: Response): Promise<string> {
   try {
     const payload = await response.json() as { message?: string; error?: string };
@@ -91,12 +86,6 @@ export default function AdmissionsPortal({
   }, [currentRole]);
 
   const loadInquiries = useCallback(async (signal?: AbortSignal) => {
-    const accessToken = token();
-    if (!accessToken) {
-      setError('لا توجد جلسة موثوقة. يرجى تسجيل الدخول من جديد.');
-      setLoading(false);
-      return;
-    }
     if (!selectedBranch?.id) {
       setError('لا يوجد فرع موثوق مرتبط بالجلسة الحالية.');
       setLoading(false);
@@ -108,8 +97,7 @@ export default function AdmissionsPortal({
       const params = new URLSearchParams({ page: String(page), limit: String(pageSize) });
       if (statusFilter !== 'ALL') params.set('status', statusFilter);
       if (searchTerm.trim()) params.set('search', searchTerm.trim());
-      const response = await fetch(`/api/admissions/inquiries?${params.toString()}`, {
-        headers: { Authorization: `Bearer ${accessToken}` },
+      const response = await authenticatedRequest(`/api/admissions/inquiries?${params.toString()}`, {
         signal
       });
       if (!response.ok) throw new Error(await responseMessage(response));
@@ -141,17 +129,12 @@ export default function AdmissionsPortal({
   const transition = async (inquiry: AdmissionInquiry, nextStatus: AdmissionStatus) => {
     const confirmation = window.confirm(`تأكيد نقل ملف ${inquiry.studentName} إلى حالة «${STATUS_LABELS[nextStatus]}»؟`);
     if (!confirmation) return;
-    const accessToken = token();
-    if (!accessToken) {
-      setError('انتهت الجلسة الموثوقة. يرجى تسجيل الدخول من جديد.');
-      return;
-    }
     setTransitioningId(inquiry.id);
     setError(null);
     try {
-      const response = await fetch(`/api/admissions/inquiries/${encodeURIComponent(inquiry.id)}/status`, {
+      const response = await authenticatedRequest(`/api/admissions/inquiries/${encodeURIComponent(inquiry.id)}/status`, {
         method: 'PATCH',
-        headers: { Authorization: `Bearer ${accessToken}`, 'Content-Type': 'application/json' },
+        headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ status: nextStatus })
       });
       if (!response.ok) throw new Error(await responseMessage(response));

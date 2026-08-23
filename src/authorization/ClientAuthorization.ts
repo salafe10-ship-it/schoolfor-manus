@@ -50,7 +50,13 @@ export function canAccessSection(
     }
   }
   const permission = SECTION_PERMISSIONS[sectionId];
-  return permission ? authorizationEngine.can(identity, permission) : false;
+  if (!permission) return false;
+  // A session without the server-derived permission hint is not allowed to
+  // fall back to the legacy role map for tenant modules. The dashboard is a
+  // safe landing surface after authentication; every protected module must
+  // remain hidden until the trusted server response includes its permissions.
+  if (!Array.isArray(identity.permissions)) return sectionId === 'dashboard';
+  return identity.permissions.includes('*') || identity.permissions.includes(permission);
 }
 
 export { CENTRAL_SECTIONS, SECTION_PERMISSIONS };

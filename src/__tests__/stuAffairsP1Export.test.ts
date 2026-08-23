@@ -3,7 +3,6 @@ import * as XLSX from 'xlsx';
 import { AuthorizationEngine } from '../authorization/AuthorizationEngine';
 import { PERMISSIONS, permissionRegistry } from '../authorization/PermissionRegistry';
 import { RoleResolver } from '../authorization/RoleResolver';
-import { AuditRepository } from '../database/repositories/AuditRepository';
 import { CanonicalStudentReadRepository } from '../database/repositories/CanonicalStudentReadRepository';
 import { buildStudentExportXlsx, generateStudentExport, STUDENT_EXPORT_MAX_ROWS } from '../modules/student-export/application/StudentExportService';
 
@@ -51,27 +50,21 @@ describe('STU-AFFAIRS-P1-006-03 Student Export', () => {
 
   it('rejects empty results and results above the 5,000-row cap without creating an artifact', async () => {
     const searchSpy = vi.spyOn(CanonicalStudentReadRepository, 'exportSearch');
-    const auditSpy = vi.spyOn(AuditRepository, 'create').mockResolvedValue({} as any);
     searchSpy.mockResolvedValueOnce({ data: [], totalCount: 0 });
     await expect(generateStudentExport({}, context, audit, 'req-empty', 'corr-empty')).rejects.toThrow('لا توجد نتائج');
     searchSpy.mockResolvedValueOnce({ data: [], totalCount: STUDENT_EXPORT_MAX_ROWS + 1 });
     await expect(generateStudentExport({}, context, audit, 'req-limit', 'corr-limit')).rejects.toThrow('5000');
-    expect(auditSpy).not.toHaveBeenCalled();
     searchSpy.mockRestore();
-    auditSpy.mockRestore();
   });
 
-  it('records accepted audit metadata before returning a generated artifact', async () => {
+  it('returns a generated artifact without invoking the legacy fallback audit repository', async () => {
     const searchSpy = vi.spyOn(CanonicalStudentReadRepository, 'exportSearch').mockResolvedValue({
       data: [{ studentNumber: 'ST-001', name: 'Student', classroom: '1', section: 'A', status: 'active', registrationDate: '2026-08-12' }],
       totalCount: 1
     });
-    const auditSpy = vi.spyOn(AuditRepository, 'create').mockResolvedValue({} as any);
     const result = await generateStudentExport({}, context, audit, 'req-1', 'corr-1');
     expect(result.buffer.subarray(0, 2).toString()).toBe('PK');
     expect(result.rowCount).toBe(1);
-    expect(auditSpy).toHaveBeenCalledWith('school-1', expect.objectContaining({ action: 'STUDENT_EXPORT_ACCEPTED', correlationId: 'corr-1' }));
     searchSpy.mockRestore();
-    auditSpy.mockRestore();
   });
 });

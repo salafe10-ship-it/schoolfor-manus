@@ -40,7 +40,8 @@ export class FiscalYearRepository implements IBaseRepository<FiscalYear> {
       }
     }
 
-    // Fallback Read
+    // Fallback Read is allowed only in explicit local/demo mode.
+    FallbackStorage.assertCanonicalPersistence(`fiscal year read ${id}`);
     const list = FallbackStorage.getFiscalYears();
     return list.find(fy => fy.id === id && fy.schoolId === schoolId) || null;
   }
@@ -70,7 +71,8 @@ export class FiscalYearRepository implements IBaseRepository<FiscalYear> {
       }
     }
 
-    // Fallback Read
+    // Fallback Read is allowed only in explicit local/demo mode.
+    FallbackStorage.assertCanonicalPersistence(`fiscal years list for ${schoolId}`);
     let list = FallbackStorage.getFiscalYears().filter(fy => fy.schoolId === schoolId);
     if (options?.status) {
       list = list.filter(fy => fy.status === options.status);

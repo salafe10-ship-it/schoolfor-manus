@@ -119,16 +119,10 @@ export default function SystemAuditTrailTab() {
   }, [logs, searchQuery, selectedAction, selectedUser, startDate, endDate]);
 
   const handleSimulateAddLog = () => {
-    EnterpriseAuditLogger.log({
-      action: simAction,
-      oldValue: simOldValue,
-      newValue: simNewValue,
-      userName: simUserName,
-      userRole: simUserRole,
-      device: simDevice,
-      module: simModule,
-      ipAddress: simIpAddress
-    });
+    // لا تُضاف أحداث محاكاة إلى سجل التدقيق؛ الأحداث يجب أن تأتي من العمليات الفعلية.
+    window.dispatchEvent(new CustomEvent('erp-notification', {
+      detail: { title: 'وضع المحاكاة غير متاح', message: 'لم تتم إضافة سجل تدقيق اصطناعي.', type: 'warning' }
+    }));
   };
 
   const handleExportCSV = () => {

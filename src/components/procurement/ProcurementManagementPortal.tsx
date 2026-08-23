@@ -15,6 +15,7 @@ import ProcurementReports from './ProcurementReports';
 import ProcurementSettings from './ProcurementSettings';
 import SupplierManager from '../inventory/SupplierManager';
 import { ProcurementRepository } from '../../database/repositories/ProcurementRepository';
+import { FallbackStorage } from '../../database/repositories/FallbackStorage';
 import { PurchaseRequest, PurchaseOrder, GoodsReceiptNote, VendorBill, VendorPayment } from '../../types';
 
 interface ProcurementManagementPortalProps {
@@ -37,11 +38,22 @@ export default function ProcurementManagementPortal({
 
   // Load state from ProcurementRepository on mount
   useEffect(() => {
-    setPurchaseRequests(ProcurementRepository.getPurchaseRequests());
-    setPurchaseOrders(ProcurementRepository.getPurchaseOrders());
-    setGoodsReceipts(ProcurementRepository.getGoodsReceipts());
-    setVendorBills(ProcurementRepository.getVendorBills());
-  }, []);
+    try {
+      setPurchaseRequests(ProcurementRepository.getPurchaseRequests());
+      setPurchaseOrders(ProcurementRepository.getPurchaseOrders());
+      setGoodsReceipts(ProcurementRepository.getGoodsReceipts());
+      setVendorBills(ProcurementRepository.getVendorBills());
+    } catch (error) {
+      // Canonical mode intentionally blocks local procurement storage. Keep the
+      // portal usable and communicate the blocked state instead of crashing it.
+      setPurchaseRequests([]);
+      setPurchaseOrders([]);
+      setGoodsReceipts([]);
+      setVendorBills([]);
+      triggerNotification?.('المشتريات متوقفة حتى يتوفر مصدر مركزي موثوق.', 'warning');
+      console.error('Procurement source unavailable:', error);
+    }
+  }, [triggerNotification]);
 
   const notify = (msg: string, type: 'success' | 'warning' | 'info' | 'danger' = 'info') => {
     if (triggerNotification) triggerNotification(msg, type);
@@ -49,23 +61,40 @@ export default function ProcurementManagementPortal({
 
   // Handlers for persistence updates
   const handleSaveRequest = (pr: PurchaseRequest) => {
-    ProcurementRepository.savePurchaseRequest(pr);
-    setPurchaseRequests(ProcurementRepository.getPurchaseRequests());
+    try {
+      ProcurementRepository.savePurchaseRequest(pr);
+      setPurchaseRequests(ProcurementRepository.getPurchaseRequests());
+    } catch (error: any) {
+      notify(error?.message || 'المشتريات متوقفة؛ تعذر حفظ طلب الشراء.', 'warning');
+    }
   };
 
   const handleDeleteRequest = (id: string) => {
-    ProcurementRepository.deletePurchaseRequest(id);
-    setPurchaseRequests(ProcurementRepository.getPurchaseRequests());
+    try {
+      ProcurementRepository.deletePurchaseRequest(id);
+      setPurchaseRequests(ProcurementRepository.getPurchaseRequests());
+    } catch (error: any) {
+      notify(error?.message || 'المشتريات متوقفة؛ تعذر حذف طلب الشراء.', 'warning');
+    }
   };
 
   const handleSaveOrder = (po: PurchaseOrder) => {
-    ProcurementRepository.savePurchaseOrder(po);
-    setPurchaseOrders(ProcurementRepository.getPurchaseOrders());
+    try {
+      ProcurementRepository.savePurchaseOrder(po);
+      setPurchaseOrders(ProcurementRepository.getPurchaseOrders());
+    } catch (error: any) {
+      notify(error?.message || 'المشتريات متوقفة؛ تعذر حفظ أمر الشراء.', 'warning');
+    }
   };
 
   const handleSaveReceipt = (grn: GoodsReceiptNote) => {
-    ProcurementRepository.saveGoodsReceipt(grn);
-    setGoodsReceipts(ProcurementRepository.getGoodsReceipts());
+    try {
+      ProcurementRepository.saveGoodsReceipt(grn);
+      setGoodsReceipts(ProcurementRepository.getGoodsReceipts());
+    } catch (error: any) {
+      notify(error?.message || 'المشتريات متوقفة؛ تعذر حفظ محضر الاستلام.', 'warning');
+      return;
+    }
 
     // Automatically update the associated Purchase Order status
     const poIndex = purchaseOrders.findIndex(p => p.id === grn.purchaseOrderId);
@@ -81,8 +110,12 @@ export default function ProcurementManagementPortal({
   };
 
   const handleSaveBill = (bill: VendorBill) => {
-    ProcurementRepository.saveVendorBill(bill);
-    setVendorBills(ProcurementRepository.getVendorBills());
+    try {
+      ProcurementRepository.saveVendorBill(bill);
+      setVendorBills(ProcurementRepository.getVendorBills());
+    } catch (error: any) {
+      notify(error?.message || 'المشتريات متوقفة؛ تعذر حفظ فاتورة المورد.', 'warning');
+    }
   };
 
   const handleRecordPayment = (payment: VendorPayment) => {
@@ -90,19 +123,23 @@ export default function ProcurementManagementPortal({
   };
 
   const handleConvertToOrder = (pr: PurchaseRequest) => {
+    if (FallbackStorage.isCanonicalPersistenceRequired()) {
+      notify('تحويل طلب الشراء متوقف حتى يتوفر مصدر مشتريات مركزي موثوق.', 'warning');
+      return;
+    }
     const newPO: PurchaseOrder = {
       id: `po_${Date.now()}`,
       schoolId: pr.schoolId || 'school_1',
-      poNo: `PO-2026-${Math.floor(1000 + Math.random() * 9000)}`,
+      poNo: `PO-${Date.now()}`,
       poDate: new Date().toISOString().split('T')[0],
       expectedDeliveryDate: new Date(Date.now() + 10 * 86400000).toISOString().split('T')[0],
       purchaseRequestId: pr.id,
-      vendorId: 'sup_sony',
-      vendorName: 'شركة سوني العالمية - التوريدات التعليمية',
+      vendorId: '',
+      vendorName: '',
       warehouseId: 'branch_1_1',
       paymentTerms: '30 يوماً من الاستلام المعتمد',
       deliveryTerms: 'تسليم أرض المستودع الرئيسي',
-      status: 'approved',
+      status: 'pending_approval',
       lines: pr.lines.map(l => ({
         ...l,
         quantityOrdered: l.quantityApproved || l.quantityRequested,
@@ -113,8 +150,6 @@ export default function ProcurementManagementPortal({
       taxAmount: pr.totalEstimatedAmount * 0.15,
       discountAmount: 0,
       grandTotal: pr.totalEstimatedAmount * 1.15,
-      approvedBy: 'المدير العام',
-      approvalDate: new Date().toISOString().split('T')[0],
       createdAt: new Date().toISOString(),
       updatedAt: new Date().toISOString()
     };
@@ -127,15 +162,19 @@ export default function ProcurementManagementPortal({
     ProcurementRepository.savePurchaseRequest(updatedPR);
     setPurchaseRequests(ProcurementRepository.getPurchaseRequests());
 
-    notify(`✓ تم تحويل طلب الشراء رقم (${pr.requestNo}) إلى أمر شراء معتمد رقم (${newPO.poNo}) بنجاح`, 'success');
+    notify(`✓ تم تحويل طلب الشراء رقم (${pr.requestNo}) إلى أمر شراء معلّق للمراجعة رقم (${newPO.poNo})`, 'success');
     setActiveTab('orders');
   };
 
   const handleAwardVendor = (rfqId: string, vendorId: string, totalAmount: number) => {
+    if (FallbackStorage.isCanonicalPersistenceRequired()) {
+      notify('ترسية العرض متوقفة حتى يتوفر مصدر مشتريات مركزي موثوق.', 'warning');
+      return;
+    }
     const newPO: PurchaseOrder = {
       id: `po_rfq_${Date.now()}`,
       schoolId: 'school_1',
-      poNo: `PO-RFQ-${Math.floor(1000 + Math.random() * 9000)}`,
+      poNo: `PO-RFQ-${Date.now()}`,
       poDate: new Date().toISOString().split('T')[0],
       expectedDeliveryDate: new Date(Date.now() + 14 * 86400000).toISOString().split('T')[0],
       vendorId,
@@ -143,7 +182,7 @@ export default function ProcurementManagementPortal({
       warehouseId: 'branch_1_1',
       paymentTerms: 'الدفع بعد 30 يوماً من الفحص المعتمد',
       deliveryTerms: 'شامل التركيب والضمان',
-      status: 'approved',
+      status: 'pending_approval',
       lines: [
         {
           id: `pol_${Date.now()}`,

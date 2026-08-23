@@ -12,12 +12,8 @@ export default function SuperAdminBackups({
   triggerNotification
 }: SuperAdminBackupsProps) {
 
-  // Mock list of database backups/snapshots
-  const [backups, setBackups] = useState<any[]>([
-    { id: 'snap_01', name: 'النسخة التلقائية اليومية - سنوية النور', type: 'scheduled', schoolName: 'مدارس النور النموذجية', size: '1.2 GB', hash: 'SHA256:7f4a...2c90', createdAt: '2026-06-26 04:00', status: 'verified' },
-    { id: 'snap_02', name: 'نسخة ما قبل ترقية الحسابات - الفرسان', type: 'manual', schoolName: 'مدارس الفرسان العالمية', size: '820 MB', hash: 'SHA256:90cb...112e', createdAt: '2026-06-25 18:14', status: 'verified' },
-    { id: 'snap_03', name: 'نسخة ما بعد استيراد ملفات الطلاب', type: 'manual', schoolName: 'مدارس النور النموذجية', size: '1.1 GB', hash: 'SHA256:bb10...88ab', createdAt: '2026-06-24 10:25', status: 'verified' }
-  ]);
+  // لا تُعرض لقطات أو بصمات قبل اتصال موثق بخدمة النسخ المركزية.
+  const [backups, setBackups] = useState<any[]>([]);
 
   // Modal and wizard states
   const [isCreatingBackup, setIsCreatingBackup] = useState(false);
@@ -31,7 +27,7 @@ export default function SuperAdminBackups({
   const [selectedSnapshot, setSelectedSnapshot] = useState<any | null>(null);
 
   // New Backup manual state
-  const [selectedSchoolId, setSelectedSchoolId] = useState<string>(schools[0]?.id || 'school_1');
+  const [selectedSchoolId, setSelectedSchoolId] = useState<string>(schools[0]?.id || '');
   const [backupNote, setBackupNote] = useState('');
 
   // Schedule automated backup state
@@ -59,6 +55,8 @@ export default function SuperAdminBackups({
   // Run Immediate Backup creation simulator
   const handleCreateBackup = (e: React.FormEvent) => {
     e.preventDefault();
+    triggerNotification('لم يتم إنشاء النسخة: خدمة التخزين المركزية غير متصلة أو غير موثقة.', 'warning');
+    return;
     setIsCreatingBackup(true);
     setBackupProgress(5);
 

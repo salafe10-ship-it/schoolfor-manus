@@ -19,6 +19,12 @@ export class StudentPromotionService {
     },
     meta: AuditMetadata
   ): Promise<any> {
+    if (!promotion.targetClassroom?.trim() || !promotion.targetStageId?.trim()) {
+      throw new ValidationError("بيانات الصف أو المرحلة المستهدفة مطلوبة للترقية.");
+    }
+    if (!Number.isFinite(promotion.carryOverFees) || promotion.carryOverFees < 0) {
+      throw new ValidationError("رسوم الترحيل يجب أن تكون رقمًا صحيحًا غير سالب.");
+    }
     const student = await StudentRepository.getById(schoolId, id);
     if (!student) {
       throw new ValidationError("الطالب غير موجود.");
@@ -34,13 +40,17 @@ export class StudentPromotionService {
     }, async () => {
       const oldClassroom = student.classroom;
       const oldStage = student.stageId;
+      const academicYearMatch = student.academicYear?.match(/^(\d{4})\/(\d{4})$/);
+      const nextAcademicYear = academicYearMatch
+        ? `${Number(academicYearMatch[1]) + 1}/${Number(academicYearMatch[2]) + 1}`
+        : student.academicYear;
 
       // Prepare updates
       const updates: Partial<Student> = {
         classroom: promotion.targetClassroom,
         stageId: promotion.targetStageId,
         feesRemaining: student.feesRemaining + promotion.carryOverFees,
-        academicYear: "2027/2028" // Next Academic Year
+        academicYear: nextAcademicYear
       };
 
       const updated = await StudentRepository.update(schoolId, id, updates, meta);

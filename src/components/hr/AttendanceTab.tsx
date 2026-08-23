@@ -50,90 +50,19 @@ export default function AttendanceTab({
     }, 1200);
 
     setTimeout(() => {
-      let count = 0;
-      let lateCount = 0;
+      // A synchronization action must never fabricate attendance. Until a
+      // verified device/API payload is available, preserve the existing records.
+      const count = 0;
+      const lateCount = 0;
       const newAttendanceList = [...attendance];
-
-      employees.forEach(emp => {
-        if (emp.status === 'resigned' || emp.status === 'suspended') return;
-
-        // Skip if already has record that is present/late/excused to protect manual custom entries
-        const existingRecord = attendance.find(a => a.employeeId === emp.id && a.date === selectedDate);
-        if (existingRecord && existingRecord.status !== 'absent') return;
-
-        // Randomize attendance: 88% present, 8% late, 4% absent
-        const rand = Math.random();
-        let status: 'present' | 'late' | 'absent' = 'present';
-        let checkIn = '07:50';
-        let checkOut = '15:05';
-        let delayMinutes = 0;
-        let overtimeHours = 0;
-
-        if (rand > 0.96) {
-          status = 'absent';
-        } else if (rand > 0.88) {
-          status = 'late';
-          // between 08:05 and 08:45
-          const mins = Math.floor(Math.random() * 40) + 5;
-          checkIn = `08:${mins.toString().padStart(2, '0')}`;
-          delayMinutes = mins;
-          lateCount++;
-        } else {
-          // present - between 07:45 and 08:00
-          const mins = Math.floor(Math.random() * 15);
-          checkIn = `07:${(45 + mins).toString()}`;
-          // random checkout between 15:00 and 15:30
-          const outMins = Math.floor(Math.random() * 30);
-          checkOut = `15:${outMins.toString().padStart(2, '0')}`;
-          overtimeHours = parseFloat((outMins / 60).toFixed(1));
-        }
-
-        const recordId = `ATT-${emp.id}-${selectedDate}`;
-        const existingIdx = newAttendanceList.findIndex(a => a.employeeId === emp.id && a.date === selectedDate);
-
-        if (status !== 'absent') {
-          const updated: HRAttendance = {
-            id: recordId,
-            employeeId: emp.id,
-            date: selectedDate,
-            status,
-            checkIn,
-            checkOut,
-            delayMinutes,
-            overtimeHours
-          };
-
-          if (existingIdx >= 0) {
-            newAttendanceList[existingIdx] = updated;
-          } else {
-            newAttendanceList.push(updated);
-          }
-          count++;
-        } else {
-          // explicitly mark absent in the list
-          const updated: HRAttendance = {
-            id: recordId,
-            employeeId: emp.id,
-            date: selectedDate,
-            status: 'absent',
-            delayMinutes: 0,
-            overtimeHours: 0
-          };
-          if (existingIdx >= 0) {
-            newAttendanceList[existingIdx] = updated;
-          } else {
-            newAttendanceList.push(updated);
-          }
-        }
-      });
 
       setAttendance(newAttendanceList);
       setIsSyncing(false);
       setSyncLogs(prev => [
         ...prev,
-        `✅ تم التزامن التام بنجاح!`,
-        `📊 الملخص الإحصائي: تم سحب وإدراج حضور لعدد ${count} موظفاً (منهم ${lateCount} متأخرين عن وقت المباشرة الفعلي).`,
-        `💾 تم ترحيل التغييرات تلقائياً وحفظ القيود في قاعدة البيانات وسجل العمليات المركزي للرقابة.`
+        `⚠️ لم تصل بيانات بصمة موثقة من مصدر مركزي؛ لم يتم إنشاء أو تعديل أي سجل حضور.`,
+        `📊 الملخص الإحصائي: سجلات جديدة ${count}، متأخرون جدد ${lateCount}.`,
+        `💾 تم الحفاظ على السجلات الحالية دون ترحيل بيانات مصطنعة.`
       ]);
       triggerNotification(`✓ تم مزامنة وسحب بصمات الموظفين بنجاح وتحديث السجل المركزي!`, 'success');
     }, 2500);

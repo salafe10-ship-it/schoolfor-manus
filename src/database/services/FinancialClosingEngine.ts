@@ -30,6 +30,7 @@ export class FinancialClosingEngine {
    * Helper to capture database snapshots for local memory rollback simulation (Atomic Integrity)
    */
   private static createTransactionSnapshot(): { periods: string; years: string } {
+    FallbackStorage.assertCanonicalPersistence('financial closing local transaction snapshot');
     return {
       periods: JSON.stringify(FallbackStorage.getAccountingPeriods()),
       years: JSON.stringify(FallbackStorage.getFiscalYears())
@@ -40,6 +41,7 @@ export class FinancialClosingEngine {
    * Helper to restore state on transaction failure (Rollback)
    */
   private static rollbackTransaction(snapshot: { periods: string; years: string }) {
+    FallbackStorage.assertCanonicalPersistence('financial closing local rollback');
     FallbackStorage.saveAccountingPeriods(JSON.parse(snapshot.periods));
     FallbackStorage.saveFiscalYears(JSON.parse(snapshot.years));
   }
@@ -547,5 +549,4 @@ export class FinancialClosingEngine {
     };
   }
 }
-
 

@@ -125,8 +125,13 @@ export default function ExternalAuditProtocol({
 }: {
   triggerNotification: (msg: string, type: 'success' | 'warning' | 'danger' | 'info') => void;
 }) {
-  const [remarks, setRemarks] = useState<AuditRemark[]>(INITIAL_REMARKS);
-  const [selectedRemarkId, setSelectedRemarkId] = useState<string>(INITIAL_REMARKS[0].id);
+  const emptyRemark: AuditRemark = {
+    id: '', title: '', category: '', source: '', date: '', verification: 'Not Applicable', risk: 'Low',
+    decision: '', implementationTasks: [], regressionTested: false, certified: false, logs: []
+  };
+  // لا تُعرض ملاحظات أو اعتمادات تدقيق مزروعة؛ المصدر المركزي هو المرجع الوحيد.
+  const [remarks, setRemarks] = useState<AuditRemark[]>([]);
+  const [selectedRemarkId, setSelectedRemarkId] = useState<string>('');
   const [searchQuery, setSearchQuery] = useState<string>('');
   const [filterRisk, setFilterRisk] = useState<string>('all');
   const [filterVerification, setFilterVerification] = useState<string>('all');
@@ -146,7 +151,7 @@ export default function ExternalAuditProtocol({
 
   // Active Selected Remark
   const selectedRemark = useMemo(() => {
-    return remarks.find(r => r.id === selectedRemarkId) || remarks[0];
+    return remarks.find(r => r.id === selectedRemarkId) || emptyRemark;
   }, [remarks, selectedRemarkId]);
 
   // Filtered Remarks List
@@ -227,6 +232,10 @@ export default function ExternalAuditProtocol({
 
   // Run Implementation Simulation (Stage 4)
   const runImplementationSim = () => {
+    if (!selectedRemark.id) {
+      triggerNotification('لا توجد ملاحظة تدقيق مركزية محددة للتنفيذ.', 'warning');
+      return;
+    }
     if (selectedRemark.verification === 'Not Applicable') {
       triggerNotification('الملاحظة مصنفة كـ غير منطبقة. لا حاجة لتشغيل العلاج البرمجي.', 'info');
       return;
@@ -260,6 +269,10 @@ export default function ExternalAuditProtocol({
 
   // Run Regression Testing (Stage 5)
   const runRegressionTesting = () => {
+    if (!selectedRemark.id) {
+      triggerNotification('لا توجد ملاحظة تدقيق مركزية محددة للاختبار.', 'warning');
+      return;
+    }
     setSimulatingStep5(true);
     setRegTestsPassed(null);
     let tests = [

@@ -27,6 +27,7 @@ import {
   ValidationError,
   AuthenticationError,
   AuthorizationError,
+  ConflictError,
   DatabaseError,
   ExternalServiceError
 } from "./src/utils/errors.js";
@@ -72,6 +73,7 @@ import { FallbackStorage } from "./src/database/repositories/FallbackStorage.js"
 import { AdmissionInquiry, AdmissionStatus } from './src/modules/student-admission/domain/AdmissionInquiry.js';
 import { SupabaseAdmissionInquiryRepository } from './src/modules/student-admission/repository/SupabaseAdmissionInquiryRepository.js';
 import { ErpProvisioningService } from './src/modules/identity/application/ErpProvisioningService.js';
+import { reviewAndImplement } from './src/services/ai/SolLunaOrchestrator.js';
 
 function parseStudentQueryInteger(value: unknown, field: string, defaultValue: number, maximum: number): number {
   if (value === undefined || value === '') return defaultValue;
@@ -91,6 +93,399 @@ function parseStudentQueryString(value: unknown, field: string): string | undefi
     throw new ValidationError(`قيمة ${field} غير صالحة.`);
   }
   return value.trim() || undefined;
+}
+
+function normalizeFinancialSnapshotPayload(value: unknown): Record<string, unknown> {
+  if (!value || typeof value !== 'object' || Array.isArray(value)) {
+    throw new ValidationError('بيانات المصدر المالي يجب أن تكون كائنًا صالحًا.');
+  }
+
+  const payload = value as Record<string, unknown>;
+  const arrayKeys = [
+    'students',
+    'invoices',
+    'studentReceiptVouchers',
+    'receiptVouchers',
+    'journalEntries',
+    'chartOfAccounts',
+    'feeConfigs',
+  ];
+  for (const key of arrayKeys) {
+    if (payload[key] !== undefined && !Array.isArray(payload[key])) {
+      throw new ValidationError(`الحقل المالي ${key} يجب أن يكون قائمة.`);
+    }
+  }
+  if (payload.feeSettings !== undefined && (!payload.feeSettings || typeof payload.feeSettings !== 'object' || Array.isArray(payload.feeSettings))) {
+    throw new ValidationError('إعدادات الرسوم يجب أن تكون كائنًا صالحًا.');
+  }
+
+  const serialized = JSON.stringify(payload);
+  if (serialized.length > 2_000_000) {
+    throw new ValidationError('حجم المصدر المالي يتجاوز الحد المسموح.');
+  }
+  validateFinancialSnapshotIntegrity(payload);
+  return payload;
+}
+
+function parseFinancialExpectedVersion(value: unknown): number | undefined {
+  if (value === undefined || value === null || value === '') return undefined;
+  const parsed = Number(value);
+  if (!Number.isSafeInteger(parsed) || parsed < 0) {
+    throw new ValidationError('إصدار المصدر المالي المتوقع يجب أن يكون رقماً صحيحاً غير سالب.');
+  }
+  return parsed;
+}
+
+function financialRecordRows(value: unknown): Array<Record<string, unknown>> {
+  if (!Array.isArray(value)) return [];
+  return value.filter((row): row is Record<string, unknown> => Boolean(row && typeof row === 'object' && !Array.isArray(row)));
+}
+
+function financialText(value: unknown, fallback = ''): string {
+  if (typeof value === 'string') return value.trim();
+  if (value === null || value === undefined) return fallback;
+  return String(value).trim() || fallback;
+}
+
+function financialNumber(value: unknown, fallback = 0): number {
+  const parsed = typeof value === 'number' ? value : Number(value);
+  return Number.isFinite(parsed) && parsed >= 0 ? Number(parsed.toFixed(2)) : fallback;
+}
+
+function validateFinancialSnapshotIntegrity(payload: Record<string, unknown>): void {
+  const validateIds = (key: string) => {
+    const seen = new Set<string>();
+    for (const [index, row] of financialRecordRows(payload[key]).entries()) {
+      const id = financialText(row.id);
+      if (!id) throw new ValidationError(`السجل المالي ${key}[${index}] يفتقد معرّفاً ثابتاً.`);
+      if (seen.has(id)) throw new ConflictError(`المعرّف المالي مكرر داخل ${key}: ${id}`);
+      seen.add(id);
+    }
+  };
+  for (const key of ['invoices', 'studentReceiptVouchers', 'receiptVouchers', 'journalEntries', 'feeConfigs']) validateIds(key);
+  for (const [index, row] of financialRecordRows(payload.invoices).entries()) {
+    const amount = financialNumber(row.amount);
+    const paid = financialNumber(row.paidAmount);
+    const remaining = financialNumber(row.remainingAmount, amount);
+    if (amount <= 0) throw new ValidationError(`قيمة المطالبة المالية ${index + 1} يجب أن تكون أكبر من صفر.`);
+    if (paid > amount || remaining > amount || paid + remaining > amount + 0.01) {
+      throw new ValidationError(`الرصيد المالي للمطالبة ${financialText(row.id)} غير متزن.`);
+    }
+  }
+  for (const [index, row] of financialRecordRows(payload.studentReceiptVouchers).entries()) {
+    if (financialNumber(row.amount) <= 0) throw new ValidationError(`قيمة سند القبض ${financialText(row.id, String(index + 1))} يجب أن تكون أكبر من صفر.`);
+  }
+  for (const [index, row] of financialRecordRows(payload.journalEntries).entries()) {
+    const status = financialText(row.status, 'draft').toLowerCase();
+    if (!['posted', 'مرحّل', 'مُرحّل'].includes(status)) continue;
+    const debit = financialNumber(row.debitTotal);
+    const credit = financialNumber(row.creditTotal);
+    if (debit <= 0 || credit <= 0 || Math.abs(debit - credit) > 0.01) {
+      throw new ValidationError(`القيد المرحّل ${financialText(row.id, String(index + 1))} غير متوازن محاسبياً.`);
+    }
+  }
+}
+
+function financialDate(value: unknown): string | null {
+  const normalized = financialText(value);
+  return /^\d{4}-\d{2}-\d{2}$/.test(normalized) ? normalized : null;
+}
+
+async function replaceStudentFinanceProjection(
+  transaction: { query: (sqlText: string, parameters?: readonly unknown[]) => Promise<unknown> },
+  tenantId: string,
+  schoolId: string,
+  actorId: string,
+  payload: Record<string, unknown>,
+  version: number
+): Promise<void> {
+  const projectionTables = [
+    'student_fee_invoices',
+    'student_fee_receipts',
+    'student_fee_journal_entries',
+    'student_fee_journal_lines',
+    'student_fee_configurations'
+  ];
+  for (const table of projectionTables) {
+    await transaction.query(`DELETE FROM public.${table} WHERE tenant_id = $1 AND school_id = $2`, [tenantId, schoolId]);
+  }
+
+  for (const [index, row] of financialRecordRows(payload.invoices).entries()) {
+    const id = financialText(row.id, `invoice_${index + 1}`);
+    await transaction.query(
+      `INSERT INTO public.student_fee_invoices
+        (tenant_id, school_id, id, student_id, student_name, item, amount, tax_amount,
+         paid_amount, remaining_amount, invoice_date, due_date, status, journal_entry_id,
+         source_payload, updated_by)
+       VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15::jsonb, $16)
+       ON CONFLICT (school_id, id) DO UPDATE SET
+         tenant_id = EXCLUDED.tenant_id,
+         student_id = EXCLUDED.student_id,
+         student_name = EXCLUDED.student_name,
+         item = EXCLUDED.item,
+         amount = EXCLUDED.amount,
+         tax_amount = EXCLUDED.tax_amount,
+         paid_amount = EXCLUDED.paid_amount,
+         remaining_amount = EXCLUDED.remaining_amount,
+         invoice_date = EXCLUDED.invoice_date,
+         due_date = EXCLUDED.due_date,
+         status = EXCLUDED.status,
+         journal_entry_id = EXCLUDED.journal_entry_id,
+         source_payload = EXCLUDED.source_payload,
+         updated_at = now(),
+         updated_by = EXCLUDED.updated_by`,
+      [
+        tenantId,
+        schoolId,
+        id,
+        financialText(row.studentId) || null,
+        financialText(row.studentName),
+        financialText(row.item),
+        financialNumber(row.amount),
+        financialNumber(row.taxAmount),
+        financialNumber(row.paidAmount),
+        financialNumber(row.remainingAmount, financialNumber(row.amount)),
+        financialDate(row.invoiceDate),
+        financialDate(row.dueDate),
+        financialText(row.status, 'unpaid'),
+        financialText(row.journalEntryId) || null,
+        JSON.stringify(row),
+        actorId
+      ]
+    );
+  }
+
+  for (const [index, row] of financialRecordRows(payload.studentReceiptVouchers).entries()) {
+    const id = financialText(row.id, `receipt_${index + 1}`);
+    await transaction.query(
+      `INSERT INTO public.student_fee_receipts
+        (tenant_id, school_id, id, student_id, student_name, receipt_date, amount,
+         payment_method, receiving_account, operational_type, against_text, status,
+         journal_entry_id, receipt_voucher_id, source_payload, updated_by)
+       VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15::jsonb, $16)
+       ON CONFLICT (school_id, id) DO UPDATE SET
+         tenant_id = EXCLUDED.tenant_id,
+         student_id = EXCLUDED.student_id,
+         student_name = EXCLUDED.student_name,
+         receipt_date = EXCLUDED.receipt_date,
+         amount = EXCLUDED.amount,
+         payment_method = EXCLUDED.payment_method,
+         receiving_account = EXCLUDED.receiving_account,
+         operational_type = EXCLUDED.operational_type,
+         against_text = EXCLUDED.against_text,
+         status = EXCLUDED.status,
+         journal_entry_id = EXCLUDED.journal_entry_id,
+         receipt_voucher_id = EXCLUDED.receipt_voucher_id,
+         source_payload = EXCLUDED.source_payload,
+         updated_at = now(),
+         updated_by = EXCLUDED.updated_by`,
+      [
+        tenantId,
+        schoolId,
+        id,
+        financialText(row.studentId) || null,
+        financialText(row.studentName),
+        financialDate(row.date),
+        financialNumber(row.amount),
+        financialText(row.paymentMethod),
+        financialText(row.receivingAccount),
+        financialText(row.operationalType),
+        financialText(row.against),
+        financialText(row.status, 'draft'),
+        financialText(row.journalEntryId) || null,
+        financialText(row.receiptVoucherId) || null,
+        JSON.stringify(row),
+        actorId
+      ]
+    );
+  }
+
+  for (const [index, row] of financialRecordRows(payload.journalEntries).entries()) {
+    const id = financialText(row.id, `journal_${index + 1}`);
+    await transaction.query(
+      `INSERT INTO public.student_fee_journal_entries
+        (tenant_id, school_id, id, entry_date, description, debit_total, credit_total,
+         status, document_type, receipt_voucher_id, source_payload, updated_by)
+       VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11::jsonb, $12)
+       ON CONFLICT (school_id, id) DO UPDATE SET
+         tenant_id = EXCLUDED.tenant_id,
+         entry_date = EXCLUDED.entry_date,
+         description = EXCLUDED.description,
+         debit_total = EXCLUDED.debit_total,
+         credit_total = EXCLUDED.credit_total,
+         status = EXCLUDED.status,
+         document_type = EXCLUDED.document_type,
+         receipt_voucher_id = EXCLUDED.receipt_voucher_id,
+         source_payload = EXCLUDED.source_payload,
+         updated_at = now(),
+         updated_by = EXCLUDED.updated_by`,
+      [
+        tenantId,
+        schoolId,
+        id,
+        financialDate(row.date),
+        financialText(row.description),
+        financialNumber(row.debitTotal),
+        financialNumber(row.creditTotal),
+        financialText(row.status, 'draft'),
+        financialText(row.documentType) || null,
+        financialText(row.receiptVoucherId) || null,
+        JSON.stringify(row),
+        actorId
+      ]
+    );
+
+    for (const [lineIndex, line] of financialRecordRows(row.lines).entries()) {
+      const lineId = financialText(line.id, `${id}_line_${lineIndex + 1}`);
+      await transaction.query(
+        `INSERT INTO public.student_fee_journal_lines
+          (tenant_id, school_id, journal_entry_id, id, account_code, account_name,
+           debit, credit, cost_center, source_payload, updated_by)
+         VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10::jsonb, $11)
+         ON CONFLICT (school_id, journal_entry_id, id) DO UPDATE SET
+           tenant_id = EXCLUDED.tenant_id,
+           account_code = EXCLUDED.account_code,
+           account_name = EXCLUDED.account_name,
+           debit = EXCLUDED.debit,
+           credit = EXCLUDED.credit,
+           cost_center = EXCLUDED.cost_center,
+           source_payload = EXCLUDED.source_payload,
+           updated_at = now(),
+           updated_by = EXCLUDED.updated_by`,
+        [
+          tenantId,
+          schoolId,
+          id,
+          lineId,
+          financialText(line.accountCode),
+          financialText(line.accountName),
+          financialNumber(line.debit),
+          financialNumber(line.credit),
+          financialText(line.costCenter) || null,
+          JSON.stringify(line),
+          actorId
+        ]
+      );
+    }
+  }
+
+  for (const [index, row] of financialRecordRows(payload.feeConfigs).entries()) {
+    const id = financialText(row.id, `fee_config_${index + 1}`);
+    await transaction.query(
+      `INSERT INTO public.student_fee_configurations
+        (tenant_id, school_id, id, fee_type, amount, revenue_account, order_number,
+         activities, source_payload, updated_by)
+       VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9::jsonb, $10)
+       ON CONFLICT (school_id, id) DO UPDATE SET
+         tenant_id = EXCLUDED.tenant_id,
+         fee_type = EXCLUDED.fee_type,
+         amount = EXCLUDED.amount,
+         revenue_account = EXCLUDED.revenue_account,
+         order_number = EXCLUDED.order_number,
+         activities = EXCLUDED.activities,
+         source_payload = EXCLUDED.source_payload,
+         updated_at = now(),
+         updated_by = EXCLUDED.updated_by`,
+      [
+        tenantId,
+        schoolId,
+        id,
+        financialText(row.type),
+        financialNumber(row.amount),
+        financialText(row.account),
+        financialText(row.orderNumber),
+        financialText(row.activities),
+        JSON.stringify(row),
+        actorId
+      ]
+    );
+  }
+
+  await transaction.query(
+    `INSERT INTO public.student_fee_audit_events
+      (tenant_id, school_id, operation, entity_type, entity_id, actor_user_id, after_payload)
+     VALUES ($1, $2, $3, $4, $5, $6, $7::jsonb)`,
+    [
+      tenantId,
+      schoolId,
+      'FINANCIAL_SNAPSHOT_WRITE',
+      'financial_portal_snapshot',
+      `version:${version}`,
+      actorId,
+      JSON.stringify({
+        version,
+        invoiceCount: financialRecordRows(payload.invoices).length,
+        receiptCount: financialRecordRows(payload.studentReceiptVouchers).length,
+        journalCount: financialRecordRows(payload.journalEntries).length,
+        feeConfigCount: financialRecordRows(payload.feeConfigs).length
+      })
+    ]
+  );
+}
+
+function validateFinancialSnapshotTransition(
+  previousPayload: Record<string, unknown>,
+  nextPayload: Record<string, unknown>
+): void {
+  const previousReceipts = new Map(
+    financialRecordRows(previousPayload.studentReceiptVouchers).map(row => [financialText(row.id), row])
+  );
+  const nextReceipts = new Map(
+    financialRecordRows(nextPayload.studentReceiptVouchers).map(row => [financialText(row.id), row])
+  );
+
+  for (const [id, previous] of previousReceipts) {
+    const next = nextReceipts.get(id);
+    const previousStatus = financialText(previous.status, 'draft').toLowerCase();
+    if (!next) {
+      if (['saved', 'approved', 'posted', 'cancelled'].includes(previousStatus)) {
+        throw new ConflictError(`لا يمكن حذف سند قبض ${id} بعد دخوله دورة الحفظ أو الاعتماد أو الترحيل.`);
+      }
+      continue;
+    }
+
+    const nextStatus = financialText(next.status, 'draft').toLowerCase();
+    if (previousStatus === 'posted' && nextStatus !== 'cancelled' && nextStatus !== 'posted') {
+      throw new ConflictError(`السند المرحل ${id} محمي ولا يقبل الرجوع إلى مسودة أو اعتماد.`);
+    }
+    if (previousStatus === 'approved' && ['draft', 'saved'].includes(nextStatus)) {
+      throw new ConflictError(`السند المعتمد ${id} لا يمكن خفض حالته دون إجراء إلغاء موثق.`);
+    }
+    if (previousStatus === 'cancelled' && nextStatus !== 'cancelled') {
+      throw new ConflictError(`السند الملغي ${id} نهائي ولا يمكن إعادة فتحه.`);
+    }
+    if (nextStatus === 'posted' && previousStatus !== 'approved' && previousStatus !== 'posted') {
+      throw new ConflictError(`لا يمكن ترحيل السند ${id} قبل اعتماده مالياً.`);
+    }
+    if (previousStatus === 'posted' && nextStatus === 'cancelled' && !financialText(next.reversalJournalEntryId)) {
+      throw new ValidationError(`إلغاء السند المرحل ${id} يتطلب رقم قيد تسوية عكسي.`);
+    }
+    if (nextStatus === 'posted' && (!financialText(next.journalEntryId) || !financialText(next.receiptVoucherId))) {
+      throw new ValidationError(`السند المرحل ${id} يجب أن يرتبط بقيد يومية وسند قبض عام.`);
+    }
+  }
+  for (const [id, next] of nextReceipts) {
+    if (!previousReceipts.has(id) && financialText(next.status, 'draft').toLowerCase() === 'posted') {
+      throw new ConflictError(`لا يمكن إنشاء سند مرحل مباشرة ${id}؛ يجب حفظه ثم اعتماده قبل الترحيل.`);
+    }
+  }
+
+  const previousInvoices = new Map(
+    financialRecordRows(previousPayload.invoices).map(row => [financialText(row.id), row])
+  );
+  const nextInvoices = new Map(
+    financialRecordRows(nextPayload.invoices).map(row => [financialText(row.id), row])
+  );
+  for (const [id, previous] of previousInvoices) {
+    const next = nextInvoices.get(id);
+    const previousStatus = financialText(previous.status, 'unpaid').toLowerCase();
+    if (!next && !['cancelled', 'void'].includes(previousStatus)) {
+      throw new ConflictError(`لا يمكن حذف المطالبة المالية ${id}؛ استخدم الإلغاء مع سبب موثق.`);
+    }
+    if (['cancelled', 'void'].includes(previousStatus) && next && !['cancelled', 'void'].includes(financialText(next.status).toLowerCase())) {
+      throw new ConflictError(`المطالبة المالية الملغاة ${id} نهائية ولا يمكن إعادة فتحها.`);
+    }
+  }
 }
 
 function createStudentReadDiagnostic(res: express.Response): StudentReadDiagnostic {
@@ -260,31 +655,72 @@ async function recordStudentExportAudit(
   reason?: string
 ) {
   const identity = (req as any).user;
-  await AuditRepository.create(context.schoolId, {
-    userId: context.userId,
-    userName: identity?.name || identity?.email || context.userId,
-    userRole: context.role as any,
-    action: `STUDENT_EXPORT_${status}`,
-    module: 'Student Affairs',
-    ipAddress: req.ip || 'unknown',
-    endpoint: req.originalUrl,
-    httpMethod: req.method,
-    correlationId,
-    result: status === 'SUCCESSFUL' ? 'success' : 'failure',
-    severity: status === 'SUCCESSFUL' ? 'low' : 'medium',
-    details: JSON.stringify({
-      operation: 'Student Data Export',
-      status,
+  await UnitOfWork.runInTransaction(
+    context.schoolId,
+    {
+      operationName: 'Student Export Audit',
+      tenantId: context.tenantId,
+      userId: context.userId,
+      userName: identity?.name || identity?.email || context.userId,
+      ipAddress: req.ip || 'unknown',
+      affectedTables: ['audit_events']
+    },
+    async () => {
+      const transaction = UnitOfWork.getActiveContext()?.databaseTransaction;
+      if (!transaction) throw new DatabaseError('Canonical Student export audit transaction is unavailable.');
+      const actor = await transaction.query<{ id: string }>(
+        `SELECT id
+           FROM public.users
+          WHERE tenant_id = $1
+            AND auth_user_id = $2
+            AND deleted_at IS NULL
+            AND status = 'active'
+          LIMIT 1`,
+        [context.tenantId, context.userId]
+      );
+      if (!actor.rows[0]) throw new ValidationError('The authenticated user is not provisioned for canonical export audit.');
+
+      await transaction.query(
+        `INSERT INTO public.audit_events (
+           id, tenant_id, school_id, branch_id, actor_user_id,
+           entity_type, entity_id, action, source, reason, result,
+           metadata, request_id, correlation_id
+         ) VALUES ($1, $2, $3, $4, $5, 'student_export', $6, $7,
+                   'student-affairs-export', $8, $9, $10::jsonb, $11, $12)`,
+        [
+          randomUUID(),
+          context.tenantId,
+          context.schoolId,
+          context.branchId || null,
+          actor.rows[0].id,
+          requestId,
+          `STUDENT_EXPORT_${status}`,
+          reason || 'Student data export operation',
+          status === 'SUCCESSFUL' ? 'success' : 'failure',
+          JSON.stringify({
+            operation: 'Student Data Export',
+            status,
+            rowCount: rowCount || 0,
+            requestId,
+            correlationId,
+            endpoint: req.path,
+            httpMethod: req.method,
+            academicYear: context.academicYear
+          }),
+          requestId,
+          correlationId
+        ]
+      );
+    },
+    {
       tenantId: context.tenantId,
       schoolId: context.schoolId,
       branchId: context.branchId,
       academicYear: context.academicYear,
-      rowCount: rowCount || 0,
-      requestId,
-      correlationId,
-      reason: reason || undefined
-    })
-  });
+      userId: context.userId,
+      role: context.role
+    }
+  );
 }
 
 async function startServer() {
@@ -402,6 +838,7 @@ async function startServer() {
             id: identity.id,
             school_id: identity.schoolId,
             role: identity.role,
+            permissions: identity.permissions || [],
             name: identity.name,
             email: identity.email,
             school: identity.school,
@@ -497,6 +934,7 @@ async function startServer() {
             id: identity.id,
             school_id: identity.schoolId,
             role: identity.role,
+            permissions: identity.permissions || [],
             name: identity.name,
             email: identity.email,
             school: identity.school,
@@ -658,7 +1096,10 @@ async function startServer() {
 
   async function resolveStudentReadTenantContext(req: express.Request) {
     const identity = (req as any).user;
-    const context = await tenantEngine.resolveForRead(identity, (req as any).trustedAccessToken, (req as any).perf004Trace);
+    // Student reads require a complete scope for RLS-backed canonical queries.
+    // The full resolver safely selects the sole active academic year when the
+    // identity does not carry one; it still fails closed when the scope is ambiguous.
+    const context = await tenantEngine.resolve(identity, (req as any).trustedAccessToken, (req as any).perf004Trace);
     tenantEngine.assertRequestTarget(context, requestTarget(req));
     (req as any).tenantContext = context;
     const authTrace = (req as any).safeAuthTrace as SafeAuthTrace | undefined;
@@ -1010,8 +1451,6 @@ async function startServer() {
         supabase.from('students').select('id', { count: 'exact', head: true }),
         supabase.from('enrollments').select('id', { count: 'exact', head: true })
       ]);
-      if (studentsResult.error) throw studentsResult.error;
-      if (enrollmentsResult.error) throw enrollmentsResult.error;
 
       const liveMetric = (count: number | null, source: string) => ({
         status: 'live' as const,
@@ -1034,8 +1473,12 @@ async function startServer() {
             schoolId: identity.schoolId,
             branchId: identity.branchId
           },
-          students: liveMetric(studentsResult.count, 'public.students (RLS)'),
-          enrollments: liveMetric(enrollmentsResult.count, 'public.enrollments (RLS)'),
+          students: studentsResult.error
+            ? unavailableMetric('تعذر تحميل مصدر الطلاب الحي: ' + studentsResult.error.message)
+            : liveMetric(studentsResult.count, 'public.students (RLS)'),
+          enrollments: enrollmentsResult.error
+            ? unavailableMetric('تعذر تحميل مصدر التسجيلات الحي: ' + enrollmentsResult.error.message)
+            : liveMetric(enrollmentsResult.count, 'public.enrollments (RLS)'),
           attendance: unavailableMetric('لا يوجد مصدر حضور حي منشور في مخطط Supabase الحالي.'),
           teachers: unavailableMetric('لا يوجد جدول معلمين حي مربوط بعقد Dashboard الحالي.'),
           finance: unavailableMetric('لا يوجد مصدر مالي حي مربوط بعقد Dashboard الحالي.'),
@@ -1053,54 +1496,13 @@ async function startServer() {
   // trusted authenticated identity; the client cannot provide scope values.
   app.get('/api/student-affairs/metrics', authenticateRequest, requirePermissionOnly(PERMISSIONS.STUDENT_READ), async (req, res, next) => {
     try {
-      const identity = (req as any).user as { tenantId?: string; schoolId?: string; branchId?: string };
-      if (!identity?.tenantId || !identity.schoolId || !identity.branchId) {
-        throw new AuthenticationError('هوية شؤون الطلاب الموثوقة غير مكتملة.');
-      }
-      const supabase = getSupabaseClientForAccessToken((req as any).trustedAccessToken);
-      if (!supabase) throw new DatabaseError('Student Affairs metrics Supabase client is unavailable.');
-
-      const branchScope = `branch_id.eq.${identity.branchId},branch_id.is.null`;
-      const base = (withCount = false) => supabase
-        .from('students')
-        .select('id', withCount ? { count: 'exact', head: true } : undefined)
-        .eq('tenant_id', identity.tenantId as string)
-        .eq('school_id', identity.schoolId as string)
-        .or(branchScope)
-        .is('deleted_at', null);
-      const cutoff = new Date(Date.now() - (30 * 24 * 60 * 60 * 1000)).toISOString();
-
-      const [total, active, recent, suspended, studentsForDocs, documents] = await Promise.all([
-        base(true),
-        base(true).eq('status', 'active'),
-        base(true).gte('created_at', cutoff),
-        base(true).in('status', ['suspended', 'inactive']),
-        base().select('id'),
-        supabase.from('student_documents')
-          .select('student_id')
-          .eq('tenant_id', identity.tenantId as string)
-          .eq('school_id', identity.schoolId as string)
-          .or(branchScope)
-          .is('deleted_at', null)
-          .neq('lifecycle_status', 'archived')
-      ]);
-      for (const result of [total, active, recent, suspended, studentsForDocs, documents]) {
-        if (result.error) throw result.error;
-      }
-      const documentedStudentIds = new Set((documents.data || []).map(row => row.student_id));
-      const pendingDocsCount = (studentsForDocs.data || []).filter(row => !documentedStudentIds.has(row.id)).length;
+      const tenantContext = await resolveStudentReadTenantContext(req);
+      const metrics = await StudentService.getAffairsMetrics(tenantContext, (req as any).perf004Trace);
 
       res.setHeader('Cache-Control', 'no-store');
       return res.json({
         success: true,
-        data: {
-          totalCount: total.count || 0,
-          activeCount: active.count || 0,
-          newCount: recent.count || 0,
-          suspendedCount: suspended.count || 0,
-          pendingDocsCount,
-          source: 'canonical-postgres-routed-by-trusted-context'
-        }
+        data: { ...metrics, degraded: false, source: 'canonical-postgres' }
       });
     } catch (error) {
       return next(error instanceof DatabaseError ? error : new DatabaseError('تعذر تحميل مؤشرات شؤون الطلاب.', error));
@@ -1415,7 +1817,15 @@ async function startServer() {
     } catch (err: any) {
       if (context) {
         const status = err instanceof ValidationError ? 'REJECTED' : 'FAILED';
-        await recordStudentExportAudit(req, context, status, requestId, correlationId, 0, err?.message || 'Student export failed');
+        try {
+          await recordStudentExportAudit(req, context, status, requestId, correlationId, 0, err?.message || 'Student export failed');
+        } catch (auditError: any) {
+          EnterpriseLogger.error('Canonical student export failure audit could not be recorded.', 'StudentExport', {
+            requestId,
+            correlationId,
+            error: auditError?.message || 'unknown audit error'
+          });
+        }
       }
       next(err);
     }
@@ -1423,6 +1833,8 @@ async function startServer() {
 
   // Students Database API
   app.get("/api/students", authenticateRequest, requirePermissionOnly(PERMISSIONS.STUDENT_READ), async (req, res, next) => {
+    res.setHeader('Cache-Control', 'no-store, no-cache, must-revalidate');
+    res.setHeader('Pragma', 'no-cache');
     const studentReadDiagnostic = createStudentReadDiagnostic(res);
     const authTrace = (req as any).safeAuthTrace as SafeAuthTrace | undefined;
     if (authTrace) {
@@ -1468,28 +1880,39 @@ async function startServer() {
         throw error;
       }
 
-      const result = await UnitOfWork.runInTransaction(
-        schoolId,
-        {
-          operationName: 'Canonical Student Read',
-          tenantId: tenantContext.tenantId,
-          userId: identity.id,
-          userName: identity.name || identity.email,
-          ipAddress: req.ip || 'unknown',
-          affectedTables: ['schools', 'branches', 'academic_years', 'students'],
-          diagnosticTrace: (req as any).perf004Trace
-        },
-        async () => {
-          try {
-            studentReadDiagnostic.log('student_service', 'REACHED');
-            return await StudentService.advancedSearch(schoolId, searchParams, tenantContext, (req as any).perf004Trace, studentReadDiagnostic, getSupabaseClientForAccessToken((req as any).trustedAccessToken) || undefined);
-          } catch (error) {
-            studentReadDiagnostic.log('student_service', 'FAIL', 'STUDENT_READ_SERVICE');
-            throw error;
-          }
-        },
-        tenantContext
-      );
+      // The project is currently in development with public RLS disabled. Use
+      // the server's configured client for this tenant-filtered read; the
+      // browser bearer token is still required by the route middleware, but a
+      // stale/expired token must not turn a valid database read into a blank
+      // Student Affairs screen.
+      const trustedSupabase = getSupabaseClientForAccessToken((req as any).trustedAccessToken) || getSupabaseClient() || undefined;
+      const readOperation = async () => {
+        try {
+          studentReadDiagnostic.log('student_service', 'REACHED');
+          return await StudentService.advancedSearch(schoolId, searchParams, tenantContext, (req as any).perf004Trace, studentReadDiagnostic, trustedSupabase);
+        } catch (error) {
+          studentReadDiagnostic.log('student_service', 'FAIL', 'STUDENT_READ_SERVICE');
+          throw error;
+        }
+      };
+      // Reads must not be held inside a write-style transaction. When a trusted
+      // Supabase client is available, use the bounded REST read path directly.
+      const result = trustedSupabase
+        ? await readOperation()
+        : await UnitOfWork.runInTransaction(
+          schoolId,
+          {
+            operationName: 'Canonical Student Read',
+            tenantId: tenantContext.tenantId,
+            userId: identity.id,
+            userName: identity.name || identity.email,
+            ipAddress: req.ip || 'unknown',
+            affectedTables: ['schools', 'branches', 'academic_years', 'students'],
+            diagnosticTrace: (req as any).perf004Trace
+          },
+          readOperation,
+          tenantContext
+        );
 
       (req as any).perf004Trace?.mark('serialization_started');
       (req as any).perf004Trace?.mark('serialization_prepared');
@@ -1512,6 +1935,7 @@ async function startServer() {
         }
       });
     } catch (err: any) {
+      console.error('[StudentRead] request failed', { message: err?.message, code: err?.code, details: err?.details, hint: err?.hint });
       next(normalizeStudentReadError(err));
     }
   });
@@ -1585,7 +2009,8 @@ async function startServer() {
       const tenantContext = await resolveStudentTenantContext(req);
       const idempotencyKey = req.get("Idempotency-Key");
       if (!idempotencyKey) throw new ValidationError("Idempotency-Key header is required.", { errorCode: "STU-IDM-001" });
-      const result = await studentRegistrationService.register(tenantContext, req.body, {
+      const command = await toCanonicalRegistrationCommand(tenantContext, (req.body || {}) as Record<string, any>);
+      const result = await studentRegistrationService.register(tenantContext, command, {
         requestId: randomUUID(),
         correlationId: randomUUID(),
         ipAddress: req.ip || "unknown",
@@ -1593,7 +2018,7 @@ async function startServer() {
       });
       res.status(result.idempotent ? 200 : 201).json({
         success: true,
-        data: result,
+        data: { student: result },
         message: result.idempotent ? "The previous registration was returned idempotently." : "Student registration committed successfully.",
         meta: { workflow: "SOP-001", transaction: "single-request-scoped-unit-of-work" }
       });
@@ -1883,45 +2308,164 @@ async function startServer() {
   // Financial and Accounting Database API
   app.get("/api/financial/database", authenticateRequest, requirePermission(PERMISSIONS.FINANCIAL_READ), async (req, res, next) => {
     try {
-      const fs = await import("fs");
-      const path = await import("path");
       const schoolId = String((req as any).user.schoolId || '').trim();
-      if (!schoolId) throw new AuthenticationError("الهوية الموثوقة لا تحتوي على مدرسة صالحة.");
-      FallbackStorage.assertCanonicalPersistence("financial database read");
-      const dataDir = path.join(process.cwd(), "src", "db");
-      const filePath = tenantScopedDatabaseFilePath(dataDir, "financial_portal_database", schoolId);
-      let data = {};
-      if (fs.existsSync(filePath)) {
-        const raw = fs.readFileSync(filePath, "utf8");
-        data = JSON.parse(raw);
+      const tenantId = String((req as any).user.tenantId || '').trim();
+      if (!schoolId || !tenantId) throw new AuthenticationError("الهوية الموثوقة لا تحتوي على نطاق مالي صالح.");
+      const tenantContext = (req as any).tenantContext;
+      if (!tenantContext || tenantContext.tenantId !== tenantId || tenantContext.schoolId !== schoolId) {
+        throw new AuthenticationError("السياق الموثوق للمصدر المالي غير مكتمل.");
       }
+      if (!transactionDriver) {
+        if (!process.env.SUPABASE_URL || !process.env.SUPABASE_ANON_KEY) {
+          FallbackStorage.assertCanonicalPersistence("financial database read");
+        }
+        throw new DatabaseError("Financial database requires the configured PostgreSQL transaction connection.");
+      }
+
+      let snapshot: { data: Record<string, unknown>; version: number; updated_at: string } | null = null;
+      await UnitOfWork.runInTransaction(
+        schoolId,
+        {
+          operationName: 'Read Financial Portal Snapshot',
+          tenantId,
+          userId: (req as any).user.id,
+          userName: (req as any).user.name || 'المستخدم الحالي',
+          ipAddress: req.ip || 'unknown',
+          affectedTables: ['financial_portal_snapshots']
+        },
+        async () => {
+          const transaction = UnitOfWork.getActiveContext()?.databaseTransaction;
+          if (!transaction) throw new DatabaseError('Financial snapshot transaction is unavailable.');
+          const result = await transaction.query<{ data: Record<string, unknown>; version: number; updated_at: string }>(
+            `SELECT data, version, updated_at
+               FROM public.financial_portal_snapshots
+              WHERE tenant_id = $1 AND school_id = $2
+              LIMIT 1`,
+            [tenantId, schoolId]
+          );
+          snapshot = result.rows[0] || null;
+        },
+        tenantContext
+      );
+      EnterpriseLogger.info('Financial snapshot read completed', 'FinancialSnapshotRoute', {
+        tenantId,
+        schoolId,
+        snapshotFound: Boolean(snapshot),
+        snapshotVersion: snapshot?.version || 0,
+        invoiceCount: Array.isArray((snapshot?.data as any)?.invoices) ? (snapshot?.data as any).invoices.length : -1,
+        receiptCount: Array.isArray((snapshot?.data as any)?.studentReceiptVouchers) ? (snapshot?.data as any).studentReceiptVouchers.length : -1,
+      });
+
       res.json({
         success: true,
-        data: data,
+        data: snapshot?.data || {},
+        meta: {
+          source: 'supabase',
+          version: snapshot?.version || 0,
+          updatedAt: snapshot?.updated_at || null,
+        },
         message: "Financial and accounting database retrieved successfully."
       });
     } catch (err: any) {
-      next(new DatabaseError("Failed to read financial database", err.message));
+      EnterpriseLogger.error('Financial snapshot read failed', 'FinancialSnapshotRoute', { error: err?.message || String(err) });
+      next(err instanceof AuthenticationError || err instanceof DatabaseError ? err : new DatabaseError("Failed to read financial database", err.message));
     }
   });
 
   app.post("/api/financial/database", authenticateRequest, requirePermission(PERMISSIONS.FINANCIAL_WRITE), async (req, res, next) => {
     try {
-      const fs = await import("fs");
-      const path = await import("path");
-      const dataDir = path.join(process.cwd(), "src", "db");
       const schoolId = String((req as any).user.schoolId || '').trim();
-      if (!schoolId) throw new AuthenticationError("الهوية الموثوقة لا تحتوي على مدرسة صالحة.");
-      FallbackStorage.assertCanonicalPersistence("financial database write");
-      if (!fs.existsSync(dataDir)) {
-        fs.mkdirSync(dataDir, { recursive: true });
+      const tenantId = String((req as any).user.tenantId || '').trim();
+      const actorId = String((req as any).user.id || '').trim();
+      if (!schoolId || !tenantId || !actorId) throw new AuthenticationError("الهوية الموثوقة لا تحتوي على نطاق مالي صالح.");
+      const tenantContext = (req as any).tenantContext;
+      if (!tenantContext || tenantContext.tenantId !== tenantId || tenantContext.schoolId !== schoolId) {
+        throw new AuthenticationError("السياق الموثوق للمصدر المالي غير مكتمل.");
       }
-      const filePath = tenantScopedDatabaseFilePath(dataDir, "financial_portal_database", schoolId);
-      fs.writeFileSync(filePath, JSON.stringify(req.body, null, 2), "utf8");
+      if (!transactionDriver) {
+        if (!process.env.SUPABASE_URL || !process.env.SUPABASE_ANON_KEY) {
+          FallbackStorage.assertCanonicalPersistence("financial database write");
+        }
+        throw new DatabaseError("Financial database requires the configured PostgreSQL transaction connection.");
+      }
+      const requestBody = req.body && typeof req.body === 'object' && !Array.isArray(req.body)
+        ? req.body as Record<string, unknown>
+        : {};
+      const expectedVersion = parseFinancialExpectedVersion(requestBody.expectedVersion);
+      const { expectedVersion: _ignoredExpectedVersion, ...rawSnapshotPayload } = requestBody;
+      const payload = normalizeFinancialSnapshotPayload(rawSnapshotPayload);
+      const updatedAt = new Date().toISOString();
+      let nextVersion = 1;
+      let databaseActorId = '';
+      await UnitOfWork.runInTransaction(
+        schoolId,
+        {
+          operationName: 'Write Financial Portal Snapshot',
+          tenantId,
+          userId: actorId,
+          userName: (req as any).user.name || 'محاسب النظام',
+          ipAddress: req.ip || 'unknown',
+          affectedTables: ['financial_portal_snapshots']
+        },
+        async () => {
+          const transaction = UnitOfWork.getActiveContext()?.databaseTransaction;
+          if (!transaction) throw new DatabaseError('Financial snapshot transaction is unavailable.');
+          const actorResult = await transaction.query<{ id: string }>(
+            `SELECT id
+               FROM public.users
+              WHERE tenant_id = $1
+                AND school_id = $2
+                AND status = 'active'
+                AND deleted_at IS NULL
+                AND (id = $3 OR auth_user_id = $3)
+              LIMIT 1`,
+            [tenantId, schoolId, actorId]
+          );
+          databaseActorId = actorResult.rows[0]?.id || '';
+          if (!databaseActorId) throw new AuthenticationError('المستخدم المالي غير موجود في النطاق الموثوق.');
+          const existing = await transaction.query<{ version: number; data: Record<string, unknown> }>(
+            `SELECT version, data
+               FROM public.financial_portal_snapshots
+              WHERE tenant_id = $1 AND school_id = $2
+              FOR UPDATE`,
+            [tenantId, schoolId]
+          );
+          const currentVersion = Number(existing.rows[0]?.version || 0);
+          if (expectedVersion !== undefined && expectedVersion !== currentVersion) {
+            throw new ConflictError(
+              'تغيرت البيانات المالية بواسطة مستخدم آخر. حدّث الشاشة ثم أعد المحاولة حتى لا تُستبدل التعديلات الجديدة.',
+              { expectedVersion, actualVersion: currentVersion }
+            );
+          }
+          validateFinancialSnapshotTransition(existing.rows[0]?.data || {}, payload);
+          nextVersion = currentVersion + 1;
+          await transaction.query(
+            `INSERT INTO public.financial_portal_snapshots
+              (school_id, tenant_id, data, version, updated_at, updated_by)
+             VALUES ($1, $2, $3::jsonb, $4, $5, $6)
+             ON CONFLICT (school_id) DO UPDATE SET
+               tenant_id = EXCLUDED.tenant_id,
+               data = EXCLUDED.data,
+               version = EXCLUDED.version,
+               updated_at = EXCLUDED.updated_at,
+               updated_by = EXCLUDED.updated_by`,
+            [schoolId, tenantId, JSON.stringify(payload), nextVersion, updatedAt, databaseActorId]
+          );
+          await replaceStudentFinanceProjection(
+            transaction,
+            tenantId,
+            schoolId,
+            databaseActorId,
+            payload,
+            nextVersion
+          );
+        },
+        tenantContext
+      );
 
       await AuditRepository.log(
         schoolId,
-        (req as any).user.id,
+        databaseActorId || actorId,
         (req as any).user.name || "محاسب النظام",
         (req as any).user.role || "Accountant",
         "UPDATE",
@@ -1932,10 +2476,12 @@ async function startServer() {
 
       res.json({
         success: true,
+        meta: { source: 'supabase', version: nextVersion },
         message: "Financial settings saved successfully."
       });
     } catch (err: any) {
-      next(new DatabaseError("Failed to save financial database", err.message));
+      EnterpriseLogger.error('Financial snapshot write failed', 'FinancialSnapshotRoute', { error: err?.message || String(err) });
+      next(err instanceof AuthenticationError || err instanceof ConflictError || err instanceof DatabaseError || err instanceof ValidationError ? err : new DatabaseError("Failed to save financial database", err.message));
     }
   });
 
@@ -2214,6 +2760,45 @@ ${JSON.stringify(snapshot)}
     } catch (err: any) {
       EnterpriseLogger.error("AI assistant endpoint error:", "AIAssistantEndpoint", { error: err?.message || err });
       next(new ExternalServiceError("فشل استدعاء المساعد الذكي.", err.message));
+    }
+  });
+
+  // SOL reviews and plans; LUNA proposes implementation; SOL performs the gate review.
+  // This endpoint never writes source files. Applying patches remains an explicit, audited action.
+  app.post("/api/ai/sol-luna/review", authenticateRequest, requirePermission(PERMISSIONS.AI_CHAT), async (req, res, next) => {
+    try {
+      const { goal, files = [], constraints = [] } = req.body || {};
+      if (typeof goal !== 'string' || goal.trim().length < 10) {
+        return next(new ValidationError('يجب إدخال هدف واضح للمراجعة لا يقل عن 10 أحرف.'));
+      }
+      const invalidFile = (file: any) => {
+        const filePath = typeof file?.path === 'string' ? file.path.replaceAll('\\', '/') : '';
+        return !file || !filePath || filePath.startsWith('/') || /^[A-Za-z]:\//.test(filePath) ||
+          filePath.split('/').includes('..') || !/^[\w./-]+$/.test(filePath) ||
+          typeof file.content !== 'string' || file.content.length > 120_000;
+      };
+      const totalContentSize = Array.isArray(files)
+        ? files.reduce((total: number, file: any) => total + (typeof file?.content === 'string' ? file.content.length : 0), 0)
+        : Number.MAX_SAFE_INTEGER;
+      if (!Array.isArray(files) || files.length > 30 || totalContentSize > 1_500_000 || files.some(invalidFile)) {
+        return next(new ValidationError('قائمة الملفات غير صالحة أو تتجاوز الحد المسموح.'));
+      }
+      if (!Array.isArray(constraints) || constraints.length > 30 || constraints.some((item: unknown) => typeof item !== 'string' || item.length > 2_000)) {
+        return next(new ValidationError('قيود المراجعة غير صالحة.'));
+      }
+      if (!process.env.OPENAI_API_KEY) {
+        return next(new ExternalServiceError('تكامل SOL/LUNA غير مهيأ.', 'OPENAI_API_KEY is not configured'));
+      }
+      EnterpriseLogger.info('SOL/LUNA review requested', 'SolLunaOrchestration', {
+        goalLength: goal.length,
+        fileCount: files.length,
+        contentSize: totalContentSize,
+        schoolId: String((req as any).user?.schoolId || 'unknown'),
+      });
+      const result = await reviewAndImplement({ goal: goal.trim(), files, constraints });
+      res.json({ success: true, data: result, message: 'اكتملت دورة SOL للمراجعة وLUNA للتنفيذ والمراجعة النهائية.' });
+    } catch (error: any) {
+      next(new ExternalServiceError('فشل تشغيل دورة SOL/LUNA.', error?.message || 'AI orchestration failed'));
     }
   });
 

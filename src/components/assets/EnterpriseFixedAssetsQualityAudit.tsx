@@ -14,7 +14,7 @@ export default function EnterpriseFixedAssetsQualityAudit({
   assets,
   triggerNotification
 }: EnterpriseFixedAssetsQualityAuditProps) {
-  const [isCertified, setIsCertified] = useState(true);
+  const [isCertified, setIsCertified] = useState(false);
 
   const totalCost = assets.reduce((sum, a) => sum + Number(a.cost || 0) + Number(a.capitalExp || 0), 0);
   const totalAccDep = assets.reduce((sum, a) => sum + Number(a.accDep || 0), 0);
@@ -24,38 +24,38 @@ export default function EnterpriseFixedAssetsQualityAudit({
     {
       title: 'مطابقة المعادلة المحاسبية للأصول الثابتة',
       desc: 'التحقق من أن صافي القيمة الدفترية = التكلفة التاريخية + التحسينات الرأسمالية - مجمع الإهلاك المتراكم لكل أصل.',
-      status: 'pass',
-      metric: `${assets.length}/${assets.length} أصل مطاطق 100%`
+      status: 'unknown',
+      metric: 'غير متحقق'
     },
     {
       title: 'سلامة التوجيه المحاسبي وقيد دفتر اليومية (JV)',
       desc: 'ربط أصول المدرسة بالدليل المالي الموحد (حساب الأصل 1300 + حـ مجمع الإهلاك + حـ مصروف الإهلاك 5200).',
-      status: 'pass',
-      metric: 'مربوط بالكامل'
+      status: 'unknown',
+      metric: 'غير متحقق'
     },
     {
       title: 'توثيق سجلات الصيانة والتكاليف التشغيلية',
       desc: 'تسجيل جميع أوامر العمل وقطع الغيار والتكلفة التشغيلية لكل أصل مع تحديث الجاهزية الفنية.',
-      status: 'pass',
-      metric: 'مكتمل وموثق'
+      status: 'unknown',
+      metric: 'غير متحقق'
     },
     {
       title: 'الربط التكاملي مع أسطول الحركة والمشتريات',
       desc: 'تكامل أصول حافلات النقل والمختبرات وأجهزة المولدات مع أقسام المشتريات والمرافق والعهدة.',
-      status: 'pass',
-      metric: 'تكامل كامل 100%'
+      status: 'unknown',
+      metric: 'غير متحقق'
     },
     {
       title: 'السجل الزمني والرقابي الشامل (Asset Timeline & Audit Trail)',
       desc: 'تتبع كافة التعديلات، حركات النقل، وتوزيع العهد بنظام الـ Timeline غير القابل للتعديل أو التزييف.',
-      status: 'pass',
-      metric: 'سجل نشط 100%'
+      status: 'unknown',
+      metric: 'غير متحقق'
     },
     {
       title: 'نظام الباركود ورمز الاستجابة السريعة (Barcode & QR)',
       desc: 'توليد أرقام تسلسلية ورموز باركود وQR فريدة لكل أصل لسهولة الجرد الميداني عبر الموبايل والماسح الضوئي.',
-      status: 'pass',
-      metric: 'مفعل لجميع الأصول'
+      status: 'unknown',
+      metric: 'غير متحقق'
     }
   ];
 
@@ -72,14 +72,14 @@ export default function EnterpriseFixedAssetsQualityAudit({
               <span className="text-xs text-slate-400 font-mono">ORDER-011</span>
             </div>
             <h2 className="text-2xl font-black text-white">تقرير الاعتماد المؤسسي لوحدة الأصول الثابتة والعهد (Fixed Assets Portal)</h2>
-            <p className="text-xs text-slate-300 max-w-2xl bg-gradient-to-b from-[#fffefc] via-[#fbf8f0] to-[#f5eeea] border-2 border-[#d4af37]/30 hover:border-[#d4af37] rounded-3xl p-4 sm:p-5 shadow-md transition-all duration-300">
-              تم فحص واختبار وحدة الأصول هندسياً ومحاسبياً وتأكيد التكلفة التاريخية والإهلاك ومطابقة العهدة بدون أي أخطاء أو تراجع برمجي.
+              <p className="text-xs text-slate-300 max-w-2xl bg-gradient-to-b from-[#fffefc] via-[#fbf8f0] to-[#f5eeea] border-2 border-[#d4af37]/30 hover:border-[#d4af37] rounded-3xl p-4 sm:p-5 shadow-md transition-all duration-300">
+              لا يمكن اعتماد فحوصات الأصول قبل وصول أدلة محاسبية وتشغيلية مركزية قابلة للتحقق.
             </p>
           </div>
 
           <div className="bg-white/10 p-4 backdrop-blur-md border border-white/10 text-center min-w-[200px]">
             <div className="flex items-center justify-center gap-2 text-emerald-400 font-black text-lg mb-1">
-              <ShieldCheck className="w-6 h-6" /> معتمد 100%
+              <ShieldCheck className="w-6 h-6" /> {isCertified ? 'معتمد' : 'غير متحقق'}
             </div>
             <span className="text-[11px] text-slate-300 block font-bold">ZERO ASSET LOSS CERTIFIED</span>
           </div>
@@ -111,7 +111,7 @@ export default function EnterpriseFixedAssetsQualityAudit({
             <CheckCircle2 className="w-5 h-5 text-emerald-600" /> نتائج الفحوصات والتدقيق المالي والتشغيلي
           </h4>
           <span className="px-2.5 py-1 bg-emerald-50 text-emerald-800 text-xs font-bold rounded-lg border border-emerald-200">
-            {auditChecks.length} فحوصات ناجحة
+            {auditChecks.filter(check => check.status === 'pass').length} فحوصات متحققة
           </span>
         </div>
 

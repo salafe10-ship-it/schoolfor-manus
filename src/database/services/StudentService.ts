@@ -1,7 +1,7 @@
 import { StudentDocumentRepository } from '../repositories/StudentDocumentRepository';
 import type { SupabaseClient } from '@supabase/supabase-js';
 import { StudentRepository } from '../repositories/StudentRepository';
-import { CanonicalStudentReadRepository, type StudentReadDiagnostic } from '../repositories/CanonicalStudentReadRepository';
+import { CanonicalStudentReadRepository, type CanonicalStudentAffairsMetrics, type StudentReadDiagnostic } from '../repositories/CanonicalStudentReadRepository';
 import { UnitOfWork } from '../UnitOfWork';
 import { FallbackStorage } from '../repositories/FallbackStorage';
 import { AuditRepository } from '../repositories/AuditRepository';
@@ -108,12 +108,14 @@ export class StudentService {
       // Data Consistency Propagation (Synchronize related modules)
       if (updates.name && updates.name !== existing.name) {
         // Sync Invoices
+        FallbackStorage.assertCanonicalPersistence('student name invoice synchronization read');
         const invoices = FallbackStorage.getInvoices().filter(i => i.studentId === id);
         for (const inv of invoices) {
           const updatedInv = { ...inv, studentName: updates.name };
           InvoiceRepository.enlistUpdateStudentName(inv.id, updates.name, updatedInv);
         }
         // Sync Attendance
+        FallbackStorage.assertCanonicalPersistence('student name attendance synchronization read');
         const attendance = FallbackStorage.getAttendance().filter(a => a.studentId === id);
         for (const att of attendance) {
           const updatedAtt = { ...att, studentName: updates.name };
@@ -278,6 +280,13 @@ export class StudentService {
     // Keep the legacy schoolId argument for API compatibility; tenant scope comes from the
     // authenticated TenantContext inside CanonicalStudentReadRepository.
     return await CanonicalStudentReadRepository.advancedSearch(params, trustedContext, diagnosticTrace, studentReadDiagnostic, supabase);
+  }
+
+  public static async getAffairsMetrics(
+    trustedContext?: TenantContext,
+    diagnosticTrace?: Perf004TraceLike
+  ): Promise<CanonicalStudentAffairsMetrics> {
+    return await CanonicalStudentReadRepository.affairsMetrics(trustedContext, diagnosticTrace);
   }
 
   /**

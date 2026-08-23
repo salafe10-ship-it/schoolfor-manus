@@ -28,7 +28,7 @@ describe('STU-AFFAIRS-P1-PRIV-008 sensitive data exposure', () => {
   });
 
   it('keeps sensitive values out of the print rows and student profile view', () => {
-    const printBlock = blockBetween('const rowsHTML = filteredStudents.map', 'printWindow.document.write');
+    const printBlock = blockBetween('{printPreviewStudents && (', 'MODAL 3: BATCH TRANSFER / PROMOTION WIZARD');
     const profileBlock = blockBetween('{viewStudent && (', 'MODAL 3: BATCH TRANSFER / PROMOTION WIZARD');
     expect(printBlock).not.toContain('st.parentPhone');
     expect(profileBlock).not.toContain('viewStudent.nationalId');

@@ -23,10 +23,7 @@ export default function SuperAdminDashboard({
 
   // Local Alerts state if not provided by parent
   const [alerts, setAlerts] = useState<any[]>(() => {
-    return propAlerts || [
-      { id: 'al_01', severity: 'danger', title: 'فشل ترخيص مدارس النور النموذجية', details: 'باقة الاشتراك ستنتهي خلال ٤ أيام مع تجاوز الحد المسموح لتخزين S3.', time: 'منذ ١٢ دقيقة' },
-      { id: 'al_02', severity: 'warning', title: 'تذبذب طفيف في استجابة بوابة Supabase API', details: 'ارتفاع زمن الاستجابة إلى ٤٥٠ مللي ثانية في عقد الظهران.', time: 'منذ ٢ ساعة' }
-    ];
+    return propAlerts || [];
   });
 
   // Handle dismiss cleanly
@@ -43,18 +40,19 @@ export default function SuperAdminDashboard({
     if (triggerNotification) triggerNotification('تم جدولة معالجة التنبيه وإرساله لفريق المتابعة ✅', 'success');
   };
   
-  // Simulated dynamic hardware telemetry
+  // لا تُعرض قياسات أجهزة أو جلسات قبل ربط مصدر المراقبة المركزي.
   const [telemetry, setTelemetry] = useState({
-    cpu: 24,
-    ram: 5.2,
-    ramLimit: 16.0,
-    iops: 1250,
-    latency: 35,
-    onlineUsers: 485,
-    activeSessions: 1420
+    cpu: 0,
+    ram: 0,
+    ramLimit: 0,
+    iops: 0,
+    latency: 0,
+    onlineUsers: 0,
+    activeSessions: 0
   });
 
   useEffect(() => {
+    return;
     const timer = setInterval(() => {
       setTelemetry(prev => ({
         cpu: Math.min(95, Math.max(8, prev.cpu + Math.round(Math.random() * 12 - 6))),
@@ -69,16 +67,11 @@ export default function SuperAdminDashboard({
     return () => clearInterval(timer);
   }, []);
 
-  // Simulated live system logs stream
-  const [logs, setLogs] = useState<string[]>([
-    '[INIT] Booting multi-tenant proxy routing gateway on port 3000.',
-    '[REDIS] Cache handshake validated for <server-managed-cache-url>',
-    '[SIDEKIQ] System scheduler active: 12 background workers initialized.',
-    '[DB] Pool connections verified. Idle pool is 18 connections.',
-    '[SECURITY] RLS (Row Level Security) verified for all active schemas.'
-  ]);
+  // لا تُنشأ سجلات تشغيل محلية؛ تُقرأ من سجل النظام المركزي.
+  const [logs, setLogs] = useState<string[]>([]);
 
   useEffect(() => {
+    return;
     const timer = setInterval(() => {
       const actions = [
         '[GATEWAY] Subdomain route request: alnoor.erpcloud.com resolved in 4ms.',
@@ -101,7 +94,7 @@ export default function SuperAdminDashboard({
   const suspendedSchools = schools.filter(s => s.status === 'suspended').length;
   const totalBranches = branches.length;
   const totalEmployees = employees.length;
-  const totalStudentsCount = 245000; // Simulated global school stats
+  const totalStudentsCount = schools.reduce((total, school) => total + Number(school.studentCount || 0), 0);
 
   return (
     <div className="w-full min-h-screen text-right font-sans dir-rtl select-none transition-all duration-300 bg-gradient-to-br from-[#f8f5ee] via-[#efe9dc] to-[#e8e0d0] text-slate-900 p-2 sm:p-4 md:p-6 space-y-6" dir="rtl">

@@ -1,8 +1,9 @@
 import { useState } from 'react';
 
 export function useStudentTransport() {
-  const [assignedRoute, setAssignedRoute] = useState<string>('route_north');
-  const [deliveryPeriod, setDeliveryPeriod] = useState<string>('both');
+  // لا يُفترض وجود مسار أو فترة قبل تحميلها من مصدر النقل المركزي.
+  const [assignedRoute, setAssignedRoute] = useState<string>('');
+  const [deliveryPeriod, setDeliveryPeriod] = useState<string>('');
 
   return {
     assignedRoute,

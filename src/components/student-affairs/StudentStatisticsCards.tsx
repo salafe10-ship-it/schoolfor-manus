@@ -1,5 +1,5 @@
 import { BookOpen, ChevronRight, FileSpreadsheet, Settings, UserPlus } from 'lucide-react';
-import React from 'react';
+import React, { useMemo } from 'react';
 interface StudentStatisticsCardsProps {
   filteredList: any[];
   activeMainView: 'directory' | 'academic_setup';
@@ -19,6 +19,20 @@ export default function StudentStatisticsCards({
   downloadExcel,
   selectedSchool
 }: StudentStatisticsCardsProps) {
+  const averageAge = useMemo(() => {
+    const ages = filteredList
+      .map(student => student.birthDate ? new Date(student.birthDate) : null)
+      .filter((birth): birth is Date => Boolean(birth && !Number.isNaN(birth.getTime())))
+      .map(birth => {
+        const today = new Date();
+        let age = today.getFullYear() - birth.getFullYear();
+        if (today.getMonth() < birth.getMonth() || (today.getMonth() === birth.getMonth() && today.getDate() < birth.getDate())) age--;
+        return age;
+      })
+      .filter(age => age >= 0);
+    return ages.length > 0 ? Math.round(ages.reduce((sum, age) => sum + age, 0) / ages.length) : null;
+  }, [filteredList]);
+
   return (
     <div className="dark:bg-slate-900 dark:border-slate-800 rounded-3xl p-6 relative overflow-hidden" id="student-statistics-cards">
       
@@ -83,11 +97,11 @@ export default function StudentStatisticsCards({
         </div>
         <div className="bg-transparent dark:bg-slate-950 p-4 border border-slate-100 dark:border-slate-800">
           <p className="text-[10px] text-slate-500 dark:text-slate-400 font-bold uppercase tracking-wider mb-1">متوسط العمر</p>
-          <p className="text-xl font-black text-slate-900 dark:text-white font-mono">11 <span className="text-[10px] font-bold text-slate-400">سنة</span></p>
+          <p className="text-xl font-black text-slate-900 dark:text-white font-mono">{averageAge ?? 'غير متحقق'} {averageAge !== null && <span className="text-[10px] font-bold text-slate-400">سنة</span>}</p>
         </div>
         <div className="bg-transparent dark:bg-slate-950 p-4 border border-slate-100 dark:border-slate-800">
           <p className="text-[10px] text-slate-500 dark:text-slate-400 font-bold uppercase tracking-wider mb-1">دقة البيانات</p>
-          <p className="text-xl font-black text-amber-600 dark:text-amber-400 font-mono">100%</p>
+          <p className="text-xl font-black text-amber-600 dark:text-amber-400 font-mono">غير متحقق</p>
         </div>
       </div>
     </div>

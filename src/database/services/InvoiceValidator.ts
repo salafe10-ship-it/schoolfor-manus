@@ -24,6 +24,7 @@ export class InvoiceValidator {
    * Performs deep business validation on the complete Invoice object before any DB write.
    */
   public static async validate(invoice: Partial<Invoice>, isNew: boolean = true): Promise<void> {
+    FallbackStorage.assertCanonicalPersistence('invoice validation student and fiscal master read');
     if (!invoice) {
       throw new InvoiceValidationError("بيانات الفاتورة مطلوبة ولا يمكن أن تكون فارغة.");
     }

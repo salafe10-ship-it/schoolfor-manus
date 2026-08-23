@@ -19,6 +19,9 @@ import {
  * Fully isolated by tenant schoolId to meet multi-school deployment standards.
  */
 export class InstallmentRepository implements IBaseRepository<InstallmentPlan> {
+  private static assertAuthoritativePersistence(operation: string): void {
+    FallbackStorage.assertCanonicalPersistence(`installment ${operation}`);
+  }
   
   public async getById(schoolId: string, id: string): Promise<InstallmentPlan | null> {
     return InstallmentRepository.getById(schoolId, id);
@@ -51,6 +54,7 @@ export class InstallmentRepository implements IBaseRepository<InstallmentPlan> {
   // --- STATIC ENTERPRISE METHODS FOR TENANT ISOLATION ---
 
   public static async getById(schoolId: string, id: string): Promise<InstallmentPlan | null> {
+    this.assertAuthoritativePersistence('plan read');
     const plans = FallbackStorage.getInstallmentPlans();
     const plan = plans.find(p => p.schoolId === schoolId && p.id === id);
     return plan || null;
@@ -60,6 +64,7 @@ export class InstallmentRepository implements IBaseRepository<InstallmentPlan> {
     schoolId: string, 
     options?: { studentId?: string; invoiceId?: string; status?: string }
   ): Promise<InstallmentPlan[]> {
+    this.assertAuthoritativePersistence('plans read');
     let plans = FallbackStorage.getInstallmentPlans().filter(p => p.schoolId === schoolId);
 
     if (options?.studentId) {
@@ -76,6 +81,7 @@ export class InstallmentRepository implements IBaseRepository<InstallmentPlan> {
   }
 
   public static async create(schoolId: string, item: Partial<InstallmentPlan>): Promise<InstallmentPlan> {
+    this.assertAuthoritativePersistence('plan write');
     if (!item.studentId || !item.invoiceId || !item.feeTemplateId) {
       throw new Error('فشل الحفظ: لا يمكن إنشاء خطة تقسيط بدون طالب أو فاتورة أو رسم مرتبطة بها.');
     }
@@ -108,6 +114,7 @@ export class InstallmentRepository implements IBaseRepository<InstallmentPlan> {
   }
 
   public static async update(schoolId: string, id: string, item: Partial<InstallmentPlan>): Promise<InstallmentPlan> {
+    this.assertAuthoritativePersistence('plan update');
     const plans = FallbackStorage.getInstallmentPlans();
     const idx = plans.findIndex(p => p.schoolId === schoolId && p.id === id);
     if (idx === -1) {
@@ -127,6 +134,7 @@ export class InstallmentRepository implements IBaseRepository<InstallmentPlan> {
   }
 
   public static async delete(schoolId: string, id: string): Promise<boolean> {
+    this.assertAuthoritativePersistence('plan delete');
     const plans = FallbackStorage.getInstallmentPlans();
     const idx = plans.findIndex(p => p.schoolId === schoolId && p.id === id);
     if (idx === -1) return false;
@@ -163,6 +171,7 @@ export class InstallmentRepository implements IBaseRepository<InstallmentPlan> {
   }
 
   public static async exists(schoolId: string, id: string): Promise<boolean> {
+    this.assertAuthoritativePersistence('plan existence read');
     const plans = FallbackStorage.getInstallmentPlans();
     return plans.some(p => p.schoolId === schoolId && p.id === id);
   }
@@ -175,6 +184,7 @@ export class InstallmentRepository implements IBaseRepository<InstallmentPlan> {
   // --- RELATED DOMAIN COLLECTION ACCESSORS ---
 
   public static getSchedulesByPlanId(planId: string, version?: number): InstallmentSchedule[] {
+    this.assertAuthoritativePersistence('schedule read');
     let schedules = FallbackStorage.getInstallmentSchedules().filter(s => s.planId === planId);
     if (version !== undefined) {
       schedules = schedules.filter(s => s.version === version);
@@ -183,6 +193,7 @@ export class InstallmentRepository implements IBaseRepository<InstallmentPlan> {
   }
 
   public static saveSchedules(planId: string, newSchedules: InstallmentSchedule[], version: number) {
+    this.assertAuthoritativePersistence('schedule write');
     const allSchedules = FallbackStorage.getInstallmentSchedules();
     // Filter out old schedules for the same plan and version
     const filtered = allSchedules.filter(s => !(s.planId === planId && s.version === version));
@@ -191,10 +202,12 @@ export class InstallmentRepository implements IBaseRepository<InstallmentPlan> {
   }
 
   public static getItemsByScheduleId(scheduleId: string): InstallmentItem[] {
+    this.assertAuthoritativePersistence('item read');
     return FallbackStorage.getInstallmentItems().filter(it => it.scheduleId === scheduleId);
   }
 
   public static saveItems(scheduleId: string, newItems: InstallmentItem[]) {
+    this.assertAuthoritativePersistence('item write');
     const allItems = FallbackStorage.getInstallmentItems();
     const filtered = allItems.filter(it => it.scheduleId !== scheduleId);
     filtered.push(...newItems);
@@ -202,32 +215,38 @@ export class InstallmentRepository implements IBaseRepository<InstallmentPlan> {
   }
 
   public static getPaymentsByPlanId(planId: string): InstallmentPayment[] {
+    this.assertAuthoritativePersistence('payment read');
     return FallbackStorage.getInstallmentPayments().filter(p => p.planId === planId);
   }
 
   public static savePayment(payment: InstallmentPayment) {
+    this.assertAuthoritativePersistence('payment write');
     const payments = FallbackStorage.getInstallmentPayments();
     payments.push(payment);
     FallbackStorage.saveInstallmentPayments(payments);
   }
 
   public static getHistoryByPlanId(planId: string): InstallmentHistory[] {
+    this.assertAuthoritativePersistence('history read');
     return FallbackStorage.getInstallmentHistories().filter(h => h.planId === planId)
       .sort((a, b) => new Date(a.timestamp).getTime() - new Date(b.timestamp).getTime());
   }
 
   public static saveHistory(history: InstallmentHistory) {
+    this.assertAuthoritativePersistence('history write');
     const histories = FallbackStorage.getInstallmentHistories();
     histories.push(history);
     FallbackStorage.saveInstallmentHistories(histories);
   }
 
   public static getVersionsByPlanId(planId: string): InstallmentVersion[] {
+    this.assertAuthoritativePersistence('version read');
     return FallbackStorage.getInstallmentVersions().filter(v => v.planId === planId)
       .sort((a, b) => a.version - b.version);
   }
 
   public static saveVersion(versionSnapshot: InstallmentVersion) {
+    this.assertAuthoritativePersistence('version write');
     const versions = FallbackStorage.getInstallmentVersions();
     versions.push(versionSnapshot);
     FallbackStorage.saveInstallmentVersions(versions);

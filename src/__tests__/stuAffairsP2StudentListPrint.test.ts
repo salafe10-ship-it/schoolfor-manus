@@ -18,19 +18,21 @@ describe('STU-AFFAIRS-P2-006-66 Student list print truthfulness', () => {
 
   it('prints the current filtered page and uses truthful browser-print wording', () => {
     expect(printBlock).toContain('const printableStudents = selectedStudentIds.length > 0');
-    expect(printBlock).toContain('const rowsHTML = printableStudents.map');
-    expect(printBlock).toContain('إجمالي الكشف: ${printableStudents.length} طالب');
-    expect(printBlock).toContain('filteredStudents.map');
-    expect(printBlock).toContain('طباعة كشف الطلاب المعروض حاليًا');
-    expect(printBlock).toContain('ليست تقريرًا رسميًا شاملًا');
+    expect(printBlock).toContain('setPrintPreviewStudents(printableStudents)');
+    expect(source).toContain('إجمالي الكشف: {printPreviewStudents.length} طالب');
+    expect(printBlock).toContain('filteredStudents.filter');
+    expect(source).toContain('معاينة كشف الطلاب');
+    expect(source).toContain('ليست تقريرًا رسميًا شاملًا');
     expect(printBlock).not.toContain('تقرير رسمي كامل');
+    expect(printBlock).not.toContain('window.open');
     expect(printBlock).not.toContain('window.fetch');
     expect(printBlock).not.toContain('fetch(');
   });
 
   it('does not add Guardian Phone or National ID to the printed HTML', () => {
-    expect(printBlock).not.toContain('parentPhone');
-    expect(printBlock).not.toContain('nationalId');
-    expect(printBlock).toContain('st.parentName');
+    const previewBlock = source.slice(source.indexOf('{printPreviewStudents && ('), source.indexOf('MODAL 3: BATCH TRANSFER / PROMOTION WIZARD'));
+    expect(previewBlock).not.toContain('parentPhone');
+    expect(previewBlock).not.toContain('nationalId');
+    expect(previewBlock).toContain('student.parentName');
   });
 });

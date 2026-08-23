@@ -94,6 +94,7 @@ export class InstallmentEngine {
    * Enforces all mandatory enterprise domain business rules.
    */
   public static async createPlan(params: PlanGenerationParams): Promise<{ plan: InstallmentPlan; schedules: InstallmentSchedule[] }> {
+    FallbackStorage.assertCanonicalPersistence('installment plan student and invoice read');
     const { schoolId, studentId, invoiceId, feeTemplateId, frequency, method, count, startDueDate, userId, userName, ipAddress } = params;
 
     // RULE 1: Ensure Student Exists and is Active
@@ -846,6 +847,7 @@ export class InstallmentEngine {
     userName: string;
     ipAddress?: string;
   }): Promise<number> {
+    FallbackStorage.assertCanonicalPersistence('bulk installment plan creation');
     let successCount = 0;
     for (const invId of params.invoiceIds) {
       try {

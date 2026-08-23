@@ -36,8 +36,8 @@ export default function AssetLifecycleOperationsModal({
 
   // State for New Asset Form
   const [newAssetData, setNewAssetData] = useState<Partial<FixedAsset>>({
-    code: `AST-${Math.floor(1000 + Math.random() * 9000)}`,
-    barcode: `6291000${Math.floor(100000 + Math.random() * 900000)}`,
+    code: '',
+    barcode: '',
     name: '',
     category: 'أثاث وتجهيزات مدرسية',
     group: 'الأثاث والتجهيزات',
@@ -50,13 +50,13 @@ export default function AssetLifecycleOperationsModal({
     cost: 0,
     capitalExp: 0,
     scrapValue: 0,
-    usefulLife: 5,
-    depRate: '20%',
+    usefulLife: 0,
+    depRate: '',
     depMethod: 'قسط ثابت',
-    depStartDate: new Date().toISOString().split('T')[0],
-    assetAccount: '130101 - الأصول الثابتة',
-    accDepAccount: '130102 - مجمع الإهلاك المتراكم',
-    depExpenseAccount: '520101 - مصروف الإهلاك السنوي',
+    depStartDate: '',
+    assetAccount: '',
+    accDepAccount: '',
+    depExpenseAccount: '',
     accDep: 0,
     netValue: 0,
     isDepPaused: false,
@@ -64,45 +64,45 @@ export default function AssetLifecycleOperationsModal({
     department: 'الإدارة العامة',
     branch: 'الفرع الرئيسي - طرابلس',
     location: 'المبنى الإداري - الدور الأول',
-    responsible: 'أ. خالد المفتي'
+    responsible: ''
   });
 
   // State for Transfer
   const [transferData, setTransferData] = useState({
     fromDept: targetAsset?.department || '',
-    toDept: 'قسم الحاسوب والتكنولوجيا',
-    fromBranch: targetAsset?.branch || 'الفرع الرئيسي - طرابلس',
-    toBranch: 'الفرع الرئيسي - طرابلس',
+    toDept: '',
+    fromBranch: targetAsset?.branch || '',
+    toBranch: '',
     fromResponsible: targetAsset?.responsible || '',
-    toResponsible: 'م. أسامة الورفلي',
-    reason: 'إعادة توزيع العهدة التشغيلية بين الأقسام',
-    approvedBy: 'المدير العام',
-    notes: 'تمت المراجعة والتسليم بنجاح'
+    toResponsible: '',
+    reason: '',
+    approvedBy: '',
+    notes: ''
   });
 
   // State for Maintenance
   const [maintenanceData, setMaintenanceData] = useState({
     type: 'دورية' as 'دورية' | 'طارئة' | 'ترميم وتحسين',
-    cost: 1500,
-    supplier: 'مركز الصيانة المعتمد',
+    cost: 0,
+    supplier: '',
     date: new Date().toISOString().split('T')[0],
     nextDate: new Date(Date.now() + 180 * 86400000).toISOString().split('T')[0],
     statusAfter: 'ممتاز',
-    workOrderNo: `WO-2026-${Math.floor(100 + Math.random() * 900)}`,
-    spareParts: 'تغيير قطع غيار وفحص شامل للجاهزية',
-    notes: 'تم فحص الأصل واختبار تشغيله'
+    workOrderNo: '',
+    spareParts: '',
+    notes: ''
   });
 
   // State for Depreciation
   const [fiscalYear, setFiscalYear] = useState('2026');
 
   // State for Sale
-  const [salePrice, setSalePrice] = useState<number>(targetAsset ? targetAsset.netValue + 5000 : 10000);
-  const [buyerName, setBuyerName] = useState('شركة المزادات المفتوحة');
-  const [saleNotes, setSaleNotes] = useState('بيع بالمزاد العلني مع إثبات الأرباح الرأسمالية');
+  const [salePrice, setSalePrice] = useState<number>(0);
+  const [buyerName, setBuyerName] = useState('');
+  const [saleNotes, setSaleNotes] = useState('');
 
   // State for Discard
-  const [discardNotes, setDiscardNotes] = useState('استبعاد الأصل الثابت لانتهاء عمره الإنتاجي وتلف أجزائه الميكانيكية');
+  const [discardNotes, setDiscardNotes] = useState('');
 
   return (
     <div className="fixed inset-0 bg-slate-900/50 backdrop-blur-xs flex items-center justify-center p-4 z-50 animate-fade-in text-right" dir="rtl">
@@ -141,21 +141,25 @@ export default function AssetLifecycleOperationsModal({
         {modalType === 'new_asset' && (
           <form onSubmit={(e) => {
             e.preventDefault();
-            const cost = Number(newAssetData.cost || 0);
-            const capitalExp = Number(newAssetData.capitalExp || 0);
+    const cost = Number(newAssetData.cost || 0);
+    const capitalExp = Number(newAssetData.capitalExp || 0);
+            if (!newAssetData.code || !newAssetData.barcode || !newAssetData.name || !newAssetData.supplier || !newAssetData.invoiceNo || cost + capitalExp <= 0 || !Number.isFinite(cost + capitalExp)) {
+              triggerNotification?.('يرجى إدخال رمز الأصل والباركود والاسم والمورد ورقم الفاتورة وتكلفة موجبة قبل الرسملة.', 'warning');
+              return;
+            }
             const created: FixedAsset = {
-              id: `FA-${Math.floor(100 + Math.random() * 900)}`,
-              code: newAssetData.code || `AST-${Date.now()}`,
-              barcode: newAssetData.barcode || '629100088109',
-              name: newAssetData.name || 'أصل مالي جديد',
+              id: `FA-${Date.now()}`,
+              code: newAssetData.code,
+              barcode: newAssetData.barcode,
+              name: newAssetData.name,
               category: newAssetData.category || 'أثاث وتجهيزات مدرسية',
               group: newAssetData.group || 'الأثاث المدرسي',
-              manufacturer: newAssetData.manufacturer || 'شركة عامة',
-              model: newAssetData.model || '2026',
-              serialNo: newAssetData.serialNo || 'SN-2026-X',
-              purchaseDate: newAssetData.purchaseDate || '2026-06-30',
-              supplier: newAssetData.supplier || 'المورد المعتمد',
-              invoiceNo: newAssetData.invoiceNo || 'INV-2026-001',
+              manufacturer: newAssetData.manufacturer || '',
+              model: newAssetData.model || '',
+              serialNo: newAssetData.serialNo || '',
+              purchaseDate: newAssetData.purchaseDate || new Date().toISOString().split('T')[0],
+              supplier: newAssetData.supplier,
+              invoiceNo: newAssetData.invoiceNo,
               cost,
               capitalExp,
               scrapValue: Number(newAssetData.scrapValue || 0),
@@ -272,7 +276,7 @@ export default function AssetLifecycleOperationsModal({
 
             <div>
               <label className="block font-bold text-slate-700 mb-1">سبب النقل والملاحظات:</label>
-              <textarea value={transferData.reason} onChange={e => setTransferData({...transferData, reason: e.target.value})} className="w-full p-2 bg-transparent rounded-lg font-bold h-20" />
+              <textarea required value={transferData.reason} onChange={e => setTransferData({...transferData, reason: e.target.value})} className="w-full p-2 bg-transparent rounded-lg font-bold h-20" />
             </div>
 
             <div className="flex justify-end gap-2 border-t border-slate-100 pt-3">
@@ -303,7 +307,7 @@ export default function AssetLifecycleOperationsModal({
 
               <div>
                 <label className="block font-bold text-slate-700 mb-1">تكلفت الصيانة (د.ل):</label>
-                <input type="number" required value={maintenanceData.cost} onChange={e => setMaintenanceData({...maintenanceData, cost: parseFloat(e.target.value) || 0})} className="w-full p-2 bg-transparent rounded-lg font-mono font-bold text-emerald-700" />
+                <input type="number" required min="0.01" value={maintenanceData.cost} onChange={e => setMaintenanceData({...maintenanceData, cost: parseFloat(e.target.value) || 0})} className="w-full p-2 bg-transparent rounded-lg font-mono font-bold text-emerald-700" />
               </div>
 
               <div>
@@ -377,7 +381,7 @@ export default function AssetLifecycleOperationsModal({
             <div className="grid grid-cols-1 md:grid-cols-2 gap-3">
               <div>
                 <label className="block font-bold text-slate-700 mb-1">سعر البيع المقبوض (د.ل):</label>
-                <input type="number" required value={salePrice} onChange={e => setSalePrice(parseFloat(e.target.value) || 0)} className="w-full p-2 bg-transparent rounded-lg font-mono font-bold text-emerald-700" />
+                <input type="number" required min="0.01" value={salePrice} onChange={e => setSalePrice(parseFloat(e.target.value) || 0)} className="w-full p-2 bg-transparent rounded-lg font-mono font-bold text-emerald-700" />
               </div>
 
               <div>

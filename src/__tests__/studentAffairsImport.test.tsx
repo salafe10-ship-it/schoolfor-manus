@@ -41,6 +41,7 @@ describe('Student Affairs Excel import contract', () => {
         currentRole="SchoolAdmin"
         logAction={vi.fn()}
         triggerNotification={notify}
+        canUseTrustedPermission={() => true}
       />,
     );
 

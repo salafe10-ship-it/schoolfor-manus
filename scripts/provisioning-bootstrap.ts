@@ -1,6 +1,9 @@
 import { randomUUID } from 'node:crypto';
+import 'dotenv/config';
 import { ErpProvisioningService } from '../src/modules/identity/application/ErpProvisioningService.js';
 import { EnterpriseLogger } from '../src/database/services/EnterpriseLogger.js';
+import { UnitOfWork } from '../src/database/UnitOfWork.js';
+import { createPostgresTransactionDriverFromEnvironment } from '../server/infrastructure/PostgresTransactionDriver.js';
 
 function required(name: string): string {
   const value = String(process.env[name] || '').trim();
@@ -20,10 +23,18 @@ async function main(): Promise<void> {
   EnterpriseLogger.info('ERP provisioning activation started', 'ProvisioningActivation', {
     operation: 'bootstrap_catalog', actor_present: 'YES', tenant_present: 'YES', school_present: 'YES', correlationId
   });
-  const result = await ErpProvisioningService.bootstrapCatalog({ tenantId, schoolId, actorUserId });
-  EnterpriseLogger.info('ERP provisioning activation committed', 'ProvisioningActivation', {
-    operation: 'bootstrap_catalog', success: true, role_present: 'YES', permission_count: result.permissionCount, correlationId
-  });
+  const transactionDriver = createPostgresTransactionDriverFromEnvironment();
+  if (!transactionDriver) throw new Error('PostgreSQL transaction driver is not configured.');
+  UnitOfWork.configureTransactionDriver(transactionDriver);
+  try {
+    const result = await ErpProvisioningService.bootstrapCatalog({ tenantId, schoolId, actorUserId });
+    EnterpriseLogger.info('ERP provisioning activation committed', 'ProvisioningActivation', {
+      operation: 'bootstrap_catalog', success: true, role_present: 'YES', permission_count: result.permissionCount, correlationId
+    });
+  } finally {
+    await transactionDriver.close();
+    UnitOfWork.configureTransactionDriver(null);
+  }
 }
 
 main().catch(error => {

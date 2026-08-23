@@ -16,86 +16,12 @@ export default function QuotationComparisonManager({
   onAwardVendor,
   triggerNotification
 }: QuotationComparisonManagerProps) {
-  const [activeRfqId, setActiveRfqId] = useState<string>('rfq_1');
+  const [activeRfqId, setActiveRfqId] = useState<string>('');
 
-  // Sample RFQ and Vendor Quotation state
-  const [rfqs, setRfqs] = useState<RequestForQuotation[]>([
-    {
-      id: 'rfq_1',
-      schoolId: 'school_1',
-      rfqNo: 'RFQ-2026-009',
-      title: 'طلب عروض أسعار لتجهيز معامل الحاسب والذكاء الاصطناعي',
-      issueDate: '2026-08-01',
-      deadlineDate: '2026-08-10',
-      vendorIds: ['sup_sony', 'sup_lg', 'sup_dell'],
-      status: 'responses_received',
-      items: [
-        {
-          id: 'i1',
-          itemCode: 'SKU-E-001',
-          itemName: 'أجهزة بروجكتور فائقة الجودة سوني UHD',
-          unit: 'جهاز',
-          quantityRequested: 10,
-          estimatedUnitPrice: 3000,
-          totalAmount: 30000
-        }
-      ],
-      createdAt: '2026-08-01'
-    }
-  ]);
+  // لا تُزرع طلبات عروض أو أسعار موردين؛ تُحمّل من دورة الشراء المركزية.
+  const [rfqs, setRfqs] = useState<RequestForQuotation[]>([]);
 
-  const [quotations, setQuotations] = useState<VendorQuotation[]>([
-    {
-      id: 'vq_1',
-      rfqId: 'rfq_1',
-      vendorId: 'sup_sony',
-      vendorName: 'شركة سوني العالمية - التوريدات التعليمية',
-      quotationNo: 'QUO-SONY-771',
-      quotationDate: '2026-08-02',
-      validUntil: '2026-09-01',
-      deliveryDays: 7,
-      paymentTerms: 'الدفع بعد 30 يوماً من الاستلام المعتمد',
-      evaluationScore: 95,
-      lines: [
-        {
-          itemId: 'SKU-E-001',
-          itemName: 'أجهزة بروجكتور سوني 4K UHD',
-          quantity: 10,
-          unitPrice: 3000,
-          discountAmount: 0,
-          taxAmount: 4500,
-          totalAmount: 34500
-        }
-      ],
-      grandTotal: 34500,
-      status: 'under_review'
-    },
-    {
-      id: 'vq_2',
-      rfqId: 'rfq_1',
-      vendorId: 'sup_lg',
-      vendorName: 'مؤسسة LG للتكنولوجيا والحلول المدرسية',
-      quotationNo: 'QUO-LG-992',
-      quotationDate: '2026-08-02',
-      validUntil: '2026-08-25',
-      deliveryDays: 14,
-      paymentTerms: '50% دفعة مقدمة و 50% عند التسليم',
-      evaluationScore: 82,
-      lines: [
-        {
-          itemId: 'SKU-E-001',
-          itemName: 'أجهزة عرض شاشات LG ProJet',
-          quantity: 10,
-          unitPrice: 2800,
-          discountAmount: 1000,
-          taxAmount: 4050,
-          totalAmount: 31050
-        }
-      ],
-      grandTotal: 31050,
-      status: 'under_review'
-    }
-  ]);
+  const [quotations, setQuotations] = useState<VendorQuotation[]>([]);
 
   const handleAward = (vq: VendorQuotation) => {
     onAwardVendor(vq.rfqId, vq.vendorId, vq.grandTotal);

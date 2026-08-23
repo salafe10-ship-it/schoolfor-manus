@@ -1,4 +1,5 @@
 import { FixedAsset, AssetMaintenanceLog, AssetTransferLog, AssetDepreciationEntry, AssetTimelineEvent } from '../../types';
+import { FallbackStorage } from './FallbackStorage';
 
 const STORAGE_KEY = 'erp_fixed_assets_v2';
 
@@ -292,7 +293,12 @@ const SEED_ASSETS: FixedAsset[] = [
 ];
 
 export class FixedAssetsRepository {
+  private static assertAuthoritativePersistence(operation: string): void {
+    FallbackStorage.assertCanonicalPersistence(`fixed assets ${operation}`);
+  }
+
   private static getAssets(): FixedAsset[] {
+    this.assertAuthoritativePersistence('read');
     try {
       const saved = localStorage.getItem(STORAGE_KEY);
       if (saved) {
@@ -302,12 +308,12 @@ export class FixedAssetsRepository {
     } catch (e) {
       console.error('Error reading fixed assets storage:', e);
     }
-    // Seed initial data
-    localStorage.setItem(STORAGE_KEY, JSON.stringify(SEED_ASSETS));
-    return SEED_ASSETS;
+    // لا تُزرع أصول أو تكاليف أو سجلات إهلاك محليًا؛ المصدر المحاسبي المركزي وحده.
+    return [];
   }
 
   private static saveAssets(assets: FixedAsset[]): void {
+    this.assertAuthoritativePersistence('write');
     try {
       localStorage.setItem(STORAGE_KEY, JSON.stringify(assets));
     } catch (e) {

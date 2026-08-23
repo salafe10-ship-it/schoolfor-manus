@@ -112,6 +112,9 @@ export default function SuperAdminSchools({
       return;
     }
 
+    triggerNotification('خدمة تهيئة المستأجر المركزية غير متاحة؛ لم تُنشأ مدرسة أو فرع أو قاعدة حسابات محليًا.', 'warning');
+    return;
+
     const generatedPassword = newSchool.password || Math.random().toString(36).substring(2, 10).toUpperCase();
     const newId = `school_${schools.length + 1}`;
     
@@ -172,7 +175,7 @@ export default function SuperAdminSchools({
     initializeCOAForSchool(newId);
     
     logAction('CREATE_SCHOOL', `تأسيس مدرسة جديدة: ${newSchool.name} بنظام Tenant معزول وقاعدة بيانات فرعية`, 'الإدارة المركزية');
-    triggerNotification('تم إنشاء وتهيئة المدرسة بنجاح ✅', 'success');
+    triggerNotification('تمت تهيئة المدرسة عبر الخدمة المركزية ✅', 'success');
 
     // Launch Success Modal
     if (onSetSuccessProvision) {

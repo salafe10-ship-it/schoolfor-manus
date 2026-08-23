@@ -4,6 +4,10 @@ import { InvoiceRepository } from '../repositories/InvoiceRepository';
 import { FallbackStorage } from '../repositories/FallbackStorage';
 
 export class StudentFeeService {
+  private static assertAuthoritativeRead(operation: string): void {
+    FallbackStorage.assertCanonicalPersistence(operation);
+  }
+
   /**
    * Enlists the creation of a Uniform Account.
    */
@@ -16,7 +20,8 @@ export class StudentFeeService {
       studentId,
       uniformSize: 'M',
       piecesReceivedCount: 0,
-      totalFees: 150.00,
+      // No financial obligation is created until a configured uniform order is selected.
+      totalFees: 0.00,
       paymentStatus: 'unpaid'
     };
     StudentUniformAccountRepository.enlistCreateStudentUniformAccount(studentId, uniformId, uniformAccount);
@@ -32,9 +37,9 @@ export class StudentFeeService {
     const transportProfile = {
       id: transportId,
       studentId,
-      routeNumber: 'Route 10',
-      pickupPoint: 'الموقع الافتراضي الرئيسي',
-      dropoffPoint: 'بوابة المدرسة رقم 1',
+      routeNumber: '',
+      pickupPoint: '',
+      dropoffPoint: '',
       monthlyFees: 0.00,
       status: 'inactive'
     };
@@ -48,14 +53,18 @@ export class StudentFeeService {
     schoolId: string,
     studentId: string,
     studentName: string,
-    invoiceId: string
+    invoiceId: string,
+    registrationFeeAmount?: number
   ): void {
+    const amount = Number(registrationFeeAmount || 0);
+    // Admission must not invent a fee. A configured amount is required before enlistment.
+    if (!Number.isFinite(amount) || amount <= 0) return;
     const invoice = {
       id: invoiceId,
       schoolId,
       studentId,
       studentName,
-      amount: 1500.00,
+      amount,
       paidAmount: 0.00,
       dueDate: new Date(Date.now() + 30 * 24 * 60 * 60 * 1000).toISOString().split('T')[0],
       status: 'unpaid',
@@ -67,7 +76,7 @@ export class StudentFeeService {
       schoolId,
       studentId,
       studentName,
-      1500.00,
+      amount,
       'رسوم الالتحاق والتسجيل السنوية للدورة الأكاديمية الجديدة',
       'tuition',
       invoice
@@ -82,6 +91,7 @@ export class StudentFeeService {
     feesRemaining: number,
     reasons: string[]
   ): void {
+    this.assertAuthoritativeRead('student fee and logistical commitments read');
     // 1. Outstanding general fees
     if (feesRemaining > 0) {
       reasons.push(`قيود مالية: يوجد على الطالب ذمم مالية معلقة بقيمة ${feesRemaining} ريال سعودي.`);
@@ -116,6 +126,7 @@ export class StudentFeeService {
    * Enlists the deletion of a student's uniform and transportation profiles.
    */
   public static enlistDeleteUniformAndTransportation(studentId: string): void {
+    this.assertAuthoritativeRead('student uniform and transportation deletion lookup');
     const uni = FallbackStorage.getStudentUniformAccounts().find(u => u.studentId === studentId);
     if (uni) {
       StudentUniformAccountRepository.enlistDeleteStudentUniformAccount(uni.id);

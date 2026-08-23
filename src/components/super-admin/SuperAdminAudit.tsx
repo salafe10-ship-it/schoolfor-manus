@@ -10,7 +10,7 @@ export default function SuperAdminAudit({
   triggerNotification
 }: SuperAdminAuditProps) {
 
-  // Load audit logs from localStorage if they exist, otherwise generate realistic defaults
+  // Load only persisted audit evidence; never present local demo events as real history.
   const [logs, setLogs] = useState<any[]>(() => {
     const saved = localStorage.getItem('edupro_central_system_logs_v1');
     if (saved) {
@@ -21,14 +21,7 @@ export default function SuperAdminAudit({
       }
     }
     
-    // Default audit records
-    return [
-      { id: 'log_01', level: 'info', user: 'مدير المنصة العام', action: 'CREATE_TENANT', details: 'تأسيس وترخيص مدرسة النور الأكاديمية بنجاح على خادم جدة', section: 'الإدارة المركزية', ip: '192.168.1.15', timestamp: '2026-06-26 14:10' },
-      { id: 'log_02', level: 'warning', user: 'المحاسب المالي (النور)', action: 'LEDGER_MODIFIED', details: 'تعديل يدوي في كشوفات القيود الصباحية للرسوم', section: 'الشؤون المالية', ip: '192.168.12.80', timestamp: '2026-06-26 13:42' },
-      { id: 'log_03', level: 'critical', user: 'بوابة تسجيل الطلاب', action: 'BRUTEFORCE_BLOCKED', details: 'رصد محاولات تخمين متكررة من عنوان IP خارجي وتم الحظر', section: 'الأمان والرقابة', ip: '185.220.101.44', timestamp: '2026-06-26 11:15' },
-      { id: 'log_04', level: 'info', user: 'مقرر التسجيل والقبول', action: 'BATCH_STUDENT_IMPORT', details: 'استيراد جماعي لعدد ٢٤٠ ملف طالب جديد من نموذج اكسل الكلي', section: 'شؤون الطلاب', ip: '192.168.30.22', timestamp: '2026-06-25 10:05' },
-      { id: 'log_05', level: 'critical', user: 'مجهول (نظام آلي)', action: 'UNAUTHORIZED_API_ACCESS', details: 'طلب وصول برأس تالف لـ /api/admin/billing من توكن منتهي الصلاحية', section: 'الأمان والرقابة', ip: '93.115.95.201', timestamp: '2026-06-25 09:12' }
-    ];
+    return [];
   });
 
   // State for filters

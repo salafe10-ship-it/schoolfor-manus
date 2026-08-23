@@ -58,7 +58,6 @@ import EnterpriseGoldenReleaseExecutionProgram from './certification/EnterpriseG
 import EnterpriseDDDReconstruction from './certification/EnterpriseDDDReconstruction';
 import SystemSettingsPortal from './components/SystemSettingsPortal';
 import { 
-  schoolsSeed, 
   branchesSeed, 
   teachersSeed, 
   employeesSeed, 
@@ -102,6 +101,20 @@ import { TransactionService } from './database/transactions/TransactionService';
 import { useCurrency, saveCurrencyConfig, formatAmount } from './utils/currency';
 import { TrustedSessionManager, TrustedSessionUser } from './middleware/trustedSessionManager';
 import { canAccessSection } from './authorization/ClientAuthorization';
+import { PERMISSIONS } from './authorization/PermissionRegistry';
+
+const UNRESOLVED_SCHOOL: School = {
+  id: '',
+  name: 'بيانات المدرسة غير متاحة',
+  logo: '🏫',
+  type: 'private',
+  licenseNumber: '',
+  address: '',
+  phone: '',
+  email: '',
+  academicYear: '',
+  status: 'frozen'
+};
 
 // Bulletproof copy-to-clipboard function supporting sandboxed frames and secure/non-secure origins
 export const copyTextToClipboard = async (text: string): Promise<boolean> => {
@@ -179,7 +192,7 @@ export default function App() {
   };
 
   // Multi-Tenant Core State
-  const [selectedSchool, setSelectedSchool] = useState<School>(schoolsSeed[0]);
+  const [selectedSchool, setSelectedSchool] = useState<School>(UNRESOLVED_SCHOOL);
   const [selectedBranch, setSelectedBranch] = useState<Branch | null>(null);
   const [currentRole, setCurrentRole] = useState<UserRole>('SchoolAdmin');
   const [trustedSessionUser, setTrustedSessionUser] = useState<TrustedSessionUser | null>(null);
@@ -187,8 +200,6 @@ export default function App() {
   // Portal & Session Separation
   const [currentPortal, setCurrentPortalState] = useState<'login' | 'school' | 'admin'>('login');
   const setCurrentPortal = (val: 'login' | 'school' | 'admin') => {
-    console.log("setCurrentPortal called with:", val);
-    try { throw new Error(); } catch(e: any) { console.log(e.stack); }
     setCurrentPortalState(val);
   };
 
@@ -209,6 +220,11 @@ export default function App() {
     sectionId,
     { currentPortal }
   );
+
+  const canUseTrustedPermission = (permission: string): boolean => {
+    if (!Array.isArray(trustedSessionUser?.permissions)) return false;
+    return trustedSessionUser.permissions.includes('*') || trustedSessionUser.permissions.includes(permission);
+  };
 
   const renderAccessDenied = (sectionId: string) => {
     const isCentralAdminSection = sectionId.startsWith('super_') || [
@@ -337,205 +353,43 @@ export default function App() {
     );
   };
 
-  // Login flow states page UI
+  // Login flow state is intentionally limited to the portal mode. Identity,
+  // role, school, and branch are all supplied by the trusted server session.
   const [loginPortalMode, setLoginPortalMode] = useState<'school' | 'gateway'>('school');
-  const [loginSchoolId, setLoginSchoolId] = useState<string>('school_1');
-  const [loginRole, setLoginRole] = useState<UserRole>('SchoolAdmin');
-  const [loginUsername, setLoginUsername] = useState<string>('سليمان بن غازي');
-  const [loginPassword, setLoginPassword] = useState<string>('••••••••');
   
-  // Admin credentials state 
-  const [adminUsername, setAdminUsername] = useState<string>('admin_sulaiman');
-  const [adminPassword, setAdminPassword] = useState<string>('••••••••');
-
   useEffect(() => {
-    if (selectedSchool) {
+    if (trustedSessionUser?.schoolId && selectedSchool.id === trustedSessionUser.schoolId) {
       localStorage.setItem('active_school_id', selectedSchool.id);
       window.dispatchEvent(new Event('active_school_changed'));
+      return;
     }
-  }, [selectedSchool]);
+    localStorage.removeItem('active_school_id');
+  }, [selectedSchool, trustedSessionUser?.schoolId]);
 
-  // SaaS Managed Schools/Tenants list
-  const [saasSchools, setSaasSchools] = useState<any[]>([
-    {
-      id: 'school_1',
-      name: 'مدارس النور الأهلية النموذجية',
-      schoolShortName: 'النور النموذجية',
-      schoolCode: 'SCH-1001',
-      logo: '✨',
-      type: 'private',
-      licenseNumber: 'L-2024-8849',
-      address: 'حي الياسمين، الرياض، المملكة العربية السعودية',
-      phone: '+966 11 405 8899',
-      email: 'info@alnoor.edu.sa',
-      academicYear: '2026/2027',
-      domain: 'alnoor.erpcloud.com',
-      subdomain: 'alnoor',
-      status: 'active',
-      plan: 'Enterprise',
-      storageUsed: '412 GB',
-      storageLimit: '1024 GB',
-      usersCount: 2450,
-      region: 'me-central1 (Dhahran)',
-      backupsCount: 249,
-      connectedDb: 'logical_db_alnoor_prod',
-      createdAt: '2024-01-12',
-      country: 'المملكة العربية السعودية',
-      city: 'الرياض',
-      managerName: 'سليمان بن غازي',
-      subscriptionDuration: '12',
-      userLimit: '5000',
-      subscriptionStart: '2026-01-12',
-      subscriptionEnd: '2027-01-12',
-      lastLogin: '2026-06-26 19:14',
-      linkStatus: 'active',
-      schoolUrl: '/?school=alnoor'
-    },
-    {
-      id: 'school_2',
-      name: 'مدارس الفرسان العالمية',
-      schoolShortName: 'الفرسان العالمية',
-      schoolCode: 'SCH-1002',
-      logo: '🛡️',
-      type: 'international',
-      licenseNumber: 'L-2023-1120',
-      address: 'حي الروضة، جدة، المملكة العربية السعودية',
-      phone: '+966 12 605 4422',
-      email: 'contact@furssan.edu.sa',
-      academicYear: '2026/2027',
-      domain: 'furssan.erpcloud.com',
-      subdomain: 'furssan',
-      status: 'active',
-      plan: 'Business',
-      storageUsed: '180 GB',
-      storageLimit: '500 GB',
-      usersCount: 1620,
-      region: 'me-central1 (Dhahran)',
-      backupsCount: 182,
-      connectedDb: 'logical_db_furssan_prod',
-      createdAt: '2023-08-15',
-      country: 'المملكة العربية السعودية',
-      city: 'جدة',
-      managerName: 'أ. مسفر الغامدي',
-      subscriptionDuration: '12',
-      userLimit: '3000',
-      subscriptionStart: '2025-08-15',
-      subscriptionEnd: '2026-08-15',
-      lastLogin: '2026-06-26 18:45',
-      linkStatus: 'active',
-      schoolUrl: '/?school=furssan'
-    },
-    {
-      id: 'school_3',
-      name: 'أكاديمية الرواد النموذجية',
-      schoolShortName: 'الرواد النموذجية',
-      schoolCode: 'SCH-1003',
-      logo: '🎓',
-      type: 'model',
-      licenseNumber: 'L-2025-4491',
-      address: 'حي النخيل، المنامة، البحرين',
-      phone: '+973 17 888 222',
-      email: 'admin@rowad.edu.bh',
-      academicYear: '2026/2027',
-      domain: 'rowad.erpcloud.com',
-      subdomain: 'rowad',
-      status: 'frozen',
-      plan: 'Basic',
-      storageUsed: '85 GB',
-      storageLimit: '250 GB',
-      usersCount: 890,
-      region: 'me-south1 (Bahrain)',
-      backupsCount: 94,
-      connectedDb: 'logical_db_rowad_prod',
-      createdAt: '2025-02-18',
-      country: 'البحرين',
-      city: 'المنامة',
-      managerName: 'علي بن حسن الماجد',
-      subscriptionDuration: '6',
-      userLimit: '1000',
-      subscriptionStart: '2025-02-18',
-      subscriptionEnd: '2026-08-18',
-      lastLogin: '2026-06-25 10:30',
-      linkStatus: 'disabled',
-      schoolUrl: '/?school=rowad'
-    },
-    {
-      id: 'school_4',
-      name: 'مدارس الخليج لعلوم الحاسوب',
-      schoolShortName: 'الخليج للحاسب',
-      schoolCode: 'SCH-1004',
-      logo: '💻',
-      type: 'private',
-      licenseNumber: 'L-2025-9921',
-      address: 'حي الخليج، الدمام، المملكة العربية السعودية',
-      phone: '+966 13 812 7700',
-      email: 'info@gulfcomputer.edu.sa',
-      academicYear: '2026/2027',
-      domain: 'gulfcomputer.erpcloud.com',
-      subdomain: 'gulfcomputer',
-      status: 'active',
-      plan: 'Enterprise',
-      storageUsed: '290 GB',
-      storageLimit: '1024 GB',
-      usersCount: 1850,
-      region: 'me-central1 (Dhahran)',
-      backupsCount: 112,
-      connectedDb: 'logical_db_gulfcomp_prod',
-      createdAt: '2025-06-20',
-      country: 'المملكة العربية السعودية',
-      city: 'الدمام',
-      managerName: 'د. فيصل المطيري',
-      subscriptionDuration: '24',
-      userLimit: '5000',
-      subscriptionStart: '2025-06-20',
-      subscriptionEnd: '2026-06-20',
-      lastLogin: '2026-06-22 09:15',
-      linkStatus: 'active',
-      schoolUrl: '/?school=gulfcomputer'
-    },
-    {
-      id: 'school_5',
-      name: 'منارة الرياض المتقدمة الأهلية',
-      schoolShortName: 'منارة الرياض',
-      schoolCode: 'SCH-1005',
-      logo: '🕌',
-      type: 'government',
-      licenseNumber: 'L-2022-7744',
-      address: 'حي الصحافة، الرياض، المملكة العربية السعودية',
-      phone: '+966 11 293 8812',
-      email: 'sahafa@manar.edu.sa',
-      academicYear: '2026/2027',
-      domain: 'manar-sahafa.erpcloud.com',
-      subdomain: 'manar-sahafa',
-      status: 'active',
-      plan: 'Enterprise',
-      storageUsed: '530 GB',
-      storageLimit: '1024 GB',
-      usersCount: 3120,
-      region: 'me-central1 (Dhahran)',
-      backupsCount: 310,
-      connectedDb: 'logical_db_manarsah_prod',
-      createdAt: '2022-09-01',
-      country: 'المملكة العربية السعودية',
-      city: 'الرياض',
-      managerName: 'أ. جاسم الصبيحي',
-      subscriptionDuration: '24',
-      userLimit: '8000',
-      subscriptionStart: '2025-09-01',
-      subscriptionEnd: '2027-09-01',
-      lastLogin: '2026-06-26 15:40',
-      linkStatus: 'active',
-      schoolUrl: '/?school=manar-sahafa'
-    }
-  ]);
+  // The central school catalogue is empty until a canonical, authorized
+  // source hydrates it. Local seed records must never define tenant scope.
+  const [saasSchools, setSaasSchools] = useState<any[]>([]);
 
   const applyTrustedSessionUser = useCallback((user: TrustedSessionUser): School => {
     const trustedSchool = user.school && user.school.id === user.schoolId ? user.school : null;
-    const targetSchool = trustedSchool || saasSchools.find(s => s.id === user.schoolId);
     const validRoles: UserRole[] = ['SuperAdmin', 'SchoolAdmin', 'Teacher', 'Accountant', 'Parent'];
-    if (!targetSchool || !validRoles.includes(user.role as UserRole)) {
+    if (!trustedSchool || !validRoles.includes(user.role as UserRole)) {
       throw new Error('Invalid trusted session identity');
     }
+
+    const targetSchool: School = {
+      id: trustedSchool.id,
+      name: trustedSchool.name,
+      logo: trustedSchool.logo,
+      type: trustedSchool.type,
+      licenseNumber: trustedSchool.licenseNumber,
+      address: trustedSchool.address,
+      phone: trustedSchool.phone,
+      email: trustedSchool.email,
+      academicYear: trustedSchool.academicYear || user.academicYear || '',
+      status: trustedSchool.status,
+      connectedDb: trustedSchool.connectedDb
+    };
 
     const trustedRole = user.role as UserRole;
     setTrustedSessionUser(user);
@@ -548,29 +402,7 @@ export default function App() {
     setIsSuperAdminPortalActive(trustedRole === 'SuperAdmin');
     setActiveSection(trustedRole === 'SuperAdmin' ? 'super_stats' : 'dashboard');
     return targetSchool;
-  }, [saasSchools]);
-
-  // Auto detect school portal URL parameter (?school=... or ?tenant=...)
-  useEffect(() => {
-    if (typeof window !== 'undefined') {
-      const params = new URLSearchParams(window.location.search);
-      const schoolParam = params.get('school') || params.get('tenant') || params.get('schoolId');
-      if (schoolParam && saasSchools && saasSchools.length > 0) {
-        const matched = saasSchools.find(s => 
-          s.id.toLowerCase() === schoolParam.toLowerCase() || 
-          (s.subdomain && s.subdomain.toLowerCase() === schoolParam.toLowerCase())
-        );
-        if (matched) {
-          setSelectedSchool(matched);
-          // The URL is a display hint only. Access is restored only by the session endpoint.
-          setCurrentPortal('login');
-          setLoginPortalMode('school');
-          setIsSuperAdminPortalActive(false);
-          setActiveSection('login');
-        }
-      }
-    }
-  }, [saasSchools]);
+  }, []);
 
   // MANDATORY SECURITY GATEWAY GUARD: Protect all school pages & routes against unauthorized access
   useEffect(() => {
@@ -612,10 +444,43 @@ export default function App() {
         setActiveSection('login');
       });
   }, [applyTrustedSessionUser, saasSchools, sessionManager]);
-  
+
   // App General Navigation
   const [isSuperAdminPortalActive, setIsSuperAdminPortalActive] = useState<boolean>(false);
   const [activeSection, setActiveSection] = useState<string>('super_dashboard');
+
+  // Hydrate the shared student collection when a trusted school session is
+  // active and the user is actually entering Student Affairs. Dashboard
+  // rendering must not issue a student-read request that the current role
+  // cannot perform.
+  useEffect(() => {
+    if (activeSection !== 'students' || !['school', 'admin'].includes(currentPortal) ||
+      !selectedSchool?.id || !sessionManager.getAccessToken() ||
+      !canAccessSection(trustedSessionUser, 'students', { currentPortal })) {
+      return;
+    }
+
+    const controller = new AbortController();
+    StudentApiRepository.list({ page: 1, limit: 100, sortBy: 'name', sortOrder: 'asc' }, controller.signal)
+      .then(response => {
+        const rows = Array.isArray(response?.data)
+          ? response.data
+          : Array.isArray(response)
+            ? response
+            : [];
+        setStudents(current => [
+          ...current.filter(student => student.schoolId !== selectedSchool.id),
+          ...(rows as Student[])
+        ]);
+      })
+      .catch(error => {
+        if (error?.name !== 'AbortError') {
+          EnterpriseLogger.warn('Shared student hydration failed', 'App', { error: error?.message || String(error) });
+        }
+      });
+
+    return () => controller.abort();
+  }, [activeSection, currentPortal, selectedSchool?.id, sessionManager, trustedSessionUser]);
 
   // Auto switch activeSection to school dashboard when in Client Mode if currently on central admin route
   useEffect(() => {
@@ -1637,7 +1502,7 @@ export default function App() {
         )}
         
         {/* Top Header Actions Bar */}
-        {!isSuperAdminViewActive && activeSection !== 'system_health' && (
+        {!isSuperAdminViewActive && activeSection !== 'system_health' && activeSection !== 'student_accounts' && (
           <Topbar 
             schools={saasSchools}
             selectedSchool={selectedSchool}
@@ -1837,6 +1702,7 @@ export default function App() {
                 selectedBranch={selectedBranch}
                 currentRole={currentRole}
                 triggerNotification={triggerNotification}
+                canAccessSection={checkSectionPermission}
                 isClientMode={isClientMode}
               />
             )}
@@ -1956,25 +1822,28 @@ export default function App() {
             )}
 
             {activeSection === 'students' && (
-              <StudentAffairsPortal
-                students={students}
-                setStudents={setStudents}
-                selectedSchool={selectedSchool}
-                currentRole={currentRole}
-                logAction={logAction}
-                triggerNotification={triggerNotification}
-                setActiveSection={setActiveSection}
-                stages={stages}
-                setStages={setStages}
-                grades={grades}
-                setGrades={setGrades}
-                academicClasses={academicClasses}
-                setAcademicClasses={setAcademicClasses}
-                costCenters={costCenters}
-                setCostCenters={setCostCenters}
-                invoices={invoices}
-                setInvoices={setInvoices}
-              />
+              checkSectionPermission('students') ? (
+                <StudentAffairsPortal
+                  students={students}
+                  setStudents={setStudents}
+                  selectedSchool={selectedSchool}
+                  currentRole={currentRole}
+                  logAction={logAction}
+                  triggerNotification={triggerNotification}
+                  setActiveSection={setActiveSection}
+                  canUseTrustedPermission={canUseTrustedPermission}
+                  stages={stages}
+                  setStages={setStages}
+                  grades={grades}
+                  setGrades={setGrades}
+                  academicClasses={academicClasses}
+                  setAcademicClasses={setAcademicClasses}
+                  costCenters={costCenters}
+                  setCostCenters={setCostCenters}
+                  invoices={invoices}
+                  setInvoices={setInvoices}
+                />
+              ) : renderAccessDenied('students')
             )}
 
             {activeSection === 'admissions' && (
@@ -2706,6 +2575,8 @@ export default function App() {
               setAcademicClasses={setAcademicClasses}
               costCenters={costCenters}
               setCostCenters={setCostCenters}
+              selectedSchool={selectedSchool}
+              selectedBranch={selectedBranch}
             />
           )}
 

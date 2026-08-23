@@ -6,7 +6,7 @@ export interface StudentProfileState {
   academicId: string;
   fullNameAr: string;
   fullNameEn: string;
-  gender: 'male' | 'female';
+  gender: 'male' | 'female' | '';
   birthDate: string;
   nationality: string;
   nationalId: string;
@@ -33,26 +33,26 @@ const initialProfileState: StudentProfileState = {
   academicId: '',
   fullNameAr: '',
   fullNameEn: '',
-  gender: 'male',
-  birthDate: '2015-01-01',
-  nationality: 'سعودي',
+  gender: '',
+  birthDate: '',
+  nationality: '',
   nationalId: '',
-  religion: 'مسلم',
-  socialStatus: 'أعزب / يعيش مع الوالدين',
-  stageId: 'primary',
-  gradeName: 'الصف الأول الابتدائي',
-  section: 'أ',
-  academicYear: '1447-1448 هـ',
+  religion: '',
+  socialStatus: '',
+  stageId: '',
+  gradeName: '',
+  section: '',
+  academicYear: '',
   seatNumber: '',
   enrollmentStatus: 'active',
-  registrationDate: new Date().toISOString().split('T')[0],
+  registrationDate: '',
   phone: '',
   email: '',
   address: '',
-  city: 'الرياض',
-  state: 'منطقة الرياض',
+  city: '',
+  state: '',
   notes: '',
-  avatarUrl: 'https://images.unsplash.com/photo-1535713875002-d1d0cf377fde?w=120&h=120&fit=crop&crop=face',
+  avatarUrl: '',
 };
 
 export function useStudentProfile() {
@@ -75,30 +75,30 @@ export function useStudentProfile() {
 
   const selectProfile = (student: Student, inferredStage: string) => {
     setProfile({
-      studentCode: student.studentCode || student.id.replace(/\D/g, '').slice(-4) || '0001',
-      academicId: student.academicId || `SAH-${student.id}`,
+      studentCode: student.studentCode || '',
+      academicId: student.academicId || '',
       fullNameAr: student.name,
-      fullNameEn: student.name.split(' ').map(n => n.charAt(0).toUpperCase() + n.slice(1)).join(' '),
-      gender: student.gender || 'male',
-      birthDate: student.birthDate || '2015-06-15',
-      nationality: student.nationality || 'سعودي',
+      fullNameEn: (student as any).nameEn || '',
+      gender: student.gender === 'male' || student.gender === 'female' ? student.gender : '',
+      birthDate: student.birthDate || '',
+      nationality: student.nationality || '',
       nationalId: student.nationalId,
-      religion: student.religion || 'مسلم',
-      socialStatus: student.socialStatus || 'أعزب / يعيش مع الوالدين',
+      religion: student.religion || '',
+      socialStatus: student.socialStatus || '',
       stageId: inferredStage,
       gradeName: student.classroom,
       section: student.section,
-      academicYear: student.academicYear || '1447-1448 هـ',
-      seatNumber: student.academicId?.replace(/\D/g, '') || '7721',
+      academicYear: student.academicYear || '',
+      seatNumber: (student as any).seatNumber || '',
       enrollmentStatus: student.status,
-      registrationDate: student.registrationDate || new Date().toISOString().split('T')[0],
+      registrationDate: student.registrationDate || '',
       phone: student.parentPhone || '',
-      email: student.email || `${student.id}@school-erp.edu`,
+      email: student.email || '',
       address: student.address || '',
-      city: 'الرياض',
-      state: 'منطقة الرياض',
+      city: '',
+      state: '',
       notes: student.healthInfo || '',
-      avatarUrl: student.avatarUrl || 'https://images.unsplash.com/photo-1535713875002-d1d0cf377fde?w=120&h=120&fit=crop&crop=face',
+      avatarUrl: student.avatarUrl || '',
     });
   };
 

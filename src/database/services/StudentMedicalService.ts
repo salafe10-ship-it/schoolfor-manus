@@ -13,13 +13,13 @@ export class StudentMedicalService {
     const medicalRecord = {
       id: medicalId,
       studentId,
-      bloodType: studentData.healthBloodType || 'O+',
-      chronicDiseases: studentData.healthChronic || 'لا يوجد',
-      allergies: studentData.healthAllergies || 'لا يوجد',
-      vaccinesTaken: studentData.healthVaccines !== undefined ? studentData.healthVaccines : true,
-      emergencyContactName: studentData.parentName || 'جهة اتصال الطوارئ',
-      emergencyContactPhone: studentData.parentPhone || '000000000',
-      medicalNotes: 'سجل طبي سليم ومؤهل صحياً'
+      bloodType: studentData.healthBloodType || '',
+      chronicDiseases: studentData.healthChronic || '',
+      allergies: studentData.healthAllergies || '',
+      vaccinesTaken: studentData.healthVaccines,
+      emergencyContactName: studentData.parentName || '',
+      emergencyContactPhone: studentData.parentPhone || '',
+      medicalNotes: ''
     };
     StudentMedicalRecordRepository.enlistCreateStudentMedicalRecord(studentId, medicalId, medicalRecord);
   }
@@ -28,6 +28,7 @@ export class StudentMedicalService {
    * Enlists the deletion of a student's medical record.
    */
   public static enlistDeleteMedicalRecord(studentId: string): void {
+    FallbackStorage.assertCanonicalPersistence('student medical record deletion lookup');
     const med = FallbackStorage.getStudentMedicalRecords().find(m => m.studentId === studentId);
     if (med) {
       StudentMedicalRecordRepository.enlistDeleteStudentMedicalRecord(med.id);

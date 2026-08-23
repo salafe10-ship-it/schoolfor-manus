@@ -5,12 +5,16 @@ import { CurrencyMaster, CurrencyProfile, ExchangeRate, FinancialConfiguration }
 
 export class CurrencyRepository {
   private static readonly DATABASE_FILE = 'currency_master_database.json';
+  private static assertAuthoritativePersistence(operation: string): void {
+    FallbackStorage.assertCanonicalPersistence(`currency ${operation}`);
+  }
 
   /**
    * Dynamic DB Reader for Currencies.
    * Assumes data has been bootstrapped by BootstrapLoader.
    */
   public static getAllCurrencies(): CurrencyMaster[] {
+    this.assertAuthoritativePersistence('master read');
     return FallbackStorage.safeReadFile<CurrencyMaster[]>(this.DATABASE_FILE, []);
   }
 
@@ -31,6 +35,7 @@ export class CurrencyRepository {
     userName: string,
     schoolId: string
   ): Promise<CurrencyMaster> {
+    this.assertAuthoritativePersistence('master write');
     const list = this.getAllCurrencies();
     if (list.some(c => c.isoCode.toUpperCase() === currency.isoCode.toUpperCase())) {
       throw new Error(`مخالفة محاسبية: رمز العملة (${currency.isoCode}) مسجل مسبقاً في النظام.`);
@@ -71,6 +76,7 @@ export class CurrencyRepository {
     schoolId: string,
     reason: string
   ): Promise<CurrencyMaster> {
+    this.assertAuthoritativePersistence('master update');
     const list = this.getAllCurrencies();
     const idx = list.findIndex(c => c.id === id);
     if (idx === -1) {
@@ -110,6 +116,7 @@ export class CurrencyRepository {
     userName: string,
     schoolId: string
   ): Promise<void> {
+    this.assertAuthoritativePersistence('master delete');
     const list = this.getAllCurrencies();
     const idx = list.findIndex(c => c.id === id);
     if (idx === -1) {
@@ -262,6 +269,7 @@ export class CurrencyRepository {
    * Get all exchange rates configured for a school.
    */
   public static getExchangeRates(schoolId: string): ExchangeRate[] {
+    this.assertAuthoritativePersistence('exchange-rate read');
     return FallbackStorage.safeReadFile<ExchangeRate[]>('currency_exchange_rates_database.json', []);
   }
 
@@ -269,6 +277,7 @@ export class CurrencyRepository {
    * Update or add an exchange rate (CPA manually configured or dynamic APIs).
    */
   public static saveExchangeRate(schoolId: string, rate: Partial<ExchangeRate> & { fromCurrency: string; toCurrency: string; rate: number }, userId: string, userName: string) {
+    this.assertAuthoritativePersistence('exchange-rate write');
     const rates = FallbackStorage.safeReadFile<ExchangeRate[]>('currency_exchange_rates_database.json', []);
     
     const existingIdx = rates.findIndex(r => 
@@ -318,7 +327,11 @@ export class CurrencyRepository {
       return amount / inverseRate.rate;
     }
 
-    // Default simulation if no rates stored, to ensure non-blocking operation
+    if (FallbackStorage.isCanonicalPersistenceRequired()) {
+      throw new Error(`لا يوجد سعر صرف مركزي معتمد للتحويل من ${from} إلى ${to}.`);
+    }
+
+    // Explicit local/demo simulation only.
     if (from === 'USD' && to === 'EUR') return amount * 0.92;
     if (from === 'EUR' && to === 'USD') return amount / 0.92;
     if (from === 'SAR' && to === 'LYD') return amount * 1.285;

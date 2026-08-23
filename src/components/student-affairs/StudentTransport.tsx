@@ -28,39 +28,39 @@ export default function StudentTransport({
           <div className="space-y-3 text-xs">
             <div className="flex justify-between items-center flex-row-reverse">
               <span className="text-slate-550 font-black">حالة قيد الاشتراك:</span>
-              <span className="inline-block bg-emerald-100 text-emerald-800 px-2 py-0.5 rounded-full font-black text-[10px]">
-                مشترك نشط
+              <span className="inline-block bg-amber-100 text-amber-800 px-2 py-0.5 rounded-full font-black text-[10px]">
+                لا توجد بيانات موثقة
               </span>
             </div>
             <div className="flex justify-between items-center flex-row-reverse">
               <span className="text-slate-550 font-black">رقم مسار الحافلة المخصصة:</span>
-              <span className="font-black text-slate-800 font-mono">Bus-Route #14 (شمال الرياض)</span>
+              <span className="font-black text-slate-500 font-mono">غير محدد</span>
             </div>
             <div className="flex justify-between items-center flex-row-reverse">
               <span className="text-slate-550 font-black">اسم السائق وهاتفه:</span>
-              <span className="font-extrabold text-slate-800">أبو محمد السديري (0503928123)</span>
+              <span className="font-extrabold text-slate-500">غير محدد</span>
             </div>
             <div className="flex justify-between items-center flex-row-reverse">
               <span className="text-slate-550 font-black">نقطة ركوب الطالب الصباحية:</span>
-              <span className="font-semibold text-slate-700">أمامي المنزل السكني للمشترك</span>
+              <span className="font-semibold text-slate-500">غير محددة</span>
             </div>
             <div className="flex justify-between items-center flex-row-reverse">
               <span className="text-slate-550 font-black">رسوم الاشتراك السنوية بالنقل:</span>
-              <span className="font-black text-slate-950 font-mono">3,200 ريال</span>
+              <span className="font-black text-slate-500 font-mono">غير محددة</span>
             </div>
           </div>
 
           <div className="pt-2 border-t flex gap-2">
             <button
               type="button"
-              onClick={() => triggerNotification('جاري إعادة حساب أقصر مسار للحافلة ومطابقة نقطة ركوب الطالب...', 'info')}
+              onClick={() => triggerNotification('لا يمكن تحديث المسار حتى تتوفر بيانات النقل المركزية للطالب.', 'warning')}
               className="flex-1 bg-amber-600 hover:bg-amber-500 text-white text-[11px] font-black py-2 transition-all cursor-pointer"
             >
               🔄 تحديث ومطابقة المسار
             </button>
             <button
               type="button"
-              onClick={() => triggerNotification('تم إيقاف الاشتراك بالنقل وخصم الرسوم التناسبية من حساب الطالب المالي بنجاح', 'success')}
+              onClick={() => triggerNotification('لا يوجد اشتراك موثق يمكن إلغاؤه.', 'warning')}
               className="bg-rose-50 text-rose-600 hover:bg-rose-100 text-[11px] font-black px-3 py-2 border border-rose-200 transition-colors cursor-pointer"
             >
               إلغاء الاشتراك بالنقل
@@ -74,19 +74,14 @@ export default function StudentTransport({
             <div className="space-y-3">
               <div>
                 <label className="block text-slate-650 font-bold text-[10.5px] mb-1">المسار المطلوب لتوصيل الطالب:</label>
-                <select className="w-full bg-transparent border border-slate-250 rounded-lg p-2 text-xs font-black">
-                  <option value="route_north">مسار شمال الرياض - حافلة رقم 14</option>
-                  <option value="route_east">مسار شرق الرياض - حافلة رقم 09</option>
-                  <option value="route_west">مسار غرب الرياض - حافلة رقم 22</option>
-                  <option value="route_south">مسار وسط وجنوب الرياض - حافلة رقم 05</option>
+            <select disabled className="w-full bg-transparent border border-slate-250 rounded-lg p-2 text-xs font-black">
+              <option value="">لا توجد مسارات موثقة متاحة</option>
                 </select>
               </div>
               <div>
                 <label className="block text-slate-650 font-bold text-[10.5px] mb-1">فترة التوصيل والنقل المدرسي:</label>
-                <select className="w-full bg-transparent border border-slate-250 rounded-lg p-2 text-xs font-black">
-                  <option value="both">الفترتين: الذهاب صباحاً والعودة مساءً</option>
-                  <option value="morning">الذهاب للمدرسة فقط (صباحاً)</option>
-                  <option value="afternoon">العودة للمنزل فقط (مساءً)</option>
+            <select disabled className="w-full bg-transparent border border-slate-250 rounded-lg p-2 text-xs font-black">
+              <option value="">لا توجد فترة نقل موثقة</option>
                 </select>
               </div>
             </div>
@@ -94,7 +89,7 @@ export default function StudentTransport({
 
           <button
             type="button"
-            onClick={() => triggerNotification('تم تغيير مسار الحافلة وتعميم التعديل على جهاز تتبع السائق في الحافلة بنجاح!', 'success')}
+            onClick={() => triggerNotification('لا يمكن حفظ تغيير المسار قبل توفر مصدر نقل مركزي موثوق.', 'warning')}
             className="w-full bg-slate-800 hover:bg-slate-700 text-white font-extrabold text-xs py-2 transition-all mt-4 cursor-pointer"
           >
             حفظ ونقل الحافلة المخصصة

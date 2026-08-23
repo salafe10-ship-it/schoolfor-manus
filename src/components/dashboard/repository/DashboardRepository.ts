@@ -1,4 +1,4 @@
-import { getTrustedAccessToken } from '../../../utils/auth';
+import { authenticatedRequest } from '../../../utils/authenticatedRequest';
 
 export type DashboardMetric = {
   status: 'live' | 'unavailable';
@@ -23,19 +23,11 @@ export type DashboardMetrics = {
   activities: DashboardMetric;
 };
 
-const getHeaders = (): HeadersInit => {
-  const token = getTrustedAccessToken();
-  return {
-    'Content-Type': 'application/json',
-    Authorization: token ? `Bearer ${token}` : ''
-  };
-};
-
 export const DashboardRepository = {
   async getMetrics(signal?: AbortSignal): Promise<DashboardMetrics> {
-    const response = await fetch('/api/dashboard/metrics', {
+    const response = await authenticatedRequest('/api/dashboard/metrics', {
       method: 'GET',
-      headers: getHeaders(),
+      headers: { 'Content-Type': 'application/json' },
       signal,
       cache: 'no-store'
     });

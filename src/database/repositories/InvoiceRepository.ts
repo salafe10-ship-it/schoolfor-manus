@@ -270,6 +270,7 @@ export class InvoiceRepository implements IBaseRepository<Invoice> {
    * Guarantees persistence under optimistic concurrency lock.
    */
   public static async getSequenceConfig(schoolId: string, branchId: string, fiscalYear: string): Promise<InvoiceNumberSequence> {
+    FallbackStorage.assertCanonicalPersistence(`invoice sequence read ${schoolId}/${branchId}/${fiscalYear}`);
     const sequences = FallbackStorage.safeReadFile<InvoiceNumberSequence[]>(this.SEQUENCES_FILE, []);
     let seq = sequences.find(s => s.schoolId === schoolId && s.branchId === branchId && s.fiscalYear === fiscalYear);
     
@@ -295,6 +296,7 @@ export class InvoiceRepository implements IBaseRepository<Invoice> {
    * Atomically increments the sequence and returns the next padded document number.
    */
   public static async incrementAndGetNextNumber(schoolId: string, branchId: string, fiscalYear: string): Promise<string> {
+    FallbackStorage.assertCanonicalPersistence(`invoice sequence write ${schoolId}/${branchId}/${fiscalYear}`);
     const sequences = FallbackStorage.safeReadFile<InvoiceNumberSequence[]>(this.SEQUENCES_FILE, []);
     let idx = sequences.findIndex(s => s.schoolId === schoolId && s.branchId === branchId && s.fiscalYear === fiscalYear);
     
@@ -327,6 +329,9 @@ export class InvoiceRepository implements IBaseRepository<Invoice> {
   // --- Private Helper methods ---
 
   private static async getAllRaw(): Promise<Invoice[]> {
+    if (!UnitOfWork.isTransactionActive()) {
+      FallbackStorage.assertCanonicalPersistence('invoice repository read');
+    }
     const baseList = FallbackStorage.getInvoices();
     if (UnitOfWork.isTransactionActive()) {
       return UnitOfWork.getPendingAll('invoices', baseList);
@@ -335,6 +340,9 @@ export class InvoiceRepository implements IBaseRepository<Invoice> {
   }
 
   private static async saveAllRaw(data: Invoice[]): Promise<void> {
+    if (!UnitOfWork.isTransactionActive()) {
+      FallbackStorage.assertCanonicalPersistence('invoice repository write');
+    }
     FallbackStorage.saveInvoices(data);
   }
 

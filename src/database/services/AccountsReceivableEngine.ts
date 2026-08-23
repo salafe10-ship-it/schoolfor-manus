@@ -297,6 +297,7 @@ export class AccountsReceivableEngine {
    */
   public static async syncStudentAccount(schoolId: string, studentId: string): Promise<void> {
     const account = await AccountsReceivableRepository.getAccountByStudentId(schoolId, studentId);
+    FallbackStorage.assertCanonicalPersistence('accounts receivable student synchronization');
     let students = FallbackStorage.getStudents();
     if (UnitOfWork.isTransactionActive()) {
       students = UnitOfWork.getPendingAll('students', students);
@@ -337,6 +338,7 @@ export class AccountsReceivableEngine {
     history: any[];
     adjustments: any[];
   }> {
+    FallbackStorage.assertCanonicalPersistence('accounts receivable portfolio read');
     const account = await AccountsReceivableRepository.getAccountByStudentId(schoolId, studentId);
     if (!account) {
       return {
@@ -386,6 +388,7 @@ export class AccountsReceivableEngine {
     brokenPromisesCount: number;
     consolidatedAgingBuckets: any[];
   }> {
+    FallbackStorage.assertCanonicalPersistence('accounts receivable company metrics read');
     const accounts = await AccountsReceivableRepository.getAllAccounts(schoolId);
     
     let totalBilled = 0;

@@ -9,6 +9,8 @@ export type AuthorizationIdentity = {
   branchId?: string;
   academicYear?: string;
   role?: string;
+  /** Server-derived effective permissions used by the client as a visibility hint. */
+  permissions?: string[];
 };
 
 export type DatabaseRolePermission = {

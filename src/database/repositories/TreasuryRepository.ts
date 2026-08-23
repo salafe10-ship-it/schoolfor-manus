@@ -8,12 +8,18 @@ import { TreasuryAccount, TreasuryTransaction, PaymentInstrumentConfig, Treasury
  * Enforces strict Tenant Isolation, Optimistic locking patterns, and seamless Unit of Work transactional integration.
  */
 export class TreasuryRepository {
+  private static assertAuthoritativePersistence(operation: string): void {
+    if (!UnitOfWork.isTransactionActive()) {
+      FallbackStorage.assertCanonicalPersistence(`treasury ${operation}`);
+    }
+  }
 
   // =========================================================================
   // 1. Treasury Accounts DAL (Chests & Bank Accounts)
   // =========================================================================
 
   public static async getAccountById(schoolId: string, id: string): Promise<TreasuryAccount | null> {
+    this.assertAuthoritativePersistence('account read');
     let accounts = FallbackStorage.getTreasuryAccounts();
     if (UnitOfWork.isTransactionActive()) {
       accounts = UnitOfWork.getPendingAll('treasury_accounts', accounts);
@@ -28,6 +34,7 @@ export class TreasuryRepository {
   }
 
   public static async getAccountByCode(schoolId: string, code: string): Promise<TreasuryAccount | null> {
+    this.assertAuthoritativePersistence('account read');
     let accounts = FallbackStorage.getTreasuryAccounts();
     if (UnitOfWork.isTransactionActive()) {
       accounts = UnitOfWork.getPendingAll('treasury_accounts', accounts);
@@ -37,6 +44,7 @@ export class TreasuryRepository {
   }
 
   public static async getAllAccounts(schoolId: string): Promise<TreasuryAccount[]> {
+    this.assertAuthoritativePersistence('accounts read');
     let accounts = FallbackStorage.getTreasuryAccounts();
     if (UnitOfWork.isTransactionActive()) {
       accounts = UnitOfWork.getPendingAll('treasury_accounts', accounts);
@@ -45,6 +53,7 @@ export class TreasuryRepository {
   }
 
   public static async createAccount(schoolId: string, account: Partial<TreasuryAccount>): Promise<TreasuryAccount> {
+    this.assertAuthoritativePersistence('account write');
     let accounts = FallbackStorage.getTreasuryAccounts();
     if (UnitOfWork.isTransactionActive()) {
       accounts = UnitOfWork.getPendingAll('treasury_accounts', accounts);
@@ -81,6 +90,7 @@ export class TreasuryRepository {
     id: string,
     updates: Partial<TreasuryAccount>
   ): Promise<TreasuryAccount> {
+    this.assertAuthoritativePersistence('account update');
     let accounts = FallbackStorage.getTreasuryAccounts();
     if (UnitOfWork.isTransactionActive()) {
       accounts = UnitOfWork.getPendingAll('treasury_accounts', accounts);
@@ -113,6 +123,7 @@ export class TreasuryRepository {
   // =========================================================================
 
   public static async getTransactionById(schoolId: string, id: string): Promise<TreasuryTransaction | null> {
+    this.assertAuthoritativePersistence('transaction read');
     let txs = FallbackStorage.getTreasuryTransactions();
     if (UnitOfWork.isTransactionActive()) {
       txs = UnitOfWork.getPendingAll('treasury_transactions', txs);
@@ -130,6 +141,7 @@ export class TreasuryRepository {
     schoolId: string,
     options?: { status?: TreasuryTransactionStatus; type?: TreasuryTransactionType; paymentInstrument?: PaymentInstrumentType }
   ): Promise<TreasuryTransaction[]> {
+    this.assertAuthoritativePersistence('transactions read');
     let txs = FallbackStorage.getTreasuryTransactions();
     if (UnitOfWork.isTransactionActive()) {
       txs = UnitOfWork.getPendingAll('treasury_transactions', txs);
@@ -150,6 +162,7 @@ export class TreasuryRepository {
   }
 
   public static async createTransaction(schoolId: string, tx: Partial<TreasuryTransaction>): Promise<TreasuryTransaction> {
+    this.assertAuthoritativePersistence('transaction write');
     let txs = FallbackStorage.getTreasuryTransactions();
     if (UnitOfWork.isTransactionActive()) {
       txs = UnitOfWork.getPendingAll('treasury_transactions', txs);
@@ -202,6 +215,7 @@ export class TreasuryRepository {
     id: string,
     updates: Partial<TreasuryTransaction>
   ): Promise<TreasuryTransaction> {
+    this.assertAuthoritativePersistence('transaction update');
     let txs = FallbackStorage.getTreasuryTransactions();
     if (UnitOfWork.isTransactionActive()) {
       txs = UnitOfWork.getPendingAll('treasury_transactions', txs);
@@ -235,10 +249,12 @@ export class TreasuryRepository {
   // =========================================================================
 
   public static async getPaymentInstrumentConfigs(): Promise<PaymentInstrumentConfig[]> {
+    this.assertAuthoritativePersistence('instrument read');
     return FallbackStorage.getPaymentInstrumentConfigs();
   }
 
   public static async savePaymentInstrumentConfigs(configs: PaymentInstrumentConfig[]): Promise<void> {
+    this.assertAuthoritativePersistence('instrument write');
     FallbackStorage.savePaymentInstrumentConfigs(configs);
   }
 }

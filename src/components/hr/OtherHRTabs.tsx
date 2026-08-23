@@ -5,6 +5,7 @@ import {
   HRPenalty, HRAdvance, HRBonus, HRPerformance, HRDocument, HRSettings 
 } from './types';
 import { SQLTransactionEngine } from '../../database/transactions/transactionManager';
+import { FallbackStorage } from '../../database/repositories/FallbackStorage';
 
 interface OtherHRTabsProps {
   activeTab: string;
@@ -73,10 +74,10 @@ export default function OtherHRTabs({
   const [jobForm, setJobForm] = useState({ titleAr: '', titleEn: '', departmentId: '', grade: 'أ', baseSalary: 3000 });
   const [contractForm, setContractForm] = useState({ employeeId: '', type: 'fixed' as any, startDate: '', endDate: '', monthlySalary: 3500 });
   const [leaveForm, setLeaveForm] = useState({ employeeId: '', type: 'annual' as any, startDate: '', endDate: '', reason: '' });
-  const [penaltyForm, setPenaltyForm] = useState({ employeeId: '', type: 'deduction' as any, date: '', amount: 100, reason: '' });
+  const [penaltyForm, setPenaltyForm] = useState({ employeeId: '', type: 'deduction' as any, date: '', amount: 0, reason: '' });
   const [advanceForm, setAdvanceForm] = useState({ employeeId: '', amount: 1000, date: '', installments: 10, deductionPerMonth: 100, reason: '' });
-  const [rewardForm, setRewardForm] = useState({ employeeId: '', amount: 500, date: '', reason: '' });
-  const [perfForm, setPerfForm] = useState({ employeeId: '', date: '', score: 85, reviewer: 'المدير العام', strengths: '', improvements: '', trainingNeeds: '' });
+  const [rewardForm, setRewardForm] = useState({ employeeId: '', amount: 0, date: '', reason: '' });
+  const [perfForm, setPerfForm] = useState({ employeeId: '', date: '', score: 0, reviewer: '', strengths: '', improvements: '', trainingNeeds: '' });
   const [docForm, setDocForm] = useState({ employeeId: '', title: '', type: 'passport', issueDate: '', expiryDate: '' });
 
   // 1. ORGANIZATIONAL STRUCTURE
@@ -145,6 +146,7 @@ export default function OtherHRTabs({
   if (activeTab === 'depts') {
     const handleSaveDept = (e: React.FormEvent) => {
       e.preventDefault();
+      if (FallbackStorage.isCanonicalPersistenceRequired()) { triggerNotification('حفظ الأقسام متوقف حتى يتم ربط مصدر الموارد البشرية المركزي.', 'warning'); return; }
       if (editingItem) {
         setDepartments(prev => prev.map(d => d.id === editingItem.id ? { ...d, ...deptForm } : d));
         triggerNotification('تم تعديل القسم الإداري بنجاح', 'success');
@@ -266,6 +268,7 @@ export default function OtherHRTabs({
   if (activeTab === 'jobs') {
     const handleSaveJob = (e: React.FormEvent) => {
       e.preventDefault();
+      if (FallbackStorage.isCanonicalPersistenceRequired()) { triggerNotification('حفظ الوظائف متوقف حتى يتم ربط مصدر الموارد البشرية المركزي.', 'warning'); return; }
       if (editingItem) {
         setJobs(prev => prev.map(j => j.id === editingItem.id ? { ...j, ...jobForm } : j));
         triggerNotification('تم تحديث المسمى الوظيفي بنجاح', 'success');
@@ -380,6 +383,7 @@ export default function OtherHRTabs({
   if (activeTab === 'contracts') {
     const handleSaveContract = (e: React.FormEvent) => {
       e.preventDefault();
+      if (FallbackStorage.isCanonicalPersistenceRequired()) { triggerNotification('حفظ العقود متوقف حتى يتم ربط مصدر الموارد البشرية المركزي.', 'warning'); return; }
       if (editingItem) {
         setContracts(prev => prev.map(c => c.id === editingItem.id ? { ...c, ...contractForm } : c));
         triggerNotification('تم تحديث العقد بنجاح', 'success');
@@ -510,10 +514,11 @@ export default function OtherHRTabs({
   if (activeTab === 'leaves') {
     const handleSaveLeave = (e: React.FormEvent) => {
       e.preventDefault();
+      if (FallbackStorage.isCanonicalPersistenceRequired()) { triggerNotification('اعتماد الإجازات متوقف حتى يتم ربط مصدر الموارد البشرية المركزي.', 'warning'); return; }
       const newLeave: HRLeave = {
         id: `LV-${Date.now().toString().slice(-4)}`,
         ...leaveForm,
-        status: 'approved' // Auto approve for demonstration
+        status: 'pending'
       };
       setLeaves(prev => [newLeave, ...prev]);
       
@@ -630,10 +635,11 @@ export default function OtherHRTabs({
   if (activeTab === 'penalties') {
     const handleSavePenalty = (e: React.FormEvent) => {
       e.preventDefault();
+      if (FallbackStorage.isCanonicalPersistenceRequired()) { triggerNotification('تسجيل الجزاءات متوقف حتى يتم ربط مصدر الموارد البشرية المركزي.', 'warning'); return; }
       const newPenalty: HRPenalty = {
         id: `PEN-${Date.now().toString().slice(-4)}`,
         ...penaltyForm,
-        status: 'applied'
+        status: 'pending'
       };
       setPenalties(prev => [newPenalty, ...prev]);
       
@@ -664,7 +670,7 @@ export default function OtherHRTabs({
             <p className="text-xs text-slate-400">تسجيل العقوبات والخصومات على العاملين وتأثيرها المباشر في استقطاعات المرتب.</p>
           </div>
           <button 
-            onClick={() => { setPenaltyForm({ employeeId: employees[0]?.id || '', type: 'deduction', date: new Date().toISOString().split('T')[0], amount: 150, reason: '' }); setShowAddModal(true); }}
+            onClick={() => { setPenaltyForm({ employeeId: '', type: 'deduction', date: new Date().toISOString().split('T')[0], amount: 0, reason: '' }); setShowAddModal(true); }}
             className="bg-gradient-to-r from-rose-600 to-rose-700 hover:opacity-90 text-white font-bold px-4 py-2 rounded-lg text-xs flex items-center gap-1 shadow-md"
           >
             <Plus className="w-4 h-4" />
@@ -758,12 +764,17 @@ export default function OtherHRTabs({
   if (activeTab === 'advances') {
     const handleSaveAdvance = (e: React.FormEvent) => {
       e.preventDefault();
+
+      if (FallbackStorage.isCanonicalPersistenceRequired()) {
+        triggerNotification('صرف السلف متوقف حتى يتم ربط مسار السلف والقيود بمصدر محاسبي مركزي موثوق.', 'warning');
+        return;
+      }
       
       const newAdvance: HRAdvance = {
         id: `ADV-${Date.now().toString().slice(-4)}`,
         ...advanceForm,
         remainingAmount: advanceForm.amount,
-        status: 'approved'
+        status: 'pending'
       };
       setAdvances(prev => [newAdvance, ...prev]);
 
@@ -833,7 +844,7 @@ export default function OtherHRTabs({
             <p className="text-xs text-slate-400">إدارة القروض والسلف المالية الممنوحة للعاملين مع الاسترداد الآلي عبر مسير الرواتب.</p>
           </div>
           <button 
-            onClick={() => { setAdvanceForm({ employeeId: employees[0]?.id || '', amount: 1500, date: new Date().toISOString().split('T')[0], installments: 10, deductionPerMonth: 150, reason: '' }); setShowAddModal(true); }}
+            onClick={() => { setAdvanceForm({ employeeId: '', amount: 0, date: new Date().toISOString().split('T')[0], installments: 0, deductionPerMonth: 0, reason: '' }); setShowAddModal(true); }}
             className="bg-gradient-to-r from-emerald-600 to-emerald-700 text-white font-bold px-4 py-2 rounded-lg text-xs flex items-center gap-1 shadow-md"
           >
             <Plus className="w-4 h-4" />
@@ -940,10 +951,11 @@ export default function OtherHRTabs({
   if (activeTab === 'rewards') {
     const handleSaveReward = (e: React.FormEvent) => {
       e.preventDefault();
+      if (FallbackStorage.isCanonicalPersistenceRequired()) { triggerNotification('اعتماد المكافآت متوقف حتى يتم ربط مصدر الموارد البشرية المركزي.', 'warning'); return; }
       const newBonus: HRBonus = {
         id: `REW-${Date.now().toString().slice(-4)}`,
         ...rewardForm,
-        status: 'applied'
+        status: 'pending'
       };
       setRewards(prev => [newBonus, ...prev]);
 
@@ -973,7 +985,7 @@ export default function OtherHRTabs({
             <p className="text-xs text-slate-400">منح المزايا الاستثنائية والزيادات المؤقتة تحفيزاً للعاملين وإضافتها لمسير المرتبات.</p>
           </div>
           <button 
-            onClick={() => { setRewardForm({ employeeId: employees[0]?.id || '', amount: 500, date: new Date().toISOString().split('T')[0], reason: '' }); setShowAddModal(true); }}
+            onClick={() => { setRewardForm({ employeeId: '', amount: 0, date: new Date().toISOString().split('T')[0], reason: '' }); setShowAddModal(true); }}
             className="bg-gradient-to-r from-emerald-600 to-teal-500 hover:opacity-90 text-white font-bold px-4 py-2 rounded-lg text-xs flex items-center gap-1 shadow-md"
           >
             <Plus className="w-4 h-4" />
@@ -1058,6 +1070,7 @@ export default function OtherHRTabs({
   if (activeTab === 'performance') {
     const handleSavePerf = (e: React.FormEvent) => {
       e.preventDefault();
+      if (FallbackStorage.isCanonicalPersistenceRequired()) { triggerNotification('حفظ التقييمات متوقف حتى يتم ربط مصدر الموارد البشرية المركزي.', 'warning'); return; }
       const newPerf: HRPerformance = {
         id: `EV-${Date.now().toString().slice(-4)}`,
         ...perfForm
@@ -1075,7 +1088,7 @@ export default function OtherHRTabs({
             <p className="text-xs text-slate-400">تسجيل مراجعات الكفاءة، رصد نقاط القوة، التوصيات التدريبية، والدرجة المكتسبة (0-100).</p>
           </div>
           <button 
-            onClick={() => { setPerfForm({ employeeId: employees[0]?.id || '', date: new Date().toISOString().split('T')[0], score: 85, reviewer: 'المدير العام أ. سليمان غازي', strengths: 'التزام متميز وتدريس تفاعلي رائع', improvements: 'التطوير الإداري وسجلات التحضير', trainingNeeds: 'دورة دمج الذكاء الاصطناعي بالتعليم' }); setShowAddModal(true); }}
+            onClick={() => { setPerfForm({ employeeId: '', date: new Date().toISOString().split('T')[0], score: 0, reviewer: '', strengths: '', improvements: '', trainingNeeds: '' }); setShowAddModal(true); }}
             className="bg-gradient-to-r from-yellow-600 to-amber-600 hover:opacity-90 text-white font-bold px-4 py-2 rounded-lg text-xs flex items-center gap-1 shadow-md"
           >
             <Plus className="w-4 h-4" />
@@ -1177,6 +1190,7 @@ export default function OtherHRTabs({
   if (activeTab === 'documents') {
     const handleSaveDoc = (e: React.FormEvent) => {
       e.preventDefault();
+      if (FallbackStorage.isCanonicalPersistenceRequired()) { triggerNotification('حفظ الوثائق متوقف حتى يتم ربط مصدر الموارد البشرية المركزي.', 'warning'); return; }
       const newDoc: HRDocument = {
         id: `DOC-${Date.now().toString().slice(-4)}`,
         ...docForm,
@@ -1291,6 +1305,7 @@ export default function OtherHRTabs({
   if (activeTab === 'settings') {
     const handleSaveSettings = (e: React.FormEvent) => {
       e.preventDefault();
+      if (FallbackStorage.isCanonicalPersistenceRequired()) { triggerNotification('حفظ إعدادات الموارد البشرية متوقف حتى يتم ربط المصدر المركزي.', 'warning'); return; }
       triggerNotification('✓ تم حفظ الإعدادات وقواعد الاحتساب ووحدة الحسابات العامة للموارد البشرية بنجاح', 'success');
     };
 

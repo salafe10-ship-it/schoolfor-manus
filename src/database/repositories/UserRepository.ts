@@ -24,6 +24,7 @@ export class UserRepository {
         EnterpriseLogger.error("Failed to fetch user from Supabase:", "UserRepository", { error: err });
       }
     }
+    FallbackStorage.assertCanonicalPersistence(`user read ${id}`);
     return FallbackStorage.getUsers().find(u => u.id === id);
   }
 

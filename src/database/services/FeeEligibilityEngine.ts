@@ -55,6 +55,7 @@ export class FeeEligibilityEngine {
     template: FeeTemplate,
     customRulesOverload?: EligibilityRules
   ): EligibilityResult {
+    FallbackStorage.assertCanonicalPersistence('fee eligibility sibling lookup');
     // 1. Resolve active eligibility rules from the template mapping or custom overrides
     const rules: EligibilityRules = customRulesOverload || (template as any).eligibilityRules || {};
 

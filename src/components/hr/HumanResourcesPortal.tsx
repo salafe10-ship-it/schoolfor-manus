@@ -13,6 +13,7 @@ import PayrollTab from './PayrollTab';
 import ReportsTab from './ReportsTab';
 import OtherHRTabs from './OtherHRTabs';
 import EnterpriseHRPayrollCertification from '../../certification/EnterpriseHRPayrollCertification';
+import { FallbackStorage } from '../../database/repositories/FallbackStorage';
 
 // Cost Center descriptive mapping
 const costCenterLabels: Record<string, string> = {
@@ -29,6 +30,7 @@ interface HumanResourcesPortalProps {
 }
 
 export default function HumanResourcesPortal({ setActiveSection, selectedSchool }: HumanResourcesPortalProps) {
+  const canonicalPersistenceRequired = FallbackStorage.isCanonicalPersistenceRequired();
   const [activeGroup, setActiveGroup] = useState<'employees_group' | 'attendance_group' | 'advances_group' | 'payroll_group' | 'reports_group'>('employees_group');
   const [activeTab, setActiveTab] = useState('employees');
   const [notification, setNotification] = useState<{ message: string; type: 'success' | 'warning' | 'error' } | null>(null);
@@ -62,6 +64,36 @@ export default function HumanResourcesPortal({ setActiveSection, selectedSchool 
 
   // 1. Initial State Seeding and LocalStorage Synchronization
   useEffect(() => {
+    // الموارد البشرية لا تقرأ أو تزرع بيانات محلية؛ المصدر المركزي وحده يملك
+    // الموظفين والعقود والحسابات البنكية. إلى أن يُربط المصدر، تبقى الوحدة فارغة.
+    setDepartments([]);
+    setJobs([]);
+    setEmployees([]);
+    setContracts([]);
+    setAttendance([]);
+    setLeaves([]);
+    setPenalties([]);
+    setAdvances([]);
+    setRewards([]);
+    setPerformance([]);
+    setDocuments([]);
+    triggerNotification('بيانات الموارد البشرية متوقفة حتى يتم ربطها بمصدر مركزي موثوق؛ لن يتم عرض أو إنشاء سجلات محلية تجريبية.', 'warning');
+    return;
+    if (canonicalPersistenceRequired) {
+      setDepartments([]);
+      setJobs([]);
+      setEmployees([]);
+      setContracts([]);
+      setAttendance([]);
+      setLeaves([]);
+      setPenalties([]);
+      setAdvances([]);
+      setRewards([]);
+      setPerformance([]);
+      setDocuments([]);
+      triggerNotification('بيانات الموارد البشرية متوقفة حتى يتم ربطها بمصدر مركزي موثوق؛ لن يتم عرض أو إنشاء سجلات محلية تجريبية.', 'warning');
+      return;
+    }
     // Load or Seed Departments
     const savedDepts = localStorage.getItem('erp_hr_departments');
     let deptsList: HRDepartment[] = [];
@@ -219,13 +251,7 @@ export default function HumanResourcesPortal({ setActiveSection, selectedSchool 
     if (savedAttendance) {
       attendanceList = JSON.parse(savedAttendance);
     } else {
-      // Seed some present for today
-      const today = new Date().toISOString().split('T')[0];
-      attendanceList = [
-        { id: 'ATT-001', employeeId: 'EMP-001', date: today, status: 'present', checkIn: '08:00', checkOut: '15:00', delayMinutes: 0, overtimeHours: 0 },
-        { id: 'ATT-002', employeeId: 'EMP-002', date: today, status: 'late', checkIn: '08:45', checkOut: '15:00', delayMinutes: 45, overtimeHours: 0 },
-        { id: 'ATT-003', employeeId: 'EMP-003', date: today, status: 'present', checkIn: '07:55', checkOut: '16:00', delayMinutes: 0, overtimeHours: 1.0 }
-      ];
+      attendanceList = [];
       localStorage.setItem('erp_hr_attendance', JSON.stringify(attendanceList));
     }
     setAttendance(attendanceList);
@@ -236,9 +262,7 @@ export default function HumanResourcesPortal({ setActiveSection, selectedSchool 
     if (savedLeaves) {
       leavesList = JSON.parse(savedLeaves);
     } else {
-      leavesList = [
-        { id: 'LV-001', employeeId: 'EMP-002', type: 'annual', startDate: '2026-07-01', endDate: '2026-07-15', reason: 'إجازة سنوية مرخصة ومقررة سلفاً لقضاء العطلة الصيفية', status: 'approved' }
-      ];
+      leavesList = [];
       localStorage.setItem('erp_hr_leaves', JSON.stringify(leavesList));
     }
     setLeaves(leavesList);
@@ -249,9 +273,7 @@ export default function HumanResourcesPortal({ setActiveSection, selectedSchool 
     if (savedPenalties) {
       penaltiesList = JSON.parse(savedPenalties);
     } else {
-      penaltiesList = [
-        { id: 'PEN-001', employeeId: 'EMP-002', type: 'deduction', date: '2026-06-12', amount: 150, reason: 'تأخير متكرر صباحي بدون إذن إداري مبرر', status: 'applied' }
-      ];
+      penaltiesList = [];
       localStorage.setItem('erp_hr_penalties', JSON.stringify(penaltiesList));
     }
     setPenalties(penaltiesList);
@@ -262,9 +284,7 @@ export default function HumanResourcesPortal({ setActiveSection, selectedSchool 
     if (savedAdvances) {
       advancesList = JSON.parse(savedAdvances);
     } else {
-      advancesList = [
-        { id: 'ADV-001', employeeId: 'EMP-003', amount: 3000, date: '2026-06-01', installments: 6, deductionPerMonth: 500, remainingAmount: 2500, reason: 'سلفة معتمدة لشراء مستلزمات عائلية طارئة', status: 'approved' }
-      ];
+      advancesList = [];
       localStorage.setItem('erp_hr_advances', JSON.stringify(advancesList));
     }
     setAdvances(advancesList);
@@ -275,9 +295,7 @@ export default function HumanResourcesPortal({ setActiveSection, selectedSchool 
     if (savedRewards) {
       rewardsList = JSON.parse(savedRewards);
     } else {
-      rewardsList = [
-        { id: 'REW-001', employeeId: 'EMP-001', amount: 1000, date: '2026-06-25', reason: 'مكافأة تميز وإشراف في بناء ومقاصة لجان المراجعة والمالية السنوية للمؤسسة', status: 'applied' }
-      ];
+      rewardsList = [];
       localStorage.setItem('erp_hr_rewards', JSON.stringify(rewardsList));
     }
     setRewards(rewardsList);
@@ -308,42 +326,53 @@ export default function HumanResourcesPortal({ setActiveSection, selectedSchool 
     }
     setDocuments(documentsList);
     
-  }, []);
+  }, [canonicalPersistenceRequired]);
 
   // 2. Local State synchronization to LocalStorage on modifications
   useEffect(() => {
+    if (canonicalPersistenceRequired) return;
     if (departments.length > 0) localStorage.setItem('erp_hr_departments', JSON.stringify(departments));
-  }, [departments]);
+  }, [canonicalPersistenceRequired, departments]);
   useEffect(() => {
+    if (canonicalPersistenceRequired) return;
     if (jobs.length > 0) localStorage.setItem('erp_hr_jobs', JSON.stringify(jobs));
-  }, [jobs]);
+  }, [canonicalPersistenceRequired, jobs]);
   useEffect(() => {
+    if (canonicalPersistenceRequired) return;
     if (employees.length > 0) localStorage.setItem('erp_hr_employees', JSON.stringify(employees));
-  }, [employees]);
+  }, [canonicalPersistenceRequired, employees]);
   useEffect(() => {
+    if (canonicalPersistenceRequired) return;
     if (contracts.length > 0) localStorage.setItem('erp_hr_contracts', JSON.stringify(contracts));
-  }, [contracts]);
+  }, [canonicalPersistenceRequired, contracts]);
   useEffect(() => {
+    if (canonicalPersistenceRequired) return;
     if (attendance.length > 0) localStorage.setItem('erp_hr_attendance', JSON.stringify(attendance));
-  }, [attendance]);
+  }, [canonicalPersistenceRequired, attendance]);
   useEffect(() => {
+    if (canonicalPersistenceRequired) return;
     if (leaves.length > 0) localStorage.setItem('erp_hr_leaves', JSON.stringify(leaves));
-  }, [leaves]);
+  }, [canonicalPersistenceRequired, leaves]);
   useEffect(() => {
+    if (canonicalPersistenceRequired) return;
     if (penalties.length > 0) localStorage.setItem('erp_hr_penalties', JSON.stringify(penalties));
-  }, [penalties]);
+  }, [canonicalPersistenceRequired, penalties]);
   useEffect(() => {
+    if (canonicalPersistenceRequired) return;
     if (advances.length > 0) localStorage.setItem('erp_hr_advances', JSON.stringify(advances));
-  }, [advances]);
+  }, [canonicalPersistenceRequired, advances]);
   useEffect(() => {
+    if (canonicalPersistenceRequired) return;
     if (rewards.length > 0) localStorage.setItem('erp_hr_rewards', JSON.stringify(rewards));
-  }, [rewards]);
+  }, [canonicalPersistenceRequired, rewards]);
   useEffect(() => {
+    if (canonicalPersistenceRequired) return;
     if (performance.length > 0) localStorage.setItem('erp_hr_performance', JSON.stringify(performance));
-  }, [performance]);
+  }, [canonicalPersistenceRequired, performance]);
   useEffect(() => {
+    if (canonicalPersistenceRequired) return;
     if (documents.length > 0) localStorage.setItem('erp_hr_documents', JSON.stringify(documents));
-  }, [documents]);
+  }, [canonicalPersistenceRequired, documents]);
 
   // Global Currency Formatting (Arabic standard)
   const formatCurrency = (amount: number, showSymbol = true) => {

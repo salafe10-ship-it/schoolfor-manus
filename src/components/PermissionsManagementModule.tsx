@@ -2,6 +2,7 @@ import { Award, Ban, BarChart3, Bell, BookOpen, Building2, Bus, CalendarCheck, C
 import React, { useState, useEffect, useMemo } from 'react';
 import { SecuritySimulationService } from '../modules/authorization/application/SecuritySimulationService';
 import { PermissionsCalculationService, Employee as ServiceEmployee } from '../modules/authorization/application/PermissionsCalculationService';
+import { FallbackStorage } from '../database/repositories/FallbackStorage';
 // ==========================================================
 // 1. TYPES & DATA DEFINITIONS
 // ==========================================================
@@ -500,8 +501,10 @@ export const PermissionsManagementModule: React.FC<PermissionsModuleProps> = ({
   setDrillDownUser,
   triggerNotification
 }) => {
+  const canonicalPersistenceRequired = FallbackStorage.isCanonicalPersistenceRequired();
   // Local high-fidelity state to track selected employee, searches, and configurations
   const [employees, setEmployees] = useState<Employee[]>(() => {
+    if (canonicalPersistenceRequired) return [];
     // Sync with existing props or localStorage, otherwise default to high fidelity
     const saved = localStorage.getItem('edupro_employees_permissions_v1');
     if (saved) {
@@ -511,10 +514,10 @@ export const PermissionsManagementModule: React.FC<PermissionsModuleProps> = ({
         // ignore
       }
     }
-    return INITIAL_EMPLOYEES_LIST;
+    return [];
   });
 
-  const [activeEmployeeId, setActiveEmployeeId] = useState<string>('emp_1');
+  const [activeEmployeeId, setActiveEmployeeId] = useState<string>('');
   const [employeeSearch, setEmployeeSearch] = useState<string>('');
   const [selectedDept, setSelectedDept] = useState<string>('all');
   const [selectedStatus, setSelectedStatus] = useState<string>('active');
@@ -640,6 +643,10 @@ export const PermissionsManagementModule: React.FC<PermissionsModuleProps> = ({
 
   // Save changes to localStorage and synchronize with context props
   const handleSaveChanges = () => {
+    if (canonicalPersistenceRequired) {
+      triggerNotification('إدارة الصلاحيات متوقفة حتى يتم ربط مصفوفة RBAC بمصدر الهوية المركزي الموثوق.', 'info');
+      return;
+    }
     localStorage.setItem('edupro_employees_permissions_v1', JSON.stringify(employees));
     setHasUnsavedChanges(false);
 

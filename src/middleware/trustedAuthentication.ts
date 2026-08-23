@@ -6,6 +6,7 @@ import {
   type TrustedSchoolPresentation,
   type TrustedBranchPresentation
 } from './trustedSchoolIdentity';
+import { roleResolver } from '../authorization/RoleResolver';
 
 export type TrustedIdentity = {
   id: string;
@@ -20,6 +21,8 @@ export type TrustedIdentity = {
   branch?: TrustedBranchPresentation;
   /** Optional academic-year claim; final scope is validated server-side. */
   academicYear?: string;
+  /** Effective tenant permissions are server-derived and are only a client-side visibility hint. */
+  permissions?: string[];
 };
 
 export type TrustedSession = {
@@ -157,6 +160,17 @@ export function extractTrustedIdentity(user: SupabaseUser): TrustedIdentity {
   };
 }
 
+async function attachTrustedTenantPermissions(identity: TrustedIdentity): Promise<TrustedIdentity> {
+  try {
+    const permissions = await roleResolver.resolveTenantPermissions(identity);
+    return { ...identity, permissions: [...permissions] };
+  } catch {
+    // The server remains the authorization authority. An unavailable or
+    // incomplete assignment must fail closed in the client visibility hint.
+    return { ...identity, permissions: [] };
+  }
+}
+
 export async function authenticateTrustedUser(
   supabase: SupabaseClient,
   identifier: unknown,
@@ -188,7 +202,8 @@ export async function authenticateTrustedUser(
   const school = await assertTrustedSchoolExists(supabase, identity.schoolId);
 
   const scopedIdentity = await assertTrustedBranchScope(supabase, identity);
-  return { identity: { ...scopedIdentity, tenantId, school }, session: data.session };
+  const trustedIdentity = await attachTrustedTenantPermissions({ ...scopedIdentity, tenantId, school });
+  return { identity: trustedIdentity, session: data.session };
 }
 
 async function assertTrustedSchoolExists(
@@ -225,7 +240,8 @@ export async function refreshTrustedSession(
   const tenantId = await resolveTrustedTenantId(supabase);
   const school = await assertTrustedSchoolExists(supabase, identity.schoolId);
   const scopedIdentity = await assertTrustedBranchScope(supabase, identity);
-  return { identity: { ...scopedIdentity, tenantId, school }, session: data.session };
+  const trustedIdentity = await attachTrustedTenantPermissions({ ...scopedIdentity, tenantId, school });
+  return { identity: trustedIdentity, session: data.session };
 }
 
 export async function verifyTrustedSession(
@@ -239,5 +255,5 @@ export async function verifyTrustedSession(
   const tenantId = await resolveTrustedTenantId(supabase);
   const school = await assertTrustedSchoolExists(supabase, identity.schoolId);
   const scopedIdentity = await assertTrustedBranchScope(supabase, identity);
-  return { ...scopedIdentity, tenantId, school };
+  return attachTrustedTenantPermissions({ ...scopedIdentity, tenantId, school });
 }

@@ -49,41 +49,7 @@ const INITIAL_SUBJECTS = [
   { id: 'sub-6', name: 'الدراسات الاجتماعية', maxScore: 100, passScore: 50 }
 ];
 
-const INITIAL_TEACHERS_MOCK = [
-  { id: 't-1', name: 'أ. عبد الرحمن اليوسف', specialization: 'الرياضيات' },
-  { id: 't-2', name: 'أ. خالد الشهري', specialization: 'اللغة العربية' },
-  { id: 't-3', name: 'أ. سارة الودعاني', specialization: 'العلوم' },
-  { id: 't-4', name: 'أ. محمد الرويلي', specialization: 'اللغة الإنجليزية' },
-  { id: 't-5', name: 'أ. فهد الشمري', specialization: 'التربية الإسلامية' }
-];
-
-// Enriching with students from main app or initial mock
-const INITIAL_STUDENTS_MOCK = [
-  { id: 'st-1', name: 'أحمد محمود العبدالله', classroom: 'الصف السابع', section: 'أ', nationalId: '1092837461' },
-  { id: 'st-2', name: 'سلطان فيصل الدوسري', classroom: 'الصف السابع', section: 'أ', nationalId: '1082736452' },
-  { id: 'st-3', name: 'رائد عبدالله الحربي', classroom: 'الصف السابع', section: 'ب', nationalId: '1072839401' },
-  { id: 'st-4', name: 'فيصل سعود المطيري', classroom: 'الصف الثامن', section: 'أ', nationalId: '1062738491' },
-  { id: 'st-5', name: 'عبدالعزيز عمر العتيبي', classroom: 'الصف الثامن', section: 'ب', nationalId: '1052637482' },
-  { id: 'st-6', name: 'سعد فهد القحطاني', classroom: 'الصف التاسع', section: 'أ', nationalId: '1042736481' },
-  { id: 'st-7', name: 'خالد وليد الرشيد', classroom: 'الصف التاسع', section: 'ب', nationalId: '1032847391' },
-  { id: 'st-8', name: 'محمد عبدالملك آل ثاني', classroom: 'الصف السابع', section: 'أ', nationalId: '1022837491' },
-  { id: 'st-9', name: 'تركي ماجد السبيعي', classroom: 'الصف السابع', section: 'ب', nationalId: '1012938472' },
-  { id: 'st-10', name: 'بدر مشعل الشمري', classroom: 'الصف الثامن', section: 'أ', nationalId: '1002938471' }
-];
-
-// Initial Grades Matrix
-const INITIAL_GRADES_MOCK: Record<string, Record<string, number>> = {
-  'st-1': { 'sub-1': 88, 'sub-2': 92, 'sub-3': 85, 'sub-4': 95, 'sub-5': 90, 'sub-6': 87 },
-  'st-2': { 'sub-1': 74, 'sub-2': 65, 'sub-3': 70, 'sub-4': 82, 'sub-5': 68, 'sub-6': 72 },
-  'st-3': { 'sub-1': 95, 'sub-2': 98, 'sub-3': 92, 'sub-4': 100, 'sub-5': 94, 'sub-6': 96 },
-  'st-4': { 'sub-1': 61, 'sub-2': 48, 'sub-3': 55, 'sub-4': 70, 'sub-5': 50, 'sub-6': 58 }, // fails math
-  'st-5': { 'sub-1': 82, 'sub-2': 78, 'sub-3': 80, 'sub-4': 88, 'sub-5': 75, 'sub-6': 81 },
-  'st-6': { 'sub-1': 42, 'sub-2': 38, 'sub-3': 45, 'sub-4': 60, 'sub-5': 40, 'sub-6': 50 }, // fails sub-1, sub-2, sub-3, sub-5
-  'st-7': { 'sub-1': 90, 'sub-2': 85, 'sub-3': 89, 'sub-4': 92, 'sub-5': 88, 'sub-6': 91 },
-  'st-8': { 'sub-1': 70, 'sub-2': 72, 'sub-3': 68, 'sub-4': 80, 'sub-5': 71, 'sub-6': 73 },
-  'st-9': { 'sub-1': 54, 'sub-2': 50, 'sub-3': 58, 'sub-4': 65, 'sub-5': 52, 'sub-6': 56 },
-  'st-10': { 'sub-1': 85, 'sub-2': 90, 'sub-3': 88, 'sub-4': 95, 'sub-5': 84, 'sub-6': 86 }
-};
+const INITIAL_TEACHERS_MOCK: Teacher[] = [];
 
 interface ExamModuleProps {
   students: Student[];
@@ -125,37 +91,29 @@ export default function ExamsResultsModule({
 
   // Control Committee & Stage isolation (Requirement #1: Multi-stage Control)
   const [controlCommittees, setControlCommittees] = useState<any[]>(() => {
-    return [
-      { id: 'all', name: 'الكنترول العام المشترك (كامل المراحل)', stage: 'all', user: 'أ. د. عبد الرحمن اليوسف', permissions: ['view', 'edit', 'approve', 'reopen'] },
-      { id: 'kindergarten', name: 'لجنة كنترول رياض الأطفال', stage: 'kindergarten', user: 'أ. مريم الدوسري', permissions: ['view', 'edit'] },
-      { id: 'primary', name: 'لجنة كنترول المرحلة الابتدائية', stage: 'primary', user: 'أ. فاطمة الغامدي', permissions: ['view', 'edit', 'approve'] },
-      { id: 'middle', name: 'لجنة كنترول المرحلة المتوسطة', stage: 'middle', user: 'أ. خالد الشهري', permissions: ['view', 'edit'] },
-      { id: 'high', name: 'لجنة كنترول المرحلة الثانوية', stage: 'high', user: 'أ. محمد بن صالح', permissions: ['view', 'edit', 'approve'] },
-    ];
+    return [];
   });
-  const [activeCommitteeId, setActiveCommitteeId] = useState<string>('all');
+  const [activeCommitteeId, setActiveCommitteeId] = useState<string>('');
 
   // Selected stage based on active committee
   const activeControlStage = controlCommittees.find(c => c.id === activeCommitteeId)?.stage || 'all';
 
   // Requirement #2 & #3: Approval & Reopening History
   const [approvalHistory, setApprovalHistory] = useState<any[]>(() => {
-    return [
-      { id: 'h-1', stage: 'الكنترول العام', approvedBy: 'أدمن النظام (salafe10@gmail.com)', timestamp: '2026-06-25 11:30:00', device: 'Chrome / Linux Run Container', ip: '192.168.30.12', action: 'approve', reason: 'الاعتماد النهائي الأولي لأعمال الكنترول' }
-    ];
+    return [];
   });
 
   // Requirement #4: Grade modification history
   const [gradeHistory, setGradeHistory] = useState<any[]>(() => {
-    return [
-      { id: 'gh-1', studentName: 'أحمد محمود العبدالله', classroom: 'الصف السابع', subjectName: 'الرياضيات', oldGrade: 85, newGrade: 88, modifiedBy: 'أ. خالد الشهري', reason: 'تعديل درجة المشاركة بعد مراجعة الدفتر وتصحيح رصد خاطئ', timestamp: '2026-06-26 14:22:00' }
-    ];
+    return [];
   });
 
   // Requirement #9: Archived years state
-  const [selectedArchivedYear, setSelectedArchivedYear] = useState<string>('2024-2025');
-  
-  const archivedData = [
+  const [selectedArchivedYear, setSelectedArchivedYear] = useState<string>('');
+
+  const archivedData: any[] = [
+    /* Archived results must be loaded from the canonical archive; no seeded history. */
+    /*
     {
       year: '2024-2025',
       stage: 'middle',
@@ -220,6 +178,7 @@ export default function ExamsResultsModule({
       median: 81,
       mode: 84,
     }
+    */
   ];
 
   const [selectedCompareStage, setSelectedCompareStage] = useState<string>('الكل');
@@ -257,7 +216,7 @@ export default function ExamsResultsModule({
   const [stageApprovalStatus, setStageApprovalStatus] = useState<Record<string, { approved: boolean, approvedBy: string, approvedAt: string }>>(() => {
     return {
       'kindergarten': { approved: false, approvedBy: '', approvedAt: '' },
-      'primary': { approved: true, approvedBy: 'أ. فاطمة الغامدي', approvedAt: '٢٠٢٦/٠٦/٢٥ ١٠:٠٠ ص' },
+      'primary': { approved: false, approvedBy: '', approvedAt: '' },
       'middle': { approved: false, approvedBy: '', approvedAt: '' },
       'high': { approved: false, approvedBy: '', approvedAt: '' }
     };
@@ -268,7 +227,7 @@ export default function ExamsResultsModule({
   const [verifiedCertificateResult, setVerifiedCertificateResult] = useState<any | null>(null);
 
   // Selected subject for psychometric analytics
-  const [selectedSubjectAnalyticId, setSelectedSubjectAnalyticId] = useState<string>('sub-1');
+  const [selectedSubjectAnalyticId, setSelectedSubjectAnalyticId] = useState<string>('');
 
   // Quality, Governance & Gaps States
   const [currentUserRole, setCurrentUserRole] = useState<'admin' | 'reviewer' | 'officer'>(() => {
@@ -276,62 +235,11 @@ export default function ExamsResultsModule({
   });
 
   const [controlClosures, setControlClosures] = useState<any[]>(() => {
-    return [
-      {
-        id: "CLS-1447-01",
-        schoolName: "مدارس سحاب النموذجية الأهلية",
-        stage: "المرحلة الابتدائية",
-        classroom: "الصف الخامس الابتدائي",
-        semester: "الفصل الدراسي الثاني",
-        academicYear: "1447-1448 هـ",
-        totalStudents: 140,
-        passedCount: 132,
-        failedCount: 8,
-        passRate: 94.28,
-        committeeMembers: ["أ. فاطمة الغامدي", "أ. مريم الدوسري", "أ. خالد الشهري"],
-        closedAt: "2026-06-25 10:15",
-        approvedBy: "أ. فاطمة الغامدي",
-        signatureHash: "SHA-256: 8a67c4f1092de09bc83a15f0d2c94a28399ef7631bd2839bceae149bc28919af",
-        isImmutableArchive: true
-      }
-    ];
+    return [];
   });
 
   const [reEvaluationRequests, setReEvaluationRequests] = useState<any[]>(() => {
-    return [
-      {
-        id: "REV-2026-001",
-        studentId: "stud_1",
-        studentName: "خالد بن وليد الميمان",
-        classroom: "الصف الأول الثانوي",
-        subjectId: "sub-1",
-        subjectName: "الرياضيات",
-        requestDate: "2026-06-28",
-        reason: "الاعتقاد بوجود خطأ في جمع درجات السؤال الثالث المقالي",
-        oldGrade: 88,
-        newGrade: 91,
-        decision: "قبول وتعديل الدرجة",
-        decisionDetails: "بعد إعادة جمع ورقة الإجابة للمرة الثانية، تبين وجود خطأ في جمع درجات السؤال الثالث بزيادة قدرها 3 درجات.",
-        committeeMembers: ["أ. عبد الرحمن اليوسف", "أ. خالد الشهري"],
-        status: "completed"
-      },
-      {
-        id: "REV-2026-002",
-        studentId: "stud_2",
-        studentName: "يوسف بن أحمد الزهراني",
-        classroom: "الصف الأول الثانوي",
-        subjectId: "sub-2",
-        subjectName: "اللغة العربية",
-        requestDate: "2026-06-29",
-        reason: "مراجعة خط يد المصحح في سؤال التعبير",
-        oldGrade: 95,
-        newGrade: 95,
-        decision: "مرفوض - تطابق تام",
-        decisionDetails: "تمت مراجعة ورقة التعبير من قبل لجنتين مستقلتين، والتقدير ممتاز ومطابق لدرجة المصحح الأول.",
-        committeeMembers: ["أ. محمد بن صالح", "أ. سارة الودعاني"],
-        status: "completed"
-      }
-    ];
+    return [];
   });
 
 
@@ -346,53 +254,32 @@ export default function ExamsResultsModule({
   });
 
   const [halls, setHalls] = useState<any[]>(() => {
-    return INITIAL_HALLS;
+    return [];
   });
 
   const [subjects, setSubjects] = useState<any[]>(() => {
-    return INITIAL_SUBJECTS;
+    return [];
   });
 
   const [classesList, setClassesList] = useState<any[]>(() => {
-    return (initialClasses.length > 0 ? initialClasses : [
-      { id: 'cls-1', name: 'الصف السابع', level: 'middle', sections: ['أ', 'ب'], capacity: 30 },
-      { id: 'cls-2', name: 'الصف الثامن', level: 'middle', sections: ['أ', 'ب'], capacity: 25 },
-      { id: 'cls-3', name: 'الصف التاسع', level: 'middle', sections: ['علمي أ'], capacity: 20 },
-      { id: 'cls-4', name: 'الصف الأول الثانوي', level: 'high', sections: ['علمي أ', 'أدبي أ'], capacity: 35 }
-    ]);
+    return initialClasses;
   });
 
   const [studentList, setStudentList] = useState<any[]>(() => {
-    // Enrich with seat numbers & hall assignment
-    return INITIAL_STUDENTS_MOCK.map((st, idx) => ({
-      ...st,
-      seatNumber: 20000 + idx + 1,
-      hallId: INITIAL_HALLS[idx % INITIAL_HALLS.length].id,
-      absentSubjects: [] as string[]
-    }));
+    // لا تُنشأ قوائم امتحان من بيانات تجريبية؛ تُستخدم القائمة المركزية فقط.
+    return initialStudents.map(st => ({ ...st, absentSubjects: [] as string[] }));
   });
 
   const [gradesMatrix, setGradesMatrix] = useState<Record<string, Record<string, number>>>(() => {
-    return INITIAL_GRADES_MOCK;
+    return {};
   });
 
   const [schedule, setSchedule] = useState<any[]>(() => {
-    // Initial standard schedule
-    return [
-      { id: 'sc-1', classroom: 'الصف السابع', subjectId: 'sub-1', date: '2026-06-01', day: 'الأحد', startTime: '08:30', endTime: '10:30', hallId: 'hall-1', proctorId: 't-1' },
-      { id: 'sc-2', classroom: 'الصف السابع', subjectId: 'sub-2', date: '2026-06-02', day: 'الإثنين', startTime: '08:30', endTime: '10:30', hallId: 'hall-1', proctorId: 't-2' },
-      { id: 'sc-3', classroom: 'الصف الثامن', subjectId: 'sub-1', date: '2026-06-01', day: 'الأحد', startTime: '11:00', endTime: '13:00', hallId: 'hall-2', proctorId: 't-3' },
-      { id: 'sc-4', classroom: 'الصف الثامن', subjectId: 'sub-2', date: '2026-06-02', day: 'الإثنين', startTime: '11:00', endTime: '13:00', hallId: 'hall-2', proctorId: 't-4' },
-      { id: 'sc-5', classroom: 'الصف التاسع', subjectId: 'sub-3', date: '2026-06-03', day: 'الثلاثاء', startTime: '08:30', endTime: '10:30', hallId: 'hall-3', proctorId: 't-5' }
-    ];
+    return [];
   });
 
   const [proctorAssignments, setProctorAssignments] = useState<any[]>(() => {
-    return [
-      { id: 'pa-1', teacherId: 't-1', name: 'أ. عبد الرحمن اليوسف', hallId: 'hall-1', shift: 'الفترة الأولى' },
-      { id: 'pa-2', teacherId: 't-2', name: 'أ. خالد الشهري', hallId: 'hall-2', shift: 'الفترة الثانية' },
-      { id: 'pa-3', teacherId: 't-3', name: 'أ. سارة الودعاني', hallId: 'hall-3', shift: 'الفترة الأولى' }
-    ];
+    return [];
   });
 
   const [approvalStatus, setApprovalStatus] = useState(() => {
@@ -550,14 +437,10 @@ export default function ExamsResultsModule({
           triggerNotification('تمت مزامنة واسترجاع كامل البيانات من السيرفر بنجاح', 'success');
           logAction('مزامنة واسترجاع البيانات يدوياً من السيرفر', 'النظام وقاعدة البيانات');
         } else {
-          // Empty DB on server, upload local state
-          const ok = await saveToServerDb();
-          if (ok) {
-            triggerNotification('تم رفع ومزامنة بياناتك المحلية مع السيرفر كنسخة رئيسية', 'success');
-            logAction('رفع ومزامنة البيانات المحلية كنسخة رئيسية', 'النظام وقاعدة البيانات');
-          } else {
-            triggerNotification('فشل رفع البيانات المحلية للسيرفر', 'warning');
-          }
+          // An empty canonical database is an empty state, not permission to
+          // promote browser/demo fixtures into authoritative exam records.
+          setDbSyncStatus('success');
+          triggerNotification('المصدر المركزي متاح لكنه لا يحتوي سجلات امتحانات بعد.', 'info');
         }
       } else {
         setDbSyncStatus('error');
@@ -606,19 +489,8 @@ export default function ExamsResultsModule({
             setLastSyncTime(new Date().toLocaleTimeString('ar-EG'));
             triggerNotification('تم الاتصال بقاعدة البيانات واسترجاع كافة السجلات بنجاح', 'success');
           } else {
-            // Seed DB on server
-            await saveToServerDb(
-              examSettings,
-              halls,
-              subjects,
-              studentList,
-              gradesMatrix,
-              schedule,
-              proctorAssignments,
-              approvalStatus,
-              auditLogs,
-              classesList
-            );
+            setDbSyncStatus('success');
+            triggerNotification('المصدر المركزي متاح لكنه لا يحتوي سجلات امتحانات بعد.', 'info');
           }
         } else {
           setDbSyncStatus('error');
@@ -712,7 +584,13 @@ export default function ExamsResultsModule({
                 setTestSuiteResults(finalResults);
                 localStorage.setItem('exams_test_suite', JSON.stringify(finalResults));
                 setTestSuiteRunning(false);
-                triggerNotification('اكتمل فحص واختبار نظام الامتحانات والكنترول التلقائي بنجاح وبنسبة 100%', 'success');
+                const allChecksPassed = finalResults.every(result => result.status === 'success');
+                triggerNotification(
+                  allChecksPassed
+                    ? 'اكتمل فحص نظام الامتحانات والكنترول، وجميع الفحوصات ناجحة.'
+                    : 'اكتمل فحص نظام الامتحانات والكنترول، لكن توجد تنبيهات تحتاج إلى معالجة.',
+                  allChecksPassed ? 'success' : 'warning'
+                );
                 logAction('تشغيل نظام فحص وتدقيق الكنترول التلقائي الشامل', 'الاختبارات والفحوصات');
               }, 600);
             }, 600);
@@ -723,11 +601,7 @@ export default function ExamsResultsModule({
   };
 
   const [auditLogs, setAuditLogs] = useState<any[]>(() => {
-    return [
-      { id: 'a-1', timestamp: '2026-06-25 09:12:30', user: 'أدمن النظام', action: 'تهيئة العام الدراسي والامتحانات', module: 'إعدادات الامتحانات' },
-      { id: 'a-2', timestamp: '2026-06-25 10:45:15', user: 'أدمن النظام', action: 'توليد أرقام جلوس الطلاب وتوزيع القاعات تلقائياً', module: 'توزيع الطلاب' },
-      { id: 'a-3', timestamp: '2026-06-26 14:22:00', user: 'أ. خالد الشهري', action: 'إدخال درجات مادة اللغة العربية للصف السابع', module: 'إدخال الدرجات' }
-    ];
+    return [];
   });
 
   // Logging Helper
@@ -897,15 +771,20 @@ export default function ExamsResultsModule({
   };
 
   // 1. Settings Handler
-  const handleSaveSettings = (e: React.FormEvent) => {
+  const handleSaveSettings = async (e: React.FormEvent) => {
     e.preventDefault();
+    const persisted = await saveToServerDb();
+    if (!persisted) {
+      triggerNotification('تعذر حفظ إعدادات الامتحانات في المصدر المركزي.', 'warning');
+      return;
+    }
     triggerNotification('تم حفظ إعدادات وثوابت الامتحانات بنجاح', 'success');
     logAction('تحديث إعدادات الامتحانات والسياسات الأكاديمية', 'إعدادات الامتحانات');
   };
 
   // 2. Class Subject handlers
   const [newSubject, setNewSubject] = useState({ name: '', maxScore: 100, passScore: 50 });
-  const handleAddSubject = (e: React.FormEvent) => {
+  const handleAddSubject = async (e: React.FormEvent) => {
     e.preventDefault();
     if (!newSubject.name.trim()) return;
     const item = {
@@ -917,12 +796,16 @@ export default function ExamsResultsModule({
     const updated = [...subjects, item];
     setSubjects(updated);
     setNewSubject({ name: '', maxScore: 100, passScore: 50 });
+    const persisted = await saveToServerDb(examSettings, halls, updated);
+    if (!persisted) {
+      triggerNotification('تعذر حفظ المادة الجديدة في المصدر المركزي.', 'warning');
+      return;
+    }
     triggerNotification(`تمت إضافة مادة ${item.name} بنجاح`, 'success');
     logAction(`إضافة مادة تعليمية جديدة: ${item.name}`, 'الفصول والمواد');
-    saveToServerDb(examSettings, halls, updated);
   };
 
-  const handleAddClassroom = (e: React.FormEvent) => {
+  const handleAddClassroom = async (e: React.FormEvent) => {
     e.preventDefault();
     if (!newClassroom.name.trim()) return;
     const sectionsArray = newClassroom.sections
@@ -938,14 +821,18 @@ export default function ExamsResultsModule({
     const updated = [...classesList, item];
     setClassesList(updated);
     setNewClassroom({ name: '', level: 'middle', capacity: 30, sections: '' });
+    const persisted = await saveToServerDb(examSettings, halls, subjects, studentList, gradesMatrix, schedule, proctorAssignments, approvalStatus, auditLogs, updated);
+    if (!persisted) {
+      triggerNotification('تعذر حفظ الصف الجديد في المصدر المركزي.', 'warning');
+      return;
+    }
     triggerNotification(`تمت إضافة الصف/الفصل ${item.name} بنجاح`, 'success');
     logAction(`إضافة فصل دراسي جديد: ${item.name}`, 'الفصول والمواد');
-    saveToServerDb(examSettings, halls, subjects, studentList, gradesMatrix, schedule, proctorAssignments, approvalStatus, auditLogs, updated);
   };
 
   // 3. Exam Halls handlers
   const [newHall, setNewHall] = useState({ name: '', capacity: 25, location: '' });
-  const handleAddHall = (e: React.FormEvent) => {
+  const handleAddHall = async (e: React.FormEvent) => {
     e.preventDefault();
     if (!newHall.name.trim()) return;
     const item = {
@@ -954,14 +841,20 @@ export default function ExamsResultsModule({
       capacity: Number(newHall.capacity),
       location: newHall.location
     };
-    setHalls([...halls, item]);
+    const updatedHalls = [...halls, item];
+    setHalls(updatedHalls);
     setNewHall({ name: '', capacity: 25, location: '' });
+    const persisted = await saveToServerDb(examSettings, updatedHalls);
+    if (!persisted) {
+      triggerNotification('تعذر حفظ القاعة الجديدة في المصدر المركزي.', 'warning');
+      return;
+    }
     triggerNotification(`تم تسجيل قاعة ${item.name} الاستيعابية بنجاح`, 'success');
     logAction(`إضافة قاعة اختبار جديدة: ${item.name}`, 'لجان وقاعات الامتحان');
   };
 
   // 4. Seating & Distribution Automatic Generators (Smart/Capacity-bounded)
-  const handleAutoDistributeAndSeating = () => {
+  const handleAutoDistributeAndSeating = async () => {
     if (approvalStatus.approved) {
       triggerNotification('لا يمكن إعادة توزيع الطلاب، النتائج معتمدة ومقفلة بالكامل 🔒', 'warning');
       return;
@@ -1016,13 +909,18 @@ export default function ExamsResultsModule({
     });
 
     setStudentList(updated);
+    const persisted = await saveToServerDb(examSettings, halls, subjects, updated, gradesMatrix, schedule, proctorAssignments, approvalStatus, auditLogs, classesList);
+    if (!persisted) {
+      triggerNotification('تعذر حفظ توزيع الطلاب وأرقام الجلوس في المصدر المركزي.', 'warning');
+      return;
+    }
     triggerNotification('اكتمل التوزيع التلقائي الذكي: تم توزيع جميع الطلاب بالتساوي وتوليد أرقام جلوس فريدة متسلسلة.', 'success');
     logAction('تشغيل محرك التوزيع التلقائي الذكي وتوليد أرقام الجلوس', 'توزيع الطلاب');
   };
 
   // 5. Proctor assignments
   const [newProctor, setNewProctor] = useState({ name: '', hallId: halls[0]?.id || '', shift: 'الفترة الأولى' });
-  const handleAddProctor = (e: React.FormEvent) => {
+  const handleAddProctor = async (e: React.FormEvent) => {
     e.preventDefault();
     if (!newProctor.name.trim()) return;
 
@@ -1038,8 +936,14 @@ export default function ExamsResultsModule({
       hallId: newProctor.hallId,
       shift: newProctor.shift
     };
-    setProctorAssignments([...proctorAssignments, item]);
+    const updatedProctors = [...proctorAssignments, item];
+    setProctorAssignments(updatedProctors);
     setNewProctor({ name: '', hallId: halls[0]?.id || '', shift: 'الفترة الأولى' });
+    const persisted = await saveToServerDb(examSettings, halls, subjects, studentList, gradesMatrix, schedule, updatedProctors, approvalStatus, auditLogs, classesList);
+    if (!persisted) {
+      triggerNotification('تعذر حفظ تكليف المراقب في المصدر المركزي.', 'warning');
+      return;
+    }
     triggerNotification(`تم تكليف المراقب ${item.name} للمراقبة`, 'success');
     logAction(`تكليف مراقب جديد: ${item.name}`, 'المراقبون والملاحظون');
   };
@@ -1155,7 +1059,7 @@ export default function ExamsResultsModule({
       return;
     }
 
-    const availableTeachers = INITIAL_TEACHERS_MOCK;
+    const availableTeachers = initialTeachers;
     if (availableTeachers.length === 0) {
       triggerNotification('تحذير: لا يوجد معلمون مسجلون لتكليفهم!', 'warning');
       return;
@@ -1595,14 +1499,7 @@ export default function ExamsResultsModule({
         
         const lines = text.split(/\r?\n/);
         if (lines.length < 2) {
-          // Fallback to mock generation if file is not proper CSV
-          const updated = { ...gradesMatrix };
-          filteredStudentsForGrades.forEach(st => {
-            if (!updated[st.id]) updated[st.id] = {};
-            updated[st.id][selectedGradeSubject] = Math.floor(Math.random() * (99 - 75 + 1)) + 75;
-          });
-          setGradesMatrix(updated);
-          triggerNotification('تم توليد وتحديث درجات الطلاب تلقائياً لمحاكاة استيراد ملف إكسل', 'success');
+          triggerNotification('ملف الاستيراد غير صالح أو لا يحتوي صفوفاً كافية. لم يتم تعديل أي درجة.', 'warning');
           return;
         }
 
@@ -1634,6 +1531,10 @@ export default function ExamsResultsModule({
           }
         }
 
+        if (importCount === 0) {
+          triggerNotification('لم يتم العثور على درجات صالحة قابلة للاستيراد. لم يتم تعديل أي درجة.', 'warning');
+          return;
+        }
         setGradesMatrix(updated);
         triggerNotification(`تم استيراد درجات ${importCount} طالب بنجاح! ${errorCount > 0 ? `(تم تخطي ${errorCount} قيم غير صالحة)` : ''}`, 'success');
         logAction(`استيراد درجات الطلاب لمادة من ملف إكسل`, 'إدخال الدرجات');
@@ -1777,7 +1678,7 @@ export default function ExamsResultsModule({
 
   const metrics = getReviewMetrics();
 
-  const handleApproveAndLock = () => {
+  const handleApproveAndLock = async () => {
     // Role-Based Access Control
     if (currentUserRole !== 'admin') {
       triggerNotification('❌ عذراً، لا تمتلك الصلاحية الكافية لاعتماد النتائج وتجميد الكنترول. تتطلب هذه العملية دور "مدير الكنترول".', 'warning');
@@ -1873,11 +1774,8 @@ export default function ExamsResultsModule({
     const updatedClosures = [newClosure, ...controlClosures];
     setControlClosures(updatedClosures);
     
-    triggerNotification('تمت عملية الاعتماد والترصيد، وإصدار محضر إقفال الكنترول بنجاح وتأمينه ضد التعديل 🔒', 'success');
-    logAction(`الاعتماد النهائي للدرجات وقفل التعديل وإصدار محضر الإقفال - السبب: ${reason}`, 'المراجعة والاعتماد');
-
     // Save directly to backend
-    saveToServerDb(
+    const persisted = await saveToServerDb(
       examSettings,
       halls,
       subjects,
@@ -1894,9 +1792,15 @@ export default function ExamsResultsModule({
       reviewedStagesSubjects,
       updatedStageStatus
     );
+    if (!persisted) {
+      triggerNotification('تعذر حفظ اعتماد النتائج في المصدر المركزي. لم يتم إثبات الإقفال.', 'warning');
+      return;
+    }
+    triggerNotification('تمت عملية الاعتماد والترصيد، وإصدار محضر إقفال الكنترول بنجاح وتأمينه ضد التعديل 🔒', 'success');
+    logAction(`الاعتماد النهائي للدرجات وقفل التعديل وإصدار محضر الإقفال - السبب: ${reason}`, 'المراجعة والاعتماد');
   };
 
-  const handleUnlockGrades = () => {
+  const handleUnlockGrades = async () => {
     // Role-Based Access Control
     if (currentUserRole !== 'admin') {
       triggerNotification('❌ عذراً، لا تمتلك الصلاحية الكافية لإلغاء التجميد وإعادة فتح الكنترول. تتطلب هذه العملية صلاحيات "مدير الكنترول" حصراً.', 'warning');
@@ -1935,11 +1839,8 @@ export default function ExamsResultsModule({
     });
     setStageApprovalStatus(updatedStageStatus);
 
-    triggerNotification('تم إلغاء الاعتماد وفتح باب تعديل وتصحيح الدرجات', 'info');
-    logAction(`فتح صلاحية تعديل الدرجات والنتائج بعد الإغلاق - السبب: ${reason}`, 'المراجعة والاعتماد');
-
     // Save directly to backend
-    saveToServerDb(
+    const persisted = await saveToServerDb(
       examSettings,
       halls,
       subjects,
@@ -1956,6 +1857,12 @@ export default function ExamsResultsModule({
       reviewedStagesSubjects,
       updatedStageStatus
     );
+    if (!persisted) {
+      triggerNotification('تعذر حفظ إعادة فتح الكنترول في المصدر المركزي. لم يتم إثبات تغيير الحالة.', 'warning');
+      return;
+    }
+    triggerNotification('تم إلغاء الاعتماد وفتح باب تعديل وتصحيح الدرجات', 'info');
+    logAction(`فتح صلاحية تعديل الدرجات والنتائج بعد الإغلاق - السبب: ${reason}`, 'المراجعة والاعتماد');
   };
 
   // 9. Report Export Simulation
@@ -2814,17 +2721,17 @@ export default function ExamsResultsModule({
   // Certificate custom states
   const [certTitle, setCertTitle] = useState('وثيقة إتمام وتفوق دراسي');
   const [certSignature, setCertSignature] = useState('مدير عام المجمع الأكاديمي');
-  const [selectedStudentForCert, setSelectedStudentForCert] = useState<string>('st-1');
+  const [selectedStudentForCert, setSelectedStudentForCert] = useState<string>('');
 
   // Manual item form state
   const [manualExam, setManualExam] = useState({
-    classroom: classesList[0]?.name || 'الصف السابع',
+    classroom: classesList[0]?.name || '',
     subjectId: subjects[0]?.id || '',
     date: scheduleConfig?.startDate || '',
     startTime: '08:30',
     endTime: '10:30',
     hallId: halls[0]?.id || '',
-    proctorId: INITIAL_TEACHERS_MOCK[0]?.id || 't-1'
+    proctorId: ''
   });
 
   const selectedStObj = processedStudents.find(s => s.id === selectedStudentForCert) || processedStudents[0];
@@ -2835,7 +2742,7 @@ export default function ExamsResultsModule({
         title="الامتحانات والنتائج والكنترول"
         stats={
           <div className="flex flex-wrap items-center gap-x-2.5 gap-y-1 text-[10px] sm:text-xs">
-            <span className="text-slate-300 font-bold">نسبة النجاح العامة للمنظومة: <span className="text-emerald-400 font-mono">94.6%</span></span>
+            <span className="text-slate-300 font-bold">نسبة النجاح العامة للمنظومة: <span className="text-amber-300 font-mono">غير متحققة لغياب نتائج مركزية معتمدة</span></span>
           </div>
         }
         onExit={setActiveSection ? () => setActiveSection('dashboard') : undefined}
@@ -6160,7 +6067,7 @@ export default function ExamsResultsModule({
           const prepProgressScore = Object.values(isPrepComplete).filter(Boolean).length * 20;
 
           // Handler to run automated scheduler
-          const handleRunAutoScheduler = () => {
+          const handleRunAutoScheduler = async () => {
             if (scheduleApprovalStatus.approved) {
               triggerNotification('الجدول معتمد ومقفل حالياً. الرجاء إلغاء الاعتماد أولاً من تبويب المراجعة والاعتماد لتشغيل المحرك.', 'warning');
               return;
@@ -6311,7 +6218,7 @@ export default function ExamsResultsModule({
             }
 
             setSchedule(generatedSchedule);
-            saveToServerDb(
+            const persisted = await saveToServerDb(
               examSettings,
               halls,
               subjects,
@@ -6324,6 +6231,11 @@ export default function ExamsResultsModule({
               classesList
             );
 
+            if (!persisted) {
+              triggerNotification('تعذر حفظ جدول الامتحانات والمراقبين في المصدر المركزي.', 'warning');
+              return;
+            }
+
             if (queue.length === 0) {
               triggerNotification(`🎉 اكتمل تكوين الجدول تلقائياً بنجاح! تم جدولة جميع المواد لجميع الصفوف (${generatedSchedule.length} اختباراً) دون أي تداخل زمني أو تعارض في الملاحظين والقاعات.`, 'success');
               logAction('تشغيل محرك الجدولة الذكي تلقائياً وجدولة كافة الاختبارات', 'جدول الامتحانات');
@@ -6331,10 +6243,11 @@ export default function ExamsResultsModule({
               triggerNotification(`تم تكوين الجدول تلقائياً لـ ${generatedSchedule.length} اختباراً، مع بقاء ${queue.length} مادة معلقة لعدم كفاية اللجان أو المراقبين. يرجى مراجعتها وتوزيعها يدوياً.`, 'warning');
               logAction('تشغيل محرك الجدولة الذكي تلقائياً مع مواد معلقة يدوية', 'جدول الامتحانات');
             }
+            return true;
           };
 
           // Optimizes the schedule by balancing the gap days between exams for students
-          const handleOptimizeSchedule = () => {
+          const handleOptimizeSchedule = async () => {
             if (scheduleApprovalStatus.approved) {
               triggerNotification('الجدول معتمد ومقفل. لا يمكن تحسينه حالياً.', 'warning');
               return;
@@ -6344,13 +6257,14 @@ export default function ExamsResultsModule({
               return;
             }
             // Trigger auto scheduler as a solid optimization pass
-            handleRunAutoScheduler();
+            const persisted = await handleRunAutoScheduler();
+            if (persisted === false) return;
             triggerNotification('تم تشغيل خوارزمية التحسين والموازنة: تم ترتيب المواد لتبدأ بالصعبة وتوسيع فترات التباعد والراحة للطلاب.', 'success');
           };
 
           // Manual item form state was moved to top-level of component to satisfy Rules of Hooks
 
-          const handleAddManualExam = (e: React.FormEvent) => {
+          const handleAddManualExam = async (e: React.FormEvent) => {
             e.preventDefault();
             if (scheduleApprovalStatus.approved) {
               triggerNotification('الجدول معتمد ومقفل! لا يمكن إضافة اختبارات يدوياً.', 'warning');
@@ -6372,7 +6286,7 @@ export default function ExamsResultsModule({
 
             const updatedSchedule = [...schedule, item];
             setSchedule(updatedSchedule);
-            saveToServerDb(
+            const persisted = await saveToServerDb(
               examSettings,
               halls,
               subjects,
@@ -6384,6 +6298,11 @@ export default function ExamsResultsModule({
               auditLogs,
               classesList
             );
+
+            if (!persisted) {
+              triggerNotification('تعذر حفظ الاختبار اليدوي في المصدر المركزي.', 'warning');
+              return;
+            }
 
             // Recheck conflicts
             const postConflicts = getScheduleConflicts(updatedSchedule);
@@ -6473,8 +6392,14 @@ export default function ExamsResultsModule({
 
                   {scheduleApprovalStatus.approved ? (
                     <button
-                      onClick={() => {
-                        setScheduleApprovalStatus({ approved: false, approvedBy: '', approvedAt: '', notes: '' });
+                      onClick={async () => {
+                        const nextApprovalStatus = { approved: false, approvedBy: '', approvedAt: '', notes: '' };
+                        const persisted = await saveToServerDb(examSettings, halls, subjects, studentList, gradesMatrix, schedule, proctorAssignments, nextApprovalStatus, auditLogs, classesList);
+                        if (!persisted) {
+                          triggerNotification('تعذر حفظ إلغاء اعتماد الجدول في المصدر المركزي.', 'warning');
+                          return;
+                        }
+                        setScheduleApprovalStatus(nextApprovalStatus);
                         triggerNotification('تم إلغاء اعتماد الجدول وفتح صلاحيات التعديل يدوياً وآلياً.', 'info');
                         logAction('إلغاء اعتماد جدول الامتحانات وفتح التعديل', 'جدول الامتحانات');
                       }}
@@ -6485,18 +6410,24 @@ export default function ExamsResultsModule({
                     </button>
                   ) : (
                     <button
-                      onClick={() => {
+                      onClick={async () => {
                         if (errorConflicts.length > 0) {
                           triggerNotification('تحذير: لا يمكن اعتماد الجدول وهو يحتوي على تعارضات زمنيّة حمراء حرجة! قم بحلها أولاً.', 'warning');
                           setScheduleSubTab('approval');
                           return;
                         }
-                        setScheduleApprovalStatus({
+                        const nextApprovalStatus = {
                           approved: true,
                           approvedBy: 'أدمن الكنترول الأكاديمي',
                           approvedAt: new Date().toLocaleString('ar-EG'),
                           notes: 'تمت مراجعة القيود اللوجستية وخلو التداخلات وتوافق الجدول بنسبة 100%'
-                        });
+                        };
+                        const persisted = await saveToServerDb(examSettings, halls, subjects, studentList, gradesMatrix, schedule, proctorAssignments, nextApprovalStatus, auditLogs, classesList);
+                        if (!persisted) {
+                          triggerNotification('تعذر حفظ اعتماد جدول الامتحانات في المصدر المركزي.', 'warning');
+                          return;
+                        }
+                        setScheduleApprovalStatus(nextApprovalStatus);
                         triggerNotification('🔒 تم اعتماد جدول الاختبارات رسمياً! تم قفل كافة التعديلات، وتم ربطه ببرامج الحضور والدرجات.', 'success');
                         logAction('اعتماد جدول الامتحانات رسمياً وقفل التغييرات', 'جدول الامتحانات');
                       }}
@@ -6848,7 +6779,7 @@ export default function ExamsResultsModule({
                           
                           <button
                             disabled={scheduleApprovalStatus.approved}
-                            onClick={() => {
+                            onClick={async () => {
                               const newHallId = `hall-${Date.now()}`;
                               const newHallObj = {
                                 id: newHallId,
@@ -7478,17 +7409,23 @@ export default function ExamsResultsModule({
                           </div>
                         ) : (
                           <button
-                            onClick={() => {
+                            onClick={async () => {
                               if (errorConflicts.length > 0) {
                                 triggerNotification('تحذير: يرجى حل التعارضات باللون الأحمر قبل اعتماد جدول الامتحانات.', 'warning');
                                 return;
                               }
-                              setScheduleApprovalStatus({
+                              const nextApprovalStatus = {
                                 approved: true,
                                 approvedBy: 'أدمن الكنترول الأكاديمي',
                                 approvedAt: new Date().toLocaleString('ar-EG'),
                                 notes: 'مطابق للسياسات الأكاديمية بنسبة 100%'
-                              });
+                              };
+                              const persisted = await saveToServerDb(examSettings, halls, subjects, studentList, gradesMatrix, schedule, proctorAssignments, nextApprovalStatus, auditLogs, classesList);
+                              if (!persisted) {
+                                triggerNotification('تعذر حفظ اعتماد جدول الامتحانات في المصدر المركزي.', 'warning');
+                                return;
+                              }
+                              setScheduleApprovalStatus(nextApprovalStatus);
                               triggerNotification('🔒 تمت الموافقة والاعتماد لجدول الامتحانات وقفل تعديله بالكامل.', 'success');
                               logAction('اعتماد جدول الامتحانات وتدشينه بالكنترول', 'جدول الامتحانات');
                             }}
@@ -11517,10 +11454,10 @@ export default function ExamsResultsModule({
                   <button
                     onClick={() => {
                       setExamSettings(DEFAULT_EXAM_SETTINGS);
-                      setHalls(INITIAL_HALLS);
-                      setSubjects(INITIAL_SUBJECTS);
-                      setGradesMatrix(INITIAL_GRADES_MOCK);
-                      triggerNotification('تمت إعادة تعيين قاعدة بيانات الامتحانات لقيم المصنع بنجاح', 'info');
+                      setHalls([]);
+                      setSubjects([]);
+                      setGradesMatrix({});
+                      triggerNotification('تم تصفير بيانات الامتحانات المحلية؛ يلزم إعادة تحميل البيانات المركزية قبل الاعتماد', 'info');
                     }}
                     className="w-full py-2 bg-red-100 hover:bg-red-200 text-red-700 rounded-lg text-xs font-bold border border-red-200 cursor-pointer transition-all"
                   >

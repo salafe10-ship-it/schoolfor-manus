@@ -23,7 +23,7 @@ export default function VendorBillPaymentManager({
   const [searchTerm, setSearchTerm] = useState('');
   const [showPaymentModal, setShowPaymentModal] = useState(false);
   const [selectedBill, setSelectedBill] = useState<VendorBill | null>(null);
-  const [paymentAmount, setPaymentAmount] = useState<number>(10000);
+  const [paymentAmount, setPaymentAmount] = useState<number>(0);
   const [paymentMethod, setPaymentMethod] = useState<'bank_transfer' | 'check' | 'cash'>('bank_transfer');
 
   const handleOpenPayment = (bill: VendorBill) => {
@@ -35,6 +35,10 @@ export default function VendorBillPaymentManager({
   const handleConfirmPayment = (e: React.FormEvent) => {
     e.preventDefault();
     if (!selectedBill) return;
+    if (!Number.isFinite(paymentAmount) || paymentAmount <= 0 || paymentAmount > selectedBill.remainingAmount) {
+      triggerNotification?.('يجب إدخال مبلغ سداد موجب لا يتجاوز المتبقي على فاتورة المورد.', 'warning');
+      return;
+    }
 
     const newPayment: VendorPayment = {
       id: `vp_${Date.now()}`,
@@ -47,8 +51,8 @@ export default function VendorBillPaymentManager({
       billNo: selectedBill.billNo,
       amountPaid: paymentAmount,
       paymentMethod,
-      referenceNo: `REF-TR-${Math.floor(10000 + Math.random() * 90000)}`,
-      glJournalEntryId: `JV-2026-PAY-${Math.floor(1000 + Math.random() * 9000)}`,
+      referenceNo: `REF-TR-${Date.now()}`,
+      glJournalEntryId: `JV-2026-PAY-${Date.now()}`,
       createdAt: new Date().toISOString()
     };
 

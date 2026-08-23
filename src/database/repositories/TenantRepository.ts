@@ -18,10 +18,23 @@ export class TenantRepository {
             EnterpriseLogger.error("Failed to fetch tenant:", "TenantRepository", { error: err });
         }
     }
+    FallbackStorage.assertCanonicalPersistence(`tenant read ${id}`);
     return FallbackStorage.getTenants().find(t => t.id === id);
   }
 
   public async saveTenant(tenant: Tenant): Promise<void> {
-      // Implement upsert logic
+      const supabase = getSupabaseClient();
+      if (!supabase) {
+          FallbackStorage.assertCanonicalPersistence(`tenant write ${tenant.id}`);
+          throw new Error('مصدر المستأجرين المركزي غير متاح.');
+      }
+      const { error } = await supabase.from('tenants').upsert({
+          id: tenant.id,
+          name: tenant.name,
+          status: tenant.status,
+          subscription: (tenant as any).subscription,
+          settings: (tenant as any).settings
+      });
+      if (error) throw new Error(`فشل حفظ المستأجر مركزياً: ${error.message}`);
   }
 }

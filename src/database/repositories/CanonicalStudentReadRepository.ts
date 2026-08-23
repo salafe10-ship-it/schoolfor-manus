@@ -24,6 +24,14 @@ export type CanonicalStudentReadParams = {
   sortOrder?: 'asc' | 'desc';
 };
 
+export type CanonicalStudentAffairsMetrics = {
+  totalCount: number;
+  activeCount: number;
+  newCount: number;
+  suspendedCount: number;
+  pendingDocsCount: number;
+};
+
 type CanonicalStudentRow = {
   id: string;
   tenant_id: string;
@@ -394,6 +402,50 @@ async function queryCanonicalStudentsFromSupabase(
   return { rows: mappedRows, totalCount: count || 0 };
 }
 
+async function queryCanonicalStudentAffairsMetrics(
+  transaction: TransactionSession,
+  context: TenantContext
+): Promise<CanonicalStudentAffairsMetrics> {
+  const result = await transaction.query<{
+    total_count: number;
+    active_count: number;
+    new_count: number;
+    suspended_count: number;
+    pending_docs_count: number;
+  }>(`
+    SELECT
+      COUNT(*)::integer AS total_count,
+      COUNT(*) FILTER (WHERE s.status = 'active')::integer AS active_count,
+      COUNT(*) FILTER (WHERE s.created_at >= CURRENT_TIMESTAMP - INTERVAL '30 days')::integer AS new_count,
+      COUNT(*) FILTER (WHERE s.status IN ('suspended', 'withdrawn'))::integer AS suspended_count,
+      COUNT(*) FILTER (WHERE NOT EXISTS (
+        SELECT 1
+        FROM public.student_documents AS d
+        WHERE d.tenant_id = s.tenant_id
+          AND d.school_id = s.school_id
+          AND (d.branch_id = s.branch_id OR d.branch_id IS NULL)
+          AND d.student_id = s.id
+          AND d.deleted_at IS NULL
+          AND d.lifecycle_status <> 'archived'
+      ))::integer AS pending_docs_count
+    FROM public.students AS s
+    WHERE s.tenant_id = $1
+      AND s.school_id = $2
+      AND s.branch_id = $3
+      AND s.deleted_at IS NULL
+  `, [context.tenantId, context.schoolId, context.branchId]);
+
+  const row = result.rows[0];
+  if (!row) throw new DatabaseError('Canonical Student Affairs metrics query returned no result.');
+  return {
+    totalCount: Number(row.total_count) || 0,
+    activeCount: Number(row.active_count) || 0,
+    newCount: Number(row.new_count) || 0,
+    suspendedCount: Number(row.suspended_count) || 0,
+    pendingDocsCount: Number(row.pending_docs_count) || 0
+  };
+}
+
 export class CanonicalStudentReadRepository {
   public static async advancedSearch(
     params: CanonicalStudentReadParams,
@@ -427,7 +479,8 @@ export class CanonicalStudentReadRepository {
     // PERF-007: Student Read may already be inside the request-scoped
     // transaction that performed trusted tenant validation. Reuse it rather
     // than opening a nested UnitOfWork or a second pool connection.
-    const result = UnitOfWork.isTransactionActive()
+    const hasActiveDatabaseTransaction = Boolean(UnitOfWork.getActiveContext()?.databaseTransaction);
+    const result = hasActiveDatabaseTransaction
       ? await executeRead()
       : await UnitOfWork.runInTransaction(
         context.schoolId,
@@ -486,5 +539,39 @@ export class CanonicalStudentReadRepository {
       );
 
     return { data: result.rows, totalCount: result.totalCount };
+  }
+
+  public static async affairsMetrics(
+    trustedContext?: TenantContext,
+    diagnosticTrace?: Perf004TraceLike
+  ): Promise<CanonicalStudentAffairsMetrics> {
+    const context = trustedContext;
+    if (!context) throw new DatabaseError('Trusted tenant context is required before Student metrics access.');
+    if (!UnitOfWork.hasTransactionDriver()) {
+      throw new DatabaseError('Canonical Student Affairs metrics require the configured PostgreSQL transaction driver.');
+    }
+
+    const executeRead = async () => {
+      const transaction = UnitOfWork.getActiveContext()?.databaseTransaction;
+      if (!transaction) throw new DatabaseError('Canonical Student metrics transaction is unavailable.');
+      return queryCanonicalStudentAffairsMetrics(transaction, context);
+    };
+
+    return UnitOfWork.isTransactionActive()
+      ? executeRead()
+      : UnitOfWork.runInTransaction(
+        context.schoolId,
+        {
+          operationName: 'Canonical Student Affairs Metrics Read',
+          tenantId: context.tenantId,
+          userId: context.userId,
+          userName: context.userId,
+          ipAddress: 'server',
+          affectedTables: ['students', 'student_documents'],
+          diagnosticTrace
+        },
+        executeRead,
+        context
+      );
   }
 }

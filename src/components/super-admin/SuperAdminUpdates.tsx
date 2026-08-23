@@ -15,14 +15,13 @@ export default function SuperAdminUpdates({
   // Releases Data
   const [releases, setReleases] = useState<any[]>(() => {
     const saved = localStorage.getItem('edupro_releases_v1');
-    return saved ? JSON.parse(saved) : [
-      { version: 'v2.4.2', date: '2026-07-14', channel: 'stable', desc: 'تحديث أمني عاجل لمعالجة فهارس الطلاب وتصفير الخزينة', status: 'active', author: 'سليمان بن غازي' },
-      { version: 'v2.4.0', date: '2026-07-01', channel: 'stable', desc: 'إصدار لوحة التحكم الفيدرالية المتطورة (Enterprise Control Center)', status: 'deployed', author: 'مطور النظام الرئيسي' },
-      { version: 'v2.3.8', date: '2026-06-15', channel: 'stable', desc: 'تحديث نظام الباصات ومراقبة مخزون الملابس المدرسية', status: 'deployed', author: 'فريق هندسة البرمجيات' }
-    ];
+    return saved ? JSON.parse(saved) : [];
   });
 
   const handleTriggerDeploy = () => {
+    triggerNotification('خدمة النشر المركزية غير متاحة؛ لم يتم نشر إصدار أو تسجيل نجاح وهمي.', 'warning');
+    return;
+
     setIsDeploying(true);
     triggerNotification('بدء تحضير ونشر حزمة التحديث البرمجي الجديد على جميع خوادم المدارس والفروع...', 'info');
     setTimeout(() => {

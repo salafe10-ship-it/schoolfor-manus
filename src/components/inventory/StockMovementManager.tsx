@@ -12,72 +12,21 @@ interface StockMovementManagerProps {
 }
 
 export default function StockMovementManager({ items, triggerNotification }: StockMovementManagerProps) {
-  const [movements, setMovements] = useState<any[]>([
-    {
-      id: 'MV-2026-001',
-      date: '2026-08-02',
-      type: 'purchase',
-      typeLabel: 'إضافة مخزنية (استلام توريد)',
-      itemId: 'inv_item_1',
-      itemName: 'أجهزة بروجكتور فائقة الجودة سوني UHD',
-      warehouseFrom: '-',
-      warehouseTo: 'المستودع الرئيسي - الرياض',
-      quantity: 15,
-      unitCost: 3000,
-      totalAmount: 45000,
-      status: 'posted',
-      statusLabel: 'مرحل للأستاذ العام',
-      createdBy: 'أمين المستودع (سليمان)',
-      refNo: 'PO-99481'
-    },
-    {
-      id: 'MV-2026-002',
-      date: '2026-08-02',
-      type: 'sale',
-      typeLabel: 'صرف مخزني (قسم البنين)',
-      itemId: 'inv_item_2',
-      itemName: 'مقاعد دراسية مدمجة بخشب طبيعي',
-      warehouseFrom: 'المستودع الرئيسي - الرياض',
-      warehouseTo: 'مبنى ثانوي البنين',
-      quantity: 40,
-      unitCost: 200,
-      totalAmount: 8000,
-      status: 'posted',
-      statusLabel: 'مرحل للأستاذ العام',
-      createdBy: 'منصور (المدير المالي)',
-      refNo: 'REQ-1004'
-    },
-    {
-      id: 'MV-2026-003',
-      date: '2026-08-01',
-      type: 'transfer',
-      typeLabel: 'تحويل بين المستودعات',
-      itemId: 'inv_item_3',
-      itemName: 'كتب المناهج البريطانية المعتمدة للأطفال',
-      warehouseFrom: 'المستودع الرئيسي',
-      warehouseTo: 'مستودع الكتب والقرطاسية',
-      quantity: 100,
-      unitCost: 50,
-      totalAmount: 5000,
-      status: 'approved',
-      statusLabel: 'معتمد وفي انتظار الترحيل',
-      createdBy: 'مشرف المستودعات',
-      refNo: 'TRF-3001'
-    }
-  ]);
+  // لا تُنشأ حركات مخزنية محلية أو مرحّلة دون سجل مركزي موثق.
+  const [movements, setMovements] = useState<any[]>([]);
 
   const [filterType, setFilterType] = useState('ALL');
   const [searchTerm, setSearchTerm] = useState('');
   const [showNewModal, setShowNewModal] = useState(false);
   const [newMovement, setNewMovement] = useState<any>({
     type: 'purchase',
-    itemId: items[0]?.id || 'inv_item_1',
-    warehouseFrom: 'branch_1_1',
-    warehouseTo: 'branch_1_2',
-    quantity: 5,
-    unitCost: 100,
+    itemId: '',
+    warehouseFrom: '',
+    warehouseTo: '',
+    quantity: 0,
+    unitCost: 0,
     notes: '',
-    refNo: `REF-${Math.floor(1000 + Math.random() * 9000)}`
+    refNo: ''
   });
 
   const notify = (msg: string, type: 'success' | 'warning' | 'info' | 'danger' = 'info') => {
@@ -86,8 +35,12 @@ export default function StockMovementManager({ items, triggerNotification }: Sto
 
   const handleCreateMovement = (e: React.FormEvent) => {
     e.preventDefault();
-    const selectedItem = items.find(i => i.id === newMovement.itemId) || items[0];
-    const unitPrice = selectedItem ? selectedItem.costPrice : newMovement.unitCost;
+    const selectedItem = items.find(i => i.id === newMovement.itemId);
+    if (!selectedItem || !Number.isInteger(newMovement.quantity) || newMovement.quantity <= 0 || !Number.isFinite(newMovement.unitCost) || newMovement.unitCost < 0 || !newMovement.refNo) {
+      notify('يرجى إدخال الصنف والكمية والتكلفة والمرجع بصورة صحيحة', 'warning');
+      return;
+    }
+    const unitPrice = newMovement.unitCost;
     const totalVal = newMovement.quantity * unitPrice;
 
     const created: any = {
@@ -96,16 +49,16 @@ export default function StockMovementManager({ items, triggerNotification }: Sto
       type: newMovement.type,
       typeLabel: newMovement.type === 'purchase' ? 'إضافة مخزنية (استلام)' :
                  newMovement.type === 'sale' ? 'صرف مخزني' : 'تحويل بين المستودعات',
-      itemId: selectedItem ? selectedItem.id : 'inv_item_1',
-      itemName: selectedItem ? selectedItem.name : 'صنف مخزني',
-      warehouseFrom: newMovement.type === 'purchase' ? '-' : 'المستودع الرئيسي',
-      warehouseTo: newMovement.type === 'sale' ? '-' : 'مستودع الأثاث',
+      itemId: selectedItem.id,
+      itemName: selectedItem.name,
+      warehouseFrom: newMovement.warehouseFrom,
+      warehouseTo: newMovement.warehouseTo,
       quantity: newMovement.quantity,
       unitCost: unitPrice,
       totalAmount: totalVal,
-      status: 'approved',
-      statusLabel: 'معتمد وجاهز للترحيل المحاسبي',
-      createdBy: 'مدير الحركة المالي',
+      status: 'pending_approval',
+      statusLabel: 'قيد المراجعة والاعتماد',
+      createdBy: 'المستخدم الحالي',
       refNo: newMovement.refNo
     };
 
@@ -115,6 +68,10 @@ export default function StockMovementManager({ items, triggerNotification }: Sto
   };
 
   const handlePostMovement = (mv: any) => {
+    if (mv.status !== 'approved') {
+      notify('لا يمكن ترحيل الحركة قبل اعتمادها من الجهة المخولة', 'warning');
+      return;
+    }
     setMovements(movements.map(m => m.id === mv.id ? { ...m, status: 'posted', statusLabel: 'مرحل للأستاذ العام' } : m));
     notify(`✓ تم ترحيل الأثر المالي للحركة رقم (${mv.id}) إلى قيد اليومية العامة وقاعدة البيانات بنجاح`, 'success');
   };

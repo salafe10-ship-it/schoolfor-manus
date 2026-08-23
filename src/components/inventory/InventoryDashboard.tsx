@@ -12,30 +12,19 @@ interface InventoryDashboardProps {
 }
 
 export default function InventoryDashboard({ items = [], onNavigateTab }: InventoryDashboardProps) {
-  // Sample or passed statistics
-  const totalItemsCount = items.length > 0 ? items.length : 1250;
-  const totalQuantity = items.reduce((sum, item) => sum + (item.quantity || 0), 0) || 18450;
-  const totalValuation = items.reduce((sum, item) => sum + ((item.quantity || 0) * (item.costPrice || 0)), 0) || 540000;
+  // لا تُستبدل البيانات الفارغة بأرقام تجريبية؛ المصدر المركزي هو المرجع الوحيد.
+  const totalItemsCount = items.length;
+  const totalQuantity = items.reduce((sum, item) => sum + (item.quantity || 0), 0);
+  const totalValuation = items.reduce((sum, item) => sum + ((item.quantity || 0) * (item.costPrice || 0)), 0);
   const lowStockItems = items.filter(i => i.quantity <= i.minLevel) || [];
-  const lowStockCount = lowStockItems.length > 0 ? lowStockItems.length : 15;
-  const outOfStockCount = items.filter(i => i.quantity === 0).length || 3;
-  const warehouseCount = 5;
-  const dailyMovementsCount = 42;
+  const lowStockCount = lowStockItems.length;
+  const outOfStockCount = items.filter(i => i.quantity === 0).length;
+  const warehouseCount = 0;
+  const dailyMovementsCount = 0;
 
-  const recentTransactions = [
-    { id: 'TR-1089', date: '2026-08-02 10:15', type: 'إضافة مخزنية', item: 'أجهزة بروجكتور فائقة الجودة سوني UHD', qty: '+15', warehouse: 'المستودع الرئيسي', status: 'مرحل', user: 'أمين المستودع' },
-    { id: 'TR-1088', date: '2026-08-02 09:30', type: 'صرف مخزني', item: 'مقاعد دراسية مدمجة بخشب طبيعي', qty: '-40', warehouse: 'مستودع فرع البنين', status: 'مرحل', user: 'مسؤول المشتريات' },
-    { id: 'TR-1087', date: '2026-08-01 14:20', type: 'تحويل بين مستودعات', item: 'كتب المناهج البريطانية المعتمدة', qty: '100', warehouse: 'الرئيسي ⬅️ فرع البنات', status: 'معتمد', user: 'مشرف الحركة' },
-    { id: 'TR-1086', date: '2026-08-01 11:00', type: 'تسوية جردية', item: 'أدوات ومجاهر كيميائية 3D', qty: '-2', warehouse: 'مختبر العلوم المركزية', status: 'قيد الترحيل', user: 'المدير المالي' },
-  ];
+  const recentTransactions: Array<Record<string, string>> = [];
 
-  const warehousesList = [
-    { name: 'المستودع الرئيسي - الرياض', code: 'WH-MAIN', capacity: '85%', itemsCount: 620, value: '310,000 د.ل', status: 'نشط' },
-    { name: 'مستودع الكتب والقرطاسية', code: 'WH-BOOKS', capacity: '62%', itemsCount: 380, value: '125,000 د.ل', status: 'نشط' },
-    { name: 'مستودع الأثاث والمعدات', code: 'WH-FURN', capacity: '90%', itemsCount: 140, value: '75,000 د.ل', status: 'ممتلئ تقريباً' },
-    { name: 'مستودع المختبرات والأجهزة', code: 'WH-LABS', capacity: '45%', itemsCount: 85, value: '25,000 د.ل', status: 'نشط' },
-    { name: 'مستودع الأنشطة والزي المدرسي', code: 'WH-UNIF', capacity: '50%', itemsCount: 25, value: '5,000 د.ل', status: 'نشط' },
-  ];
+  const warehousesList: Array<{ name: string; code: string; capacity: string; itemsCount: number; value: string; status: string }> = [];
 
   return (
     <div className="space-y-6">
@@ -133,7 +122,7 @@ export default function InventoryDashboard({ items = [], onNavigateTab }: Invent
           <div>
             <p className="text-xs text-slate-500 font-bold">حركات اليوم</p>
             <p className="text-xl font-black text-slate-900 mt-0.5">{dailyMovementsCount}</p>
-            <p className="text-[11px] text-emerald-600 font-semibold">100% موثقة بالكامل</p>
+            <p className="text-[11px] text-emerald-600 font-semibold">توثيق الحركات غير متحقق</p>
           </div>
         </div>
       </div>

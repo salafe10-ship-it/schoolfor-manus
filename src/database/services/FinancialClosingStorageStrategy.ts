@@ -128,6 +128,9 @@ export class ProductionClosingDatabaseProvider implements IFinancialClosingStora
         );
       }
     }
+    // Production closing reads must fail closed; never substitute local ledger data
+    // after an authoritative database error.
+    FallbackStorage.assertCanonicalPersistence('financial closing general-ledger read');
     return FallbackStorage.getGeneralLedgerLines().filter(gl => gl.schoolId === schoolId);
   }
 

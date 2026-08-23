@@ -100,16 +100,17 @@ export default function StudentAddressInformation({
               <p className="text-[10px] text-slate-400 mt-1 leading-relaxed font-semibold">العنوان مدعوم بنظام الخرائط ومطابقة الإحداثيات بشكل تلقائي.</p>
             </div>
             <div className="z-10 flex items-center gap-1.5 text-[10px] text-slate-400 font-mono mt-4">
-              <span className="w-2 h-2 rounded-full bg-emerald-500 animate-pulse"></span>
-              <span>Lat: 24.7136, Lng: 46.6753</span>
+              <span className="w-2 h-2 rounded-full bg-slate-400"></span>
+              <span>الإحداثيات: غير موثقة</span>
             </div>
             <div className="z-10 mt-2">
               <button
                 type="button"
-                onClick={() => triggerNotification('جاري التكامل والاتصال بخرائط Google Maps لتحديث الإحداثيات الجغرافية لموقع الطالب...', 'info')}
-                className="w-full bg-amber-600 hover:bg-amber-500 text-white text-[10px] font-black py-2 rounded-lg cursor-pointer transition-colors"
+                onClick={() => triggerNotification('لا يمكن تفعيل المطابقة قبل توفر خدمة GIS وموافقة الموقع.', 'warning')}
+                className="w-full bg-slate-300 text-slate-500 text-[10px] font-black py-2 rounded-lg cursor-not-allowed"
+                disabled
               >
-                🗺️ تفعيل مطابقة Google Maps
+                🗺️ مطابقة الخرائط غير متاحة
               </button>
             </div>
           </div>

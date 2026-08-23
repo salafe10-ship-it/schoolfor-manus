@@ -60,6 +60,10 @@ export default function StudentDocuments({
   };
 
   const uploadFile = async (file: File, retry = false) => {
+    if (!activePrintStudent) {
+      triggerNotification('يرجى اختيار طالب قبل رفع المستند وربطه بالسجل الصحيح.', 'warning');
+      return;
+    }
     const statusId = `status_${Date.now()}_${file.name}`;
     setUploadStatuses(prev => [...prev, { id: statusId, name: file.name, progress: 0, status: 'scanning', file }]);
 
@@ -71,31 +75,8 @@ export default function StudentDocuments({
         throw new Error('صيغة الملف غير مدعومة أو غير آمنة');
       }
 
-      // 2. Simulated Pipeline
-      await simulateProcess(file, statusId, 'scanning');
-      await simulateProcess(file, statusId, 'compressing');
-      await simulateProcess(file, statusId, 'uploading');
-
-      // 3. Finalize
-      const newDoc: DocumentInfo = {
-        id: `doc_${Date.now()}`,
-        name: file.name,
-        type: docCategory,
-        size: (file.size / 1024 / 1024).toFixed(2) + ' MB',
-        uploadDate: new Date().toISOString().split('T')[0],
-        uploadedBy: 'المستخدم الحالي',
-        expiryDate: expiryDate || undefined,
-        matchedStudentName: formStudent.fullNameAr,
-        confidence: '98%'
-      };
-
-      if (activePrintStudent) {
-        setStudents(prev => prev.map(s => s.id === activePrintStudent.id ? { ...s, securedDocs: [...(s.securedDocs || []), newDoc] } : s));
-        logAction('DOC_UPLOAD', `تم رفع ${file.name} بنجاح`, 'شؤون الطلاب');
-      }
-
-      setUploadStatuses(prev => prev.map(s => s.id === statusId ? { ...s, status: 'completed' } : s));
-      triggerNotification(`تم رفع ${file.name} بنجاح`, 'success');
+      // لا نُحاكي الرفع ولا نضيف مستندًا محليًا؛ الحفظ يجب أن يتم عبر خدمة المستندات المركزية.
+      throw new Error('خدمة مستندات الطلاب المركزية غير متاحة؛ لم يتم حفظ الملف.');
     } catch (e: any) {
       setUploadStatuses(prev => prev.map(s => s.id === statusId ? { ...s, status: 'failed', error: e.message } : s));
       triggerNotification(`فشل رفع ${file.name}: ${e.message}`, 'warning');

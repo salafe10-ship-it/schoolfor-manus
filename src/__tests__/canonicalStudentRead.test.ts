@@ -38,6 +38,14 @@ const studentRow = {
   total_count: 1
 };
 
+const studentMetricsRow = {
+  total_count: 10,
+  active_count: 10,
+  new_count: 10,
+  suspended_count: 0,
+  pending_docs_count: 10
+};
+
 class ReadSession implements TransactionSession {
   public committed = false;
   public rolledBack = false;
@@ -223,5 +231,26 @@ describe('PERF-002 canonical Student read path', () => {
     )).rejects.toThrow('حجم الصفحة يجب أن يكون بين 1 و100');
 
     expect(driver.session.queries).toHaveLength(0);
+  });
+
+  it('returns Student Affairs metrics from the trusted canonical PostgreSQL scope', async () => {
+    const driver = new ReadDriver([studentMetricsRow]);
+    UnitOfWork.configureTransactionDriver(driver);
+
+    const result = await runWithTenantContext(trustedContext, () =>
+      StudentService.getAffairsMetrics(trustedContext)
+    );
+
+    expect(result).toEqual({
+      totalCount: 10,
+      activeCount: 10,
+      newCount: 10,
+      suspendedCount: 0,
+      pendingDocsCount: 10
+    });
+    expect(driver.session.queries[0].sql).toContain('public.student_documents');
+    expect(driver.session.queries[0].parameters).toEqual(['tenant-a', 'school-a', 'branch-a']);
+    expect(driver.session.committed).toBe(true);
+    expect(driver.session.released).toBe(true);
   });
 });

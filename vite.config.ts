@@ -1,8 +1,12 @@
 import tailwindcss from '@tailwindcss/vite';
 import react from '@vitejs/plugin-react';
 import {defineConfig} from 'vite';
+import path from 'node:path';
+import {fileURLToPath} from 'node:url';
 
-const projectRoot = process.cwd();
+// Resolve from the config file itself so Vite/Vitest remain stable when
+// launched through npm, tsx, or an IDE runner with a different cwd.
+const projectRoot = path.dirname(fileURLToPath(import.meta.url));
 
 export default defineConfig(() => {
   return {

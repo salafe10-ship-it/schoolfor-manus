@@ -336,15 +336,21 @@ export default function DatabaseSchemaAuditor({
     { name: 'idx_invoices_id_unique', table: 'invoices', columns: 'id', type: 'B-Tree', unused: true }
   ];
 
+  const verifiedTablesSchema: TableSchemaInfo[] = [];
+  const verifiedMissingIndexes: typeof missingIndexes = [];
+
   const currentIndexesList = indexesOptimized 
     ? [
         ...initialExistingIndexes.filter(idx => !idx.unused),
-        ...missingIndexes.map(idx => ({ name: idx.name, table: idx.table, columns: idx.columns, type: 'Composite B-Tree', unused: false }))
+        ...verifiedMissingIndexes.map(idx => ({ name: idx.name, table: idx.table, columns: idx.columns, type: 'Composite B-Tree', unused: false }))
       ]
     : initialExistingIndexes;
 
   // 3. Execution plan optimization simulation
   const handleApplyTuning = () => {
+    triggerNotification('خدمة مخطط قاعدة البيانات المركزية غير متاحة؛ لم تُنشأ فهارس أو تُعدّل بنية محليًا.', 'warning');
+    return;
+
     setIsApplyingOptimizations(true);
     EnterpriseLogger.info("Applying interactive DB Schema Optimization and Index Tuning...", "SchemaAuditor");
     
@@ -434,7 +440,7 @@ export default function DatabaseSchemaAuditor({
               </p>
 
               <div className="space-y-3">
-                {tablesSchema.map((table) => {
+                {verifiedTablesSchema.map((table) => {
                   const isExpanded = expandedTable === table.name;
                   return (
                     <div 
@@ -596,7 +602,7 @@ export default function DatabaseSchemaAuditor({
                 </div>
 
                 <div className="space-y-3.5">
-                  {missingIndexes.map((idx, index) => (
+                  {verifiedMissingIndexes.map((idx, index) => (
                     <div 
                       key={index} 
                       className={`p-3.5 border flex flex-col sm:flex-row justify-between gap-3 transition-all ${

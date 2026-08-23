@@ -195,7 +195,7 @@ export default function SchoolClientLogin({
         <div className="flex items-center gap-3">
           <button 
             type="button"
-            onClick={() => triggerNotification('فريق الدعم الفني متواجد لمساعدتك على مدار الساعة: 800-123-456', 'info')}
+            onClick={() => triggerNotification('للحصول على الدعم، راجع مسؤول النظام المعتمد في مؤسستك.', 'info')}
             className={`border font-extrabold text-xs px-4 py-2 rounded-full shadow-md flex items-center gap-2 transition-all cursor-pointer ${
               isDark 
                 ? 'bg-slate-900/90 hover:bg-slate-800 border-amber-500/30 text-amber-200' 
@@ -463,7 +463,7 @@ export default function SchoolClientLogin({
               isDark ? 'text-amber-400/80' : 'text-[#7a5a29]'
             }`}>
               <ShieldCheck className="w-4 h-4 text-[#8b6508] dark:text-amber-400" />
-              <span>نظام آمن ومحمي بالكامل 256-bit SSL</span>
+              <span>المصادقة المركزية تحمي جلسة الوصول إلى النظام</span>
             </div>
 
           </form>

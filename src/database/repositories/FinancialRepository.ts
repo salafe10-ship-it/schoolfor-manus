@@ -212,7 +212,8 @@ export class FinancialRepository implements IBaseRepository<Invoice> {
       }
     }
 
-    // Fallback
+    // Fallback is permitted only in explicit local/demo mode.
+    FallbackStorage.assertCanonicalPersistence(`invoice list read for ${schoolId}`);
     const schoolStudents = FallbackStorage.getStudents().filter(s => s.schoolId === schoolId);
     const studentIds = new Set(schoolStudents.map(s => s.id));
 
@@ -254,6 +255,7 @@ export class FinancialRepository implements IBaseRepository<Invoice> {
       }
     }
 
+    FallbackStorage.assertCanonicalPersistence(`invoice read ${id}`);
     const invoice = FallbackStorage.getInvoices().find(inv => inv.id === id);
     return invoice || null;
   }
@@ -290,6 +292,7 @@ export class FinancialRepository implements IBaseRepository<Invoice> {
       }
     }
 
+    FallbackStorage.assertCanonicalPersistence(`invoice create ${id}`);
     const all = FallbackStorage.getInvoices();
     all.unshift(newInvoice);
     FallbackStorage.saveInvoices(all);
@@ -321,6 +324,7 @@ export class FinancialRepository implements IBaseRepository<Invoice> {
       }
     }
 
+    FallbackStorage.assertCanonicalPersistence(`invoice update ${id}`);
     const all = FallbackStorage.getInvoices();
     const idx = all.findIndex(inv => inv.id === id);
     if (idx === -1) {
@@ -350,6 +354,7 @@ export class FinancialRepository implements IBaseRepository<Invoice> {
       }
     }
 
+    FallbackStorage.assertCanonicalPersistence(`invoice delete ${id}`);
     const all = FallbackStorage.getInvoices();
     const filtered = all.filter(inv => inv.id !== id);
     if (filtered.length === all.length) return false;

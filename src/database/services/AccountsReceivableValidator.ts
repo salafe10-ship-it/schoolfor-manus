@@ -29,6 +29,7 @@ export class AccountsReceivableValidator {
    * Validates a ReceivableAccount before insertion or update.
    */
   public static validateAccount(account: Partial<ReceivableAccount>, schoolId: string): void {
+    FallbackStorage.assertCanonicalPersistence('receivable account validation reads');
     const errors: Record<string, string> = {};
 
     if (!account.studentId) {
@@ -102,6 +103,7 @@ export class AccountsReceivableValidator {
    * Validates a ReceivableTransaction before posting.
    */
   public static validateTransaction(tx: Partial<ReceivableTransaction>, schoolId: string): void {
+    FallbackStorage.assertCanonicalPersistence('receivable transaction validation reads');
     const errors: Record<string, string> = {};
 
     if (!tx.receivableAccountId) {

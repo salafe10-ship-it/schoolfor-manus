@@ -8,12 +8,18 @@ import { CollectionReceipt, CollectionAllocation, CollectionStatus } from '../..
  * Implements strict Tenant Isolation, Optimistic Locking, and UnitOfWork transaction integration.
  */
 export class CollectionsRepository {
+  private static assertAuthoritativePersistence(operation: string): void {
+    if (!UnitOfWork.isTransactionActive()) {
+      FallbackStorage.assertCanonicalPersistence(`collections ${operation}`);
+    }
+  }
 
   // =========================================================================
   // 1. CollectionReceipt DAL Operations
   // =========================================================================
 
   public static async getCollectionById(schoolId: string, id: string): Promise<CollectionReceipt | null> {
+    this.assertAuthoritativePersistence('receipt read');
     let receipts = FallbackStorage.getCollectionReceipts();
     if (UnitOfWork.isTransactionActive()) {
       receipts = UnitOfWork.getPendingAll('collection_receipts', receipts);
@@ -28,6 +34,7 @@ export class CollectionsRepository {
   }
 
   public static async getCollectionsByAccountId(schoolId: string, accountId: string): Promise<CollectionReceipt[]> {
+    this.assertAuthoritativePersistence('receipts read');
     let receipts = FallbackStorage.getCollectionReceipts();
     if (UnitOfWork.isTransactionActive()) {
       receipts = UnitOfWork.getPendingAll('collection_receipts', receipts);
@@ -36,6 +43,7 @@ export class CollectionsRepository {
   }
 
   public static async getAllCollections(schoolId: string, options?: { status?: CollectionStatus }): Promise<CollectionReceipt[]> {
+    this.assertAuthoritativePersistence('receipts read');
     let receipts = FallbackStorage.getCollectionReceipts();
     if (UnitOfWork.isTransactionActive()) {
       receipts = UnitOfWork.getPendingAll('collection_receipts', receipts);
@@ -48,6 +56,7 @@ export class CollectionsRepository {
   }
 
   public static async createCollection(schoolId: string, collection: Partial<CollectionReceipt>): Promise<CollectionReceipt> {
+    this.assertAuthoritativePersistence('receipt write');
     let receipts = FallbackStorage.getCollectionReceipts();
     if (UnitOfWork.isTransactionActive()) {
       receipts = UnitOfWork.getPendingAll('collection_receipts', receipts);
@@ -90,6 +99,7 @@ export class CollectionsRepository {
     id: string,
     updates: Partial<CollectionReceipt>
   ): Promise<CollectionReceipt> {
+    this.assertAuthoritativePersistence('receipt update');
     let receipts = FallbackStorage.getCollectionReceipts();
     if (UnitOfWork.isTransactionActive()) {
       receipts = UnitOfWork.getPendingAll('collection_receipts', receipts);
@@ -128,6 +138,7 @@ export class CollectionsRepository {
   // =========================================================================
 
   public static async getCollectionAllocationsByCollectionId(schoolId: string, collectionId: string): Promise<CollectionAllocation[]> {
+    this.assertAuthoritativePersistence('allocation read');
     let allocations = FallbackStorage.getCollectionAllocations();
     if (UnitOfWork.isTransactionActive()) {
       allocations = UnitOfWork.getPendingAll('collection_allocations', allocations);
@@ -136,6 +147,7 @@ export class CollectionsRepository {
   }
 
   public static async createCollectionAllocation(schoolId: string, allocation: Partial<CollectionAllocation>): Promise<CollectionAllocation> {
+    this.assertAuthoritativePersistence('allocation write');
     let allocations = FallbackStorage.getCollectionAllocations();
     if (UnitOfWork.isTransactionActive()) {
       allocations = UnitOfWork.getPendingAll('collection_allocations', allocations);

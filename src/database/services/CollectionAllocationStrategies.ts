@@ -290,6 +290,7 @@ export class SpecificInstallmentAllocationStrategy implements ICollectionAllocat
     if (!targetSchedId) {
       throw new Error(`سياسة التوزيع لقسط محدد تتطلب تحديد القسط المرجعي بالسند.`);
     }
+    FallbackStorage.assertCanonicalPersistence('collection strategy installment source read');
     const schedule = FallbackStorage.getInstallmentSchedules().find(s => s.id === targetSchedId);
     if (!schedule) {
       throw new Error(`القسط المحدد غير موجود: ${targetSchedId}`);
@@ -485,7 +486,8 @@ export class ManualAllocationStrategy implements ICollectionAllocationStrategy {
         allocations.push(alloc);
         remainingAmount -= inst.amount;
       } else if (inst.targetType === 'Installment') {
-        const schedule = FallbackStorage.getInstallmentSchedules().find(s => s.id === inst.targetId);
+    FallbackStorage.assertCanonicalPersistence('collection strategy mixed installment source read');
+    const schedule = FallbackStorage.getInstallmentSchedules().find(s => s.id === inst.targetId);
         if (!schedule) {
           throw new Error(`توزيع يدوي: القسط المستهدف غير موجود بالنظام: ${inst.targetId}`);
         }

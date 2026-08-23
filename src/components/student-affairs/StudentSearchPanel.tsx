@@ -2,7 +2,7 @@ import { AlertTriangle, Calendar, ChevronDown, ChevronUp, Filter, Hash, HelpCirc
 import React from 'react';
 import { Stage, Grade } from '../../types';
 import { EnterpriseLogger } from '../../database/services/EnterpriseLogger';
-import { getTrustedAccessToken } from '../../utils/auth';
+import { StudentRepository } from './repository/StudentRepository';
 
 interface StudentSearchPanelProps {
   searchQuery: string;
@@ -437,29 +437,38 @@ export default function StudentSearchPanel({
               onClick={() => {
                 const selectedCount = Object.values(selectedIds).filter(Boolean).length;
                 if (confirm(`هل تريد بالتأكيد ترحيل إجراء الحذف الجماعي لـ ${selectedCount} طلاب محددين؟`)) {
-                  setIsLoading(true);
-                  const token = getTrustedAccessToken();
-                  const deletePromises = Object.keys(selectedIds)
-                    .filter(id => selectedIds[id])
-                    .map(id => fetch(`/api/students/${id}`, { 
-                      method: 'DELETE',
-                      headers: {
-                        'Authorization': token ? `Bearer ${token}` : ""
-                      }
-                    }));
-                  
-                  Promise.all(deletePromises)
-                    .then(() => {
-                      setStudents(prev => prev.filter(s => !selectedIds[s.id]));
-                      setSelectedIds({});
-                      setIsLoading(false);
-                      triggerNotification(`تم الحذف الجماعي لـ ${selectedCount} طلاب بنجاح من قاعدة البيانات`, 'success');
-                    })
-                    .catch(err => {
-                      setIsLoading(false);
-                      EnterpriseLogger.error("An error occurred", "StudentAffairsPortal", { error: err });
-                      triggerNotification("فشل الحذف الجماعي من الخادم", "warning");
+                  void (async () => {
+                    setIsLoading(true);
+                    const selectedStudentIds = Object.keys(selectedIds).filter(id => selectedIds[id]);
+                    const results = await Promise.allSettled(
+                      selectedStudentIds.map(id => StudentRepository.softDeleteStudent(id))
+                    );
+                    const succeededIds = selectedStudentIds.filter((_, index) => results[index]?.status === 'fulfilled');
+                    const failedCount = selectedStudentIds.length - succeededIds.length;
+                    setStudents(prev => prev.filter(student => !succeededIds.includes(student.id)));
+                    setSelectedIds({});
+                    setIsLoading(false);
+
+                    if (failedCount === 0) {
+                      triggerNotification(`تم الحذف الجماعي لـ ${selectedCount} طلاب بعد تأكيد استجابة الخادم.`, 'success');
+                      return;
+                    }
+
+                    const firstFailure = results.find(result => result.status === 'rejected');
+                    EnterpriseLogger.warn('Batch student deletion partially failed', 'StudentAffairsPortal', {
+                      succeededCount: succeededIds.length,
+                      failedCount,
+                      error: firstFailure?.status === 'rejected' ? firstFailure.reason?.message || String(firstFailure.reason) : 'unknown'
                     });
+                    triggerNotification(
+                      `تم تنفيذ ${succeededIds.length} من ${selectedCount} عمليات حذف، وفشلت ${failedCount}. لم تُخفَ السجلات التي لم يؤكد الخادم حذفها.`,
+                      'warning'
+                    );
+                  })().catch(error => {
+                    setIsLoading(false);
+                    EnterpriseLogger.error('Batch student deletion failed', 'StudentAffairsPortal', { error });
+                    triggerNotification('فشل الحذف الجماعي من الخادم؛ لم تُخفَ السجلات محليًا.', 'warning');
+                  });
                 }
               }}
               className="bg-rose-600 text-white font-black px-2 py-1 rounded text-[9px] hover:bg-rose-700"

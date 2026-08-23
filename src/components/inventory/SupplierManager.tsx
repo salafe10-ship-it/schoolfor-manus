@@ -7,12 +7,8 @@ interface SupplierManagerProps {
 }
 
 export default function SupplierManager({ triggerNotification }: SupplierManagerProps) {
-  const [suppliers, setSuppliers] = useState<InventorySupplier[]>([
-    { id: 'sup_sony', schoolId: 'school_1', name: 'شركة سوني العالمية - التوريدات التعليمية', phone: '+966 11 445 8899', email: 'education@sony.com.sa', address: 'طريق الملك فهد - الرياض' },
-    { id: 'sup_local', schoolId: 'school_1', name: 'مؤسسة الرياض للأثاث المدرسي والتجهيزات', phone: '+966 11 223 9900', email: 'sales@riyadhfurniture.sa', address: 'حي الملز - الصناعية الأولى' },
-    { id: 'sup_publish', schoolId: 'school_1', name: 'دار النشر العالمية للمناهج البريطانية', phone: '+966 12 600 4455', email: 'orders@globalbooks.com', address: 'طريق المدينة - جدة' },
-    { id: 'sup_sci', schoolId: 'school_1', name: 'مؤسسة الأجهزة العلمية والمختبرات المتقدمة', phone: '+966 13 881 2233', email: 'lab@scitech.com.sa', address: 'طريق الظهران - الخبر' },
-  ]);
+  // لا تُزرع جهات توريد أو بيانات اتصال غير موثقة عند فتح الوحدة.
+  const [suppliers, setSuppliers] = useState<InventorySupplier[]>([]);
 
   const [showAddModal, setShowAddModal] = useState(false);
   const [newSup, setNewSup] = useState<Partial<InventorySupplier>>({
@@ -25,15 +21,18 @@ export default function SupplierManager({ triggerNotification }: SupplierManager
 
   const handleSave = (e: React.FormEvent) => {
     e.preventDefault();
-    if (!newSup.name) return;
+    if (!newSup.name?.trim() || !newSup.phone?.trim() || !newSup.email?.trim() || !newSup.address?.trim()) {
+      notify('اسم المورد والهاتف والبريد والعنوان حقول مطلوبة وموثقة', 'warning');
+      return;
+    }
 
     const created: InventorySupplier = {
       id: `sup_${Date.now()}`,
       schoolId: 'school_1',
-      name: newSup.name,
-      phone: newSup.phone || '+966 11 000 0000',
-      email: newSup.email || 'info@supplier.sa',
-      address: newSup.address || 'الرياض'
+      name: newSup.name.trim(),
+      phone: newSup.phone.trim(),
+      email: newSup.email.trim(),
+      address: newSup.address.trim()
     };
 
     setSuppliers([...suppliers, created]);

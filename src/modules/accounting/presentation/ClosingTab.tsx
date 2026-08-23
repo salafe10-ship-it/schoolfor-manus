@@ -1,6 +1,7 @@
 import { Activity, AlertTriangle, ArrowLeft, ArrowRight, BookOpen, Briefcase, Calculator, Calendar, CheckCircle, CheckCircle2, ChevronLeft, ChevronRight, Clock, CornerUpLeft, CreditCard, Download, Edit, Eye, FileDown, FileText, Filter, Flag, Hash, Key, Layers, LayoutTemplate, Link, List, Lock as LockIcon, Maximize2, Minimize2, PenTool, Play, Plus, Printer, RefreshCw, Save, Search, Settings2, Share2, ShieldCheck, Table, Trash2, User, X } from 'lucide-react';
 import React, { useState, useEffect, useMemo, useCallback } from 'react';
 import { AccountingContext } from '../../../components/GeneralLedgerPortal';
+import { FallbackStorage } from '../../../database/repositories/FallbackStorage';
 export const ClosingTab = () => {
   const {
   activeTab, setActiveTab, activeSidebarItem, setActiveSidebarItem,
@@ -72,6 +73,12 @@ export const ClosingTab = () => {
   isAccountOrDescendant, getProcessedAccounts,
   formatCurrency, triggerNotification, logAction, handlePostAllPendingJvs
 } = React.useContext(AccountingContext);
+  const canonicalPersistenceRequired = FallbackStorage.isCanonicalPersistenceRequired();
+  const ensureCanonicalClosingPersistence = () => {
+    if (!canonicalPersistenceRequired) return true;
+    triggerNotification('عمليات الإقفال وفتح السنة متوقفة حتى يتم ربط حالة الإقفال بمصدر محاسبي مركزي موثوق.', 'warning');
+    return false;
+  };
 
   return (
     <>
@@ -638,6 +645,7 @@ export const ClosingTab = () => {
                           </button>
                           <button
                             onClick={() => {
+                              if (!ensureCanonicalClosingPersistence()) return;
                               if (hasCriticalErrors) return;
                               setClosingStep('executing');
                               setClosingProgress(0);
@@ -1049,6 +1057,7 @@ export const ClosingTab = () => {
                         ) : (
                           <button
                             onClick={() => {
+                              if (!ensureCanonicalClosingPersistence()) return;
                               setOpenedYear2027(true);
                               localStorage.setItem('erp_is_year_2027_opened', 'true');
                               triggerNotification(`🚀 تم تفعيل وفتح دفاتر السنة المالية الجديدة ${newYearNumberInput} وتثبيت الأرصدة الافتتاحية بنجاح!`, 'success');
@@ -1066,6 +1075,7 @@ export const ClosingTab = () => {
                     <div className="text-center">
                       <button
                         onClick={() => {
+                          if (!ensureCanonicalClosingPersistence()) return;
                           setIsYearClosed(false);
                           setOpenedYear2027(false);
                           setClosingStep('check');

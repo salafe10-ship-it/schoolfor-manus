@@ -380,7 +380,19 @@ export class FeeStructureEngine {
         this.rules = [];
       }
     } else {
-      // LocalStorage mode
+      // Canonical browser mode must never seed or persist authoritative fee data locally.
+      // The browser is allowed to consume server-backed data only; localStorage is not a
+      // substitute for fee configuration, assignments, or eligibility rules.
+      if (FallbackStorage.isCanonicalPersistenceRequired()) {
+        this.categories = [];
+        this.templates = [];
+        this.assignments = [];
+        this.rules = [];
+        this.initialized = true;
+        return;
+      }
+
+      // Explicit local/demo mode
       try {
         const catKey = 'school_db_fee_categories_database.json';
         const tmplKey = 'school_db_fee_templates_database.json';
@@ -430,6 +442,9 @@ export class FeeStructureEngine {
         EnterpriseLogger.error("Failed to persist Fee Engine files:", "FeeStructureEngine", { error: err?.message || err });
       }
     } else {
+      if (FallbackStorage.isCanonicalPersistenceRequired()) {
+        throw new Error('Canonical fee persistence is unavailable in browser mode.');
+      }
       try {
         localStorage.setItem('school_db_fee_categories_database.json', JSON.stringify(this.categories));
         localStorage.setItem('school_db_fee_templates_database.json', JSON.stringify(this.templates));
@@ -578,6 +593,8 @@ export class FeeStructureEngine {
       auditDetails.push('تحديث وتعديل قواعد وأحكام الأهلية المرتبطة بالرسم المالي');
     }
 
+    // Invoice usage is authoritative; never inspect browser fallback in canonical mode.
+    FallbackStorage.assertCanonicalPersistence('fee template invoice usage check');
     // Check if invoices exist for this template in FallbackStorage
     const allInvoices = FallbackStorage.getInvoices();
     const hasInvoices = allInvoices.some(inv => 
@@ -693,6 +710,7 @@ export class FeeStructureEngine {
     }
 
     // Validate if invoices generated
+    FallbackStorage.assertCanonicalPersistence('fee template delete invoice check');
     const allInvoices = FallbackStorage.getInvoices();
     const hasInvoices = allInvoices.some(inv => 
       this.assignments.some(asg => asg.templateId === templateId && asg.studentId === inv.studentId)
@@ -770,6 +788,7 @@ export class FeeStructureEngine {
       throw new Error(`حظر إصدار: يوجد إصدار أحدث نشط ومفعل (نسخة ${newerActiveTemplate.version.version}) لهذا الرسم المالي (${tmpl.code}). يجب استخدامه بدلاً من النسخة القديمة.`);
     }
 
+    FallbackStorage.assertCanonicalPersistence('fee assignment student selection');
     const students = FallbackStorage.getStudents().filter(s => s.schoolId === schoolId);
     let targetStudents: Student[] = [];
 
@@ -949,6 +968,7 @@ export class FeeStructureEngine {
     const precision = config.rounding.precision;
     const mode = config.rounding.mode;
 
+    FallbackStorage.assertCanonicalPersistence('student fee summary read');
     const students = FallbackStorage.getStudents();
     const student = students.find(s => s.id === studentId && s.schoolId === schoolId);
     if (!student) {

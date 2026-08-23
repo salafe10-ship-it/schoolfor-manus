@@ -24,6 +24,7 @@ export class StudentTransportationRepository implements IBaseRepository<StudentT
         EnterpriseLogger.error("Failed to fetch student transportation by id:", "StudentTransportationRepository", { error: err });
       }
     }
+    FallbackStorage.assertCanonicalPersistence('student transportation by id read');
     return FallbackStorage.getStudentTransportation().find(trans => trans.id === id) || null;
   }
 
@@ -44,6 +45,7 @@ export class StudentTransportationRepository implements IBaseRepository<StudentT
         EnterpriseLogger.error("Failed to fetch student transportation by studentId:", "StudentTransportationRepository", { error: err });
       }
     }
+    FallbackStorage.assertCanonicalPersistence('student transportation by student read');
     return FallbackStorage.getStudentTransportation().find(trans => trans.studentId === studentId) || null;
   }
 
@@ -66,6 +68,7 @@ export class StudentTransportationRepository implements IBaseRepository<StudentT
         EnterpriseLogger.error("Failed to fetch student transportation records:", "StudentTransportationRepository", { error: err });
       }
     }
+    FallbackStorage.assertCanonicalPersistence('student transportation list read');
     let data = FallbackStorage.getStudentTransportation();
     if (options?.studentId) {
       data = data.filter(trans => trans.studentId === options.studentId);

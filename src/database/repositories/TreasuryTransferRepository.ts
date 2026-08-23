@@ -8,8 +8,14 @@ import { TreasuryTransfer, TreasuryTransactionStatus } from '../../types';
  * STRICTLY contains no business rules, validation, or ledger logic (adhering to domain separation).
  */
 export class TreasuryTransferRepository {
+  private static assertAuthoritativePersistence(operation: string): void {
+    if (!UnitOfWork.isTransactionActive()) {
+      FallbackStorage.assertCanonicalPersistence(`treasury transfer ${operation}`);
+    }
+  }
 
   public static async getById(schoolId: string, id: string): Promise<TreasuryTransfer | null> {
+    this.assertAuthoritativePersistence('read');
     let transfers = FallbackStorage.getTreasuryTransfers();
     if (UnitOfWork.isTransactionActive()) {
       transfers = UnitOfWork.getPendingAll('treasury_transfers', transfers);
@@ -24,6 +30,7 @@ export class TreasuryTransferRepository {
   }
 
   public static async getAll(schoolId: string): Promise<TreasuryTransfer[]> {
+    this.assertAuthoritativePersistence('list read');
     let transfers = FallbackStorage.getTreasuryTransfers();
     if (UnitOfWork.isTransactionActive()) {
       transfers = UnitOfWork.getPendingAll('treasury_transfers', transfers);
@@ -57,6 +64,7 @@ export class TreasuryTransferRepository {
   }
 
   public static async save(schoolId: string, transfer: TreasuryTransfer): Promise<TreasuryTransfer> {
+    this.assertAuthoritativePersistence('write');
     if (transfer.schoolId !== schoolId) {
       throw new Error('حظر أمني للمستأجر: معرف المدرسة لا يطابق المستند.');
     }

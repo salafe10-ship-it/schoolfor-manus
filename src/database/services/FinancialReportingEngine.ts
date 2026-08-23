@@ -68,6 +68,10 @@ export interface CashFlowReport {
 
 export class FinancialReportingEngine {
 
+  private static assertAuthoritativeReporting(operation: string): void {
+    FallbackStorage.assertCanonicalPersistence(`financial report ${operation}`);
+  }
+
   private static constructHeader(
     reportId: string,
     reportName: string,
@@ -79,6 +83,7 @@ export class FinancialReportingEngine {
     configurationVersion: string = '1.0.0',
     auditReference: string = 'AUDIT_REF_' + Date.now()
   ): FinancialReportHeader {
+    this.assertAuthoritativeReporting(reportName);
     return {
       reportId,
       reportName,
@@ -130,6 +135,7 @@ export class FinancialReportingEngine {
   ): Promise<{ header: FinancialReportHeader; lines: GeneralLedger[] }> {
     FinancialReportingDomainRules.verifyMultiTenantBoundary(schoolId, requestSchoolId);
 
+    this.assertAuthoritativeReporting('general ledger source read');
     let lines = FallbackStorage.getGeneralLedgerLines().filter(gl => gl.schoolId === schoolId);
 
     if (filters.accountId) {
@@ -162,6 +168,7 @@ export class FinancialReportingEngine {
   ): Promise<{ header: FinancialReportHeader; accounts: any[] }> {
     FinancialReportingDomainRules.verifyMultiTenantBoundary(schoolId, requestSchoolId);
 
+    this.assertAuthoritativeReporting('receivable source read');
     let accounts = FallbackStorage.getReceivableAccounts().filter(acc => (acc as any).schoolId === schoolId);
     const txs = FallbackStorage.getReceivableTransactions().filter(tx => (tx as any).schoolId === schoolId);
 
@@ -193,6 +200,7 @@ export class FinancialReportingEngine {
   ): Promise<IncomeStatementReport> {
     FinancialReportingDomainRules.verifyMultiTenantBoundary(schoolId, requestSchoolId);
 
+    this.assertAuthoritativeReporting('income statement account source read');
     const accounts = FallbackStorage.getAccounts().filter(acc => (acc as any).schoolId === schoolId);
 
     const revenueLines = accounts
@@ -238,6 +246,7 @@ export class FinancialReportingEngine {
   ): Promise<BalanceSheetReport> {
     FinancialReportingDomainRules.verifyMultiTenantBoundary(schoolId, requestSchoolId);
 
+    this.assertAuthoritativeReporting('balance sheet account source read');
     const accounts = FallbackStorage.getAccounts().filter(acc => (acc as any).schoolId === schoolId);
 
     const assetLines = accounts
@@ -311,6 +320,7 @@ export class FinancialReportingEngine {
   ): Promise<CashFlowReport> {
     FinancialReportingDomainRules.verifyMultiTenantBoundary(schoolId, requestSchoolId);
 
+    this.assertAuthoritativeReporting('cash flow voucher source read');
     const vouchers = FallbackStorage.getVouchers().filter(v => (v as any).schoolId === schoolId);
 
     const operatingInflows: { description: string; amount: number }[] = [];
@@ -383,6 +393,7 @@ export class FinancialReportingEngine {
   ): Promise<{ header: FinancialReportHeader; schedules: any[] }> {
     FinancialReportingDomainRules.verifyMultiTenantBoundary(schoolId, requestSchoolId);
 
+    this.assertAuthoritativeReporting('deferred revenue source read');
     const schedules = FallbackStorage.getRecognitionSchedules().filter(
       s => (s as any).schoolId === schoolId && s.recognitionStatus !== 'Recognized'
     );
@@ -403,6 +414,7 @@ export class FinancialReportingEngine {
   ): Promise<{ header: FinancialReportHeader; collections: any[]; stats: any }> {
     FinancialReportingDomainRules.verifyMultiTenantBoundary(schoolId, requestSchoolId);
 
+    this.assertAuthoritativeReporting('collections report source read');
     const transactions = FallbackStorage.getReceivableTransactions().filter(
       t => (t as any).schoolId === schoolId && (t.type === 'credit' || t.type === 'settlement')
     );
@@ -434,6 +446,7 @@ export class FinancialReportingEngine {
   ): Promise<{ header: FinancialReportHeader; accounts: TreasuryAccount[]; transactions: TreasuryTransaction[] }> {
     FinancialReportingDomainRules.verifyMultiTenantBoundary(schoolId, requestSchoolId);
 
+    this.assertAuthoritativeReporting('treasury report source read');
     const accounts = FallbackStorage.getTreasuryAccounts().filter(acc => acc.schoolId === schoolId);
     const transactions = FallbackStorage.getTreasuryTransactions().filter(tx => tx.schoolId === schoolId);
 
@@ -453,6 +466,7 @@ export class FinancialReportingEngine {
   ): Promise<{ header: FinancialReportHeader; schedules: any[] }> {
     FinancialReportingDomainRules.verifyMultiTenantBoundary(schoolId, requestSchoolId);
 
+    this.assertAuthoritativeReporting('installments report source read');
     const schedules = FallbackStorage.getInstallmentSchedules().filter(s => (s as any).schoolId === schoolId);
     const header = this.constructHeader('REP_INS_' + Date.now(), 'تقرير جدولة الأقساط والالتزامات السدادية', schoolId, periodName, generatedBy);
 
@@ -470,6 +484,7 @@ export class FinancialReportingEngine {
   ): Promise<{ header: FinancialReportHeader; recognitions: any[] }> {
     FinancialReportingDomainRules.verifyMultiTenantBoundary(schoolId, requestSchoolId);
 
+    this.assertAuthoritativeReporting('revenue recognition report source read');
     const recognitions = FallbackStorage.getRecognitionSchedules().filter(
       s => (s as any).schoolId === schoolId && s.recognitionStatus === 'Recognized'
     );

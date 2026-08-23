@@ -55,6 +55,7 @@ export class FinancialPeriodService {
    * Get all periods for a school
    */
   public static async getPeriodsForSchool(schoolId: string): Promise<AccountingPeriod[]> {
+    FallbackStorage.assertCanonicalPersistence('financial periods school read');
     return FallbackStorage.getAccountingPeriods().filter(p => p.schoolId === schoolId);
   }
 
@@ -137,6 +138,7 @@ export class FinancialPeriodService {
    * Get active Academic Calendar periods
    */
   public static async getAcademicPeriods(schoolId: string): Promise<any[]> {
+    FallbackStorage.assertCanonicalPersistence('academic periods read');
     return FallbackStorage.getAcademicPeriods().filter(ap => ap.calendarId && ap.startDate);
   }
 }

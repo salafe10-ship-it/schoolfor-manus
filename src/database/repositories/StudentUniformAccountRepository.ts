@@ -23,6 +23,7 @@ export class StudentUniformAccountRepository implements IBaseRepository<StudentU
         EnterpriseLogger.error("Failed to fetch student uniform account by id:", "StudentUniformAccountRepository", { error: err });
       }
     }
+    FallbackStorage.assertCanonicalPersistence('student uniform account by id read');
     return FallbackStorage.getStudentUniformAccounts().find(uni => uni.id === id) || null;
   }
 
@@ -43,6 +44,7 @@ export class StudentUniformAccountRepository implements IBaseRepository<StudentU
         EnterpriseLogger.error("Failed to fetch student uniform account by studentId:", "StudentUniformAccountRepository", { error: err });
       }
     }
+    FallbackStorage.assertCanonicalPersistence('student uniform account by student read');
     return FallbackStorage.getStudentUniformAccounts().find(uni => uni.studentId === studentId) || null;
   }
 
@@ -65,6 +67,7 @@ export class StudentUniformAccountRepository implements IBaseRepository<StudentU
         EnterpriseLogger.error("Failed to fetch student uniform account records:", "StudentUniformAccountRepository", { error: err });
       }
     }
+    FallbackStorage.assertCanonicalPersistence('student uniform account list read');
     let data = FallbackStorage.getStudentUniformAccounts();
     if (options?.studentId) {
       data = data.filter(uni => uni.studentId === options.studentId);

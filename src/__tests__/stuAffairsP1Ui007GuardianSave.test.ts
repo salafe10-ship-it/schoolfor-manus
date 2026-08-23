@@ -24,10 +24,12 @@ describe('STU-AFFAIRS-P1-UI-007 guardian save false-success containment', () => 
   it('keeps success notifications after awaited canonical responses', () => {
     const block = saveHandlerBlock();
     const guardianAwait = block.indexOf('guardianUpdateResult = await StudentRepository.updateGuardian');
-    const studentAwait = block.indexOf('const response = await StudentRepository.saveStudent(studentPayload)');
+    const studentAwait = block.indexOf('const response = isEditMode');
+    const canonicalStudentCall = block.indexOf('await StudentRepository.registerStudent(studentPayload');
     const successNotification = block.lastIndexOf("'success'");
     expect(guardianAwait).toBeGreaterThan(-1);
     expect(studentAwait).toBeGreaterThan(guardianAwait);
+    expect(canonicalStudentCall).toBeGreaterThan(studentAwait);
     expect(successNotification).toBeGreaterThan(studentAwait);
     expect(successNotification).toBeGreaterThan(studentAwait);
   });

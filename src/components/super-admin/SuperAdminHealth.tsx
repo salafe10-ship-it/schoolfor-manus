@@ -18,9 +18,9 @@ export default function SuperAdminHealth({
   triggerNotification
 }: SuperAdminHealthProps) {
   const [activeTab, setActiveTab] = useState<'realtime' | 'db_perf' | 'optimization'>('realtime');
-  const [cpuUsage, setCpuUsage] = useState(42);
-  const [memoryUsage, setMemoryUsage] = useState(64);
-  const [networkPing, setNetworkPing] = useState(14);
+  const [cpuUsage, setCpuUsage] = useState(0);
+  const [memoryUsage, setMemoryUsage] = useState(0);
+  const [networkPing, setNetworkPing] = useState(0);
   const [isVacuuming, setIsVacuuming] = useState(false);
   const [isFlushCache, setIsFlushCache] = useState(false);
   const [isScanningSec, setIsScanningSec] = useState(false);
@@ -29,6 +29,9 @@ export default function SuperAdminHealth({
   const [historyData, setHistoryData] = useState<any[]>([]);
 
   useEffect(() => {
+    // لا تُعرض قياسات أو رسوم محاكاة؛ القياس الحي لا يثبت إلا من موصل المراقبة المركزي.
+    return;
+
     // Populate historic logs
     const initialData = Array.from({ length: 15 }, (_, i) => ({
       time: `${i * 2}ث`,

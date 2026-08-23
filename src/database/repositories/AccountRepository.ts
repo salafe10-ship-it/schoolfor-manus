@@ -353,6 +353,8 @@ export class AccountRepository implements IBaseRepository<Account> {
     }
 
     // Business Rule 2: Prevent deleting account if it has transactions
+    // Transaction existence is authoritative and must never be inferred from browser fallback data.
+    FallbackStorage.assertCanonicalPersistence(`account delete transaction check ${id}`);
     // Check Journal Entries
     const journalEntries = FallbackStorage.getJournalEntries();
     const hasJournalEntries = journalEntries.some(e => 

@@ -53,18 +53,30 @@ export default function InventoryManagementPortal({ triggerNotification }: Inven
   }, []);
 
   const handleAddItem = async (newItem: Partial<InventoryItem>) => {
-    await InventoryRepository.create('school_1', newItem);
-    await loadItems();
+    try {
+      await InventoryRepository.create('school_1', newItem);
+      await loadItems();
+    } catch (err: any) {
+      notify(`المخزون متوقف؛ تعذر حفظ الصنف: ${err?.message || 'مصدر البيانات غير متاح'}`, 'warning');
+    }
   };
 
   const handleUpdateItem = async (id: string, updated: Partial<InventoryItem>) => {
-    await InventoryRepository.update('school_1', id, updated);
-    await loadItems();
+    try {
+      await InventoryRepository.update('school_1', id, updated);
+      await loadItems();
+    } catch (err: any) {
+      notify(`المخزون متوقف؛ تعذر تعديل الصنف: ${err?.message || 'مصدر البيانات غير متاح'}`, 'warning');
+    }
   };
 
   const handleDeleteItem = async (id: string) => {
-    await InventoryRepository.delete('school_1', id);
-    await loadItems();
+    try {
+      await InventoryRepository.delete('school_1', id);
+      await loadItems();
+    } catch (err: any) {
+      notify(`المخزون متوقف؛ تعذر حذف الصنف: ${err?.message || 'مصدر البيانات غير متاح'}`, 'warning');
+    }
   };
 
   const handleNew = () => {

@@ -389,12 +389,9 @@ export class PostingEngine {
         const newDebitTotal = Number(((acc.debitBalance || 0) - item.debit).toFixed(3));
         const newCreditTotal = Number(((acc.creditBalance || 0) - item.credit).toFixed(3));
 
-        // Delete from general ledger in fallback storage
-        const glLines = FallbackStorage.getGeneralLedgerLines();
-        const filteredGlLines = glLines.filter(gl => !(gl.referenceId === entry!.id && gl.referenceType === 'journal'));
-        FallbackStorage.saveGeneralLedgerLines(filteredGlLines);
-
-        // Enlist deletion via GeneralLedgerRepository
+        // Canonical persistence: enlist the deletion in the active transaction.
+        // Do not mutate fallback storage here; doing so would create a second,
+        // non-transactional source of truth during an unpost operation.
         GeneralLedgerRepository.enlistDeleteGeneralLedgerByReference(schoolId, entry!.id, 'journal');
 
         acc.balance = newBalance;

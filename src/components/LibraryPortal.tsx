@@ -39,30 +39,18 @@ export default function LibraryPortal({
   const [activeTab, setActiveTab] = useState<'catalog' | 'borrows' | 'fines'>('catalog');
   const [searchTerm, setSearchTerm] = useState('');
 
-  // Mock Books Data
-  const [books, setBooks] = useState<BookItem[]>([
-    { id: '1', code: 'BK-1001', title: 'مقدمة ابن خلدون التاريخية', author: 'عبدالرحمن بن خلدون', category: 'تاريخ', totalCopies: 5, availableCopies: 4, location: 'الرف A-3' },
-    { id: '2', code: 'BK-1002', title: 'البداية والنهاية', author: 'ابن كثير', category: 'تاريخ إسلامي', totalCopies: 3, availableCopies: 2, location: 'الرف B-1' },
-    { id: '3', code: 'BK-1003', title: 'رياض الصالحين', author: 'الإمام النووي', category: 'علوم شرعية', totalCopies: 10, availableCopies: 10, location: 'الرف C-4' },
-    { id: '4', code: 'BK-1004', title: 'عبقرية عمر', author: 'عباس محمود العقاد', category: 'أدب وسير', totalCopies: 4, availableCopies: 3, location: 'الرف D-2' },
-    { id: '5', code: 'BK-1005', title: 'شرح ديوان المتنبي', author: 'الواحدي', category: 'لغة عربية وشعر', totalCopies: 2, availableCopies: 1, location: 'الرف E-5' },
-  ]);
+  // لا تُعرض كتب قبل تحميلها من مصدر المكتبة المركزي.
+  const [books, setBooks] = useState<BookItem[]>([]);
 
-  // Mock Borrowing Records
-  const [borrows, setBorrows] = useState<BorrowRecord[]>([
-    { id: 'b1', studentName: 'أحمد محمود العتيبي', studentCode: 'STD-1447-0091', bookTitle: 'مقدمة ابن خلدون التاريخية', bookCode: 'BK-1001', borrowDate: '1447-05-10', dueDate: '1447-05-24', status: 'active', fine: 0 },
-    { id: 'b2', studentName: 'سارة عبد الرحمن الشهري', studentCode: 'STD-1447-0105', bookTitle: 'البداية والنهاية', bookCode: 'BK-1002', borrowDate: '1447-04-15', dueDate: '1447-04-29', status: 'overdue', fine: 15.00 },
-    { id: 'b3', studentName: 'محمد فيصل الحربي', studentCode: 'STD-1447-0084', bookTitle: 'عبقرية عمر', bookCode: 'BK-1004', borrowDate: '1447-05-01', dueDate: '1447-05-15', status: 'returned', fine: 0 },
-    { id: 'b4', studentName: 'ريناد علي القحطاني', studentCode: 'STD-1447-0231', bookTitle: 'شرح ديوان المتنبي', bookCode: 'BK-1005', borrowDate: '1447-05-08', dueDate: '1447-05-22', status: 'active', fine: 0 },
-  ]);
+  const [borrows, setBorrows] = useState<BorrowRecord[]>([]);
 
-  const [newBook, setNewBook] = useState({ title: '', author: '', category: '', totalCopies: 1, location: '' });
+  const [newBook, setNewBook] = useState({ title: '', author: '', category: '', totalCopies: 0, location: '' });
   const [isAddingBook, setIsAddingBook] = useState(false);
 
   const handleAddBook = (e: React.FormEvent) => {
     e.preventDefault();
-    if (!newBook.title || !newBook.author) {
-      triggerNotification('الرجاء إدخال عنوان الكتاب والمؤلف', 'warning');
+    if (!newBook.title || !newBook.author || !Number.isInteger(Number(newBook.totalCopies)) || Number(newBook.totalCopies) <= 0 || !newBook.location) {
+      triggerNotification('الرجاء إدخال عنوان الكتاب والمؤلف وعدد نسخ صحيح وموقع التخزين', 'warning');
       return;
     }
     const created: BookItem = {
@@ -70,14 +58,14 @@ export default function LibraryPortal({
       code: `BK-${1000 + books.length + 1}`,
       title: newBook.title,
       author: newBook.author,
-      category: newBook.category || 'عام',
-      totalCopies: Number(newBook.totalCopies) || 1,
-      availableCopies: Number(newBook.totalCopies) || 1,
-      location: newBook.location || 'الرف العام'
+      category: newBook.category,
+      totalCopies: Number(newBook.totalCopies),
+      availableCopies: Number(newBook.totalCopies),
+      location: newBook.location
     };
     setBooks([...books, created]);
     setIsAddingBook(false);
-    setNewBook({ title: '', author: '', category: '', totalCopies: 1, location: '' });
+    setNewBook({ title: '', author: '', category: '', totalCopies: 0, location: '' });
     triggerNotification('تم إضافة الكتاب بنجاح وفهرسته آلياً', 'success');
   };
 

@@ -62,7 +62,7 @@ export default function Topbar({
           setEmployees(JSON.parse(saved));
         } catch (e) {}
       }
-      setActiveEmpId(localStorage.getItem('active_employee_id') || 'emp_11');
+      setActiveEmpId(localStorage.getItem('active_employee_id') || '');
     };
     loadEmps();
     window.addEventListener('storage', loadEmps);
@@ -247,8 +247,8 @@ export default function Topbar({
           ) : (
             <div id="trusted-branch-display" className="flex items-center gap-2 bg-[#2a1d13] border border-[#d4af37]/30 px-4 py-2 text-xs font-black text-amber-100 select-none shadow-2xs">
               <Layers className="w-3.5 h-3.5 text-amber-400" />
-              <span>{selectedBranch?.name || 'الفرع الموثوق'}</span>
-              <span className="text-[9px] text-emerald-300 bg-emerald-950/60 px-2 py-0.5 rounded border border-emerald-800 font-black mr-1.5">سياق موثوق ✅</span>
+              <span>{selectedBranch?.name || 'الفرع غير محدد'}</span>
+              <span className="text-[9px] text-amber-300 bg-amber-950/60 px-2 py-0.5 rounded border border-amber-800 font-black mr-1.5">بانتظار سياق موثوق</span>
             </div>
           )}
         </div>
@@ -257,8 +257,8 @@ export default function Topbar({
         <div className="hidden sm:flex items-center gap-1.5">
           <div id="trusted-academic-year-display" className="flex items-center gap-2 bg-[#2a1d13] border border-[#d4af37]/30 px-4 py-2 text-xs font-black text-amber-100 select-none shadow-2xs">
             <Calendar className="w-3.5 h-3.5 text-amber-400" />
-            <span>{selectedSchool.academicYear || 'العام الدراسي غير محدد'}</span>
-            <span className="text-[9px] text-amber-300/70">من الهوية الموثوقة</span>
+            <span>{selectedSchool.academicYear || 'السنة غير محددة'}</span>
+            <span className="text-[9px] text-amber-300/70">من الهوية الموثوقة فقط</span>
           </div>
         </div>
       </div>

@@ -625,7 +625,8 @@ export class StudentRepository {
       }
     }
 
-    // 2. Robust Fallback client-side matching engine
+    // 2. Robust fallback client-side matching engine (explicit local mode only)
+    FallbackStorage.assertCanonicalPersistence('student advanced search fallback');
     let students = FallbackStorage.getStudents().filter(s => s.schoolId === schoolId);
 
     if (params.quickSearch) {
@@ -681,9 +682,12 @@ export class StudentRepository {
                 .eq('id', studentId)
                 .eq('school_id', schoolId);
             if (error) throw error;
+            this.CACHE.delete(studentId);
+            return;
         }
     }
-    // Fallback logic
+    // Fallback logic (explicit local mode only)
+    FallbackStorage.assertCanonicalPersistence('student status update fallback');
     const currentStudents = FallbackStorage.getStudents();
     const updated = currentStudents.map(s => (s.id === studentId && s.schoolId === schoolId) ? {...s, status} : s);
     FallbackStorage.saveStudents(updated as any);

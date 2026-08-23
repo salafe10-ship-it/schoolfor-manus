@@ -13,6 +13,7 @@ export type TrustedSessionUser = {
   branchId?: string;
   branch?: TrustedBranchPresentation;
   academicYear?: string;
+  permissions?: string[];
 };
 
 export type SessionResponse = {
@@ -49,6 +50,9 @@ function normalizeUser(value: unknown): TrustedSessionUser {
   const role = String(value.role || '').trim();
   const branchId = String(value.branchId || value.branch_id || '').trim();
   const academicYear = String(value.academicYear || value.academic_year || '').trim();
+  const permissions = Array.isArray(value.permissions)
+    ? value.permissions.filter((permission: unknown): permission is string => typeof permission === 'string' && Boolean(permission.trim())).map((permission: string) => permission.trim())
+    : undefined;
   const name = String(value.name || email).trim();
   if (!id || !email || !schoolId || !role) throw new TrustedSessionError('INVALID_SESSION');
   const school = isRecord(value.school) && String(value.school.id || '').trim() === schoolId
@@ -59,7 +63,18 @@ function normalizeUser(value: unknown): TrustedSessionUser {
     && String(value.branch.schoolId || value.branch.school_id || '').trim() === schoolId
     ? value.branch as TrustedBranchPresentation
     : undefined;
-  return { id, email, name, schoolId, role, ...(school ? { school } : {}), ...(branchId ? { branchId } : {}), ...(branch ? { branch } : {}), ...(academicYear ? { academicYear } : {}) };
+  return {
+    id,
+    email,
+    name,
+    schoolId,
+    role,
+    ...(school ? { school } : {}),
+    ...(branchId ? { branchId } : {}),
+    ...(branch ? { branch } : {}),
+    ...(academicYear ? { academicYear } : {}),
+    ...(permissions ? { permissions } : {})
+  };
 }
 
 function readResponseBody(value: unknown): Record<string, any> {

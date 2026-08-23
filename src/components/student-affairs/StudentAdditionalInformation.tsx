@@ -39,7 +39,7 @@ export default function StudentAdditionalInformation({
             <div>
               <label className="block text-slate-700 font-bold text-[11px] mb-1">فصيلة الدم:</label>
               <select
-                value={formStudent.healthBloodType || 'O+'}
+                value={formStudent.healthBloodType || ''}
                 onChange={(e) => updateField('healthBloodType', e.target.value)}
                 className="w-full bg-transparent p-2.5 text-xs font-black focus:ring-1 focus:ring-emerald-500 cursor-pointer"
               >
@@ -257,7 +257,7 @@ export default function StudentAdditionalInformation({
             </span>
           ) : (
             <span className="mr-auto inline-flex items-center gap-1 bg-amber-50 text-amber-700 border border-amber-200 font-extrabold px-2.5 py-0.5 rounded-full text-[9px]">
-              <span>النقاط المتبقية: {formStudent.behaviorPoints || 100}</span>
+              <span>النقاط المسجلة: {formStudent.behaviorPoints ?? 0}</span>
             </span>
           )}
         </h3>
@@ -268,7 +268,7 @@ export default function StudentAdditionalInformation({
             <div>
               <label className="block text-slate-700 font-bold text-[11px] mb-1">مستوى الانضباط العام:</label>
               <select
-                value={formStudent.behaviorDisciplineLevel || 'ممتاز'}
+                value={formStudent.behaviorDisciplineLevel || ''}
                 onChange={(e) => updateField('behaviorDisciplineLevel', e.target.value)}
                 className="w-full bg-transparent p-2.5 text-xs font-black focus:ring-1 focus:ring-amber-500 cursor-pointer"
               >
@@ -283,7 +283,7 @@ export default function StudentAdditionalInformation({
             <div>
               <label className="block text-slate-700 font-bold text-[11px] mb-1">مستوى الالتزام بالأنشطة والواجبات:</label>
               <select
-                value={formStudent.behaviorCommitmentLevel || 'ممتاز'}
+                value={formStudent.behaviorCommitmentLevel || ''}
                 onChange={(e) => updateField('behaviorCommitmentLevel', e.target.value)}
                 className="w-full bg-transparent p-2.5 text-xs font-black focus:ring-1 focus:ring-amber-500 cursor-pointer"
               >
@@ -298,7 +298,7 @@ export default function StudentAdditionalInformation({
             <div>
               <label className="block text-slate-700 font-bold text-[11px] mb-1">التعاون والمشاركة المجتمعية والعمل الجماعي:</label>
               <select
-                value={formStudent.behaviorCooperationLevel || 'ممتاز'}
+                value={formStudent.behaviorCooperationLevel || ''}
                 onChange={(e) => updateField('behaviorCooperationLevel', e.target.value)}
                 className="w-full bg-transparent p-2.5 text-xs font-black focus:ring-1 focus:ring-amber-500 cursor-pointer"
               >

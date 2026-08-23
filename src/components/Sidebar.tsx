@@ -32,14 +32,14 @@ export default function Sidebar({
 }: SidebarProps) {
   
   const [activeEmployeeId, setActiveEmployeeId] = React.useState(() => {
-    return localStorage.getItem('active_employee_id') || 'emp_11';
+    return localStorage.getItem('active_employee_id') || '';
   });
 
   const [modulesVer, setModulesVer] = React.useState(0);
 
   React.useEffect(() => {
     const handleStorageChange = () => {
-      setActiveEmployeeId(localStorage.getItem('active_employee_id') || 'emp_11');
+      setActiveEmployeeId(localStorage.getItem('active_employee_id') || '');
       setModulesVer(v => v + 1);
     };
     const handleModulesChanged = () => {
@@ -258,7 +258,7 @@ export default function Sidebar({
             if (currentRole === 'SuperAdmin' && !localStorage.getItem('active_employee_id')) return true;
 
             const savedEmployees = localStorage.getItem('edupro_employees_permissions_v1');
-            const activeEmpId = localStorage.getItem('active_employee_id') || 'emp_11';
+            const activeEmpId = localStorage.getItem('active_employee_id') || '';
             
             if (!savedEmployees) return true; // Default to true if not initialized yet
             

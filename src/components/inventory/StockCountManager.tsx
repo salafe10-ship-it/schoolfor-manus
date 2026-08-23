@@ -13,36 +13,8 @@ interface StockCountManagerProps {
 
 export default function StockCountManager({ items, triggerNotification }: StockCountManagerProps) {
   const [valuationPolicy, setValuationPolicy] = useState<'weighted_average' | 'fifo'>('weighted_average');
-  const [countAuditRecords, setCountAuditRecords] = useState<any[]>([
-    {
-      id: 'AUD-2026-01',
-      date: '2026-08-01',
-      warehouse: 'المستودع الرئيسي - الرياض',
-      itemCode: 'SKU-E-001',
-      itemName: 'أجهزة بروجكتور فائقة الجودة سوني UHD',
-      bookQty: 45,
-      actualQty: 44,
-      discrepancy: -1,
-      unitCost: 3000,
-      financialImpact: -3000,
-      status: 'pending_approval',
-      statusLabel: 'قيد الاعتماد من المراجع المالي'
-    },
-    {
-      id: 'AUD-2026-02',
-      date: '2026-08-01',
-      warehouse: 'مستودع الكتب والقرطاسية',
-      itemCode: 'SKU-B-001',
-      itemName: 'كتب المناهج البريطانية المعتمدة',
-      bookQty: 1200,
-      actualQty: 1205,
-      discrepancy: +5,
-      unitCost: 50,
-      financialImpact: +250,
-      status: 'approved_posted',
-      statusLabel: 'تم اعتماد وتسوية الزيادة في الدفاتر',
-    }
-  ]);
+  // لا تُعرض نتائج جرد أو فروقات مالية قبل وصولها من مصدر المخزون المركزي.
+  const [countAuditRecords, setCountAuditRecords] = useState<any[]>([]);
 
   const notify = (msg: string, type: 'success' | 'warning' | 'info' | 'danger' = 'info') => {
     if (triggerNotification) triggerNotification(msg, type);

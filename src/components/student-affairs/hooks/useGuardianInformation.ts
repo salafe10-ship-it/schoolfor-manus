@@ -32,7 +32,7 @@ const initialGuardianState: GuardianInformationState = {
   emergencyPhone: '',
   guardianEmail: '',
   emergencyContact: '',
-  relationshipType: 'الأب',
+  relationshipType: '',
 };
 
 export function useGuardianInformation() {

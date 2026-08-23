@@ -7,6 +7,7 @@ import { StudentLibraryService } from './StudentLibraryService';
 import { StudentFeeService } from './StudentFeeService';
 import { StudentGuardianService } from './StudentGuardianService';
 import { Student, AuditMetadata } from '../../types';
+import { ValidationError } from '../../utils/errors';
 
 export class StudentAdmissionService {
   /**
@@ -18,7 +19,21 @@ export class StudentAdmissionService {
     meta: AuditMetadata
   ): Promise<any> {
     const studentId = studentData.id || `stud_${Date.now()}_${Math.floor(Math.random() * 1000)}`;
-    const name = studentData.name || "طالب جديد";
+    const name = studentData.name?.trim();
+    if (!name) {
+      throw new ValidationError("اسم الطالب مطلوب ولا يمكن إنشاء سجل بدونه.");
+    }
+    if (studentData.gender !== 'male' && studentData.gender !== 'female') {
+      throw new ValidationError("جنس الطالب مطلوب ويجب أن يكون محددًا بصورة صحيحة.");
+    }
+    if (studentData.parentName?.trim() || studentData.parentPhone?.trim()) {
+      throw new ValidationError(
+        'بيانات ولي الأمر يجب تسجيلها عبر خدمة تسجيل الطالب المركزية قبل إنشاء أي بيانات تابعة.'
+      );
+    }
+    const configuredRegistrationFee = Number(
+      (studentData as any).registrationFeeAmount ?? (studentData as any).registrationFee ?? 0
+    );
 
     return UnitOfWork.runInTransaction(schoolId, {
       tenantId: schoolId,
@@ -45,24 +60,26 @@ export class StudentAdmissionService {
         name: studentData.name || "",
         nationalId: studentData.nationalId || "",
         classroom: studentData.classroom || "",
-        section: studentData.section || "أ",
+        section: studentData.section || "",
         parentName: studentData.parentName || "",
         parentPhone: studentData.parentPhone || "",
         registrationDate: studentData.registrationDate || new Date().toISOString().split('T')[0],
         status: 'active',
         feesPaid: 0,
-        feesRemaining: 1500, // Enforce standard initial registration fee
-        stageId: studentData.stageId || "stage_1",
-        gradeId: studentData.gradeId || "grade_1",
-        classId: studentData.classId || "class_1",
-        gender: studentData.gender || "male",
-        nationality: studentData.nationality || "سعودي",
-        religion: studentData.religion || "مسلم",
-        birthDate: studentData.birthDate || "2010-01-01",
-        address: studentData.address || "الرياض",
-        academicYear: studentData.academicYear || "2026/2027",
+        feesRemaining: Number.isFinite(configuredRegistrationFee) && configuredRegistrationFee > 0
+          ? configuredRegistrationFee
+          : 0,
+        stageId: studentData.stageId || "",
+        gradeId: studentData.gradeId || "",
+        classId: studentData.classId || "",
+        gender: studentData.gender,
+        nationality: studentData.nationality || "",
+        religion: studentData.religion || "",
+        birthDate: studentData.birthDate || "",
+        address: studentData.address || "",
+        academicYear: studentData.academicYear || "",
         behaviorPoints: 100,
-        behaviorNotes: "سجل نظيف عند الالتحاق",
+        behaviorNotes: "",
         version: 1,
         isDeleted: false
       };
@@ -90,7 +107,13 @@ export class StudentAdmissionService {
 
       // 1.7 Financial Account (Initial registration fee invoice, Delegated to StudentFeeService)
       const invoiceId = `inv_${Date.now()}_${Math.floor(Math.random() * 1000)}`;
-      StudentFeeService.enlistCreateInitialInvoice(schoolId, studentId, newStudent.name, invoiceId);
+      StudentFeeService.enlistCreateInitialInvoice(
+        schoolId,
+        studentId,
+        newStudent.name,
+        invoiceId,
+        configuredRegistrationFee
+      );
 
       // 1.8 Audit Record logging
       const auditLogId = `log_${Date.now()}_${Math.floor(Math.random() * 1000)}`;

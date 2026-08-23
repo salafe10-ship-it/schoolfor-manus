@@ -56,18 +56,19 @@ export default function SchoolUniformManagement({
   const [activeTab, setActiveTab] = useState<'dashboard' | 'items' | 'purchase' | 'sales' | 'returns' | 'accounting' | 'schema'>('dashboard');
 
   // --- ENTITY STATE MANAGERS (In-memory reactive DB simulation) ---
-  const [categories, setCategories] = useState<UniformCategory[]>(initialCategories);
-  const [items, setItems] = useState<UniformItem[]>(initialItems);
-  const [sizes, setSizes] = useState<UniformSize[]>(initialSizes);
-  const [colors, setColors] = useState<UniformColor[]>(initialColors);
-  const [variants, setVariants] = useState<UniformVariant[]>(initialVariants);
-  const [suppliers, setSuppliers] = useState<UniformSupplier[]>(initialSuppliers);
-  const [purchaseOrders, setPurchaseOrders] = useState<UniformPurchaseOrder[]>(initialPOs);
-  const [measurements, setMeasurements] = useState<StudentMeasurement[]>(initialMeasurements);
-  const [reservations, setReservations] = useState<UniformReservation[]>(initialReservations);
-  const [returns, setReturns] = useState<UniformReturn[]>(initialReturns);
-  const [inventoryCounts, setInventoryCounts] = useState<UniformInventoryCount[]>(initialCounts);
-  const [journals, setJournals] = useState<AccountingJournalEntry[]>(initialJournals);
+  // لا تُزرع بيانات تجريبية في الوحدة؛ لا تظهر السجلات إلا من المصدر المركزي أو من إدخال المستخدم.
+  const [categories, setCategories] = useState<UniformCategory[]>([]);
+  const [items, setItems] = useState<UniformItem[]>([]);
+  const [sizes, setSizes] = useState<UniformSize[]>([]);
+  const [colors, setColors] = useState<UniformColor[]>([]);
+  const [variants, setVariants] = useState<UniformVariant[]>([]);
+  const [suppliers, setSuppliers] = useState<UniformSupplier[]>([]);
+  const [purchaseOrders, setPurchaseOrders] = useState<UniformPurchaseOrder[]>([]);
+  const [measurements, setMeasurements] = useState<StudentMeasurement[]>([]);
+  const [reservations, setReservations] = useState<UniformReservation[]>([]);
+  const [returns, setReturns] = useState<UniformReturn[]>([]);
+  const [inventoryCounts, setInventoryCounts] = useState<UniformInventoryCount[]>([]);
+  const [journals, setJournals] = useState<AccountingJournalEntry[]>([]);
 
   // Search, edit & creation states
   const [itemSearchTerm, setItemSearchTerm] = useState('');
@@ -93,10 +94,10 @@ export default function SchoolUniformManagement({
 
   // New Item Form
   const [newItem, setNewItem] = useState({
-    code: '', barcode: '', nameAr: '', nameEn: '', categoryId: 'cat_1',
-    group: 'Boys', division: 'Regular', season: 'Summer', gender: 'Male',
-    description: '', brand: 'سحاب ستايل', fabricType: 'قطن مخلوط', cottonPercent: 50,
-    weightGsm: 150, washInstructions: 'غسيل آلي دافئ', buyPrice: 30, sellPrice: 45
+    code: '', barcode: '', nameAr: '', nameEn: '', categoryId: '',
+    group: '', division: '', season: '', gender: '',
+    description: '', brand: '', fabricType: '', cottonPercent: 0,
+    weightGsm: 0, washInstructions: '', buyPrice: 0, sellPrice: 0
   });
 
   // New Supplier Form
@@ -107,7 +108,7 @@ export default function SchoolUniformManagement({
 
   // New Purchase Order Form
   const [newPO, setNewPO] = useState({
-    supplierId: 'sup_1', dueDate: '2026-08-01', notes: '', items: [] as { variantId: string; qty: number; cost: number }[]
+    supplierId: '', dueDate: '', notes: '', items: [] as { variantId: string; qty: number; cost: number }[]
   });
 
   // Fitting Form
@@ -157,18 +158,17 @@ export default function SchoolUniformManagement({
     const lowStockItems = variants.filter(v => v.stockQty > 0 && v.stockQty <= v.alertLimit).length;
     const outOfStockItems = variants.filter(v => v.stockQty === 0).length;
     
-    // Hardcoded beautiful constants for sales history simulation
-    const salesToday = 2380;
-    const salesMonth = 48500;
-    const totalRevenue = 154000;
-    const totalCostOfGoods = 101000;
-    const totalProfits = totalRevenue - totalCostOfGoods;
+    // لا تُعرض مؤشرات مالية تخمينية عند غياب فواتير الزي الفعلية.
+    const salesToday = 0;
+    const salesMonth = 0;
+    const totalRevenue = 0;
+    const totalProfits = 0;
     
     const pendingOrders = purchaseOrders.filter(po => po.status === 'Approved').length;
     const deliveredOrders = purchaseOrders.filter(po => po.status === 'Received').length;
     const pendingReservations = reservations.filter(r => r.status === 'Pending').length;
     const returnedQtyCount = returns.reduce((acc, r) => acc + r.qty, 0);
-    const turnoverRate = 4.2; // COGS / Avg Inventory
+    const turnoverRate = 0;
 
     return {
       totalInventoryValue, totalItemsCount, lowStockItems, outOfStockItems,
@@ -178,28 +178,11 @@ export default function SchoolUniformManagement({
   }, [variants, items, purchaseOrders, reservations, returns]);
 
   // Chart data helpers
-  const itemsSalesChart = [
-    { name: 'قمصان صبيان', sales: 420 },
-    { name: 'بناطيل كحلي', sales: 380 },
-    { name: 'مريول بنات', sales: 290 },
-    { name: 'أطقم رياضية', sales: 510 },
-    { name: 'سترات شتوية', sales: 180 }
-  ];
+  const itemsSalesChart: { name: string; sales: number }[] = [];
 
-  const sizesChart = [
-    { name: 'S', value: 140 },
-    { name: 'M', value: 310 },
-    { name: 'L', value: 240 },
-    { name: 'XL', value: 95 },
-    { name: 'XXL', value: 45 }
-  ];
+  const sizesChart: { name: string; value: number }[] = [];
 
-  const colorsChart = [
-    { name: 'أبيض ناصع', value: 480, color: '#F1F5F9' },
-    { name: 'كحلي داكن', value: 350, color: '#1E293B' },
-    { name: 'رمادي مدرسي', value: 190, color: '#94A3B8' },
-    { name: 'أخضر رياضي', value: 120, color: '#22C55E' }
-  ];
+  const colorsChart: { name: string; value: number; color: string }[] = [];
 
   // --- AUTOMATIC SIZE RECOMMENDER ALGORITHM ---
   const calculateRecommendedSize = (h: number, w: number, chest: number): string => {
@@ -336,7 +319,7 @@ export default function SchoolUniformManagement({
       }));
       queryLogs.push(SQLCommandBuilder.create({
         sqlText: `INSERT INTO uniform_student_order_items (id, student_order_id, variant_id, qty, price, line_total) VALUES ($1, $2, $3, $4, $5, $6);`,
-        parameters: [`itm_${Math.random().toString(36).substring(7)}`, orderId, c.variantId, c.qty, variant?.sellPrice || 0, c.qty * (variant?.sellPrice || 0)],
+        parameters: [`${orderId}-ITEM-${queryLogs.length}`, orderId, c.variantId, c.qty, variant?.sellPrice || 0, c.qty * (variant?.sellPrice || 0)],
         executionContext: 'Link student order items'
       }));
     });
@@ -372,11 +355,14 @@ export default function SchoolUniformManagement({
       ipAddress: '192.168.10.12',
       affectedTables: ['uniform_student_orders', 'uniform_item_variants', 'uniform_stock_transactions', 'accounting_journal_entries'],
       validationBlock: () => {
+        if (!Number.isFinite(discount) || discount < 0 || discount > subtotal + tax) {
+          return { valid: false, error: 'قيمة الخصم غير صالحة أو تتجاوز إجمالي الفاتورة' };
+        }
         // Double check quantities
         for (const item of cart) {
           const { variant } = getVariantDetails(item.variantId);
-          if (!variant || variant.stockQty < item.qty) {
-            return { valid: false, error: `الكمية المطلوبة غير متوفرة للصنف ${variant?.sku}` };
+          if (!variant || !Number.isInteger(item.qty) || item.qty <= 0 || variant.stockQty < item.qty) {
+            return { valid: false, error: `الكمية المطلوبة غير متوفرة أو غير صالحة للصنف ${variant?.sku || item.item.name}` };
           }
         }
         return { valid: true };
@@ -451,6 +437,15 @@ export default function SchoolUniformManagement({
     const po = purchaseOrders.find(p => p.id === poId);
     if (!po) return;
 
+    // لا يجوز استلام أمر شراء دون بنود كمية فعلية مرتبطة به. كانت النسخة
+    // السابقة تزيد المخزون بقيمة ثابتة، وهو تلاعب صامت في أرصدة المستودع.
+    triggerNotification(
+      'تعذر استلام أمر الشراء',
+      'لا توجد بنود وكميات مستلمة موثقة لهذا الأمر من مصدر المشتريات المركزي.',
+      'warning'
+    );
+    return;
+
     const receiptId = `rec_${Date.now()}`;
     const journalId = `JE-PURCH-${Date.now().toString().slice(-4)}`;
 
@@ -464,11 +459,6 @@ export default function SchoolUniformManagement({
         sqlText: `INSERT INTO uniform_receipts (id, code, purchase_order_id, receipt_date, total_amount, received_by, journal_entry_id) VALUES ($1, $2, $3, CURRENT_DATE, $4, 'salafe10@gmail.com', $5);`,
         parameters: [receiptId, `REC-${Date.now().toString().slice(-4)}`, poId, po.totalAmount, journalId],
         executionContext: 'Log PO Receipt'
-      }),
-      SQLCommandBuilder.create({
-        sqlText: `UPDATE uniform_item_variants SET stock_qty = stock_qty + 50 WHERE id IN (SELECT variant_id FROM uniform_purchase_order_items WHERE purchase_order_id = $1);`,
-        parameters: [poId],
-        executionContext: 'Bulk increase stock'
       }),
       SQLCommandBuilder.create({
         sqlText: `INSERT INTO accounting_journal_entries (id, date, ref, desc) VALUES ($1, CURRENT_DATE, $2, 'استلام بضاعة ومخزون ملابس وزي مدرسي');`,
@@ -500,14 +490,6 @@ export default function SchoolUniformManagement({
         // Complete PO status
         setPurchaseOrders(prev => prev.map(p => p.id === poId ? { ...p, status: 'Received' } : p));
         
-        // Boost stock for the items associated (Simulate receiving 50 of shirts and jackets)
-        setVariants(prev => prev.map(v => {
-          if (v.id === 'var_3' || v.id === 'var_6') {
-            return { ...v, stockQty: v.stockQty + 100 }; // Replenish low items!
-          }
-          return v;
-        }));
-
         // Insert purchase journal
         const newJournal: AccountingJournalEntry = {
           id: journalId,
@@ -663,7 +645,7 @@ export default function SchoolUniformManagement({
   const handleCreateItem = async () => {
     const item_id = `item_${Date.now()}`;
     const variant_id = `var_${Date.now()}`;
-    const sku = `SKU-${newItem.code}-M`;
+    const sku = `SKU-${newItem.code}`;
 
     const query_1 = SQLCommandBuilder.create({
       sqlText: `INSERT INTO uniform_items (id, code, barcode, name_ar, name_en, category_id, item_group, division, season, gender, description, brand, fabric_type, cotton_percent, weight_gsm, wash_instructions) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16);`,
@@ -672,8 +654,8 @@ export default function SchoolUniformManagement({
     });
 
     const query_2 = SQLCommandBuilder.create({
-      sqlText: `INSERT INTO uniform_item_variants (id, item_id, size_id, color_id, sku, stock_qty, buy_price, sell_price, student_price, wholesale_price) VALUES ($1, $2, 'sz_2', 'cl_2', $3, 100, $4, $5, $6, $7);`,
-      parameters: [variant_id, item_id, sku, newItem.buyPrice, newItem.sellPrice, newItem.sellPrice - 5, newItem.buyPrice + 5],
+      sqlText: `INSERT INTO uniform_item_variants (id, item_id, size_id, color_id, sku, stock_qty, buy_price, sell_price, student_price, wholesale_price) VALUES ($1, $2, $3, $4, $5, 0, $6, $7, $8, $9);`,
+      parameters: [variant_id, item_id, '', '', sku, newItem.buyPrice, newItem.sellPrice, newItem.sellPrice, newItem.sellPrice],
       executionContext: 'Create uniform item variant'
     });
 
@@ -685,7 +667,7 @@ export default function SchoolUniformManagement({
       ipAddress: '192.168.10.15',
       affectedTables: ['uniform_items', 'uniform_item_variants'],
       validationBlock: () => {
-        if (!newItem.code || !newItem.nameAr || !newItem.barcode) {
+        if (!newItem.code || !newItem.nameAr || !newItem.barcode || !Number.isFinite(newItem.buyPrice) || !Number.isFinite(newItem.sellPrice) || newItem.buyPrice < 0 || newItem.sellPrice < newItem.buyPrice) {
           return { valid: false, error: 'الرجاء تعبئة الكود والاسم العربي والباركود' };
         }
         return { valid: true };
@@ -711,20 +693,22 @@ export default function SchoolUniformManagement({
           washInstructions: newItem.washInstructions,
           minPrice: newItem.buyPrice,
           maxPrice: newItem.sellPrice * 2,
-          marginPercent: Math.round(((newItem.sellPrice - newItem.buyPrice) / newItem.buyPrice) * 100)
+          marginPercent: newItem.buyPrice > 0
+            ? Math.round(((newItem.sellPrice - newItem.buyPrice) / newItem.buyPrice) * 100)
+            : 0
         };
 
         const variant: UniformVariant = {
           id: variant_id,
           itemId: item_id,
-          sizeId: 'sz_2', // M by default
-          colorId: 'cl_2', // Navy by default
+          sizeId: '',
+          colorId: '',
           sku,
-          stockQty: 100, // Pre-seed 100 pieces
+          stockQty: 0,
           buyPrice: newItem.buyPrice,
           sellPrice: newItem.sellPrice,
-          studentPrice: newItem.sellPrice - 5,
-          wholesalePrice: newItem.buyPrice + 5,
+          studentPrice: newItem.sellPrice,
+          wholesalePrice: newItem.sellPrice,
           alertLimit: 10,
           reorderPoint: 20,
           maxLimit: 500,
@@ -740,13 +724,13 @@ export default function SchoolUniformManagement({
 
     if (opResult.success) {
       logSQL(`${typeof query_1 === 'string' ? query_1 : SQLCommandBuilder.formatForTrace(query_1)}\n\n${typeof query_2 === 'string' ? query_2 : SQLCommandBuilder.formatForTrace(query_2)}`);
-      triggerNotification('تم تسجيل الصنف', `تم إنشاء الصنف ${newItem.nameAr} وإسناد المقاس (M) برصيد افتراضي 100 قطعة`, 'success');
+      triggerNotification('تم تسجيل الصنف', `تم إنشاء الصنف ${newItem.nameAr} برصيد ابتدائي صفر؛ يُحدّث الرصيد عبر الاستلام المخزني`, 'success');
       setShowAddItemModal(false);
       setNewItem({
-        code: '', barcode: '', nameAr: '', nameEn: '', categoryId: 'cat_1',
-        group: 'Boys', division: 'Regular', season: 'Summer', gender: 'Male',
-        description: '', brand: 'سحاب ستايل', fabricType: 'قطن مخلوط', cottonPercent: 50,
-        weightGsm: 150, washInstructions: 'غسيل آلي دافئ', buyPrice: 30, sellPrice: 45
+        code: '', barcode: '', nameAr: '', nameEn: '', categoryId: '',
+        group: '', division: '', season: '', gender: '',
+        description: '', brand: '', fabricType: '', cottonPercent: 0,
+        weightGsm: 0, washInstructions: '', buyPrice: 0, sellPrice: 0
       });
     } else {
       triggerNotification('فشل الإدراج', opResult.error || '', 'error');

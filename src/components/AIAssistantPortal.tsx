@@ -7,7 +7,7 @@ import { ChevronDown, Database, MessageSquare, Send, ShieldCheck, Sparkles, Tras
 import { EnterpriseLogger } from '../database/services/EnterpriseLogger';
 import React, { useState, useRef, useEffect } from 'react';
 import { motion, AnimatePresence } from 'motion/react';
-import { getTrustedAccessToken } from '../utils/auth';
+import { authenticatedRequest } from '../utils/authenticatedRequest';
 
 interface Message {
   id: string;
@@ -18,13 +18,13 @@ interface Message {
 
 export default function AIAssistantPortal() {
   const [isOpen, setIsOpen] = useState(false);
-  const [isSimulationMode, setIsSimulationMode] = useState(true); // Default to simulation mode as requested
+  const [isSimulationMode, setIsSimulationMode] = useState(false);
   const [panelSize, setPanelSize] = useState<'md' | 'lg' | 'xl'>('md'); // Add three dynamic sizing state (Medium, Large, Extra Large)
   const [messages, setMessages] = useState<Message[]>([
     {
       id: 'welcome',
       sender: 'assistant',
-      text: 'مرحباً بك! أنا مساعدك الذكي لنظام سحاب.\n\nلقد تم تفعيل **وضع المحاكاة التفاعلية الذكية** (يعمل محلياً وفورياً).\n\nيمكنك الاستفسار عن أي شيء يخص:\n1. **البيانات والتقارير الفعلية**: مثل سجلات الطلاب، درجات الامتحانات والنتائج، المعلمين والموظفين، الرسوم المالية والفواتير، حركة المستودعات والعهد، باصات النقل، أو سجل الرقابة والعمليات.\n2. **طريقة استخدام النظام**: مثل كيفية الحفظ، البحث، الطباعة، أو كيفية عمل الشاشات المختلفة.\n\nتفضل بطرح سؤالك وسأجيبك فوراً بدقة وموثوقية متناهية.',
+      text: 'مرحباً بك! أنا مساعدك الذكي للنظام.\n\nسأجيب فقط من المصدر السحابي الموثوق أو أوضح أن البيانات غير متاحة. لا تُستخدم بيانات تجريبية أو إجابات مالية ثابتة.',
       timestamp: new Date()
     }
   ]);
@@ -199,14 +199,13 @@ export default function AIAssistantPortal() {
     setIsLoading(true);
     setError(null);
 
-    // If we are in Simulation Mode, trigger immediate client-side simulation response (with typing delay)
+    // حتى وضع المحاكاة لا يعيد بيانات؛ يوضح فقط أن المصدر غير متاح.
     if (isSimulationMode) {
       setTimeout(() => {
-        const simResponseText = getSimulatedResponse(query);
         const assistantMsg: Message = {
           id: `assistant-sim-${Date.now()}`,
           sender: 'assistant',
-          text: simResponseText,
+          text: 'وضع المحاكاة لا يعرض بيانات مؤسسية. فعّل المصدر السحابي الموثوق للحصول على إجابة مؤكدة.',
           timestamp: new Date()
         };
         setMessages(prev => [...prev, assistantMsg]);
@@ -217,13 +216,9 @@ export default function AIAssistantPortal() {
 
     // Otherwise try reaching real API
     try {
-      const token = getTrustedAccessToken();
-      const response = await fetch('/api/ai/chat', {
+      const response = await authenticatedRequest('/api/ai/chat', {
         method: 'POST',
-        headers: {
-          'Content-Type': 'application/json',
-          'Authorization': token ? `Bearer ${token}` : ''
-        },
+        headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ prompt: query })
       });
 
@@ -242,15 +237,13 @@ export default function AIAssistantPortal() {
 
       setMessages(prev => [...prev, assistantMsg]);
     } catch (err: any) {
-      EnterpriseLogger.warn('AI Cloud call failed. Falling back to high-fidelity local simulator.', "AIAssistantPortal", { details: err });
-      
-      // Since API failed, immediately fallback to local simulation response gracefully so the app never hangs
+      EnterpriseLogger.warn('AI Cloud call failed; no local data fallback is permitted.', "AIAssistantPortal", { details: err });
+
       setTimeout(() => {
-        const simResponseText = getSimulatedResponse(query);
         const assistantMsg: Message = {
           id: `assistant-fallback-${Date.now()}`,
           sender: 'assistant',
-          text: `💡 (ملاحظة: تعذر الاتصال بالخادم، تم تفعيل الإجابة الذكية من محاكي سحاب المحلي)\n\n${simResponseText}`,
+          text: 'تعذر الاتصال بالمصدر السحابي الموثوق. لم يتم توليد إجابة بديلة حتى لا تُعرض بيانات غير مؤكدة.',
           timestamp: new Date()
         };
         setMessages(prev => [...prev, assistantMsg]);

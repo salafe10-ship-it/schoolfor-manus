@@ -21,20 +21,12 @@ export default function StudentActivities({
         {/* Active Clubs */}
         <div className="p-5 text-right space-y-3">
           <h4 className="text-xs font-black text-slate-800 border-b pb-2">الأندية الطلابية والمواهب المشترك بها</h4>
-          <ul className="text-xs space-y-2.5 text-slate-700">
-            <li className="flex justify-between items-center bg-transparent p-2 rounded-lg border flex-row-reverse">
-              <span className="font-extrabold">نادي الذكاء الاصطناعي والابتكار</span>
-              <span className="text-[10px] bg-amber-50 text-amber-700 font-bold px-2 py-0.5 rounded">عضو مبدع</span>
-            </li>
-            <li className="flex justify-between items-center bg-transparent p-2 rounded-lg border flex-row-reverse">
-              <span className="font-extrabold">الجمعية الرياضية المدرسية (فريق كرة القدم)</span>
-              <span className="text-[10px] bg-emerald-50 text-emerald-700 font-bold px-2 py-0.5 rounded">كابتن الفريق</span>
-            </li>
-          </ul>
+          <p className="text-xs text-slate-500 p-2 border rounded-lg">لا توجد عضويات أو مشاركات موثقة من المصدر المركزي.</p>
           <button
             type="button"
-            onClick={() => triggerNotification('جاري فتح معالج الاشتراك بالأندية المدرسية اللامنهجية ومسابقات الموهبة...', 'info')}
-            className="w-full bg-violet-600 hover:bg-violet-500 text-white text-xs font-black py-2 transition-all cursor-pointer"
+            onClick={() => triggerNotification('لا يمكن تسجيل النادي قبل توفر مصدر الأنشطة المركزي.', 'warning')}
+            className="w-full bg-slate-300 text-slate-500 text-xs font-black py-2 cursor-not-allowed"
+            disabled
           >
             ➕ تسجيل الطالب في نادي إضافي
           </button>
@@ -43,15 +35,7 @@ export default function StudentActivities({
         {/* Awards Received */}
         <div className="p-5 text-right space-y-3">
           <h4 className="text-xs font-black text-slate-800 border-b pb-2">الجوائز وشهادات التميز وبطولات الأثر</h4>
-          <ul className="text-xs space-y-2 text-slate-700 text-right">
-            <li className="flex justify-between items-start bg-amber-50/50 p-2 rounded-lg border border-amber-200 flex-row-reverse">
-              <span className="text-[9.5px] text-slate-450 font-mono font-bold">1447-02-15 هـ</span>
-              <div>
-                <p className="font-black text-amber-950 text-right">🏆 درع التميز العلمي على مستوى المدرسة</p>
-                <p className="text-[9.5px] text-slate-500 mt-0.5 text-right">الفوز بالمركز الأول في مسابقة البحوث العلمية الشابة 1447 هـ</p>
-              </div>
-            </li>
-          </ul>
+          <p className="text-xs text-slate-500 p-2 border rounded-lg">لا توجد جوائز موثقة من المصدر المركزي.</p>
         </div>
       </div>
     </div>

@@ -76,22 +76,10 @@ export default function SystemErrorLogsTab() {
   };
 
   const handleSimulateNewError = () => {
-    // Generate simulated stack trace
-    const randomLine = Math.floor(100 + Math.random() * 800);
-    const stackTrace = `Error: ${simErrorMessage.split(':')[0]}
-    at SQLTransactionEngine.execute (transactionManager.ts:${randomLine}:12)
-    at async FormLifecycleOrchestrator.run (FormLifecycleOrchestrator.ts:79:24)
-    at async ${simScreenName.split(' ')[0]}.handleSave (index.tsx:244:11)`;
-
-    EnterpriseErrorLogger.log({
-      userName: simUserName,
-      screenName: simScreenName,
-      operationName: simOperationName,
-      errorMessage: simErrorMessage,
-      stackTrace: stackTrace,
-      schoolId: simSchoolId,
-      branchId: simBranchId
-    });
+    // لا تُضاف أخطاء اصطناعية إلى سجل التدقيق؛ السجل يُكتب من مسارات الفشل الفعلية فقط.
+    window.dispatchEvent(new CustomEvent('erp-notification', {
+      detail: { title: 'وضع الاختبار غير متاح', message: 'لم تتم إضافة سجل محاكاة إلى سجل الأخطاء المؤسسي.', type: 'warning' }
+    }));
   };
 
   const handleExportCSV = () => {

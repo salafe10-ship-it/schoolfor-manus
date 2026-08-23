@@ -35,6 +35,7 @@ export class StudentWithdrawalService {
     StudentLibraryService.checkLibraryCommitments(id, reasons);
 
     // Check documents
+    FallbackStorage.assertCanonicalPersistence('student withdrawal documents read');
     const docs = FallbackStorage.getStudentDocuments().filter(d => d.studentId === id);
     if (docs.length > 0 && action === 'permanent') {
       reasons.push(`الملفات المحفوظة: يحتوي الخزانة المؤمنة للطالب على ${docs.length} مستندات رسمية مرفوعة.`);
@@ -79,6 +80,7 @@ export class StudentWithdrawalService {
         return { success: true, action: 'restore', student: updated };
       } else {
         // Permanent Hard Delete - cascading deletes on all sub tables
+        FallbackStorage.assertCanonicalPersistence('student withdrawal contacts read');
         const subList = FallbackStorage.getStudentContacts().filter(c => c.studentId === id);
         for (const item of subList) {
           StudentContactRepository.enlistDeleteStudentContact(item.id);

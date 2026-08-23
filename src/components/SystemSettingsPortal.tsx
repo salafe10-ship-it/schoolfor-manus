@@ -25,31 +25,15 @@ export default function SystemSettingsPortal({
 
   // Organization Settings State
   const [orgSettings, setOrgSettings] = useState({
-    name: 'مؤسسة إدوبرو التعليمية الكبرى (EduPro Enterprise)',
-    shortName: 'EduPro ERP',
-    logoUrl: '/logo.png',
-    address: 'شارع الجمهورية، الحي الدبلوماسي',
-    country: 'المملكة العربية السعودية / ليبيا',
-    city: 'طرابلس / الرياض',
-    phone: '+218 21 0000000',
-    email: 'admin@edupro-enterprise.edu',
-    website: 'https://edupro-enterprise.edu',
-    currency: 'دينار ليبي / ريال سعودي',
-    language: 'اللغة العربية (الموحدة)',
-    timezone: 'GMT+2 / GMT+3',
+    name: '', shortName: '', logoUrl: '', address: '', country: '', city: '', phone: '', email: '', website: '',
+    currency: '', language: '', timezone: '',
     dateFormat: 'YYYY-MM-DD',
     timeFormat: '24 Hours'
   });
 
   // School & Academic Structure
   const [schoolSettings, setSchoolSettings] = useState({
-    stage: 'تعليم أساسي وثانوي متكامل (K-12)',
-    schoolType: 'مؤسسة نموذجية أهلية / دولية',
-    academicSystem: 'نظام الفصول الدراسية الثلاثة (Tri-Semester)',
-    classesCount: 36,
-    sectionsCount: 108,
-    maxCapacity: 2500,
-    currentAcademicYear: '2025/2026'
+    stage: '', schoolType: '', academicSystem: '', classesCount: 0, sectionsCount: 0, maxCapacity: 0, currentAcademicYear: ''
   });
 
   // Financial Settings
@@ -94,37 +78,19 @@ export default function SystemSettingsPortal({
 
   // System & Integration Settings
   const [systemSettings, setSystemSettings] = useState({
-    smtpHost: 'smtp.edupro-enterprise.edu',
-    smsGateway: 'Active - Twilio Enterprise Connector',
-    pushNotifications: true,
-    autoBackupDaily: true,
-    sessionTimeoutMinutes: 60,
-    tenantId: 'edupro-tenant-prime-001',
-    apiSecurityMode: 'Strict OAuth2 + JWT Bearer'
+    smtpHost: '', smsGateway: '', pushNotifications: false, autoBackupDaily: false, sessionTimeoutMinutes: 0, tenantId: '', apiSecurityMode: ''
   });
 
   // Master Data State
   const [masterTab, setMasterTab] = useState<'nationalities' | 'religions' | 'cities' | 'departments' | 'job_titles'>('nationalities');
-  const [nationalities, setNationalities] = useState([
-    { id: '1', nameAr: 'ليبي', active: true },
-    { id: '2', nameAr: 'سعودي', active: true },
-    { id: '3', nameAr: 'مصري', active: true },
-    { id: '4', nameAr: 'أردني', active: true },
-    { id: '5', nameAr: 'سوري', active: true }
-  ]);
+  const [nationalities, setNationalities] = useState<any[]>([]);
   const [newNatInput, setNewNatInput] = useState('');
 
-  // Audit Logs & Timeline
-  const [configAuditLogs, setConfigAuditLogs] = useState([
-    { id: '1', user: 'المشرف العام (SuperAdmin)', action: 'تحديث بيانات المؤسسة واللوجو', time: '2026-08-02 01:15', category: 'المؤسسة', status: 'معتمد' },
-    { id: '2', user: 'مدير النظام (SystemAdmin)', action: 'تعديل سياسة الحضور والخصومات', time: '2026-08-01 14:20', category: 'الموارد البشرية', status: 'معتمد' },
-    { id: '3', user: 'المدير المالي (CFO)', action: 'تثبيت السنة المالية والعملة الافتراضية', time: '2026-07-28 09:10', category: 'المالية', status: 'معتمد' },
-    { id: '4', user: 'مسؤول الكنترول', action: 'تحديث الحد الأدنى لنجاح الامتحانات إلى 50%', time: '2026-07-25 11:00', category: 'الامتحانات', status: 'معتمد' }
-  ]);
+  // لا تُعرض أحداث تدقيق قبل تحميلها من سجل التدقيق المركزي.
+  const [configAuditLogs, setConfigAuditLogs] = useState<any[]>([]);
 
   const handleSaveSection = (sectionName: string) => {
-    logAction('UPDATE_SYSTEM_SETTINGS', `تم حفظ وتحديث إعدادات قسم [${sectionName}] بنجاح`, 'الإعدادات العامة');
-    triggerNotification(`✓ تم حفظ وتحديث إعدادات ${sectionName} بنجاح وتطبيقها على كافة الوحدات!`, 'success');
+    triggerNotification(`خدمة حفظ الإعدادات المركزية غير متاحة؛ لم يُحفظ قسم ${sectionName}.`, 'warning');
   };
 
   return (
@@ -211,25 +177,25 @@ export default function SystemSettingsPortal({
           <div className="grid grid-cols-1 md:grid-cols-4 gap-4">
             <div className="bg-slate-900 border border-slate-800 p-5 space-y-2">
               <span className="text-[11px] text-slate-400 font-bold block">إجمالي الإعدادات المُدارة</span>
-              <span className="text-3xl font-black text-white font-mono">148</span>
-              <span className="text-[10px] text-emerald-400 flex items-center gap-1">
-                <CheckCircle className="w-3 h-3" /> جميعها مفعلة ومتزامنة
+              <span className="text-3xl font-black text-white font-mono">غير متحقق</span>
+              <span className="text-[10px] text-slate-400 flex items-center gap-1">
+                <CheckCircle className="w-3 h-3" /> بانتظار المصدر المركزي
               </span>
             </div>
             <div className="bg-slate-900 border border-slate-800 p-5 space-y-2">
               <span className="text-[11px] text-slate-400 font-bold block">الجداول المرجعية (Master Data)</span>
-              <span className="text-3xl font-black text-[#dfb55a] font-mono">24</span>
-              <span className="text-[10px] text-slate-400">بدون أي تكرار أو تعارض</span>
+              <span className="text-3xl font-black text-[#dfb55a] font-mono">غير متحقق</span>
+              <span className="text-[10px] text-slate-400">لا يوجد قياس مركزي متاح</span>
             </div>
             <div className="bg-slate-900 border border-slate-800 p-5 space-y-2">
               <span className="text-[11px] text-slate-400 font-bold block">حالة العزل السحابي (Multi-Tenant)</span>
-              <span className="text-xl font-black text-emerald-400 font-mono">Active (100%)</span>
-              <span className="text-[10px] text-slate-400">حماية مشددة لبيانات المدارس</span>
+              <span className="text-xl font-black text-slate-400 font-mono">غير متحقق</span>
+              <span className="text-[10px] text-slate-400">تتطلب فحص العزل المركزي</span>
             </div>
             <div className="bg-slate-900 border border-slate-800 p-5 space-y-2">
               <span className="text-[11px] text-slate-400 font-bold block">آخر نسخة احتياطية ناجحة</span>
-              <span className="text-sm font-black text-white font-mono">اليوم، 02:00 صباحاً</span>
-              <span className="text-[10px] text-yellow-400">تشفير AES-256 بالكامل</span>
+              <span className="text-sm font-black text-white font-mono">غير متحقق</span>
+              <span className="text-[10px] text-slate-400">لا يوجد سجل نسخة موثوق</span>
             </div>
           </div>
 
@@ -242,19 +208,19 @@ export default function SystemSettingsPortal({
               <div className="space-y-3 text-xs">
                 <div className="flex justify-between items-center p-3 bg-slate-950 border border-slate-800">
                   <span className="text-slate-300 font-bold">قاعدة البيانات الرئيسية (PostgreSQL / Firestore)</span>
-                  <span className="text-emerald-400 font-mono font-bold">متصل • 1.2ms</span>
+                  <span className="text-slate-400 font-mono font-bold">غير متحقق</span>
                 </div>
                 <div className="flex justify-between items-center p-3 bg-slate-950 border border-slate-800">
                   <span className="text-slate-300 font-bold">خدمة البريد الإلكتروني السحابي (SMTP Gateway)</span>
-                  <span className="text-emerald-400 font-mono font-bold">يعمل بانتظام</span>
+                  <span className="text-slate-400 font-mono font-bold">غير متحقق</span>
                 </div>
                 <div className="flex justify-between items-center p-3 bg-slate-950 border border-slate-800">
                   <span className="text-slate-300 font-bold">بوابة الرسائل القصيرة (SMS API Connector)</span>
-                  <span className="text-emerald-400 font-mono font-bold">متصل وفعال</span>
+                  <span className="text-slate-400 font-mono font-bold">غير متحقق</span>
                 </div>
                 <div className="flex justify-between items-center p-3 bg-slate-950 border border-slate-800">
                   <span className="text-slate-300 font-bold">محرك التصدير والتقارير الآلي (PDF/Excel)</span>
-                  <span className="text-emerald-400 font-mono font-bold">جاهز</span>
+                  <span className="text-slate-400 font-mono font-bold">غير متحقق</span>
                 </div>
               </div>
             </div>

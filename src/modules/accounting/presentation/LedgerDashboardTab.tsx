@@ -74,13 +74,17 @@ export const LedgerDashboardTab = () => {
 
   const financialTotals = useMemo(() => {
     const reportAccounts = getProcessedAccounts ? getProcessedAccounts() : accounts;
-    const subRevenues = reportAccounts.filter(a => a.classification === 'إيرادات' && a.type === 'فرعي');
-    const subExpenses = reportAccounts.filter(a => a.classification === 'مصروفات' && a.type === 'فرعي');
-    const subLiquidity = reportAccounts.filter(a => a.classification === 'أصول' && a.type === 'فرعي' && (a.code.startsWith('110') || a.code.startsWith('111') || a.code.startsWith('112')));
+    const isLeaf = (account: any) => account.type === 'فرعي' || account.type === 'leaf' || Number(account.level) >= 3;
+    const subRevenues = reportAccounts.filter(a => a.classification === 'إيرادات' && isLeaf(a));
+    const subExpenses = reportAccounts.filter(a => a.classification === 'مصروفات' && isLeaf(a));
+    const subLiquidity = reportAccounts.filter(a => a.classification === 'أصول' && isLeaf(a) && (a.code.startsWith('110') || a.code.startsWith('111') || a.code.startsWith('112')));
 
-    const revenues = subRevenues.reduce((sum, a) => sum + (a.balance || 0), 0);
-    const expenses = subExpenses.reduce((sum, a) => sum + (a.balance || 0), 0);
-    const liquidity = subLiquidity.reduce((sum, a) => sum + (a.balance || 0), 0);
+    const ending = (account: any) => Number(account.endingBalance ?? account.balance ?? 0) || 0;
+    const periodRevenue = (account: any) => (Number(account.creditMovements || 0) - Number(account.debitMovements || 0)) || 0;
+    const periodExpense = (account: any) => (Number(account.debitMovements || 0) - Number(account.creditMovements || 0)) || 0;
+    const revenues = subRevenues.reduce((sum, a) => sum + periodRevenue(a), 0);
+    const expenses = subExpenses.reduce((sum, a) => sum + periodExpense(a), 0);
+    const liquidity = subLiquidity.reduce((sum, a) => sum + ending(a), 0);
     const netResult = revenues - expenses;
 
     return {

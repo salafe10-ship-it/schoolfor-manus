@@ -21,10 +21,7 @@ export default function SuperAdminCentralNotifications({
   // BroadCast History / Logs
   const [broadcastLogs, setBroadcastLogs] = useState<any[]>(() => {
     const saved = localStorage.getItem('edupro_broadcast_logs_v1');
-    return saved ? JSON.parse(saved) : [
-      { id: 'bc_01', title: 'صيانة وقائية طارئة لخوادم المستأجرين', date: '2026-07-13 23:00', target: 'كافة المدارس', channel: 'In-App + Email', delivered: 4210, failed: 2, status: 'completed' },
-      { id: 'bc_02', title: 'إعلان تحديث باقات التخزين وتسهيلات السداد', date: '2026-07-10 10:15', target: 'مديري فروع المدارس فقط', channel: 'Email Only', delivered: 124, failed: 0, status: 'completed' }
-    ];
+    return saved ? JSON.parse(saved) : [];
   });
 
   const handleSendBroadcast = (e: React.FormEvent) => {
@@ -34,47 +31,8 @@ export default function SuperAdminCentralNotifications({
       return;
     }
 
-    setIsSending(true);
-    triggerNotification('جاري تجميع فهارس المستخدمين والبدء في بث الإشعارات المترابطة...', 'info');
-
-    setTimeout(() => {
-      setIsSending(false);
-
-      const targetLabel = targetAudience === 'all' 
-        ? 'كافة المدارس' 
-        : `مستأجر محدد (${schools.find(s => s.id === targetSchoolId)?.name || 'غير معروف'})`;
-
-      const channelLabel = notificationChannel === 'all' ? 'In-App + Email + SMS' :
-                           notificationChannel === 'in_app' ? 'In-App Only' :
-                           notificationChannel === 'email' ? 'Email Only' : 'SMS/WhatsApp Only';
-
-      const newLog = {
-        id: `bc_${Date.now()}`,
-        title: broadcastTitle,
-        date: new Date().toISOString().replace('T', ' ').substring(0, 16),
-        target: targetLabel,
-        channel: channelLabel,
-        delivered: targetAudience === 'all' ? 4250 : 25,
-        failed: 0,
-        status: 'completed'
-      };
-
-      const updated = [newLog, ...broadcastLogs];
-      setBroadcastLogs(updated);
-      localStorage.setItem('edupro_broadcast_logs_v1', JSON.stringify(updated));
-
-      logAction(
-        'SEND_BROADCAST_NOTIFICATION',
-        `بث إشعار مركزي بعنوان (${broadcastTitle}) موجه لـ ${targetLabel} عبر قناة ${channelLabel}`,
-        'مركز الإشعارات الفيدرالي'
-      );
-
-      triggerNotification('تم ترحيل وبث الإشعار وحفظ تقارير التسليم حياً بنجاح! 🔔', 'success');
-      
-      // Clear inputs
-      setBroadcastTitle('');
-      setBroadcastBody('');
-    }, 2000);
+    setIsSending(false);
+    triggerNotification('خدمة الإرسال المركزي غير متاحة؛ لم يتم بث الإشعار أو تسجيل نجاح وهمي.', 'warning');
   };
 
   return (
@@ -85,22 +43,22 @@ export default function SuperAdminCentralNotifications({
         
         <div className="bg-slate-900 border border-slate-800 p-4 rounded-xl">
           <span className="text-[10px] text-slate-400 font-bold block">إجمالي الرسائل المرسلة</span>
-          <span className="text-lg font-black text-white mt-1 block font-mono">4,334 رسالة</span>
+          <span className="text-lg font-black text-white mt-1 block font-mono">{broadcastLogs.length ? broadcastLogs.length.toLocaleString() : 'غير متحقق'}</span>
         </div>
 
         <div className="bg-slate-900 border border-slate-800 p-4 rounded-xl">
           <span className="text-[10px] text-slate-400 font-bold block">معدل التسليم الناجح (Delivery)</span>
-          <span className="text-lg font-black text-emerald-400 mt-1 block font-mono">99.95%</span>
+          <span className="text-lg font-black text-emerald-400 mt-1 block font-mono">غير متحقق</span>
         </div>
 
         <div className="bg-slate-900 border border-slate-800 p-4 rounded-xl">
           <span className="text-[10px] text-slate-400 font-bold block">معدل الفتح والمشاهدة (Open Rate)</span>
-          <span className="text-lg font-black text-amber-400 mt-1 block font-mono">84.2%</span>
+          <span className="text-lg font-black text-amber-400 mt-1 block font-mono">غير متحقق</span>
         </div>
 
         <div className="bg-slate-900 border border-slate-800 p-4 rounded-xl">
           <span className="text-[10px] text-slate-400 font-bold block">متوسط سرعة الإرسال (Delivery Speed)</span>
-          <span className="text-lg font-black text-amber-400 mt-1 block font-mono">0.4 ثانية</span>
+          <span className="text-lg font-black text-amber-400 mt-1 block font-mono">غير متحقق</span>
         </div>
 
       </div>

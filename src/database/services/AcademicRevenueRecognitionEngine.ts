@@ -95,6 +95,7 @@ export class AcademicRevenueRecognitionEngine {
   }
 
   public static findAccountIdByCode(code: string, fallbackId: string): string {
+    FallbackStorage.assertCanonicalPersistence('revenue recognition account master read');
     const accounts = FallbackStorage.getAccounts();
     const found = accounts.find(a => a.code === code || a.id === code);
     return found ? found.id : fallbackId;
@@ -118,6 +119,7 @@ export class AcademicRevenueRecognitionEngine {
     userId: string,
     userName: string
   ): Promise<RevenueRecognitionSchedule[]> {
+    FallbackStorage.assertCanonicalPersistence('revenue recognition invoice read');
     // 1. Retrieve the Invoice
     const invoices = FallbackStorage.getInvoices();
     const invoice = invoices.find(inv => inv.id === invoiceId);
@@ -419,6 +421,7 @@ export class AcademicRevenueRecognitionEngine {
     userId: string,
     userName: string
   ): Promise<number> {
+    FallbackStorage.assertCanonicalPersistence('revenue recognition period invoice read');
     // Validate period is not closed
     const period = await RevenueRecognitionRepository.getPeriod(periodId);
     if (!period) {
@@ -551,6 +554,7 @@ export class AcademicRevenueRecognitionEngine {
     userName: string,
     reason: string
   ): Promise<void> {
+    FallbackStorage.assertCanonicalPersistence('revenue recognition adjustment invoice read');
     const schedules = await RevenueRecognitionRepository.getSchedulesByInvoice(invoiceId);
     if (schedules.length === 0) {
       return; // No schedules to adjust

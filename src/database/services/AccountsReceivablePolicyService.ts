@@ -136,7 +136,8 @@ export class AccountsReceivablePolicyService {
       throw new Error('قيمة التعديل يجب أن تكون أكبر من الصفر.');
     }
 
-    // 1. Create adjustment draft
+    // 1. Create adjustment request. Financial adjustments require an explicit
+    // approval workflow; creating the request must not alter balances or GL.
     const adj = await AccountsReceivableRepository.createAdjustment(schoolId, {
       receivableAccountId: accountId,
       invoiceId: params.invoiceId,
@@ -144,9 +145,11 @@ export class AccountsReceivablePolicyService {
       type: params.type,
       amount: params.amount,
       reason: params.reason,
-      status: 'approved', // auto-approve in enterprise core rules if logged by accountant
-      approvedBy: auditContext.userName
+      status: 'pending',
+      approvedBy: ''
     });
+
+    return adj;
 
     // 2. Modify corresponding transactions & outstanding balance
     if (params.type === 'write_off' || params.type === 'waiver' || params.type === 'discount' || params.type === 'settlement') {

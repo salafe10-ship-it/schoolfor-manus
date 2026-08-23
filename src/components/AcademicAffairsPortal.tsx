@@ -76,22 +76,11 @@ export default function AcademicAffairsPortal({
   const [selectedAcademicYear, setSelectedAcademicYear] = useState<string>('1447 - 1448 هـ (2026/2027)');
   const [selectedSemester, setSelectedSemester] = useState<string>('الفصل الدراسي الأول');
 
-  // Subjects Mock State
-  const [subjects, setSubjects] = useState<SubjectItem[]>([
-    { id: 'subj_1', code: 'MATH-101', name: 'الرياضيات المتقدمة', stageName: 'المرحلة الابتدائية', gradeName: 'الصف الأول الابتدائي', creditHours: 4, weeklyPeriods: 5, passingScore: 50, maxScore: 100, assignedTeacherId: teachers[0]?.id || 't1', assignedTeacherName: teachers[0]?.name || 'د. أحمد المحمود', isElective: false, status: 'active' },
-    { id: 'subj_2', code: 'SCI-101', name: 'العلوم العامة والبيئة', stageName: 'المرحلة الابتدائية', gradeName: 'الصف الأول الابتدائي', creditHours: 3, weeklyPeriods: 4, passingScore: 50, maxScore: 100, assignedTeacherId: teachers[1]?.id || 't2', assignedTeacherName: teachers[1]?.name || 'أ. سارة خالد', isElective: false, status: 'active' },
-    { id: 'subj_3', code: 'ARAB-101', name: 'اللغة العربية والإنشاء', stageName: 'المرحلة الابتدائية', gradeName: 'الصف الأول الابتدائي', creditHours: 5, weeklyPeriods: 6, passingScore: 50, maxScore: 100, assignedTeacherId: teachers[2]?.id || 't3', assignedTeacherName: teachers[2]?.name || 'أ. طارق عبدالكريم', isElective: false, status: 'active' },
-    { id: 'subj_4', code: 'ENG-101', name: 'اللغة الإنجليزية المكثفة', stageName: 'المرحلة المتوسطة', gradeName: 'الصف الأول المتوسط', creditHours: 4, weeklyPeriods: 5, passingScore: 50, maxScore: 100, assignedTeacherId: teachers[3]?.id || 't4', assignedTeacherName: teachers[3]?.name || 'أ. فاطمة الزهراء', isElective: true, status: 'active' },
-    { id: 'subj_5', code: 'PHYS-201', name: 'الفيزياء الكونية وتطبيقاتها', stageName: 'المرحلة الثانوية', gradeName: 'الصف الأول الثانوي', creditHours: 4, weeklyPeriods: 4, passingScore: 60, maxScore: 100, assignedTeacherId: teachers[0]?.id || 't1', assignedTeacherName: teachers[0]?.name || 'د. أحمد المحمود', isElective: false, status: 'active' },
-    { id: 'subj_6', code: 'ISLAM-101', name: 'الدراسات الإسلامية والقرآن', stageName: 'المرحلة الابتدائية', gradeName: 'الصف الأول الابتدائي', creditHours: 3, weeklyPeriods: 4, passingScore: 50, maxScore: 100, assignedTeacherId: teachers[1]?.id || 't2', assignedTeacherName: teachers[1]?.name || 'أ. سارة خالد', isElective: false, status: 'active' }
-  ]);
+  // تُحمّل المقررات من الهيكل الأكاديمي المركزي؛ لا تُزرع بيانات تجريبية عند الفتح.
+  const [subjects, setSubjects] = useState<SubjectItem[]>([]);
 
   // Timetable State
-  const [schedulePeriods, setSchedulePeriods] = useState<SchedulePeriod[]>([
-    { id: 'sched_1', day: 'الأحد', periodNumber: 1, classId: 'cls_1', className: 'الصف الأول الابتدائي (أ)', subjectId: 'subj_1', subjectName: 'الرياضيات المتقدمة', teacherId: teachers[0]?.id || 't1', teacherName: teachers[0]?.name || 'د. أحمد المحمود', roomName: 'قاعة 101' },
-    { id: 'sched_2', day: 'الأحد', periodNumber: 2, classId: 'cls_1', className: 'الصف الأول الابتدائي (أ)', subjectId: 'subj_3', subjectName: 'اللغة العربية والإنشاء', teacherId: teachers[2]?.id || 't3', teacherName: teachers[2]?.name || 'أ. طارق عبدالكريم', roomName: 'قاعة 101' },
-    { id: 'sched_3', day: 'الإثنين', periodNumber: 1, classId: 'cls_2', className: 'الصف الأول الابتدائي (ب)', subjectId: 'subj_2', subjectName: 'العلوم العامة والبيئة', teacherId: teachers[1]?.id || 't2', teacherName: teachers[1]?.name || 'أ. سارة خالد', roomName: 'قاعة 102' }
-  ]);
+  const [schedulePeriods, setSchedulePeriods] = useState<SchedulePeriod[]>([]);
 
   // Search & Filters State
   const [searchKeyword, setSearchKeyword] = useState<string>('');
@@ -191,8 +180,8 @@ export default function AcademicAffairsPortal({
   // Metrics
   const totalSubjectsCount = subjects.length;
   const totalWeeklyPeriods = subjects.reduce((acc, curr) => acc + curr.weeklyPeriods, 0);
-  const totalClassesCount = academicClasses.length > 0 ? academicClasses.length : 24;
-  const activeTeachersCount = teachers.length > 0 ? teachers.length : 48;
+  const totalClassesCount = academicClasses.length;
+  const activeTeachersCount = teachers.length;
   const conflictCount = scheduleConflicts.length;
 
   // Save Subject
@@ -597,7 +586,7 @@ export default function AcademicAffairsPortal({
           <div>
             <span className="text-[11px] font-black text-slate-700 block">الفصول والشعب المفتوحة</span>
             <span className="text-2xl font-black text-slate-900 font-mono tracking-tight block mt-1">{totalClassesCount} شعبة</span>
-            <span className="text-[10px] font-bold text-amber-800 bg-amber-50 px-2 py-0.5 rounded-full inline-block mt-1">طاقة استيعابية 100%</span>
+            <span className="text-[10px] font-bold text-amber-800 bg-amber-50 px-2 py-0.5 rounded-full inline-block mt-1">{totalClassesCount > 0 ? 'بيانات السعة من السجل المركزي' : 'السعة غير متحققة'}</span>
           </div>
           <div className="w-11 h-11 bg-[#2a1a0e] text-amber-400 flex items-center justify-center border border-[#d4af37]/40 shrink-0">
             <Building className="w-5 h-5" />
@@ -609,14 +598,14 @@ export default function AcademicAffairsPortal({
           <div>
             <span className="text-[11px] font-black text-slate-700 block">سلامة الجدول والتعارضات</span>
             <span className={`text-2xl font-black font-mono tracking-tight block mt-1 ${conflictCount > 0 ? 'text-rose-600' : 'text-emerald-600'}`}>
-              {conflictCount > 0 ? `${conflictCount} تعارض` : 'صفر تعارضات'}
+              {schedulePeriods.length === 0 ? 'غير متحقق' : conflictCount > 0 ? `${conflictCount} تعارض` : 'صفر تعارضات'}
             </span>
             <span className={`text-[10px] font-bold px-2 py-0.5 rounded-full inline-block mt-1 ${conflictCount > 0 ? 'bg-rose-100 text-rose-800' : 'bg-emerald-100 text-emerald-800'}`}>
-              {conflictCount > 0 ? 'يتطلب التعديل' : 'معتمد بنسبة 100%'}
+              {schedulePeriods.length === 0 ? 'بانتظار جدول مركزي' : conflictCount > 0 ? 'يتطلب التعديل' : 'لا توجد تعارضات'}
             </span>
           </div>
           <div className={`w-11 h-11 bg-[#2a1a0e] flex items-center justify-center border border-[#d4af37]/40 shrink-0 ${conflictCount > 0 ? 'text-rose-400' : 'text-emerald-400'}`}>
-            {conflictCount > 0 ? <AlertTriangle className="w-5 h-5" /> : <CheckCircle2 className="w-5 h-5" />}
+            {schedulePeriods.length === 0 || conflictCount > 0 ? <AlertTriangle className="w-5 h-5" /> : <CheckCircle2 className="w-5 h-5" />}
           </div>
         </div>
 
@@ -707,13 +696,13 @@ export default function AcademicAffairsPortal({
               <div className="border-2 border-amber-200 p-4 hover:border-[#d4af37] transition-all space-y-3">
                 <div className="flex items-center justify-between border-b border-slate-100 pb-2">
                   <div className="font-black text-slate-900 text-sm">المرحلة الابتدائية</div>
-                  <span className="text-[10px] font-bold bg-emerald-100 text-emerald-800 px-2 py-0.5 rounded-full">نشطة</span>
+                  <span className="text-[10px] font-bold bg-slate-100 text-slate-600 px-2 py-0.5 rounded-full">غير متحقق</span>
                 </div>
                 <div className="space-y-1.5 text-xs font-bold text-slate-700">
-                  <div className="flex justify-between"><span>الصفوف الدراسية:</span><span className="font-mono text-amber-900">6 صفوف (1-6)</span></div>
-                  <div className="flex justify-between"><span>عدد الشعب:</span><span className="font-mono text-amber-900">12 شعبة</span></div>
-                  <div className="flex justify-between"><span>إجمالي الطلاب:</span><span className="font-mono text-amber-900">840 طالب</span></div>
-                  <div className="flex justify-between"><span>المواد المقررة:</span><span className="font-mono text-amber-900">9 مواد</span></div>
+                  <div className="flex justify-between"><span>الصفوف الدراسية:</span><span className="font-mono text-slate-500">غير متحقق</span></div>
+                  <div className="flex justify-between"><span>عدد الشعب:</span><span className="font-mono text-slate-500">غير متحقق</span></div>
+                  <div className="flex justify-between"><span>إجمالي الطلاب:</span><span className="font-mono text-slate-500">غير متحقق</span></div>
+                  <div className="flex justify-between"><span>المواد المقررة:</span><span className="font-mono text-slate-500">غير متحقق</span></div>
                 </div>
               </div>
 
@@ -721,13 +710,13 @@ export default function AcademicAffairsPortal({
               <div className="border-2 border-amber-200 p-4 hover:border-[#d4af37] transition-all space-y-3">
                 <div className="flex items-center justify-between border-b border-slate-100 pb-2">
                   <div className="font-black text-slate-900 text-sm">المرحلة المتوسطة</div>
-                  <span className="text-[10px] font-bold bg-emerald-100 text-emerald-800 px-2 py-0.5 rounded-full">نشطة</span>
+                  <span className="text-[10px] font-bold bg-slate-100 text-slate-600 px-2 py-0.5 rounded-full">غير متحقق</span>
                 </div>
                 <div className="space-y-1.5 text-xs font-bold text-slate-700">
-                  <div className="flex justify-between"><span>الصفوف الدراسية:</span><span className="font-mono text-amber-900">3 صفوف (1-3)</span></div>
-                  <div className="flex justify-between"><span>عدد الشعب:</span><span className="font-mono text-amber-900">8 شعب</span></div>
-                  <div className="flex justify-between"><span>إجمالي الطلاب:</span><span className="font-mono text-amber-900">560 طالب</span></div>
-                  <div className="flex justify-between"><span>المواد المقررة:</span><span className="font-mono text-amber-900">11 مادة</span></div>
+                  <div className="flex justify-between"><span>الصفوف الدراسية:</span><span className="font-mono text-slate-500">غير متحقق</span></div>
+                  <div className="flex justify-between"><span>عدد الشعب:</span><span className="font-mono text-slate-500">غير متحقق</span></div>
+                  <div className="flex justify-between"><span>إجمالي الطلاب:</span><span className="font-mono text-slate-500">غير متحقق</span></div>
+                  <div className="flex justify-between"><span>المواد المقررة:</span><span className="font-mono text-slate-500">غير متحقق</span></div>
                 </div>
               </div>
 
@@ -735,13 +724,13 @@ export default function AcademicAffairsPortal({
               <div className="border-2 border-amber-200 p-4 hover:border-[#d4af37] transition-all space-y-3">
                 <div className="flex items-center justify-between border-b border-slate-100 pb-2">
                   <div className="font-black text-slate-900 text-sm">المرحلة الثانوية</div>
-                  <span className="text-[10px] font-bold bg-emerald-100 text-emerald-800 px-2 py-0.5 rounded-full">نشطة</span>
+                  <span className="text-[10px] font-bold bg-slate-100 text-slate-600 px-2 py-0.5 rounded-full">غير متحقق</span>
                 </div>
                 <div className="space-y-1.5 text-xs font-bold text-slate-700">
-                  <div className="flex justify-between"><span>الصفوف الدراسية:</span><span className="font-mono text-amber-900">3 صفوف (1-3)</span></div>
-                  <div className="flex justify-between"><span>عدد الشعب:</span><span className="font-mono text-amber-900">6 شعب</span></div>
-                  <div className="flex justify-between"><span>إجمالي الطلاب:</span><span className="font-mono text-amber-900">420 طالب</span></div>
-                  <div className="flex justify-between"><span>المواد المقررة:</span><span className="font-mono text-amber-900">14 مادة</span></div>
+                  <div className="flex justify-between"><span>الصفوف الدراسية:</span><span className="font-mono text-slate-500">غير متحقق</span></div>
+                  <div className="flex justify-between"><span>عدد الشعب:</span><span className="font-mono text-slate-500">غير متحقق</span></div>
+                  <div className="flex justify-between"><span>إجمالي الطلاب:</span><span className="font-mono text-slate-500">غير متحقق</span></div>
+                  <div className="flex justify-between"><span>المواد المقررة:</span><span className="font-mono text-slate-500">غير متحقق</span></div>
                 </div>
               </div>
 
@@ -947,50 +936,8 @@ export default function AcademicAffairsPortal({
             </button>
           </div>
 
-          <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
-            
-            <div className="border-2 border-amber-200 p-4 space-y-3">
-              <div className="flex items-center justify-between border-b pb-2">
-                <div className="font-black text-slate-900 text-sm">الصف الأول الابتدائي (أ)</div>
-                <span className="text-[10px] font-bold bg-emerald-100 text-emerald-800 px-2 py-0.5 rounded-full">32 / 35 طالب</span>
-              </div>
-              <div className="w-full bg-slate-100 rounded-full h-2 overflow-hidden">
-                <div className="bg-emerald-500 h-full rounded-full" style={{ width: '91%' }} />
-              </div>
-              <div className="flex justify-between items-center text-xs font-bold text-slate-600">
-                <span>مربط القاعة: 101</span>
-                <span>المعلم الرائد: د. أحمد المحمود</span>
-              </div>
-            </div>
-
-            <div className="border-2 border-amber-200 p-4 space-y-3">
-              <div className="flex items-center justify-between border-b pb-2">
-                <div className="font-black text-slate-900 text-sm">الصف الأول الابتدائي (ب)</div>
-                <span className="text-[10px] font-bold bg-emerald-100 text-emerald-800 px-2 py-0.5 rounded-full">30 / 35 طالب</span>
-              </div>
-              <div className="w-full bg-slate-100 rounded-full h-2 overflow-hidden">
-                <div className="bg-emerald-500 h-full rounded-full" style={{ width: '85%' }} />
-              </div>
-              <div className="flex justify-between items-center text-xs font-bold text-slate-600">
-                <span>مربط القاعة: 102</span>
-                <span>المعلم الرائد: أ. سارة خالد</span>
-              </div>
-            </div>
-
-            <div className="border-2 border-amber-200 p-4 space-y-3">
-              <div className="flex items-center justify-between border-b pb-2">
-                <div className="font-black text-slate-900 text-sm">الصف الثاني الابتدائي (أ)</div>
-                <span className="text-[10px] font-bold bg-amber-100 text-amber-900 px-2 py-0.5 rounded-full">34 / 35 طالب</span>
-              </div>
-              <div className="w-full bg-slate-100 rounded-full h-2 overflow-hidden">
-                <div className="bg-amber-500 h-full rounded-full" style={{ width: '97%' }} />
-              </div>
-              <div className="flex justify-between items-center text-xs font-bold text-slate-600">
-                <span>مربط القاعة: 103</span>
-                <span>المعلم الرائد: أ. طارق عبدالكريم</span>
-              </div>
-            </div>
-
+          <div className="p-4 bg-amber-50 border border-amber-200 text-xs font-bold text-amber-900">
+            {academicClasses.length > 0 ? 'بيانات الفصول المركزية محملة ويمكن مراجعتها.' : 'لا توجد بيانات فصول مركزية متاحة للتحقق.'}
           </div>
         </div>
       )}
@@ -1033,7 +980,7 @@ export default function AcademicAffairsPortal({
           ) : (
             <div className="p-3 bg-emerald-50 border border-emerald-300 flex items-center gap-2 text-emerald-900 text-xs font-extrabold">
               <CheckCircle2 className="w-4 h-4 text-emerald-600" />
-              <span>الجدول الدراسي معتمد بنسبة 100% وخالٍ تماماً من أي تعارضات للمعلمين أو القاعات!</span>
+              <span>{schedulePeriods.length > 0 && conflictCount === 0 ? 'الجدول الدراسي المحمل لا يحتوي تعارضات' : 'حالة الجدول غير متحققة لغياب جدول مركزي'}</span>
             </div>
           )}
 
@@ -1130,28 +1077,15 @@ export default function AcademicAffairsPortal({
           <div className="grid grid-cols-1 md:grid-cols-2 gap-5">
             <div className="p-4 border border-amber-200 space-y-3">
               <div className="font-black text-slate-900 text-xs">نسبة تغطية المناهج الدراسية حسب المرحلة</div>
-              <div className="space-y-2 text-xs font-bold">
-                <div>
-                  <div className="flex justify-between mb-1"><span>المرحلة الابتدائية</span><span className="font-mono">94%</span></div>
-                  <div className="w-full bg-slate-100 rounded-full h-2"><div className="bg-emerald-500 h-full rounded-full" style={{ width: '94%' }} /></div>
-                </div>
-                <div>
-                  <div className="flex justify-between mb-1"><span>المرحلة المتوسطة</span><span className="font-mono">88%</span></div>
-                  <div className="w-full bg-slate-100 rounded-full h-2"><div className="bg-emerald-500 h-full rounded-full" style={{ width: '88%' }} /></div>
-                </div>
-                <div>
-                  <div className="flex justify-between mb-1"><span>المرحلة الثانوية</span><span className="font-mono">91%</span></div>
-                  <div className="w-full bg-slate-100 rounded-full h-2"><div className="bg-emerald-500 h-full rounded-full" style={{ width: '91%' }} /></div>
-                </div>
+              <div className="p-3 bg-amber-50 border border-amber-200 text-xs font-bold text-amber-900">
+                لا توجد بيانات تغطية مناهج مركزية متاحة للتحقق.
               </div>
             </div>
 
             <div className="p-4 border border-amber-200 space-y-3">
               <div className="font-black text-slate-900 text-xs">توزيع نصاب المعلمين الأسبوعي</div>
               <div className="space-y-2 text-xs font-bold text-slate-700">
-                <div className="flex justify-between p-2 bg-transparent rounded-xl"><span>متوسط النصاب للمعلم:</span><span className="font-mono text-amber-900">18 حصة/أسبوع</span></div>
-                <div className="flex justify-between p-2 bg-transparent rounded-xl"><span>الحد الأعلى المسموح:</span><span className="font-mono text-amber-900">24 حصة/أسبوع</span></div>
-                <div className="flex justify-between p-2 bg-transparent rounded-xl"><span>معلمون بنصاب مكتمل:</span><span className="font-mono text-emerald-700">92%</span></div>
+                <div className="p-3 bg-amber-50 border border-amber-200 text-amber-900">لا توجد بيانات نصاب معلمين مركزية متاحة للتحقق.</div>
               </div>
             </div>
           </div>

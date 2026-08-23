@@ -25,25 +25,25 @@ export default function StudentUniform({
             <div className="flex justify-between items-center flex-row-reverse">
               <span className="text-slate-550 font-black">مقاس الزي المدرسي المعتمد للطالب:</span>
               <span className="bg-slate-100 text-slate-800 font-mono font-black text-[11px] px-2.5 py-0.5 rounded-md">
-                M (مستوفي المعيار)
+                غير محدد
               </span>
             </div>
             <div className="flex justify-between items-center flex-row-reverse">
               <span className="text-slate-550 font-black">عدد القطع المستلمة من المستودع:</span>
-              <span className="font-extrabold text-slate-850">3 قطع (مجموعة كاملة)</span>
+              <span className="font-extrabold text-slate-500">غير موثق</span>
             </div>
             <div className="flex justify-between items-center flex-row-reverse">
               <span className="text-slate-550 font-black">تاريخ ومسؤول الصرف الفعلي:</span>
-              <span className="font-semibold text-slate-700">1447-01-05 هـ - أ. وليد الصالح</span>
+              <span className="font-semibold text-slate-500">غير موثق</span>
             </div>
             <div className="flex justify-between items-center flex-row-reverse">
               <span className="text-slate-550 font-black">قيمة رسوم الزي والمستلزمات:</span>
-              <span className="font-black text-slate-900 font-mono">450 ريال</span>
+              <span className="font-black text-slate-500 font-mono">غير محددة</span>
             </div>
             <div className="flex justify-between items-center flex-row-reverse">
               <span className="text-slate-550 font-black">حالة سداد قيمة الزي:</span>
               <span className="inline-block bg-emerald-100 text-emerald-800 px-2 py-0.5 rounded font-black text-[9.5px]">
-                تم السداد بالكامل
+                غير متحقق
               </span>
             </div>
           </div>
@@ -51,8 +51,9 @@ export default function StudentUniform({
           <div className="pt-2 border-t flex gap-2">
             <button
               type="button"
-              onClick={() => triggerNotification('جاري ترحيل وتعديل مقاس الطالب المدرسي بالمنظومة للعام القادم...', 'info')}
-              className="flex-1 bg-amber-600 hover:bg-amber-500 text-white text-[11px] font-black py-2 transition-all cursor-pointer"
+              onClick={() => triggerNotification('لا يمكن تعديل المقاس قبل توفر مصدر الزي المركزي.', 'warning')}
+              className="flex-1 bg-slate-300 text-slate-500 text-[11px] font-black py-2 cursor-not-allowed"
+              disabled
             >
               👕 تعديل المقاس والمواصفات
             </button>
@@ -65,19 +66,14 @@ export default function StudentUniform({
             <div className="space-y-3">
               <div>
                 <label className="block text-slate-650 font-bold text-[10.5px] mb-1">القطعة المطلوب صرفها الآن:</label>
-                <select className="w-full bg-transparent border border-slate-250 rounded-lg p-2 text-xs font-black">
-                  <option value="shirt">قميص صيفي إضافي - 80 ريال</option>
-                  <option value="pants">بنطال مدرسي رسمي - 120 ريال</option>
-                  <option value="jacket">سترة صوفية شتوية - 150 ريال</option>
+                <select disabled className="w-full bg-transparent border border-slate-250 rounded-lg p-2 text-xs font-black">
+                  <option value="">لا توجد أصناف موثقة متاحة</option>
                 </select>
               </div>
               <div>
                 <label className="block text-slate-655 font-bold text-[10.5px] mb-1">المقاس المطلوب صرفه حالياً:</label>
-                <select className="w-full bg-transparent border border-slate-250 rounded-lg p-2 text-xs font-black">
-                  <option value="s">Small (S)</option>
-                  <option value="m">Medium (M)</option>
-                  <option value="l">Large (L)</option>
-                  <option value="xl">Extra Large (XL)</option>
+                <select disabled className="w-full bg-transparent border border-slate-250 rounded-lg p-2 text-xs font-black">
+                  <option value="">لا توجد مقاسات موثقة متاحة</option>
                 </select>
               </div>
             </div>
@@ -85,8 +81,9 @@ export default function StudentUniform({
 
           <button
             type="button"
-            onClick={() => triggerNotification('تم صرف قطعة الزي بنجاح، وترحيل قيمتها المحاسبية كذمة مالية مستحقة الدفع فورياً على الطالب!', 'success')}
-            className="w-full bg-slate-850 hover:bg-slate-700 text-white font-extrabold text-xs py-2 transition-all mt-4 cursor-pointer"
+            onClick={() => triggerNotification('لا يمكن صرف قطعة قبل توفر مصدر الزي المركزي.', 'warning')}
+            className="w-full bg-slate-300 text-slate-500 font-extrabold text-xs py-2 cursor-not-allowed"
+            disabled
           >
             تأكيد صرف وترحيل رسوم القطعة الإضافية
           </button>

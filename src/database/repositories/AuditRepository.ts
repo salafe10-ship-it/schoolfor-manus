@@ -127,6 +127,7 @@ export class AuditRepository implements IBaseRepository<AuditLog> {
         EnterpriseLogger.error("Failed to fetch audit log by ID:", "AuditRepository", { error: err });
       }
     }
+    FallbackStorage.assertCanonicalPersistence(`audit read ${id}`);
     const log = FallbackStorage.getAuditLogs().find(l => l.schoolId === schoolId && l.id === id);
     return log || null;
   }
@@ -194,6 +195,7 @@ export class AuditRepository implements IBaseRepository<AuditLog> {
       }
     }
 
+    FallbackStorage.assertCanonicalPersistence(`audit list read for ${schoolId}`);
     let logs = FallbackStorage.getAuditLogs().filter(log => log.schoolId === schoolId);
     if (options?.userId) {
       logs = logs.filter(log => log.userId === options.userId);
@@ -317,6 +319,7 @@ export class AuditRepository implements IBaseRepository<AuditLog> {
       }
     }
 
+    FallbackStorage.assertCanonicalPersistence(`audit create ${newLog.id}`);
     const all = FallbackStorage.getAuditLogs();
     all.unshift(newLog);
     FallbackStorage.saveAuditLogs(all);

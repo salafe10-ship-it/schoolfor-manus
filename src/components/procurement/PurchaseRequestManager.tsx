@@ -32,27 +32,16 @@ export default function PurchaseRequestManager({
 
   const handleOpenNew = () => {
     setEditingPR({
-      requestNo: `PR-2026-${Math.floor(100 + Math.random() * 900)}`,
+      requestNo: '',
       requestDate: new Date().toISOString().split('T')[0],
       requiredDate: new Date(Date.now() + 14 * 86400000).toISOString().split('T')[0],
-      requesterName: 'د. خالد الزهراني',
-      department: 'قسم الحاسوب والتقنية',
+      requesterName: '',
+      department: '',
       priority: 'medium',
-      purpose: 'توفير التجهيزات والقرطاسية للفصل الدراسي القادم',
+      purpose: '',
       status: 'pending_approval',
-      lines: [
-        {
-          id: `line_${Date.now()}_1`,
-          itemCode: 'SKU-E-001',
-          itemName: 'أجهزة بروجكتور فائقة الجودة سوني UHD',
-          unit: 'جهاز',
-          quantityRequested: 5,
-          estimatedUnitPrice: 3000,
-          totalAmount: 15000,
-          warehouseId: 'branch_1_1'
-        }
-      ],
-      totalEstimatedAmount: 15000
+      lines: [],
+      totalEstimatedAmount: 0
     });
     setShowModal(true);
   };
@@ -62,12 +51,12 @@ export default function PurchaseRequestManager({
     const lines = editingPR.lines || [];
     const newLine: ProcurementItemLine = {
       id: `line_${Date.now()}`,
-      itemCode: 'SKU-NEW',
-      itemName: 'صنف جديد مخصص',
-      unit: 'قطعة',
-      quantityRequested: 1,
-      estimatedUnitPrice: 100,
-      totalAmount: 100
+      itemCode: '',
+      itemName: '',
+      unit: '',
+      quantityRequested: 0,
+      estimatedUnitPrice: 0,
+      totalAmount: 0
     };
     const updatedLines = [...lines, newLine];
     const total = updatedLines.reduce((s, l) => s + l.totalAmount, 0);
@@ -95,7 +84,14 @@ export default function PurchaseRequestManager({
 
   const handleSubmitForm = (e: React.FormEvent) => {
     e.preventDefault();
-    if (!editingPR || !editingPR.requestNo) return;
+    if (!editingPR || !editingPR.requestNo) {
+      notify('يرجى إدخال رقم طلب الشراء', 'warning');
+      return;
+    }
+    if (!editingPR.requesterName || !editingPR.department || !editingPR.purpose || !editingPR.lines?.length || editingPR.lines.some(l => !l.itemCode || !l.itemName || !Number.isInteger(l.quantityRequested) || l.quantityRequested <= 0 || !Number.isFinite(l.estimatedUnitPrice) || l.estimatedUnitPrice < 0)) {
+      notify('لا يمكن حفظ الطلب دون بيانات الطالب والغرض وبنود وكميات وأسعار صحيحة', 'warning');
+      return;
+    }
 
     const prToSave: PurchaseRequest = {
       id: editingPR.id || `pr_${Date.now()}`,

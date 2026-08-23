@@ -27,10 +27,7 @@ export default function SuperAdminImpersonation({
   // Impersonation Log History
   const [logs, setLogs] = useState<any[]>(() => {
     const saved = localStorage.getItem('edupro_impersonation_logs_v1');
-    return saved ? JSON.parse(saved) : [
-      { id: 'imp_01', adminName: 'سليمان بن غازي', schoolName: 'مدارس النور الأهلية', reason: 'مساعدة المدير المالي في ترحيل قيود الخزينة المفتوحة', date: '2026-07-12 10:30', duration: '30 دقيقة', status: 'completed' },
-      { id: 'imp_02', adminName: 'سليمان بن غازي', schoolName: 'مدارس الفرسان العالمية', reason: 'حل مشكلة في جداول حصص الباصات وحجز الطلاب', date: '2026-07-13 14:15', duration: '60 دقيقة', status: 'completed' }
-    ];
+    return saved ? JSON.parse(saved) : [];
   });
 
   const handleStartImpersonation = (e: React.FormEvent) => {
@@ -42,6 +39,9 @@ export default function SuperAdminImpersonation({
 
     const school = schools.find(s => s.id === targetSchoolId);
     if (!school) return;
+
+    triggerNotification('خدمة الولوج الآمن المركزية غير متاحة؛ لم تبدأ جلسة محاكاة ولم يُسجل نجاح.', 'warning');
+    return;
 
     // Log the secure impersonation action
     const newLog = {

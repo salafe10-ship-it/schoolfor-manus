@@ -12,6 +12,7 @@ export interface IFinancialStatementsStorageProvider {
 
 export class ProductionDatabaseProvider implements IFinancialStatementsStorageProvider {
   public async save(schoolId: string, statementSet: FinancialStatementsSet): Promise<void> {
+    FallbackStorage.assertCanonicalPersistence('financial statement fallback save');
     const supabase = getSupabaseClient();
     if (!supabase) {
       throw new Error('خطأ إنتاجي حرج: عميل قاعدة البيانات غير متوفر أو غير مهيأ.');
@@ -44,6 +45,7 @@ export class ProductionDatabaseProvider implements IFinancialStatementsStoragePr
   }
 
   public async getById(schoolId: string, statementId: string): Promise<FinancialStatementsSet | null> {
+    FallbackStorage.assertCanonicalPersistence('financial statement fallback read');
     const supabase = getSupabaseClient();
     if (!supabase) {
       throw new Error('خطأ إنتاجي حرج: عميل قاعدة البيانات غير متوفر أو غير مهيأ.');
@@ -62,6 +64,7 @@ export class ProductionDatabaseProvider implements IFinancialStatementsStoragePr
   }
 
   public async getAll(schoolId: string): Promise<FinancialStatementsSet[]> {
+    FallbackStorage.assertCanonicalPersistence('financial statements fallback list read');
     const supabase = getSupabaseClient();
     if (!supabase) {
       throw new Error('خطأ إنتاجي حرج: عميل قاعدة البيانات غير متوفر أو غير مهيأ.');
@@ -123,7 +126,7 @@ export class FinancialStatementsStorageResolver {
     const isLocalHost = typeof window !== 'undefined' && 
       (window.location.hostname === 'localhost' || window.location.hostname === '127.0.0.1');
 
-    return isNodeProd || isViteProd || (typeof window !== 'undefined' && !isLocalHost);
+    return isNodeProd || isViteProd || (typeof window !== 'undefined' && !isLocalHost) || FallbackStorage.isCanonicalPersistenceRequired();
   }
 
   public static async resolveProvider(): Promise<IFinancialStatementsStorageProvider> {

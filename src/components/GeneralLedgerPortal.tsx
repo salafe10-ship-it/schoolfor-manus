@@ -1,5 +1,5 @@
 import { Activity, AlertTriangle, ArrowRightLeft, Building2, Calculator, Calendar, CheckCircle2, Coins, FileSpreadsheet, FileText, Hash, HelpCircle, Landmark, Layers, Lock as LockIcon, Percent, Play, Plus, Printer, RefreshCw, Search, Settings2, TrendingUp, UserCheck, Users, X } from 'lucide-react';
-import React, { useState, useMemo } from 'react';
+import React, { useEffect, useState, useMemo } from 'react';
 import { Student, Invoice, Stage, Grade, AcademicClass, CostCenter, UserRole } from '../types';
 import { SQLTransactionEngine } from '../database/transactions/transactionManager';
 import { SQLCommandBuilder } from '../database/transactions/SQLCommand';
@@ -10,6 +10,7 @@ import EnterpriseActionToolbar from './shared/EnterpriseActionToolbar';
 import { EnterpriseAuditLogger } from '../utils/EnterpriseAuditLogger';
 import { PermissionsManagementModule, MODULES_SCHEMA } from './PermissionsManagementModule';
 import { AccountingContext, type AccountNode } from '../modules/accounting/presentation/AccountingContext';
+import { getTrustedAccessToken } from '../utils/auth';
 export { AccountingContext };
 export type { AccountNode };
 
@@ -85,6 +86,12 @@ export default function GeneralLedgerPortal({
   setDrillDownUser: setDrillDownUserProp
 }: GeneralLedgerPortalProps) {
   const { currencyConfig, format: formatCurrency } = useCurrency();
+  const canonicalPersistenceRequired = FallbackStorage.isCanonicalPersistenceRequired();
+  useEffect(() => {
+    if (canonicalPersistenceRequired) {
+      triggerNotification('تم إخفاء البيانات الافتراضية للأستاذ العام حتى يتم تحميل المصدر المحاسبي المركزي الموثوق.', 'warning');
+    }
+  }, [canonicalPersistenceRequired, triggerNotification]);
   const [activeTab, setActiveTab] = useState<string>(initialTab || 'dashboard');
   const [activeSidebarItem, setActiveSidebarItem] = useState<string>(initialTab || 'dashboard');
   const [refreshing, setRefreshing] = useState<boolean>(false);
@@ -200,8 +207,144 @@ export default function GeneralLedgerPortal({
   const findOriginalDocument = (id: string) => { console.log('Find original document', id); };
   const handleReportAccountClick = (acc: string) => { console.log('Report account click', acc); };
   const handleJournalEntryClick = (jvId: string) => { console.log('Journal entry click', jvId); };
-  const isAccountOrDescendant = (acc: string, parent: string) => { return false; };
-  const getProcessedAccounts = () => { return []; };
+  const isAccountOrDescendant = (acc: string, parent: string) => {
+    if (!acc || !parent) return false;
+
+    const normalize = (value: string) => String(value).trim();
+    const accountCode = normalize(acc);
+    const parentCode = normalize(parent);
+    if (accountCode === parentCode) return true;
+
+    const accountByCode = new Map<string, AccountNode>(accounts.map(account => [normalize(account.code), account]));
+    const accountById = new Map<string, AccountNode>(accounts.map(account => [normalize(account.id), account]));
+    const visited = new Set<string>();
+    let current = accountByCode.get(accountCode) || accountById.get(accountCode);
+
+    while (current?.parentAccountId && !visited.has(current.code)) {
+      visited.add(current.code);
+      const ancestor = normalize(String(current.parentAccountId));
+      if (ancestor === parentCode) return true;
+      current = accountByCode.get(ancestor) || accountById.get(ancestor);
+    }
+
+    return false;
+  };
+
+  const getProcessedAccounts = (options?: {
+    fromDate?: string;
+    toDate?: string;
+    costCenter?: string;
+  }) => {
+    const toAmount = (value: unknown) => {
+      const amount = Number(value);
+      return Number.isFinite(amount) ? amount : 0;
+    };
+
+    const sourceAccounts = accounts.map(account => ({
+      ...account,
+      openingBalance: 0,
+      debitMovements: 0,
+      creditMovements: 0,
+      endingBalance: 0,
+      allDebitMovements: 0,
+      allCreditMovements: 0
+    }));
+    const accountByCode = new Map<string, typeof sourceAccounts[number]>(sourceAccounts.map(account => [String(account.code), account]));
+    const accountById = new Map<string, typeof sourceAccounts[number]>(sourceAccounts.map(account => [String(account.id), account]));
+
+    // When the canonical chart is present, its balance is the persisted
+    // closing balance. When it is absent, the connected journal stream is the
+    // source of truth and balances are derived from its posted movements.
+    const hasCanonicalBalances = canonicalSnapshotHasAccounts;
+    sourceAccounts.forEach(account => {
+      account.openingBalance = 0;
+      account.endingBalance = 0;
+    });
+
+    const normalizedEntries = canonicalFinancialStatus === 'ready'
+      ? getNormalizedJournalEntries().filter((entry: any) =>
+          entry.status === 'مرحل' || entry.status === 'معتمد' || entry.status === 'posted' || entry.status === 'approved'
+        )
+      : [];
+
+    const periodEntries = normalizedEntries.filter((entry: any) => {
+      const date = String(entry.date || '');
+      if (options?.fromDate && date < options.fromDate) return false;
+      if (options?.toDate && date > options.toDate) return false;
+      return true;
+    });
+
+    const applyLines = (entries: any[], movementKey: 'period' | 'all', applyCostCenterFilter: boolean) => entries.forEach((entry: any) => {
+      if (!Array.isArray(entry.lines)) return;
+      entry.lines.forEach((line: any) => {
+        if (applyCostCenterFilter && options?.costCenter && options.costCenter !== 'all' && line.costCenter !== options.costCenter) return;
+        const code = String(line.accountCode || line.accountId || '').trim();
+        const account = accountByCode.get(code) || accountById.get(code);
+        if (!account) return;
+        const debit = toAmount(line.debit);
+        const credit = toAmount(line.credit);
+        if (movementKey === 'all') {
+          account.allDebitMovements += debit;
+          account.allCreditMovements += credit;
+        } else {
+          account.debitMovements += debit;
+          account.creditMovements += credit;
+        }
+      });
+    });
+
+    // All movements establish the opening balance when the canonical chart
+    // stores a current closing balance; period movements establish the report
+    // closing balance. This keeps Q1/Q2/full-year reports consistent.
+    applyLines(normalizedEntries, 'all', false);
+    applyLines(periodEntries, 'period', true);
+
+    sourceAccounts.forEach(account => {
+      const isDebitNature = account.natureType === 'مدين' || account.classification === 'أصول' || account.classification === 'مصروفات';
+      const allSignedMovement = isDebitNature
+        ? account.allDebitMovements - account.allCreditMovements
+        : account.allCreditMovements - account.allDebitMovements;
+      const periodSignedMovement = isDebitNature
+        ? account.debitMovements - account.creditMovements
+        : account.creditMovements - account.debitMovements;
+      const persistedBalance = toAmount(account.balance);
+
+      account.openingBalance = hasCanonicalBalances ? persistedBalance - allSignedMovement : 0;
+      account.endingBalance = account.openingBalance + periodSignedMovement;
+    });
+
+    const childrenByParent = new Map<string, typeof sourceAccounts>();
+    sourceAccounts.forEach(account => {
+      if (!account.parentAccountId) return;
+      const key = String(account.parentAccountId);
+      const children = childrenByParent.get(key) || [];
+      children.push(account);
+      childrenByParent.set(key, children);
+    });
+
+    const aggregate = (account: typeof sourceAccounts[number], visited = new Set<string>()) => {
+      if (visited.has(account.code)) return account;
+      const nextVisited = new Set(visited);
+      nextVisited.add(account.code);
+      const children = [
+        ...(childrenByParent.get(account.code) || []),
+        ...(childrenByParent.get(account.id) || [])
+      ].filter((child, index, list) => list.findIndex(item => item.code === child.code) === index);
+
+      children.forEach(child => aggregate(child, nextVisited));
+      if (children.length > 0) {
+        account.openingBalance = children.reduce((sum, child) => sum + child.openingBalance, 0);
+        account.debitMovements = children.reduce((sum, child) => sum + child.debitMovements, 0);
+        account.creditMovements = children.reduce((sum, child) => sum + child.creditMovements, 0);
+        account.endingBalance = children.reduce((sum, child) => sum + child.endingBalance, 0);
+      }
+      return account;
+    };
+
+    sourceAccounts.filter(account => !account.parentAccountId).forEach(root => aggregate(root));
+
+    return sourceAccounts;
+  };
   const handleCalcPress = (expr: string) => { console.log('Calc press', expr); };
   const handleBankTransferSubmit = () => { console.log('Bank transfer submitted'); };
   const handleSelectAsset = (a: string) => { };
@@ -300,6 +443,7 @@ export default function GeneralLedgerPortal({
 
   // Chart of accounts state
   const [accounts, setAccounts] = useState<AccountNode[]>(() => {
+    if (canonicalPersistenceRequired) return [];
     const local = localStorage.getItem('erp_chart_of_accounts_v2');
     if (local) {
       try {
@@ -308,7 +452,9 @@ export default function GeneralLedgerPortal({
         console.error("Failed to parse accounts from localStorage", "GeneralLedgerPortal", { error: e });
       }
     }
-    return [
+    // لا تُحمّل أرصدة افتتاحية تجريبية عند غياب المصدر المحاسبي المركزي.
+    return [];
+    /* return [
       // 1000 Assets (الأصول)
       { id: '1000', code: '1000', name: 'الأصول والممتلكات', nameAr: 'الأصول والممتلكات', nameEn: 'Assets', parentAccountId: undefined, type: 'رئيسي', classification: 'أصول', level: 1, natureType: 'مدين', isActive: true, balance: 464500.00, currency: 'د.ل', notes: 'الحساب الرئيسي لجميع الأصول' },
       { id: '1100', code: '1100', name: 'الأصول المتداولة والسيولة', nameAr: 'الأصول المتداولة والسيولة', nameEn: 'Current Assets and Liquidity', parentAccountId: '1000', type: 'رئيسي', classification: 'أصول', level: 2, natureType: 'مدين', isActive: true, balance: 450000.00, currency: 'د.ل', notes: 'النقدية وحسابات البنوك والعهد' },
@@ -354,23 +500,21 @@ export default function GeneralLedgerPortal({
       { id: '5250', code: '5250', name: 'مصروف التسويق والدعاية والنشر', nameAr: 'مصروف التسويق والدعاية والنشر', nameEn: 'Marketing and Advertising Expenses', parentAccountId: '5200', type: 'فرعي', classification: 'مصروفات', level: 3, natureType: 'مدين', isActive: true, balance: 0.00, currency: 'د.ل', notes: 'إعلانات التسجيل للطلاب الجدد، الحملات وتجهيز المطبوعات والهدايا' },
       { id: '5260', code: '5260', name: 'مصروف إيجار مبنى الفرع السنوي', nameAr: 'مصروف إيجار مبنى الفرع السنوي', nameEn: 'Branch Building Annual Rent', parentAccountId: '5200', type: 'فرعي', classification: 'مصروفات', level: 3, natureType: 'مدين', isActive: true, balance: 20000.00, currency: 'د.ل', notes: 'الإيجار التعاقدي السنوي لموقع المدرسة الحالي' },
       { id: '5270', code: '5270', name: 'مصروفات إدارية وتشغيلية أخرى', nameAr: 'مصروفات إدارية وتشغيلية أخرى', nameEn: 'Other Admin & Operating Expenses', parentAccountId: '5200', type: 'فرعي', classification: 'مصروفات', level: 3, natureType: 'مدين', isActive: true, balance: 0.00, currency: 'د.ل', notes: 'أي بنود مصروفات طارئة أخرى لم تدرج بالمجموعات' }
-    ];
+    ]; */
   });
 
   // Suppliers state
-  const [suppliers, setSuppliers] = useState([
-    { id: 'sup_1', name: 'شركة البيان للمطبوعات والكتب', category: 'الكتب والوسائل التعليمية', balance: 3200.00, contact: '0912183921', status: 'نشط' },
-    { id: 'sup_2', name: 'الشركة الليبية للخدمات والنظافة', category: 'صيانة ومرافق', balance: 1500.00, contact: '0925562181', status: 'نشط' },
-    { id: 'sup_3', name: 'شركة الفاف للشحن والنقل البري', category: 'النقل والوقود للرحلات الحافلية', balance: 2800.00, contact: '0917736192', status: 'تحت التسوية' },
-  ]);
+  const [suppliers, setSuppliers] = useState<any[]>([]);
 
   // Journal entries state
   const [journalEntries, setJournalEntries] = useState(() => {
+    if (canonicalPersistenceRequired) return [];
     const local = localStorage.getItem('erp_journal_entries_v2');
     if (local) {
       try { return JSON.parse(local); } catch (e: any) {}
     }
-    return [
+    return [];
+    /* return [
       {
         id: 'JV-2026-001',
         date: '2026-06-20',
@@ -422,8 +566,124 @@ export default function GeneralLedgerPortal({
         ],
         attachments: [] as string[]
       }
-    ];
+    ]; */
   });
+
+  // The general ledger must consume the same canonical financial snapshot as
+  // the student-fees module. Local seed rows remain useful for rendering the
+  // chart structure, but balances and movements are fail-closed until the
+  // trusted source is available.
+  const [canonicalFinancialStatus, setCanonicalFinancialStatus] = useState<'loading' | 'ready' | 'blocked'>('loading');
+  const [canonicalFinancialMessage, setCanonicalFinancialMessage] = useState('جارٍ ربط الأستاذ العام بالمصدر المالي الموحد...');
+  const [canonicalSnapshotHasAccounts, setCanonicalSnapshotHasAccounts] = useState(false);
+
+  useEffect(() => {
+    let active = true;
+
+    const loadCanonicalFinancialSnapshot = async () => {
+      try {
+        const response = await fetch('/api/financial/database', {
+          headers: {
+            'Authorization': `Bearer ${getTrustedAccessToken()}`
+          },
+          cache: 'no-store'
+        });
+        const result = await response.json().catch(() => ({}));
+        if (!response.ok || !result.success) {
+          throw new Error(result.message || `تعذر تحميل المصدر المالي (${response.status})`);
+        }
+
+        const data = result.data || {};
+        const canonicalJournalEntries = Array.isArray(data.journalEntries) ? data.journalEntries : [];
+        const canonicalReceiptVouchers = Array.isArray(data.receiptVouchers) ? data.receiptVouchers : [];
+        const canonicalAccounts = Array.isArray(data.chartOfAccounts) ? data.chartOfAccounts : [];
+
+        if (!active) return;
+
+        // The connected snapshot is authoritative. Keeping browser demo
+        // entries alongside it would make journal totals and reports drift
+        // from the actual posted source.
+        setJournalEntries(canonicalJournalEntries);
+        setReceiptVouchers(canonicalReceiptVouchers);
+
+        if (canonicalAccounts.length > 0) {
+          setCanonicalSnapshotHasAccounts(true);
+          const normalizedAccounts: AccountNode[] = canonicalAccounts.map((account: any) => {
+            const code = String(account.code || account.accountCode || account.id || '');
+            const name = account.nameAr || account.name || account.nameEn || 'حساب مالي';
+            const rawNature = String(account.nature || account.accountType || account.type || '').trim().toLowerCase();
+            const classificationByNature: Record<string, AccountNode['classification']> = {
+              asset: 'أصول',
+              assets: 'أصول',
+              liability: 'خصوم',
+              liabilities: 'خصوم',
+              equity: 'حقوق ملكية',
+              revenue: 'إيرادات',
+              revenues: 'إيرادات',
+              income: 'إيرادات',
+              expense: 'مصروفات',
+              expenses: 'مصروفات'
+            };
+            // Some legacy snapshots carry a stale `classification` label while
+            // the accounting nature/type is correct. Prefer the semantic nature
+            // so revenue/expense postings cannot be rendered under assets.
+            const classification = classificationByNature[rawNature]
+              || account.classification
+              || 'أصول';
+            const rawNatureType = String(account.natureType || '').trim();
+            return {
+              id: String(account.id || code),
+              code,
+              name,
+              nameAr: name,
+              nameEn: account.nameEn || account.name || '',
+              parentAccountId: account.parentAccountId,
+              type: account.type || (Number(account.level || 3) >= 3 ? 'فرعي' : 'رئيسي'),
+              classification,
+              level: Number(account.level || 3),
+              natureType: rawNatureType || (
+                classification === 'إيرادات' || classification === 'خصوم' || classification === 'حقوق ملكية'
+                  ? 'دائن'
+                  : 'مدين'
+              ),
+              isActive: account.isActive !== false,
+              balance: Number(account.balance || 0),
+              currency: account.currency || 'د.ل',
+              notes: account.notes || ''
+            } as AccountNode;
+          });
+          setAccounts(previous => {
+            const canonicalByCode = new Map(normalizedAccounts.map(account => [account.code, account]));
+            const merged = previous.map(account => canonicalByCode.get(account.code) || account);
+            const existingCodes = new Set(merged.map(account => account.code));
+            return [...merged, ...normalizedAccounts.filter(account => !existingCodes.has(account.code))];
+          });
+        } else {
+          // An authenticated but empty chart is valid during development. In
+          // that case zero the demo balances and let the posted journal stream
+          // build a real trial balance instead of showing fabricated amounts.
+          setCanonicalSnapshotHasAccounts(false);
+          setAccounts(previous => previous.map(account => ({ ...account, balance: 0 })));
+        }
+
+        setCanonicalFinancialStatus('ready');
+        setCanonicalFinancialMessage(`المصدر المالي الموحد متصل — ${canonicalJournalEntries.length} قيد و${canonicalReceiptVouchers.length} سند قبض موثق`);
+      } catch (error: any) {
+        if (!active) return;
+        setJournalEntries([]);
+        setReceiptVouchers([]);
+        setCanonicalSnapshotHasAccounts(false);
+        setAccounts(previous => previous.map(account => ({ ...account, balance: 0 })));
+        setCanonicalFinancialStatus('blocked');
+        setCanonicalFinancialMessage(error?.message || 'تعذر ربط الأستاذ العام بالمصدر المالي الموحد');
+      }
+    };
+
+    void loadCanonicalFinancialSnapshot();
+    return () => {
+      active = false;
+    };
+  }, [selectedSchool?.id]);
 
   // Helper to sync local state to FallbackStorage, run the PostingEngine action, and sync back
   const runWithPostingEngine = async (
@@ -933,6 +1193,7 @@ export default function GeneralLedgerPortal({
   ];
 
   const [localRoles, setLocalRoles] = useState<any[]>(() => {
+    if (canonicalPersistenceRequired) return [];
     const saved = localStorage.getItem('erp_roles_list_v1');
     return saved ? JSON.parse(saved) : DEFAULT_ROLES;
   });
@@ -940,18 +1201,17 @@ export default function GeneralLedgerPortal({
   const setRoles = setRolesProp !== undefined ? setRolesProp : setLocalRoles;
 
   const [localUsers, setLocalUsers] = useState<any[]>(() => {
+    if (canonicalPersistenceRequired) return [];
     const saved = localStorage.getItem('erp_users_list_v1');
-    return saved ? JSON.parse(saved) : INITIAL_USERS;
+    return saved ? JSON.parse(saved) : [];
   });
   const SIMULATED_USERS = usersProp !== undefined ? usersProp : localUsers;
   const setUsers = setUsersProp !== undefined ? setUsersProp : setLocalUsers;
 
   const [localPermissionsAuditLog, setLocalPermissionsAuditLog] = useState<any[]>(() => {
+    if (canonicalPersistenceRequired) return [];
     const saved = localStorage.getItem('erp_permissions_audit_log_v1');
-    return saved ? JSON.parse(saved) : [
-      { id: 'audit_0', modifier: 'سليمان غازي', targetUser: 'منصور خلف', date: '2026-06-30 08:30:12', action: 'إنشاء حساب وتخصيص صلاحيات ترحيل الحسابات العامة' },
-      { id: 'audit_1', modifier: 'سليمان غازي', targetUser: 'سالم الوحيشي', date: '2026-06-30 09:15:44', action: 'منح صلاحيات التدقيق المالي وعرض ميزان المراجعة' }
-    ];
+    return saved ? JSON.parse(saved) : [];
   });
   const permissionsAuditLog = permissionsAuditLogProp !== undefined ? permissionsAuditLogProp : localPermissionsAuditLog;
   const setPermissionsAuditLog = setPermissionsAuditLogProp !== undefined ? setPermissionsAuditLogProp : setLocalPermissionsAuditLog;
@@ -960,15 +1220,14 @@ export default function GeneralLedgerPortal({
                                   const [showPostClosingTrialBalance, setShowPostClosingTrialBalance] = useState<boolean>(false);
   
   const [localDrillDownUser, setLocalDrillDownUser] = useState<any>(() => {
+    if (canonicalPersistenceRequired) return null;
     const saved = localStorage.getItem('erp_users_list_v1');
-    const initial = saved ? JSON.parse(saved) : INITIAL_USERS;
+    const initial = saved ? JSON.parse(saved) : [];
     return initial[0];
   });
   const drillDownUser = currentDrillDownUserProp !== undefined ? currentDrillDownUserProp : localDrillDownUser;
   const setDrillDownUser = setDrillDownUserProp !== undefined ? setDrillDownUserProp : setLocalDrillDownUser;
-  const [drillDownHistory, setDrillDownHistory] = useState<any[]>([
-    { level: 'reports', title: 'التقارير المالية' }
-  ]);
+  const [drillDownHistory, setDrillDownHistory] = useState<any[]>([]);
   const [drillDownJvId, setDrillDownJvId] = useState<string | null>(null);
   const [drillDownDoc, setDrillDownDoc] = useState<{ id: string; type: string; data: any } | null>(null);
 
@@ -2718,7 +2977,7 @@ export default function GeneralLedgerPortal({
 
   return (
     <AccountingContext.Provider value={accountingContextValue}>
-    <div className="w-full min-h-screen text-right font-sans dir-rtl select-none transition-all duration-300 bg-gradient-to-br from-[#f8f5ee] via-[#efe9dc] to-[#e8e0d0] text-slate-900 p-2 sm:p-4 md:p-6 space-y-6" dir="rtl">
+    <div id="general-ledger-portal" className="financial-luxury-accounting-shell w-full min-h-screen text-right font-sans dir-rtl select-none transition-all duration-300 bg-gradient-to-br from-[#f8f5ee] via-[#efe9dc] to-[#e8e0d0] text-slate-900 p-2 sm:p-4 md:p-6 space-y-6" dir="rtl">
       <EnterpriseActionToolbar
         title="الحسابات العامة والرقابة المالية"
         stats={
@@ -2733,6 +2992,19 @@ export default function GeneralLedgerPortal({
         onImportExcel={() => {}}
         onDownloadTemplate={() => {}}
       />
+      <div
+        role="status"
+        className={`mx-3 sm:mx-4 rounded-2xl border px-4 py-3 text-xs font-bold shadow-sm ${
+          canonicalFinancialStatus === 'ready'
+            ? 'border-emerald-300 bg-emerald-50 text-emerald-800'
+            : canonicalFinancialStatus === 'blocked'
+              ? 'border-rose-300 bg-rose-50 text-rose-800'
+              : 'border-amber-300 bg-amber-50 text-amber-800'
+        }`}
+      >
+        {canonicalFinancialStatus === 'ready' ? '✓ ' : canonicalFinancialStatus === 'blocked' ? '⚠ ' : '⏳ '}
+        {canonicalFinancialMessage}
+      </div>
       <div id="general-ledger-portal-layout" className="flex flex-col lg:flex-row-reverse gap-4 w-full p-3 sm:p-4 text-right">
       
       {/* LEFT AREA: Content Window based on nested state */}

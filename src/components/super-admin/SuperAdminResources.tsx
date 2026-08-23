@@ -24,16 +24,16 @@ export default function SuperAdminResources({
   // Parse resources
   const getStorageDetails = (school: any) => {
     const used = parseFloat(school.storageUsed || '0');
-    const limit = parseFloat(school.storageLimit || '500');
-    const percent = Math.min(100, Math.round((used / limit) * 100));
+    const limit = parseFloat(school.storageLimit || '0');
+    const percent = limit > 0 ? Math.min(100, Math.round((used / limit) * 100)) : 0;
     return { used, limit, percent };
   };
 
   // Aggregated data across all schools
   const totalStorageUsed = schools.reduce((acc, s) => acc + parseFloat(s.storageUsed || '0'), 0);
-  const totalStorageLimit = schools.reduce((acc, s) => acc + parseFloat(s.storageLimit || '500'), 0);
-  const totalStudents = 245000; // Simulated global
-  const totalActiveUsers = schools.reduce((acc, s) => acc + (s.usersCount || 120), 0);
+  const totalStorageLimit = schools.reduce((acc, s) => acc + parseFloat(s.storageLimit || '0'), 0);
+  const totalStudents = schools.reduce((acc, s) => acc + Number(s.studentCount || 0), 0);
+  const totalActiveUsers = schools.reduce((acc, s) => acc + Number(s.usersCount || 0), 0);
   
   // Chart 1 Data: Storage Consumption per School (Top 5)
   const schoolStorageChartData = schools.slice(0, 5).map(s => {
@@ -46,58 +46,16 @@ export default function SuperAdminResources({
   });
 
   // Chart 2 Data: DB query consumption / storage history
-  const historyData = [
-    { month: 'يناير', dbSize: 45, storageSize: 320, activeQueries: 8900 },
-    { month: 'فبراير', dbSize: 48, storageSize: 360, activeQueries: 9400 },
-    { month: 'مارس', dbSize: 52, storageSize: 410, activeQueries: 10500 },
-    { month: 'أبريل', dbSize: 58, storageSize: 480, activeQueries: 12100 },
-    { month: 'مايو', dbSize: 64, storageSize: 560, activeQueries: 13400 },
-    { month: 'يونيو', dbSize: 72, storageSize: 642, activeQueries: 14800 }
-  ];
+  const historyData: any[] = [];
 
   // Action: Vacuum & Optimize DB Space
   const handleOptimizeDb = (schoolId: string, schoolName: string) => {
-    setIsOptimizing(schoolId);
-    triggerNotification(`جاري جدولة وإجراء فحص وصيانة الخادم الفيدرالي لـ ${schoolName}...`, 'info');
-    
-    setTimeout(() => {
-      // If single school, we slightly decrease their database storage as a visual feedback
-      if (schoolId !== 'all') {
-        setSchools(prev => prev.map(s => {
-          if (s.id === schoolId) {
-            const used = parseFloat(s.storageUsed || '0');
-            const optimizedUsed = Math.max(1, Number((used * 0.95).toFixed(2))); // reduce by 5%
-            return { ...s, storageUsed: `${optimizedUsed} GB` };
-          }
-          return s;
-        }));
-      }
-
-      logAction(
-        'DB_VACUUM_OPTIMIZE',
-        `تنفيذ عملية تنظيف البيانات الميتة (VACUUM FULL & REINDEX) لقاعدة بيانات مستأجر: ${schoolName}`,
-        'مراقبة استهلاك الموارد'
-      );
-      
-      triggerNotification(`اكتمل تنظيف وصيانة خادم مدرسة ${schoolName} بنجاح • تم تحرير مساحات التخزين المؤقتة ✅`, 'success');
-      setIsOptimizing(null);
-    }, 2000);
+    triggerNotification('خدمة صيانة قاعدة البيانات المركزية غير متاحة؛ لم تُنفذ العملية ولم تُعدّل الأرقام محليًا.', 'warning');
   };
 
   // Action: Clear S3 temp logs
   const handleClearS3Temp = (schoolId: string, schoolName: string) => {
-    setIsOptimizing(schoolId + '_s3');
-    triggerNotification(`جاري مسح الملفات غير النشطة واللقطات المؤقتة لـ ${schoolName}...`, 'info');
-    
-    setTimeout(() => {
-      logAction(
-        'CLEAR_S3_TEMP_FILES',
-        `مسح اللقطات والملفات المؤقتة التالفة في سلة S3 للمستأجر: ${schoolName}`,
-        'مراقبة استهلاك الموارد'
-      );
-      triggerNotification(`تم تطهير مجلدات المؤقتات بنجاح وحفظ مساحات تخزين إضافية ✅`, 'success');
-      setIsOptimizing(null);
-    }, 1800);
+    triggerNotification('خدمة التخزين المركزي غير متاحة؛ لم تُحذف ملفات أو تُسجل عملية تطهير.', 'warning');
   };
 
   const selectedSchoolObj = schools.find(s => s.id === selectedSchoolId);
@@ -144,13 +102,13 @@ export default function SuperAdminResources({
           <div className="flex justify-between items-start">
             <div>
               <p className="text-[10px] font-bold text-slate-400 uppercase tracking-wider">خادمي الاتصال المباشر PostgreSQL</p>
-              <h3 className="text-xl font-black text-white mt-1.5 font-mono">148 متصل</h3>
+              <h3 className="text-xl font-black text-white mt-1.5 font-mono">غير متحقق</h3>
             </div>
             <div className="p-2 bg-purple-950/50 text-purple-400 border border-purple-900 group-hover:scale-110 transition-transform">
               <DatabaseZap className="w-5 h-5" />
             </div>
           </div>
-          <p className="text-[9px] text-slate-500 mt-3 font-semibold">تجمع الاتصالات (Connection Pool): 18/100 مستخدم بنجاح</p>
+          <p className="text-[9px] text-slate-500 mt-3 font-semibold">تجمع الاتصالات غير متحقق</p>
         </div>
 
         {/* Metric 4: Backup Health status */}
@@ -159,13 +117,13 @@ export default function SuperAdminResources({
           <div className="flex justify-between items-start">
             <div>
               <p className="text-[10px] font-bold text-slate-400 uppercase tracking-wider">جدولة النسخ الاحتياطية المؤتمتة</p>
-              <h3 className="text-xl font-black text-emerald-400 mt-1.5 font-mono">100% سليم</h3>
+              <h3 className="text-xl font-black text-emerald-400 mt-1.5 font-mono">غير متحقق</h3>
             </div>
             <div className="p-2 bg-amber-950/50 text-amber-400 border border-amber-900 group-hover:scale-110 transition-transform">
               <Clock className="w-5 h-5" />
             </div>
           </div>
-          <p className="text-[9px] text-slate-500 mt-3 font-semibold">آخر لقطة تزامنية ناجحة لجميع المستأجرين: منذ ٣ ساعات</p>
+          <p className="text-[9px] text-slate-500 mt-3 font-semibold">آخر لقطة تزامنية غير متحققة</p>
         </div>
 
       </div>

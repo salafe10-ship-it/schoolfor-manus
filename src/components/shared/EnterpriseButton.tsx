@@ -17,11 +17,11 @@ export default function EnterpriseButton({
   disabled,
   ...props
 }: EnterpriseButtonProps) {
-  const baseStyles = "flex items-center gap-2 px-4 py-2 rounded-lg font-bold text-xs transition-all duration-200 border";
+  const baseStyles = "flex min-h-10 items-center justify-center gap-2 px-4 py-2.5 rounded-xl font-bold text-xs transition-all duration-200 border active:scale-[0.98]";
   
   const variants = {
-    primary: "bg-amber-600 hover:bg-amber-700 text-white border-amber-700 shadow-sm",
-    secondary: "hover:bg-transparent text-slate-700 border-slate-200 shadow-sm",
+    primary: "bg-gradient-to-r from-[#9a6a1d] to-[#d4af37] hover:brightness-105 text-[#1c120c] border-[#f7d174]/50 shadow-md",
+    secondary: "bg-[#fffefc] hover:bg-[#f8f5ee] text-slate-700 border-slate-200 shadow-sm",
     danger: "bg-rose-50 hover:bg-rose-100 text-rose-700 border-rose-200",
     ghost: "bg-transparent hover:bg-slate-100 text-slate-600 border-transparent"
   };

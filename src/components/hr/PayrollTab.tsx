@@ -5,6 +5,7 @@ import { HREmployee, HRPenalty, HRAdvance, HRBonus, HRSettings } from './types';
 import { SQLTransactionEngine } from '../../database/transactions/transactionManager';
 import { SQLCommandBuilder } from '../../database/transactions/SQLCommand';
 import { getTrustedAccessToken } from '../../utils/auth';
+import { FallbackStorage } from '../../database/repositories/FallbackStorage';
 
 interface PayrollTabProps {
   employees: HREmployee[];
@@ -48,7 +49,9 @@ export default function PayrollTab({
   useEffect(() => {
     // Check if payroll is already posted in localStorage
     const postedKey = `erp_hr_payroll_posted_${selectedMonth}`;
-    const postedVal = localStorage.getItem(postedKey);
+    const postedVal = FallbackStorage.isCanonicalPersistenceRequired()
+      ? null
+      : localStorage.getItem(postedKey);
     setIsPosted(!!postedVal);
 
     // Calculate items
@@ -112,6 +115,11 @@ export default function PayrollTab({
     }
     if (isPosted) {
       triggerNotification('تنبيه: مسير رواتب هذا الشهر معتمد ومرحل مسبقاً بالحسابات العامة', 'warning');
+      return;
+    }
+
+    if (FallbackStorage.isCanonicalPersistenceRequired()) {
+      triggerNotification('ترحيل الرواتب متوقف حتى يتم ربط مسار الرواتب بمصدر محاسبي مركزي موثوق.', 'warning');
       return;
     }
 

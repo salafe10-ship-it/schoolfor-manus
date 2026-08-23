@@ -2,6 +2,9 @@ import { FallbackStorage } from './FallbackStorage';
 import { FinancialConfiguration, FinancialConfigurationAuditLog } from '../../types';
 
 export class FinancialConfigurationRepository {
+  private static assertAuthoritativePersistence(operation: string): void {
+    FallbackStorage.assertCanonicalPersistence(`financial configuration ${operation}`);
+  }
   /**
    * Get the enterprise defaults for a school to guarantee 100% backward compatibility.
    */
@@ -62,6 +65,7 @@ export class FinancialConfigurationRepository {
    * Fetch configuration for a specific school. If none exists, return defaults.
    */
   public static async getBySchoolId(schoolId: string): Promise<FinancialConfiguration> {
+    this.assertAuthoritativePersistence('read');
     const configs = FallbackStorage.getFinancialConfigurations();
     const found = configs.find(c => c.schoolId === schoolId);
     if (found) {
@@ -81,6 +85,7 @@ export class FinancialConfigurationRepository {
     userName: string,
     reason: string
   ): Promise<FinancialConfiguration> {
+    this.assertAuthoritativePersistence('write');
     // 1. Load existing or default configuration
     const current = await this.getBySchoolId(schoolId);
     const oldValueString = JSON.stringify(current);
@@ -156,6 +161,7 @@ export class FinancialConfigurationRepository {
    * Fetch all audit logs for configuration changes.
    */
   public static async getAuditLogs(schoolId: string): Promise<FinancialConfigurationAuditLog[]> {
+    this.assertAuthoritativePersistence('audit read');
     const logs = FallbackStorage.getFinancialConfigurationAuditLogs();
     return logs.filter(l => l.schoolId === schoolId);
   }

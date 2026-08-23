@@ -2,6 +2,7 @@ import {
   PurchaseRequest, RequestForQuotation, VendorQuotation, 
   PurchaseOrder, GoodsReceiptNote, VendorBill, VendorPayment 
 } from '../../types';
+import { FallbackStorage } from './FallbackStorage';
 
 const STORAGE_KEYS = {
   PURCHASE_REQUESTS: 'edupro_procurement_purchase_requests',
@@ -188,20 +189,23 @@ const DEFAULT_VENDOR_BILLS: VendorBill[] = [
 ];
 
 export class ProcurementRepository {
+  private static assertAuthoritativePersistence(operation: string): void {
+    FallbackStorage.assertCanonicalPersistence(`procurement ${operation}`);
+  }
+
   private static getStored<T>(key: string, defaultValue: T[]): T[] {
+    this.assertAuthoritativePersistence('read');
     try {
       const data = localStorage.getItem(key);
-      if (!data) {
-        localStorage.setItem(key, JSON.stringify(defaultValue));
-        return defaultValue;
-      }
+      if (!data) return [];
       return JSON.parse(data);
     } catch {
-      return defaultValue;
+      return [];
     }
   }
 
   private static setStored<T>(key: string, value: T[]): void {
+    this.assertAuthoritativePersistence('write');
     try {
       localStorage.setItem(key, JSON.stringify(value));
     } catch (e) {

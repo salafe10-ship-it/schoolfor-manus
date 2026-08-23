@@ -26,7 +26,7 @@ export default function SuperAdminDomains({
 
   // Test Link Simulation State
   const [testingId, setTestingId] = useState<string | null>(null);
-  const [testResult, setTestResult] = useState<Record<string, { status: 'healthy' | 'error', latency: number, time: string }>>({});
+  const [testResult, setTestResult] = useState<Record<string, { status: 'healthy' | 'error' | 'unknown', latency: number | null, time: string | null }>>({});
 
   // Subdomain uniqueness validation
   const checkSubdomainAvailability = (sub: string, schoolId?: string) => {
@@ -114,33 +114,15 @@ export default function SuperAdminDomains({
     }
   };
 
-  // Action: Test Link Readiness (Live Diagnostics Simulation)
+  // Action: Test Link Readiness; لا تُثبت النتيجة إلا من موصل تشخيص مركزي.
   const handleTestLink = (school: any) => {
     setTestingId(school.id);
-    
-    // Simulate API network check
-    setTimeout(() => {
-      const isHealthy = Math.random() > 0.05; // 95% success simulation
-      const latency = Math.round(15 + Math.random() * 45); // 15ms - 60ms
-      const now = new Date().toLocaleTimeString('ar-EG');
-
-      setTestResult(prev => ({
-        ...prev,
-        [school.id]: {
-          status: isHealthy ? 'healthy' : 'error',
-          latency: latency,
-          time: now
-        }
-      }));
-
-      setTestingId(null);
-      
-      if (isHealthy) {
-        triggerNotification(`رابط مدرسة ${school.name} سليم وجاهز للاستقبال • الاستجابة: ${latency}ms 🟢`, 'success');
-      } else {
-        triggerNotification(`خطأ في توجيه خوادم مدرسة ${school.name} • يرجى مراجعة سجل النطاقات DNS 🔴`, 'danger');
-      }
-    }, 1500);
+    setTestResult(prev => ({
+      ...prev,
+      [school.id]: { status: 'unknown', latency: null, time: null }
+    }));
+    setTestingId(null);
+    triggerNotification('لم يُنفذ فحص النطاق: لا يوجد موصل DNS/HTTP مركزي موثوق في الجلسة الحالية.', 'warning');
   };
 
   // Action: Regenerate Link DNS Routes
@@ -258,10 +240,10 @@ export default function SuperAdminDomains({
                       ) : result ? (
                         <div className="space-y-0.5">
                           <span className={`inline-flex items-center gap-1 text-[10px] font-black ${
-                            result.status === 'healthy' ? 'text-emerald-400' : 'text-red-400'
+                            result.status === 'healthy' ? 'text-emerald-400' : result.status === 'unknown' ? 'text-slate-400' : 'text-red-400'
                           }`}>
-                            <span className={`w-1.5 h-1.5 rounded-full ${result.status === 'healthy' ? 'bg-emerald-500' : 'bg-red-500'}`} />
-                            {result.status === 'healthy' ? `مستقر (${result.latency}ms)` : 'غير متصل'}
+                            <span className={`w-1.5 h-1.5 rounded-full ${result.status === 'healthy' ? 'bg-emerald-500' : result.status === 'unknown' ? 'bg-slate-500' : 'bg-red-500'}`} />
+                            {result.status === 'healthy' ? `مستقر (${result.latency}ms)` : result.status === 'unknown' ? 'غير متحقق' : 'غير متصل'}
                           </span>
                           <div className="text-[8px] text-slate-500 font-bold">{result.time}</div>
                         </div>

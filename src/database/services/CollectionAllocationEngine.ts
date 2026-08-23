@@ -25,6 +25,7 @@ export class CollectionAllocationEngine {
     operatorContext?: { userId: string; userName: string; ipAddress: string },
     manualInstructions?: { targetType: 'Invoice' | 'Installment'; targetId: string; amount: number }[]
   ): Promise<CollectionAllocation[]> {
+    FallbackStorage.assertCanonicalPersistence('collection allocation installment read');
     const receipt = await CollectionsRepository.getCollectionById(schoolId, collectionId);
     if (!receipt) {
       throw new Error(`سند التحصيل غير موجود: ${collectionId}`);

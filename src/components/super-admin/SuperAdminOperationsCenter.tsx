@@ -4,6 +4,7 @@ import { PieChart, Pie, Cell, ResponsiveContainer, Tooltip } from 'recharts';
 import { motion, AnimatePresence } from 'motion/react';
 import { copyTextToClipboard } from '../SuperAdminView';
 import { getTrustedSchoolUrl, openTrustedSchoolPortal } from '../../utils/EnterpriseDomainUtils';
+import { FallbackStorage } from '../../database/repositories/FallbackStorage';
 
 interface SuperAdminOperationsCenterProps {
   schools: any[];
@@ -62,34 +63,25 @@ export default function SuperAdminOperationsCenter({
   const [backupStatusText, setBackupStatusText] = useState('');
   
   const [backupLogs, setBackupLogs] = useState<any[]>(() => {
-    return [
-      { id: 'b_01', schoolName: 'مدارس النور الأهلية النموذجية', date: '2026-07-13 02:00', size: '1.2 GB', type: 'تلقائي (Daily)', status: 'success', checksum: 'sha256-a7f4...' },
-      { id: 'b_02', schoolName: 'مدارس الفرسان العالمية', date: '2026-07-13 03:30', size: '840 MB', type: 'تلقائي (Daily)', status: 'success', checksum: 'sha256-e99d...' },
-      { id: 'b_03', schoolName: 'أكاديمية الرواد النموذجية', date: '2026-07-13 04:15', size: '420 MB', type: 'تلقائي (Daily)', status: 'success', checksum: 'sha256-4c4f...' }
-    ];
+    return [];
   });
 
   // Simulated live system logs stream for operations center
-  const [liveLogs, setLiveLogs] = useState<string[]>([
-    '[CENTRAL] مركز العمليات نشط وبحالة استتباب ممتازة. جاري رقابة خوادم السحابة الفيدرالية.',
-    '[MONITOR] فحص اتصال Supabase بـ ١٨ عقدة مستأجر - سليم ١٠٠٪.',
-    '[ROUTING] تم التحقق من سلامة كافة شهادات SSL للروابط الفرعية *.erpcloud.com',
-    '[SECURITY] حماية RLS نشطة وتمنع تداخل مساحات التخزين بين Tenants.'
-  ]);
+  const [liveLogs, setLiveLogs] = useState<string[]>([]);
 
   // Telemetry real-time updates
   const [telemetry, setTelemetry] = useState({
-    cpu: 28,
-    ram: 6.4,
-    ramLimit: 16.0,
-    latency: 24,
-    requestCount: 15420,
-    errorCount: 2,
-    onlineUsers: 549,
-    activeSessions: 1622
+    cpu: 0,
+    ram: 0,
+    ramLimit: 0,
+    latency: 0,
+    requestCount: 0,
+    errorCount: 0,
+    onlineUsers: 0,
+    activeSessions: 0
   });
 
-  const [telemetryHistory, setTelemetryHistory] = useState<number[]>([30, 34, 28, 42, 38, 48, 46, 52, 58, 50, 46, 52]);
+  const [telemetryHistory, setTelemetryHistory] = useState<number[]>([]);
 
   // Keep state matching active school selection
   useEffect(() => {
@@ -104,6 +96,8 @@ export default function SuperAdminOperationsCenter({
 
   // Simulated real-time telemetry oscillation
   useEffect(() => {
+    // لا تُحاكى القياسات؛ تُملأ من موصل المراقبة المركزي عند توفره.
+    return;
     const interval = setInterval(() => {
       let nextCpu = 28;
       setTelemetry(prev => {
@@ -130,6 +124,8 @@ export default function SuperAdminOperationsCenter({
 
   // Simulated live syslog generator
   useEffect(() => {
+    // لا تُولّد سجلات تشغيل محلية؛ السجل الحي يجب أن يأتي من المصدر المركزي.
+    return;
     const interval = setInterval(() => {
       const msgs = [
         `[ROUTER] إعادة توجيه طلب آمن لـ ${activeSchool?.subdomain || 'alnoor'}.erpcloud.com في 2ms.`,
@@ -146,12 +142,7 @@ export default function SuperAdminOperationsCenter({
   }, [activeSchool]);
 
   // Alerts Center State
-  const [alerts, setAlerts] = useState<any[]>([
-    { id: 'op_al_01', type: 'danger', category: 'الاشتراكات', title: 'اقتراب انتهاء ترخيص مدرسة الرواد', desc: 'متبقي ٣ أيام على انتهاء صلاحية باقة Basic مع تجاوز الحدود المخصصة للتخزين.', action: 'تجديد', schoolId: 'school_3' },
-    { id: 'op_al_02', type: 'warning', category: 'النسخ الاحتياطي', title: 'فشل النسخ الاحتياطي التلقائي', desc: 'مدرسة الفرسان العالمية واجهت خلل اتصال مؤقت بقاعدة البيانات أثناء حفظ اللقطة التلقائية.', action: 'نسخ الآن', schoolId: 'school_2' },
-    { id: 'op_al_03', type: 'info', category: 'الموارد والتخزين', title: 'استهلاك التخزين تجاوز الحد الحرج', desc: 'مدارس النور الأهلية تجاوزت عتبة الـ ٨٠٪ من المساحة التخزينية (٤١٢ جيجا بايت).', action: 'ترقية', schoolId: 'school_1' },
-    { id: 'op_al_04', type: 'danger', category: 'الأمان والوصول', title: 'محاولات دخول فاشلة متكررة مقلقة', desc: 'تم رصد ١٢ محاولة دخول فاشلة برمز مرور خاطئ لحساب مسؤول في مدرسة الرواد.', action: 'فحص الحساب', schoolId: 'school_3' }
-  ]);
+  const [alerts, setAlerts] = useState<any[]>([]);
 
   const handleDismissAlert = (id: string) => {
     setAlerts(prev => prev.filter(a => a.id !== id));
@@ -199,6 +190,10 @@ export default function SuperAdminOperationsCenter({
   });
 
   const saveModulesConfig = (updated: typeof schoolModules) => {
+    if (FallbackStorage.isCanonicalPersistenceRequired()) {
+      triggerNotification('إدارة وحدات المستأجرين متوقفة حتى يتم ربط المصدر المركزي الموثوق.', 'warning');
+      return;
+    }
     setSchoolModules(updated);
     localStorage.setItem('erp_tenant_modules_v1', JSON.stringify(updated));
   };
@@ -291,6 +286,10 @@ export default function SuperAdminOperationsCenter({
   // Subscription Details Handler
   const handleSaveSubscription = (e: React.FormEvent) => {
     e.preventDefault();
+    if (FallbackStorage.isCanonicalPersistenceRequired()) {
+      triggerNotification('تحديث اشتراك المستأجر متوقف حتى يتم ربط المصدر المركزي الموثوق.', 'warning');
+      return;
+    }
     
     const updatedSchools = schools.map(s => {
       if (s.id === activeSchool.id) {
@@ -474,8 +473,8 @@ export default function SuperAdminOperationsCenter({
   const suspendedSchoolsCount = schools.filter(s => s.status === 'suspended' || s.status === 'frozen').length;
   const trialSchoolsCount = schools.filter(s => s.plan === 'Basic' || s.plan === 'Trial' || s.plan === 'Standard').length;
   const expiredSchoolsCount = schools.filter(s => s.status === 'expired' || s.status === 'frozen').length;
-  const totalStudentsCount = schools.reduce((acc, s) => acc + (s.usersCount || 0), 245000);
-  const totalEmployeesCount = 12400;
+  const totalStudentsCount = schools.reduce((acc, s) => acc + (s.usersCount || 0), 0);
+  const totalEmployeesCount = schools.reduce((acc, s) => acc + (s.employeesCount || 0), 0);
   const totalUsersCount = totalStudentsCount + totalEmployeesCount;
 
   // Filter schools list based on search and tab selections
@@ -508,12 +507,7 @@ export default function SuperAdminOperationsCenter({
     window.print();
   };
 
-  const subscriptionChartData = [
-    { name: 'نشطة وسارية', value: 86.7, color: '#10B981' },
-    { name: 'شارفت على الانتهاء', value: 5.3, color: '#F59E0B' },
-    { name: 'منتهية الصلاحية', value: 1.8, color: '#EF4444' },
-    { name: 'فترة تجريبية أساسية', value: 6.2, color: '#3B82F6' },
-  ];
+  const subscriptionChartData: { name: string; value: number; color: string }[] = [];
 
   const availableModules = [
     { key: 'students', label: 'الطلاب والقبول والتسجيل', icon: Users, desc: 'إدارة ملفات الطلاب الأكاديمية والشخصية والصحية.' },

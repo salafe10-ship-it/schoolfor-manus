@@ -91,7 +91,7 @@ export class EmployeeValidator {
       errors.role = "الدور الوظيفي مطلوب.";
     }
 
-    if (employee.salary !== undefined && (typeof employee.salary !== 'number' || employee.salary < 0)) {
+    if (employee.salary !== undefined && (typeof employee.salary !== 'number' || !Number.isFinite(employee.salary) || employee.salary < 0)) {
       errors.salary = "الراتب يجب أن يكون قيمة موجبة.";
     }
 
@@ -158,12 +158,21 @@ export class InventoryValidator {
       errors.category = "تصنيف المادة غير صالح أو غير موجود.";
     }
 
-    if (item.quantity === undefined || typeof item.quantity !== 'number' || item.quantity < 0) {
+    if (item.quantity === undefined || typeof item.quantity !== 'number' || !Number.isFinite(item.quantity) || item.quantity < 0) {
       errors.quantity = "الكمية الكلية مطلوبة ويجب أن تكون صفراً أو أكثر.";
     }
 
-    if (item.available !== undefined && (typeof item.available !== 'number' || item.available < 0 || item.available > (item.quantity || 0))) {
+    if (item.available !== undefined && (typeof item.available !== 'number' || !Number.isFinite(item.available) || item.available < 0 || item.available > (item.quantity || 0))) {
       errors.available = "الكمية المتاحة يجب أن تكون قيمة موجبة ولا تتجاوز الكمية الكلية.";
+    }
+
+    for (const field of ['minLevel', 'maxLevel', 'reorderLevel', 'costPrice', 'salePrice'] as const) {
+      if (item[field] !== undefined && (typeof item[field] !== 'number' || !Number.isFinite(item[field]) || item[field] < 0)) {
+        errors[field] = "القيمة الرقمية يجب أن تكون رقمًا منتهيًا غير سالب.";
+      }
+    }
+    if (item.vatRate !== undefined && (typeof item.vatRate !== 'number' || !Number.isFinite(item.vatRate) || item.vatRate < 0 || item.vatRate > 100)) {
+      errors.vatRate = "نسبة الضريبة يجب أن تكون بين 0 و100.";
     }
 
     if (Object.keys(errors).length > 0) {

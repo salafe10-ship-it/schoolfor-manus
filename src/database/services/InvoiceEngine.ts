@@ -290,6 +290,7 @@ export class InvoiceEngine {
       });
 
       // 3. Increment Student Outstanding Balances
+      FallbackStorage.assertCanonicalPersistence('invoice student balance synchronization');
       const students = FallbackStorage.getStudents();
       const studIdx = students.findIndex(s => s.id === invoice.studentId);
       if (studIdx !== -1) {
@@ -606,6 +607,7 @@ export class InvoiceEngine {
       }
 
       // 3. Decrement student outstanding remaining balance
+      FallbackStorage.assertCanonicalPersistence('credit note student balance synchronization');
       const students = FallbackStorage.getStudents();
       const studIdx = students.findIndex(s => s.id === invoice.studentId);
       if (studIdx !== -1) {
@@ -800,6 +802,7 @@ export class InvoiceEngine {
       }
 
       // 3. Increment student outstanding remaining balance
+      FallbackStorage.assertCanonicalPersistence('debit note student balance synchronization');
       const students = FallbackStorage.getStudents();
       const studIdx = students.findIndex(s => s.id === invoice.studentId);
       if (studIdx !== -1) {
@@ -940,6 +943,7 @@ export class InvoiceEngine {
 
     // Reduce student outstanding balances if we cancelled an issued invoice
     if (invoice.status === 'Issued') {
+      FallbackStorage.assertCanonicalPersistence('invoice cancellation student balance synchronization');
       const students = FallbackStorage.getStudents();
       const studIdx = students.findIndex(s => s.id === invoice.studentId);
       if (studIdx !== -1) {
@@ -1055,6 +1059,7 @@ export class InvoiceEngine {
       });
 
       // Reduce student outstanding balances
+      FallbackStorage.assertCanonicalPersistence('invoice void student balance synchronization');
       const students = FallbackStorage.getStudents();
       const studIdx = students.findIndex(s => s.id === invoice.studentId);
       if (studIdx !== -1) {

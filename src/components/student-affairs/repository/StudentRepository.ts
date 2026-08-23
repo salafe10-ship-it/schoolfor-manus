@@ -32,6 +32,23 @@ export const StudentRepository = {
     return data;
   },
 
+  async registerStudent(studentData: any, idempotencyKey: string): Promise<any> {
+    if (!idempotencyKey.trim()) throw new Error('مفتاح idempotency مطلوب قبل بدء تسجيل الطالب.');
+    const response = await authenticatedRequest("/api/student-registration", {
+      method: "POST",
+      headers: {
+        "Content-Type": "application/json",
+        "Idempotency-Key": idempotencyKey
+      },
+      body: JSON.stringify(studentData)
+    });
+    const data = await response.json().catch(() => ({}));
+    if (!response.ok) {
+      throw new Error(data.message || data.error || "تعذر تسجيل الطالب عبر المسار الكانوني.");
+    }
+    return data;
+  },
+
   async softDeleteStudent(studentId: string): Promise<any> {
     const response = await authenticatedRequest(`/api/students/${studentId}?action=soft`, {
       method: "DELETE",
@@ -165,10 +182,12 @@ export const StudentRepository = {
     const response = await authenticatedRequest(`/api/students?${params.toString()}`, {
       method: "GET",
       headers: { "Content-Type": "application/json" },
+      cache: "no-store",
       signal
     });
     if (!response.ok) {
-      throw new Error("فشل جلب بيانات الطلاب من الخادم");
+      const errorData = await response.json().catch(() => ({}));
+      throw new Error(errorData.message || errorData.error || `فشل جلب بيانات الطلاب من الخادم (${response.status})`);
     }
     return response.json();
   },

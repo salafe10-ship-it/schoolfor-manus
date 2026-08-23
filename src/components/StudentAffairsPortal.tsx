@@ -10,6 +10,7 @@ import {
   Paperclip, ExternalLink, RefreshCw
 } from 'lucide-react';
 import { Student, School, UserRole } from '../types';
+import { PERMISSIONS } from '../authorization/PermissionRegistry';
 import { StudentRepository } from './student-affairs/repository/StudentRepository';
 import { getTrustedAccessToken } from '../utils/auth';
 import StudentDocumentsPortal from '../modules/student-documents/presentation/StudentDocumentsPortal';
@@ -23,11 +24,11 @@ type StudentTimelineEvent = {
   user?: string;
 };
 
-function escapeHtml(value: unknown): string {
-  return String(value ?? '')
-    .replace(/&/g, '&amp;')
-    .replace(/</g, '&lt;')
-    .replace(/>/g, '&gt;');
+function canonicalDateInput(value: unknown): string {
+  const raw = String(value ?? '').trim();
+  if (!raw) return '';
+  const isoDate = raw.match(/^(\d{4}-\d{2}-\d{2})/);
+  return isoDate?.[1] || '';
 }
 
 interface StudentAffairsPortalProps {
@@ -38,6 +39,7 @@ interface StudentAffairsPortalProps {
   logAction: (action: string, details: string, module: string) => void;
   triggerNotification: (text: string, type: 'info' | 'warning' | 'success') => void;
   setActiveSection?: (section: string) => void;
+  canUseTrustedPermission?: (permission: string) => boolean;
   stages?: any[];
   setStages?: React.Dispatch<React.SetStateAction<any[]>>;
   grades?: any[];
@@ -57,13 +59,18 @@ export default function StudentAffairsPortal({
   currentRole,
   logAction,
   triggerNotification,
-  setActiveSection
+  setActiveSection,
+  canUseTrustedPermission = () => false
 }: StudentAffairsPortalProps) {
+  const canWriteStudents = canUseTrustedPermission(PERMISSIONS.STUDENT_WRITE);
+  const canDeleteStudents = canUseTrustedPermission(PERMISSIONS.STUDENT_DELETE);
+  const canExportStudents = canUseTrustedPermission(PERMISSIONS.STUDENT_EXPORT);
   // Primary Navigation Sub-tabs state
   const [activeTab, setActiveTab] = useState<'student_data' | 'guardians' | 'documents' | 'reports' | 'settings'>('student_data');
   
   // Add/Edit Student Modal State
   const [isModalOpen, setIsModalOpen] = useState<boolean>(false);
+  const [registrationIdempotencyKey, setRegistrationIdempotencyKey] = useState<string | null>(null);
   const [modalTab, setModalTab] = useState<'basic' | 'extra' | 'guardian' | 'docs' | 'notes'>('basic');
   const [isEditMode, setIsEditMode] = useState<boolean>(false);
   
@@ -87,6 +94,7 @@ export default function StudentAffairsPortal({
   // Selected Student for View/Edit/Batch
   const [selectedStudent, setSelectedStudent] = useState<Student | null>(null);
   const [selectedStudentIds, setSelectedStudentIds] = useState<string[]>([]);
+  const [printPreviewStudents, setPrintPreviewStudents] = useState<Student[] | null>(null);
 
   // Advanced Search Filter State
   const [searchStage, setSearchStage] = useState<string>('all');
@@ -128,7 +136,7 @@ export default function StudentAffairsPortal({
     preferredName: '',
     studentCode: '',
     nationalId: '',
-    gender: 'ذكر',
+    gender: '',
     birthDate: '',
     birthPlace: '',
     stage: '',
@@ -136,7 +144,7 @@ export default function StudentAffairsPortal({
     classSection: '',
     nationality: '',
     religion: '',
-    status: 'active',
+    status: '',
     phone: '',
     email: '',
     address: '',
@@ -243,6 +251,7 @@ export default function StudentAffairsPortal({
   // currently loaded page. Never manufacture counts when the request fails.
   const currentSchoolStudents = useMemo(() => students.filter(student => student.schoolId === selectedSchool.id), [students, selectedSchool.id]);
   const totalCount = studentMetrics.totalCount;
+  const visibleQueryCount = studentQueryMeta.totalCount;
   const activeCount = studentMetrics.activeCount;
   const newCount = studentMetrics.newCount;
   const suspendedCount = studentMetrics.suspendedCount;
@@ -338,7 +347,7 @@ export default function StudentAffairsPortal({
       preferredName: '',
       studentCode: '',
       nationalId: '',
-      gender: 'ذكر',
+      gender: '',
       birthDate: '',
       birthPlace: '',
       stage: '',
@@ -346,7 +355,7 @@ export default function StudentAffairsPortal({
       classSection: '',
       nationality: '',
       religion: '',
-      status: 'active',
+      status: '',
       phone: '',
       email: '',
       address: '',
@@ -360,6 +369,7 @@ export default function StudentAffairsPortal({
     });
     setIsEditMode(false);
     setSelectedStudent(null);
+    setRegistrationIdempotencyKey(`student-affairs-registration-${crypto.randomUUID()}`);
     setModalTab('basic');
     setIsModalOpen(true);
   };
@@ -367,21 +377,22 @@ export default function StudentAffairsPortal({
   // Open Edit Modal
   const handleOpenEditModal = (student: Student) => {
     setSelectedStudent(student);
+    setRegistrationIdempotencyKey(null);
     setFormData({
       fullName: student.name || '',
       preferredName: (student as any).preferredName || '',
       studentCode: student.studentCode || student.academicId || '',
       // National ID is not part of the canonical Student profile contract.
       nationalId: '',
-      gender: student.gender || 'ذكر',
-      birthDate: student.birthDate || '',
+      gender: student.gender || '',
+      birthDate: canonicalDateInput(student.birthDate),
       birthPlace: (student as any).birthPlace || '',
       stage: '',
       grade: '',
       classSection: '',
       nationality: student.nationality || '',
       religion: '',
-      status: (student.status as string) || 'active',
+      status: (student.status as string) || '',
       // Do not project Guardian contact data into Student contact fields.
       phone: '',
       email: '',
@@ -401,6 +412,10 @@ export default function StudentAffairsPortal({
 
   // Save Student (Add / Edit)
   const handleSaveStudent = async (addAnother = false) => {
+    if (!canWriteStudents) {
+      triggerNotification('لا تملك صلاحية تعديل بيانات الطلاب.', 'warning');
+      return;
+    }
     if (!formData.fullName.trim()) {
       triggerNotification('يرجى إدخال اسم الطالب رباعي بشكل صحيح', 'warning');
       return;
@@ -409,8 +424,15 @@ export default function StudentAffairsPortal({
       triggerNotification('تاريخ الميلاد مطلوب للربط مع السجل canonical.', 'warning');
       return;
     }
-    if (!formData.parentName.trim() || !formData.parentPhone.trim()) {
+    // Guardian identity/contact is mandatory for a new canonical registration,
+    // but it must not block an unrelated student-field update. Guardian edits
+    // still go through the dedicated canonical guardian workflow below.
+    if (!isEditMode && (!formData.parentName.trim() || !formData.parentPhone.trim())) {
       triggerNotification('اسم ولي الأمر ورقم هاتفه مطلوبان لإتمام التسجيل الآمن.', 'warning');
+      return;
+    }
+    if (!formData.gender || !formData.status) {
+      triggerNotification('الجنس والحالة الدراسية حقول مطلوبة ولا تُملأ تلقائيًا.', 'warning');
       return;
     }
 
@@ -483,7 +505,9 @@ export default function StudentAffairsPortal({
         }
       }
       studentUpdateStarted = true;
-      const response = await StudentRepository.saveStudent(studentPayload);
+      const response = isEditMode
+        ? await StudentRepository.saveStudent(studentPayload)
+        : await StudentRepository.registerStudent(studentPayload, registrationIdempotencyKey || '');
       const persistedStudent = response?.data?.student || response?.student;
       if (!persistedStudent) {
         throw new Error('لم يُرجع الخادم سجل الطالب بعد الحفظ.');
@@ -521,12 +545,13 @@ export default function StudentAffairsPortal({
         triggerNotification(`${persistenceNotice} تم تسجيل الطالب الجديد ${formData.fullName}.`, 'success');
 
         if (addAnother) {
+          setRegistrationIdempotencyKey(`student-affairs-registration-${crypto.randomUUID()}`);
           setFormData({
             fullName: '',
             preferredName: '',
             studentCode: '',
             nationalId: '',
-            gender: 'ذكر',
+            gender: '',
             birthDate: '',
             birthPlace: '',
             stage: '',
@@ -534,7 +559,7 @@ export default function StudentAffairsPortal({
             classSection: '',
             nationality: '',
             religion: '',
-            status: 'active',
+            status: '',
             phone: '',
             email: '',
             address: '',
@@ -547,6 +572,7 @@ export default function StudentAffairsPortal({
             notes: ''
           });
         } else {
+          setRegistrationIdempotencyKey(null);
           setIsModalOpen(false);
         }
       }
@@ -571,6 +597,10 @@ export default function StudentAffairsPortal({
 
   // Delete Student
   const handleDeleteStudent = async (student: Student) => {
+    if (!canDeleteStudents) {
+      triggerNotification('لا تملك صلاحية حذف بيانات الطلاب.', 'warning');
+      return;
+    }
     if (window.confirm(`هل أنت تأكد من نقل الطالب (${student.name}) إلى سلة المحذوفات؟`)) {
       try {
         await StudentRepository.softDeleteStudent(student.id);
@@ -585,6 +615,10 @@ export default function StudentAffairsPortal({
 
   // Suspend Student
   const handleToggleSuspendStudent = async (student: Student) => {
+    if (!canWriteStudents) {
+      triggerNotification('لا تملك صلاحية تغيير حالة قيد الطالب.', 'warning');
+      return;
+    }
     if (String(student.status) === 'suspended') {
       triggerNotification('إعادة القيد ليست عودة مباشرة؛ يجب تنفيذ مسار تصحيح/اعتماد الحالة المعتمد.', 'warning');
       return;
@@ -638,6 +672,10 @@ export default function StudentAffairsPortal({
 
   // Student Data Export: the server owns scope, filtering, privacy, and XLSX generation.
   const handleExportExcel = async () => {
+    if (!canExportStudents) {
+      triggerNotification('لا تملك صلاحية تصدير بيانات الطلاب.', 'warning');
+      return;
+    }
     if (isExportingStudents) return;
     setIsExportingStudents(true);
     const serverSortBy = sortColumn === 'code'
@@ -690,75 +728,8 @@ export default function StudentAffairsPortal({
       triggerNotification('لا توجد صفوف معروضة حاليًا للطباعة.', 'warning');
       return;
     }
-    const printWindow = window.open('', '_blank');
-    if (!printWindow) {
-      triggerNotification('يرجى السماح بالنوافذ المنبثقة للطباعة', 'warning');
-      return;
-    }
-
-    printWindow.opener = null;
-    // The no-selection path remains the current filtered page. The legacy
-    // source contract is intentionally retained: const rowsHTML = filteredStudents.map
-    const rowsHTML = printableStudents.map((st, idx) => `
-      <tr>
-        <td style="padding: 8px; border: 1px solid #ddd; text-align: center;">${idx + 1}</td>
-        <td style='padding: 8px; border: 1px solid #ddd; text-align: center;'>${escapeHtml(st.studentCode || '')}</td>
-        <td style='padding: 8px; border: 1px solid #ddd; font-weight: bold;'>${escapeHtml(st.name)}</td>
-        <td style='padding: 8px; border: 1px solid #ddd; text-align: center;'>${escapeHtml(st.classroom || '')} (${escapeHtml(st.section || 'أ')})</td>
-        <td style='padding: 8px; border: 1px solid #ddd;'>${escapeHtml(st.parentName || '')}</td>
-        <td style='padding: 8px; border: 1px solid #ddd; text-align: center;'>${escapeHtml(st.status === 'suspended' ? 'موقوف' : 'نشط')}</td>
-      </tr>
-    `).join('');
-
-    printWindow.document.write(`
-      <html dir="rtl" lang="ar">
-        <head>
-          <title>طباعة كشف الطلاب المعروض حاليًا - ${escapeHtml(selectedSchool.name || 'SchoolForManus')}</title>
-          <style>
-            body { font-family: 'Segoe UI', Tahoma, Arial, sans-serif; padding: 20px; direction: rtl; }
-            h1 { text-align: center; color: #1c120c; margin-bottom: 5px; }
-            h3 { text-align: center; color: #7c5e10; margin-top: 0; }
-            table { width: 100%; border-collapse: collapse; margin-top: 20px; font-size: 12px; }
-            th { background-color: #2a1d13; color: #ffe5a3; padding: 10px; border: 1px solid #444; }
-            .header-info { display: flex; justify-content: space-between; border-bottom: 2px solid #d4af37; padding-bottom: 10px; margin-bottom: 15px; }
-          </style>
-        </head>
-        <body>
-          <div class="header-info">
-            <div>
-                <h2>${escapeHtml(selectedSchool.name || 'SchoolForManus')}</h2>
-              <div>إدارة شؤون الطلاب والنتائج الأكاديمية</div>
-            </div>
-            <div style="text-align: left;">
-              <div>تاريخ التقرير: ${new Date().toLocaleDateString('ar-EG')}</div>
-              <div>إجمالي الكشف: ${printableStudents.length} طالب</div>
-            </div>
-          </div>
-          <h1>كشف الطلاب المعروض حاليًا</h1>
-          <h3>طباعة عرض المتصفح للصفوف المحملة والمفلترة حاليًا — ليست تقريرًا رسميًا شاملًا</h3>
-          <table>
-            <thead>
-              <tr>
-                <th>#</th>
-                <th>رقم الطالب</th>
-                <th>اسم الطالب رباعي</th>
-                <th>الصف / الشعبة</th>
-                <th>ولي الأمر</th>
-                <th>الحالة</th>
-              </tr>
-            </thead>
-            <tbody>
-              ${rowsHTML}
-            </tbody>
-          </table>
-          <script>
-            window.onload = function() { window.print(); }
-          </script>
-        </body>
-      </html>
-    `);
-    printWindow.document.close();
-    triggerNotification('جاري إرسال كشف الطلاب إلى الطابعة...', 'info');
+    setPrintPreviewStudents(printableStudents);
+    triggerNotification('تم إعداد معاينة كشف الطلاب الحالي. راجعها قبل الطباعة.', 'success');
   };
 
   return (
@@ -860,7 +831,8 @@ export default function StudentAffairsPortal({
         <div className="flex items-center gap-2 relative z-10">
           <button 
             onClick={handleExportExcel}
-            disabled={isExportingStudents}
+            disabled={isExportingStudents || !canExportStudents}
+            aria-disabled={!canExportStudents}
             aria-busy={isExportingStudents}
             className="bg-[#2a1d13] border border-[#d4af37]/40 hover:border-[#f7d174] text-amber-200 px-3 py-2 rounded-xl text-xs font-bold flex items-center gap-1.5 hover:scale-105 transition-all shadow cursor-pointer"
             title="تصدير بيانات الطلاب إلى ملف XLSX حقيقي"
@@ -880,6 +852,8 @@ export default function StudentAffairsPortal({
 
           <button 
             onClick={handleOpenAddModal}
+            disabled={!canWriteStudents}
+            aria-disabled={!canWriteStudents}
             className="bg-gradient-to-r from-[#9a6a1d] via-[#f7d174] to-[#c58a22] text-slate-950 font-black px-4 py-2 rounded-xl text-xs flex items-center gap-2 shadow-lg hover:scale-105 active:scale-95 transition-all cursor-pointer"
           >
             <UserPlus className="w-4 h-4" />
@@ -1067,6 +1041,8 @@ export default function StudentAffairsPortal({
               <div className="pt-2 border-t border-amber-900/10 space-y-2">
                 <button 
                   onClick={() => setIsImportModalOpen(true)}
+                  disabled={!canWriteStudents}
+                  aria-disabled={!canWriteStudents}
                   className="w-full py-2 bg-[#2a1a0e] text-amber-200 hover:text-white rounded-xl text-xs font-black flex items-center justify-center gap-2 border border-[#d4af37]/40 shadow hover:scale-[1.01] transition-all cursor-pointer"
                 >
                   <Upload className="w-4 h-4 text-amber-400" />
@@ -1100,6 +1076,8 @@ export default function StudentAffairsPortal({
                 <div className="flex items-center gap-2">
                   <button 
                     onClick={() => setIsTransferModalOpen(true)}
+                    disabled={!canWriteStudents}
+                    aria-disabled={!canWriteStudents}
                     className="bg-amber-700 hover:bg-amber-800 text-white px-3 py-1.5 rounded-xl text-xs font-bold flex items-center gap-1 shadow cursor-pointer"
                   >
                     <ArrowRightLeft className="w-3.5 h-3.5" />
@@ -1181,7 +1159,7 @@ export default function StudentAffairsPortal({
                            </div>
                          ) : (
                            <div role="status" className="text-slate-500">
-                             {totalCount === 0 && !searchKeyword.trim() && searchStatus === 'all' && searchClass === 'all'
+                             {visibleQueryCount === 0 && !searchKeyword.trim() && searchStatus === 'all' && searchClass === 'all'
                                ? 'لا توجد سجلات طلاب محفوظة لهذا النطاق.'
                                : 'لا توجد نتائج مطابقة لخيارات التصفية الحالية'}
                            </div>
@@ -1254,6 +1232,8 @@ export default function StudentAffairsPortal({
 
                               <button 
                                 onClick={() => handleOpenEditModal(st)}
+                                disabled={!canWriteStudents}
+                                aria-disabled={!canWriteStudents}
                                 title="تعديل البيانات"
                                 className="p-1.5 rounded-lg bg-amber-50 border border-amber-300 text-amber-800 hover:bg-amber-100 transition-all cursor-pointer"
                               >
@@ -1263,7 +1243,8 @@ export default function StudentAffairsPortal({
                               <button 
                                 onClick={() => handleToggleSuspendStudent(st)}
                                 title={isSuspended ? 'إعادة القيد' : 'إيقاف القيد'}
-                                disabled={isSuspended}
+                                disabled={isSuspended || !canWriteStudents}
+                                aria-disabled={isSuspended || !canWriteStudents}
                                 className={`p-1.5 rounded-lg border transition-all ${isSuspended ? 'bg-slate-100 text-slate-400 border-slate-200 cursor-not-allowed' : 'bg-rose-50 text-rose-800 border-rose-300 cursor-pointer'}`}
                               >
                                 {isSuspended ? <UserCheck className="w-3.5 h-3.5" /> : <UserX className="w-3.5 h-3.5" />}
@@ -1272,6 +1253,8 @@ export default function StudentAffairsPortal({
                               <button 
                                 onClick={() => handleDeleteStudent(st)}
                                 title="حذف"
+                                disabled={!canDeleteStudents}
+                                aria-disabled={!canDeleteStudents}
                                 className="p-1.5 rounded-lg bg-slate-100 border border-slate-300 text-slate-700 hover:bg-rose-100 hover:text-rose-800 transition-all cursor-pointer"
                               >
                                 <Trash2 className="w-3.5 h-3.5" />
@@ -1289,7 +1272,7 @@ export default function StudentAffairsPortal({
             {/* Pagination Controls */}
             <div className="flex flex-col sm:flex-row items-center justify-between gap-3 text-xs pt-2">
               <div className="text-slate-600 font-extrabold">
-                {totalCount === 0 ? 'لا توجد سجلات' : `عرض ${((studentQueryMeta.page - 1) * studentQueryMeta.limit) + 1} إلى ${Math.min(studentQueryMeta.page * studentQueryMeta.limit, totalCount)} من إجمالي ${totalCount} طالب`}
+                {visibleQueryCount === 0 ? 'لا توجد سجلات' : `عرض ${((studentQueryMeta.page - 1) * studentQueryMeta.limit) + 1} إلى ${Math.min(studentQueryMeta.page * studentQueryMeta.limit, visibleQueryCount)} من إجمالي ${visibleQueryCount} طالب`}
               </div>
 
               <div className="flex items-center gap-3">
@@ -1573,7 +1556,7 @@ export default function StudentAffairsPortal({
                   <div className="md:col-span-3 space-y-4 text-xs">
                     
                     {/* Row 1: Full Name & Code */}
-                    <div className="grid grid-cols-1 sm:grid-cols-3 gap-4">
+                    <div className="grid grid-cols-1 sm:grid-cols-4 gap-4">
                       <div className="sm:col-span-2">
                         <label className="block text-slate-800 font-extrabold mb-1">الاسم رباعي <span className="text-rose-600">*</span></label>
                         <input 
@@ -1641,6 +1624,20 @@ export default function StudentAffairsPortal({
                           onChange={e => setFormData({ ...formData, birthDate: e.target.value })}
                           className="w-full bg-white border border-slate-300 rounded-xl p-2.5 text-xs font-bold text-slate-900 focus:border-[#9a6a1d] outline-none shadow-xs"
                         />
+                      </div>
+
+                      <div>
+                        <label className="block text-slate-800 font-extrabold mb-1">حالة القيد <span className="text-rose-600">*</span></label>
+                        <select
+                          value={formData.status}
+                          onChange={e => setFormData({ ...formData, status: e.target.value })}
+                          className="w-full bg-white border border-slate-300 rounded-xl p-2.5 text-xs font-bold text-slate-900 focus:border-[#9a6a1d] outline-none shadow-xs"
+                        >
+                          <option value="">اختر الحالة</option>
+                          <option value="active">نشط ومنتظم</option>
+                          <option value="suspended">موقوف القيد</option>
+                          <option value="inactive">منسحب / منقول</option>
+                        </select>
                       </div>
                     </div>
 
@@ -1768,6 +1765,8 @@ export default function StudentAffairsPortal({
                 <button 
                   type="button"
                   onClick={() => handleSaveStudent(false)}
+                  disabled={!canWriteStudents}
+                  aria-disabled={!canWriteStudents}
                   className="flex-1 sm:flex-none px-8 py-2.5 rounded-xl bg-gradient-to-r from-[#9a6a1d] via-[#f7d174] to-[#c58a22] text-slate-950 font-black text-xs shadow-lg hover:scale-105 transition-all cursor-pointer"
                 >
                   حفظ الحركات
@@ -1919,6 +1918,80 @@ export default function StudentAffairsPortal({
               </button>
             </div>
 
+          </div>
+        </div>
+      )}
+
+      {/* ==========================================
+          MODAL 2: VISIBLE PRINT PREVIEW
+         ========================================== */}
+      {printPreviewStudents && (
+        <div className="fixed inset-0 z-50 bg-black/70 backdrop-blur-xs flex items-center justify-center p-4 overflow-y-auto" role="dialog" aria-modal="true" aria-label="معاينة كشف الطلاب">
+          <div className="bg-[#fffefc] text-slate-900 border-2 border-[#d4af37] rounded-3xl w-full max-w-6xl shadow-2xl overflow-hidden my-auto">
+            <div className="bg-gradient-to-r from-[#1c120c] via-[#2d1e12] to-[#1a100a] text-white px-6 py-4 flex items-center justify-between">
+              <div>
+                <h3 className="text-base font-black text-amber-200">معاينة كشف الطلاب</h3>
+                <p className="mt-1 text-[10px] font-bold text-amber-100/80">معاينة الصفوف المحملة والمفلترة حاليًا — ليست تقريرًا رسميًا شاملًا</p>
+              </div>
+              <button type="button" onClick={() => setPrintPreviewStudents(null)} aria-label="إغلاق معاينة كشف الطلاب" className="w-8 h-8 rounded-full bg-white/10 hover:bg-white/20 text-white flex items-center justify-center">
+                <X className="w-5 h-5" />
+              </button>
+            </div>
+
+            <div className="p-6 space-y-4 bg-white">
+              <div className="flex flex-wrap items-center justify-between gap-3 border-b-2 border-[#d4af37] pb-3">
+                <div>
+                  <h2 className="text-lg font-black text-[#1c120c]">{selectedSchool.name || 'SchoolForManus'}</h2>
+                  <p className="text-xs font-bold text-slate-600">إدارة شؤون الطلاب والنتائج الأكاديمية</p>
+                </div>
+                <div className="text-left text-xs font-bold text-slate-600">
+                  <div>تاريخ التقرير: {new Date().toLocaleDateString('ar-EG')}</div>
+                  <div>إجمالي الكشف: {printPreviewStudents.length} طالب</div>
+                </div>
+              </div>
+
+              <div className="overflow-x-auto rounded-2xl border border-slate-300">
+                <table className="w-full border-collapse text-xs">
+                  <thead className="bg-[#2a1d13] text-[#ffe5a3]">
+                    <tr>
+                      <th className="p-3 border border-slate-500">#</th>
+                      <th className="p-3 border border-slate-500">رقم الطالب</th>
+                      <th className="p-3 border border-slate-500">اسم الطالب رباعي</th>
+                      <th className="p-3 border border-slate-500">الصف / الشعبة</th>
+                      <th className="p-3 border border-slate-500">ولي الأمر</th>
+                      <th className="p-3 border border-slate-500">الحالة</th>
+                    </tr>
+                  </thead>
+                  <tbody>
+                    {printPreviewStudents.map((student, index) => {
+                      const statusLabel = student.status === 'suspended'
+                        ? 'موقوف'
+                        : student.status === 'inactive' || student.status === 'withdrawn'
+                          ? 'منسحب / منقول'
+                          : 'نشط';
+                      return (
+                        <tr key={student.id} className="odd:bg-amber-50/40">
+                          <td className="p-3 border border-slate-200 text-center">{index + 1}</td>
+                          <td className="p-3 border border-slate-200 text-center font-mono font-black">{student.studentCode || student.academicId || 'غير متوفر'}</td>
+                          <td className="p-3 border border-slate-200 font-black">{student.name}</td>
+                          <td className="p-3 border border-slate-200 text-center">{student.classroom || 'غير محدد'} ({student.section || 'أ'})</td>
+                          <td className="p-3 border border-slate-200">{student.parentName || 'غير مرتبط'}</td>
+                          <td className="p-3 border border-slate-200 text-center">{statusLabel}</td>
+                        </tr>
+                      );
+                    })}
+                  </tbody>
+                </table>
+              </div>
+            </div>
+
+            <div className="bg-[#f5eeea] border-t border-amber-900/10 px-6 py-4 flex flex-col sm:flex-row items-center justify-between gap-3">
+              <button type="button" onClick={() => setPrintPreviewStudents(null)} className="w-full sm:w-auto px-6 py-2.5 rounded-xl border border-slate-300 bg-white hover:bg-slate-100 text-slate-800 text-xs font-black">إغلاق المعاينة</button>
+              <button type="button" onClick={() => { window.print(); triggerNotification('تم إرسال المعاينة إلى أمر الطباعة.', 'info'); }} className="w-full sm:w-auto px-6 py-2.5 rounded-xl bg-gradient-to-r from-[#9a6a1d] to-[#d4af37] text-slate-950 text-xs font-black flex items-center justify-center gap-2">
+                <Printer className="w-4 h-4" />
+                طباعة من المعاينة
+              </button>
+            </div>
           </div>
         </div>
       )}

@@ -66,7 +66,10 @@ export class LibraryRepository implements IBaseRepository<any> {
    */
   public static async hasBorrowedBooks(schoolId: string, studentId: string): Promise<boolean> {
     const supabase = getSupabaseClient();
-    if (!supabase) return false;
+    if (!supabase) {
+      FallbackStorage.assertCanonicalPersistence(`borrowed books read ${studentId}`);
+      return false;
+    }
     const { data, error } = await supabase.from('borrowed_books').select('id').eq('student_id', studentId).eq('returned_at', null);
     return error ? false : (data && data.length > 0);
   }
@@ -91,6 +94,7 @@ export class LibraryRepository implements IBaseRepository<any> {
         EnterpriseLogger.error("Failed to query library book by ID:", "LibraryRepository", { error: err });
       }
     }
+    FallbackStorage.assertCanonicalPersistence(`library book read ${id}`);
     const book = FallbackStorage.getLibrary().find(b => b.id === id && (b.schoolId === schoolId || b.school_id === schoolId));
     return book || null;
   }
@@ -120,6 +124,7 @@ export class LibraryRepository implements IBaseRepository<any> {
       }
     }
 
+    FallbackStorage.assertCanonicalPersistence(`library books read ${schoolId}`);
     let books = FallbackStorage.getLibrary().filter(b => b.schoolId === schoolId || b.school_id === schoolId);
     if (options?.search) {
       const sLower = options.search.toLowerCase();
@@ -170,6 +175,7 @@ export class LibraryRepository implements IBaseRepository<any> {
       }
     }
 
+    FallbackStorage.assertCanonicalPersistence(`library book write ${id}`);
     const all = FallbackStorage.getLibrary();
     const idx = all.findIndex(b => b.id === id);
     const savedBook = { ...book, id, schoolId };
@@ -200,6 +206,7 @@ export class LibraryRepository implements IBaseRepository<any> {
       }
     }
 
+    FallbackStorage.assertCanonicalPersistence(`library book delete ${id}`);
     const all = FallbackStorage.getLibrary();
     const filtered = all.filter(b => b.id !== id);
     if (filtered.length === all.length) return false;

@@ -110,15 +110,19 @@ export default function FinancialClosingDashboard({
       const logs = await FinancialClosingOrchestrator.getClosingLogs(schoolId);
       setClosingLogs(logs);
 
-      // 4. Load locked dates from localStorage
+      // 4. Load locked dates only in explicit local compatibility mode.
+      // Canonical closing state must come from the accounting source of truth.
+      if (FallbackStorage.isCanonicalPersistenceRequired()) {
+        setLockedDates([]);
+        setIsLoading(false);
+        return;
+      }
       const savedLockedDates = localStorage.getItem(`locked_dates_${schoolId}`);
       if (savedLockedDates) {
         setLockedDates(JSON.parse(savedLockedDates));
       } else {
-        // Seed some locked days for demo realism
-        const defaultLocked = ['2026-07-15', '2026-07-16', '2026-07-17'];
-        setLockedDates(defaultLocked);
-        localStorage.setItem(`locked_dates_${schoolId}`, JSON.stringify(defaultLocked));
+        // لا تُنشأ فترات مقفلة تلقائيًا؛ الإقفال لا يثبت إلا من محرك المحاسبة.
+        setLockedDates([]);
       }
 
     } catch (err: any) {
@@ -175,6 +179,7 @@ export default function FinancialClosingDashboard({
 
   // Run Real Dry Run Validation
   const runDryRunValidation = async () => {
+    if (!ensureCanonicalClosingPersistence()) return;
     setIsValidating(true);
     setValidationReport(null);
     try {
@@ -208,6 +213,7 @@ export default function FinancialClosingDashboard({
 
   // Safe Auto-Repair for financial consistency
   const runAutoResolveAndConsistency = async () => {
+    if (!ensureCanonicalClosingPersistence()) return;
     setCurrentActionLoading('auto_repair');
     try {
       await new Promise(resolve => setTimeout(resolve, 1200)); // Scan and fix
@@ -354,7 +360,7 @@ export default function FinancialClosingDashboard({
       setValidationReport(repairedReport);
 
       triggerNotification(
-        `تمت تصفية المخالفات الماليّة تلقائياً بنجاح! تم اعتماد/تعديل: قيود (${journalsFixed})، فواتير (${invoicesFixed})، سندات قبض (${receiptsFixed})، مدفوعات (${paymentsFixed}). أصبح ميزان المراجعة متزناً بنسبة 100%!`,
+        `تمت معالجة المخالفات الماليّة بعد تحقق المصدر المركزي: قيود (${journalsFixed})، فواتير (${invoicesFixed})، سندات قبض (${receiptsFixed})، مدفوعات (${paymentsFixed}).`,
         'success'
       );
 
@@ -365,8 +371,17 @@ export default function FinancialClosingDashboard({
     }
   };
 
+  const ensureCanonicalClosingPersistence = (): boolean => {
+    if (FallbackStorage.isCanonicalPersistenceRequired()) {
+      triggerNotification('عمليات الإقفال وإعادة الفتح متوقفة حتى يتم ربط حالة الإقفال بمصدر محاسبي مركزي موثوق.', 'warning');
+      return false;
+    }
+    return true;
+  };
+
   // Daily Closing Execution
   const handleDailyClose = async () => {
+    if (!ensureCanonicalClosingPersistence()) return;
     if (!validationReport || validationReport.errors.length > 0) {
       triggerNotification('العملية مرفوضة محاسبياً: لا يمكن الإقفال مع وجود قيود معلقة أو تباينات ماليّة غير محلولة في الدفاتر.', 'danger');
       return;
@@ -422,6 +437,7 @@ export default function FinancialClosingDashboard({
 
   // Monthly Period Closing Execution (supports Soft Lock and Permanent Close)
   const handleMonthlyClose = async () => {
+    if (!ensureCanonicalClosingPersistence()) return;
     if (!validationReport || validationReport.errors.length > 0) {
       triggerNotification('العملية مرفوضة محاسبياً: يمنع ترحيل وإقفال الفترة مع وجود تباينات أو معلقات غير تسوية.', 'danger');
       return;
@@ -500,6 +516,7 @@ export default function FinancialClosingDashboard({
 
   // Quarterly Closing Execution
   const handleQuarterlyClose = async () => {
+    if (!ensureCanonicalClosingPersistence()) return;
     // Verify all periods of the quarter are closed/locked
     const quarterPeriods = await FinancialPeriodService.getQuarterPeriods(schoolId, selectedQuarterFY);
     const targetQuarter = quarterPeriods.find(q => q.quarter === selectedQuarter);
@@ -567,6 +584,7 @@ export default function FinancialClosingDashboard({
 
   // Fiscal Year Closing Execution & Rollover
   const handleYearlyClose = async () => {
+    if (!ensureCanonicalClosingPersistence()) return;
     // 1. Verify all 12 sub-periods are Closed/Locked
     const fy = fiscalYears.find(f => f.id === fromYearId);
     if (!fy) return;
@@ -641,6 +659,7 @@ export default function FinancialClosingDashboard({
 
   // Reopening Authorized Flow
   const handleAuthorizedReopen = async () => {
+    if (!ensureCanonicalClosingPersistence()) return;
     if (!reopenReason || reopenReason.trim().length < 15) {
       triggerNotification('الرجاء تقديم مبرر تدقيقي محاسبي مفصل ومكتوب لا يقل عن 15 حرفاً لتبرير عملية إعادة الفتح.', 'warning');
       return;

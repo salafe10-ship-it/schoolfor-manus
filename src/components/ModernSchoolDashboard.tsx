@@ -34,6 +34,7 @@ interface ModernSchoolDashboardProps {
   selectedBranch: Branch | null;
   currentRole: UserRole;
   triggerNotification: (msg: string, type: 'info' | 'warning' | 'success') => void;
+  canAccessSection: (section: string) => boolean;
   isClientMode?: boolean;
   userName?: string;
 }
@@ -97,6 +98,8 @@ export default function ModernSchoolDashboard({
   selectedSchool,
   selectedBranch,
   currentRole,
+  triggerNotification,
+  canAccessSection,
   isClientMode: _isClientMode,
   userName = 'مستخدم المدرسة',
 }: ModernSchoolDashboardProps) {
@@ -167,7 +170,13 @@ export default function ModernSchoolDashboard({
   };
   const studentCount = formatMetric(metrics?.students);
   const studentDetail = describeMetric(metrics?.students);
-  const handleNav = (section: string) => setActiveSection(section);
+  const handleNav = (section: string) => {
+    if (!canAccessSection(section)) {
+      triggerNotification('لا تملك الصلاحية الموثقة لفتح هذه الوحدة.', 'warning');
+      return;
+    }
+    setActiveSection(section);
+  };
 
   const quickActions: QuickAction[] = [
     { section: 'students', label: 'شؤون الطلاب', icon: GraduationCap },
@@ -221,6 +230,8 @@ export default function ModernSchoolDashboard({
           <button
             type="button"
             onClick={() => handleNav('students')}
+            disabled={!canAccessSection('students')}
+            aria-disabled={!canAccessSection('students')}
             className="flex h-10 w-10 items-center justify-center rounded-2xl border border-[#d4af37]/30 bg-[#2a1d13] text-amber-300 shadow transition-all hover:scale-105 hover:border-[#f7d174] focus:outline-none focus:ring-2 focus:ring-amber-300/60"
             title="البحث في شؤون الطلاب"
             aria-label="البحث في شؤون الطلاب"
@@ -262,7 +273,7 @@ export default function ModernSchoolDashboard({
             <h3 className="text-sm font-black text-slate-900">الاختصارات الرئيسية</h3>
           </div>
           <div className="grid grid-cols-2 gap-3 sm:grid-cols-3 md:grid-cols-6">
-            {quickActions.map(({ section, label, icon: Icon }) => (
+            {quickActions.filter(({ section }) => canAccessSection(section)).map(({ section, label, icon: Icon }) => (
               <button
                 key={`${section}-${label}`}
                 type="button"

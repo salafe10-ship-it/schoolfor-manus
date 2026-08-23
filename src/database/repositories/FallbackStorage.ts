@@ -165,6 +165,7 @@ export class FallbackStorage {
    */
   public static isCanonicalPersistenceRequired(): boolean {
     const runtime = typeof process !== 'undefined' ? process.env : {};
+    const viteProduction = typeof import.meta !== 'undefined' && (import.meta as any).env?.PROD === true;
     const supabaseUrl = runtime?.SUPABASE_URL;
     const supabaseKey = runtime?.SUPABASE_ANON_KEY;
     const hasConfiguredSupabase = Boolean(
@@ -174,7 +175,8 @@ export class FallbackStorage {
       !supabaseKey.includes('your-anon-key')
     );
 
-    return runtime?.NODE_ENV === 'production' ||
+    return viteProduction ||
+      runtime?.NODE_ENV === 'production' ||
       runtime?.EDUPRO_ENVIRONMENT === 'staging' ||
       runtime?.EDUPRO_PERSISTENCE_MODE === 'canonical' ||
       hasConfiguredSupabase;
@@ -263,7 +265,7 @@ export class FallbackStorage {
     if (studentsFromFile.length > 0) {
       this.students = studentsFromFile;
     } else {
-      this.students = [...studentsSeed];
+      this.students = [];
       this.safeWriteFile(studentDbFile, this.students);
     }
 
@@ -273,94 +275,41 @@ export class FallbackStorage {
     if (examsFromFile && Object.keys(examsFromFile).length > 0) {
       this.exams = examsFromFile;
     } else {
-      this.exams = {
-        examTemplates: [
-          { id: 'exam_1', title: 'اختبار الرياضيات الفتري الأول', subject: 'الرياضيات', classId: 'الصف الأول الثانوي', date: '2026-10-15', maxScore: 50 },
-          { id: 'exam_2', title: 'اختبار الفيزياء النظري النهائي', subject: 'الفيزياء', classId: 'الصف الثالث الثانوي', date: '2026-12-20', maxScore: 100 },
-          { id: 'exam_3', title: 'امتحان الإملاء والآداب والتربية', subject: 'اللغة العربية', classId: 'الصف الخامس الابتدائي', date: '2026-10-18', maxScore: 30 }
-        ]
-      };
+      this.exams = { examTemplates: [] };
       this.safeWriteFile(examDbFile, this.exams);
     }
 
     // Load other files or fall back to seeds
-    this.invoices = this.safeReadFile<Invoice[]>('invoices_database.json', [...invoicesSeed]);
-    this.teachers = this.safeReadFile<Teacher[]>('teachers_database.json', [...teachersSeed]);
-    this.employees = this.safeReadFile<Employee[]>('employees_database.json', [...employeesSeed]);
-    this.inventory = this.safeReadFile<InventoryItem[]>('inventory_database.json', [...inventorySeed]);
-    this.buses = this.safeReadFile<BusRoute[]>('buses_database.json', [...busRoutesSeed]);
-    this.auditLogs = this.safeReadFile<AuditLog[]>('auditlogs_database.json', [...auditLogsSeed]);
-    this.attendance = this.safeReadFile<Attendance[]>('attendance_database.json', [...initialAttendance]);
+    this.invoices = this.safeReadFile<Invoice[]>('invoices_database.json', []);
+    this.teachers = this.safeReadFile<Teacher[]>('teachers_database.json', []);
+    this.employees = this.safeReadFile<Employee[]>('employees_database.json', []);
+    this.inventory = this.safeReadFile<InventoryItem[]>('inventory_database.json', []);
+    this.buses = this.safeReadFile<BusRoute[]>('buses_database.json', []);
+    this.auditLogs = this.safeReadFile<AuditLog[]>('auditlogs_database.json', []);
+    this.attendance = this.safeReadFile<Attendance[]>('attendance_database.json', []);
     
     // Uniforms local storage seed
-    this.uniforms = this.safeReadFile<any[]>('uniforms_database.json', [
-      { id: 'uni_1', name: 'زي مدرسي بنين - أساسي (كافة المقاسات)', category: 'بنين', size: 'M, L, XL', stock: 140, price: 45, alertLimit: 20 },
-      { id: 'uni_2', name: 'زي مدرسي بنات - أساسي (كافة المقاسات)', category: 'بنات', size: 'S, M, L', stock: 185, price: 45, alertLimit: 25 },
-      { id: 'uni_3', name: 'بدلة رياضة مدرسية - بنين وبنات', category: 'رياضة', size: 'S, M, L, XL', stock: 95, price: 35, alertLimit: 15 },
-      { id: 'uni_4', name: 'سترة شتوية فاخرة (Blazer) - ثانوي', category: 'شتاء', size: 'M, L, XL', stock: 60, price: 120, alertLimit: 10 },
-      { id: 'uni_5', name: 'قميص قطني إضافي - أبيض ناصع', category: 'قمصان', size: 'S, M, L', stock: 210, price: 15, alertLimit: 30 }
-    ]);
+    this.uniforms = this.safeReadFile<any[]>('uniforms_database.json', []);
 
     // Library local storage seed
-    this.library = this.safeReadFile<any[]>('library_database.json', [
-      { id: 'book_1', title: 'مقدمة في الفيزياء الحديثة', author: 'د. علي مصطفى', isbn: '978-3-16-148410-0', count: 12, available: 10, section: 'العلوم الطبيعية' },
-      { id: 'book_2', title: 'تاريخ الأدب العربي المعاصر', author: 'أ.د. محمد حسن', isbn: '978-600-123-456-7', count: 8, available: 8, section: 'اللغة والأدب' },
-      { id: 'book_3', title: 'أصول التربية والتدريس المطور', author: 'د. يوسف القحطاني', isbn: '978-9960-12-345-6', count: 5, available: 4, section: 'التربية وعلم النفس' }
-    ]);
+    this.library = this.safeReadFile<any[]>('library_database.json', []);
 
-    this.guardians = this.safeReadFile<any[]>('guardians_database.json', [
-      { id: 'guard_1', schoolId: 'school_1', nationalId: '1029384756', name: 'وليد بن خالد الميمان', phone: '+966 50 123 4567', email: 'walid@alnoor.edu.sa', occupation: 'مهندس برمجيات', address: 'الرياض', appAccess: true, appAccountStatus: 'active' },
-      { id: 'guard_2', schoolId: 'school_1', nationalId: '1102938476', name: 'أحمد بن يوسف الزهراني', phone: '+966 54 987 6543', email: 'ahmed@alnoor.edu.sa', occupation: 'طبيب', address: 'الرياض', appAccess: true, appAccountStatus: 'active' }
-    ]);
-    this.student_guardians = this.safeReadFile<any[]>('student_guardians_database.json', [
-      { id: 'sg_1', studentId: 'stud_1', guardianId: 'guard_1', relationType: 'father', isPrimary: true, financialLiability: true, smsNotifications: true },
-      { id: 'sg_2', studentId: 'stud_2', guardianId: 'guard_2', relationType: 'father', isPrimary: true, financialLiability: true, smsNotifications: true }
-    ]);
-    this.student_medical_records = this.safeReadFile<any[]>('student_medical_records_database.json', [
-      { id: 'med_1', studentId: 'stud_1', bloodType: 'O+', chronicDiseases: 'None', allergies: 'Peanuts', vaccinesTaken: true, emergencyContactName: 'وليد الميمان', emergencyContactPhone: '+966 50 123 4567', medicalNotes: 'Slight seasonal allergy' },
-      { id: 'med_2', studentId: 'stud_2', bloodType: 'A-', chronicDiseases: 'Asthma', allergies: 'Dust', vaccinesTaken: true, emergencyContactName: 'أحمد الزهراني', emergencyContactPhone: '+966 54 987 6543', medicalNotes: 'Inhaler in backpack' }
-    ]);
-    this.student_transportation = this.safeReadFile<any[]>('student_transportation_database.json', [
-      { id: 'trans_1', studentId: 'stud_1', routeNumber: 'Route 12', pickupPoint: 'Yasmeen District', dropoffPoint: 'School Gate 1', monthlyFees: 200, status: 'active' }
-    ]);
-    this.student_library_accounts = this.safeReadFile<any[]>('student_library_accounts_database.json', [
-      { id: 'lib_1', studentId: 'stud_1', libraryCardNumber: 'LC-99201', status: 'active', booksBorrowedCount: 2, unpaidFines: 0 }
-    ]);
-    this.student_uniform_accounts = this.safeReadFile<any[]>('student_uniform_accounts_database.json', [
-      { id: 'uni_acc_1', studentId: 'stud_1', uniformSize: 'L', piecesReceivedCount: 3, totalFees: 135, paymentStatus: 'paid' }
-    ]);
-    this.student_assets = this.safeReadFile<any[]>('student_assets_database.json', [
-      { id: 'asset_1', studentId: 'stud_1', assetName: 'iPad Pro School Edition', serialNumber: 'GG99102X9', receivedDate: '2025-09-01', condition: 'excellent' }
-    ]);
-    this.student_documents = this.safeReadFile<any[]>('student_documents_database.json', [
-      { id: 'doc_1', studentId: 'stud_1', category: 'national_id', fileName: 'national_id_card.pdf', fileSize: '450 KB', accessPermission: 'admins', ocrProcessed: true, ocrExtractedName: 'خالد بن وليد الميمان', uploadedAt: '2024-09-01' }
-    ]);
-    this.student_contacts = this.safeReadFile<any[]>('student_contacts_database.json', [
-      { id: 'cont_1', studentId: 'stud_1', contactName: 'خال الطالب - سعد', contactPhone: '+966 50 000 1111', contactRelation: 'Uncle', isEmergency: true }
-    ]);
+    this.guardians = this.safeReadFile<any[]>('guardians_database.json', []);
+    this.student_guardians = this.safeReadFile<any[]>('student_guardians_database.json', []);
+    this.student_medical_records = this.safeReadFile<any[]>('student_medical_records_database.json', []);
+    this.student_transportation = this.safeReadFile<any[]>('student_transportation_database.json', []);
+    this.student_library_accounts = this.safeReadFile<any[]>('student_library_accounts_database.json', []);
+    this.student_uniform_accounts = this.safeReadFile<any[]>('student_uniform_accounts_database.json', []);
+    this.student_assets = this.safeReadFile<any[]>('student_assets_database.json', []);
+    this.student_documents = this.safeReadFile<any[]>('student_documents_database.json', []);
+    this.student_contacts = this.safeReadFile<any[]>('student_contacts_database.json', []);
 
     this.journalEntries = this.safeReadFile<JournalEntry[]>('journal_entries_database.json', []);
     this.vouchers = this.safeReadFile<Voucher[]>('vouchers_database.json', []);
 
-    this.accounts = this.safeReadFile<Account[]>('accounts_database.json', [
-      { id: 'acc_1', code: '1000', name: 'الأصول', nature: 'asset', level: 1, isActive: true, isLeaf: false, balance: 0 },
-      { id: 'acc_11', code: '1100', name: 'الأصول المتداولة', nature: 'asset', level: 2, parentAccountId: 'acc_1', isActive: true, isLeaf: false, balance: 0 },
-      { id: 'acc_111', code: '1101', name: 'الصندوق', nature: 'asset', level: 3, parentAccountId: 'acc_11', isActive: true, isLeaf: true, balance: 50000 },
-      { id: 'acc_112', code: '1102', name: 'البنك', nature: 'asset', level: 3, parentAccountId: 'acc_11', isActive: true, isLeaf: true, balance: 100000 },
-      { id: 'acc_113', code: '1103', name: 'ذمم الطلاب المدينين', nature: 'asset', level: 3, parentAccountId: 'acc_11', isActive: true, isLeaf: true, balance: 0 },
-      { id: 'acc_2', code: '2000', name: 'الخصوم', nature: 'liability', level: 1, isActive: true, isLeaf: false, balance: 0 },
-      { id: 'acc_211', code: '2101', name: 'الإيرادات المؤجلة غير المحققة (Deferred Revenue)', nature: 'liability', level: 3, parentAccountId: 'acc_2', isActive: true, isLeaf: true, balance: 0 },
-      { id: 'acc_3', code: '3000', name: 'حقوق الملكية', nature: 'equity', level: 1, isActive: true, isLeaf: false, balance: 0 },
-      { id: 'acc_4', code: '4000', name: 'الإيرادات', nature: 'revenue', level: 1, isActive: true, isLeaf: false, balance: 0 },
-      { id: 'acc_411', code: '4101', name: 'إيرادات الرسوم الدراسية المحققة', nature: 'revenue', level: 3, parentAccountId: 'acc_4', isActive: true, isLeaf: true, balance: 0 },
-      { id: 'acc_5', code: '5000', name: 'المصروفات', nature: 'expense', level: 1, isActive: true, isLeaf: false, balance: 0 }
-    ]);
-    this.fiscalYears = this.safeReadFile<FiscalYear[]>('fiscal_years_database.json', [
-      { id: 'fy_2026', yearName: '2026', startDate: '2026-01-01', endDate: '2026-12-31', status: 'open', schoolId: 'school_1' }
-    ]);
-    this.accountingPeriods = this.safeReadFile<AccountingPeriod[]>('accounting_periods_database.json', [
-      { id: 'ap_2026_07', fiscalYearId: 'fy_2026', periodName: '2026-07', startDate: '2026-07-01', endDate: '2026-07-31', status: 'open', schoolId: 'school_1' }
-    ]);
+    this.accounts = this.safeReadFile<Account[]>('accounts_database.json', []);
+    this.fiscalYears = this.safeReadFile<FiscalYear[]>('fiscal_years_database.json', []);
+    this.accountingPeriods = this.safeReadFile<AccountingPeriod[]>('accounting_periods_database.json', []);
     this.generalLedgerLines = this.safeReadFile<GeneralLedger[]>('general_ledger_database.json', []);
     
     this.installmentPlans = this.safeReadFile<InstallmentPlan[]>('installment_plans_database.json', []);
@@ -370,14 +319,10 @@ export class FallbackStorage {
     this.installmentHistories = this.safeReadFile<InstallmentHistory[]>('installment_histories_database.json', []);
     this.installmentVersions = this.safeReadFile<InstallmentVersion[]>('installment_versions_database.json', []);
 
-    this.academicCalendars = this.safeReadFile<AcademicCalendar[]>('academic_calendars_database.json', [
-      { id: 'acad_cal_2026', schoolId: 'school_1', name: 'التقويم الأكاديمي 2026', startDate: '2026-09-01', endDate: '2027-06-30', isActive: true, totalMonths: 10, totalWeeks: 43, totalDays: 303 }
-    ]);
-    this.academicTerms = this.safeReadFile<AcademicTerm[]>('academic_terms_database.json', [
-      { id: 'term_1', calendarId: 'acad_cal_2026', name: 'الفصل الدراسي الأول', startDate: '2026-09-01', endDate: '2027-01-15', weightPercent: 50 },
-      { id: 'term_2', calendarId: 'acad_cal_2026', name: 'الفصل الدراسي الثاني', startDate: '2027-01-16', endDate: '2027-06-30', weightPercent: 50 }
-    ]);
-    this.academicPeriods = this.safeReadFile<AcademicPeriod[]>('academic_periods_database.json', [
+    this.academicCalendars = this.safeReadFile<AcademicCalendar[]>('academic_calendars_database.json', []);
+    this.academicTerms = this.safeReadFile<AcademicTerm[]>('academic_terms_database.json', []);
+    this.academicPeriods = this.safeReadFile<AcademicPeriod[]>('academic_periods_database.json', []);
+    /*
       { id: 'acad_per_2026_09', calendarId: 'acad_cal_2026', name: '2026-09', startDate: '2026-09-01', endDate: '2026-09-30', isActive: true, isClosed: false },
       { id: 'acad_per_2026_10', calendarId: 'acad_cal_2026', name: '2026-10', startDate: '2026-10-01', endDate: '2026-10-31', isActive: true, isClosed: false },
       { id: 'acad_per_2026_11', calendarId: 'acad_cal_2026', name: '2026-11', startDate: '2026-11-01', endDate: '2026-11-30', isActive: true, isClosed: false },
@@ -388,15 +333,8 @@ export class FallbackStorage {
       { id: 'acad_per_2027_04', calendarId: 'acad_cal_2026', name: '2027-04', startDate: '2027-04-01', endDate: '2027-04-30', isActive: true, isClosed: false },
       { id: 'acad_per_2027_05', calendarId: 'acad_cal_2026', name: '2027-05', startDate: '2027-05-01', endDate: '2027-05-31', isActive: true, isClosed: false },
       { id: 'acad_per_2027_06', calendarId: 'acad_cal_2026', name: '2027-06', startDate: '2027-06-01', endDate: '2027-06-30', isActive: true, isClosed: false }
-    ]);
-    this.recognitionPolicies = this.safeReadFile<RevenueRecognitionPolicy[]>('recognition_policies_database.json', [
-      { id: 'pol_def', schoolId: 'school_1', name: 'الإيرادات المؤجلة (IFRS 15)', type: 'Deferred Revenue', description: 'تأجيل الاعتراف بالإيرادات حتى تقديم الخدمة فعلياً طبقاً للمعيار الدولي IFRS 15', isDefault: true },
-      { id: 'pol_imm', schoolId: 'school_1', name: 'الاعتراف الفوري', type: 'Immediate', description: 'الاعتراف بالإيراد كاملاً فور إصدار الفاتورة', isDefault: false },
-      { id: 'pol_csh', schoolId: 'school_1', name: 'الأساس النقدي', type: 'Cash Basis', description: 'الاعتراف بالإيراد تدريجياً بالتزامن مع التحصيلات النقدية فقط', isDefault: false },
-      { id: 'pol_str', schoolId: 'school_1', name: 'الاعتراف القسط الثابت', type: 'Straight Line', description: 'توزيع الإيراد بالتساوي شهرياً على شهور الخدمة', isDefault: false },
-      { id: 'pol_dly', schoolId: 'school_1', name: 'الاعتراف اليومي', type: 'Daily', description: 'الاعتراف بالإيراد على أساس الأيام الفعلية شهرياً', isDefault: false },
-      { id: 'pol_trm', schoolId: 'school_1', name: 'الاعتراف بالفصل الدراسي', type: 'Academic Term', description: 'الاعتراف بالإيراد موزّعاً حسب أوزان الفصول الدراسية', isDefault: false }
-    ]);
+    ]); */
+    this.recognitionPolicies = this.safeReadFile<RevenueRecognitionPolicy[]>('recognition_policies_database.json', []);
     this.recognitionSchedules = this.safeReadFile<RevenueRecognitionSchedule[]>('recognition_schedules_database.json', []);
     this.recognitionEntries = this.safeReadFile<RevenueRecognitionEntry[]>('recognition_entries_database.json', []);
     this.recognitionHistories = this.safeReadFile<RevenueRecognitionHistory[]>('recognition_histories_database.json', []);
@@ -421,18 +359,7 @@ export class FallbackStorage {
     this.treasuryAccounts = this.safeReadFile<TreasuryAccount[]>('treasury_accounts_database.json', []);
     this.treasuryTransactions = this.safeReadFile<TreasuryTransaction[]>('treasury_transactions_database.json', []);
     this.treasuryTransfers = this.safeReadFile<TreasuryTransfer[]>('treasury_transfers_database.json', []);
-    this.paymentInstrumentConfigs = this.safeReadFile<PaymentInstrumentConfig[]>('payment_instruments_database.json', [
-      { instrument: 'Cash', isActive: true, notes: 'الصندوق النقدي' },
-      { instrument: 'Bank Transfer', isActive: true, notes: 'التحويلات البنكية المباشرة' },
-      { instrument: 'Cheque', isActive: true, notes: 'الشيكات المصرفية الآجلة والمقبولة الدفع' },
-      { instrument: 'POS', isActive: true, notes: 'نقاط البيع الإلكترونية بمدارسنا' },
-      { instrument: 'Online Payment', isActive: true, notes: 'بوابات الدفع الإلكتروني عبر الإنترنت' },
-      { instrument: 'Wallet', isActive: true, notes: 'المحافظ الإلكترونية' },
-      { instrument: 'Credit Balance', isActive: true, notes: 'الأرصدة الدائنة المرحلة للطلاب' },
-      { instrument: 'Scholarship Offset', isActive: true, notes: 'المنح والخصومات الأكاديمية الاستثنائية' },
-      { instrument: 'Voucher', isActive: true, notes: 'قسائم القبض والصرف الداخلية' },
-      { instrument: 'Gift Card', isActive: true, notes: 'بطاقات الهدايا مسبقة الدفع للأنشطة والخدمات' }
-    ]);
+    this.paymentInstrumentConfigs = this.safeReadFile<PaymentInstrumentConfig[]>('payment_instruments_database.json', []);
 
     this.mdmRegistry = this.safeReadFile<any[]>('mdm_registry_database.json', []);
     this.logs = this.safeReadFile<any[]>('logs_database.json', []);
@@ -445,10 +372,7 @@ export class FallbackStorage {
     this.workflowDefinitions = this.safeReadFile<any[]>('workflow_definitions_database.json', []);
     this.workflowInstances = this.safeReadFile<any[]>('workflow_instances_database.json', []);
 
-    this.kpiDefinitions = this.safeReadFile<KPIDefinition[]>('kpi_definitions_database.json', [
-      { id: 'kpi_1', name: 'نسبة تحصيل الرسوم', code: 'FEES_COLLECTION_RATE', formula: 'collected/total', module: 'الشؤون المالية', targetValue: 95, currentValue: 88, period: 'سنوي' },
-      { id: 'kpi_2', name: 'معدل انضباط الطلاب', code: 'STUDENT_ATTENDANCE_RATE', formula: 'attended/total', module: 'شؤون الطلاب', targetValue: 98, currentValue: 96, period: 'شهري' }
-    ]);
+    this.kpiDefinitions = this.safeReadFile<KPIDefinition[]>('kpi_definitions_database.json', []);
     this.dashboardDefinitions = this.safeReadFile<DashboardDefinition[]>('dashboard_definitions_database.json', []);
 
     this.backgroundJobs = this.safeReadFile<any[]>('background_jobs_database.json', []);
