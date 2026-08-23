@@ -453,11 +453,12 @@ export default function App() {
   // shared collection here as well: doing so duplicates GET /api/students
   // during navigation and can overlap the server transaction context.
   useEffect(() => {
-    if (activeSection !== 'students') {
+    if (activeSection !== 'students' ||
+      !canAccessSection(trustedSessionUser, 'students', { currentPortal })) {
       return;
     }
     return undefined;
-  }, [activeSection]);
+  }, [activeSection, currentPortal, trustedSessionUser]);
 
   // Auto switch activeSection to school dashboard when in Client Mode if currently on central admin route
   useEffect(() => {
