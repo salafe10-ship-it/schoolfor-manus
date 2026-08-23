@@ -1815,6 +1815,12 @@ async function startServer() {
         .setHeader('X-Correlation-Id', correlationId)
         .send(result.buffer);
     } catch (err: any) {
+      EnterpriseLogger.error('Student export request failed.', 'StudentExport', {
+        requestId,
+        correlationId,
+        status: err instanceof ValidationError ? 'REJECTED' : 'FAILED',
+        error: err?.message || 'unknown export error'
+      });
       if (context) {
         const status = err instanceof ValidationError ? 'REJECTED' : 'FAILED';
         try {

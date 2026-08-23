@@ -9,7 +9,8 @@ const serverSource = readFileSync('server.ts', 'utf8');
 describe('STU-AFFAIRS-P1 save and persistence contract', () => {
   it('surfaces server validation, permission, and persistence errors', () => {
     expect(repositorySource).toContain('data.message || data.error');
-    expect(portalSource).toContain("triggerNotification(error?.message || 'تعذر حفظ سجل الطالب في الخادم.'");
+    expect(portalSource).toContain("const errorMessage = error?.message || 'تعذر حفظ سجل الطالب في الخادم.'");
+    expect(portalSource).toContain("triggerNotification(errorMessage, 'warning')");
   });
 
   it('acquires the active trusted token through the shared authenticated request layer', () => {

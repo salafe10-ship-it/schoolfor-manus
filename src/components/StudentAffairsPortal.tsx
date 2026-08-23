@@ -12,7 +12,7 @@ import {
 import { Student, School, UserRole } from '../types';
 import { PERMISSIONS } from '../authorization/PermissionRegistry';
 import { StudentRepository } from './student-affairs/repository/StudentRepository';
-import { getTrustedAccessToken } from '../utils/auth';
+import { authenticatedRequest } from '../utils/authenticatedRequest';
 import StudentDocumentsPortal from '../modules/student-documents/presentation/StudentDocumentsPortal';
 
 type StudentTimelineEvent = {
@@ -27,8 +27,46 @@ type StudentTimelineEvent = {
 function canonicalDateInput(value: unknown): string {
   const raw = String(value ?? '').trim();
   if (!raw) return '';
+  if (raw.includes('T')) {
+    const parsed = new Date(raw);
+    if (!Number.isNaN(parsed.getTime())) {
+      const pad = (part: number) => String(part).padStart(2, '0');
+      return `${parsed.getFullYear()}-${pad(parsed.getMonth() + 1)}-${pad(parsed.getDate())}`;
+    }
+  }
   const isoDate = raw.match(/^(\d{4}-\d{2}-\d{2})/);
   return isoDate?.[1] || '';
+}
+
+function canonicalGuardianRelationship(value: string): string {
+  const normalized = value.trim();
+  if (['parent', 'legal_guardian', 'foster_parent', 'sibling', 'relative', 'sponsor', 'other'].includes(normalized)) {
+    return normalized;
+  }
+  if (['أب', 'أم', 'عم', 'خال', 'جد'].includes(normalized)) return 'parent';
+  if (normalized === 'وصي قانوني') return 'legal_guardian';
+  if (normalized === 'أخ' || normalized === 'أخت') return 'sibling';
+  return 'other';
+}
+
+function guardianRelationshipForForm(value: unknown): string {
+  const normalized = String(value ?? '').trim();
+  if (['أب', 'أم', 'عم', 'خال', 'جد', 'وصي قانوني', 'أخ', 'أخت'].includes(normalized)) return normalized;
+  if (normalized === 'legal_guardian') return 'وصي قانوني';
+  if (normalized === 'sibling') return 'أخ';
+  return 'أب';
+}
+
+function guardianRelationshipLabel(value: unknown): string {
+  const normalized = String(value ?? '').trim();
+  if (normalized === 'parent') return 'ولي أمر / أب أو أم';
+  if (normalized === 'legal_guardian') return 'وصي قانوني';
+  if (normalized === 'foster_parent') return 'والد بديل';
+  if (normalized === 'sibling') return 'أخ / أخت';
+  if (normalized === 'relative') return 'قريب';
+  if (normalized === 'sponsor') return 'كفيل';
+  if (normalized === 'other') return 'أخرى';
+  return normalized || 'غير محددة';
 }
 
 interface StudentAffairsPortalProps {
@@ -109,6 +147,7 @@ export default function StudentAffairsPortal({
   const [isLoadingStudents, setIsLoadingStudents] = useState<boolean>(false);
   const [isExportingStudents, setIsExportingStudents] = useState<boolean>(false);
   const [studentLoadError, setStudentLoadError] = useState<string | null>(null);
+  const [studentSaveError, setStudentSaveError] = useState<string | null>(null);
   const [studentRefreshToken, setStudentRefreshToken] = useState(0);
   const [studentQueryMeta, setStudentQueryMeta] = useState({
     page: 1,
@@ -136,7 +175,7 @@ export default function StudentAffairsPortal({
     preferredName: '',
     studentCode: '',
     nationalId: '',
-    gender: '',
+    gender: 'ذكر',
     birthDate: '',
     birthPlace: '',
     stage: '',
@@ -151,7 +190,7 @@ export default function StudentAffairsPortal({
     parentName: '',
     parentPhone: '',
     parentNationalId: '',
-    parentRelation: '',
+    parentRelation: 'أب',
     parentJob: '',
     avatarUrl: '',
     notes: ''
@@ -164,17 +203,8 @@ export default function StudentAffairsPortal({
   useEffect(() => {
     let cancelled = false;
     const controller = new AbortController();
-    const token = getTrustedAccessToken() || null;
 
     setStudentLoadError(null);
-    if (!token) {
-      setIsLoadingStudents(false);
-      setStudentQueryMeta({ page: 1, limit: rowsPerPage, totalCount: 0, totalPages: 1, hasNext: false, hasPrevious: false });
-      setStudentLoadError('لا توجد جلسة موثوقة لجلب بيانات الطلاب. سجّل الدخول ثم أعد المحاولة.');
-      setStudents(current => current.filter(student => student.schoolId !== selectedSchool.id));
-      return () => { cancelled = true; controller.abort(); };
-    }
-
     setIsLoadingStudents(true);
     const serverSortBy = sortColumn === 'code'
       ? 'studentNumber'
@@ -259,20 +289,11 @@ export default function StudentAffairsPortal({
 
   useEffect(() => {
     const controller = new AbortController();
-    let retryTimer: number | undefined;
-    let attempts = 0;
     const loadMetrics = () => {
       if (controller.signal.aborted) return;
-      const token = getTrustedAccessToken() || null;
-      if (!token && attempts < 5) {
-        attempts += 1;
-        retryTimer = window.setTimeout(loadMetrics, 250);
-        return;
-      }
-      if (!token) return;
-      fetch('/api/student-affairs/metrics', {
+      authenticatedRequest('/api/student-affairs/metrics', {
         method: 'GET',
-        headers: { Accept: 'application/json', Authorization: `Bearer ${token}` },
+        headers: { Accept: 'application/json' },
         signal: controller.signal
       })
         .then(response => response.ok ? response.json() : Promise.reject(new Error('تعذر تحميل مؤشرات شؤون الطلاب.')))
@@ -291,8 +312,11 @@ export default function StudentAffairsPortal({
           if (error?.name !== 'AbortError') void triggerNotification(error?.message || 'تعذر تحميل مؤشرات شؤون الطلاب.', 'warning');
         });
     };
-    loadMetrics();
-    return () => controller.abort();
+    const metricsTimer = window.setTimeout(loadMetrics, 1500);
+    return () => {
+      window.clearTimeout(metricsTimer);
+      controller.abort();
+    };
     // App supplies an inline notification callback; it must not refetch on
     // every parent render.
     // eslint-disable-next-line react-hooks/exhaustive-deps
@@ -311,6 +335,18 @@ export default function StudentAffairsPortal({
     setTimelineError('');
   };
 
+  const handleOpenFirstIdCard = () => {
+    const student = selectedStudentIds.length > 0
+      ? filteredStudents.find(candidate => selectedStudentIds.includes(candidate.id))
+      : filteredStudents[0];
+    if (!student) {
+      triggerNotification('لا يوجد طالب محمل لفتح بطاقة الهوية.', 'warning');
+      return;
+    }
+    handleOpenViewStudent(student);
+    setShowIdCardPrint(true);
+  };
+
   const loadStudentTimeline = async (student: Student) => {
     setTimelineStudent(student);
     setTimelineEvents([]);
@@ -318,13 +354,9 @@ export default function StudentAffairsPortal({
     setTimelineStatus('loading');
 
     try {
-      const token = getTrustedAccessToken();
-      const response = await fetch(`/api/students/${encodeURIComponent(student.id)}/timeline`, {
+      const response = await authenticatedRequest(`/api/students/${encodeURIComponent(student.id)}/timeline`, {
         method: 'GET',
-        headers: {
-          Accept: 'application/json',
-          ...(token ? { Authorization: `Bearer ${token}` } : {})
-        }
+        headers: { Accept: 'application/json' }
       });
       const payload = await response.json().catch(() => null) as { data?: StudentTimelineEvent[]; message?: string; error?: string } | null;
       if (!response.ok) {
@@ -358,7 +390,7 @@ export default function StudentAffairsPortal({
       preferredName: '',
       studentCode: '',
       nationalId: '',
-      gender: '',
+      gender: 'ذكر',
       birthDate: '',
       birthPlace: '',
       stage: '',
@@ -373,7 +405,7 @@ export default function StudentAffairsPortal({
       parentName: '',
       parentPhone: '',
       parentNationalId: '',
-      parentRelation: '',
+      parentRelation: 'أب',
       parentJob: '',
       avatarUrl: '',
       notes: ''
@@ -381,6 +413,7 @@ export default function StudentAffairsPortal({
     setIsEditMode(false);
     setSelectedStudent(null);
     setRegistrationIdempotencyKey(`student-affairs-registration-${crypto.randomUUID()}`);
+    setStudentSaveError(null);
     setModalTab('basic');
     setIsModalOpen(true);
   };
@@ -411,39 +444,45 @@ export default function StudentAffairsPortal({
       parentName: student.parentName || '',
       parentPhone: student.parentPhone || '',
       parentNationalId: (student as any).parentNationalId || '',
-      parentRelation: (student as any).guardianRelation || (student as any).parentRelation || '',
+      parentRelation: guardianRelationshipForForm((student as any).guardianRelation || (student as any).parentRelation),
       parentJob: (student as any).parentJob || '',
       avatarUrl: student.avatarUrl || '',
       notes: (student as any).notes || ''
     });
     setIsEditMode(true);
+    setStudentSaveError(null);
     setModalTab('basic');
     setIsModalOpen(true);
   };
 
   // Save Student (Add / Edit)
   const handleSaveStudent = async (addAnother = false) => {
+    setStudentSaveError(null);
+    const rejectSave = (message: string) => {
+      setStudentSaveError(message);
+      triggerNotification(message, 'warning');
+    };
     if (!canWriteStudents) {
-      triggerNotification('لا تملك صلاحية تعديل بيانات الطلاب.', 'warning');
+      rejectSave('لا تملك صلاحية تعديل بيانات الطلاب.');
       return;
     }
     if (!formData.fullName.trim()) {
-      triggerNotification('يرجى إدخال اسم الطالب رباعي بشكل صحيح', 'warning');
+      rejectSave('يرجى إدخال اسم الطالب رباعي بشكل صحيح');
       return;
     }
     if (!formData.birthDate) {
-      triggerNotification('تاريخ الميلاد مطلوب للربط مع السجل canonical.', 'warning');
+      rejectSave('تاريخ الميلاد مطلوب للربط مع السجل canonical.');
       return;
     }
     // Guardian identity/contact is mandatory for a new canonical registration,
     // but it must not block an unrelated student-field update. Guardian edits
     // still go through the dedicated canonical guardian workflow below.
     if (!isEditMode && (!formData.parentName.trim() || !formData.parentPhone.trim())) {
-      triggerNotification('اسم ولي الأمر ورقم هاتفه مطلوبان لإتمام التسجيل الآمن.', 'warning');
+      rejectSave('اسم ولي الأمر ورقم هاتفه مطلوبان لإتمام التسجيل الآمن.');
       return;
     }
     if (!formData.gender || !formData.status) {
-      triggerNotification('الجنس والحالة الدراسية حقول مطلوبة ولا تُملأ تلقائيًا.', 'warning');
+      rejectSave('الجنس والحالة الدراسية حقول مطلوبة ولا تُملأ تلقائيًا.');
       return;
     }
 
@@ -473,7 +512,7 @@ export default function StudentAffairsPortal({
       Object.assign(studentPayload, {
         parentName: formData.parentName,
         parentPhone: formData.parentPhone,
-        guardianRelation: formData.parentRelation
+        guardianRelation: canonicalGuardianRelationship(formData.parentRelation)
       });
     }
 
@@ -510,7 +549,7 @@ export default function StudentAffairsPortal({
             legalMiddleName: parts.length > 2 ? parts.slice(1, -1).join(' ') : null,
             legalLastName: parts[parts.length - 1],
             phone: formData.parentPhone.trim(),
-            relationshipType: formData.parentRelation || undefined
+            relationshipType: canonicalGuardianRelationship(formData.parentRelation)
           });
           guardianPersisted = true;
         }
@@ -531,7 +570,7 @@ export default function StudentAffairsPortal({
           ...persistedStudent,
           parentName: formData.parentName,
           parentPhone: formData.parentPhone,
-          guardianRelation: formData.parentRelation,
+          guardianRelation: canonicalGuardianRelationship(formData.parentRelation),
           guardianId: updatedGuardian.guardianId,
           guardianVersion: updatedGuardian.guardianVersion,
           guardianRelationshipId: updatedGuardian.relationshipId,
@@ -562,7 +601,7 @@ export default function StudentAffairsPortal({
             preferredName: '',
             studentCode: '',
             nationalId: '',
-            gender: '',
+            gender: 'ذكر',
             birthDate: '',
             birthPlace: '',
             stage: '',
@@ -577,7 +616,7 @@ export default function StudentAffairsPortal({
             parentName: '',
             parentPhone: '',
             parentNationalId: '',
-            parentRelation: '',
+            parentRelation: 'أب',
             parentJob: '',
             avatarUrl: '',
             notes: ''
@@ -588,6 +627,8 @@ export default function StudentAffairsPortal({
         }
       }
     } catch (error: any) {
+      const errorMessage = error?.message || 'تعذر حفظ سجل الطالب في الخادم.';
+      setStudentSaveError(errorMessage);
       if (isEditMode && selectedStudent && guardianChanged && guardianPersisted && !studentPersisted) {
         triggerNotification(
           'تم حفظ بيانات ولي الأمر، لكن لم تثبت نتيجة حفظ بيانات الطالب. أعد تحميل السجل للتحقق قبل إعادة المحاولة.',
@@ -602,7 +643,7 @@ export default function StudentAffairsPortal({
         );
         return;
       }
-      triggerNotification(error?.message || 'تعذر حفظ سجل الطالب في الخادم.', 'warning');
+      triggerNotification(errorMessage, 'warning');
     }
   };
 
@@ -1364,7 +1405,7 @@ export default function StudentAffairsPortal({
                   </div>
                   <div>
                     <h4 className="text-xs font-black text-slate-900">{st.parentName || 'غير مرتبط'}</h4>
-                    <span className="text-[10px] font-bold text-amber-800 bg-amber-50 px-2 py-0.5 rounded-full">صلة القرابة: {(st as any).guardianRelation || 'غير محددة'}</span>
+                    <span className="text-[10px] font-bold text-amber-800 bg-amber-50 px-2 py-0.5 rounded-full">صلة القرابة: {guardianRelationshipLabel((st as any).guardianRelation)}</span>
                   </div>
                 </div>
 
@@ -1436,12 +1477,12 @@ export default function StudentAffairsPortal({
               <p className="text-[10px] text-slate-500 font-bold">طباعة وتصدير القوائم الرسمية للمدرسين والإدارة</p>
             </div>
 
-            <div className="bg-white border border-slate-200 rounded-2xl p-4 shadow-xs space-y-3 opacity-75">
+            <div className="bg-white border border-amber-200 rounded-2xl p-4 shadow-xs space-y-3 cursor-pointer hover:border-[#d4af37] transition-all" onClick={handleOpenFirstIdCard}>
               <div className="w-10 h-10 rounded-xl bg-[#2a1a0e] text-amber-300 flex items-center justify-center">
                 <Award className="w-5 h-5" />
               </div>
-              <h4 className="text-xs font-black text-slate-700">بطاقات الهوية المدرسية (قريبًا)</h4>
-              <p className="text-[10px] text-slate-500 font-bold">تحتاج خدمة إصدار موثقة وQR مرتبطًا بالسجل الدائم.</p>
+              <h4 className="text-xs font-black text-slate-900">بطاقات الهوية المدرسية</h4>
+              <p className="text-[10px] text-slate-500 font-bold">فتح بطاقة الطالب الرسمية من السجل الكانوني ثم إرسالها للطباعة.</p>
             </div>
 
             <div className="bg-white border border-slate-200 rounded-2xl p-4 shadow-xs space-y-3 opacity-75">
@@ -1533,6 +1574,11 @@ export default function StudentAffairsPortal({
 
             {/* Modal Body Form */}
             <div className="p-6 space-y-4">
+              {studentSaveError && (
+                <div role="alert" className="rounded-xl border border-rose-300 bg-rose-50 px-4 py-3 text-xs font-black text-rose-800" dir="rtl">
+                  {studentSaveError}
+                </div>
+              )}
               {modalTab === 'basic' && (
                 <div className="grid grid-cols-1 md:grid-cols-4 gap-6">
                   
@@ -1573,7 +1619,7 @@ export default function StudentAffairsPortal({
                         <input 
                           type="text"
                           value={formData.fullName}
-                          onChange={e => setFormData({ ...formData, fullName: e.target.value })}
+                          onChange={e => setFormData(current => ({ ...current, fullName: e.target.value }))}
                           placeholder="أدخل الاسم رباعي بالكامل"
                           className="w-full bg-white border border-slate-300 rounded-xl p-2.5 text-xs font-bold text-slate-900 focus:border-[#9a6a1d] outline-none shadow-xs"
                         />
@@ -1584,7 +1630,7 @@ export default function StudentAffairsPortal({
                         <input 
                           type="text"
                           value={formData.studentCode}
-                          onChange={e => setFormData({ ...formData, studentCode: e.target.value })}
+                          onChange={e => setFormData(current => ({ ...current, studentCode: e.target.value }))}
                           className="w-full bg-slate-100 border border-slate-300 rounded-xl p-2.5 text-xs font-bold font-mono text-amber-900 outline-none"
                         />
                       </div>
@@ -1595,7 +1641,7 @@ export default function StudentAffairsPortal({
                       <input
                         type="text"
                         value={formData.preferredName}
-                        onChange={e => setFormData({ ...formData, preferredName: e.target.value })}
+                        onChange={e => setFormData(current => ({ ...current, preferredName: e.target.value }))}
                         placeholder="الاسم الذي يفضّل الطالب ظهوره به"
                         className="w-full bg-white border border-slate-300 rounded-xl p-2.5 text-xs font-bold text-slate-900 focus:border-[#9a6a1d] outline-none shadow-xs"
                       />
@@ -1619,7 +1665,7 @@ export default function StudentAffairsPortal({
                         <label className="block text-slate-800 font-extrabold mb-1">الجنس</label>
                         <select 
                           value={formData.gender}
-                          onChange={e => setFormData({ ...formData, gender: e.target.value })}
+                          onChange={e => setFormData(current => ({ ...current, gender: e.target.value }))}
                           className="w-full bg-white border border-slate-300 rounded-xl p-2.5 text-xs font-bold text-slate-900 focus:border-[#9a6a1d] outline-none shadow-xs"
                         >
                           <option value="ذكر">ذكر</option>
@@ -1630,9 +1676,12 @@ export default function StudentAffairsPortal({
                       <div>
                         <label className="block text-slate-800 font-extrabold mb-1">تاريخ الميلاد</label>
                         <input 
-                          type="date"
+                          type="text"
+                          inputMode="numeric"
+                          placeholder="YYYY-MM-DD"
+                          aria-label="تاريخ الميلاد"
                           value={formData.birthDate}
-                          onChange={e => setFormData({ ...formData, birthDate: e.target.value })}
+                          onChange={e => setFormData(current => ({ ...current, birthDate: e.target.value }))}
                           className="w-full bg-white border border-slate-300 rounded-xl p-2.5 text-xs font-bold text-slate-900 focus:border-[#9a6a1d] outline-none shadow-xs"
                         />
                       </div>
@@ -1641,7 +1690,7 @@ export default function StudentAffairsPortal({
                         <label className="block text-slate-800 font-extrabold mb-1">حالة القيد <span className="text-rose-600">*</span></label>
                         <select
                           value={formData.status}
-                          onChange={e => setFormData({ ...formData, status: e.target.value })}
+                          onChange={e => setFormData(current => ({ ...current, status: e.target.value }))}
                           className="w-full bg-white border border-slate-300 rounded-xl p-2.5 text-xs font-bold text-slate-900 focus:border-[#9a6a1d] outline-none shadow-xs"
                         >
                           <option value="">اختر الحالة</option>
@@ -1707,7 +1756,7 @@ export default function StudentAffairsPortal({
                     <input 
                       type="text"
                       value={formData.parentName}
-                      onChange={e => setFormData({ ...formData, parentName: e.target.value })}
+                      onChange={e => setFormData(current => ({ ...current, parentName: e.target.value }))}
                       placeholder="أدخل اسم ولي الأمر"
                       className="w-full bg-white border border-slate-300 rounded-xl p-2.5 text-xs font-bold text-slate-900 outline-none shadow-xs"
                     />
@@ -1718,7 +1767,7 @@ export default function StudentAffairsPortal({
                     <input 
                       type="text"
                       value={formData.parentPhone}
-                      onChange={e => setFormData({ ...formData, parentPhone: e.target.value })}
+                      onChange={e => setFormData(current => ({ ...current, parentPhone: e.target.value }))}
                       placeholder="0500000000"
                       className="w-full bg-white border border-slate-300 rounded-xl p-2.5 text-xs font-bold text-slate-900 font-mono outline-none shadow-xs"
                     />
@@ -1728,7 +1777,7 @@ export default function StudentAffairsPortal({
                     <label className="block text-slate-800 font-extrabold mb-1">صلة القرابة</label>
                     <select 
                       value={formData.parentRelation}
-                      onChange={e => setFormData({ ...formData, parentRelation: e.target.value })}
+                      onChange={e => setFormData(current => ({ ...current, parentRelation: e.target.value }))}
                       className="w-full bg-white border border-slate-300 rounded-xl p-2.5 text-xs font-bold text-slate-900 outline-none shadow-xs"
                     >
                       <option value="أب">أب</option>
@@ -1736,6 +1785,8 @@ export default function StudentAffairsPortal({
                       <option value="عم">عم</option>
                       <option value="خال">خال</option>
                       <option value="جد">جد</option>
+                      <option value="وصي قانوني">وصي قانوني</option>
+                      <option value="أخ">أخ</option>
                     </select>
                   </div>
 
@@ -1853,7 +1904,7 @@ export default function StudentAffairsPortal({
                   </div>
                   <div className="rounded-xl border border-slate-200 bg-white p-3">
                     <span className="block text-[10px] font-bold text-slate-500">تاريخ الميلاد</span>
-                    <span className="mt-1 block text-xs font-black text-slate-900">{viewStudent.birthDate || 'غير متوفر'}</span>
+                    <span className="mt-1 block text-xs font-black text-slate-900">{canonicalDateInput(viewStudent.birthDate) || 'غير متوفر'}</span>
                   </div>
                   <div className="rounded-xl border border-slate-200 bg-white p-3">
                     <span className="block text-[10px] font-bold text-slate-500">النوع</span>
@@ -1919,16 +1970,48 @@ export default function StudentAffairsPortal({
               <button onClick={() => setViewStudent(null)} className="px-5 py-2 rounded-xl bg-white border border-slate-300 font-bold text-xs">إغلاق</button>
               <button
                 type="button"
-                disabled
-                aria-disabled="true"
-                title="خدمة طباعة البطاقة الرسمية غير متاحة حتى اعتماد خدمة الطباعة"
-                className="px-6 py-2 rounded-xl bg-slate-200 text-slate-500 font-black text-xs flex items-center gap-1.5 border border-slate-300 cursor-not-allowed"
+                onClick={() => setShowIdCardPrint(true)}
+                className="px-6 py-2 rounded-xl bg-gradient-to-r from-[#9a6a1d] to-[#d4af37] text-slate-950 font-black text-xs flex items-center gap-1.5 border border-amber-700"
               >
                 <Printer className="w-4 h-4" />
-                <span>طباعة البطاقة الرسمية (غير متاحة)</span>
+                <span>معاينة وطباعة البطاقة الرسمية</span>
               </button>
             </div>
 
+          </div>
+        </div>
+      )}
+
+      {showIdCardPrint && viewStudent && (
+        <div className="fixed inset-0 z-[60] bg-black/70 flex items-center justify-center p-4" role="dialog" aria-modal="true" aria-label="معاينة بطاقة الطالب">
+          <div className="bg-white text-slate-900 w-full max-w-md rounded-2xl border-2 border-[#d4af37] shadow-2xl overflow-hidden">
+            <div className="no-print bg-[#2a1d13] text-white px-5 py-4 flex items-center justify-between">
+              <h3 className="font-black text-amber-200">معاينة بطاقة الطالب الرسمية</h3>
+              <button type="button" aria-label="إغلاق معاينة البطاقة" onClick={() => setShowIdCardPrint(false)} className="text-white/80 hover:text-white"><X className="w-5 h-5" /></button>
+            </div>
+            <div className="p-6" dir="rtl">
+              <div className="printable-area rounded-2xl border-2 border-[#d4af37] p-5 bg-gradient-to-br from-[#1c120c] to-[#2a1d13] text-white">
+                <div className="flex items-center justify-between border-b border-amber-400/40 pb-3 mb-4">
+                  <strong className="text-amber-200">{selectedSchool.name || 'SchoolForManus'}</strong>
+                  <span className="font-mono text-amber-300">{viewStudent.studentCode || viewStudent.academicId || '—'}</span>
+                </div>
+                <div className="flex items-center gap-4">
+                  <div className="w-20 h-24 rounded-xl border border-amber-400 flex items-center justify-center overflow-hidden bg-black/20">
+                    {viewStudent.avatarUrl ? <img src={viewStudent.avatarUrl} alt={viewStudent.name} className="w-full h-full object-cover" /> : <span className="text-3xl font-black text-amber-300">{viewStudent.name.slice(0, 1)}</span>}
+                  </div>
+                  <div className="space-y-2 text-sm">
+                    <div className="font-black text-amber-100">{viewStudent.name}</div>
+                    <div>تاريخ الميلاد: {canonicalDateInput(viewStudent.birthDate) || '—'}</div>
+                    <div>المرحلة: {viewStudent.stage || 'غير محددة'}</div>
+                    <div>المدرسة: {selectedSchool.name || 'SchoolForManus'}</div>
+                  </div>
+                </div>
+              </div>
+              <div className="no-print mt-4 flex justify-end gap-2">
+                <button type="button" onClick={() => window.print()} className="rounded-xl bg-[#d4af37] px-5 py-2 text-xs font-black">طباعة</button>
+                <button type="button" onClick={() => setShowIdCardPrint(false)} className="rounded-xl border border-slate-300 px-5 py-2 text-xs font-black">إغلاق</button>
+              </div>
+            </div>
           </div>
         </div>
       )}
@@ -1939,7 +2022,7 @@ export default function StudentAffairsPortal({
       {printPreviewStudents && (
         <div className="fixed inset-0 z-50 bg-black/70 backdrop-blur-xs flex items-center justify-center p-4 overflow-y-auto" role="dialog" aria-modal="true" aria-label="معاينة كشف الطلاب">
           <div className="bg-[#fffefc] text-slate-900 border-2 border-[#d4af37] rounded-3xl w-full max-w-6xl shadow-2xl overflow-hidden my-auto">
-            <div className="bg-gradient-to-r from-[#1c120c] via-[#2d1e12] to-[#1a100a] text-white px-6 py-4 flex items-center justify-between">
+            <div className="no-print bg-gradient-to-r from-[#1c120c] via-[#2d1e12] to-[#1a100a] text-white px-6 py-4 flex items-center justify-between">
               <div>
                 <h3 className="text-base font-black text-amber-200">معاينة كشف الطلاب</h3>
                 <p className="mt-1 text-[10px] font-bold text-amber-100/80">معاينة الصفوف المحملة والمفلترة حاليًا — ليست تقريرًا رسميًا شاملًا</p>
@@ -1949,7 +2032,7 @@ export default function StudentAffairsPortal({
               </button>
             </div>
 
-            <div className="p-6 space-y-4 bg-white">
+            <div className="printable-area p-6 space-y-4 bg-white">
               <div className="flex flex-wrap items-center justify-between gap-3 border-b-2 border-[#d4af37] pb-3">
                 <div>
                   <h2 className="text-lg font-black text-[#1c120c]">{selectedSchool.name || 'SchoolForManus'}</h2>
@@ -1996,7 +2079,7 @@ export default function StudentAffairsPortal({
               </div>
             </div>
 
-            <div className="bg-[#f5eeea] border-t border-amber-900/10 px-6 py-4 flex flex-col sm:flex-row items-center justify-between gap-3">
+            <div className="no-print bg-[#f5eeea] border-t border-amber-900/10 px-6 py-4 flex flex-col sm:flex-row items-center justify-between gap-3">
               <button type="button" onClick={() => setPrintPreviewStudents(null)} className="w-full sm:w-auto px-6 py-2.5 rounded-xl border border-slate-300 bg-white hover:bg-slate-100 text-slate-800 text-xs font-black">إغلاق المعاينة</button>
               <button type="button" onClick={() => { window.print(); triggerNotification('تم إرسال المعاينة إلى أمر الطباعة.', 'info'); }} className="w-full sm:w-auto px-6 py-2.5 rounded-xl bg-gradient-to-r from-[#9a6a1d] to-[#d4af37] text-slate-950 text-xs font-black flex items-center justify-center gap-2">
                 <Printer className="w-4 h-4" />

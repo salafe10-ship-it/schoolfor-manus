@@ -214,7 +214,7 @@ async function queryCanonicalStudents(
     SELECT
       s.id, s.tenant_id, s.school_id, s.branch_id, s.student_number,
       s.legal_first_name, s.legal_middle_name, s.legal_last_name,
-      s.preferred_name, s.date_of_birth, s.gender, s.nationality,
+      s.preferred_name, s.date_of_birth::text AS date_of_birth, s.gender, s.nationality,
       s.status, s.version, s.created_at, s.deleted_at,
       enrollment.class_reference, enrollment.section_reference,
       guardian.guardian_id, guardian.guardian_version,

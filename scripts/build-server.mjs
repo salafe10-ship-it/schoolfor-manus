@@ -7,12 +7,13 @@ const projectRoot = path.dirname(fileURLToPath(import.meta.url));
 const workspaceRoot = path.resolve(projectRoot, '..');
 
 await build({
-  absWorkingDir: workspaceRoot,
-  entryPoints: ['./server.ts'],
+  // Use absolute paths so esbuild does not reinterpret the entrypoint as a
+  // package when invoked by npm on Windows or from a sandboxed workspace.
+  entryPoints: [path.join(workspaceRoot, 'server.ts')],
   bundle: true,
   platform: 'node',
   format: 'cjs',
   packages: 'external',
   sourcemap: true,
-  outfile: './dist/server.cjs'
+  outfile: path.join(workspaceRoot, 'dist', 'server.cjs')
 });

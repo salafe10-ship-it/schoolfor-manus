@@ -32,6 +32,10 @@ export async function getTrustedAccessTokenAsync(): Promise<string> {
   const manager = getTrustedSessionManager();
   if (!manager) return '';
   try {
+    // This helper owns the explicit restore/validation contract. The shared
+    // request layer checks the locally safe token first, so normal API calls do
+    // not add a session round-trip; direct callers still get authoritative
+    // session validation here.
     await manager.restore();
     const token = manager.getAccessToken();
     return token && !manager.isAccessTokenExpiringSoon() ? token : '';

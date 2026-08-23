@@ -50,6 +50,22 @@ class BrowserAsyncContextStorage<T> implements AsyncContextStorage<T> {
 }
 
 function createAsyncContextStorage<T>(): AsyncContextStorage<T> {
+  // `tsx` runs this module as native ESM, where `require` is undefined. The
+  // old check therefore selected the browser fallback in the server and made
+  // concurrent requests share one mutable transaction context. Node 22+
+  // exposes built-in modules without a static import, which keeps the client
+  // bundle free of a Node-only dependency while giving the server real
+  // request-local async context isolation.
+  const runtimeProcess = (globalThis as typeof globalThis & {
+    process?: { getBuiltinModule?: (name: string) => unknown };
+  }).process;
+  const asyncHooks = runtimeProcess?.getBuiltinModule?.('node:async_hooks') as {
+    AsyncLocalStorage?: new <S>() => AsyncContextStorage<S>;
+  } | undefined;
+  if (asyncHooks?.AsyncLocalStorage) {
+    return new asyncHooks.AsyncLocalStorage<T>();
+  }
+
   const runtimeRequire = typeof require === 'function' ? require : undefined;
   if (runtimeRequire) {
     const { AsyncLocalStorage } = runtimeRequire('node:async_hooks') as typeof import('node:async_hooks');

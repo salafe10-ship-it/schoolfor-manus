@@ -3,6 +3,13 @@ import { afterEach, describe, expect, it, vi } from 'vitest';
 import StudentDocumentsPortal from '../modules/student-documents/presentation/StudentDocumentsPortal';
 import type { Student } from '../types';
 
+// The portal tests exercise document lifecycle behavior. Authentication and
+// its single-refresh/401 contract are covered by authenticatedRequest.test.ts.
+// Keep this adapter transparent so each test's fetch mock remains canonical.
+vi.mock('../utils/authenticatedRequest', () => ({
+  authenticatedRequest: (input: RequestInfo | URL, init?: RequestInit) => fetch(input, init)
+}));
+
 const student = { id: '44444444-4444-4444-8444-444444444444', name: 'طالب الاختبار' } as Student;
 const notify = vi.fn();
 

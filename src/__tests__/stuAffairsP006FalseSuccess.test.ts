@@ -7,22 +7,20 @@ const portalSource = readFileSync(
   'utf8'
 );
 
-describe('STU-AFFAIRS-P0-006-01 official card print safety gate', () => {
-  it('does not claim a successful print without a print implementation', () => {
+describe('STU-AFFAIRS-P0-006-01 official card print contract', () => {
+  it('does not claim a successful print before the browser print action completes', () => {
     expect(portalSource).not.toContain('تم طباعة بطاقة الطالب بنجاح');
-    expect(portalSource).toContain('طباعة البطاقة الرسمية (غير متاحة)');
-    expect(portalSource).toContain('خدمة طباعة البطاقة الرسمية غير متاحة حتى اعتماد خدمة الطباعة');
+    expect(portalSource).toContain('معاينة وطباعة البطاقة الرسمية');
+    expect(portalSource).toContain('window.print()');
   });
 
-  it('keeps the unavailable card action non-interactive and API-free', () => {
-    const cardLabelIndex = portalSource.indexOf('طباعة البطاقة الرسمية (غير متاحة)');
+  it('keeps the print preview scoped to the selected student and excludes controls from print', () => {
+    const cardLabelIndex = portalSource.indexOf('معاينة وطباعة البطاقة الرسمية');
     expect(cardLabelIndex).toBeGreaterThan(-1);
 
     const cardBlock = portalSource.slice(Math.max(0, cardLabelIndex - 900), cardLabelIndex + 200);
-    expect(cardBlock).toContain('disabled');
-    expect(cardBlock).toContain('aria-disabled="true"');
-    expect(cardBlock).not.toContain('fetch(');
-    expect(cardBlock).not.toContain('triggerNotification(');
-    expect(cardBlock).not.toContain('window.print(');
+    expect(portalSource).toContain('printable-area');
+    expect(portalSource).toContain('no-print');
+    expect(cardBlock).toContain('setShowIdCardPrint(true)');
   });
 });

@@ -2,7 +2,7 @@ import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import type { FormEvent } from 'react';
 import { Archive, CheckCircle2, ChevronLeft, ChevronRight, Clock3, Eye, FilePlus2, FileText, History, Loader2, LockKeyhole, RefreshCw, Search, ShieldAlert, X, XCircle } from 'lucide-react';
 import type { Student, UserRole } from '../../../types';
-import { getTrustedAccessToken } from '../../../utils/auth';
+import { authenticatedRequest } from '../../../utils/authenticatedRequest';
 
 type StudentDocumentRow = {
   id: string;
@@ -52,24 +52,18 @@ const verificationLabels: Record<string, string> = {
   not_required: 'غير مطلوب', pending: 'قيد المراجعة', verified: 'موثق', rejected: 'مرفوض', expired: 'منتهي'
 };
 
-function authHeaders(idempotency = false): Record<string, string> {
-  const token = getTrustedAccessToken();
-  return {
-    Accept: 'application/json',
-    ...(token ? { Authorization: `Bearer ${token}` } : {}),
-    ...(idempotency ? { 'Idempotency-Key': crypto.randomUUID() } : {})
-  };
-}
-
-async function request<T>(url: string, init: RequestInit = {}, idempotency = false): Promise<T> {
+async function request<T>(url: string, init: RequestInit = {}, idempotency = false, unwrap = true): Promise<T> {
   const controller = new AbortController();
   const timeoutId = setTimeout(() => controller.abort(), 15000);
   let response: Response;
   try {
-    response = await fetch(url, {
+    const headers = new Headers(init.headers || {});
+    headers.set('Accept', 'application/json');
+    if (idempotency) headers.set('Idempotency-Key', crypto.randomUUID());
+    response = await authenticatedRequest(url, {
       ...init,
       signal: init.signal || controller.signal,
-      headers: { ...authHeaders(idempotency), ...(init.headers || {}) }
+      headers
     });
   } catch (cause: any) {
     const timedOut = cause?.name === 'AbortError';
@@ -90,7 +84,7 @@ async function request<T>(url: string, init: RequestInit = {}, idempotency = fal
     error.outcome = 'failure';
     throw error;
   }
-  const result = payload?.data ?? payload;
+  const result = unwrap ? payload?.data ?? payload : payload;
   if (result == null) {
     const error = new Error('استجاب الخادم دون نتيجة كانونـية مؤكدة. لم يتم اعتبار العملية ناجحة.') as DocumentRequestError;
     error.errorCode = 'CANONICAL_RESULT_MISSING';
@@ -244,11 +238,9 @@ export default function StudentDocumentsPortal({ students, currentRole, triggerN
     if (classification) query.set('classification', classification);
     if (retention) query.set('retention', retention);
     try {
-      const response = await fetch(`/api/student-documents?${query.toString()}`, { headers: authHeaders() });
-      const payload = await response.json().catch(() => null) as { data?: StudentDocumentRow[]; meta?: { total?: number }; message?: string; errorCode?: string; success?: boolean } | null;
-      if (!response.ok || payload?.success === false) throw Object.assign(new Error(payload?.message || 'تعذر تحميل مستندات الطلاب.'), { status: response.status, errorCode: payload?.errorCode });
+      const payload = await request<{ data?: StudentDocumentRow[]; meta?: { total?: number } }>(`/api/student-documents?${query.toString()}`, {}, false, false);
       if (requestSequence !== listRequestSequence.current) return true;
-      const nextRows = payload?.data || [];
+      const nextRows = Array.isArray(payload?.data) ? payload.data : [];
       const serverTotal = payload?.meta?.total;
       const hasKnownTotal = typeof serverTotal === 'number' && Number.isFinite(serverTotal);
       setRows(nextRows); setTotalKnown(hasKnownTotal); setTotal(hasKnownTotal ? Number(serverTotal) : nextRows.length);

@@ -8,7 +8,7 @@
 |---:|---|---|---|
 | 01 | Login | `ACCEPTED WITH NON-BLOCKING ITEMS` | Browser UAT المرئي Login → Dashboard → Reload ناجح؛ API trace وDB read-only موثقـان كـUNVERIFIED. |
 | 02 | Dashboard | `ACCEPTED WITH NON-BLOCKING ITEMS` | Browser UAT وReload والحالات الحية/غير المتاحة والحراسة نجحت؛ API trace وDB read-only موثقـان كـUNVERIFIED. |
-| 03 | Student Affairs | `NOT CLOSED — RUNTIME UAT BLOCKED` | القراءة/التعديل/التصدير/المؤشرات/البحث/المعاينة المرئية للطباعة وإعادة التحميل مثبتة حيًا مع PostgreSQL؛ أصلح STU-SOL-012 إلى STU-SOL-015. Add/Delete/Persistence لم تُثبت بعد. |
+| 03 | Student Affairs | `NOT CLOSED — BLOCKERS REMAIN` | القراءة/الحفظ/التحرير/الحارس/التصدير/الطباعة/المصادقة/الاختبارات مثبتة؛ الشهادات وExcel import والتخزين الثنائي والنقل/الترقية ومصدر stage/grade/section ما زالت تمنع الإغلاق. راجع `CODEX_STUDENT_AFFAIRS_FINAL_CLOSURE_REPORT.md`. |
 | 04 | Academics / Academic Structure | `PENDING` | — |
 | 05 | Admissions / Registration | `PENDING` | — |
 | 06 | Attendance | `PENDING` | — |
