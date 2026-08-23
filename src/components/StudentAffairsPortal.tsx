@@ -259,28 +259,39 @@ export default function StudentAffairsPortal({
 
   useEffect(() => {
     const controller = new AbortController();
-    const token = getTrustedAccessToken() || null;
-    if (!token) return () => controller.abort();
-    fetch('/api/student-affairs/metrics', {
-      method: 'GET',
-      headers: { Accept: 'application/json', Authorization: `Bearer ${token}` },
-      signal: controller.signal
-    })
-      .then(response => response.ok ? response.json() : Promise.reject(new Error('تعذر تحميل مؤشرات شؤون الطلاب.')))
-      .then(payload => {
-        const metrics = payload?.data;
-        if (!metrics) throw new Error('استجابة مؤشرات شؤون الطلاب غير صالحة.');
-        setStudentMetrics({
-          totalCount: Number(metrics.totalCount) || 0,
-          activeCount: Number(metrics.activeCount) || 0,
-          newCount: Number(metrics.newCount) || 0,
-          suspendedCount: Number(metrics.suspendedCount) || 0,
-          pendingDocsCount: Number(metrics.pendingDocsCount) || 0
-        });
+    let retryTimer: number | undefined;
+    let attempts = 0;
+    const loadMetrics = () => {
+      if (controller.signal.aborted) return;
+      const token = getTrustedAccessToken() || null;
+      if (!token && attempts < 5) {
+        attempts += 1;
+        retryTimer = window.setTimeout(loadMetrics, 250);
+        return;
+      }
+      if (!token) return;
+      fetch('/api/student-affairs/metrics', {
+        method: 'GET',
+        headers: { Accept: 'application/json', Authorization: `Bearer ${token}` },
+        signal: controller.signal
       })
-      .catch(error => {
-        if (error?.name !== 'AbortError') void triggerNotification(error?.message || 'تعذر تحميل مؤشرات شؤون الطلاب.', 'warning');
-      });
+        .then(response => response.ok ? response.json() : Promise.reject(new Error('تعذر تحميل مؤشرات شؤون الطلاب.')))
+        .then(payload => {
+          const metrics = payload?.data;
+          if (!metrics) throw new Error('استجابة مؤشرات شؤون الطلاب غير صالحة.');
+          setStudentMetrics({
+            totalCount: Number(metrics.totalCount) || 0,
+            activeCount: Number(metrics.activeCount) || 0,
+            newCount: Number(metrics.newCount) || 0,
+            suspendedCount: Number(metrics.suspendedCount) || 0,
+            pendingDocsCount: Number(metrics.pendingDocsCount) || 0
+          });
+        })
+        .catch(error => {
+          if (error?.name !== 'AbortError') void triggerNotification(error?.message || 'تعذر تحميل مؤشرات شؤون الطلاب.', 'warning');
+        });
+    };
+    loadMetrics();
     return () => controller.abort();
     // App supplies an inline notification callback; it must not refetch on
     // every parent render.
