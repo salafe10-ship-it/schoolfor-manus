@@ -1069,13 +1069,17 @@ export default function GeneralLedgerPortal({
   const [canonicalFinancialData, setCanonicalFinancialData] = useState<Record<string, any>>({});
   const [canonicalFinancialVersion, setCanonicalFinancialVersion] = useState(0);
   const [canonicalFinancialRefreshNonce, setCanonicalFinancialRefreshNonce] = useState(0);
-  // LUNA safety boundary: the current endpoint is a versioned snapshot, not
-  // an approved Receipt/Payment -> Journal -> GL writer.
-  const canonicalFinancialWriteMode: string = 'snapshot_read_only';
-  const canonicalFinancialWriteReady = canonicalFinancialStatus === 'ready' && canonicalFinancialWriteMode === 'ledger_ready';
+  // LUNA safety boundary: snapshot_write is an authenticated, versioned UAT
+  // writer. It is deliberately distinct from ledger_ready because the
+  // current endpoint is not proven to write canonical general-ledger tables.
+  type CanonicalFinancialWriteMode = 'snapshot_read_only' | 'snapshot_write' | 'ledger_ready';
+  const [canonicalFinancialWriteMode, setCanonicalFinancialWriteMode] = useState<CanonicalFinancialWriteMode>('snapshot_read_only');
+  const canonicalFinancialWriteReady = canonicalFinancialStatus === 'ready'
+    && canonicalFinancialWriteMode !== 'snapshot_read_only';
+  const canonicalLedgerReady = canonicalFinancialStatus === 'ready' && canonicalFinancialWriteMode === 'ledger_ready';
   const requireCanonicalFinancialWrite = (actionName: string) => {
     if (canonicalFinancialWriteReady) return true;
-    triggerNotification(`تعذر تنفيذ ${actionName}: المصدر الحالي للقراءة فقط ولا توجد خدمة دفتر أستاذ كانونية معتمدة.`, 'warning');
+    triggerNotification(`تعذر تنفيذ ${actionName}: المصدر المالي المركزي غير متاح للكتابة أو لم تعتمد خدمة دفتر الأستاذ الكانونية.`, 'warning');
     return false;
   };
 
@@ -1132,6 +1136,12 @@ export default function GeneralLedgerPortal({
           fixedAssets: canonicalFixedAssets
         });
         setCanonicalFinancialVersion(Number(result.meta?.version || 0));
+        const resolvedWriteMode: CanonicalFinancialWriteMode = result.meta?.writeMode === 'snapshot_write'
+          ? 'snapshot_write'
+          : result.meta?.writeMode === 'ledger_ready'
+            ? 'ledger_ready'
+            : 'snapshot_read_only';
+        setCanonicalFinancialWriteMode(resolvedWriteMode);
 
         if (canonicalAccounts.length > 0) {
           setCanonicalSnapshotHasAccounts(true);
@@ -1194,7 +1204,9 @@ export default function GeneralLedgerPortal({
         }
 
         setCanonicalFinancialStatus('ready');
-        setCanonicalFinancialMessage(`المصدر المالي المركزي متصل للقراءة فقط — ${canonicalJournalEntries.length} قيد و${canonicalReceiptVouchers.length} سند قبض و${canonicalPaymentVouchers.length} سند صرف معروض؛ الترحيل والإقفال غير متاحين حتى اعتماد خدمة دفتر الأستاذ.`);
+        setCanonicalFinancialMessage(resolvedWriteMode === 'snapshot_write'
+          ? `المصدر المالي المركزي متصل للكتابة المركزية في UAT — ${canonicalJournalEntries.length} قيد و${canonicalReceiptVouchers.length} سند قبض و${canonicalPaymentVouchers.length} سند صرف؛ الحفظ موثق بالإصدار، لكن الترحيل والإقفال المعتمدين للـ GL غير متاحين.`
+          : `المصدر المالي المركزي متصل للقراءة فقط — ${canonicalJournalEntries.length} قيد و${canonicalReceiptVouchers.length} سند قبض و${canonicalPaymentVouchers.length} سند صرف معروض؛ الترحيل والإقفال غير متاحين حتى اعتماد خدمة دفتر الأستاذ.`);
       } catch (error: any) {
         if (!active) return;
         setJournalEntries([]);
@@ -1205,6 +1217,7 @@ export default function GeneralLedgerPortal({
         setFixedAssets([]);
         setCanonicalFinancialData({});
         setCanonicalFinancialVersion(0);
+        setCanonicalFinancialWriteMode('snapshot_read_only');
         setCanonicalSnapshotHasAccounts(false);
         setAccounts(previous => previous.map(account => ({ ...account, balance: 0 })));
         setCanonicalFinancialStatus('blocked');
@@ -1233,8 +1246,8 @@ export default function GeneralLedgerPortal({
     if (canonicalFinancialStatus !== 'ready') {
       throw new Error('الحفظ المالي متوقف حتى يتوفر المصدر المحاسبي المركزي الموثوق.');
     }
-    if (canonicalFinancialWriteMode !== 'ledger_ready') {
-      throw new Error('الكتابة المالية متوقفة: المصدر الحالي snapshot للقراءة فقط، ولم تعتمد خدمة دفتر الأستاذ الكانونية.');
+    if (canonicalFinancialWriteMode === 'snapshot_read_only') {
+      throw new Error('الكتابة المالية متوقفة: المصدر الحالي snapshot للقراءة فقط، ولم تفعّل كتابة UAT المركزية.');
     }
     if (!selectedSchool?.id) {
       throw new Error('لا يمكن حفظ الحركة المالية دون مدرسة موثوقة.');
@@ -1301,7 +1314,9 @@ export default function GeneralLedgerPortal({
     }
     setCanonicalFinancialData(nextPayload);
     setCanonicalFinancialVersion(nextVersion);
-    setCanonicalFinancialMessage(`المصدر المالي الموحد متصل — الإصدار ${nextVersion}، ${Array.isArray(nextPayload.journalEntries) ? nextPayload.journalEntries.length : 0} قيد موثق`);
+    setCanonicalFinancialMessage(canonicalFinancialWriteMode === 'snapshot_write'
+      ? `المصدر المالي المركزي متصل للكتابة المركزية في UAT — الإصدار ${nextVersion}، ${Array.isArray(nextPayload.journalEntries) ? nextPayload.journalEntries.length : 0} قيد موثق؛ غير معتمد كترحيل GL نهائي.`
+      : `المصدر المالي الموحد متصل — الإصدار ${nextVersion}، ${Array.isArray(nextPayload.journalEntries) ? nextPayload.journalEntries.length : 0} قيد موثق`);
     return result;
   };
 
@@ -1926,8 +1941,16 @@ export default function GeneralLedgerPortal({
       triggerNotification(`تعذر تنفيذ ${actionName}: المصدر المحاسبي المركزي غير جاهز أو غير موثوق.`, 'warning');
       return false;
     }
-    if (canonicalFinancialWriteMode !== 'ledger_ready') {
-      triggerNotification(`تعذر تنفيذ ${actionName}: المصدر الحالي snapshot للقراءة فقط، ولا توجد خدمة دفتر أستاذ كانونية معتمدة.`, 'warning');
+    if (canonicalFinancialWriteMode === 'snapshot_write') {
+      triggerNotification(`سيتم تنفيذ ${actionName} كنسخة عرض من snapshot UAT؛ لا تُعد قائمة مالية أو دفتر أستاذ معتمداً.`, 'info');
+      return true;
+    }
+    if (!canonicalLedgerReady) {
+      if (canonicalFinancialWriteMode === 'snapshot_write') {
+        triggerNotification(`تم منع ${actionName}: هذه نسخة UAT مركزية وليست دفتر أستاذ عاماً معتمداً.`, 'info');
+      } else {
+        triggerNotification(`تعذر تنفيذ ${actionName}: المصدر الحالي snapshot للقراءة فقط، ولا توجد خدمة دفتر أستاذ كانونية معتمدة.`, 'warning');
+      }
       return false;
     }
     return true;
@@ -1953,8 +1976,8 @@ export default function GeneralLedgerPortal({
   };
 
   const handleImportLedgerExcel = () => {
-    if (canonicalFinancialWriteMode !== 'ledger_ready') {
-      triggerNotification('استيراد الحسابات والقيود متوقف: المصدر الحالي snapshot للقراءة فقط ولا توجد خدمة ترحيل كانونية معتمدة.', 'warning');
+    if (!canonicalFinancialWriteReady) {
+      triggerNotification('استيراد الحسابات والقيود متوقف: فعّل مسار الكتابة المركزي أولاً.', 'warning');
       return;
     }
     setActiveTab('trial_balance');
@@ -3751,7 +3774,9 @@ export default function GeneralLedgerPortal({
         role="status"
         className={`mx-3 sm:mx-4 rounded-2xl border px-4 py-3 text-xs font-bold shadow-sm ${
           canonicalFinancialStatus === 'ready'
-            ? 'border-emerald-300 bg-emerald-50 text-emerald-800'
+            ? canonicalFinancialWriteMode === 'snapshot_write'
+              ? 'border-indigo-300 bg-indigo-50 text-indigo-800'
+              : 'border-emerald-300 bg-emerald-50 text-emerald-800'
             : canonicalFinancialStatus === 'blocked'
               ? 'border-rose-300 bg-rose-50 text-rose-800'
               : 'border-amber-300 bg-amber-50 text-amber-800'
@@ -3782,7 +3807,13 @@ export default function GeneralLedgerPortal({
                 <p className="mt-1 text-xs font-semibold text-slate-500">المراكز المعروضة مصدرها النطاق المالي المركزي للمدرسة الحالية.</p>
               </div>
               <span className={`rounded-full px-3 py-1 text-[11px] font-black ${canonicalFinancialStatus === 'ready' ? 'bg-emerald-100 text-emerald-800' : 'bg-rose-100 text-rose-800'}`}>
-                {canonicalFinancialStatus === 'ready' ? 'snapshot متصل — قراءة فقط' : 'غير متحقق'}
+                {canonicalFinancialStatus === 'ready'
+                  ? canonicalFinancialWriteMode === 'snapshot_write'
+                    ? 'snapshot متصل — كتابة UAT'
+                    : canonicalFinancialWriteMode === 'ledger_ready'
+                      ? 'دفتر الأستاذ متصل — معتمد'
+                      : 'snapshot متصل — قراءة فقط'
+                  : 'غير متحقق'}
               </span>
             </div>
             {Array.isArray(costCenters) && costCenters.length > 0 ? (
@@ -4282,6 +4313,12 @@ export default function GeneralLedgerPortal({
               <p className="text-xs text-slate-500 mt-1">تداول السيولة بين الصندوق الفرعي كاش وبين الحساب الجاري للمدرسة بالمصارف</p>
             </div>
 
+            {canonicalFinancialWriteMode === 'snapshot_write' && (
+              <div role="status" className="rounded-xl border border-indigo-200 bg-indigo-50 px-4 py-3 text-xs font-bold text-indigo-900">
+                الكتابة المركزية UAT متاحة للحفظ بإصدار وتدقيق؛ هذه الحوالة لا تُعد ترحيلاً نهائياً في دفتر الأستاذ العام، وتبقى التقارير والإقفال غير معتمدين.
+              </div>
+            )}
+
             {!canonicalFinancialWriteReady && (
               <div role="alert" className="rounded-xl border border-amber-200 bg-amber-50 px-4 py-3 text-xs font-bold text-amber-900">
                 الحوالات البنكية متوقفة: المصدر المالي الحالي للقراءة فقط ولا توجد خدمة حوالات أو قيد كانوني معتمد للحفظ.
@@ -4362,7 +4399,7 @@ export default function GeneralLedgerPortal({
                     className="w-full bg-[#c58a22] hover:bg-amber-700 text-white font-black py-3 rounded-lg flex items-center justify-center gap-2 shadow cursor-pointer transition-all disabled:opacity-40 disabled:cursor-not-allowed"
                   >
                     <ArrowRightLeft className="w-4 h-4" />
-                    <span>{canonicalFinancialWriteReady ? 'بدء التحويل وتحديث المركز المالي للمصارف 🖹' : 'التحويل غير متاح — المصدر للقراءة فقط'}</span>
+                    <span>{canonicalFinancialWriteReady ? canonicalFinancialWriteMode === 'ledger_ready' ? 'بدء التحويل وتحديث المركز المالي للمصارف 🖹' : 'حفظ الحوالة في المصدر المركزي UAT' : 'التحويل غير متاح — المصدر للقراءة فقط'}</span>
                   </button>
                 </div>
               </form>

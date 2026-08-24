@@ -180,7 +180,9 @@ export const ClosingTab = () => {
 
               {canonicalFinancialStatus === 'ready' && canonicalFinancialWriteMode !== 'ledger_ready' && (
                 <div role="alert" className="rounded-xl border border-amber-300 bg-amber-50 px-4 py-3 text-xs font-bold text-amber-900">
-                  الإقفال السنوي متوقف: المصدر الحالي snapshot للقراءة فقط، ولا توجد خدمة إقفال كانونية تحفظ الاعتماد والقيد الختامي. لا يتم إنشاء أو تعديل أرصدة من هذه الشاشة.
+                  {canonicalFinancialWriteMode === 'snapshot_write'
+                    ? 'الإقفال السنوي متوقف: المصدر الحالي snapshot UAT للكتابة المركزية، لكنه لا يثبت خدمة إقفال كانونية تحفظ الاعتماد والقيد الختامي في دفتر الأستاذ العام. لا يتم إنشاء أو تعديل أرصدة من هذه الشاشة.'
+                    : 'الإقفال السنوي متوقف: المصدر الحالي snapshot للقراءة فقط، ولا توجد خدمة إقفال كانونية تحفظ الاعتماد والقيد الختامي. لا يتم إنشاء أو تعديل أرصدة من هذه الشاشة.'}
                 </div>
               )}
 

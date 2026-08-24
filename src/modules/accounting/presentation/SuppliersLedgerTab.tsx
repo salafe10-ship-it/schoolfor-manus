@@ -72,11 +72,12 @@ export const SuppliersLedgerTab = () => {
 
   const [isCreatingSupplier, setIsCreatingSupplier] = React.useState(false);
   const [supplierDraft, setSupplierDraft] = React.useState({ id: '', name: '', contact: '', category: '', accountCode: '', balance: '0' });
+  const supplierWritesAvailable = canonicalFinancialStatus === 'ready' && canonicalFinancialWriteMode !== 'snapshot_read_only';
 
   const submitSupplier = async (event: React.FormEvent) => {
     event.preventDefault();
-    if (canonicalFinancialStatus !== 'ready' || canonicalFinancialWriteMode !== 'ledger_ready') {
-      triggerNotification('لا يمكن تسجيل المورد: سجل الموردين للقراءة فقط حتى اعتماد خدمة دفتر الأستاذ الكانونية.', 'warning');
+    if (!supplierWritesAvailable) {
+      triggerNotification('لا يمكن تسجيل المورد: المصدر المالي المركزي غير متاح للكتابة.', 'warning');
       return;
     }
     const name = supplierDraft.name.trim();
@@ -125,7 +126,7 @@ export const SuppliersLedgerTab = () => {
 
               <button 
                 onClick={() => setIsCreatingSupplier(previous => !previous)}
-                disabled={canonicalFinancialStatus !== 'ready' || canonicalFinancialWriteMode !== 'ledger_ready'}
+                disabled={!supplierWritesAvailable}
                 className="bg-indigo-600 hover:bg-indigo-700 text-white font-bold text-xs px-4 py-2 rounded-lg flex items-center gap-2"
               >
                 <Plus className="w-4 h-4" />
@@ -138,7 +139,7 @@ export const SuppliersLedgerTab = () => {
                 <div className="flex items-center justify-between">
                   <div>
                     <h3 className="font-black text-slate-900">تسجيل مورد جديد</h3>
-                    <p className="text-[10px] text-slate-500 mt-1">{canonicalFinancialWriteMode === 'ledger_ready' ? 'سيُحفظ المورد مع الحساب الدائن في المصدر المركزي فقط بعد اجتياز التحقق.' : 'المصدر الحالي snapshot للقراءة فقط؛ إضافة المورد متوقفة حتى اعتماد خدمة دفتر الأستاذ.'}</p>
+                    <p className="text-[10px] text-slate-500 mt-1">{supplierWritesAvailable ? canonicalFinancialWriteMode === 'ledger_ready' ? 'سيُحفظ المورد مع الحساب الدائن في المصدر المركزي فقط بعد اجتياز التحقق.' : 'سيُحفظ المورد في المصدر المركزي UAT؛ لا يُعد ذلك ترحيلاً نهائياً في دفتر الأستاذ العام.' : 'المصدر الحالي snapshot للقراءة فقط؛ إضافة المورد متوقفة حتى تفعيل الكتابة المركزية.'}</p>
                   </div>
                   <button type="button" onClick={() => setIsCreatingSupplier(false)} className="text-slate-500 hover:text-slate-900 font-bold">إغلاق</button>
                 </div>
@@ -164,7 +165,7 @@ export const SuppliersLedgerTab = () => {
                 </div>
                 <div className="flex justify-end gap-2">
                   <button type="button" onClick={() => setIsCreatingSupplier(false)} className="rounded-lg bg-slate-100 px-4 py-2 font-bold text-slate-600">إلغاء</button>
-                  <button type="submit" disabled={canonicalFinancialStatus !== 'ready' || canonicalFinancialWriteMode !== 'ledger_ready'} className="rounded-lg bg-indigo-600 px-5 py-2 font-black text-white disabled:cursor-not-allowed disabled:bg-slate-300">{canonicalFinancialWriteMode === 'ledger_ready' ? 'حفظ المورد مركزيًا' : 'الإضافة غير متاحة — قراءة فقط'}</button>
+                  <button type="submit" disabled={!supplierWritesAvailable} className="rounded-lg bg-indigo-600 px-5 py-2 font-black text-white disabled:cursor-not-allowed disabled:bg-slate-300">{supplierWritesAvailable ? 'حفظ المورد مركزيًا' : 'الإضافة غير متاحة — قراءة فقط'}</button>
                 </div>
               </form>
             )}

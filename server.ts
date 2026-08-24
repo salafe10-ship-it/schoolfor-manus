@@ -38,6 +38,7 @@ import {
 import { requestTarget } from "./src/middleware/tenantValidation.js";
 import { tenantEngine } from "./src/tenant/TenantEngine.js";
 import { PERMISSIONS } from "./src/authorization/PermissionRegistry.js";
+import { authorizationEngine } from "./src/authorization/AuthorizationEngine.js";
 import {
   authenticateTrustedUser,
   resolveTrustedLoginIdentifier,
@@ -72,6 +73,29 @@ import { createStartupReadiness } from "./server/infrastructure/StartupReadiness
 import { FallbackStorage } from "./src/database/repositories/FallbackStorage.js";
 import { AdmissionInquiry, AdmissionStatus } from './src/modules/student-admission/domain/AdmissionInquiry.js';
 import { SupabaseAdmissionInquiryRepository } from './src/modules/student-admission/repository/SupabaseAdmissionInquiryRepository.js';
+
+type FinancialWriteMode = 'snapshot_read_only' | 'snapshot_write';
+
+/**
+ * UAT-only bridge for the existing versioned financial snapshot writer.
+ * This is intentionally not named ledger_ready: the current endpoint does
+ * not prove a write into the canonical general_ledger/journal tables.
+ */
+function resolveFinancialWriteMode(req: express.Request): FinancialWriteMode {
+  const configuredForUat = process.env.NODE_ENV !== 'production'
+    && process.env.FINANCIAL_SNAPSHOT_WRITE_MODE === 'snapshot_write';
+  if (!configuredForUat) return 'snapshot_read_only';
+
+  const user = (req as any).user;
+  const decision = authorizationEngine.authorizeTenant(user, PERMISSIONS.FINANCIAL_WRITE, {
+    schoolId: user?.schoolId,
+    branchId: String(req.headers['x-branch-id'] || req.query.branchId || ''),
+    endpoint: req.originalUrl,
+    method: req.method,
+    ipAddress: req.ip || 'unknown'
+  });
+  return decision.allowed ? 'snapshot_write' : 'snapshot_read_only';
+}
 import { ErpProvisioningService } from './src/modules/identity/application/ErpProvisioningService.js';
 import { reviewAndImplement } from './src/services/ai/SolLunaOrchestrator.js';
 
@@ -2387,6 +2411,7 @@ async function startServer() {
           source: 'supabase',
           version: snapshot?.version || 0,
           updatedAt: snapshot?.updated_at || null,
+          writeMode: resolveFinancialWriteMode(req),
         },
         message: "Financial and accounting database retrieved successfully."
       });

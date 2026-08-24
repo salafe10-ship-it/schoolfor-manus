@@ -77,9 +77,10 @@ export const ChartOfAccountsTab = () => {
     handleImportCoaCSV, persistCanonicalFinancialSnapshot, canonicalFinancialStatus, canonicalFinancialWriteMode,
   } = React.useContext(AccountingContext);
   const chartWritesAreCanonical = canonicalFinancialStatus === 'ready' && canonicalFinancialWriteMode === 'ledger_ready';
+  const chartWritesAvailable = canonicalFinancialStatus === 'ready' && canonicalFinancialWriteMode !== 'snapshot_read_only';
   const guardChartWrite = (actionName: string) => {
-    if (chartWritesAreCanonical) return true;
-    triggerNotification(`تعذر تنفيذ ${actionName}: شجرة الحسابات للقراءة فقط حتى اعتماد دفتر الأستاذ الكانوني.`, 'warning');
+    if (chartWritesAvailable) return true;
+    triggerNotification(`تعذر تنفيذ ${actionName}: شجرة الحسابات للقراءة فقط حتى تفعيل مسار الكتابة المركزي.`, 'warning');
     return false;
   };
 
@@ -105,12 +106,12 @@ export const ChartOfAccountsTab = () => {
                 <button
                   type="button"
                   onClick={handleCreateNewCoaClick}
-                  disabled={!chartWritesAreCanonical}
+                  disabled={!chartWritesAvailable}
                   className="bg-white hover:bg-slate-50 text-indigo-650 font-bold text-[11px] px-3 py-2 rounded-lg flex items-center gap-1.5 border border-slate-200 hover:border-slate-300 transition-all duration-150 shadow-xs cursor-pointer"
                   title="إنشاء كود مالي جديد"
                 >
                   <Plus className="w-3.5 h-3.5" />
-                  <span>{chartWritesAreCanonical ? 'جديد (F2)' : 'جديد — قراءة فقط'}</span>
+                  <span>{chartWritesAvailable ? chartWritesAreCanonical ? 'جديد (F2)' : 'جديد — حفظ مركزي UAT' : 'جديد — قراءة فقط'}</span>
                 </button>
 
                 <button
@@ -127,18 +128,18 @@ export const ChartOfAccountsTab = () => {
                       ? 'bg-amber-50 text-amber-850 border-amber-250 hover:bg-amber-100/50' 
                       : 'bg-white hover:bg-slate-50 text-slate-700 border-slate-200 hover:border-slate-300'
                   }`}
-                  disabled={coaMode === 'view' && !chartWritesAreCanonical}
+                  disabled={coaMode === 'view' && !chartWritesAvailable}
                   title="تعديل بيانات الحساب المحدد"
                 >
                   <Edit3 className="w-3.5 h-3.5" />
-                    <span>{coaMode !== 'view' ? 'إلغاء التعديل' : chartWritesAreCanonical ? 'تعديل' : 'تعديل — قراءة فقط'}</span>
+                    <span>{coaMode !== 'view' ? 'إلغاء التعديل' : chartWritesAvailable ? 'تعديل' : 'تعديل — قراءة فقط'}</span>
                 </button>
 
                 {coaMode !== 'view' && (
                   <button
                     type="button"
                     onClick={handleSaveCoa}
-                    disabled={!chartWritesAreCanonical}
+                    disabled={!chartWritesAvailable}
                     className="bg-indigo-650 hover:bg-indigo-700 text-white font-bold text-[11px] px-3 py-2 rounded-lg flex items-center gap-1.5 border border-indigo-650 shadow-xs transition-all duration-150 cursor-pointer"
                     title="حفظ التغييرات الحالية"
                   >
@@ -150,7 +151,7 @@ export const ChartOfAccountsTab = () => {
                 <button
                   type="button"
                   onClick={handleDeleteCoa}
-                  disabled={coaMode !== 'view' || !chartWritesAreCanonical}
+                  disabled={coaMode !== 'view' || !chartWritesAvailable}
                   className="bg-white hover:bg-rose-50 text-rose-650 hover:border-rose-250 disabled:opacity-40 font-bold text-[11px] px-3 py-2 rounded-lg flex items-center gap-1.5 border border-slate-200 transition-all duration-150 shadow-xs cursor-pointer"
                   title="حذف الحساب المحدد"
                 >
@@ -185,12 +186,12 @@ export const ChartOfAccountsTab = () => {
                 <button
                   type="button"
                   onClick={() => setShowCoaImportModal(true)}
-                  disabled={!chartWritesAreCanonical}
+                  disabled={!chartWritesAvailable}
                   className="bg-slate-100 hover:bg-slate-200 text-slate-700 font-bold text-[11px] px-2.5 py-2 rounded-lg flex items-center gap-1 border border-slate-200 transition-all duration-150"
                   title="استيراد الحسابات من ملف CSV/Excel"
                 >
                   <Upload className="w-3.5 h-3.5 text-slate-500" />
-                  <span>{chartWritesAreCanonical ? 'استيراد CSV' : 'استيراد — قراءة فقط'}</span>
+                  <span>{chartWritesAvailable ? 'استيراد CSV' : 'استيراد — قراءة فقط'}</span>
                 </button>
 
                 <button

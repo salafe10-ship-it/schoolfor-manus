@@ -84,8 +84,12 @@ export const JournalEntriesTab = () => {
   const [jvPage, setJvPage] = React.useState(1);
   const JV_PAGE_SIZE = 15;
   const journalWritesAreCanonical = canonicalFinancialWriteMode === 'ledger_ready';
+  const journalWritesAreAvailable = journalWritesAreCanonical || canonicalFinancialWriteMode === 'snapshot_write';
+  const journalWriteBlockedLabel = canonicalFinancialWriteMode === 'snapshot_write'
+    ? 'حفظ مركزي UAT — غير معتمد كترحيل GL'
+    : 'قراءة فقط';
   const guardJournalWrite = (actionName: string) => {
-    if (journalWritesAreCanonical) return true;
+    if (journalWritesAreAvailable) return true;
     triggerNotification(`تعذر تنفيذ ${actionName}: القيود للقراءة فقط حتى اعتماد دفتر الأستاذ الكانوني.`, 'warning');
     return false;
   };
@@ -559,21 +563,21 @@ const handleImportJvLinesFromCSV = (csvText: string) => {
                     <div className="flex items-center gap-1.5 bg-white p-1 rounded-lg border border-slate-200 shadow-xs">
                       <button
                         onClick={handlePrepareNewJv}
-                        disabled={!journalWritesAreCanonical}
+                        disabled={!journalWritesAreAvailable}
                         className="flex items-center gap-1.5 px-3 py-1.5 rounded-md hover:bg-indigo-50 hover:text-indigo-600 text-slate-700 transition font-semibold text-[11px] disabled:opacity-40 disabled:cursor-not-allowed"
-                        title={journalWritesAreCanonical ? 'قيد مالي جديد' : 'إنشاء القيد متوقف — دفتر الأستاذ للقراءة فقط'}
+                        title={journalWritesAreAvailable ? journalWritesAreCanonical ? 'قيد مالي جديد' : 'قيد جديد سيُحفظ في snapshot UAT' : 'إنشاء القيد متوقف — دفتر الأستاذ للقراءة فقط'}
                       >
                         <Plus className="w-4 h-4 text-indigo-600" />
-                        <span>{journalWritesAreCanonical ? 'جديد' : 'جديد — قراءة فقط'}</span>
+                        <span>{journalWritesAreAvailable ? journalWritesAreCanonical ? 'جديد' : 'جديد — حفظ مركزي UAT' : 'جديد — قراءة فقط'}</span>
                       </button>
 
                       <button
                         onClick={handleSaveJv}
-                        disabled={activeJvState.status === 'معتمد' || !journalWritesAreCanonical}
+                        disabled={activeJvState.status === 'معتمد' || !journalWritesAreAvailable}
                         className={`flex items-center gap-1.5 px-3 py-1.5 rounded-md text-slate-700 transition font-semibold text-[11px] ${
-                          activeJvState.status === 'معتمد' || !journalWritesAreCanonical ? 'opacity-30 cursor-not-allowed' : 'hover:bg-emerald-50 hover:text-emerald-600'
+                          activeJvState.status === 'معتمد' || !journalWritesAreAvailable ? 'opacity-30 cursor-not-allowed' : 'hover:bg-emerald-50 hover:text-emerald-600'
                         }`}
-                        title={journalWritesAreCanonical ? 'حفظ القيد' : 'الحفظ متوقف — دفتر الأستاذ للقراءة فقط'}
+                        title={journalWritesAreAvailable ? 'حفظ القيد مركزياً' : 'الحفظ متوقف — دفتر الأستاذ للقراءة فقط'}
                       >
                         <Save className="w-4 h-4 text-emerald-600" />
                         <span>حفظ</span>
@@ -588,9 +592,9 @@ const handleImportJvLinesFromCSV = (csvText: string) => {
                             triggerNotification('✏️ تم تمكين التعديل والتحرير على حقول السند', 'info');
                           }
                         }}
-                        disabled={activeJvState.status === 'معتمد' || !journalWritesAreCanonical}
+                        disabled={activeJvState.status === 'معتمد' || !journalWritesAreAvailable}
                         className={`flex items-center gap-1.5 px-3 py-1.5 rounded-md text-slate-700 transition font-semibold text-[11px] ${
-                          activeJvState.status === 'معتمد' || !journalWritesAreCanonical ? 'opacity-30 cursor-not-allowed' : 'hover:bg-sky-50 hover:text-sky-600'
+                          activeJvState.status === 'معتمد' || !journalWritesAreAvailable ? 'opacity-30 cursor-not-allowed' : 'hover:bg-sky-50 hover:text-sky-600'
                         }`}
                         title="تعديل القيد المالي"
                       >
@@ -603,9 +607,9 @@ const handleImportJvLinesFromCSV = (csvText: string) => {
                     <div className="flex items-center gap-1.5 bg-white p-1 rounded-lg border border-slate-200 shadow-xs">
                       <button
                         onClick={() => handleDeleteJv(activeJvState.id)}
-                        disabled={!journalWritesAreCanonical}
+                        disabled={!journalWritesAreAvailable}
                         className="flex items-center gap-1.5 px-3 py-1.5 rounded-md hover:bg-rose-50 hover:text-rose-600 text-slate-700 transition font-semibold text-[11px]"
-                        title={journalWritesAreCanonical ? 'حذف القيد نهائياً' : 'الحذف متوقف — دفتر الأستاذ للقراءة فقط'}
+                        title={journalWritesAreAvailable ? 'حذف القيد من المصدر المركزي' : 'الحذف متوقف — دفتر الأستاذ للقراءة فقط'}
                       >
                         <Trash2 className="w-4 h-4 text-rose-600" />
                         <span>حذف</span>
@@ -613,9 +617,9 @@ const handleImportJvLinesFromCSV = (csvText: string) => {
 
                       <button
                         onClick={() => handleCloneJv(activeJvState.id)}
-                        disabled={!journalWritesAreCanonical}
+                        disabled={!journalWritesAreAvailable}
                         className="flex items-center gap-1.5 px-3 py-1.5 rounded-md hover:bg-indigo-50/50 hover:text-indigo-600 text-slate-700 transition font-semibold text-[11px] disabled:opacity-40 disabled:cursor-not-allowed"
-                        title={journalWritesAreCanonical ? 'استنساخ القيد الحالي' : 'نسخ القيد متوقف — دفتر الأستاذ للقراءة فقط'}
+                        title={journalWritesAreAvailable ? 'استنساخ القيد الحالي' : 'نسخ القيد متوقف — دفتر الأستاذ للقراءة فقط'}
                       >
                         <Copy className="w-4 h-4 text-indigo-500" />
                         <span>نسخ قيد</span>
@@ -674,11 +678,11 @@ const handleImportJvLinesFromCSV = (csvText: string) => {
                     <div className="flex items-center gap-1.5 bg-white p-1 rounded-lg border border-slate-200 shadow-xs">
                       <button
                         onClick={() => handlePostJv(activeJvState.id)}
-                        disabled={activeJvState.status === 'مرحل' || activeJvState.status === 'معتمد' || !journalWritesAreCanonical}
+                        disabled={activeJvState.status === 'مرحل' || activeJvState.status === 'معتمد' || !journalWritesAreAvailable}
                         className={`flex items-center gap-1.5 px-3 py-1.5 rounded-md text-slate-700 transition font-semibold text-[11px] ${
-                          activeJvState.status === 'مرحل' || activeJvState.status === 'معتمد' || !journalWritesAreCanonical ? 'opacity-30 cursor-not-allowed' : 'hover:bg-emerald-50 hover:text-emerald-600'
+                          activeJvState.status === 'مرحل' || activeJvState.status === 'معتمد' || !journalWritesAreAvailable ? 'opacity-30 cursor-not-allowed' : 'hover:bg-emerald-50 hover:text-emerald-600'
                         }`}
-                        title={journalWritesAreCanonical ? 'ترحيل القيد وربطه بالأستاذ العام' : 'الترحيل متوقف — دفتر الأستاذ للقراءة فقط'}
+                        title={journalWritesAreAvailable ? journalWritesAreCanonical ? 'ترحيل القيد وربطه بالأستاذ العام' : 'حفظ حالة القيد في snapshot UAT — غير مرحّل في GL' : 'الترحيل متوقف — دفتر الأستاذ للقراءة فقط'}
                       >
                         <ArrowUpRight className="w-4 h-4 text-emerald-600" />
                         <span>ترحيل</span>
@@ -686,11 +690,11 @@ const handleImportJvLinesFromCSV = (csvText: string) => {
 
                       <button
                         onClick={() => handleUnpostJv(activeJvState.id)}
-                        disabled={activeJvState.status !== 'مرحل' || !journalWritesAreCanonical}
+                        disabled={activeJvState.status !== 'مرحل' || !journalWritesAreAvailable}
                         className={`flex items-center gap-1.5 px-3 py-1.5 rounded-md text-slate-700 transition font-semibold text-[11px] ${
-                          activeJvState.status !== 'مرحل' || !journalWritesAreCanonical ? 'opacity-30 cursor-not-allowed' : 'hover:bg-amber-50 hover:text-amber-600'
+                          activeJvState.status !== 'مرحل' || !journalWritesAreAvailable ? 'opacity-30 cursor-not-allowed' : 'hover:bg-amber-50 hover:text-amber-600'
                         }`}
-                        title={journalWritesAreCanonical ? 'إلغاء الترحيل وإعادته لمسودة' : 'إلغاء الترحيل متوقف — دفتر الأستاذ للقراءة فقط'}
+                        title={journalWritesAreAvailable ? 'إلغاء الترحيل وإعادته لمسودة' : 'إلغاء الترحيل متوقف — دفتر الأستاذ للقراءة فقط'}
                       >
                         <ArrowDownLeft className="w-4 h-4 text-amber-600" />
                         <span>إلغاء ترحيل</span>
@@ -698,11 +702,11 @@ const handleImportJvLinesFromCSV = (csvText: string) => {
 
                       <button
                         onClick={() => handleApproveJv(activeJvState.id)}
-                        disabled={activeJvState.status === 'معتمد' || !journalWritesAreCanonical}
+                        disabled={activeJvState.status === 'معتمد' || !journalWritesAreAvailable}
                         className={`flex items-center gap-1.5 px-3 py-1.5 rounded-md text-slate-700 transition font-semibold text-[11px] ${
-                          activeJvState.status === 'معتمد' || !journalWritesAreCanonical ? 'opacity-30 cursor-not-allowed' : 'hover:bg-blue-50 hover:text-blue-600'
+                          activeJvState.status === 'معتمد' || !journalWritesAreAvailable ? 'opacity-30 cursor-not-allowed' : 'hover:bg-blue-50 hover:text-blue-600'
                         }`}
-                        title={journalWritesAreCanonical ? 'اعتماد القيد نهائياً' : 'الاعتماد متوقف — دفتر الأستاذ للقراءة فقط'}
+                        title={journalWritesAreAvailable ? journalWritesAreCanonical ? 'اعتماد القيد نهائياً' : 'اعتماد حالة القيد داخل snapshot UAT — غير نهائي للـ GL' : 'الاعتماد متوقف — دفتر الأستاذ للقراءة فقط'}
                       >
                         <LockIcon className="w-4 h-4 text-blue-600" />
                         <span>اعتماد مالي</span>
@@ -1411,11 +1415,11 @@ const handleImportJvLinesFromCSV = (csvText: string) => {
 
                     <button 
                       onClick={handlePrepareNewJv}
-                      disabled={!journalWritesAreCanonical}
+                      disabled={!journalWritesAreAvailable}
                       className="bg-sky-600 hover:bg-sky-700 text-white font-extrabold text-xs px-4 py-2.5 rounded-lg flex items-center gap-2 shadow disabled:opacity-40 disabled:cursor-not-allowed"
                     >
                       <Plus className="w-4 h-4" />
-                      <span>{journalWritesAreCanonical ? 'فتح شاشة القيود الاحترافية (ERP) 🖥️' : 'شاشة القيود — قراءة فقط'}</span>
+                      <span>{journalWritesAreAvailable ? journalWritesAreCanonical ? 'فتح شاشة القيود الاحترافية (ERP) 🖥️' : journalWriteBlockedLabel : 'شاشة القيود — قراءة فقط'}</span>
                     </button>
                   </div>
                 </div>
@@ -1491,16 +1495,16 @@ const handleImportJvLinesFromCSV = (csvText: string) => {
                               className="text-blue-600 hover:text-blue-750 font-black hover:underline"
                               title="عرض تفاصيل القيد"
                             >
-                              {journalWritesAreCanonical ? 'عرض/تحرير 🖥️' : 'عرض فقط 👁️'}
+                              {journalWritesAreAvailable ? 'عرض/تحرير 🖥️' : 'عرض فقط 👁️'}
                             </button>
                             <span className="text-slate-300">|</span>
                             <button
                               onClick={() => handleDeleteJv(entry.id)}
-                              disabled={!journalWritesAreCanonical}
+                              disabled={!journalWritesAreAvailable}
                               className="text-rose-500 hover:text-rose-600 font-bold hover:underline disabled:opacity-40 disabled:no-underline disabled:cursor-not-allowed"
-                              title={journalWritesAreCanonical ? 'حذف القيد' : 'الحذف متوقف — دفتر الأستاذ للقراءة فقط'}
+                              title={journalWritesAreAvailable ? 'حذف القيد من المصدر المركزي' : 'الحذف متوقف — دفتر الأستاذ للقراءة فقط'}
                             >
-                              {journalWritesAreCanonical ? 'حذف 🗑️' : 'حذف — قراءة فقط'}
+                              {journalWritesAreAvailable ? 'حذف 🗑️' : 'حذف — قراءة فقط'}
                             </button>
                           </td>
                         </tr>

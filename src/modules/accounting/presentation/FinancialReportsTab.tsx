@@ -331,7 +331,9 @@ const handleDrillDownToOriginalDocument = (jv: any) => {
 
             const reportCertificationLabel = reportsAreCanonical
               ? 'تقرير مالي رسمي معتمد'
-              : 'نسخة عرض غير معتمدة — snapshot للقراءة فقط';
+              : canonicalFinancialWriteMode === 'snapshot_write'
+                ? 'نسخة عرض UAT من snapshot — غير معتمدة للرقابة أو الإقفال'
+                : 'نسخة عرض غير معتمدة — snapshot للقراءة فقط';
 
             const activeCostCenterLabel = filterCostCenter === 'all' ? 'جميع الأقسام والفروع' : (activeCostCenters.find(c => c.id === filterCostCenter)?.name || filterCostCenter);
 
@@ -672,7 +674,9 @@ const handleDrillDownToOriginalDocument = (jv: any) => {
                 <div className="space-y-6">
                   {!reportsAreCanonical && (
                     <div role="alert" className="rounded-xl border border-amber-300 bg-amber-50 px-4 py-3 text-xs font-bold text-amber-900">
-                      هذه الأرقام نسخة عرض من snapshot مركزي للقراءة فقط، وليست قائمة مالية معتمدة. لا تُستخدم للتسوية أو الإقفال حتى اعتماد خدمة دفتر الأستاذ الكانونية.
+                      {canonicalFinancialWriteMode === 'snapshot_write'
+                        ? 'هذه الأرقام نسخة عرض من snapshot مركزي محفوظ في UAT، وليست قائمة مالية أو ترحيلاً معتمداً. لا تُستخدم للتسوية أو الإقفال حتى اعتماد خدمة دفتر الأستاذ الكانونية.'
+                        : 'هذه الأرقام نسخة عرض من snapshot مركزي للقراءة فقط، وليست قائمة مالية معتمدة. لا تُستخدم للتسوية أو الإقفال حتى اعتماد خدمة دفتر الأستاذ الكانونية.'}
                     </div>
                   )}
                   {/* Executive dashboard widgets */}

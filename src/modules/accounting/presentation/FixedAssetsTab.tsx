@@ -72,6 +72,7 @@ export const FixedAssetsTab = () => {
   formatCurrency, canonicalFinancialStatus, canonicalFinancialWriteMode
 } = React.useContext(AccountingContext);
   const fixedAssetWritesAreCanonical = canonicalFinancialStatus === 'ready' && canonicalFinancialWriteMode === 'ledger_ready';
+  const fixedAssetWritesAvailable = canonicalFinancialStatus === 'ready' && canonicalFinancialWriteMode !== 'snapshot_read_only';
   
   const [assetActionModal, setAssetActionModal] = useState<'none' | 'maintenance' | 'transfer' | 'sale' | 'discard' | 'print_card' | 'print_schedule'>('none');
   const [selectedAssetsForAction, setSelectedAssetsForAction] = useState<string>('all_assets');
@@ -107,11 +108,11 @@ export const FixedAssetsTab = () => {
                 <button
                   type="button"
                   onClick={handleImportExcelSimulate}
-                  disabled={!fixedAssetWritesAreCanonical}
+                  disabled={!fixedAssetWritesAvailable}
                   className="bg-emerald-600 hover:bg-emerald-700 text-white font-black px-3 py-2 rounded-lg flex items-center gap-1.5 cursor-pointer text-xs shadow-xs disabled:cursor-not-allowed disabled:bg-slate-300"
                 >
                   <FileSpreadsheet className="w-3.5 h-3.5" />
-                  <span>{fixedAssetWritesAreCanonical ? 'استيراد جماعي Excel' : 'الاستيراد غير متاح — قراءة فقط'}</span>
+                  <span>{fixedAssetWritesAvailable ? 'استيراد جماعي Excel' : 'الاستيراد غير متاح — قراءة فقط'}</span>
                 </button>
 
                 <button
@@ -206,14 +207,14 @@ export const FixedAssetsTab = () => {
                 })()}
 
                 {/* Alert 3: GL Connection Status */}
-                <div className={`${fixedAssetWritesAreCanonical ? 'bg-emerald-50/50 border-emerald-200' : 'bg-amber-50/50 border-amber-200'} border rounded-xl p-3.5 flex items-start gap-3`}>
-                      <div className={`${fixedAssetWritesAreCanonical ? 'bg-emerald-100 text-emerald-800' : 'bg-amber-100 text-amber-800'} p-2 rounded-lg`}>
+                <div className={`${fixedAssetWritesAvailable ? 'bg-emerald-50/50 border-emerald-200' : 'bg-amber-50/50 border-amber-200'} border rounded-xl p-3.5 flex items-start gap-3`}>
+                      <div className={`${fixedAssetWritesAvailable ? 'bg-emerald-100 text-emerald-800' : 'bg-amber-100 text-amber-800'} p-2 rounded-lg`}>
                     <CheckCircle2 className="w-4 h-4" />
                   </div>
                   <div>
                         <h4 className="font-extrabold text-slate-900 mb-0.5">حالة ربط القيود بالأستاذ العام</h4>
                         <p className="text-[10px] text-slate-700 font-semibold leading-relaxed">
-                          {fixedAssetWritesAreCanonical ? 'المصدر المالي المركزي متصل؛ لا يعتمد ترحيل أي حركة أصول إلا بعد حفظ قيد موثق.' : 'المصدر الحالي snapshot للقراءة فقط؛ تم إيقاف ترحيل واستيراد أي حركة أصول.'}
+                          {fixedAssetWritesAvailable ? (fixedAssetWritesAreCanonical ? 'المصدر المالي المركزي متصل؛ لا يعتمد ترحيل أي حركة أصول إلا بعد حفظ قيد موثق.' : 'الكتابة المركزية UAT متاحة لحفظ سجل الأصل؛ لا يُعد ذلك ترحيلاً نهائياً في دفتر الأستاذ العام.') : 'المصدر الحالي snapshot للقراءة فقط؛ تم إيقاف ترحيل واستيراد أي حركة أصول.'}
                     </p>
                   </div>
                 </div>
@@ -426,11 +427,11 @@ export const FixedAssetsTab = () => {
                       <button
                         type="button"
                         onClick={handleNewAsset}
-                        disabled={!fixedAssetWritesAreCanonical}
+                        disabled={!fixedAssetWritesAvailable}
                         className="bg-indigo-600 hover:bg-indigo-750 text-white font-bold px-3 py-2 rounded-lg flex items-center gap-1 cursor-pointer disabled:opacity-40 disabled:cursor-not-allowed"
                       >
                         <Plus className="w-3.5 h-3.5" />
-                        <span>{fixedAssetWritesAreCanonical ? 'جديد (F2)' : 'جديد — قراءة فقط'}</span>
+                        <span>{fixedAssetWritesAvailable ? 'جديد (F2)' : 'جديد — قراءة فقط'}</span>
                       </button>
 
                       {!isNewAssetMode ? (
@@ -444,7 +445,7 @@ export const FixedAssetsTab = () => {
                               setIsNewAssetMode(false);
                             }
                           }}
-                          disabled={!fixedAssetWritesAreCanonical || assetForm.status === 'تم بيعه' || assetForm.status === 'مستبعد'}
+                          disabled={!fixedAssetWritesAvailable || assetForm.status === 'تم بيعه' || assetForm.status === 'مستبعد'}
                           className="bg-slate-100 hover:bg-slate-200 text-slate-800 border border-slate-200 font-bold px-3 py-2 rounded-lg flex items-center gap-1 cursor-pointer disabled:opacity-50"
                         >
                           <Edit3 className="w-3.5 h-3.5" />
@@ -454,7 +455,7 @@ export const FixedAssetsTab = () => {
                         <button
                           type="button"
                           onClick={handleSaveAsset}
-                          disabled={!fixedAssetWritesAreCanonical}
+                          disabled={!fixedAssetWritesAvailable}
                           className="bg-emerald-600 hover:bg-emerald-700 text-white font-bold px-4 py-2 rounded-lg flex items-center gap-1 cursor-pointer"
                         >
                           <Save className="w-3.5 h-3.5" />
@@ -478,7 +479,7 @@ export const FixedAssetsTab = () => {
                       <button
                         type="button"
                         onClick={() => handleDeleteAsset(assetForm.id)}
-                          disabled={!fixedAssetWritesAreCanonical || !assetForm.id}
+                          disabled={!fixedAssetWritesAvailable || !assetForm.id}
                         className="bg-rose-50 hover:bg-rose-100 text-rose-600 border border-rose-150 font-bold px-3 py-2 rounded-lg flex items-center gap-1 cursor-pointer disabled:opacity-50"
                       >
                         <Trash2 className="w-3.5 h-3.5" />

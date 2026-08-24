@@ -78,9 +78,16 @@ export const PaymentVoucherTab = () => {
   isAccountOrDescendant, getProcessedAccounts,
   formatCurrency, triggerNotification, persistCanonicalFinancialSnapshot, canonicalFinancialStatus, canonicalFinancialWriteMode
 } = React.useContext(AccountingContext);
+  const ledgerPostingReady = canonicalFinancialWriteMode === 'ledger_ready';
+  const snapshotWriteReady = canonicalFinancialWriteMode === 'snapshot_write';
   const canonicalWriteReady = canonicalFinancialStatus === 'ready'
-    && canonicalFinancialWriteMode === 'ledger_ready'
+    && (ledgerPostingReady || snapshotWriteReady)
     && typeof persistCanonicalFinancialSnapshot === 'function';
+  const paymentSubmitLabel = ledgerPostingReady
+    ? 'ترحيل سند الصرف عبر دفتر الأستاذ الكانوني 🖹'
+    : snapshotWriteReady
+      ? 'حفظ سند الصرف في المصدر المركزي UAT'
+      : 'الترحيل غير متاح — خدمة دفتر الأستاذ غير معتمدة';
 
   const handleAddPaymentVoucher = async (e: React.FormEvent) => {
     e.preventDefault();
@@ -215,7 +222,9 @@ export const PaymentVoucherTab = () => {
       device: 'نظام الإدارة المالية المركزي'
     });
 
-    triggerNotification(`تم إنشاء وترحيل سند الصرف ${pvId} عبر خدمة دفتر الأستاذ الكانونية.`, 'success');
+    triggerNotification(ledgerPostingReady
+      ? `تم إنشاء وترحيل سند الصرف ${pvId} عبر خدمة دفتر الأستاذ الكانونية.`
+      : `تم حفظ سند الصرف ${pvId} في المصدر المركزي UAT بإصدار موثق؛ لم يُعتمد كترحيل نهائي في دفتر الأستاذ العام.`, 'success');
   };
 
 
@@ -701,7 +710,7 @@ const handlePrintPV = (pv: any) => {
                       className="w-full bg-gradient-to-r from-rose-600 to-red-650 hover:from-rose-700 hover:to-red-700 text-white font-black py-3 rounded-lg flex items-center justify-center gap-2 shadow-md hover:shadow-lg cursor-pointer transition-all active:scale-[0.99]"
                     >
                       <Coins className="w-4 h-4 text-white" />
-                      <span>{canonicalWriteReady ? 'ترحيل سند الصرف عبر دفتر الأستاذ الكانوني 🖹' : 'الترحيل غير متاح — خدمة دفتر الأستاذ غير معتمدة'}</span>
+                      <span>{paymentSubmitLabel}</span>
                     </button>
                     {!canonicalWriteReady && (
                       <p role="alert" className="mt-2 text-[10px] font-bold text-amber-700">

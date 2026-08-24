@@ -74,9 +74,16 @@ export const ReceiptVoucherTab = () => {
   isAccountOrDescendant, getProcessedAccounts,
   formatCurrency, triggerNotification, persistCanonicalFinancialSnapshot, canonicalFinancialStatus, canonicalFinancialWriteMode
 } = React.useContext(AccountingContext);
+  const ledgerPostingReady = canonicalFinancialWriteMode === 'ledger_ready';
+  const snapshotWriteReady = canonicalFinancialWriteMode === 'snapshot_write';
   const canonicalWriteReady = canonicalFinancialStatus === 'ready'
-    && canonicalFinancialWriteMode === 'ledger_ready'
+    && (ledgerPostingReady || snapshotWriteReady)
     && typeof persistCanonicalFinancialSnapshot === 'function';
+  const receiptSubmitLabel = ledgerPostingReady
+    ? 'ترحيل السند عبر دفتر الأستاذ الكانوني 🖹'
+    : snapshotWriteReady
+      ? 'حفظ سند القبض في المصدر المركزي UAT'
+      : 'الترحيل غير متاح — خدمة دفتر الأستاذ غير معتمدة';
 
   const handleAddReceiptVoucher = async (e: React.FormEvent) => {
     e.preventDefault();
@@ -219,7 +226,9 @@ export const ReceiptVoucherTab = () => {
       device: 'نظام الإدارة المالية المركزي'
     });
 
-    triggerNotification(`تم إنشاء وترحيل سند القبض ${rvId} عبر خدمة دفتر الأستاذ الكانونية.`, 'success');
+    triggerNotification(ledgerPostingReady
+      ? `تم إنشاء وترحيل سند القبض ${rvId} عبر خدمة دفتر الأستاذ الكانونية.`
+      : `تم حفظ سند القبض ${rvId} في المصدر المركزي UAT بإصدار موثق؛ لم يُعتمد كترحيل نهائي في دفتر الأستاذ العام.`, 'success');
   };
 
 
@@ -521,7 +530,7 @@ const handlePrintRV = (rv: any) => {
               </div>
               <div className="bg-emerald-50 border border-emerald-100 rounded-lg p-2 px-3 flex items-center gap-2">
                 <span className="w-2.5 h-2.5 rounded-full bg-emerald-500 animate-pulse"></span>
-                <span className="font-extrabold text-amber-800 text-[10px]">المصدر المركزي متصل للقراءة فقط — الترحيل متوقف</span>
+                <span className="font-extrabold text-amber-800 text-[10px]">{ledgerPostingReady ? 'المصدر المركزي متصل — الترحيل عبر دفتر الأستاذ الكانوني' : snapshotWriteReady ? 'المصدر المركزي UAT متصل للكتابة — الحفظ موثق وليس ترحيلاً نهائياً في GL' : 'المصدر المركزي متصل للقراءة فقط — الترحيل متوقف'}</span>
               </div>
             </div>
 
@@ -761,7 +770,7 @@ const handlePrintRV = (rv: any) => {
                       className="w-full bg-gradient-to-r from-emerald-600 to-teal-600 hover:from-emerald-700 hover:to-teal-700 text-white font-black py-3 rounded-lg flex items-center justify-center gap-2 shadow-md hover:shadow-lg cursor-pointer transition-all active:scale-[0.99]"
                     >
                       <Coins className="w-4 h-4" />
-                      <span>{canonicalWriteReady ? 'ترحيل السند عبر دفتر الأستاذ الكانوني 🖹' : 'الترحيل غير متاح — خدمة دفتر الأستاذ غير معتمدة'}</span>
+                      <span>{receiptSubmitLabel}</span>
                     </button>
                     {!canonicalWriteReady && (
                       <p role="alert" className="mt-2 text-[10px] font-bold text-amber-700">
@@ -786,7 +795,7 @@ const handlePrintRV = (rv: any) => {
                     </li>
                     <li className="flex items-start gap-2">
                       <span className="bg-slate-200 text-emerald-800 p-0.5 px-1.5 rounded text-[10px] font-mono mt-0.5">02</span>
-                      <span><strong>المعاينة فقط:</strong> لا يتم إنشاء قيد مزدوج أو ترحيل سند قبل اعتماد خدمة دفتر الأستاذ الكانونية.</span>
+                      <span><strong>{snapshotWriteReady ? 'الحفظ المركزي UAT:' : 'المعاينة فقط:'}</strong> {snapshotWriteReady ? 'يتم حفظ السند واللقطة بإصدار موثق، ولا تُمنح صفة الترحيل النهائي في دفتر الأستاذ العام.' : 'لا يتم إنشاء قيد مزدوج أو ترحيل سند قبل اعتماد خدمة دفتر الأستاذ الكانونية.'}</span>
                     </li>
                     <li className="flex items-start gap-2">
                       <span className="bg-slate-200 text-emerald-800 p-0.5 px-1.5 rounded text-[10px] font-mono mt-0.5">03</span>
