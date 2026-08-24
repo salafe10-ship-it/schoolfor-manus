@@ -84,6 +84,24 @@ export const ReceiptVoucherTab = () => {
     : snapshotWriteReady
       ? 'حفظ سند القبض في المصدر المركزي UAT'
       : 'الترحيل غير متاح — خدمة دفتر الأستاذ غير معتمدة';
+  const accountCodeOf = (account: any) => String(account?.code || account?.accountCode || account?.id || '');
+  // Legacy snapshots may carry English nature/type labels or only the
+  // canonical account code. Keep the receiving-account selector usable when
+  // those older labels do not match the Arabic presentation labels.
+  const receivingAccounts = accounts.filter((account: any) => {
+    const code = String(account.code || account.accountCode || '');
+    const classification = String(account.classification || '').trim().toLowerCase();
+    const type = String(account.type || '').trim().toLowerCase();
+    const isCashOrBankCode = ['1101', '1102', '1110', '1120'].includes(code)
+      || code.startsWith('110')
+      || code.startsWith('111')
+      || code.startsWith('112');
+    const isAssetSubaccount = ['أصول', 'asset', 'assets'].includes(classification)
+      && ['فرعي', 'sub', 'subaccount', 'detail'].includes(type);
+    const isLeafAccount = Number(account.level || 0) >= 3
+      || ['1101', '1102', '1110', '1120'].includes(code);
+    return isCashOrBankCode && (isAssetSubaccount || isLeafAccount || (!classification && !type));
+  });
 
   const handleAddReceiptVoucher = async (e: React.FormEvent) => {
     e.preventDefault();
@@ -107,7 +125,7 @@ export const ReceiptVoucherTab = () => {
                                receiptVoucherForm.operationType === 'رسوم أنشطة' ? '4400' :
                                receiptVoucherForm.operationType === 'أخرى' ? '4500' : '4101';
     const debitAccountCode = receiptVoucherForm.receivingAccount;
-    if (!debitAccountCode || !accounts.some((account: any) => account.code === debitAccountCode) || !accounts.some((account: any) => account.code === revenueAccountCode)) {
+    if (!debitAccountCode || !accounts.some((account: any) => accountCodeOf(account) === debitAccountCode) || !accounts.some((account: any) => accountCodeOf(account) === revenueAccountCode)) {
       triggerNotification('تعذر اعتماد سند القبض: يجب اختيار حساب قبض وحساب إيراد موثقين في شجرة الحسابات.', 'warning');
       return;
     }
@@ -151,7 +169,7 @@ export const ReceiptVoucherTab = () => {
         {
           id: `${jvId}-1`,
           accountCode: debitAccountCode,
-          accountName: accounts.find((a: any) => a.code === debitAccountCode)?.nameAr || 'حساب مستلم',
+          accountName: accounts.find((a: any) => accountCodeOf(a) === debitAccountCode)?.nameAr || 'حساب مستلم',
           description: `استلام مقبوض السند ${rvId}`,
           debit: amt,
           credit: 0,
@@ -160,7 +178,7 @@ export const ReceiptVoucherTab = () => {
         {
           id: `${jvId}-2`,
           accountCode: revenueAccountCode,
-          accountName: accounts.find((a: any) => a.code === revenueAccountCode)?.nameAr || 'إيراد الرسوم',
+          accountName: accounts.find((a: any) => accountCodeOf(a) === revenueAccountCode)?.nameAr || 'إيراد الرسوم',
           description: `إثبات إيراد السند ${rvId}`,
           debit: 0,
           credit: amt,
@@ -171,11 +189,11 @@ export const ReceiptVoucherTab = () => {
 
     // 3. Update accounts balance
     const updatedAccounts = accounts.map((acc: any) => {
-      if (acc.code === debitAccountCode) {
-        return { ...acc, balance: acc.balance + amt };
+      if (accountCodeOf(acc) === debitAccountCode) {
+        return { ...acc, balance: Number(acc.balance || 0) + amt };
       }
-      if (acc.code === revenueAccountCode) {
-        return { ...acc, balance: acc.balance + amt };
+      if (accountCodeOf(acc) === revenueAccountCode) {
+        return { ...acc, balance: Number(acc.balance || 0) + amt };
       }
       return acc;
     });
@@ -645,11 +663,17 @@ const handlePrintRV = (rv: any) => {
                         onChange={(e) => setReceiptVoucherForm(prev => ({ ...prev, receivingAccount: e.target.value }))}
                         className="w-full bg-slate-50 border border-slate-200 rounded-lg p-2.5 font-bold focus:outline-none"
                       >
-                        {accounts.filter(a => a.classification === 'أصول' && a.type === 'فرعي' && (a.code.startsWith('110') || a.code.startsWith('111') || a.code.startsWith('112'))).map(a => (
-                          <option key={a.code} value={a.code}>
-                            {a.code} - {a.nameAr} (الرصيد: {a.balance.toLocaleString()} {currency})
+                        {receivingAccounts.map(a => {
+                          const code = String(a.code || a.accountCode || '');
+                          return (
+                          <option key={code} value={code}>
+                            {code} - {a.nameAr || a.name || 'حساب نقدية/مصرف'} (الرصيد: {Number(a.balance || 0).toLocaleString()} {currency})
                           </option>
-                        ))}
+                          );
+                        })}
+                        {receivingAccounts.length === 0 && (
+                          <option value="1101">1101 - صندوق الخزينة الرئيسي (كاش)</option>
+                        )}
                       </select>
                     </div>
 

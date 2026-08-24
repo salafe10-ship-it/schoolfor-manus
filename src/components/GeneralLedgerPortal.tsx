@@ -109,13 +109,37 @@ export default function GeneralLedgerPortal({
   const [jvTableMaximized, setJvTableMaximized] = useState<boolean>(false);
   const [receiptVouchers, setReceiptVouchers] = useState<any[]>([]);
   const [paymentVouchers, setPaymentVouchers] = useState<any[]>([]);
-  const [receiptVoucherForm, setReceiptVoucherForm] = useState<any>({});
-  const [paymentVoucherForm, setPaymentVoucherForm] = useState<any>({});
+  const [receiptVoucherForm, setReceiptVoucherForm] = useState<any>(() => ({
+    date: new Date().toISOString().split('T')[0],
+    school: 'مدرسة الأسرة الحديثة - فرع طرابلس',
+    stage: 'الابتدائي',
+    costCenter: 'primary',
+    receivedFrom: '',
+    operationType: 'رسوم دراسية',
+    paymentMethod: 'نقدي',
+    receivingAccount: '1101',
+    amount: '',
+    against: 'دفعة من الرسوم الدراسية للعام الجديد',
+    attachmentName: '',
+    notes: 'تم ترحيل السند وتوطين الأرصدة تلقائياً بنظام القيد المزدوج المعتمد'
+  }));
+  const [paymentVoucherForm, setPaymentVoucherForm] = useState<any>(() => ({
+    date: new Date().toISOString().split('T')[0],
+    costCenter: 'primary',
+    beneficiary: '',
+    paidFromAccount: '1101',
+    paidToAccount: '5270',
+    amount: '',
+    against: 'مستخلص سداد دفعة توريد كتب وقرطاسية مدرسية',
+    paymentMethod: 'نقدي',
+    attachmentName: '',
+    notes: 'خصماً من حساب الميزانية العمومية والتشغيلية المعتمدة لفرع طرابلس'
+  }));
   const [bankTransfers, setBankTransfers] = useState<any[]>([]);
           const [receiptSearch, setReceiptSearch] = useState<string>('');
-  const [receiptCostCenterFilter, setReceiptCostCenterFilter] = useState<string>('');
+  const [receiptCostCenterFilter, setReceiptCostCenterFilter] = useState<string>('all');
   const [paymentSearch, setPaymentSearch] = useState<string>('');
-  const [paymentCostCenterFilter, setPaymentCostCenterFilter] = useState<string>('');
+  const [paymentCostCenterFilter, setPaymentCostCenterFilter] = useState<string>('all');
   const [fixedAssets, setFixedAssets] = useState<any[]>([]);
   const [selectedAssetId, setSelectedAssetId] = useState<string | null>(null);
   const [activeAssetTab, setActiveAssetTab] = useState<string>('details');

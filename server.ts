@@ -130,6 +130,10 @@ function normalizeFinancialSnapshotPayload(value: unknown): Record<string, unkno
     'invoices',
     'studentReceiptVouchers',
     'receiptVouchers',
+    'paymentVouchers',
+    'bankTransfers',
+    'suppliers',
+    'fixedAssets',
     'journalEntries',
     'chartOfAccounts',
     'feeConfigs',
@@ -186,7 +190,7 @@ function validateFinancialSnapshotIntegrity(payload: Record<string, unknown>): v
       seen.add(id);
     }
   };
-  for (const key of ['invoices', 'studentReceiptVouchers', 'receiptVouchers', 'journalEntries', 'feeConfigs']) validateIds(key);
+  for (const key of ['invoices', 'studentReceiptVouchers', 'receiptVouchers', 'paymentVouchers', 'bankTransfers', 'suppliers', 'fixedAssets', 'journalEntries', 'feeConfigs']) validateIds(key);
   for (const [index, row] of financialRecordRows(payload.invoices).entries()) {
     const amount = financialNumber(row.amount);
     const paid = financialNumber(row.paidAmount);
@@ -230,6 +234,31 @@ async function replaceStudentFinanceProjection(
     'student_fee_journal_lines',
     'student_fee_configurations'
   ];
+  // The versioned financial snapshot is the authoritative UAT write path.
+  // Student-finance projection tables are optional in partially provisioned
+  // environments; their absence must not roll back an otherwise valid
+  // snapshot write. A later migration can enable the projection without
+  // changing the snapshot contract.
+  const tableCheck = await transaction.query(
+    `SELECT table_name
+       FROM information_schema.tables
+      WHERE table_schema = 'public'
+        AND table_name = ANY($1::text[])`,
+    [projectionTables]
+  );
+  const availableProjectionTables = new Set(
+    ((tableCheck as any)?.rows || []).map((row: { table_name: string }) => row.table_name)
+  );
+  const missingProjectionTables = projectionTables.filter(table => !availableProjectionTables.has(table));
+  if (missingProjectionTables.length > 0) {
+    EnterpriseLogger.warn('Student finance projection skipped: tables are not provisioned', 'FinancialSnapshotRoute', {
+      missingProjectionTables,
+      version,
+      tenantId,
+      schoolId
+    });
+    return;
+  }
   for (const table of projectionTables) {
     await transaction.query(`DELETE FROM public.${table} WHERE tenant_id = $1 AND school_id = $2`, [tenantId, schoolId]);
   }
@@ -2512,20 +2541,30 @@ async function startServer() {
         tenantContext
       );
 
-      await AuditRepository.log(
-        schoolId,
-        databaseActorId || actorId,
-        (req as any).user.name || "محاسب النظام",
-        (req as any).user.role || "Accountant",
-        "UPDATE",
-        "financial_database",
-        req.ip || "127.0.0.1",
-        "حفظ ومزامنة القيود المالية وسندات القبض وشجرة الحسابات"
-      );
+      // The snapshot transaction has already committed at this point. An
+      // unavailable audit_logs sidecar must not make the client report a
+      // failed financial save after the canonical version was persisted.
+      try {
+        await AuditRepository.log(
+          schoolId,
+          databaseActorId || actorId,
+          (req as any).user.name || "محاسب النظام",
+          (req as any).user.role || "Accountant",
+          "UPDATE",
+          "financial_database",
+          req.ip || "127.0.0.1",
+          "حفظ ومزامنة القيود المالية وسندات القبض وشجرة الحسابات"
+        );
+      } catch (auditError: any) {
+        EnterpriseLogger.warn('Financial snapshot committed without audit_logs sidecar', 'FinancialSnapshotRoute', {
+          version: nextVersion,
+          error: auditError?.message || String(auditError)
+        });
+      }
 
       res.json({
         success: true,
-        meta: { source: 'supabase', version: nextVersion },
+        meta: { source: 'supabase', version: nextVersion, auditSidecar: 'unavailable' },
         message: "Financial settings saved successfully."
       });
     } catch (err: any) {
