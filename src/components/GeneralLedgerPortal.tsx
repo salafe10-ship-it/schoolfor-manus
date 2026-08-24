@@ -659,8 +659,8 @@ export default function GeneralLedgerPortal({
   };
   const handleMaintenanceSubmit = async () => {
     const asset = fixedAssets.find(item => item.id === (selectedAssetId || assetForm.id));
-    if (!asset || canonicalFinancialStatus !== 'ready') {
-      triggerNotification('تعذر تسجيل الصيانة: الأصل غير موثق أو المصدر المركزي غير جاهز.', 'warning');
+    if (!asset || !canonicalFinancialWriteReady) {
+      triggerNotification('تعذر تسجيل الصيانة: الأصل غير موثق أو المصدر المالي للقراءة فقط.', 'warning');
       return;
     }
     const cost = Number(assetForm.cost ?? maintenanceForm.cost ?? 0);

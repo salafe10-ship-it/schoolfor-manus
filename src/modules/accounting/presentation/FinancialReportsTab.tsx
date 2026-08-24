@@ -329,6 +329,10 @@ const handleDrillDownToOriginalDocument = (jv: any) => {
               return;
             }
 
+            const reportCertificationLabel = reportsAreCanonical
+              ? 'تقرير مالي رسمي معتمد'
+              : 'نسخة عرض غير معتمدة — snapshot للقراءة فقط';
+
             const activeCostCenterLabel = filterCostCenter === 'all' ? 'جميع الأقسام والفروع' : (activeCostCenters.find(c => c.id === filterCostCenter)?.name || filterCostCenter);
 
             printWindow.document.write(`
@@ -357,7 +361,7 @@ const handleDrillDownToOriginalDocument = (jv: any) => {
                       <h2>نظام الإدارة المالية الشامل والتدقيق المحاسبي ERP</h2>
                     </div>
                     <div style="text-align: left; font-size: 10px; font-weight: bold; line-height: 1.5;">
-                      <p>المستند: <span class="tag-badge">تقرير مالي رسمي معتمد</span></p>
+                      <p>المستند: <span class="tag-badge">${reportCertificationLabel}</span></p>
                       <p>تاريخ الاستخراج: ${new Date().toLocaleDateString('ar-SA')}</p>
                       <p>الفترة المالية: من ${filterFromDate} إلى ${filterToDate}</p>
                       <p>مركز التكلفة: ${activeCostCenterLabel}</p>
@@ -525,7 +529,7 @@ const handleDrillDownToOriginalDocument = (jv: any) => {
                     <span>محددات الفلترة والتحكم بالتقارير (خيارات تصفية متعددة الأبعاد)</span>
                   </div>
                   <div className="text-[10px] bg-slate-100 text-slate-600 px-2.5 py-1 rounded-full font-mono">
-                    مطابقة مع الدليل المحاسبي ومعتمدة من الرقابة المالية 🔐
+                    {reportsAreCanonical ? 'مطابقة مع الدليل المحاسبي ومعتمدة من الرقابة المالية 🔐' : 'نسخة عرض من snapshot — غير معتمدة للرقابة أو الإقفال'}
                   </div>
                 </div>
 
@@ -897,7 +901,7 @@ const handleDrillDownToOriginalDocument = (jv: any) => {
                           </span>
                           <span className="text-[10px] font-bold px-2 py-0.5 bg-sky-50 text-sky-700 rounded-full">مقارنة المخطط والفعلي</span>
                         </div>
-                        <h3 className="text-sm font-black text-slate-900">الموازنات السنوية المعتمدة (Estimated Budget)</h3>
+                        <h3 className="text-sm font-black text-slate-900">{reportsAreCanonical ? 'الموازنات السنوية المعتمدة' : 'الموازنات السنوية — نسخة عرض'} (Estimated Budget)</h3>
                         <p className="text-[11px] text-slate-500 leading-relaxed">مقارنة المصروفات التشغيلية والرواتب الحاصلة فعلياً بالمطابقة مع المخصص السنوي المعتمد مسبقاً من مجلس الإدارة لتفادي العجز.</p>
                       </div>
                       <div className="mt-5 pt-4 border-t border-slate-100 flex gap-2">
@@ -1068,7 +1072,7 @@ const handleDrillDownToOriginalDocument = (jv: any) => {
                                 {jv.createdByUser || 'سليمان غازي'}
                               </span>
                               <span className="inline-block mt-1.5 text-[9px] text-emerald-750 font-extrabold bg-emerald-50 border border-emerald-150 px-2 py-0.5 rounded-md">
-                                مراجع ومعتمد بالصلاحيات
+                                {reportsAreCanonical ? 'مراجع ومعتمد بالصلاحيات' : 'معروض من snapshot — غير معتمد'}
                               </span>
                             </div>
                           </div>
@@ -1173,14 +1177,14 @@ const handleDrillDownToOriginalDocument = (jv: any) => {
                                 
                                 printReportPdf(
                                   `سند قيد يومية رقم ${jv.id}`,
-                                  `بيان القيد المزدوج المحاسبي المعتمد والمسجل في ${jv.date}`,
+                                  `${reportsAreCanonical ? 'بيان القيد المزدوج المحاسبي المعتمد' : 'بيان القيد المزدوج المعروض — غير معتمد'} والمسجل في ${jv.date}`,
                                   ['رمز الحساب', 'اسم الحساب', 'مدين', 'دائن', 'البيان'],
                                   tableRows,
                                   `
                                     <div style="margin-top: 20px; font-weight: bold;">
                                       <p>البيان العام للقيد: ${jv.description}</p>
                                       <p>المحاسب المسؤول: ${jv.createdByUser || 'سليمان غازي'}</p>
-                                      <p>حالة الترحيل بالأستاذ: مرحل ترحيلاً معتمداً نهائياً ✓</p>
+                                      <p>حالة الترحيل بالأستاذ: ${reportsAreCanonical ? 'مرحل ترحيلاً معتمداً نهائياً ✓' : 'حالة تاريخية معروضة من snapshot — لا يمكن إثبات ترحيل كانوني جديد'}</p>
                                     </div>
                                   `
                                 );
@@ -1219,7 +1223,7 @@ const handleDrillDownToOriginalDocument = (jv: any) => {
                                 <span className="px-2.5 py-0.5 bg-amber-200 text-amber-900 rounded-full text-[10px] font-black">
                                   المستوى الرابع: المستند المرجعي الأصلي
                                 </span>
-                                <span>سند قبض مالي أصلي معتمد قانونياً</span>
+                                <span>{reportsAreCanonical ? 'سند قبض مالي أصلي معتمد قانونياً' : 'سند قبض معروض من snapshot — غير معتمد قانونياً'}</span>
                               </div>
                               <span className="font-mono text-[10px] bg-white border border-amber-300 px-2 py-0.5 rounded text-amber-800">
                                 ID: {rv.id}
@@ -1241,7 +1245,7 @@ const handleDrillDownToOriginalDocument = (jv: any) => {
                                 </div>
                                 <div className="text-left text-xs font-bold space-y-1 text-slate-500">
                                   <div>التاريخ: <span className="font-mono font-extrabold text-slate-800">{rv.date}</span></div>
-                                  <div>الحالة: <span className="px-2 py-0.5 bg-emerald-100 text-emerald-800 rounded-full text-[9px] font-black">{rv.status || 'معتمد'}</span></div>
+                                  <div>الحالة: <span className={`px-2 py-0.5 rounded-full text-[9px] font-black ${reportsAreCanonical ? 'bg-emerald-100 text-emerald-800' : 'bg-amber-100 text-amber-800'}`}>{reportsAreCanonical ? (rv.status || 'معتمد') : 'معروض — غير معتمد'}</span></div>
                                 </div>
                               </div>
 
@@ -1286,7 +1290,7 @@ const handleDrillDownToOriginalDocument = (jv: any) => {
                                   <div className="mt-6 border-b border-slate-200 h-5"></div>
                                 </div>
                                 <div>
-                                  <span>المحاسب المعتمد</span>
+                                  <span>{reportsAreCanonical ? 'المحاسب المعتمد' : 'المستخدم المسجل'}</span>
                                   <span className="block mt-4 font-black text-slate-800">{rv.user || 'سليمان غازي'}</span>
                                 </div>
                                 <div>
@@ -1323,7 +1327,7 @@ const handleDrillDownToOriginalDocument = (jv: any) => {
                                           <div class="header">
                                             <div>
                                               <h3>مجمع المدارس الموحد</h3>
-                                              <p>سند قبض مالي رسمي رقم: ${rv.id}</p>
+                                            <p>${reportsAreCanonical ? 'سند قبض مالي رسمي معتمد' : 'نسخة عرض لسند قبض — غير معتمدة'} رقم: ${rv.id}</p>
                                             </div>
                                             <div>
                                               <p>التاريخ: ${rv.date}</p>
@@ -1348,7 +1352,7 @@ const handleDrillDownToOriginalDocument = (jv: any) => {
                                 className="bg-amber-600 hover:bg-amber-700 text-white font-extrabold px-6 py-2.5 rounded-xl text-xs flex items-center gap-1.5 cursor-pointer shadow transition-all active:scale-95"
                               >
                                 <Printer className="w-4 h-4" />
-                                <span>طباعة سند القبض الرسمي المعتمد PDF</span>
+                                <span>{reportsAreCanonical ? 'طباعة سند القبض الرسمي المعتمد PDF' : 'طباعة نسخة عرض سند القبض PDF'}</span>
                               </button>
                             </div>
                           </div>
@@ -1375,7 +1379,7 @@ const handleDrillDownToOriginalDocument = (jv: any) => {
                                 <span className="px-2.5 py-0.5 bg-indigo-200 text-indigo-900 rounded-full text-[10px] font-black">
                                   المستوى الرابع: المستند المرجعي الأصلي
                                 </span>
-                                <span>سند صرف مالي أصلي معتمد قانونياً</span>
+                                <span>{reportsAreCanonical ? 'سند صرف مالي أصلي معتمد قانونياً' : 'سند صرف معروض من snapshot — غير معتمد قانونياً'}</span>
                               </div>
                               <span className="font-mono text-[10px] bg-white border border-indigo-300 px-2 py-0.5 rounded text-indigo-800">
                                 ID: {pv.id}
@@ -1392,12 +1396,12 @@ const handleDrillDownToOriginalDocument = (jv: any) => {
                                   <p className="text-[9px] text-slate-400 font-semibold">مركز التكلفة: {activeCostCenters.find(c => c.id === pv.costCenter)?.name || pv.costCenter}</p>
                                 </div>
                                 <div className="text-center bg-indigo-500/10 border border-indigo-500/20 px-5 py-2.5 rounded-xl">
-                                  <span className="text-[11px] font-black text-indigo-800 block">سند صرف مالي رسمي</span>
+                                  <span className="text-[11px] font-black text-indigo-800 block">{reportsAreCanonical ? 'سند صرف مالي رسمي معتمد' : 'نسخة عرض لسند صرف'}</span>
                                   <span className="font-mono font-black text-slate-900 text-sm mt-1 block">{pv.id}</span>
                                 </div>
                                 <div className="text-left text-xs font-bold space-y-1 text-slate-500">
                                   <div>التاريخ: <span className="font-mono font-extrabold text-slate-800">{pv.date}</span></div>
-                                  <div>الحالة: <span className="px-2 py-0.5 bg-emerald-100 text-emerald-800 rounded-full text-[9px] font-black">{pv.status || 'معتمد'}</span></div>
+                                  <div>الحالة: <span className={`px-2 py-0.5 rounded-full text-[9px] font-black ${reportsAreCanonical ? 'bg-emerald-100 text-emerald-800' : 'bg-amber-100 text-amber-800'}`}>{reportsAreCanonical ? (pv.status || 'معتمد') : 'معروض — غير معتمد'}</span></div>
                                 </div>
                               </div>
 
@@ -1413,7 +1417,7 @@ const handleDrillDownToOriginalDocument = (jv: any) => {
                                   <span className="text-rose-700 font-black text-sm" dir="ltr">
                                     {pv.amount.toLocaleString(undefined, { minimumFractionDigits: 2 })} {currency}
                                   </span>
-                                  <span className="mr-3 text-[10px] text-slate-400">({pv.amount === 1200 ? 'ألف ومائتان دينار ليبي فقط لا غير' : 'مبلغ منصرف ومعتمد من الخزينة'})</span>
+                                  <span className="mr-3 text-[10px] text-slate-400">({pv.amount === 1200 ? 'ألف ومائتان دينار ليبي فقط لا غير' : reportsAreCanonical ? 'مبلغ منصرف ومعتمد من الخزينة' : 'مبلغ معروض من snapshot — غير معتمد'})</span>
                                 </div>
 
                                 <div className="flex items-center border-b border-dashed border-slate-200 pb-2">
@@ -1481,7 +1485,7 @@ const handleDrillDownToOriginalDocument = (jv: any) => {
                                           <div class="header">
                                             <div>
                                               <h3>مجمع المدارس الموحد</h3>
-                                              <p>سند صرف مالي رسمي رقم: ${pv.id}</p>
+                                            <p>${reportsAreCanonical ? 'سند صرف مالي رسمي معتمد' : 'نسخة عرض لسند صرف — غير معتمدة'} رقم: ${pv.id}</p>
                                             </div>
                                             <div>
                                               <p>التاريخ: ${pv.date}</p>
@@ -1505,7 +1509,7 @@ const handleDrillDownToOriginalDocument = (jv: any) => {
                                 className="bg-indigo-600 hover:bg-indigo-700 text-white font-extrabold px-6 py-2.5 rounded-xl text-xs flex items-center gap-1.5 cursor-pointer shadow transition-all active:scale-95"
                               >
                                 <Printer className="w-4 h-4" />
-                                <span>طباعة سند الصرف المالي المعتمد PDF</span>
+                                <span>{reportsAreCanonical ? 'طباعة سند الصرف المالي المعتمد PDF' : 'طباعة نسخة عرض سند الصرف PDF'}</span>
                               </button>
                             </div>
                           </div>
@@ -1875,7 +1879,7 @@ const handleDrillDownToOriginalDocument = (jv: any) => {
                           className="bg-indigo-650 hover:bg-indigo-700 text-white font-bold text-[11px] px-3 py-1.5 rounded-lg flex items-center gap-1.5 cursor-pointer"
                         >
                           <Printer className="w-3.5 h-3.5" />
-                          <span>طباعة PDF المعتمد</span>
+                          <span>{reportsAreCanonical ? 'طباعة PDF المعتمد' : 'طباعة نسخة عرض PDF'}</span>
                         </button>
                       </div>
                     </div>

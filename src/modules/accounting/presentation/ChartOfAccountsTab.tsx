@@ -1533,7 +1533,12 @@ export const ChartOfAccountsTab = () => {
               setCoaScanState('scanning');
               setTimeout(() => {
                 setCoaScanState('completed');
-                triggerNotification('✓ تم الانتهاء من فحص شجرة الحسابات والدليل المالي الموحد بالكامل وفق المعيار الدولي IFRS 101', 'success');
+                triggerNotification(
+                  chartWritesAreCanonical
+                    ? '✓ اكتمل فحص شجرة الحسابات وفق قواعد التدقيق المفعلة.'
+                    : 'تم فحص عرض شجرة الحسابات؛ لا يمكن اعتماد نتيجة IFRS أو سلامة دفتر الأستاذ في وضع القراءة فقط.',
+                  'info'
+                );
               }, 1200);
             };
 
@@ -1789,7 +1794,9 @@ export const ChartOfAccountsTab = () => {
                         <span className="w-2.5 h-2.5 rounded-full bg-indigo-600 animate-pulse shrink-0" />
                         <span className="font-semibold text-slate-700">مجموع مراكز التكلفة للفروع متزن حالياً:</span>
                       </div>
-                      <span className="bg-indigo-100 text-indigo-800 px-2 py-0.5 rounded font-bold">100% متطابق</span>
+                      <span className={`px-2 py-0.5 rounded font-bold ${chartWritesAreCanonical ? 'bg-indigo-100 text-indigo-800' : 'bg-amber-100 text-amber-800'}`}>
+                        {chartWritesAreCanonical ? '100% متطابق' : 'غير متحقق — قراءة فقط'}
+                      </span>
                     </div>
                   </div>
 
@@ -1853,7 +1860,7 @@ export const ChartOfAccountsTab = () => {
                         
                         {/* 1. Rule Check: Balance Sheet Equilibrium */}
                         <div className={`p-4 rounded-xl border flex flex-col justify-between gap-3 ${
-                          bsEquilibrium ? 'bg-emerald-50/50 border-emerald-200' : 'bg-rose-50/50 border-rose-200'
+                          !chartWritesAreCanonical ? 'bg-amber-50/50 border-amber-200' : bsEquilibrium ? 'bg-emerald-50/50 border-emerald-200' : 'bg-rose-50/50 border-rose-200'
                         }`}>
                           <div className="flex justify-between items-start">
                             <div>
@@ -1861,9 +1868,9 @@ export const ChartOfAccountsTab = () => {
                               <h5 className="text-[11px] font-black mt-1 text-slate-900">المعادلة: الأصول = الخصوم + حقوق الملكية</h5>
                             </div>
                             <span className={`px-2 py-0.5 rounded text-[8px] font-black ${
-                              bsEquilibrium ? 'bg-emerald-100 text-emerald-800' : 'bg-rose-100 text-rose-800'
+                              !chartWritesAreCanonical ? 'bg-amber-100 text-amber-800' : bsEquilibrium ? 'bg-emerald-100 text-emerald-800' : 'bg-rose-100 text-rose-800'
                             }`}>
-                              {bsEquilibrium ? 'متطابق متوازن' : 'غير متزن'}
+                              {!chartWritesAreCanonical ? 'غير متحقق — قراءة فقط' : bsEquilibrium ? 'متطابق متوازن' : 'غير متزن'}
                             </span>
                           </div>
 
@@ -1872,7 +1879,9 @@ export const ChartOfAccountsTab = () => {
                             <span>الخصوم والملكية: {(totalLiabilities + totalEquity).toLocaleString()} د.ل</span>
                           </div>
 
-                          {bsEquilibrium ? (
+                          {!chartWritesAreCanonical ? (
+                            <p className="text-[9px] text-amber-700">⚠️ لا يمكن إثبات توازن الميزانية من snapshot للقراءة فقط.</p>
+                          ) : bsEquilibrium ? (
                             <p className="text-[9px] text-emerald-700">✓ تم التحقق بنجاح: ميزان الأصول يتطابق تماماً مع مصادر التمويل والخصوم وفق GAAP.</p>
                           ) : (
                             <div className="flex items-center justify-between gap-2 border-t border-rose-200 pt-2 mt-1">
@@ -1919,7 +1928,7 @@ export const ChartOfAccountsTab = () => {
 
                           return (
                             <div className={`p-4 rounded-xl border flex flex-col justify-between gap-3 ${
-                              !hasMismatches ? 'bg-emerald-50/50 border-emerald-200' : 'bg-amber-50/50 border-amber-200'
+                              !chartWritesAreCanonical ? 'bg-amber-50/50 border-amber-200' : !hasMismatches ? 'bg-emerald-50/50 border-emerald-200' : 'bg-amber-50/50 border-amber-200'
                             }`}>
                               <div className="flex justify-between items-start">
                                 <div>
@@ -1927,14 +1936,16 @@ export const ChartOfAccountsTab = () => {
                                   <h5 className="text-[11px] font-black mt-1 text-slate-900">فحص تطابق أرصدة الحسابات الأب مع الحسابات التابعة</h5>
                                 </div>
                                 <span className={`px-2 py-0.5 rounded text-[8px] font-black ${
-                                  !hasMismatches ? 'bg-emerald-100 text-emerald-800' : 'bg-amber-100 text-amber-800'
+                                  !chartWritesAreCanonical ? 'bg-amber-100 text-amber-800' : !hasMismatches ? 'bg-emerald-100 text-emerald-800' : 'bg-amber-100 text-amber-800'
                                 }`}>
-                                  {!hasMismatches ? 'هيكل متطابق' : 'فجوة مجاميع هرمية'}
+                                  {!chartWritesAreCanonical ? 'غير متحقق — قراءة فقط' : !hasMismatches ? 'هيكل متطابق' : 'فجوة مجاميع هرمية'}
                                 </span>
                               </div>
 
                               <p className="text-[9px] text-slate-650 leading-relaxed font-semibold">
-                                {!hasMismatches 
+                                {!chartWritesAreCanonical
+                                  ? '⚠️ لا يمكن إثبات تطابق أرصدة الحسابات الأب مع فروعها من snapshot للقراءة فقط.'
+                                  : !hasMismatches
                                   ? '✓ رائع! جميع أرصدة الحسابات الرئيسية الإجمالية تتطابق تماماً مع مجاميع تفرعاتها الفرعية الحالية.' 
                                   : `يوجد عدد (${mismatchingNodes.length}) حسابات رئيسية لا تتطابق أرصدتها مع مجموع حساباتها التابعة.`}
                               </p>
@@ -1962,7 +1973,7 @@ export const ChartOfAccountsTab = () => {
 
                           return (
                             <div className={`p-4 rounded-xl border flex flex-col justify-between gap-3 ${
-                              !hasOverruns ? 'bg-emerald-50/50 border-emerald-200' : 'bg-rose-50/50 border-rose-200'
+                              !chartWritesAreCanonical ? 'bg-amber-50/50 border-amber-200' : !hasOverruns ? 'bg-emerald-50/50 border-emerald-200' : 'bg-rose-50/50 border-rose-200'
                             }`}>
                               <div className="flex justify-between items-start">
                                 <div>
@@ -1970,14 +1981,16 @@ export const ChartOfAccountsTab = () => {
                                   <h5 className="text-[11px] font-black mt-1 text-slate-900">رصد تجاوز السقوف المالية المعتمدة للعام</h5>
                                 </div>
                                 <span className={`px-2 py-0.5 rounded text-[8px] font-black ${
-                                  !hasOverruns ? 'bg-emerald-100 text-emerald-800' : 'bg-rose-100 text-rose-800'
+                                  !chartWritesAreCanonical ? 'bg-amber-100 text-amber-800' : !hasOverruns ? 'bg-emerald-100 text-emerald-800' : 'bg-rose-100 text-rose-800'
                                 }`}>
-                              {!hasOverruns ? 'موازنات منضبطة' : 'مخالفات موازنة'}
+                              {!chartWritesAreCanonical ? 'غير متحقق — قراءة فقط' : !hasOverruns ? 'موازنات منضبطة' : 'مخالفات موازنة'}
                             </span>
                           </div>
 
                           <div className="text-[9.5px] text-slate-650 font-medium">
-                            {!hasOverruns ? (
+                            {!chartWritesAreCanonical ? (
+                              <span className="text-amber-700">⚠️ لا يمكن إثبات تجاوزات الموازنات من snapshot للقراءة فقط.</span>
+                            ) : !hasOverruns ? (
                               <span>✓ لم يتم تجاوز أي سقف تقديري للموازنات السنوية بجميع البنود التشغيلية.</span>
                             ) : (
                               <div className="space-y-1 max-h-[80px] overflow-y-auto font-sans">
@@ -2005,7 +2018,7 @@ export const ChartOfAccountsTab = () => {
 
                       return (
                         <div className={`p-4 rounded-xl border flex flex-col justify-between gap-3 ${
-                          !hasAlert ? 'bg-emerald-50/50 border-emerald-200' : 'bg-amber-50/50 border-amber-200'
+                          !chartWritesAreCanonical ? 'bg-amber-50/50 border-amber-200' : !hasAlert ? 'bg-emerald-50/50 border-emerald-200' : 'bg-amber-50/50 border-amber-200'
                         }`}>
                           <div className="flex justify-between items-start">
                             <div>
@@ -2013,14 +2026,16 @@ export const ChartOfAccountsTab = () => {
                               <h5 className="text-[11px] font-black mt-1 text-slate-900">فحص وجود أرصدة معلقة على كود مالي غير نشط</h5>
                             </div>
                             <span className={`px-2 py-0.5 rounded text-[8px] font-black ${
-                              !hasAlert ? 'bg-emerald-100 text-emerald-800' : 'bg-amber-100 text-amber-800'
+                              !chartWritesAreCanonical ? 'bg-amber-100 text-amber-800' : !hasAlert ? 'bg-emerald-100 text-emerald-800' : 'bg-amber-100 text-amber-800'
                             }`}>
-                              {!hasAlert ? 'آمن ومطابق' : 'مخالفة تجميد'}
+                              {!chartWritesAreCanonical ? 'غير متحقق — قراءة فقط' : !hasAlert ? 'آمن ومطابق' : 'مخالفة تجميد'}
                             </span>
                           </div>
 
                           <p className="text-[9px] text-slate-650 leading-relaxed font-bold">
-                            {!hasAlert 
+                            {!chartWritesAreCanonical
+                              ? '⚠️ لا يمكن إثبات سلامة الحسابات المعطلة من snapshot للقراءة فقط.'
+                              : !hasAlert
                               ? '✓ ممتاز! لا يوجد أي حساب مالي غير نشط يحوي أرصدة معلقة حالياً.' 
                               : `اكتشفنا عدد (${inactiveWithBalance.length}) حسابات معطلة ولكنها تحمل رصيد مالي قائم.`}
                           </p>
@@ -2108,14 +2123,16 @@ export const ChartOfAccountsTab = () => {
                               <h5 className="text-[11px] font-black mt-1 text-slate-900">الرقابة الجنائية على القيود المباشرة والتسويات لمنع الانحراف الدفتري</h5>
                             </div>
                             <span className={`px-2 py-0.5 rounded text-[8px] font-black ${
-                              !hasViolations ? 'bg-emerald-100 text-emerald-800' : 'bg-rose-100 text-rose-800'
+                              !chartWritesAreCanonical ? 'bg-amber-100 text-amber-800' : !hasViolations ? 'bg-emerald-100 text-emerald-800' : 'bg-rose-100 text-rose-800'
                             }`}>
-                              {!hasViolations ? 'مطابقة قانونية 100%' : 'انحراف قيود مكتشف'}
+                              {!chartWritesAreCanonical ? 'غير متحقق — قراءة فقط' : !hasViolations ? 'مطابقة قانونية 100%' : 'انحراف قيود مكتشف'}
                             </span>
                           </div>
 
                           <div className="text-[9.5px] text-slate-650 leading-relaxed font-semibold">
-                            {!hasViolations ? (
+                            {!chartWritesAreCanonical ? (
+                              <span className="text-amber-700">⚠️ نتيجة التدقيق المعروضة من snapshot للقراءة فقط؛ لا يمكن إثبات سلامة الفروع والمدارس أو اعتماد القيود.</span>
+                            ) : !hasViolations ? (
                               <span className="text-emerald-700">✓ ممتاز! تم مطابقة كافة القيود الدفترية التاريخية والنشطة بنجاح. لا يوجد أي حساب ملغى، محذوف، مركز تكلفة تالف، أو تباين في الفروع أو المدارس.</span>
                             ) : (
                               <div className="space-y-1.5 max-h-[120px] overflow-y-auto font-sans bg-rose-50/30 p-2 rounded border border-rose-100">
@@ -2135,6 +2152,7 @@ export const ChartOfAccountsTab = () => {
                               <button
                                 type="button"
                                 onClick={() => {
+                                  if (!guardChartWrite('معالجة انحرافات القيود')) return;
                                   setJournalEntries(prev => prev.map(jv => {
                                     let lines = jv.lines || [];
                                     const debitTotal = lines.reduce((sum: number, l: any) => sum + (parseFloat(l.debit) || 0), 0);

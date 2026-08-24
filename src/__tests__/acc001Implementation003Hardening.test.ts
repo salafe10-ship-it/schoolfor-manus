@@ -57,4 +57,16 @@ describe('ACC-001-IMPLEMENTATION-003 accounting hardening', () => {
     expect(receipt).toContain('إلغاء سند القبض متوقف: المصدر للقراءة فقط');
     expect(payment).toContain('إلغاء سند الصرف متوقف: المصدر للقراءة فقط');
   });
+
+  it('keeps read-only report and closing claims explicitly unverified', () => {
+    const reports = read('src/modules/accounting/presentation/FinancialReportsTab.tsx');
+    const closing = read('src/modules/accounting/presentation/ClosingTab.tsx');
+    const chart = read('src/modules/accounting/presentation/ChartOfAccountsTab.tsx');
+
+    expect(reports).toContain('نسخة عرض غير معتمدة — snapshot للقراءة فقط');
+    expect(reports).toContain('سند قبض معروض من snapshot — غير معتمد قانونياً');
+    expect(closing).toContain('const closingProofReady =');
+    expect(closing).toContain('غير متحقق — قراءة فقط');
+    expect(chart).toContain("guardChartWrite('معالجة انحرافات القيود')");
+  });
 });

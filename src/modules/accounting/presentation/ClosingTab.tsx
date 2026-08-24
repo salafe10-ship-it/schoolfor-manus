@@ -73,8 +73,9 @@ export const ClosingTab = () => {
   formatCurrency, triggerNotification, logAction, handlePostAllPendingJvs,
   persistCanonicalFinancialSnapshot, canonicalFinancialStatus, canonicalFinancialWriteMode
 } = React.useContext(AccountingContext);
+  const closingProofReady = canonicalFinancialStatus === 'ready' && canonicalFinancialWriteMode === 'ledger_ready';
   const ensureCanonicalClosingPersistence = () => {
-    if (canonicalFinancialStatus === 'ready' && canonicalFinancialWriteMode === 'ledger_ready' && typeof persistCanonicalFinancialSnapshot === 'function') return true;
+    if (closingProofReady && typeof persistCanonicalFinancialSnapshot === 'function') return true;
     triggerNotification('عمليات الإقفال وفتح السنة متوقفة: المصدر الحالي snapshot للقراءة فقط، ولم تعتمد خدمة إقفال كانونية.', 'warning');
     return false;
   };
@@ -139,13 +140,13 @@ export const ClosingTab = () => {
           };
 
           // Matched Trial Balance Check (balanced double-entry verify)
-          const isTrialBalanceMatched = journalEntries.length > 0 && !unbalancedJv && unpostedJvsCount === 0;
+          const isTrialBalanceMatched = closingProofReady && journalEntries.length > 0 && !unbalancedJv && unpostedJvsCount === 0;
 
           // Check if there are any critical blocking errors (❌)
           const hasCriticalErrors = unpostedJvsCount > 0 || !!unbalancedJv;
 
           // Determine active step based on state
-          const currentDisplayStep = isYearClosed ? 'done' : closingStep;
+          const currentDisplayStep = isYearClosed && closingProofReady ? 'done' : closingStep;
 
           return (
             <div className="space-y-6 animate-fade-in max-w-4xl mx-auto pb-12">
@@ -168,7 +169,7 @@ export const ClosingTab = () => {
                     </p>
                   </div>
                   <div className="bg-white/10 p-4 rounded-2xl border border-white/10 backdrop-blur-sm shadow-inner flex flex-col items-center justify-center min-w-[140px]">
-                    <span className="text-[10px] text-indigo-300 font-bold">صافي الربح المستحق للترحيل</span>
+                    <span className="text-[10px] text-indigo-300 font-bold">{closingProofReady ? 'صافي الربح المستحق للترحيل' : 'صافي العرض — غير متحقق للترحيل'}</span>
                     <span className="text-xl font-mono font-black text-emerald-400 mt-1" dir="ltr">
                       +{financialTotals[0].toLocaleString(undefined, { minimumFractionDigits: 2 })}
                     </span>
@@ -395,9 +396,9 @@ export const ClosingTab = () => {
                       <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
                         {/* 1. JOURNAL ENTRIES CHECK */}
                         <div className={`p-4 rounded-xl border flex flex-col justify-between transition-all shadow-sm ${
-                          unpostedJvsCount === 0 
-                            ? 'bg-emerald-50/40 border-emerald-100' 
-                            : 'bg-rose-50/40 border-rose-100'
+                          closingProofReady && unpostedJvsCount === 0
+                            ? 'bg-emerald-50/40 border-emerald-100'
+                            : 'bg-amber-50/40 border-amber-100'
                         }`}>
                           <div className="space-y-2">
                             <div className="flex items-center justify-between">
@@ -405,10 +406,15 @@ export const ClosingTab = () => {
                                 <FileText className="w-4 h-4 text-slate-500" />
                                 <span>قيود اليومية العامة غير المرحلة</span>
                               </span>
-                              {unpostedJvsCount === 0 ? (
+                              {closingProofReady && unpostedJvsCount === 0 ? (
                                 <span className="bg-emerald-100 text-emerald-800 text-[9px] font-extrabold px-2 py-0.5 rounded-full flex items-center gap-0.5">
                                   <span>مكتمل</span>
                                   <span>✅</span>
+                                </span>
+                              ) : !closingProofReady ? (
+                                <span className="bg-amber-100 text-amber-800 text-[9px] font-extrabold px-2 py-0.5 rounded-full flex items-center gap-0.5">
+                                  <span>غير متحقق — قراءة فقط</span>
+                                  <span>⚠️</span>
                                 </span>
                               ) : (
                                 <span className="bg-rose-100 text-rose-800 text-[9px] font-extrabold px-2 py-0.5 rounded-full flex items-center gap-0.5">
@@ -436,8 +442,8 @@ export const ClosingTab = () => {
 
                         {/* 2. RECEIPT VOUCHERS CHECK */}
                         <div className={`p-4 rounded-xl border flex flex-col justify-between transition-all shadow-sm ${
-                          unapprovedRvsCount === 0 
-                            ? 'bg-emerald-50/40 border-emerald-100' 
+                          closingProofReady && unapprovedRvsCount === 0
+                            ? 'bg-emerald-50/40 border-emerald-100'
                             : 'bg-amber-50/40 border-amber-100'
                         }`}>
                           <div className="space-y-2">
@@ -446,10 +452,15 @@ export const ClosingTab = () => {
                                 <CheckCircle2 className="w-4 h-4 text-slate-500" />
                                 <span>سندات القبض المفتوحة</span>
                               </span>
-                              {unapprovedRvsCount === 0 ? (
+                              {closingProofReady && unapprovedRvsCount === 0 ? (
                                 <span className="bg-emerald-100 text-emerald-800 text-[9px] font-extrabold px-2 py-0.5 rounded-full flex items-center gap-0.5">
                                   <span>مكتمل</span>
                                   <span>✅</span>
+                                </span>
+                              ) : !closingProofReady ? (
+                                <span className="bg-amber-100 text-amber-800 text-[9px] font-extrabold px-2 py-0.5 rounded-full flex items-center gap-0.5">
+                                  <span>غير متحقق — قراءة فقط</span>
+                                  <span>⚠️</span>
                                 </span>
                               ) : (
                                 <span className="bg-amber-100 text-amber-800 text-[9px] font-extrabold px-2 py-0.5 rounded-full flex items-center gap-0.5">
@@ -477,8 +488,8 @@ export const ClosingTab = () => {
 
                         {/* 3. PAYMENT VOUCHERS CHECK */}
                         <div className={`p-4 rounded-xl border flex flex-col justify-between transition-all shadow-sm ${
-                          unapprovedPvsCount === 0 
-                            ? 'bg-emerald-50/40 border-emerald-100' 
+                          closingProofReady && unapprovedPvsCount === 0
+                            ? 'bg-emerald-50/40 border-emerald-100'
                             : 'bg-amber-50/40 border-amber-100'
                         }`}>
                           <div className="space-y-2">
@@ -487,10 +498,15 @@ export const ClosingTab = () => {
                                 <CheckCircle2 className="w-4 h-4 text-slate-500" />
                                 <span>سندات الصرف المفتوحة</span>
                               </span>
-                              {unapprovedPvsCount === 0 ? (
+                              {closingProofReady && unapprovedPvsCount === 0 ? (
                                 <span className="bg-emerald-100 text-emerald-800 text-[9px] font-extrabold px-2 py-0.5 rounded-full flex items-center gap-0.5">
                                   <span>مكتمل</span>
                                   <span>✅</span>
+                                </span>
+                              ) : !closingProofReady ? (
+                                <span className="bg-amber-100 text-amber-800 text-[9px] font-extrabold px-2 py-0.5 rounded-full flex items-center gap-0.5">
+                                  <span>غير متحقق — قراءة فقط</span>
+                                  <span>⚠️</span>
                                 </span>
                               ) : (
                                 <span className="bg-amber-100 text-amber-800 text-[9px] font-extrabold px-2 py-0.5 rounded-full flex items-center gap-0.5">
@@ -518,8 +534,8 @@ export const ClosingTab = () => {
 
                         {/* 4. FINANCIAL ADJUSTMENTS CHECK */}
                         <div className={`p-4 rounded-xl border flex flex-col justify-between transition-all shadow-sm ${
-                          unapprovedAdjustmentsCount === 0 
-                            ? 'bg-emerald-50/40 border-emerald-100' 
+                          closingProofReady && unapprovedAdjustmentsCount === 0
+                            ? 'bg-emerald-50/40 border-emerald-100'
                             : 'bg-amber-50/40 border-amber-100'
                         }`}>
                           <div className="space-y-2">
@@ -528,10 +544,15 @@ export const ClosingTab = () => {
                                 <CheckCircle2 className="w-4 h-4 text-slate-500" />
                                 <span>4. التسويات والقرارات المعلقة</span>
                               </span>
-                              {unapprovedAdjustmentsCount === 0 ? (
+                              {closingProofReady && unapprovedAdjustmentsCount === 0 ? (
                                 <span className="bg-emerald-100 text-emerald-800 text-[9px] font-extrabold px-2 py-0.5 rounded-full flex items-center gap-0.5">
                                   <span>مكتمل</span>
                                   <span>✅</span>
+                                </span>
+                              ) : !closingProofReady ? (
+                                <span className="bg-amber-100 text-amber-800 text-[9px] font-extrabold px-2 py-0.5 rounded-full flex items-center gap-0.5">
+                                  <span>غير متحقق — قراءة فقط</span>
+                                  <span>⚠️</span>
                                 </span>
                               ) : (
                                 <span className="bg-amber-100 text-amber-800 text-[9px] font-extrabold px-2 py-0.5 rounded-full flex items-center gap-0.5">
@@ -558,23 +579,23 @@ export const ClosingTab = () => {
                         </div>
 
                         {/* 5. FINANCIAL PERIOD QUARTERS */}
-                        <div className="p-4 rounded-xl border bg-emerald-50/40 border-emerald-100 flex flex-col justify-between transition-all shadow-sm">
+                        <div className={`p-4 rounded-xl border flex flex-col justify-between transition-all shadow-sm ${closingProofReady ? 'bg-emerald-50/40 border-emerald-100' : 'bg-amber-50/40 border-amber-100'}`}>
                           <div className="space-y-2">
                             <div className="flex items-center justify-between">
                               <span className="text-[11px] font-black text-slate-800 flex items-center gap-1.5">
                                 <Calendar className="w-4 h-4 text-slate-500" />
                                 <span>5. الفترات المالية الفرعية</span>
                               </span>
-                              <span className="bg-emerald-100 text-emerald-800 text-[9px] font-extrabold px-2 py-0.5 rounded-full flex items-center gap-0.5">
-                                <span>مستقرة</span>
-                                <span>✅</span>
+                              <span className={`${closingProofReady ? 'bg-emerald-100 text-emerald-800' : 'bg-amber-100 text-amber-800'} text-[9px] font-extrabold px-2 py-0.5 rounded-full flex items-center gap-0.5`}>
+                                <span>{closingProofReady ? 'مستقرة' : 'غير متحقق — قراءة فقط'}</span>
+                                <span>{closingProofReady ? '✅' : '⚠️'}</span>
                               </span>
                             </div>
                             <p className="text-[10px] text-slate-500 leading-relaxed">
                               مراجعة مطابقة الفترات الضريبية ربع السنوية وقفلها الدفتري المؤقت تمهيداً للإغلاق السنوي النهائي.
                             </p>
                             <p className="text-[10px] font-mono font-bold text-slate-700 bg-white/60 p-1.5 rounded border border-slate-100">
-                              الحالة: تم إغلاق الفترات Q1, Q2, Q3 محاسبياً.
+                              الحالة: {closingProofReady ? 'تم إغلاق الفترات Q1, Q2, Q3 محاسبياً.' : 'لا يمكن إثبات إغلاق الفترات من snapshot للقراءة فقط.'}
                             </p>
                           </div>
                         </div>
@@ -591,7 +612,12 @@ export const ClosingTab = () => {
                                 <Layers className="w-4 h-4 text-slate-500" />
                                 <span>6. توازن قيود اليومية الفردية</span>
                               </span>
-                              {!unbalancedJv ? (
+                              {!closingProofReady ? (
+                                <span className="bg-amber-100 text-amber-800 text-[9px] font-extrabold px-2 py-0.5 rounded-full flex items-center gap-0.5">
+                                  <span>غير متحقق — قراءة فقط</span>
+                                  <span>⚠️</span>
+                                </span>
+                              ) : !unbalancedJv ? (
                                 <span className="bg-emerald-100 text-emerald-800 text-[9px] font-extrabold px-2 py-0.5 rounded-full flex items-center gap-0.5">
                                   <span>متوازن تماماً</span>
                                   <span>✅</span>
@@ -620,9 +646,9 @@ export const ClosingTab = () => {
                                 <Layers className="w-4 h-4 text-slate-500" />
                                 <span>7. توازن ميزان المراجعة وتطابق الدفاتر الشاملة</span>
                               </span>
-                              <span className="bg-emerald-100 text-emerald-800 text-[9px] font-extrabold px-2 py-0.5 rounded-full flex items-center gap-0.5">
-                                <span>متوازن تماماً</span>
-                                <span>✅</span>
+                              <span className={`${closingProofReady ? 'bg-emerald-100 text-emerald-800' : 'bg-amber-100 text-amber-800'} text-[9px] font-extrabold px-2 py-0.5 rounded-full flex items-center gap-0.5`}>
+                                <span>{closingProofReady ? 'متوازن تماماً' : 'غير متحقق — قراءة فقط'}</span>
+                                <span>{closingProofReady ? '✅' : '⚠️'}</span>
                               </span>
                             </div>
                             <p className="text-[10px] text-slate-500 leading-relaxed">
