@@ -14,6 +14,7 @@ export type TrustedSessionUser = {
   branch?: TrustedBranchPresentation;
   academicYear?: string;
   permissions?: string[];
+  platformPermissions?: string[];
 };
 
 export type SessionResponse = {
@@ -53,6 +54,11 @@ function normalizeUser(value: unknown): TrustedSessionUser {
   const permissions = Array.isArray(value.permissions)
     ? value.permissions.filter((permission: unknown): permission is string => typeof permission === 'string' && Boolean(permission.trim())).map((permission: string) => permission.trim())
     : undefined;
+  const platformPermissions = Array.isArray(value.platformPermissions || value.platform_permissions)
+    ? (value.platformPermissions || value.platform_permissions)
+      .filter((permission: unknown): permission is string => typeof permission === 'string' && Boolean(permission.trim()))
+      .map((permission: string) => permission.trim())
+    : undefined;
   const name = String(value.name || email).trim();
   if (!id || !email || !schoolId || !role) throw new TrustedSessionError('INVALID_SESSION');
   const school = isRecord(value.school) && String(value.school.id || '').trim() === schoolId
@@ -73,7 +79,8 @@ function normalizeUser(value: unknown): TrustedSessionUser {
     ...(branchId ? { branchId } : {}),
     ...(branch ? { branch } : {}),
     ...(academicYear ? { academicYear } : {}),
-    ...(permissions ? { permissions } : {})
+    ...(permissions ? { permissions } : {}),
+    ...(platformPermissions ? { platformPermissions } : {})
   };
 }
 

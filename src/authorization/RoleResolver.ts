@@ -11,6 +11,8 @@ export type AuthorizationIdentity = {
   role?: string;
   /** Server-derived effective permissions used by the client as a visibility hint. */
   permissions?: string[];
+  /** Server-derived platform permissions; never accepted as request authority. */
+  platformPermissions?: string[];
 };
 
 export type DatabaseRolePermission = {
@@ -193,7 +195,12 @@ export class RoleResolver {
   }
 
   getPlatformPermissions(identity: AuthorizationIdentity | null | undefined): ReadonlySet<string> {
-    return this.platformDatabaseAssignment(identity)?.permissions || new Set<string>();
+    const databasePermissions = this.platformDatabaseAssignment(identity)?.permissions;
+    if (databasePermissions) return databasePermissions;
+    if (!Array.isArray(identity?.platformPermissions)) return new Set<string>();
+    return new Set(identity.platformPermissions
+      .map(permission => permissionRegistry.normalize(permission))
+      .filter((permission): permission is string => permission === PERMISSIONS.PLATFORM_ADMIN));
   }
 
   isPlatformAdmin(identity: AuthorizationIdentity | null | undefined): boolean {

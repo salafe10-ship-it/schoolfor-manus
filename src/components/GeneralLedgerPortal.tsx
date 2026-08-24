@@ -1,8 +1,6 @@
 import { Activity, AlertTriangle, ArrowRightLeft, Building2, Calculator, Calendar, CheckCircle2, Coins, FileSpreadsheet, FileText, Hash, HelpCircle, Landmark, Layers, Lock as LockIcon, Percent, Play, Plus, Printer, RefreshCw, Search, Settings2, TrendingUp, UserCheck, Users, X } from 'lucide-react';
 import React, { useEffect, useState, useMemo } from 'react';
 import { Student, Invoice, Stage, Grade, AcademicClass, CostCenter, UserRole } from '../types';
-import { SQLTransactionEngine } from '../database/transactions/transactionManager';
-import { SQLCommandBuilder } from '../database/transactions/SQLCommand';
 import { PostingEngine } from '../database/services/PostingEngine';
 import { FallbackStorage } from '../database/repositories/FallbackStorage';
 import { useCurrency } from '../utils/currency';
@@ -185,7 +183,10 @@ export default function GeneralLedgerPortal({
   const [filterBalanceOnly, setFilterBalanceOnly] = useState<any>(null);
   const [filterSortBy, setFilterSortBy] = useState<any>(null);
   const [trialBalanceLevel, setTrialBalanceLevel] = useState<any>(null);
-  const [closingStep, setClosingStep] = useState<any>(null);
+  // The closing screen renders its readiness controls only from the
+  // explicit `check` step. Starting with null leaves the screen header
+  // visible while hiding every actionable closing command.
+  const [closingStep, setClosingStep] = useState<any>('check');
   const [isCheckingReady, setIsCheckingReady] = useState<any>(null);
   const [checkedReady, setCheckedReady] = useState<any>(null);
   const [closingProgress, setClosingProgress] = useState<any>(null);
@@ -1093,14 +1094,14 @@ export default function GeneralLedgerPortal({
   const [canonicalFinancialData, setCanonicalFinancialData] = useState<Record<string, any>>({});
   const [canonicalFinancialVersion, setCanonicalFinancialVersion] = useState(0);
   const [canonicalFinancialRefreshNonce, setCanonicalFinancialRefreshNonce] = useState(0);
-  // LUNA safety boundary: snapshot_write is an authenticated, versioned UAT
-  // writer. It is deliberately distinct from ledger_ready because the
-  // current endpoint is not proven to write canonical general-ledger tables.
-  type CanonicalFinancialWriteMode = 'snapshot_read_only' | 'snapshot_write' | 'ledger_ready';
+  // The canonical ERP integration is distinct from the compatibility snapshot:
+  // posted source documents are persisted to the canonical journal and GL.
+  type CanonicalFinancialWriteMode = 'snapshot_read_only' | 'snapshot_write' | 'erp_integrated' | 'ledger_ready';
   const [canonicalFinancialWriteMode, setCanonicalFinancialWriteMode] = useState<CanonicalFinancialWriteMode>('snapshot_read_only');
   const canonicalFinancialWriteReady = canonicalFinancialStatus === 'ready'
     && canonicalFinancialWriteMode !== 'snapshot_read_only';
-  const canonicalLedgerReady = canonicalFinancialStatus === 'ready' && canonicalFinancialWriteMode === 'ledger_ready';
+  const canonicalLedgerReady = canonicalFinancialStatus === 'ready'
+    && (canonicalFinancialWriteMode === 'ledger_ready' || canonicalFinancialWriteMode === 'erp_integrated');
   const requireCanonicalFinancialWrite = (actionName: string) => {
     if (canonicalFinancialWriteReady) return true;
     triggerNotification(`تعذر تنفيذ ${actionName}: المصدر المالي المركزي غير متاح للكتابة أو لم تعتمد خدمة دفتر الأستاذ الكانونية.`, 'warning');
@@ -1162,9 +1163,11 @@ export default function GeneralLedgerPortal({
         setCanonicalFinancialVersion(Number(result.meta?.version || 0));
         const resolvedWriteMode: CanonicalFinancialWriteMode = result.meta?.writeMode === 'snapshot_write'
           ? 'snapshot_write'
-          : result.meta?.writeMode === 'ledger_ready'
-            ? 'ledger_ready'
-            : 'snapshot_read_only';
+          : result.meta?.writeMode === 'erp_integrated'
+            ? 'erp_integrated'
+            : result.meta?.writeMode === 'ledger_ready'
+              ? 'ledger_ready'
+              : 'snapshot_read_only';
         setCanonicalFinancialWriteMode(resolvedWriteMode);
 
         if (canonicalAccounts.length > 0) {
@@ -1230,7 +1233,9 @@ export default function GeneralLedgerPortal({
         setCanonicalFinancialStatus('ready');
         setCanonicalFinancialMessage(resolvedWriteMode === 'snapshot_write'
           ? `المصدر المالي المركزي متصل للكتابة المركزية في UAT — ${canonicalJournalEntries.length} قيد و${canonicalReceiptVouchers.length} سند قبض و${canonicalPaymentVouchers.length} سند صرف؛ الحفظ موثق بالإصدار، لكن الترحيل والإقفال المعتمدين للـ GL غير متاحين.`
-          : `المصدر المالي المركزي متصل للقراءة فقط — ${canonicalJournalEntries.length} قيد و${canonicalReceiptVouchers.length} سند قبض و${canonicalPaymentVouchers.length} سند صرف معروض؛ الترحيل والإقفال غير متاحين حتى اعتماد خدمة دفتر الأستاذ.`);
+          : resolvedWriteMode === 'erp_integrated'
+            ? `دفتر الأستاذ الكانوني متصل — ${canonicalJournalEntries.length} قيد و${canonicalReceiptVouchers.length} سند قبض و${canonicalPaymentVouchers.length} سند صرف؛ الربط المالي للمصادر مفعّل.`
+            : `المصدر المالي المركزي متصل للقراءة فقط — ${canonicalJournalEntries.length} قيد و${canonicalReceiptVouchers.length} سند قبض و${canonicalPaymentVouchers.length} سند صرف معروض؛ الترحيل والإقفال غير متاحين حتى اعتماد خدمة دفتر الأستاذ.`);
       } catch (error: any) {
         if (!active) return;
         setJournalEntries([]);
@@ -1340,7 +1345,9 @@ export default function GeneralLedgerPortal({
     setCanonicalFinancialVersion(nextVersion);
     setCanonicalFinancialMessage(canonicalFinancialWriteMode === 'snapshot_write'
       ? `المصدر المالي المركزي متصل للكتابة المركزية في UAT — الإصدار ${nextVersion}، ${Array.isArray(nextPayload.journalEntries) ? nextPayload.journalEntries.length : 0} قيد موثق؛ غير معتمد كترحيل GL نهائي.`
-      : `المصدر المالي الموحد متصل — الإصدار ${nextVersion}، ${Array.isArray(nextPayload.journalEntries) ? nextPayload.journalEntries.length : 0} قيد موثق`);
+      : canonicalFinancialWriteMode === 'erp_integrated'
+        ? `دفتر الأستاذ الكانوني متصل — الإصدار ${nextVersion}، وتمت مزامنة قيود المصادر والتقارير.`
+        : `المصدر المالي الموحد متصل — الإصدار ${nextVersion}، ${Array.isArray(nextPayload.journalEntries) ? nextPayload.journalEntries.length : 0} قيد موثق`);
     return result;
   };
 
@@ -1895,7 +1902,7 @@ export default function GeneralLedgerPortal({
 
   const hasUserPermission = (permissionId: string) => {
     if (!drillDownUser) return false;
-    if (drillDownUser?.permissions?.includes('*') || drillDownUser?.role?.includes('كامل الصلاحيات') || drillDownUser?.id === 'user_001') {
+    if (drillDownUser?.permissions?.includes('*') || drillDownUser?.role?.includes('كامل الصلاحيات')) {
       return true;
     }
     return Boolean(drillDownUser?.permissions?.includes(permissionId));
@@ -1903,7 +1910,7 @@ export default function GeneralLedgerPortal({
 
   const isItemPermitted = (itemId: string) => {
     if (!drillDownUser) return false;
-    if (drillDownUser?.permissions?.includes('*') || drillDownUser?.role?.includes('كامل الصلاحيات') || drillDownUser?.id === 'user_001') {
+    if (drillDownUser?.permissions?.includes('*') || drillDownUser?.role?.includes('كامل الصلاحيات')) {
       return true;
     }
 
@@ -2035,83 +2042,57 @@ export default function GeneralLedgerPortal({
   
   
   
-  // Delete account with strict accounting validations
+  // Archive account with strict accounting validations. Posted history is
+  // never physically deleted from the canonical chart.
   const handleDeleteCoa = async () => {
     if (!selectedAccountCode) return;
-    if (!requireCanonicalFinancialWrite('حذف الحساب')) return;
+    if (!requireCanonicalFinancialWrite('تعطيل الحساب')) return;
 
     const accToDelete = accounts.find(a => a.code === selectedAccountCode);
     if (!accToDelete) return;
 
     if (!hasUserPermission('ledger:delete')) {
-      triggerNotification('عذراً، لا تملك الصلاحية المعتمدة لحذف حساب من الدليل المحاسبي.', 'warning');
+      triggerNotification('عذراً، لا تملك الصلاحية المعتمدة لتعطيل حساب من الدليل المحاسبي.', 'warning');
       return;
     }
 
     if (!selectedSchool?.id || !drillDownUser?.id) {
-      triggerNotification('تعذر تنفيذ الحذف: هوية المدرسة أو المستخدم الموثوقة غير متاحة.', 'warning');
+      triggerNotification('تعذر تنفيذ التعطيل: هوية المدرسة أو المستخدم الموثوقة غير متاحة.', 'warning');
       return;
     }
 
     // 1. Prevent deleting account if it is a main account and has children
     const hasChildren = accounts.some(a => a.parentAccountId === selectedAccountCode);
     if (hasChildren) {
-      triggerNotification('عذراً، لا يمكن حذف حساب رئيسي يحتوي على حسابات تابعة له في الشجرة.', 'warning');
+      triggerNotification('عذراً، لا يمكن تعطيل حساب رئيسي يحتوي على حسابات تابعة له في الشجرة.', 'warning');
       return;
     }
 
     // 2. Prevent deleting account with non-zero balance
     if (accToDelete.balance !== 0) {
-      triggerNotification('عذراً، لا يمكن حذف حساب ذو رصيد مالي غير صفري، يرجى إجراء تسوية قيد إقفال أولاً.', 'warning');
+      triggerNotification('عذراً، لا يمكن تعطيل حساب ذو رصيد مالي غير صفري، يرجى إجراء تسوية قيد إقفال أولاً.', 'warning');
       return;
     }
 
     // Ask user for final confirmation
-    const confirmDelete = window.confirm(`هل أنت متأكد تماماً من رغبتك في حذف الحساب (${accToDelete.code} - ${accToDelete.nameAr}) من شجرة الحسابات نهائياً؟`);
+    const confirmDelete = window.confirm(`هل أنت متأكد من رغبتك في تعطيل الحساب (${accToDelete.code} - ${accToDelete.nameAr})؟ سيبقى تاريخه المحاسبي محفوظاً.`);
     if (!confirmDelete) return;
 
-    // Execute SQL Transaction
-    const result = await SQLTransactionEngine.run({
-      operationName: `DELETE_COA_ACCOUNT (حذف حساب مالي #${selectedAccountCode})`,
-      tenantId: selectedSchool.id,
-      userId: drillDownUser.id,
-      userName: drillDownUser.name || drillDownUser.id,
-      ipAddress: window.location.hostname || 'unknown',
-      affectedTables: ['chart_of_accounts'],
-      validationBlock: () => {
-        const hasChildrenCheck = accounts.some(a => a.parentAccountId === selectedAccountCode);
-        if (hasChildrenCheck) {
-          return { valid: false, error: 'يحتوي الحساب على حسابات فرعية تابعة له' };
-        }
-        return { valid: true };
-      },
-      authorizationBlock: () => ({
-        authorized: hasUserPermission('ledger:delete'),
-        error: 'لا تملك الصلاحية المعتمدة لحذف حساب من الدليل المحاسبي.'
-      }),
-      executionBlock: () => true,
-      nestedSqlQueries: [
-        SQLCommandBuilder.create({
-          sqlText: `-- Delete account node from table`,
-          parameters: []
-        }),
-        SQLCommandBuilder.create({
-          sqlText: `DELETE FROM chart_of_accounts WHERE code = $1;`,
-          parameters: [selectedAccountCode],
-          executionContext: 'Delete chart of account'
-        })
-      ]
-    });
-
-    if (!result.success) {
-      triggerNotification(`❌ لم يتم حذف الحساب: ${result.error || 'فشلت المعاملة المحاسبية.'}`, 'warning');
-      return;
+    try {
+      // Financial accounts remain part of the audit history. Archive the
+      // account centrally instead of physically deleting a code that may be
+      // referenced by a posted document or an external reconciliation.
+      const updatedAccounts = accounts.map(a => a.code === selectedAccountCode
+        ? { ...a, isActive: false }
+        : a);
+      await persistCanonicalFinancialSnapshot({ chartOfAccounts: updatedAccounts });
+      setAccounts(updatedAccounts);
+      triggerNotification(`✓ تم تعطيل الحساب المالي #${selectedAccountCode} مركزيًا مع الحفاظ على تاريخه المحاسبي.`, 'success');
+      setSelectedAccountCode('1000'); // Fallback to root assets
+      setCoaMode('view');
+    } catch (error: any) {
+      triggerNotification(`❌ لم يتم تعطيل الحساب مركزيًا: ${error?.message || 'فشلت المعاملة المحاسبية.'}`, 'warning');
     }
-
-    setAccounts(prev => prev.filter(a => a.code !== selectedAccountCode));
-    triggerNotification(`✓ تم حذف الحساب المالي #${selectedAccountCode} نهائياً من الدليل الموحد.`, 'success');
-    setSelectedAccountCode('1000'); // Fallback to root assets
-    setCoaMode('view');
   };
 
   // Expand and Collapse all nodes
@@ -2132,7 +2113,7 @@ export default function GeneralLedgerPortal({
   };
 
   // Custom CSV import logic
-  const handleImportCoaCSV = () => {
+  const handleImportCoaCSV = async () => {
     if (!requireCanonicalFinancialWrite('استيراد الحسابات')) return;
     if (!coaImportText.trim()) {
       triggerNotification('يرجى لصق بيانات CSV صالحة للاستيراد', 'warning');
@@ -2176,10 +2157,16 @@ export default function GeneralLedgerPortal({
     });
 
     if (importedCount > 0) {
-      setAccounts(prev => [...prev, ...newAccountsBatch]);
-      triggerNotification(`✓ تم استيراد عدد (${importedCount}) حسابات مالية جديدة بنجاح إلى شجرة الحسابات!`, 'success');
-      setShowCoaImportModal(false);
-      setCoaImportText('');
+      try {
+        const updatedAccounts = [...accounts, ...newAccountsBatch];
+        await persistCanonicalFinancialSnapshot({ chartOfAccounts: updatedAccounts });
+        setAccounts(updatedAccounts);
+        triggerNotification(`✓ تم استيراد عدد (${importedCount}) حسابات مالية جديدة وحفظها مركزيًا.`, 'success');
+        setShowCoaImportModal(false);
+        setCoaImportText('');
+      } catch (error: any) {
+        triggerNotification(`تعذر حفظ الحسابات المستوردة مركزيًا: ${error?.message || 'خطأ غير معروف'}`, 'warning');
+      }
     } else {
       triggerNotification('لم يتم العثور على أي حسابات جديدة صالحة للاستيراد. يرجى مراجعة الصياغة والتأكد من عدم تكرار الأكواد.', 'warning');
     }
@@ -3834,7 +3821,7 @@ export default function GeneralLedgerPortal({
                 {canonicalFinancialStatus === 'ready'
                   ? canonicalFinancialWriteMode === 'snapshot_write'
                     ? 'snapshot متصل — كتابة UAT'
-                    : canonicalFinancialWriteMode === 'ledger_ready'
+                    : (canonicalFinancialWriteMode === 'ledger_ready' || canonicalFinancialWriteMode === 'erp_integrated')
                       ? 'دفتر الأستاذ متصل — معتمد'
                       : 'snapshot متصل — قراءة فقط'
                   : 'غير متحقق'}
@@ -4423,7 +4410,7 @@ export default function GeneralLedgerPortal({
                     className="w-full bg-[#c58a22] hover:bg-amber-700 text-white font-black py-3 rounded-lg flex items-center justify-center gap-2 shadow cursor-pointer transition-all disabled:opacity-40 disabled:cursor-not-allowed"
                   >
                     <ArrowRightLeft className="w-4 h-4" />
-                    <span>{canonicalFinancialWriteReady ? canonicalFinancialWriteMode === 'ledger_ready' ? 'بدء التحويل وتحديث المركز المالي للمصارف 🖹' : 'حفظ الحوالة في المصدر المركزي UAT' : 'التحويل غير متاح — المصدر للقراءة فقط'}</span>
+                    <span>{canonicalFinancialWriteReady ? canonicalLedgerReady ? 'بدء التحويل وتحديث المركز المالي للمصارف 🖹' : 'حفظ الحوالة في المصدر المركزي UAT' : 'التحويل غير متاح — المصدر للقراءة فقط'}</span>
                   </button>
                 </div>
               </form>
@@ -5252,12 +5239,11 @@ export default function GeneralLedgerPortal({
 
                 <button
                   onClick={() => {
-                    triggerNotification('📥 تم توليد وحفظ أرشفة ملف PDF الرقمي بأمان', 'success');
-                    setShowJvPrintModal(false);
+                    handlePrintJvDirect(activeJvState, selectedJvPrintTemplate);
                   }}
                   className="w-full bg-slate-200 hover:bg-slate-300 text-slate-700 py-2 rounded-lg text-center font-bold transition cursor-pointer"
                 >
-                  حفظ بصيغة PDF مراجع 📄
+                  فتح حوار الطباعة / حفظ كـ PDF 📄
                 </button>
 
                 <button

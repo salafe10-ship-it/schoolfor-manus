@@ -14,6 +14,7 @@ interface EnterpriseActionToolbarProps {
   onSearch?: () => void;
   onPrint?: () => void;
   onExportPdf?: () => void;
+  exportPdfLabel?: string;
   onExportExcel?: () => void;
   onImportExcel?: () => void;
   onDownloadTemplate?: () => void;
@@ -42,6 +43,7 @@ export default function EnterpriseActionToolbar({
   onSearch,
   onPrint,
   onExportPdf,
+  exportPdfLabel = 'PDF',
   onExportExcel,
   onImportExcel,
   onDownloadTemplate,
@@ -237,7 +239,7 @@ export default function EnterpriseActionToolbar({
               title="تصدير بصيغة PDF"
             >
               <FileText className="w-3.5 h-3.5 shrink-0" />
-              <span>PDF</span>
+              <span>{exportPdfLabel}</span>
             </button>
           )}
 

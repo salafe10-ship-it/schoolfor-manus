@@ -1,7 +1,10 @@
 import { randomUUID } from 'node:crypto';
+import 'dotenv/config';
 import { ErpProvisioningService } from '../src/modules/identity/application/ErpProvisioningService.js';
 import { SupabaseAdminAuthTargetResolver } from '../src/modules/identity/application/TrustedAuthTargetResolver.js';
 import { EnterpriseLogger } from '../src/database/services/EnterpriseLogger.js';
+import { UnitOfWork } from '../src/database/UnitOfWork.js';
+import { createPostgresTransactionDriverFromEnvironment } from '../server/infrastructure/PostgresTransactionDriver.js';
 
 const correlationId = randomUUID();
 
@@ -18,10 +21,18 @@ async function main(): Promise<void> {
   });
   const verified = await new SupabaseAdminAuthTargetResolver().verifyTargetAuthUser(targetAuthUserId);
   if (!verified) throw new Error('Target Auth user could not be verified.');
-  await ErpProvisioningService.provisionPlatformIdentity({ authUserId: verified.authUserId });
-  EnterpriseLogger.info('Platform provisioning activation committed', 'ProvisioningActivation', {
-    operation: 'FIRST_PLATFORM_ADMIN_BOOTSTRAP', success: true, outcome: 'commit', correlationId
-  });
+  const transactionDriver = createPostgresTransactionDriverFromEnvironment();
+  if (!transactionDriver) throw new Error('PostgreSQL transaction driver is not configured.');
+  UnitOfWork.configureTransactionDriver(transactionDriver);
+  try {
+    await ErpProvisioningService.provisionPlatformIdentity({ authUserId: verified.authUserId });
+    EnterpriseLogger.info('Platform provisioning activation committed', 'ProvisioningActivation', {
+      operation: 'FIRST_PLATFORM_ADMIN_BOOTSTRAP', success: true, outcome: 'commit', correlationId
+    });
+  } finally {
+    await transactionDriver.close();
+    UnitOfWork.configureTransactionDriver(null);
+  }
 }
 
 main().catch(error => {

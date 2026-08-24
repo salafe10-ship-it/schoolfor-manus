@@ -1,6 +1,7 @@
 import { AlertTriangle, Barcode, BookOpen, Calendar, CheckCircle2, Clock, Edit3, FileSpreadsheet, Plus, RefreshCw, Search, ShieldAlert, Trash2, User } from 'lucide-react';
-import React, { useState } from 'react';
+import React, { useEffect, useState } from 'react';
 import EnterpriseActionToolbar from './shared/EnterpriseActionToolbar';
+import { LibraryRepository } from '../database/repositories/LibraryRepository';
 
 interface LibraryPortalProps {
   selectedSchool?: any;
@@ -43,18 +44,48 @@ export default function LibraryPortal({
   const [books, setBooks] = useState<BookItem[]>([]);
 
   const [borrows, setBorrows] = useState<BorrowRecord[]>([]);
+  const schoolId = selectedSchool?.id || selectedSchool?.school_id || 'school_1';
 
   const [newBook, setNewBook] = useState({ title: '', author: '', category: '', totalCopies: 0, location: '' });
   const [isAddingBook, setIsAddingBook] = useState(false);
 
-  const handleAddBook = (e: React.FormEvent) => {
+  const toBookItem = (book: any): BookItem => ({
+    id: String(book.id),
+    code: String(book.code || book.isbn || book.id),
+    title: String(book.title || ''),
+    author: String(book.author || ''),
+    category: String(book.category || book.category_name || ''),
+    totalCopies: Number(book.totalCopies ?? book.total_copies ?? book.copies ?? 0),
+    availableCopies: Number(book.availableCopies ?? book.available_copies ?? book.copies ?? 0),
+    location: String(book.location || book.shelf_location || '')
+  });
+
+  useEffect(() => {
+    let cancelled = false;
+    const loadBooks = async () => {
+      try {
+        const rows = await LibraryRepository.getAll(schoolId);
+        if (!cancelled) setBooks(rows.map(toBookItem));
+      } catch (error) {
+        if (!cancelled) {
+          setBooks([]);
+          triggerNotification('المكتبة متوقفة حتى يتوفر مصدر مركزي موثوق؛ لم تُعرض سجلات محلية تجريبية.', 'warning');
+        }
+        console.error('Library source unavailable:', error);
+      }
+    };
+    void loadBooks();
+    return () => { cancelled = true; };
+  }, [schoolId, triggerNotification]);
+
+  const handleAddBook = async (e: React.FormEvent) => {
     e.preventDefault();
     if (!newBook.title || !newBook.author || !Number.isInteger(Number(newBook.totalCopies)) || Number(newBook.totalCopies) <= 0 || !newBook.location) {
       triggerNotification('الرجاء إدخال عنوان الكتاب والمؤلف وعدد نسخ صحيح وموقع التخزين', 'warning');
       return;
     }
-    const created: BookItem = {
-      id: String(books.length + 1),
+    const created = {
+      id: `book_${Date.now()}`,
       code: `BK-${1000 + books.length + 1}`,
       title: newBook.title,
       author: newBook.author,
@@ -63,20 +94,21 @@ export default function LibraryPortal({
       availableCopies: Number(newBook.totalCopies),
       location: newBook.location
     };
-    setBooks([...books, created]);
+    try {
+      const saved = await LibraryRepository.create(schoolId, created);
+      setBooks(prev => [toBookItem(saved), ...prev]);
+    } catch (error) {
+      triggerNotification('المكتبة متوقفة؛ تعذر حفظ الكتاب في المصدر المركزي.', 'warning');
+      console.error('Library book save failed:', error);
+      return;
+    }
     setIsAddingBook(false);
     setNewBook({ title: '', author: '', category: '', totalCopies: 0, location: '' });
     triggerNotification('تم إضافة الكتاب بنجاح وفهرسته آلياً', 'success');
   };
 
-  const handleReturnBook = (borrowId: string) => {
-    setBorrows(borrows.map(b => {
-      if (b.id === borrowId) {
-        return { ...b, status: 'returned' as const };
-      }
-      return b;
-    }));
-    triggerNotification('تم تسجيل استرجاع الكتاب وإغلاق سجل الإعارة', 'success');
+  const handleReturnBook = (_borrowId: string) => {
+    triggerNotification('إغلاق الإعارة متوقف حتى يتوفر مستودع مركزي لسجلات borrowed_books؛ لم يتم تغيير الحالة محليًا.', 'warning');
   };
 
   const filteredBooks = books.filter(b => 
@@ -128,7 +160,7 @@ export default function LibraryPortal({
           fileInput.onchange = (e: any) => {
             const file = e.target.files[0];
             if (file) {
-              triggerNotification(`تم اختيار الملف "${file.name}" وجاري فهرسة الكتب آلياً...`, 'success');
+              triggerNotification(`تم اختيار الملف "${file.name}"، لكن الاستيراد لم يُنفذ لأن مسار الاستيراد المركزي غير مهيأ بعد.`, 'warning');
             }
           };
           fileInput.click();
@@ -175,7 +207,7 @@ export default function LibraryPortal({
           <div className="p-4 shadow-xs flex justify-between items-center">
             <div>
               <p className="text-[10px] text-slate-500 font-black">إجمالي الغرامات المحصلة</p>
-              <h4 className="text-lg font-black text-emerald-600 mt-1">15.00 ريال</h4>
+              <h4 className="text-lg font-black text-emerald-600 mt-1">{borrows.reduce((sum, borrow) => sum + (Number(borrow.fine) || 0), 0).toFixed(2)} د.ل</h4>
             </div>
             <span className="p-2 bg-emerald-50 text-emerald-600 rounded-lg"><Barcode className="w-5 h-5" /></span>
           </div>
@@ -353,7 +385,7 @@ export default function LibraryPortal({
                       <td className="px-6 py-4 text-rose-700 font-black font-mono">{b.fine.toFixed(2)} ريال</td>
                       <td className="px-6 py-4 text-center">
                         <button
-                          onClick={() => triggerNotification('تم ترحيل الغرامة بنجاح إلى حساب الذمم المدين للطالب بالدبل انتري', 'success')}
+                          onClick={() => triggerNotification('ترحيل الغرامة متوقف حتى يتوفر مسار مركزي يربط المكتبة بالذمم ودفتر الأستاذ؛ لم يتم تسجيل قيد.', 'warning')}
                           className="bg-amber-650 hover:bg-amber-600 text-white font-bold text-[10px] px-3 py-1 rounded-lg transition-all cursor-pointer"
                         >
                           ترحيل الغرامة لرسوم الطالب 💸

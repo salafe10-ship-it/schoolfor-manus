@@ -19,13 +19,15 @@ import { InventoryRepository } from '../../database/repositories/InventoryReposi
 import { InventoryItem } from '../../types';
 
 interface InventoryManagementPortalProps {
+  selectedSchool?: any;
   triggerNotification?: (msg: string, type: 'success' | 'warning' | 'info' | 'danger') => void;
 }
 
-export default function InventoryManagementPortal({ triggerNotification }: InventoryManagementPortalProps) {
+export default function InventoryManagementPortal({ selectedSchool, triggerNotification }: InventoryManagementPortalProps) {
   const [activeTab, setActiveTab] = useState('dashboard');
   const [items, setItems] = useState<InventoryItem[]>([]);
   const [isLoading, setIsLoading] = useState(false);
+  const schoolId = selectedSchool?.id || selectedSchool?.school_id || 'school_1';
 
   const notify = (msg: string, type: 'success' | 'warning' | 'info' | 'danger' = 'info') => {
     if (triggerNotification) {
@@ -39,7 +41,7 @@ export default function InventoryManagementPortal({ triggerNotification }: Inven
   const loadItems = async () => {
     try {
       setIsLoading(true);
-      const data = await InventoryRepository.getAll('school_1');
+      const data = await InventoryRepository.getAll(schoolId);
       setItems(data);
     } catch (err: any) {
       notify(`خطأ في تحميل الأصناف: ${err.message}`, 'danger');
@@ -50,11 +52,11 @@ export default function InventoryManagementPortal({ triggerNotification }: Inven
 
   useEffect(() => {
     loadItems();
-  }, []);
+  }, [schoolId]);
 
   const handleAddItem = async (newItem: Partial<InventoryItem>) => {
     try {
-      await InventoryRepository.create('school_1', newItem);
+      await InventoryRepository.create(schoolId, newItem);
       await loadItems();
     } catch (err: any) {
       notify(`المخزون متوقف؛ تعذر حفظ الصنف: ${err?.message || 'مصدر البيانات غير متاح'}`, 'warning');
@@ -63,7 +65,7 @@ export default function InventoryManagementPortal({ triggerNotification }: Inven
 
   const handleUpdateItem = async (id: string, updated: Partial<InventoryItem>) => {
     try {
-      await InventoryRepository.update('school_1', id, updated);
+      await InventoryRepository.update(schoolId, id, updated);
       await loadItems();
     } catch (err: any) {
       notify(`المخزون متوقف؛ تعذر تعديل الصنف: ${err?.message || 'مصدر البيانات غير متاح'}`, 'warning');
@@ -72,7 +74,7 @@ export default function InventoryManagementPortal({ triggerNotification }: Inven
 
   const handleDeleteItem = async (id: string) => {
     try {
-      await InventoryRepository.delete('school_1', id);
+      await InventoryRepository.delete(schoolId, id);
       await loadItems();
     } catch (err: any) {
       notify(`المخزون متوقف؛ تعذر حذف الصنف: ${err?.message || 'مصدر البيانات غير متاح'}`, 'warning');
@@ -84,12 +86,8 @@ export default function InventoryManagementPortal({ triggerNotification }: Inven
     notify('تم الانتقال لنموذج إضافة صنف جديد لدليل الأصناف 📦', 'info');
   };
 
-  const handleSave = async () => {
-    try {
-      notify('تم تزامن وتحفظ بيانات المخزون بنجاح في قاعدة البيانات 💾', 'success');
-    } catch (err: any) {
-      notify(`خطأ في حفظ المخزون: ${err.message}`, 'danger');
-    }
+  const handleSave = () => {
+    notify('الحفظ يتم من نموذج الصنف بعد إدخال بياناته؛ لم يتم تسجيل تغيير من زر الحفظ العام.', 'warning');
   };
 
   const handleSearch = () => {
@@ -128,7 +126,7 @@ export default function InventoryManagementPortal({ triggerNotification }: Inven
     fileInput.onchange = (e: any) => {
       const file = e.target.files[0];
       if (file) {
-        notify(`تم قراءة الملف "${file.name}" وجاري استيراد الأصناف المعتمدة...`, 'success');
+        notify(`تم اختيار الملف "${file.name}"، لكن الاستيراد لم يُنفذ لأن مسار الاستيراد المركزي غير مهيأ بعد.`, 'warning');
       }
     };
     fileInput.click();

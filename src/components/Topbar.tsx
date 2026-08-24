@@ -76,6 +76,7 @@ export default function Topbar({
   // Real-time clock and date state
   const [timeString, setTimeString] = useState('');
   const [dateString, setDateString] = useState('');
+  const trustedScopeReady = Boolean(selectedSchool?.id && selectedBranch?.id);
 
   useEffect(() => {
     const updateTime = () => {
@@ -248,7 +249,9 @@ export default function Topbar({
             <div id="trusted-branch-display" className="flex items-center gap-2 bg-[#2a1d13] border border-[#d4af37]/30 px-4 py-2 text-xs font-black text-amber-100 select-none shadow-2xs">
               <Layers className="w-3.5 h-3.5 text-amber-400" />
               <span>{selectedBranch?.name || 'الفرع غير محدد'}</span>
-              <span className="text-[9px] text-amber-300 bg-amber-950/60 px-2 py-0.5 rounded border border-amber-800 font-black mr-1.5">بانتظار سياق موثوق</span>
+                <span className={`text-[9px] px-2 py-0.5 rounded border font-black mr-1.5 ${trustedScopeReady ? 'text-emerald-300 bg-emerald-950/60 border-emerald-800' : 'text-amber-300 bg-amber-950/60 border-amber-800'}`}>
+                  {trustedScopeReady ? 'سياق موثوق ✅' : 'بانتظار سياق موثوق'}
+                </span>
             </div>
           )}
         </div>
@@ -257,8 +260,8 @@ export default function Topbar({
         <div className="hidden sm:flex items-center gap-1.5">
           <div id="trusted-academic-year-display" className="flex items-center gap-2 bg-[#2a1d13] border border-[#d4af37]/30 px-4 py-2 text-xs font-black text-amber-100 select-none shadow-2xs">
             <Calendar className="w-3.5 h-3.5 text-amber-400" />
-            <span>{selectedSchool.academicYear || 'السنة غير محددة'}</span>
-            <span className="text-[9px] text-amber-300/70">من الهوية الموثوقة فقط</span>
+            <span>{selectedSchool.academicYear || 'السنة غير محددة في السجل الموثوق'}</span>
+            <span className="text-[9px] text-amber-300/70">من الهوية الموثوقة</span>
           </div>
         </div>
       </div>

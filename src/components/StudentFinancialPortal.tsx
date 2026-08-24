@@ -75,6 +75,10 @@ export default function StudentFinancialPortal({
   const [refreshing, setRefreshing] = useState<boolean>(false);
   const [studentSearch, setStudentSearch] = useState<string>('');
   const [selectedStudent, setSelectedStudent] = useState<Student | null>(null);
+  const [reportSearch, setReportSearch] = useState<string>('');
+  const [reportStatusFilter, setReportStatusFilter] = useState<string>('all');
+  const [reportStartDate, setReportStartDate] = useState<string>('');
+  const [reportEndDate, setReportEndDate] = useState<string>('');
   
   // States for sub-screens
   const [paymentAmount, setPaymentAmount] = useState<number>(0);
@@ -88,7 +92,8 @@ export default function StudentFinancialPortal({
     secondary: 0,
     busFee: 0,
     booksFee: 0,
-    examFee: 0
+    examFee: 0,
+    siblingDiscountPercent: 0
   });
 
   // Fee configuration items representing the user's specific billing types (e.g. from the uploaded image)
@@ -139,6 +144,7 @@ export default function StudentFinancialPortal({
   const [financialPersistence, setFinancialPersistence] = useState<'loading' | 'ready' | 'blocked'>('loading');
   const [financialPersistenceMessage, setFinancialPersistenceMessage] = useState('جارٍ التحقق من مصدر البيانات المالية...');
   const [financialPersistenceVersion, setFinancialPersistenceVersion] = useState(0);
+  const feeImportInputRef = React.useRef<HTMLInputElement | null>(null);
 
   const runWithLock = async (opName: string, asyncFn: () => Promise<any> | any) => {
     if (activeSaving) {
@@ -194,6 +200,7 @@ export default function StudentFinancialPortal({
   const [glRvs, setGlRvs] = useState<any[]>([]);
   const [glJvs, setGlJvs] = useState<any[]>([]);
   const [chartOfAccounts, setChartOfAccounts] = useState<any[]>([]);
+  const [expenseAccruals, setExpenseAccruals] = useState<any[]>([]);
 
   // DB Syncer helper
   const saveToServerDb = async (
@@ -216,6 +223,7 @@ export default function StudentFinancialPortal({
       invoices: updatedInvoices !== undefined ? updatedInvoices : financialInvoices,
       feeConfigs: updatedFeeConfigs !== undefined ? updatedFeeConfigs : feeConfigs,
       feeSettings: updatedFeeSettings !== undefined ? updatedFeeSettings : feeSettings,
+      expenseAccruals,
       expectedVersion: financialPersistenceVersion
     };
     const response = await fetch('/api/financial/database', {
@@ -243,6 +251,29 @@ export default function StudentFinancialPortal({
     return false;
   };
 
+  const handleSaveSiblingDiscount = async () => {
+    if (!ensureFinancialWriteReady()) return;
+    const normalizedPercent = Number(siblingDiscountPercent);
+    if (!Number.isFinite(normalizedPercent) || normalizedPercent < 0 || normalizedPercent > 100) {
+      triggerNotification('نسبة خصم الأشقاء يجب أن تكون بين 0 و100 بالمائة.', 'warning');
+      return;
+    }
+
+    try {
+      const updatedFeeSettings = {
+        ...feeSettings,
+        siblingDiscountPercent: normalizedPercent
+      };
+      await saveToServerDb(undefined, undefined, undefined, undefined, undefined, undefined, updatedFeeSettings);
+      setFeeSettings(updatedFeeSettings);
+      setHasSiblingsDetected(normalizedPercent > 0);
+      logAction('SAVE_SIBLING_DISCOUNT_POLICY', `حفظ سياسة خصم الأشقاء بنسبة ${normalizedPercent}%`, 'إدارة الرسوم');
+      triggerNotification('✓ تم حفظ سياسة خصم الأشقاء في المصدر المالي المعتمد.', 'success');
+    } catch (error: any) {
+      triggerNotification(error?.message || 'تعذر حفظ سياسة خصم الأشقاء.', 'warning');
+    }
+  };
+
   // On mount, load database and sync state fully
   React.useEffect(() => {
     const loadFinancialDb = async () => {
@@ -260,11 +291,19 @@ export default function StudentFinancialPortal({
            setFinancialInvoices(res.data.invoices || []);
            setInvoices(res.data.invoices || []);
            setFeeConfigs(res.data.feeConfigs || []);
-           if (res.data.feeSettings) setFeeSettings(res.data.feeSettings);
+           if (res.data.feeSettings) {
+             const loadedFeeSettings = {
+               ...res.data.feeSettings,
+               siblingDiscountPercent: Number(res.data.feeSettings.siblingDiscountPercent || 0)
+             };
+             setFeeSettings(loadedFeeSettings);
+             setSiblingDiscountPercent(loadedFeeSettings.siblingDiscountPercent);
+           }
            if (res.data.studentReceiptVouchers) setStudentReceiptVouchers(res.data.studentReceiptVouchers);
           if (res.data.receiptVouchers) setGlRvs(res.data.receiptVouchers);
           if (res.data.journalEntries) setGlJvs(res.data.journalEntries);
           if (res.data.chartOfAccounts) setChartOfAccounts(res.data.chartOfAccounts);
+          setExpenseAccruals(Array.isArray(res.data.expenseAccruals) ? res.data.expenseAccruals : []);
           setFinancialPersistence('ready');
           setFinancialPersistenceVersion(Number(res.meta?.version || 0));
           setFinancialPersistenceMessage('البيانات المالية محملة من المصدر المعتمد.');
@@ -278,6 +317,7 @@ export default function StudentFinancialPortal({
            setFinancialInvoices([]);
            setInvoices([]);
            setFeeConfigs([]);
+           setExpenseAccruals([]);
           setFinancialPersistence('ready');
           setFinancialPersistenceVersion(Number(res.meta?.version || 0));
           setFinancialPersistenceMessage('المصدر المعتمد متاح ولا توجد حركات مالية مسجلة بعد.');
@@ -1161,86 +1201,206 @@ export default function StudentFinancialPortal({
     void handleRefreshData();
   };
 
-  // 8. Toolbar - EXPORT EXCEL
-  const handleExportExcel = () => {
+  const financialReportRows = useMemo(() => {
+    const rows = [
+      ...financialInvoices.map(invoice => ({
+        recordType: 'مطالبة مالية',
+        id: invoice.id,
+        date: invoice.invoiceDate || invoice.dueDate || '',
+        studentId: invoice.studentId,
+        student: invoice.studentName,
+        description: invoice.item,
+        status: String(invoice.status || ''),
+        amount: Number(invoice.amount || invoice.totalAmount || 0)
+      })),
+      ...studentReceiptVouchers.map(voucher => ({
+        recordType: 'سند قبض',
+        id: voucher.id,
+        date: voucher.date || '',
+        studentId: voucher.studentId,
+        student: voucher.studentName,
+        description: voucher.against || '',
+        status: String(voucher.status || ''),
+        amount: Number(voucher.amount || 0)
+      }))
+    ];
+    const search = reportSearch.trim().toLowerCase();
+    return rows.filter(row => {
+      const normalizedStatus = row.status.toLowerCase();
+      const matchesSearch = !search || [row.id, row.student, row.studentId, row.description, row.recordType]
+        .some(value => String(value || '').toLowerCase().includes(search));
+      const matchesStatus = reportStatusFilter === 'all'
+        || normalizedStatus === reportStatusFilter
+        || (reportStatusFilter === 'draft' && !['posted', 'approved', 'paid', 'cancelled', 'void'].includes(normalizedStatus));
+      const matchesStart = !reportStartDate || row.date >= reportStartDate;
+      const matchesEnd = !reportEndDate || row.date <= reportEndDate;
+      return matchesSearch && matchesStatus && matchesStart && matchesEnd;
+    });
+  }, [financialInvoices, studentReceiptVouchers, reportSearch, reportStatusFilter, reportStartDate, reportEndDate]);
+
+  const downloadFile = (blob: Blob, fileName: string) => {
+    const url = URL.createObjectURL(blob);
+    const link = document.createElement('a');
+    link.href = url;
+    link.download = fileName;
+    document.body.appendChild(link);
+    link.click();
+    document.body.removeChild(link);
+    window.setTimeout(() => URL.revokeObjectURL(url), 0);
+  };
+
+  const voucherStatusLabel = (status: unknown) => {
+    const normalized = String(status || '').toLowerCase();
+    return normalized === 'posted' ? 'مرحل حسابياً' : normalized === 'approved' ? 'معتمد مالياً' : normalized === 'saved' ? 'مسودة محفوظة' : normalized === 'cancelled' ? 'ملغي ومسوى' : 'مسودة';
+  };
+
+  const financialStatusLabel = (status: unknown) => {
+    const normalized = String(status || '').toLowerCase();
+    if (normalized === 'paid') return 'مسدد';
+    if (normalized === 'partial') return 'مسدد جزئياً';
+    if (normalized === 'unpaid') return 'غير مسدد';
+    if (normalized === 'posted') return 'مرحل حسابياً';
+    if (normalized === 'approved') return 'معتمد مالياً';
+    if (normalized === 'cancelled' || normalized === 'void') return 'ملغى ومسوى';
+    if (normalized === 'saved' || normalized === 'draft') return 'مسودة محفوظة';
+    return 'غير محدد';
+  };
+
+  const feeConfigHeaders = ['المعرف', 'نوع الرسوم', 'المبلغ', 'حساب الإيراد', 'رقم الترتيب', 'الأنشطة'];
+
+  const handleDownloadFeeTemplate = async () => {
+    try {
+      const XLSX = await import('xlsx');
+      const worksheet = XLSX.utils.aoa_to_sheet([
+        feeConfigHeaders,
+        ['', 'رسوم دراسية فصليّة', 0, '4101', '1', '']
+      ]);
+      const workbook = XLSX.utils.book_new();
+      XLSX.utils.book_append_sheet(workbook, worksheet, 'FeeConfigs');
+      const buffer = XLSX.write(workbook, { bookType: 'xlsx', type: 'array' });
+      downloadFile(new Blob([buffer], { type: 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet' }), 'قالب_بنود_رسوم_الطلاب.xlsx');
+      triggerNotification('✓ تم تنزيل قالب XLSX الحقيقي لبنود الرسوم.', 'success');
+    } catch (error: any) {
+      triggerNotification(error?.message || 'تعذر إنشاء قالب بنود الرسوم.', 'warning');
+    }
+  };
+
+  const handleImportFeeConfig = () => {
+    feeImportInputRef.current?.click();
+  };
+
+  const handleFeeConfigFileChange = async (event: React.ChangeEvent<HTMLInputElement>) => {
+    const file = event.target.files?.[0];
+    event.target.value = '';
+    if (!file) return;
+    if (!ensureFinancialWriteReady()) return;
+
+    try {
+      const XLSX = await import('xlsx');
+      const workbook = XLSX.read(await file.arrayBuffer(), { type: 'array' });
+      const firstSheet = workbook.Sheets[workbook.SheetNames[0]];
+      const rows = XLSX.utils.sheet_to_json<Record<string, unknown>>(firstSheet, { defval: '' });
+      if (!rows.length) throw new Error('ملف الاستيراد لا يحتوي على صفوف بيانات.');
+
+      const imported = rows.map((row, index) => {
+        const type = String(row['نوع الرسوم'] ?? row.type ?? '').trim();
+        const amount = Number(row['المبلغ'] ?? row.amount ?? 0);
+        const account = String(row['حساب الإيراد'] ?? row.account ?? '').trim();
+        if (!type || !Number.isFinite(amount) || amount <= 0) {
+          throw new Error(`الصف ${index + 2} يحتاج نوع رسوم ومبلغًا موجبًا.`);
+        }
+        if (!account) {
+          throw new Error(`الصف ${index + 2} يحتاج حساب إيراد مرتبطًا بدليل الحسابات.`);
+        }
+        return {
+          id: String(row['المعرف'] ?? row.id ?? '').trim() || createFinancialReference('FEE-CONFIG'),
+          type,
+          amount,
+          account,
+          orderNumber: String(row['رقم الترتيب'] ?? row.orderNumber ?? index + 1).trim(),
+          activities: String(row['الأنشطة'] ?? row.activities ?? '').trim()
+        };
+      });
+
+      const merged = new Map(feeConfigs.map(item => [item.id, item]));
+      imported.forEach(item => merged.set(item.id, item));
+      const updatedFeeConfigs = [...merged.values()];
+      await saveToServerDb(undefined, undefined, undefined, undefined, undefined, updatedFeeConfigs);
+      setFeeConfigs(updatedFeeConfigs);
+      logAction('IMPORT_FEE_CONFIG', `استيراد ${imported.length} بند رسوم من ملف ${file.name}`, 'الإعدادات المالية');
+      triggerNotification(`✓ تم استيراد وحفظ ${imported.length} بند رسوم بعد التحقق من الأعمدة والمبالغ.`, 'success');
+    } catch (error: any) {
+      triggerNotification(error?.message || 'تعذر استيراد ملف بنود الرسوم.', 'warning');
+    }
+  };
+
+  // 8. Toolbar - EXPORT XLSX
+  const handleExportExcel = async () => {
     if (filteredReceiptVouchers.length === 0) {
       triggerNotification('⚠️ لا توجد سجلات لتصديرها في الكشف الحالي المصفى.', 'warning');
       return;
     }
-    triggerNotification('📥 جاري تصدير كشف السندات بصيغة Excel...', 'success');
-    setTimeout(() => {
-      const headers = ['رقم السند', 'تاريخ السند', 'اسم الطالب', 'رقم الطالب الأكاديمي', 'القيمة', 'طريقة الدفع', 'الحساب المدين', 'حالة السند', 'البيان ومصوغ القبض'];
-      const rows = filteredReceiptVouchers.map(v => [
-        v.id,
-        v.date,
-        v.studentName,
-        v.studentId,
-        v.amount,
-        v.paymentMethod,
-        v.receivingAccount === '1101' ? 'الخزينة (كاش)' : 'البنك الجاري',
-        v.status === 'posted' ? 'مرحل حسابياً' : v.status === 'approved' ? 'معتمد مالياً' : v.status === 'saved' ? 'مسودة' : 'ملغي',
-        v.against || ''
-      ]);
-
-      const csvContent = "\uFEFF" 
-        + [headers.join(','), ...rows.map(e => e.map(cell => `"${String(cell).replace(/"/g, '""')}"`).join(','))].join('\n');
-      
-      const blob = new Blob([csvContent], { type: 'text/csv;charset=utf-8;' });
-      const url = URL.createObjectURL(blob);
-      const link = document.createElement("a");
-      link.setAttribute("href", url);
-      link.setAttribute("download", `كشف_سندات_قبض_الطلاب_ERP_${new Date().toISOString().split('T')[0]}.csv`);
-      document.body.appendChild(link);
-      link.click();
-      document.body.removeChild(link);
-      
-      logAction('EXPORT_EXCEL', `تصدير عدد ${filteredReceiptVouchers.length} سند قبض طلاب لملف Excel`, 'الحسابات');
-      EnterpriseAuditLogger.log({
-        action: 'تصدير',
-        oldValue: `استعراض كشف سندات القبض على الشاشة لعدد ${filteredReceiptVouchers.length} سند`,
-        newValue: `تصدير وتحميل ملف كشف سندات قبض الطلاب بصيغة Excel لعدد ${filteredReceiptVouchers.length} سجل`,
-         userName: auditActor,
-        userRole: 'المدير المالي والمشرف العام',
-        module: 'بوابة الشؤون المالية (StudentFinancialPortal)',
-         ipAddress: auditIpAddress
-      });
-      triggerNotification('✓ تم تحميل ملف Excel بنجاح.', 'success');
-    }, 600);
+    const XLSX = await import('xlsx');
+    const rows = filteredReceiptVouchers.map(v => ({
+      'رقم السند': v.id,
+      'تاريخ السند': v.date,
+      'اسم الطالب': v.studentName,
+      'رقم الطالب الأكاديمي': v.studentId,
+      'القيمة': v.amount,
+      'طريقة الدفع': v.paymentMethod,
+      'الحساب المدين': v.receivingAccount === '1101' ? 'الخزينة (كاش)' : 'البنك الجاري',
+      'حالة السند': voucherStatusLabel(v.status),
+      'البيان ومصوغ القبض': v.against || ''
+    }));
+    const worksheet = XLSX.utils.json_to_sheet(rows);
+    const workbook = XLSX.utils.book_new();
+    XLSX.utils.book_append_sheet(workbook, worksheet, 'StudentReceipts');
+    const buffer = XLSX.write(workbook, { bookType: 'xlsx', type: 'array' });
+    downloadFile(new Blob([buffer], { type: 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet' }), `كشف_سندات_قبض_الطلاب_ERP_${new Date().toISOString().split('T')[0]}.xlsx`);
+    logAction('EXPORT_XLSX', `تصدير عدد ${filteredReceiptVouchers.length} سند قبض طلاب لملف XLSX`, 'الحسابات');
+    EnterpriseAuditLogger.log({
+      action: 'تصدير',
+      oldValue: `استعراض كشف سندات القبض على الشاشة لعدد ${filteredReceiptVouchers.length} سند`,
+      newValue: `تصدير وتحميل ملف XLSX لسندات قبض الطلاب لعدد ${filteredReceiptVouchers.length} سجل`,
+      userName: auditActor,
+      userRole: 'المدير المالي والمشرف العام',
+      module: 'بوابة الشؤون المالية (StudentFinancialPortal)',
+      ipAddress: auditIpAddress
+    });
+    triggerNotification('✓ تم تحميل ملف XLSX الحقيقي بنجاح.', 'success');
   };
 
-  const handleExportFinancialReport = () => {
-    const headers = ['نوع السجل', 'المرجع', 'التاريخ', 'الطالب', 'البيان', 'الحالة', 'القيمة'];
-    const invoiceRows = financialInvoices.map(invoice => [
-      'مطالبة مالية', invoice.id, invoice.invoiceDate || invoice.dueDate, invoice.studentName,
-      invoice.item, invoice.status, invoice.amount
-    ]);
-    const receiptRows = studentReceiptVouchers.map(voucher => [
-      'سند قبض', voucher.id, voucher.date, voucher.studentName, voucher.against || '', voucher.status, voucher.amount
-    ]);
-    const csvContent = '\uFEFF' + [
-      headers.join(','),
-      ...[...invoiceRows, ...receiptRows].map(row => row.map(cell => `"${String(cell ?? '').replace(/"/g, '""')}"`).join(','))
-    ].join('\n');
-    const blob = new Blob([csvContent], { type: 'text/csv;charset=utf-8;' });
-    const url = URL.createObjectURL(blob);
-    const link = document.createElement('a');
-    link.href = url;
-    link.download = `تقرير_رسوم_الطلاب_${new Date().toISOString().split('T')[0]}.csv`;
-    document.body.appendChild(link);
-    link.click();
-    document.body.removeChild(link);
-    URL.revokeObjectURL(url);
-    logAction('EXPORT_FINANCIAL_REPORT', `تصدير تقرير رسوم الطلاب بعدد ${invoiceRows.length + receiptRows.length} حركة`, 'حسابات الطلاب');
+  const handleExportFinancialReport = async () => {
+    const XLSX = await import('xlsx');
+    const rows = financialReportRows.map(row => ({
+      'نوع السجل': row.recordType,
+      'المرجع': row.id,
+      'التاريخ': row.date,
+      'الطالب': row.student,
+      'البيان': row.description,
+      'الحالة': financialStatusLabel(row.status),
+      'القيمة': row.amount
+    }));
+    if (rows.length === 0) {
+      triggerNotification('⚠️ لا توجد حركات مطابقة لفلاتر التقرير الحالية.', 'warning');
+      return;
+    }
+    const worksheet = XLSX.utils.json_to_sheet(rows);
+    const workbook = XLSX.utils.book_new();
+    XLSX.utils.book_append_sheet(workbook, worksheet, 'StudentFeesReport');
+    const buffer = XLSX.write(workbook, { bookType: 'xlsx', type: 'array' });
+    downloadFile(new Blob([buffer], { type: 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet' }), `تقرير_رسوم_الطلاب_${new Date().toISOString().split('T')[0]}.xlsx`);
+    logAction('EXPORT_FINANCIAL_REPORT', `تصدير تقرير رسوم الطلاب بعدد ${rows.length} حركة`, 'حسابات الطلاب');
     EnterpriseAuditLogger.log({
       action: 'تصدير',
       oldValue: 'عرض التقرير المالي الموثق',
-      newValue: `تقرير رسوم الطلاب بعدد ${invoiceRows.length + receiptRows.length} حركة`,
+      newValue: `تقرير XLSX لرسوم الطلاب بعدد ${rows.length} حركة`,
       userName: auditActor,
       userRole: currentRole,
       module: 'بوابة الشؤون المالية (StudentFinancialPortal)',
       ipAddress: auditIpAddress
     });
-    triggerNotification('✓ تم تنزيل تقرير رسوم الطلاب بصيغة CSV بنجاح.', 'success');
+    triggerNotification('✓ تم تنزيل تقرير رسوم الطلاب بصيغة XLSX حقيقية بنجاح.', 'success');
   };
 
   const handlePrintFinancialReport = () => {
@@ -1252,13 +1412,15 @@ export default function StudentFinancialPortal({
     const escapeHtml = (value: unknown) => String(value ?? '')
       .replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;')
       .replace(/"/g, '&quot;').replace(/'/g, '&#039;');
-    const rows = [...financialInvoices.map(invoice => ({
-      type: 'مطالبة مالية', id: invoice.id, date: invoice.invoiceDate || invoice.dueDate,
-      student: invoice.studentName, description: invoice.item, status: invoice.status, amount: invoice.amount
-    })), ...studentReceiptVouchers.map(voucher => ({
-      type: 'سند قبض', id: voucher.id, date: voucher.date, student: voucher.studentName,
-      description: voucher.against || '', status: voucher.status, amount: voucher.amount
-    }))];
+    const rows = financialReportRows.map(row => ({
+      type: row.recordType,
+      id: row.id,
+      date: row.date,
+      student: row.student,
+      description: row.description,
+      status: financialStatusLabel(row.status),
+      amount: row.amount
+    }));
     printWindow.document.write(`<!doctype html><html dir="rtl"><head><meta charset="utf-8"><title>تقرير رسوم الطلاب</title><style>
       body{font-family:Arial,sans-serif;color:#13213d;padding:28px;line-height:1.6}h1{color:#0b1733;border-bottom:3px solid #c8922e;padding-bottom:10px} .meta{display:flex;gap:24px;flex-wrap:wrap;background:#fbf8f0;border:1px solid #d8bd80;padding:12px;margin:16px 0;font-weight:bold}table{width:100%;border-collapse:collapse;font-size:11px}th{background:#0b1733;color:#fff;padding:8px}td{border:1px solid #d8bd80;padding:7px} .amount{font-family:monospace;text-align:left}@media print{button{display:none}}
     </style></head><body><h1>تقرير رسوم الطلاب والحركات المالية</h1>
@@ -1266,7 +1428,7 @@ export default function StudentFinancialPortal({
       <table><thead><tr><th>النوع</th><th>المرجع</th><th>التاريخ</th><th>الطالب</th><th>البيان</th><th>الحالة</th><th>القيمة</th></tr></thead><tbody>${rows.map(row => `<tr><td>${escapeHtml(row.type)}</td><td>${escapeHtml(row.id)}</td><td>${escapeHtml(row.date)}</td><td>${escapeHtml(row.student)}</td><td>${escapeHtml(row.description)}</td><td>${escapeHtml(row.status)}</td><td class="amount">${escapeHtml(formatLD(Number(row.amount || 0)))}</td></tr>`).join('')}</tbody></table>
       <p>تاريخ الاستخراج: ${escapeHtml(new Date().toLocaleString('ar-LY'))} — المستخدم: ${escapeHtml(auditActor)}</p><script>window.onload=()=>window.print()</script></body></html>`);
     printWindow.document.close();
-    logAction('PRINT_FINANCIAL_REPORT', `طباعة تقرير رسوم الطلاب بعدد ${rows.length} حركة`, 'حسابات الطلاب');
+    logAction('PRINT_FINANCIAL_REPORT', `طباعة تقرير رسوم الطلاب المصفى بعدد ${rows.length} حركة`, 'حسابات الطلاب');
   };
 
   // Helper to print a student statement of account beautifully (Ledger)
@@ -1931,6 +2093,17 @@ export default function StudentFinancialPortal({
     });
   }, [studentReceiptVouchers, rvSearch, rvStatusFilter]);
 
+  // A status/search filter must never leave a detail card pointing at a row
+  // that is no longer visible in the current list.
+  React.useEffect(() => {
+    if (!selectedStudRv) return;
+    const selectedIsVisible = filteredReceiptVouchers.some(voucher => voucher.id === selectedStudRv.id);
+    if (!selectedIsVisible) {
+      setSelectedStudRv(filteredReceiptVouchers[0] || null);
+      setStudRvMode('view');
+    }
+  }, [filteredReceiptVouchers, selectedStudRv]);
+
   // Live aggregated numbers for the dashboard. Prefer the canonical invoice and
   // posted-receipt snapshot when it exists; fall back to student balances only
   // for schools that have not created any invoices yet.
@@ -2127,11 +2300,19 @@ export default function StudentFinancialPortal({
        setFinancialInvoices(data.invoices || []);
        setInvoices(data.invoices || []);
        setFeeConfigs(data.feeConfigs || []);
-       if (data.feeSettings) setFeeSettings(data.feeSettings);
+       if (data.feeSettings) {
+         const refreshedFeeSettings = {
+           ...data.feeSettings,
+           siblingDiscountPercent: Number(data.feeSettings.siblingDiscountPercent || 0)
+         };
+         setFeeSettings(refreshedFeeSettings);
+         setSiblingDiscountPercent(refreshedFeeSettings.siblingDiscountPercent);
+       }
        setStudentReceiptVouchers(data.studentReceiptVouchers || []);
       setGlRvs(data.receiptVouchers || []);
       setGlJvs(data.journalEntries || []);
-      setChartOfAccounts(data.chartOfAccounts || []);
+       setChartOfAccounts(data.chartOfAccounts || []);
+       setExpenseAccruals(Array.isArray(data.expenseAccruals) ? data.expenseAccruals : []);
       setFinancialPersistence('ready');
       setFinancialPersistenceVersion(Number(res.meta?.version || 0));
       setFinancialPersistenceMessage('البيانات المالية محملة من المصدر المعتمد.');
@@ -2305,7 +2486,10 @@ export default function StudentFinancialPortal({
   let portalOnSearch: (() => void) | undefined = undefined;
   let portalOnPrint: (() => void) | undefined = undefined;
   let portalOnExportPdf: (() => void) | undefined = undefined;
+  let portalExportPdfLabel = 'PDF';
   let portalOnExportExcel: (() => void) | undefined = undefined;
+  let portalOnImportExcel: (() => void) | undefined = undefined;
+  let portalOnDownloadTemplate: (() => void) | undefined = undefined;
   let portalIsEditing = false;
   let portalSelectedId: string | null = null;
 
@@ -2328,6 +2512,8 @@ export default function StudentFinancialPortal({
     portalIsEditing = studRvMode !== 'view';
     portalSelectedId = selectedStudRv ? selectedStudRv.id : null;
   } else if (activeSubSec === 'settings') {
+    portalOnImportExcel = handleImportFeeConfig;
+    portalOnDownloadTemplate = () => { void handleDownloadFeeTemplate(); };
     portalOnNew = () => {
       setCurrFeeId('');
       setCurrFeeType('');
@@ -2341,6 +2527,10 @@ export default function StudentFinancialPortal({
       if (!ensureFinancialWriteReady()) return;
       if (!currFeeType) {
         triggerNotification('الرجاء إدخال نوع الرسوم أولاً', 'warning');
+        return;
+      }
+      if (!currFeeAccount.trim()) {
+        triggerNotification('الرجاء تحديد حساب الإيراد من دليل الحسابات قبل الحفظ.', 'warning');
         return;
       }
       if (currFeeAmount <= 0) {
@@ -2404,6 +2594,7 @@ export default function StudentFinancialPortal({
   } else if (activeSubSec === 'reports') {
     portalOnPrint = handlePrintFinancialReport;
     portalOnExportPdf = handlePrintFinancialReport;
+    portalExportPdfLabel = 'معاينة PDF';
     portalOnExportExcel = handleExportFinancialReport;
   } else if (activeSubSec === 'management') {
     portalOnSave = () => {
@@ -2504,9 +2695,10 @@ export default function StudentFinancialPortal({
         onSearch={portalOnSearch}
         onPrint={portalOnPrint}
         onExportPdf={portalOnExportPdf}
+        exportPdfLabel={portalExportPdfLabel}
         onExportExcel={portalOnExportExcel}
-        onImportExcel={() => {}}
-        onDownloadTemplate={() => {}}
+        onImportExcel={portalOnImportExcel}
+        onDownloadTemplate={portalOnDownloadTemplate}
         isSaving={false}
         isLoading={false}
         selectedId={portalSelectedId}
@@ -2514,6 +2706,14 @@ export default function StudentFinancialPortal({
         userRole={currentRole || 'SuperAdmin'}
         onExit={setActiveSection ? () => setActiveSection('dashboard') : undefined}
       />}
+      <input
+        ref={feeImportInputRef}
+        type="file"
+        accept=".xlsx,.xls,.csv,text/csv,application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
+        className="hidden"
+        aria-label="استيراد بنود الرسوم"
+        onChange={(event) => { void handleFeeConfigFileChange(event); }}
+      />
       {financialPersistence !== 'ready' && (
         <div className={`mx-3 sm:mx-4 rounded-2xl border p-4 flex items-start gap-3 ${financialPersistence === 'blocked' ? 'border-red-200 bg-red-50 text-red-800' : 'border-amber-200 bg-amber-50 text-amber-800'}`} role="status">
           <AlertTriangle className="w-5 h-5 shrink-0 mt-0.5" />
@@ -3343,9 +3543,8 @@ export default function StudentFinancialPortal({
                           className="w-12 bg-transparent text-xs text-center font-bold font-mono rounded py-0.5"
                         />
                         <button 
-                          onClick={() => {
-                            triggerNotification('تم تحديث وتثبيت نسبة الخصم بنجاح', 'success');
-                          }}
+                          type="button"
+                          onClick={() => { void handleSaveSiblingDiscount(); }}
                           className="fee-management-inline-action text-[10px] font-extrabold px-2.5 py-1 rounded"
                         >
                           تطبيق وحفظ
@@ -3585,7 +3784,7 @@ export default function StudentFinancialPortal({
                     }}
                     className="fee-management-action fee-management-primary-action text-xs font-black py-3 px-1 transition-transform active:scale-95 text-center cursor-pointer"
                   >
-                    💾 حفظ المعاملة
+                    📝 تجهيز مسودة سند
                   </button>
 
                   {/* Button 2: قبض (Collect) - Unified Gold */}
@@ -3697,13 +3896,12 @@ export default function StudentFinancialPortal({
                       >
                         🖨️ طباعة كشف
                       </button>
-                      <button 
-                        onClick={() => {
-                          triggerNotification('جاري تجميع كشف الحساب وتنزيله بهيئة ملف PDF', 'success');
-                        }}
+                      <button
+                        type="button"
+                        onClick={handlePrintStudentLedger}
                         className="fee-management-utility-action fee-management-utility-pdf text-[9px] font-bold px-2 py-1 rounded cursor-pointer"
                       >
-                        💾 تحميل PDF
+                        🖨️ معاينة PDF
                       </button>
                     </div>
                   </div>
@@ -4719,6 +4917,136 @@ export default function StudentFinancialPortal({
                 </div>
               )}
 
+            </div>
+
+            <div className="p-5 space-y-4 bg-white border-2 border-slate-200 rounded-3xl shadow-md">
+              <div className="flex flex-wrap items-center justify-between gap-3 border-b border-slate-100 pb-3">
+                <div>
+                  <h4 className="text-sm font-black text-slate-900">🔎 سجل الحركات التفصيلي</h4>
+                  <p className="text-[10px] text-slate-500 font-bold mt-1">تصفية مباشرة من المطالبات وسندات القبض في المصدر المالي الكانوني</p>
+                </div>
+                <span className="text-[10px] font-black text-emerald-700 bg-emerald-50 border border-emerald-200 rounded-full px-3 py-1">
+                  {financialReportRows.length} نتيجة مطابقة
+                </span>
+              </div>
+
+              <div className="grid grid-cols-1 md:grid-cols-2 xl:grid-cols-5 gap-3 items-end">
+                <label className="text-[10px] font-black text-slate-700">
+                  بحث
+                  <input
+                    type="search"
+                    value={reportSearch}
+                    onChange={(e) => setReportSearch(e.target.value)}
+                    placeholder="رقم، طالب، بيان..."
+                    className="mt-1 w-full border border-slate-200 rounded-lg px-3 py-2 text-xs font-bold focus:outline-none focus:ring-2 focus:ring-amber-300"
+                  />
+                </label>
+                <label className="text-[10px] font-black text-slate-700">
+                  الحالة
+                  <select
+                    value={reportStatusFilter}
+                    onChange={(e) => setReportStatusFilter(e.target.value)}
+                    className="mt-1 w-full border border-slate-200 rounded-lg px-3 py-2 text-xs font-bold bg-white focus:outline-none focus:ring-2 focus:ring-amber-300"
+                  >
+                    <option value="all">كل الحالات</option>
+                    <option value="posted">مرحل حسابياً</option>
+                    <option value="approved">معتمد مالياً</option>
+                    <option value="saved">مسودة محفوظة</option>
+                    <option value="draft">مسودة غير محفوظة</option>
+                    <option value="paid">مسدد</option>
+                    <option value="partial">مسدد جزئياً</option>
+                    <option value="unpaid">غير مسدد</option>
+                    <option value="cancelled">ملغى ومسوى</option>
+                  </select>
+                </label>
+                <label className="text-[10px] font-black text-slate-700">
+                  من تاريخ
+                  <input
+                    type="date"
+                    value={reportStartDate}
+                    onChange={(e) => setReportStartDate(e.target.value)}
+                    className="mt-1 w-full border border-slate-200 rounded-lg px-3 py-2 text-xs font-bold focus:outline-none focus:ring-2 focus:ring-amber-300"
+                  />
+                </label>
+                <label className="text-[10px] font-black text-slate-700">
+                  إلى تاريخ
+                  <input
+                    type="date"
+                    value={reportEndDate}
+                    onChange={(e) => setReportEndDate(e.target.value)}
+                    className="mt-1 w-full border border-slate-200 rounded-lg px-3 py-2 text-xs font-bold focus:outline-none focus:ring-2 focus:ring-amber-300"
+                  />
+                </label>
+                <button
+                  type="button"
+                  onClick={() => {
+                    setReportSearch('');
+                    setReportStatusFilter('all');
+                    setReportStartDate('');
+                    setReportEndDate('');
+                  }}
+                  className="h-9 rounded-lg border border-slate-300 bg-slate-50 text-slate-700 text-xs font-black hover:bg-slate-100"
+                >
+                  مسح الفلاتر
+                </button>
+              </div>
+
+              <div className="overflow-x-auto border border-slate-100 rounded-xl">
+                <table className="w-full min-w-[760px] text-right text-[10px]">
+                  <thead className="bg-slate-900 text-amber-100 font-black">
+                    <tr>
+                      <th className="p-2">النوع</th>
+                      <th className="p-2">المرجع</th>
+                      <th className="p-2">التاريخ</th>
+                      <th className="p-2">الطالب</th>
+                      <th className="p-2">الحالة</th>
+                      <th className="p-2 text-left">القيمة</th>
+                      <th className="p-2">إجراء</th>
+                    </tr>
+                  </thead>
+                  <tbody className="divide-y divide-slate-100">
+                    {financialReportRows.slice(0, 200).map(row => (
+                      <tr key={`${row.recordType}-${row.id}`} className="hover:bg-amber-50/50">
+                        <td className="p-2 font-bold text-slate-700">{row.recordType}</td>
+                        <td className="p-2 font-mono text-slate-500">{row.id}</td>
+                        <td className="p-2 font-mono text-slate-500">{row.date || 'غير متاح'}</td>
+                        <td className="p-2 font-bold text-slate-800">{row.student || 'غير محدد'}</td>
+                        <td className="p-2 text-slate-600">{financialStatusLabel(row.status)}</td>
+                        <td className="p-2 text-left font-mono font-black text-emerald-700">{formatLD(row.amount)}</td>
+                        <td className="p-2">
+                          <button
+                            type="button"
+                            aria-label={`فتح سجل ${row.id}`}
+                            onClick={() => {
+                              const student = students.find(item => item.id === row.studentId);
+                              if (student) setSelectedStudent(student);
+                              if (row.recordType === 'سند قبض') {
+                                const voucher = studentReceiptVouchers.find(item => item.id === row.id);
+                                if (voucher) setSelectedStudRv(voucher);
+                                setStudRvMode('view');
+                                setActiveSubSec('receipts');
+                              } else {
+                                setActiveSubSec('management');
+                              }
+                            }}
+                            className="rounded-md border border-amber-300 bg-amber-50 px-2 py-1 text-[10px] font-black text-amber-900 hover:bg-amber-100"
+                          >
+                            فتح السجل
+                          </button>
+                        </td>
+                      </tr>
+                    ))}
+                    {financialReportRows.length === 0 && (
+                      <tr>
+                        <td colSpan={7} className="p-8 text-center text-slate-400 font-bold">لا توجد حركات مطابقة للفلاتر الحالية.</td>
+                      </tr>
+                    )}
+                  </tbody>
+                </table>
+              </div>
+              {financialReportRows.length > 200 && (
+                <p className="text-[10px] text-slate-500 font-bold">يُعرض أول 200 سجل؛ استخدم الفلاتر لتضييق النطاق قبل التصدير.</p>
+              )}
             </div>
           </div>
         )}

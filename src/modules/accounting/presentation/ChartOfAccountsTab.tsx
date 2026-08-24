@@ -76,12 +76,34 @@ export const ChartOfAccountsTab = () => {
     handleDeleteCoa, handleExpandAllCoa, handleCollapseAllCoa, handleExportCoaExcel, handlePrintCoaTree,
     handleImportCoaCSV, persistCanonicalFinancialSnapshot, canonicalFinancialStatus, canonicalFinancialWriteMode,
   } = React.useContext(AccountingContext);
-  const chartWritesAreCanonical = canonicalFinancialStatus === 'ready' && canonicalFinancialWriteMode === 'ledger_ready';
+  const chartWritesAreCanonical = canonicalFinancialStatus === 'ready'
+    && (canonicalFinancialWriteMode === 'ledger_ready' || canonicalFinancialWriteMode === 'erp_integrated');
   const chartWritesAvailable = canonicalFinancialStatus === 'ready' && canonicalFinancialWriteMode !== 'snapshot_read_only';
   const guardChartWrite = (actionName: string) => {
     if (chartWritesAvailable) return true;
     triggerNotification(`تعذر تنفيذ ${actionName}: شجرة الحسابات للقراءة فقط حتى تفعيل مسار الكتابة المركزي.`, 'warning');
     return false;
+  };
+
+  const persistChartAccounts = async (
+    nextAccounts: AccountNode[],
+    actionName: string,
+    successMessage: string
+  ) => {
+    if (!guardChartWrite(actionName)) return false;
+    if (typeof persistCanonicalFinancialSnapshot !== 'function') {
+      triggerNotification(`تعذر تنفيذ ${actionName}: مسار الحفظ المركزي غير متاح.`, 'warning');
+      return false;
+    }
+    try {
+      await persistCanonicalFinancialSnapshot({ chartOfAccounts: nextAccounts });
+      setAccounts(nextAccounts);
+      triggerNotification(successMessage, 'success');
+      return true;
+    } catch (error: any) {
+      triggerNotification(`تعذر حفظ ${actionName} مركزيًا: ${error?.message || 'خطأ غير معروف'}`, 'warning');
+      return false;
+    }
   };
 
   return (
@@ -153,10 +175,10 @@ export const ChartOfAccountsTab = () => {
                   onClick={handleDeleteCoa}
                   disabled={coaMode !== 'view' || !chartWritesAvailable}
                   className="bg-white hover:bg-rose-50 text-rose-650 hover:border-rose-250 disabled:opacity-40 font-bold text-[11px] px-3 py-2 rounded-lg flex items-center gap-1.5 border border-slate-200 transition-all duration-150 shadow-xs cursor-pointer"
-                  title="حذف الحساب المحدد"
+                  title="تعطيل الحساب المحدد مع حفظ تاريخه"
                 >
                   <Trash2 className="w-3.5 h-3.5" />
-                  <span>حذف</span>
+                  <span>تعطيل</span>
                 </button>
 
                 <div className="w-px h-6 bg-slate-200 mx-1" />
@@ -812,17 +834,23 @@ export const ChartOfAccountsTab = () => {
                           }
                         }
 
-                        const handleSaveInlineBudget = () => {
+                        const handleSaveInlineBudget = async () => {
                           if (!guardChartWrite('تعديل الموازنة')) return;
-                          setAccounts(prev => prev.map(a => {
+                          const updatedAccounts = accounts.map(a => {
                             if (a.code === currentAccount.code) {
                               return { ...a, annualBudget: inlineBudgetVal };
                             }
                             return a;
-                          }));
-                          triggerNotification(`✓ تم تحديث الموازنة التقديرية للحساب #${currentAccount.code} بنجاح!`, 'success');
-                          setInlineBudgetEdit(false);
-                          logAction('UPDATE_BUDGET', `تعديل الموازنة التقديرية للحساب #${currentAccount.code} إلى ${inlineBudgetVal.toLocaleString()} د.ل`, 'الحسابات العامة');
+                          });
+                          const saved = await persistChartAccounts(
+                            updatedAccounts,
+                            'تعديل الموازنة',
+                            `✓ تم تحديث الموازنة التقديرية للحساب #${currentAccount.code} مركزيًا.`
+                          );
+                          if (saved) {
+                            setInlineBudgetEdit(false);
+                            logAction('UPDATE_BUDGET', `تعديل الموازنة التقديرية للحساب #${currentAccount.code} إلى ${inlineBudgetVal.toLocaleString()} د.ل`, 'الحسابات العامة');
+                          }
                         };
 
                         return (
@@ -931,14 +959,14 @@ export const ChartOfAccountsTab = () => {
                         const totalSplit = inlineSplits.kindergarten + inlineSplits.primary + inlineSplits.middle + inlineSplits.secondary;
                         const isBalanced = totalSplit === 100;
 
-                        const handleSaveSplits = () => {
+                        const handleSaveSplits = async () => {
                           if (!guardChartWrite('تثبيت أبعاد مراكز التكلفة')) return;
                           if (!isBalanced) {
                             triggerNotification('فشل الحفظ: يجب أن يكون مجموع نسب التوزيع مساوياً لـ 100% تماماً.', 'warning');
                             return;
                           }
 
-                          setAccounts(prev => prev.map(a => {
+                          const updatedAccounts = accounts.map(a => {
                             if (a.code === currentAccount.code) {
                               return {
                                 ...a,
@@ -951,10 +979,15 @@ export const ChartOfAccountsTab = () => {
                               };
                             }
                             return a;
-                          }));
-
-                          triggerNotification(`✓ تم تثبيت وتوزيع الأبعاد متعددة مراكز التكلفة للحساب #${currentAccount.code}!`, 'success');
-                          logAction('UPDATE_COA_SPLITS', `تعديل نسب توزيع مراكز التكلفة للحساب #${currentAccount.code} (روضة ${inlineSplits.kindergarten}٪، ابتدائي ${inlineSplits.primary}٪، متوسط ${inlineSplits.middle}٪، ثانوي ${inlineSplits.secondary}٪)`, 'الحسابات العامة');
+                          });
+                          const saved = await persistChartAccounts(
+                            updatedAccounts,
+                            'تثبيت أبعاد مراكز التكلفة',
+                            `✓ تم تثبيت وتوزيع أبعاد مراكز التكلفة للحساب #${currentAccount.code} مركزيًا.`
+                          );
+                          if (saved) {
+                            logAction('UPDATE_COA_SPLITS', `تعديل نسب توزيع مراكز التكلفة للحساب #${currentAccount.code} (روضة ${inlineSplits.kindergarten}٪، ابتدائي ${inlineSplits.primary}٪، متوسط ${inlineSplits.middle}٪، ثانوي ${inlineSplits.secondary}٪)`, 'الحسابات العامة');
+                          }
                         };
 
                         const handleBalancedSplit = () => {
@@ -1544,27 +1577,30 @@ export const ChartOfAccountsTab = () => {
             };
 
             // Interactive Auto-Fixer for parent sums
-            const handleAutoFixParentBalances = () => {
+            const handleAutoFixParentBalances = async () => {
               if (!guardChartWrite('إعادة احتساب أرصدة التجميع')) return;
               // For each parent, sum its children and set parent balance
-              setAccounts(prev => {
-                const updated = [...prev];
-                // Go level by level from bottom up (3 to 1)
-                for (let lv = 3; lv >= 1; lv--) {
-                  updated.forEach(acc => {
-                    if (acc.level === lv && acc.type === 'رئيسي') {
-                      const children = updated.filter(c => c.parentAccountId === acc.code);
-                      if (children.length > 0) {
-                        acc.balance = children.reduce((sum, c) => sum + c.balance, 0);
-                      }
+              const updated = [...accounts];
+              // Go level by level from bottom up (3 to 1)
+              for (let lv = 3; lv >= 1; lv--) {
+                updated.forEach(acc => {
+                  if (acc.level === lv && acc.type === 'رئيسي') {
+                    const children = updated.filter(c => c.parentAccountId === acc.code);
+                    if (children.length > 0) {
+                      acc.balance = children.reduce((sum, c) => sum + c.balance, 0);
                     }
-                  });
-                }
-                return updated;
-              });
-              setCoaAuditFixCount(prev => prev + 1);
-              triggerNotification('✓ تم إصلاح موازين حسابات التجميع بنجاح وتطابق مجاميع المستويات الفرعية!', 'success');
-              logAction('AUTO_FIX_COA_BALANCES', 'إعادة احتساب وتزامن أرصدة الحسابات الإجمالية من الحسابات الفرعية تلقائياً بمساعد التدقيق', 'الحسابات العامة');
+                  }
+                });
+              }
+              const saved = await persistChartAccounts(
+                updated,
+                'إعادة احتساب أرصدة التجميع',
+                '✓ تم إصلاح موازين حسابات التجميع وحفظها مركزيًا.'
+              );
+              if (saved) {
+                setCoaAuditFixCount(prev => prev + 1);
+                logAction('AUTO_FIX_COA_BALANCES', 'إعادة احتساب وتزامن أرصدة الحسابات الإجمالية من الحسابات الفرعية تلقائياً بمساعد التدقيق', 'الحسابات العامة');
+              }
             };
 
             return (
@@ -1890,17 +1926,21 @@ export const ChartOfAccountsTab = () => {
                               <button 
                                 type="button"
                                 disabled={!chartWritesAreCanonical}
-                                onClick={() => {
+                                onClick={async () => {
                                   if (!guardChartWrite('التوازن التلقائي')) return;
                                   // Fix by putting difference in equity or matching
                                   const diff = totalAssets - (totalLiabilities + totalEquity);
-                                  setAccounts(prev => prev.map(a => {
+                                  const updatedAccounts = accounts.map(a => {
                                     if (a.code === '3101') {
                                       return { ...a, balance: a.balance + diff };
                                     }
                                     return a;
-                                  }));
-                                  triggerNotification('✓ تم معالجة وتثبيت الفجوة وتحويل الفارق لحساب رأس المال الفعلي لإحداث التوازن!', 'success');
+                                  });
+                                  await persistChartAccounts(
+                                    updatedAccounts,
+                                    'التوازن التلقائي',
+                                    '✓ تم معالجة فجوة الميزانية وحفظ التسوية مركزيًا.'
+                                  );
                                 }}
                                 className="bg-rose-600 hover:bg-rose-700 text-white font-extrabold text-[8px] px-2 py-1 rounded transition-all shrink-0 cursor-pointer"
                               >
@@ -2047,15 +2087,19 @@ export const ChartOfAccountsTab = () => {
                               <button
                                 type="button"
                                 disabled={!chartWritesAreCanonical}
-                                onClick={() => {
+                                onClick={async () => {
                                   if (!guardChartWrite('تنشيط الحسابات المتأثرة')) return;
-                                  setAccounts(prev => prev.map(a => {
+                                  const updatedAccounts = accounts.map(a => {
                                     if (!a.isActive && a.balance !== 0) {
                                       return { ...a, isActive: true };
                                     }
                                     return a;
-                                  }));
-                                  triggerNotification('✓ تم إعادة تفعيل وتنشيط كافة الحسابات الحاملة للأرصدة بنجاح لتصحيح وضعها المالي!', 'success');
+                                  });
+                                  await persistChartAccounts(
+                                    updatedAccounts,
+                                    'تنشيط الحسابات المتأثرة',
+                                    '✓ تم إعادة تفعيل الحسابات الحاملة للأرصدة وحفظ الحالة مركزيًا.'
+                                  );
                                 }}
                                 className="bg-indigo-600 hover:bg-indigo-700 text-white font-extrabold text-[8px] px-2 py-1 rounded transition-all shrink-0 cursor-pointer"
                               >
@@ -2239,9 +2283,9 @@ export const ChartOfAccountsTab = () => {
           })()}
 
         {coaWorkspaceMode === 'spreadsheet' && (() => {
-          const handleSaveSpreadLine = (accCode: string, fields: any) => {
+          const handleSaveSpreadLine = async (accCode: string, fields: any) => {
             if (!guardChartWrite('تعديل الحساب الجماعي')) return;
-            setAccounts(prev => prev.map(a => {
+            const updatedAccounts = accounts.map(a => {
               if (a.code === accCode) {
                 return {
                   ...a,
@@ -2252,10 +2296,16 @@ export const ChartOfAccountsTab = () => {
                 };
               }
               return a;
-            }));
-            setSpreadEditCode(null);
-            triggerNotification(`✓ تم تحديث وحفظ بيانات الحساب (${accCode}) بنجاح!`, 'success');
-            logAction('UPDATE_COA_SPREADSHEET', `تحديث بيانات الحساب #${accCode} عبر شاشة التعديل الجماعي`, 'الحسابات العامة');
+            });
+            const saved = await persistChartAccounts(
+              updatedAccounts,
+              'تعديل الحساب الجماعي',
+              `✓ تم تحديث وحفظ بيانات الحساب (${accCode}) مركزيًا.`
+            );
+            if (saved) {
+              setSpreadEditCode(null);
+              logAction('UPDATE_COA_SPREADSHEET', `تحديث بيانات الحساب #${accCode} عبر شاشة التعديل الجماعي`, 'الحسابات العامة');
+            }
           };
 
           return (
@@ -2455,7 +2505,7 @@ export const ChartOfAccountsTab = () => {
         {coaWorkspaceMode === 'wizard' && (() => {
           const parentNodes = accounts.filter(a => a.type === 'رئيسي');
           
-          const handleWizardSubmit = (e: React.FormEvent) => {
+          const handleWizardSubmit = async (e: React.FormEvent) => {
             e.preventDefault();
             if (!guardChartWrite('توليد الحسابات الفرعية')) return;
             
@@ -2521,8 +2571,13 @@ export const ChartOfAccountsTab = () => {
               return;
             }
 
-            setAccounts(prev => [...prev, ...newNodes]);
-            triggerNotification(`✓ تم توليد وتثبيت عدد (4) حسابات فرعية للذمم ومراكز تكلفة الفروع بنجاح!`, 'success');
+            const updatedAccounts = [...accounts, ...newNodes];
+            const saved = await persistChartAccounts(
+              updatedAccounts,
+              'توليد الحسابات الفرعية',
+              '✓ تم توليد وتثبيت 4 حسابات فرعية وحفظها مركزيًا.'
+            );
+            if (!saved) return;
             logAction('AUTO_GENERATE_BRANCH_COA', `توليد تلقائي لـ 4 حسابات فرعية لمراكز التكلفة بمرحلة (${wizardBaseName}) تحت الأب #${wizardParentId}`, 'الحسابات العامة');
             
             // Select the first generated account and go back to inspector

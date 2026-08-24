@@ -71,7 +71,8 @@ export const FixedAssetsTab = () => {
   isAccountOrDescendant, getProcessedAccounts,
   formatCurrency, canonicalFinancialStatus, canonicalFinancialWriteMode
 } = React.useContext(AccountingContext);
-  const fixedAssetWritesAreCanonical = canonicalFinancialStatus === 'ready' && canonicalFinancialWriteMode === 'ledger_ready';
+  const fixedAssetWritesAreCanonical = canonicalFinancialStatus === 'ready'
+    && (canonicalFinancialWriteMode === 'ledger_ready' || canonicalFinancialWriteMode === 'erp_integrated');
   const fixedAssetWritesAvailable = canonicalFinancialStatus === 'ready' && canonicalFinancialWriteMode !== 'snapshot_read_only';
   
   const [assetActionModal, setAssetActionModal] = useState<'none' | 'maintenance' | 'transfer' | 'sale' | 'discard' | 'print_card' | 'print_schedule'>('none');

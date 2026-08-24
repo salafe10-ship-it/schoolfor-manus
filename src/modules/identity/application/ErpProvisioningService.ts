@@ -54,9 +54,14 @@ function required(value: string, field: string): string {
 }
 
 function canonicalCatalog() {
-  return [...new Set(Object.values(PERMISSIONS))]
+  // The registry is the single source of truth for the complete explicit
+  // catalog. This includes the legacy aliases that are still used by older
+  // screens, normalized to Resource.Action codes. Platform.Admin is kept in
+  // the separate platform catalog and must never be granted to a tenant role.
+  return permissionRegistry.list()
     .map(value => permissionRegistry.normalize(value))
-    .filter((value): value is string => Boolean(value) && value !== '*')
+    .filter((value): value is string => Boolean(value) && value !== '*' && value !== PERMISSIONS.PLATFORM_ADMIN)
+    .filter((value, index, values) => values.indexOf(value) === index)
     .map(permission => {
       const separator = permission.lastIndexOf('.');
       if (separator <= 0 || separator === permission.length - 1) {
@@ -284,6 +289,79 @@ export class ErpProvisioningService {
       )).rows[0]?.id;
       if (!assignmentId) throw new Error('ERP role assignment could not be verified.');
       return { userId, roleId, roleAssignmentId: assignmentId, permissionCount };
+    });
+  }
+
+  /**
+   * Explicit owner activation for an already trusted school identity.
+   *
+   * This workflow deliberately targets the existing school-scoped `admin`
+   * role. It does not create a wildcard permission, change platform RBAC, or
+   * accept a role/permission list from the browser.
+   */
+  public static async provisionSchoolOwnerIdentity(context: TrustedProvisioningContext): Promise<ProvisioningResult> {
+    const authUserId = required(context.authUserId, 'authUserId');
+    const tenantId = required(context.tenantId, 'tenantId');
+    const schoolId = required(context.schoolId, 'schoolId');
+    const displayName = required(context.displayName, 'displayName');
+    const branchId = context.branchId?.trim() || null;
+    const actorUserId = context.actorUserId?.trim() || null;
+
+    return UnitOfWork.runInTransaction(schoolId, {
+      operationName: 'ERP school owner permission activation', tenantId, userId: actorUserId || authUserId,
+      userName: displayName, ipAddress: 'internal',
+      affectedTables: ['users', 'roles', 'permissions', 'role_permissions', 'user_roles'],
+      tenantContext: { tenantId, schoolId, branchId: branchId || '', academicYear: '', userId: authUserId, role: 'SchoolOwner' }
+    }, async () => {
+      const transaction = db();
+      const user = (await transaction.query<{ id: string; tenant_id: string; school_id: string | null; branch_id: string | null; status: string }>(
+        `SELECT id, tenant_id, school_id, branch_id, status
+           FROM public.users
+          WHERE auth_user_id = $1::uuid AND deleted_at IS NULL
+          FOR UPDATE`, [authUserId]
+      )).rows[0];
+      if (!user || user.status !== 'active') throw new Error('Trusted ERP identity is missing or inactive.');
+      if (user.tenant_id !== tenantId || user.school_id !== schoolId || (user.branch_id || null) !== branchId) {
+        throw new Error('Existing ERP identity is outside the trusted owner scope.');
+      }
+
+      const role = (await transaction.query<{ id: string; school_id: string | null; branch_id: string | null; status: string; deleted_at: string | null }>(
+        `SELECT id, school_id, branch_id, status, deleted_at
+           FROM public.roles
+          WHERE tenant_id = $1::uuid
+            AND role_key = 'admin'
+            AND school_id = $2::uuid
+            AND branch_id IS NULL
+          FOR UPDATE`, [tenantId, schoolId]
+      )).rows[0];
+      if (!role || role.school_id !== schoolId || role.branch_id !== null || role.status !== 'active' || role.deleted_at !== null) {
+        throw new Error('Trusted school owner role is missing, incorrectly scoped, or inactive.');
+      }
+
+      const permissionCount = await ensurePermissions({ tenantId, schoolId, actorUserId: actorUserId || undefined }, role.id);
+      const assignment = await transaction.query<{ id: string }>(
+        `INSERT INTO public.user_roles
+          (tenant_id, user_id, role_id, school_id, branch_id, status, created_by, updated_by)
+         SELECT $1::uuid, $2::uuid, $3::uuid, $4::uuid, $5::uuid, 'active', $6::uuid, $6::uuid
+          WHERE NOT EXISTS (
+            SELECT 1 FROM public.user_roles
+             WHERE tenant_id = $1::uuid AND user_id = $2::uuid AND role_id = $3::uuid
+               AND school_id = $4::uuid AND branch_id IS NOT DISTINCT FROM $5::uuid
+               AND deleted_at IS NULL AND status = 'active'
+          )
+         RETURNING id`,
+        [tenantId, user.id, role.id, schoolId, branchId, actorUserId]
+      );
+      const roleAssignmentId = assignment.rows[0]?.id || (await transaction.query<{ id: string }>(
+        `SELECT id FROM public.user_roles
+          WHERE tenant_id = $1::uuid AND user_id = $2::uuid AND role_id = $3::uuid
+            AND school_id = $4::uuid AND branch_id IS NOT DISTINCT FROM $5::uuid
+            AND deleted_at IS NULL AND status = 'active'
+          ORDER BY starts_at DESC LIMIT 1 FOR UPDATE`,
+        [tenantId, user.id, role.id, schoolId, branchId]
+      )).rows[0]?.id;
+      if (!roleAssignmentId) throw new Error('Trusted school owner role assignment could not be verified.');
+      return { userId: user.id, roleId: role.id, roleAssignmentId, permissionCount };
     });
   }
 }

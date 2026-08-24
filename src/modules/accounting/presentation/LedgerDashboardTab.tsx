@@ -72,7 +72,8 @@ export const LedgerDashboardTab = () => {
   formatCurrency, triggerNotification, canonicalFinancialStatus, canonicalFinancialVersion, canonicalFinancialWriteMode, refreshCanonicalFinancialData
 } = React.useContext(AccountingContext);
 
-  const dashboardFinancialsAreCanonical = canonicalFinancialStatus === 'ready' && canonicalFinancialWriteMode === 'ledger_ready';
+  const dashboardFinancialsAreCanonical = canonicalFinancialStatus === 'ready'
+    && (canonicalFinancialWriteMode === 'ledger_ready' || canonicalFinancialWriteMode === 'erp_integrated');
 
   const financialTotals = useMemo(() => {
     const reportAccounts = getProcessedAccounts ? getProcessedAccounts() : accounts;

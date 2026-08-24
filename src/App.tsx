@@ -116,6 +116,15 @@ const UNRESOLVED_SCHOOL: School = {
   status: 'frozen'
 };
 
+function hasTrustedPlatformAdminAccess(user: TrustedSessionUser | null | undefined): boolean {
+  if (Array.isArray(user?.platformPermissions)) {
+    return user.platformPermissions.includes(PERMISSIONS.PLATFORM_ADMIN);
+  }
+  // Backward-compatible fallback for legacy SuperAdmin sessions issued before
+  // the platform permission projection was added to the trusted session.
+  return user?.role === 'SuperAdmin';
+}
+
 // Bulletproof copy-to-clipboard function supporting sandboxed frames and secure/non-secure origins
 export const copyTextToClipboard = async (text: string): Promise<boolean> => {
   if (navigator.clipboard) {
@@ -205,7 +214,7 @@ export default function App() {
 
   // Client Mode isolation detector
   const isClientMode = useMemo(() => {
-    if (trustedSessionUser?.role === 'SuperAdmin') return false;
+    if (hasTrustedPlatformAdminAccess(trustedSessionUser)) return false;
     if (currentPortal === 'school') return true;
     if (typeof window !== 'undefined') {
       const params = new URLSearchParams(window.location.search);
@@ -392,15 +401,16 @@ export default function App() {
     };
 
     const trustedRole = user.role as UserRole;
+    const hasPlatformAdmin = hasTrustedPlatformAdminAccess(user);
     setTrustedSessionUser(user);
     setSelectedSchool(targetSchool);
-    setCurrentRole(trustedRole);
+    setCurrentRole(hasPlatformAdmin ? 'SuperAdmin' : trustedRole);
     const trustedBranch = user.branch && user.branch.schoolId === user.schoolId
       ? { id: user.branch.id, schoolId: user.branch.schoolId, name: user.branch.name, city: user.branch.city, manager: '', studentCount: 0, teacherCount: 0 }
       : null;
     setSelectedBranch(trustedBranch);
-    setIsSuperAdminPortalActive(trustedRole === 'SuperAdmin');
-    setActiveSection(trustedRole === 'SuperAdmin' ? 'super_stats' : 'dashboard');
+    setIsSuperAdminPortalActive(hasPlatformAdmin);
+    setActiveSection(hasPlatformAdmin ? 'super_stats' : 'dashboard');
     return targetSchool;
   }, []);
 
@@ -432,9 +442,8 @@ export default function App() {
 
     sessionManager.restore()
       .then(user => {
-        const trustedRole = user.role as UserRole;
         applyTrustedSessionUser(user);
-        setCurrentPortal(trustedRole === 'SuperAdmin' ? 'admin' : 'school');
+        setCurrentPortal(hasTrustedPlatformAdminAccess(user) ? 'admin' : 'school');
       })
       .catch(() => {
         sessionManager.logout();
@@ -460,12 +469,15 @@ export default function App() {
     return undefined;
   }, [activeSection, currentPortal, trustedSessionUser]);
 
-  // Auto switch activeSection to school dashboard when in Client Mode if currently on central admin route
+  // A trusted non-SuperAdmin identity must always land on the school dashboard.
+  // Do not rely only on the portal flag here: the central login form can finish
+  // with a school-scoped role while the portal state is still settling, leaving
+  // the initial `super_dashboard` route visible and producing a false 403.
   useEffect(() => {
-    if (isClientMode && (activeSection.startsWith('super_') || activeSection === 'system_health' || activeSection === 'db_schema')) {
+    if (!hasTrustedPlatformAdminAccess(trustedSessionUser) && (activeSection.startsWith('super_') || activeSection === 'system_health' || activeSection === 'db_schema')) {
       setActiveSection('dashboard');
     }
-  }, [isClientMode, activeSection]);
+  }, [trustedSessionUser, activeSection]);
 
   const [isImpersonating, setIsImpersonating] = useState<boolean>(() => {
     return localStorage.getItem('impersonation_active') === 'true';
@@ -767,8 +779,7 @@ export default function App() {
     try {
       const user = await sessionManager.login(identifier, password, rememberMe);
       const targetSchool = applyTrustedSessionUser(user);
-      const trustedRole = user.role as UserRole;
-      setCurrentPortal(trustedRole === 'SuperAdmin' ? 'admin' : 'school');
+      setCurrentPortal(hasTrustedPlatformAdminAccess(user) ? 'admin' : 'school');
 
       logAction('PORTAL_LOGIN', `تم تسجيل الدخول الموثوق إلى ${targetSchool.name}`, 'المصادقة والأمان');
       triggerNotification(`تم تسجيل الدخول إلى ${targetSchool.name} بنجاح`, 'success');
@@ -1429,7 +1440,7 @@ export default function App() {
     }
   }
 
-  const isSuperAdminViewActive = !isClientMode && trustedSessionUser?.role === 'SuperAdmin' && isSuperAdminPortalActive && activeSection !== 'system_health';
+  const isSuperAdminViewActive = !isClientMode && hasTrustedPlatformAdminAccess(trustedSessionUser) && isSuperAdminPortalActive && activeSection !== 'system_health';
 
   return (
     <div className="flex h-screen overflow-hidden bg-slate-50 font-sans text-slate-900 selection:bg-sky-500 selection:text-white w-full" dir="rtl">
@@ -1496,7 +1507,7 @@ export default function App() {
             theme={theme}
             onThemeToggle={toggleTheme}
             isClientMode={isClientMode}
-            onOpenSuperAdminPortal={trustedSessionUser?.role === 'SuperAdmin' ? () => {
+            onOpenSuperAdminPortal={hasTrustedPlatformAdminAccess(trustedSessionUser) ? () => {
               setIsSuperAdminPortalActive(true);
               setCurrentPortal('admin');
               setActiveSection('super_dashboard');
@@ -1896,7 +1907,10 @@ export default function App() {
             {/* VIEW: INVENTORY & STORES (إدارة المخزون والعهد المدرسية) */}
             {/* ========================================================== */}
             {activeSection === 'inventory' && (
-              <InventoryManagementPortal />
+              <InventoryManagementPortal
+                selectedSchool={selectedSchool}
+                triggerNotification={triggerNotification}
+              />
             )}
 
             {/* ========================================================== */}
@@ -2533,30 +2547,39 @@ export default function App() {
           {/* ========================================================== */}
           {/* VIEW: STUDENT ACCOUNTS SECTION (حسابات الطلاب والرسوم) */}
           {/* ========================================================== */}
-          {activeSection === 'student_accounts' && (
-            <StudentFinancialPortal
-              students={students}
-              setStudents={setStudents}
-              invoices={invoices}
-              setInvoices={setInvoices}
-              filteredStudents={filteredStudents}
-              handleStudentPaymentSubmit={handleStudentPaymentSubmit}
-              currentRole={currentRole}
-              setActiveSection={setActiveSection}
-              logAction={logAction}
-              triggerNotification={triggerNotification}
-              stages={stages}
-              setStages={setStages}
-              grades={grades}
-              setGrades={setGrades}
-              academicClasses={academicClasses}
-              setAcademicClasses={setAcademicClasses}
-              costCenters={costCenters}
-              setCostCenters={setCostCenters}
-              selectedSchool={selectedSchool}
-              selectedBranch={selectedBranch}
-            />
-          )}
+            {activeSection === 'student_accounts' && (
+              <AccountingErrorBoundary
+                title="تعذر تحميل وحدة رسوم الطلاب"
+                description="توقف تحميل واجهة الرسوم قبل عرضها. أعد المحاولة لتجديد ملف الوحدة أو ارجع للوحة المدرسة."
+                retryLabel="إعادة تحميل وحدة الرسوم"
+                onRetry={() => window.location.reload()}
+              >
+                <React.Suspense fallback={<div className="flex h-[400px] items-center justify-center text-slate-500 font-bold" role="status">جاري تحميل وحدة الرسوم والأقساط...</div>}>
+                  <StudentFinancialPortal
+                    students={students}
+                    setStudents={setStudents}
+                    invoices={invoices}
+                    setInvoices={setInvoices}
+                    filteredStudents={filteredStudents}
+                    handleStudentPaymentSubmit={handleStudentPaymentSubmit}
+                    currentRole={currentRole}
+                    setActiveSection={setActiveSection}
+                    logAction={logAction}
+                    triggerNotification={triggerNotification}
+                    stages={stages}
+                    setStages={setStages}
+                    grades={grades}
+                    setGrades={setGrades}
+                    academicClasses={academicClasses}
+                    setAcademicClasses={setAcademicClasses}
+                    costCenters={costCenters}
+                    setCostCenters={setCostCenters}
+                    selectedSchool={selectedSchool}
+                    selectedBranch={selectedBranch}
+                  />
+                </React.Suspense>
+              </AccountingErrorBoundary>
+            )}
 
           {/* ========================================================== */}
           {/* VIEW: DB SCHEMA SECTION (مخطط قاعدة البيانات والربط) */}

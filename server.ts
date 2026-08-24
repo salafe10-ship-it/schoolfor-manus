@@ -73,8 +73,9 @@ import { createStartupReadiness } from "./server/infrastructure/StartupReadiness
 import { FallbackStorage } from "./src/database/repositories/FallbackStorage.js";
 import { AdmissionInquiry, AdmissionStatus } from './src/modules/student-admission/domain/AdmissionInquiry.js';
 import { SupabaseAdmissionInquiryRepository } from './src/modules/student-admission/repository/SupabaseAdmissionInquiryRepository.js';
+import { CanonicalErpPostingService } from './src/modules/financial/application/CanonicalErpPostingService.js';
 
-type FinancialWriteMode = 'snapshot_read_only' | 'snapshot_write';
+type FinancialWriteMode = 'snapshot_read_only' | 'snapshot_write' | 'erp_integrated';
 
 /**
  * UAT-only bridge for the existing versioned financial snapshot writer.
@@ -82,9 +83,10 @@ type FinancialWriteMode = 'snapshot_read_only' | 'snapshot_write';
  * not prove a write into the canonical general_ledger/journal tables.
  */
 function resolveFinancialWriteMode(req: express.Request): FinancialWriteMode {
-  const configuredForUat = process.env.NODE_ENV !== 'production'
-    && process.env.FINANCIAL_SNAPSHOT_WRITE_MODE === 'snapshot_write';
-  if (!configuredForUat) return 'snapshot_read_only';
+  const configuredForWrite = (process.env.NODE_ENV !== 'production'
+    && process.env.FINANCIAL_SNAPSHOT_WRITE_MODE === 'snapshot_write')
+    || process.env.FINANCIAL_ERP_MODE === 'canonical';
+  if (!configuredForWrite) return 'snapshot_read_only';
 
   const user = (req as any).user;
   const decision = authorizationEngine.authorizeTenant(user, PERMISSIONS.FINANCIAL_WRITE, {
@@ -94,7 +96,8 @@ function resolveFinancialWriteMode(req: express.Request): FinancialWriteMode {
     method: req.method,
     ipAddress: req.ip || 'unknown'
   });
-  return decision.allowed ? 'snapshot_write' : 'snapshot_read_only';
+  if (!decision.allowed) return 'snapshot_read_only';
+  return (req as any).financialErpReady === true ? 'erp_integrated' : 'snapshot_write';
 }
 import { ErpProvisioningService } from './src/modules/identity/application/ErpProvisioningService.js';
 import { reviewAndImplement } from './src/services/ai/SolLunaOrchestrator.js';
@@ -137,6 +140,7 @@ function normalizeFinancialSnapshotPayload(value: unknown): Record<string, unkno
     'journalEntries',
     'chartOfAccounts',
     'feeConfigs',
+    'expenseAccruals',
   ];
   for (const key of arrayKeys) {
     if (payload[key] !== undefined && !Array.isArray(payload[key])) {
@@ -190,7 +194,7 @@ function validateFinancialSnapshotIntegrity(payload: Record<string, unknown>): v
       seen.add(id);
     }
   };
-  for (const key of ['invoices', 'studentReceiptVouchers', 'receiptVouchers', 'paymentVouchers', 'bankTransfers', 'suppliers', 'fixedAssets', 'journalEntries', 'feeConfigs']) validateIds(key);
+  for (const key of ['invoices', 'studentReceiptVouchers', 'receiptVouchers', 'paymentVouchers', 'bankTransfers', 'suppliers', 'fixedAssets', 'journalEntries', 'feeConfigs', 'expenseAccruals']) validateIds(key);
   for (const [index, row] of financialRecordRows(payload.invoices).entries()) {
     const amount = financialNumber(row.amount);
     const paid = financialNumber(row.paidAmount);
@@ -202,6 +206,9 @@ function validateFinancialSnapshotIntegrity(payload: Record<string, unknown>): v
   }
   for (const [index, row] of financialRecordRows(payload.studentReceiptVouchers).entries()) {
     if (financialNumber(row.amount) <= 0) throw new ValidationError(`قيمة سند القبض ${financialText(row.id, String(index + 1))} يجب أن تكون أكبر من صفر.`);
+  }
+  for (const [index, row] of financialRecordRows(payload.expenseAccruals).entries()) {
+    if (financialNumber(row.amount || row.totalAmount) <= 0) throw new ValidationError(`قيمة المصروف المستحق ${financialText(row.id, String(index + 1))} يجب أن تكون أكبر من صفر.`);
   }
   for (const [index, row] of financialRecordRows(payload.journalEntries).entries()) {
     const status = financialText(row.status, 'draft').toLowerCase();
@@ -892,6 +899,7 @@ async function startServer() {
             school_id: identity.schoolId,
             role: identity.role,
             permissions: identity.permissions || [],
+            platform_permissions: identity.platformPermissions || [],
             name: identity.name,
             email: identity.email,
             school: identity.school,
@@ -988,6 +996,7 @@ async function startServer() {
             school_id: identity.schoolId,
             role: identity.role,
             permissions: identity.permissions || [],
+            platform_permissions: identity.platformPermissions || [],
             name: identity.name,
             email: identity.email,
             school: identity.school,
@@ -2400,6 +2409,8 @@ async function startServer() {
       }
 
       let snapshot: { data: Record<string, unknown>; version: number; updated_at: string } | null = null;
+      let canonicalErpReady = false;
+      let canonicalErpModel: Awaited<ReturnType<typeof CanonicalErpPostingService.readModel>> | null = null;
       await UnitOfWork.runInTransaction(
         schoolId,
         {
@@ -2421,26 +2432,74 @@ async function startServer() {
             [tenantId, schoolId]
           );
           snapshot = result.rows[0] || null;
+          canonicalErpReady = await CanonicalErpPostingService.isProvisioned(transaction);
+          if (canonicalErpReady) {
+            canonicalErpModel = await CanonicalErpPostingService.readModel(transaction, schoolId);
+          }
         },
         tenantContext
       );
+      (req as any).financialErpReady = canonicalErpReady;
+      const snapshotData = snapshot?.data || {};
+      let responseData = snapshotData;
+      if (canonicalErpReady && canonicalErpModel) {
+        const sourceLinks = new Map(
+          canonicalErpModel.sourceLinks.map(link => [`${link.sourceType}:${link.sourceId}`, link.journalEntryId])
+        );
+        const linkRows = (value: unknown, sourceType: string) => financialRecordRows(value).map(row => {
+          const sourceId = financialText(row.id);
+          const journalEntryId = sourceLinks.get(`${sourceType}:${sourceId}`);
+          return journalEntryId
+            ? { ...row, legacyJournalEntryId: row.journalEntryId, journalEntryId }
+            : row;
+        });
+        const linkedPaymentRows = financialRecordRows(snapshotData.paymentVouchers).map(row => {
+          const sourceId = financialText(row.id);
+          const journalEntryId = sourceLinks.get(`payment_voucher:${sourceId}`) || sourceLinks.get(`expense_accrual:${sourceId}`);
+          return journalEntryId
+            ? { ...row, legacyJournalEntryId: row.journalEntryId, journalEntryId }
+            : row;
+        });
+        responseData = {
+          ...snapshotData,
+          invoices: linkRows(snapshotData.invoices, 'student_fee_invoice'),
+          studentReceiptVouchers: linkRows(snapshotData.studentReceiptVouchers, 'student_receipt'),
+          receiptVouchers: linkRows(snapshotData.receiptVouchers, 'student_receipt'),
+          paymentVouchers: linkedPaymentRows,
+          journalEntries: canonicalErpModel.journalEntries.length > 0
+            ? canonicalErpModel.journalEntries
+            : snapshotData.journalEntries,
+          chartOfAccounts: canonicalErpModel.chartOfAccounts.length > 0
+            ? canonicalErpModel.chartOfAccounts
+            : snapshotData.chartOfAccounts,
+          expenseAccruals: canonicalErpModel.expenseAccruals,
+          erpJournalEntries: canonicalErpModel.journalEntries,
+          erpLedgerEntries: canonicalErpModel.ledgerEntries,
+          erpChartOfAccounts: canonicalErpModel.chartOfAccounts,
+          erpExpenseAccruals: canonicalErpModel.expenseAccruals
+        };
+      }
       EnterpriseLogger.info('Financial snapshot read completed', 'FinancialSnapshotRoute', {
         tenantId,
         schoolId,
         snapshotFound: Boolean(snapshot),
         snapshotVersion: snapshot?.version || 0,
+        canonicalErpReady,
+        canonicalJournalCount: canonicalErpModel?.journalEntries.length || 0,
         invoiceCount: Array.isArray((snapshot?.data as any)?.invoices) ? (snapshot?.data as any).invoices.length : -1,
         receiptCount: Array.isArray((snapshot?.data as any)?.studentReceiptVouchers) ? (snapshot?.data as any).studentReceiptVouchers.length : -1,
       });
 
       res.json({
         success: true,
-        data: snapshot?.data || {},
+        data: responseData,
         meta: {
           source: 'supabase',
           version: snapshot?.version || 0,
           updatedAt: snapshot?.updated_at || null,
           writeMode: resolveFinancialWriteMode(req),
+          erpIntegration: canonicalErpReady ? 'ready' : 'not_provisioned',
+          canonicalJournalCount: canonicalErpModel?.journalEntries.length || 0,
         },
         message: "Financial and accounting database retrieved successfully."
       });
@@ -2475,6 +2534,8 @@ async function startServer() {
       const updatedAt = new Date().toISOString();
       let nextVersion = 1;
       let databaseActorId = '';
+      let canonicalErpReady = false;
+      let canonicalErpSync: Awaited<ReturnType<typeof CanonicalErpPostingService.syncSnapshot>> | null = null;
       await UnitOfWork.runInTransaction(
         schoolId,
         {
@@ -2537,9 +2598,20 @@ async function startServer() {
             payload,
             nextVersion
           );
+          canonicalErpReady = await CanonicalErpPostingService.isProvisioned(transaction);
+          if (canonicalErpReady) {
+            canonicalErpSync = await CanonicalErpPostingService.syncSnapshot(
+              transaction,
+              tenantId,
+              schoolId,
+              databaseActorId,
+              payload
+            );
+          }
         },
         tenantContext
       );
+      (req as any).financialErpReady = canonicalErpReady;
 
       // The snapshot transaction has already committed at this point. An
       // unavailable audit_logs sidecar must not make the client report a
@@ -2564,7 +2636,21 @@ async function startServer() {
 
       res.json({
         success: true,
-        meta: { source: 'supabase', version: nextVersion, auditSidecar: 'unavailable' },
+        meta: {
+          source: 'supabase',
+          version: nextVersion,
+          auditSidecar: 'unavailable',
+          writeMode: resolveFinancialWriteMode(req),
+          erpIntegration: canonicalErpReady ? 'ready' : 'not_provisioned',
+          erpSync: canonicalErpSync
+            ? {
+                createdJournalCount: canonicalErpSync.createdJournalCount,
+                existingJournalCount: canonicalErpSync.existingJournalCount,
+                ledgerLineCount: canonicalErpSync.ledgerLineCount,
+                expenseAccrualCount: canonicalErpSync.expenseAccrualCount
+              }
+            : null
+        },
         message: "Financial settings saved successfully."
       });
     } catch (err: any) {

@@ -295,6 +295,7 @@ export default function SuperAdminView({
                 setIsSuperAdminPortalActive(false);
                 if (setCurrentPortal) setCurrentPortal('school');
                 if (setCurrentRole) setCurrentRole('SchoolAdmin');
+                setActiveSection('dashboard');
                 triggerNotification('تم الخروج من لوحة الإدارة المركزية والعودة لبوابة المدرسة', 'info');
               }}
               className="w-full bg-rose-950/40 hover:bg-rose-950/80 border border-rose-900 text-rose-300 px-4 py-2.5 text-xs font-black transition-all flex items-center justify-center gap-2 cursor-pointer shadow-xs"

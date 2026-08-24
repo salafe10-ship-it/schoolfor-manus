@@ -16,6 +16,8 @@
     "db:seed": "tsx src/database/scripts/seed.ts",
     "provisioning:bootstrap": "tsx scripts/provisioning-bootstrap.ts",
     "provisioning:admin": "tsx scripts/provisioning-admin.ts",
+    "provisioning:school-owner": "tsx scripts/provisioning-school-owner.ts",
+    "financial:seed-uat-review": "tsx scripts/seed-uat-accounting-review.ts",
     "provisioning:platform-admin": "tsx scripts/provisioning-platform-admin.ts",
     "test": "vitest",
     "test:coverage": "vitest run --coverage"

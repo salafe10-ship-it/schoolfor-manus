@@ -73,7 +73,8 @@ export const ClosingTab = () => {
   formatCurrency, triggerNotification, logAction, handlePostAllPendingJvs,
   persistCanonicalFinancialSnapshot, canonicalFinancialStatus, canonicalFinancialWriteMode
 } = React.useContext(AccountingContext);
-  const closingProofReady = canonicalFinancialStatus === 'ready' && canonicalFinancialWriteMode === 'ledger_ready';
+  const canonicalLedgerReady = canonicalFinancialWriteMode === 'ledger_ready' || canonicalFinancialWriteMode === 'erp_integrated';
+  const closingProofReady = canonicalFinancialStatus === 'ready' && canonicalLedgerReady;
   const ensureCanonicalClosingPersistence = () => {
     if (closingProofReady && typeof persistCanonicalFinancialSnapshot === 'function') return true;
     triggerNotification('عمليات الإقفال وفتح السنة متوقفة: المصدر الحالي snapshot للقراءة فقط، ولم تعتمد خدمة إقفال كانونية.', 'warning');
@@ -178,7 +179,7 @@ export const ClosingTab = () => {
                 </div>
               </div>
 
-              {canonicalFinancialStatus === 'ready' && canonicalFinancialWriteMode !== 'ledger_ready' && (
+              {canonicalFinancialStatus === 'ready' && !canonicalLedgerReady && (
                 <div role="alert" className="rounded-xl border border-amber-300 bg-amber-50 px-4 py-3 text-xs font-bold text-amber-900">
                   {canonicalFinancialWriteMode === 'snapshot_write'
                     ? 'الإقفال السنوي متوقف: المصدر الحالي snapshot UAT للكتابة المركزية، لكنه لا يثبت خدمة إقفال كانونية تحفظ الاعتماد والقيد الختامي في دفتر الأستاذ العام. لا يتم إنشاء أو تعديل أرصدة من هذه الشاشة.'
@@ -659,8 +660,8 @@ export const ClosingTab = () => {
                             <div className="grid grid-cols-2 gap-2 text-[10px] font-mono font-bold text-slate-650 bg-white/60 p-2 rounded border border-slate-100">
                               <div>إجمالي الحركات المدينة: {accounts.filter(a => a.type === 'فرعي' && (a.classification === 'أصول' || a.classification === 'مصروفات')).reduce((s,a) => s + a.balance, 0).toLocaleString()} د.ل</div>
                               <div>إجمالي الحركات الدائنة: {accounts.filter(a => a.type === 'فرعي' && (a.classification === 'خصوم' || a.classification === 'حقوق ملكية' || a.classification === 'إيرادات')).reduce((s,a) => s + a.balance, 0).toLocaleString()} د.ل</div>
-                              <div className={`col-span-2 text-center font-extrabold border-t border-slate-100 pt-1 mt-1 text-[11px] ${canonicalFinancialWriteMode === 'ledger_ready' ? 'text-emerald-700' : 'text-amber-700'}`}>
-                                {canonicalFinancialWriteMode === 'ledger_ready'
+                              <div className={`col-span-2 text-center font-extrabold border-t border-slate-100 pt-1 mt-1 text-[11px] ${canonicalLedgerReady ? 'text-emerald-700' : 'text-amber-700'}`}>
+                                {canonicalLedgerReady
                                   ? 'الفارق الحالي: 0.00 د.ل (تطابق تام ومكتمل بنسبة 100%)'
                                   : 'الفارق غير متحقق — snapshot للقراءة فقط ولا توجد قائمة إقفال كانونية.'}
                               </div>
@@ -676,7 +677,7 @@ export const ClosingTab = () => {
                           <p className="text-[10px] text-slate-500">
                             {hasCriticalErrors
                               ? '🚨 يوجد أخطاء محاسبية حرجة (باللون الأحمر) تمنع إقفال السنة المالية. يرجى ترحيل القيود المعلقة.'
-                              : canonicalFinancialWriteMode === 'ledger_ready'
+                              : canonicalLedgerReady
                                 ? '✓ جميع الشروط والمطابقات الأساسية ممتازة ومكتملة. النظام مهيأ محاسبياً للإقفال النهائي.'
                                 : '⚠️ الفحص للعرض فقط؛ لا يمكن إثبات جاهزية الإقفال قبل اعتماد دفتر الأستاذ الكانوني.'}
                           </p>

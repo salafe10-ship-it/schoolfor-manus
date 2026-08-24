@@ -83,8 +83,9 @@ export const JournalEntriesTab = () => {
 
   const [jvPage, setJvPage] = React.useState(1);
   const JV_PAGE_SIZE = 15;
-  const journalWritesAreCanonical = canonicalFinancialWriteMode === 'ledger_ready';
+  const journalWritesAreCanonical = canonicalFinancialWriteMode === 'ledger_ready' || canonicalFinancialWriteMode === 'erp_integrated';
   const journalWritesAreAvailable = journalWritesAreCanonical || canonicalFinancialWriteMode === 'snapshot_write';
+  const isPostedJournalStatus = (status: unknown) => ['مرحل', 'مرحّل', 'مُرحّل', 'posted', 'approved', 'معتمد'].includes(String(status || '').trim().toLowerCase());
   const journalWriteBlockedLabel = canonicalFinancialWriteMode === 'snapshot_write'
     ? 'حفظ مركزي UAT — غير معتمد كترحيل GL'
     : 'قراءة فقط';
@@ -1376,7 +1377,7 @@ const handleImportJvLinesFromCSV = (csvText: string) => {
                     <div>
                       <span className="text-[10px] font-bold text-slate-500 block mb-1">القيود المرحلة للأستاذ</span>
                       <span className="text-lg font-black text-indigo-900 font-mono">
-                        {journalEntries.filter(j => j.status === 'مرحل').length} قيود
+                        {journalEntries.filter(j => isPostedJournalStatus(j.status)).length} قيود
                       </span>
                     </div>
                     <div className="bg-indigo-50 text-indigo-700 p-2 rounded-lg">
@@ -1440,7 +1441,9 @@ const handleImportJvLinesFromCSV = (csvText: string) => {
                       </tr>
                     </thead>
                     <tbody className="divide-y divide-slate-200 font-semibold text-slate-800">
-                      {journalEntries.slice((jvPage - 1) * JV_PAGE_SIZE, jvPage * JV_PAGE_SIZE).map((entry, idx) => (
+                      {journalEntries.slice((jvPage - 1) * JV_PAGE_SIZE, jvPage * JV_PAGE_SIZE).map((entry, idx) => {
+                        const isCanonicalPostedEntry = String(entry.id || '').startsWith('ERP-JV-') && isPostedJournalStatus(entry.status);
+                        return (
                         <tr 
                           key={entry.id} 
                           className={`h-[28px] hover:bg-slate-50 transition cursor-pointer ${idx % 2 === 1 ? 'bg-slate-50/40' : ''}`}
@@ -1483,7 +1486,7 @@ const handleImportJvLinesFromCSV = (csvText: string) => {
                           <td className="px-3 py-1 text-center border-l border-slate-200">
                             <span className={`px-2 py-0.5 rounded text-[9px] font-black border ${
                               entry.status === 'معتمد' ? 'bg-indigo-50 text-indigo-800 border-indigo-100' :
-                              entry.status === 'مرحل' ? 'bg-emerald-50 text-emerald-800 border-emerald-100' :
+                              isPostedJournalStatus(entry.status) ? 'bg-emerald-50 text-emerald-800 border-emerald-100' :
                               'bg-amber-50 text-amber-800 border-amber-100'
                             }`}>
                               {entry.status}
@@ -1495,20 +1498,21 @@ const handleImportJvLinesFromCSV = (csvText: string) => {
                               className="text-blue-600 hover:text-blue-750 font-black hover:underline"
                               title="عرض تفاصيل القيد"
                             >
-                              {journalWritesAreAvailable ? 'عرض/تحرير 🖥️' : 'عرض فقط 👁️'}
+                              {isCanonicalPostedEntry ? 'عرض التفاصيل 👁️' : journalWritesAreAvailable ? 'عرض/تحرير 🖥️' : 'عرض فقط 👁️'}
                             </button>
                             <span className="text-slate-300">|</span>
                             <button
                               onClick={() => handleDeleteJv(entry.id)}
-                              disabled={!journalWritesAreAvailable}
+                              disabled={!journalWritesAreAvailable || isCanonicalPostedEntry}
                               className="text-rose-500 hover:text-rose-600 font-bold hover:underline disabled:opacity-40 disabled:no-underline disabled:cursor-not-allowed"
-                              title={journalWritesAreAvailable ? 'حذف القيد من المصدر المركزي' : 'الحذف متوقف — دفتر الأستاذ للقراءة فقط'}
+                              title={isCanonicalPostedEntry ? 'القيد الكانوني محمي؛ استخدم الإلغاء العكسي من مصدر الحركة.' : journalWritesAreAvailable ? 'حذف القيد من المصدر المركزي' : 'الحذف متوقف — دفتر الأستاذ للقراءة فقط'}
                             >
-                              {journalWritesAreAvailable ? 'حذف 🗑️' : 'حذف — قراءة فقط'}
+                              {isCanonicalPostedEntry ? 'محمي — canonical' : journalWritesAreAvailable ? 'حذف 🗑️' : 'حذف — قراءة فقط'}
                             </button>
                           </td>
                         </tr>
-                      ))}
+                        );
+                      })}
                     </tbody>
                   </table>
                   {journalEntries.length > JV_PAGE_SIZE && (

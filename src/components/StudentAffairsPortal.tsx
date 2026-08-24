@@ -38,6 +38,16 @@ function canonicalDateInput(value: unknown): string {
   return isoDate?.[1] || '';
 }
 
+function printableText(value: unknown): string {
+  return String(value ?? '—').replace(/[&<>"']/g, character => ({
+    '&': '&amp;',
+    '<': '&lt;',
+    '>': '&gt;',
+    '"': '&quot;',
+    "'": '&#39;'
+  }[character] || character));
+}
+
 function canonicalGuardianRelationship(value: string): string {
   const normalized = value.trim();
   if (['parent', 'legal_guardian', 'foster_parent', 'sibling', 'relative', 'sponsor', 'other'].includes(normalized)) {
@@ -98,7 +108,10 @@ export default function StudentAffairsPortal({
   logAction,
   triggerNotification,
   setActiveSection,
-  canUseTrustedPermission = () => false
+  canUseTrustedPermission = () => false,
+  stages = [],
+  grades = [],
+  academicClasses = []
 }: StudentAffairsPortalProps) {
   const canWriteStudents = canUseTrustedPermission(PERMISSIONS.STUDENT_WRITE);
   const canDeleteStudents = canUseTrustedPermission(PERMISSIONS.STUDENT_DELETE);
@@ -133,6 +146,14 @@ export default function StudentAffairsPortal({
   const [selectedStudent, setSelectedStudent] = useState<Student | null>(null);
   const [selectedStudentIds, setSelectedStudentIds] = useState<string[]>([]);
   const [printPreviewStudents, setPrintPreviewStudents] = useState<Student[] | null>(null);
+  const [isPrintFilterOpen, setIsPrintFilterOpen] = useState(false);
+  const [printFilterStage, setPrintFilterStage] = useState('all');
+  const [printFilterGrade, setPrintFilterGrade] = useState('all');
+  const [printFilterClass, setPrintFilterClass] = useState('all');
+  const [printFilterSection, setPrintFilterSection] = useState('all');
+  const [printOnlySelected, setPrintOnlySelected] = useState(false);
+  const [isPreparingPrint, setIsPreparingPrint] = useState(false);
+  const [printNotice, setPrintNotice] = useState('');
 
   // Advanced Search Filter State
   const [searchStage, setSearchStage] = useState<string>('all');
@@ -320,12 +341,88 @@ export default function StudentAffairsPortal({
     // App supplies an inline notification callback; it must not refetch on
     // every parent render.
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [selectedSchool.id]);
+  }, [selectedSchool.id, studentRefreshToken]);
 
   // The server owns filtering, sorting, and pagination. These aliases keep
   // downstream row actions/export code scoped to the current server page.
   const filteredStudents = currentSchoolStudents;
   const paginatedStudents = currentSchoolStudents;
+
+  const printStageOptions = useMemo(() => {
+    const options = new Map<string, string>();
+    stages
+      .filter(stage => stage?.isActive !== false)
+      .forEach(stage => {
+        const value = String(stage?.id || '').trim();
+        if (value) options.set(value, String(stage?.name || stage?.code || value));
+      });
+    currentSchoolStudents.forEach(student => {
+      const rawStudent = student as Student & Record<string, unknown>;
+      const value = String(rawStudent.stageId || rawStudent.stage || '').trim();
+      if (value && !options.has(value)) options.set(value, value);
+    });
+    return Array.from(options.entries()).map(([value, label]) => ({ value, label }));
+  }, [stages, currentSchoolStudents]);
+
+  const printGradeOptions = useMemo(() => {
+    const options = new Map<string, string>();
+    grades
+      .filter(grade => grade?.isActive !== false && (printFilterStage === 'all' || String(grade?.stageId || '') === printFilterStage))
+      .forEach(grade => {
+        const value = String(grade?.id || '').trim();
+        if (value) options.set(value, String(grade?.name || grade?.code || value));
+      });
+    currentSchoolStudents.forEach(student => {
+      const rawStudent = student as Student & Record<string, unknown>;
+      const value = String(rawStudent.gradeId || rawStudent.grade || '').trim();
+      const stageId = String(rawStudent.stageId || '').trim();
+      if (value && (printFilterStage === 'all' || !stageId || stageId === printFilterStage) && !options.has(value)) options.set(value, value);
+    });
+    return Array.from(options.entries()).map(([value, label]) => ({ value, label }));
+  }, [grades, printFilterStage, currentSchoolStudents]);
+
+  const printClassOptions = useMemo(() => {
+    const options = new Map<string, string>();
+    academicClasses
+      .filter(academicClass => academicClass?.isActive !== false && (printFilterGrade === 'all' || String(academicClass?.gradeId || '') === printFilterGrade))
+      .forEach(academicClass => {
+        const value = String(academicClass?.id || '').trim();
+        if (value) options.set(value, String(academicClass?.name || academicClass?.code || value));
+      });
+    currentSchoolStudents.forEach(student => {
+      const rawStudent = student as Student & Record<string, unknown>;
+      const value = String(rawStudent.classId || rawStudent.classroom || '').trim();
+      const gradeId = String(rawStudent.gradeId || '').trim();
+      if (value && (printFilterGrade === 'all' || !gradeId || gradeId === printFilterGrade) && !options.has(value)) options.set(value, value);
+    });
+    return Array.from(options.entries()).map(([value, label]) => ({ value, label }));
+  }, [academicClasses, printFilterGrade, currentSchoolStudents]);
+
+  const printSectionOptions = useMemo(() => {
+    const sections = new Set(['أ', 'ب', 'ج', 'د']);
+    currentSchoolStudents.forEach(student => {
+      const section = String(student.section || '').trim();
+      if (section) sections.add(section);
+    });
+    return Array.from(sections);
+  }, [currentSchoolStudents]);
+
+  const resolveStudentAcademicContext = (student: Student) => {
+    const rawStudent = student as Student & Record<string, unknown>;
+    const classValue = String(rawStudent.classId || rawStudent.classroom || '').trim();
+    const classRecord = academicClasses.find(academicClass => [academicClass?.id, academicClass?.code, academicClass?.name].some(value => String(value || '').trim() === classValue));
+    const gradeId = String(rawStudent.gradeId || classRecord?.gradeId || '').trim();
+    const gradeRecord = grades.find(grade => String(grade?.id || '').trim() === gradeId || String(grade?.name || '').trim() === String(rawStudent.grade || '').trim());
+    return {
+      stageId: String(rawStudent.stageId || gradeRecord?.stageId || '').trim(),
+      gradeId,
+      classId: String(rawStudent.classId || classRecord?.id || '').trim(),
+      classroom: String(rawStudent.classroom || '').trim(),
+      classCode: String(classRecord?.code || '').trim(),
+      className: String(classRecord?.name || '').trim(),
+      section: String(student.section || '').trim()
+    };
+  };
 
   const handleOpenViewStudent = (student: Student) => {
     setViewStudent(student);
@@ -671,11 +768,10 @@ export default function StudentAffairsPortal({
       triggerNotification('لا تملك صلاحية تغيير حالة قيد الطالب.', 'warning');
       return;
     }
-    if (String(student.status) === 'suspended') {
-      triggerNotification('إعادة القيد ليست عودة مباشرة؛ يجب تنفيذ مسار تصحيح/اعتماد الحالة المعتمد.', 'warning');
-      return;
-    }
-    const newStatus = student.status === 'suspended' ? 'active' : 'suspended';
+    const isSuspended = String(student.status) === 'suspended';
+    const newStatus = isSuspended ? 'active' : 'suspended';
+    const actionLabel = isSuspended ? 'إعادة القيد' : 'إيقاف القيد';
+    if (!window.confirm(`هل تريد ${actionLabel} للطالب (${student.name})؟`)) return;
     try {
       const response = await StudentRepository.saveStudent({ id: student.id, status: newStatus });
       const persistedStudent = response?.data?.student || response?.student;
@@ -683,7 +779,7 @@ export default function StudentAffairsPortal({
         throw new Error('لم يُرجع الخادم سجل الطالب بعد تغيير الحالة.');
       }
       setStudents(current => current.map(currentStudent => currentStudent.id === student.id ? persistedStudent : currentStudent));
-      const statusText = newStatus === 'suspended' ? 'إيقاف قيد' : 'إعادة تفعيل قيد';
+      const statusText = newStatus === 'suspended' ? 'إيقاف القيد' : 'إعادة القيد';
       logAction('SUSPEND_STUDENT', `${statusText} الطالب: ${student.name}`, 'شؤون الطلاب');
       triggerNotification(`تم ${statusText} الطالب ${student.name} بنجاح`, 'success');
     } catch (error: any) {
@@ -764,25 +860,119 @@ export default function StudentAffairsPortal({
   };
 
   // Export PDF / Print List
-  const handlePrintList = () => {
-    if (isLoadingStudents) {
-      triggerNotification('انتظر اكتمال تحميل الصفوف الحالية قبل الطباعة.', 'warning');
+  const handlePrintList = (onlySelected = false) => {
+    if (onlySelected && selectedStudentIds.length === 0) {
+      triggerNotification('حدد طالبًا واحدًا على الأقل قبل طباعة المحددين.', 'warning');
       return;
     }
-    if (studentLoadError) {
-      triggerNotification('لا يمكن الطباعة أثناء وجود خطأ في تحميل بيانات الطلاب. أعد المحاولة أولًا.', 'warning');
-      return;
-    }
-    const printableStudents = selectedStudentIds.length > 0
-      ? filteredStudents.filter(student => selectedStudentIds.includes(student.id))
-      : filteredStudents;
-    if (printableStudents.length === 0) {
-      triggerNotification('لا توجد صفوف معروضة حاليًا للطباعة.', 'warning');
-      return;
-    }
-    setPrintPreviewStudents(printableStudents);
-    triggerNotification('تم إعداد معاينة كشف الطلاب الحالي. راجعها قبل الطباعة.', 'success');
+    setPrintOnlySelected(onlySelected);
+    setPrintFilterStage('all');
+    setPrintFilterGrade('all');
+    setPrintFilterClass('all');
+    setPrintFilterSection('all');
+    setIsPrintFilterOpen(true);
   };
+
+  const loadAllStudentsForPrint = async (): Promise<Student[]> => {
+    const pageSize = 100;
+    const uniqueStudents = new Map<string, Student>();
+    let page = 1;
+    let totalPages = 1;
+    do {
+      const response = await StudentRepository.list({
+        page,
+        limit: pageSize,
+        sortBy: 'name',
+        sortOrder: 'asc'
+      });
+      const rows = Array.isArray(response?.data) ? response.data as Student[] : [];
+      rows.forEach(student => uniqueStudents.set(student.id, student));
+      const totalCount = Number(response?.meta?.totalCount) || rows.length;
+      totalPages = Math.max(1, Number(response?.meta?.totalPages) || Math.ceil(totalCount / pageSize));
+      page += 1;
+      if (rows.length === 0) break;
+    } while (page <= totalPages);
+    return Array.from(uniqueStudents.values());
+  };
+
+  const handleApplyPrintFilters = async () => {
+    if (isPreparingPrint) return;
+    setIsPreparingPrint(true);
+    try {
+      const sourceStudents = await loadAllStudentsForPrint();
+      const selectedIds = new Set(selectedStudentIds);
+      const printableStudents = sourceStudents.filter(student => {
+        if (printOnlySelected && !selectedIds.has(student.id)) return false;
+        const context = resolveStudentAcademicContext(student);
+        if (printFilterStage !== 'all' && context.stageId !== printFilterStage) return false;
+        if (printFilterGrade !== 'all' && context.gradeId !== printFilterGrade) return false;
+        if (printFilterClass !== 'all' && ![context.classId, context.classroom, context.classCode, context.className].includes(printFilterClass)) return false;
+        if (printFilterSection !== 'all' && context.section !== printFilterSection) return false;
+        return true;
+      });
+      if (printableStudents.length === 0) {
+        triggerNotification('لا توجد طلاب مطابقون لخيارات الطباعة الحالية.', 'warning');
+        return;
+      }
+      setPrintPreviewStudents(printableStudents);
+      setIsPrintFilterOpen(false);
+      triggerNotification(`تم إعداد كشف الطباعة لعدد ${printableStudents.length} طالب.`, 'success');
+    } catch (error: any) {
+      triggerNotification(error?.message || 'تعذر تحميل بيانات الطلاب الكاملة للطباعة.', 'warning');
+    } finally {
+      setIsPreparingPrint(false);
+    }
+  };
+
+  const handlePrintStudentsPreview = () => {
+    if (!printPreviewStudents || printPreviewStudents.length === 0) {
+      setPrintNotice('لا توجد بيانات جاهزة للطباعة من المعاينة.');
+      triggerNotification('لا توجد بيانات جاهزة للطباعة من المعاينة.', 'warning');
+      return;
+    }
+    if (typeof window.print !== 'function') {
+      setPrintNotice('المتصفح الداخلي لا يفتح نافذة الطباعة الأصلية. استخدم Ctrl+P أو افتح البرنامج في Chrome / Edge.');
+      triggerNotification('المتصفح الداخلي لا يدعم تشغيل الطابعة مباشرة. استخدم Ctrl+P أو افتح البرنامج في Chrome / Edge.', 'warning');
+      return;
+    }
+    window.focus();
+    window.print();
+    setPrintNotice('تم إرسال أمر الطباعة. إذا لم تظهر نافذة الطابعة، استخدم Ctrl+P ثم اختر الطابعة واضغط طباعة.');
+    triggerNotification('تم إرسال أمر الطباعة. إذا لم تظهر نافذة الطابعة، استخدم Ctrl+P.', 'info');
+  };
+
+  const handleDownloadPrintableStudents = () => {
+    if (!printPreviewStudents || printPreviewStudents.length === 0) {
+      setPrintNotice('لا توجد بيانات جاهزة لتنزيلها للطباعة.');
+      triggerNotification('لا توجد بيانات جاهزة لتنزيلها للطباعة.', 'warning');
+      return;
+    }
+    const rows = printPreviewStudents.map((student, index) => {
+      const context = resolveStudentAcademicContext(student);
+      return `<tr><td>${index + 1}</td><td>${printableText(student.studentCode || student.academicId || '—')}</td><td>${printableText(student.name)}</td><td>${printableText(context.className || context.classroom || 'غير محدد')} (${printableText(context.section || 'غير محددة')})</td><td>${printableText(student.guardianName || 'غير مرتبط')}</td><td>${printableText(student.status || 'نشط')}</td></tr>`;
+    }).join('');
+    const html = `<!doctype html><html lang="ar" dir="rtl"><head><meta charset="utf-8"><title>كشف الطلاب - ${printableText(selectedSchool.name || 'SchoolForManus')}</title><style>body{font-family:Arial,sans-serif;color:#111;margin:24px}h1{font-size:20px;margin:0 0 6px}p{font-size:12px;margin:4px 0 16px}table{width:100%;border-collapse:collapse;font-size:12px}th,td{border:1px solid #9aa7b8;padding:7px;text-align:right}th{background:#e5ebf3;font-weight:700}@media print{@page{size:A4 landscape;margin:12mm}body{margin:0}th{background:#e5ebf3!important;-webkit-print-color-adjust:exact;print-color-adjust:exact}}</style></head><body><h1>${printableText(selectedSchool.name || 'SchoolForManus')}</h1><p>إدارة شؤون الطلاب والنتائج الأكاديمية — ${printableText(printScopeSummary)}</p><table><thead><tr><th>#</th><th>رقم الطالب</th><th>اسم الطالب رباعي</th><th>الصف / الشعبة</th><th>ولي الأمر</th><th>الحالة</th></tr></thead><tbody>${rows}</tbody></table></body></html>`;
+    const downloadUrl = URL.createObjectURL(new Blob([html], { type: 'text/html;charset=utf-8' }));
+    const link = document.createElement('a');
+    link.href = downloadUrl;
+    link.download = `كشف-الطلاب-${new Date().toISOString().slice(0, 10)}.html`;
+    document.body.appendChild(link);
+    link.click();
+    document.body.removeChild(link);
+    URL.revokeObjectURL(downloadUrl);
+    setPrintNotice('تم تنزيل ملف كشف للطباعة. افتحه في Chrome أو Edge ثم اطبع من قائمة المتصفح.');
+    triggerNotification('تم تنزيل كشف الطلاب بصيغة HTML جاهزة للطباعة.', 'success');
+  };
+
+  const printScopeSummary = useMemo(() => {
+    const stageLabel = printStageOptions.find(option => option.value === printFilterStage)?.label || printFilterStage;
+    const gradeLabel = printGradeOptions.find(option => option.value === printFilterGrade)?.label || printFilterGrade;
+    const classLabel = printClassOptions.find(option => option.value === printFilterClass)?.label || printFilterClass;
+    const sectionLabel = printFilterSection === 'all' ? 'الكل' : `شعبة ${printFilterSection}`;
+    return printFilterStage === 'all' && printFilterGrade === 'all' && printFilterClass === 'all' && printFilterSection === 'all'
+      ? 'النطاق: جميع الطلاب'
+      : `المرحلة: ${printFilterStage === 'all' ? 'الكل' : stageLabel} • الصف: ${printFilterGrade === 'all' ? 'الكل' : gradeLabel} • الفصل: ${printFilterClass === 'all' ? 'الكل' : classLabel} • ${sectionLabel}`;
+  }, [printStageOptions, printGradeOptions, printClassOptions, printFilterStage, printFilterGrade, printFilterClass, printFilterSection]);
 
   return (
     <div 
@@ -894,7 +1084,8 @@ export default function StudentAffairsPortal({
           </button>
 
           <button 
-            onClick={handlePrintList}
+            type="button"
+            onClick={() => handlePrintList(false)}
             className="bg-[#2a1d13] border border-[#d4af37]/40 hover:border-[#f7d174] text-amber-200 px-3 py-2 rounded-xl text-xs font-bold flex items-center gap-1.5 hover:scale-105 transition-all shadow cursor-pointer"
             title="طباعة الكشف المعاين"
           >
@@ -1137,7 +1328,7 @@ export default function StudentAffairsPortal({
                   </button>
 
                   <button 
-                    onClick={handlePrintList}
+                    onClick={() => handlePrintList(true)}
                     className="bg-[#2a1a0e] text-amber-300 px-3 py-1.5 rounded-xl text-xs font-bold flex items-center gap-1 shadow cursor-pointer"
                   >
                     <Printer className="w-3.5 h-3.5" />
@@ -1295,8 +1486,8 @@ export default function StudentAffairsPortal({
                               <button 
                                 onClick={() => handleToggleSuspendStudent(st)}
                                 title={isSuspended ? 'إعادة القيد' : 'إيقاف القيد'}
-                                disabled={isSuspended || !canWriteStudents}
-                                aria-disabled={isSuspended || !canWriteStudents}
+                                disabled={!canWriteStudents}
+                                aria-disabled={!canWriteStudents}
                                 className={`p-1.5 rounded-lg border transition-all ${isSuspended ? 'bg-slate-100 text-slate-400 border-slate-200 cursor-not-allowed' : 'bg-rose-50 text-rose-800 border-rose-300 cursor-pointer'}`}
                               >
                                 {isSuspended ? <UserCheck className="w-3.5 h-3.5" /> : <UserX className="w-3.5 h-3.5" />}
@@ -1469,7 +1660,7 @@ export default function StudentAffairsPortal({
           </div>
 
           <div className="grid grid-cols-1 sm:grid-cols-3 gap-4">
-            <div className="bg-white border border-amber-200 rounded-2xl p-4 shadow-xs hover:border-[#d4af37] transition-all space-y-3 cursor-pointer" onClick={handlePrintList}>
+            <div className="bg-white border border-amber-200 rounded-2xl p-4 shadow-xs hover:border-[#d4af37] transition-all space-y-3 cursor-pointer" onClick={() => handlePrintList(false)}>
               <div className="w-10 h-10 rounded-xl bg-[#2a1a0e] text-amber-300 flex items-center justify-center">
                 <Printer className="w-5 h-5" />
               </div>
@@ -2016,23 +2207,152 @@ export default function StudentAffairsPortal({
         </div>
       )}
 
+      {isPrintFilterOpen && (
+        <div className="fixed inset-0 z-[90] bg-black/70 backdrop-blur-xs flex items-center justify-center p-4" role="dialog" aria-modal="true" aria-label="خيارات طباعة كشف الطلاب">
+          <div className="w-full max-w-4xl overflow-hidden rounded-3xl border-2 border-[#d4af37] bg-[#fffefc] text-slate-900 shadow-2xl">
+            <div className="flex items-center justify-between gap-3 bg-gradient-to-r from-[#1c120c] via-[#2d1e12] to-[#1a100a] px-5 py-4 text-white">
+              <div>
+                <h3 className="text-base font-black text-amber-200">خيارات طباعة كشف الطلاب</h3>
+                <p className="mt-1 text-[10px] font-bold text-amber-100/80">اترك أي خيار على «الكل» لطباعة جميع الطلاب، أو اجمع أكثر من مرشح لطباعة نطاق دقيق.</p>
+              </div>
+              <button type="button" onClick={() => setIsPrintFilterOpen(false)} aria-label="خروج من خيارات الطباعة" className="rounded-xl bg-white/10 px-3 py-2 text-xs font-black text-white hover:bg-white/20">
+                <X className="inline-block ml-1 h-4 w-4" />
+                خروج
+              </button>
+            </div>
+
+            <div className="grid grid-cols-1 gap-4 p-5 sm:grid-cols-2">
+              <label className="text-xs font-black text-slate-700">
+                المرحلة الدراسية
+                <select
+                  aria-label="مرحلة الطباعة"
+                  value={printFilterStage}
+                  onChange={event => {
+                    setPrintFilterStage(event.target.value);
+                    setPrintFilterGrade('all');
+                    setPrintFilterClass('all');
+                  }}
+                  className="mt-1 w-full rounded-xl border border-slate-300 bg-white p-2.5 text-xs font-bold outline-none focus:border-[#9a6a1d]"
+                >
+                  <option value="all">الكل</option>
+                  {printStageOptions.map(option => <option key={option.value} value={option.value}>{option.label}</option>)}
+                </select>
+              </label>
+
+              <label className="text-xs font-black text-slate-700">
+                الصف الدراسي
+                <select
+                  aria-label="صف الطباعة"
+                  value={printFilterGrade}
+                  onChange={event => {
+                    setPrintFilterGrade(event.target.value);
+                    setPrintFilterClass('all');
+                  }}
+                  className="mt-1 w-full rounded-xl border border-slate-300 bg-white p-2.5 text-xs font-bold outline-none focus:border-[#9a6a1d]"
+                >
+                  <option value="all">الكل</option>
+                  {printGradeOptions.map(option => <option key={option.value} value={option.value}>{option.label}</option>)}
+                </select>
+              </label>
+
+              <label className="text-xs font-black text-slate-700">
+                الفصل الأكاديمي
+                <select
+                  aria-label="فصل الطباعة"
+                  value={printFilterClass}
+                  onChange={event => setPrintFilterClass(event.target.value)}
+                  className="mt-1 w-full rounded-xl border border-slate-300 bg-white p-2.5 text-xs font-bold outline-none focus:border-[#9a6a1d]"
+                >
+                  <option value="all">الكل</option>
+                  {printClassOptions.map(option => <option key={option.value} value={option.value}>{option.label}</option>)}
+                </select>
+              </label>
+
+              <label className="text-xs font-black text-slate-700">
+                الشعبة
+                <select
+                  aria-label="شعبة الطباعة"
+                  value={printFilterSection}
+                  onChange={event => setPrintFilterSection(event.target.value)}
+                  className="mt-1 w-full rounded-xl border border-slate-300 bg-white p-2.5 text-xs font-bold outline-none focus:border-[#9a6a1d]"
+                >
+                  <option value="all">الكل</option>
+                  {printSectionOptions.map(section => <option key={section} value={section}>شعبة {section}</option>)}
+                </select>
+              </label>
+            </div>
+
+            <div className="flex flex-col gap-3 border-t border-amber-900/10 bg-[#f5eeea] px-5 py-4 sm:flex-row sm:items-center sm:justify-between">
+              <div className="text-xs font-bold text-slate-600">
+                <span className="font-black text-[#2a1d13]">النطاق:</span>{' '}
+                {printOnlySelected ? `الطلاب المحددون (${selectedStudentIds.length})` : 'كل طلاب المدرسة'}
+                <span className="mx-1">•</span>
+                كل المرشحات غير المحددة = الكل
+              </div>
+              <div className="flex items-center gap-2">
+                <button type="button" onClick={() => setIsPrintFilterOpen(false)} className="rounded-xl border border-slate-300 bg-white px-5 py-2.5 text-xs font-black text-slate-800 hover:bg-slate-100">إلغاء</button>
+                <button type="button" onClick={() => void handleApplyPrintFilters()} disabled={isPreparingPrint} className="rounded-xl bg-gradient-to-r from-[#9a6a1d] to-[#d4af37] px-5 py-2.5 text-xs font-black text-slate-950 disabled:cursor-wait disabled:opacity-60">
+                  {isPreparingPrint ? <><RefreshCw className="inline-block ml-1 h-4 w-4 animate-spin" /> جاري تجهيز الكشف...</> : <><Printer className="inline-block ml-1 h-4 w-4" /> عرض الكشف</>}
+                </button>
+              </div>
+            </div>
+          </div>
+        </div>
+      )}
+
       {/* ==========================================
           MODAL 2: VISIBLE PRINT PREVIEW
          ========================================== */}
       {printPreviewStudents && (
-        <div className="fixed inset-0 z-50 bg-black/70 backdrop-blur-xs flex items-center justify-center p-4 overflow-y-auto" role="dialog" aria-modal="true" aria-label="معاينة كشف الطلاب">
-          <div className="bg-[#fffefc] text-slate-900 border-2 border-[#d4af37] rounded-3xl w-full max-w-6xl shadow-2xl overflow-hidden my-auto">
-            <div className="no-print bg-gradient-to-r from-[#1c120c] via-[#2d1e12] to-[#1a100a] text-white px-6 py-4 flex items-center justify-between">
+        <div className="student-print-preview fixed inset-0 z-[100] bg-[#fffefc] text-slate-900 overflow-hidden" role="dialog" aria-modal="true" aria-label="معاينة كشف الطلاب">
+          <style>{`
+            @media print {
+              @page { size: A4 landscape; margin: 12mm; }
+              body * { visibility: hidden !important; }
+              .student-print-preview, .student-print-preview * { visibility: visible !important; }
+              .student-print-preview { position: absolute !important; inset: 0 !important; width: 100% !important; height: auto !important; min-height: 0 !important; overflow: visible !important; background: #fff !important; }
+              .student-print-preview > div { display: block !important; height: auto !important; min-height: 0 !important; }
+              .student-print-preview .no-print { display: none !important; }
+              .student-print-preview .printable-area { display: block !important; height: auto !important; min-height: 0 !important; overflow: visible !important; padding: 0 !important; }
+              .student-print-preview .overflow-x-auto { overflow: visible !important; }
+              .student-print-preview table { width: 100% !important; }
+              .student-print-preview tr { page-break-inside: avoid; }
+            }
+          `}</style>
+          <div className="h-full min-h-screen w-full flex flex-col">
+            <div className="no-print shrink-0 bg-gradient-to-r from-[#1c120c] via-[#2d1e12] to-[#1a100a] text-white px-4 sm:px-6 py-4 flex items-center justify-between gap-3">
               <div>
                 <h3 className="text-base font-black text-amber-200">معاينة كشف الطلاب</h3>
                 <p className="mt-1 text-[10px] font-bold text-amber-100/80">معاينة الصفوف المحملة والمفلترة حاليًا — ليست تقريرًا رسميًا شاملًا</p>
+                <p className="mt-1 text-[10px] font-black text-[#f7d174]">{printScopeSummary}</p>
+                {printNotice && (
+                  <p role="status" className="mt-2 rounded-lg border border-amber-300/40 bg-amber-100/15 px-2.5 py-1.5 text-[10px] font-black text-amber-100">
+                    {printNotice}
+                  </p>
+                )}
+                {typeof window.print !== 'function' && (
+                  <p role="alert" className="mt-2 rounded-lg bg-amber-100/15 px-2.5 py-1.5 text-[10px] font-black text-amber-100">
+                    الطباعة المباشرة غير متاحة في المتصفح الداخلي — استخدم Ctrl+P أو Chrome / Edge.
+                  </p>
+                )}
               </div>
-              <button type="button" onClick={() => setPrintPreviewStudents(null)} aria-label="إغلاق معاينة كشف الطلاب" className="w-8 h-8 rounded-full bg-white/10 hover:bg-white/20 text-white flex items-center justify-center">
-                <X className="w-5 h-5" />
-              </button>
+              <div className="flex items-center gap-2 shrink-0">
+                <button type="button" onClick={handlePrintStudentsPreview} aria-label="طباعة كشف الطلاب من المعاينة" title="طباعة النظام أو استخدام Ctrl+P" className="px-4 py-2 rounded-xl bg-gradient-to-r from-[#9a6a1d] to-[#d4af37] text-slate-950 text-xs font-black flex items-center justify-center gap-2 shadow-lg">
+                  <Printer className="w-4 h-4" />
+                  طباعة مباشرة
+                </button>
+                <button type="button" onClick={handleDownloadPrintableStudents} aria-label="تنزيل كشف الطلاب للطباعة" title="تنزيل ملف HTML جاهز للطباعة" className="px-4 py-2 rounded-xl bg-white/10 hover:bg-white/20 text-amber-100 text-xs font-black flex items-center justify-center gap-2 border border-amber-200/30">
+                  <Download className="w-4 h-4" />
+                  تنزيل للطباعة
+                </button>
+                <button type="button" onClick={() => setPrintPreviewStudents(null)} aria-label="خروج من معاينة كشف الطلاب" className="px-4 py-2 rounded-xl bg-white/10 hover:bg-white/20 text-white text-xs font-black flex items-center justify-center gap-2">
+                  <X className="w-4 h-4" />
+                  خروج
+                </button>
+              </div>
             </div>
 
-            <div className="printable-area p-6 space-y-4 bg-white">
+            <div className="printable-area flex-1 min-h-0 overflow-y-auto p-4 sm:p-6 space-y-4 bg-white">
               <div className="flex flex-wrap items-center justify-between gap-3 border-b-2 border-[#d4af37] pb-3">
                 <div>
                   <h2 className="text-lg font-black text-[#1c120c]">{selectedSchool.name || 'SchoolForManus'}</h2>
@@ -2079,13 +2399,6 @@ export default function StudentAffairsPortal({
               </div>
             </div>
 
-            <div className="no-print bg-[#f5eeea] border-t border-amber-900/10 px-6 py-4 flex flex-col sm:flex-row items-center justify-between gap-3">
-              <button type="button" onClick={() => setPrintPreviewStudents(null)} className="w-full sm:w-auto px-6 py-2.5 rounded-xl border border-slate-300 bg-white hover:bg-slate-100 text-slate-800 text-xs font-black">إغلاق المعاينة</button>
-              <button type="button" onClick={() => { window.print(); triggerNotification('تم إرسال المعاينة إلى أمر الطباعة.', 'info'); }} className="w-full sm:w-auto px-6 py-2.5 rounded-xl bg-gradient-to-r from-[#9a6a1d] to-[#d4af37] text-slate-950 text-xs font-black flex items-center justify-center gap-2">
-                <Printer className="w-4 h-4" />
-                طباعة من المعاينة
-              </button>
-            </div>
           </div>
         </div>
       )}

@@ -32,7 +32,8 @@ describe('ACC-001-IMPLEMENTATION-003 accounting hardening', () => {
 
     expect(portal).not.toContain("tenantId: 'school_1'");
     expect(portal).not.toContain('authorizationBlock: () => ({ authorized: true })');
-    expect(portal).toContain('tenantId: selectedSchool.id');
+    expect(portal).toContain('selectedSchool?.id');
+    expect(portal).toContain("authenticatedRequest('/api/financial/database'");
     expect(portal).toContain("hasUserPermission('ledger:delete')");
   });
 

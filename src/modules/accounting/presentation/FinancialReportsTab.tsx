@@ -82,7 +82,8 @@ const activeDrillDownUser = drillDownUser || {
   role: 'غير محدد',
   permissions: [] as string[]
 };
-const reportsAreCanonical = canonicalFinancialStatus === 'ready' && canonicalFinancialWriteMode === 'ledger_ready';
+const reportsAreCanonical = canonicalFinancialStatus === 'ready'
+  && (canonicalFinancialWriteMode === 'ledger_ready' || canonicalFinancialWriteMode === 'erp_integrated');
 
 const [selectedReport, setSelectedReport] = useState<string | null>(null);
 const [drillDownStack, setDrillDownStack] = useState<any[]>([]);
@@ -96,6 +97,19 @@ const [filterActiveOnly, setFilterActiveOnly] = useState<boolean>(false);
 const [filterBalanceOnly, setFilterBalanceOnly] = useState<boolean>(false);
 const [filterSortBy, setFilterSortBy] = useState<'code' | 'name'>('code');
 const [trialBalanceLevel, setTrialBalanceLevel] = useState<1 | 2 | 3 | 'all'>('all');
+
+// The header action must call the browser print dialog directly from the
+// user's click. Calling another button programmatically makes popup/print
+// protection treat the request as untrusted and silently block it.
+const handlePrintSelectedReport = () => {
+  if (!selectedReport) {
+    triggerNotification('اختر تقريراً أولاً ثم اضغط زر الطباعة.', 'warning');
+    return;
+  }
+
+  triggerNotification('جارٍ فتح حوار طباعة التقرير الحالي...', 'info');
+  window.print();
+};
 
 const handleSelectReport = (reportType: string | null) => {
     setSelectedReport(reportType);
@@ -223,21 +237,26 @@ const handleDrillDownToOriginalDocument = (jv: any) => {
           });
 
           // Calculate core aggregates for the summary dashboard
-          const totalAssets = reportAccounts
-            .filter(a => a.classification === 'أصول' && a.level === 1)
-            .reduce((sum, a) => sum + (a.endingBalance || 0), 0);
+          const isLeafAccount = (account: any) => account.type === 'فرعي' || account.type === 'leaf' || Number(account.level) >= 3;
 
-          const totalLiabilities = reportAccounts
-            .filter(a => a.classification === 'خصوم' && a.level === 1)
-            .reduce((sum, a) => sum + (a.endingBalance || 0), 0);
+          // Canonical ERP chart rows may arrive without a persisted hierarchy
+          // level. Prefer leaf balances when available, otherwise use root
+          // balances, so the financial statements never hide real balances.
+          const sumBalanceSheetClass = (classification: string) => {
+            const classified = reportAccounts.filter(a => a.classification === classification);
+            const leafAccounts = classified.filter(a => isLeafAccount(a));
+            const accountsToSum = leafAccounts.length > 0
+              ? leafAccounts
+              : classified.filter(a => a.level === 1);
+            return accountsToSum.reduce((sum, a) => sum + (a.endingBalance || 0), 0);
+          };
 
-          const totalEquity = reportAccounts
-            .filter(a => a.classification === 'حقوق ملكية' && a.level === 1)
-            .reduce((sum, a) => sum + (a.endingBalance || 0), 0);
+          const totalAssets = sumBalanceSheetClass('أصول');
+          const totalLiabilities = sumBalanceSheetClass('خصوم');
+          const totalEquity = sumBalanceSheetClass('حقوق ملكية');
 
           const periodRevenue = (account: any) => Number(account.creditMovements || 0) - Number(account.debitMovements || 0);
           const periodExpense = (account: any) => Number(account.debitMovements || 0) - Number(account.creditMovements || 0);
-          const isLeafAccount = (account: any) => account.type === 'فرعي' || account.type === 'leaf' || Number(account.level) >= 3;
           const sumPeriodClass = (classification: string, movement: (account: any) => number) => {
             const leafAccounts = reportAccounts.filter(a => a.classification === classification && isLeafAccount(a));
             const accountsToSum = leafAccounts.length > 0
@@ -325,7 +344,8 @@ const handleDrillDownToOriginalDocument = (jv: any) => {
           const printReportPdf = (title: string, subTitle: string, tableHeaders: string[], tableRowsHtml: string, summaryHtml?: string) => {
             const printWindow = window.open('', '_blank');
             if (!printWindow) {
-              triggerNotification('❌ تم حظر فتح حوار الطباعة. يرجى تفعيل النوافذ المنبثقة.', 'warning');
+              triggerNotification('تعذر فتح نسخة PDF المنفصلة؛ سيتم استخدام طباعة التقرير الحالي مباشرة.', 'warning');
+              window.print();
               return;
             }
 
@@ -438,6 +458,17 @@ const handleDrillDownToOriginalDocument = (jv: any) => {
                     >
                       <ArrowLeft className="w-4 h-4 rotate-180" />
                       <span>الرجوع لقائمة التقارير</span>
+                    </button>
+                  )}
+                  {selectedReport && (
+                    <button
+                      type="button"
+                      onClick={handlePrintSelectedReport}
+                      className="bg-indigo-600 hover:bg-indigo-700 text-white font-bold text-xs px-3.5 py-2 rounded-lg flex items-center gap-1.5 transition-colors cursor-pointer shadow-sm"
+                      aria-label="طباعة التقرير الحالي"
+                    >
+                      <Printer className="w-3.5 h-3.5" />
+                      <span>طباعة التقرير</span>
                     </button>
                   )}
                   <button 
@@ -824,6 +855,7 @@ const handleDrillDownToOriginalDocument = (jv: any) => {
                       </div>
                       <div className="mt-5 pt-4 border-t border-slate-100 flex gap-2">
                         <button
+                          type="button"
                           onClick={() => {
                             // Auto select first sub-account if none selected
                             let accCode = filterAccount;

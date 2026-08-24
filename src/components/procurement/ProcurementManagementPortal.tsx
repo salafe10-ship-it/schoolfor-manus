@@ -119,7 +119,12 @@ export default function ProcurementManagementPortal({
   };
 
   const handleRecordPayment = (payment: VendorPayment) => {
-    // Payment logged and saved
+    try {
+      ProcurementRepository.saveVendorPayment(payment);
+      notify(`تم حفظ دفعة المورد ${payment.paymentNo} وتسجيل مرجعها في سجل المدفوعات.`, 'success');
+    } catch (error: any) {
+      notify(error?.message || 'تسجيل دفعة المورد متوقف حتى يتوفر مصدر مشتريات مركزي موثوق؛ لم يُنشأ قيد.', 'warning');
+    }
   };
 
   const handleConvertToOrder = (pr: PurchaseRequest) => {
@@ -235,7 +240,18 @@ export default function ProcurementManagementPortal({
           notify('تم تحديث بيانات وحدة المشتريات بنجاح', 'success');
         }}
         onPrint={() => window.print()}
-        onExportExcel={() => notify('تم تصدير سجلات المشتريات بالكامل', 'info')}
+        onExportExcel={() => {
+          const csv = "data:text/csv;charset=utf-8,\uFEFF" +
+            "رقم الفاتورة,المورد,الإجمالي,المدفوع,المتبقي,الحالة\n" +
+            vendorBills.map(bill => `${bill.billNo},"${bill.vendorName}",${bill.grandTotal},${bill.paidAmount},${bill.remainingAmount},${bill.status}`).join("\n");
+          const link = document.createElement('a');
+          link.href = encodeURI(csv);
+          link.download = `edupro_procurement_bills_${Date.now()}.csv`;
+          document.body.appendChild(link);
+          link.click();
+          document.body.removeChild(link);
+          notify('تم تصدير فواتير الموردين إلى ملف CSV بنجاح.', 'success');
+        }}
       />
 
       {/* Navigation Sub-Header */}

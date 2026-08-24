@@ -3,6 +3,20 @@ import React from 'react';
 import { AccountingContext } from '../../../components/GeneralLedgerPortal';
 import { EnterpriseAuditLogger } from '../../../utils/EnterpriseAuditLogger';
 
+const RECEIPT_STAGE_LABELS: Record<string, string> = {
+  kindergarten: 'الروضة',
+  primary: 'الابتدائي',
+  middle: 'المتوسط',
+  secondary: 'الثانوي'
+};
+
+const getReceiptStageKey = (voucher: any): string => {
+  const value = String(voucher.schoolStage || voucher.stageKey || '').trim().toLowerCase();
+  if (RECEIPT_STAGE_LABELS[value]) return value;
+  const costCenter = String(voucher.costCenter || '').trim().toLowerCase();
+  return RECEIPT_STAGE_LABELS[costCenter] ? costCenter : '';
+};
+
 export const ReceiptVoucherTab = () => {
   const {
   activeTab, setActiveTab, activeSidebarItem, setActiveSidebarItem,
@@ -74,7 +88,7 @@ export const ReceiptVoucherTab = () => {
   isAccountOrDescendant, getProcessedAccounts,
   formatCurrency, triggerNotification, persistCanonicalFinancialSnapshot, canonicalFinancialStatus, canonicalFinancialWriteMode
 } = React.useContext(AccountingContext);
-  const ledgerPostingReady = canonicalFinancialWriteMode === 'ledger_ready';
+  const ledgerPostingReady = canonicalFinancialWriteMode === 'ledger_ready' || canonicalFinancialWriteMode === 'erp_integrated';
   const snapshotWriteReady = canonicalFinancialWriteMode === 'snapshot_write';
   const canonicalWriteReady = canonicalFinancialStatus === 'ready'
     && (ledgerPostingReady || snapshotWriteReady)
@@ -946,7 +960,7 @@ const handlePrintRV = (rv: any) => {
                   <tbody className="divide-y divide-slate-100 font-semibold text-slate-800">
                     {receiptVouchers
                       .filter(v => {
-                        const matchesCC = receiptCostCenterFilter === 'all' || v.costCenter === receiptCostCenterFilter;
+                        const matchesCC = receiptCostCenterFilter === 'all' || getReceiptStageKey(v) === receiptCostCenterFilter;
                         const matchesSearch = v.receivedFrom.toLowerCase().includes(receiptSearch.toLowerCase()) || 
                                               v.against.toLowerCase().includes(receiptSearch.toLowerCase());
                         return matchesCC && matchesSearch;

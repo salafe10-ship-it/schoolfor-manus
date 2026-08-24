@@ -3,6 +3,25 @@ import React from 'react';
 import { AccountingContext } from '../../../components/GeneralLedgerPortal';
 import { EnterpriseAuditLogger } from '../../../utils/EnterpriseAuditLogger';
 
+const VOUCHER_STAGE_LABELS: Record<string, string> = {
+  kindergarten: 'الروضة',
+  primary: 'الابتدائي',
+  middle: 'المتوسط',
+  secondary: 'الثانوي'
+};
+
+const getVoucherStageKey = (voucher: any): string => {
+  const value = String(voucher.schoolStage || voucher.stageKey || '').trim().toLowerCase();
+  if (VOUCHER_STAGE_LABELS[value]) return value;
+  const costCenter = String(voucher.costCenter || '').trim().toLowerCase();
+  return VOUCHER_STAGE_LABELS[costCenter] ? costCenter : '';
+};
+
+const getVoucherCostCenterLabel = (voucher: any): string => {
+  const stageKey = getVoucherStageKey(voucher);
+  return VOUCHER_STAGE_LABELS[stageKey] || String(voucher.costCenter || 'غير محدد');
+};
+
 export const PaymentVoucherTab = () => {
   const {
   activeTab, setActiveTab, activeSidebarItem, setActiveSidebarItem,
@@ -78,7 +97,7 @@ export const PaymentVoucherTab = () => {
   isAccountOrDescendant, getProcessedAccounts,
   formatCurrency, triggerNotification, persistCanonicalFinancialSnapshot, canonicalFinancialStatus, canonicalFinancialWriteMode
 } = React.useContext(AccountingContext);
-  const ledgerPostingReady = canonicalFinancialWriteMode === 'ledger_ready';
+  const ledgerPostingReady = canonicalFinancialWriteMode === 'ledger_ready' || canonicalFinancialWriteMode === 'erp_integrated';
   const snapshotWriteReady = canonicalFinancialWriteMode === 'snapshot_write';
   const canonicalWriteReady = canonicalFinancialStatus === 'ready'
     && (ledgerPostingReady || snapshotWriteReady)
@@ -863,7 +882,7 @@ const handlePrintPV = (pv: any) => {
                   <tbody className="divide-y divide-slate-100 font-semibold text-slate-800">
                     {paymentVouchers
                       .filter(v => {
-                        const matchesCC = paymentCostCenterFilter === 'all' || v.costCenter === paymentCostCenterFilter;
+                        const matchesCC = paymentCostCenterFilter === 'all' || getVoucherStageKey(v) === paymentCostCenterFilter;
                         const matchesSearch = v.beneficiary.toLowerCase().includes(paymentSearch.toLowerCase()) || 
                                               v.against.toLowerCase().includes(paymentSearch.toLowerCase());
                         return matchesCC && matchesSearch;
@@ -878,9 +897,7 @@ const handlePrintPV = (pv: any) => {
                           </td>
                           <td className="px-6 py-3.5 text-slate-700">
                             <span className="p-1 px-2 bg-slate-100 rounded text-[9px] font-black border border-slate-200">
-                              {v.costCenter === 'kindergarten' ? 'الروضة' :
-                               v.costCenter === 'primary' ? 'الابتدائي' :
-                               v.costCenter === 'middle' ? 'المتوسط' : 'الثانوي'}
+                              {getVoucherCostCenterLabel(v)}
                             </span>
                           </td>
                           <td className="px-6 py-3.5 font-mono font-black text-rose-600 text-sm" dir="ltr">

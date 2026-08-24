@@ -1,4 +1,3 @@
-import { authorizationEngine } from './AuthorizationEngine';
 import { PERMISSIONS } from './PermissionRegistry';
 import { AuthorizationIdentity, roleResolver } from './RoleResolver';
 
@@ -44,7 +43,10 @@ export function canAccessSection(
   if (!identity || context.currentPortal === 'login') return false;
   if (CENTRAL_SECTIONS.has(sectionId)) {
     try {
-      return context.currentPortal === 'admin' && roleResolver.isSuperAdmin(identity) && authorizationEngine.can(identity, PERMISSIONS.PLATFORM_ADMIN);
+      const hasServerDerivedPlatformPermission = Array.isArray(identity.platformPermissions)
+        ? identity.platformPermissions.includes(PERMISSIONS.PLATFORM_ADMIN)
+        : roleResolver.isSuperAdmin(identity);
+      return context.currentPortal === 'admin' && hasServerDerivedPlatformPermission;
     } catch {
       return false;
     }

@@ -281,4 +281,17 @@ export class ProcurementRepository {
     }
     this.setStored(STORAGE_KEYS.VENDOR_BILLS, list);
   }
+
+  // --- Vendor Payments ---
+  static getVendorPayments(schoolId: string = 'school_1'): VendorPayment[] {
+    return this.getStored<VendorPayment>(STORAGE_KEYS.VENDOR_PAYMENTS, []);
+  }
+
+  static saveVendorPayment(payment: VendorPayment): void {
+    const list = this.getVendorPayments(payment.schoolId);
+    const index = list.findIndex(item => item.id === payment.id);
+    if (index >= 0) list[index] = payment;
+    else list.unshift(payment);
+    this.setStored(STORAGE_KEYS.VENDOR_PAYMENTS, list);
+  }
 }

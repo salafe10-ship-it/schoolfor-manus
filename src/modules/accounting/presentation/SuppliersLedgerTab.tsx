@@ -139,7 +139,7 @@ export const SuppliersLedgerTab = () => {
                 <div className="flex items-center justify-between">
                   <div>
                     <h3 className="font-black text-slate-900">تسجيل مورد جديد</h3>
-                    <p className="text-[10px] text-slate-500 mt-1">{supplierWritesAvailable ? canonicalFinancialWriteMode === 'ledger_ready' ? 'سيُحفظ المورد مع الحساب الدائن في المصدر المركزي فقط بعد اجتياز التحقق.' : 'سيُحفظ المورد في المصدر المركزي UAT؛ لا يُعد ذلك ترحيلاً نهائياً في دفتر الأستاذ العام.' : 'المصدر الحالي snapshot للقراءة فقط؛ إضافة المورد متوقفة حتى تفعيل الكتابة المركزية.'}</p>
+                    <p className="text-[10px] text-slate-500 mt-1">{supplierWritesAvailable ? (canonicalFinancialWriteMode === 'ledger_ready' || canonicalFinancialWriteMode === 'erp_integrated') ? 'سيُحفظ المورد مع الحساب الدائن في المصدر المركزي بعد اجتياز التحقق.' : 'سيُحفظ المورد في المصدر المركزي UAT؛ لا يُعد ذلك ترحيلاً نهائياً في دفتر الأستاذ العام.' : 'المصدر الحالي snapshot للقراءة فقط؛ إضافة المورد متوقفة حتى تفعيل الكتابة المركزية.'}</p>
                   </div>
                   <button type="button" onClick={() => setIsCreatingSupplier(false)} className="text-slate-500 hover:text-slate-900 font-bold">إغلاق</button>
                 </div>
