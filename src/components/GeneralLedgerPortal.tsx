@@ -1517,8 +1517,11 @@ export default function GeneralLedgerPortal({
     
     receiptVouchers.forEach((rv: any) => {
       const hasJv = list.some(j => j.receiptVoucherId === rv.id || j.id === `JV-RV-${rv.id}` || j.description.includes(rv.id));
-      const revenueAccount = rv.revenueAccount || rv.creditAccount;
-      if (!hasJv && rv.receivingAccount && revenueAccount && Number(rv.amount) > 0) {
+      const creditAccount = rv.revenueAccount
+        || rv.creditAccount
+        || rv.receivableAccount
+        || (rv.studentId || rv.studentPaymentId ? '1201' : '');
+      if (!hasJv && rv.receivingAccount && creditAccount && Number(rv.amount) > 0) {
         list.push({
           id: `JV-RV-${rv.id}`,
           date: rv.date,
@@ -1533,7 +1536,7 @@ export default function GeneralLedgerPortal({
           receiptVoucherId: rv.id,
           lines: [
             { id: `l-rv-${rv.id}-1`, accountCode: rv.receivingAccount, accountName: accounts.find(a => a.code === rv.receivingAccount)?.nameAr || '', description: rv.against, debit: rv.amount, credit: 0, costCenter: rv.costCenter },
-            { id: `l-rv-${rv.id}-2`, accountCode: revenueAccount, accountName: accounts.find(a => a.code === revenueAccount)?.nameAr || '', description: rv.against, debit: 0, credit: rv.amount, costCenter: rv.costCenter }
+            { id: `l-rv-${rv.id}-2`, accountCode: creditAccount, accountName: accounts.find(a => a.code === creditAccount)?.nameAr || '', description: rv.against, debit: 0, credit: rv.amount, costCenter: rv.costCenter }
           ]
         });
       }
@@ -1576,7 +1579,7 @@ export default function GeneralLedgerPortal({
         const rv = receiptVouchers.find(v => v.id === rvId);
         
         const debitAcc = rv?.receivingAccount;
-        const creditAcc = rv?.revenueAccount || rv?.creditAccount;
+        const creditAcc = rv?.revenueAccount || rv?.creditAccount || rv?.receivableAccount || (rv?.studentId || rv?.studentPaymentId ? '1201' : undefined);
         const amt = entry.debitTotal || rv?.amount || 0;
         const cc = rv?.costCenter || 'primary';
         if (debitAcc && creditAcc && Number(amt) > 0) {
@@ -4793,10 +4796,10 @@ export default function GeneralLedgerPortal({
                   </tr>
                   <tr>
                     <td className="px-4 py-2 font-mono text-amber-700">
-                      {selectedReceiptVoucher.operationType === 'رسوم حافلة' ? '4300' : selectedReceiptVoucher.operationType === 'رسوم أنشطة' ? '4400' : selectedReceiptVoucher.operationType === 'أخرى' ? '4500' : '4101'}
+                      {selectedReceiptVoucher.receivableAccount || (selectedReceiptVoucher.studentId || selectedReceiptVoucher.studentPaymentId ? (selectedReceiptVoucher.creditAccount || '1201') : selectedReceiptVoucher.operationType === 'رسوم حافلة' ? '4300' : selectedReceiptVoucher.operationType === 'رسوم أنشطة' ? '4400' : selectedReceiptVoucher.operationType === 'أخرى' ? '4500' : '4101')}
                     </td>
                     <td className="px-4 py-2">
-                      {selectedReceiptVoucher.operationType === 'رسوم حافلة' ? 'إيرادات اشتراكات النقل والحافلات' :
+                      {selectedReceiptVoucher.receivableAccount || selectedReceiptVoucher.studentId || selectedReceiptVoucher.studentPaymentId ? 'ذمم الطلاب المدينة' : selectedReceiptVoucher.operationType === 'رسوم حافلة' ? 'إيرادات اشتراكات النقل والحافلات' :
                        selectedReceiptVoucher.operationType === 'رسوم أنشطة' ? 'إيرادات الأنشطة الطلابية والرحلات' :
                        selectedReceiptVoucher.operationType === 'أخرى' ? 'إيرادات وتبرعات تعليمية طارئة' : 'إيرادات الرسوم الدراسية الموحدة'}
                     </td>

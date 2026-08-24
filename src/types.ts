@@ -440,6 +440,9 @@ export interface Invoice {
   receiptVoucherId?: string;
   journalEntryId?: string;
   costCenter?: string;
+  /** Explicit ERP account links used by the canonical posting adapter. */
+  revenueAccount?: string;
+  receivableAccount?: string;
   financialPeriod?: string;
   user?: string;
   createdAt?: string;
@@ -2563,7 +2566,6 @@ export interface FixedAsset {
   createdAt: string;
   updatedAt: string;
 }
-
 
 
 

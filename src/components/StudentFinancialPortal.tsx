@@ -39,6 +39,8 @@ interface StudentFinancialPortalProps {
   selectedBranch?: { id?: string; name?: string } | null;
 }
 
+const STUDENT_RECEIVABLE_ACCOUNT = '1201';
+
 export default function StudentFinancialPortal({
   students,
   setStudents,
@@ -201,6 +203,38 @@ export default function StudentFinancialPortal({
   const [glJvs, setGlJvs] = useState<any[]>([]);
   const [chartOfAccounts, setChartOfAccounts] = useState<any[]>([]);
   const [expenseAccruals, setExpenseAccruals] = useState<any[]>([]);
+
+  const feeRevenueAccountOptions = useMemo(() => {
+    const accounts = chartOfAccounts
+      .filter(account => account?.isActive !== false && account?.is_active !== false)
+      .filter(account => account?.type !== 'رئيسي' && account?.isLeaf !== false && account?.is_leaf !== false)
+      .filter(account => {
+        const code = String(account?.code || account?.accountCode || account?.id || '');
+        const classification = String(account?.classification || account?.accountNature || account?.nature || '').toLowerCase();
+        return code.startsWith('4') || classification.includes('revenue') || classification.includes('إيراد');
+      })
+      .map(account => ({
+        code: String(account?.code || account?.accountCode || account?.id || '').trim(),
+        name: String(account?.nameAr || account?.name || account?.nameEn || '').trim()
+      }))
+      .filter(account => account.code)
+      .sort((a, b) => a.code.localeCompare(b.code));
+    if (currFeeAccount && !accounts.some(account => account.code === currFeeAccount)) {
+      return [{ code: currFeeAccount, name: 'الحساب الحالي — يحتاج مراجعة' }, ...accounts];
+    }
+    return accounts;
+  }, [chartOfAccounts, currFeeAccount]);
+
+  const validateFeeRevenueAccount = (accountCode: string) => {
+    const normalizedCode = String(accountCode || '').trim();
+    if (!normalizedCode) return 'يجب تحديد حساب إيراد مرتبط ببند الرسوم.';
+    if (chartOfAccounts.length === 0) return null;
+    const account = chartOfAccounts.find(item => String(item?.code || item?.accountCode || item?.id || '').trim() === normalizedCode);
+    if (!account) return `حساب الإيراد ${normalizedCode} غير موجود في دليل الحسابات الحالي.`;
+    if (account.isActive === false || account.is_active === false) return `حساب الإيراد ${normalizedCode} غير نشط.`;
+    if (account.type === 'رئيسي' || account.isLeaf === false || account.is_leaf === false) return `حساب الإيراد ${normalizedCode} تجميعي ولا يقبل الترحيل المباشر.`;
+    return null;
+  };
 
   // DB Syncer helper
   const saveToServerDb = async (
@@ -663,6 +697,7 @@ export default function StudentFinancialPortal({
           operationType: selectedStudRv.operationalType === 'رسوم حافلة' ? 'رسوم حافلة' : 'رسوم دراسية',
           paymentMethod: selectedStudRv.paymentMethod,
           receivingAccount: debitAccountCode,
+          receivableAccount: STUDENT_RECEIVABLE_ACCOUNT,
           amount: amount,
           against: selectedStudRv.against,
           attachmentName: selectedStudRv.attachmentName || null,
@@ -710,9 +745,9 @@ export default function StudentFinancialPortal({
             },
             {
               id: createFinancialReference('line'),
-              accountCode: '4101',
-              accountName: 'إيرادات الرسوم الدراسية الموحدة',
-              description: `الجانب الدائن - إثبات إيراد الرسوم للمرحلة التعليمية: ${stageLabel}`,
+              accountCode: STUDENT_RECEIVABLE_ACCOUNT,
+              accountName: 'ذمم الطلاب المدينة',
+              description: `الجانب الدائن - تسوية ذمم الطالب مقابل سند الرسوم للمرحلة التعليمية: ${stageLabel}`,
               debit: 0,
               credit: amount,
               costCenter
@@ -728,8 +763,8 @@ export default function StudentFinancialPortal({
           if (acc.code === debitAccountCode) {
             return { ...acc, balance: (acc.balance || 0) + amount };
           }
-          if (acc.code === '4101' || acc.code === '411') {
-            return { ...acc, balance: (acc.balance || 0) + amount };
+          if (acc.code === STUDENT_RECEIVABLE_ACCOUNT) {
+            return { ...acc, balance: Math.max(0, (acc.balance || 0) - amount) };
           }
           return acc;
         });
@@ -786,13 +821,13 @@ export default function StudentFinancialPortal({
           executionContext: 'Debit Asset account'
         }),
         SQLCommandBuilder.create({
-          sqlText: `-- 3. Credit Tuition fee revenue on GL ledger`,
+          sqlText: `-- 3. Credit student receivable on GL ledger`,
           parameters: []
         }),
         SQLCommandBuilder.create({
-          sqlText: `UPDATE chart_of_accounts SET balance = balance + $1 WHERE code = '4101';`,
-          parameters: [amount],
-          executionContext: 'Credit Revenue account'
+          sqlText: `UPDATE chart_of_accounts SET balance = balance - $1 WHERE code = $2;`,
+          parameters: [amount, STUDENT_RECEIVABLE_ACCOUNT],
+          executionContext: 'Settle Student Receivable account'
         }),
         SQLCommandBuilder.create({
           sqlText: `-- 4. Deduct student remaining fees`,
@@ -893,7 +928,7 @@ export default function StudentFinancialPortal({
           }
         },
         executionBlock: async () => {
-          // B) Create Reversal JV (Debit Tuition Revenue, Credit Cash/Bank)
+          // B) Create Reversal JV (Debit Student Receivable, Credit Cash/Bank)
           const reversalJv = {
             id: reversalJvId,
             date: new Date().toISOString().split('T')[0],
@@ -910,9 +945,9 @@ export default function StudentFinancialPortal({
             lines: [
               {
                 id: createFinancialReference('line-reverse'),
-                accountCode: '4101',
-                accountName: 'إيرادات الرسوم الدراسية الموحدة',
-                description: `الجانب المدين - عكس وتخفيض الإيراد الدراسي بسبب إلغاء السند - سبب الإلغاء: ${cancelReason}`,
+                accountCode: STUDENT_RECEIVABLE_ACCOUNT,
+                accountName: 'ذمم الطلاب المدينة',
+                description: `الجانب المدين - إعادة ذمة الطالب بعد إلغاء سند القبض - سبب الإلغاء: ${cancelReason}`,
                 debit: amount,
                 credit: 0,
                 costCenter
@@ -931,13 +966,13 @@ export default function StudentFinancialPortal({
           };
 
           const updatedJvs = [reversalJv, ...glJvs];
-          // C) Adjust Chart of Accounts (Subtract from Cash and from Revenue)
+          // C) Adjust Chart of Accounts (Subtract from Cash and restore Receivable)
           const updatedAccounts = chartOfAccounts.map((acc: any) => {
             if (acc.code === debitAccountCode) {
               return { ...acc, balance: Math.max(0, (acc.balance || 0) - amount) };
             }
-            if (acc.code === '4101' || acc.code === '411') {
-              return { ...acc, balance: Math.max(0, (acc.balance || 0) - amount) };
+            if (acc.code === STUDENT_RECEIVABLE_ACCOUNT) {
+              return { ...acc, balance: (acc.balance || 0) + amount };
             }
             return acc;
           });
@@ -1009,13 +1044,13 @@ export default function StudentFinancialPortal({
             executionContext: 'Reverse Asset balance'
           }),
           SQLCommandBuilder.create({
-            sqlText: `-- 3. Reverse and reduce tuition fees revenue`,
+            sqlText: `-- 3. Restore student receivable balance`,
             parameters: []
           }),
           SQLCommandBuilder.create({
-            sqlText: `UPDATE chart_of_accounts SET balance = balance - $1 WHERE code = '4101';`,
-            parameters: [amount],
-            executionContext: 'Reverse Tuition Revenue'
+            sqlText: `UPDATE chart_of_accounts SET balance = balance + $1 WHERE code = $2;`,
+            parameters: [amount, STUDENT_RECEIVABLE_ACCOUNT],
+            executionContext: 'Restore Student Receivable balance'
           }),
           SQLCommandBuilder.create({
             sqlText: `-- 4. Reverse student balances (re-add remaining debt)`,
@@ -1312,6 +1347,8 @@ export default function StudentFinancialPortal({
         if (!account) {
           throw new Error(`الصف ${index + 2} يحتاج حساب إيراد مرتبطًا بدليل الحسابات.`);
         }
+        const accountError = validateFeeRevenueAccount(account);
+        if (accountError) throw new Error(`الصف ${index + 2}: ${accountError}`);
         return {
           id: String(row['المعرف'] ?? row.id ?? '').trim() || createFinancialReference('FEE-CONFIG'),
           type,
@@ -2343,6 +2380,13 @@ export default function StudentFinancialPortal({
 
     const tenantId = auditTenantId;
     const invoiceDate = new Date().toISOString().split('T')[0];
+    const selectedFeeConfig = feeConfigs.find(config => config.type === massFeeType);
+    const revenueAccount = String(selectedFeeConfig?.account || '').trim();
+    const revenueAccountError = validateFeeRevenueAccount(revenueAccount);
+    if (revenueAccountError) {
+      triggerNotification(`لا يمكن توزيع الرسوم قبل ربط بند «${massFeeType}» بحساب إيراد صالح: ${revenueAccountError}`, 'warning');
+      return;
+    }
     if (!/^\d{4}-\d{2}-\d{2}$/.test(massDueDate)) {
       triggerNotification('الرجاء تحديد تاريخ استحقاق صحيح قبل التوزيع.', 'warning');
       return;
@@ -2358,6 +2402,7 @@ export default function StudentFinancialPortal({
       dueDate,
       status: 'unpaid',
       item: `قيد مالي جماعي: ${massFeeType} بقيمة ${massFeeAmount} د.ل`,
+      revenueAccount,
       taxAmount: 0,
       invoiceDate
     }));
@@ -2531,6 +2576,11 @@ export default function StudentFinancialPortal({
       }
       if (!currFeeAccount.trim()) {
         triggerNotification('الرجاء تحديد حساب الإيراد من دليل الحسابات قبل الحفظ.', 'warning');
+        return;
+      }
+      const feeAccountError = validateFeeRevenueAccount(currFeeAccount);
+      if (feeAccountError) {
+        triggerNotification(feeAccountError, 'warning');
         return;
       }
       if (currFeeAmount <= 0) {
@@ -3017,13 +3067,26 @@ export default function StudentFinancialPortal({
                   {/* حساب الإيراد */}
                   <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-2">
                     <label className="text-xs font-bold text-slate-800 sm:w-28 shrink-0 text-right">حساب الإيراد:</label>
-                    <input
-                      type="text"
-                      placeholder="مثال: 411"
-                      value={currFeeAccount}
-                      onChange={(e) => setCurrFeeAccount(e.target.value)}
-                      className="w-full bg-transparent rounded p-2 text-xs font-bold focus:ring-1 focus:ring-orange-500 focus:outline-none focus:text-right"
-                    />
+                    {feeRevenueAccountOptions.length > 0 ? (
+                      <select
+                        value={currFeeAccount}
+                        onChange={(e) => setCurrFeeAccount(e.target.value)}
+                        className="w-full bg-transparent rounded p-2 text-xs font-bold focus:ring-1 focus:ring-orange-500 focus:outline-none focus:text-right"
+                      >
+                        <option value="">اختر حساب إيراد من الدليل</option>
+                        {feeRevenueAccountOptions.map(account => (
+                          <option key={account.code} value={account.code}>{account.code} — {account.name}</option>
+                        ))}
+                      </select>
+                    ) : (
+                      <input
+                        type="text"
+                        placeholder="مثال: 4101"
+                        value={currFeeAccount}
+                        onChange={(e) => setCurrFeeAccount(e.target.value)}
+                        className="w-full bg-transparent rounded p-2 text-xs font-bold focus:ring-1 focus:ring-orange-500 focus:outline-none focus:text-right"
+                      />
+                    )}
                   </div>
                 </div>
 

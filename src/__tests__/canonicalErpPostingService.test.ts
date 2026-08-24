@@ -44,6 +44,26 @@ describe('canonical ERP accounting mappings', () => {
     expect(posting?.description).toBe('شراء أصل ثابت');
   });
 
+  it('keeps student fee invoice and receipt links explicit across the AR workflow', () => {
+    const invoice = buildCanonicalPosting('student_fee_invoice', {
+      id: 'INV-EXPLICIT-1', amount: 300, invoiceDate: '2026-08-24', status: 'unpaid',
+      revenueAccount: '4301', receivableAccount: '1290', item: 'رسوم نقل'
+    }, new Map([
+      ['student_fees.receivable', '1201'],
+      ['student_fees.revenue', '4101']
+    ]));
+    const receipt = buildCanonicalPosting('student_receipt', {
+      id: 'RV-EXPLICIT-1', amount: 100, date: '2026-08-24', status: 'posted',
+      receivingAccount: '1110', receivableAccount: '1290'
+    }, new Map([
+      ['student_fees.receivable', '1201'],
+      ['treasury.cash', '1101']
+    ]));
+
+    expect(invoice?.lines.map(line => line.accountCode)).toEqual(['1290', '4301']);
+    expect(receipt?.lines.map(line => line.accountCode)).toEqual(['1110', '1290']);
+  });
+
   it('maps balanced manual journal entries to the canonical ledger contract', () => {
     const posting = buildCanonicalPosting('journal_entry', {
       id: 'JV-MANUAL-1', date: '2026-08-24', status: 'posted', description: 'قيد تسوية يدوي',
