@@ -1,4 +1,5 @@
 services:
+  # Live deployment verification checkpoint: 2026-08-26.
   - type: web
     name: schoolfor-manus-staging
     runtime: node
