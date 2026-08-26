@@ -2747,6 +2747,7 @@ export default function ExamsResultsModule({
           <ExamsAssessmentPanel
             state={assessmentState}
             actorId={trustedActorLabel}
+            candidateIds={studentList.map(student => String(student.id || '').trim()).filter(Boolean)}
             onChange={persistAssessmentState}
           />
         )}

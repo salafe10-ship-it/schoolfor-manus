@@ -408,11 +408,15 @@ export function startAssessmentAttempt(
   state: AssessmentWorkflowState,
   assessmentId: string,
   candidateId: string,
-  actorId: string
+  actorId: string,
+  allowedCandidateIds?: readonly string[]
 ): AssessmentWorkflowState {
   const { blueprint, lifecycle } = getContext(state, assessmentId);
   if (lifecycle.state !== 'open') throw new AssessmentWorkflowError('الامتحان ليس مفتوحاً للمحاولات حالياً.');
   if (!String(candidateId || '').trim()) throw new AssessmentWorkflowError('معرف الطالب مطلوب لبدء المحاولة.');
+  if (Array.isArray(allowedCandidateIds) && allowedCandidateIds.length > 0 && !allowedCandidateIds.map(String).includes(candidateId.trim())) {
+    throw new AssessmentWorkflowError('لا يمكن بدء المحاولة؛ الطالب غير موجود ضمن السجلات الأكاديمية المؤهلة للدورة.');
+  }
   if (state.attempts.some(item => item.assessmentId === assessmentId && item.candidateId === candidateId && !['marked', 'voided'].includes(String(item.status)))) {
     throw new AssessmentWorkflowError('للطالب محاولة مفتوحة بالفعل لهذا الامتحان.');
   }

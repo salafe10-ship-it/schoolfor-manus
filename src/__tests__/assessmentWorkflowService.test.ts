@@ -152,4 +152,13 @@ describe('online assessment workflow and closure gates', () => {
     expect(() => transitionAssessment(state, 'assessment-2', 'open', 'admin-1', 'تجاوز المراحل')).toThrow(AssessmentWorkflowError);
     expect(state.auditEvents.some(event => event.action === 'assessment.created')).toBe(true);
   });
+
+  it('requires a candidate to exist in the authoritative eligible-student list when supplied', () => {
+    let state = createEmptyAssessmentWorkflowState();
+    state = createQuestionDraft(state, { ...singleQuestion, id: 'q-3', bankId: 'bank-3' });
+    state = activate(state, 'q-3');
+    state = createAssessment(state, { id: 'assessment-3', title: 'اختبار الهوية', durationMinutes: 20, actorId: 'admin-1', questionRefs: [{ questionId: 'q-3', version: 1 }] });
+    state = openAssessment(state, 'assessment-3');
+    expect(() => startAssessmentAttempt(state, 'assessment-3', 'unknown-student', 'admin-1', ['student-1'])).toThrow(/السجلات الأكاديمية/);
+  });
 });
