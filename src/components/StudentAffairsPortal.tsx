@@ -110,8 +110,11 @@ export default function StudentAffairsPortal({
   setActiveSection,
   canUseTrustedPermission = () => false,
   stages = [],
+  setStages,
   grades = [],
-  academicClasses = []
+  setGrades,
+  academicClasses = [],
+  setAcademicClasses
 }: StudentAffairsPortalProps) {
   const canWriteStudents = canUseTrustedPermission(PERMISSIONS.STUDENT_WRITE);
   const canDeleteStudents = canUseTrustedPermission(PERMISSIONS.STUDENT_DELETE);
@@ -135,12 +138,9 @@ export default function StudentAffairsPortal({
 
   // Transfer / Promotion Modal State
   const [isTransferModalOpen, setIsTransferModalOpen] = useState<boolean>(false);
-  const [transferTargetStage, setTransferTargetStage] = useState<string>('المرحلة الابتدائية');
-  const [transferTargetGrade, setTransferTargetGrade] = useState<string>('الصف الثاني الابتدائي');
-  const [transferTargetSection, setTransferTargetSection] = useState<string>('ب');
-
-  // Excel Import Modal State
-  const [isImportModalOpen, setIsImportModalOpen] = useState<boolean>(false);
+  const [transferTargetStage, setTransferTargetStage] = useState<string>('');
+  const [transferTargetGrade, setTransferTargetGrade] = useState<string>('');
+  const [transferTargetSection, setTransferTargetSection] = useState<string>('');
 
   // Selected Student for View/Edit/Batch
   const [selectedStudent, setSelectedStudent] = useState<Student | null>(null);
@@ -167,6 +167,7 @@ export default function StudentAffairsPortal({
   const [rowsPerPage, setRowsPerPage] = useState<number>(50);
   const [isLoadingStudents, setIsLoadingStudents] = useState<boolean>(false);
   const [isExportingStudents, setIsExportingStudents] = useState<boolean>(false);
+  const [isRepairingOperationalEnrollments, setIsRepairingOperationalEnrollments] = useState<boolean>(false);
   const [studentLoadError, setStudentLoadError] = useState<string | null>(null);
   const [studentSaveError, setStudentSaveError] = useState<string | null>(null);
   const [studentRefreshToken, setStudentRefreshToken] = useState(0);
@@ -185,6 +186,44 @@ export default function StudentAffairsPortal({
     suspendedCount: 0,
     pendingDocsCount: 0
   });
+  const [academicContextError, setAcademicContextError] = useState<string | null>(null);
+  const [canonicalSections, setCanonicalSections] = useState<string[]>([]);
+  const academicYearLabel = String(selectedSchool.academicYear || '').trim() || 'غير محددة';
+  const transferGradeOptions = useMemo(
+    () => grades.filter(grade => grade?.isActive !== false && String(grade?.stageId || '') === transferTargetStage),
+    [grades, transferTargetStage]
+  );
+
+  useEffect(() => {
+    const controller = new AbortController();
+    authenticatedRequest('/api/academic/context', {
+      method: 'GET',
+      headers: { Accept: 'application/json' },
+      cache: 'no-store',
+      signal: controller.signal
+    })
+      .then(async response => {
+        const payload = await response.json().catch(() => ({}));
+        if (!response.ok) throw new Error(payload?.message || 'تعذر تحميل الهيكل الأكاديمي الموثوق.');
+        const context = payload?.data || {};
+        const canonicalStages = Array.isArray(context.stages) ? context.stages : [];
+        const canonicalGrades = Array.isArray(context.grades) ? context.grades : [];
+        setStages?.(canonicalStages);
+        setGrades?.(canonicalGrades);
+        setAcademicClasses?.(Array.isArray(context.classes) ? context.classes : []);
+        const canonicalSectionValues = Array.isArray(context.sections) ? context.sections.map((section: unknown) => String(section || '').trim()).filter(Boolean) : [];
+        setCanonicalSections(canonicalSectionValues);
+        setTransferTargetSection(current => current && canonicalSectionValues.includes(current) ? current : (canonicalSectionValues[0] || ''));
+        const firstStageId = String(canonicalStages.find((stage: any) => stage?.isActive !== false)?.id || '');
+        setTransferTargetStage(current => current && canonicalStages.some((stage: any) => String(stage?.id) === current) ? current : firstStageId);
+        setTransferTargetGrade(current => current && canonicalGrades.some((grade: any) => String(grade?.id) === current) ? current : String(canonicalGrades.find((grade: any) => String(grade?.stageId) === firstStageId && grade?.isActive !== false)?.id || ''));
+        setAcademicContextError(null);
+      })
+      .catch(error => {
+        if (error?.name !== 'AbortError') setAcademicContextError(error?.message || 'تعذر تحميل الهيكل الأكاديمي الموثوق.');
+      });
+    return () => controller.abort();
+  }, [selectedSchool.id, setStages, setGrades, setAcademicClasses]);
 
   // Sorting State
   const [sortColumn, setSortColumn] = useState<'name' | 'code' | 'grade' | 'status'>('name');
@@ -301,6 +340,14 @@ export default function StudentAffairsPortal({
   // Dashboard metrics come from the server-side canonical scope, not the
   // currently loaded page. Never manufacture counts when the request fails.
   const currentSchoolStudents = useMemo(() => students.filter(student => student.schoolId === selectedSchool.id), [students, selectedSchool.id]);
+  const operationalPlacementCandidateCount = useMemo(
+    () => currentSchoolStudents.filter(student => {
+      const status = String(student.status || '').trim();
+      return ['active', 'applicant'].includes(status)
+        && (!String(student.classroom || '').trim() || !String(student.section || '').trim());
+    }).length,
+    [currentSchoolStudents]
+  );
   const totalCount = studentMetrics.totalCount;
   const visibleQueryCount = studentQueryMeta.totalCount;
   const activeCount = studentMetrics.activeCount;
@@ -399,13 +446,13 @@ export default function StudentAffairsPortal({
   }, [academicClasses, printFilterGrade, currentSchoolStudents]);
 
   const printSectionOptions = useMemo(() => {
-    const sections = new Set(['أ', 'ب', 'ج', 'د']);
+    const sections = new Set(canonicalSections);
     currentSchoolStudents.forEach(student => {
       const section = String(student.section || '').trim();
       if (section) sections.add(section);
     });
     return Array.from(sections);
-  }, [currentSchoolStudents]);
+  }, [canonicalSections, currentSchoolStudents]);
 
   const resolveStudentAcademicContext = (student: Student) => {
     const rawStudent = student as Student & Record<string, unknown>;
@@ -873,6 +920,38 @@ export default function StudentAffairsPortal({
     setIsPrintFilterOpen(true);
   };
 
+  const handleOperationalEnrollmentRepair = async () => {
+    if (!canWriteStudents) {
+      triggerNotification('لا تملك صلاحية إصلاح ربط القيد التشغيلي.', 'warning');
+      return;
+    }
+    if (isRepairingOperationalEnrollments || operationalPlacementCandidateCount === 0) return;
+    setIsRepairingOperationalEnrollments(true);
+    try {
+      const response = await StudentRepository.repairOperationalEnrollments(
+        'ربط تشغيلي للطلاب بتفويض مدير النظام لتجهيز الاختبار الفعلي.',
+        `student-affairs-operational-enrollment-repair-${crypto.randomUUID()}`
+      );
+      const result = response?.data;
+      setStudentRefreshToken(value => value + 1);
+      logAction(
+        'REPAIR_OPERATIONAL_ENROLLMENTS',
+        `تم إصلاح ربط ${Number(result?.processedCount) || 0} طالب بالفصول التشغيلية المعتمدة.`,
+        'شؤون الطلاب'
+      );
+      triggerNotification(
+        result?.processedCount > 0
+          ? `تم ربط ${result.processedCount} طالب بالفصول والشعب المعتمدة وحفظ سجل تدقيق العملية.`
+          : 'لا توجد سجلات غير مرتبطة تحتاج إلى إصلاح.',
+        'success'
+      );
+    } catch (error: any) {
+      triggerNotification(error?.message || 'تعذر إصلاح ربط القيد التشغيلي.', 'warning');
+    } finally {
+      setIsRepairingOperationalEnrollments(false);
+    }
+  };
+
   const loadAllStudentsForPrint = async (): Promise<Student[]> => {
     const pageSize = 100;
     const uniqueStudents = new Map<string, Student>();
@@ -1140,7 +1219,7 @@ export default function StudentAffairsPortal({
           <div>
             <span className="text-[11px] font-black text-slate-700 block">الطلاب الجدد (هذا العام)</span>
             <span className="text-2xl font-black text-slate-900 font-mono tracking-tight block mt-1">{newCount.toLocaleString('ar-EG')}</span>
-            <span className="text-[10px] font-bold text-indigo-700 bg-indigo-50 px-2 py-0.5 rounded-full inline-block mt-1">دفعة 2024 - 2025</span>
+            <span className="text-[10px] font-bold text-indigo-700 bg-indigo-50 px-2 py-0.5 rounded-full inline-block mt-1">السنة الأكاديمية {academicYearLabel}</span>
           </div>
           <div className="w-11 h-11 rounded-2xl bg-[#2a1a0e] text-amber-400 flex items-center justify-center border border-[#d4af37]/40 shadow-sm shrink-0">
             <UserPlus className="w-5 h-5" />
@@ -1219,27 +1298,35 @@ export default function StudentAffairsPortal({
 
               {/* Stage Select */}
               <div>
-                <label className="block text-slate-700 font-extrabold mb-1">المرحلة الدراسية (سيُفعّل بعد اعتماد المصدر)</label>
+                <label className="block text-slate-700 font-extrabold mb-1">المرحلة الدراسية</label>
                 <select 
                   value={searchStage}
-                  disabled
-                  title="مصدر المرحلة الدراسية غير مثبت في العقد الكانوني الحالي"
+                  onChange={e => { setSearchStage(e.target.value); setSearchGrade('all'); setCurrentPage(1); }}
+                  disabled={stages.length === 0}
+                  title={academicContextError || 'المرحلة من الهيكل الأكاديمي الموثوق'}
                   className="w-full bg-white border border-slate-300 rounded-xl p-2 text-xs font-bold text-slate-900 focus:border-[#9a6a1d] outline-none shadow-xs"
                 >
-                  <option value="all">غير متاح حاليًا</option>
+                  <option value="all">جميع المراحل</option>
+                  {stages.filter(stage => stage?.isActive !== false).map(stage => (
+                    <option key={stage.id} value={stage.id}>{stage.name || stage.code}</option>
+                  ))}
                 </select>
               </div>
 
               {/* Grade Select */}
               <div>
-                <label className="block text-slate-700 font-extrabold mb-1">الصف الدراسي (سيُفعّل بعد اعتماد المصدر)</label>
+                <label className="block text-slate-700 font-extrabold mb-1">الصف الدراسي</label>
                 <select 
                   value={searchGrade}
-                  disabled
-                  title="مصدر الصف الدراسي غير مثبت في العقد الكانوني الحالي"
+                  onChange={e => { setSearchGrade(e.target.value); setCurrentPage(1); }}
+                  disabled={grades.length === 0}
+                  title={academicContextError || 'الصف من الهيكل الأكاديمي الموثوق'}
                   className="w-full bg-white border border-slate-300 rounded-xl p-2 text-xs font-bold text-slate-900 focus:border-[#9a6a1d] outline-none shadow-xs"
                 >
-                  <option value="all">غير متاح حاليًا</option>
+                  <option value="all">جميع الصفوف</option>
+                  {grades.filter(grade => grade?.isActive !== false && (searchStage === 'all' || grade.stageId === searchStage)).map(grade => (
+                    <option key={grade.id} value={grade.id}>{grade.name || grade.code}</option>
+                  ))}
                 </select>
               </div>
 
@@ -1255,10 +1342,7 @@ export default function StudentAffairsPortal({
                   className="w-full bg-white border border-slate-300 rounded-xl p-2 text-xs font-bold text-slate-900 focus:border-[#9a6a1d] outline-none shadow-xs"
                 >
                   <option value="all">جميع الشعب والصفوف</option>
-                  <option value="أ">شعبة أ</option>
-                  <option value="ب">شعبة ب</option>
-                  <option value="ج">شعبة ج</option>
-                  <option value="د">شعبة د</option>
+                  {canonicalSections.map(section => <option key={section} value={section}>شعبة {section}</option>)}
                 </select>
               </div>
 
@@ -1282,14 +1366,32 @@ export default function StudentAffairsPortal({
 
               {/* Quick Actions Card */}
               <div className="pt-2 border-t border-amber-900/10 space-y-2">
+                <section
+                  className="rounded-xl border border-amber-300 bg-amber-50 p-3 text-[11px] font-bold text-amber-950"
+                  aria-label="حالة ربط القيد التشغيلي"
+                >
+                  <p>سجلات تحتاج ربطاً تشغيلياً: {operationalPlacementCandidateCount.toLocaleString('ar-EG')}</p>
+                  <p className="mt-1 text-[10px] leading-4 text-amber-800">يُوزّع الخادم السجلات غير المرتبطة فقط على الفصول النشطة حسب السعة، ويثبت العملية في سجل التدقيق.</p>
+                  <button
+                    type="button"
+                    onClick={() => void handleOperationalEnrollmentRepair()}
+                    disabled={!canWriteStudents || isRepairingOperationalEnrollments || operationalPlacementCandidateCount === 0}
+                    aria-disabled={!canWriteStudents || operationalPlacementCandidateCount === 0}
+                    aria-busy={isRepairingOperationalEnrollments}
+                    className="mt-2 w-full rounded-lg bg-[#2a1a0e] px-3 py-2 text-xs font-black text-amber-300 transition hover:bg-[#3a2719] disabled:cursor-not-allowed disabled:opacity-50"
+                  >
+                    {isRepairingOperationalEnrollments ? 'جارٍ تثبيت الربط...' : 'إصلاح ربط القيد التشغيلي'}
+                  </button>
+                </section>
                 <button 
-                  onClick={() => setIsImportModalOpen(true)}
-                  disabled={!canWriteStudents}
-                  aria-disabled={!canWriteStudents}
-                  className="w-full py-2 bg-[#2a1a0e] text-amber-200 hover:text-white rounded-xl text-xs font-black flex items-center justify-center gap-2 border border-[#d4af37]/40 shadow hover:scale-[1.01] transition-all cursor-pointer"
+                  type="button"
+                  disabled
+                  aria-disabled="true"
+                  title="يتطلب الاستيراد مسار تحقق ومعاملة ذرية وسياسة منع التكرار قبل تفعيله"
+                  className="w-full py-2 bg-slate-200 text-slate-500 rounded-xl text-xs font-black flex items-center justify-center gap-2 border border-slate-300 cursor-not-allowed"
                 >
                   <Upload className="w-4 h-4 text-amber-400" />
-                  <span>استيراد طلاب من Excel</span>
+                  <span>استيراد Excel — غير مفعّل</span>
                 </button>
               </div>
 
@@ -1929,9 +2031,7 @@ export default function StudentAffairsPortal({
                           disabled
                           className="w-full bg-slate-100 border border-slate-300 rounded-xl p-2.5 text-xs font-bold text-slate-500 outline-none shadow-xs"
                         >
-                          <option value="أ">شعبة أ</option>
-                          <option value="ب">شعبة ب</option>
-                          <option value="ج">شعبة ج</option>
+                          {canonicalSections.map(section => <option key={section} value={section}>شعبة {section}</option>)}
                         </select>
                       </div>
                     </div>
@@ -2388,7 +2488,7 @@ export default function StudentAffairsPortal({
                           <td className="p-3 border border-slate-200 text-center">{index + 1}</td>
                           <td className="p-3 border border-slate-200 text-center font-mono font-black">{student.studentCode || student.academicId || 'غير متوفر'}</td>
                           <td className="p-3 border border-slate-200 font-black">{student.name}</td>
-                          <td className="p-3 border border-slate-200 text-center">{student.classroom || 'غير محدد'} ({student.section || 'أ'})</td>
+                          <td className="p-3 border border-slate-200 text-center">{student.classroom || 'غير محدد'} ({student.section || 'غير محددة'})</td>
                           <td className="p-3 border border-slate-200">{student.parentName || 'غير مرتبط'}</td>
                           <td className="p-3 border border-slate-200 text-center">{statusLabel}</td>
                         </tr>
@@ -2423,12 +2523,17 @@ export default function StudentAffairsPortal({
                 <label className="block text-slate-700 mb-1">المرحلة الدراسية المستهدفة</label>
                 <select 
                   value={transferTargetStage}
-                  onChange={e => setTransferTargetStage(e.target.value)}
+                  onChange={e => {
+                    const stageId = e.target.value;
+                    setTransferTargetStage(stageId);
+                    setTransferTargetGrade(String(grades.find(grade => String(grade?.stageId) === stageId && grade?.isActive !== false)?.id || ''));
+                  }}
                   className="w-full bg-slate-50 border border-slate-300 p-2.5 rounded-xl"
                 >
-                  <option value="المرحلة الابتدائية">المرحلة الابتدائية</option>
-                  <option value="المرحلة المتوسطة">المرحلة المتوسطة</option>
-                  <option value="المرحلة الثانوية">المرحلة الثانوية</option>
+                  <option value="">اختر المرحلة</option>
+                  {stages.filter(stage => stage?.isActive !== false).map(stage => (
+                    <option key={stage.id} value={stage.id}>{stage.name || stage.code}</option>
+                  ))}
                 </select>
               </div>
 
@@ -2439,9 +2544,10 @@ export default function StudentAffairsPortal({
                   onChange={e => setTransferTargetGrade(e.target.value)}
                   className="w-full bg-slate-50 border border-slate-300 p-2.5 rounded-xl"
                 >
-                  <option value="الصف الأول الابتدائي">الصف الأول الابتدائي</option>
-                  <option value="الصف الثاني الابتدائي">الصف الثاني الابتدائي</option>
-                  <option value="الصف الثالث الابتدائي">الصف الثالث الابتدائي</option>
+                  <option value="">اختر الصف</option>
+                  {transferGradeOptions.map(grade => (
+                    <option key={grade.id} value={grade.id}>{grade.name || grade.code}</option>
+                  ))}
                 </select>
               </div>
 
@@ -2452,9 +2558,7 @@ export default function StudentAffairsPortal({
                   onChange={e => setTransferTargetSection(e.target.value)}
                   className="w-full bg-slate-50 border border-slate-300 p-2.5 rounded-xl"
                 >
-                  <option value="أ">شعبة أ</option>
-                  <option value="ب">شعبة ب</option>
-                  <option value="ج">شعبة ج</option>
+                  {canonicalSections.map(section => <option key={section} value={section}>شعبة {section}</option>)}
                 </select>
               </div>
             </div>
@@ -2483,32 +2587,6 @@ export default function StudentAffairsPortal({
       {/* ==========================================
           MODAL 4: EXCEL IMPORT AVAILABILITY
          ========================================== */}
-      {isImportModalOpen && (
-        <div className="fixed inset-0 z-50 bg-black/70 backdrop-blur-xs flex items-center justify-center p-4">
-          <div className="bg-[#fffefc] text-slate-900 border-2 border-[#d4af37] rounded-3xl w-full max-w-lg shadow-2xl p-6 space-y-4">
-            <div className="flex items-center justify-between border-b pb-3 border-amber-900/10">
-              <div className="flex items-center gap-2">
-                <Upload className="w-5 h-5 text-amber-800" />
-                <h3 className="text-sm font-black text-slate-900">استيراد قائمة الطلاب من Excel</h3>
-              </div>
-              <button onClick={() => setIsImportModalOpen(false)}><X className="w-5 h-5 text-slate-500" /></button>
-            </div>
-
-            <div className="border-2 border-dashed border-[#d4af37] rounded-2xl p-8 text-center bg-amber-50/50 space-y-3">
-              <FileSpreadsheet className="w-12 h-12 text-amber-800 mx-auto" />
-              <div className="text-xs font-black text-slate-800">استيراد Excel غير متاح حاليًا</div>
-              <div className="text-[10px] leading-5 text-slate-600">
-                لم يتم تفعيل مسار استيراد قانوني يحفظ البيانات حتى الآن. لم يتم استلام ملف أو تعديل أي طالب.
-              </div>
-            </div>
-
-            <div className="flex items-center justify-end pt-3 border-t border-slate-200">
-              <button onClick={() => setIsImportModalOpen(false)} className="px-4 py-2 bg-slate-100 rounded-xl text-xs font-bold">إغلاق</button>
-            </div>
-          </div>
-        </div>
-      )}
-
     </div>
   );
 }

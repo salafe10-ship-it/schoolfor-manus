@@ -15,6 +15,7 @@ import { EnterpriseAuditLogger } from '../utils/EnterpriseAuditLogger';
 import AccountingIntegrityDemo from '../certification/AccountingIntegrityDemo';
 import { StudentAffairsValidationFramework } from '../validation/StudentAffairsValidationFramework';
 import { getTrustedAccessToken } from '../utils/auth';
+import { authenticatedRequest } from '../utils/authenticatedRequest';
 
 interface StudentFinancialPortalProps {
   students: Student[];
@@ -1167,33 +1168,28 @@ export default function StudentFinancialPortal({
     };
     const updatedInvoices = financialInvoices.map(item => item.id === invoiceId ? cancelledInvoice : item);
 
-    // Generate reversal JV if it has a journalEntryId
-    let reversalJvId = '';
+    let canonicalReversalId = '';
     if (inv.journalEntryId) {
-      reversalJvId = createFinancialReference('JV-REV-INV');
+      try {
+        const response = await authenticatedRequest(`/api/financial/journals/${encodeURIComponent(inv.journalEntryId)}/reverse`, {
+          method: 'POST', headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ reason: cancelReason })
+        });
+        const result = await response.json().catch(() => ({}));
+        if (!response.ok || !result.success) throw new Error(result?.error || result?.message || 'فشل العكس الكانوني.');
+        canonicalReversalId = String(result.data?.reversalId || '');
+      } catch (error: any) {
+        triggerNotification(error?.message || 'تعذر تنفيذ العكس الكانوني للفاتورة.', 'warning');
+        return;
+      }
     }
 
-    const updatedJvs = reversalJvId
-      ? [{
-          id: reversalJvId,
-          date: new Date().toISOString().split('T')[0],
-          description: `عكس وإلغاء قيد فاتورة رقم ${inv.id} - سبب الإلغاء: ${cancelReason}`,
-          debitTotal: inv.amount,
-          creditTotal: inv.amount,
-          status: 'مرحل',
-          type: 'تسوية عكسية',
-          createdByUser: auditActor,
-          lines: [
-            { id: `${reversalJvId}-debit`, accountCode: '4101', accountName: 'إيرادات الرسوم الدراسية الموحدة', debit: inv.amount, credit: 0 },
-            { id: `${reversalJvId}-credit`, accountCode: '1201', accountName: 'ذمم الطلاب', debit: 0, credit: inv.amount }
-          ]
-        }, ...glJvs]
-      : glJvs;
-    const updatedAccounts = reversalJvId
-      ? chartOfAccounts.map((account: any) => ['1201', '4101', '411'].includes(String(account.code))
-        ? { ...account, balance: Math.max(0, Number(account.balance || 0) - Number(inv.amount || 0)) }
-        : account)
-      : chartOfAccounts;
+    // Keep the snapshot as a compatibility projection; the reversal itself is canonical.
+    let reversalJvId = '';
+    reversalJvId = canonicalReversalId;
+
+    const updatedJvs = glJvs;
+    const updatedAccounts = chartOfAccounts;
 
     try {
       await saveToServerDb(undefined, undefined, updatedJvs, updatedAccounts, updatedInvoices);
@@ -2895,7 +2891,7 @@ export default function StudentFinancialPortal({
                 <div>
                   <div className="flex justify-between items-center pb-3 border-b border-slate-100 mb-3">
                     <h4 className="text-xs font-black text-slate-900">⏳ تحليل أعمار المديونيات</h4>
-                    <span className="bg-gradient-to-r from-[#2a1d13] via-[#3a2719] to-[#2a1d13] text-amber-200 font-extrabold">Aging Report</span>
+                    <span className="bg-gradient-to-r from-[#2a1d13] via-[#3a2719] to-[#2a1d13] text-amber-200 font-extrabold">تقرير أعمار المديونيات</span>
                   </div>
                   
                   {agingAnalysis ? (
@@ -4784,8 +4780,8 @@ export default function StudentFinancialPortal({
                                       <td className="p-1.5 border border-purple-100 font-mono text-slate-400">0.00</td>
                                     </tr>
                                     <tr>
-                                      <td className="p-1.5 border border-purple-100 text-right font-bold">إيرادات الرسوم الدراسية الموحدة</td>
-                                      <td className="p-1.5 border border-purple-100 text-right font-mono text-purple-900">4101</td>
+                                      <td className="p-1.5 border border-purple-100 text-right font-bold">ذمم الطلاب المدينة</td>
+                                      <td className="p-1.5 border border-purple-100 text-right font-mono text-purple-900">{STUDENT_RECEIVABLE_ACCOUNT}</td>
                                       <td className="p-1.5 border border-purple-100 font-mono text-slate-400">0.00</td>
                                       <td className="p-1.5 border border-purple-100 font-mono font-bold text-amber-650">+{selectedStudRv.amount.toLocaleString()}</td>
                                     </tr>

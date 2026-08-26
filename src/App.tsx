@@ -26,6 +26,7 @@ import SchoolClientLogin from './components/SchoolClientLogin';
 import PasswordRecoveryScreen from './components/PasswordRecoveryScreen';
 const HumanResourcesPortal = React.lazy(() => import('./components/hr/HumanResourcesPortal'));
 const ExamsResultsModule = React.lazy(() => import('./components/ExamsResultsModule'));
+const ExamsErrorBoundary = React.lazy(() => import('./components/ExamsErrorBoundary'));
 import AIAssistantPortal from './components/AIAssistantPortal';
 const SystemHealthCenter = React.lazy(() => import('./components/SystemHealthCenter'));
 const SchoolUniformManagement = React.lazy(() => import('./components/SchoolUniformManagement'));
@@ -2050,14 +2051,19 @@ export default function App() {
           {/* VIEW: EXAMS & RESULTS (الامتحانات والنتائج) */}
           {/* ========================================================== */}
           {activeSection === 'exams' && (
-            <ExamsResultsModule
-              students={students}
-              teachers={teachers}
-              classes={classesSeed}
-              triggerNotification={triggerNotification}
-              setActiveSection={setActiveSection}
-              selectedSchool={selectedSchool}
-            />
+            <React.Suspense fallback={<div className="p-8 text-center text-sm font-bold text-slate-500">جارٍ تحميل وحدة الامتحانات...</div>}>
+              <ExamsErrorBoundary onExit={() => setActiveSection('dashboard')}>
+                <ExamsResultsModule
+                  students={students}
+                  teachers={teachers}
+                  classes={classesSeed}
+                  triggerNotification={triggerNotification}
+                  setActiveSection={setActiveSection}
+                  selectedSchool={selectedSchool}
+                  currentRole={currentRole}
+                />
+              </ExamsErrorBoundary>
+            </React.Suspense>
           )}
 
           {/* ========================================================== */}

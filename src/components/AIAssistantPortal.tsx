@@ -398,14 +398,15 @@ export default function AIAssistantPortal() {
         whileHover={{ scale: 1.05, y: -3 }}
         whileTap={{ scale: 0.95 }}
         onClick={() => setIsOpen(!isOpen)}
-        className="h-14 px-5 flex items-center justify-center gap-2.5 bg-gradient-to-tr from-slate-950 via-slate-900 to-slate-800 text-white rounded-[28px] rounded-bl-[4px] shadow-[0_10px_30px_rgba(0,0,0,0.5)] border border-[#dfb55a]/60 hover:border-[#dfb55a] transition-all cursor-pointer select-none group relative"
+        aria-label={isOpen ? 'إغلاق المساعد الذكي' : 'فتح المساعد الذكي'}
+        className="h-12 w-12 xl:h-14 xl:w-auto xl:px-5 flex items-center justify-center xl:gap-2.5 bg-gradient-to-tr from-slate-950 via-slate-900 to-slate-800 text-white rounded-full xl:rounded-[28px] xl:rounded-bl-[4px] shadow-[0_10px_30px_rgba(0,0,0,0.5)] border border-[#dfb55a]/60 hover:border-[#dfb55a] transition-all cursor-pointer select-none group relative"
         title="المساعد الذكي (AI) - اسحب للتحريك"
       >
         <div className="absolute inset-0 bg-gradient-to-r from-amber-500/10 to-yellow-500/10 rounded-[28px] rounded-bl-[4px] opacity-0 group-hover:opacity-100 transition-opacity" />
         <div className="relative flex items-center justify-center">
           <Sparkles className="w-5 h-5 text-amber-400 group-hover:text-amber-300 transition-colors animate-pulse" />
         </div>
-        <span className="relative text-xs font-black tracking-wide text-slate-100 group-hover:text-amber-300 transition-colors font-sans flex items-center gap-1.5">
+        <span className="relative hidden xl:flex text-xs font-black tracking-wide text-slate-100 group-hover:text-amber-300 transition-colors font-sans items-center gap-1.5">
           <span>المساعد الذكي</span>
           <span className="text-[9px] text-slate-400 font-normal opacity-70">(اسحب)</span>
         </span>

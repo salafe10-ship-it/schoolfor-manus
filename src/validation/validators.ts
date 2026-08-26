@@ -60,19 +60,160 @@ export class ExamValidator {
   }
 
   public static validateDatabase(examsData: any): void {
-    if (!examsData) {
+    if (!examsData || typeof examsData !== 'object' || Array.isArray(examsData)) {
       throw new ValidationError("بيانات قاعدة الاختبارات مطلوبة.");
     }
-    // If examsData contains an array of exams, validate each one
-    if (Array.isArray(examsData)) {
-      examsData.forEach((exam, index) => {
-        try {
-          this.validate(exam);
-        } catch (err: any) {
-          throw new ValidationError(`خطأ في الاختبار رقم ${index + 1}: ${err.message}`, err.details);
+
+    const requireArray = (field: string): any[] => {
+      const value = examsData[field];
+      if (!Array.isArray(value)) {
+        throw new ValidationError(`حقل ${field} يجب أن يكون قائمة صالحة.`);
+      }
+      return value;
+    };
+    const requireRecord = (field: string): Record<string, any> => {
+      const value = examsData[field];
+      if (!value || typeof value !== 'object' || Array.isArray(value)) {
+        throw new ValidationError(`حقل ${field} يجب أن يكون كائناً صالحاً.`);
+      }
+      return value;
+    };
+    const requireUniqueIds = (items: any[], label: string): Set<string> => {
+      const ids = new Set<string>();
+      items.forEach((item, index) => {
+        const id = String(item?.id || '').trim();
+        if (!id) throw new ValidationError(`${label}: المعرف مفقود في السجل رقم ${index + 1}.`);
+        if (ids.has(id)) throw new ValidationError(`${label}: المعرف ${id} مكرر.`);
+        ids.add(id);
+      });
+      return ids;
+    };
+
+    const subjects = requireArray('exams_subjects');
+    const halls = requireArray('exams_halls');
+    const students = requireArray('exams_students_enriched');
+    const schedule = requireArray('exams_schedule');
+    requireArray('exams_proctors');
+    const classes = requireArray('exams_classes_list');
+    const gradesMatrix = requireRecord('exams_grades_matrix');
+    requireRecord('exams_settings');
+
+    const subjectIds = requireUniqueIds(subjects, 'المواد');
+    const hallIds = requireUniqueIds(halls, 'القاعات');
+    const studentIds = requireUniqueIds(students, 'الطلاب');
+    const classNames = new Set<string>();
+    const subjectNames = new Set<string>();
+    const normalizeAcademicYear = (value: unknown) => String(value || '').replace(/\D/g, '');
+    const targetAcademicYear = normalizeAcademicYear(examsData.exams_settings?.academicYear);
+
+    subjects.forEach((subject, index) => {
+      const name = String(subject?.name || '').trim();
+      const maxScore = Number(subject?.maxScore);
+      const passScore = Number(subject?.passScore);
+      if (!name) throw new ValidationError(`المادة رقم ${index + 1} بلا اسم.`);
+      const normalizedName = name.replace(/\s+/g, ' ').toLocaleLowerCase('ar');
+      if (subjectNames.has(normalizedName)) throw new ValidationError(`اسم المادة ${name} مكرر في دورة الامتحانات.`);
+      subjectNames.add(normalizedName);
+      if (!Number.isFinite(maxScore) || maxScore <= 0) {
+        throw new ValidationError(`الدرجة العظمى للمادة ${name} يجب أن تكون أكبر من صفر.`);
+      }
+      if (!Number.isFinite(passScore) || passScore < 0 || passScore > maxScore) {
+        throw new ValidationError(`درجة النجاح للمادة ${name} خارج النطاق المسموح.`);
+      }
+    });
+
+    halls.forEach((hall, index) => {
+      const name = String(hall?.name || '').trim();
+      const capacity = Number(hall?.capacity);
+      if (!name) throw new ValidationError(`القاعة رقم ${index + 1} بلا اسم.`);
+      if (!Number.isSafeInteger(capacity) || capacity <= 0) {
+        throw new ValidationError(`سعة القاعة ${name} يجب أن تكون عدداً صحيحاً أكبر من صفر.`);
+      }
+    });
+
+    classes.forEach((classItem, index) => {
+      const name = String(classItem?.name || '').trim();
+      if (!name) throw new ValidationError(`الصف رقم ${index + 1} بلا اسم.`);
+      if (classNames.has(name)) throw new ValidationError(`اسم الصف ${name} مكرر.`);
+      classNames.add(name);
+      if (classItem?.capacity !== undefined) {
+        const capacity = Number(classItem.capacity);
+        if (!Number.isSafeInteger(capacity) || capacity <= 0) {
+          throw new ValidationError(`سعة الصف ${name} يجب أن تكون عدداً صحيحاً أكبر من صفر.`);
+        }
+      }
+    });
+
+    const occupiedSeats = new Set<string>();
+    const studentsByHall = new Map<string, number>();
+    students.forEach((student, index) => {
+      const name = String(student?.name || '').trim();
+      const classroom = String(student?.classroom || '').trim();
+      if (!name || !classroom) throw new ValidationError(`بيانات الطالب رقم ${index + 1} لا تحتوي الاسم والصف.`);
+      if (classNames.size > 0 && !classNames.has(classroom)) {
+        throw new ValidationError(`الطالب ${name} مرتبط بصف غير معرف في دورة الامتحانات.`);
+      }
+      const studentAcademicYear = normalizeAcademicYear(student?.academicYear);
+      if (!targetAcademicYear || !studentAcademicYear || studentAcademicYear !== targetAcademicYear) {
+        throw new ValidationError(`الطالب ${name} غير مرتبط بالسنة الأكاديمية الحالية للدورة.`);
+      }
+      if (!['active', 'accepted'].includes(String(student?.status || '').toLowerCase())) {
+        throw new ValidationError(`حالة الطالب ${name} لا تسمح بترشيحه للامتحان.`);
+      }
+      const absentSubjects = student?.absentSubjects ?? [];
+      if (!Array.isArray(absentSubjects) || absentSubjects.some((subjectId: unknown) => !subjectIds.has(String(subjectId)))) {
+        throw new ValidationError(`قائمة غياب الطالب ${name} تحتوي مادة غير صالحة.`);
+      }
+      const hallId = String(student?.hallId || '').trim();
+      const seatNumber = String(student?.seatNumber || '').trim();
+      if ((hallId && !seatNumber) || (!hallId && seatNumber)) {
+        throw new ValidationError(`توزيع الطالب ${name} يجب أن يحتوي القاعة ورقم الجلوس معاً.`);
+      }
+      if (hallId) {
+        if (!hallIds.has(hallId)) throw new ValidationError(`الطالب ${name} مرتبط بقاعة غير صالحة.`);
+        const seatKey = `${hallId}|${seatNumber}`;
+        if (occupiedSeats.has(seatKey)) throw new ValidationError(`رقم الجلوس ${seatNumber} مكرر داخل القاعة.`);
+        occupiedSeats.add(seatKey);
+        studentsByHall.set(hallId, (studentsByHall.get(hallId) || 0) + 1);
+      }
+    });
+
+    halls.forEach(hall => {
+      const assignedCount = studentsByHall.get(String(hall.id)) || 0;
+      if (assignedCount > Number(hall.capacity)) {
+        throw new ValidationError(`عدد الطلاب الموزعين يتجاوز سعة القاعة ${String(hall.name || hall.id)}.`);
+      }
+    });
+
+    Object.entries(gradesMatrix).forEach(([studentId, row]) => {
+      if (!studentIds.has(studentId)) throw new ValidationError(`مصفوفة الدرجات تحتوي طالباً غير صالح: ${studentId}.`);
+      if (!row || typeof row !== 'object' || Array.isArray(row)) {
+        throw new ValidationError(`درجات الطالب ${studentId} ليست كائناً صالحاً.`);
+      }
+      Object.entries(row as Record<string, unknown>).forEach(([subjectId, rawGrade]) => {
+        if (!subjectIds.has(subjectId)) throw new ValidationError(`مصفوفة الدرجات تحتوي مادة غير صالحة: ${subjectId}.`);
+        const subject = subjects.find(item => String(item.id) === subjectId);
+        if (typeof rawGrade !== 'number' || !Number.isFinite(rawGrade) || rawGrade < 0 || rawGrade > Number(subject.maxScore)) {
+          throw new ValidationError(`درجة الطالب ${studentId} في المادة ${String(subject.name || subjectId)} خارج النطاق المسموح.`);
         }
       });
-    }
+    });
+
+    requireUniqueIds(schedule, 'الجدول');
+    schedule.forEach((item, index) => {
+      const subjectId = String(item?.subjectId || '').trim();
+      const hallId = String(item?.hallId || '').trim();
+      const classroom = String(item?.classroom || '').trim();
+      const date = String(item?.date || '').trim();
+      const startTime = String(item?.startTime || '').trim();
+      const endTime = String(item?.endTime || '').trim();
+      if (!subjectIds.has(subjectId) || !hallIds.has(hallId) || (classNames.size > 0 && !classNames.has(classroom))) {
+        throw new ValidationError(`سجل الجدول رقم ${index + 1} يحتوي مرجعاً غير صالح.`);
+      }
+      if (!/^\d{4}-\d{2}-\d{2}$/.test(date) || !/^\d{2}:\d{2}$/.test(startTime) || !/^\d{2}:\d{2}$/.test(endTime) || startTime >= endTime) {
+        throw new ValidationError(`سجل الجدول رقم ${index + 1} يحتوي تاريخاً أو وقتاً غير صالح.`);
+      }
+    });
   }
 }
 

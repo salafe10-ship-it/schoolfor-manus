@@ -249,7 +249,8 @@ describe('PERF-002 canonical Student read path', () => {
       pendingDocsCount: 10
     });
     expect(driver.session.queries[0].sql).toContain('public.student_documents');
-    expect(driver.session.queries[0].parameters).toEqual(['tenant-a', 'school-a', 'branch-a']);
+    expect(driver.session.queries[0].sql).toContain('current_enrollment.academic_year_id = $4');
+    expect(driver.session.queries[0].parameters).toEqual(['tenant-a', 'school-a', 'branch-a', 'year-a']);
     expect(driver.session.committed).toBe(true);
     expect(driver.session.released).toBe(true);
   });

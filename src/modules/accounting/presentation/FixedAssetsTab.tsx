@@ -1164,11 +1164,13 @@ export const FixedAssetsTab = () => {
                                 </div>
                                 <button
                                   type="button"
-                                  onClick={() => triggerNotification(`📥 جاري تحميل المستند: ${file.name}...`, 'success')}
-                                  className="text-indigo-600 hover:text-indigo-800 font-bold hover:underline flex items-center gap-0.5"
+                                  disabled
+                                  aria-disabled="true"
+                                  title="تنزيل مرفقات الأصول غير متاح حتى ربط التخزين الموثوق"
+                                  className="text-slate-400 font-bold flex items-center gap-0.5 cursor-not-allowed"
                                 >
                                   <ExternalLink className="w-3.5 h-3.5" />
-                                  <span>تنزيل المرفق</span>
+                                  <span>التنزيل غير متاح</span>
                                 </button>
                               </div>
                             ))}

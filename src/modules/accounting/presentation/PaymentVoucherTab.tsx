@@ -782,10 +782,13 @@ const handlePrintPV = (pv: any) => {
                         <div className="flex items-center gap-2">
                           <span className="text-[9px] bg-slate-100 text-slate-600 px-1.5 py-0.5 rounded font-mono">{v.id}</span>
                           <button 
-                            onClick={() => triggerNotification(`فتح المستند المرفق: ${v.attachmentName}`, 'info')}
-                            className="text-indigo-600 hover:text-indigo-800 font-bold"
+                            type="button"
+                            disabled
+                            aria-disabled="true"
+                            title="معاينة المرفقات غير متاحة حتى ربط التخزين الموثوق"
+                            className="text-slate-400 font-bold cursor-not-allowed"
                           >
-                            معاينة
+                            المعاينة غير متاحة
                           </button>
                         </div>
                       </div>

@@ -1,4 +1,4 @@
-import { fireEvent, render, screen } from '@testing-library/react';
+import { render, screen } from '@testing-library/react';
 import { describe, expect, it, vi } from 'vitest';
 import StudentAffairsPortal from '../components/StudentAffairsPortal';
 import type { School, Student } from '../types';
@@ -45,10 +45,12 @@ describe('Student Affairs Excel import contract', () => {
       />,
     );
 
-    fireEvent.click(screen.getByRole('button', { name: 'استيراد طلاب من Excel' }));
+    const importButton = screen.getByRole('button', { name: 'استيراد Excel — غير مفعّل' });
 
-    expect(screen.getByText('استيراد Excel غير متاح حاليًا')).not.toBeNull();
-    expect(screen.getByText(/لم يتم تفعيل مسار استيراد قانوني/)).not.toBeNull();
+    expect((importButton as HTMLButtonElement).disabled).toBe(true);
+    expect(importButton.getAttribute('title')).toBe(
+      'يتطلب الاستيراد مسار تحقق ومعاملة ذرية وسياسة منع التكرار قبل تفعيله',
+    );
     expect(screen.queryByRole('button', { name: 'تأكيد الاستيراد' })).toBeNull();
     expect(notify).not.toHaveBeenCalledWith(expect.stringContaining('تم استيراد'), 'success');
   });

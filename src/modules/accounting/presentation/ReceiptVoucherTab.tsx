@@ -2,6 +2,7 @@ import { AlertTriangle, BookOpen, Calculator, Check, CheckCircle2, ChevronLeft, 
 import React from 'react';
 import { AccountingContext } from '../../../components/GeneralLedgerPortal';
 import { EnterpriseAuditLogger } from '../../../utils/EnterpriseAuditLogger';
+import { authenticatedRequest } from '../../../utils/authenticatedRequest';
 
 const RECEIPT_STAGE_LABELS: Record<string, string> = {
   kindergarten: 'الروضة',
@@ -18,6 +19,7 @@ const getReceiptStageKey = (voucher: any): string => {
 };
 
 export const ReceiptVoucherTab = () => {
+  const receiptFormRef = React.useRef<HTMLFormElement>(null);
   const {
   activeTab, setActiveTab, activeSidebarItem, setActiveSidebarItem,
   refreshing, setRefreshing, currency, setCurrency, activeSaving, setActiveSaving,
@@ -117,15 +119,16 @@ export const ReceiptVoucherTab = () => {
     return isCashOrBankCode && (isAssetSubaccount || isLeafAccount || (!classification && !type));
   });
 
-  const handleAddReceiptVoucher = async (e: React.FormEvent) => {
-    e.preventDefault();
+  const handleAddReceiptVoucher = async () => {
+    const submitted = receiptFormRef.current ? new FormData(receiptFormRef.current) : null;
 
-    if (!canonicalWriteReady) {
-      triggerNotification('تعذر اعتماد سند القبض: المصدر الحالي snapshot للقراءة فقط، ولم تعتمد خدمة دفتر الأستاذ الكانونية.', 'warning');
+    if (typeof persistCanonicalFinancialSnapshot !== 'function' || !ledgerPostingReady) {
+      triggerNotification('تعذر اعتماد سند القبض: الكاتب الكانوني غير متاح في جلسة الحسابات الحالية.', 'warning');
       return;
     }
 
-    const amt = parseFloat(receiptVoucherForm.amount);
+    const submittedAmount = String(submitted?.get('amount') || receiptVoucherForm.amount || '').trim();
+    const amt = parseFloat(submittedAmount);
     if (isNaN(amt) || amt <= 0) {
       triggerNotification('❌ القيمة المالية المدخلة غير صالحة', 'error');
       return;
@@ -138,9 +141,17 @@ export const ReceiptVoucherTab = () => {
     const revenueAccountCode = receiptVoucherForm.operationType === 'رسوم حافلة' ? '4300' :
                                receiptVoucherForm.operationType === 'رسوم أنشطة' ? '4400' :
                                receiptVoucherForm.operationType === 'أخرى' ? '4500' : '4101';
-    const debitAccountCode = receiptVoucherForm.receivingAccount;
-    if (!debitAccountCode || !accounts.some((account: any) => accountCodeOf(account) === debitAccountCode) || !accounts.some((account: any) => accountCodeOf(account) === revenueAccountCode)) {
-      triggerNotification('تعذر اعتماد سند القبض: يجب اختيار حساب قبض وحساب إيراد موثقين في شجرة الحسابات.', 'warning');
+    const creditAccountCode = receiptVoucherForm.operationType === 'رسوم دراسية' || receiptVoucherForm.operationType === 'رسوم دراسية سنوية مجمعة'
+      ? '1201'
+      : revenueAccountCode;
+    const debitAccountCode = String(
+      submitted?.get('receivingAccount')
+      || receiptVoucherForm.receivingAccount
+      || accountCodeOf(receivingAccounts[0])
+      || '1101'
+    ).trim();
+    if (!debitAccountCode) {
+      triggerNotification('تعذر اعتماد سند القبض: يجب اختيار حساب قبض موثق.', 'warning');
       return;
     }
 
@@ -151,17 +162,18 @@ export const ReceiptVoucherTab = () => {
       school: receiptVoucherForm.school,
       stage: receiptVoucherForm.stage,
       costCenter: receiptVoucherForm.costCenter,
-      receivedFrom: receiptVoucherForm.receivedFrom,
+      receivedFrom: String(submitted?.get('receivedFrom') || receiptVoucherForm.receivedFrom || '').trim(),
       operationType: receiptVoucherForm.operationType,
       paymentMethod: receiptVoucherForm.paymentMethod,
-      receivingAccount: receiptVoucherForm.receivingAccount,
+      receivingAccount: debitAccountCode,
       revenueAccount: revenueAccountCode,
+      receivableAccount: creditAccountCode === '1201' ? creditAccountCode : undefined,
       amount: amt,
       against: receiptVoucherForm.against,
       attachmentName: receiptVoucherForm.attachmentName,
       notes: receiptVoucherForm.notes,
       user: 'سليمان غازي',
-      status: 'معتمد',
+      status: ledgerPostingReady ? 'posted' : 'approved',
       financialPeriod: 'السنة المالية 2026',
       createdAt: new Date().toLocaleDateString('ar-LY') + ' ' + new Date().toLocaleTimeString('ar-LY'),
       journalEntryId: jvId
@@ -171,7 +183,7 @@ export const ReceiptVoucherTab = () => {
     const newJv = {
       id: jvId,
       date: receiptVoucherForm.date || new Date().toISOString().split('T')[0],
-      description: `توطين قيد سند القبض رقم ${rvId} - ${receiptVoucherForm.receivedFrom}`,
+      description: `توطين قيد سند القبض رقم ${rvId} - ${String(submitted?.get('receivedFrom') || receiptVoucherForm.receivedFrom || '').trim()}`,
       debitSum: amt,
       creditSum: amt,
       debitTotal: amt,
@@ -191,8 +203,8 @@ export const ReceiptVoucherTab = () => {
         },
         {
           id: `${jvId}-2`,
-          accountCode: revenueAccountCode,
-          accountName: accounts.find((a: any) => accountCodeOf(a) === revenueAccountCode)?.nameAr || 'إيراد الرسوم',
+          accountCode: creditAccountCode,
+          accountName: accounts.find((a: any) => accountCodeOf(a) === creditAccountCode)?.nameAr || 'ذمم الطلاب المدينة',
           description: `إثبات إيراد السند ${rvId}`,
           debit: 0,
           credit: amt,
@@ -206,7 +218,7 @@ export const ReceiptVoucherTab = () => {
       if (accountCodeOf(acc) === debitAccountCode) {
         return { ...acc, balance: Number(acc.balance || 0) + amt };
       }
-      if (accountCodeOf(acc) === revenueAccountCode) {
+      if (accountCodeOf(acc) === creditAccountCode) {
         return { ...acc, balance: Number(acc.balance || 0) + amt };
       }
       return acc;
@@ -215,16 +227,49 @@ export const ReceiptVoucherTab = () => {
     const updatedRvs = [newRv, ...receiptVouchers];
     const updatedJvs = [newJv, ...journalEntries];
 
-    // 4. Never fall back to localStorage for a financial voucher.
+    // 4. Post the receipt directly to the canonical ledger first. The UI
+    // snapshot is only a compatibility projection and can never be the
+    // source of truth for a posted receipt.
+    try {
+      const requestInit: RequestInit = {
+        method: 'POST',
+        headers: { 'Accept': 'application/json', 'Content-Type': 'application/json' },
+        body: JSON.stringify(newRv)
+      };
+      let canonicalResponse: Response;
+      try {
+        canonicalResponse = await authenticatedRequest('/api/financial/receipts/post', requestInit);
+      } catch (authError) {
+        // The trusted session may be cookie-backed after a portal handoff.
+        // Retry once through the same-origin session only; never downgrade to
+        // local persistence or report success without a canonical journal id.
+        canonicalResponse = await fetch('/api/financial/receipts/post', { ...requestInit, credentials: 'include' });
+        if (!canonicalResponse.ok && authError) throw authError;
+      }
+      const canonicalResult = await canonicalResponse.json().catch(() => ({}));
+      if (!canonicalResponse.ok || !canonicalResult.success || !canonicalResult.data?.journalId) {
+        throw new Error(canonicalResult.message || canonicalResult.error?.message || canonicalResult.error || 'تعذر إثبات القيد الكانوني لسند القبض.');
+      }
+      newRv.journalEntryId = canonicalResult.data.journalId;
+      newJv.id = canonicalResult.data.journalId;
+    } catch (error: any) {
+      console.error('[ReceiptVoucherTab] canonical receipt posting failed', error);
+      triggerNotification(`تعذر حفظ سند القبض مركزياً: ${error?.message || 'خطأ غير معروف'}`, 'warning');
+      return;
+    }
+
     try {
       await persistCanonicalFinancialSnapshot({
         receiptVouchers: updatedRvs,
         journalEntries: updatedJvs,
         chartOfAccounts: updatedAccounts
       });
-    } catch (error: any) {
-      triggerNotification(`تعذر حفظ سند القبض مركزياً: ${error?.message || 'خطأ غير معروف'}`, 'warning');
-      return;
+    } catch (projectionError: any) {
+      // The canonical journal has already committed. A compatibility
+      // projection failure must be visible, but must not misreport the
+      // immutable accounting transaction as failed.
+      console.warn('[ReceiptVoucherTab] canonical receipt posted; snapshot projection deferred', projectionError);
+      triggerNotification(`تم ترحيل القيد الكانوني بنجاح، وتعذر تحديث نسخة العرض مؤقتاً: ${projectionError?.message || 'خطأ غير معروف'}`, 'warning');
     }
 
     setReceiptVouchers(updatedRvs);
@@ -577,7 +622,15 @@ const handlePrintRV = (rv: any) => {
                   </span>
                 </div>
 
-                <form onSubmit={(e) => { e.preventDefault(); handleAddReceiptVoucher(e); }} className="space-y-4">
+                <form
+                  ref={receiptFormRef}
+                  noValidate
+                  onSubmit={(e) => {
+                    e.preventDefault();
+                    void handleAddReceiptVoucher();
+                  }}
+                  className="space-y-4"
+                >
                   <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
                     <div>
                       <label className="block text-slate-700 font-bold mb-1">المدرسة والموقع:</label>
@@ -646,6 +699,7 @@ const handlePrintRV = (rv: any) => {
                       <label className="block text-slate-700 font-bold mb-1">اسم الطالب أو الجهة المقبوض منها:</label>
                       <input 
                         type="text" 
+                        name="receivedFrom"
                         required
                         value={receiptVoucherForm.receivedFrom}
                         onChange={(e) => setReceiptVoucherForm(prev => ({ ...prev, receivedFrom: e.target.value }))}
@@ -673,6 +727,7 @@ const handlePrintRV = (rv: any) => {
                     <div className="md:col-span-2">
                       <label className="block text-slate-700 font-bold mb-1">الحساب المستلم (صناديق نقدية ومصارف):</label>
                       <select 
+                        name="receivingAccount"
                         value={receiptVoucherForm.receivingAccount}
                         onChange={(e) => setReceiptVoucherForm(prev => ({ ...prev, receivingAccount: e.target.value }))}
                         className="w-full bg-slate-50 border border-slate-200 rounded-lg p-2.5 font-bold focus:outline-none"
@@ -723,6 +778,7 @@ const handlePrintRV = (rv: any) => {
                       <label className="block text-slate-700 font-bold mb-1">قيمة المقبوض:</label>
                       <input 
                         type="number" 
+                        name="amount"
                         required
                         min="1"
                         value={receiptVoucherForm.amount}
@@ -801,11 +857,12 @@ const handlePrintRV = (rv: any) => {
                   </div>
 
                   <div className="pt-3">
-                    <button 
-                      type="submit"
+                    <button
+                      type="button"
+                      onClick={() => { void handleAddReceiptVoucher(); }}
                       disabled={!canonicalWriteReady}
                       aria-disabled={!canonicalWriteReady}
-                      className="w-full bg-gradient-to-r from-emerald-600 to-teal-600 hover:from-emerald-700 hover:to-teal-700 text-white font-black py-3 rounded-lg flex items-center justify-center gap-2 shadow-md hover:shadow-lg cursor-pointer transition-all active:scale-[0.99]"
+                      className="relative z-20 w-full bg-gradient-to-r from-emerald-600 to-teal-600 hover:from-emerald-700 hover:to-teal-700 text-white font-black py-3 rounded-lg flex items-center justify-center gap-2 shadow-md hover:shadow-lg cursor-pointer transition-all active:scale-[0.99]"
                     >
                       <Coins className="w-4 h-4" />
                       <span>{receiptSubmitLabel}</span>
@@ -861,10 +918,13 @@ const handlePrintRV = (rv: any) => {
                         <div className="flex items-center gap-2">
                           <span className="text-[9px] bg-slate-100 text-slate-600 px-1.5 py-0.5 rounded font-mono">{v.id}</span>
                           <button 
-                            onClick={() => triggerNotification(`فتح المستند المرفق: ${v.attachmentName}`, 'info')}
-                            className="text-indigo-600 hover:text-indigo-800 font-bold"
+                            type="button"
+                            disabled
+                            aria-disabled="true"
+                            title="معاينة المرفقات غير متاحة حتى ربط التخزين الموثوق"
+                            className="text-slate-400 font-bold cursor-not-allowed"
                           >
-                            معاينة
+                            المعاينة غير متاحة
                           </button>
                         </div>
                       </div>
@@ -1018,7 +1078,7 @@ const handlePrintRV = (rv: any) => {
                               </button>
                               {v.status !== 'ملغى' && (
                                 <button 
-                                  onClick={() => {
+                                  onClick={async () => {
                                     if (!canonicalWriteReady) {
                                       triggerNotification('إلغاء سند القبض متوقف: المصدر للقراءة فقط ولا يوجد مسار عكسي كانوني.', 'warning');
                                       return;
@@ -1030,48 +1090,31 @@ const handlePrintRV = (rv: any) => {
                                         return;
                                       }
 
-                                      const voidedAt = new Date().toLocaleDateString('ar-LY') + ' ' + new Date().toLocaleTimeString('ar-LY');
-                                      setReceiptVouchers(prev => prev.map(item => item.id === v.id ? { 
-                                        ...item, 
-                                        status: 'ملغى' as const,
-                                        voidReason: cancelReason,
-                                        voidedBy: 'سليمان غازي',
-                                        voidedAt
-                                      } : item));
-                                      // Reverse ledger balance
-                                      setAccounts(prev => prev.map(acc => {
-                                        if (acc.code === v.receivingAccount) {
-                                          return { ...acc, balance: acc.balance - v.amount };
-                                        }
-                                        const creditCode = v.operationType === 'رسوم حافلة' ? '4300' : v.operationType === 'رسوم أنشطة' ? '4400' : v.operationType === 'أخرى' ? '4500' : '4101';
-                                        if (acc.code === creditCode) {
-                                          return { ...acc, balance: acc.balance - v.amount };
-                                        }
-                                        return acc;
-                                      }));
-                                      // Append reverse JV
-                                      const reverseJv = {
-                                        id: `JV-2026-REV-${String(Math.floor(Math.random() * 899) + 100)}`,
-                                        date: new Date().toISOString().split('T')[0],
-                                        description: `عكس وإلغاء سند قبض رقم ${v.id} - سبب الإلغاء: ${cancelReason}`,
-                                        debitTotal: v.amount,
-                                        creditTotal: v.amount,
-                                        status: 'مرحل'
-                                      };
-                                      setJournalEntries(prev => [reverseJv, ...prev]);
+                                      const canonicalJournalId = String((v as any).journalEntryId || '').trim();
+                                      if (!canonicalJournalId) {
+                                        triggerNotification('تعذر العكس: السند لا يحتوي على معرف قيد كانوني.', 'warning');
+                                        return;
+                                      }
+                                      try {
+                                        const response = await authenticatedRequest(`/api/financial/journals/${encodeURIComponent(canonicalJournalId)}/reverse`, {
+                                          method: 'POST', headers: { 'Content-Type': 'application/json' },
+                                          body: JSON.stringify({ reason: cancelReason })
+                                        });
+                                        const result = await response.json().catch(() => ({}));
+                                        if (!response.ok || !result.success) throw new Error(result?.error || result?.message || 'فشل العكس الكانوني.');
+                                        const voidedAt = new Date().toISOString();
+                                        const updatedReceipts = receiptVouchers.map(item => item.id === v.id
+                                          ? { ...item, status: 'ملغى', voidReason: cancelReason, voidedBy: 'سليمان غازي', voidedAt }
+                                          : item);
+                                        await persistCanonicalFinancialSnapshot({ receiptVouchers: updatedReceipts });
+                                        setReceiptVouchers(updatedReceipts);
+                                        triggerNotification(`تم إنشاء القيد العكسي الكانوني ${result.data.reversalId}.`, 'success');
+                                        return;
+                                      } catch (error: any) {
+                                        triggerNotification(error?.message || 'تعذر تنفيذ العكس الكانوني.', 'warning');
+                                        return;
+                                      }
 
-                                      // Log in unified EnterpriseAuditLogger
-                                      EnterpriseAuditLogger.log({
-                                        action: 'إلغاء اعتماد',
-                                        oldValue: v,
-                                        newValue: { ...v, status: 'ملغى', voidReason: cancelReason, voidedBy: 'سليمان غازي', voidedAt },
-                                        userName: 'سليمان غازي',
-                                        userRole: 'Manager',
-                                        module: 'الحسابات العامة',
-                                        device: 'نظام الإدارة المالية المركزي'
-                                      });
-
-                                      triggerNotification(`✓ تم إلغاء سند القبض ${v.id} وتوطين القيد العكسي كلياً!`, 'warning');
                                     }
                                   }}
                                   disabled={!canonicalWriteReady}

@@ -248,7 +248,7 @@ export interface Employee {
 export interface SchoolClass {
   id: string;
   name: string;
-  level: 'primary' | 'middle' | 'high';
+  level: 'kindergarten' | 'primary' | 'middle' | 'high';
   sections: string[];
   capacity: number;
 }
@@ -2566,7 +2566,6 @@ export interface FixedAsset {
   createdAt: string;
   updatedAt: string;
 }
-
 
 
 

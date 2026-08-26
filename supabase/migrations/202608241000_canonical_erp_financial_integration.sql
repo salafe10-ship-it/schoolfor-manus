@@ -63,7 +63,10 @@ CREATE TABLE IF NOT EXISTS public.erp_journal_entries (
     status text NOT NULL DEFAULT 'posted',
     source_type text NOT NULL,
     source_id text NOT NULL,
+    fiscal_period text NOT NULL,
     idempotency_key text NOT NULL,
+    reversal_of_journal_id text,
+    reversal_reason text,
     total_debit numeric(14,2) NOT NULL,
     total_credit numeric(14,2) NOT NULL,
     created_at timestamptz NOT NULL DEFAULT now(),
@@ -79,11 +82,55 @@ CREATE TABLE IF NOT EXISTS public.erp_journal_entries (
         ON UPDATE RESTRICT ON DELETE RESTRICT,
     CONSTRAINT uq_erp_journal_source UNIQUE (school_id, source_type, source_id),
     CONSTRAINT uq_erp_journal_idempotency UNIQUE (school_id, idempotency_key),
-    CONSTRAINT ck_erp_journal_status CHECK (status = 'posted'),
+    CONSTRAINT ck_erp_journal_status CHECK (status IN ('draft', 'approved', 'posted', 'reversed')),
     CONSTRAINT ck_erp_journal_totals CHECK (
         total_debit > 0 AND total_credit > 0 AND total_debit = total_credit
     )
 );
+
+CREATE TABLE IF NOT EXISTS public.erp_financial_periods (
+    tenant_id uuid NOT NULL,
+    school_id uuid NOT NULL,
+    period_code text NOT NULL,
+    starts_on date NOT NULL,
+    ends_on date NOT NULL,
+    status text NOT NULL DEFAULT 'open',
+    closed_at timestamptz,
+    closed_by uuid,
+    PRIMARY KEY (school_id, period_code),
+    CONSTRAINT fk_erp_period_school FOREIGN KEY (tenant_id, school_id)
+        REFERENCES public.schools (tenant_id, id) ON UPDATE RESTRICT ON DELETE RESTRICT,
+    CONSTRAINT fk_erp_period_actor FOREIGN KEY (closed_by)
+        REFERENCES public.users (id) ON UPDATE RESTRICT ON DELETE RESTRICT,
+    CONSTRAINT ck_erp_period_dates CHECK (starts_on <= ends_on),
+    CONSTRAINT ck_erp_period_status CHECK (status IN ('open', 'closed'))
+);
+
+DO $$
+BEGIN
+    IF NOT EXISTS (
+        SELECT 1 FROM pg_constraint
+        WHERE conrelid = 'public.erp_journal_entries'::regclass
+          AND conname = 'fk_erp_journal_period'
+    ) THEN
+        ALTER TABLE public.erp_journal_entries
+            ADD CONSTRAINT fk_erp_journal_period
+            FOREIGN KEY (school_id, fiscal_period)
+            REFERENCES public.erp_financial_periods (school_id, period_code)
+            ON UPDATE RESTRICT ON DELETE RESTRICT;
+    END IF;
+    IF NOT EXISTS (
+        SELECT 1 FROM pg_constraint
+        WHERE conrelid = 'public.erp_journal_entries'::regclass
+          AND conname = 'fk_erp_journal_reversal'
+    ) THEN
+        ALTER TABLE public.erp_journal_entries
+            ADD CONSTRAINT fk_erp_journal_reversal
+            FOREIGN KEY (school_id, reversal_of_journal_id)
+            REFERENCES public.erp_journal_entries (school_id, id)
+            ON UPDATE RESTRICT ON DELETE RESTRICT;
+    END IF;
+END $$;
 
 CREATE TABLE IF NOT EXISTS public.erp_journal_lines (
     tenant_id uuid NOT NULL,
@@ -215,6 +262,7 @@ BEGIN
         'erp_general_ledger',
         'erp_expense_accruals',
         'erp_financial_audit_events'
+        ,'erp_financial_periods'
     ] LOOP
         EXECUTE format('ALTER TABLE public.%I ENABLE ROW LEVEL SECURITY', table_name);
         EXECUTE format('DROP POLICY IF EXISTS %I ON public.%I', 'p_' || table_name || '_scope', table_name);
@@ -240,7 +288,8 @@ GRANT SELECT, INSERT, UPDATE ON TABLE
     public.erp_journal_lines,
     public.erp_general_ledger,
     public.erp_expense_accruals,
-    public.erp_financial_audit_events
+    public.erp_financial_audit_events,
+    public.erp_financial_periods
 TO authenticated;
 
 COMMENT ON TABLE public.erp_journal_entries IS
@@ -253,5 +302,34 @@ COMMENT ON TABLE public.erp_expense_accruals IS
     'Accrued expenses subledger linked to canonical posted journals.';
 COMMENT ON TABLE public.erp_financial_audit_events IS
     'Append-only audit trail for canonical ERP financial synchronization.';
+COMMENT ON TABLE public.erp_financial_periods IS
+    'Authoritative financial periods; posted journals must belong to an open period.';
+
+CREATE OR REPLACE FUNCTION public.prevent_erp_ledger_mutation()
+RETURNS trigger LANGUAGE plpgsql AS $$
+BEGIN
+    RAISE EXCEPTION 'Canonical general-ledger history is immutable; use a reversal journal.';
+END;
+$$;
+
+CREATE OR REPLACE FUNCTION public.prevent_erp_posted_journal_mutation()
+RETURNS trigger LANGUAGE plpgsql AS $$
+BEGIN
+    IF TG_OP = 'DELETE' OR (OLD.status IN ('posted', 'reversed') AND NEW.status <> 'reversed') THEN
+        RAISE EXCEPTION 'Posted canonical journals are immutable; use approval or reversal workflow.';
+    END IF;
+    RETURN NEW;
+END;
+$$;
+
+DROP TRIGGER IF EXISTS trg_erp_journal_immutable ON public.erp_journal_entries;
+CREATE TRIGGER trg_erp_journal_immutable
+    BEFORE UPDATE OR DELETE ON public.erp_journal_entries
+    FOR EACH ROW EXECUTE FUNCTION public.prevent_erp_posted_journal_mutation();
+
+DROP TRIGGER IF EXISTS trg_erp_gl_immutable ON public.erp_general_ledger;
+CREATE TRIGGER trg_erp_gl_immutable
+    BEFORE UPDATE OR DELETE ON public.erp_general_ledger
+    FOR EACH ROW EXECUTE FUNCTION public.prevent_erp_ledger_mutation();
 
 COMMIT;

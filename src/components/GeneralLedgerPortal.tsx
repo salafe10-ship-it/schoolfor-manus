@@ -4165,7 +4165,7 @@ export default function GeneralLedgerPortal({
                       <h4 className="text-xs font-black text-slate-950">التصميم المهني المعتمد (شجرة موحدة ومراكز تكلفة ✅)</h4>
                     </div>
                     <span className="text-[10px] text-emerald-800 bg-emerald-100 font-bold px-2 py-0.5 rounded">
-                      حوكمة وذكاء وتكامل مالي YTD
+                      حوكمة وذكاء وتكامل مالي منذ بداية السنة
                     </span>
                   </div>
 

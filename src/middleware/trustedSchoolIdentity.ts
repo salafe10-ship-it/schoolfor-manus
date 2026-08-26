@@ -66,6 +66,17 @@ export async function resolveTrustedSchoolPresentation(
 
   if (error || !data) return null;
   const school = toTrustedSchoolPresentation(data as SchoolRecord);
+  const { data: academicYear } = await supabase
+    .from('academic_years')
+    .select('name, code')
+    .eq('school_id', trustedSchoolId)
+    .eq('is_current', true)
+    .eq('status', 'active')
+    .is('deleted_at', null)
+    .order('starts_on', { ascending: false })
+    .limit(1)
+    .maybeSingle();
+  school.academicYear = String(academicYear?.name || academicYear?.code || '').trim();
   return school.id === trustedSchoolId ? school : null;
 }
 

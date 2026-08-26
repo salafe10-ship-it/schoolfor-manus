@@ -54,6 +54,8 @@ type CanonicalStudentRow = {
   guardian_relation: string | null;
   class_reference: string | null;
   section_reference: string | null;
+  academic_year_id: string | null;
+  academic_year_name: string | null;
   status: string;
   version: number;
   created_at: string;
@@ -144,7 +146,8 @@ export function mapCanonicalStudentRow(row: CanonicalStudentRow): Record<string,
     birthDate: row.date_of_birth,
     gender: row.gender || undefined,
     nationality: row.nationality || undefined,
-    academicYear: undefined,
+    academicYearId: row.academic_year_id || undefined,
+    academicYear: row.academic_year_name || undefined,
     status: mapStatus(row.status),
     feesPaid: 0,
     feesRemaining: 0,
@@ -217,14 +220,21 @@ async function queryCanonicalStudents(
       s.preferred_name, s.date_of_birth::text AS date_of_birth, s.gender, s.nationality,
       s.status, s.version, s.created_at, s.deleted_at,
       enrollment.class_reference, enrollment.section_reference,
+      enrollment.academic_year_id, enrollment.academic_year_name,
       guardian.guardian_id, guardian.guardian_version,
       guardian.guardian_relationship_id, guardian.guardian_relationship_version,
       guardian.parent_name, guardian.parent_phone, guardian.guardian_relation,
       COUNT(*) OVER()::integer AS total_count
     FROM public.students AS s
     LEFT JOIN LATERAL (
-      SELECT e.class_reference, e.section_reference
+      SELECT e.class_reference, e.section_reference, e.academic_year_id,
+             COALESCE(y.name, y.code) AS academic_year_name
       FROM public.enrollments AS e
+      INNER JOIN public.academic_years AS y
+        ON y.tenant_id = e.tenant_id
+       AND y.school_id = e.school_id
+       AND y.id = e.academic_year_id
+       AND y.deleted_at IS NULL
       WHERE e.tenant_id = s.tenant_id
         AND e.school_id = s.school_id
         AND (e.branch_id = s.branch_id OR (e.branch_id IS NULL AND s.branch_id IS NULL))
@@ -348,6 +358,40 @@ async function queryCanonicalStudentsFromSupabase(
 
   const rows = (studentRows || []) as Array<Record<string, unknown>>;
   const studentIds = rows.map(row => String(row.id || '')).filter(Boolean);
+  const enrollmentByStudent = new Map<string, Record<string, unknown>>();
+  const academicYearById = new Map<string, string>();
+  if (studentIds.length) {
+    const { data: enrollmentRows, error: enrollmentError } = await supabase
+      .from('enrollments')
+      .select('student_id,academic_year_id,class_reference,section_reference,starts_on,created_at')
+      .eq('tenant_id', context.tenantId)
+      .eq('school_id', context.schoolId)
+      .or(`branch_id.is.null,branch_id.eq.${context.branchId}`)
+      .in('student_id', studentIds)
+      .in('enrollment_status', ['pending', 'active'])
+      .is('deleted_at', null)
+      .order('starts_on', { ascending: false })
+      .order('created_at', { ascending: false });
+    if (enrollmentError) throw enrollmentError;
+    for (const enrollment of (enrollmentRows || []) as Array<Record<string, unknown>>) {
+      const enrolledStudentId = String(enrollment.student_id || '');
+      if (enrolledStudentId && !enrollmentByStudent.has(enrolledStudentId)) enrollmentByStudent.set(enrolledStudentId, enrollment);
+    }
+    const academicYearIds = [...new Set(Array.from(enrollmentByStudent.values()).map(enrollment => String(enrollment.academic_year_id || '')).filter(Boolean))];
+    if (academicYearIds.length) {
+      const { data: academicYearRows, error: academicYearError } = await supabase
+        .from('academic_years')
+        .select('id,name,code')
+        .eq('tenant_id', context.tenantId)
+        .eq('school_id', context.schoolId)
+        .in('id', academicYearIds)
+        .is('deleted_at', null);
+      if (academicYearError) throw academicYearError;
+      for (const year of (academicYearRows || []) as Array<Record<string, unknown>>) {
+        academicYearById.set(String(year.id || ''), String(year.name || year.code || ''));
+      }
+    }
+  }
   const guardianLinks: Array<Record<string, unknown>> = [];
   if (studentIds.length) {
     const { data, error } = await supabase
@@ -384,6 +428,8 @@ async function queryCanonicalStudentsFromSupabase(
       .sort((left, right) => Number(right.is_primary === true) - Number(left.is_primary === true) || String(left.created_at || '').localeCompare(String(right.created_at || '')));
     const link = links[0];
     const guardian = link ? guardianById.get(String(link.guardian_id || '')) : undefined;
+    const enrollment = enrollmentByStudent.get(String(row.id || ''));
+    const academicYearId = String(enrollment?.academic_year_id || '');
     return mapCanonicalStudentRow({
       ...row,
       guardian_id: guardian?.id || null,
@@ -393,8 +439,10 @@ async function queryCanonicalStudentsFromSupabase(
       parent_name: guardian ? [guardian.legal_first_name, guardian.legal_middle_name, guardian.legal_last_name].filter(Boolean).join(' ') : null,
       parent_phone: guardian?.phone || null,
       guardian_relation: link?.relationship_type || null,
-      class_reference: null,
-      section_reference: null,
+      class_reference: enrollment?.class_reference || null,
+      section_reference: enrollment?.section_reference || null,
+      academic_year_id: academicYearId || null,
+      academic_year_name: academicYearById.get(academicYearId) || null,
       total_count: count || 0
     } as unknown as CanonicalStudentRow);
   });
@@ -416,7 +464,17 @@ async function queryCanonicalStudentAffairsMetrics(
     SELECT
       COUNT(*)::integer AS total_count,
       COUNT(*) FILTER (WHERE s.status = 'active')::integer AS active_count,
-      COUNT(*) FILTER (WHERE s.created_at >= CURRENT_TIMESTAMP - INTERVAL '30 days')::integer AS new_count,
+      COUNT(*) FILTER (WHERE EXISTS (
+        SELECT 1
+        FROM public.enrollments AS current_enrollment
+        WHERE current_enrollment.tenant_id = s.tenant_id
+          AND current_enrollment.school_id = s.school_id
+          AND (current_enrollment.branch_id = s.branch_id OR current_enrollment.branch_id IS NULL)
+          AND current_enrollment.student_id = s.id
+          AND current_enrollment.academic_year_id = $4
+          AND current_enrollment.enrollment_status IN ('pending', 'active')
+          AND current_enrollment.deleted_at IS NULL
+      ))::integer AS new_count,
       COUNT(*) FILTER (WHERE s.status IN ('suspended', 'withdrawn'))::integer AS suspended_count,
       COUNT(*) FILTER (WHERE NOT EXISTS (
         SELECT 1
@@ -433,7 +491,7 @@ async function queryCanonicalStudentAffairsMetrics(
       AND s.school_id = $2
       AND s.branch_id = $3
       AND s.deleted_at IS NULL
-  `, [context.tenantId, context.schoolId, context.branchId]);
+  `, [context.tenantId, context.schoolId, context.branchId, context.academicYear]);
 
   const row = result.rows[0];
   if (!row) throw new DatabaseError('Canonical Student Affairs metrics query returned no result.');
@@ -567,7 +625,7 @@ export class CanonicalStudentReadRepository {
           userId: context.userId,
           userName: context.userId,
           ipAddress: 'server',
-          affectedTables: ['students', 'student_documents'],
+          affectedTables: ['students', 'enrollments', 'student_documents'],
           diagnosticTrace
         },
         executeRead,

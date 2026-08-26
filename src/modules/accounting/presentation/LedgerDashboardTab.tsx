@@ -135,7 +135,7 @@ export const LedgerDashboardTab = () => {
             <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-4">
               {/* Total Revenues */}
               <div className="bg-white rounded-xl p-5 border border-slate-200 hover:shadow-md transition-shadow flex flex-col justify-between h-28">
-                <span className="text-[11px] text-slate-500 font-black">إجمالي الإيرادات (YTD)</span>
+                <span className="text-[11px] text-slate-500 font-black">إجمالي الإيرادات منذ بداية السنة</span>
                 <div>
                   <div className="text-2xl font-black text-emerald-600 tracking-tight" dir="ltr">
                     {formatCurrency(financialTotals.revenues, false)}
@@ -146,7 +146,7 @@ export const LedgerDashboardTab = () => {
 
               {/* Total Expenses */}
               <div className="bg-white rounded-xl p-5 border border-slate-200 hover:shadow-md transition-shadow flex flex-col justify-between h-28">
-                <span className="text-[11px] text-slate-500 font-black">إجمالي المصروفات (YTD)</span>
+                <span className="text-[11px] text-slate-500 font-black">إجمالي المصروفات منذ بداية السنة</span>
                 <div>
                   <div className="text-2xl font-black text-rose-600 tracking-tight" dir="ltr">
                     {formatCurrency(financialTotals.expenses, false)}
@@ -268,7 +268,7 @@ export const LedgerDashboardTab = () => {
                   </div>
                 </div>
 
-                <span className="text-[10px] text-slate-400 font-medium font-mono">طريقة الحسبة: (الربح التشغيلي ÷ الإيرادات YTD)</span>
+                <span className="text-[10px] text-slate-400 font-medium">طريقة الحسبة: الربح التشغيلي ÷ إيرادات السنة حتى اليوم</span>
               </div>
 
             </div>

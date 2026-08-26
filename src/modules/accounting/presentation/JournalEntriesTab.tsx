@@ -652,13 +652,16 @@ const handleImportJvLinesFromCSV = (csvText: string) => {
 
                       <div className="relative group">
                         <button
+                          type="button"
+                          aria-haspopup="menu"
+                          aria-label="فتح خيارات تصدير القيود"
                           className="flex items-center gap-1.5 px-3 py-1.5 rounded-md hover:bg-slate-100 hover:text-emerald-600 text-slate-700 transition font-semibold text-[11px]"
                           title="تصدير المستند"
                         >
                           <Download className="w-4 h-4 text-slate-500" />
                           <span>تصدير</span>
                         </button>
-                        <div className="hidden group-hover:block absolute top-8 right-0 bg-white border border-slate-200 rounded-xl shadow-xl py-1.5 w-36 z-50 text-[11px]">
+                        <div role="menu" className="hidden group-hover:block group-focus-within:block absolute top-8 right-0 bg-white border border-slate-200 rounded-xl shadow-xl py-1.5 w-36 z-50 text-[11px]">
                           <button onClick={() => handleExportJv('xls')} className="w-full text-right px-3 py-2 hover:bg-slate-50 flex items-center gap-2 text-slate-700 font-semibold">
                             <FileSpreadsheet className="w-3.5 h-3.5 text-emerald-600" />
                             <span>ملف Excel (.xls)</span>

@@ -8,22 +8,26 @@ describe('IDMAP-001 trusted school identity mapping', () => {
   it('keeps the server-resolved UUID as the application school id', async () => {
     const schoolId = 'c4060060-0600-4600-8600-600600600603';
     const supabase = {
-      from: vi.fn(() => ({
-        select: vi.fn(() => ({
-          eq: vi.fn(() => ({
-            maybeSingle: vi.fn().mockResolvedValue({
-              data: {
-                id: schoolId,
-                school_code: 'P003',
-                legal_name: 'PERF003 Test Tenant',
-                display_name: 'PERF003 Test School',
-                status: 'active'
-              },
-              error: null
-            })
-          }))
-        }))
-      }))
+      from: vi.fn((table: string) => {
+        const query: any = {
+          select: vi.fn(() => query),
+          eq: vi.fn(() => query),
+          is: vi.fn(() => query),
+          order: vi.fn(() => query),
+          limit: vi.fn(() => query),
+          maybeSingle: vi.fn().mockResolvedValue(table === 'schools' ? {
+            data: {
+              id: schoolId,
+              school_code: 'P003',
+              legal_name: 'PERF003 Test Tenant',
+              display_name: 'PERF003 Test School',
+              status: 'active'
+            },
+            error: null
+          } : { data: { name: '2025-2026', code: '2025-2026' }, error: null })
+        };
+        return query;
+      })
     } as any;
 
     await expect(resolveTrustedSchoolPresentation(supabase, schoolId)).resolves.toMatchObject({

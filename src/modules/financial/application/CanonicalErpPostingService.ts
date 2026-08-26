@@ -7,7 +7,8 @@ export const CANONICAL_ERP_TABLES = [
   'erp_journal_lines',
   'erp_general_ledger',
   'erp_expense_accruals',
-  'erp_financial_audit_events'
+  'erp_financial_audit_events',
+  'erp_financial_periods'
 ] as const;
 
 type FinancialRow = Record<string, unknown>;
@@ -29,6 +30,7 @@ export type CanonicalPostingDocument = {
   date: string;
   description: string;
   lines: CanonicalPostingLine[];
+  fiscalPeriod?: string;
   expenseAccrual?: {
     supplierName: string;
     amount: number;
@@ -97,6 +99,10 @@ function dateValue(value: unknown): string {
   return date;
 }
 
+function fiscalPeriodFor(date: string): string {
+  return date.slice(0, 7);
+}
+
 function normalizedStatus(value: unknown, fallback = 'draft'): string {
   const status = textValue(value, fallback).toLowerCase();
   if (['مرحّل', 'مُرحّل', 'مرحل', 'posted'].includes(status)) return 'posted';
@@ -158,6 +164,7 @@ export function buildCanonicalPosting(
       sourceId,
       date: dateValue(rowValue(input, 'invoiceDate', 'date')),
       description: textValue(rowValue(input, 'item', 'description'), `إثبات رسوم الطالب ${sourceId}`),
+      fiscalPeriod: fiscalPeriodFor(dateValue(rowValue(input, 'invoiceDate', 'date'))),
       lines
     };
   }
@@ -177,6 +184,7 @@ export function buildCanonicalPosting(
       sourceId,
       date: dateValue(rowValue(input, 'date', 'receiptDate')),
       description: textValue(rowValue(input, 'against', 'description'), `تحصيل رسوم الطالب ${sourceId}`),
+      fiscalPeriod: fiscalPeriodFor(dateValue(rowValue(input, 'date', 'receiptDate'))),
       lines
     };
   }
@@ -197,6 +205,7 @@ export function buildCanonicalPosting(
       sourceId,
       date: dateValue(rowValue(input, 'accrualDate', 'date')),
       description: textValue(rowValue(input, 'description', 'against'), `إثبات مصروف مستحق ${sourceId}`),
+      fiscalPeriod: fiscalPeriodFor(dateValue(rowValue(input, 'accrualDate', 'date'))),
       lines,
       expenseAccrual: {
         supplierName: textValue(rowValue(input, 'supplierName', 'supplier', 'beneficiary')),
@@ -242,6 +251,7 @@ export function buildCanonicalPosting(
       sourceId,
       date: dateValue(rowValue(input, 'date', 'entryDate')),
       description: textValue(rowValue(input, 'description', 'memo'), `قيد يومية ${sourceId}`),
+      fiscalPeriod: fiscalPeriodFor(dateValue(rowValue(input, 'date', 'entryDate'))),
       lines
     };
   }
@@ -261,6 +271,7 @@ export function buildCanonicalPosting(
     sourceId,
     date: dateValue(rowValue(input, 'date', 'paymentDate')),
     description: textValue(rowValue(input, 'against', 'description'), `سداد مصروف ${sourceId}`),
+    fiscalPeriod: fiscalPeriodFor(dateValue(rowValue(input, 'date', 'paymentDate'))),
     lines
   };
 }
@@ -366,6 +377,16 @@ export class CanonicalErpPostingService {
     const idempotencyKey = `${document.sourceType}:${document.sourceId}`;
     const debitTotal = Number(document.lines.reduce((sum, line) => sum + line.debit, 0).toFixed(2));
     const creditTotal = Number(document.lines.reduce((sum, line) => sum + line.credit, 0).toFixed(2));
+    const fiscalPeriod = document.fiscalPeriod || fiscalPeriodFor(document.date);
+    const period = await db(transaction).query<{ status: string }>(
+      `SELECT status FROM public.erp_financial_periods
+        WHERE tenant_id = $1::uuid AND school_id = $2::uuid
+          AND period_code = $3 AND starts_on <= $4::date AND ends_on >= $4::date
+        FOR UPDATE`,
+      [tenantId, schoolId, fiscalPeriod, document.date]
+    );
+    if (!period.rows[0]) throw new Error(`الفترة المالية ${fiscalPeriod} غير معرفة للمدرسة.`);
+    if (period.rows[0].status !== 'open') throw new Error(`الفترة المالية ${fiscalPeriod} مغلقة ولا تقبل الترحيل.`);
     const existing = await db(transaction).query<{ id: string; total_debit: string | number; total_credit: string | number }>(
       `SELECT id, total_debit, total_credit
          FROM public.erp_journal_entries
@@ -377,16 +398,29 @@ export class CanonicalErpPostingService {
       if (Number(existing.rows[0].total_debit) !== debitTotal || Number(existing.rows[0].total_credit) !== creditTotal) {
         throw new Error(`تعارض تكرار: المستند ${document.sourceId} سبق ترحيله بقيمة مختلفة.`);
       }
+      const existingLines = await db(transaction).query<{ account_code: string; debit: string | number; credit: string | number }>(
+        `SELECT account_code, debit, credit FROM public.erp_journal_lines
+          WHERE school_id = $1 AND journal_entry_id = $2 ORDER BY account_code`,
+        [schoolId, existing.rows[0].id]
+      );
+      const expectedLines = [...document.lines].sort((a, b) => a.accountCode.localeCompare(b.accountCode));
+      const linesMatch = existingLines.rows.length === expectedLines.length
+        && existingLines.rows.every((line, index) => line.account_code === expectedLines[index].accountCode
+          && Number(line.debit) === expectedLines[index].debit
+          && Number(line.credit) === expectedLines[index].credit);
+      if (!linesMatch) {
+        throw new Error(`تعارض ترحيل: المستند ${document.sourceId} مرتبط بقيد قديم غير مطابق لقاعدة الذمم الكانونية.`);
+      }
       return { created: false, ledgerLines: 0, journalEntryId: existing.rows[0].id };
     }
 
     await db(transaction).query(
       `INSERT INTO public.erp_journal_entries
         (tenant_id, school_id, id, entry_date, description, source_type, source_id,
-         idempotency_key, total_debit, total_credit, created_by)
-       VALUES ($1::uuid, $2::uuid, $3, $4, $5, $6, $7, $8, $9, $10, $11::uuid)`,
+         fiscal_period, idempotency_key, total_debit, total_credit, created_by)
+       VALUES ($1::uuid, $2::uuid, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12::uuid)`,
       [tenantId, schoolId, journalEntryId, document.date, document.description, document.sourceType,
-        document.sourceId, idempotencyKey, debitTotal, creditTotal, actorId]
+        document.sourceId, fiscalPeriod, idempotencyKey, debitTotal, creditTotal, actorId]
     );
 
     const orderedLines = [...document.lines].sort((a, b) => a.accountCode.localeCompare(b.accountCode));
@@ -534,25 +568,121 @@ export class CanonicalErpPostingService {
     return { createdJournalCount, existingJournalCount, ledgerLineCount, expenseAccrualCount, sourceLinks };
   }
 
-  public static async readModel(transaction: TransactionLike, schoolId: string): Promise<CanonicalErpReadModel> {
-    if (!(await this.isProvisioned(transaction))) {
+  /** Creates an immutable compensating journal for a posted canonical entry. */
+  public static async reverseJournal(
+    transaction: TransactionLike,
+    tenantId: string,
+    schoolId: string,
+    actorId: string,
+    journalId: string,
+    reason: string
+  ): Promise<string> {
+    const cleanReason = reason.trim();
+    if (!cleanReason) throw new Error('سبب العكس المحاسبي إلزامي.');
+    const original = await db(transaction).query<any>(
+      `SELECT id, entry_date, description, source_type, source_id, fiscal_period, status
+         FROM public.erp_journal_entries
+        WHERE tenant_id = $1::uuid AND school_id = $2::uuid AND id = $3
+        FOR UPDATE`,
+      [tenantId, schoolId, journalId]
+    );
+    const source = original.rows[0];
+    if (!source) throw new Error(`القيد ${journalId} غير موجود في الأستاذ الكانوني.`);
+    if (source.status !== 'posted') throw new Error(`لا يمكن عكس القيد ${journalId} في حالته الحالية.`);
+    const already = await db(transaction).query<{ id: string }>(
+      `SELECT id FROM public.erp_journal_entries
+        WHERE tenant_id = $1::uuid AND school_id = $2::uuid AND reversal_of_journal_id = $3
+        LIMIT 1`, [tenantId, schoolId, journalId]
+    );
+    if (already.rows[0]) return already.rows[0].id;
+    const lines = await db(transaction).query<any>(
+      `SELECT id, account_code, account_name, debit, credit, cost_center
+         FROM public.erp_journal_lines
+        WHERE school_id = $1 AND journal_entry_id = $2
+        ORDER BY id`, [schoolId, journalId]
+    );
+    if (lines.rows.length < 2) throw new Error(`القيد ${journalId} لا يحتوي على أسطر قابلة للعكس.`);
+    const reversalPeriod = await db(transaction).query<{ status: string }>(
+      `SELECT status FROM public.erp_financial_periods
+        WHERE tenant_id = $1::uuid AND school_id = $2::uuid
+          AND period_code = to_char(CURRENT_DATE, 'YYYY-MM')
+          AND starts_on <= CURRENT_DATE AND ends_on >= CURRENT_DATE
+        FOR UPDATE`, [tenantId, schoolId]
+    );
+    if (!reversalPeriod.rows[0] || reversalPeriod.rows[0].status !== 'open') {
+      throw new Error(`لا يمكن عكس القيد ${journalId}: فترة العكس الحالية مغلقة أو غير معرفة.`);
+    }
+    const reversalId = `ERP-REV-${journalId}`;
+    const key = `reversal:${journalId}`;
+    await db(transaction).query(
+      `INSERT INTO public.erp_journal_entries
+        (tenant_id, school_id, id, entry_date, description, status, source_type, source_id,
+         fiscal_period, idempotency_key, reversal_of_journal_id, reversal_reason,
+         total_debit, total_credit, created_by)
+       VALUES ($1::uuid, $2::uuid, $3, CURRENT_DATE, $4, 'posted', 'reversal', $5,
+         $6, $7, $8, $9, $10, $11, $12::uuid)`,
+      [tenantId, schoolId, reversalId, `عكس القيد ${journalId}: ${cleanReason}`, journalId,
+        fiscalPeriodFor(new Date().toISOString().slice(0, 10)), key, journalId, cleanReason,
+        Number(lines.rows.reduce((sum: number, row: any) => sum + Number(row.credit), 0).toFixed(2)),
+        Number(lines.rows.reduce((sum: number, row: any) => sum + Number(row.debit), 0).toFixed(2)), actorId]
+    );
+    for (const line of lines.rows) {
+      await db(transaction).query(
+        `INSERT INTO public.erp_journal_lines
+          (tenant_id, school_id, journal_entry_id, id, account_code, account_name, debit, credit, cost_center)
+         VALUES ($1::uuid, $2::uuid, $3, $4, $5, $6, $7, $8, $9)`,
+        [tenantId, schoolId, reversalId, `${line.id}-REV`, line.account_code, line.account_name,
+          line.credit, line.debit, line.cost_center || null]
+      );
+      await db(transaction).query(
+        `INSERT INTO public.erp_general_ledger
+          (tenant_id, school_id, id, journal_entry_id, journal_line_id, account_code, entry_date,
+           debit, credit, balance_after, source_type, source_id, description)
+         VALUES ($1::uuid, $2::uuid, $3, $4, $5, $6, CURRENT_DATE, $7, $8, 0, 'reversal', $9, $10)`,
+        [tenantId, schoolId, `${reversalId}-${line.id}-REV`, reversalId, `${line.id}-REV`, line.account_code,
+          line.credit, line.debit, journalId, `عكس القيد ${journalId}: ${cleanReason}`]
+      );
+    }
+    await db(transaction).query(
+      `UPDATE public.erp_journal_entries SET status = 'reversed'
+        WHERE tenant_id = $1::uuid AND school_id = $2::uuid AND id = $3`,
+      [tenantId, schoolId, journalId]
+    );
+    await db(transaction).query(
+      `INSERT INTO public.erp_financial_audit_events
+        (tenant_id, school_id, operation, entity_type, entity_id, actor_user_id, after_payload)
+       VALUES ($1::uuid, $2::uuid, 'REVERSE', 'erp_journal_entry', $3, $4::uuid, $5::jsonb)`,
+      [tenantId, schoolId, journalId, actorId, JSON.stringify({ reversalId, reason: cleanReason })]
+    );
+    return reversalId;
+  }
+
+  public static async readModel(
+    transaction: TransactionLike,
+    schoolId: string,
+    provisioned = false
+  ): Promise<CanonicalErpReadModel> {
+    if (!provisioned && !(await this.isProvisioned(transaction))) {
       return { journalEntries: [], ledgerEntries: [], chartOfAccounts: [], expenseAccruals: [], sourceLinks: [] };
     }
-    const [journals, lines, ledger, accounts, accruals] = await Promise.all([
-      db(transaction).query<any>(
+    // A transaction is backed by one checked-out PostgreSQL client. Issuing a
+    // Promise.all against that client is unsupported by node-postgres, causes
+    // query contention, and is deprecated for pg@9. Keep the reads ordered on
+    // the same consistent transaction snapshot.
+    const journals = await db(transaction).query<any>(
         `SELECT id, entry_date, description, status, source_type, source_id, total_debit, total_credit, created_at
            FROM public.erp_journal_entries WHERE school_id = $1 ORDER BY entry_date DESC, created_at DESC`, [schoolId]
-      ),
-      db(transaction).query<any>(
+      );
+    const lines = await db(transaction).query<any>(
         `SELECT journal_entry_id, id, account_code, account_name, debit, credit, cost_center
            FROM public.erp_journal_lines WHERE school_id = $1 ORDER BY journal_entry_id, id`, [schoolId]
-      ),
-      db(transaction).query<any>(
+      );
+    const ledger = await db(transaction).query<any>(
         `SELECT id, journal_entry_id, journal_line_id, account_code, entry_date, debit, credit,
                 balance_after, source_type, source_id, description, created_at
            FROM public.erp_general_ledger WHERE school_id = $1 ORDER BY entry_date DESC, created_at DESC`, [schoolId]
-      ),
-      db(transaction).query<any>(
+      );
+    const accounts = await db(transaction).query<any>(
         `SELECT c.account_code, c.account_name, c.account_nature, c.is_active, c.is_leaf,
                 COALESCE(SUM(gl.debit), 0) AS debit_balance,
                 COALESCE(SUM(gl.credit), 0) AS credit_balance,
@@ -564,13 +694,12 @@ export class CanonicalErpPostingService {
           WHERE c.school_id = $1
           GROUP BY c.account_code, c.account_name, c.account_nature, c.is_active, c.is_leaf
           ORDER BY c.account_code`, [schoolId]
-      ),
-      db(transaction).query<any>(
+      );
+    const accruals = await db(transaction).query<any>(
         `SELECT id, accrual_date, description, supplier_name, amount, expense_account,
                 payable_account, status, journal_entry_id, created_at
            FROM public.erp_expense_accruals WHERE school_id = $1 ORDER BY accrual_date DESC, created_at DESC`, [schoolId]
-      )
-    ]);
+      );
 
     const lineMap = new Map<string, any[]>();
     for (const line of lines.rows) {

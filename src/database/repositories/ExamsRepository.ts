@@ -153,30 +153,28 @@ export class ExamsRepository implements IBaseRepository<any> {
       return pending.data;
     }
 
-    const isHealthy = await FallbackStorage.isHealthy();
-    if (isHealthy) {
-      try {
-        const supabase = getSupabaseClient();
-        if (supabase) {
-          const { data, error } = await supabase
-            .from('exams_database')
-            .select('data')
-            .eq('school_id', schoolId)
-            .maybeSingle();
-
-          if (!error && data && data.data) {
-            return data.data;
-          }
-        }
-      } catch (err: any) {
-        EnterpriseLogger.error("Failed to fetch exams database from Supabase:", "ExamsRepository", { error: err?.message || err });
-      }
-    } else {
-      FallbackStorage.assertCanonicalPersistence('exams database read');
-      return FallbackStorage.getExams();
+    // Canonical reads depend on the central client, not on the health of the
+    // emergency local store. Coupling the two made an empty/disabled fallback
+    // incorrectly turn a healthy Supabase read into HTTP 500.
+    const supabase = getSupabaseClient();
+    if (!supabase) {
+      FallbackStorage.assertCanonicalPersistence('exams database read without a central client');
+      return {};
     }
+    try {
+      const { data, error } = await supabase
+        .from('exams_database')
+        .select('data')
+        .eq('school_id', schoolId)
+        .maybeSingle();
 
-    FallbackStorage.assertCanonicalPersistence('exams database read after central failure');
+      if (error) throw error;
+      // No configured cycle is a valid canonical empty state.
+      return data?.data && typeof data.data === 'object' ? data.data : {};
+    } catch (err: any) {
+      EnterpriseLogger.error("Failed to fetch exams database from Supabase:", "ExamsRepository", { error: err?.message || err });
+      FallbackStorage.assertCanonicalPersistence('exams database read after central failure');
+    }
     return {};
   }
 

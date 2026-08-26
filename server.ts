@@ -57,9 +57,15 @@ import {
   readConnectionIdentity,
   type ConnectionIdentity,
 } from "./server/infrastructure/StagingConnectionDiagnostics.js";
-import { randomUUID } from "node:crypto";
+import { createHash, randomUUID } from "node:crypto";
 import { studentRegistrationService } from "./src/modules/student-registration/application/StudentRegistrationService.js";
 import { canonicalGuardianUpdateService } from "./src/modules/student-registration/application/CanonicalGuardianUpdateService.js";
+import { operationalEnrollmentAssignmentService } from "./src/modules/student-affairs/application/OperationalEnrollmentAssignmentService.js";
+import { canonicalExamClassSyncService } from "./src/modules/exams/application/CanonicalExamClassSyncService.js";
+import {
+  findScheduleResourceConflicts,
+  getExamIntervalDurationMinutes
+} from "./src/modules/exams/application/ExamSchedulingRules.js";
 import { CanonicalStudentWriteRepository } from "./src/database/repositories/CanonicalStudentWriteRepository.js";
 import { CanonicalStudentTimelineRepository } from "./src/database/repositories/CanonicalStudentTimelineRepository.js";
 import { CANONICAL_STUDENT_SORT_FIELDS, type StudentReadDiagnostic } from "./src/database/repositories/CanonicalStudentReadRepository.js";
@@ -73,9 +79,192 @@ import { createStartupReadiness } from "./server/infrastructure/StartupReadiness
 import { FallbackStorage } from "./src/database/repositories/FallbackStorage.js";
 import { AdmissionInquiry, AdmissionStatus } from './src/modules/student-admission/domain/AdmissionInquiry.js';
 import { SupabaseAdmissionInquiryRepository } from './src/modules/student-admission/repository/SupabaseAdmissionInquiryRepository.js';
-import { CanonicalErpPostingService } from './src/modules/financial/application/CanonicalErpPostingService.js';
+import { CanonicalErpPostingService, buildCanonicalPosting } from './src/modules/financial/application/CanonicalErpPostingService.js';
+import { ExamValidator } from './src/validation/validators.js';
+import { evaluateExamClosureReadiness } from './src/modules/exams/domain/ExamClosureReadiness.js';
+import { calculateCohortExamResults } from './src/modules/exams/domain/ExamResultEngine.js';
 
 type FinancialWriteMode = 'snapshot_read_only' | 'snapshot_write' | 'erp_integrated';
+
+function stableJsonStringify(value: unknown): string {
+  if (value === null || typeof value !== 'object') return JSON.stringify(value) ?? 'null';
+  if (Array.isArray(value)) return `[${value.map(stableJsonStringify).join(',')}]`;
+  const record = value as Record<string, unknown>;
+  return `{${Object.keys(record).sort().map(key => `${JSON.stringify(key)}:${stableJsonStringify(record[key])}`).join(',')}}`;
+}
+
+function validateScheduleForApproval(payload: Record<string, any>): void {
+  const schedule = Array.isArray(payload.exams_schedule) ? payload.exams_schedule : [];
+  const subjects = Array.isArray(payload.exams_subjects) ? payload.exams_subjects : [];
+  const halls = Array.isArray(payload.exams_halls) ? payload.exams_halls : [];
+  const students = Array.isArray(payload.exams_students_enriched) ? payload.exams_students_enriched : [];
+  const config = payload.exams_schedule_config || {};
+  const subjectIds = new Set(subjects.map((item: any) => String(item.id)));
+  const subjectById = new Map(subjects.map((item: any) => [String(item.id), item]));
+  const classNames = new Set((Array.isArray(payload.exams_classes_list) ? payload.exams_classes_list : []).map((item: any) => String(item.name)));
+  const hallIds = new Set(halls.map((item: any) => String(item.id)));
+  if (schedule.length === 0 || subjectIds.size === 0 || classNames.size === 0 || hallIds.size === 0) {
+    throw new ValidationError('اعتماد الجدول يتطلب جدولاً ومواد وصفوفاً وقاعات موثقة.');
+  }
+
+  const startDate = String(config.startDate || '').trim();
+  const examsPerWeek = Number(config.examsPerWeek);
+  const subjectsPerDay = Number(config.subjectsPerDay);
+  const minGapDays = Number(config.minGapDays);
+  const dailySlots = Array.isArray(config.dailySlots) ? config.dailySlots : [];
+  const holidayDays = Array.isArray(config.holidayDays) ? config.holidayDays.map(Number) : [];
+  const customHolidays = Array.isArray(config.customHolidays) ? config.customHolidays.map(String) : [];
+  if (!/^\d{4}-\d{2}-\d{2}$/.test(startDate)
+    || !Number.isSafeInteger(examsPerWeek) || examsPerWeek < 1 || examsPerWeek > 7
+    || !Number.isSafeInteger(subjectsPerDay) || subjectsPerDay < 1 || subjectsPerDay > dailySlots.length
+    || !Number.isSafeInteger(minGapDays) || minGapDays < 0 || minGapDays > 7
+    || dailySlots.length === 0
+    || holidayDays.some(day => !Number.isSafeInteger(day) || day < 0 || day > 6)
+    || customHolidays.some(date => !/^\d{4}-\d{2}-\d{2}$/.test(date))) {
+    throw new ValidationError('قواعد الجدولة غير مكتملة أو خارج النطاق المسموح.');
+  }
+  dailySlots.forEach((slot: any, index: number) => {
+    const start = String(slot?.start || '').trim();
+    const end = String(slot?.end || '').trim();
+    if (!/^\d{2}:\d{2}$/.test(start) || !/^\d{2}:\d{2}$/.test(end) || start >= end) {
+      throw new ValidationError(`الفترة الزمنية رقم ${index + 1} غير صالحة.`);
+    }
+  });
+
+  const intervalConflicts = findScheduleResourceConflicts(schedule);
+  if (intervalConflicts.length > 0) {
+    const conflict = intervalConflicts[0];
+    const resourceLabel = conflict.type === 'classroom'
+      ? 'الصف'
+      : conflict.type === 'hall'
+        ? 'القاعة'
+        : 'المراقب';
+    throw new ValidationError(
+      `لا يمكن اعتماد الجدول: يوجد تداخل زمني فعلي في ${resourceLabel} ${conflict.resourceId} بتاريخ ${conflict.date}.`
+    );
+  }
+
+  const parseDateUtc = (value: string): Date => {
+    const [year, month, day] = value.split('-').map(Number);
+    return new Date(Date.UTC(year, month - 1, day));
+  };
+  const studentsByClass = new Map<string, number>();
+  students.forEach((student: any) => {
+    const classroom = String(student?.classroom || '').trim();
+    if (classroom) studentsByClass.set(classroom, (studentsByClass.get(classroom) || 0) + 1);
+  });
+  const hallById = new Map(halls.map((hall: any) => [String(hall.id), hall]));
+  const customUnavailable = payload.exams_custom_proctor_unavailable && typeof payload.exams_custom_proctor_unavailable === 'object'
+    ? payload.exams_custom_proctor_unavailable
+    : {};
+
+  const occupiedClasses = new Set<string>();
+  const occupiedHalls = new Set<string>();
+  const occupiedProctors = new Set<string>();
+  const classSubjects = new Set<string>();
+  const classDayCounts = new Map<string, number>();
+  const classWeekCounts = new Map<string, number>();
+  const classDates = new Map<string, Set<string>>();
+  for (const item of schedule) {
+    const classroom = String(item?.classroom || '').trim();
+    const subjectId = String(item?.subjectId || '').trim();
+    const hallId = String(item?.hallId || '').trim();
+    const proctorId = String(item?.proctorId || '').trim();
+    const date = String(item?.date || '').trim();
+    const startTime = String(item?.startTime || '').trim();
+    const endTime = String(item?.endTime || '').trim();
+    if (!classNames.has(classroom) || !subjectIds.has(subjectId) || !hallIds.has(hallId) || !proctorId) {
+      throw new ValidationError('يحتوي الجدول على صف أو مادة أو قاعة أو مراقب غير صالح.');
+    }
+    if (!/^\d{4}-\d{2}-\d{2}$/.test(date) || !/^\d{2}:\d{2}$/.test(startTime) || !/^\d{2}:\d{2}$/.test(endTime) || startTime >= endTime) {
+      throw new ValidationError('يحتوي الجدول على تاريخ أو فترة زمنية غير صالحة.');
+    }
+    const configuredDuration = Number(subjectById.get(subjectId)?.examDuration || 120);
+    const scheduledDuration = getExamIntervalDurationMinutes(startTime, endTime);
+    if (!Number.isSafeInteger(configuredDuration) || configuredDuration <= 0 || scheduledDuration !== configuredDuration) {
+      throw new ValidationError(`مدة اختبار المادة ${String(subjectById.get(subjectId)?.name || subjectId)} لا تطابق المدة المجدولة.`);
+    }
+    const examDate = parseDateUtc(date);
+    const dayOfWeek = examDate.getUTCDay();
+    const dayName = ['الأحد', 'الإثنين', 'الثلاثاء', 'الأربعاء', 'الخميس', 'الجمعة', 'السبت'][dayOfWeek];
+    if (date < startDate || holidayDays.includes(dayOfWeek) || customHolidays.includes(date)) {
+      throw new ValidationError('يحتوي الجدول على اختبار قبل تاريخ البداية أو في يوم إجازة.');
+    }
+    if (Array.isArray(customUnavailable[proctorId]) && (customUnavailable[proctorId].includes(date) || customUnavailable[proctorId].includes(dayName))) {
+      throw new ValidationError('يحتوي الجدول على مراقب غير متاح في موعد الاختبار.');
+    }
+    const slot = `${date}|${startTime}`;
+    const classSlot = `${slot}|${classroom}`;
+    const hallSlot = `${slot}|${hallId}`;
+    const proctorSlot = `${slot}|${proctorId}`;
+    const classSubject = `${classroom}|${subjectId}`;
+    if (occupiedClasses.has(classSlot) || occupiedHalls.has(hallSlot) || occupiedProctors.has(proctorSlot) || classSubjects.has(classSubject)) {
+      throw new ValidationError('لا يمكن اعتماد الجدول لوجود تعارض أو تكرار في الصف أو القاعة أو المراقب أو المادة.');
+    }
+    occupiedClasses.add(classSlot);
+    occupiedHalls.add(hallSlot);
+    occupiedProctors.add(proctorSlot);
+    classSubjects.add(classSubject);
+    const assignedHallIds = [...new Set([hallId, ...(Array.isArray(item?.splitHalls) ? item.splitHalls.map(String) : [])])];
+    let totalCapacity = 0;
+    for (const splitHallId of assignedHallIds) {
+      const hall = hallById.get(String(splitHallId));
+      if (!hall || hall.status === 'inactive') throw new ValidationError('يحتوي توزيع القاعات على قاعة غير صالحة أو غير نشطة.');
+      totalCapacity += Number(hall.capacity || 0);
+      const splitHallSlot = `${slot}|${String(splitHallId)}`;
+      if (occupiedHalls.has(splitHallSlot) && splitHallSlot !== hallSlot) {
+        throw new ValidationError('لا يمكن اعتماد الجدول لوجود تعارض في القاعات المجزأة.');
+      }
+      occupiedHalls.add(splitHallSlot);
+    }
+    const classStudentCount = studentsByClass.get(classroom) || 0;
+    if (classStudentCount === 0 || totalCapacity < classStudentCount) {
+      throw new ValidationError(`سعة القاعات لا تغطي طلاب الصف ${classroom}.`);
+    }
+
+    const classDayKey = `${classroom}|${date}`;
+    classDayCounts.set(classDayKey, (classDayCounts.get(classDayKey) || 0) + 1);
+    if ((classDayCounts.get(classDayKey) || 0) > subjectsPerDay) {
+      throw new ValidationError(`تجاوز الصف ${classroom} الحد اليومي للامتحانات.`);
+    }
+    const weekStart = new Date(examDate);
+    weekStart.setUTCDate(examDate.getUTCDate() - dayOfWeek);
+    const weekKey = `${classroom}|${weekStart.toISOString().slice(0, 10)}`;
+    classWeekCounts.set(weekKey, (classWeekCounts.get(weekKey) || 0) + 1);
+    if ((classWeekCounts.get(weekKey) || 0) > examsPerWeek) {
+      throw new ValidationError(`تجاوز الصف ${classroom} الحد الأسبوعي للامتحانات.`);
+    }
+    const dates = classDates.get(classroom) || new Set<string>();
+    dates.add(date);
+    classDates.set(classroom, dates);
+  }
+
+  for (const [classroom, studentCount] of studentsByClass.entries()) {
+    if (studentCount === 0 || !classNames.has(classroom)) continue;
+    for (const subjectId of subjectIds) {
+      if (!classSubjects.has(`${classroom}|${subjectId}`)) {
+        throw new ValidationError(`الجدول غير مكتمل: لم تُجدول كل المواد للصف ${classroom}.`);
+      }
+    }
+    const orderedDates = [...(classDates.get(classroom) || [])].sort();
+    for (let index = 1; index < orderedDates.length; index += 1) {
+      const gap = Math.round((parseDateUtc(orderedDates[index]).getTime() - parseDateUtc(orderedDates[index - 1]).getTime()) / 86_400_000);
+      if (gap <= minGapDays) {
+        throw new ValidationError(`الجدول لا يحقق الحد الأدنى للراحة بين امتحانات الصف ${classroom}.`);
+      }
+    }
+  }
+}
+
+function assertExamFieldsUnchanged(
+  currentData: Record<string, any>,
+  requestedData: Record<string, any>,
+  fields: string[],
+  message: string
+): void {
+  const changed = fields.some(field => stableJsonStringify(currentData[field] ?? null) !== stableJsonStringify(requestedData[field] ?? null));
+  if (changed) throw new ConflictError(message);
+}
 
 /**
  * UAT-only bridge for the existing versioned financial snapshot writer.
@@ -1492,6 +1681,53 @@ async function startServer() {
     res.json({ success: true, data: { user }, message: "الجلسة الموثوقة فعالة." });
   });
 
+  // School-scoped academic catalogue. Configuration is stored in the
+  // canonical school_settings table and cannot be selected by the browser.
+  app.get('/api/academic/context', authenticateRequest, requirePermissionOnly(PERMISSIONS.STUDENT_READ), async (req, res, next) => {
+    try {
+      const identity = (req as any).user as { schoolId?: string; branchId?: string };
+      if (!identity?.schoolId) throw new AuthenticationError('هوية المدرسة الموثوقة غير مكتملة.');
+      const supabase = getSupabaseClientForAccessToken((req as any).trustedAccessToken) || getSupabaseClient();
+      if (!supabase) throw new DatabaseError('مصدر الهيكل الأكاديمي غير متاح.');
+
+      const [yearResult, structureResult] = await Promise.all([
+        supabase
+          .from('academic_years')
+          .select('id,code,name,starts_on,ends_on,status,is_current,branch_id')
+          .eq('school_id', identity.schoolId)
+          .eq('is_current', true)
+          .eq('status', 'active')
+          .is('deleted_at', null)
+          .order('starts_on', { ascending: false })
+          .limit(1)
+          .maybeSingle(),
+        supabase
+          .from('school_settings')
+          .select('setting_value')
+          .eq('school_id', identity.schoolId)
+          .eq('setting_key', 'academic_structure')
+          .eq('status', 'active')
+          .is('deleted_at', null)
+          .order('effective_from', { ascending: false })
+          .limit(1)
+          .maybeSingle()
+      ]);
+      if (yearResult.error) throw yearResult.error;
+      if (structureResult.error) throw structureResult.error;
+      const value = structureResult.data?.setting_value as Record<string, unknown> | undefined;
+      const stages = Array.isArray(value?.stages) ? value.stages : [];
+      const grades = Array.isArray(value?.grades) ? value.grades : [];
+      const classes = Array.isArray(value?.classes) ? value.classes : [];
+      const sections = Array.isArray(value?.sections) ? value.sections : [];
+      if (!yearResult.data) throw new ValidationError('لا توجد سنة أكاديمية حالية وفعالة للمدرسة.');
+      if (!stages.length || !grades.length) throw new ValidationError('الهيكل الأكاديمي للمرحلة والصف غير مهيأ للمدرسة.');
+      res.setHeader('Cache-Control', 'no-store');
+      res.json({ success: true, data: { academicYear: yearResult.data, stages, grades, classes, sections } });
+    } catch (error) {
+      next(error);
+    }
+  });
+
   // Dashboard metrics are read-only, request-scoped, and RLS-backed.
   // The endpoint never accepts tenant, school, or branch identifiers from the client.
   app.get('/api/dashboard/metrics', authenticateRequest, requirePermissionOnly(PERMISSIONS.DASHBOARD_VIEW), async (req, res, next) => {
@@ -2113,6 +2349,30 @@ async function startServer() {
     }
   });
 
+  // Repairs only missing academic placements through one canonical,
+  // all-or-nothing transaction. The server owns the student selection,
+  // configured classes, capacity calculation and activation audit; the browser
+  // cannot choose a class, tenant, school, academic year, or student list.
+  app.post("/api/student-affairs/operational-enrollment-repair", authenticateRequest, requirePermission(PERMISSIONS.STUDENT_WRITE), async (req, res, next) => {
+    try {
+      const context = await resolveStudentTenantContext(req);
+      const result = await operationalEnrollmentAssignmentService.repairUnassignedStudents(context, {
+        idempotencyKey: req.get('Idempotency-Key'),
+        reason: req.body?.reason,
+        ipAddress: req.ip || 'unknown'
+      });
+      res.json({
+        success: true,
+        data: result,
+        message: result.processedCount > 0
+          ? `تم ربط ${result.processedCount} طالباً بالفصول التشغيلية المعتمدة.`
+          : 'لا توجد سجلات غير مرتبطة تحتاج إلى إصلاح.'
+      });
+    } catch (error) {
+      next(error);
+    }
+  });
+
   app.patch("/api/students/:studentId/guardian", authenticateRequest, requirePermission(PERMISSIONS.STUDENT_WRITE), async (req, res, next) => {
     try {
       const context = await resolveStudentTenantContext(req);
@@ -2350,48 +2610,549 @@ async function startServer() {
   // Exams and Results Database API
   app.get("/api/exams/database", authenticateRequest, requirePermission(PERMISSIONS.EXAM_READ), async (req, res, next) => {
     try {
-      const exams = await ExamsRepository.getExams((req as any).user.schoolId);
+      const identity = (req as any).user;
+      const schoolId = String(identity.schoolId || '').trim();
+      const tenantId = String(identity.tenantId || '').trim();
+      const tenantContext = (req as any).tenantContext;
+      if (!schoolId || !tenantId || !tenantContext) {
+        throw new AuthenticationError('السياق الموثوق لقراءة الامتحانات غير مكتمل.');
+      }
+      const snapshot = await UnitOfWork.runInTransaction(schoolId, {
+        operationName: 'Read versioned exams database',
+        tenantId,
+        userId: identity.id,
+        userName: identity.name || 'المستخدم الحالي',
+        ipAddress: req.ip || 'unknown',
+        affectedTables: ['exams_database']
+      }, async () => {
+        const transaction = UnitOfWork.getActiveContext()?.databaseTransaction;
+        if (!transaction) throw new DatabaseError('معاملة قراءة الامتحانات غير متاحة.');
+        const result = await transaction.query<{ data: Record<string, unknown>; version: number }>(
+          `SELECT data, version FROM public.exams_database WHERE tenant_id = $1 AND school_id = $2`,
+          [tenantId, schoolId]
+        );
+        return result.rows[0] || { data: {}, version: 0 };
+      }, tenantContext);
       res.json({
         success: true,
-        data: exams,
+        data: snapshot.data || {},
         message: "Exams settings and database retrieved successfully.",
-        meta: null
+        meta: { version: Number(snapshot.version || 0) }
       });
     } catch (err: any) {
+      EnterpriseLogger.error('Failed to read exams database', 'ExamsDatabaseRoute', {
+        schoolId: (req as any).user?.schoolId,
+        error: err?.message || String(err)
+      });
       next(new DatabaseError("Failed to read exams database", err.message));
+    }
+  });
+
+  app.post("/api/exams/sync-canonical-classes", authenticateRequest, requirePermission(PERMISSIONS.EXAM_WRITE), async (req, res, next) => {
+    try {
+      const tenantContext = (req as any).tenantContext;
+      if (!tenantContext) throw new AuthenticationError('سياق المدرسة الموثوق غير مكتمل لمزامنة صفوف الامتحانات.');
+      const result = await canonicalExamClassSyncService.synchronize(tenantContext, {
+        expectedVersion: req.body?.expectedVersion,
+        ipAddress: req.ip
+      });
+      res.json({
+        success: true,
+        data: {
+          classes: result.classes,
+          matchedStudentClassCount: result.matchedStudentClassCount,
+          requestId: result.requestId,
+          correlationId: result.correlationId
+        },
+        meta: { version: result.version }
+      });
+    } catch (err: any) {
+      EnterpriseLogger.error('Failed to synchronize canonical exam classes', 'CanonicalExamClassSyncRoute', {
+        schoolId: (req as any).user?.schoolId,
+        error: err?.message || String(err)
+      });
+      next(err instanceof AuthenticationError || err instanceof AuthorizationError || err instanceof ConflictError || err instanceof ValidationError || err instanceof DatabaseError
+        ? err
+        : new DatabaseError('Failed to synchronize canonical exam classes', err.message));
+    }
+  });
+
+  app.get("/api/exams/audit-events", authenticateRequest, requirePermission(PERMISSIONS.EXAM_READ), async (req, res, next) => {
+    try {
+      const schoolId = String((req as any).user.schoolId || '').trim();
+      const tenantId = String((req as any).user.tenantId || '').trim();
+      const tenantContext = (req as any).tenantContext;
+      if (!schoolId || !tenantId || !tenantContext || tenantContext.tenantId !== tenantId || tenantContext.schoolId !== schoolId) {
+        throw new AuthenticationError('السياق الموثوق لسجل تدقيق الامتحانات غير مكتمل.');
+      }
+      const events = await UnitOfWork.runInTransaction(schoolId, {
+        operationName: 'Read canonical exams audit events',
+        tenantId,
+        userId: (req as any).user.id,
+        userName: (req as any).user.name || 'المستخدم الحالي',
+        ipAddress: req.ip || 'unknown',
+        affectedTables: ['audit_events']
+      }, async () => {
+        const transaction = UnitOfWork.getActiveContext()?.databaseTransaction;
+        if (!transaction) throw new DatabaseError('معاملة قراءة سجل تدقيق الامتحانات غير متاحة.');
+        const result = await transaction.query<{
+          id: string;
+          action: string;
+          reason: string | null;
+          result: string;
+          metadata: Record<string, unknown>;
+          created_at: string;
+          actor_name: string | null;
+        }>(
+          `SELECT event.id,
+                  event.action,
+                  event.reason,
+                  event.result,
+                  event.metadata,
+                  event.created_at,
+                  actor.display_name AS actor_name
+             FROM public.audit_events event
+             LEFT JOIN public.users actor
+               ON actor.tenant_id = event.tenant_id
+              AND actor.id = event.actor_user_id
+            WHERE event.tenant_id = $1
+              AND event.school_id = $2
+              AND event.entity_type = 'exams_database'
+              AND event.entity_id = $2
+            ORDER BY event.created_at DESC, event.id DESC
+            LIMIT 200`,
+          [tenantId, schoolId]
+        );
+        return result.rows;
+      }, tenantContext);
+      res.json({
+        success: true,
+        data: events.map(event => ({
+          id: event.id,
+          timestamp: event.created_at,
+          user: event.actor_name || 'مستخدم موثق',
+          operation: event.action,
+          action: event.reason || event.action,
+          module: 'سجل خادم الامتحانات',
+          result: event.result,
+          metadata: event.metadata
+        }))
+      });
+    } catch (err: any) {
+      EnterpriseLogger.error('Failed to read canonical exams audit events', 'ExamsAuditRoute', {
+        schoolId: (req as any).user?.schoolId,
+        error: err?.message || String(err)
+      });
+      next(err instanceof AuthenticationError || err instanceof DatabaseError ? err : new DatabaseError('Failed to read exams audit events', err.message));
     }
   });
 
   app.post("/api/exams/database", authenticateRequest, requirePermission(PERMISSIONS.EXAM_WRITE), async (req, res, next) => {
     try {
-      const schoolId = (req as any).user.schoolId;
-      await ExamsRepository.saveExams(schoolId, req.body);
-
-      await AuditRepository.log(
-        schoolId,
-        (req as any).user.id,
-        (req as any).user.name || "مدير النظام",
-        (req as any).user.role || "Admin",
-        "UPDATE",
-        "exams_database",
-        req.ip || "127.0.0.1",
-        "تعديل وحفظ إعدادات درجات الكنترول والامتحانات"
-      );
+      const schoolId = String((req as any).user.schoolId || '').trim();
+      const tenantId = String((req as any).user.tenantId || '').trim();
+      const expectedVersion = Number(req.body?.expectedVersion);
+      const operation = String(req.body?.operation || 'write');
+      const operationReason = String(req.body?.operationReason || '').trim();
+      const {
+        expectedVersion: _ignoredExpectedVersion,
+        operation: _ignoredOperation,
+        operationReason: _ignoredOperationReason,
+        ...payload
+      } = req.body || {};
+      if (!schoolId || !tenantId || !Number.isInteger(expectedVersion) || expectedVersion < 0) {
+        throw new ValidationError('حفظ الامتحانات يتطلب مدرسة موثوقة ورقم إصدار متوقعًا صالحًا.');
+      }
+      if (!['write', 'approve', 'reopen', 'approve_schedule', 'reopen_schedule'].includes(operation)) {
+        throw new ValidationError('نوع عملية الامتحانات غير صالح.');
+      }
+      if (operation !== 'write' && (operationReason.length < 5 || operationReason.length > 500)) {
+        throw new ValidationError('سبب الاعتماد أو إعادة الفتح إلزامي ويجب أن يتراوح بين 5 و500 حرف.');
+      }
+      if (['approve', 'reopen', 'approve_schedule', 'reopen_schedule'].includes(operation) && !['SuperAdmin', 'SchoolAdmin'].includes(String((req as any).user.role || ''))) {
+        throw new AuthorizationError('اعتماد أو إعادة فتح النتائج والجدول يتطلب صلاحية مدير المدرسة أو مدير المنصة.');
+      }
+      ExamValidator.validateDatabase(payload);
+      const tenantContext = (req as any).tenantContext;
+      if (!tenantContext || tenantContext.tenantId !== tenantId || tenantContext.schoolId !== schoolId) {
+        throw new AuthenticationError('السياق الموثوق لبيانات الامتحانات غير مكتمل.');
+      }
+      let nextVersion = expectedVersion + 1;
+      let archiveMetadata: Record<string, unknown> | null = null;
+      await UnitOfWork.runInTransaction(schoolId, {
+        operationName: 'Write versioned exams database',
+        tenantId,
+        userId: (req as any).user.id,
+        userName: (req as any).user.name || 'المستخدم الحالي',
+        ipAddress: req.ip || 'unknown',
+        affectedTables: ['exams_database']
+      }, async () => {
+        const transaction = UnitOfWork.getActiveContext()?.databaseTransaction;
+        if (!transaction) throw new DatabaseError('معاملة حفظ الامتحانات غير متاحة.');
+        const actorResult = await transaction.query<{ id: string }>(
+          `SELECT id
+             FROM public.users
+            WHERE tenant_id = $1
+              AND auth_user_id = $2
+              AND status = 'active'
+              AND deleted_at IS NULL
+            LIMIT 1`,
+          [tenantId, (req as any).user.id]
+        );
+        const canonicalActorId = actorResult.rows[0]?.id;
+        if (!canonicalActorId) {
+          throw new AuthenticationError('تعذر ربط هوية الجلسة بسجل المستخدم المؤسسي المعتمد.');
+        }
+        const current = await transaction.query<{ data: Record<string, unknown>; version: number }>(
+          `SELECT data, version FROM public.exams_database WHERE tenant_id = $1 AND school_id = $2 FOR UPDATE`,
+          [tenantId, schoolId]
+        );
+        const actualVersion = Number(current.rows[0]?.version || 0);
+        if (actualVersion !== expectedVersion) {
+          throw new ConflictError('تم تعديل بيانات الامتحانات بواسطة مستخدم آخر. أعد المزامنة قبل الحفظ.', { expectedVersion, actualVersion });
+        }
+        const currentData = (current.rows[0]?.data || {}) as Record<string, any>;
+        const currentApproval = Boolean(currentData.exams_approval_status?.approved);
+        const requestedApproval = Boolean((payload as any)?.exams_approval_status?.approved);
+        const currentScheduleApproval = Boolean(currentData.exams_schedule_approval_status?.approved);
+        const requestedScheduleApproval = Boolean((payload as any)?.exams_schedule_approval_status?.approved);
+        if (operation === 'write' && (currentApproval !== requestedApproval || currentScheduleApproval !== requestedScheduleApproval)) {
+          throw new ValidationError('تغيير حالة اعتماد النتائج أو الجدول يتطلب عملية اعتماد أو إعادة فتح صريحة.');
+        }
+        if (['approve', 'reopen'].includes(operation) && currentScheduleApproval !== requestedScheduleApproval) {
+          throw new ValidationError('عملية اعتماد أو إعادة فتح النتائج لا يجوز أن تغيّر حالة اعتماد الجدول.');
+        }
+        if (['approve_schedule', 'reopen_schedule'].includes(operation) && currentApproval !== requestedApproval) {
+          throw new ValidationError('عملية اعتماد أو إعادة فتح الجدول لا يجوز أن تغيّر حالة اعتماد النتائج.');
+        }
+        if (operation === 'write' && currentApproval) {
+          throw new ConflictError('النتائج معتمدة والكنترول مغلق. أعد فتحه بالمسار الموثق قبل أي تعديل.');
+        }
+        const examCoreFields = [
+          'exams_settings', 'exams_halls', 'exams_subjects', 'exams_students_enriched',
+          'exams_grades_matrix', 'exams_schedule', 'exams_proctors', 'exams_classes_list'
+        ];
+        if (['approve', 'reopen'].includes(operation)) {
+          assertExamFieldsUnchanged(
+            currentData,
+            payload as Record<string, any>,
+            examCoreFields,
+            'تغيرت بيانات الدورة قبل الاعتماد أو إعادة الفتح. احفظ التعديلات وأعد المزامنة أولاً.'
+          );
+        }
+        if (operation === 'write' && currentScheduleApproval) {
+          assertExamFieldsUnchanged(
+            currentData,
+            payload as Record<string, any>,
+            ['exams_schedule', 'exams_schedule_config', 'exams_custom_proctor_unavailable'],
+            'جدول الامتحانات معتمد ومقفل. أعد فتح الجدول قبل تعديل مواعيده أو قواعده.'
+          );
+        }
+        if (['approve_schedule', 'reopen_schedule'].includes(operation)) {
+          assertExamFieldsUnchanged(
+            currentData,
+            payload as Record<string, any>,
+            ['exams_schedule', 'exams_schedule_config', 'exams_custom_proctor_unavailable'],
+            'تغيرت بيانات الجدول قبل الاعتماد أو إعادة الفتح. احفظ التعديلات وأعد المزامنة أولاً.'
+          );
+        }
+        if (operation === 'approve') {
+          if (currentApproval || !requestedApproval) {
+            throw new ConflictError('انتقال اعتماد النتائج غير صالح أو سبق تنفيذه.');
+          }
+          const students = Array.isArray((payload as any).exams_students_enriched) ? (payload as any).exams_students_enriched : [];
+          const subjects = Array.isArray((payload as any).exams_subjects) ? (payload as any).exams_subjects : [];
+          const matrix = (payload as any).exams_grades_matrix || {};
+          const readiness = evaluateExamClosureReadiness({
+            students,
+            subjects,
+            gradesMatrix: matrix,
+            scheduleApprovalStatus: (payload as any).exams_schedule_approval_status,
+            reviewedSubjects: (payload as any).exams_reviewed_stages_subjects,
+            reEvaluationRequests: (payload as any).exams_re_evaluation_requests
+          });
+          if (!readiness.ready) {
+            throw new ValidationError(
+              `لا يمكن اعتماد النتائج: ${readiness.blockers.map(blocker => blocker.message).join(' ')}`,
+              { blockers: readiness.blockers }
+            );
+          }
+          (payload as any).exams_approval_status = {
+            approved: true,
+            approvedBy: (req as any).user.name || 'المستخدم الحالي',
+            approvedAt: new Date().toISOString()
+          };
+        }
+        if (operation === 'reopen' && (!currentApproval || requestedApproval)) {
+          throw new ConflictError('إعادة فتح الكنترول تتطلب نتائج معتمدة وانتقالًا صريحًا إلى الحالة المفتوحة.');
+        }
+        if (operation === 'approve_schedule') {
+          if (currentScheduleApproval || !requestedScheduleApproval) {
+            throw new ConflictError('انتقال اعتماد جدول الامتحانات غير صالح أو سبق تنفيذه.');
+          }
+          validateScheduleForApproval(payload as Record<string, any>);
+          (payload as any).exams_schedule_approval_status = {
+            approved: true,
+            approvedBy: (req as any).user.name || 'المستخدم الحالي',
+            approvedAt: new Date().toISOString(),
+            notes: 'اجتاز الجدول فحوص المراجع والتعارضات على الخادم.'
+          };
+        }
+        if (operation === 'reopen_schedule' && (!currentScheduleApproval || requestedScheduleApproval)) {
+          throw new ConflictError('إعادة فتح الجدول تتطلب جدولاً معتمداً وانتقالاً صريحاً إلى الحالة المفتوحة.');
+        }
+        if (operation === 'reopen_schedule' && currentApproval) {
+          throw new ConflictError('لا يمكن إعادة فتح الجدول بينما النتائج معتمدة. أعد فتح النتائج أولاً عبر المسار الموثق.');
+        }
+        if (operation === 'reopen') {
+          (payload as any).exams_approval_status = { approved: false, approvedBy: '', approvedAt: '' };
+        }
+        if (operation === 'reopen_schedule') {
+          (payload as any).exams_schedule_approval_status = { approved: false, approvedBy: '', approvedAt: '', notes: '' };
+        }
+        nextVersion = actualVersion + 1;
+        const existingClosures = Array.isArray(currentData.exams_control_closures) ? currentData.exams_control_closures : [];
+        if (operation === 'approve') {
+          const settings = (payload as any).exams_settings || {};
+          const archiveStudents = Array.isArray((payload as any).exams_students_enriched) ? (payload as any).exams_students_enriched : [];
+          const archiveSubjects = Array.isArray((payload as any).exams_subjects) ? (payload as any).exams_subjects : [];
+          const archiveGrades = (payload as any).exams_grades_matrix || {};
+          const calculatedResults = calculateCohortExamResults(
+            archiveStudents,
+            archiveSubjects,
+            archiveGrades,
+            settings
+          );
+          const passedCount = calculatedResults.filter(result => result.status === 'passed').length;
+          const failedCount = calculatedResults.filter(result => result.status === 'failed').length;
+          const incompleteCount = calculatedResults.filter(result => result.status === 'incomplete').length;
+          const archivePayload = {
+            settings,
+            students: archiveStudents,
+            subjects: archiveSubjects,
+            gradesMatrix: archiveGrades,
+            calculatedResults,
+            resultSummary: {
+              totalStudents: archiveStudents.length,
+              passedCount,
+              failedCount,
+              incompleteCount
+            },
+            schedule: (payload as any).exams_schedule || [],
+            proctors: (payload as any).exams_proctors || [],
+            classes: (payload as any).exams_classes_list || [],
+            approvalStatus: (payload as any).exams_approval_status,
+            stageApprovalStatus: (payload as any).exams_stage_approval_status || {},
+            approvalReason: operationReason
+          };
+          const signatureHash = createHash('sha256').update(stableJsonStringify({
+            tenantId,
+            schoolId,
+            operationalVersion: nextVersion,
+            payload: archivePayload
+          })).digest('hex');
+          const archiveId = randomUUID();
+          const serverSignedAt = new Date().toISOString();
+          const schoolResult = await transaction.query<{ name: string }>(
+            `SELECT name FROM public.schools WHERE tenant_id = $1 AND id = $2 LIMIT 1`,
+            [tenantId, schoolId]
+          );
+          const committeeMembers = (Array.isArray((payload as any).exams_control_committees) ? (payload as any).exams_control_committees : [])
+            .map((committee: any) => String(committee?.user || '').trim())
+            .filter(Boolean);
+          const requestedClosure = Array.isArray((payload as any).exams_control_closures)
+            ? (payload as any).exams_control_closures[0] || {}
+            : {};
+          const serverClosure = {
+            ...requestedClosure,
+            id: requestedClosure.id || `closure-${nextVersion}`,
+            archiveId,
+            schoolName: schoolResult.rows[0]?.name || schoolId,
+            stage: 'كامل المراحل',
+            classroom: 'جميع الصفوف',
+            semester: String(settings.semester || 'غير محدد'),
+            academicYear: String(settings.academicYear || 'غير محدد'),
+            totalStudents: archiveStudents.length,
+            passedCount,
+            failedCount,
+            incompleteCount,
+            passRate: archiveStudents.length > 0 ? Number(((passedCount / archiveStudents.length) * 100).toFixed(2)) : 0,
+            committeeMembers,
+            reason: operationReason,
+            approvedBy: (req as any).user.name || 'المستخدم الحالي',
+            closedAt: serverSignedAt,
+            serverSignedAt,
+            operationalVersion: nextVersion,
+            signatureHash,
+            isImmutableArchive: true
+          };
+          (payload as any).exams_control_closures = [serverClosure, ...existingClosures];
+          await transaction.query(
+            `INSERT INTO public.exams_result_archives
+               (id, tenant_id, school_id, operational_version, academic_year, semester, payload, signature_hash, created_by)
+             VALUES ($1, $2, $3, $4, $5, $6, $7::jsonb, $8, $9)`,
+            [
+              archiveId,
+              tenantId,
+              schoolId,
+              nextVersion,
+              String(settings.academicYear || '').trim() || 'غير محدد',
+              String(settings.semester || '').trim() || 'غير محدد',
+              JSON.stringify(archivePayload),
+              signatureHash,
+              canonicalActorId
+            ]
+          );
+          archiveMetadata = serverClosure;
+        } else {
+          (payload as any).exams_control_closures = existingClosures;
+        }
+        await transaction.query(
+          `INSERT INTO public.exams_database (tenant_id, school_id, data, version, updated_at, updated_by)
+           VALUES ($1, $2, $3::jsonb, $4, now(), $5)
+           ON CONFLICT (school_id) DO UPDATE
+             SET data = EXCLUDED.data,
+                 version = EXCLUDED.version,
+                 updated_at = now(),
+                 updated_by = EXCLUDED.updated_by
+           WHERE public.exams_database.tenant_id = EXCLUDED.tenant_id`,
+          [tenantId, schoolId, JSON.stringify(payload), nextVersion, canonicalActorId]
+        );
+        await transaction.query(
+          `INSERT INTO public.audit_events
+             (tenant_id, school_id, branch_id, actor_user_id, entity_type, entity_id, action, source, reason, result, metadata)
+           VALUES ($1, $2, $3, $4, 'exams_database', $2, $5, 'ExamsDatabaseRoute', $6, 'success', $7::jsonb)`,
+          [
+            tenantId,
+            schoolId,
+            (req as any).user.branchId || null,
+            canonicalActorId,
+            operation,
+            operation === 'write' ? 'حفظ بيانات دورة الامتحانات' : operationReason,
+            JSON.stringify({
+              expectedVersion,
+              actualVersion,
+              nextVersion,
+              operationLabel: operation === 'approve'
+                ? 'اعتماد نتائج الامتحانات وإنشاء أرشيف غير قابل للتعديل'
+                : operation === 'reopen'
+                  ? 'إعادة فتح نتائج الامتحانات'
+                  : operation === 'approve_schedule'
+                    ? 'اعتماد جدول الامتحانات'
+                    : operation === 'reopen_schedule'
+                      ? 'إعادة فتح جدول الامتحانات'
+                      : 'حفظ بيانات دورة الامتحانات'
+            })
+          ]
+        );
+      }, tenantContext);
 
       res.json({
         success: true,
         data: {
-          updated: true
+          updated: true,
+          archive: archiveMetadata,
+          operationState: {
+            approvalStatus: (payload as any).exams_approval_status || null,
+            scheduleApprovalStatus: (payload as any).exams_schedule_approval_status || null
+          }
         },
         message: "Exams settings saved successfully.",
-        meta: null
+        meta: { version: nextVersion }
       });
     } catch (err: any) {
-      next(new DatabaseError("Failed to save exams database in transaction", err.message));
+      EnterpriseLogger.error('Failed to save exams database transaction', 'ExamsDatabaseRoute', {
+        schoolId: (req as any).user?.schoolId,
+        operation: req.body?.operation || 'write',
+        error: err?.message || String(err)
+      });
+      next(err instanceof AuthenticationError || err instanceof AuthorizationError || err instanceof ConflictError || err instanceof ValidationError || err instanceof DatabaseError
+        ? err
+        : new DatabaseError("Failed to save exams database in transaction", err.message));
     }
   });
 
   // Financial and Accounting Database API
+  app.post("/api/financial/journals/:journalId/reverse", authenticateRequest, requirePermission(PERMISSIONS.FINANCIAL_WRITE), async (req, res, next) => {
+    try {
+      const schoolId = String((req as any).user.schoolId || '').trim();
+      const tenantId = String((req as any).user.tenantId || '').trim();
+      const actorId = String((req as any).user.id || '').trim();
+      const journalId = String(req.params.journalId || '').trim();
+      const reason = String(req.body?.reason || '').trim();
+      const tenantContext = (req as any).tenantContext;
+      if (!schoolId || !tenantId || !actorId || !journalId || !reason) {
+        throw new AuthenticationError('نطاق العملية أو القيد أو سبب العكس غير مكتمل.');
+      }
+      if (!tenantContext || tenantContext.tenantId !== tenantId || tenantContext.schoolId !== schoolId) {
+        throw new AuthenticationError('السياق الموثوق للمصدر المالي غير مكتمل.');
+      }
+      if (!transactionDriver) throw new DatabaseError('العكس المالي يتطلب اتصال PostgreSQL الكانوني.');
+      let reversalId = '';
+      await UnitOfWork.runInTransaction(schoolId, {
+        operationName: `Reverse canonical journal ${journalId}`,
+        tenantId, userId: actorId, userName: (req as any).user.name || 'المستخدم الحالي',
+        ipAddress: req.ip || 'unknown', affectedTables: ['erp_journal_entries', 'erp_journal_lines', 'erp_general_ledger', 'erp_financial_audit_events']
+      }, async () => {
+        const transaction = UnitOfWork.getActiveContext()?.databaseTransaction;
+        if (!transaction) throw new DatabaseError('Financial transaction is unavailable.');
+        const actor = await transaction.query<{ id: string }>(
+          `SELECT id FROM public.users WHERE tenant_id = $1 AND school_id = $2 AND status = 'active' AND deleted_at IS NULL AND (id = $3 OR auth_user_id = $3) LIMIT 1`,
+          [tenantId, schoolId, actorId]
+        );
+        if (!actor.rows[0]) throw new AuthenticationError('المستخدم المالي غير موجود في النطاق الموثوق.');
+        reversalId = await CanonicalErpPostingService.reverseJournal(transaction, tenantId, schoolId, actor.rows[0].id, journalId, reason);
+      }, tenantContext);
+      res.json({ success: true, data: { journalId, reversalId }, meta: { source: 'canonical_erp' } });
+    } catch (err: any) {
+      next(err instanceof AuthenticationError || err instanceof DatabaseError ? err : new DatabaseError('تعذر عكس القيد الكانوني.', err?.message));
+    }
+  });
+
+  app.post("/api/financial/receipts/post", authenticateRequest, requirePermission(PERMISSIONS.FINANCIAL_WRITE), async (req, res, next) => {
+    try {
+      const user = (req as any).user;
+      const schoolId = String(user.schoolId || '').trim();
+      const tenantId = String(user.tenantId || '').trim();
+      const actorId = String(user.id || '').trim();
+      const tenantContext = (req as any).tenantContext;
+      if (!schoolId || !tenantId || !actorId || !tenantContext
+        || tenantContext.tenantId !== tenantId || tenantContext.schoolId !== schoolId) {
+        throw new AuthenticationError('السياق المالي الموثوق غير مكتمل.');
+      }
+      if (!transactionDriver) throw new DatabaseError('ترحيل سند القبض يتطلب اتصال PostgreSQL.');
+      const voucher = req.body && typeof req.body === 'object' && !Array.isArray(req.body) ? req.body : {};
+      const document = buildCanonicalPosting('student_receipt', { ...voucher, status: 'posted' });
+      if (!document) throw new ValidationError('سند القبض غير صالح للترحيل.');
+      let result: Awaited<ReturnType<typeof CanonicalErpPostingService.syncSnapshot>>;
+      await UnitOfWork.runInTransaction(schoolId, {
+        operationName: `Post receipt ${document.sourceId}`,
+        tenantId, userId: actorId, userName: user.name || 'المستخدم المالي',
+        ipAddress: req.ip || 'unknown', affectedTables: ['erp_journal_entries', 'erp_journal_lines', 'erp_general_ledger']
+      }, async () => {
+        const transaction = UnitOfWork.getActiveContext()?.databaseTransaction;
+        if (!transaction) throw new DatabaseError('المعاملة المالية غير متاحة.');
+        const actor = await transaction.query<{ id: string }>(
+          `SELECT id FROM public.users WHERE tenant_id = $1 AND school_id = $2 AND status = 'active' AND deleted_at IS NULL AND (id = $3 OR auth_user_id = $3) LIMIT 1`,
+          [tenantId, schoolId, actorId]
+        );
+        if (!actor.rows[0]) throw new AuthenticationError('المستخدم المالي غير موجود.');
+        result = await CanonicalErpPostingService.syncSnapshot(transaction, tenantId, schoolId, actor.rows[0].id, {
+          receiptVouchers: [{ ...voucher, status: 'posted' }], chartOfAccounts: []
+        });
+      }, tenantContext);
+      const link = result!.sourceLinks.find(item => item.sourceType === 'student_receipt' && item.sourceId === document.sourceId);
+      if (!link) throw new DatabaseError('تمت المعاملة دون إثبات رابط القيد الكانوني.');
+      res.json({ success: true, data: { journalId: link.journalEntryId, sourceId: document.sourceId }, meta: result });
+    } catch (err: any) {
+      EnterpriseLogger.error('Canonical receipt posting failed', 'FinancialReceiptRoute', {
+        error: err?.message || String(err),
+        cause: err?.cause?.message || err?.cause || undefined
+      });
+      next(err instanceof AuthenticationError || err instanceof DatabaseError || err instanceof ValidationError ? err : new DatabaseError('تعذر ترحيل سند القبض الكانوني.', err?.message));
+    }
+  });
+
   app.get("/api/financial/database", authenticateRequest, requirePermission(PERMISSIONS.FINANCIAL_READ), async (req, res, next) => {
     try {
       const schoolId = String((req as any).user.schoolId || '').trim();
@@ -2434,7 +3195,7 @@ async function startServer() {
           snapshot = result.rows[0] || null;
           canonicalErpReady = await CanonicalErpPostingService.isProvisioned(transaction);
           if (canonicalErpReady) {
-            canonicalErpModel = await CanonicalErpPostingService.readModel(transaction, schoolId);
+            canonicalErpModel = await CanonicalErpPostingService.readModel(transaction, schoolId, true);
           }
         },
         tenantContext
@@ -2607,6 +3368,20 @@ async function startServer() {
               databaseActorId,
               payload
             );
+            const postedReceiptIds = [
+              ...(Array.isArray(payload.studentReceiptVouchers) ? payload.studentReceiptVouchers : []),
+              ...(Array.isArray(payload.receiptVouchers) ? payload.receiptVouchers : [])
+            ]
+              .filter((row: any) => row && ['posted', 'مرحل', 'مرحّل', 'مُرحّل'].includes(String(row.status || '').trim().toLowerCase()))
+              .map((row: any) => String(row.id || '').trim())
+              .filter(Boolean);
+            const linkedReceiptIds = new Set((canonicalErpSync.sourceLinks || [])
+              .filter(link => link.sourceType === 'student_receipt')
+              .map(link => link.sourceId));
+            const missingReceiptIds = postedReceiptIds.filter(id => !linkedReceiptIds.has(id));
+            if (missingReceiptIds.length > 0) {
+              throw new DatabaseError(`تعذر إثبات ترحيل سندات القبض الكانونية: ${missingReceiptIds.join(', ')}`);
+            }
           }
         },
         tenantContext

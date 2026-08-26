@@ -8,6 +8,23 @@ const inFlightStudentLists = new Map<string, Promise<any>>();
  */
 
 export const StudentRepository = {
+  async repairOperationalEnrollments(reason: string, idempotencyKey: string): Promise<any> {
+    if (!idempotencyKey.trim()) throw new Error('مفتاح منع التكرار مطلوب قبل إصلاح ربط القيد.');
+    const response = await authenticatedRequest('/api/student-affairs/operational-enrollment-repair', {
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/json',
+        'Idempotency-Key': idempotencyKey
+      },
+      body: JSON.stringify({ reason })
+    });
+    const data = await response.json().catch(() => ({}));
+    if (!response.ok) {
+      throw new Error(data.message || data.error || 'تعذر إصلاح ربط القيد التشغيلي من الخادم.');
+    }
+    return data;
+  },
+
   async updateGuardian(studentId: string, payload: Record<string, unknown>): Promise<any> {
     const response = await authenticatedRequest(`/api/students/${encodeURIComponent(studentId)}/guardian`, {
       method: "PATCH",
