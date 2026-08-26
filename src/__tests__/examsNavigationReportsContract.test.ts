@@ -15,6 +15,7 @@ describe('exams navigation and schedule report contracts', () => {
       'control-center',
       'settings',
       'classes',
+      'assessment',
       'halls',
       'distribution',
       'seating',

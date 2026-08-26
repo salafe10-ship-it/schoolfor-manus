@@ -522,11 +522,12 @@ export function validateAssessmentBlueprint(
       addIssue(issues, code, path, `Question ${reference.questionId} version ${reference.version} is unavailable.`);
       return;
     }
-    if (question.status === 'archived') {
-      addIssue(issues, 'BLUEPRINT_ARCHIVED_QUESTION', path, `Archived question ${reference.questionId} cannot be used.`);
-      return;
-    }
-    if (question.status !== 'active') {
+    // An archived version remains resolvable when an existing blueprint
+    // points to it. Archiving freezes that version for the old assessment;
+    // new assessments still select active questions only at the application
+    // boundary. This is what makes versioning safe for already-published
+    // exams without allowing archived questions into new blueprints.
+    if (question.status !== 'active' && question.status !== 'archived') {
       addIssue(issues, 'BLUEPRINT_INACTIVE_QUESTION', path, `Question ${reference.questionId} must be active before use.`);
       return;
     }
@@ -793,12 +794,16 @@ export type AssessmentAttemptStatus = typeof ASSESSMENT_ATTEMPT_STATUSES[number]
 export interface AssessmentResponseMark {
   questionId: string;
   questionVersion: number;
+  /** The candidate answer is retained for autosave/resume and auditability. */
+  answer?: unknown;
+  savedAt?: string;
   awardedPoints?: number | null;
   markingStatus?: 'pending' | 'marked' | 'not_required' | null;
 }
 
 export interface AssessmentAttemptRecord {
   id: string;
+  assessmentId?: string;
   candidateId: string;
   status?: AssessmentAttemptStatus | null;
   responses: AssessmentResponseMark[];

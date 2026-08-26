@@ -21,7 +21,13 @@ import { Student, Teacher, SchoolClass, UserRole } from '../types';
 import EnterpriseActionToolbar from './shared/EnterpriseActionToolbar';
 import ExamsCertificatesPanel from './exams/ExamsCertificatesPanel';
 import ExamsDistributionPanel from './exams/ExamsDistributionPanel';
+import ExamsAssessmentPanel from './exams/ExamsAssessmentPanel';
 import { canAssignProctorForWeek } from '../modules/exams/application/ExamSchedulingRules';
+import {
+  AssessmentWorkflowState,
+  createEmptyAssessmentWorkflowState,
+  normalizeAssessmentWorkflowState
+} from '../modules/exams/application/AssessmentWorkflowService';
 import { calculateCohortExamResults } from '../modules/exams/domain/ExamResultEngine';
 import { getTrustedAccessToken } from '../utils/auth';
 
@@ -83,7 +89,7 @@ export default function ExamsResultsModule({
   const availableTeachers = initialTeachers;
   // Navigation Sidebar
   const validTabIds = useMemo(() => [
-    'control-center', 'settings', 'classes', 'halls', 'distribution',
+    'control-center', 'settings', 'classes', 'assessment', 'halls', 'distribution',
     'seating', 'proctors', 'schedule', 'grades-entry', 'processing',
     'quality-governance', 'review', 'reports', 'certificates',
     'system-settings', 'exams-guide'
@@ -235,6 +241,11 @@ export default function ExamsResultsModule({
   const [approvalStatus, setApprovalStatus] = useState(() => {
     return { approved: false, approvedBy: '', approvedAt: '' };
   });
+
+  // The online assessment lifecycle is persisted in the same canonical,
+  // versioned exams document so an interrupted browser/session resumes from
+  // the last acknowledged server write.
+  const [assessmentState, setAssessmentState] = useState<AssessmentWorkflowState>(() => createEmptyAssessmentWorkflowState());
 
   // Scheduling Engine States
   const [scheduleSubTab, setScheduleSubTab] = useState<'prep' | 'engine' | 'approval' | 'reports'>('prep');
@@ -409,6 +420,7 @@ export default function ExamsResultsModule({
       scheduleApprovalStatus?: any;
       scheduleConfig?: any;
       customProctorUnavailable?: Record<string, string[]>;
+      assessmentState?: AssessmentWorkflowState;
       operationReason?: string;
     } = {}
   ) => {
@@ -441,7 +453,8 @@ export default function ExamsResultsModule({
         exams_control_committees: persistenceExtras.controlCommittees ?? controlCommittees,
         exams_schedule_approval_status: persistenceExtras.scheduleApprovalStatus ?? scheduleApprovalStatus,
         exams_schedule_config: persistenceExtras.scheduleConfig ?? scheduleConfigRef.current,
-        exams_custom_proctor_unavailable: persistenceExtras.customProctorUnavailable ?? customProctorUnavailable
+        exams_custom_proctor_unavailable: persistenceExtras.customProctorUnavailable ?? customProctorUnavailable,
+        exams_assessment_state: persistenceExtras.assessmentState ?? assessmentState
       };
       const token = getTrustedAccessToken();
       const response = await fetch('/api/exams/database', {
@@ -486,6 +499,41 @@ export default function ExamsResultsModule({
     } finally {
       setIsDbSyncing(false);
       databaseWriteLockRef.current = false;
+    }
+  };
+
+  const persistAssessmentState = async (nextState: AssessmentWorkflowState, reason: string): Promise<boolean> => {
+    const persisted = await saveToServerDb(
+      undefined,
+      undefined,
+      undefined,
+      undefined,
+      undefined,
+      undefined,
+      undefined,
+      undefined,
+      undefined,
+      undefined,
+      undefined,
+      undefined,
+      undefined,
+      undefined,
+      undefined,
+      'write',
+      { assessmentState: nextState, operationReason: `الامتحان الإلكتروني: ${reason}` }
+    );
+    if (!persisted) return false;
+    setAssessmentState(nextState);
+    logAction(`حفظ دورة الامتحان الإلكتروني: ${reason}`, 'الامتحان الإلكتروني وبنك الأسئلة');
+    return true;
+  };
+
+  const restoreAssessmentState = (raw: unknown): void => {
+    try {
+      setAssessmentState(normalizeAssessmentWorkflowState(raw));
+    } catch (error) {
+      EnterpriseLogger.error('Invalid canonical online assessment state', 'ExamsResultsModule', { error });
+      triggerNotification('تم تجاهل بيانات الامتحان الإلكتروني غير الصالحة لحماية سلامة المصدر المركزي.', 'warning');
     }
   };
 
@@ -540,6 +588,7 @@ export default function ExamsResultsModule({
           if (dbData.exams_schedule_approval_status) setScheduleApprovalStatus(dbData.exams_schedule_approval_status);
           if (dbData.exams_schedule_config) updateScheduleConfig(dbData.exams_schedule_config);
           if (dbData.exams_custom_proctor_unavailable) setCustomProctorUnavailable(dbData.exams_custom_proctor_unavailable);
+          if (dbData.exams_assessment_state) restoreAssessmentState(dbData.exams_assessment_state);
           setDbSyncStatus('success');
           setLastSyncTime(new Date().toLocaleTimeString('ar-EG'));
           triggerNotification('تمت مزامنة واسترجاع كامل البيانات من السيرفر بنجاح', 'success');
@@ -660,6 +709,7 @@ export default function ExamsResultsModule({
             if (dbData.exams_schedule_approval_status) setScheduleApprovalStatus(dbData.exams_schedule_approval_status);
             if (dbData.exams_schedule_config) updateScheduleConfig(dbData.exams_schedule_config);
             if (dbData.exams_custom_proctor_unavailable) setCustomProctorUnavailable(dbData.exams_custom_proctor_unavailable);
+            if (dbData.exams_assessment_state) restoreAssessmentState(dbData.exams_assessment_state);
             setDbSyncStatus('success');
             setLastSyncTime(new Date().toLocaleTimeString('ar-EG'));
             triggerNotification('تم الاتصال بقاعدة البيانات واسترجاع كافة السجلات بنجاح', 'success');
@@ -739,6 +789,7 @@ export default function ExamsResultsModule({
     { id: 'control-center', label: 'مركز عمليات الكنترول الموحد ⚡', icon: Sparkles, section: 'البدء والتهيئة' },
     { id: 'settings', label: 'إعدادات الامتحانات', icon: Settings, section: 'البدء والتهيئة' },
     { id: 'classes', label: 'الفصول والمواد', icon: BookOpen, section: 'البدء والتهيئة' },
+    { id: 'assessment', label: 'بنك الأسئلة والامتحان الإلكتروني', icon: FileCheck2, section: 'البدء والتهيئة' },
     { id: 'halls', label: 'لجان وقاعات الامتحان', icon: Home, section: 'اللجان والجدولة' },
     { id: 'distribution', label: 'توزيع الطلاب', icon: Users, section: 'اللجان والجدولة' },
     { id: 'seating', label: 'أرقام الجلوس', icon: IdCard, section: 'اللجان والجدولة' },
@@ -890,7 +941,8 @@ export default function ExamsResultsModule({
       exams_re_evaluation_requests: reEvaluationRequests,
       exams_snapshots: snapshots,
       exams_reviewed_stages_subjects: reviewedStagesSubjects,
-      exams_stage_approval_status: stageApprovalStatus
+      exams_stage_approval_status: stageApprovalStatus,
+      exams_assessment_state: assessmentState
     };
     const canonicalJson = JSON.stringify(backupData);
     const digest = await crypto.subtle.digest('SHA-256', new TextEncoder().encode(canonicalJson));
@@ -2689,6 +2741,15 @@ export default function ExamsResultsModule({
             </div>
           );
         })()}
+
+        {/* TAB: Online assessment lifecycle, question bank, autosave and publication gates */}
+        {activeTab === 'assessment' && (
+          <ExamsAssessmentPanel
+            state={assessmentState}
+            actorId={trustedActorLabel}
+            onChange={persistAssessmentState}
+          />
+        )}
 
         {/* TAB: Concise Operations Guide */}
         {activeTab === 'exams-guide' && (
