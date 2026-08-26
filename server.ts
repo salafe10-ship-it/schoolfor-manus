@@ -83,6 +83,7 @@ import { CanonicalErpPostingService, buildCanonicalPosting } from './src/modules
 import { ExamValidator } from './src/validation/validators.js';
 import { evaluateExamClosureReadiness } from './src/modules/exams/domain/ExamClosureReadiness.js';
 import { calculateCohortExamResults } from './src/modules/exams/domain/ExamResultEngine.js';
+import { normalizeAssessmentWorkflowState } from './src/modules/exams/application/AssessmentWorkflowService.js';
 
 type FinancialWriteMode = 'snapshot_read_only' | 'snapshot_write' | 'erp_integrated';
 
@@ -2773,6 +2774,13 @@ async function startServer() {
         throw new AuthorizationError('اعتماد أو إعادة فتح النتائج والجدول يتطلب صلاحية مدير المدرسة أو مدير المنصة.');
       }
       ExamValidator.validateDatabase(payload);
+      if ((payload as any).exams_assessment_state !== undefined) {
+        try {
+          normalizeAssessmentWorkflowState((payload as any).exams_assessment_state);
+        } catch (error: any) {
+          throw new ValidationError(`بيانات الامتحان الإلكتروني غير صالحة: ${error?.message || 'فشل التحقق.'}`);
+        }
+      }
       const tenantContext = (req as any).tenantContext;
       if (!tenantContext || tenantContext.tenantId !== tenantId || tenantContext.schoolId !== schoolId) {
         throw new AuthenticationError('السياق الموثوق لبيانات الامتحانات غير مكتمل.');
@@ -2812,6 +2820,31 @@ async function startServer() {
           throw new ConflictError('تم تعديل بيانات الامتحانات بواسطة مستخدم آخر. أعد المزامنة قبل الحفظ.', { expectedVersion, actualVersion });
         }
         const currentData = (current.rows[0]?.data || {}) as Record<string, any>;
+        const currentAssessmentState = normalizeAssessmentWorkflowState(currentData.exams_assessment_state);
+        const requestedAssessmentState = normalizeAssessmentWorkflowState((payload as any).exams_assessment_state);
+        const assessmentStateChanged = stableJsonStringify(currentAssessmentState) !== stableJsonStringify(requestedAssessmentState);
+        const actorRole = String((req as any).user.role || '').trim();
+        if (assessmentStateChanged && actorRole === 'Teacher') {
+          const currentLifecycles = new Map(currentAssessmentState.lifecycles.map(item => [item.assessmentId, item.state]));
+          requestedAssessmentState.lifecycles.forEach(item => {
+            const previous = currentLifecycles.get(item.assessmentId);
+            if (previous !== undefined && previous !== item.state && !['draft', 'review'].includes(item.state)) {
+              throw new AuthorizationError('اعتماد أو فتح أو نشر الامتحان الإلكتروني يتطلب مدير المدرسة أو مدير المنصة.');
+            }
+          });
+        }
+        const currentAttemptIds = new Set(currentAssessmentState.attempts.map(item => item.id));
+        const eligibleCandidateIds = new Set(
+          (Array.isArray((payload as any).exams_students_enriched) ? (payload as any).exams_students_enriched : [])
+            .filter((student: any) => ['active', 'accepted'].includes(String(student?.status || '').toLowerCase()))
+            .map((student: any) => String(student?.id || '').trim())
+            .filter(Boolean)
+        );
+        requestedAssessmentState.attempts.forEach(attempt => {
+          if (!currentAttemptIds.has(attempt.id) && !eligibleCandidateIds.has(String(attempt.candidateId || '').trim())) {
+            throw new ValidationError('لا يمكن حفظ محاولة جديدة لطالب غير موجود ضمن السجلات الأكاديمية المؤهلة.');
+          }
+        });
         const currentApproval = Boolean(currentData.exams_approval_status?.approved);
         const requestedApproval = Boolean((payload as any)?.exams_approval_status?.approved);
         const currentScheduleApproval = Boolean(currentData.exams_schedule_approval_status?.approved);

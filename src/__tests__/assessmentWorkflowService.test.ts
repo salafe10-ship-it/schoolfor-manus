@@ -102,6 +102,8 @@ describe('online assessment workflow and closure gates', () => {
     state = openAssessment(state, 'assessment-1');
     state = startAssessmentAttempt(state, 'assessment-1', 'student-1', 'admin-1');
     const attemptId = state.attempts[0].id;
+    expect(state.attempts[0].startedAt).toBeTruthy();
+    expect(Date.parse(state.attempts[0].deadlineAt || '')).toBeGreaterThan(Date.parse(state.attempts[0].startedAt || ''));
     state = autosaveAssessmentResponse(state, attemptId, 'q-1', 'kh', 'student-1');
     expect(state.attempts[0].responses[0].answer).toBe('kh');
     const reloaded = normalizeAssessmentWorkflowState(JSON.parse(JSON.stringify(state)));
@@ -115,6 +117,15 @@ describe('online assessment workflow and closure gates', () => {
     state = transitionAssessment(state, 'assessment-1', 'published', 'admin-1', 'نشر النتائج');
     expect(state.lifecycles[0].state).toBe('published');
     expect(getAssessmentPublicationReadiness(state, 'assessment-1').ready).toBe(true);
+
+    const expiredAttempt = {
+      ...reloaded.attempts[0],
+      deadlineAt: '2000-01-01T00:00:00.000Z'
+    };
+    const expiredState = { ...reloaded, attempts: [expiredAttempt] };
+    expect(() => autosaveAssessmentResponse(expiredState, attemptId, 'q-1', 'kh', 'student-1')).toThrow(/انتهى زمن المحاولة/);
+    const autoSubmittedState = submitAssessmentAttempt(expiredState, attemptId, 'student-1');
+    expect(autoSubmittedState.attempts[0].autoSubmitted).toBe(true);
   });
 
   it('blocks results approval until an essay answer is manually marked', () => {

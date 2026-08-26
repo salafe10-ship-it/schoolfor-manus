@@ -806,6 +806,11 @@ export interface AssessmentAttemptRecord {
   assessmentId?: string;
   candidateId: string;
   status?: AssessmentAttemptStatus | null;
+  /** Server-authoritative timestamps used to resume and enforce the attempt window. */
+  startedAt?: string;
+  deadlineAt?: string;
+  submittedAt?: string;
+  autoSubmitted?: boolean;
   responses: AssessmentResponseMark[];
   recordedTotal: number;
   maximumTotal: number;

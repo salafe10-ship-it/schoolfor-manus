@@ -114,6 +114,7 @@ const makeId = (prefix: string): string => {
 };
 
 const now = (): string => new Date().toISOString();
+const isValidTimestamp = (value: unknown): value is string => typeof value === 'string' && Boolean(value.trim()) && Number.isFinite(Date.parse(value));
 
 const addAudit = (
   state: AssessmentWorkflowState,
@@ -180,6 +181,22 @@ export function validateAssessmentWorkflowState(value: unknown): AssessmentWorkf
     lifecycleIds.add(id);
   });
   unique(attempts, 'المحاولات');
+  attempts.forEach((attempt, index) => {
+    if (!attempt || typeof attempt !== 'object' || !String(attempt.candidateId || '').trim()) {
+      throw new AssessmentWorkflowError(`المحاولة رقم ${index + 1} تحتاج معرف طالب صالحاً.`);
+    }
+    (['startedAt', 'deadlineAt', 'submittedAt'] as const).forEach(field => {
+      if (attempt[field] !== undefined && !isValidTimestamp(attempt[field])) {
+        throw new AssessmentWorkflowError(`المحاولة رقم ${index + 1} تحتوي توقيتاً غير صالح.`);
+      }
+    });
+    if (attempt.startedAt && attempt.deadlineAt && Date.parse(attempt.deadlineAt) < Date.parse(attempt.startedAt)) {
+      throw new AssessmentWorkflowError(`المحاولة رقم ${index + 1} تحتوي نافذة زمنية معكوسة.`);
+    }
+    if (attempt.autoSubmitted !== undefined && typeof attempt.autoSubmitted !== 'boolean') {
+      throw new AssessmentWorkflowError(`المحاولة رقم ${index + 1} تحتوي حالة تسليم تلقائي غير صالحة.`);
+    }
+  });
 
   assessments.forEach(item => {
     if (!item || typeof item !== 'object' || !String(item.title || '').trim() || !String(item.blueprintId || '').trim()) {
@@ -425,6 +442,8 @@ export function startAssessmentAttempt(
     assessmentId,
     candidateId: candidateId.trim(),
     status: 'in_progress',
+    startedAt: now(),
+    deadlineAt: new Date(Date.now() + getContext(state, assessmentId).assessment.durationMinutes * 60_000).toISOString(),
     responses: [],
     recordedTotal: 0,
     maximumTotal: blueprint.totalPoints
@@ -443,6 +462,9 @@ export function autosaveAssessmentResponse(
   if (attemptIndex < 0) throw new AssessmentWorkflowError('المحاولة غير موجودة.');
   const attempt = state.attempts[attemptIndex];
   if (attempt.status !== 'in_progress') throw new AssessmentWorkflowError('لا يمكن تعديل إجابة بعد تسليم المحاولة.');
+  if (attempt.deadlineAt && Date.parse(attempt.deadlineAt) <= Date.now()) {
+    throw new AssessmentWorkflowError('انتهى زمن المحاولة؛ سلّمها ليتم احتسابها كتسليم تلقائي.');
+  }
   const { blueprint } = getContext(state, String(attempt.assessmentId || ''));
   const reference = blueprint.questionRefs.find(item => item.questionId === questionId);
   if (!reference) throw new AssessmentWorkflowError('السؤال لا ينتمي إلى نموذج الامتحان.');
@@ -499,7 +521,9 @@ export function submitAssessmentAttempt(
   const attempt = state.attempts.find(item => item.id === attemptId);
   if (!attempt) throw new AssessmentWorkflowError('المحاولة غير موجودة.');
   if (attempt.status !== 'in_progress') throw new AssessmentWorkflowError('المحاولة سُلّمت بالفعل أو لم تعد قابلة للتسليم.');
-  const attempts = state.attempts.map(item => item.id === attemptId ? { ...item, status: 'submitted' as const } : item);
+  const submittedAt = now();
+  const autoSubmitted = Boolean(attempt.deadlineAt && Date.parse(submittedAt) >= Date.parse(attempt.deadlineAt));
+  const attempts = state.attempts.map(item => item.id === attemptId ? { ...item, status: 'submitted' as const, submittedAt, autoSubmitted } : item);
   return addAudit({ ...state, attempts }, actorId, 'attempt.submitted', 'attempt', attemptId);
 }
 
