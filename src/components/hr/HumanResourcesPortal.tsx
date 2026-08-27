@@ -12,7 +12,6 @@ import AttendanceTab from './AttendanceTab';
 import PayrollTab from './PayrollTab';
 import ReportsTab from './ReportsTab';
 import OtherHRTabs from './OtherHRTabs';
-import EnterpriseHRPayrollCertification from '../../certification/EnterpriseHRPayrollCertification';
 import { FallbackStorage } from '../../database/repositories/FallbackStorage';
 
 // Cost Center descriptive mapping
@@ -711,6 +710,18 @@ export default function HumanResourcesPortal({ setActiveSection, selectedSchool 
               </button>
             </div>
           )}
+
+          {activeTab === 'certification' && (
+            <div className="border border-amber-500/40 bg-amber-50 p-6 text-right space-y-3">
+              <h3 className="text-base font-black text-amber-900">اعتماد الموارد البشرية والرواتب غير متاح</h3>
+              <p className="text-sm leading-7 text-amber-950">
+                لا يمكن إصدار شهادة أو عرض قياسات أداء للموارد البشرية قبل ربط ملفات الموظفين والحضور والعقود والرواتب بمصدر مركزي موثّق، ثم تنفيذ اختبار قبول حيّ وسجل تدقيق قابل للمراجعة.
+              </p>
+              <p className="text-xs font-bold text-amber-800">
+                لا تُنشأ سجلات أو قيود محاسبية تجريبية في بيئة Staging.
+              </p>
+            </div>
+          )}
           
           {/* Dashboard view */}
           {activeTab === 'dashboard' && (
@@ -813,7 +824,7 @@ export default function HumanResourcesPortal({ setActiveSection, selectedSchool 
               <div className="bg-[#dfb55a]/10 border border-[#dfb55a]/20 p-4 flex items-center gap-3 text-xs text-[#dfb55a]">
                 <Info className="w-5 h-5 shrink-0" />
                 <p className="leading-relaxed">
-                  <strong>تزامن القيود والحسابات العامة:</strong> يقوم هذا النظام المالي الموحد بتوليد قيد مزدوج في اليومية العامة للمدرسة ويُرحل سندات صرف الرواتب والسلف آلياً إلى جدول سندات الصرف بالحسابات العامة، مما يمنع الازدواجية ويضبط الميزانية تلقائياً.
+                  <strong>حالة الربط المحاسبي:</strong> ترحيل الرواتب والسلف مقفل حتى يكتمل المصدر المركزي ومسار الاعتماد المحاسبي؛ لا تُولّد قيود أو سندات صرف محلية.
                 </p>
               </div>
 

@@ -1,6 +1,7 @@
 import { AlertTriangle, Award, BookOpen, Briefcase, Calendar, Check, CheckSquare, ChevronDown, Clock, CreditCard, DollarSign, Download, Edit, Eye, Filter, Grid, History as HistoryIcon, List, Mail, MapPin, Paperclip, Phone, Plus, Printer, Search, ShieldCheck, Trash2, User, X } from 'lucide-react';
 import React, { useState } from 'react';
 import { HREmployee, HRDepartment, HRJob, HRContract, HRLeave, HRBonus, HRPenalty, HRPerformance, HRDocument } from './types';
+import { FallbackStorage } from '../../database/repositories/FallbackStorage';
 
 interface EmployeesTabProps {
   employees: HREmployee[];
@@ -124,6 +125,10 @@ export default function EmployeesTab({
 
   const handleSave = (e: React.FormEvent) => {
     e.preventDefault();
+    if (FallbackStorage.isCanonicalPersistenceRequired()) {
+      triggerNotification('حفظ ملف الموظف متوقف حتى يُربط مصدر موارد بشرية مركزي موثّق.', 'warning');
+      return;
+    }
     if (!formName || !formNationalId || !formPhone || !formEmail) {
       triggerNotification('الرجاء تعبئة البيانات الأساسية المطلوبة', 'warning');
       return;
@@ -207,10 +212,8 @@ export default function EmployeesTab({
         bankName: formBankName,
         iban: formIban,
         profileImage: formProfileImage,
-        allowances: [{ name: 'بدل نقل وسكن', amount: 350 }],
-        attachments: [
-          { name: 'عقد العمل المعتمد.pdf', type: 'PDF', date: new Date().toISOString().split('T')[0], size: '1.2 MB' }
-        ],
+        allowances: [],
+        attachments: [],
         auditLogs: [
           {
             action: 'إنشاء ملف موظف',
@@ -227,6 +230,10 @@ export default function EmployeesTab({
   };
 
   const handleDelete = (id: string) => {
+    if (FallbackStorage.isCanonicalPersistenceRequired()) {
+      triggerNotification('حذف ملف الموظف متوقف حتى يُربط مصدر موارد بشرية مركزي موثّق.', 'warning');
+      return;
+    }
     if (confirm('هل أنت متأكد من رغبتك في حذف ملف هذا الموظف نهائياً؟')) {
       setEmployees(prev => prev.filter(emp => emp.id !== id));
       triggerNotification('تم حذف ملف الموظف بنجاح', 'success');
@@ -239,6 +246,10 @@ export default function EmployeesTab({
   // Simulate file upload
   const handleSimulateUpload = () => {
     if (!selectedEmp) return;
+    if (FallbackStorage.isCanonicalPersistenceRequired()) {
+      triggerNotification('رفع مرفق الموظف متوقف حتى يُربط أرشيف مركزي موثّق.', 'warning');
+      return;
+    }
     const name = prompt('أدخل اسم المستند (مثال: البطاقة الشخصية، شهادة الخبرة):');
     if (!name) return;
     

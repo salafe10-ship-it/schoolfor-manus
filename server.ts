@@ -3882,8 +3882,12 @@ ${JSON.stringify(snapshot)}
     app.use(vite.middlewares);
   } else {
     const distPath = path.join(process.cwd(), "dist");
-    app.use(express.static(distPath));
+    // Keep the HTML entry point fresh after each deployment.  Its JavaScript
+    // chunks are content-addressed and may be replaced between releases; a
+    // cached index.html can otherwise reference a chunk that no longer exists.
+    app.use(express.static(distPath, { index: false }));
     app.get("*", (req, res) => {
+      res.setHeader("Cache-Control", "no-store, no-cache, must-revalidate, private");
       res.sendFile(path.join(distPath, "index.html"));
     });
   }
