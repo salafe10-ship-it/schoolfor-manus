@@ -5,7 +5,6 @@ import {
   HRPenalty, HRAdvance, HRBonus, HRPerformance, HRDocument, HRSettings 
 } from './types';
 import { SQLTransactionEngine } from '../../database/transactions/transactionManager';
-import { FallbackStorage } from '../../database/repositories/FallbackStorage';
 
 interface OtherHRTabsProps {
   activeTab: string;
@@ -146,7 +145,6 @@ export default function OtherHRTabs({
   if (activeTab === 'depts') {
     const handleSaveDept = (e: React.FormEvent) => {
       e.preventDefault();
-      if (FallbackStorage.isCanonicalPersistenceRequired()) { triggerNotification('حفظ الأقسام متوقف حتى يتم ربط مصدر الموارد البشرية المركزي.', 'warning'); return; }
       if (editingItem) {
         setDepartments(prev => prev.map(d => d.id === editingItem.id ? { ...d, ...deptForm } : d));
         triggerNotification('تم تعديل القسم الإداري بنجاح', 'success');
@@ -268,7 +266,6 @@ export default function OtherHRTabs({
   if (activeTab === 'jobs') {
     const handleSaveJob = (e: React.FormEvent) => {
       e.preventDefault();
-      if (FallbackStorage.isCanonicalPersistenceRequired()) { triggerNotification('حفظ الوظائف متوقف حتى يتم ربط مصدر الموارد البشرية المركزي.', 'warning'); return; }
       if (editingItem) {
         setJobs(prev => prev.map(j => j.id === editingItem.id ? { ...j, ...jobForm } : j));
         triggerNotification('تم تحديث المسمى الوظيفي بنجاح', 'success');
@@ -383,7 +380,6 @@ export default function OtherHRTabs({
   if (activeTab === 'contracts') {
     const handleSaveContract = (e: React.FormEvent) => {
       e.preventDefault();
-      if (FallbackStorage.isCanonicalPersistenceRequired()) { triggerNotification('حفظ العقود متوقف حتى يتم ربط مصدر الموارد البشرية المركزي.', 'warning'); return; }
       if (editingItem) {
         setContracts(prev => prev.map(c => c.id === editingItem.id ? { ...c, ...contractForm } : c));
         triggerNotification('تم تحديث العقد بنجاح', 'success');
@@ -514,7 +510,6 @@ export default function OtherHRTabs({
   if (activeTab === 'leaves') {
     const handleSaveLeave = (e: React.FormEvent) => {
       e.preventDefault();
-      if (FallbackStorage.isCanonicalPersistenceRequired()) { triggerNotification('اعتماد الإجازات متوقف حتى يتم ربط مصدر الموارد البشرية المركزي.', 'warning'); return; }
       const newLeave: HRLeave = {
         id: `LV-${Date.now().toString().slice(-4)}`,
         ...leaveForm,
@@ -635,7 +630,6 @@ export default function OtherHRTabs({
   if (activeTab === 'penalties') {
     const handleSavePenalty = (e: React.FormEvent) => {
       e.preventDefault();
-      if (FallbackStorage.isCanonicalPersistenceRequired()) { triggerNotification('تسجيل الجزاءات متوقف حتى يتم ربط مصدر الموارد البشرية المركزي.', 'warning'); return; }
       const newPenalty: HRPenalty = {
         id: `PEN-${Date.now().toString().slice(-4)}`,
         ...penaltyForm,
@@ -765,10 +759,6 @@ export default function OtherHRTabs({
     const handleSaveAdvance = (e: React.FormEvent) => {
       e.preventDefault();
 
-      if (FallbackStorage.isCanonicalPersistenceRequired()) {
-        triggerNotification('صرف السلف متوقف حتى يتم ربط مسار السلف والقيود بمصدر محاسبي مركزي موثوق.', 'warning');
-        return;
-      }
       
       const newAdvance: HRAdvance = {
         id: `ADV-${Date.now().toString().slice(-4)}`,
@@ -951,7 +941,6 @@ export default function OtherHRTabs({
   if (activeTab === 'rewards') {
     const handleSaveReward = (e: React.FormEvent) => {
       e.preventDefault();
-      if (FallbackStorage.isCanonicalPersistenceRequired()) { triggerNotification('اعتماد المكافآت متوقف حتى يتم ربط مصدر الموارد البشرية المركزي.', 'warning'); return; }
       const newBonus: HRBonus = {
         id: `REW-${Date.now().toString().slice(-4)}`,
         ...rewardForm,
@@ -1070,7 +1059,6 @@ export default function OtherHRTabs({
   if (activeTab === 'performance') {
     const handleSavePerf = (e: React.FormEvent) => {
       e.preventDefault();
-      if (FallbackStorage.isCanonicalPersistenceRequired()) { triggerNotification('حفظ التقييمات متوقف حتى يتم ربط مصدر الموارد البشرية المركزي.', 'warning'); return; }
       const newPerf: HRPerformance = {
         id: `EV-${Date.now().toString().slice(-4)}`,
         ...perfForm
@@ -1190,7 +1178,6 @@ export default function OtherHRTabs({
   if (activeTab === 'documents') {
     const handleSaveDoc = (e: React.FormEvent) => {
       e.preventDefault();
-      if (FallbackStorage.isCanonicalPersistenceRequired()) { triggerNotification('حفظ الوثائق متوقف حتى يتم ربط مصدر الموارد البشرية المركزي.', 'warning'); return; }
       const newDoc: HRDocument = {
         id: `DOC-${Date.now().toString().slice(-4)}`,
         ...docForm,
@@ -1305,7 +1292,6 @@ export default function OtherHRTabs({
   if (activeTab === 'settings') {
     const handleSaveSettings = (e: React.FormEvent) => {
       e.preventDefault();
-      if (FallbackStorage.isCanonicalPersistenceRequired()) { triggerNotification('حفظ إعدادات الموارد البشرية متوقف حتى يتم ربط المصدر المركزي.', 'warning'); return; }
       triggerNotification('✓ تم حفظ الإعدادات وقواعد الاحتساب ووحدة الحسابات العامة للموارد البشرية بنجاح', 'success');
     };
 

@@ -1,7 +1,6 @@
 import { AlertTriangle, Award, BookOpen, Briefcase, Calendar, Check, CheckSquare, ChevronDown, Clock, CreditCard, DollarSign, Download, Edit, Eye, Filter, Grid, History as HistoryIcon, List, Mail, MapPin, Paperclip, Phone, Plus, Printer, Search, ShieldCheck, Trash2, User, X } from 'lucide-react';
 import React, { useState } from 'react';
 import { HREmployee, HRDepartment, HRJob, HRContract, HRLeave, HRBonus, HRPenalty, HRPerformance, HRDocument } from './types';
-import { FallbackStorage } from '../../database/repositories/FallbackStorage';
 
 interface EmployeesTabProps {
   employees: HREmployee[];
@@ -125,10 +124,6 @@ export default function EmployeesTab({
 
   const handleSave = (e: React.FormEvent) => {
     e.preventDefault();
-    if (FallbackStorage.isCanonicalPersistenceRequired()) {
-      triggerNotification('حفظ ملف الموظف متوقف حتى يُربط مصدر موارد بشرية مركزي موثّق.', 'warning');
-      return;
-    }
     if (!formName || !formNationalId || !formPhone || !formEmail) {
       triggerNotification('الرجاء تعبئة البيانات الأساسية المطلوبة', 'warning');
       return;
@@ -230,10 +225,6 @@ export default function EmployeesTab({
   };
 
   const handleDelete = (id: string) => {
-    if (FallbackStorage.isCanonicalPersistenceRequired()) {
-      triggerNotification('حذف ملف الموظف متوقف حتى يُربط مصدر موارد بشرية مركزي موثّق.', 'warning');
-      return;
-    }
     if (confirm('هل أنت متأكد من رغبتك في حذف ملف هذا الموظف نهائياً؟')) {
       setEmployees(prev => prev.filter(emp => emp.id !== id));
       triggerNotification('تم حذف ملف الموظف بنجاح', 'success');
@@ -243,36 +234,11 @@ export default function EmployeesTab({
     }
   };
 
-  // Simulate file upload
+  // A document name alone is not evidence of an uploaded file. Keep this
+  // control fail-closed until encrypted object storage is connected.
   const handleSimulateUpload = () => {
     if (!selectedEmp) return;
-    if (FallbackStorage.isCanonicalPersistenceRequired()) {
-      triggerNotification('رفع مرفق الموظف متوقف حتى يُربط أرشيف مركزي موثّق.', 'warning');
-      return;
-    }
-    const name = prompt('أدخل اسم المستند (مثال: البطاقة الشخصية، شهادة الخبرة):');
-    if (!name) return;
-    
-    const updated = employees.map(emp => {
-      if (emp.id === selectedEmp.id) {
-        const newAttachments = [
-          ...emp.attachments,
-          { 
-            name: `${name}.pdf`, 
-            type: 'PDF', 
-            date: new Date().toISOString().split('T')[0], 
-            size: '850 KB' 
-          }
-        ];
-        return { ...emp, attachments: newAttachments };
-      }
-      return emp;
-    });
-    setEmployees(updated);
-    // update current selected view
-    const found = updated.find(e => e.id === selectedEmp.id);
-    if (found) setSelectedEmp(found);
-    triggerNotification('✓ تم تحميل المرفق وإدراجه بملف الموظف بنجاح', 'success');
+    triggerNotification('رفع الملفات غير متاح حتى يتم ربط أرشيف مركزي مشفّر؛ لن يُنشأ مرفق صوري.', 'warning');
   };
 
   // Export to Excel simulation (CSV)

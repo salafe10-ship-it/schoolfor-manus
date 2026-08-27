@@ -1,7 +1,6 @@
 import { AlertCircle, ArrowLeftRight, Calendar, Check, ChevronLeft, ChevronRight, Clock, Cpu, Database, Filter, Fingerprint, RefreshCw, Search, Sparkles, ThumbsUp, UserCheck, UserMinus, UserX, Wifi, X } from 'lucide-react';
 import React, { useState } from 'react';
 import { HREmployee, HRAttendance, HRDepartment, HRSettings } from './types';
-import { FallbackStorage } from '../../database/repositories/FallbackStorage';
 
 interface AttendanceTabProps {
   employees: HREmployee[];
@@ -93,10 +92,6 @@ export default function AttendanceTab({
 
   // Update a single attendance attribute
   const updateAttendance = (empId: string, status: 'present' | 'absent' | 'late' | 'excused', fields: Partial<HRAttendance>) => {
-    if (FallbackStorage.isCanonicalPersistenceRequired()) {
-      triggerNotification('تعديل الحضور متوقف حتى يُربط سجل حضور مركزي موثّق.', 'warning');
-      return;
-    }
     const recordId = `ATT-${empId}-${selectedDate}`;
     const existingIdx = attendance.findIndex(a => a.employeeId === empId && a.date === selectedDate);
     
@@ -144,10 +139,6 @@ export default function AttendanceTab({
 
   // Batch mark all filtered employees as Present
   const handleBatchPresent = () => {
-    if (FallbackStorage.isCanonicalPersistenceRequired()) {
-      triggerNotification('الرصد الجماعي متوقف حتى يُربط سجل حضور مركزي موثّق.', 'warning');
-      return;
-    }
     let count = 0;
     const nowStr = settings.workingHoursStart;
     const checkOutStr = settings.workingHoursEnd;

@@ -1,5 +1,5 @@
 import { AlertTriangle, Award, Bell, Briefcase, Building2, Calendar, Check, CheckCircle, ChevronLeft, Clock, Coins, FileSpreadsheet, FileText, FolderOpen, Home, Info, PieChart, Play, Scale, Settings2, ShieldCheck, TrendingUp, Users } from 'lucide-react';
-import React, { useState, useEffect } from 'react';
+import React, { useState, useEffect, useRef } from 'react';
 import EnterpriseActionToolbar from '../shared/EnterpriseActionToolbar';
 
 import { 
@@ -56,6 +56,9 @@ export default function HumanResourcesPortal({ setActiveSection, selectedSchool 
     defaultBankSafeAccount: '1102',
     defaultSalariesExpenseAccount: '5101'
   });
+  const canonicalVersionRef = useRef(0);
+  const canonicalBaselineRef = useRef<string | null>(null);
+  const canonicalSaveInFlightRef = useRef(false);
 
   // Global notification trigger helper
   const triggerNotification = (message: string, type: 'success' | 'warning' | 'error') => {
@@ -80,20 +83,22 @@ export default function HumanResourcesPortal({ setActiveSection, selectedSchool 
           if (!response.ok || !payload?.success) throw new Error(payload?.message || 'تعذر تحميل سجل الموارد البشرية.');
           if (cancelled) return;
           const data = payload.data || {};
-          setEmployees(list<HREmployee>(data.employees));
-          setDepartments(list<HRDepartment>(data.departments));
-          setJobs(list<HRJob>(data.jobs));
-          setContracts(list<HRContract>(data.contracts));
-          setAttendance(list<HRAttendance>(data.attendance));
-          setLeaves(list<HRLeave>(data.leaves));
-          setPenalties(list<HRPenalty>(data.penalties));
-          setAdvances(list<HRAdvance>(data.advances));
-          setRewards(list<HRBonus>(data.rewards));
-          setPerformance(list<HRPerformance>(data.performance));
-          setDocuments(list<HRDocument>(data.documents));
-          if (data.settings && typeof data.settings === 'object' && !Array.isArray(data.settings)) {
-            setSettings(previous => ({ ...previous, ...data.settings }));
-          }
+          const loadedSettings = data.settings && typeof data.settings === 'object' && !Array.isArray(data.settings)
+            ? { ...settings, ...data.settings } : settings;
+          const canonicalData = {
+            employees: list<HREmployee>(data.employees), departments: list<HRDepartment>(data.departments),
+            jobs: list<HRJob>(data.jobs), contracts: list<HRContract>(data.contracts),
+            attendance: list<HRAttendance>(data.attendance), leaves: list<HRLeave>(data.leaves),
+            penalties: list<HRPenalty>(data.penalties), advances: list<HRAdvance>(data.advances),
+            rewards: list<HRBonus>(data.rewards), performance: list<HRPerformance>(data.performance),
+            documents: list<HRDocument>(data.documents), settings: loadedSettings
+          };
+          canonicalVersionRef.current = Number(payload?.meta?.version || 0);
+          canonicalBaselineRef.current = JSON.stringify(canonicalData);
+          setEmployees(canonicalData.employees); setDepartments(canonicalData.departments); setJobs(canonicalData.jobs);
+          setContracts(canonicalData.contracts); setAttendance(canonicalData.attendance); setLeaves(canonicalData.leaves);
+          setPenalties(canonicalData.penalties); setAdvances(canonicalData.advances); setRewards(canonicalData.rewards);
+          setPerformance(canonicalData.performance); setDocuments(canonicalData.documents); setSettings(loadedSettings);
         } catch (error: any) {
           if (!cancelled) triggerNotification(error?.message || 'تعذر تحميل سجل الموارد البشرية المركزي.', 'error');
         }
@@ -334,6 +339,36 @@ export default function HumanResourcesPortal({ setActiveSection, selectedSchool 
     setDocuments(documentsList);
     
   }, [canonicalPersistenceRequired]);
+
+  useEffect(() => {
+    if (!canonicalPersistenceRequired || !canonicalBaselineRef.current) return;
+    const data = { employees, departments, jobs, contracts, attendance, leaves, penalties, advances, rewards, performance, documents, settings };
+    const serialized = JSON.stringify(data);
+    if (serialized === canonicalBaselineRef.current) return;
+    const timer = window.setTimeout(async () => {
+      if (canonicalSaveInFlightRef.current) return;
+      canonicalSaveInFlightRef.current = true;
+      try {
+        const token = getTrustedAccessToken();
+        if (!token) throw new Error('انتهت جلسة الدخول الموثوقة قبل الحفظ.');
+        const response = await fetch('/api/hr/database', {
+          method: 'POST',
+          headers: { Authorization: `Bearer ${token}`, 'Content-Type': 'application/json' },
+          body: JSON.stringify({ expectedVersion: canonicalVersionRef.current, data, countryCode: 'ZZ', legalConfiguration: {} })
+        });
+        const payload = await response.json();
+        if (!response.ok || !payload?.success) throw new Error(payload?.message || 'تعذر حفظ سجل الموارد البشرية.');
+        canonicalVersionRef.current = Number(payload?.meta?.version || canonicalVersionRef.current + 1);
+        canonicalBaselineRef.current = serialized;
+        triggerNotification('تم حفظ سجل الموارد البشرية المركزي.', 'success');
+      } catch (error: any) {
+        triggerNotification(error?.message || 'تعذر حفظ سجل الموارد البشرية المركزي.', 'error');
+      } finally {
+        canonicalSaveInFlightRef.current = false;
+      }
+    }, 500);
+    return () => window.clearTimeout(timer);
+  }, [canonicalPersistenceRequired, employees, departments, jobs, contracts, attendance, leaves, penalties, advances, rewards, performance, documents, settings]);
 
   // 2. Local State synchronization to LocalStorage on modifications
   useEffect(() => {
