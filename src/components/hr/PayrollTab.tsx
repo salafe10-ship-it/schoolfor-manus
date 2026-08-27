@@ -16,6 +16,8 @@ interface PayrollTabProps {
   formatCurrency: (amount: number, showSymbol?: boolean) => string;
   triggerNotification: (msg: string, type: 'success' | 'warning' | 'error') => void;
   costCenterLabels: Record<string, string>;
+  onApprovePayroll: (period: string) => Promise<void>;
+  onPayPayroll: (period: string) => Promise<void>;
 }
 
 interface PayrollItem {
@@ -38,11 +40,14 @@ export default function PayrollTab({
   settings,
   formatCurrency,
   triggerNotification,
-  costCenterLabels
+  costCenterLabels,
+  onApprovePayroll,
+  onPayPayroll
 }: PayrollTabProps) {
   const [selectedMonth, setSelectedMonth] = useState('2026-06');
   const [payrollList, setPayrollList] = useState<PayrollItem[]>([]);
   const [isPosted, setIsPosted] = useState(false);
+  const [isApproved, setIsApproved] = useState(false);
   const [selectedSlip, setSelectedSlip] = useState<PayrollItem | null>(null);
 
   // Sync / Calculate payroll for selected month
@@ -108,7 +113,7 @@ export default function PayrollTab({
   }, { basic: 0, allowances: 0, bonuses: 0, deductions: 0, advances: 0, net: 0 });
 
   // Handle Post Payroll to General Ledger
-  const handlePostPayroll = () => {
+  const handlePostPayroll = async () => {
     if (payrollList.length === 0) {
       triggerNotification('لا توجد بيانات رواتب لاحتسابها واعتمادها', 'warning');
       return;
@@ -117,6 +122,15 @@ export default function PayrollTab({
       triggerNotification('تنبيه: مسير رواتب هذا الشهر معتمد ومرحل مسبقاً بالحسابات العامة', 'warning');
       return;
     }
+
+    if (!isApproved) {
+      await onApprovePayroll(selectedMonth);
+      setIsApproved(true);
+      return;
+    }
+    await onPayPayroll(selectedMonth);
+    setIsPosted(true);
+    return;
 
     if (FallbackStorage.isCanonicalPersistenceRequired()) {
       triggerNotification('ترحيل الرواتب متوقف حتى يتم ربط مسار الرواتب بمصدر محاسبي مركزي موثوق.', 'warning');
@@ -371,7 +385,7 @@ export default function PayrollTab({
               className="bg-gradient-to-r from-emerald-600 to-teal-500 hover:opacity-90 text-white font-bold px-4 py-1.5 rounded-lg text-xs flex items-center gap-1.5 shadow-md transition-all"
             >
               <Play className="w-4 h-4" />
-              <span>اعتماد وترحيل الرواتب للدفتر</span>
+              <span>{isApproved ? 'تنفيذ الصرف وترحيل القيد' : 'اعتماد مسير الرواتب'}</span>
             </button>
           )}
         </div>

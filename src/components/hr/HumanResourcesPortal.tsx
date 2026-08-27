@@ -69,6 +69,23 @@ export default function HumanResourcesPortal({ setActiveSection, selectedSchool 
     setTimeout(() => setNotification(null), 5000);
   };
 
+  const runPayrollWorkflow = async (period: string, action: 'approve' | 'pay') => {
+    try {
+      const token = getTrustedAccessToken();
+      if (!token) throw new Error('انتهت جلسة الدخول الموثوقة.');
+      const response = await fetch(`/api/hr/payroll-runs/${period}/${action}`, {
+        method: 'POST', headers: { Authorization: `Bearer ${token}`, 'Content-Type': 'application/json' },
+        body: JSON.stringify({ expectedVersion: canonicalVersionRef.current })
+      });
+      const payload = await response.json();
+      if (!response.ok || !payload?.success) throw new Error(payload?.message || 'تعذر تنفيذ مسار الرواتب.');
+      canonicalVersionRef.current = Number(payload?.meta?.version || canonicalVersionRef.current + 1);
+      triggerNotification(action === 'approve' ? 'تم اعتماد المسير دون إنشاء قيد.' : `تم تنفيذ الصرف وإثبات القيد ${payload?.data?.journalId || ''}.`, 'success');
+    } catch (error: any) {
+      triggerNotification(error?.message || 'تعذر تنفيذ مسار الرواتب.', 'error');
+    }
+  };
+
   // 1. Load canonical records in managed environments. Local seed data remains
   // strictly a development fallback and can never populate a managed school.
   useEffect(() => {
@@ -920,6 +937,8 @@ export default function HumanResourcesPortal({ setActiveSection, selectedSchool 
               formatCurrency={formatCurrency}
               triggerNotification={triggerNotification}
               costCenterLabels={costCenterLabels}
+              onApprovePayroll={(period) => runPayrollWorkflow(period, 'approve')}
+              onPayPayroll={(period) => runPayrollWorkflow(period, 'pay')}
             />
           )}
 
