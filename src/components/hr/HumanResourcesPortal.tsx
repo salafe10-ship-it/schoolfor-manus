@@ -54,7 +54,10 @@ export default function HumanResourcesPortal({ setActiveSection, selectedSchool 
     weekends: [5, 6],
     lateDeductionRate: 1.0,
     defaultBankSafeAccount: '1102',
-    defaultSalariesExpenseAccount: '5101'
+    defaultSalariesExpenseAccount: '5101',
+    payrollPayableAccount: '',
+    advanceReceivableAccount: '',
+    deductionClearingAccount: ''
   });
   const canonicalVersionRef = useRef(0);
   const canonicalBaselineRef = useRef<string | null>(null);

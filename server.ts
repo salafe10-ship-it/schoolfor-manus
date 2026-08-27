@@ -2737,6 +2737,67 @@ async function startServer() {
     }
   });
 
+  // HR only records school-owned account mappings here. It deliberately does
+  // not create a journal: posting remains an explicit approved-payment action.
+  app.post('/api/hr/accounting-mappings', authenticateRequest, requirePermission(PERMISSIONS.FINANCIAL_WRITE), async (req, res, next) => {
+    try {
+      const identity = (req as any).user;
+      const tenantId = String(identity?.tenantId || '').trim();
+      const schoolId = String(identity?.schoolId || '').trim();
+      const tenantContext = (req as any).tenantContext;
+      const mappings = [
+        ['treasury.cash', String(req.body?.cashAccount || '').trim(), 'asset'],
+        ['hr.payroll.expense', String(req.body?.payrollExpenseAccount || '').trim(), 'expense'],
+        ['hr.payroll.payable', String(req.body?.payrollPayableAccount || '').trim(), 'liability'],
+        ['hr.advance.receivable', String(req.body?.advanceReceivableAccount || '').trim(), 'asset'],
+        ['hr.deductions.clearing', String(req.body?.deductionClearingAccount || '').trim(), 'liability']
+      ] as const;
+      if (!tenantId || !schoolId || !tenantContext || tenantContext.tenantId !== tenantId || tenantContext.schoolId !== schoolId || mappings.some(([, code]) => !code)) {
+        throw new ValidationError('اعتماد ربط HR يتطلب جميع حسابات الصرف والرواتب والسلف والخصومات ضمن المدرسة الموثوقة.');
+      }
+      await UnitOfWork.runInTransaction(schoolId, {
+        operationName: 'Configure HR accounting mappings', tenantId, userId: identity.id,
+        userName: identity.name || 'المستخدم الحالي', ipAddress: req.ip || 'unknown',
+        affectedTables: ['erp_account_mappings', 'audit_events']
+      }, async () => {
+        const transaction = UnitOfWork.getActiveContext()?.databaseTransaction;
+        if (!transaction) throw new DatabaseError('معاملة اعتماد ربط حسابات HR غير متاحة.');
+        const actor = await transaction.query<{ id: string }>(
+          `SELECT id FROM public.users WHERE tenant_id = $1 AND auth_user_id = $2 AND status = 'active' AND deleted_at IS NULL LIMIT 1`,
+          [tenantId, identity.id]
+        );
+        const actorId = actor.rows[0]?.id;
+        if (!actorId) throw new AuthenticationError('تعذر ربط هوية الجلسة بالمستخدم المالي المعتمد.');
+        if (!await CanonicalErpPostingService.isProvisioned(transaction)) {
+          throw new DatabaseError('دفتر الأستاذ الكانوني غير مهيأ بعد لهذه المدرسة.');
+        }
+        for (const [key, code, nature] of mappings) {
+          const account = await transaction.query<{ account_code: string }>(
+            `SELECT account_code FROM public.erp_chart_of_accounts
+              WHERE tenant_id = $1 AND school_id = $2 AND account_code = $3 AND account_nature = $4
+                AND is_active = true AND is_leaf = true LIMIT 1`, [tenantId, schoolId, code, nature]
+          );
+          if (!account.rows[0]) throw new ValidationError(`الحساب ${code} غير موجود أو لا يحمل طبيعة ${nature} المناسبة لربط ${key}.`);
+          await transaction.query(
+            `INSERT INTO public.erp_account_mappings (tenant_id, school_id, mapping_key, account_code, is_active, updated_by)
+             VALUES ($1, $2, $3, $4, true, $5)
+             ON CONFLICT (school_id, mapping_key) DO UPDATE SET account_code = EXCLUDED.account_code, is_active = true, updated_at = now(), updated_by = EXCLUDED.updated_by`,
+            [tenantId, schoolId, key, code, actorId]
+          );
+        }
+        await transaction.query(
+          `INSERT INTO public.audit_events (tenant_id, school_id, branch_id, actor_user_id, entity_type, entity_id, action, source, reason, result, metadata)
+           VALUES ($1, $2, $3, $4, 'hr_accounting_mapping', $2, 'configure', 'HrAccountingMappingRoute', 'اعتماد خرائط حسابات HR', 'success', $5::jsonb)`,
+          [tenantId, schoolId, identity.branchId || null, actorId, JSON.stringify({ mappingKeys: mappings.map(([key]) => key) })]
+        );
+      }, tenantContext);
+      res.json({ success: true, message: 'تم اعتماد خرائط حسابات الموارد البشرية دون إنشاء أي قيد.' });
+    } catch (err: any) {
+      next(err instanceof AuthenticationError || err instanceof AuthorizationError || err instanceof ValidationError || err instanceof DatabaseError
+        ? err : new DatabaseError('تعذر اعتماد خرائط حسابات الموارد البشرية.', err?.message));
+    }
+  });
+
   // Exams and Results Database API
   app.get("/api/exams/database", authenticateRequest, requirePermission(PERMISSIONS.EXAM_READ), async (req, res, next) => {
     try {

@@ -13,4 +13,12 @@ describe('HR canonical database route contract', () => {
     expect(source).toContain("'hr_database', $2, 'write', 'HrDatabaseRoute'");
     expect(source).toContain('رمز الدولة اختياري ومحايد');
   });
+
+  it('configures school-owned HR accounting mappings without posting a journal', () => {
+    expect(source).toContain("app.post('/api/hr/accounting-mappings', authenticateRequest, requirePermission(PERMISSIONS.FINANCIAL_WRITE)");
+    expect(source).toContain("['hr.payroll.expense'");
+    expect(source).toContain("['hr.advance.receivable'");
+    expect(source).toContain('erp_account_mappings');
+    expect(source).toContain('دون إنشاء أي قيد');
+  });
 });

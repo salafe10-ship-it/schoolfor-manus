@@ -5,6 +5,7 @@ import {
   HRPenalty, HRAdvance, HRBonus, HRPerformance, HRDocument, HRSettings 
 } from './types';
 import { SQLTransactionEngine } from '../../database/transactions/transactionManager';
+import { getTrustedAccessToken } from '../../utils/auth';
 
 interface OtherHRTabsProps {
   activeTab: string;
@@ -1290,9 +1291,26 @@ export default function OtherHRTabs({
 
   // 11. SETTINGS
   if (activeTab === 'settings') {
-    const handleSaveSettings = (e: React.FormEvent) => {
+    const handleSaveSettings = async (e: React.FormEvent) => {
       e.preventDefault();
-      triggerNotification('✓ تم حفظ الإعدادات وقواعد الاحتساب ووحدة الحسابات العامة للموارد البشرية بنجاح', 'success');
+      try {
+        const response = await fetch('/api/hr/accounting-mappings', {
+          method: 'POST',
+          headers: { Authorization: `Bearer ${getTrustedAccessToken()}`, 'Content-Type': 'application/json' },
+          body: JSON.stringify({
+            cashAccount: settings.defaultBankSafeAccount,
+            payrollExpenseAccount: settings.defaultSalariesExpenseAccount,
+            payrollPayableAccount: settings.payrollPayableAccount,
+            advanceReceivableAccount: settings.advanceReceivableAccount,
+            deductionClearingAccount: settings.deductionClearingAccount
+          })
+        });
+        const payload = await response.json();
+        if (!response.ok || !payload?.success) throw new Error(payload?.message || 'تعذر اعتماد ربط الحسابات.');
+        triggerNotification('تم اعتماد ربط حسابات HR للمدرسة؛ لا ينشأ قيد حتى اعتماد الصرف وتنفيذه.', 'success');
+      } catch (error: any) {
+        triggerNotification(error?.message || 'تعذر اعتماد ربط الحسابات.', 'error');
+      }
     };
 
     return (
@@ -1337,6 +1355,22 @@ export default function OtherHRTabs({
                     <option value="1120">1120 • صندوق الابتدائي (كاش فرعي)</option>
                   </select>
                   <p className="text-[10px] text-slate-500">الحساب الذي سُتقتطع منه السيولة النقدية تلقائياً عند اعتماد مسير الرواتب أو صرف سلفة.</p>
+                </div>
+
+                <div className="space-y-1.5">
+                  <label className="text-slate-400 font-semibold block">حساب التزام رواتب الموظفين</label>
+                  <input value={settings.payrollPayableAccount} onChange={e => setSettings(p => ({ ...p, payrollPayableAccount: e.target.value.trim() }))} placeholder="مثال: 2105" className="w-full bg-slate-850 border border-slate-700 rounded p-2.5 text-white" />
+                  <p className="text-[10px] text-slate-500">يُسجل فيه صافي الاستحقاق المعتمد قبل تنفيذ الصرف.</p>
+                </div>
+                <div className="space-y-1.5">
+                  <label className="text-slate-400 font-semibold block">حساب ذمم سلف الموظفين</label>
+                  <input value={settings.advanceReceivableAccount} onChange={e => setSettings(p => ({ ...p, advanceReceivableAccount: e.target.value.trim() }))} placeholder="مثال: 1305" className="w-full bg-slate-850 border border-slate-700 rounded p-2.5 text-white" />
+                  <p className="text-[10px] text-slate-500">يُستخدم عند صرف السلفة وعند استرداد أقساطها من الراتب.</p>
+                </div>
+                <div className="space-y-1.5">
+                  <label className="text-slate-400 font-semibold block">حساب تسوية الخصومات والجزاءات</label>
+                  <input value={settings.deductionClearingAccount} onChange={e => setSettings(p => ({ ...p, deductionClearingAccount: e.target.value.trim() }))} placeholder="مثال: 2205" className="w-full bg-slate-850 border border-slate-700 rounded p-2.5 text-white" />
+                  <p className="text-[10px] text-slate-500">حساب التزام/تسوية؛ تحدد معالجة الخصم القانونية في سياسة المدرسة.</p>
                 </div>
 
                 <div className="space-y-1.5">
