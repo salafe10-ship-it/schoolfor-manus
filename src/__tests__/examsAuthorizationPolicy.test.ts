@@ -9,6 +9,7 @@ import {
 
 describe('exams authorization and read-scope policy', () => {
   it('allows only approval roles to approve or reopen the schedule and results', () => {
+    expect(canApproveExamOperation('Admin', 'approve')).toBe(true);
     expect(canApproveExamOperation('SuperAdmin', 'approve')).toBe(true);
     expect(canApproveExamOperation('SchoolAdmin', 'approve_schedule')).toBe(true);
     expect(canApproveExamOperation('control', 'reopen')).toBe(true);
@@ -59,6 +60,7 @@ describe('exams authorization and read-scope policy', () => {
 
   it('returns the untouched full snapshot to exam staff', () => {
     const data = { exams_grades_matrix: { 'student-1': { arabic: 99 } } };
+    expect(canViewExamAudit('Admin')).toBe(true);
     const projected = projectExamDatabaseForRead(data, 'Control');
     expect(projected.scope).toBe('full');
     expect(projected.data).toEqual(data);

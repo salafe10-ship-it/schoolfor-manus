@@ -5,9 +5,9 @@ export type ExamReadScope = 'full' | 'restricted';
 
 const normalizeRole = (role: unknown): string => String(role ?? '').trim().toLowerCase();
 
-const APPROVAL_ROLES = new Set(['superadmin', 'schooladmin', 'control']);
-const STAFF_READ_ROLES = new Set(['superadmin', 'schooladmin', 'control', 'teacher', 'auditor']);
-const WRITE_ROLES = new Set(['superadmin', 'schooladmin', 'control', 'teacher']);
+const APPROVAL_ROLES = new Set(['admin', 'superadmin', 'schooladmin', 'control']);
+const STAFF_READ_ROLES = new Set(['admin', 'superadmin', 'schooladmin', 'control', 'teacher', 'auditor']);
+const WRITE_ROLES = new Set(['admin', 'superadmin', 'schooladmin', 'control', 'teacher']);
 
 /**
  * The API uses this policy after trusted RBAC resolution. It is deliberately
