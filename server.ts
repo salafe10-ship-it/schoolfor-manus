@@ -2798,6 +2798,66 @@ async function startServer() {
     }
   });
 
+  // A payroll approval is an immutable business checkpoint, not a financial
+  // posting. The server computes the amount from the HR snapshot so a browser
+  // can never approve a forged payroll total.
+  app.post('/api/hr/payroll-runs/:period/approve', authenticateRequest, requirePermission(PERMISSIONS.HR_WRITE), async (req, res, next) => {
+    try {
+      const identity = (req as any).user;
+      const tenantId = String(identity?.tenantId || '').trim();
+      const schoolId = String(identity?.schoolId || '').trim();
+      const period = String(req.params.period || '').trim();
+      const expectedVersion = Number(req.body?.expectedVersion);
+      const tenantContext = (req as any).tenantContext;
+      if (!/^\d{4}-\d{2}$/.test(period) || !Number.isInteger(expectedVersion) || expectedVersion < 0
+        || !tenantContext || tenantContext.tenantId !== tenantId || tenantContext.schoolId !== schoolId) {
+        throw new ValidationError('اعتماد مسير الرواتب يتطلب فترة صالحة وسجل HR متزامناً ضمن المدرسة الموثوقة.');
+      }
+      let run: Record<string, unknown> | null = null;
+      let nextVersion = expectedVersion + 1;
+      await UnitOfWork.runInTransaction(schoolId, {
+        operationName: `Approve HR payroll ${period}`, tenantId, userId: identity.id,
+        userName: identity.name || 'المستخدم الحالي', ipAddress: req.ip || 'unknown',
+        affectedTables: ['hr_database', 'audit_events']
+      }, async () => {
+        const transaction = UnitOfWork.getActiveContext()?.databaseTransaction;
+        if (!transaction) throw new DatabaseError('معاملة اعتماد مسير الرواتب غير متاحة.');
+        const actor = await transaction.query<{ id: string }>(`SELECT id FROM public.users WHERE tenant_id = $1 AND auth_user_id = $2 AND status = 'active' AND deleted_at IS NULL LIMIT 1`, [tenantId, identity.id]);
+        const actorId = actor.rows[0]?.id;
+        if (!actorId) throw new AuthenticationError('تعذر ربط هوية الجلسة بالمستخدم المعتمد.');
+        const current = await transaction.query<{ data: Record<string, any>; version: number }>(`SELECT data, version FROM public.hr_database WHERE tenant_id = $1 AND school_id = $2 FOR UPDATE`, [tenantId, schoolId]);
+        const data = current.rows[0]?.data;
+        const actualVersion = Number(current.rows[0]?.version || 0);
+        if (!data || actualVersion !== expectedVersion) throw new ConflictError('تغير سجل HR؛ أعد تحميل المسير قبل اعتماده.', { expectedVersion, actualVersion });
+        const existingRuns = Array.isArray(data.payrollRuns) ? data.payrollRuns : [];
+        if (existingRuns.some((item: any) => item?.period === period && ['approved', 'paid'].includes(item?.status))) throw new ConflictError('مسير هذه الفترة معتمد أو مصروف بالفعل.');
+        const employees = Array.isArray(data.employees) ? data.employees : [];
+        const rewards = Array.isArray(data.rewards) ? data.rewards : [];
+        const penalties = Array.isArray(data.penalties) ? data.penalties : [];
+        const advances = Array.isArray(data.advances) ? data.advances : [];
+        const lines = employees.filter((employee: any) => employee?.status !== 'resigned').map((employee: any) => {
+          const allowance = (Array.isArray(employee.allowances) ? employee.allowances : []).reduce((sum: number, item: any) => sum + Number(item?.amount || 0), 0);
+          const bonus = rewards.filter((item: any) => item?.employeeId === employee.id && item?.status === 'applied' && String(item?.date || '').startsWith(period)).reduce((sum: number, item: any) => sum + Number(item?.amount || 0), 0);
+          const penalty = penalties.filter((item: any) => item?.employeeId === employee.id && item?.status === 'applied' && String(item?.date || '').startsWith(period)).reduce((sum: number, item: any) => sum + Number(item?.amount || 0), 0);
+          const advance = advances.find((item: any) => item?.employeeId === employee.id && item?.status === 'approved' && Number(item?.remainingAmount || 0) > 0);
+          const advanceDeduction = advance ? Math.min(Number(advance.deductionPerMonth || 0), Number(advance.remainingAmount || 0)) : 0;
+          const gross = Number(employee.basicSalary || 0) + allowance + bonus;
+          return { employeeId: String(employee.id), gross, penalty, advanceDeduction, net: Math.max(0, gross - penalty - advanceDeduction) };
+        }).filter((line: any) => line.gross > 0);
+        if (!lines.length) throw new ValidationError('لا توجد استحقاقات موجبة لاعتمادها في هذه الفترة.');
+        const totals = lines.reduce((sum: any, line: any) => ({ gross: sum.gross + line.gross, penalty: sum.penalty + line.penalty, advance: sum.advance + line.advanceDeduction, net: sum.net + line.net }), { gross: 0, penalty: 0, advance: 0, net: 0 });
+        run = { id: `payroll-${period}`, period, status: 'approved', lines, totals, approvedAt: new Date().toISOString(), approvedBy: actorId, hrVersion: actualVersion, fingerprint: createHash('sha256').update(stableJsonStringify({ period, lines, totals })).digest('hex') };
+        data.payrollRuns = [...existingRuns.filter((item: any) => item?.period !== period), run];
+        nextVersion = actualVersion + 1;
+        await transaction.query(`UPDATE public.hr_database SET data = $3::jsonb, version = $4, updated_at = now(), updated_by = $5 WHERE tenant_id = $1 AND school_id = $2`, [tenantId, schoolId, JSON.stringify(data), nextVersion, actorId]);
+        await transaction.query(`INSERT INTO public.audit_events (tenant_id, school_id, branch_id, actor_user_id, entity_type, entity_id, action, source, reason, result, metadata) VALUES ($1,$2,$3,$4,'hr_payroll_run',$5,'approve','HrPayrollRoute','اعتماد مسير دون ترحيل','success',$6::jsonb)`, [tenantId, schoolId, identity.branchId || null, actorId, `payroll-${period}`, JSON.stringify({ period, totals })]);
+      }, tenantContext);
+      res.json({ success: true, data: run, meta: { version: nextVersion } });
+    } catch (err: any) {
+      next(err instanceof AuthenticationError || err instanceof AuthorizationError || err instanceof ValidationError || err instanceof ConflictError || err instanceof DatabaseError ? err : new DatabaseError('تعذر اعتماد مسير الرواتب.', err?.message));
+    }
+  });
+
   // Exams and Results Database API
   app.get("/api/exams/database", authenticateRequest, requirePermission(PERMISSIONS.EXAM_READ), async (req, res, next) => {
     try {
