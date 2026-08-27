@@ -47,7 +47,7 @@ export interface Branch {
   teacherCount: number;
 }
 
-export type UserRole = 'SuperAdmin' | 'SchoolAdmin' | 'Teacher' | 'Accountant' | 'Parent';
+export type UserRole = 'SuperAdmin' | 'SchoolAdmin' | 'Teacher' | 'Accountant' | 'Parent' | 'Control' | 'Auditor' | 'Student';
 
 export type UserStatus = 'active' | 'inactive' | 'locked' | 'suspended';
 
@@ -2566,6 +2566,5 @@ export interface FixedAsset {
   createdAt: string;
   updatedAt: string;
 }
-
 
 

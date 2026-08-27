@@ -116,6 +116,9 @@ export default function Topbar({
       case 'Teacher': return 'أستاذ المادة (Teacher)';
       case 'Accountant': return 'المحاسب المالي (Accountant)';
       case 'Parent': return 'ولي الأمر (Parent)';
+      case 'Control': return 'لجنة الامتحانات (Control)';
+      case 'Auditor': return 'المراجع الرقابي (Auditor)';
+      case 'Student': return 'الطالب (Student)';
     }
   };
 

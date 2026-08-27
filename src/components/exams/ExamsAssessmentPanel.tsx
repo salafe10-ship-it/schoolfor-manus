@@ -84,7 +84,7 @@ export default function ExamsAssessmentPanel({ state, actorId, candidateIds, per
   const canAdminister = permissionRole === 'admin';
 
   const activeQuestions = useMemo(() => state.questionBank.filter(question => question.status === 'active'), [state.questionBank]);
-  const activeAssessment = state.assessments[0];
+  const activeAssessment = state.assessments[state.assessments.length - 1];
   const assessmentById = (id: string) => state.assessments.find(item => item.id === id);
   const lifecycleById = (id: string) => state.lifecycles.find(item => item.assessmentId === id);
   const questionsForAssessment = (assessmentId: string) => {

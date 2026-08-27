@@ -128,6 +128,9 @@ export default function TopNavigation({
       case 'Teacher': return 'bg-emerald-100 text-emerald-700 border-emerald-200';
       case 'Accountant': return 'bg-amber-100 text-amber-700 border-amber-200';
       case 'Parent': return 'bg-amber-100 text-amber-700 border-amber-200';
+      case 'Control': return 'bg-rose-100 text-rose-700 border-rose-200';
+      case 'Auditor': return 'bg-cyan-100 text-cyan-700 border-cyan-200';
+      case 'Student': return 'bg-slate-100 text-slate-700 border-slate-200';
     }
   };
 
@@ -138,6 +141,9 @@ export default function TopNavigation({
       case 'Teacher': return 'عضو هيئة التدريس';
       case 'Accountant': return 'المدير المالي والرواتب';
       case 'Parent': return 'ولي أمر الطالب';
+      case 'Control': return 'لجنة الامتحانات';
+      case 'Auditor': return 'المراجع الرقابي';
+      case 'Student': return 'الطالب';
     }
   };
 

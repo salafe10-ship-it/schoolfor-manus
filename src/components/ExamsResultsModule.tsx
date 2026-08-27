@@ -178,7 +178,7 @@ export default function ExamsResultsModule({
   const [selectedSubjectAnalyticId, setSelectedSubjectAnalyticId] = useState<string>('');
 
   // Quality, Governance & Gaps States
-  const currentUserRole: 'admin' | 'reviewer' | 'officer' = currentRole === 'SuperAdmin' || currentRole === 'SchoolAdmin'
+  const currentUserRole: 'admin' | 'reviewer' | 'officer' = currentRole === 'SuperAdmin' || currentRole === 'SchoolAdmin' || currentRole === 'Control'
     ? 'admin'
     : currentRole === 'Teacher'
       ? 'reviewer'

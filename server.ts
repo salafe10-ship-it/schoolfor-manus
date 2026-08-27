@@ -38,6 +38,7 @@ import {
 import { requestTarget } from "./src/middleware/tenantValidation.js";
 import { tenantEngine } from "./src/tenant/TenantEngine.js";
 import { PERMISSIONS } from "./src/authorization/PermissionRegistry.js";
+import { roleResolver } from "./src/authorization/RoleResolver.js";
 import { authorizationEngine } from "./src/authorization/AuthorizationEngine.js";
 import {
   authenticateTrustedUser,
@@ -84,6 +85,12 @@ import { ExamValidator } from './src/validation/validators.js';
 import { evaluateExamClosureReadiness } from './src/modules/exams/domain/ExamClosureReadiness.js';
 import { calculateCohortExamResults } from './src/modules/exams/domain/ExamResultEngine.js';
 import { normalizeAssessmentWorkflowState } from './src/modules/exams/application/AssessmentWorkflowService.js';
+import {
+  assertTeacherWriteScope,
+  canApproveExamOperation,
+  canViewExamAudit,
+  projectExamDatabaseForRead
+} from './src/modules/exams/application/ExamAuthorizationPolicy.js';
 
 type FinancialWriteMode = 'snapshot_read_only' | 'snapshot_write' | 'erp_integrated';
 
@@ -2614,6 +2621,7 @@ async function startServer() {
       const identity = (req as any).user;
       const schoolId = String(identity.schoolId || '').trim();
       const tenantId = String(identity.tenantId || '').trim();
+      const actorRole = roleResolver.resolveRole(identity);
       const tenantContext = (req as any).tenantContext;
       if (!schoolId || !tenantId || !tenantContext) {
         throw new AuthenticationError('السياق الموثوق لقراءة الامتحانات غير مكتمل.');
@@ -2634,11 +2642,12 @@ async function startServer() {
         );
         return result.rows[0] || { data: {}, version: 0 };
       }, tenantContext);
+      const projection = projectExamDatabaseForRead(snapshot.data || {}, actorRole);
       res.json({
         success: true,
-        data: snapshot.data || {},
+        data: projection.data,
         message: "Exams settings and database retrieved successfully.",
-        meta: { version: Number(snapshot.version || 0) }
+        meta: { version: Number(snapshot.version || 0), scope: projection.scope }
       });
     } catch (err: any) {
       EnterpriseLogger.error('Failed to read exams database', 'ExamsDatabaseRoute', {
@@ -2682,6 +2691,10 @@ async function startServer() {
     try {
       const schoolId = String((req as any).user.schoolId || '').trim();
       const tenantId = String((req as any).user.tenantId || '').trim();
+      const actorRole = roleResolver.resolveRole((req as any).user);
+      if (!canViewExamAudit(actorRole)) {
+        throw new AuthorizationError('سجل تدقيق الامتحانات متاح لأدوار الرقابة والاعتماد فقط.');
+      }
       const tenantContext = (req as any).tenantContext;
       if (!schoolId || !tenantId || !tenantContext || tenantContext.tenantId !== tenantId || tenantContext.schoolId !== schoolId) {
         throw new AuthenticationError('السياق الموثوق لسجل تدقيق الامتحانات غير مكتمل.');
@@ -2744,7 +2757,7 @@ async function startServer() {
         schoolId: (req as any).user?.schoolId,
         error: err?.message || String(err)
       });
-      next(err instanceof AuthenticationError || err instanceof DatabaseError ? err : new DatabaseError('Failed to read exams audit events', err.message));
+      next(err instanceof AuthenticationError || err instanceof AuthorizationError || err instanceof DatabaseError ? err : new DatabaseError('Failed to read exams audit events', err.message));
     }
   });
 
@@ -2755,6 +2768,7 @@ async function startServer() {
       const expectedVersion = Number(req.body?.expectedVersion);
       const operation = String(req.body?.operation || 'write');
       const operationReason = String(req.body?.operationReason || '').trim();
+      const actorRole = roleResolver.resolveRole((req as any).user);
       const {
         expectedVersion: _ignoredExpectedVersion,
         operation: _ignoredOperation,
@@ -2770,8 +2784,10 @@ async function startServer() {
       if (operation !== 'write' && (operationReason.length < 5 || operationReason.length > 500)) {
         throw new ValidationError('سبب الاعتماد أو إعادة الفتح إلزامي ويجب أن يتراوح بين 5 و500 حرف.');
       }
-      if (['approve', 'reopen', 'approve_schedule', 'reopen_schedule'].includes(operation) && !['SuperAdmin', 'SchoolAdmin'].includes(String((req as any).user.role || ''))) {
-        throw new AuthorizationError('اعتماد أو إعادة فتح النتائج والجدول يتطلب صلاحية مدير المدرسة أو مدير المنصة.');
+      if (!canApproveExamOperation(actorRole, operation as 'write' | 'approve' | 'reopen' | 'approve_schedule' | 'reopen_schedule')) {
+        throw new AuthorizationError(operation === 'write'
+          ? 'الدور الحالي لا يملك صلاحية تعديل بيانات الامتحانات.'
+          : 'اعتماد أو إعادة فتح النتائج والجدول يتطلب دوراً مخولاً للاعتماد.');
       }
       ExamValidator.validateDatabase(payload);
       if ((payload as any).exams_assessment_state !== undefined) {
@@ -2823,8 +2839,14 @@ async function startServer() {
         const currentAssessmentState = normalizeAssessmentWorkflowState(currentData.exams_assessment_state);
         const requestedAssessmentState = normalizeAssessmentWorkflowState((payload as any).exams_assessment_state);
         const assessmentStateChanged = stableJsonStringify(currentAssessmentState) !== stableJsonStringify(requestedAssessmentState);
-        const actorRole = String((req as any).user.role || '').trim();
-        if (assessmentStateChanged && actorRole === 'Teacher') {
+        if (actorRole === 'teacher') {
+          try {
+            assertTeacherWriteScope(currentData, payload as Record<string, unknown>);
+          } catch (error: any) {
+            throw new AuthorizationError(error?.message || 'الدور الحالي لا يملك صلاحية تعديل هذه الحقول.');
+          }
+        }
+        if (assessmentStateChanged && actorRole === 'teacher') {
           const currentLifecycles = new Map(currentAssessmentState.lifecycles.map(item => [item.assessmentId, item.state]));
           requestedAssessmentState.lifecycles.forEach(item => {
             const previous = currentLifecycles.get(item.assessmentId);

@@ -314,6 +314,9 @@ export default function Sidebar({
       case 'Teacher': return 'bg-emerald-950/60 text-emerald-300 border-emerald-900/60';
       case 'Accountant': return 'bg-amber-950/60 text-amber-300 border-amber-900/60';
       case 'Parent': return 'bg-amber-950/60 text-amber-300 border-amber-900/60';
+      case 'Control': return 'bg-rose-950/60 text-rose-300 border-rose-900/60';
+      case 'Auditor': return 'bg-cyan-950/60 text-cyan-300 border-cyan-900/60';
+      case 'Student': return 'bg-slate-950/60 text-slate-300 border-slate-900/60';
     }
   };
 
@@ -324,6 +327,9 @@ export default function Sidebar({
       case 'Teacher': return 'عضو هيئة التدريس';
       case 'Accountant': return 'المدير المالي والرواتب';
       case 'Parent': return 'ولي أمر الطالب';
+      case 'Control': return 'لجنة الامتحانات';
+      case 'Auditor': return 'المراجع الرقابي';
+      case 'Student': return 'الطالب';
     }
   };
 

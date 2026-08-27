@@ -55,7 +55,11 @@ const ROLE_ALIASES: Record<string, UserRole> = {
   'school-admin': 'SchoolAdmin',
   teacher: 'Teacher',
   accountant: 'Accountant',
-  parent: 'Parent'
+  parent: 'Parent',
+  control: 'Control',
+  examiner: 'Control',
+  auditor: 'Auditor',
+  student: 'Student'
 };
 
 export function normalizeTrustedRole(value: unknown): UserRole | null {

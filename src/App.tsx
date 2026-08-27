@@ -382,7 +382,7 @@ export default function App() {
 
   const applyTrustedSessionUser = useCallback((user: TrustedSessionUser): School => {
     const trustedSchool = user.school && user.school.id === user.schoolId ? user.school : null;
-    const validRoles: UserRole[] = ['SuperAdmin', 'SchoolAdmin', 'Teacher', 'Accountant', 'Parent'];
+    const validRoles: UserRole[] = ['SuperAdmin', 'SchoolAdmin', 'Teacher', 'Accountant', 'Parent', 'Control', 'Auditor', 'Student'];
     if (!trustedSchool || !validRoles.includes(user.role as UserRole)) {
       throw new Error('Invalid trusted session identity');
     }
@@ -2289,7 +2289,7 @@ export default function App() {
                     <p className="text-xs text-slate-500 mb-4">قم بتجربة التحكم بمستوى الصلاحيات وتغيير نمط العرض لمعاينة قيود الأمان في جداول قاعدة البيانات</p>
 
                     <div className="grid grid-cols-1 md:grid-cols-5 gap-4">
-                      {(['SuperAdmin', 'SchoolAdmin', 'Teacher', 'Accountant', 'Parent'] as UserRole[]).map((r) => (
+                      {(['SuperAdmin', 'SchoolAdmin', 'Teacher', 'Accountant', 'Parent', 'Control', 'Auditor', 'Student'] as UserRole[]).map((r) => (
                         <button
                           key={r}
                           onClick={() => {
