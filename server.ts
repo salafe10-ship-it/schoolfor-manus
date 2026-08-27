@@ -80,7 +80,7 @@ import { createStartupReadiness } from "./server/infrastructure/StartupReadiness
 import { FallbackStorage } from "./src/database/repositories/FallbackStorage.js";
 import { AdmissionInquiry, AdmissionStatus } from './src/modules/student-admission/domain/AdmissionInquiry.js';
 import { SupabaseAdmissionInquiryRepository } from './src/modules/student-admission/repository/SupabaseAdmissionInquiryRepository.js';
-import { CanonicalErpPostingService, buildCanonicalPosting } from './src/modules/financial/application/CanonicalErpPostingService.js';
+import { CANONICAL_ERP_TABLES, CanonicalErpPostingService, buildCanonicalPosting } from './src/modules/financial/application/CanonicalErpPostingService.js';
 import { ExamValidator } from './src/validation/validators.js';
 import { evaluateExamClosureReadiness } from './src/modules/exams/domain/ExamClosureReadiness.js';
 import { calculateCohortExamResults } from './src/modules/exams/domain/ExamResultEngine.js';
@@ -2855,6 +2855,63 @@ async function startServer() {
       res.json({ success: true, data: run, meta: { version: nextVersion } });
     } catch (err: any) {
       next(err instanceof AuthenticationError || err instanceof AuthorizationError || err instanceof ValidationError || err instanceof ConflictError || err instanceof DatabaseError ? err : new DatabaseError('تعذر اعتماد مسير الرواتب.', err?.message));
+    }
+  });
+
+  app.post('/api/hr/payroll-runs/:period/pay', authenticateRequest, requirePermission(PERMISSIONS.FINANCIAL_WRITE), async (req, res, next) => {
+    try {
+      const identity = (req as any).user;
+      const tenantId = String(identity?.tenantId || '').trim();
+      const schoolId = String(identity?.schoolId || '').trim();
+      const period = String(req.params.period || '').trim();
+      const expectedVersion = Number(req.body?.expectedVersion);
+      const tenantContext = (req as any).tenantContext;
+      if (!/^\d{4}-\d{2}$/.test(period) || !Number.isInteger(expectedVersion) || expectedVersion < 0
+        || !tenantContext || tenantContext.tenantId !== tenantId || tenantContext.schoolId !== schoolId) throw new ValidationError('تنفيذ الصرف يتطلب مسيراً معتمداً وسجل HR متزامناً ضمن المدرسة الموثوقة.');
+      let nextVersion = expectedVersion + 1;
+      let journalId = '';
+      await UnitOfWork.runInTransaction(schoolId, {
+        operationName: `Pay approved HR payroll ${period}`, tenantId, userId: identity.id,
+        userName: identity.name || 'المستخدم الحالي', ipAddress: req.ip || 'unknown', affectedTables: ['hr_database', ...CANONICAL_ERP_TABLES]
+      }, async () => {
+        const transaction = UnitOfWork.getActiveContext()?.databaseTransaction;
+        if (!transaction) throw new DatabaseError('معاملة تنفيذ صرف الرواتب غير متاحة.');
+        const actor = await transaction.query<{ id: string }>(`SELECT id FROM public.users WHERE tenant_id=$1 AND auth_user_id=$2 AND status='active' AND deleted_at IS NULL LIMIT 1`, [tenantId, identity.id]);
+        const actorId = actor.rows[0]?.id;
+        if (!actorId) throw new AuthenticationError('تعذر ربط هوية الجلسة بالمستخدم المالي المعتمد.');
+        if (!await CanonicalErpPostingService.isProvisioned(transaction)) throw new DatabaseError('دفتر الأستاذ الكانوني غير مهيأ لهذه المدرسة.');
+        const current = await transaction.query<{ data: Record<string, any>; version: number }>(`SELECT data,version FROM public.hr_database WHERE tenant_id=$1 AND school_id=$2 FOR UPDATE`, [tenantId, schoolId]);
+        const data = current.rows[0]?.data;
+        const actualVersion = Number(current.rows[0]?.version || 0);
+        if (!data || actualVersion !== expectedVersion) throw new ConflictError('تغير سجل HR؛ أعد تحميل المسير قبل تنفيذ الصرف.', { expectedVersion, actualVersion });
+        const run = (Array.isArray(data.payrollRuns) ? data.payrollRuns : []).find((item: any) => item?.period === period);
+        if (!run || run.status !== 'approved') throw new ConflictError('لا يمكن الصرف إلا لمسير معتمد وغير مصروف.');
+        const recomputedFingerprint = createHash('sha256').update(stableJsonStringify({ period, lines: run.lines, totals: run.totals })).digest('hex');
+        if (run.fingerprint !== recomputedFingerprint) throw new ConflictError('بصمة مسير الرواتب المعتمد غير صحيحة.');
+        const mappingRows = await transaction.query<{ mapping_key: string; account_code: string }>(`SELECT mapping_key,account_code FROM public.erp_account_mappings WHERE school_id=$1 AND is_active=true AND mapping_key = ANY($2::text[])`, [schoolId, ['treasury.cash','hr.payroll.expense','hr.advance.receivable','hr.deductions.clearing']]);
+        const mappings = new Map(mappingRows.rows.map(row => [row.mapping_key, row.account_code]));
+        const required = ['treasury.cash','hr.payroll.expense','hr.advance.receivable','hr.deductions.clearing'];
+        if (required.some(key => !mappings.get(key))) throw new ValidationError('لا يمكن تنفيذ الصرف قبل اعتماد جميع خرائط حسابات HR من شاشة الحسابات.');
+        const totals = run.totals || {};
+        const gross = Number(totals.gross || 0), net = Number(totals.net || 0), advance = Number(totals.advance || 0), penalty = Number(totals.penalty || 0);
+        if (![gross, net, advance, penalty].every(Number.isFinite) || gross <= 0 || Math.round(gross * 100) !== Math.round((net + advance + penalty) * 100)) throw new ValidationError('إجماليات مسير الرواتب المعتمد غير متوازنة.');
+        const lines = [
+          { id: 'expense', accountCode: mappings.get('hr.payroll.expense'), debit: gross, credit: 0 },
+          { id: 'cash', accountCode: mappings.get('treasury.cash'), debit: 0, credit: net }
+        ];
+        if (advance > 0) lines.push({ id: 'advance', accountCode: mappings.get('hr.advance.receivable'), debit: 0, credit: advance });
+        if (penalty > 0) lines.push({ id: 'deduction', accountCode: mappings.get('hr.deductions.clearing'), debit: 0, credit: penalty });
+        const sync = await CanonicalErpPostingService.syncSnapshot(transaction, tenantId, schoolId, actorId, { journalEntries: [{ id: `hr-payroll-${period}`, sourceType: 'journal_entry', status: 'posted', date: `${period}-01`, description: `صرف مسير الرواتب المعتمد للفترة ${period}`, lines }] });
+        journalId = sync.sourceLinks.find(link => link.sourceId === `hr-payroll-${period}`)?.journalEntryId || '';
+        if (!journalId) throw new DatabaseError('تعذر إثبات قيد صرف الرواتب الكانوني.');
+        run.status = 'paid'; run.paidAt = new Date().toISOString(); run.paidBy = actorId; run.journalId = journalId;
+        nextVersion = actualVersion + 1;
+        await transaction.query(`UPDATE public.hr_database SET data=$3::jsonb,version=$4,updated_at=now(),updated_by=$5 WHERE tenant_id=$1 AND school_id=$2`, [tenantId, schoolId, JSON.stringify(data), nextVersion, actorId]);
+        await transaction.query(`INSERT INTO public.audit_events (tenant_id,school_id,branch_id,actor_user_id,entity_type,entity_id,action,source,reason,result,metadata) VALUES ($1,$2,$3,$4,'hr_payroll_run',$5,'pay','HrPayrollRoute','تنفيذ صرف وترحيل مسير معتمد','success',$6::jsonb)`, [tenantId, schoolId, identity.branchId || null, actorId, `payroll-${period}`, JSON.stringify({ period, journalId, totals })]);
+      }, tenantContext);
+      res.json({ success: true, data: { period, journalId, status: 'paid' }, meta: { version: nextVersion } });
+    } catch (err: any) {
+      next(err instanceof AuthenticationError || err instanceof AuthorizationError || err instanceof ValidationError || err instanceof ConflictError || err instanceof DatabaseError ? err : new DatabaseError('تعذر تنفيذ صرف مسير الرواتب.', err?.message));
     }
   });
 
