@@ -12,7 +12,7 @@
 | 04 | Academics / Academic Structure | `PENDING` | — |
 | 05 | Admissions / Registration | `PENDING` | — |
 | 06 | Attendance | `PENDING` | — |
-| 07 | Exams & Results | `PENDING SOL GATE` | توجد إصلاحات واختبارات سابقة؛ يلزم تقرير الوحدة الكامل. |
+| 07 | Exams & Results | `UNIT CLOSED` | UAT حي مكتمل: 3 دورات إلكترونية مؤرشفة، تصدير CSV/XLSX/RTL، اعتماد جدول ونتائج، ومحضر خادمي غير قابل للتعديل. راجع `UNIT_07_EXAMS_CHECKPOINT.md`. |
 | 08 | Fees / Student Finance | `PENDING SOL GATE` | توجد إصلاحات واختبارات سابقة؛ يلزم تقرير الوحدة الكامل. |
 | 09 | General Finance / Accounting | `BLOCKED — SOURCE OF TRUTH REQUIRED` | إعادة الفحص المحاسبي: 10 ملفات/10 اختبارات ناجحة، لكن لا يوجد مخطط PostgreSQL محاسبي كانوني أو عقد مالك معتمد. راجع `acc-002-general-accounting-discovery-audit.md`. |
 | 10 | General Ledger | `BLOCKED — OWNER CONTRACT REQUIRED` | القراءة/الحواجز الأمنية مثبتة، بينما الترحيل والكتابة والإقفال والتقارير الكانونية غير قابلة للاعتماد قبل ACC-001/ACC-002. |

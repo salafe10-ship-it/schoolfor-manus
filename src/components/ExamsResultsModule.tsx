@@ -499,8 +499,7 @@ export default function ExamsResultsModule({
           status: response.status,
           errorCode: result.errorCode || null,
           traceId: result.traceId || null,
-          failureCategory,
-          failureDetail: failureDetail.slice(0, 500) || null
+          failureCategory
         });
         setDbSyncStatus(response.status === 409 ? 'conflict' : 'error');
         triggerNotification(
