@@ -2619,6 +2619,124 @@ async function startServer() {
     }
   });
 
+  // Canonical Human Resources Database API. The client never supplies a
+  // tenant, school, or actor: all three are taken from the trusted request.
+  app.get('/api/hr/database', authenticateRequest, requirePermission(PERMISSIONS.HR_READ), async (req, res, next) => {
+    try {
+      const identity = (req as any).user;
+      const tenantId = String(identity?.tenantId || '').trim();
+      const schoolId = String(identity?.schoolId || '').trim();
+      const tenantContext = (req as any).tenantContext;
+      if (!tenantId || !schoolId || !tenantContext || tenantContext.tenantId !== tenantId || tenantContext.schoolId !== schoolId) {
+        throw new AuthenticationError('السياق الموثوق لقراءة سجلات الموارد البشرية غير مكتمل.');
+      }
+      const snapshot = await UnitOfWork.runInTransaction(schoolId, {
+        operationName: 'Read versioned HR database', tenantId, userId: identity.id,
+        userName: identity.name || 'المستخدم الحالي', ipAddress: req.ip || 'unknown',
+        affectedTables: ['hr_database']
+      }, async () => {
+        const transaction = UnitOfWork.getActiveContext()?.databaseTransaction;
+        if (!transaction) throw new DatabaseError('معاملة قراءة سجلات الموارد البشرية غير متاحة.');
+        const result = await transaction.query<{ data: Record<string, unknown>; version: number; country_code: string; legal_configuration: Record<string, unknown> }>(
+          `SELECT data, version, country_code, legal_configuration
+             FROM public.hr_database
+            WHERE tenant_id = $1 AND school_id = $2`,
+          [tenantId, schoolId]
+        );
+        return result.rows[0] || {
+          data: { employees: [], departments: [], jobs: [], contracts: [], attendance: [], leaves: [], penalties: [], advances: [], rewards: [], performance: [], documents: [], settings: {} },
+          version: 0, country_code: 'ZZ', legal_configuration: {}
+        };
+      }, tenantContext);
+      res.setHeader('Cache-Control', 'no-store');
+      res.json({ success: true, data: snapshot.data, meta: {
+        version: Number(snapshot.version || 0), countryCode: snapshot.country_code, legalConfiguration: snapshot.legal_configuration
+      }});
+    } catch (err: any) {
+      EnterpriseLogger.error('Failed to read HR database', 'HrDatabaseRoute', { schoolId: (req as any).user?.schoolId, error: err?.message || String(err) });
+      next(err instanceof AuthenticationError || err instanceof AuthorizationError || err instanceof DatabaseError ? err : new DatabaseError('تعذر قراءة سجلات الموارد البشرية.', err?.message));
+    }
+  });
+
+  app.post('/api/hr/database', authenticateRequest, requirePermission(PERMISSIONS.HR_WRITE), async (req, res, next) => {
+    try {
+      const identity = (req as any).user;
+      const tenantId = String(identity?.tenantId || '').trim();
+      const schoolId = String(identity?.schoolId || '').trim();
+      const expectedVersion = Number(req.body?.expectedVersion);
+      const requestedData = req.body?.data;
+      const requestedCountryCode = String(req.body?.countryCode || 'ZZ').trim().toUpperCase();
+      const requestedLegalConfiguration = req.body?.legalConfiguration ?? {};
+      const tenantContext = (req as any).tenantContext;
+      const expectedCollections = ['employees', 'departments', 'jobs', 'contracts', 'attendance', 'leaves', 'penalties', 'advances', 'rewards', 'performance', 'documents'];
+      if (!tenantId || !schoolId || !tenantContext || tenantContext.tenantId !== tenantId || tenantContext.schoolId !== schoolId
+        || !Number.isInteger(expectedVersion) || expectedVersion < 0) {
+        throw new ValidationError('حفظ الموارد البشرية يتطلب نطاق مدرسة موثوقاً ورقم إصدار متوقعاً صالحاً.');
+      }
+      if (!requestedData || typeof requestedData !== 'object' || Array.isArray(requestedData)
+        || !requestedLegalConfiguration || typeof requestedLegalConfiguration !== 'object' || Array.isArray(requestedLegalConfiguration)) {
+        throw new ValidationError('بيانات وإعدادات الموارد البشرية يجب أن تكون كائنات صالحة.');
+      }
+      if (!/^[A-Z]{2}$/.test(requestedCountryCode)) {
+        throw new ValidationError('رمز الدولة اختياري ومحايد، لكنه عند تقديمه يجب أن يتكون من حرفين كبيرين.');
+      }
+      for (const collection of expectedCollections) {
+        if (!Array.isArray((requestedData as Record<string, unknown>)[collection])) {
+          throw new ValidationError(`حقل سجلات الموارد البشرية ${collection} يجب أن يكون قائمة.`);
+        }
+      }
+      if ((requestedData as Record<string, unknown>).settings !== undefined
+        && (typeof (requestedData as Record<string, unknown>).settings !== 'object' || Array.isArray((requestedData as Record<string, unknown>).settings))) {
+        throw new ValidationError('إعدادات الموارد البشرية يجب أن تكون كائناً.');
+      }
+
+      let nextVersion = expectedVersion + 1;
+      await UnitOfWork.runInTransaction(schoolId, {
+        operationName: 'Write versioned HR database', tenantId, userId: identity.id,
+        userName: identity.name || 'المستخدم الحالي', ipAddress: req.ip || 'unknown',
+        affectedTables: ['hr_database', 'audit_events']
+      }, async () => {
+        const transaction = UnitOfWork.getActiveContext()?.databaseTransaction;
+        if (!transaction) throw new DatabaseError('معاملة حفظ سجلات الموارد البشرية غير متاحة.');
+        const actorResult = await transaction.query<{ id: string }>(
+          `SELECT id FROM public.users
+            WHERE tenant_id = $1 AND auth_user_id = $2 AND status = 'active' AND deleted_at IS NULL
+            LIMIT 1`, [tenantId, identity.id]
+        );
+        const actorId = actorResult.rows[0]?.id;
+        if (!actorId) throw new AuthenticationError('تعذر ربط هوية الجلسة بسجل المستخدم المؤسسي المعتمد.');
+        const current = await transaction.query<{ version: number }>(
+          `SELECT version FROM public.hr_database WHERE tenant_id = $1 AND school_id = $2 FOR UPDATE`, [tenantId, schoolId]
+        );
+        const actualVersion = Number(current.rows[0]?.version || 0);
+        if (actualVersion !== expectedVersion) {
+          throw new ConflictError('تم تعديل سجلات الموارد البشرية بواسطة مستخدم آخر. أعد المزامنة قبل الحفظ.', { expectedVersion, actualVersion });
+        }
+        nextVersion = actualVersion + 1;
+        await transaction.query(
+          `INSERT INTO public.hr_database (tenant_id, school_id, country_code, legal_configuration, data, version, updated_at, updated_by)
+           VALUES ($1, $2, $3, $4::jsonb, $5::jsonb, $6, now(), $7)
+           ON CONFLICT (school_id) DO UPDATE SET country_code = EXCLUDED.country_code,
+             legal_configuration = EXCLUDED.legal_configuration, data = EXCLUDED.data,
+             version = EXCLUDED.version, updated_at = now(), updated_by = EXCLUDED.updated_by
+           WHERE public.hr_database.tenant_id = EXCLUDED.tenant_id`,
+          [tenantId, schoolId, requestedCountryCode, JSON.stringify(requestedLegalConfiguration), JSON.stringify(requestedData), nextVersion, actorId]
+        );
+        await transaction.query(
+          `INSERT INTO public.audit_events
+             (tenant_id, school_id, branch_id, actor_user_id, entity_type, entity_id, action, source, reason, result, metadata)
+           VALUES ($1, $2, $3, $4, 'hr_database', $2, 'write', 'HrDatabaseRoute', 'حفظ سجل الموارد البشرية', 'success', $5::jsonb)`,
+          [tenantId, schoolId, identity.branchId || null, actorId, JSON.stringify({ expectedVersion, actualVersion, nextVersion, countryCode: requestedCountryCode })]
+        );
+      }, tenantContext);
+      res.json({ success: true, data: { updated: true }, meta: { version: nextVersion } });
+    } catch (err: any) {
+      EnterpriseLogger.error('Failed to save HR database', 'HrDatabaseRoute', { schoolId: (req as any).user?.schoolId, error: err?.message || String(err) });
+      next(err instanceof AuthenticationError || err instanceof AuthorizationError || err instanceof ConflictError || err instanceof ValidationError || err instanceof DatabaseError
+        ? err : new DatabaseError('تعذر حفظ سجلات الموارد البشرية.', err?.message));
+    }
+  });
+
   // Exams and Results Database API
   app.get("/api/exams/database", authenticateRequest, requirePermission(PERMISSIONS.EXAM_READ), async (req, res, next) => {
     try {

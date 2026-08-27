@@ -13,6 +13,7 @@ import PayrollTab from './PayrollTab';
 import ReportsTab from './ReportsTab';
 import OtherHRTabs from './OtherHRTabs';
 import { FallbackStorage } from '../../database/repositories/FallbackStorage';
+import { getTrustedAccessToken } from '../../utils/auth';
 import './hr-identity.css';
 
 // Cost Center descriptive mapping
@@ -62,37 +63,43 @@ export default function HumanResourcesPortal({ setActiveSection, selectedSchool 
     setTimeout(() => setNotification(null), 5000);
   };
 
-  // 1. Initial State Seeding and LocalStorage Synchronization
+  // 1. Load canonical records in managed environments. Local seed data remains
+  // strictly a development fallback and can never populate a managed school.
   useEffect(() => {
-    // الموارد البشرية لا تقرأ أو تزرع بيانات محلية؛ المصدر المركزي وحده يملك
-    // الموظفين والعقود والحسابات البنكية. إلى أن يُربط المصدر، تبقى الوحدة فارغة.
-    setDepartments([]);
-    setJobs([]);
-    setEmployees([]);
-    setContracts([]);
-    setAttendance([]);
-    setLeaves([]);
-    setPenalties([]);
-    setAdvances([]);
-    setRewards([]);
-    setPerformance([]);
-    setDocuments([]);
-    triggerNotification('بيانات الموارد البشرية متوقفة حتى يتم ربطها بمصدر مركزي موثوق؛ لن يتم عرض أو إنشاء سجلات محلية تجريبية.', 'warning');
-    return;
     if (canonicalPersistenceRequired) {
-      setDepartments([]);
-      setJobs([]);
-      setEmployees([]);
-      setContracts([]);
-      setAttendance([]);
-      setLeaves([]);
-      setPenalties([]);
-      setAdvances([]);
-      setRewards([]);
-      setPerformance([]);
-      setDocuments([]);
-      triggerNotification('بيانات الموارد البشرية متوقفة حتى يتم ربطها بمصدر مركزي موثوق؛ لن يتم عرض أو إنشاء سجلات محلية تجريبية.', 'warning');
-      return;
+      let cancelled = false;
+      const list = <T,>(value: unknown): T[] => Array.isArray(value) ? value as T[] : [];
+      const loadCanonicalHr = async () => {
+        try {
+          const token = getTrustedAccessToken();
+          if (!token) throw new Error('انتهت جلسة الدخول الموثوقة.');
+          const response = await fetch('/api/hr/database', {
+            headers: { Authorization: `Bearer ${token}` }, cache: 'no-store'
+          });
+          const payload = await response.json();
+          if (!response.ok || !payload?.success) throw new Error(payload?.message || 'تعذر تحميل سجل الموارد البشرية.');
+          if (cancelled) return;
+          const data = payload.data || {};
+          setEmployees(list<HREmployee>(data.employees));
+          setDepartments(list<HRDepartment>(data.departments));
+          setJobs(list<HRJob>(data.jobs));
+          setContracts(list<HRContract>(data.contracts));
+          setAttendance(list<HRAttendance>(data.attendance));
+          setLeaves(list<HRLeave>(data.leaves));
+          setPenalties(list<HRPenalty>(data.penalties));
+          setAdvances(list<HRAdvance>(data.advances));
+          setRewards(list<HRBonus>(data.rewards));
+          setPerformance(list<HRPerformance>(data.performance));
+          setDocuments(list<HRDocument>(data.documents));
+          if (data.settings && typeof data.settings === 'object' && !Array.isArray(data.settings)) {
+            setSettings(previous => ({ ...previous, ...data.settings }));
+          }
+        } catch (error: any) {
+          if (!cancelled) triggerNotification(error?.message || 'تعذر تحميل سجل الموارد البشرية المركزي.', 'error');
+        }
+      };
+      void loadCanonicalHr();
+      return () => { cancelled = true; };
     }
     // Load or Seed Departments
     const savedDepts = localStorage.getItem('erp_hr_departments');

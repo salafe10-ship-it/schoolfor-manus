@@ -25,6 +25,8 @@ export const PERMISSIONS = {
   STUDENT_DOCUMENT_VERSION_CREATE: 'StudentDocument.Version.Create',
   EXAM_READ: 'Exam.View',
   EXAM_WRITE: 'Exam.Write',
+  HR_READ: 'Hr.View',
+  HR_WRITE: 'Hr.Edit',
   FINANCIAL_READ: 'Financial.Read',
   FINANCIAL_WRITE: 'Financial.Write',
   INVENTORY_READ: 'Inventory.View',
