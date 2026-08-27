@@ -3021,7 +3021,10 @@ async function startServer() {
           const archiveId = randomUUID();
           const serverSignedAt = new Date().toISOString();
           const schoolResult = await transaction.query<{ name: string }>(
-            `SELECT name FROM public.schools WHERE tenant_id = $1 AND id = $2 LIMIT 1`,
+            `SELECT COALESCE(NULLIF(display_name, ''), NULLIF(legal_name, ''), school_code, id::text) AS name
+               FROM public.schools
+              WHERE tenant_id = $1 AND id = $2
+              LIMIT 1`,
             [tenantId, schoolId]
           );
           const committeeMembers = (Array.isArray((payload as any).exams_control_committees) ? (payload as any).exams_control_committees : [])

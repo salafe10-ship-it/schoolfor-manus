@@ -36,6 +36,7 @@ describe('versioned exams database contract', () => {
     expect(archiveMigration).toContain('GRANT SELECT, INSERT ON TABLE public.exams_result_archives TO authenticated');
     expect(server).toContain("createHash('sha256')");
     expect(server).toContain('INSERT INTO public.exams_result_archives');
+    expect(server).toContain("COALESCE(NULLIF(display_name, ''), NULLIF(legal_name, ''), school_code, id::text) AS name");
     expect(server).toContain('isImmutableArchive: true');
   });
 
