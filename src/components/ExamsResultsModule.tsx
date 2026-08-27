@@ -485,6 +485,22 @@ export default function ExamsResultsModule({
           : true;
       } else {
         const result = await response.json().catch(() => ({}));
+        const failureDetail = String(result.details || '');
+        const failureCategory = /exams_result_archives/i.test(failureDetail)
+          ? 'immutable_archive_persistence'
+          : /permission denied|row-level security/i.test(failureDetail)
+            ? 'database_access_policy'
+            : /foreign key|violates .*constraint/i.test(failureDetail)
+              ? 'archive_reference_integrity'
+              : /statement timeout|timeout/i.test(failureDetail)
+                ? 'database_timeout'
+                : 'unclassified';
+        EnterpriseLogger.error('Exams database save was rejected by the server', 'ExamsResultsModule', {
+          status: response.status,
+          errorCode: result.errorCode || null,
+          traceId: result.traceId || null,
+          failureCategory
+        });
         setDbSyncStatus(response.status === 409 ? 'conflict' : 'error');
         triggerNotification(
           result.message || (response.status === 409
