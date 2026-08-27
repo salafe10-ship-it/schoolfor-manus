@@ -4,10 +4,18 @@ export type ExamDatabaseOperation = 'write' | 'approve' | 'reopen' | 'approve_sc
 export type ExamReadScope = 'full' | 'restricted';
 
 const normalizeRole = (role: unknown): string => String(role ?? '').trim().toLowerCase();
+const normalizePermissions = (permissions: Iterable<unknown> | null | undefined): Set<string> => new Set(
+  permissions ? Array.from(permissions, permission => String(permission ?? '').trim().toLowerCase()).filter(Boolean) : []
+);
 
 const APPROVAL_ROLES = new Set(['admin', 'superadmin', 'schooladmin', 'control']);
 const STAFF_READ_ROLES = new Set(['admin', 'superadmin', 'schooladmin', 'control', 'teacher', 'auditor']);
 const WRITE_ROLES = new Set(['admin', 'superadmin', 'schooladmin', 'control', 'teacher']);
+
+const hasStaffPermission = (permissions: Iterable<unknown> | null | undefined): boolean => {
+  const normalized = normalizePermissions(permissions);
+  return normalized.has('*') || normalized.has('exam.write') || normalized.has('audit.read');
+};
 
 /**
  * The API uses this policy after trusted RBAC resolution. It is deliberately
@@ -18,12 +26,16 @@ export function canApproveExamOperation(role: unknown, operation: ExamDatabaseOp
   return APPROVAL_ROLES.has(normalizeRole(role));
 }
 
-export function canViewFullExamDatabase(role: unknown): boolean {
-  return STAFF_READ_ROLES.has(normalizeRole(role));
+export function canWriteExamOperation(role: unknown, permissions?: Iterable<unknown> | null): boolean {
+  return canApproveExamOperation(role, 'write') || normalizePermissions(permissions).has('*') || normalizePermissions(permissions).has('exam.write');
 }
 
-export function canViewExamAudit(role: unknown): boolean {
-  return STAFF_READ_ROLES.has(normalizeRole(role));
+export function canViewFullExamDatabase(role: unknown, permissions?: Iterable<unknown> | null): boolean {
+  return STAFF_READ_ROLES.has(normalizeRole(role)) || hasStaffPermission(permissions);
+}
+
+export function canViewExamAudit(role: unknown, permissions?: Iterable<unknown> | null): boolean {
+  return STAFF_READ_ROLES.has(normalizeRole(role)) || hasStaffPermission(permissions);
 }
 
 const TEACHER_ALLOWED_FIELDS = new Set([
@@ -86,9 +98,10 @@ function publicQuestion(question: Record<string, unknown>): Record<string, unkno
  */
 export function projectExamDatabaseForRead(
   data: Record<string, unknown>,
-  role: unknown
+  role: unknown,
+  permissions?: Iterable<unknown> | null
 ): { data: Record<string, unknown>; scope: ExamReadScope } {
-  if (canViewFullExamDatabase(role)) return { data: copy(data), scope: 'full' };
+  if (canViewFullExamDatabase(role, permissions)) return { data: copy(data), scope: 'full' };
 
   const rawState = data.exams_assessment_state;
   const state = rawState && typeof rawState === 'object' && !Array.isArray(rawState)

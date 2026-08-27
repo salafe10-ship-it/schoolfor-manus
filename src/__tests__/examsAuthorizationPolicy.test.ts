@@ -4,6 +4,7 @@ import {
   canApproveExamOperation,
   canViewExamAudit,
   canViewFullExamDatabase,
+  canWriteExamOperation,
   projectExamDatabaseForRead
 } from '../modules/exams/application/ExamAuthorizationPolicy';
 
@@ -28,6 +29,15 @@ describe('exams authorization and read-scope policy', () => {
       { exams_schedule: [], exams_settings: { semester: '2' } },
       { exams_schedule: [{ id: 'forbidden-edit' }], exams_settings: { semester: '2' } }
     )).toThrow(/exams_schedule/);
+  });
+
+  it('uses server-derived permissions for full staff access without trusting a display role', () => {
+    const staffPermissions = new Set(['Exam.Write']);
+    expect(canWriteExamOperation('employee', staffPermissions)).toBe(true);
+    expect(canViewFullExamDatabase('employee', staffPermissions)).toBe(true);
+    expect(canViewExamAudit('employee', staffPermissions)).toBe(true);
+    expect(canWriteExamOperation('student', new Set(['Exam.View']))).toBe(false);
+    expect(canViewFullExamDatabase('student', new Set(['Exam.View']))).toBe(false);
   });
 
   it('keeps audit events and the full control-room snapshot away from student-facing roles', () => {

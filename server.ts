@@ -89,6 +89,7 @@ import {
   assertTeacherWriteScope,
   canApproveExamOperation,
   canViewExamAudit,
+  canWriteExamOperation,
   projectExamDatabaseForRead
 } from './src/modules/exams/application/ExamAuthorizationPolicy.js';
 
@@ -2622,6 +2623,7 @@ async function startServer() {
       const schoolId = String(identity.schoolId || '').trim();
       const tenantId = String(identity.tenantId || '').trim();
       const actorRole = roleResolver.resolveRole(identity);
+      const actorPermissions = roleResolver.getPermissions(identity);
       const tenantContext = (req as any).tenantContext;
       if (!schoolId || !tenantId || !tenantContext) {
         throw new AuthenticationError('السياق الموثوق لقراءة الامتحانات غير مكتمل.');
@@ -2642,7 +2644,7 @@ async function startServer() {
         );
         return result.rows[0] || { data: {}, version: 0 };
       }, tenantContext);
-      const projection = projectExamDatabaseForRead(snapshot.data || {}, actorRole);
+      const projection = projectExamDatabaseForRead(snapshot.data || {}, actorRole, actorPermissions);
       res.json({
         success: true,
         data: projection.data,
@@ -2689,10 +2691,12 @@ async function startServer() {
 
   app.get("/api/exams/audit-events", authenticateRequest, requirePermission(PERMISSIONS.EXAM_READ), async (req, res, next) => {
     try {
-      const schoolId = String((req as any).user.schoolId || '').trim();
-      const tenantId = String((req as any).user.tenantId || '').trim();
-      const actorRole = roleResolver.resolveRole((req as any).user);
-      if (!canViewExamAudit(actorRole)) {
+      const identity = (req as any).user;
+      const schoolId = String(identity.schoolId || '').trim();
+      const tenantId = String(identity.tenantId || '').trim();
+      const actorRole = roleResolver.resolveRole(identity);
+      const actorPermissions = roleResolver.getPermissions(identity);
+      if (!canViewExamAudit(actorRole, actorPermissions)) {
         throw new AuthorizationError('سجل تدقيق الامتحانات متاح لأدوار الرقابة والاعتماد فقط.');
       }
       const tenantContext = (req as any).tenantContext;
@@ -2768,7 +2772,9 @@ async function startServer() {
       const expectedVersion = Number(req.body?.expectedVersion);
       const operation = String(req.body?.operation || 'write');
       const operationReason = String(req.body?.operationReason || '').trim();
-      const actorRole = roleResolver.resolveRole((req as any).user);
+      const identity = (req as any).user;
+      const actorRole = roleResolver.resolveRole(identity);
+      const actorPermissions = roleResolver.getPermissions(identity);
       const {
         expectedVersion: _ignoredExpectedVersion,
         operation: _ignoredOperation,
@@ -2784,7 +2790,10 @@ async function startServer() {
       if (operation !== 'write' && (operationReason.length < 5 || operationReason.length > 500)) {
         throw new ValidationError('سبب الاعتماد أو إعادة الفتح إلزامي ويجب أن يتراوح بين 5 و500 حرف.');
       }
-      if (!canApproveExamOperation(actorRole, operation as 'write' | 'approve' | 'reopen' | 'approve_schedule' | 'reopen_schedule')) {
+      const allowed = operation === 'write'
+        ? canWriteExamOperation(actorRole, actorPermissions)
+        : canApproveExamOperation(actorRole, operation as 'approve' | 'reopen' | 'approve_schedule' | 'reopen_schedule');
+      if (!allowed) {
         throw new AuthorizationError(operation === 'write'
           ? 'الدور الحالي لا يملك صلاحية تعديل بيانات الامتحانات.'
           : 'اعتماد أو إعادة فتح النتائج والجدول يتطلب دوراً مخولاً للاعتماد.');
