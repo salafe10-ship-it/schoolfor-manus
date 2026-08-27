@@ -1,0 +1,136 @@
+/*
+ * HR is part of the same school workspace as the dashboard and accounting
+ * modules.  Legacy HR screens used a separate slate/teal theme; these scoped
+ * tokens keep legacy subcomponents visually coherent without changing any
+ * other portal.
+ */
+#hr-portal {
+  --hr-ink: #1c120c;
+  --hr-muted: #64748b;
+  --hr-gold: #d4af37;
+  --hr-gold-dark: #9a6a1d;
+  --hr-surface: #fffefc;
+  --hr-surface-muted: #f8f3ea;
+  --hr-border: rgba(154, 106, 29, 0.24);
+  color: var(--hr-ink);
+}
+
+#hr-portal #hr-sidebar-menu {
+  background: linear-gradient(180deg, #fffefc, #f7efe1) !important;
+  border: 2px solid rgba(212, 175, 55, 0.32) !important;
+  border-radius: 1.5rem;
+  box-shadow: 0 12px 30px rgba(28, 18, 12, 0.1) !important;
+  color: var(--hr-ink) !important;
+}
+
+#hr-portal #hr-sidebar-menu h3,
+#hr-portal #hr-sidebar-menu .text-white,
+#hr-portal .text-white,
+#hr-portal .text-slate-100,
+#hr-portal .text-slate-200,
+#hr-portal .text-slate-300 {
+  color: var(--hr-ink) !important;
+}
+
+#hr-portal .text-slate-400,
+#hr-portal .text-slate-500 {
+  color: var(--hr-muted) !important;
+}
+
+#hr-portal #hr-sidebar-menu .border-slate-800,
+#hr-portal #hr-sidebar-menu .border-slate-800\/60,
+#hr-portal .border-slate-800,
+#hr-portal .border-slate-700 {
+  border-color: var(--hr-border) !important;
+}
+
+#hr-portal #hr-sidebar-menu button {
+  background: #fffdf8 !important;
+  border-color: rgba(154, 106, 29, 0.2) !important;
+  box-shadow: 0 3px 10px rgba(28, 18, 12, 0.05) !important;
+}
+
+#hr-portal #hr-sidebar-menu button:hover {
+  background: #f8edd5 !important;
+  border-color: rgba(154, 106, 29, 0.46) !important;
+}
+
+#hr-portal #hr-sidebar-menu button.hr-nav-active {
+  background: linear-gradient(135deg, var(--hr-gold-dark), var(--hr-gold)) !important;
+  border-color: #f7d174 !important;
+  color: #1c120c !important;
+  box-shadow: 0 7px 16px rgba(154, 106, 29, 0.24) !important;
+}
+
+#hr-portal .hr-subtabs {
+  background: linear-gradient(180deg, #fffefc, #f8f3ea) !important;
+  border: 2px solid rgba(212, 175, 55, 0.28) !important;
+  border-radius: 1.25rem;
+  box-shadow: 0 8px 20px rgba(28, 18, 12, 0.07) !important;
+}
+
+#hr-portal .hr-subtabs button {
+  color: #5b3a1f !important;
+}
+
+#hr-portal .hr-subtabs button:hover {
+  background: #f8edd5 !important;
+}
+
+/* Legacy panes, tables, filters and dialogs. */
+#hr-portal .bg-slate-950,
+#hr-portal .bg-slate-950\/60,
+#hr-portal .bg-slate-950\/80,
+#hr-portal .bg-slate-900,
+#hr-portal .bg-slate-900\/60,
+#hr-portal .bg-slate-900\/40,
+#hr-portal .bg-slate-900\/20 {
+  background: linear-gradient(180deg, var(--hr-surface), var(--hr-surface-muted)) !important;
+}
+
+#hr-portal .bg-slate-800,
+#hr-portal .bg-slate-800\/80,
+#hr-portal .bg-slate-800\/40,
+#hr-portal .bg-slate-700 {
+  background: #f7efe1 !important;
+}
+
+#hr-portal input,
+#hr-portal select,
+#hr-portal textarea {
+  background: #fffefc !important;
+  border-color: rgba(100, 116, 139, 0.28) !important;
+  color: var(--hr-ink) !important;
+}
+
+#hr-portal input:focus,
+#hr-portal select:focus,
+#hr-portal textarea:focus {
+  border-color: var(--hr-gold) !important;
+  box-shadow: 0 0 0 3px rgba(212, 175, 55, 0.16) !important;
+}
+
+#hr-portal .hover\:bg-slate-700:hover,
+#hr-portal .hover\:bg-slate-800:hover {
+  background: #f1dfba !important;
+}
+
+#hr-portal .bg-\[\#dfb55a\],
+#hr-portal .bg-gradient-to-r.from-\[\#dfb55a\] {
+  background: linear-gradient(135deg, var(--hr-gold-dark), var(--hr-gold)) !important;
+  color: #1c120c !important;
+}
+
+#hr-portal .rounded-lg,
+#hr-portal .rounded-md {
+  border-radius: 0.875rem;
+}
+
+#hr-portal table,
+#hr-portal .overflow-hidden {
+  border-radius: 1.25rem;
+}
+
+@media (max-width: 1023px) {
+  #hr-portal #hr-sidebar-menu { border-radius: 1.25rem; }
+}

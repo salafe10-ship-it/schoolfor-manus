@@ -13,6 +13,7 @@ import PayrollTab from './PayrollTab';
 import ReportsTab from './ReportsTab';
 import OtherHRTabs from './OtherHRTabs';
 import { FallbackStorage } from '../../database/repositories/FallbackStorage';
+import './hr-identity.css';
 
 // Cost Center descriptive mapping
 const costCenterLabels: Record<string, string> = {
@@ -387,7 +388,7 @@ export default function HumanResourcesPortal({ setActiveSection, selectedSchool 
   const attendanceRate = employees.length > 0 ? Math.round((presentTodayCount / employees.length) * 100) : 100;
 
   return (
-    <div className="w-full min-h-screen text-right font-sans dir-rtl select-none transition-all duration-300 bg-gradient-to-br from-[#f8f5ee] via-[#efe9dc] to-[#e8e0d0] text-slate-900 p-2 sm:p-4 md:p-6 space-y-6" dir="rtl">
+    <div id="hr-portal" className="w-full min-h-screen text-right font-sans dir-rtl select-none transition-all duration-300 bg-gradient-to-br from-[#f8f5ee] via-[#efe9dc] to-[#e8e0d0] text-slate-900 p-2 sm:p-4 md:p-6 space-y-6" dir="rtl">
       <EnterpriseActionToolbar
         title="شؤون المعلمين والموظفين"
         stats={
@@ -456,7 +457,7 @@ export default function HumanResourcesPortal({ setActiveSection, selectedSchool 
                     }}
                     className={`group w-full relative flex items-center justify-between h-[42px] px-3.5 rounded-lg text-xs font-bold transition-all duration-200 cursor-pointer overflow-hidden border transform hover:scale-[1.01] select-none ${
                       activeGroup === 'employees_group' 
-                        ? 'bg-gradient-to-b from-teal-600 via-teal-700 to-teal-900 border-teal-400 text-white shadow-[inset_0_1.5px_0_rgba(255,255,255,0.35),0_4px_8px_rgba(0,0,0,0.4)]' 
+                        ? 'hr-nav-active'
                         : 'bg-gradient-to-b from-slate-700/80 via-slate-800 to-slate-900 border-slate-600 text-white/95 hover:text-white shadow-[inset_0_1.5px_0_rgba(255,255,255,0.2),0_4px_6px_rgba(0,0,0,0.4)] hover:from-slate-650 hover:via-slate-750 hover:to-slate-850 hover:border-slate-500'
                     }`}
                   >
@@ -477,7 +478,7 @@ export default function HumanResourcesPortal({ setActiveSection, selectedSchool 
                     }}
                     className={`group w-full relative flex items-center justify-between h-[42px] px-3.5 rounded-lg text-xs font-bold transition-all duration-200 cursor-pointer overflow-hidden border transform hover:scale-[1.01] select-none ${
                       activeGroup === 'attendance_group' 
-                        ? 'bg-gradient-to-b from-teal-600 via-teal-700 to-teal-900 border-teal-400 text-white shadow-[inset_0_1.5px_0_rgba(255,255,255,0.35),0_4px_8px_rgba(0,0,0,0.4)]' 
+                        ? 'hr-nav-active'
                         : 'bg-gradient-to-b from-slate-700/80 via-slate-800 to-slate-900 border-slate-600 text-white/95 hover:text-white shadow-[inset_0_1.5px_0_rgba(255,255,255,0.2),0_4px_6px_rgba(0,0,0,0.4)] hover:from-slate-650 hover:via-slate-750 hover:to-slate-850 hover:border-slate-500'
                     }`}
                   >
@@ -498,7 +499,7 @@ export default function HumanResourcesPortal({ setActiveSection, selectedSchool 
                     }}
                     className={`group w-full relative flex items-center justify-between h-[42px] px-3.5 rounded-lg text-xs font-bold transition-all duration-200 cursor-pointer overflow-hidden border transform hover:scale-[1.01] select-none ${
                       activeGroup === 'advances_group' 
-                        ? 'bg-gradient-to-b from-teal-600 via-teal-700 to-teal-900 border-teal-400 text-white shadow-[inset_0_1.5px_0_rgba(255,255,255,0.35),0_4px_8px_rgba(0,0,0,0.4)]' 
+                        ? 'hr-nav-active'
                         : 'bg-gradient-to-b from-slate-700/80 via-slate-800 to-slate-900 border-slate-600 text-white/95 hover:text-white shadow-[inset_0_1.5px_0_rgba(255,255,255,0.2),0_4px_6px_rgba(0,0,0,0.4)] hover:from-slate-650 hover:via-slate-750 hover:to-slate-850 hover:border-slate-500'
                     }`}
                   >
@@ -519,7 +520,7 @@ export default function HumanResourcesPortal({ setActiveSection, selectedSchool 
                     }}
                     className={`group w-full relative flex items-center justify-between h-[42px] px-3.5 rounded-lg text-xs font-bold transition-all duration-200 cursor-pointer overflow-hidden border transform hover:scale-[1.01] select-none ${
                       activeGroup === 'payroll_group' 
-                        ? 'bg-gradient-to-b from-teal-600 via-teal-700 to-teal-900 border-teal-400 text-white shadow-[inset_0_1.5px_0_rgba(255,255,255,0.35),0_4px_8px_rgba(0,0,0,0.4)]' 
+                        ? 'hr-nav-active'
                         : 'bg-gradient-to-b from-slate-700/80 via-slate-800 to-slate-900 border-slate-600 text-white/95 hover:text-white shadow-[inset_0_1.5px_0_rgba(255,255,255,0.2),0_4px_6px_rgba(0,0,0,0.4)] hover:from-slate-650 hover:via-slate-750 hover:to-slate-850 hover:border-slate-500'
                     }`}
                   >
@@ -540,7 +541,7 @@ export default function HumanResourcesPortal({ setActiveSection, selectedSchool 
                     }}
                     className={`group w-full relative flex items-center justify-between h-[42px] px-3.5 rounded-lg text-xs font-bold transition-all duration-200 cursor-pointer overflow-hidden border transform hover:scale-[1.01] select-none ${
                       activeGroup === 'reports_group' 
-                        ? 'bg-gradient-to-b from-teal-600 via-teal-700 to-teal-900 border-teal-400 text-white shadow-[inset_0_1.5px_0_rgba(255,255,255,0.35),0_4px_8px_rgba(0,0,0,0.4)]' 
+                        ? 'hr-nav-active'
                         : 'bg-gradient-to-b from-slate-700/80 via-slate-800 to-slate-900 border-slate-600 text-white/95 hover:text-white shadow-[inset_0_1.5px_0_rgba(255,255,255,0.2),0_4px_6px_rgba(0,0,0,0.4)] hover:from-slate-650 hover:via-slate-750 hover:to-slate-850 hover:border-slate-500'
                     }`}
                   >
@@ -564,7 +565,7 @@ export default function HumanResourcesPortal({ setActiveSection, selectedSchool 
           
           {/* Dynamic Sub-tab Bar depending on active high-level Group */}
           {activeGroup === 'employees_group' && (
-            <div className="bg-slate-900 border border-slate-800/80 p-1.5 flex flex-wrap gap-1.5 shadow-lg">
+            <div className="hr-subtabs bg-slate-900 border border-slate-800/80 p-1.5 flex flex-wrap gap-1.5 shadow-lg">
               <button
                 onClick={() => setActiveTab('employees')}
                 className={`px-4 py-2 rounded-lg text-xs font-bold transition-all duration-150 ${
@@ -609,7 +610,7 @@ export default function HumanResourcesPortal({ setActiveSection, selectedSchool 
           )}
 
           {activeGroup === 'attendance_group' && (
-            <div className="bg-slate-900 border border-slate-800/80 p-1.5 flex flex-wrap gap-1.5 shadow-lg">
+            <div className="hr-subtabs bg-slate-900 border border-slate-800/80 p-1.5 flex flex-wrap gap-1.5 shadow-lg">
               <button
                 onClick={() => setActiveTab('attendance')}
                 className={`px-4 py-2 rounded-lg text-xs font-bold transition-all duration-150 ${
@@ -630,7 +631,7 @@ export default function HumanResourcesPortal({ setActiveSection, selectedSchool 
           )}
 
           {activeGroup === 'advances_group' && (
-            <div className="bg-slate-900 border border-slate-800/80 p-1.5 flex flex-wrap gap-1.5 shadow-lg">
+            <div className="hr-subtabs bg-slate-900 border border-slate-800/80 p-1.5 flex flex-wrap gap-1.5 shadow-lg">
               <button
                 onClick={() => setActiveTab('advances')}
                 className={`px-4 py-2 rounded-lg text-xs font-bold transition-all duration-150 ${
@@ -659,7 +660,7 @@ export default function HumanResourcesPortal({ setActiveSection, selectedSchool 
           )}
 
           {activeGroup === 'reports_group' && (
-            <div className="bg-slate-900 border border-slate-800/80 p-1.5 flex flex-wrap gap-1.5 shadow-lg">
+            <div className="hr-subtabs bg-slate-900 border border-slate-800/80 p-1.5 flex flex-wrap gap-1.5 shadow-lg">
               <button
                 onClick={() => setActiveTab('dashboard')}
                 className={`px-4 py-2 rounded-lg text-xs font-bold transition-all duration-150 ${
