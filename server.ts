@@ -1021,7 +1021,10 @@ async function startServer() {
     res.set('Pragma', 'no-cache');
   };
 
-  app.use(express.json());
+  // Versioned operational snapshots, including the exams workflow and audit
+  // history, can legitimately exceed Express's 100kb default. Keep a bounded
+  // parser limit so canonical writes fail safely without truncating UAT cycles.
+  app.use(express.json({ limit: '2mb' }));
   app.use((req, res, next) => {
     startSafeAuthTrace(req, res);
     if (req.method === 'GET' && req.path === '/api/students') {
