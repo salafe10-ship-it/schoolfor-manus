@@ -241,6 +241,8 @@ export default function ExamsResultsModule({
   const [approvalStatus, setApprovalStatus] = useState(() => {
     return { approved: false, approvedBy: '', approvedAt: '' };
   });
+  const [resultsApprovalReason, setResultsApprovalReason] = useState('');
+  const [scheduleApprovalReason, setScheduleApprovalReason] = useState('');
 
   // The online assessment lifecycle is persisted in the same canonical,
   // versioned exams document so an interrupted browser/session resumes from
@@ -1940,7 +1942,7 @@ export default function ExamsResultsModule({
       return;
     }
 
-    const reason = window.prompt('أدخل سبب/مبرر اعتماد هذه النتائج وتجميد الكنترول:')?.trim();
+    const reason = resultsApprovalReason.trim();
     if (!reason) {
       triggerNotification('تم إلغاء الاعتماد: السبب الموثق إلزامي.', 'warning');
       return;
@@ -2061,6 +2063,7 @@ export default function ExamsResultsModule({
     setStageApprovalStatus(updatedStageStatus);
     setSnapshots(updatedSnapshots);
     setControlClosures([serverArchive, ...controlClosures]);
+    setResultsApprovalReason('');
     triggerNotification('تمت عملية الاعتماد والترصيد، وإصدار محضر إقفال الكنترول بنجاح وتأمينه ضد التعديل 🔒', 'success');
     logAction(`الاعتماد النهائي للدرجات وقفل التعديل وإصدار محضر الإقفال - السبب: ${reason}`, 'المراجعة والاعتماد');
   };
@@ -4609,7 +4612,7 @@ export default function ExamsResultsModule({
               triggerNotification(`لا يمكن اعتماد جدول غير مكتمل: المجدول ${schedule.length} من ${totalSubjectsToSchedule} اختباراً مطلوباً.`, 'warning');
               return;
             }
-            const reason = window.prompt('أدخل مبرر اعتماد جدول الامتحانات وقفل تعديله:')?.trim();
+            const reason = scheduleApprovalReason.trim();
             if (!reason) {
               triggerNotification('تم إلغاء الاعتماد: السبب الموثق إلزامي.', 'warning');
               return;
@@ -4633,6 +4636,7 @@ export default function ExamsResultsModule({
             setScheduleApprovalStatus(typeof persisted === 'object' && persisted.operationState?.scheduleApprovalStatus
               ? persisted.operationState.scheduleApprovalStatus
               : nextApprovalStatus);
+            setScheduleApprovalReason('');
             triggerNotification('تم اعتماد جدول الاختبارات وقفل تعديله من الخادم.', 'success');
             logAction(`اعتماد جدول الامتحانات وقفل التغييرات - السبب: ${reason}`, 'جدول الامتحانات');
           };
@@ -5743,12 +5747,21 @@ export default function ExamsResultsModule({
                             <span className="text-[10px] text-slate-500 block">{scheduleApprovalStatus.approvedAt}</span>
                           </div>
                         ) : (
-                          <button
-                            onClick={handleApproveSchedule}
-                            className="px-6 py-3 bg-amber-600 hover:bg-amber-700 text-white text-xs font-black shadow-md shadow-amber-600/10 transition-all cursor-pointer text-center"
-                          >
-                            الموافقة واعتماد الجدول نهائياً 🔒
-                          </button>
+                          <>
+                            <textarea
+                              aria-label="سبب اعتماد جدول الامتحانات"
+                              value={scheduleApprovalReason}
+                              onChange={event => setScheduleApprovalReason(event.target.value)}
+                              className="min-h-16 w-full border border-amber-300 bg-white p-2 text-xs text-slate-800"
+                              placeholder="سبب اعتماد الجدول وقفل تعديله (إلزامي)"
+                            />
+                            <button
+                              onClick={handleApproveSchedule}
+                              className="px-6 py-3 bg-amber-600 hover:bg-amber-700 text-white text-xs font-black shadow-md shadow-amber-600/10 transition-all cursor-pointer text-center"
+                            >
+                              الموافقة واعتماد الجدول نهائياً 🔒
+                            </button>
+                          </>
                         )}
                       </div>
                     </div>
@@ -8297,6 +8310,14 @@ export default function ExamsResultsModule({
                         <span className="font-black text-xs">بانتظار الاعتماد وقفل الدرجات للموسم الحالي 🔓</span>
                       </div>
                       <p className="text-[11px] text-amber-800">يمكن تصحيح ورصد الدرجات بحرية من المعلمين حالياً.</p>
+
+                      <textarea
+                        aria-label="سبب اعتماد النتائج وقفل الكنترول"
+                        value={resultsApprovalReason}
+                        onChange={event => setResultsApprovalReason(event.target.value)}
+                        className="min-h-16 w-full border border-amber-300 bg-white p-2 text-xs text-slate-800"
+                        placeholder="سبب اعتماد النتائج وإصدار محضر الإقفال (إلزامي)"
+                      />
 
                       <button
                         onClick={handleApproveAndLock}

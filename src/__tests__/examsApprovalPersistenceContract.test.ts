@@ -6,5 +6,7 @@ describe('exams approval persistence contract', () => {
     const source = readFileSync('src/components/ExamsResultsModule.tsx', 'utf8');
     expect(source).toContain('const persisted = await saveToServerDb(');
     expect(source).toContain('تعذر حفظ اعتماد النتائج في المصدر المركزي');
+    expect(source).toContain('aria-label="سبب اعتماد النتائج وقفل الكنترول"');
+    expect(source).toContain('aria-label="سبب اعتماد جدول الامتحانات"');
   });
 });
