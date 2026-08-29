@@ -1,6 +1,7 @@
 import { Award, Calendar, CalendarX, Coins, Download, FileSpreadsheet, Filter, HelpCircle, Printer, Scale, Search, UserCheck, Users } from 'lucide-react';
 import React, { useState } from 'react';
 import { HREmployee, HRDepartment, HRJob, HRAttendance, HRLeave, HRAdvance, HRBonus, HRPenalty } from './types';
+import { FallbackStorage } from '../../database/repositories/FallbackStorage';
 
 interface ReportsTabProps {
   employees: HREmployee[];
@@ -14,9 +15,10 @@ interface ReportsTabProps {
   formatCurrency: (amount: number, showSymbol?: boolean) => string;
   triggerNotification: (msg: string, type: 'success' | 'warning' | 'error') => void;
   costCenterLabels: Record<string, string>;
+  onCanonicalReportAudit?: (payload: { reportType: ReportType; format: 'csv' | 'print'; startDate: string; endDate: string; rowCount: number }) => Promise<boolean>;
 }
 
-type ReportType = 'employees' | 'attendance' | 'leaves' | 'advances' | 'rewards' | 'penalties';
+export type ReportType = 'employees' | 'attendance' | 'leaves' | 'advances' | 'rewards' | 'penalties';
 
 export default function ReportsTab({
   employees,
@@ -29,7 +31,8 @@ export default function ReportsTab({
   penalties,
   formatCurrency,
   triggerNotification,
-  costCenterLabels
+  costCenterLabels,
+  onCanonicalReportAudit
 }: ReportsTabProps) {
   const [reportType, setReportType] = useState<ReportType>('employees');
   const [searchParam, setSearchParam] = useState('');
@@ -92,7 +95,11 @@ export default function ReportsTab({
   const reportData = getFilteredReportData();
 
   // CSV Excel export simulation
-  const handleExportCSV = () => {
+  const handleExportCSV = async () => {
+    if (FallbackStorage.isCanonicalPersistenceRequired() && onCanonicalReportAudit) {
+      const allowed = await onCanonicalReportAudit({ reportType, format: 'csv', startDate, endDate, rowCount: reportData.length });
+      if (!allowed) return;
+    }
     let csvContent = "data:text/csv;charset=utf-8,\uFEFF";
     
     if (reportType === 'employees') {
@@ -145,7 +152,11 @@ export default function ReportsTab({
   };
 
   // Browser Print Preview trigger
-  const handlePrintReport = () => {
+  const handlePrintReport = async () => {
+    if (FallbackStorage.isCanonicalPersistenceRequired() && onCanonicalReportAudit) {
+      const allowed = await onCanonicalReportAudit({ reportType, format: 'print', startDate, endDate, rowCount: reportData.length });
+      if (!allowed) return;
+    }
     const printWindow = window.open('', '_blank');
     if (!printWindow) return;
 

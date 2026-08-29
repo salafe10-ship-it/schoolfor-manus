@@ -4,13 +4,15 @@ import EnterpriseActionToolbar from '../shared/EnterpriseActionToolbar';
 
 import { 
   HREmployee, HRDepartment, HRJob, HRContract, HRAttendance, 
-  HRLeave, HRPenalty, HRAdvance, HRBonus, HRPerformance, HRDocument, HRSettings 
+  HRLeave, HRPenalty, HRAdvance, HRBonus, HRPerformance, HRDocument, HRSettings,
+  HRPayrollRun
 } from './types';
 
 import EmployeesTab from './EmployeesTab';
 import AttendanceTab from './AttendanceTab';
 import PayrollTab from './PayrollTab';
 import ReportsTab from './ReportsTab';
+import type { ReportType } from './ReportsTab';
 import OtherHRTabs from './OtherHRTabs';
 import { FallbackStorage } from '../../database/repositories/FallbackStorage';
 import { getTrustedAccessToken } from '../../utils/auth';
@@ -48,6 +50,7 @@ export default function HumanResourcesPortal({ setActiveSection, selectedSchool 
   const [rewards, setRewards] = useState<HRBonus[]>([]);
   const [performance, setPerformance] = useState<HRPerformance[]>([]);
   const [documents, setDocuments] = useState<HRDocument[]>([]);
+  const [payrollRuns, setPayrollRuns] = useState<HRPayrollRun[]>([]);
   const [settings, setSettings] = useState<HRSettings>({
     workingHoursStart: '08:00',
     workingHoursEnd: '15:00',
@@ -57,7 +60,10 @@ export default function HumanResourcesPortal({ setActiveSection, selectedSchool 
     defaultSalariesExpenseAccount: '5101',
     payrollPayableAccount: '',
     advanceReceivableAccount: '',
-    deductionClearingAccount: ''
+    deductionClearingAccount: '',
+    unpaidAbsenceDeduction: false,
+    overtimeMultiplier: 0,
+    workingHoursPerDay: 8
   });
   const canonicalVersionRef = useRef(0);
   const canonicalBaselineRef = useRef<string | null>(null);
@@ -69,7 +75,7 @@ export default function HumanResourcesPortal({ setActiveSection, selectedSchool 
     setTimeout(() => setNotification(null), 5000);
   };
 
-  const runPayrollWorkflow = async (period: string, action: 'approve' | 'pay') => {
+  const runPayrollWorkflow = async (period: string, action: 'approve' | 'pay'): Promise<boolean> => {
     try {
       const token = getTrustedAccessToken();
       if (!token) throw new Error('انتهت جلسة الدخول الموثوقة.');
@@ -80,9 +86,81 @@ export default function HumanResourcesPortal({ setActiveSection, selectedSchool 
       const payload = await response.json();
       if (!response.ok || !payload?.success) throw new Error(payload?.message || 'تعذر تنفيذ مسار الرواتب.');
       canonicalVersionRef.current = Number(payload?.meta?.version || canonicalVersionRef.current + 1);
+      const returnedData = payload?.data;
+      if (action === 'approve' && returnedData?.period) {
+        const nextRuns = [...payrollRuns.filter(run => run.period !== period), returnedData as HRPayrollRun];
+        setPayrollRuns(nextRuns);
+        canonicalBaselineRef.current = JSON.stringify({ employees, departments, jobs, contracts, attendance, leaves, penalties, advances, rewards, performance, documents, payrollRuns: nextRuns, settings });
+      } else if (action === 'pay' && returnedData?.period) {
+        const nextRuns = payrollRuns.map(run => run.period === period ? { ...run, ...returnedData, status: 'paid' as const } : run);
+        setPayrollRuns(nextRuns);
+        canonicalBaselineRef.current = JSON.stringify({ employees, departments, jobs, contracts, attendance, leaves, penalties, advances, rewards, performance, documents, payrollRuns: nextRuns, settings });
+      }
       triggerNotification(action === 'approve' ? 'تم اعتماد المسير دون إنشاء قيد.' : `تم تنفيذ الصرف وإثبات القيد ${payload?.data?.journalId || ''}.`, 'success');
+      return true;
     } catch (error: any) {
       triggerNotification(error?.message || 'تعذر تنفيذ مسار الرواتب.', 'error');
+      return false;
+    }
+  };
+
+  const auditHrReport = async (payload: { reportType: ReportType; format: 'csv' | 'print'; startDate: string; endDate: string; rowCount: number }) => {
+    try {
+      const token = getTrustedAccessToken();
+      if (!token) throw new Error('انتهت جلسة الدخول الموثوقة.');
+      const response = await fetch('/api/hr/reports/audit', {
+        method: 'POST',
+        headers: { Authorization: `Bearer ${token}`, 'Content-Type': 'application/json' },
+        body: JSON.stringify(payload)
+      });
+      const result = await response.json();
+      if (!response.ok || !result?.success) throw new Error(result?.message || 'تعذر تدقيق التقرير الكانوني.');
+      return true;
+    } catch (error: any) {
+      triggerNotification(error?.message || 'تعذر تدقيق التقرير؛ لم يتم التصدير.', 'error');
+      return false;
+    }
+  };
+
+  const runAdvanceWorkflow = async (advanceId: string) => {
+    try {
+      const token = getTrustedAccessToken();
+      if (!token) throw new Error('انتهت جلسة الدخول الموثوقة.');
+      const response = await fetch(`/api/hr/advances/${encodeURIComponent(advanceId)}/pay`, {
+        method: 'POST',
+        headers: { Authorization: `Bearer ${token}`, 'Content-Type': 'application/json' },
+        body: JSON.stringify({ expectedVersion: canonicalVersionRef.current })
+      });
+      const payload = await response.json();
+      if (!response.ok || !payload?.success) throw new Error(payload?.message || 'تعذر تنفيذ صرف السلفة.');
+      const nextAdvances = advances.map(item => item.id === advanceId ? { ...item, ...(payload.data?.advance || {}), journalId: payload.data?.journalId, paidAt: payload.data?.paidAt, paidBy: payload.data?.paidBy } : item);
+      canonicalVersionRef.current = Number(payload?.meta?.version || canonicalVersionRef.current + 1);
+      setAdvances(nextAdvances);
+      canonicalBaselineRef.current = JSON.stringify({ employees, departments, jobs, contracts, attendance, leaves, penalties, advances: nextAdvances, rewards, performance, documents, payrollRuns, settings });
+      triggerNotification(`تم صرف السلفة وإثبات القيد ${payload.data?.journalId || ''} مركزياً.`, 'success');
+    } catch (error: any) {
+      triggerNotification(error?.message || 'تعذر تنفيذ صرف السلفة.', 'error');
+    }
+  };
+
+  const runContractSigning = async (contractId: string) => {
+    try {
+      const token = getTrustedAccessToken();
+      if (!token) throw new Error('انتهت جلسة الدخول الموثوقة.');
+      const response = await fetch(`/api/hr/contracts/${encodeURIComponent(contractId)}/sign`, {
+        method: 'POST',
+        headers: { Authorization: `Bearer ${token}`, 'Content-Type': 'application/json' },
+        body: JSON.stringify({ expectedVersion: canonicalVersionRef.current })
+      });
+      const payload = await response.json();
+      if (!response.ok || !payload?.success) throw new Error(payload?.message || 'تعذر توقيع العقد.');
+      const nextContracts = contracts.map(item => item.id === contractId ? { ...item, ...(payload.data?.contract || {}) } : item);
+      canonicalVersionRef.current = Number(payload?.meta?.version || canonicalVersionRef.current + 1);
+      setContracts(nextContracts);
+      canonicalBaselineRef.current = JSON.stringify({ employees, departments, jobs, contracts: nextContracts, attendance, leaves, penalties, advances, rewards, performance, documents, payrollRuns, settings });
+      triggerNotification('تم توقيع العقد واعتماده بختم سلامة خادمي.', 'success');
+    } catch (error: any) {
+      triggerNotification(error?.message || 'تعذر توقيع العقد.', 'error');
     }
   };
 
@@ -111,7 +189,7 @@ export default function HumanResourcesPortal({ setActiveSection, selectedSchool 
             attendance: list<HRAttendance>(data.attendance), leaves: list<HRLeave>(data.leaves),
             penalties: list<HRPenalty>(data.penalties), advances: list<HRAdvance>(data.advances),
             rewards: list<HRBonus>(data.rewards), performance: list<HRPerformance>(data.performance),
-            documents: list<HRDocument>(data.documents), settings: loadedSettings
+            documents: list<HRDocument>(data.documents), payrollRuns: list<HRPayrollRun>(data.payrollRuns), settings: loadedSettings
           };
           canonicalVersionRef.current = Number(payload?.meta?.version || 0);
           canonicalBaselineRef.current = JSON.stringify(canonicalData);
@@ -119,6 +197,7 @@ export default function HumanResourcesPortal({ setActiveSection, selectedSchool 
           setContracts(canonicalData.contracts); setAttendance(canonicalData.attendance); setLeaves(canonicalData.leaves);
           setPenalties(canonicalData.penalties); setAdvances(canonicalData.advances); setRewards(canonicalData.rewards);
           setPerformance(canonicalData.performance); setDocuments(canonicalData.documents); setSettings(loadedSettings);
+          setPayrollRuns(canonicalData.payrollRuns);
         } catch (error: any) {
           if (!cancelled) triggerNotification(error?.message || 'تعذر تحميل سجل الموارد البشرية المركزي.', 'error');
         }
@@ -362,7 +441,7 @@ export default function HumanResourcesPortal({ setActiveSection, selectedSchool 
 
   useEffect(() => {
     if (!canonicalPersistenceRequired || !canonicalBaselineRef.current) return;
-    const data = { employees, departments, jobs, contracts, attendance, leaves, penalties, advances, rewards, performance, documents, settings };
+    const data = { employees, departments, jobs, contracts, attendance, leaves, penalties, advances, rewards, performance, documents, payrollRuns, settings };
     const serialized = JSON.stringify(data);
     if (serialized === canonicalBaselineRef.current) return;
     const timer = window.setTimeout(async () => {
@@ -388,7 +467,7 @@ export default function HumanResourcesPortal({ setActiveSection, selectedSchool 
       }
     }, 500);
     return () => window.clearTimeout(timer);
-  }, [canonicalPersistenceRequired, employees, departments, jobs, contracts, attendance, leaves, penalties, advances, rewards, performance, documents, settings]);
+  }, [canonicalPersistenceRequired, employees, departments, jobs, contracts, attendance, leaves, penalties, advances, rewards, performance, documents, payrollRuns, settings]);
 
   // 2. Local State synchronization to LocalStorage on modifications
   useEffect(() => {
@@ -887,7 +966,7 @@ export default function HumanResourcesPortal({ setActiveSection, selectedSchool 
               <div className="bg-[#dfb55a]/10 border border-[#dfb55a]/20 p-4 flex items-center gap-3 text-xs text-[#dfb55a]">
                 <Info className="w-5 h-5 shrink-0" />
                 <p className="leading-relaxed">
-                  <strong>حالة الربط المحاسبي:</strong> ترحيل الرواتب والسلف مقفل حتى يكتمل المصدر المركزي ومسار الاعتماد المحاسبي؛ لا تُولّد قيود أو سندات صرف محلية.
+                  <strong>حالة الربط المحاسبي:</strong> مسير الرواتب يمر باعتماد HR ثم صرف مالي مركزي؛ طلبات السلف تبقى قيد المراجعة ولا تُنشئ قيوداً محلية.
                 </p>
               </div>
 
@@ -930,9 +1009,12 @@ export default function HumanResourcesPortal({ setActiveSection, selectedSchool 
           {activeTab === 'payroll' && (
             <PayrollTab 
               employees={employees}
+              attendance={attendance}
+              leaves={leaves}
               penalties={penalties}
               advances={advances}
               rewards={rewards}
+              payrollRuns={payrollRuns}
               settings={settings}
               formatCurrency={formatCurrency}
               triggerNotification={triggerNotification}
@@ -956,6 +1038,7 @@ export default function HumanResourcesPortal({ setActiveSection, selectedSchool 
               formatCurrency={formatCurrency}
               triggerNotification={triggerNotification}
               costCenterLabels={costCenterLabels}
+              onCanonicalReportAudit={auditHrReport}
             />
           )}
 
@@ -988,6 +1071,8 @@ export default function HumanResourcesPortal({ setActiveSection, selectedSchool 
               formatCurrency={formatCurrency}
               triggerNotification={triggerNotification}
               costCenterLabels={costCenterLabels}
+              onPayAdvance={runAdvanceWorkflow}
+              onSignContract={runContractSigning}
             />
           )}
 

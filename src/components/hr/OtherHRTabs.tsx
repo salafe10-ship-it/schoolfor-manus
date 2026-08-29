@@ -4,7 +4,6 @@ import {
   HREmployee, HRDepartment, HRJob, HRContract, HRLeave, 
   HRPenalty, HRAdvance, HRBonus, HRPerformance, HRDocument, HRSettings 
 } from './types';
-import { SQLTransactionEngine } from '../../database/transactions/transactionManager';
 import { getTrustedAccessToken } from '../../utils/auth';
 
 interface OtherHRTabsProps {
@@ -34,6 +33,8 @@ interface OtherHRTabsProps {
   formatCurrency: (amount: number, showSymbol?: boolean) => string;
   triggerNotification: (msg: string, type: 'success' | 'warning' | 'error') => void;
   costCenterLabels: Record<string, string>;
+  onPayAdvance?: (advanceId: string) => Promise<void>;
+  onSignContract?: (contractId: string) => Promise<void>;
 }
 
 export default function OtherHRTabs({
@@ -62,7 +63,9 @@ export default function OtherHRTabs({
   setSettings,
   formatCurrency,
   triggerNotification,
-  costCenterLabels
+  costCenterLabels,
+  onPayAdvance,
+  onSignContract
 }: OtherHRTabsProps) {
 
   // Global modals state
@@ -381,6 +384,10 @@ export default function OtherHRTabs({
   if (activeTab === 'contracts') {
     const handleSaveContract = (e: React.FormEvent) => {
       e.preventDefault();
+      if (editingItem?.signatureHash) {
+        triggerNotification('العقد الموقّع محمي؛ أنشئ إصداراً جديداً بدلاً من تعديل النسخة المعتمدة.', 'warning');
+        return;
+      }
       if (editingItem) {
         setContracts(prev => prev.map(c => c.id === editingItem.id ? { ...c, ...contractForm } : c));
         triggerNotification('تم تحديث العقد بنجاح', 'success');
@@ -388,13 +395,22 @@ export default function OtherHRTabs({
         const newContract: HRContract = {
           id: `CON-2026-${String(contracts.length + 1).padStart(4, '0')}`,
           ...contractForm,
-          status: 'active'
+          status: 'draft',
+          version: 1
         };
         setContracts(prev => [newContract, ...prev]);
-        triggerNotification('✓ تم تحرير وإبرام عقد العمل للموظف بنجاح', 'success');
+        triggerNotification('✓ تم حفظ مسودة العقد؛ لا تصبح سارية قبل التوقيع والاعتماد.', 'success');
       }
       setShowAddModal(false);
       setEditingItem(null);
+    };
+
+    const handleSignContract = (contractId: string) => {
+      if (!onSignContract) {
+        triggerNotification('توقيع العقود متاح فقط مع المصدر المركزي الموثوق.', 'warning');
+        return;
+      }
+      void onSignContract(contractId);
     };
 
     return (
@@ -441,11 +457,12 @@ export default function OtherHRTabs({
                     <td className="p-4 text-center">
                       <span className={`px-2 py-0.5 rounded text-[10px] font-bold ${
                         c.status === 'active' ? 'bg-emerald-500/10 text-emerald-400' : 'bg-rose-500/10 text-rose-400'
-                      }`}>{c.status === 'active' ? 'ساري' : 'منتهي / ملغي'}</span>
+                      }`}>{c.status === 'draft' ? 'مسودة' : c.status === 'active' ? 'ساري وموقّع' : 'منتهي / ملغي'}</span>
                     </td>
                     <td className="p-4 text-center">
                       <div className="flex items-center justify-center gap-2">
                         <button onClick={() => { setEditingItem(c); setContractForm({ ...c }); setShowAddModal(true); }} className="p-1 bg-slate-800 hover:bg-slate-700 text-amber-400 rounded"><Edit className="w-3.5 h-3.5" /></button>
+                        {c.status === 'draft' && <button onClick={() => handleSignContract(c.id)} className="p-1 bg-emerald-900/60 hover:bg-emerald-800 text-emerald-300 rounded" title="توقيع واعتماد">توقيع</button>}
                         <button onClick={() => { if(confirm('إلغاء أو إنهاء هذا العقد؟')) setContracts(prev => prev.map(x => x.id === c.id ? {...x, status: 'terminated'} : x)); }} className="p-1 bg-slate-800 hover:bg-rose-950 text-rose-400 rounded"><X className="w-3.5 h-3.5" /></button>
                       </div>
                     </td>
@@ -518,11 +535,21 @@ export default function OtherHRTabs({
       };
       setLeaves(prev => [newLeave, ...prev]);
       
-      // Auto update employee status to on_leave
-      setEmployees(prev => prev.map(emp => emp.id === leaveForm.employeeId ? { ...emp, status: 'on_leave' } : emp));
-      
-      triggerNotification('✓ تم اعتماد الإجازة بنجاح، وتحديث حالة الموظف لـ (في إجازة)', 'success');
+      triggerNotification('✓ تم تسجيل طلب الإجازة وإرساله للمراجعة والاعتماد', 'success');
       setShowAddModal(false);
+    };
+
+    const updateLeaveStatus = (leaveId: string, status: HRLeave['status']) => {
+      const leave = leaves.find(item => item.id === leaveId);
+      if (!leave) return;
+      setLeaves(prev => prev.map(item => item.id === leaveId ? { ...item, status } : item));
+      if (status === 'approved') {
+        setEmployees(prev => prev.map(employee => employee.id === leave.employeeId ? { ...employee, status: 'on_leave' } : employee));
+      }
+      if (status === 'rejected') {
+        setEmployees(prev => prev.map(employee => employee.id === leave.employeeId && employee.status === 'on_leave' ? { ...employee, status: 'active' } : employee));
+      }
+      triggerNotification(status === 'approved' ? 'تم اعتماد طلب الإجازة وتحديث حالة الموظف.' : 'تم رفض طلب الإجازة.', status === 'approved' ? 'success' : 'warning');
     };
 
     return (
@@ -568,7 +595,13 @@ export default function OtherHRTabs({
                     <td className="p-4 text-center font-mono text-slate-400">{l.endDate}</td>
                     <td className="p-4 max-w-[200px] truncate">{l.reason}</td>
                     <td className="p-4 text-center">
-                      <span className="bg-emerald-500/10 text-emerald-400 font-bold text-[10px] px-2 py-0.5 rounded border border-emerald-500/20">معتمدة</span>
+                      <div className="flex flex-col items-center gap-1.5">
+                        <span className={`font-bold text-[10px] px-2 py-0.5 rounded border ${l.status === 'approved' ? 'bg-emerald-500/10 text-emerald-400 border-emerald-500/20' : l.status === 'rejected' ? 'bg-rose-500/10 text-rose-400 border-rose-500/20' : 'bg-amber-500/10 text-amber-400 border-amber-500/20'}`}>{l.status === 'approved' ? 'معتمدة' : l.status === 'rejected' ? 'مرفوضة' : 'قيد المراجعة'}</span>
+                        {l.status === 'pending' && <div className="flex gap-1">
+                          <button type="button" onClick={() => updateLeaveStatus(l.id, 'approved')} className="text-[10px] bg-emerald-700/80 px-2 py-1 rounded text-white">اعتماد</button>
+                          <button type="button" onClick={() => updateLeaveStatus(l.id, 'rejected')} className="text-[10px] bg-rose-700/80 px-2 py-1 rounded text-white">رفض</button>
+                        </div>}
+                      </div>
                     </td>
                   </tr>
                 );
@@ -618,7 +651,7 @@ export default function OtherHRTabs({
               </div>
               <div className="bg-slate-800 p-4 flex justify-end gap-2 border-t border-slate-700">
                 <button type="button" onClick={() => setShowAddModal(false)} className="bg-slate-700 px-4 py-2 rounded text-slate-300">إلغاء</button>
-                <button type="submit" className="bg-[#dfb55a] text-slate-950 font-bold px-5 py-2 rounded">اعتماد الإجازة فوراً</button>
+                <button type="submit" className="bg-[#dfb55a] text-slate-950 font-bold px-5 py-2 rounded">إرسال الطلب للمراجعة</button>
               </div>
             </form>
           </div>
@@ -653,8 +686,13 @@ export default function OtherHRTabs({
         return emp;
       }));
 
-      triggerNotification('✓ تم رصد المخالفة وتثبيت الخصم المالي ليرحل تلقائياً بمسير رواتب الشهر', 'success');
+      triggerNotification('✓ تم تسجيل الجزاء وإرساله للمراجعة قبل إدخاله في مسير الرواتب', 'success');
       setShowAddModal(false);
+    };
+
+    const updatePenaltyStatus = (penaltyId: string, status: HRPenalty['status']) => {
+      setPenalties(prev => prev.map(item => item.id === penaltyId ? { ...item, status } : item));
+      triggerNotification(status === 'applied' ? 'تم تطبيق الجزاء؛ سيظهر في المسير القادم.' : 'تم إلغاء أثر الجزاء.', status === 'applied' ? 'success' : 'warning');
     };
 
     return (
@@ -698,7 +736,13 @@ export default function OtherHRTabs({
                     <td className="p-4 text-center font-bold text-rose-400 font-mono">-{formatCurrency(p.amount, true)}</td>
                     <td className="p-4">{p.reason}</td>
                     <td className="p-4 text-center">
-                      <span className="bg-rose-500/10 text-rose-400 font-bold text-[10px] px-2 py-0.5 rounded border border-rose-500/20">نافذ</span>
+                      <div className="flex flex-col items-center gap-1.5">
+                        <span className={`font-bold text-[10px] px-2 py-0.5 rounded border ${p.status === 'applied' ? 'bg-rose-500/10 text-rose-400 border-rose-500/20' : p.status === 'waived' ? 'bg-slate-500/10 text-slate-400 border-slate-500/20' : 'bg-amber-500/10 text-amber-400 border-amber-500/20'}`}>{p.status === 'applied' ? 'نافذ' : p.status === 'waived' ? 'ملغى' : 'قيد المراجعة'}</span>
+                        {p.status === 'pending' && <div className="flex gap-1">
+                          <button type="button" onClick={() => updatePenaltyStatus(p.id, 'applied')} className="text-[10px] bg-rose-700/80 px-2 py-1 rounded text-white">تطبيق</button>
+                          <button type="button" onClick={() => updatePenaltyStatus(p.id, 'waived')} className="text-[10px] bg-slate-700 px-2 py-1 rounded text-white">إلغاء</button>
+                        </div>}
+                      </div>
                     </td>
                   </tr>
                 );
@@ -759,8 +803,6 @@ export default function OtherHRTabs({
   if (activeTab === 'advances') {
     const handleSaveAdvance = (e: React.FormEvent) => {
       e.preventDefault();
-
-      
       const newAdvance: HRAdvance = {
         id: `ADV-${Date.now().toString().slice(-4)}`,
         ...advanceForm,
@@ -768,63 +810,13 @@ export default function OtherHRTabs({
         status: 'pending'
       };
       setAdvances(prev => [newAdvance, ...prev]);
-
-      // Integrate with ledger to create a payment voucher (سند صرف سلفة)
-      let ledgerAccounts: any[] = [];
-      let paymentVouchers: any[] = [];
-      try {
-        const accs = localStorage.getItem('erp_chart_of_accounts_v2');
-        if (accs) ledgerAccounts = JSON.parse(accs);
-        const pvs = localStorage.getItem('erp_payment_vouchers_v2');
-        if (pvs) paymentVouchers = JSON.parse(pvs);
-      } catch (err) {}
-
-      const bankSafe = settings.defaultBankSafeAccount || '1101';
-      const pvId = `PV-2026-ADV${Date.now().toString().slice(-3)}`;
-
-      SQLTransactionEngine.run({
-        operationName: `GENERATE_ADVANCE_PAYMENT (صرف سلفة للموظف)`,
-        tenantId: 'school_1',
-        userId: 'mgr_hr',
-        userName: 'مدير الموارد البشرية',
-        ipAddress: '192.168.1.100',
-        affectedTables: ['accounts_ledger', 'voucher_payments'],
-        validationBlock: () => ({ valid: true }),
-        authorizationBlock: () => ({ authorized: true }),
-        executionBlock: () => {
-          // Credit Bank/Safe
-          if (ledgerAccounts.length > 0) {
-            const updated = ledgerAccounts.map((a: any) => {
-              if (a.code === bankSafe) return { ...a, balance: a.balance - advanceForm.amount };
-              return a;
-            });
-            localStorage.setItem('erp_chart_of_accounts_v2', JSON.stringify(updated));
-          }
-
-          // Create Payment Voucher
-          const emp = employees.find(x => x.id === advanceForm.employeeId);
-          const newVoucher = {
-            id: pvId,
-            date: advanceForm.date,
-            beneficiary: emp ? emp.name : 'موظف سلفة',
-            costCenter: emp ? emp.costCenter : 'admin',
-            paidFromAccount: bankSafe,
-            paidToAccount: '1230', // Advances account
-            amount: advanceForm.amount,
-            against: `صرف سلفة للموظف بقيمة ${advanceForm.amount} تُسترد على ${advanceForm.installments} شهور`,
-            attachmentName: null,
-            paymentMethod: bankSafe === '1102' ? 'تحويل' : 'نقدي',
-            status: 'معتمد' as const,
-            notes: `سلفة مستردة • القسط الشهري: ${advanceForm.deductionPerMonth}`
-          };
-          localStorage.setItem('erp_payment_vouchers_v2', JSON.stringify([newVoucher, ...paymentVouchers]));
-          return true;
-        },
-        nestedSqlQueries: []
-      });
-
-      triggerNotification(`✓ تم اعتماد طلب السلفة بنجاح، وصرف المبلغ بموجب سند الصرف ${pvId} المضاف آلياً لليومية العامة`, 'success');
+      triggerNotification('✓ تم تسجيل طلب السلفة وإرساله للمراجعة المالية؛ لا يتم الصرف قبل الاعتماد.', 'success');
       setShowAddModal(false);
+    };
+
+    const updateAdvanceStatus = (advanceId: string, status: HRAdvance['status']) => {
+      setAdvances(prev => prev.map(item => item.id === advanceId ? { ...item, status } : item));
+      triggerNotification(status === 'approved' ? 'تم اعتماد السلفة؛ الصرف يتم من المسار المالي المركزي.' : 'تم رفض طلب السلفة.', status === 'approved' ? 'success' : 'warning');
     };
 
     return (
@@ -870,9 +862,15 @@ export default function OtherHRTabs({
                     <td className="p-4 text-center font-mono font-bold text-rose-400">-{formatCurrency(a.deductionPerMonth, true)}</td>
                     <td className="p-4 text-center font-mono font-bold text-amber-500">{formatCurrency(a.remainingAmount, true)}</td>
                     <td className="p-4 text-center">
-                      <span className={`px-2 py-0.5 rounded text-[10px] font-bold ${
-                        a.remainingAmount > 0 ? 'bg-amber-500/10 text-amber-400' : 'bg-emerald-500/10 text-emerald-400'
-                      }`}>{a.remainingAmount > 0 ? 'جار التحصيل' : 'مستردة بالكامل'}</span>
+                      <div className="flex flex-col items-center gap-1.5">
+                        <span className={`px-2 py-0.5 rounded text-[10px] font-bold ${a.status === 'pending' ? 'bg-amber-500/10 text-amber-400' : a.status === 'rejected' ? 'bg-rose-500/10 text-rose-400' : a.remainingAmount > 0 ? 'bg-sky-500/10 text-sky-400' : 'bg-emerald-500/10 text-emerald-400'}`}>{a.status === 'pending' ? 'قيد المراجعة' : a.status === 'rejected' ? 'مرفوضة' : a.remainingAmount > 0 ? 'معتمدة وجار التحصيل' : 'مستردة بالكامل'}</span>
+                        {a.status === 'pending' && <div className="flex gap-1">
+                          <button type="button" onClick={() => updateAdvanceStatus(a.id, 'approved')} className="text-[10px] bg-emerald-700/80 px-2 py-1 rounded text-white">اعتماد</button>
+                          <button type="button" onClick={() => updateAdvanceStatus(a.id, 'rejected')} className="text-[10px] bg-rose-700/80 px-2 py-1 rounded text-white">رفض</button>
+                        </div>}
+                        {a.status === 'approved' && !a.journalId && onPayAdvance && <button type="button" onClick={() => void onPayAdvance(a.id)} className="text-[10px] bg-sky-700/80 px-2 py-1 rounded text-white">صرف مركزي</button>}
+                        {a.journalId && <span className="text-[9px] text-slate-500 font-mono">قيد: {a.journalId}</span>}
+                      </div>
                     </td>
                   </tr>
                 );
@@ -929,7 +927,7 @@ export default function OtherHRTabs({
               </div>
               <div className="bg-slate-800 p-4 flex justify-end gap-2 border-t border-slate-700">
                 <button type="button" onClick={() => setShowAddModal(false)} className="bg-slate-700 px-4 py-2 rounded text-slate-300">إلغاء</button>
-                <button type="submit" className="bg-[#dfb55a] text-slate-950 font-bold px-5 py-2 rounded">اعتماد السلفة وصرفها</button>
+                <button type="submit" className="bg-[#dfb55a] text-slate-950 font-bold px-5 py-2 rounded">إرسال الطلب للمراجعة</button>
               </div>
             </form>
           </div>
@@ -963,8 +961,13 @@ export default function OtherHRTabs({
         return emp;
       }));
 
-      triggerNotification('✓ تم اعتماد ومنح المكافأة بنجاح، وستضاف تلقائياً لصافي مستحقات الموظف بالمرتب', 'success');
+      triggerNotification('✓ تم تسجيل المكافأة وإرسالها للمراجعة قبل إضافتها إلى مسير الرواتب', 'success');
       setShowAddModal(false);
+    };
+
+    const updateRewardStatus = (rewardId: string, status: HRBonus['status']) => {
+      setRewards(prev => prev.map(item => item.id === rewardId ? { ...item, status } : item));
+      triggerNotification(status === 'applied' ? 'تم اعتماد المكافأة وستدخل في المسير القادم.' : 'تم إرجاع المكافأة للمراجعة.', status === 'applied' ? 'success' : 'warning');
     };
 
     return (
@@ -1006,7 +1009,10 @@ export default function OtherHRTabs({
                     <td className="p-4 text-center font-bold text-emerald-400 font-mono">+{formatCurrency(r.amount, true)}</td>
                     <td className="p-4 font-semibold text-slate-200">{r.reason}</td>
                     <td className="p-4 text-center">
-                      <span className="bg-emerald-500/10 text-emerald-400 font-bold text-[10px] px-2 py-0.5 rounded border border-emerald-500/20">معتمدة</span>
+                      <div className="flex flex-col items-center gap-1.5">
+                        <span className={`font-bold text-[10px] px-2 py-0.5 rounded border ${r.status === 'applied' || r.status === 'paid' ? 'bg-emerald-500/10 text-emerald-400 border-emerald-500/20' : 'bg-amber-500/10 text-amber-400 border-amber-500/20'}`}>{r.status === 'paid' ? 'صُرفت' : r.status === 'applied' ? 'معتمدة' : 'قيد المراجعة'}</span>
+                        {r.status === 'pending' && <button type="button" onClick={() => updateRewardStatus(r.id, 'applied')} className="text-[10px] bg-emerald-700/80 px-2 py-1 rounded text-white">اعتماد</button>}
+                      </div>
                     </td>
                   </tr>
                 );
@@ -1047,7 +1053,7 @@ export default function OtherHRTabs({
               </div>
               <div className="bg-slate-800 p-4 flex justify-end gap-2 border-t border-slate-700">
                 <button type="button" onClick={() => setShowAddModal(false)} className="bg-slate-700 px-4 py-2 rounded text-slate-300">إلغاء</button>
-                <button type="submit" className="bg-[#dfb55a] text-slate-950 font-bold px-5 py-2 rounded">منح المكافأة فوراً</button>
+                <button type="submit" className="bg-[#dfb55a] text-slate-950 font-bold px-5 py-2 rounded">إرسال للمراجعة</button>
               </div>
             </form>
           </div>
@@ -1182,7 +1188,9 @@ export default function OtherHRTabs({
       const newDoc: HRDocument = {
         id: `DOC-${Date.now().toString().slice(-4)}`,
         ...docForm,
-        status: 'valid'
+        status: docForm.expiryDate < new Date().toISOString().slice(0, 10)
+          ? 'expired'
+          : docForm.expiryDate <= new Date(Date.now() + 90 * 24 * 60 * 60 * 1000).toISOString().slice(0, 10) ? 'warning' : 'valid'
       };
       setDocuments(prev => [newDoc, ...prev]);
       triggerNotification('✓ تم تسجيل وحفظ الوثيقة الثبوتية بملف الموظف الرقمي بنجاح', 'success');
@@ -1194,10 +1202,10 @@ export default function OtherHRTabs({
         <div className="flex justify-between items-center bg-slate-900/40 p-4 border border-slate-800">
           <div>
             <h3 className="font-bold text-white text-sm">أرشيف الوثائق والمستندات الثبوتية</h3>
-            <p className="text-xs text-slate-400">أرشفة جوازات السفر، البطاقات الشخصية، الرخص، المؤهلات العلمية للعاملين وتواريخ الصلاحية.</p>
+            <p className="text-xs text-slate-400">تسجيل بيانات الوثائق وتواريخ صلاحيتها في السجل المركزي؛ رفع الملفات الثنائية يحتاج مخزن مستندات مؤمناً.</p>
           </div>
           <button 
-            onClick={() => { setDocForm({ employeeId: employees[0]?.id || '', title: 'جواز السفر الإلكتروني', type: 'passport', issueDate: '2021-01-01', expiryDate: '2028-12-31' }); setShowAddModal(true); }}
+            onClick={() => { setDocForm({ employeeId: employees[0]?.id || '', title: '', type: 'passport', issueDate: '', expiryDate: '' }); setShowAddModal(true); }}
             className="bg-gradient-to-r from-yellow-600 to-amber-600 hover:opacity-90 text-white font-bold px-4 py-2 rounded-lg text-xs flex items-center gap-1 shadow-md"
           >
             <Plus className="w-4 h-4" />
@@ -1230,7 +1238,7 @@ export default function OtherHRTabs({
                     <td className="p-4 text-center font-mono text-slate-400">{d.issueDate}</td>
                     <td className="p-4 text-center font-mono text-slate-400">{d.expiryDate}</td>
                     <td className="p-4 text-center">
-                      <span className="bg-emerald-500/10 text-emerald-400 font-bold text-[10px] px-2 py-0.5 rounded border border-emerald-500/20">صالحة ونافذة</span>
+                      <span className={`font-bold text-[10px] px-2 py-0.5 rounded border ${d.status === 'expired' ? 'bg-rose-500/10 text-rose-400 border-rose-500/20' : d.status === 'warning' ? 'bg-amber-500/10 text-amber-400 border-amber-500/20' : 'bg-emerald-500/10 text-emerald-400 border-emerald-500/20'}`}>{d.status === 'expired' ? 'منتهية' : d.status === 'warning' ? 'توشك على الانتهاء' : 'صالحة ونافذة'}</span>
                     </td>
                   </tr>
                 );
@@ -1280,7 +1288,7 @@ export default function OtherHRTabs({
               </div>
               <div className="bg-slate-800 p-4 flex justify-end gap-2 border-t border-slate-700">
                 <button type="button" onClick={() => setShowAddModal(false)} className="bg-slate-700 px-4 py-2 rounded text-slate-300">إلغاء</button>
-                <button type="submit" className="bg-[#dfb55a] text-slate-950 font-bold px-5 py-2 rounded">حفظ وأرشفة الوثيقة</button>
+                <button type="submit" className="bg-[#dfb55a] text-slate-950 font-bold px-5 py-2 rounded">حفظ بيانات الوثيقة</button>
               </div>
             </form>
           </div>
@@ -1338,6 +1346,14 @@ export default function OtherHRTabs({
                 <div className="space-y-1">
                   <label className="text-slate-400 font-medium">معدل اقتطاع التأخير الفوري (ساعة/ساعة)</label>
                   <input type="number" step="0.1" value={settings.lateDeductionRate} onChange={e => setSettings(p=>({...p, lateDeductionRate: Number(e.target.value)}))} className="w-full bg-slate-850 border border-slate-700 rounded p-2 text-white font-mono" />
+                </div>
+                <label className="flex items-center gap-2 text-slate-300 md:col-span-2">
+                  <input type="checkbox" checked={settings.unpaidAbsenceDeduction === true} onChange={e => setSettings(p => ({ ...p, unpaidAbsenceDeduction: e.target.checked }))} />
+                  خصم أيام الغياب غير المدفوعة بعد اعتمادها فقط
+                </label>
+                <div className="space-y-1">
+                  <label className="text-slate-400 font-medium">مضاعف أجر الساعات الإضافية</label>
+                  <input type="number" min="0" step="0.1" value={settings.overtimeMultiplier ?? 0} onChange={e => setSettings(p => ({ ...p, overtimeMultiplier: Math.max(0, Number(e.target.value)) }))} className="w-full bg-slate-850 border border-slate-700 rounded p-2 text-white font-mono" />
                 </div>
               </div>
             </div>

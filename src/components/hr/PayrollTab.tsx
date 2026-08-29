@@ -1,23 +1,22 @@
 import { Check, CheckSquare, Coins, CreditCard, Eye, FileText, Filter, Play, Printer, Search, ShieldAlert, ShieldCheck, TrendingDown, TrendingUp } from 'lucide-react';
-import { EnterpriseLogger } from '../../database/services/EnterpriseLogger';
 import React, { useState, useEffect } from 'react';
-import { HREmployee, HRPenalty, HRAdvance, HRBonus, HRSettings } from './types';
-import { SQLTransactionEngine } from '../../database/transactions/transactionManager';
-import { SQLCommandBuilder } from '../../database/transactions/SQLCommand';
-import { getTrustedAccessToken } from '../../utils/auth';
-import { FallbackStorage } from '../../database/repositories/FallbackStorage';
+import { HRAttendance, HREmployee, HRPenalty, HRAdvance, HRBonus, HRPayrollRun, HRSettings } from './types';
+import { calculatePayrollRun } from '../../modules/hr/domain/PayrollCalculation';
 
 interface PayrollTabProps {
   employees: HREmployee[];
+  attendance: HRAttendance[];
+  leaves: import('./types').HRLeave[];
   penalties: HRPenalty[];
   advances: HRAdvance[];
   rewards: HRBonus[];
+  payrollRuns: HRPayrollRun[];
   settings: HRSettings;
   formatCurrency: (amount: number, showSymbol?: boolean) => string;
   triggerNotification: (msg: string, type: 'success' | 'warning' | 'error') => void;
   costCenterLabels: Record<string, string>;
-  onApprovePayroll: (period: string) => Promise<void>;
-  onPayPayroll: (period: string) => Promise<void>;
+  onApprovePayroll: (period: string) => Promise<boolean>;
+  onPayPayroll: (period: string) => Promise<boolean>;
 }
 
 interface PayrollItem {
@@ -34,9 +33,12 @@ interface PayrollItem {
 
 export default function PayrollTab({
   employees,
+  attendance,
+  leaves,
   penalties,
   advances,
   rewards,
+  payrollRuns,
   settings,
   formatCurrency,
   triggerNotification,
@@ -52,54 +54,32 @@ export default function PayrollTab({
 
   // Sync / Calculate payroll for selected month
   useEffect(() => {
-    // Check if payroll is already posted in localStorage
-    const postedKey = `erp_hr_payroll_posted_${selectedMonth}`;
-    const postedVal = FallbackStorage.isCanonicalPersistenceRequired()
-      ? null
-      : localStorage.getItem(postedKey);
-    setIsPosted(!!postedVal);
+    const persistedRun = payrollRuns.find(run => run.period === selectedMonth);
+    setIsApproved(persistedRun?.status === 'approved' || persistedRun?.status === 'paid');
+    setIsPosted(persistedRun?.status === 'paid');
 
     // Calculate items
-    const items: PayrollItem[] = employees
-      .filter(emp => emp.status !== 'resigned')
-      .map(emp => {
-        // Calculate total allowances
-        const totalAllowances = emp.allowances.reduce((acc, a) => acc + a.amount, 0);
-
-        // Filter applied rewards for this employee in selected month
-        const totalBonuses = rewards
-          .filter(r => r.employeeId === emp.id && r.status === 'applied' && r.date.startsWith(selectedMonth))
-          .reduce((acc, r) => acc + r.amount, 0);
-
-        // Filter penalties for this employee in selected month
-        const totalPenalties = penalties
-          .filter(p => p.employeeId === emp.id && p.status === 'applied' && p.date.startsWith(selectedMonth))
-          .reduce((acc, p) => acc + p.amount, 0);
-
-        // Filter active advances and deduct installment
-        const activeAdvance = advances.find(a => a.employeeId === emp.id && (a.status === 'approved' || a.status === 'fully_paid') && a.remainingAmount > 0);
-        let advanceDeduction = 0;
-        if (activeAdvance) {
-          advanceDeduction = Math.min(activeAdvance.deductionPerMonth, activeAdvance.remainingAmount);
-        }
-
-        const net = emp.basicSalary + totalAllowances + totalBonuses - totalPenalties - advanceDeduction;
-
-        return {
-          employeeId: emp.id,
-          employeeName: emp.name,
-          basicSalary: emp.basicSalary,
-          allowances: totalAllowances,
-          bonuses: totalBonuses,
-          deductions: totalPenalties,
-          advancesDeducted: advanceDeduction,
-          netSalary: Math.max(0, net),
-          costCenter: emp.costCenter
-        };
-      });
+    const calculation = calculatePayrollRun({ period: selectedMonth, employees, rewards, penalties, advances, attendance, leaves, settings });
+    const items: PayrollItem[] = calculation.lines.map(line => {
+      const employee = employees.find(item => item.id === line.employeeId);
+      const basicSalary = Number(employee?.basicSalary || 0);
+      const allowances = (employee?.allowances || []).reduce((sum, item) => sum + Number(item.amount || 0), 0);
+      const bonuses = rewards.filter(item => item.employeeId === line.employeeId && item.status === 'applied' && item.date.startsWith(selectedMonth)).reduce((sum, item) => sum + Number(item.amount || 0), 0);
+      return {
+        employeeId: line.employeeId,
+        employeeName: employee?.name || line.employeeId,
+        basicSalary,
+        allowances,
+        bonuses,
+        deductions: line.penalty + line.attendanceDeduction + (line.leaveDeduction || 0),
+        advancesDeducted: line.advanceDeduction,
+        netSalary: line.net,
+        costCenter: employee?.costCenter || 'admin'
+      };
+    });
 
     setPayrollList(items);
-  }, [employees, penalties, advances, rewards, selectedMonth]);
+  }, [employees, attendance, leaves, penalties, advances, rewards, payrollRuns, selectedMonth, settings]);
 
   // Total summary calculations
   const totals = payrollList.reduce((acc, item) => {
@@ -124,155 +104,13 @@ export default function PayrollTab({
     }
 
     if (!isApproved) {
-      await onApprovePayroll(selectedMonth);
-      setIsApproved(true);
+      const approved = await onApprovePayroll(selectedMonth);
+      if (approved) setIsApproved(true);
       return;
     }
-    await onPayPayroll(selectedMonth);
-    setIsPosted(true);
+    const posted = await onPayPayroll(selectedMonth);
+    if (posted) setIsPosted(true);
     return;
-
-    if (FallbackStorage.isCanonicalPersistenceRequired()) {
-      triggerNotification('ترحيل الرواتب متوقف حتى يتم ربط مسار الرواتب بمصدر محاسبي مركزي موثوق.', 'warning');
-      return;
-    }
-
-    if (!confirm(`هل أنت متأكد من رغبتك في اعتماد مسير الرواتب لشهر (${selectedMonth}) وترحيله تلقائياً للحسابات العامة؟ سيعمل هذا الإجراء على تعديل ميزان المراجعة وتوليد القيود وسندات الصرف.`)) {
-      return;
-    }
-
-    // Prepare ledger account references
-    const bankSafeAccount = settings.defaultBankSafeAccount || '1102'; // Source bank/safe
-    const salariesExpenseAccount = settings.defaultSalariesExpenseAccount || '5101'; // Salaries expense
-    
-    // We fetch general ledger journal entries and vouchers from localStorage to append our entries!
-    let ledgerAccounts: any[] = [];
-    let journalEntries: any[] = [];
-    let paymentVouchers: any[] = [];
-
-    try {
-      const accs = localStorage.getItem('erp_chart_of_accounts_v2');
-      if (accs) ledgerAccounts = JSON.parse(accs);
-      const jvs = localStorage.getItem('erp_journal_entries_v2');
-      if (jvs) journalEntries = JSON.parse(jvs);
-      const pvs = localStorage.getItem('erp_payment_vouchers_v2');
-      if (pvs) paymentVouchers = JSON.parse(pvs);
-    } catch (e: any) {
-      EnterpriseLogger.error("Failed to read ledger structures from localstorage", "PayrollTab", { error: e });
-    }
-
-    const jvId = `JV-2026-P${selectedMonth.replace('-', '')}`;
-    const dateStr = new Date().toISOString().split('T')[0];
-
-    SQLTransactionEngine.run({
-      operationName: `POST_PAYROLL (ترحيل مسير الرواتب شهر ${selectedMonth})`,
-      tenantId: 'school_1',
-      userId: 'mgr_hr',
-      userName: 'مدير الموارد البشرية',
-      ipAddress: '192.168.1.100',
-      affectedTables: ['accounts_ledger', 'journal_entries', 'voucher_payments'],
-      validationBlock: () => ({ valid: true }),
-      authorizationBlock: () => ({ authorized: true }),
-      executionBlock: () => {
-        // 1. Debit Salaries Expense and Credit Cash/Bank in the ledger account list
-        if (ledgerAccounts.length > 0) {
-          const updatedAccounts = ledgerAccounts.map((acc: any) => {
-            if (acc.code === bankSafeAccount) {
-              // Credit asset (reduces balance)
-              return { ...acc, balance: Number(acc.balance) - totals.net };
-            }
-            if (acc.code === salariesExpenseAccount) {
-              // Debit expense (increases balance)
-              return { ...acc, balance: Number(acc.balance) + totals.net };
-            }
-            return acc;
-          });
-          localStorage.setItem('erp_chart_of_accounts_v2', JSON.stringify(updatedAccounts));
-        }
-
-        // 2. Append Double-Entry Journal Entry
-        const newJV = {
-          id: jvId,
-          date: dateStr,
-          description: `إثبات مستحقات وصرف مسير الرواتب والأجور لشهر ${selectedMonth} (قيد آلي)`,
-          debitTotal: totals.net,
-          creditTotal: totals.net,
-          status: 'مرحل'
-        };
-        const updatedJVs = [newJV, ...journalEntries];
-        localStorage.setItem('erp_journal_entries_v2', JSON.stringify(updatedJVs));
-
-        // 3. For each paid employee, append a Payment Voucher (سند صرف)
-        const newVouchers: any[] = [];
-        payrollList.forEach((item, index) => {
-          const pvId = `PV-2026-P${selectedMonth.replace('-', '')}${String(index + 1).padStart(3, '0')}`;
-          
-          newVouchers.push({
-            id: pvId,
-            date: dateStr,
-            beneficiary: item.employeeName,
-            costCenter: item.costCenter,
-            paidFromAccount: bankSafeAccount,
-            paidToAccount: salariesExpenseAccount,
-            amount: item.netSalary,
-            against: `صرف الراتب الصافي المستحق لشهر ${selectedMonth}`,
-            attachmentName: null,
-            paymentMethod: bankSafeAccount === '1102' ? 'تحويل' : 'نقدي',
-            status: 'معتمد' as const,
-            notes: `مسير رواتب الكتروني معتمد • راتب أساسي: ${item.basicSalary}، بدلات: ${item.allowances}، مكافآت: ${item.bonuses}، خصومات: ${item.deductions}`
-          });
-        });
-
-        const updatedPVs = [...newVouchers, ...paymentVouchers];
-        localStorage.setItem('erp_payment_vouchers_v2', JSON.stringify(updatedPVs));
-
-        // Sync with server database authoritative financial API
-        fetch('/api/financial/database', {
-          method: 'POST',
-          headers: {
-            'Authorization': `Bearer ${getTrustedAccessToken()}`,
-            'Content-Type': 'application/json'
-          },
-          body: JSON.stringify({
-            journalEntries: updatedJVs,
-            paymentVouchers: updatedPVs,
-            chartOfAccounts: ledgerAccounts.length > 0 ? ledgerAccounts : undefined
-          })
-        }).catch(err => {
-          EnterpriseLogger.error("Failed to sync payroll postings with server financial database", "PayrollTab", { error: err });
-        });
-
-        // Mark payroll as posted in local storage
-        localStorage.setItem(`erp_hr_payroll_posted_${selectedMonth}`, 'true');
-        setIsPosted(true);
-
-        return true;
-      },
-      nestedSqlQueries: [
-        SQLCommandBuilder.create({
-          sqlText: `-- Post Payroll for Month $1`,
-          parameters: [selectedMonth],
-          executionContext: 'Payroll Processing Engine'
-        }),
-        SQLCommandBuilder.create({
-          sqlText: `UPDATE chart_of_accounts SET balance = balance - $1 WHERE code = $2;`,
-          parameters: [totals.net, bankSafeAccount],
-          executionContext: 'Payroll Balance Posting'
-        }),
-        SQLCommandBuilder.create({
-          sqlText: `UPDATE chart_of_accounts SET balance = balance + $1 WHERE code = $2;`,
-          parameters: [totals.net, salariesExpenseAccount],
-          executionContext: 'Payroll Expense Posting'
-        }),
-        SQLCommandBuilder.create({
-          sqlText: `INSERT INTO journal_entries (id, date, description, debit_total, credit_total, status) VALUES ($1, $2, $3, $4, $5, $6);`,
-          parameters: [jvId, dateStr, `مسير الرواتب لشهر ${selectedMonth}`, totals.net, totals.net, 'Posted'],
-          executionContext: 'Payroll Journal Logging'
-        })
-      ]
-    });
-
-    triggerNotification(`✓ تم اعتماد وترحيل مسير رواتب شهر ${selectedMonth} بنجاح! تم إنشاء القيود وتوليد عدد ${payrollList.length} سند صرف فردي وإدراجها بدفتر اليومية العامة للمدرسة.`, 'success');
   };
 
   // Handle Print Salary Slip

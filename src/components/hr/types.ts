@@ -58,7 +58,11 @@ export interface HRContract {
   startDate: string;
   endDate: string;
   monthlySalary: number;
-  status: 'active' | 'expired' | 'terminated';
+  status: 'draft' | 'active' | 'expired' | 'terminated';
+  version?: number;
+  signedAt?: string;
+  signatureHash?: string;
+  terminationReason?: string;
 }
 
 export interface HRAttendance {
@@ -103,6 +107,9 @@ export interface HRAdvance {
   remainingAmount: number;
   reason: string;
   status: 'pending' | 'approved' | 'rejected' | 'fully_paid';
+  journalId?: string;
+  paidAt?: string;
+  paidBy?: string;
 }
 
 export interface HRBonus {
@@ -145,4 +152,40 @@ export interface HRSettings {
   payrollPayableAccount: string;
   advanceReceivableAccount: string;
   deductionClearingAccount: string;
+  /** Optional policy switches. Absent values retain the safe defaults. */
+  unpaidAbsenceDeduction?: boolean;
+  overtimeMultiplier?: number;
+  workingHoursPerDay?: number;
+}
+
+export interface HRPayrollRun {
+  id: string;
+  period: string;
+  status: 'approved' | 'paid';
+  lines: Array<{
+    employeeId: string;
+    gross: number;
+    penalty: number;
+    advanceDeduction: number;
+    attendanceDeduction?: number;
+    leaveDeduction?: number;
+    overtimePay?: number;
+    net: number;
+  }>;
+  totals: {
+    gross: number;
+    penalty: number;
+    advance: number;
+    attendance?: number;
+    leave?: number;
+    overtime?: number;
+    net: number;
+  };
+  approvedAt: string;
+  approvedBy: string;
+  paidAt?: string;
+  paidBy?: string;
+  journalId?: string;
+  hrVersion: number;
+  fingerprint: string;
 }

@@ -92,6 +92,7 @@ import {
   canWriteExamOperation,
   projectExamDatabaseForRead
 } from './src/modules/exams/application/ExamAuthorizationPolicy.js';
+import { calculatePayrollRun } from './src/modules/hr/domain/PayrollCalculation.js';
 
 type FinancialWriteMode = 'snapshot_read_only' | 'snapshot_write' | 'erp_integrated';
 
@@ -100,6 +101,104 @@ function stableJsonStringify(value: unknown): string {
   if (Array.isArray(value)) return `[${value.map(stableJsonStringify).join(',')}]`;
   const record = value as Record<string, unknown>;
   return `{${Object.keys(record).sort().map(key => `${JSON.stringify(key)}:${stableJsonStringify(record[key])}`).join(',')}}`;
+}
+
+function validateHrSnapshotData(data: Record<string, any>): void {
+  const collections = ['employees', 'departments', 'jobs', 'contracts', 'attendance', 'leaves', 'penalties', 'advances', 'rewards', 'performance', 'documents', 'payrollRuns'];
+  for (const collection of collections) {
+    if (!Array.isArray(data[collection])) throw new ValidationError(`حقل سجلات الموارد البشرية ${collection} يجب أن يكون قائمة.`);
+    const ids = new Set<string>();
+    for (const [index, row] of data[collection].entries()) {
+      if (!row || typeof row !== 'object' || Array.isArray(row)) throw new ValidationError(`السجل ${collection}[${index}] غير صالح.`);
+      const id = String(row.id || '').trim();
+      if (!id || ids.has(id)) throw new ConflictError(`المعرّف ${id || '(فارغ)'} مكرر أو مفقود داخل ${collection}.`);
+      ids.add(id);
+    }
+  }
+  const employees = new Set(data.employees.map((row: any) => String(row.id)));
+  const departments = new Set(data.departments.map((row: any) => String(row.id)));
+  for (const collection of ['contracts', 'attendance', 'leaves', 'penalties', 'advances', 'rewards', 'performance', 'documents']) {
+    for (const row of data[collection]) {
+      if (!employees.has(String(row.employeeId || ''))) throw new ValidationError(`السجل ${collection}/${String(row.id)} مرتبط بموظف غير موجود.`);
+    }
+  }
+  for (const row of data.employees) {
+    if (row.departmentId && !departments.has(String(row.departmentId))) throw new ValidationError(`الموظف ${row.id} مرتبط بقسم غير موجود.`);
+  }
+  for (const row of data.jobs) {
+    if (row.departmentId && !departments.has(String(row.departmentId))) throw new ValidationError(`الوظيفة ${row.id} مرتبطة بقسم غير موجود.`);
+  }
+  const assertMoney = (value: unknown, label: string, allowZero = true) => {
+    const amount = Number(value);
+    if (!Number.isFinite(amount) || (allowZero ? amount < 0 : amount <= 0)) throw new ValidationError(`${label} يجب أن يكون رقماً مالياً صالحاً.`);
+  };
+  for (const row of data.employees) assertMoney(row.basicSalary, `راتب الموظف ${row.id}`);
+  for (const row of data.jobs) assertMoney(row.baseSalary, `راتب الوظيفة ${row.id}`);
+  for (const row of data.contracts) assertMoney(row.monthlySalary, `راتب العقد ${row.id}`, false);
+  for (const row of data.penalties) assertMoney(row.amount, `قيمة الجزاء ${row.id}`);
+  for (const row of data.rewards) assertMoney(row.amount, `قيمة المكافأة ${row.id}`);
+  for (const row of data.advances) {
+    assertMoney(row.amount, `قيمة السلفة ${row.id}`, false);
+    assertMoney(row.deductionPerMonth, `قسط السلفة ${row.id}`, false);
+    assertMoney(row.remainingAmount, `رصيد السلفة ${row.id}`);
+    if (!Number.isInteger(Number(row.installments)) || Number(row.installments) <= 0) throw new ValidationError(`عدد أقساط السلفة ${row.id} غير صالح.`);
+    if (Number(row.remainingAmount) > Number(row.amount)) throw new ValidationError(`رصيد السلفة ${row.id} يتجاوز أصل السلفة.`);
+  }
+  for (const row of data.attendance) {
+    assertMoney(row.delayMinutes, `تأخير الحضور ${row.id}`);
+    assertMoney(row.overtimeHours, `إضافي الحضور ${row.id}`);
+  }
+  const statuses: Record<string, string[]> = {
+    employees: ['active', 'on_leave', 'resigned', 'suspended'],
+    contracts: ['draft', 'active', 'expired', 'terminated'],
+    leaves: ['pending', 'approved', 'rejected'],
+    penalties: ['pending', 'applied', 'waived'],
+    advances: ['pending', 'approved', 'rejected', 'fully_paid'],
+    rewards: ['pending', 'applied', 'paid']
+  };
+  for (const [collection, allowed] of Object.entries(statuses)) {
+    for (const row of data[collection]) {
+      if (!allowed.includes(String(row.status || ''))) throw new ValidationError(`حالة السجل ${collection}/${String(row.id)} غير معتمدة.`);
+    }
+  }
+  for (const row of data.performance) {
+    const score = Number(row.score);
+    if (!Number.isFinite(score) || score < 0 || score > 100) throw new ValidationError(`درجة تقييم الأداء ${row.id} يجب أن تكون بين صفر و100.`);
+  }
+  for (const row of data.contracts.concat(data.leaves, data.documents)) {
+    const start = String(row.startDate || row.issueDate || '').trim();
+    const end = String(row.endDate || row.expiryDate || '').trim();
+    if (!/^\d{4}-\d{2}-\d{2}$/.test(start) || !/^\d{4}-\d{2}-\d{2}$/.test(end) || start > end) {
+      throw new ValidationError(`الفترة الزمنية للسجل ${row.id} غير صالحة.`);
+    }
+  }
+  const payrollPeriods = new Set<string>();
+  for (const row of data.payrollRuns) {
+    const runPeriod = String(row.period || '');
+    if (payrollPeriods.has(runPeriod)) throw new ConflictError(`مسير الرواتب للفترة ${runPeriod} مكرر.`);
+    payrollPeriods.add(runPeriod);
+    if (!/^\d{4}-\d{2}$/.test(String(row.period || '')) || !['approved', 'paid'].includes(row.status)
+      || !Array.isArray(row.lines) || !row.totals || typeof row.totals !== 'object' || !String(row.fingerprint || '').trim()) {
+      throw new ValidationError(`مسير الرواتب ${String(row.id || row.period || '')} غير صالح.`);
+    }
+    const lineEmployeeIds = new Set<string>();
+    for (const line of row.lines) {
+      const employeeId = String(line?.employeeId || '').trim();
+      if (!employeeId || lineEmployeeIds.has(employeeId) || !employees.has(employeeId)) {
+        throw new ValidationError(`خط مسير الرواتب ${String(row.period)} مرتبط بموظف غير صالح أو مكرر.`);
+      }
+      lineEmployeeIds.add(employeeId);
+      for (const field of ['gross', 'penalty', 'advanceDeduction', 'attendanceDeduction', 'leaveDeduction', 'overtimePay', 'net']) {
+        if (line[field] !== undefined) assertMoney(line[field], `قيمة ${field} في مسير ${String(row.period)}`);
+      }
+    }
+    for (const field of ['gross', 'penalty', 'advance', 'attendance', 'leave', 'overtime', 'net']) {
+      if (row.totals[field] !== undefined) assertMoney(row.totals[field], `إجمالي ${field} في مسير ${String(row.period)}`);
+    }
+  }
+  if (data.settings !== undefined && (!data.settings || typeof data.settings !== 'object' || Array.isArray(data.settings))) {
+    throw new ValidationError('إعدادات الموارد البشرية يجب أن تكون كائناً.');
+  }
 }
 
 function validateScheduleForApproval(payload: Record<string, any>): void {
@@ -2644,7 +2743,7 @@ async function startServer() {
           [tenantId, schoolId]
         );
         return result.rows[0] || {
-          data: { employees: [], departments: [], jobs: [], contracts: [], attendance: [], leaves: [], penalties: [], advances: [], rewards: [], performance: [], documents: [], settings: {} },
+          data: { employees: [], departments: [], jobs: [], contracts: [], attendance: [], leaves: [], penalties: [], advances: [], rewards: [], performance: [], documents: [], payrollRuns: [], settings: {} },
           version: 0, country_code: 'ZZ', legal_configuration: {}
         };
       }, tenantContext);
@@ -2668,7 +2767,7 @@ async function startServer() {
       const requestedCountryCode = String(req.body?.countryCode || 'ZZ').trim().toUpperCase();
       const requestedLegalConfiguration = req.body?.legalConfiguration ?? {};
       const tenantContext = (req as any).tenantContext;
-      const expectedCollections = ['employees', 'departments', 'jobs', 'contracts', 'attendance', 'leaves', 'penalties', 'advances', 'rewards', 'performance', 'documents'];
+      const expectedCollections = ['employees', 'departments', 'jobs', 'contracts', 'attendance', 'leaves', 'penalties', 'advances', 'rewards', 'performance', 'documents', 'payrollRuns'];
       if (!tenantId || !schoolId || !tenantContext || tenantContext.tenantId !== tenantId || tenantContext.schoolId !== schoolId
         || !Number.isInteger(expectedVersion) || expectedVersion < 0) {
         throw new ValidationError('حفظ الموارد البشرية يتطلب نطاق مدرسة موثوقاً ورقم إصدار متوقعاً صالحاً.');
@@ -2689,6 +2788,7 @@ async function startServer() {
         && (typeof (requestedData as Record<string, unknown>).settings !== 'object' || Array.isArray((requestedData as Record<string, unknown>).settings))) {
         throw new ValidationError('إعدادات الموارد البشرية يجب أن تكون كائناً.');
       }
+      validateHrSnapshotData(requestedData as Record<string, any>);
 
       let nextVersion = expectedVersion + 1;
       await UnitOfWork.runInTransaction(schoolId, {
@@ -2705,13 +2805,43 @@ async function startServer() {
         );
         const actorId = actorResult.rows[0]?.id;
         if (!actorId) throw new AuthenticationError('تعذر ربط هوية الجلسة بسجل المستخدم المؤسسي المعتمد.');
-        const current = await transaction.query<{ version: number }>(
-          `SELECT version FROM public.hr_database WHERE tenant_id = $1 AND school_id = $2 FOR UPDATE`, [tenantId, schoolId]
+        const current = await transaction.query<{ data: Record<string, unknown>; version: number }>(
+          `SELECT data, version FROM public.hr_database WHERE tenant_id = $1 AND school_id = $2 FOR UPDATE`, [tenantId, schoolId]
         );
         const actualVersion = Number(current.rows[0]?.version || 0);
         if (actualVersion !== expectedVersion) {
           throw new ConflictError('تم تعديل سجلات الموارد البشرية بواسطة مستخدم آخر. أعد المزامنة قبل الحفظ.', { expectedVersion, actualVersion });
         }
+        const currentRuns = Array.isArray((current.rows[0]?.data as any)?.payrollRuns) ? (current.rows[0]?.data as any).payrollRuns : [];
+        const requestedRuns = (requestedData as any).payrollRuns as any[];
+        for (const currentRun of currentRuns.filter((item: any) => ['approved', 'paid'].includes(item?.status))) {
+          const requestedRun = requestedRuns.find(item => item?.period === currentRun?.period);
+          if (!requestedRun || stableJsonStringify(requestedRun) !== stableJsonStringify(currentRun)) {
+            throw new ConflictError(`مسير الرواتب للفترة ${String(currentRun?.period || '')} محمي بعد الاعتماد ولا يقبل تعديلاً عاماً.`);
+          }
+        }
+        const currentData = (current.rows[0]?.data || {}) as Record<string, any>;
+        const currentAdvances = Array.isArray(currentData.advances) ? currentData.advances : [];
+        const requestedAdvances = (requestedData as Record<string, any>).advances as any[];
+        for (const currentAdvance of currentAdvances.filter((item: any) => String(item?.journalId || '').trim())) {
+          const requestedAdvance = requestedAdvances.find(item => item?.id === currentAdvance?.id);
+          if (!requestedAdvance || stableJsonStringify(requestedAdvance) !== stableJsonStringify(currentAdvance)) {
+            throw new ConflictError(`السلفة ${String(currentAdvance?.id || '')} محمية بعد الصرف ولا تقبل تعديلاً عاماً.`);
+          }
+        }
+        const currentContracts = Array.isArray(currentData.contracts) ? currentData.contracts : [];
+        const requestedContracts = (requestedData as Record<string, any>).contracts as any[];
+        for (const currentContract of currentContracts.filter((item: any) => String(item?.signatureHash || '').trim())) {
+          const requestedContract = requestedContracts.find(item => item?.id === currentContract?.id);
+          if (!requestedContract || stableJsonStringify(requestedContract) !== stableJsonStringify(currentContract)) {
+            throw new ConflictError(`العقد ${String(currentContract?.id || '')} محمي بعد التوقيع ولا يقبل تعديلاً عاماً.`);
+          }
+        }
+        const changedCollections = expectedCollections.filter(collection =>
+          stableJsonStringify(currentData[collection] || []) !== stableJsonStringify((requestedData as Record<string, any>)[collection] || [])
+        );
+        const previousSnapshotHash = createHash('sha256').update(stableJsonStringify(currentData)).digest('hex');
+        const nextSnapshotHash = createHash('sha256').update(stableJsonStringify(requestedData)).digest('hex');
         nextVersion = actualVersion + 1;
         await transaction.query(
           `INSERT INTO public.hr_database (tenant_id, school_id, country_code, legal_configuration, data, version, updated_at, updated_by)
@@ -2726,7 +2856,7 @@ async function startServer() {
           `INSERT INTO public.audit_events
              (tenant_id, school_id, branch_id, actor_user_id, entity_type, entity_id, action, source, reason, result, metadata)
            VALUES ($1, $2, $3, $4, 'hr_database', $2, 'write', 'HrDatabaseRoute', 'حفظ سجل الموارد البشرية', 'success', $5::jsonb)`,
-          [tenantId, schoolId, identity.branchId || null, actorId, JSON.stringify({ expectedVersion, actualVersion, nextVersion, countryCode: requestedCountryCode })]
+          [tenantId, schoolId, identity.branchId || null, actorId, JSON.stringify({ expectedVersion, actualVersion, nextVersion, countryCode: requestedCountryCode, changedCollections, previousSnapshotHash, nextSnapshotHash })]
         );
       }, tenantContext);
       res.json({ success: true, data: { updated: true }, meta: { version: nextVersion } });
@@ -2734,6 +2864,105 @@ async function startServer() {
       EnterpriseLogger.error('Failed to save HR database', 'HrDatabaseRoute', { schoolId: (req as any).user?.schoolId, error: err?.message || String(err) });
       next(err instanceof AuthenticationError || err instanceof AuthorizationError || err instanceof ConflictError || err instanceof ValidationError || err instanceof DatabaseError
         ? err : new DatabaseError('تعذر حفظ سجلات الموارد البشرية.', err?.message));
+    }
+  });
+
+  // Reports are rendered in the browser from the already loaded canonical
+  // snapshot, but every export/print must still prove its source and leave an
+  // auditable event. No report endpoint accepts school or tenant identifiers.
+  app.post('/api/hr/reports/audit', authenticateRequest, requirePermission(PERMISSIONS.HR_READ), async (req, res, next) => {
+    try {
+      const identity = (req as any).user;
+      const tenantId = String(identity?.tenantId || '').trim();
+      const schoolId = String(identity?.schoolId || '').trim();
+      const tenantContext = (req as any).tenantContext;
+      const reportType = String(req.body?.reportType || '').trim();
+      const format = String(req.body?.format || '').trim().toLowerCase();
+      const rowCount = Number(req.body?.rowCount);
+      const startDate = String(req.body?.startDate || '').trim();
+      const endDate = String(req.body?.endDate || '').trim();
+      if (!tenantId || !schoolId || !tenantContext || tenantContext.tenantId !== tenantId || tenantContext.schoolId !== schoolId
+        || !['employees', 'attendance', 'leaves', 'advances', 'rewards', 'penalties'].includes(reportType)
+        || !['csv', 'print'].includes(format) || !Number.isInteger(rowCount) || rowCount < 0 || rowCount > 100000
+        || !/^\d{4}-\d{2}-\d{2}$/.test(startDate) || !/^\d{4}-\d{2}-\d{2}$/.test(endDate) || startDate > endDate) {
+        throw new ValidationError('بيانات تصدير تقرير HR غير صالحة أو خارج نطاق المدرسة الموثوقة.');
+      }
+      let resultHash = '';
+      await UnitOfWork.runInTransaction(schoolId, {
+        operationName: `Audit HR report ${reportType}`, tenantId, userId: identity.id,
+        userName: identity.name || 'المستخدم الحالي', ipAddress: req.ip || 'unknown',
+        affectedTables: ['hr_database', 'audit_events']
+      }, async () => {
+        const transaction = UnitOfWork.getActiveContext()?.databaseTransaction;
+        if (!transaction) throw new DatabaseError('معاملة تدقيق تقرير HR غير متاحة.');
+        const actor = await transaction.query<{ id: string }>(
+          `SELECT id FROM public.users WHERE tenant_id = $1 AND auth_user_id = $2 AND status = 'active' AND deleted_at IS NULL LIMIT 1`,
+          [tenantId, identity.id]
+        );
+        if (!actor.rows[0]) throw new AuthenticationError('تعذر ربط مستخدم التقرير بسجل المدرسة.');
+        const snapshot = await transaction.query<{ data: Record<string, unknown>; version: number }>(
+          `SELECT data, version FROM public.hr_database WHERE tenant_id = $1 AND school_id = $2`, [tenantId, schoolId]
+        );
+        if (!snapshot.rows[0]) throw new DatabaseError('لا يوجد سجل HR مركزي لإصدار التقرير.');
+        resultHash = createHash('sha256').update(stableJsonStringify(snapshot.rows[0].data)).digest('hex');
+        await transaction.query(
+          `INSERT INTO public.audit_events (tenant_id, school_id, branch_id, actor_user_id, entity_type, entity_id, action, source, reason, result, metadata)
+           VALUES ($1, $2, $3, $4, 'hr_report', $5, $6, 'HrReportRoute', 'إصدار تقرير من المصدر الكانوني', 'success', $7::jsonb)`,
+          [tenantId, schoolId, identity.branchId || null, actor.rows[0].id, `${reportType}:${format}`, `export_${format}`,
+            JSON.stringify({ reportType, format, rowCount, startDate, endDate, source: 'canonical-postgres', snapshotVersion: Number(snapshot.rows[0].version || 0), snapshotHash: resultHash })]
+        );
+      }, tenantContext);
+      res.json({ success: true, data: { source: 'canonical-postgres', snapshotHash: resultHash, rowCount } });
+    } catch (err: any) {
+      next(err instanceof AuthenticationError || err instanceof AuthorizationError || err instanceof ValidationError || err instanceof DatabaseError
+        ? err : new DatabaseError('تعذر تدقيق تقرير الموارد البشرية.', err?.message));
+    }
+  });
+
+  app.post('/api/hr/contracts/:contractId/sign', authenticateRequest, requirePermission(PERMISSIONS.HR_WRITE), async (req, res, next) => {
+    try {
+      const identity = (req as any).user;
+      const tenantId = String(identity?.tenantId || '').trim();
+      const schoolId = String(identity?.schoolId || '').trim();
+      const contractId = String(req.params.contractId || '').trim();
+      const expectedVersion = Number(req.body?.expectedVersion);
+      const tenantContext = (req as any).tenantContext;
+      if (!tenantId || !schoolId || !contractId || !Number.isInteger(expectedVersion) || expectedVersion < 0
+        || !tenantContext || tenantContext.tenantId !== tenantId || tenantContext.schoolId !== schoolId) {
+        throw new ValidationError('توقيع العقد يتطلب سجلاً متزامناً ونطاق مدرسة موثوقاً.');
+      }
+      let signedContract: Record<string, any> | null = null;
+      let nextVersion = expectedVersion + 1;
+      await UnitOfWork.runInTransaction(schoolId, {
+        operationName: `Sign HR contract ${contractId}`, tenantId, userId: identity.id,
+        userName: identity.name || 'المستخدم الحالي', ipAddress: req.ip || 'unknown',
+        affectedTables: ['hr_database', 'audit_events']
+      }, async () => {
+        const transaction = UnitOfWork.getActiveContext()?.databaseTransaction;
+        if (!transaction) throw new DatabaseError('معاملة توقيع العقد غير متاحة.');
+        const actor = await transaction.query<{ id: string }>(`SELECT id FROM public.users WHERE tenant_id=$1 AND auth_user_id=$2 AND status='active' AND deleted_at IS NULL LIMIT 1`, [tenantId, identity.id]);
+        const actorId = actor.rows[0]?.id;
+        if (!actorId) throw new AuthenticationError('تعذر ربط هوية الجلسة بمستخدم الموارد البشرية.');
+        const current = await transaction.query<{ data: Record<string, any>; version: number }>(`SELECT data,version FROM public.hr_database WHERE tenant_id=$1 AND school_id=$2 FOR UPDATE`, [tenantId, schoolId]);
+        const data = current.rows[0]?.data;
+        const actualVersion = Number(current.rows[0]?.version || 0);
+        if (!data || actualVersion !== expectedVersion) throw new ConflictError('تغير سجل HR؛ أعد تحميل العقد قبل توقيعه.', { expectedVersion, actualVersion });
+        const contract = (Array.isArray(data.contracts) ? data.contracts : []).find((item: any) => item?.id === contractId);
+        if (!contract) throw new ValidationError('العقد المطلوب توقيعه غير موجود.');
+        if (contract.status !== 'draft') throw new ConflictError('لا يمكن توقيع عقد غير موجود في حالة المسودة.');
+        const signedAt = new Date().toISOString();
+        const version = Math.max(1, Number(contract.version || 1));
+        const signatureHash = createHash('sha256').update(stableJsonStringify({ id: contract.id, employeeId: contract.employeeId, type: contract.type, startDate: contract.startDate, endDate: contract.endDate, monthlySalary: contract.monthlySalary, version, signedAt, signer: actorId })).digest('hex');
+        signedContract = { ...contract, status: 'active', version, signedAt, signatureHash };
+        data.contracts = (Array.isArray(data.contracts) ? data.contracts : []).map((item: any) => item?.id === contractId ? signedContract : item);
+        nextVersion = actualVersion + 1;
+        await transaction.query(`UPDATE public.hr_database SET data=$3::jsonb,version=$4,updated_at=now(),updated_by=$5 WHERE tenant_id=$1 AND school_id=$2`, [tenantId, schoolId, JSON.stringify(data), nextVersion, actorId]);
+        await transaction.query(`INSERT INTO public.audit_events (tenant_id,school_id,branch_id,actor_user_id,entity_type,entity_id,action,source,reason,result,metadata) VALUES ($1,$2,$3,$4,'hr_contract',$5,'sign','HrContractRoute','توقيع عقد واعتماده بختم خادمي','success',$6::jsonb)`, [tenantId, schoolId, identity.branchId || null, actorId, contractId, JSON.stringify({ version, signedAt, signatureHash })]);
+      }, tenantContext);
+      res.json({ success: true, data: { contract: signedContract }, meta: { version: nextVersion } });
+    } catch (err: any) {
+      next(err instanceof AuthenticationError || err instanceof AuthorizationError || err instanceof ConflictError || err instanceof ValidationError || err instanceof DatabaseError
+        ? err : new DatabaseError('تعذر توقيع العقد.', err?.message));
     }
   });
 
@@ -2798,6 +3027,66 @@ async function startServer() {
     }
   });
 
+  app.post('/api/hr/advances/:advanceId/pay', authenticateRequest, requirePermission(PERMISSIONS.FINANCIAL_WRITE), async (req, res, next) => {
+    try {
+      const identity = (req as any).user;
+      const tenantId = String(identity?.tenantId || '').trim();
+      const schoolId = String(identity?.schoolId || '').trim();
+      const advanceId = String(req.params.advanceId || '').trim();
+      const expectedVersion = Number(req.body?.expectedVersion);
+      const tenantContext = (req as any).tenantContext;
+      if (!tenantId || !schoolId || !advanceId || !Number.isInteger(expectedVersion) || expectedVersion < 0
+        || !tenantContext || tenantContext.tenantId !== tenantId || tenantContext.schoolId !== schoolId) {
+        throw new ValidationError('صرف السلفة يتطلب سجلاً متزامناً ونطاق مدرسة موثوقاً.');
+      }
+      let paidAdvance: Record<string, any> | null = null;
+      let journalId = '';
+      let nextVersion = expectedVersion + 1;
+      await UnitOfWork.runInTransaction(schoolId, {
+        operationName: `Pay HR advance ${advanceId}`, tenantId, userId: identity.id,
+        userName: identity.name || 'المستخدم الحالي', ipAddress: req.ip || 'unknown',
+        affectedTables: ['hr_database', ...CANONICAL_ERP_TABLES]
+      }, async () => {
+        const transaction = UnitOfWork.getActiveContext()?.databaseTransaction;
+        if (!transaction) throw new DatabaseError('معاملة صرف السلفة غير متاحة.');
+        const actor = await transaction.query<{ id: string }>(`SELECT id FROM public.users WHERE tenant_id=$1 AND auth_user_id=$2 AND status='active' AND deleted_at IS NULL LIMIT 1`, [tenantId, identity.id]);
+        const actorId = actor.rows[0]?.id;
+        if (!actorId) throw new AuthenticationError('تعذر ربط هوية الجلسة بالمستخدم المالي المعتمد.');
+        if (!await CanonicalErpPostingService.isProvisioned(transaction)) throw new DatabaseError('دفتر الأستاذ الكانوني غير مهيأ لهذه المدرسة.');
+        const current = await transaction.query<{ data: Record<string, any>; version: number }>(`SELECT data,version FROM public.hr_database WHERE tenant_id=$1 AND school_id=$2 FOR UPDATE`, [tenantId, schoolId]);
+        const data = current.rows[0]?.data;
+        const actualVersion = Number(current.rows[0]?.version || 0);
+        if (!data || actualVersion !== expectedVersion) throw new ConflictError('تغير سجل HR؛ أعد تحميل السلفة قبل تنفيذ الصرف.', { expectedVersion, actualVersion });
+        const advance = (Array.isArray(data.advances) ? data.advances : []).find((item: any) => item?.id === advanceId);
+        if (!advance || advance.status !== 'approved') throw new ConflictError('لا يمكن صرف سلفة غير معتمدة.');
+        if (advance.journalId) throw new ConflictError('تم صرف هذه السلفة وإثبات قيدها مسبقاً.');
+        const amount = Number(advance.amount || 0);
+        if (!Number.isFinite(amount) || amount <= 0) throw new ValidationError('قيمة السلفة غير صالحة للصرف.');
+        const mappingRows = await transaction.query<{ mapping_key: string; account_code: string }>(`SELECT mapping_key,account_code FROM public.erp_account_mappings WHERE school_id=$1 AND is_active=true AND mapping_key = ANY($2::text[])`, [schoolId, ['treasury.cash', 'hr.advance.receivable']]);
+        const mappings = new Map(mappingRows.rows.map(row => [row.mapping_key, row.account_code]));
+        if (!mappings.get('treasury.cash') || !mappings.get('hr.advance.receivable')) throw new ValidationError('لا يمكن صرف السلفة قبل اعتماد خريطة النقد وذمم السلف.');
+        const sync = await CanonicalErpPostingService.syncSnapshot(transaction, tenantId, schoolId, actorId, {
+          journalEntries: [{ id: `hr-advance-${advanceId}`, sourceType: 'journal_entry', status: 'posted', date: String(advance.date || new Date().toISOString().slice(0, 10)), description: `صرف سلفة موظف ${advance.employeeId}`, lines: [
+            { id: 'advance-receivable', accountCode: mappings.get('hr.advance.receivable'), debit: amount, credit: 0 },
+            { id: 'cash', accountCode: mappings.get('treasury.cash'), debit: 0, credit: amount }
+          ] }]
+        });
+        journalId = sync.sourceLinks.find(link => link.sourceId === `hr-advance-${advanceId}`)?.journalEntryId || '';
+        if (!journalId) throw new DatabaseError('تعذر إثبات قيد السلفة الكانوني.');
+        const paidAt = new Date().toISOString();
+        paidAdvance = { ...advance, journalId, paidAt, paidBy: actorId };
+        data.advances = (Array.isArray(data.advances) ? data.advances : []).map((item: any) => item?.id === advanceId ? paidAdvance : item);
+        nextVersion = actualVersion + 1;
+        await transaction.query(`UPDATE public.hr_database SET data=$3::jsonb,version=$4,updated_at=now(),updated_by=$5 WHERE tenant_id=$1 AND school_id=$2`, [tenantId, schoolId, JSON.stringify(data), nextVersion, actorId]);
+        await transaction.query(`INSERT INTO public.audit_events (tenant_id,school_id,branch_id,actor_user_id,entity_type,entity_id,action,source,reason,result,metadata) VALUES ($1,$2,$3,$4,'hr_advance',$5,'pay','HrAdvanceRoute','صرف سلفة معتمدة وترحيل قيدها','success',$6::jsonb)`, [tenantId, schoolId, identity.branchId || null, actorId, advanceId, JSON.stringify({ amount, journalId })]);
+      }, tenantContext);
+      res.json({ success: true, data: { advance: paidAdvance, journalId, paidAt: paidAdvance?.paidAt, paidBy: paidAdvance?.paidBy }, meta: { version: nextVersion } });
+    } catch (err: any) {
+      next(err instanceof AuthenticationError || err instanceof AuthorizationError || err instanceof ConflictError || err instanceof ValidationError || err instanceof DatabaseError
+        ? err : new DatabaseError('تعذر صرف السلفة.', err?.message));
+    }
+  });
+
   // A payroll approval is an immutable business checkpoint, not a financial
   // posting. The server computes the amount from the HR snapshot so a browser
   // can never approve a forged payroll total.
@@ -2831,21 +3120,18 @@ async function startServer() {
         if (!data || actualVersion !== expectedVersion) throw new ConflictError('تغير سجل HR؛ أعد تحميل المسير قبل اعتماده.', { expectedVersion, actualVersion });
         const existingRuns = Array.isArray(data.payrollRuns) ? data.payrollRuns : [];
         if (existingRuns.some((item: any) => item?.period === period && ['approved', 'paid'].includes(item?.status))) throw new ConflictError('مسير هذه الفترة معتمد أو مصروف بالفعل.');
-        const employees = Array.isArray(data.employees) ? data.employees : [];
-        const rewards = Array.isArray(data.rewards) ? data.rewards : [];
-        const penalties = Array.isArray(data.penalties) ? data.penalties : [];
-        const advances = Array.isArray(data.advances) ? data.advances : [];
-        const lines = employees.filter((employee: any) => employee?.status !== 'resigned').map((employee: any) => {
-          const allowance = (Array.isArray(employee.allowances) ? employee.allowances : []).reduce((sum: number, item: any) => sum + Number(item?.amount || 0), 0);
-          const bonus = rewards.filter((item: any) => item?.employeeId === employee.id && item?.status === 'applied' && String(item?.date || '').startsWith(period)).reduce((sum: number, item: any) => sum + Number(item?.amount || 0), 0);
-          const penalty = penalties.filter((item: any) => item?.employeeId === employee.id && item?.status === 'applied' && String(item?.date || '').startsWith(period)).reduce((sum: number, item: any) => sum + Number(item?.amount || 0), 0);
-          const advance = advances.find((item: any) => item?.employeeId === employee.id && item?.status === 'approved' && Number(item?.remainingAmount || 0) > 0);
-          const advanceDeduction = advance ? Math.min(Number(advance.deductionPerMonth || 0), Number(advance.remainingAmount || 0)) : 0;
-          const gross = Number(employee.basicSalary || 0) + allowance + bonus;
-          return { employeeId: String(employee.id), gross, penalty, advanceDeduction, net: Math.max(0, gross - penalty - advanceDeduction) };
-        }).filter((line: any) => line.gross > 0);
+        const calculation = calculatePayrollRun({
+          period,
+          employees: Array.isArray(data.employees) ? data.employees : [],
+          rewards: Array.isArray(data.rewards) ? data.rewards : [],
+          penalties: Array.isArray(data.penalties) ? data.penalties : [],
+          advances: Array.isArray(data.advances) ? data.advances : [],
+          attendance: Array.isArray(data.attendance) ? data.attendance : [],
+          leaves: Array.isArray(data.leaves) ? data.leaves : [],
+          settings: data.settings && typeof data.settings === 'object' ? data.settings : {}
+        });
+        const { lines, totals } = calculation;
         if (!lines.length) throw new ValidationError('لا توجد استحقاقات موجبة لاعتمادها في هذه الفترة.');
-        const totals = lines.reduce((sum: any, line: any) => ({ gross: sum.gross + line.gross, penalty: sum.penalty + line.penalty, advance: sum.advance + line.advanceDeduction, net: sum.net + line.net }), { gross: 0, penalty: 0, advance: 0, net: 0 });
         run = { id: `payroll-${period}`, period, status: 'approved', lines, totals, approvedAt: new Date().toISOString(), approvedBy: actorId, hrVersion: actualVersion, fingerprint: createHash('sha256').update(stableJsonStringify({ period, lines, totals })).digest('hex') };
         data.payrollRuns = [...existingRuns.filter((item: any) => item?.period !== period), run];
         nextVersion = actualVersion + 1;
@@ -2885,7 +3171,7 @@ async function startServer() {
         const actualVersion = Number(current.rows[0]?.version || 0);
         if (!data || actualVersion !== expectedVersion) throw new ConflictError('تغير سجل HR؛ أعد تحميل المسير قبل تنفيذ الصرف.', { expectedVersion, actualVersion });
         const run = (Array.isArray(data.payrollRuns) ? data.payrollRuns : []).find((item: any) => item?.period === period);
-        if (!run || run.status !== 'approved') throw new ConflictError('لا يمكن الصرف إلا لمسير معتمد وغير مصروف.');
+         if (!run || run.status !== 'approved' || run.journalId) throw new ConflictError('لا يمكن الصرف إلا لمسير معتمد وغير مصروف.');
         const recomputedFingerprint = createHash('sha256').update(stableJsonStringify({ period, lines: run.lines, totals: run.totals })).digest('hex');
         if (run.fingerprint !== recomputedFingerprint) throw new ConflictError('بصمة مسير الرواتب المعتمد غير صحيحة.');
         const mappingRows = await transaction.query<{ mapping_key: string; account_code: string }>(`SELECT mapping_key,account_code FROM public.erp_account_mappings WHERE school_id=$1 AND is_active=true AND mapping_key = ANY($2::text[])`, [schoolId, ['treasury.cash','hr.payroll.expense','hr.advance.receivable','hr.deductions.clearing']]);
@@ -2894,13 +3180,16 @@ async function startServer() {
         if (required.some(key => !mappings.get(key))) throw new ValidationError('لا يمكن تنفيذ الصرف قبل اعتماد جميع خرائط حسابات HR من شاشة الحسابات.');
         const totals = run.totals || {};
         const gross = Number(totals.gross || 0), net = Number(totals.net || 0), advance = Number(totals.advance || 0), penalty = Number(totals.penalty || 0);
-        if (![gross, net, advance, penalty].every(Number.isFinite) || gross <= 0 || Math.round(gross * 100) !== Math.round((net + advance + penalty) * 100)) throw new ValidationError('إجماليات مسير الرواتب المعتمد غير متوازنة.');
+        const attendance = Number(totals.attendance || 0), leave = Number(totals.leave || 0), overtime = Number(totals.overtime || 0);
+        if (![gross, net, advance, penalty, attendance, leave, overtime].every(Number.isFinite) || gross <= 0 || Math.round((gross + overtime) * 100) !== Math.round((net + advance + penalty + attendance + leave) * 100)) throw new ValidationError('إجماليات مسير الرواتب المعتمد غير متوازنة.');
         const lines = [
-          { id: 'expense', accountCode: mappings.get('hr.payroll.expense'), debit: gross, credit: 0 },
+          { id: 'expense', accountCode: mappings.get('hr.payroll.expense'), debit: gross + overtime, credit: 0 },
           { id: 'cash', accountCode: mappings.get('treasury.cash'), debit: 0, credit: net }
         ];
         if (advance > 0) lines.push({ id: 'advance', accountCode: mappings.get('hr.advance.receivable'), debit: 0, credit: advance });
         if (penalty > 0) lines.push({ id: 'deduction', accountCode: mappings.get('hr.deductions.clearing'), debit: 0, credit: penalty });
+        if (attendance > 0) lines.push({ id: 'attendance-deduction', accountCode: mappings.get('hr.deductions.clearing'), debit: 0, credit: attendance });
+        if (leave > 0) lines.push({ id: 'unpaid-leave-deduction', accountCode: mappings.get('hr.deductions.clearing'), debit: 0, credit: leave });
         const sync = await CanonicalErpPostingService.syncSnapshot(transaction, tenantId, schoolId, actorId, { journalEntries: [{ id: `hr-payroll-${period}`, sourceType: 'journal_entry', status: 'posted', date: `${period}-01`, description: `صرف مسير الرواتب المعتمد للفترة ${period}`, lines }] });
         journalId = sync.sourceLinks.find(link => link.sourceId === `hr-payroll-${period}`)?.journalEntryId || '';
         if (!journalId) throw new DatabaseError('تعذر إثبات قيد صرف الرواتب الكانوني.');
