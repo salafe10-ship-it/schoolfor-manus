@@ -29,6 +29,14 @@ describe('HR canonical database route contract', () => {
     expect(source).toContain('hr-advance-${advanceId}');
   });
 
+  it('keeps HR audit entity identifiers compatible with the canonical UUID column', () => {
+    expect(source).toContain("actor.rows[0].id, schoolId, `export_${format}`");
+    expect(source).toContain('actorId, schoolId, JSON.stringify({ contractId, version, signedAt, signatureHash })');
+    expect(source).toContain('actorId, schoolId, JSON.stringify({ advanceId, amount, journalId })');
+    expect(source).toContain('actorId, schoolId, JSON.stringify({ runId: `payroll-${period}`, period, totals })');
+    expect(source).toContain('actorId, schoolId, JSON.stringify({ runId: `payroll-${period}`, period, journalId, totals })');
+  });
+
   it('configures school-owned HR accounting mappings without posting a journal', () => {
     expect(source).toContain("app.post('/api/hr/accounting-mappings', authenticateRequest, requirePermission(PERMISSIONS.FINANCIAL_WRITE)");
     expect(source).toContain("['hr.payroll.expense'");

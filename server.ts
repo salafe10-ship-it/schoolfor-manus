@@ -2908,8 +2908,8 @@ async function startServer() {
         await transaction.query(
           `INSERT INTO public.audit_events (tenant_id, school_id, branch_id, actor_user_id, entity_type, entity_id, action, source, reason, result, metadata)
            VALUES ($1, $2, $3, $4, 'hr_report', $5, $6, 'HrReportRoute', 'إصدار تقرير من المصدر الكانوني', 'success', $7::jsonb)`,
-          [tenantId, schoolId, identity.branchId || null, actor.rows[0].id, `${reportType}:${format}`, `export_${format}`,
-            JSON.stringify({ reportType, format, rowCount, startDate, endDate, source: 'canonical-postgres', snapshotVersion: Number(snapshot.rows[0].version || 0), snapshotHash: resultHash })]
+          [tenantId, schoolId, identity.branchId || null, actor.rows[0].id, schoolId, `export_${format}`,
+            JSON.stringify({ reportKey: `${reportType}:${format}`, reportType, format, rowCount, startDate, endDate, source: 'canonical-postgres', snapshotVersion: Number(snapshot.rows[0].version || 0), snapshotHash: resultHash })]
         );
       }, tenantContext);
       res.json({ success: true, data: { source: 'canonical-postgres', snapshotHash: resultHash, rowCount } });
@@ -2957,7 +2957,7 @@ async function startServer() {
         data.contracts = (Array.isArray(data.contracts) ? data.contracts : []).map((item: any) => item?.id === contractId ? signedContract : item);
         nextVersion = actualVersion + 1;
         await transaction.query(`UPDATE public.hr_database SET data=$3::jsonb,version=$4,updated_at=now(),updated_by=$5 WHERE tenant_id=$1 AND school_id=$2`, [tenantId, schoolId, JSON.stringify(data), nextVersion, actorId]);
-        await transaction.query(`INSERT INTO public.audit_events (tenant_id,school_id,branch_id,actor_user_id,entity_type,entity_id,action,source,reason,result,metadata) VALUES ($1,$2,$3,$4,'hr_contract',$5,'sign','HrContractRoute','توقيع عقد واعتماده بختم خادمي','success',$6::jsonb)`, [tenantId, schoolId, identity.branchId || null, actorId, contractId, JSON.stringify({ version, signedAt, signatureHash })]);
+        await transaction.query(`INSERT INTO public.audit_events (tenant_id,school_id,branch_id,actor_user_id,entity_type,entity_id,action,source,reason,result,metadata) VALUES ($1,$2,$3,$4,'hr_contract',$5,'sign','HrContractRoute','توقيع عقد واعتماده بختم خادمي','success',$6::jsonb)`, [tenantId, schoolId, identity.branchId || null, actorId, schoolId, JSON.stringify({ contractId, version, signedAt, signatureHash })]);
       }, tenantContext);
       res.json({ success: true, data: { contract: signedContract }, meta: { version: nextVersion } });
     } catch (err: any) {
@@ -3078,7 +3078,7 @@ async function startServer() {
         data.advances = (Array.isArray(data.advances) ? data.advances : []).map((item: any) => item?.id === advanceId ? paidAdvance : item);
         nextVersion = actualVersion + 1;
         await transaction.query(`UPDATE public.hr_database SET data=$3::jsonb,version=$4,updated_at=now(),updated_by=$5 WHERE tenant_id=$1 AND school_id=$2`, [tenantId, schoolId, JSON.stringify(data), nextVersion, actorId]);
-        await transaction.query(`INSERT INTO public.audit_events (tenant_id,school_id,branch_id,actor_user_id,entity_type,entity_id,action,source,reason,result,metadata) VALUES ($1,$2,$3,$4,'hr_advance',$5,'pay','HrAdvanceRoute','صرف سلفة معتمدة وترحيل قيدها','success',$6::jsonb)`, [tenantId, schoolId, identity.branchId || null, actorId, advanceId, JSON.stringify({ amount, journalId })]);
+        await transaction.query(`INSERT INTO public.audit_events (tenant_id,school_id,branch_id,actor_user_id,entity_type,entity_id,action,source,reason,result,metadata) VALUES ($1,$2,$3,$4,'hr_advance',$5,'pay','HrAdvanceRoute','صرف سلفة معتمدة وترحيل قيدها','success',$6::jsonb)`, [tenantId, schoolId, identity.branchId || null, actorId, schoolId, JSON.stringify({ advanceId, amount, journalId })]);
       }, tenantContext);
       res.json({ success: true, data: { advance: paidAdvance, journalId, paidAt: paidAdvance?.paidAt, paidBy: paidAdvance?.paidBy }, meta: { version: nextVersion } });
     } catch (err: any) {
@@ -3136,7 +3136,7 @@ async function startServer() {
         data.payrollRuns = [...existingRuns.filter((item: any) => item?.period !== period), run];
         nextVersion = actualVersion + 1;
         await transaction.query(`UPDATE public.hr_database SET data = $3::jsonb, version = $4, updated_at = now(), updated_by = $5 WHERE tenant_id = $1 AND school_id = $2`, [tenantId, schoolId, JSON.stringify(data), nextVersion, actorId]);
-        await transaction.query(`INSERT INTO public.audit_events (tenant_id, school_id, branch_id, actor_user_id, entity_type, entity_id, action, source, reason, result, metadata) VALUES ($1,$2,$3,$4,'hr_payroll_run',$5,'approve','HrPayrollRoute','اعتماد مسير دون ترحيل','success',$6::jsonb)`, [tenantId, schoolId, identity.branchId || null, actorId, `payroll-${period}`, JSON.stringify({ period, totals })]);
+        await transaction.query(`INSERT INTO public.audit_events (tenant_id, school_id, branch_id, actor_user_id, entity_type, entity_id, action, source, reason, result, metadata) VALUES ($1,$2,$3,$4,'hr_payroll_run',$5,'approve','HrPayrollRoute','اعتماد مسير دون ترحيل','success',$6::jsonb)`, [tenantId, schoolId, identity.branchId || null, actorId, schoolId, JSON.stringify({ runId: `payroll-${period}`, period, totals })]);
       }, tenantContext);
       res.json({ success: true, data: run, meta: { version: nextVersion } });
     } catch (err: any) {
@@ -3196,7 +3196,7 @@ async function startServer() {
         run.status = 'paid'; run.paidAt = new Date().toISOString(); run.paidBy = actorId; run.journalId = journalId;
         nextVersion = actualVersion + 1;
         await transaction.query(`UPDATE public.hr_database SET data=$3::jsonb,version=$4,updated_at=now(),updated_by=$5 WHERE tenant_id=$1 AND school_id=$2`, [tenantId, schoolId, JSON.stringify(data), nextVersion, actorId]);
-        await transaction.query(`INSERT INTO public.audit_events (tenant_id,school_id,branch_id,actor_user_id,entity_type,entity_id,action,source,reason,result,metadata) VALUES ($1,$2,$3,$4,'hr_payroll_run',$5,'pay','HrPayrollRoute','تنفيذ صرف وترحيل مسير معتمد','success',$6::jsonb)`, [tenantId, schoolId, identity.branchId || null, actorId, `payroll-${period}`, JSON.stringify({ period, journalId, totals })]);
+        await transaction.query(`INSERT INTO public.audit_events (tenant_id,school_id,branch_id,actor_user_id,entity_type,entity_id,action,source,reason,result,metadata) VALUES ($1,$2,$3,$4,'hr_payroll_run',$5,'pay','HrPayrollRoute','تنفيذ صرف وترحيل مسير معتمد','success',$6::jsonb)`, [tenantId, schoolId, identity.branchId || null, actorId, schoolId, JSON.stringify({ runId: `payroll-${period}`, period, journalId, totals })]);
       }, tenantContext);
       res.json({ success: true, data: { period, journalId, status: 'paid' }, meta: { version: nextVersion } });
     } catch (err: any) {
