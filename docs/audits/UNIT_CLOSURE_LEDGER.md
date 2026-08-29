@@ -16,8 +16,8 @@
 | 08 | Fees / Student Finance | `PENDING SOL GATE` | توجد إصلاحات واختبارات سابقة؛ يلزم تقرير الوحدة الكامل. |
 | 09 | General Finance / Accounting | `BLOCKED — SOURCE OF TRUTH REQUIRED` | إعادة الفحص المحاسبي: 10 ملفات/10 اختبارات ناجحة، لكن لا يوجد مخطط PostgreSQL محاسبي كانوني أو عقد مالك معتمد. راجع `acc-002-general-accounting-discovery-audit.md`. |
 | 10 | General Ledger | `BLOCKED — OWNER CONTRACT REQUIRED` | القراءة/الحواجز الأمنية مثبتة، بينما الترحيل والكتابة والإقفال والتقارير الكانونية غير قابلة للاعتماد قبل ACC-001/ACC-002. |
-| 11 | HR | `PENDING SOL GATE` | توجد إصلاحات واختبارات سابقة؛ يلزم تقرير الوحدة الكامل. |
-| 12 | Payroll | `PENDING` | — |
+| 11 | HR | `UNIT CLOSED — ACCEPTED WITH NON-BLOCKING INTEGRATION ITEMS` | UAT حي مكتمل: حفظ وإعادة تحميل مركزيان، تحقق وتراجع ذري، اعتماد مسير، تدقيق تقرير، تنظيف بيانات الاختبار، وصحة Staging. تكامل الملفات الثنائية والبصمة واختبار العزل الحي المعزز غير مانعة. راجع `UNIT_11_HR_COMPREHENSIVE_AUDIT_2026-08-27.md`. |
+| 12 | Payroll | `PENDING — ACCOUNT MAPPINGS REQUIRED` | اعتماد المسير داخل HR مثبت، لكن الدفع والترحيل المالي لم ينفذا لأن خرائط الحسابات المطلوبة `0/4`. لم يُنشأ أي قيد مالي. |
 | 13 | Inventory | `PENDING SOL GATE` | توجد إصلاحات واختبارات سابقة؛ يلزم تقرير الوحدة الكامل. |
 | 14 | Fixed Assets | `PENDING SOL GATE` | توجد إصلاحات واختبارات سابقة؛ يلزم تقرير الوحدة الكامل. |
 | 15 | Administration | `PENDING` | — |
