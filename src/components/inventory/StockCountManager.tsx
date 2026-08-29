@@ -16,6 +16,9 @@ interface StockCountManagerProps {
 
 export default function StockCountManager({ items, stocktakes = [], settings = {}, onSave, triggerNotification }: StockCountManagerProps) {
   const [valuationPolicy, setValuationPolicy] = useState<'weighted_average' | 'fifo'>(settings.defaultValuationMethod === 'fifo' ? 'fifo' : 'weighted_average');
+  const [showCountForm, setShowCountForm] = useState(false);
+  const [countItemId, setCountItemId] = useState('');
+  const [actualQty, setActualQty] = useState(0);
   const countAuditRecords = stocktakes;
 
   const notify = (msg: string, type: 'success' | 'warning' | 'info' | 'danger' = 'info') => {
@@ -26,19 +29,22 @@ export default function StockCountManager({ items, stocktakes = [], settings = {
     notify('اعتماد الأثر المالي لتسوية الجرد متوقف حتى يتوفر عقد دفتر أستاذ كانوني؛ لم يُنشأ قيد.', 'warning');
   };
 
-  const handleCreateStocktake = async () => {
+  const openStocktake = () => {
     const item = items[0];
     if (!item) { notify('لا يمكن بدء الجرد قبل تسجيل صنف مركزي واحد على الأقل.', 'warning'); return; }
-    const entered = prompt(`أدخل الكمية الفعلية للصنف ${item.name} (الرصيد الدفتري ${item.quantity}):`, String(item.quantity));
-    if (entered === null) return;
-    const actualQty = Number(entered);
-    if (!Number.isInteger(actualQty) || actualQty < 0) { notify('الكمية الفعلية يجب أن تكون عدداً صحيحاً غير سالب.', 'warning'); return; }
+    setCountItemId(item.id); setActualQty(item.quantity); setShowCountForm(true);
+  };
+
+  const handleCreateStocktake = async (event: React.FormEvent) => {
+    event.preventDefault();
+    const item = items.find(row => row.id === countItemId);
+    if (!item || !Number.isInteger(actualQty) || actualQty < 0) { notify('اختر الصنف وأدخل كمية فعلية صحيحة غير سالبة.', 'warning'); return; }
     const discrepancy = actualQty - item.quantity;
     const record = { id: `STK-${Date.now()}`, itemId: item.id, itemName: item.name, warehouse: item.warehouseId,
       bookQty: item.quantity, actualQty, discrepancy, financialImpact: discrepancy * item.costPrice,
       valuationPolicy, status: 'pending_approval', statusLabel: 'قيد اعتماد التسوية', createdAt: new Date().toISOString() };
     if (!onSave) { notify('حفظ محضر الجرد متوقف حتى يتوفر المصدر المركزي.', 'warning'); return; }
-    try { await onSave([record, ...stocktakes]); notify(`تم حفظ محضر الجرد ${record.id} مركزياً.`, 'success'); }
+    try { await onSave([record, ...stocktakes]); notify(`تم حفظ محضر الجرد ${record.id} مركزياً.`, 'success'); setShowCountForm(false); }
     catch (error: any) { notify(error?.message || 'تعذر حفظ محضر الجرد مركزياً.', 'danger'); }
   };
 
@@ -53,7 +59,7 @@ export default function StockCountManager({ items, stocktakes = [], settings = {
           <p className="text-xs text-slate-500 mt-0.5">معالجة العجز والزيادة الجردية، وتطبيق سياسة التقييم المحاسبي للمخزون</p>
         </div>
 
-        <button onClick={handleCreateStocktake} className="px-4 py-2 bg-slate-900 text-white font-bold text-xs">
+        <button onClick={openStocktake} className="px-4 py-2 bg-slate-900 text-white font-bold text-xs">
           تسجيل نتيجة جرد جديدة
         </button>
 
@@ -84,6 +90,19 @@ export default function StockCountManager({ items, stocktakes = [], settings = {
           </button>
         </div>
       </div>
+
+      {showCountForm && (
+        <div className="fixed inset-0 z-50 bg-slate-900/60 flex items-center justify-center p-4">
+          <form onSubmit={handleCreateStocktake} className="bg-white p-6 w-full max-w-lg space-y-4" dir="rtl">
+            <h3 className="font-black text-lg">تسجيل نتيجة جرد فعلية</h3>
+            <select required value={countItemId} onChange={event => { const id = event.target.value; setCountItemId(id); setActualQty(items.find(row => row.id === id)?.quantity || 0); }} className="w-full p-2.5 border border-slate-300">
+              {items.map(item => <option key={item.id} value={item.id}>{item.name} — دفتري {item.quantity}</option>)}
+            </select>
+            <input required type="number" min="0" step="1" value={actualQty} onChange={event => setActualQty(Number(event.target.value))} className="w-full p-2.5 border border-slate-300" />
+            <div className="flex justify-end gap-2"><button type="button" onClick={() => setShowCountForm(false)} className="px-4 py-2 bg-slate-100">إلغاء</button><button type="submit" className="px-4 py-2 bg-slate-900 text-white font-bold">حفظ المحضر</button></div>
+          </form>
+        </div>
+      )}
 
       {/* Audit Variance Table */}
       <div className="overflow-hidden space-y-4 p-6">

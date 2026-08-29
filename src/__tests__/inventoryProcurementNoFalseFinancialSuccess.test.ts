@@ -14,3 +14,15 @@ describe('inventory and procurement financial truthfulness', () => {
     expect(count).toContain('لم يُنشأ قيد');
   });
 });
+
+describe('inventory and procurement browser interaction integrity', () => {
+  it('does not depend on native prompt dialogs for operational writes', () => {
+    const files = [
+      'src/components/inventory/CategoryBrandUnitManager.tsx',
+      'src/components/inventory/StockCountManager.tsx',
+      'src/components/procurement/PurchaseRequestManager.tsx',
+      'src/components/procurement/VendorBillPaymentManager.tsx'
+    ];
+    for (const file of files) expect(readFileSync(file, 'utf8')).not.toContain('prompt(');
+  });
+});

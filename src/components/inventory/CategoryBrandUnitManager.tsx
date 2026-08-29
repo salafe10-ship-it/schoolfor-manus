@@ -12,10 +12,27 @@ interface CategoryBrandUnitManagerProps {
 
 export default function CategoryBrandUnitManager({ categories, brands, units, onSave, triggerNotification }: CategoryBrandUnitManagerProps) {
   const [activeSubTab, setActiveSubTab] = useState<'categories' | 'brands' | 'units'>('categories');
+  const [newName, setNewName] = useState('');
+  const [showCreateForm, setShowCreateForm] = useState(false);
 
   const notify = (msg: string, type: 'success' | 'warning' | 'info' | 'danger' = 'info') => {
     if (triggerNotification) triggerNotification(msg, type);
   };
+
+  const handleCreate = async (event: React.FormEvent) => {
+    event.preventDefault();
+    const name = newName.trim();
+    if (!name) { notify('الاسم مطلوب.', 'warning'); return; }
+    try {
+      if (activeSubTab === 'categories') await onSave({ categories: [...categories, { id: `cat_${Date.now()}`, schoolId: '', name, description: '' }] });
+      if (activeSubTab === 'brands') await onSave({ brands: [...brands, { id: `brand_${Date.now()}`, name, origin: '' }] });
+      if (activeSubTab === 'units') await onSave({ units: [...units, { id: `unit_${Date.now()}`, schoolId: '', name, symbol: name }] });
+      notify(`✓ تم حفظ (${name}) مركزياً`, 'success');
+      setNewName(''); setShowCreateForm(false);
+    } catch (error: any) { notify(error?.message || 'تعذر الحفظ المركزي', 'danger'); }
+  };
+
+  const openCreateForm = () => { setNewName(''); setShowCreateForm(true); };
 
   return (
     <div className="space-y-6">
@@ -55,15 +72,7 @@ export default function CategoryBrandUnitManager({ categories, brands, units, on
           <div className="flex justify-between items-center border-b border-slate-100 pb-3">
             <h4 className="font-bold text-slate-900 text-base">دليل التصنيفات الفنية للأصناف</h4>
             <button 
-              onClick={async () => {
-                const name = prompt('أدخل اسم التصنيف الجديد:');
-                if (name) {
-                  try {
-                    await onSave({ categories: [...categories, { id: `cat_${Date.now()}`, schoolId: '', name: name.trim(), description: '' }] });
-                    notify(`✓ تم حفظ التصنيف (${name}) مركزياً`, 'success');
-                  } catch (error: any) { notify(error?.message || 'تعذر حفظ التصنيف مركزياً', 'danger'); }
-                }
-              }}
+              onClick={openCreateForm}
               className="px-4 py-2 bg-[#2a1d13] text-[#fce79a] font-bold text-xs flex items-center gap-1"
             >
               <Plus className="w-4 h-4" /> إضافة تصنيف
@@ -88,15 +97,7 @@ export default function CategoryBrandUnitManager({ categories, brands, units, on
           <div className="flex justify-between items-center border-b border-slate-100 pb-3">
             <h4 className="font-bold text-slate-900 text-base">دليل العلامات التجارية والماركات</h4>
             <button 
-              onClick={async () => {
-                const name = prompt('أدخل اسم العلامة التجارية الجديدة:');
-                if (name) {
-                  try {
-                    await onSave({ brands: [...brands, { id: `brand_${Date.now()}`, name: name.trim(), origin: '' }] });
-                    notify(`✓ تم حفظ العلامة التجارية (${name}) مركزياً`, 'success');
-                  } catch (error: any) { notify(error?.message || 'تعذر حفظ العلامة التجارية مركزياً', 'danger'); }
-                }
-              }}
+              onClick={openCreateForm}
               className="px-4 py-2 bg-[#2a1d13] text-[#fce79a] font-bold text-xs flex items-center gap-1"
             >
               <Plus className="w-4 h-4" /> إضافة علامة تجارية
@@ -120,15 +121,7 @@ export default function CategoryBrandUnitManager({ categories, brands, units, on
           <div className="flex justify-between items-center border-b border-slate-100 pb-3">
             <h4 className="font-bold text-slate-900 text-base">دليل وحدات القياس المعتمدة</h4>
             <button 
-              onClick={async () => {
-                const name = prompt('أدخل اسم وحدة القياس (مثل: كرتونة/طقم):');
-                if (name) {
-                  try {
-                    await onSave({ units: [...units, { id: `unit_${Date.now()}`, schoolId: '', name: name.trim(), symbol: name.trim() }] });
-                    notify(`✓ تم حفظ وحدة القياس (${name}) مركزياً`, 'success');
-                  } catch (error: any) { notify(error?.message || 'تعذر حفظ وحدة القياس مركزياً', 'danger'); }
-                }
-              }}
+              onClick={openCreateForm}
               className="px-4 py-2 bg-[#2a1d13] text-[#fce79a] font-bold text-xs flex items-center gap-1"
             >
               <Plus className="w-4 h-4" /> إضافة وحدة قياس
@@ -144,6 +137,17 @@ export default function CategoryBrandUnitManager({ categories, brands, units, on
               </div>
             ))}
           </div>
+        </div>
+      )}
+
+      {showCreateForm && (
+        <div className="fixed inset-0 z-50 bg-slate-900/60 flex items-center justify-center p-4">
+          <form onSubmit={handleCreate} className="bg-white p-6 w-full max-w-md space-y-4" dir="rtl">
+            <h3 className="font-black text-lg">{activeSubTab === 'categories' ? 'إضافة تصنيف' : activeSubTab === 'brands' ? 'إضافة علامة تجارية' : 'إضافة وحدة قياس'}</h3>
+            <label className="block text-xs font-bold">الاسم *</label>
+            <input autoFocus required value={newName} onChange={event => setNewName(event.target.value)} className="w-full p-2.5 border border-slate-300" />
+            <div className="flex justify-end gap-2"><button type="button" onClick={() => setShowCreateForm(false)} className="px-4 py-2 bg-slate-100">إلغاء</button><button type="submit" className="px-4 py-2 bg-slate-900 text-white font-bold">حفظ مركزياً</button></div>
+          </form>
         </div>
       )}
     </div>

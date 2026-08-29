@@ -21,19 +21,29 @@ export default function VendorBillPaymentManager({
   triggerNotification
 }: VendorBillPaymentManagerProps) {
   const [searchTerm, setSearchTerm] = useState('');
+  const [showBillForm, setShowBillForm] = useState(false);
+  const [billReceiptId, setBillReceiptId] = useState('');
+  const [vendorInvoiceNo, setVendorInvoiceNo] = useState('');
   const filtered = vendorBills.filter(b => 
     b.billNo.toLowerCase().includes(searchTerm.toLowerCase()) ||
     b.vendorName.toLowerCase().includes(searchTerm.toLowerCase()) ||
     b.vendorInvoiceNo.toLowerCase().includes(searchTerm.toLowerCase())
   );
 
-  const handleCreateBill = async () => {
+  const openBillForm = () => {
     const receipt = receipts.find(item => !vendorBills.some(bill => bill.grnId === item.id));
     if (!receipt) { triggerNotification?.('لا يوجد إذن استلام غير مفوتر لإنشاء فاتورة مورد.', 'warning'); return; }
+    setBillReceiptId(receipt.id); setVendorInvoiceNo(''); setShowBillForm(true);
+  };
+
+  const handleCreateBill = async (event: React.FormEvent) => {
+    event.preventDefault();
+    const receipt = receipts.find(item => item.id === billReceiptId && !vendorBills.some(bill => bill.grnId === item.id));
+    if (!receipt) { triggerNotification?.('اختر إذن استلام صالحاً وغير مفوتر.', 'warning'); return; }
     const po = orders.find(item => item.id === receipt.purchaseOrderId);
     if (!po) { triggerNotification?.('تعذر ربط إذن الاستلام بأمر الشراء.', 'warning'); return; }
-    const invoiceNo = prompt('أدخل رقم فاتورة المورد:');
-    if (!invoiceNo?.trim()) return;
+    const invoiceNo = vendorInvoiceNo.trim();
+    if (!invoiceNo) { triggerNotification?.('رقم فاتورة المورد مطلوب.', 'warning'); return; }
     const amount = receipt.totalReceivedValue;
     const bill: VendorBill = {
       id: `bill_${Date.now()}`, schoolId: '', billNo: `BILL-${Date.now()}`, vendorInvoiceNo: invoiceNo.trim(),
@@ -42,7 +52,7 @@ export default function VendorBillPaymentManager({
       subtotal: amount, taxAmount: 0, grandTotal: amount, paidAmount: 0, remainingAmount: amount,
       status: 'pending_matching', notes: 'بانتظار المطابقة الثلاثية والاعتماد المالي.', createdAt: new Date().toISOString()
     };
-    try { await onSaveBill(bill); triggerNotification?.(`تم حفظ فاتورة المورد ${bill.billNo} مركزياً بحالة انتظار المطابقة.`, 'success'); }
+    try { await onSaveBill(bill); triggerNotification?.(`تم حفظ فاتورة المورد ${bill.billNo} مركزياً بحالة انتظار المطابقة.`, 'success'); setShowBillForm(false); }
     catch (error: any) { triggerNotification?.(error?.message || 'تعذر حفظ فاتورة المورد', 'danger'); }
   };
 
@@ -56,8 +66,21 @@ export default function VendorBillPaymentManager({
           </h3>
           <p className="text-xs text-slate-500 mt-0.5">توثيق فاتورة المورد وربطها بأمر الشراء وإذن الاستلام؛ الدفع والترحيل المالي محجوبان حتى اكتمال التكامل القانوني</p>
         </div>
-        <button onClick={handleCreateBill} className="px-4 py-2 bg-slate-900 text-white font-bold text-xs">تسجيل فاتورة مورد</button>
+        <button onClick={openBillForm} className="px-4 py-2 bg-slate-900 text-white font-bold text-xs">تسجيل فاتورة مورد</button>
       </div>
+
+      {showBillForm && (
+        <div className="fixed inset-0 z-50 bg-slate-900/60 flex items-center justify-center p-4">
+          <form onSubmit={handleCreateBill} className="bg-white p-6 w-full max-w-lg space-y-4" dir="rtl">
+            <h3 className="font-black text-lg">تسجيل فاتورة مورد مرتبطة بالاستلام</h3>
+            <select required value={billReceiptId} onChange={event => setBillReceiptId(event.target.value)} className="w-full p-2.5 border border-slate-300">
+              {receipts.filter(receipt => !vendorBills.some(bill => bill.grnId === receipt.id)).map(receipt => <option key={receipt.id} value={receipt.id}>{receipt.grnNo} — {receipt.vendorName} — {receipt.totalReceivedValue.toLocaleString('ar-SA')}</option>)}
+            </select>
+            <input required value={vendorInvoiceNo} onChange={event => setVendorInvoiceNo(event.target.value)} placeholder="رقم فاتورة المورد" className="w-full p-2.5 border border-slate-300" />
+            <div className="flex justify-end gap-2"><button type="button" onClick={() => setShowBillForm(false)} className="px-4 py-2 bg-slate-100">إلغاء</button><button type="submit" className="px-4 py-2 bg-slate-900 text-white font-bold">حفظ بانتظار المطابقة</button></div>
+          </form>
+        </div>
+      )}
 
       {/* 3-Way Matching Banner */}
       <div className="bg-purple-900 text-white p-5 border border-purple-800 space-y-2">

@@ -25,6 +25,8 @@ export default function PurchaseRequestManager({
   const [filterStatus, setFilterStatus] = useState<string>('ALL');
   const [showModal, setShowModal] = useState(false);
   const [editingPR, setEditingPR] = useState<Partial<PurchaseRequest> | null>(null);
+  const [rejectingPR, setRejectingPR] = useState<PurchaseRequest | null>(null);
+  const [rejectionReason, setRejectionReason] = useState('');
 
   const notify = (msg: string, type: 'success' | 'warning' | 'info' | 'danger' = 'info') => {
     if (triggerNotification) triggerNotification(msg, type);
@@ -129,15 +131,17 @@ export default function PurchaseRequestManager({
     catch (error: any) { notify(error?.message || 'تعذر اعتماد طلب الشراء', 'danger'); }
   };
 
-  const handleReject = async (pr: PurchaseRequest) => {
-    const reason = prompt('يرجى كتابة سبب رفض الطلب:');
-    if (reason) {
+  const handleReject = async (event: React.FormEvent) => {
+    event.preventDefault();
+    const pr = rejectingPR;
+    const reason = rejectionReason.trim();
+    if (pr && reason) {
       const updated: PurchaseRequest = {
         ...pr,
         status: 'rejected',
         rejectionReason: reason
       };
-      try { await onSaveRequest(updated); notify(`تم رفض طلب الشراء رقم (${pr.requestNo}) مركزياً`, 'warning'); }
+      try { await onSaveRequest(updated); notify(`تم رفض طلب الشراء رقم (${pr.requestNo}) مركزياً`, 'warning'); setRejectingPR(null); setRejectionReason(''); }
       catch (error: any) { notify(error?.message || 'تعذر رفض طلب الشراء', 'danger'); }
     }
   };
@@ -252,7 +256,7 @@ export default function PurchaseRequestManager({
                             اعتماد
                           </button>
                           <button 
-                            onClick={() => handleReject(r)}
+                            onClick={() => { setRejectingPR(r); setRejectionReason(''); }}
                             className="px-2.5 py-1 bg-red-600 hover:bg-red-700 text-white font-bold text-xs rounded-lg transition"
                           >
                             رفض
@@ -286,6 +290,16 @@ export default function PurchaseRequestManager({
           </table>
         </div>
       </div>
+
+      {rejectingPR && (
+        <div className="fixed inset-0 z-50 bg-slate-900/60 flex items-center justify-center p-4">
+          <form onSubmit={handleReject} className="bg-white p-6 w-full max-w-lg space-y-4" dir="rtl">
+            <h3 className="font-black text-lg">رفض طلب الشراء {rejectingPR.requestNo}</h3>
+            <textarea required value={rejectionReason} onChange={event => setRejectionReason(event.target.value)} placeholder="سبب الرفض الموثق" className="w-full p-2.5 border border-slate-300" rows={3} />
+            <div className="flex justify-end gap-2"><button type="button" onClick={() => setRejectingPR(null)} className="px-4 py-2 bg-slate-100">إلغاء</button><button type="submit" className="px-4 py-2 bg-red-700 text-white font-bold">تأكيد الرفض</button></div>
+          </form>
+        </div>
+      )}
 
       {/* Modal Form */}
       {showModal && editingPR && (

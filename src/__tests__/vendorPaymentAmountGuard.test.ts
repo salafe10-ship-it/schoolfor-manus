@@ -3,13 +3,14 @@ import fs from 'node:fs';
 import path from 'node:path';
 
 describe('vendor payment integrity', () => {
-  it('rejects zero, invalid, or overpayment amounts', () => {
+  it('keeps payment unavailable until canonical treasury and ledger integration exists', () => {
     const source = fs.readFileSync(
       path.resolve(process.cwd(), 'src/components/procurement/VendorBillPaymentManager.tsx'),
       'utf8'
     );
-    expect(source).toContain('paymentAmount <= 0 || paymentAmount > selectedBill.remainingAmount');
-    expect(source).toContain('useState<number>(0)');
-    expect(source).not.toContain('useState<number>(10000)');
+    expect(source).toContain('الدفع محجوب بأمان');
+    expect(source).toContain('لم تُسجل دفعة');
+    expect(source).not.toContain('VendorPayment');
+    expect(source).not.toContain('paymentNo:');
   });
 });
