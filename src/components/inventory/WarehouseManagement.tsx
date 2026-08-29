@@ -7,12 +7,12 @@ import {
 import { InventoryWarehouse } from '../../types';
 
 interface WarehouseManagementProps {
+  warehouses?: InventoryWarehouse[];
+  onSave?: (warehouses: InventoryWarehouse[]) => Promise<void>;
   triggerNotification?: (msg: string, type: 'success' | 'warning' | 'info' | 'danger') => void;
 }
 
-export default function WarehouseManagement({ triggerNotification }: WarehouseManagementProps) {
-  // لا تُعرض مستودعات أو مسؤولون وهميون؛ تُحمّل القائمة من المستودع المركزي عند ربطه.
-  const [warehouses, setWarehouses] = useState<InventoryWarehouse[]>([]);
+export default function WarehouseManagement({ warehouses = [], onSave, triggerNotification }: WarehouseManagementProps) {
 
   const [showAddModal, setShowAddModal] = useState(false);
   const [editingWh, setEditingWh] = useState<Partial<InventoryWarehouse> | null>(null);
@@ -21,29 +21,32 @@ export default function WarehouseManagement({ triggerNotification }: WarehouseMa
     if (triggerNotification) triggerNotification(msg, type);
   };
 
-  const handleSave = (e: React.FormEvent) => {
+  const handleSave = async (e: React.FormEvent) => {
     e.preventDefault();
     if (!editingWh || !editingWh.name?.trim() || !editingWh.location?.trim() || !editingWh.manager?.trim()) {
       notify('اسم المستودع والموقع وأمين المستودع حقول مطلوبة وموثقة', 'warning');
       return;
     }
 
-    if (editingWh.id) {
-      setWarehouses(warehouses.map(w => w.id === editingWh.id ? (editingWh as InventoryWarehouse) : w));
-      notify(`✓ تم تحديث بيانات المستودع (${editingWh.name}) بنجاح`, 'success');
-    } else {
+    if (!onSave) { notify('حفظ المستودع متوقف حتى يتوفر المصدر المركزي.', 'warning'); return; }
+    try {
+      if (editingWh.id) {
+        await onSave(warehouses.map(w => w.id === editingWh.id ? (editingWh as InventoryWarehouse) : w));
+        notify(`✓ تم تحديث بيانات المستودع (${editingWh.name}) مركزياً`, 'success');
+      } else {
       const newWh: InventoryWarehouse = {
         id: `wh_${Date.now()}`,
-        schoolId: 'school_1',
+        schoolId: '',
         name: editingWh.name || '',
         location: editingWh.location.trim(),
         manager: editingWh.manager.trim()
       };
-      setWarehouses([...warehouses, newWh]);
-      notify(`✓ تم إضافة المستودع الجديد (${newWh.name}) بنجاح`, 'success');
-    }
-    setShowAddModal(false);
-    setEditingWh(null);
+        await onSave([...warehouses, newWh]);
+        notify(`✓ تم إضافة المستودع الجديد (${newWh.name}) مركزياً`, 'success');
+      }
+      setShowAddModal(false);
+      setEditingWh(null);
+    } catch (error: any) { notify(error?.message || 'تعذر حفظ المستودع مركزياً', 'danger'); }
   };
 
   return (
@@ -109,12 +112,7 @@ export default function WarehouseManagement({ triggerNotification }: WarehouseMa
             {/* Sub-locations / Racks Preview */}
             <div className="bg-transparent p-3 border border-slate-100 space-y-2">
               <span className="text-xs font-bold text-slate-500 block">الأرفف والأقسام الفرعية المعتمدة:</span>
-              <div className="flex flex-wrap gap-2 text-xs">
-                <span className="px-2.5 py-1 rounded-md font-mono font-bold text-slate-700">رف A1-01</span>
-                <span className="px-2.5 py-1 rounded-md font-mono font-bold text-slate-700">رف A1-02</span>
-                <span className="px-2.5 py-1 rounded-md font-mono font-bold text-slate-700">رف B2-05</span>
-                <span className="px-2.5 py-1 rounded-md font-mono font-bold text-slate-700">ممر الأجهزة C</span>
-              </div>
+              <div className="text-xs text-slate-500">لا توجد مواقع فرعية موثقة لهذا المستودع بعد.</div>
             </div>
           </div>
         ))}

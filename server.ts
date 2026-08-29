@@ -4089,59 +4089,173 @@ async function startServer() {
     }
   });
 
-  // Inventory Database API
+  // Canonical Inventory and Procurement Database API. All scope and actor
+  // values come from the trusted session; the browser submits business data
+  // and an optimistic version only.
   app.get("/api/inventory/database", authenticateRequest, requirePermission(PERMISSIONS.INVENTORY_READ), async (req, res, next) => {
     try {
-      const fs = await import("fs");
-      const path = await import("path");
-      const schoolId = String((req as any).user.schoolId || '').trim();
-      const dataDir = path.join(process.cwd(), "src", "db");
-      const filePath = tenantScopedDatabaseFilePath(dataDir, "inventory_database", schoolId);
-      let data = { items: [] };
-      if (fs.existsSync(filePath)) {
-        const raw = fs.readFileSync(filePath, "utf8");
-        data = JSON.parse(raw);
+      const identity = (req as any).user;
+      const tenantId = String(identity?.tenantId || '').trim();
+      const schoolId = String(identity?.schoolId || '').trim();
+      const tenantContext = (req as any).tenantContext;
+      if (!tenantId || !schoolId || !tenantContext || tenantContext.tenantId !== tenantId || tenantContext.schoolId !== schoolId) {
+        throw new AuthenticationError('السياق الموثوق لقراءة المخزون والمشتريات غير مكتمل.');
       }
-      res.json({
-        success: true,
-        data: data,
-        message: "Inventory database retrieved successfully."
-      });
+      const snapshot = await UnitOfWork.runInTransaction(schoolId, {
+        operationName: 'Read versioned inventory database', tenantId, userId: identity.id,
+        userName: identity.name || 'المستخدم الحالي', ipAddress: req.ip || 'unknown',
+        affectedTables: ['inventory_database']
+      }, async () => {
+        const transaction = UnitOfWork.getActiveContext()?.databaseTransaction;
+        if (!transaction) throw new DatabaseError('معاملة قراءة المخزون والمشتريات غير متاحة.');
+        const result = await transaction.query<{ data: Record<string, unknown>; version: number }>(
+          `SELECT data, version FROM public.inventory_database WHERE tenant_id = $1 AND school_id = $2`,
+          [tenantId, schoolId]
+        );
+        return result.rows[0] || {
+          data: { items: [], categories: [], brands: [], units: [], suppliers: [], warehouses: [], movements: [], stocktakes: [], purchaseRequests: [], rfqs: [], quotations: [], purchaseOrders: [], goodsReceipts: [], vendorBills: [], vendorPayments: [], settings: {}, procurementSettings: {} },
+          version: 0
+        };
+      }, tenantContext);
+      res.setHeader('Cache-Control', 'no-store');
+      res.json({ success: true, data: snapshot.data, meta: { version: Number(snapshot.version || 0) }, message: "Inventory database retrieved successfully." });
     } catch (err: any) {
-      next(new DatabaseError("Failed to read inventory database", err.message));
+      next(err instanceof AuthenticationError || err instanceof AuthorizationError || err instanceof DatabaseError
+        ? err : new DatabaseError("Failed to read inventory database", err.message));
     }
   });
 
   app.post("/api/inventory/database", authenticateRequest, requirePermission(PERMISSIONS.INVENTORY_WRITE), async (req, res, next) => {
     try {
-      const fs = await import("fs");
-      const path = await import("path");
-      const dataDir = path.join(process.cwd(), "src", "db");
-      if (!fs.existsSync(dataDir)) {
-        fs.mkdirSync(dataDir, { recursive: true });
+      const identity = (req as any).user;
+      const tenantId = String(identity?.tenantId || '').trim();
+      const schoolId = String(identity?.schoolId || '').trim();
+      const tenantContext = (req as any).tenantContext;
+      const expectedVersion = Number(req.body?.expectedVersion);
+      const requestedData = req.body?.data;
+      const expectedArrays = ['items', 'categories', 'brands', 'units', 'suppliers', 'warehouses', 'movements', 'stocktakes', 'purchaseRequests', 'rfqs', 'quotations', 'purchaseOrders', 'goodsReceipts', 'vendorBills', 'vendorPayments'];
+      if (!tenantId || !schoolId || !tenantContext || tenantContext.tenantId !== tenantId || tenantContext.schoolId !== schoolId
+        || !Number.isInteger(expectedVersion) || expectedVersion < 0) {
+        throw new ValidationError('حفظ المخزون والمشتريات يتطلب نطاق مدرسة موثوقاً ورقم إصدار صالحاً.');
       }
-      const schoolId = String((req as any).user.schoolId || '').trim();
-      const filePath = tenantScopedDatabaseFilePath(dataDir, "inventory_database", schoolId);
-      fs.writeFileSync(filePath, JSON.stringify(req.body, null, 2), "utf8");
-
-      await AuditRepository.log(
-        schoolId,
-        (req as any).user.id,
-        (req as any).user.name || "أمين المستودع",
-        (req as any).user.role || "InventoryManager",
-        "UPDATE",
-        "inventory_database",
-        req.ip || "127.0.0.1",
-        "تحديث وحفظ بيانات وحركات المخزون والمستودعات"
-      );
-
-      res.json({
-        success: true,
-        message: "Inventory database saved successfully."
-      });
+      if (!requestedData || typeof requestedData !== 'object' || Array.isArray(requestedData)) {
+        throw new ValidationError('بيانات المخزون والمشتريات يجب أن تكون كائناً صالحاً.');
+      }
+      for (const collection of expectedArrays) {
+        if (!Array.isArray((requestedData as Record<string, unknown>)[collection])) {
+          throw new ValidationError(`حقل ${collection} يجب أن يكون قائمة.`);
+        }
+      }
+      for (const objectKey of ['settings', 'procurementSettings']) {
+        const value = (requestedData as Record<string, unknown>)[objectKey];
+        if (!value || typeof value !== 'object' || Array.isArray(value)) throw new ValidationError(`حقل ${objectKey} يجب أن يكون كائناً.`);
+      }
+      const ids = (rows: any[]) => rows.map(row => String(row?.id || '').trim()).filter(Boolean);
+      for (const collection of expectedArrays) {
+        const collectionIds = ids((requestedData as any)[collection]);
+        if (collectionIds.length !== new Set(collectionIds).size) throw new ValidationError(`توجد معرفات مكررة في ${collection}.`);
+      }
+      for (const item of (requestedData as any).items) {
+        if (!String(item?.id || '').trim() || !String(item?.name || '').trim() || !String(item?.sku || '').trim()
+          || !Number.isFinite(Number(item?.quantity)) || Number(item.quantity) < 0
+          || !Number.isFinite(Number(item?.costPrice)) || Number(item.costPrice) < 0) {
+          throw new ValidationError('بطاقات الأصناف تتطلب معرفاً واسماً وSKU وكميات وتكاليف غير سالبة.');
+        }
+      }
+      let nextVersion = expectedVersion + 1;
+      await UnitOfWork.runInTransaction(schoolId, {
+        operationName: 'Write versioned inventory database', tenantId, userId: identity.id,
+        userName: identity.name || 'المستخدم الحالي', ipAddress: req.ip || 'unknown',
+        affectedTables: ['inventory_database', 'audit_events']
+      }, async () => {
+        const transaction = UnitOfWork.getActiveContext()?.databaseTransaction;
+        if (!transaction) throw new DatabaseError('معاملة حفظ المخزون والمشتريات غير متاحة.');
+        const actorResult = await transaction.query<{ id: string }>(
+          `SELECT id FROM public.users WHERE tenant_id = $1 AND auth_user_id = $2 AND status = 'active' AND deleted_at IS NULL LIMIT 1`,
+          [tenantId, identity.id]
+        );
+        const actorId = actorResult.rows[0]?.id;
+        if (!actorId) throw new AuthenticationError('تعذر ربط الجلسة بسجل المستخدم المؤسسي.');
+        const current = await transaction.query<{ data: Record<string, any>; version: number }>(
+          `SELECT data, version FROM public.inventory_database WHERE tenant_id = $1 AND school_id = $2 FOR UPDATE`,
+          [tenantId, schoolId]
+        );
+        const actualVersion = Number(current.rows[0]?.version || 0);
+        if (actualVersion !== expectedVersion) throw new ConflictError('تم تعديل المخزون أو المشتريات بواسطة مستخدم آخر. أعد المزامنة.', { expectedVersion, actualVersion });
+        const currentData = current.rows[0]?.data || {};
+        for (const key of ['movements', 'stocktakes', 'purchaseRequests', 'rfqs', 'quotations', 'purchaseOrders', 'goodsReceipts', 'vendorBills', 'vendorPayments']) {
+          for (const locked of (Array.isArray(currentData[key]) ? currentData[key] : []).filter((row: any) => ['approved', 'issued', 'awarded', 'posted', 'closed', 'paid', 'posted_to_gl', 'partially_received', 'fully_received'].includes(String(row?.status)))) {
+            const requested = (requestedData as any)[key].find((row: any) => row?.id === locked.id);
+            if (!requested || stableJsonStringify(requested) !== stableJsonStringify(locked)) {
+              throw new ConflictError(`السجل ${locked.id} في ${key} محمي بعد الاعتماد ولا يقبل تعديلاً عاماً.`);
+            }
+          }
+        }
+        const changedCollections = [...expectedArrays, 'settings', 'procurementSettings'].filter(key =>
+          stableJsonStringify(currentData[key] ?? (expectedArrays.includes(key) ? [] : {})) !== stableJsonStringify((requestedData as any)[key])
+        );
+        nextVersion = actualVersion + 1;
+        await transaction.query(
+          `INSERT INTO public.inventory_database (tenant_id, school_id, data, version, updated_at, updated_by)
+           VALUES ($1, $2, $3::jsonb, $4, now(), $5)
+           ON CONFLICT (school_id) DO UPDATE SET data = EXCLUDED.data, version = EXCLUDED.version,
+             updated_at = now(), updated_by = EXCLUDED.updated_by
+           WHERE public.inventory_database.tenant_id = EXCLUDED.tenant_id`,
+          [tenantId, schoolId, JSON.stringify(requestedData), nextVersion, actorId]
+        );
+        await transaction.query(
+          `INSERT INTO public.audit_events
+             (tenant_id, school_id, branch_id, actor_user_id, entity_type, entity_id, action, source, reason, result, metadata)
+           VALUES ($1, $2, $3, $4, 'inventory_database', $2, 'write', 'InventoryDatabaseRoute', 'حفظ المخزون والمشتريات', 'success', $5::jsonb)`,
+          [tenantId, schoolId, identity.branchId || null, actorId, JSON.stringify({ expectedVersion, actualVersion, nextVersion, changedCollections,
+            previousSnapshotHash: createHash('sha256').update(stableJsonStringify(currentData)).digest('hex'),
+            nextSnapshotHash: createHash('sha256').update(stableJsonStringify(requestedData)).digest('hex') })]
+        );
+      }, tenantContext);
+      res.json({ success: true, data: { updated: true }, meta: { version: nextVersion }, message: "Inventory database saved successfully." });
     } catch (err: any) {
-      next(new DatabaseError("Failed to save inventory database", err.message));
+      next(err instanceof AuthenticationError || err instanceof AuthorizationError || err instanceof ConflictError || err instanceof ValidationError || err instanceof DatabaseError
+        ? err : new DatabaseError("Failed to save inventory database", err.message));
     }
+  });
+
+  app.post('/api/inventory/reports/audit', authenticateRequest, requirePermission(PERMISSIONS.INVENTORY_READ), async (req, res, next) => {
+    try {
+      const identity = (req as any).user;
+      const tenantId = String(identity?.tenantId || '').trim();
+      const schoolId = String(identity?.schoolId || '').trim();
+      const tenantContext = (req as any).tenantContext;
+      const reportType = String(req.body?.reportType || '').trim();
+      const format = String(req.body?.format || '').trim().toLowerCase();
+      const expectedVersion = Number(req.body?.expectedVersion);
+      if (!tenantId || !schoolId || !tenantContext || !['valuation', 'reorder', 'turnover', 'procurement'].includes(reportType)
+        || !['csv', 'print'].includes(format) || !Number.isInteger(expectedVersion) || expectedVersion < 0) {
+        throw new ValidationError('طلب تدقيق تقرير المخزون غير صالح.');
+      }
+      const result = await UnitOfWork.runInTransaction(schoolId, {
+        operationName: 'Audit inventory report export', tenantId, userId: identity.id,
+        userName: identity.name || 'المستخدم الحالي', ipAddress: req.ip || 'unknown', affectedTables: ['inventory_database', 'audit_events']
+      }, async () => {
+        const transaction = UnitOfWork.getActiveContext()?.databaseTransaction;
+        if (!transaction) throw new DatabaseError('معاملة تدقيق التقرير غير متاحة.');
+        const actor = await transaction.query<{ id: string }>(`SELECT id FROM public.users WHERE tenant_id = $1 AND auth_user_id = $2 AND status = 'active' AND deleted_at IS NULL LIMIT 1`, [tenantId, identity.id]);
+        const actorId = actor.rows[0]?.id;
+        if (!actorId) throw new AuthenticationError('تعذر ربط الجلسة بسجل المستخدم المؤسسي لتدقيق التقرير.');
+        const snapshot = await transaction.query<{ data: Record<string, any>; version: number }>(`SELECT data, version FROM public.inventory_database WHERE tenant_id = $1 AND school_id = $2`, [tenantId, schoolId]);
+        const actualVersion = Number(snapshot.rows[0]?.version || 0);
+        if (actualVersion !== expectedVersion) throw new ConflictError('تغير مصدر التقرير. أعد تحميل الوحدة قبل التصدير.', { expectedVersion, actualVersion });
+        const data = snapshot.rows[0]?.data || {};
+        const rowCount = reportType === 'procurement' ? (data.purchaseOrders || []).length : (data.items || []).length;
+        const hash = createHash('sha256').update(stableJsonStringify(data)).digest('hex');
+        await transaction.query(
+          `INSERT INTO public.audit_events (tenant_id, school_id, branch_id, actor_user_id, entity_type, entity_id, action, source, reason, result, metadata)
+           VALUES ($1, $2, $3, $4, 'inventory_report', $2, 'export', 'InventoryReportRoute', 'تصدير تقرير مخزون أو مشتريات', 'success', $5::jsonb)`,
+          [tenantId, schoolId, identity.branchId || null, actorId, JSON.stringify({ reportType, format, version: actualVersion, rowCount, snapshotHash: hash })]
+        );
+        return { rowCount, snapshotHash: hash };
+      }, tenantContext);
+      res.json({ success: true, data: result, meta: { version: expectedVersion } });
+    } catch (err: any) { next(err); }
   });
 
   // Supabase Connectivity Status

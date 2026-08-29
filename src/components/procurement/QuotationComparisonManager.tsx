@@ -3,35 +3,99 @@ import {
   ArrowRightLeft, FileSpreadsheet, CheckCircle2, Award, 
   Clock, Plus, ShieldCheck, DollarSign, Star, FileCheck 
 } from 'lucide-react';
-import { RequestForQuotation, VendorQuotation, PurchaseRequest } from '../../types';
+import { RequestForQuotation, VendorQuotation, PurchaseRequest, InventorySupplier } from '../../types';
 
 interface QuotationComparisonManagerProps {
   requests: PurchaseRequest[];
-  onAwardVendor: (rfqId: string, vendorId: string, totalAmount: number) => void;
+  rfqs: RequestForQuotation[];
+  quotations: VendorQuotation[];
+  suppliers: InventorySupplier[];
+  onSaveRfq: (rfq: RequestForQuotation) => Promise<void>;
+  onSaveQuotation: (quotation: VendorQuotation, rfq: RequestForQuotation) => Promise<void>;
+  onAwardVendor: (rfqId: string, vendorId: string, totalAmount: number) => Promise<void>;
   triggerNotification?: (msg: string, type: 'success' | 'warning' | 'info' | 'danger') => void;
 }
 
 export default function QuotationComparisonManager({
   requests,
+  rfqs,
+  quotations,
+  suppliers,
+  onSaveRfq,
+  onSaveQuotation,
   onAwardVendor,
   triggerNotification
 }: QuotationComparisonManagerProps) {
   const [activeRfqId, setActiveRfqId] = useState<string>('');
+  const [showQuoteForm, setShowQuoteForm] = useState(false);
+  const [quoteNo, setQuoteNo] = useState('');
+  const [vendorId, setVendorId] = useState('');
+  const [deliveryDays, setDeliveryDays] = useState(0);
+  const [paymentTerms, setPaymentTerms] = useState('');
+  const [unitPrices, setUnitPrices] = useState<Record<string, number>>({});
 
-  // لا تُزرع طلبات عروض أو أسعار موردين؛ تُحمّل من دورة الشراء المركزية.
-  const [rfqs, setRfqs] = useState<RequestForQuotation[]>([]);
-
-  const [quotations, setQuotations] = useState<VendorQuotation[]>([]);
-
-  const handleAward = (vq: VendorQuotation) => {
-    onAwardVendor(vq.rfqId, vq.vendorId, vq.grandTotal);
-    if (triggerNotification) {
-      triggerNotification(`✓ تم ترسية المناقصة على المورد (${vq.vendorName}) بقيمة ${vq.grandTotal.toLocaleString('ar-SA')} د.ل وإصدار أمر الشراء تلقائياً`, 'success');
-    }
+  const handleAward = async (vq: VendorQuotation) => {
+    try {
+      await onAwardVendor(vq.rfqId, vq.vendorId, vq.grandTotal);
+      triggerNotification?.(`✓ تم ترسية العرض على المورد (${vq.vendorName}) وحفظ أمر الشراء مركزياً`, 'success');
+    } catch (error: any) { triggerNotification?.(error?.message || 'تعذرت ترسية العرض', 'danger'); }
   };
 
   const selectedRfq = rfqs.find(r => r.id === activeRfqId);
   const rfqQuotes = quotations.filter(q => q.rfqId === activeRfqId);
+
+  const handleCreateRfq = async () => {
+    const request = requests.find(item => item.status === 'approved');
+    if (!request) { triggerNotification?.('يلزم طلب شراء معتمد قبل إنشاء RFQ.', 'warning'); return; }
+    const rfq: RequestForQuotation = {
+      id: `rfq_${Date.now()}`, schoolId: '', rfqNo: `RFQ-${Date.now()}`, purchaseRequestId: request.id,
+      title: request.purpose, issueDate: new Date().toISOString().split('T')[0],
+      deadlineDate: new Date(Date.now() + 7 * 86400000).toISOString().split('T')[0], vendorIds: [],
+      items: request.lines, status: 'draft', createdAt: new Date().toISOString()
+    };
+    try { await onSaveRfq(rfq); setActiveRfqId(rfq.id); triggerNotification?.(`تم حفظ طلب العروض ${rfq.rfqNo} مركزياً.`, 'success'); }
+    catch (error: any) { triggerNotification?.(error?.message || 'تعذر حفظ طلب العروض', 'danger'); }
+  };
+
+  const handleSaveQuotation = async (event: React.FormEvent) => {
+    event.preventDefault();
+    if (!selectedRfq) return;
+    const supplier = suppliers.find(item => item.id === vendorId);
+    if (!supplier || !quoteNo.trim() || !Number.isInteger(deliveryDays) || deliveryDays <= 0 || !paymentTerms.trim()
+      || selectedRfq.items.some(item => !Number.isFinite(unitPrices[item.id]) || unitPrices[item.id] <= 0)) {
+      triggerNotification?.('أكمل المورد ورقم العرض وشروطه وأسعار جميع البنود بقيم صحيحة.', 'warning');
+      return;
+    }
+    const lines = selectedRfq.items.map(item => ({
+      itemId: item.itemId || item.itemCode,
+      itemName: item.itemName,
+      quantity: item.quantityRequested,
+      unitPrice: unitPrices[item.id],
+      discountAmount: 0,
+      taxAmount: 0,
+      totalAmount: item.quantityRequested * unitPrices[item.id],
+    }));
+    const quotation: VendorQuotation = {
+      id: `quotation_${Date.now()}`,
+      rfqId: selectedRfq.id,
+      vendorId: supplier.id,
+      vendorName: supplier.name,
+      quotationNo: quoteNo.trim(),
+      quotationDate: new Date().toISOString().slice(0, 10),
+      validUntil: selectedRfq.deadlineDate,
+      deliveryDays,
+      paymentTerms: paymentTerms.trim(),
+      lines,
+      grandTotal: lines.reduce((sum, line) => sum + line.totalAmount, 0),
+      status: 'received',
+    };
+    try {
+      await onSaveQuotation(quotation, { ...selectedRfq, vendorIds: Array.from(new Set([...selectedRfq.vendorIds, supplier.id])), status: 'sent' });
+      setShowQuoteForm(false);
+      setQuoteNo(''); setVendorId(''); setDeliveryDays(0); setPaymentTerms(''); setUnitPrices({});
+      triggerNotification?.(`تم حفظ عرض المورد ${supplier.name} مركزياً.`, 'success');
+    } catch (error: any) { triggerNotification?.(error?.message || 'تعذر حفظ عرض المورد', 'danger'); }
+  };
 
   return (
     <div className="space-y-6" id="quotation-comparison-manager">
@@ -45,12 +109,18 @@ export default function QuotationComparisonManager({
         </div>
 
         <button 
-          onClick={() => alert('يمكنك اختيار طلب شراء معتمد وتحويله إلى طلب عروض أسعار RFQ')}
+          onClick={handleCreateRfq}
           className="px-5 py-2.5 bg-slate-900 hover:bg-slate-800 text-white font-bold text-sm transition flex items-center gap-2 shadow-sm"
         >
           <Plus className="w-4 h-4" /> إنشاء طلب عروض أسعار جديد (RFQ)
         </button>
       </div>
+
+      {rfqs.length > 0 && (
+        <div className="p-3 flex flex-wrap gap-2">
+          {rfqs.map(rfq => <button key={rfq.id} onClick={() => setActiveRfqId(rfq.id)} className="px-3 py-2 bg-slate-100 text-slate-800 font-bold text-xs">{rfq.rfqNo} — {rfq.status}</button>)}
+        </div>
+      )}
 
       {/* Comparison Matrix View */}
       {selectedRfq && (
@@ -63,9 +133,10 @@ export default function QuotationComparisonManager({
               <h4 className="text-lg font-black text-slate-900 mt-1">{selectedRfq.title}</h4>
             </div>
 
-            <span className="text-xs text-slate-500 font-bold">
-              الموعد النهائي للتقديم: <strong className="text-slate-900">{selectedRfq.deadlineDate}</strong>
-            </span>
+            <div className="flex items-center gap-3">
+              <span className="text-xs text-slate-500 font-bold">الموعد النهائي: <strong className="text-slate-900">{selectedRfq.deadlineDate}</strong></span>
+              <button onClick={() => setShowQuoteForm(true)} className="px-3 py-2 bg-amber-700 text-white text-xs font-bold">تسجيل عرض مورد</button>
+            </div>
           </div>
 
           {/* Side-By-Side Vendor Matrix */}
@@ -138,6 +209,24 @@ export default function QuotationComparisonManager({
               </div>
             ))}
           </div>
+        </div>
+      )}
+
+      {showQuoteForm && selectedRfq && (
+        <div className="fixed inset-0 z-50 bg-slate-900/60 flex items-center justify-center p-4">
+          <form onSubmit={handleSaveQuotation} className="bg-white p-6 w-full max-w-3xl max-h-[90vh] overflow-y-auto space-y-4" dir="rtl">
+            <h3 className="font-black text-lg">تسجيل عرض مورد موثق — {selectedRfq.rfqNo}</h3>
+            <div className="grid grid-cols-1 md:grid-cols-2 gap-3">
+              <select required value={vendorId} onChange={e => setVendorId(e.target.value)} className="p-2.5"><option value="">اختر المورد</option>{suppliers.map(s => <option key={s.id} value={s.id}>{s.name}</option>)}</select>
+              <input required value={quoteNo} onChange={e => setQuoteNo(e.target.value)} placeholder="رقم عرض المورد" className="p-2.5" />
+              <input required type="number" min="1" value={deliveryDays || ''} onChange={e => setDeliveryDays(Number(e.target.value))} placeholder="مدة التسليم بالأيام" className="p-2.5" />
+              <input required value={paymentTerms} onChange={e => setPaymentTerms(e.target.value)} placeholder="شروط الدفع" className="p-2.5" />
+            </div>
+            <div className="space-y-2">
+              {selectedRfq.items.map(item => <label key={item.id} className="grid grid-cols-3 gap-3 items-center text-sm"><span className="col-span-2 font-bold">{item.itemName} × {item.quantityRequested}</span><input required type="number" min="0.01" step="0.01" value={unitPrices[item.id] || ''} onChange={e => setUnitPrices(prev => ({ ...prev, [item.id]: Number(e.target.value) }))} placeholder="سعر الوحدة" className="p-2" /></label>)}
+            </div>
+            <div className="flex justify-end gap-3"><button type="button" onClick={() => setShowQuoteForm(false)} className="px-4 py-2 bg-slate-100">إلغاء</button><button type="submit" className="px-4 py-2 bg-slate-900 text-white font-bold">حفظ العرض مركزياً</button></div>
+          </form>
         </div>
       )}
     </div>

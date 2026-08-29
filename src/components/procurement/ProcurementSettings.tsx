@@ -2,22 +2,26 @@ import React, { useState } from 'react';
 import { Settings, ShieldCheck, DollarSign, Layers, Save, CheckCircle2 } from 'lucide-react';
 
 interface ProcurementSettingsProps {
+  settings?: Record<string, any>;
+  onSave?: (settings: Record<string, any>) => Promise<void>;
   triggerNotification?: (msg: string, type: 'success' | 'warning' | 'info' | 'danger') => void;
 }
 
-export default function ProcurementSettings({ triggerNotification }: ProcurementSettingsProps) {
-  const [managerApprovalLimit, setManagerApprovalLimit] = useState<number>(50000);
-  const [boardApprovalLimit, setBoardApprovalLimit] = useState<number>(200000);
-  const [requireRfqThreshold, setRequireRfqThreshold] = useState<number>(20000);
-  const [apGlAccount, setApGlAccount] = useState<string>('210101 - حسابات الموردين دائنون (AP)');
-  const [grniGlAccount, setGrniGlAccount] = useState<string>('210102 - البضاعة المستلمة غير المفوترة (GRNI)');
-  const [purchaseExpenseAccount, setPurchaseExpenseAccount] = useState<string>('510201 - مصروفات المشتريات والمستلزمات');
+export default function ProcurementSettings({ settings = {}, onSave, triggerNotification }: ProcurementSettingsProps) {
+  const [managerApprovalLimit, setManagerApprovalLimit] = useState<number>(Number(settings.managerApprovalLimit || 0));
+  const [boardApprovalLimit, setBoardApprovalLimit] = useState<number>(Number(settings.boardApprovalLimit || 0));
+  const [requireRfqThreshold, setRequireRfqThreshold] = useState<number>(Number(settings.requireRfqThreshold || 0));
+  const [apGlAccount, setApGlAccount] = useState<string>(String(settings.apGlAccount || ''));
+  const [grniGlAccount, setGrniGlAccount] = useState<string>(String(settings.grniGlAccount || ''));
+  const [purchaseExpenseAccount, setPurchaseExpenseAccount] = useState<string>(String(settings.purchaseExpenseAccount || ''));
 
-  const handleSaveSettings = (e: React.FormEvent) => {
+  const handleSaveSettings = async (e: React.FormEvent) => {
     e.preventDefault();
-    if (triggerNotification) {
-      triggerNotification('✓ تم حفظ إعدادات وسقوف اعتمادات المشتريات والربط مع الحسابات العامة بنجاح', 'success');
-    }
+    if (!onSave) { triggerNotification?.('حفظ إعدادات المشتريات متوقف حتى يتوفر المصدر المركزي.', 'warning'); return; }
+    try {
+      await onSave({ managerApprovalLimit, boardApprovalLimit, requireRfqThreshold, apGlAccount, grniGlAccount, purchaseExpenseAccount });
+      triggerNotification?.('✓ تم حفظ إعدادات وسقوف المشتريات مركزياً', 'success');
+    } catch (error: any) { triggerNotification?.(error?.message || 'تعذر حفظ إعدادات المشتريات مركزياً', 'danger'); }
   };
 
   return (

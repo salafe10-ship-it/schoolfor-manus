@@ -8,7 +8,7 @@ import { PurchaseOrder, ProcurementItemLine, PurchaseOrderStatus } from '../../t
 
 interface PurchaseOrderManagerProps {
   orders: PurchaseOrder[];
-  onSaveOrder: (po: PurchaseOrder) => void;
+  onSaveOrder: (po: PurchaseOrder) => Promise<void>;
   onReceiveItems: (po: PurchaseOrder) => void;
   triggerNotification?: (msg: string, type: 'success' | 'warning' | 'info' | 'danger') => void;
 }
@@ -48,7 +48,7 @@ export default function PurchaseOrderManager({
     setShowModal(true);
   };
 
-  const handleSubmitForm = (e: React.FormEvent) => {
+  const handleSubmitForm = async (e: React.FormEvent) => {
     e.preventDefault();
     if (!editingPO || !editingPO.poNo) {
       notify('يرجى إدخال رقم أمر الشراء قبل الحفظ', 'warning');
@@ -61,7 +61,7 @@ export default function PurchaseOrderManager({
 
     const poToSave: PurchaseOrder = {
       id: editingPO.id || `po_${Date.now()}`,
-      schoolId: 'school_1',
+      schoolId: '',
       poNo: editingPO.poNo,
       poDate: editingPO.poDate || new Date().toISOString().split('T')[0],
       expectedDeliveryDate: editingPO.expectedDeliveryDate || new Date().toISOString().split('T')[0],
@@ -80,10 +80,12 @@ export default function PurchaseOrderManager({
       updatedAt: new Date().toISOString()
     };
 
-    onSaveOrder(poToSave);
-    notify(`✓ تم حفظ وإصدار أمر الشراء رقم (${poToSave.poNo}) بنجاح`, 'success');
-    setShowModal(false);
-    setEditingPO(null);
+    try {
+      await onSaveOrder(poToSave);
+      notify(`✓ تم حفظ أمر الشراء رقم (${poToSave.poNo}) مركزياً`, 'success');
+      setShowModal(false);
+      setEditingPO(null);
+    } catch (error: any) { notify(error?.message || 'تعذر حفظ أمر الشراء مركزياً', 'danger'); }
   };
 
   const filtered = orders.filter(po => {
@@ -92,6 +94,13 @@ export default function PurchaseOrderManager({
                         po.vendorName.toLowerCase().includes(searchTerm.toLowerCase());
     return matchStatus && matchSearch;
   });
+
+  const handleApproveOrder = async (po: PurchaseOrder) => {
+    try {
+      await onSaveOrder({ ...po, status: 'approved', approvedBy: 'المستخدم الحالي', approvalDate: new Date().toISOString().split('T')[0], updatedAt: new Date().toISOString() });
+      notify(`تم اعتماد أمر الشراء ${po.poNo} مركزياً.`, 'success');
+    } catch (error: any) { notify(error?.message || 'تعذر اعتماد أمر الشراء', 'danger'); }
+  };
 
   return (
     <div className="space-y-6" id="purchase-order-manager">
@@ -104,11 +113,11 @@ export default function PurchaseOrderManager({
           <p className="text-xs text-slate-500 mt-0.5">إصدار أوامر التوريد للموردين، تحديد الكميات، متابعة الاستلامات والالتزامات</p>
         </div>
 
-        <button 
-          onClick={handleOpenNew}
+        <button
+          onClick={() => notify('أنشئ أمر الشراء من طلب شراء معتمد أو من ترسية عرض؛ وذلك لحفظ سلسلة المستندات الرقابية.', 'info')}
           className="px-5 py-2.5 bg-slate-900 hover:bg-slate-800 text-white font-bold text-sm transition flex items-center gap-2"
         >
-          <Plus className="w-4 h-4" /> أصدار أمر شراء جديد (PO)
+          <Plus className="w-4 h-4" /> إنشاء من طلب/ترسية معتمدة
         </button>
       </div>
 
@@ -173,8 +182,14 @@ export default function PurchaseOrderManager({
                   </td>
                   <td className="px-4 py-4 text-center">
                     <div className="flex justify-center items-center gap-2">
+                      {['draft', 'pending_approval'].includes(po.status) && (
+                        <button onClick={() => handleApproveOrder(po)} className="px-3 py-1.5 bg-amber-600 text-white font-bold text-xs">
+                          اعتماد أمر الشراء
+                        </button>
+                      )}
                       <button 
                         onClick={() => onReceiveItems(po)}
+                        disabled={!['approved', 'issued', 'partially_received'].includes(po.status)}
                         className="px-3 py-1.5 bg-emerald-600 hover:bg-emerald-700 text-white font-bold text-xs transition flex items-center gap-1"
                       >
                         <Truck className="w-3.5 h-3.5" /> إنشاء إذن استلام وفحص (GRN)

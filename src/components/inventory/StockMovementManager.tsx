@@ -8,12 +8,12 @@ import { InventoryTransaction, InventoryItem } from '../../types';
 
 interface StockMovementManagerProps {
   items: InventoryItem[];
+  movements?: any[];
+  onSave?: (movements: any[]) => Promise<void>;
   triggerNotification?: (msg: string, type: 'success' | 'warning' | 'info' | 'danger') => void;
 }
 
-export default function StockMovementManager({ items, triggerNotification }: StockMovementManagerProps) {
-  // لا تُنشأ حركات مخزنية محلية أو مرحّلة دون سجل مركزي موثق.
-  const [movements, setMovements] = useState<any[]>([]);
+export default function StockMovementManager({ items, movements = [], onSave, triggerNotification }: StockMovementManagerProps) {
 
   const [filterType, setFilterType] = useState('ALL');
   const [searchTerm, setSearchTerm] = useState('');
@@ -33,7 +33,7 @@ export default function StockMovementManager({ items, triggerNotification }: Sto
     if (triggerNotification) triggerNotification(msg, type);
   };
 
-  const handleCreateMovement = (e: React.FormEvent) => {
+  const handleCreateMovement = async (e: React.FormEvent) => {
     e.preventDefault();
     const selectedItem = items.find(i => i.id === newMovement.itemId);
     if (!selectedItem || !Number.isInteger(newMovement.quantity) || newMovement.quantity <= 0 || !Number.isFinite(newMovement.unitCost) || newMovement.unitCost < 0 || !newMovement.refNo) {
@@ -62,9 +62,12 @@ export default function StockMovementManager({ items, triggerNotification }: Sto
       refNo: newMovement.refNo
     };
 
-    setMovements([created, ...movements]);
-    notify(`✓ تم تسجيل حركة المخزون رقم (${created.id}) بنجاح`, 'success');
-    setShowNewModal(false);
+    if (!onSave) { notify('تسجيل الحركة متوقف حتى يتوفر المصدر المركزي.', 'warning'); return; }
+    try {
+      await onSave([created, ...movements]);
+      notify(`✓ تم تسجيل حركة المخزون رقم (${created.id}) مركزياً وقيد المراجعة`, 'success');
+      setShowNewModal(false);
+    } catch (error: any) { notify(error?.message || 'تعذر حفظ الحركة مركزياً', 'danger'); }
   };
 
   const handlePostMovement = (mv: any) => {
@@ -72,8 +75,7 @@ export default function StockMovementManager({ items, triggerNotification }: Sto
       notify('لا يمكن ترحيل الحركة قبل اعتمادها من الجهة المخولة', 'warning');
       return;
     }
-    setMovements(movements.map(m => m.id === mv.id ? { ...m, status: 'posted', statusLabel: 'مرحل للأستاذ العام' } : m));
-    notify(`✓ تم ترحيل الأثر المالي للحركة رقم (${mv.id}) إلى قيد اليومية العامة وقاعدة البيانات بنجاح`, 'success');
+    notify(`الترحيل المالي للحركة ${mv.id} متوقف حتى يتوفر عقد دفتر أستاذ كانوني؛ لم يُنشأ قيد.`, 'warning');
   };
 
   const filtered = movements.filter(m => {

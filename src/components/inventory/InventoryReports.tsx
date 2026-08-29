@@ -4,20 +4,34 @@ import {
   TrendingUp, AlertTriangle, Package, Layers, BarChart3 
 } from 'lucide-react';
 import { InventoryItem } from '../../types';
+import { getTrustedAccessToken } from '../../utils/auth';
 
 interface InventoryReportsProps {
   items: InventoryItem[];
+  canonicalVersion: number;
   triggerNotification?: (msg: string, type: 'success' | 'warning' | 'info' | 'danger') => void;
 }
 
-export default function InventoryReports({ items, triggerNotification }: InventoryReportsProps) {
+export default function InventoryReports({ items, canonicalVersion, triggerNotification }: InventoryReportsProps) {
   const [activeReport, setActiveReport] = useState<'valuation' | 'reorder' | 'turnover' | 'variances'>('valuation');
 
   const notify = (msg: string, type: 'success' | 'warning' | 'info' | 'danger' = 'info') => {
     if (triggerNotification) triggerNotification(msg, type);
   };
 
-  const handleExportCSV = () => {
+  const auditReport = async (format: 'csv' | 'print') => {
+    const token = getTrustedAccessToken();
+    if (!token) throw new Error('انتهت جلسة الدخول الموثوقة.');
+    const response = await fetch('/api/inventory/reports/audit', {
+      method: 'POST', headers: { Authorization: `Bearer ${token}`, 'Content-Type': 'application/json' },
+      body: JSON.stringify({ reportType: activeReport, format, expectedVersion: canonicalVersion })
+    });
+    const payload = await response.json();
+    if (!response.ok || !payload?.success) throw new Error(payload?.message || 'تعذر تدقيق مصدر التقرير.');
+  };
+
+  const handleExportCSV = async () => {
+    try { await auditReport('csv'); } catch (error: any) { notify(error?.message || 'تعذر تصدير التقرير.', 'danger'); return; }
     const csvContent = "data:text/csv;charset=utf-8,\uFEFF" + 
       "كود الصنف,اسم الصنف,الفئة,الكمية الحالية,تكلفة الوحدة,إجمالي التقييم,المستودع\n" +
       items.map(i => `${i.sku || i.id},${i.name},${i.categoryId},${i.quantity},${i.costPrice},${i.quantity * i.costPrice},${i.warehouseId}`).join("\n");
@@ -32,7 +46,8 @@ export default function InventoryReports({ items, triggerNotification }: Invento
     notify('تم تصدير التقرير الحالي بصيغة CSV بنجاح 📊', 'success');
   };
 
-  const handlePrint = () => {
+  const handlePrint = async () => {
+    try { await auditReport('print'); } catch (error: any) { notify(error?.message || 'تعذر طباعة التقرير.', 'danger'); return; }
     window.print();
     notify('تم تجهيز التقرير وإرساله للطباعة 🖨️', 'info');
   };

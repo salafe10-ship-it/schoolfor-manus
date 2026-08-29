@@ -1,4 +1,4 @@
-import React, { useState, useEffect } from 'react';
+import React, { useState } from 'react';
 import { 
   ShoppingBag, FileText, ArrowRightLeft, Truck, 
   DollarSign, FileSpreadsheet, Settings, Users, 
@@ -14,137 +14,113 @@ import VendorBillPaymentManager from './VendorBillPaymentManager';
 import ProcurementReports from './ProcurementReports';
 import ProcurementSettings from './ProcurementSettings';
 import SupplierManager from '../inventory/SupplierManager';
-import { ProcurementRepository } from '../../database/repositories/ProcurementRepository';
-import { FallbackStorage } from '../../database/repositories/FallbackStorage';
-import { PurchaseRequest, PurchaseOrder, GoodsReceiptNote, VendorBill, VendorPayment } from '../../types';
+import { PurchaseRequest, PurchaseOrder, GoodsReceiptNote, VendorBill } from '../../types';
+import type { InventoryCanonicalDatabase } from '../inventory/inventoryCanonical';
+import { getTrustedAccessToken } from '../../utils/auth';
 
 interface ProcurementManagementPortalProps {
   selectedSchool?: any;
   setActiveSection?: (section: string) => void;
   triggerNotification?: (msg: string, type: 'success' | 'warning' | 'info' | 'danger') => void;
+  database: InventoryCanonicalDatabase;
+  onCommit: (database: InventoryCanonicalDatabase, successMessage?: string) => Promise<void>;
+  canonicalVersion: number;
 }
 
 export default function ProcurementManagementPortal({
   selectedSchool,
   setActiveSection,
-  triggerNotification
+  triggerNotification,
+  database,
+  onCommit,
+  canonicalVersion
 }: ProcurementManagementPortalProps) {
   const [activeTab, setActiveTab] = useState<string>('dashboard');
-
-  const [purchaseRequests, setPurchaseRequests] = useState<PurchaseRequest[]>([]);
-  const [purchaseOrders, setPurchaseOrders] = useState<PurchaseOrder[]>([]);
-  const [goodsReceipts, setGoodsReceipts] = useState<GoodsReceiptNote[]>([]);
-  const [vendorBills, setVendorBills] = useState<VendorBill[]>([]);
-
-  // Load state from ProcurementRepository on mount
-  useEffect(() => {
-    try {
-      setPurchaseRequests(ProcurementRepository.getPurchaseRequests());
-      setPurchaseOrders(ProcurementRepository.getPurchaseOrders());
-      setGoodsReceipts(ProcurementRepository.getGoodsReceipts());
-      setVendorBills(ProcurementRepository.getVendorBills());
-    } catch (error) {
-      // Canonical mode intentionally blocks local procurement storage. Keep the
-      // portal usable and communicate the blocked state instead of crashing it.
-      setPurchaseRequests([]);
-      setPurchaseOrders([]);
-      setGoodsReceipts([]);
-      setVendorBills([]);
-      triggerNotification?.('المشتريات متوقفة حتى يتوفر مصدر مركزي موثوق.', 'warning');
-      console.error('Procurement source unavailable:', error);
-    }
-  }, [triggerNotification]);
+  const { purchaseRequests, purchaseOrders, goodsReceipts, vendorBills } = database;
+  const commitPatch = async (patch: Partial<InventoryCanonicalDatabase>, message?: string) => onCommit({ ...database, ...patch }, message);
 
   const notify = (msg: string, type: 'success' | 'warning' | 'info' | 'danger' = 'info') => {
     if (triggerNotification) triggerNotification(msg, type);
   };
 
+  const auditReport = async (format: 'csv' | 'print') => {
+    const token = getTrustedAccessToken();
+    if (!token) throw new Error('انتهت جلسة الدخول الموثوقة.');
+    const response = await fetch('/api/inventory/reports/audit', { method: 'POST',
+      headers: { Authorization: `Bearer ${token}`, 'Content-Type': 'application/json' },
+      body: JSON.stringify({ reportType: 'procurement', format, expectedVersion: canonicalVersion }) });
+    const payload = await response.json();
+    if (!response.ok || !payload?.success) throw new Error(payload?.message || 'تعذر تدقيق تقرير المشتريات.');
+  };
+
   // Handlers for persistence updates
-  const handleSaveRequest = (pr: PurchaseRequest) => {
+  const handleSaveRequest = async (pr: PurchaseRequest) => {
     try {
-      ProcurementRepository.savePurchaseRequest(pr);
-      setPurchaseRequests(ProcurementRepository.getPurchaseRequests());
+      const next = purchaseRequests.some(item => item.id === pr.id) ? purchaseRequests.map(item => item.id === pr.id ? pr : item) : [pr, ...purchaseRequests];
+      await commitPatch({ purchaseRequests: next });
     } catch (error: any) {
       notify(error?.message || 'المشتريات متوقفة؛ تعذر حفظ طلب الشراء.', 'warning');
+      throw error;
     }
   };
 
-  const handleDeleteRequest = (id: string) => {
+  const handleDeleteRequest = async (id: string) => {
     try {
-      ProcurementRepository.deletePurchaseRequest(id);
-      setPurchaseRequests(ProcurementRepository.getPurchaseRequests());
+      await commitPatch({ purchaseRequests: purchaseRequests.filter(item => item.id !== id) });
     } catch (error: any) {
       notify(error?.message || 'المشتريات متوقفة؛ تعذر حذف طلب الشراء.', 'warning');
+      throw error;
     }
   };
 
-  const handleSaveOrder = (po: PurchaseOrder) => {
+  const handleSaveOrder = async (po: PurchaseOrder) => {
     try {
-      ProcurementRepository.savePurchaseOrder(po);
-      setPurchaseOrders(ProcurementRepository.getPurchaseOrders());
+      const next = purchaseOrders.some(item => item.id === po.id) ? purchaseOrders.map(item => item.id === po.id ? po : item) : [po, ...purchaseOrders];
+      await commitPatch({ purchaseOrders: next });
     } catch (error: any) {
       notify(error?.message || 'المشتريات متوقفة؛ تعذر حفظ أمر الشراء.', 'warning');
+      throw error;
     }
   };
 
-  const handleSaveReceipt = (grn: GoodsReceiptNote) => {
+  const handleSaveReceipt = async (grn: GoodsReceiptNote) => {
     try {
-      ProcurementRepository.saveGoodsReceipt(grn);
-      setGoodsReceipts(ProcurementRepository.getGoodsReceipts());
+      const nextReceipts = goodsReceipts.some(item => item.id === grn.id) ? goodsReceipts.map(item => item.id === grn.id ? grn : item) : [grn, ...goodsReceipts];
+      const nextOrders = purchaseOrders.map(po => po.id === grn.purchaseOrderId ? { ...po, status: 'partially_received' as const } : po);
+      const acceptedByItem = new Map<string, number>();
+      for (const line of grn.lines) acceptedByItem.set(line.itemId, (acceptedByItem.get(line.itemId) || 0) + Number(line.acceptedQty || 0));
+      const nextItems = database.items.map(item => acceptedByItem.has(item.id) ? { ...item, quantity: item.quantity + (acceptedByItem.get(item.id) || 0) } : item);
+      await commitPatch({ goodsReceipts: nextReceipts, purchaseOrders: nextOrders, items: nextItems });
     } catch (error: any) {
       notify(error?.message || 'المشتريات متوقفة؛ تعذر حفظ محضر الاستلام.', 'warning');
-      return;
-    }
-
-    // Automatically update the associated Purchase Order status
-    const poIndex = purchaseOrders.findIndex(p => p.id === grn.purchaseOrderId);
-    if (poIndex >= 0) {
-      const po = purchaseOrders[poIndex];
-      const updatedPO: PurchaseOrder = {
-        ...po,
-        status: 'partially_received'
-      };
-      ProcurementRepository.savePurchaseOrder(updatedPO);
-      setPurchaseOrders(ProcurementRepository.getPurchaseOrders());
+      throw error;
     }
   };
 
-  const handleSaveBill = (bill: VendorBill) => {
+  const handleSaveBill = async (bill: VendorBill) => {
     try {
-      ProcurementRepository.saveVendorBill(bill);
-      setVendorBills(ProcurementRepository.getVendorBills());
+      const next = vendorBills.some(item => item.id === bill.id) ? vendorBills.map(item => item.id === bill.id ? bill : item) : [bill, ...vendorBills];
+      await commitPatch({ vendorBills: next });
     } catch (error: any) {
       notify(error?.message || 'المشتريات متوقفة؛ تعذر حفظ فاتورة المورد.', 'warning');
+      throw error;
     }
   };
 
-  const handleRecordPayment = (payment: VendorPayment) => {
-    try {
-      ProcurementRepository.saveVendorPayment(payment);
-      notify(`تم حفظ دفعة المورد ${payment.paymentNo} وتسجيل مرجعها في سجل المدفوعات.`, 'success');
-    } catch (error: any) {
-      notify(error?.message || 'تسجيل دفعة المورد متوقف حتى يتوفر مصدر مشتريات مركزي موثوق؛ لم يُنشأ قيد.', 'warning');
-    }
-  };
-
-  const handleConvertToOrder = (pr: PurchaseRequest) => {
-    if (FallbackStorage.isCanonicalPersistenceRequired()) {
-      notify('تحويل طلب الشراء متوقف حتى يتوفر مصدر مشتريات مركزي موثوق.', 'warning');
-      return;
-    }
+  const handleConvertToOrder = async (pr: PurchaseRequest) => {
     const newPO: PurchaseOrder = {
       id: `po_${Date.now()}`,
-      schoolId: pr.schoolId || 'school_1',
+      schoolId: pr.schoolId || '',
       poNo: `PO-${Date.now()}`,
       poDate: new Date().toISOString().split('T')[0],
       expectedDeliveryDate: new Date(Date.now() + 10 * 86400000).toISOString().split('T')[0],
       purchaseRequestId: pr.id,
       vendorId: '',
       vendorName: '',
-      warehouseId: 'branch_1_1',
-      paymentTerms: '30 يوماً من الاستلام المعتمد',
-      deliveryTerms: 'تسليم أرض المستودع الرئيسي',
-      status: 'pending_approval',
+      warehouseId: '',
+      paymentTerms: '',
+      deliveryTerms: '',
+      status: 'draft',
       lines: pr.lines.map(l => ({
         ...l,
         quantityOrdered: l.quantityApproved || l.quantityRequested,
@@ -152,66 +128,52 @@ export default function ProcurementManagementPortal({
         actualUnitPrice: l.estimatedUnitPrice
       })),
       subtotal: pr.totalEstimatedAmount,
-      taxAmount: pr.totalEstimatedAmount * 0.15,
+      taxAmount: 0,
       discountAmount: 0,
-      grandTotal: pr.totalEstimatedAmount * 1.15,
+      grandTotal: pr.totalEstimatedAmount,
       createdAt: new Date().toISOString(),
       updatedAt: new Date().toISOString()
     };
 
-    ProcurementRepository.savePurchaseOrder(newPO);
-    setPurchaseOrders(ProcurementRepository.getPurchaseOrders());
-
-    // Update PR status to converted_to_po
     const updatedPR: PurchaseRequest = { ...pr, status: 'converted_to_po' };
-    ProcurementRepository.savePurchaseRequest(updatedPR);
-    setPurchaseRequests(ProcurementRepository.getPurchaseRequests());
-
-    notify(`✓ تم تحويل طلب الشراء رقم (${pr.requestNo}) إلى أمر شراء معلّق للمراجعة رقم (${newPO.poNo})`, 'success');
+    await commitPatch({ purchaseOrders: [newPO, ...purchaseOrders], purchaseRequests: purchaseRequests.map(item => item.id === pr.id ? updatedPR : item) });
+    notify(`✓ تم تحويل طلب الشراء رقم (${pr.requestNo}) إلى مسودة أمر شراء مركزية رقم (${newPO.poNo}) لاستكمال المورد والمستودع`, 'success');
     setActiveTab('orders');
   };
 
-  const handleAwardVendor = (rfqId: string, vendorId: string, totalAmount: number) => {
-    if (FallbackStorage.isCanonicalPersistenceRequired()) {
-      notify('ترسية العرض متوقفة حتى يتوفر مصدر مشتريات مركزي موثوق.', 'warning');
-      return;
-    }
+  const handleAwardVendor = async (rfqId: string, vendorId: string, totalAmount: number) => {
+    const supplier = database.suppliers.find(item => item.id === vendorId);
+    if (!supplier) throw new Error('لا يمكن ترسية العرض على مورد غير مسجل في المصدر المركزي.');
+    const quotation = database.quotations.find(item => item.rfqId === rfqId && item.vendorId === vendorId);
+    if (!quotation) throw new Error('لا يمكن ترسية عرض غير موجود في المصدر المركزي.');
+    const warehouseId = database.warehouses[0]?.id;
+    if (!warehouseId) throw new Error('يلزم مستودع مركزي معتمد قبل إنشاء أمر الشراء.');
     const newPO: PurchaseOrder = {
       id: `po_rfq_${Date.now()}`,
-      schoolId: 'school_1',
+      schoolId: '',
       poNo: `PO-RFQ-${Date.now()}`,
       poDate: new Date().toISOString().split('T')[0],
       expectedDeliveryDate: new Date(Date.now() + 14 * 86400000).toISOString().split('T')[0],
       vendorId,
-      vendorName: vendorId === 'sup_sony' ? 'شركة سوني العالمية' : 'مؤسسة LG للتكنولوجيا',
-      warehouseId: 'branch_1_1',
-      paymentTerms: 'الدفع بعد 30 يوماً من الفحص المعتمد',
-      deliveryTerms: 'شامل التركيب والضمان',
+      vendorName: supplier.name,
+      warehouseId,
+      paymentTerms: quotation.paymentTerms,
+      deliveryTerms: `التسليم خلال ${quotation.deliveryDays} يوم`,
       status: 'pending_approval',
-      lines: [
-        {
-          id: `pol_${Date.now()}`,
-          itemCode: 'SKU-E-001',
-          itemName: 'أجهزة بروجكتور سوني UHD',
-          unit: 'جهاز',
-          quantityRequested: 10,
-          quantityOrdered: 10,
-          quantityReceived: 0,
-          estimatedUnitPrice: 3000,
-          actualUnitPrice: 3000,
-          totalAmount
-        }
-      ],
-      subtotal: totalAmount / 1.15,
-      taxAmount: totalAmount - (totalAmount / 1.15),
+      lines: quotation.lines.map((line, index) => ({
+        id: `pol_${Date.now()}_${index}`, itemId: line.itemId, itemCode: line.itemId, itemName: line.itemName,
+        unit: 'وحدة', quantityRequested: line.quantity, quantityOrdered: line.quantity, quantityReceived: 0,
+        estimatedUnitPrice: line.unitPrice, actualUnitPrice: line.unitPrice, taxAmount: line.taxAmount, totalAmount: line.totalAmount
+      })),
+      subtotal: quotation.lines.reduce((sum, line) => sum + line.quantity * line.unitPrice - line.discountAmount, 0),
+      taxAmount: quotation.lines.reduce((sum, line) => sum + line.taxAmount, 0),
       discountAmount: 0,
       grandTotal: totalAmount,
       createdAt: new Date().toISOString(),
       updatedAt: new Date().toISOString()
     };
 
-    ProcurementRepository.savePurchaseOrder(newPO);
-    setPurchaseOrders(ProcurementRepository.getPurchaseOrders());
+    await commitPatch({ purchaseOrders: [newPO, ...purchaseOrders], rfqs: database.rfqs.map(rfq => rfq.id === rfqId ? { ...rfq, status: 'awarded' as const, awardedVendorId: vendorId } : rfq) });
     setActiveTab('orders');
   };
 
@@ -233,14 +195,11 @@ export default function ProcurementManagementPortal({
       <EnterpriseActionToolbar
         title="منظومة المشتريات والتوريدات الحوكمية (Procurement ERP)"
         onRefresh={() => {
-          setPurchaseRequests(ProcurementRepository.getPurchaseRequests());
-          setPurchaseOrders(ProcurementRepository.getPurchaseOrders());
-          setGoodsReceipts(ProcurementRepository.getGoodsReceipts());
-          setVendorBills(ProcurementRepository.getVendorBills());
-          notify('تم تحديث بيانات وحدة المشتريات بنجاح', 'success');
+          notify('البيانات المعروضة متزامنة مع snapshot المركزي الحالي.', 'info');
         }}
-        onPrint={() => window.print()}
-        onExportExcel={() => {
+        onPrint={async () => { try { await auditReport('print'); window.print(); } catch (error: any) { notify(error?.message || 'تعذر طباعة التقرير.', 'danger'); } }}
+        onExportExcel={async () => {
+          try { await auditReport('csv'); } catch (error: any) { notify(error?.message || 'تعذر تصدير التقرير.', 'danger'); return; }
           const csv = "data:text/csv;charset=utf-8,\uFEFF" +
             "رقم الفاتورة,المورد,الإجمالي,المدفوع,المتبقي,الحالة\n" +
             vendorBills.map(bill => `${bill.billNo},"${bill.vendorName}",${bill.grandTotal},${bill.paidAmount},${bill.remainingAmount},${bill.status}`).join("\n");
@@ -308,6 +267,14 @@ export default function ProcurementManagementPortal({
         {activeTab === 'quotations' && (
           <QuotationComparisonManager 
             requests={purchaseRequests}
+            rfqs={database.rfqs}
+            quotations={database.quotations}
+            suppliers={database.suppliers}
+            onSaveRfq={async rfq => commitPatch({ rfqs: [rfq, ...database.rfqs] })}
+            onSaveQuotation={async (quotation, rfq) => commitPatch({
+              quotations: [quotation, ...database.quotations],
+              rfqs: database.rfqs.map(item => item.id === rfq.id ? rfq : item)
+            })}
             onAwardVendor={handleAwardVendor}
             triggerNotification={triggerNotification}
           />
@@ -335,14 +302,14 @@ export default function ProcurementManagementPortal({
           <VendorBillPaymentManager 
             vendorBills={vendorBills}
             receipts={goodsReceipts}
+            orders={purchaseOrders}
             onSaveBill={handleSaveBill}
-            onRecordPayment={handleRecordPayment}
             triggerNotification={triggerNotification}
           />
         )}
 
         {activeTab === 'suppliers' && (
-          <SupplierManager />
+          <SupplierManager suppliers={database.suppliers} onSave={async suppliers => commitPatch({ suppliers })} triggerNotification={triggerNotification} />
         )}
 
         {activeTab === 'reports' && (
@@ -354,7 +321,7 @@ export default function ProcurementManagementPortal({
         )}
 
         {activeTab === 'settings' && (
-          <ProcurementSettings triggerNotification={triggerNotification} />
+          <ProcurementSettings settings={database.procurementSettings} onSave={async procurementSettings => commitPatch({ procurementSettings })} triggerNotification={triggerNotification} />
         )}
       </div>
     </div>

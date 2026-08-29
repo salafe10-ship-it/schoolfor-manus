@@ -8,9 +8,9 @@ import { PurchaseRequest, ProcurementItemLine, PurchaseRequestStatus } from '../
 
 interface PurchaseRequestManagerProps {
   requests: PurchaseRequest[];
-  onSaveRequest: (pr: PurchaseRequest) => void;
-  onDeleteRequest: (id: string) => void;
-  onConvertToOrder: (pr: PurchaseRequest) => void;
+  onSaveRequest: (pr: PurchaseRequest) => Promise<void>;
+  onDeleteRequest: (id: string) => Promise<void>;
+  onConvertToOrder: (pr: PurchaseRequest) => Promise<void>;
   triggerNotification?: (msg: string, type: 'success' | 'warning' | 'info' | 'danger') => void;
 }
 
@@ -82,20 +82,20 @@ export default function PurchaseRequestManager({
     setEditingPR({ ...editingPR, lines: updatedLines, totalEstimatedAmount: total });
   };
 
-  const handleSubmitForm = (e: React.FormEvent) => {
+  const handleSubmitForm = async (e: React.FormEvent) => {
     e.preventDefault();
     if (!editingPR || !editingPR.requestNo) {
       notify('يرجى إدخال رقم طلب الشراء', 'warning');
       return;
     }
     if (!editingPR.requesterName || !editingPR.department || !editingPR.purpose || !editingPR.lines?.length || editingPR.lines.some(l => !l.itemCode || !l.itemName || !Number.isInteger(l.quantityRequested) || l.quantityRequested <= 0 || !Number.isFinite(l.estimatedUnitPrice) || l.estimatedUnitPrice < 0)) {
-      notify('لا يمكن حفظ الطلب دون بيانات الطالب والغرض وبنود وكميات وأسعار صحيحة', 'warning');
+      notify('لا يمكن حفظ الطلب دون بيانات مقدم الطلب والغرض وبنود وكميات وأسعار صحيحة', 'warning');
       return;
     }
 
     const prToSave: PurchaseRequest = {
       id: editingPR.id || `pr_${Date.now()}`,
-      schoolId: 'school_1',
+      schoolId: '',
       requestNo: editingPR.requestNo,
       requestDate: editingPR.requestDate || new Date().toISOString().split('T')[0],
       requiredDate: editingPR.requiredDate || new Date().toISOString().split('T')[0],
@@ -110,24 +110,26 @@ export default function PurchaseRequestManager({
       updatedAt: new Date().toISOString()
     };
 
-    onSaveRequest(prToSave);
-    notify(`✓ تم حفظ طلب الشراء رقم (${prToSave.requestNo}) بنجاح`, 'success');
-    setShowModal(false);
-    setEditingPR(null);
+    try {
+      await onSaveRequest(prToSave);
+      notify(`✓ تم حفظ طلب الشراء رقم (${prToSave.requestNo}) مركزياً`, 'success');
+      setShowModal(false);
+      setEditingPR(null);
+    } catch (error: any) { notify(error?.message || 'تعذر حفظ طلب الشراء مركزياً', 'danger'); }
   };
 
-  const handleApprove = (pr: PurchaseRequest) => {
+  const handleApprove = async (pr: PurchaseRequest) => {
     const updated: PurchaseRequest = {
       ...pr,
       status: 'approved',
-      approvedBy: 'أ. عبد الله العتيبي (المدير المالي)',
+      approvedBy: 'المستخدم الحالي',
       approvalDate: new Date().toISOString().split('T')[0]
     };
-    onSaveRequest(updated);
-    notify(`✓ تم اعتماد طلب الشراء رقم (${pr.requestNo}) تحضيراً لإصدار أمر الشراء`, 'success');
+    try { await onSaveRequest(updated); notify(`✓ تم اعتماد طلب الشراء رقم (${pr.requestNo}) مركزياً`, 'success'); }
+    catch (error: any) { notify(error?.message || 'تعذر اعتماد طلب الشراء', 'danger'); }
   };
 
-  const handleReject = (pr: PurchaseRequest) => {
+  const handleReject = async (pr: PurchaseRequest) => {
     const reason = prompt('يرجى كتابة سبب رفض الطلب:');
     if (reason) {
       const updated: PurchaseRequest = {
@@ -135,8 +137,8 @@ export default function PurchaseRequestManager({
         status: 'rejected',
         rejectionReason: reason
       };
-      onSaveRequest(updated);
-      notify(`تم رفض طلب الشراء رقم (${pr.requestNo})`, 'warning');
+      try { await onSaveRequest(updated); notify(`تم رفض طلب الشراء رقم (${pr.requestNo}) مركزياً`, 'warning'); }
+      catch (error: any) { notify(error?.message || 'تعذر رفض طلب الشراء', 'danger'); }
     }
   };
 
@@ -260,7 +262,7 @@ export default function PurchaseRequestManager({
 
                       {r.status === 'approved' && (
                         <button 
-                          onClick={() => onConvertToOrder(r)}
+                          onClick={async () => { try { await onConvertToOrder(r); } catch (error: any) { notify(error?.message || 'تعذر تحويل الطلب إلى أمر شراء', 'danger'); } }}
                           className="px-2.5 py-1 bg-amber-600 hover:bg-amber-700 text-white font-bold text-xs rounded-lg transition flex items-center gap-1"
                         >
                           تحويل إلى أمر شراء PO
@@ -357,7 +359,17 @@ export default function PurchaseRequestManager({
                 <div className="space-y-2">
                   {(editingPR.lines || []).map((line, idx) => (
                     <div key={line.id} className="p-3 bg-transparent grid grid-cols-12 gap-2 items-center text-xs">
-                      <div className="col-span-5">
+                      <div className="col-span-2">
+                        <label className="block text-[10px] text-slate-500 font-bold mb-0.5">رمز الصنف *</label>
+                        <input
+                          type="text"
+                          value={line.itemCode}
+                          onChange={(e) => handleUpdateLine(idx, 'itemCode', e.target.value)}
+                          className="w-full p-1.5 rounded-md font-mono font-bold"
+                        />
+                      </div>
+
+                      <div className="col-span-3">
                         <label className="block text-[10px] text-slate-500 font-bold mb-0.5">اسم الصنف</label>
                         <input 
                           type="text"
@@ -367,7 +379,17 @@ export default function PurchaseRequestManager({
                         />
                       </div>
 
-                      <div className="col-span-2">
+                      <div className="col-span-1">
+                        <label className="block text-[10px] text-slate-500 font-bold mb-0.5">الوحدة</label>
+                        <input
+                          type="text"
+                          value={line.unit}
+                          onChange={(e) => handleUpdateLine(idx, 'unit', e.target.value)}
+                          className="w-full p-1.5 rounded-md font-bold text-center"
+                        />
+                      </div>
+
+                      <div className="col-span-1">
                         <label className="block text-[10px] text-slate-500 font-bold mb-0.5">الكمية</label>
                         <input 
                           type="number"

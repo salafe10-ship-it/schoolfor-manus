@@ -2,10 +2,12 @@ import React, { useState } from 'react';
 import { Settings, ShieldCheck, CheckCircle2, Lock, Save, Sliders } from 'lucide-react';
 
 interface InventorySettingsProps {
+  settings?: Record<string, any>;
+  onSave?: (settings: Record<string, any>) => Promise<void>;
   triggerNotification?: (msg: string, type: 'success' | 'warning' | 'info' | 'danger') => void;
 }
 
-export default function InventorySettings({ triggerNotification }: InventorySettingsProps) {
+export default function InventorySettings({ settings: savedSettings, onSave, triggerNotification }: InventorySettingsProps) {
   const [settings, setSettings] = useState({
     allowNegativeStock: false,
     defaultValuationMethod: 'weighted_average',
@@ -14,16 +16,19 @@ export default function InventorySettings({ triggerNotification }: InventorySett
     requireApprovalForAdjustments: true,
     inventoryAccountPrefix: '110500',
     cogsAccountPrefix: '510100',
-    adjustmentAccountPrefix: '510900'
+    adjustmentAccountPrefix: '',
+    ...(savedSettings || {})
   });
 
   const notify = (msg: string, type: 'success' | 'warning' | 'info' | 'danger' = 'info') => {
     if (triggerNotification) triggerNotification(msg, type);
   };
 
-  const handleSave = (e: React.FormEvent) => {
+  const handleSave = async (e: React.FormEvent) => {
     e.preventDefault();
-    notify('✓ تم حفظ إعدادات وسيارات وسياسات إدارة المخزون بنجاح', 'success');
+    if (!onSave) { notify('حفظ الإعدادات متوقف حتى يتوفر المصدر المركزي.', 'warning'); return; }
+    try { await onSave(settings); notify('✓ تم حفظ إعدادات وسياسات إدارة المخزون مركزياً', 'success'); }
+    catch (error: any) { notify(error?.message || 'تعذر حفظ إعدادات المخزون مركزياً', 'danger'); }
   };
 
   return (

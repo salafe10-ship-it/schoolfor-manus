@@ -1,4 +1,4 @@
-import React, { useState, useEffect } from 'react';
+import React, { useState, useEffect, useRef } from 'react';
 import { 
   ArrowLeftRight, Barcode, ClipboardCheck, FileSpreadsheet, 
   FileText, LayoutDashboard, Package, Ruler, Settings, 
@@ -15,19 +15,23 @@ import SupplierManager from './SupplierManager';
 import InventoryReports from './InventoryReports';
 import InventorySettings from './InventorySettings';
 import EnterpriseInventoryQualityAudit from '../../certification/EnterpriseInventoryQualityAudit';
-import { InventoryRepository } from '../../database/repositories/InventoryRepository';
 import { InventoryItem } from '../../types';
+import ProcurementManagementPortal from '../procurement/ProcurementManagementPortal';
+import { getTrustedAccessToken } from '../../utils/auth';
+import { emptyInventoryCanonicalDatabase, InventoryCanonicalDatabase, normalizeInventoryCanonicalDatabase } from './inventoryCanonical';
 
 interface InventoryManagementPortalProps {
   selectedSchool?: any;
+  initialTab?: string;
   triggerNotification?: (msg: string, type: 'success' | 'warning' | 'info' | 'danger') => void;
 }
 
-export default function InventoryManagementPortal({ selectedSchool, triggerNotification }: InventoryManagementPortalProps) {
-  const [activeTab, setActiveTab] = useState('dashboard');
-  const [items, setItems] = useState<InventoryItem[]>([]);
+export default function InventoryManagementPortal({ selectedSchool, initialTab = 'dashboard', triggerNotification }: InventoryManagementPortalProps) {
+  const [activeTab, setActiveTab] = useState(initialTab);
+  const [database, setDatabase] = useState<InventoryCanonicalDatabase>(emptyInventoryCanonicalDatabase);
   const [isLoading, setIsLoading] = useState(false);
-  const schoolId = selectedSchool?.id || selectedSchool?.school_id || 'school_1';
+  const versionRef = useRef(0);
+  const items = database.items;
 
   const notify = (msg: string, type: 'success' | 'warning' | 'info' | 'danger' = 'info') => {
     if (triggerNotification) {
@@ -37,47 +41,71 @@ export default function InventoryManagementPortal({ selectedSchool, triggerNotif
     }
   };
 
-  // Load Inventory items from Repository / Storage
-  const loadItems = async () => {
+  const loadDatabase = async () => {
     try {
       setIsLoading(true);
-      const data = await InventoryRepository.getAll(schoolId);
-      setItems(data);
+      const token = getTrustedAccessToken();
+      if (!token) throw new Error('انتهت جلسة الدخول الموثوقة.');
+      const response = await fetch('/api/inventory/database', { headers: { Authorization: `Bearer ${token}` }, cache: 'no-store' });
+      const payload = await response.json();
+      if (!response.ok || !payload?.success) throw new Error(payload?.message || 'تعذر تحميل المخزون والمشتريات.');
+      versionRef.current = Number(payload?.meta?.version || 0);
+      setDatabase(normalizeInventoryCanonicalDatabase(payload.data));
     } catch (err: any) {
-      notify(`خطأ في تحميل الأصناف: ${err.message}`, 'danger');
+      notify(`خطأ في تحميل المخزون والمشتريات: ${err.message}`, 'danger');
     } finally {
       setIsLoading(false);
     }
   };
 
   useEffect(() => {
-    loadItems();
-  }, [schoolId]);
+    void loadDatabase();
+  }, [selectedSchool?.id, selectedSchool?.school_id]);
+
+  const commitDatabase = async (nextDatabase: InventoryCanonicalDatabase, successMessage?: string) => {
+    const token = getTrustedAccessToken();
+    if (!token) throw new Error('انتهت جلسة الدخول الموثوقة.');
+    const response = await fetch('/api/inventory/database', {
+      method: 'POST',
+      headers: { Authorization: `Bearer ${token}`, 'Content-Type': 'application/json' },
+      body: JSON.stringify({ expectedVersion: versionRef.current, data: nextDatabase })
+    });
+    const payload = await response.json();
+    if (!response.ok || !payload?.success) throw new Error(payload?.message || 'تعذر حفظ المخزون والمشتريات.');
+    versionRef.current = Number(payload?.meta?.version || versionRef.current + 1);
+    setDatabase(nextDatabase);
+    if (successMessage) notify(successMessage, 'success');
+  };
+
+  const updateCollection = async <K extends keyof InventoryCanonicalDatabase,>(key: K, value: InventoryCanonicalDatabase[K], successMessage?: string) => {
+    await commitDatabase({ ...database, [key]: value }, successMessage);
+  };
 
   const handleAddItem = async (newItem: Partial<InventoryItem>) => {
     try {
-      await InventoryRepository.create(schoolId, newItem);
-      await loadItems();
+      const item = { ...newItem, id: newItem.id || `inv_item_${Date.now()}` } as InventoryItem;
+      await updateCollection('items', [...items, item]);
     } catch (err: any) {
       notify(`المخزون متوقف؛ تعذر حفظ الصنف: ${err?.message || 'مصدر البيانات غير متاح'}`, 'warning');
+      throw err;
     }
   };
 
   const handleUpdateItem = async (id: string, updated: Partial<InventoryItem>) => {
     try {
-      await InventoryRepository.update(schoolId, id, updated);
-      await loadItems();
+      await updateCollection('items', items.map(item => item.id === id ? { ...item, ...updated, id } as InventoryItem : item));
     } catch (err: any) {
       notify(`المخزون متوقف؛ تعذر تعديل الصنف: ${err?.message || 'مصدر البيانات غير متاح'}`, 'warning');
+      throw err;
     }
   };
 
   const handleDeleteItem = async (id: string) => {
     try {
-      await InventoryRepository.delete(schoolId, id);
-      await loadItems();
+      await updateCollection('items', items.filter(item => item.id !== id));
     } catch (err: any) {
       notify(`المخزون متوقف؛ تعذر حذف الصنف: ${err?.message || 'مصدر البيانات غير متاح'}`, 'warning');
+      throw err;
     }
   };
 
@@ -154,6 +182,7 @@ export default function InventoryManagementPortal({ selectedSchool, triggerNotif
     { id: 'warehouses', name: 'المستودعات والأرفف', icon: Warehouse },
     { id: 'movements', name: 'الحركات المخزنية', icon: ArrowLeftRight },
     { id: 'stocktakes', name: 'الجرد والتسويات', icon: ClipboardCheck },
+    { id: 'procurement', name: 'المشتريات والتوريدات', icon: Truck },
     { id: 'reports', name: 'التقارير والتحليلات', icon: FileSpreadsheet },
     { id: 'audit', name: 'الاعتماد الفني والجودة', icon: ShieldCheck },
     { id: 'settings', name: 'إعدادات المنظومة', icon: Settings },
@@ -206,6 +235,10 @@ export default function InventoryManagementPortal({ selectedSchool, triggerNotif
           {activeTab === 'items' && (
             <InventoryItemList 
               items={items}
+              categories={database.categories}
+              units={database.units}
+              suppliers={database.suppliers}
+              warehouses={database.warehouses}
               onAddItem={handleAddItem}
               onUpdateItem={handleUpdateItem}
               onDeleteItem={handleDeleteItem}
@@ -214,27 +247,34 @@ export default function InventoryManagementPortal({ selectedSchool, triggerNotif
           )}
 
           {activeTab === 'categories' && (
-            <CategoryBrandUnitManager triggerNotification={triggerNotification} />
+            <CategoryBrandUnitManager categories={database.categories} brands={database.brands} units={database.units}
+              onSave={async (patch) => commitDatabase({ ...database, ...patch })} triggerNotification={triggerNotification} />
           )}
 
           {activeTab === 'suppliers' && (
-            <SupplierManager triggerNotification={triggerNotification} />
+            <SupplierManager suppliers={database.suppliers} onSave={async suppliers => updateCollection('suppliers', suppliers)} triggerNotification={triggerNotification} />
           )}
 
           {activeTab === 'warehouses' && (
-            <WarehouseManagement triggerNotification={triggerNotification} />
+            <WarehouseManagement warehouses={database.warehouses} onSave={async warehouses => updateCollection('warehouses', warehouses)} triggerNotification={triggerNotification} />
           )}
 
           {activeTab === 'movements' && (
-            <StockMovementManager items={items} triggerNotification={triggerNotification} />
+            <StockMovementManager items={items} movements={database.movements} onSave={async movements => updateCollection('movements', movements)} triggerNotification={triggerNotification} />
           )}
 
           {activeTab === 'stocktakes' && (
-            <StockCountManager items={items} triggerNotification={triggerNotification} />
+            <StockCountManager items={items} stocktakes={database.stocktakes} settings={database.settings}
+              onSave={async stocktakes => updateCollection('stocktakes', stocktakes)} triggerNotification={triggerNotification} />
+          )}
+
+          {activeTab === 'procurement' && (
+            <ProcurementManagementPortal selectedSchool={selectedSchool} triggerNotification={triggerNotification}
+              database={database} canonicalVersion={versionRef.current} onCommit={commitDatabase} />
           )}
 
           {activeTab === 'reports' && (
-            <InventoryReports items={items} triggerNotification={triggerNotification} />
+            <InventoryReports items={items} canonicalVersion={versionRef.current} triggerNotification={triggerNotification} />
           )}
 
           {activeTab === 'audit' && (
@@ -242,7 +282,7 @@ export default function InventoryManagementPortal({ selectedSchool, triggerNotif
           )}
 
           {activeTab === 'settings' && (
-            <InventorySettings triggerNotification={triggerNotification} />
+            <InventorySettings settings={database.settings} onSave={async settings => updateCollection('settings', settings)} triggerNotification={triggerNotification} />
           )}
         </main>
       </div>

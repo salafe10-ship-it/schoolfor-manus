@@ -5,10 +5,14 @@ import {
   Package, Tag, Warehouse, Image as ImageIcon, 
   ArrowUpDown, Layers, Lock, ShieldCheck, DollarSign
 } from 'lucide-react';
-import { InventoryItem } from '../../types';
+import { InventoryCategory, InventoryItem, InventorySupplier, InventoryUnit, InventoryWarehouse } from '../../types';
 
 interface InventoryItemListProps {
   items: InventoryItem[];
+  categories: InventoryCategory[];
+  units: InventoryUnit[];
+  suppliers: InventorySupplier[];
+  warehouses: InventoryWarehouse[];
   onAddItem: (item: Partial<InventoryItem>) => Promise<void>;
   onUpdateItem: (id: string, item: Partial<InventoryItem>) => Promise<void>;
   onDeleteItem: (id: string) => Promise<void>;
@@ -17,6 +21,10 @@ interface InventoryItemListProps {
 
 export default function InventoryItemList({
   items,
+  categories,
+  units,
+  suppliers,
+  warehouses,
   onAddItem,
   onUpdateItem,
   onDeleteItem,
@@ -56,27 +64,31 @@ export default function InventoryItemList({
   });
 
   const handleOpenNewModal = () => {
+    if (!categories.length || !units.length || !suppliers.length || !warehouses.length) {
+      notify('يلزم تسجيل تصنيف ووحدة قياس ومورد ومستودع مركزي قبل إضافة صنف.', 'warning');
+      return;
+    }
     setEditingItem({
-      schoolId: 'school_1',
-      branchId: 'branch_1_1',
+      schoolId: '',
+      branchId: '',
       sku: `SKU-${Math.floor(1000 + Math.random() * 9000)}`,
       name: '',
-      categoryId: 'cat_electronics',
-      unitId: 'unit_pcs',
-      supplierId: 'sup_local',
-      warehouseId: 'branch_1_1',
-      quantity: 10,
-      minLevel: 5,
-      maxLevel: 100,
-      reorderLevel: 10,
-      costPrice: 100,
-      salePrice: 150,
-      vatRate: 15,
+      categoryId: categories[0].id,
+      unitId: units[0].id,
+      supplierId: suppliers[0].id,
+      warehouseId: warehouses[0].id,
+      quantity: 0,
+      minLevel: 0,
+      maxLevel: 0,
+      reorderLevel: 0,
+      costPrice: 0,
+      salePrice: 0,
+      vatRate: 0,
       status: 'active',
-      inventoryAccountId: 'acc_inv_101',
-      costOfGoodsAccountId: 'acc_cogs_501',
-      adjustmentAccountId: 'acc_adj_509',
-      costCenterId: 'cc_primary'
+      inventoryAccountId: '',
+      costOfGoodsAccountId: '',
+      adjustmentAccountId: '',
+      costCenterId: ''
     });
     setIsModalOpen(true);
   };
@@ -164,11 +176,7 @@ export default function InventoryItemList({
               className="w-full py-2 px-3 bg-transparent text-sm focus:ring-2 focus:ring-slate-900 focus:font-semibold"
             >
               <option value="ALL">جميع الفئات والتصنيفات</option>
-              <option value="cat_electronics">أجهزة وإلكترونيات</option>
-              <option value="cat_furniture">أثاث ومستلزمات فصول</option>
-              <option value="cat_books">كتب ومناهج دراسية</option>
-              <option value="cat_lab">مختبرات ومعامل علوم</option>
-              <option value="cat_stationery">قرطاسية وأدوات تعليمية</option>
+              {categories.map(category => <option key={category.id} value={category.id}>{category.name}</option>)}
             </select>
           </div>
 
@@ -179,9 +187,7 @@ export default function InventoryItemList({
               className="w-full py-2 px-3 bg-transparent text-sm focus:ring-2 focus:ring-slate-900 focus:font-semibold"
             >
               <option value="ALL">جميع المستودعات</option>
-              <option value="branch_1_1">المستودع الرئيسي - الرياض</option>
-              <option value="branch_1_2">مستودع الكتب والقرطاسية</option>
-              <option value="branch_1_3">مستودع الأثاث والمعدات</option>
+              {warehouses.map(warehouse => <option key={warehouse.id} value={warehouse.id}>{warehouse.name}</option>)}
             </select>
           </div>
 
@@ -244,10 +250,7 @@ export default function InventoryItemList({
                       </td>
                       <td className="px-5 py-4 font-semibold text-slate-600">
                         <span className="px-2.5 py-1 bg-slate-100 text-slate-700 rounded-lg text-xs">
-                          {item.categoryId === 'cat_electronics' ? 'أجهزة وإلكترونيات' :
-                           item.categoryId === 'cat_furniture' ? 'أثاث فصول' :
-                           item.categoryId === 'cat_books' ? 'كتب ومناهج' :
-                           item.categoryId === 'cat_lab' ? 'مختبرات وعلوم' : 'عام / قرطاسية'}
+                          {categories.find(category => category.id === item.categoryId)?.name || 'تصنيف غير متاح'}
                         </span>
                       </td>
                       <td className="px-5 py-4 text-center">
@@ -358,28 +361,22 @@ export default function InventoryItemList({
                   <div>
                     <label className="block text-xs font-bold text-slate-700 mb-1">التصنيف الفني</label>
                     <select 
-                      value={editingItem.categoryId || 'cat_electronics'}
+                      value={editingItem.categoryId || ''}
                       onChange={(e) => setEditingItem({ ...editingItem, categoryId: e.target.value })}
                       className="w-full p-2.5 bg-transparent text-sm font-semibold focus:ring-2 focus:ring-slate-900"
                     >
-                      <option value="cat_electronics">أجهزة وإلكترونيات</option>
-                      <option value="cat_furniture">أثاث ومستلزمات فصول</option>
-                      <option value="cat_books">كتب ومناهج دراسية</option>
-                      <option value="cat_lab">مختبرات ومعامل علوم</option>
-                      <option value="cat_stationery">قرطاسية وأدوات تعليمية</option>
+                      {categories.map(category => <option key={category.id} value={category.id}>{category.name}</option>)}
                     </select>
                   </div>
 
                   <div>
                     <label className="block text-xs font-bold text-slate-700 mb-1">المستودع الرئيسي الافتراضي</label>
                     <select 
-                      value={editingItem.warehouseId || 'branch_1_1'}
+                      value={editingItem.warehouseId || ''}
                       onChange={(e) => setEditingItem({ ...editingItem, warehouseId: e.target.value })}
                       className="w-full p-2.5 bg-transparent text-sm font-semibold focus:ring-2 focus:ring-slate-900"
                     >
-                      <option value="branch_1_1">المستودع الرئيسي - الرياض</option>
-                      <option value="branch_1_2">مستودع الكتب والقرطاسية</option>
-                      <option value="branch_1_3">مستودع الأثاث والمعدات</option>
+                      {warehouses.map(warehouse => <option key={warehouse.id} value={warehouse.id}>{warehouse.name}</option>)}
                     </select>
                   </div>
                 </div>
@@ -530,11 +527,11 @@ export default function InventoryItemList({
               </div>
               <div>
                 <span className="text-xs text-slate-400 block font-bold">حساب أصل المخزون:</span>
-                <span className="font-mono text-xs font-bold text-slate-700">{viewingItem.inventoryAccountId || '110500 - ح/ المخزون الرئيسي'}</span>
+                <span className="font-mono text-xs font-bold text-slate-700">{viewingItem.inventoryAccountId || 'غير مربوط'}</span>
               </div>
               <div>
                 <span className="text-xs text-slate-400 block font-bold">حساب تكلفة المبيعات/الصرف:</span>
-                <span className="font-mono text-xs font-bold text-slate-700">{viewingItem.costOfGoodsAccountId || '510100 - ح/ تكلفة البضاعة'}</span>
+                <span className="font-mono text-xs font-bold text-slate-700">{viewingItem.costOfGoodsAccountId || 'غير مربوط'}</span>
               </div>
             </div>
 

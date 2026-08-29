@@ -2,12 +2,12 @@ import { describe, expect, it } from 'vitest';
 import { readFileSync } from 'node:fs';
 import { resolve } from 'node:path';
 
-describe('procurement portal fail-closed loading', () => {
-  it('handles blocked canonical reads without crashing the portal', () => {
+describe('procurement portal canonical loading', () => {
+  it('uses the inventory and procurement snapshot instead of browser storage', () => {
     const source = readFileSync(resolve(process.cwd(), 'src/components/procurement/ProcurementManagementPortal.tsx'), 'utf8');
-    expect(source).toContain('Procurement source unavailable:');
-    expect(source).toContain('المشتريات متوقفة حتى يتوفر مصدر مركزي موثوق.');
-    expect(source).toContain('try {');
-    expect(source).toContain('} catch (error) {');
+    expect(source).toContain('database: InventoryCanonicalDatabase');
+    expect(source).toContain('onCommit: (database: InventoryCanonicalDatabase');
+    expect(source).toContain('const { purchaseRequests, purchaseOrders, goodsReceipts, vendorBills } = database');
+    expect(source).not.toContain('ProcurementRepository.getPurchaseRequests');
   });
 });

@@ -8,7 +8,7 @@ import { GoodsReceiptNote, GoodsReceiptStatus, PurchaseOrder } from '../../types
 interface GoodsReceiptManagerProps {
   receipts: GoodsReceiptNote[];
   orders: PurchaseOrder[];
-  onSaveReceipt: (grn: GoodsReceiptNote) => void;
+  onSaveReceipt: (grn: GoodsReceiptNote) => Promise<void>;
   triggerNotification?: (msg: string, type: 'success' | 'warning' | 'info' | 'danger') => void;
 }
 
@@ -21,10 +21,10 @@ export default function GoodsReceiptManager({
   const [searchTerm, setSearchTerm] = useState('');
   const [showModal, setShowModal] = useState(false);
   const [selectedPoId, setSelectedPoId] = useState<string>('');
-  const [inspectorName, setInspectorName] = useState<string>('أ. يحيى الشهري (أمين المستودع)');
+  const [inspectorName, setInspectorName] = useState<string>('المستخدم الحالي');
   const [inspectionResult, setInspectionResult] = useState<'passed' | 'conditional_pass' | 'failed'>('passed');
   const [deliveryNoteNo, setDeliveryNoteNo] = useState<string>(`DN-${Math.floor(1000 + Math.random() * 9000)}`);
-  const [receivedQty, setReceivedQty] = useState<number>(8);
+  const [receivedQty, setReceivedQty] = useState<number>(0);
   const [rejectedQty, setRejectedQty] = useState<number>(0);
   const [rejectionReason, setRejectionReason] = useState<string>('');
 
@@ -37,15 +37,25 @@ export default function GoodsReceiptManager({
     setShowModal(true);
   };
 
-  const handleCreateGRN = (e: React.FormEvent) => {
+  const handleCreateGRN = async (e: React.FormEvent) => {
     e.preventDefault();
     if (!selectedPO) return;
-
-    const totalValue = receivedQty * (selectedPO.lines[0]?.actualUnitPrice || 3000);
+    const sourceLine = selectedPO.lines[0];
+    if (!sourceLine) {
+      triggerNotification?.('لا يمكن إنشاء إذن استلام لأمر شراء بلا بنود موثقة', 'warning');
+      return;
+    }
+    if (!Number.isFinite(receivedQty) || receivedQty <= 0 || !Number.isFinite(rejectedQty) || rejectedQty < 0 || rejectedQty > receivedQty) {
+      triggerNotification?.('أدخل كمية مستلمة موجبة، ويجب ألا تتجاوز الكمية المرفوضة الكمية المستلمة', 'warning');
+      return;
+    }
+    const unitCost = sourceLine.actualUnitPrice ?? sourceLine.estimatedUnitPrice ?? 0;
+    const acceptedQty = receivedQty - rejectedQty;
+    const totalValue = acceptedQty * unitCost;
 
     const newGRN: GoodsReceiptNote = {
       id: `grn_${Date.now()}`,
-      schoolId: 'school_1',
+      schoolId: '',
       grnNo: `GRN-2026-${Math.floor(100 + Math.random() * 900)}`,
       grnDate: new Date().toISOString().split('T')[0],
       purchaseOrderId: selectedPO.id,
@@ -56,34 +66,33 @@ export default function GoodsReceiptManager({
       warehouseId: selectedPO.warehouseId,
       inspectorName,
       inspectionResult,
-      status: 'posted_to_gl',
+      status: inspectionResult === 'failed' ? 'rejected' : inspectionResult === 'conditional_pass' ? 'partially_accepted' : 'inspected_received',
       lines: [
         {
           lineId: `grnl_${Date.now()}`,
-          itemId: selectedPO.lines[0]?.itemId || 'inv_item_1',
-          itemCode: selectedPO.lines[0]?.itemCode || 'SKU-001',
-          itemName: selectedPO.lines[0]?.itemName || 'صنف توريد',
-          orderedQty: selectedPO.lines[0]?.quantityOrdered || 10,
+          itemId: sourceLine.itemId,
+          itemCode: sourceLine.itemCode,
+          itemName: sourceLine.itemName,
+          orderedQty: sourceLine.quantityOrdered ?? sourceLine.quantityRequested,
           receivedQty,
-          acceptedQty: receivedQty,
+          acceptedQty,
           rejectedQty,
           rejectionReason,
-          unitCost: selectedPO.lines[0]?.actualUnitPrice || 3000,
+          unitCost,
           totalCost: totalValue
         }
       ],
       totalReceivedValue: totalValue,
-      glJournalEntryId: `JV-2026-${Math.floor(100000 + Math.random() * 900000)}`,
-      isPostedToGL: true,
-      notes: 'تم فحص الشحنة وتحديث رصيد المستودع وإنشاء القيد المحاسبي التلقائي',
+      isPostedToGL: false,
+      notes: 'تم فحص الشحنة وحفظ محضر الاستلام؛ الترحيل المالي يتطلب تكامل دفتر الأستاذ.',
       createdAt: new Date().toISOString()
     };
 
-    onSaveReceipt(newGRN);
-    if (triggerNotification) {
-      triggerNotification(`✓ تم اعتماد إذن الاستلام والفحص رقم (${newGRN.grnNo}) وتحديث رصيد المخزون بقيمة ${totalValue.toLocaleString('ar-SA')} د.ل`, 'success');
-    }
-    setShowModal(false);
+    try {
+      await onSaveReceipt(newGRN);
+      triggerNotification?.(`✓ تم حفظ إذن الاستلام والفحص (${newGRN.grnNo}) مركزياً؛ لم يُنشأ قيد مالي`, 'success');
+      setShowModal(false);
+    } catch (error: any) { triggerNotification?.(error?.message || 'تعذر حفظ محضر الاستلام مركزياً', 'danger'); }
   };
 
   const filtered = receipts.filter(r => 
@@ -137,7 +146,7 @@ export default function GoodsReceiptManager({
                 <th className="px-4 py-4">المورد</th>
                 <th className="px-4 py-4">نتيجة الفحص الفني</th>
                 <th className="px-4 py-4">القيمة الاستلامية</th>
-                <th className="px-4 py-4">القيد المحاسبي الآلي</th>
+                <th className="px-4 py-4">حالة التكامل المحاسبي</th>
               </tr>
             </thead>
             <tbody className="divide-y divide-amber-900/10 bg-white/60 backdrop-blur-sm rounded-b-2xl">
@@ -148,14 +157,15 @@ export default function GoodsReceiptManager({
                   <td className="px-4 py-4 font-mono text-xs font-bold text-amber-700">{grn.poNo}</td>
                   <td className="px-4 py-4 font-bold text-slate-900">{grn.vendorName}</td>
                   <td className="px-4 py-4">
-                    <span className="px-2.5 py-1 bg-emerald-50 text-emerald-700 border border-emerald-200 rounded-lg text-xs font-bold inline-flex items-center gap-1">
-                      <CheckCircle2 className="w-3.5 h-3.5" /> مقبول ومفحوص
+                    <span className={`px-2.5 py-1 border rounded-lg text-xs font-bold inline-flex items-center gap-1 ${grn.inspectionResult === 'failed' ? 'bg-red-50 text-red-700 border-red-200' : 'bg-emerald-50 text-emerald-700 border-emerald-200'}`}>
+                      {grn.inspectionResult === 'failed' ? <XCircle className="w-3.5 h-3.5" /> : <CheckCircle2 className="w-3.5 h-3.5" />}
+                      {grn.inspectionResult === 'failed' ? 'مرفوض' : grn.inspectionResult === 'conditional_pass' ? 'قبول مشروط' : 'مقبول ومفحوص'}
                     </span>
                   </td>
                   <td className="px-4 py-4 font-black text-emerald-700">{grn.totalReceivedValue.toLocaleString('ar-SA')} د.ل</td>
                   <td className="px-4 py-4">
-                    <span className="px-2.5 py-1 bg-slate-100 text-slate-800 font-mono text-xs font-bold rounded-md">
-                      {grn.glJournalEntryId || 'JV-2026-AUTO'}
+                    <span className="px-2.5 py-1 bg-amber-100 text-amber-900 text-xs font-bold rounded-md">
+                      {grn.isPostedToGL && grn.glJournalEntryId ? grn.glJournalEntryId : 'لم يُرحّل — ينتظر دفتر الأستاذ'}
                     </span>
                   </td>
                 </tr>
@@ -215,6 +225,17 @@ export default function GoodsReceiptManager({
 
               <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
                 <div>
+                  <label className="block text-xs font-bold text-slate-700 mb-1">الكمية المرفوضة</label>
+                  <input type="number" min="0" max={receivedQty} value={rejectedQty} onChange={e => setRejectedQty(Number(e.target.value))} className="w-full p-2.5 bg-transparent text-sm font-bold" />
+                </div>
+                <div>
+                  <label className="block text-xs font-bold text-slate-700 mb-1">سبب الرفض/الملاحظات</label>
+                  <input type="text" value={rejectionReason} onChange={e => setRejectionReason(e.target.value)} className="w-full p-2.5 bg-transparent text-sm" />
+                </div>
+              </div>
+
+              <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+                <div>
                   <label className="block text-xs font-bold text-slate-700 mb-1">الكمية المقبولة المستلمة فعلياً</label>
                   <input 
                     type="number"
@@ -242,10 +263,10 @@ export default function GoodsReceiptManager({
 
               <div className="p-4 bg-amber-50/50 border border-amber-100 text-xs space-y-1">
                 <span className="font-bold text-amber-900 block flex items-center gap-1">
-                  <ShieldCheck className="w-4 h-4 text-amber-600" /> الترحيل المحاسبي الآلي للمخزن (Automated GL Entry)
+                  <ShieldCheck className="w-4 h-4 text-amber-600" /> فصل الاستلام المخزني عن الترحيل المالي
                 </span>
                 <p className="text-slate-600">
-                  سيقوم النظام بتوليد قيد يومية آلي: <strong>من حـ/ أصل المخزون (مدين)</strong> إلى <strong>حـ/ البضاعة المستلمة غير المفوترة GRNI (دائن)</strong> فور حفظ الإذن.
+                  يحفظ النظام محضر الفحص ويحدّث الكمية المقبولة فقط. لا يُنشأ قيد يومية من هذه الشاشة؛ الترحيل يتطلب تكامل دفتر الأستاذ وخرائط الحسابات المعتمدة.
                 </p>
               </div>
 

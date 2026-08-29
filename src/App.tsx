@@ -32,7 +32,6 @@ const SystemHealthCenter = React.lazy(() => import('./components/SystemHealthCen
 const SchoolUniformManagement = React.lazy(() => import('./components/SchoolUniformManagement'));
 const LibraryPortal = React.lazy(() => import('./components/LibraryPortal'));
 const InventoryManagementPortal = React.lazy(() => import('./components/inventory/InventoryManagementPortal'));
-const ProcurementManagementPortal = React.lazy(() => import('./components/procurement/ProcurementManagementPortal'));
 const FixedAssetsPortal = React.lazy(() => import('./components/assets/FixedAssetsPortal'));
 import EnterpriseProcurementQualityAudit from './certification/EnterpriseProcurementQualityAudit';
 import ModernSchoolDashboard from './components/ModernSchoolDashboard';
@@ -1918,9 +1917,9 @@ export default function App() {
             {/* VIEW: PROCUREMENT & PURCHASING (إدارة المشتريات والتوريدات) */}
             {/* ========================================================== */}
             {activeSection === 'procurement' && (
-              <ProcurementManagementPortal 
+              <InventoryManagementPortal
                 selectedSchool={selectedSchool}
-                setActiveSection={setActiveSection}
+                initialTab="procurement"
                 triggerNotification={triggerNotification}
               />
             )}

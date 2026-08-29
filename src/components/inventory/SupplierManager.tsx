@@ -3,12 +3,12 @@ import { Truck, Phone, Mail, MapPin, Plus, Edit, Trash2, CheckCircle2 } from 'lu
 import { InventorySupplier } from '../../types';
 
 interface SupplierManagerProps {
+  suppliers?: InventorySupplier[];
+  onSave?: (suppliers: InventorySupplier[]) => Promise<void>;
   triggerNotification?: (msg: string, type: 'success' | 'warning' | 'info' | 'danger') => void;
 }
 
-export default function SupplierManager({ triggerNotification }: SupplierManagerProps) {
-  // لا تُزرع جهات توريد أو بيانات اتصال غير موثقة عند فتح الوحدة.
-  const [suppliers, setSuppliers] = useState<InventorySupplier[]>([]);
+export default function SupplierManager({ suppliers = [], onSave, triggerNotification }: SupplierManagerProps) {
 
   const [showAddModal, setShowAddModal] = useState(false);
   const [newSup, setNewSup] = useState<Partial<InventorySupplier>>({
@@ -19,7 +19,7 @@ export default function SupplierManager({ triggerNotification }: SupplierManager
     if (triggerNotification) triggerNotification(msg, type);
   };
 
-  const handleSave = (e: React.FormEvent) => {
+  const handleSave = async (e: React.FormEvent) => {
     e.preventDefault();
     if (!newSup.name?.trim() || !newSup.phone?.trim() || !newSup.email?.trim() || !newSup.address?.trim()) {
       notify('اسم المورد والهاتف والبريد والعنوان حقول مطلوبة وموثقة', 'warning');
@@ -28,16 +28,20 @@ export default function SupplierManager({ triggerNotification }: SupplierManager
 
     const created: InventorySupplier = {
       id: `sup_${Date.now()}`,
-      schoolId: 'school_1',
+      schoolId: '',
       name: newSup.name.trim(),
       phone: newSup.phone.trim(),
       email: newSup.email.trim(),
       address: newSup.address.trim()
     };
 
-    setSuppliers([...suppliers, created]);
-    notify(`✓ تم تسجيل المورد الجديد (${created.name}) بنجاح`, 'success');
-    setShowAddModal(false);
+    if (!onSave) { notify('حفظ المورد متوقف حتى يتوفر المصدر المركزي.', 'warning'); return; }
+    try {
+      await onSave([...suppliers, created]);
+      notify(`✓ تم تسجيل المورد الجديد (${created.name}) مركزياً`, 'success');
+      setShowAddModal(false);
+      setNewSup({ name: '', phone: '', email: '', address: '' });
+    } catch (error: any) { notify(error?.message || 'تعذر حفظ المورد مركزياً', 'danger'); }
   };
 
   return (

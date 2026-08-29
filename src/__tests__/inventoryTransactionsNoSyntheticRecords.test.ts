@@ -6,8 +6,10 @@ describe('inventory transaction integrity', () => {
   it('does not seed stock counts or movements', () => {
     const countSource = fs.readFileSync(path.resolve(process.cwd(), 'src/components/inventory/StockCountManager.tsx'), 'utf8');
     const movementSource = fs.readFileSync(path.resolve(process.cwd(), 'src/components/inventory/StockMovementManager.tsx'), 'utf8');
-    expect(countSource).toContain('useState<any[]>([])');
-    expect(movementSource).toContain('useState<any[]>([])');
+    expect(countSource).toContain('stocktakes = []');
+    expect(countSource).toContain('await onSave([record, ...stocktakes])');
+    expect(movementSource).toContain('movements = []');
+    expect(movementSource).toContain('await onSave([created, ...movements])');
     expect(countSource).not.toContain('AUD-2026-01');
     expect(movementSource).not.toContain('MV-2026-001');
     expect(movementSource).not.toContain('PO-99481');

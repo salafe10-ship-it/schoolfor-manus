@@ -3,17 +3,15 @@ import { Tag, Tags, Ruler, Plus, Edit, Trash2, CheckCircle2 } from 'lucide-react
 import { InventoryCategory, InventoryUnit } from '../../types';
 
 interface CategoryBrandUnitManagerProps {
+  categories: InventoryCategory[];
+  brands: Array<{ id: string; name: string; origin?: string }>;
+  units: InventoryUnit[];
+  onSave: (patch: Partial<{ categories: InventoryCategory[]; brands: Array<{ id: string; name: string; origin?: string }>; units: InventoryUnit[] }>) => Promise<void>;
   triggerNotification?: (msg: string, type: 'success' | 'warning' | 'info' | 'danger') => void;
 }
 
-export default function CategoryBrandUnitManager({ triggerNotification }: CategoryBrandUnitManagerProps) {
+export default function CategoryBrandUnitManager({ categories, brands, units, onSave, triggerNotification }: CategoryBrandUnitManagerProps) {
   const [activeSubTab, setActiveSubTab] = useState<'categories' | 'brands' | 'units'>('categories');
-
-  const [categories, setCategories] = useState<InventoryCategory[]>([]);
-
-  const [brands, setBrands] = useState<any[]>([]);
-
-  const [units, setUnits] = useState<InventoryUnit[]>([]);
 
   const notify = (msg: string, type: 'success' | 'warning' | 'info' | 'danger' = 'info') => {
     if (triggerNotification) triggerNotification(msg, type);
@@ -57,11 +55,13 @@ export default function CategoryBrandUnitManager({ triggerNotification }: Catego
           <div className="flex justify-between items-center border-b border-slate-100 pb-3">
             <h4 className="font-bold text-slate-900 text-base">دليل التصنيفات الفنية للأصناف</h4>
             <button 
-              onClick={() => {
+              onClick={async () => {
                 const name = prompt('أدخل اسم التصنيف الجديد:');
                 if (name) {
-                  setCategories([...categories, { id: `cat_${Date.now()}`, schoolId: 'school_1', name, description: '' }]);
-                  notify(`✓ تم إضافة التصنيف (${name}) بنجاح`, 'success');
+                  try {
+                    await onSave({ categories: [...categories, { id: `cat_${Date.now()}`, schoolId: '', name: name.trim(), description: '' }] });
+                    notify(`✓ تم حفظ التصنيف (${name}) مركزياً`, 'success');
+                  } catch (error: any) { notify(error?.message || 'تعذر حفظ التصنيف مركزياً', 'danger'); }
                 }
               }}
               className="px-4 py-2 bg-[#2a1d13] text-[#fce79a] font-bold text-xs flex items-center gap-1"
@@ -88,11 +88,13 @@ export default function CategoryBrandUnitManager({ triggerNotification }: Catego
           <div className="flex justify-between items-center border-b border-slate-100 pb-3">
             <h4 className="font-bold text-slate-900 text-base">دليل العلامات التجارية والماركات</h4>
             <button 
-              onClick={() => {
+              onClick={async () => {
                 const name = prompt('أدخل اسم العلامة التجارية الجديدة:');
                 if (name) {
-                  setBrands([...brands, { id: `brand_${Date.now()}`, name, origin: '', itemsCount: 0 }]);
-                  notify(`✓ تم إضافة العلامة التجارية (${name}) بنجاح`, 'success');
+                  try {
+                    await onSave({ brands: [...brands, { id: `brand_${Date.now()}`, name: name.trim(), origin: '' }] });
+                    notify(`✓ تم حفظ العلامة التجارية (${name}) مركزياً`, 'success');
+                  } catch (error: any) { notify(error?.message || 'تعذر حفظ العلامة التجارية مركزياً', 'danger'); }
                 }
               }}
               className="px-4 py-2 bg-[#2a1d13] text-[#fce79a] font-bold text-xs flex items-center gap-1"
@@ -118,11 +120,13 @@ export default function CategoryBrandUnitManager({ triggerNotification }: Catego
           <div className="flex justify-between items-center border-b border-slate-100 pb-3">
             <h4 className="font-bold text-slate-900 text-base">دليل وحدات القياس المعتمدة</h4>
             <button 
-              onClick={() => {
+              onClick={async () => {
                 const name = prompt('أدخل اسم وحدة القياس (مثل: كرتونة/طقم):');
                 if (name) {
-                  setUnits([...units, { id: `unit_${Date.now()}`, schoolId: 'school_1', name, symbol: name }]);
-                  notify(`✓ تم إضافة وحدة القياس (${name}) بنجاح`, 'success');
+                  try {
+                    await onSave({ units: [...units, { id: `unit_${Date.now()}`, schoolId: '', name: name.trim(), symbol: name.trim() }] });
+                    notify(`✓ تم حفظ وحدة القياس (${name}) مركزياً`, 'success');
+                  } catch (error: any) { notify(error?.message || 'تعذر حفظ وحدة القياس مركزياً', 'danger'); }
                 }
               }}
               className="px-4 py-2 bg-[#2a1d13] text-[#fce79a] font-bold text-xs flex items-center gap-1"
