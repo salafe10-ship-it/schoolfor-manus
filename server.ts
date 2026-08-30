@@ -59,6 +59,7 @@ import {
   type ConnectionIdentity,
 } from "./server/infrastructure/StagingConnectionDiagnostics.js";
 import { createHash, randomUUID } from "node:crypto";
+import { Pool } from "pg";
 import { studentRegistrationService } from "./src/modules/student-registration/application/StudentRegistrationService.js";
 import { canonicalGuardianUpdateService } from "./src/modules/student-registration/application/CanonicalGuardianUpdateService.js";
 import { operationalEnrollmentAssignmentService } from "./src/modules/student-affairs/application/OperationalEnrollmentAssignmentService.js";
@@ -96,6 +97,15 @@ import { calculatePayrollRun } from './src/modules/hr/domain/PayrollCalculation.
 import { validateInventoryProcurementSnapshot } from './src/modules/inventory/domain/InventoryProcurementValidation.js';
 
 type FinancialWriteMode = 'snapshot_read_only' | 'snapshot_write' | 'erp_integrated';
+
+const platformAdminPool = (process.env.DIRECT_URL || process.env.DATABASE_URL)
+  ? new Pool({
+      connectionString: process.env.DIRECT_URL || process.env.DATABASE_URL,
+      max: Number(process.env.PG_PLATFORM_POOL_MAX || 5),
+      connectionTimeoutMillis: Number(process.env.PG_CONNECTION_TIMEOUT_MS || 5_000),
+      ssl: process.env.PGSSLMODE === 'disable' ? undefined : { rejectUnauthorized: false },
+    })
+  : null;
 
 function stableJsonStringify(value: unknown): string {
   if (value === null || typeof value !== 'object') return JSON.stringify(value) ?? 'null';
@@ -1503,6 +1513,157 @@ async function startServer() {
         error: error instanceof Error ? error.message : 'unknown'
       });
       return next(error);
+    }
+  });
+
+  // Central school directory. This path is the only browser-facing school
+  // creation entry point: scope is derived from the verified platform
+  // identity and the two records are committed atomically in PostgreSQL.
+  app.get('/api/admin/central/schools', authenticateRequest, requirePermissionOnly(PERMISSIONS.PLATFORM_ADMIN), async (_req, res, next) => {
+    if (!platformAdminPool) return next(new DatabaseError('مصدر قاعدة البيانات المركزية غير متاح.'));
+    try {
+      const result = await platformAdminPool.query(
+        `SELECT id, tenant_id, school_code, legal_name, display_name, timezone, locale, status, created_at, updated_at
+           FROM public.schools
+          WHERE deleted_at IS NULL
+          ORDER BY created_at DESC`,
+      );
+      return res.json({ success: true, schools: result.rows });
+    } catch (error) {
+      return next(new DatabaseError('تعذر تحميل دليل المدارس المركزي.', error instanceof Error ? error.message : String(error)));
+    }
+  });
+
+  app.post('/api/admin/central/schools', authenticateRequest, requirePermissionOnly(PERMISSIONS.PLATFORM_ADMIN), async (req, res, next) => {
+    if (!platformAdminPool) return next(new DatabaseError('مصدر قاعدة البيانات المركزية غير متاح.'));
+    const identity = (req as any).user as { id?: string; tenantId?: string };
+    const tenantId = String(identity?.tenantId || '').trim();
+    const actorId = String(identity?.id || '').trim();
+    const name = String(req.body?.name || '').trim();
+    const schoolCode = String(req.body?.schoolCode || '').trim().toUpperCase();
+    const timezone = String(req.body?.timezone || 'Africa/Khartoum').trim();
+    const locale = String(req.body?.locale || 'ar').trim();
+
+    if (!tenantId || !actorId) return next(new AuthenticationError('هوية الإدارة المركزية لا تحمل نطاق المستأجر الموثوق.'));
+    if (name.length < 2 || name.length > 160) return next(new ValidationError('اسم المدرسة يجب أن يكون بين حرفين و160 حرفاً.'));
+    if (schoolCode && !/^[A-Z0-9][A-Z0-9._/-]*$/.test(schoolCode)) return next(new ValidationError('رمز المدرسة غير صالح.'));
+    if (!/^[A-Za-z_/-]+$/.test(timezone) || locale.length < 2) return next(new ValidationError('إعدادات اللغة أو المنطقة الزمنية غير صالحة.'));
+
+    const schoolId = randomUUID();
+    const branchId = randomUUID();
+    const resolvedCode = schoolCode || `SCH-${schoolId.slice(0, 8).toUpperCase()}`;
+    const client = await platformAdminPool.connect();
+    try {
+      await client.query('BEGIN');
+      const school = await client.query(
+        `INSERT INTO public.schools
+          (id, tenant_id, school_code, legal_name, display_name, timezone, locale, status, created_by, updated_by)
+         VALUES ($1, $2, $3, $4, $4, $5, $6, 'active', $7, $7)
+         RETURNING id, tenant_id, school_code, legal_name, display_name, timezone, locale, status, created_at, updated_at`,
+        [schoolId, tenantId, resolvedCode, name, timezone, locale, actorId],
+      );
+      const branch = await client.query(
+        `INSERT INTO public.branches
+          (id, tenant_id, school_id, branch_code, name, address, status, created_by, updated_by)
+         VALUES ($1, $2, $3, $4, 'الفرع الرئيسي', '{}'::jsonb, 'active', $5, $5)
+         RETURNING id, tenant_id, school_id, branch_code, name, status, created_at, updated_at`,
+        [branchId, tenantId, schoolId, `${resolvedCode}-MAIN`, actorId],
+      );
+      await client.query(
+        `INSERT INTO public.hr_database
+          (tenant_id, school_id, country_code, legal_configuration, data, version, updated_by)
+         VALUES ($1, $2, 'ZZ', '{}'::jsonb,
+           '{"employees":[],"departments":[],"jobs":[],"contracts":[],"attendance":[],"leaves":[],"penalties":[],"advances":[],"rewards":[],"performance":[],"documents":[],"payrollRuns":[],"settings":{}}'::jsonb,
+           0, $3)
+         ON CONFLICT (school_id) DO NOTHING`,
+        [tenantId, schoolId, actorId],
+      );
+      await client.query(
+        `INSERT INTO public.inventory_database
+          (tenant_id, school_id, data, version, updated_by)
+         VALUES ($1, $2,
+           '{"items":[],"categories":[],"brands":[],"units":[],"suppliers":[],"warehouses":[],"movements":[],"stocktakes":[],"purchaseRequests":[],"rfqs":[],"quotations":[],"purchaseOrders":[],"goodsReceipts":[],"vendorBills":[],"vendorPayments":[],"settings":{},"procurementSettings":{}}'::jsonb,
+           0, $3)
+         ON CONFLICT (school_id) DO NOTHING`,
+        [tenantId, schoolId, actorId],
+      );
+      await client.query(
+        `INSERT INTO public.financial_portal_snapshots
+          (tenant_id, school_id, data, version, updated_by)
+         VALUES ($1, $2, '{}'::jsonb, 0, $3)
+         ON CONFLICT (school_id) DO NOTHING`,
+        [tenantId, schoolId, actorId],
+      );
+      await client.query('COMMIT');
+      return res.status(201).json({
+        success: true,
+        school: school.rows[0],
+        branch: branch.rows[0],
+        provisioning: {
+          hr_database: true,
+          inventory_database: true,
+          financial_portal_snapshots: true,
+        },
+      });
+    } catch (error) {
+      try { await client.query('ROLLBACK'); } catch { /* keep original error */ }
+      return next(error instanceof Error && /duplicate|unique/i.test(error.message)
+        ? new ConflictError('رمز المدرسة مستخدم مسبقاً داخل المستأجر.')
+        : new DatabaseError('تعذر إنشاء المدرسة والفرع في المصدر المركزي.', error instanceof Error ? error.message : String(error)));
+    } finally {
+      client.release();
+    }
+  });
+
+  app.patch('/api/admin/central/schools/:schoolId', authenticateRequest, requirePermissionOnly(PERMISSIONS.PLATFORM_ADMIN), async (req, res, next) => {
+    if (!platformAdminPool) return next(new DatabaseError('مصدر قاعدة البيانات المركزية غير متاح.'));
+    const identity = (req as any).user as { id?: string; tenantId?: string };
+    const tenantId = String(identity?.tenantId || '').trim();
+    const actorId = String(identity?.id || '').trim();
+    const schoolId = String(req.params.schoolId || '').trim();
+    const operation = String(req.body?.operation || '').trim();
+    if (!tenantId || !actorId || !schoolId) return next(new AuthenticationError('هوية الإدارة المركزية أو المدرسة غير مكتملة.'));
+    if (!/^[0-9a-f-]{36}$/i.test(schoolId)) return next(new ValidationError('معرف المدرسة غير صالح.'));
+
+    try {
+      let result;
+      if (operation === 'update') {
+        const name = String(req.body?.name || '').trim();
+        const schoolCode = String(req.body?.schoolCode || '').trim().toUpperCase();
+        if (name.length < 2 || name.length > 160) return next(new ValidationError('اسم المدرسة يجب أن يكون بين حرفين و160 حرفاً.'));
+        if (!/^[A-Z0-9][A-Z0-9._/-]*$/.test(schoolCode)) return next(new ValidationError('رمز المدرسة غير صالح.'));
+        result = await platformAdminPool.query(
+          `UPDATE public.schools
+              SET legal_name = $3, display_name = $3, school_code = $4, updated_at = now(), updated_by = $5, version = version + 1
+            WHERE id = $1 AND tenant_id = $2 AND deleted_at IS NULL
+          RETURNING id, tenant_id, school_code, legal_name, display_name, timezone, locale, status, created_at, updated_at`,
+          [schoolId, tenantId, name, schoolCode, actorId],
+        );
+      } else if (operation === 'status') {
+        const status = String(req.body?.status || '').trim();
+        if (!['active', 'suspended'].includes(status)) return next(new ValidationError('حالة المدرسة غير مسموح بها.'));
+        result = await platformAdminPool.query(
+          `UPDATE public.schools SET status = $3, updated_at = now(), updated_by = $4, version = version + 1
+            WHERE id = $1 AND tenant_id = $2 AND deleted_at IS NULL
+          RETURNING id, tenant_id, school_code, legal_name, display_name, timezone, locale, status, created_at, updated_at`,
+          [schoolId, tenantId, status, actorId],
+        );
+      } else if (operation === 'archive') {
+        result = await platformAdminPool.query(
+          `UPDATE public.schools SET status = 'archived', deleted_at = now(), deleted_by = $3, updated_at = now(), updated_by = $3, version = version + 1
+            WHERE id = $1 AND tenant_id = $2 AND deleted_at IS NULL
+          RETURNING id, tenant_id, school_code, legal_name, display_name, timezone, locale, status, created_at, updated_at`,
+          [schoolId, tenantId, actorId],
+        );
+      } else {
+        return next(new ValidationError('عملية إدارة المدرسة غير معتمدة.'));
+      }
+      if (result.rowCount !== 1) return next(new ConflictError('المدرسة غير موجودة أو لا تنتمي إلى المستأجر الموثوق.'));
+      return res.json({ success: true, school: result.rows[0] });
+    } catch (error) {
+      return next(error instanceof Error && /duplicate|unique/i.test(error.message)
+        ? new ConflictError('رمز المدرسة مستخدم مسبقاً داخل المستأجر.')
+        : new DatabaseError('تعذر تحديث المدرسة في المصدر المركزي.', error instanceof Error ? error.message : String(error)));
     }
   });
 

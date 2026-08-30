@@ -2,6 +2,7 @@ import { Archive, Ban, Calendar, CheckCircle, Copy, Edit2, ExternalLink, FileSpr
 import React, { useState } from 'react';
 import { initializeCOAForSchool } from '../../utils/COAUtils';
 import { getTrustedSchoolUrl, openTrustedSchoolPortal } from '../../utils/EnterpriseDomainUtils';
+import { authenticatedRequest } from '../../utils/authenticatedRequest';
 import ImpersonationModal from './ImpersonationModal';
 
 interface SuperAdminSchoolsProps {
@@ -95,9 +96,22 @@ export default function SuperAdminSchools({
   // -------------------------------------------------------------
   // ACTIONS HANDLERS
   // -------------------------------------------------------------
+
+  const mutateCentralSchool = async (schoolId: string, body: Record<string, unknown>) => {
+    const response = await authenticatedRequest(`/api/admin/central/schools/${encodeURIComponent(schoolId)}`, {
+      method: 'PATCH',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(body),
+    });
+    const payload = await response.json().catch(() => ({}));
+    if (!response.ok || !payload?.success || !payload?.school) {
+      throw new Error(payload?.message || 'CENTRAL_SCHOOL_UPDATE_FAILED');
+    }
+    return payload.school;
+  };
   
   // Handle Add School (Provision Tenant)
-  const handleProvisionSchool = (e: React.FormEvent) => {
+  const handleProvisionSchool = async (e: React.FormEvent) => {
     e.preventDefault();
     
     // Check parameters
@@ -112,7 +126,75 @@ export default function SuperAdminSchools({
       return;
     }
 
-    triggerNotification('خدمة تهيئة المستأجر المركزية غير متاحة؛ لم تُنشأ مدرسة أو فرع أو قاعدة حسابات محليًا.', 'warning');
+    try {
+      const response = await authenticatedRequest('/api/admin/central/schools', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          name: newSchool.name,
+          schoolCode: newSchool.schoolCode || undefined,
+          timezone: 'Africa/Khartoum',
+          locale: 'ar',
+        }),
+      });
+      const payload = await response.json().catch(() => ({}));
+      if (!response.ok || !payload?.success || !payload?.school || !payload?.branch) {
+        throw new Error(payload?.message || 'CENTRAL_SCHOOL_PROVISIONING_FAILED');
+      }
+
+      const canonicalSchool = payload.school;
+      const canonicalBranch = payload.branch;
+      const createdSchool = {
+        ...canonicalSchool,
+        id: canonicalSchool.id,
+        name: canonicalSchool.display_name,
+        schoolShortName: newSchool.schoolShortName || canonicalSchool.display_name,
+        schoolCode: canonicalSchool.school_code,
+        type: newSchool.type,
+        city: newSchool.city,
+        address: newSchool.address,
+        phone: newSchool.phone,
+        email: newSchool.email,
+        subdomain: newSchool.subdomain,
+        domain: newSchool.subdomain ? `${newSchool.subdomain}.erpcloud.com` : '',
+        status: canonicalSchool.status,
+        plan: newSchool.plan,
+        storageUsed: '0 GB',
+        storageLimit: `${newSchool.storageLimit} GB`,
+        usersCount: 0,
+        employeesCount: 0,
+        studentsCount: 0,
+        managerName: newSchool.managerName,
+        adminName: newSchool.managerName,
+        adminEmail: newSchool.adminEmail,
+        schoolUrl: getTrustedSchoolUrl({ id: canonicalSchool.id, subdomain: newSchool.subdomain }),
+      };
+      const createdBranch = {
+        ...canonicalBranch,
+        id: canonicalBranch.id,
+        schoolId: canonicalBranch.school_id,
+        name: canonicalBranch.name,
+        city: newSchool.city,
+        address: newSchool.address || 'العنوان الإداري',
+        phone: newSchool.phone || 'الهاتف الإداري',
+        status: canonicalBranch.status,
+        isMain: true,
+        usersCount: 0,
+        studentsCount: 0,
+        employeesCount: 0,
+      };
+      setSchools(prev => [...prev, createdSchool]);
+      setBranches(prev => [...prev, createdBranch]);
+      logAction('CREATE_SCHOOL', `تأسيس مدرسة جديدة من المصدر المركزي: ${canonicalSchool.display_name}`, 'الإدارة المركزية');
+      triggerNotification('تم إنشاء المدرسة والفرع في قاعدة البيانات المركزية ✅', 'success');
+      setShowAddModal(false);
+      setNewSchool({
+        name: '', schoolShortName: '', schoolCode: '', type: 'private', city: 'الرياض', address: '', phone: '', email: '',
+        subdomain: '', managerName: '', adminEmail: '', password: '', plan: 'Enterprise', storageLimit: '500', userLimit: '3000', subscriptionDuration: '12'
+      });
+    } catch (error) {
+      triggerNotification(error instanceof Error ? error.message : 'تعذر إنشاء المدرسة مركزياً؛ لم يتم تعديل البيانات.', 'danger');
+    }
     return;
 
     const generatedPassword = newSchool.password || Math.random().toString(36).substring(2, 10).toUpperCase();
@@ -212,63 +294,70 @@ export default function SuperAdminSchools({
   };
 
   // Edit School
-  const handleSaveEditSchool = (e: React.FormEvent) => {
+  const handleSaveEditSchool = async (e: React.FormEvent) => {
     e.preventDefault();
     if (!currentSchool) return;
 
-    setSchools(prev => prev.map(s => s.id === currentSchool.id ? currentSchool : s));
-    logAction('EDIT_SCHOOL', `تحديث بيانات المستأجر: ${currentSchool.name}`, 'الإدارة المركزية');
-    triggerNotification('تم تحديث البيانات بنجاح', 'success');
-    setShowEditModal(false);
+    try {
+      const school = await mutateCentralSchool(currentSchool.id, {
+        operation: 'update', name: currentSchool.name, schoolCode: currentSchool.schoolCode,
+      });
+      setSchools(prev => prev.map(item => item.id === school.id ? { ...item, ...currentSchool, ...school, name: school.display_name, schoolCode: school.school_code } : item));
+      logAction('EDIT_SCHOOL', `تحديث بيانات المدرسة من المصدر المركزي: ${school.display_name}`, 'الإدارة المركزية');
+      triggerNotification('تم تحديث بيانات المدرسة في قاعدة البيانات المركزية ✅', 'success');
+      setShowEditModal(false);
+    } catch (error) {
+      triggerNotification(error instanceof Error ? error.message : 'تعذر تحديث المدرسة؛ لم يتم تعديل البيانات.', 'danger');
+    }
   };
 
   // Toggle school frozen/active status
-  const handleToggleFreezeSchool = (school: any) => {
+  const handleToggleFreezeSchool = async (school: any) => {
     const isFrozen = school.status === 'suspended';
     const newStatus = isFrozen ? 'active' : 'suspended';
-    
-    setSchools(prev => prev.map(s => s.id === school.id ? { ...s, status: newStatus } : s));
-    
-    logAction(
-      isFrozen ? 'UNFREEZE_SCHOOL' : 'FREEZE_SCHOOL', 
-      `${isFrozen ? 'إلغاء تجميد' : 'تجميد مؤقت'} لخدمات مدرسة: ${school.name}`, 
-      'الحماية والامتثال'
-    );
-    
-    triggerNotification(
-      isFrozen ? `تم تفعيل مدرسة ${school.name} بنجاح` : `تم تعليق حساب مدرسة ${school.name} وتحويل مستخدميها لصفحة الهبوط الباردة`, 
-      isFrozen ? 'success' : 'warning'
-    );
+    try {
+      const canonical = await mutateCentralSchool(school.id, { operation: 'status', status: newStatus });
+      setSchools(prev => prev.map(item => item.id === canonical.id ? { ...item, status: canonical.status } : item));
+      logAction(isFrozen ? 'UNFREEZE_SCHOOL' : 'FREEZE_SCHOOL', `${isFrozen ? 'إلغاء تفعيل' : 'تعليق'} المدرسة مركزياً: ${school.name}`, 'الحماية والامتثال');
+      triggerNotification(isFrozen ? `تم تفعيل مدرسة ${school.name} مركزياً` : `تم تعليق مدرسة ${school.name} مركزياً`, isFrozen ? 'success' : 'warning');
+    } catch (error) {
+      triggerNotification(error instanceof Error ? error.message : 'تعذر تغيير حالة المدرسة؛ لم يتم تعديل البيانات.', 'danger');
+    }
   };
 
   // Archive School
-  const handleToggleArchiveSchool = (school: any) => {
+  const handleToggleArchiveSchool = async (school: any) => {
     const isArchived = !!school.archived;
-    setSchools(prev => prev.map(s => s.id === school.id ? { ...s, archived: !isArchived } : s));
-    
-    logAction(
-      isArchived ? 'RESTORE_SCHOOL' : 'ARCHIVE_SCHOOL', 
-      `${isArchived ? 'استعادة مدرسة من الأرشيف السحابي' : 'أرشفة مدرسة ونقلها للمستودع البارد'}: ${school.name}`, 
-      'شؤون التخزين'
-    );
-    
-    triggerNotification(
-      isArchived ? `تم فك أرشفة ${school.name} وإعادتها لقائمة العمليات` : `تمت أرشفة ${school.name} ونقل بياناتها بأمان`, 
-      'info'
-    );
+    if (isArchived) {
+      triggerNotification('استعادة المدرسة تحتاج مسار اعتماد مركزي مستقل؛ لم يتم تعديل البيانات.', 'warning');
+      return;
+    }
+    try {
+      const canonical = await mutateCentralSchool(school.id, { operation: 'archive' });
+      setSchools(prev => prev.map(item => item.id === canonical.id ? { ...item, status: canonical.status, archived: true } : item));
+      logAction('ARCHIVE_SCHOOL', `أرشفة المدرسة مركزياً: ${school.name}`, 'شؤون التخزين');
+      triggerNotification(`تمت أرشفة ${school.name} في قاعدة البيانات المركزية`, 'info');
+    } catch (error) {
+      triggerNotification(error instanceof Error ? error.message : 'تعذر أرشفة المدرسة؛ لم يتم تعديل البيانات.', 'danger');
+    }
   };
 
   // Permanently Terminate School services (sets status to terminated)
-  const handleTerminateSchool = (school: any) => {
+  const handleTerminateSchool = async (school: any) => {
     if (confirm(`⚠️ تحذير أمني: هل أنت متأكد من إنهاء اشتراك مدرسة ${school.name} نهائياً وإغلاق بوابة الدخول؟ لا يمكن التراجع عن هذا الإجراء.`)) {
-      setSchools(prev => prev.map(s => s.id === school.id ? { ...s, status: 'terminated' } : s));
-      logAction('TERMINATE_SCHOOL', `إغلاق خدمات وتصفية مستأجر مدرسة: ${school.name} بشكل نهائي`, 'الرقابة القضائية');
-      triggerNotification(`تم تصفية وإلغاء خدمات مدرسة ${school.name} بشكل نهائي`, 'danger');
+      try {
+        const canonical = await mutateCentralSchool(school.id, { operation: 'archive' });
+        setSchools(prev => prev.map(item => item.id === canonical.id ? { ...item, status: canonical.status, archived: true } : item));
+        logAction('TERMINATE_SCHOOL', `أرشفة خدمات مدرسة مركزياً: ${school.name}`, 'الرقابة القضائية');
+        triggerNotification(`تمت أرشفة خدمات مدرسة ${school.name} مركزياً`, 'danger');
+      } catch (error) {
+        triggerNotification(error instanceof Error ? error.message : 'تعذر إنهاء المدرسة؛ لم يتم تعديل البيانات.', 'danger');
+      }
     }
   };
 
   // Safe soft delete with double entry check
-  const handleSafeDeleteSchool = () => {
+  const handleSafeDeleteSchool = async () => {
     if (!currentSchool) return;
 
     if (deleteConfirmText !== currentSchool.name) {
@@ -276,23 +365,27 @@ export default function SuperAdminSchools({
       return;
     }
 
-    // Soft delete logic: filter out or flag as deleted
-    setSchools(prev => prev.filter(s => s.id !== currentSchool.id));
-    // Soft delete associated branches
-    setBranches(prev => prev.filter(b => b.schoolId !== currentSchool.id));
-
-    logAction('SOFT_DELETE_SCHOOL', `حذف آمن متكامل للمستأجر: ${currentSchool.name} وتجميد رخصه في قاعدة البيانات التاريخية`, 'الحوكمة');
-    triggerNotification('تم حذف المدرسة وجميع فروعها وإرجاع تراخيصها بأمان ✅', 'success');
-    
-    setShowDeleteModal(false);
-    setDeleteConfirmText('');
-    setCurrentSchool(null);
+    try {
+      await mutateCentralSchool(currentSchool.id, { operation: 'archive' });
+      setSchools(prev => prev.filter(s => s.id !== currentSchool.id));
+      setBranches(prev => prev.filter(b => b.schoolId !== currentSchool.id));
+      logAction('SOFT_DELETE_SCHOOL', `أرشفة آمنة للمستأجر في المصدر المركزي: ${currentSchool.name}`, 'الحوكمة');
+      triggerNotification('تمت أرشفة المدرسة وفروعها من المصدر المركزي ✅', 'success');
+      setShowDeleteModal(false);
+      setDeleteConfirmText('');
+      setCurrentSchool(null);
+    } catch (error) {
+      triggerNotification(error instanceof Error ? error.message : 'تعذر الأرشفة؛ لم يتم تعديل البيانات.', 'danger');
+    }
   };
 
   // Update subscription limits & packages
   const handleSaveLimits = (e: React.FormEvent) => {
     e.preventDefault();
     if (!currentSchool) return;
+
+    triggerNotification('إدارة حدود الاشتراك تحتاج واجهة إعدادات مركزية؛ لم يتم حفظ تغييرات محلية.', 'warning');
+    return;
 
     // Calculate end date based on duration
     const currentStart = new Date(currentSchool.subscriptionStart || new Date());

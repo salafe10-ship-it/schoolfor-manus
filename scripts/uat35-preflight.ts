@@ -14,13 +14,16 @@ const REQUIRED_TABLES = [
   'hr_database',
   'roles',
   'permissions',
+  'role_permissions',
+  'user_roles',
   'inventory_database',
   'financial_portal_snapshots',
   'buses',
+  'uniforms',
   'student_transportation',
   'students',
   'student_uniform_accounts',
-  'audit_logs',
+  'audit_events',
 ] as const;
 
 const connectionString = process.env.DIRECT_URL || process.env.DATABASE_URL;
