@@ -28,6 +28,32 @@ describe('central administration review contracts', () => {
     expect(branches).not.toContain('setTimeout(');
   });
 
+  it('connects central identity, RBAC, and notifications to canonical backends', () => {
+    expect(server).toContain("app.get('/api/admin/central/users'");
+    expect(server).toContain("app.post('/api/admin/central/schools/:schoolId/users'");
+    expect(server).toContain("app.patch('/api/admin/central/users/:userId'");
+    expect(server).toContain("app.get('/api/admin/central/rbac'");
+    expect(server).toContain("app.patch('/api/admin/central/rbac/roles/:roleId'");
+    expect(server).toContain("app.get('/api/admin/central/notifications'");
+    expect(server).toContain("app.post('/api/admin/central/notifications'");
+    const central = server.slice(server.indexOf("app.get('/api/admin/central/users'"), server.indexOf('async function resolveStudentTenantContext'));
+    expect(central).toContain('platformAdminAuth.auth.admin.createUser');
+    expect(central).toContain('notification_queue');
+    expect(central).toContain('requirePermissionOnly(PERMISSIONS.PLATFORM_ADMIN)');
+    expect(central).not.toContain('localStorage');
+  });
+
+  it('uses central API contracts in the users, RBAC, and notifications screens', () => {
+    const users = read('src/components/super-admin/SuperAdminUsers.tsx');
+    const rbac = read('src/components/super-admin/SuperAdminRbac.tsx');
+    const notifications = read('src/components/super-admin/SuperAdminCentralNotifications.tsx');
+    expect(users).toContain('/api/admin/central/users');
+    expect(rbac).toContain('/api/admin/central/rbac');
+    expect(rbac).toContain('تم اعتماد صلاحيات دور');
+    expect(notifications).toContain('/api/admin/central/notifications');
+    expect(notifications).not.toContain('localStorage');
+  });
+
   it('does not open an unverified local impersonation session', () => {
     const view = read('src/components/SuperAdminView.tsx');
     const start = view.indexOf('const handleImpersonateSchool');

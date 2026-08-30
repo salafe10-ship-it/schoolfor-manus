@@ -7,8 +7,8 @@ describe('SuperAdminHealth authoritative telemetry contract', () => {
 
   it('starts unverified and does not run random telemetry updates', () => {
     expect(source).toContain('useState(0)');
-    expect(source).toContain('لا تُعرض قياسات أو رسوم محاكاة');
-    expect(source).toContain('return;');
+    expect(source).toContain('القياس الحي لا يثبت إلا من موصل مراقبة مركزي موثق');
+    expect(source).toContain('setHistoryData([]);');
     expect(source).not.toContain('const [cpuUsage, setCpuUsage] = useState(42)');
   });
 });

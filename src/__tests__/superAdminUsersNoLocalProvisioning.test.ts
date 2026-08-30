@@ -8,10 +8,10 @@ const source = fs.readFileSync(
 );
 
 describe('super admin user provisioning evidence safety', () => {
-  it('fails closed without the central identity service', () => {
-    const guard = 'خدمة الهوية المركزية غير متاحة';
-    expect(source).toContain(guard);
-    expect(source.indexOf(guard)).toBeLessThan(source.indexOf('const matchedSchoolName'));
+  it('uses the canonical central identity service instead of local provisioning', () => {
+    expect(source).toContain("authenticatedRequest('/api/admin/central/users'");
+    expect(source).toContain('/api/admin/central/schools/${encodeURIComponent(newUser.schoolId)}/users');
+    expect(source).not.toContain('localStorage.setItem');
     expect(source).not.toContain('مدرسة سحابية');
     expect(source).not.toContain('تم إنشاء حساب المستخدم بنجاح ومزامنته مع القنوات');
   });

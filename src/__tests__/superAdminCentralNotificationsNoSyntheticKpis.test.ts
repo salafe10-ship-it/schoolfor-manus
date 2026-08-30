@@ -9,8 +9,9 @@ const source = fs.readFileSync(
 
 describe('SuperAdminCentralNotifications evidence safety', () => {
   it('does not seed broadcast history or hardcode delivery claims', () => {
-    expect(source).toContain("return saved ? JSON.parse(saved) : []");
+    expect(source).toContain("authenticatedRequest('/api/admin/central/notifications')");
     expect(source).toContain('غير متحقق');
+    expect(source).not.toContain('localStorage');
     expect(source).not.toContain('99.95%');
     expect(source).not.toContain('84.2%');
     expect(source).not.toContain('4250');
@@ -18,7 +19,7 @@ describe('SuperAdminCentralNotifications evidence safety', () => {
   });
 
   it('fails closed when the central sender is unavailable', () => {
-    expect(source).toContain('خدمة الإرسال المركزي غير متاحة');
+    expect(source).toContain('لم يتم تسجيل نجاح وهمي');
     expect(source).not.toContain("status: 'completed'");
   });
 });

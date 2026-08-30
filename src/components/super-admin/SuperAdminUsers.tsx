@@ -1,5 +1,6 @@
 import { Ban, CheckCircle, Edit2, HelpCircle, Key, Laptop, Lock as LockIcon, Mail, Plus, RefreshCw, Search, ShieldAlert, ShieldCheck, Trash2, UserCheck, X } from 'lucide-react';
-import React, { useState } from 'react';
+import React, { useEffect, useState } from 'react';
+import { authenticatedRequest } from '../../utils/authenticatedRequest';
 interface SuperAdminUsersProps {
   schools: any[];
   branches: any[];
@@ -14,9 +15,8 @@ export default function SuperAdminUsers({
   triggerNotification
 }: SuperAdminUsersProps) {
 
-  // The identity directory is intentionally empty until a verified central
-  // identity connector is available; localStorage is never authoritative.
-  const [employees] = useState<any[]>([]);
+  const [employees, setEmployees] = useState<any[]>([]);
+  const [isDirectoryLoading, setIsDirectoryLoading] = useState(true);
 
   // State for filters
   const [searchTerm, setSearchTerm] = useState('');
@@ -37,7 +37,7 @@ export default function SuperAdminUsers({
     jobTitle: '',
     department: 'شئون الطلاب',
     email: '',
-    schoolId: schools[0]?.id || 'school_1',
+    schoolId: schools[0]?.id || '',
     branchId: '',
     password: '',
     initialRole: 'SchoolAdmin'
@@ -46,62 +46,139 @@ export default function SuperAdminUsers({
   // Filter branches based on selected school in "Add User"
   const newUserBranches = branches.filter(b => b.schoolId === newUser.schoolId);
 
+  useEffect(() => {
+    let mounted = true;
+    const loadUsers = async () => {
+      setIsDirectoryLoading(true);
+      try {
+        const response = await authenticatedRequest('/api/admin/central/users');
+        const payload = await response.json().catch(() => ({}));
+        if (!response.ok || !payload?.success || !Array.isArray(payload.users)) throw new Error(payload?.message || 'تعذر تحميل دليل الهوية المركزي.');
+        if (mounted) setEmployees(payload.users.map((user: any) => ({
+          ...user,
+          name: user.display_name,
+          email: user.email || '',
+          schoolId: user.school_id,
+          branchId: user.branch_id,
+          jobTitle: user.roles?.[0]?.name || 'موظف نظام',
+          department: user.school_name || 'المدرسة',
+          forcePasswordChange: false,
+          loginCount: 0,
+          lastLogin: 'غير متاح من الدليل الحالي',
+        })));
+      } catch (error) {
+        if (mounted) triggerNotification(error instanceof Error ? error.message : 'تعذر تحميل دليل الهوية المركزي.', 'danger');
+      } finally {
+        if (mounted) setIsDirectoryLoading(false);
+      }
+    };
+    void loadUsers();
+    return () => { mounted = false; };
+  }, [triggerNotification]);
+
+  const mapCanonicalUser = (user: any) => ({
+    ...user,
+    name: user.display_name,
+    email: user.email || '',
+    schoolId: user.school_id,
+    branchId: user.branch_id,
+    jobTitle: user.roles?.[0]?.name || user.jobTitle || 'موظف نظام',
+    department: user.school_name || 'المدرسة',
+  });
+
+  const mutateCentralUser = async (userId: string, body: Record<string, unknown>) => {
+    const response = await authenticatedRequest(`/api/admin/central/users/${encodeURIComponent(userId)}`, {
+      method: 'PATCH', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(body),
+    });
+    const payload = await response.json().catch(() => ({}));
+    if (!response.ok || !payload?.success || !payload?.user) throw new Error(payload?.message || 'تعذر حفظ مستخدم الهوية مركزيًا.');
+    return payload;
+  };
+
   // -------------------------------------------------------------
   // HANDLERS
   // -------------------------------------------------------------
 
   // Handle Add User
-  const handleAddUser = (e: React.FormEvent) => {
+  const handleAddUser = async (e: React.FormEvent) => {
     e.preventDefault();
     if (!newUser.name || !newUser.email) {
       triggerNotification('يرجى تعبئة الحقول الأساسية لإنشاء الموظف', 'warning');
       return;
     }
 
-    triggerNotification('خدمة الهوية المركزية غير متاحة؛ لم يُنشأ مستخدم أو تُحفظ صلاحيات محليًا.', 'warning');
-  };
-
-  const identityUnavailable = (action: string) => {
-    triggerNotification(`${action} يحتاج خدمة الهوية المركزية؛ لم يتم تعديل مستخدم أو صلاحية محليًا.`, 'warning');
+    if (!newUser.schoolId) { triggerNotification('يرجى اختيار مدرسة موثقة أولاً.', 'warning'); return; }
+    try {
+      const response = await authenticatedRequest(`/api/admin/central/schools/${encodeURIComponent(newUser.schoolId)}/users`, {
+        method: 'POST', headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ name: newUser.name, email: newUser.email, password: newUser.password, branchId: newUser.branchId || undefined, initialRole: newUser.initialRole }),
+      });
+      const payload = await response.json().catch(() => ({}));
+      if (!response.ok || !payload?.success || !payload?.user) throw new Error(payload?.message || 'تعذر إنشاء هوية الموظف مركزيًا.');
+      const created = mapCanonicalUser(payload.user);
+      setEmployees(prev => [created, ...prev]);
+      logAction('CREATE_USER', `إنشاء هوية مركزية للموظف [${newUser.name}]`, 'المستخدمين والصلاحيات');
+      triggerNotification('تم إنشاء الهوية وربطها بالمدرسة والدور مركزيًا ✅', 'success');
+      if (payload.temporaryPassword) {
+        setResetDetails({ name: newUser.name, password: payload.temporaryPassword });
+        setShowPasswordResetModal(true);
+      }
+      setShowAddModal(false);
+      setNewUser({ name: '', jobTitle: '', department: 'شئون الطلاب', email: '', schoolId: schools[0]?.id || '', branchId: '', password: '', initialRole: 'SchoolAdmin' });
+    } catch (error) {
+      triggerNotification(error instanceof Error ? error.message : 'تعذر إنشاء هوية الموظف؛ لم يتم تعديل البيانات.', 'danger');
+    }
   };
 
   // Save Edit User
-  const handleSaveEditUser = (e: React.FormEvent) => {
+  const handleSaveEditUser = async (e: React.FormEvent) => {
     e.preventDefault();
     if (!currentUser) return;
-    identityUnavailable(`حفظ بيانات ${currentUser.name}`);
+    try {
+      const payload = await mutateCentralUser(currentUser.id, { operation: 'update', displayName: currentUser.name });
+      setEmployees(prev => prev.map(user => user.id === currentUser.id ? { ...user, ...mapCanonicalUser(payload.user) } : user));
+      triggerNotification('تم حفظ بيانات الموظف في الهوية المركزية ✅', 'success');
+      setShowEditModal(false);
+    } catch (error) { triggerNotification(error instanceof Error ? error.message : 'تعذر حفظ بيانات الموظف مركزيًا.', 'danger'); }
   };
 
   // Toggle user state (Suspend / Resume)
-  const handleToggleFreezeUser = (user: any) => {
-    identityUnavailable(`تغيير حالة ${user.name}`);
+  const handleToggleFreezeUser = async (user: any) => {
+    const status = user.status === 'suspended' ? 'active' : 'suspended';
+    try { const payload = await mutateCentralUser(user.id, { operation: 'status', status }); setEmployees(prev => prev.map(item => item.id === user.id ? { ...item, ...mapCanonicalUser(payload.user) } : item)); triggerNotification(status === 'active' ? 'تم تفعيل الهوية مركزيًا ✅' : 'تم تعليق الهوية مركزيًا', status === 'active' ? 'success' : 'warning'); }
+    catch (error) { triggerNotification(error instanceof Error ? error.message : 'تعذر تغيير حالة الهوية مركزيًا.', 'danger'); }
   };
 
   // Lock / Unlock user account
-  const handleToggleLockUser = (user: any) => {
-    identityUnavailable(`قفل حساب ${user.name}`);
+  const handleToggleLockUser = async (user: any) => {
+    const status = user.status === 'locked' ? 'active' : 'disabled';
+    try { const payload = await mutateCentralUser(user.id, { operation: 'status', status }); setEmployees(prev => prev.map(item => item.id === user.id ? { ...item, ...mapCanonicalUser(payload.user), status: status === 'disabled' ? 'locked' : status } : item)); triggerNotification(status === 'active' ? 'تم إلغاء قفل الهوية مركزيًا ✅' : 'تم قفل الهوية مركزيًا', status === 'active' ? 'success' : 'danger'); }
+    catch (error) { triggerNotification(error instanceof Error ? error.message : 'تعذر قفل الهوية مركزيًا.', 'danger'); }
   };
 
   // Terminate/Delete User accounts
-  const handleTerminateUser = (user: any) => {
-    if (confirm(`⚠️ تحذير: هل أنت متأكد من إلغاء حساب الموظف [${user.name}] وحذف صلاحياته نهائياً من خادم السحاب؟`)) {
-      identityUnavailable(`إلغاء حساب ${user.name}`);
+  const handleTerminateUser = async (user: any) => {
+    if (confirm(`⚠️ تحذير: هل أنت متأكد من أرشفة هوية الموظف [${user.name}]؟`)) {
+      try { await mutateCentralUser(user.id, { operation: 'archive' }); setEmployees(prev => prev.filter(item => item.id !== user.id)); triggerNotification('تمت أرشفة الهوية مركزيًا ✅', 'warning'); }
+      catch (error) { triggerNotification(error instanceof Error ? error.message : 'تعذر أرشفة الهوية مركزيًا.', 'danger'); }
     }
   };
 
   // Reset password wizard
-  const handleResetPassword = (user: any) => {
-    identityUnavailable(`إعادة كلمة مرور ${user.name}`);
+  const handleResetPassword = async (user: any) => {
+    try { const payload = await mutateCentralUser(user.id, { operation: 'reset_password' }); setResetDetails({ name: user.name, password: payload.temporaryPassword }); setShowPasswordResetModal(true); triggerNotification('تم إصدار كلمة مرور مؤقتة من Supabase Auth المركزي ✅', 'success'); }
+    catch (error) { triggerNotification(error instanceof Error ? error.message : 'تعذر إعادة كلمة المرور مركزيًا.', 'danger'); }
   };
 
   // Toggle Force Password Change next login
-  const handleToggleForcePassword = (user: any) => {
-    identityUnavailable(`تعديل إلزام كلمة مرور ${user.name}`);
+  const handleToggleForcePassword = async (user: any) => {
+    try { const payload = await mutateCentralUser(user.id, { operation: 'force_password', forcePasswordChange: !user.forcePasswordChange }); setEmployees(prev => prev.map(item => item.id === user.id ? { ...item, ...mapCanonicalUser(payload.user), forcePasswordChange: payload.user.forcePasswordChange } : item)); triggerNotification('تم تحديث سياسة كلمة المرور مركزيًا ✅', 'info'); }
+    catch (error) { triggerNotification(error instanceof Error ? error.message : 'تعذر تحديث سياسة كلمة المرور.', 'danger'); }
   };
 
   // Forcefully terminate/end all user's active sessions (Token Eviction)
   const handleEvictSessions = (user: any) => {
-    identityUnavailable(`إنهاء جلسات ${user.name}`);
+    triggerNotification(`إنهاء الجلسات النشطة لـ ${user.name} يحتاج موصل جلسات مركزي؛ لم يتم تسجيل نجاح وهمي.`, 'warning');
   };
 
   // -------------------------------------------------------------

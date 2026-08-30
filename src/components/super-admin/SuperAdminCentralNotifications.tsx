@@ -1,5 +1,6 @@
 import { AlertCircle, BarChart3, Bell, CheckCircle, Filter, Mail, MessageSquare, Send, ShieldAlert, Users, Volume2 } from 'lucide-react';
-import React, { useState } from 'react';
+import React, { useEffect, useState } from 'react';
+import { authenticatedRequest } from '../../utils/authenticatedRequest';
 interface SuperAdminCentralNotificationsProps {
   schools: any[];
   logAction: (action: string, details: string, section?: string) => void;
@@ -18,21 +19,46 @@ export default function SuperAdminCentralNotifications({
   const [notificationChannel, setNotificationChannel] = useState<'all' | 'in_app' | 'email' | 'sms'>('all');
   const [isSending, setIsSending] = useState(false);
 
-  // BroadCast History / Logs
-  const [broadcastLogs, setBroadcastLogs] = useState<any[]>(() => {
-    const saved = localStorage.getItem('edupro_broadcast_logs_v1');
-    return saved ? JSON.parse(saved) : [];
-  });
+  // Broadcast history is read from the canonical notification queue.
+  const [broadcastLogs, setBroadcastLogs] = useState<any[]>([]);
+  const [isLoadingLogs, setIsLoadingLogs] = useState(true);
 
-  const handleSendBroadcast = (e: React.FormEvent) => {
+  const loadBroadcastLogs = async () => {
+    setIsLoadingLogs(true);
+    try {
+      const response = await authenticatedRequest('/api/admin/central/notifications');
+      const payload = await response.json().catch(() => ({}));
+      if (!response.ok || !payload?.success || !Array.isArray(payload.notifications)) throw new Error(payload?.message || 'تعذر تحميل سجل الإشعارات المركزي.');
+      setBroadcastLogs(payload.notifications);
+    } catch (error) {
+      triggerNotification(error instanceof Error ? error.message : 'تعذر تحميل سجل الإشعارات المركزي.', 'danger');
+    } finally { setIsLoadingLogs(false); }
+  };
+
+  useEffect(() => { void loadBroadcastLogs(); }, []);
+
+  const handleSendBroadcast = async (e: React.FormEvent) => {
     e.preventDefault();
     if (!broadcastTitle || !broadcastBody) {
       triggerNotification('يرجى كتابة عنوان وتفاصيل الإشعار الفيدرالي', 'warning');
       return;
     }
 
-    setIsSending(false);
-    triggerNotification('خدمة الإرسال المركزي غير متاحة؛ لم يتم بث الإشعار أو تسجيل نجاح وهمي.', 'warning');
+    setIsSending(true);
+    try {
+      const response = await authenticatedRequest('/api/admin/central/notifications', {
+        method: 'POST', headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ title: broadcastTitle, body: broadcastBody, audience: targetAudience, targetSchoolId: targetSchoolId || undefined, channel: notificationChannel }),
+      });
+      const payload = await response.json().catch(() => ({}));
+      if (!response.ok || !payload?.success) throw new Error(payload?.message || 'تعذر وضع الإشعار في قائمة الإرسال المركزية.');
+      logAction('CREATE_CENTRAL_NOTIFICATION', `وضع إشعار [${broadcastTitle}] في قائمة الإرسال (${payload.queued} مستلم)`, 'الإدارة المركزية');
+      triggerNotification(`تمت جدولة الإشعار مركزيًا لـ ${payload.queued} مستلم؛ الحالة الحالية: قيد الانتظار ✅`, 'success');
+      setBroadcastTitle(''); setBroadcastBody(''); setTargetSchoolId('');
+      await loadBroadcastLogs();
+    } catch (error) {
+      triggerNotification(error instanceof Error ? error.message : 'تعذر إرسال الإشعار؛ لم يتم تسجيل نجاح وهمي.', 'danger');
+    } finally { setIsSending(false); }
   };
 
   return (
@@ -43,7 +69,7 @@ export default function SuperAdminCentralNotifications({
         
         <div className="bg-slate-900 border border-slate-800 p-4 rounded-xl">
           <span className="text-[10px] text-slate-400 font-bold block">إجمالي الرسائل المرسلة</span>
-          <span className="text-lg font-black text-white mt-1 block font-mono">{broadcastLogs.length ? broadcastLogs.length.toLocaleString() : 'غير متحقق'}</span>
+                <span className="text-lg font-black text-white mt-1 block font-mono">{isLoadingLogs ? '...' : broadcastLogs.length.toLocaleString()}</span>
         </div>
 
         <div className="bg-slate-900 border border-slate-800 p-4 rounded-xl">
@@ -168,29 +194,29 @@ export default function SuperAdminCentralNotifications({
           </div>
 
           <div className="flex-1 overflow-y-auto max-h-[360px] p-4 space-y-3">
-            {broadcastLogs.map((log) => (
+            {isLoadingLogs ? <div className="text-xs text-slate-400">جاري تحميل السجل المركزي...</div> : broadcastLogs.length === 0 ? <div className="text-xs text-slate-500">لا توجد إشعارات في قائمة الإرسال.</div> : broadcastLogs.map((log) => (
               <div key={log.id} className="bg-slate-950/50 border border-slate-850 p-4 space-y-2 hover:bg-slate-950 transition-colors">
                 <div className="flex justify-between items-center">
-                  <h4 className="text-xs font-black text-slate-100">{log.title}</h4>
-                  <span className="text-[9px] font-mono text-slate-500">{log.date}</span>
+                  <h4 className="text-xs font-black text-slate-100">{log.payload?.title || 'إشعار مركزي'}</h4>
+                  <span className="text-[9px] font-mono text-slate-500">{new Date(log.created_at).toLocaleString('ar')}</span>
                 </div>
                 
                 <div className="grid grid-cols-2 sm:grid-cols-4 gap-2 text-[10px] text-slate-400 font-semibold pt-1">
                   <div>
                     <span className="block text-slate-500 text-[8px] font-bold">الجمهور:</span>
-                    <span>{log.target}</span>
+                    <span>{log.school_name || (log.payload?.audience === 'all' ? 'كل المدارس' : 'مدرسة محددة')}</span>
                   </div>
                   <div>
                     <span className="block text-slate-500 text-[8px] font-bold">القنوات:</span>
-                    <span>{log.channel}</span>
+                    <span>{log.channel} / {log.status}</span>
                   </div>
                   <div>
                     <span className="block text-slate-500 text-[8px] font-bold">مستلم بنجاح:</span>
-                    <span className="text-emerald-400 font-mono font-bold">{log.delivered}</span>
+                    <span className="text-amber-400 font-mono font-bold">قيد الانتظار</span>
                   </div>
                   <div>
                     <span className="block text-slate-500 text-[8px] font-bold">فشل الإرسال:</span>
-                    <span className="text-rose-400 font-mono font-bold">{log.failed}</span>
+                    <span className="text-slate-500 font-mono font-bold">غير متحقق</span>
                   </div>
                 </div>
               </div>

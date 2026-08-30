@@ -37,7 +37,7 @@ import {
 } from "./src/middleware/auth.js";
 import { requestTarget } from "./src/middleware/tenantValidation.js";
 import { tenantEngine } from "./src/tenant/TenantEngine.js";
-import { PERMISSIONS } from "./src/authorization/PermissionRegistry.js";
+import { PERMISSIONS, permissionRegistry } from "./src/authorization/PermissionRegistry.js";
 import { roleResolver } from "./src/authorization/RoleResolver.js";
 import { authorizationEngine } from "./src/authorization/AuthorizationEngine.js";
 import {
@@ -58,8 +58,9 @@ import {
   readConnectionIdentity,
   type ConnectionIdentity,
 } from "./server/infrastructure/StagingConnectionDiagnostics.js";
-import { createHash, randomUUID } from "node:crypto";
+import { createHash, randomBytes, randomUUID } from "node:crypto";
 import { Pool } from "pg";
+import { createClient } from '@supabase/supabase-js';
 import { studentRegistrationService } from "./src/modules/student-registration/application/StudentRegistrationService.js";
 import { canonicalGuardianUpdateService } from "./src/modules/student-registration/application/CanonicalGuardianUpdateService.js";
 import { operationalEnrollmentAssignmentService } from "./src/modules/student-affairs/application/OperationalEnrollmentAssignmentService.js";
@@ -106,6 +107,29 @@ const platformAdminPool = (process.env.DIRECT_URL || process.env.DATABASE_URL)
       ssl: process.env.PGSSLMODE === 'disable' ? undefined : { rejectUnauthorized: false },
     })
   : null;
+
+const platformAdminAuth = process.env.SUPABASE_URL && process.env.SUPABASE_SERVICE_ROLE_KEY
+  ? createClient(process.env.SUPABASE_URL, process.env.SUPABASE_SERVICE_ROLE_KEY, { auth: { autoRefreshToken: false, persistSession: false } })
+  : null;
+
+const CENTRAL_IDENTITY_ROLE_CATALOG: Record<string, { name: string; description: string; permissions: string[] }> = {
+  schooladmin: {
+    name: 'مدير المدرسة', description: 'إدارة التشغيل اليومي للمدرسة ضمن نطاقها الموثوق.',
+    permissions: [PERMISSIONS.DASHBOARD_VIEW, PERMISSIONS.STUDENT_READ, PERMISSIONS.STUDENT_WRITE, PERMISSIONS.HR_READ, PERMISSIONS.HR_WRITE, PERMISSIONS.FINANCIAL_READ, PERMISSIONS.INVENTORY_READ, PERMISSIONS.INVENTORY_WRITE],
+  },
+  accountant: {
+    name: 'المحاسب المالي', description: 'قراءة الحسابات وإدخال العمليات المالية المعتمدة.',
+    permissions: [PERMISSIONS.DASHBOARD_VIEW, PERMISSIONS.FINANCIAL_READ, PERMISSIONS.FINANCIAL_WRITE],
+  },
+  teacher: {
+    name: 'المعلم', description: 'الوصول إلى السجلات الأكاديمية المصرح بها.',
+    permissions: [PERMISSIONS.DASHBOARD_VIEW, PERMISSIONS.STUDENT_READ, PERMISSIONS.EXAM_READ, PERMISSIONS.EXAM_WRITE],
+  },
+  hr: {
+    name: 'مسؤول الموارد البشرية', description: 'إدارة ملفات الموارد البشرية ضمن المدرسة.',
+    permissions: [PERMISSIONS.DASHBOARD_VIEW, PERMISSIONS.HR_READ, PERMISSIONS.HR_WRITE],
+  },
+};
 
 function stableJsonStringify(value: unknown): string {
   if (value === null || typeof value !== 'object') return JSON.stringify(value) ?? 'null';
@@ -1884,6 +1908,373 @@ async function startServer() {
       return next(error instanceof Error && /duplicate|unique/i.test(error.message)
         ? new ConflictError('رمز الفرع مستخدم مسبقاً داخل المدرسة.')
         : new DatabaseError('تعذر تحديث الفرع في المصدر المركزي.', error instanceof Error ? error.message : String(error)));
+    }
+  });
+
+  // Central identity directory. Supabase Auth is the identity source; the
+  // public.users and RBAC rows are written only after Auth accepts the user.
+  app.get('/api/admin/central/users', authenticateRequest, requirePermissionOnly(PERMISSIONS.PLATFORM_ADMIN), async (req, res, next) => {
+    if (!platformAdminPool) return next(new DatabaseError('مصدر قاعدة البيانات المركزية غير متاح.'));
+    const identity = (req as any).user as { tenantId?: string };
+    const tenantId = String(identity?.tenantId || '').trim();
+    if (!tenantId) return next(new AuthenticationError('هوية الإدارة المركزية غير مكتملة.'));
+    try {
+      const result = await platformAdminPool.query(
+        `SELECT u.id, u.auth_user_id, u.tenant_id, u.school_id, u.branch_id,
+                u.display_name, u.status, u.created_at, au.email,
+                s.display_name AS school_name, b.name AS branch_name,
+                COALESCE(jsonb_agg(DISTINCT jsonb_build_object('id', r.id, 'roleKey', r.role_key, 'name', r.name))
+                  FILTER (WHERE r.id IS NOT NULL), '[]'::jsonb) AS roles
+           FROM public.users u
+           JOIN auth.users au ON au.id = u.auth_user_id
+           LEFT JOIN public.schools s ON s.tenant_id = u.tenant_id AND s.id = u.school_id
+           LEFT JOIN public.branches b ON b.tenant_id = u.tenant_id AND b.school_id = u.school_id AND b.id = u.branch_id
+           LEFT JOIN public.user_roles ur ON ur.tenant_id = u.tenant_id AND ur.user_id = u.id
+                AND ur.deleted_at IS NULL AND ur.status = 'active'
+           LEFT JOIN public.roles r ON r.tenant_id = ur.tenant_id AND r.id = ur.role_id
+          WHERE u.tenant_id = $1 AND u.deleted_at IS NULL
+          GROUP BY u.id, au.email, s.display_name, b.name
+          ORDER BY u.created_at DESC`,
+        [tenantId],
+      );
+      return res.json({ success: true, users: result.rows });
+    } catch (error) {
+      return next(new DatabaseError('تعذر تحميل دليل الهوية المركزي.', error instanceof Error ? error.message : String(error)));
+    }
+  });
+
+  app.post('/api/admin/central/schools/:schoolId/users', authenticateRequest, requirePermissionOnly(PERMISSIONS.PLATFORM_ADMIN), async (req, res, next) => {
+    if (!platformAdminPool || !platformAdminAuth) return next(new ExternalServiceError('خدمة Supabase Auth المركزية غير مهيأة.'));
+    const identity = (req as any).user as { id?: string; tenantId?: string };
+    const tenantId = String(identity?.tenantId || '').trim();
+    const actorId = String(identity?.id || '').trim();
+    const schoolId = String(req.params.schoolId || '').trim();
+    const branchId = String(req.body?.branchId || '').trim();
+    const displayName = String(req.body?.name || '').trim();
+    const email = String(req.body?.email || '').trim().toLowerCase();
+    const requestedPassword = String(req.body?.password || '').trim();
+    const roleKey = String(req.body?.initialRole || 'schooladmin').trim().toLowerCase().replace(/[^a-z]/g, '');
+    const roleSpec = CENTRAL_IDENTITY_ROLE_CATALOG[roleKey];
+    if (!tenantId || !actorId || !schoolId) return next(new AuthenticationError('هوية الإدارة المركزية أو المدرسة غير مكتملة.'));
+    if (!/^[0-9a-f-]{36}$/i.test(schoolId) || (branchId && !/^[0-9a-f-]{36}$/i.test(branchId))) return next(new ValidationError('معرف المدرسة أو الفرع غير صالح.'));
+    if (displayName.length < 2 || displayName.length > 160) return next(new ValidationError('اسم الموظف يجب أن يكون بين حرفين و160 حرفاً.'));
+    if (!/^\S+@\S+\.\S+$/.test(email)) return next(new ValidationError('البريد الإلكتروني غير صالح.'));
+    if (requestedPassword && requestedPassword.length < 8) return next(new ValidationError('كلمة المرور يجب ألا تقل عن 8 رموز.'));
+    if (!roleSpec) return next(new ValidationError('الدور المطلوب غير موجود في الكتالوج المركزي.'));
+    const password = requestedPassword || randomBytes(12).toString('base64url');
+    let authUserId = '';
+    const client = await platformAdminPool.connect();
+    try {
+      const authResult = await platformAdminAuth.auth.admin.createUser({ email, password, email_confirm: true, user_metadata: { display_name: displayName } });
+      if (authResult.error || !authResult.data.user) throw new ExternalServiceError(authResult.error?.message || 'تعذر إنشاء هوية Supabase Auth.');
+      authUserId = authResult.data.user.id;
+      await client.query('BEGIN');
+      const scope = await client.query(
+        `SELECT s.id, b.id AS branch_id
+           FROM public.schools s
+           LEFT JOIN public.branches b ON b.tenant_id = s.tenant_id AND b.school_id = s.id AND b.id = $3::uuid AND b.deleted_at IS NULL
+          WHERE s.id = $1 AND s.tenant_id = $2 AND s.deleted_at IS NULL`,
+        [schoolId, tenantId, branchId || null],
+      );
+      if (scope.rowCount !== 1 || (branchId && !scope.rows[0].branch_id)) throw new ConflictError('المدرسة أو الفرع غير موجود في نطاق الإدارة المركزية.');
+      const userResult = await client.query(
+        `INSERT INTO public.users (auth_user_id, tenant_id, school_id, branch_id, display_name, status, created_by, updated_by)
+         VALUES ($1::uuid, $2::uuid, $3::uuid, $4::uuid, $5, 'active', $6::uuid, $6::uuid)
+         RETURNING id, auth_user_id, tenant_id, school_id, branch_id, display_name, status, created_at`,
+        [authUserId, tenantId, schoolId, branchId || null, displayName, actorId],
+      );
+      const userId = userResult.rows[0].id;
+      const roleResult = await client.query(
+        `INSERT INTO public.roles (tenant_id, school_id, role_key, name, description, is_system, status, created_by, updated_by)
+         VALUES ($1::uuid, NULL, $2, $3, $4, true, 'active', $5::uuid, $5::uuid)
+         ON CONFLICT (tenant_id, role_key) DO UPDATE SET updated_at = now()
+         RETURNING id`,
+        [tenantId, roleKey, roleSpec.name, roleSpec.description, actorId],
+      );
+      const roleId = roleResult.rows[0].id;
+      for (const permissionKey of roleSpec.permissions) {
+        const [resource, action] = permissionKey.split('.', 2);
+        const permissionResult = await client.query(
+          `INSERT INTO public.permissions (tenant_id, permission_key, resource, action, description, status, created_by, updated_by)
+           VALUES (NULL, $1, $2, $3, $1, 'active', $4::uuid, $4::uuid)
+           ON CONFLICT (permission_key) DO UPDATE SET updated_at = now()
+           RETURNING id`,
+          [permissionKey, resource, action, actorId],
+        );
+        await client.query(
+          `INSERT INTO public.role_permissions (tenant_id, role_id, permission_id, status, created_by, updated_by)
+           VALUES ($1::uuid, $2::uuid, $3::uuid, 'active', $4::uuid, $4::uuid)
+           ON CONFLICT (role_id, permission_id) DO NOTHING`,
+          [tenantId, roleId, permissionResult.rows[0].id, actorId],
+        );
+      }
+      const assignment = await client.query(
+        `INSERT INTO public.user_roles (tenant_id, user_id, role_id, school_id, branch_id, status, created_by, updated_by)
+         VALUES ($1::uuid, $2::uuid, $3::uuid, $4::uuid, $5::uuid, 'active', $6::uuid, $6::uuid)
+         RETURNING id`,
+        [tenantId, userId, roleId, schoolId, branchId || null, actorId],
+      );
+      await client.query('COMMIT');
+      return res.status(201).json({ success: true, user: { ...userResult.rows[0], email, roles: [{ roleKey, name: roleSpec.name }], roleAssignmentId: assignment.rows[0].id }, temporaryPassword: requestedPassword ? null : password });
+    } catch (error) {
+      await client.query('ROLLBACK').catch(() => undefined);
+      if (authUserId) await platformAdminAuth.auth.admin.deleteUser(authUserId).catch(() => undefined);
+      return next(error instanceof Error ? error : new DatabaseError('تعذر إنشاء مستخدم الإدارة المركزية.'));
+    } finally {
+      client.release();
+    }
+  });
+
+  app.patch('/api/admin/central/users/:userId', authenticateRequest, requirePermissionOnly(PERMISSIONS.PLATFORM_ADMIN), async (req, res, next) => {
+    if (!platformAdminPool || !platformAdminAuth) return next(new ExternalServiceError('خدمة Supabase Auth المركزية غير مهيأة.'));
+    const identity = (req as any).user as { id?: string; tenantId?: string };
+    const tenantId = String(identity?.tenantId || '').trim();
+    const actorId = String(identity?.id || '').trim();
+    const userId = String(req.params.userId || '').trim();
+    const operation = String(req.body?.operation || '').trim();
+    if (!tenantId || !actorId || !/^[0-9a-f-]{36}$/i.test(userId)) return next(new AuthenticationError('هوية المستخدم أو الإدارة غير مكتملة.'));
+    try {
+      const target = await platformAdminPool.query(`SELECT id, auth_user_id, display_name, status FROM public.users WHERE id = $1::uuid AND tenant_id = $2::uuid AND deleted_at IS NULL`, [userId, tenantId]);
+      if (target.rowCount !== 1) return next(new ConflictError('المستخدم غير موجود في نطاق الإدارة المركزية.'));
+      const row = target.rows[0];
+      if (operation === 'update') {
+        const displayName = String(req.body?.displayName || '').trim();
+        if (displayName.length < 2 || displayName.length > 160) return next(new ValidationError('اسم الموظف يجب أن يكون بين حرفين و160 حرفاً.'));
+        const authResult = await platformAdminAuth.auth.admin.updateUserById(row.auth_user_id, { user_metadata: { display_name: displayName } });
+        if (authResult.error) return next(new ExternalServiceError('تعذر تحديث اسم الهوية عبر Supabase Auth.'));
+        const updated = await platformAdminPool.query(
+          `UPDATE public.users
+              SET display_name = $3, updated_at = now(), updated_by = $4::uuid, version = version + 1
+            WHERE id = $1::uuid AND tenant_id = $2::uuid AND deleted_at IS NULL
+          RETURNING id, auth_user_id, tenant_id, school_id, branch_id, display_name, status, created_at`,
+          [userId, tenantId, displayName, actorId],
+        );
+        return res.json({ success: true, user: updated.rows[0] });
+      }
+      if (operation === 'reset_password') {
+        const password = randomBytes(12).toString('base64url');
+        const authResult = await platformAdminAuth.auth.admin.updateUserById(row.auth_user_id, { password, user_metadata: { forcePasswordChange: true } });
+        if (authResult.error) return next(new ExternalServiceError('تعذر إعادة تعيين كلمة المرور عبر Supabase Auth.'));
+        return res.json({ success: true, user: row, temporaryPassword: password });
+      }
+      if (operation === 'force_password') {
+        const forced = Boolean(req.body?.forcePasswordChange);
+        const authResult = await platformAdminAuth.auth.admin.updateUserById(row.auth_user_id, { user_metadata: { forcePasswordChange: forced } });
+        if (authResult.error) return next(new ExternalServiceError('تعذر تحديث سياسة كلمة المرور المركزية.'));
+        return res.json({ success: true, user: { ...row, forcePasswordChange: forced } });
+      }
+      if (operation === 'status') {
+        const status = String(req.body?.status || '').trim();
+        if (!['active', 'suspended', 'disabled'].includes(status)) return next(new ValidationError('حالة المستخدم غير مسموح بها.'));
+        const authResult = await platformAdminAuth.auth.admin.updateUserById(row.auth_user_id, { ban_duration: status === 'active' ? 'none' : '876000h' });
+        if (authResult.error) return next(new ExternalServiceError('تعذر تغيير حالة الهوية عبر Supabase Auth.'));
+        const updated = await platformAdminPool.query(`UPDATE public.users SET status = $3, updated_at = now(), updated_by = $4::uuid, version = version + 1 WHERE id = $1::uuid AND tenant_id = $2::uuid AND deleted_at IS NULL RETURNING id, auth_user_id, tenant_id, school_id, branch_id, display_name, status, created_at`, [userId, tenantId, status, actorId]);
+        return res.json({ success: true, user: updated.rows[0] });
+      }
+      if (operation === 'archive') {
+        const authResult = await platformAdminAuth.auth.admin.updateUserById(row.auth_user_id, { ban_duration: '876000h' });
+        if (authResult.error) return next(new ExternalServiceError('تعذر تعطيل الهوية قبل أرشفتها.'));
+        const updated = await platformAdminPool.query(`UPDATE public.users SET status = 'archived', deleted_at = now(), deleted_by = $3::uuid, updated_at = now(), updated_by = $3::uuid, version = version + 1 WHERE id = $1::uuid AND tenant_id = $2::uuid AND deleted_at IS NULL RETURNING id, auth_user_id, tenant_id, school_id, branch_id, display_name, status, created_at`, [userId, tenantId, actorId]);
+        return res.json({ success: true, user: updated.rows[0] });
+      }
+      return next(new ValidationError('عملية إدارة المستخدم غير معتمدة.'));
+    } catch (error) {
+      return next(error instanceof Error ? error : new DatabaseError('تعذر تحديث مستخدم الإدارة المركزية.'));
+    }
+  });
+
+  // Central RBAC is tenant-scoped and versioned through the canonical identity
+  // tables. The browser never writes permissions directly or invents role IDs.
+  app.get('/api/admin/central/rbac', authenticateRequest, requirePermissionOnly(PERMISSIONS.PLATFORM_ADMIN), async (req, res, next) => {
+    if (!platformAdminPool) return next(new DatabaseError('مصدر قاعدة البيانات المركزية غير متاح.'));
+    const identity = (req as any).user as { id?: string; tenantId?: string };
+    const tenantId = String(identity?.tenantId || '').trim();
+    const actorId = String(identity?.id || '').trim();
+    if (!tenantId || !actorId) return next(new AuthenticationError('هوية الإدارة المركزية غير مكتملة.'));
+    try {
+      const client = await platformAdminPool.connect();
+      try {
+        await client.query('BEGIN');
+        for (const [roleKey, roleSpec] of Object.entries(CENTRAL_IDENTITY_ROLE_CATALOG)) {
+          await client.query(
+            `INSERT INTO public.roles (tenant_id, school_id, branch_id, role_key, name, description, is_system, status, created_by, updated_by)
+             VALUES ($1::uuid, NULL, NULL, $2, $3, $4, true, 'active', $5::uuid, $5::uuid)
+             ON CONFLICT (tenant_id, role_key) DO UPDATE SET name = EXCLUDED.name, description = EXCLUDED.description,
+               is_system = true, status = 'active', deleted_at = NULL, deleted_by = NULL, updated_at = now(), updated_by = $5::uuid`,
+            [tenantId, roleKey, roleSpec.name, roleSpec.description, actorId],
+          );
+        }
+        await client.query('COMMIT');
+      } catch (error) {
+        await client.query('ROLLBACK').catch(() => undefined);
+        throw error;
+      } finally {
+        client.release();
+      }
+      const roles = await platformAdminPool.query(
+        `SELECT r.id, r.tenant_id, r.role_key, r.name, r.description, r.is_system, r.status, r.version,
+                COALESCE(jsonb_agg(DISTINCT jsonb_build_object(
+                  'id', p.id, 'permissionKey', p.permission_key, 'resource', p.resource, 'action', p.action,
+                  'description', COALESCE(p.description, p.permission_key)
+                )) FILTER (WHERE p.id IS NOT NULL), '[]'::jsonb) AS permissions
+           FROM public.roles r
+           LEFT JOIN public.role_permissions rp ON rp.tenant_id = r.tenant_id AND rp.role_id = r.id
+                AND rp.status = 'active' AND rp.deleted_at IS NULL
+           LEFT JOIN public.permissions p ON p.id = rp.permission_id AND p.status = 'active' AND p.deleted_at IS NULL
+          WHERE r.tenant_id = $1::uuid AND r.school_id IS NULL AND r.branch_id IS NULL
+                AND r.status = 'active' AND r.deleted_at IS NULL
+          GROUP BY r.id
+          ORDER BY r.name ASC`,
+        [tenantId],
+      );
+      const catalog = permissionRegistry.list().map((permissionKey) => {
+        const [resource, action] = permissionKey.split('.', 2);
+        return { permissionKey, resource, action, description: permissionKey };
+      });
+      return res.json({ success: true, roles: roles.rows, permissionCatalog: catalog });
+    } catch (error) {
+      return next(new DatabaseError('تعذر تحميل مصفوفة الصلاحيات المركزية.', error instanceof Error ? error.message : String(error)));
+    }
+  });
+
+  app.patch('/api/admin/central/rbac/roles/:roleId', authenticateRequest, requirePermissionOnly(PERMISSIONS.PLATFORM_ADMIN), async (req, res, next) => {
+    if (!platformAdminPool) return next(new DatabaseError('مصدر قاعدة البيانات المركزية غير متاح.'));
+    const identity = (req as any).user as { id?: string; tenantId?: string };
+    const tenantId = String(identity?.tenantId || '').trim();
+    const actorId = String(identity?.id || '').trim();
+    const roleId = String(req.params.roleId || '').trim();
+    const requestedKeys = req.body?.permissionKeys;
+    if (!tenantId || !actorId) return next(new AuthenticationError('هوية الإدارة المركزية غير مكتملة.'));
+    if (!/^[0-9a-f-]{36}$/i.test(roleId)) return next(new ValidationError('معرف الدور غير صالح.'));
+    if (!Array.isArray(requestedKeys)) return next(new ValidationError('قائمة الصلاحيات يجب أن تكون مصفوفة.'));
+    const permissionKeys = [...new Set(requestedKeys.map((key) => permissionRegistry.normalize(key)).filter((key): key is string => Boolean(key)))];
+    if (permissionKeys.length !== requestedKeys.length) return next(new ValidationError('توجد صلاحية غير مسجلة في الكتالوج المركزي.'));
+    const name = req.body?.name === undefined ? undefined : String(req.body.name || '').trim();
+    const description = req.body?.description === undefined ? undefined : String(req.body.description || '').trim();
+    if (name !== undefined && (name.length < 2 || name.length > 160)) return next(new ValidationError('اسم الدور يجب أن يكون بين حرفين و160 حرفاً.'));
+    const client = await platformAdminPool.connect();
+    try {
+      await client.query('BEGIN');
+      const role = await client.query(
+        `UPDATE public.roles
+            SET name = COALESCE($3, name), description = COALESCE($4, description),
+                updated_at = now(), updated_by = $5::uuid, version = version + 1
+          WHERE id = $1::uuid AND tenant_id = $2::uuid AND school_id IS NULL AND branch_id IS NULL
+                AND status = 'active' AND deleted_at IS NULL
+        RETURNING id, tenant_id, role_key, name, description, is_system, status, version`,
+        [roleId, tenantId, name ?? null, description ?? null, actorId],
+      );
+      if (role.rowCount !== 1) throw new ConflictError('الدور غير موجود في نطاق الإدارة المركزية.');
+      await client.query(
+        `UPDATE public.role_permissions
+            SET status = 'revoked', deleted_at = now(), deleted_by = $3::uuid, updated_at = now(), updated_by = $3::uuid, version = version + 1
+          WHERE tenant_id = $1::uuid AND role_id = $2::uuid AND deleted_at IS NULL`,
+        [tenantId, roleId, actorId],
+      );
+      for (const permissionKey of permissionKeys) {
+        const [resource, action] = permissionKey.split('.', 2);
+        const permission = await client.query(
+          `INSERT INTO public.permissions (tenant_id, permission_key, resource, action, description, status, created_by, updated_by)
+           VALUES (NULL, $1, $2, $3, $1, 'active', $4::uuid, $4::uuid)
+           ON CONFLICT (permission_key) DO UPDATE SET status = 'active', deleted_at = NULL, deleted_by = NULL, updated_at = now(), updated_by = $4::uuid
+           RETURNING id`,
+          [permissionKey, resource, action, actorId],
+        );
+        await client.query(
+          `INSERT INTO public.role_permissions (tenant_id, role_id, permission_id, status, created_by, updated_by)
+           VALUES ($1::uuid, $2::uuid, $3::uuid, 'active', $4::uuid, $4::uuid)
+           ON CONFLICT (role_id, permission_id) DO UPDATE SET status = 'active', deleted_at = NULL, deleted_by = NULL, updated_at = now(), updated_by = $4::uuid, version = role_permissions.version + 1`,
+          [tenantId, roleId, permission.rows[0].id, actorId],
+        );
+      }
+      await client.query('COMMIT');
+      return res.json({ success: true, role: role.rows[0], permissionKeys });
+    } catch (error) {
+      await client.query('ROLLBACK').catch(() => undefined);
+      return next(error instanceof Error ? error : new DatabaseError('تعذر حفظ مصفوفة الصلاحيات المركزية.'));
+    } finally {
+      client.release();
+    }
+  });
+
+  // Central in-app broadcasts are queued per real recipient. External email/SMS
+  // channels are recorded as requested but never reported as delivered without
+  // their provider workers.
+  app.get('/api/admin/central/notifications', authenticateRequest, requirePermissionOnly(PERMISSIONS.PLATFORM_ADMIN), async (req, res, next) => {
+    if (!platformAdminPool) return next(new DatabaseError('مصدر قاعدة البيانات المركزية غير متاح.'));
+    const identity = (req as any).user as { tenantId?: string };
+    const tenantId = String(identity?.tenantId || '').trim();
+    if (!tenantId) return next(new AuthenticationError('هوية الإدارة المركزية غير مكتملة.'));
+    try {
+      const result = await platformAdminPool.query(
+        `SELECT n.id, n.tenant_id, n.channel, n.status, n.payload, n.priority, n.created_at, n.available_at,
+                u.display_name AS recipient_name, u.school_id, s.display_name AS school_name
+           FROM public.notification_queue n
+           LEFT JOIN public.users u ON u.tenant_id = n.tenant_id AND u.id = n.recipient_user_id
+           LEFT JOIN public.schools s ON s.tenant_id = u.tenant_id AND s.id = u.school_id
+          WHERE n.tenant_id = $1::uuid AND n.deleted_at IS NULL
+          ORDER BY n.created_at DESC
+          LIMIT 500`,
+        [tenantId],
+      );
+      return res.json({ success: true, notifications: result.rows });
+    } catch (error) {
+      return next(new DatabaseError('تعذر تحميل سجل الإشعارات المركزي.', error instanceof Error ? error.message : String(error)));
+    }
+  });
+
+  app.post('/api/admin/central/notifications', authenticateRequest, requirePermissionOnly(PERMISSIONS.PLATFORM_ADMIN), async (req, res, next) => {
+    if (!platformAdminPool) return next(new DatabaseError('مصدر قاعدة البيانات المركزية غير متاح.'));
+    const identity = (req as any).user as { id?: string; tenantId?: string };
+    const tenantId = String(identity?.tenantId || '').trim();
+    const actorId = String(identity?.id || '').trim();
+    const title = String(req.body?.title || '').trim();
+    const body = String(req.body?.body || '').trim();
+    const audience = String(req.body?.audience || 'all').trim();
+    const schoolId = String(req.body?.targetSchoolId || '').trim();
+    const requestedChannel = String(req.body?.channel || 'in_app').trim();
+    if (!tenantId || !actorId) return next(new AuthenticationError('هوية الإدارة المركزية غير مكتملة.'));
+    if (title.length < 2 || title.length > 200 || body.length < 2 || body.length > 5000) return next(new ValidationError('عنوان ومحتوى الإشعار غير صالحين.'));
+    if (!['all', 'specific'].includes(audience)) return next(new ValidationError('جمهور الإشعار غير صالح.'));
+    if (audience === 'specific' && !/^[0-9a-f-]{36}$/i.test(schoolId)) return next(new ValidationError('معرف المدرسة المستهدفة غير صالح.'));
+    if (!['all', 'in_app', 'email', 'sms'].includes(requestedChannel)) return next(new ValidationError('قناة الإشعار غير مدعومة.'));
+    try {
+      const recipients = await platformAdminPool.query(
+        `SELECT u.id, u.school_id
+           FROM public.users u
+          WHERE u.tenant_id = $1::uuid AND u.status = 'active' AND u.deleted_at IS NULL
+            AND ($2 = 'all' OR u.school_id = $3::uuid)
+          ORDER BY u.id`,
+        [tenantId, audience, audience === 'specific' ? schoolId : null],
+      );
+      if (!recipients.rowCount) return next(new ConflictError('لا يوجد مستلمون نشطون في النطاق المحدد؛ لم يتم إنشاء بث فارغ.'));
+      const client = await platformAdminPool.connect();
+      try {
+        await client.query('BEGIN');
+        const template = await client.query(
+          `INSERT INTO public.notification_templates (tenant_id, template_key, channel, locale, template_version, subject, body, variables, status, created_by, updated_by)
+           VALUES ($1::uuid, $2, 'in_app', 'ar', 1, $3, $4, '[]'::jsonb, 'active', $5::uuid, $5::uuid)
+           RETURNING id`,
+          [tenantId, `central-broadcast-${randomUUID().replaceAll('-', '')}`, title, body, actorId],
+        );
+        const templateId = template.rows[0].id;
+        for (const recipient of recipients.rows) {
+          await client.query(
+            `INSERT INTO public.notification_queue (tenant_id, template_id, recipient_user_id, channel, payload, idempotency_key, priority, status, created_by, updated_by)
+             VALUES ($1::uuid, $2::uuid, $3::uuid, 'in_app', $4::jsonb, $5, 50, 'queued', $6::uuid, $6::uuid)`,
+            [tenantId, templateId, recipient.id, JSON.stringify({ title, body, audience, targetSchoolId: schoolId || null, requestedChannel }), `${templateId}:${recipient.id}`, actorId],
+          );
+        }
+        await client.query('COMMIT');
+        return res.status(201).json({ success: true, queued: recipients.rowCount, requestedChannel, effectiveChannel: 'in_app', deliveryStatus: 'queued' });
+      } catch (error) {
+        await client.query('ROLLBACK').catch(() => undefined);
+        throw error;
+      } finally {
+        client.release();
+      }
+    } catch (error) {
+      return next(error instanceof Error ? error : new DatabaseError('تعذر وضع الإشعار في قائمة الإرسال المركزية.'));
     }
   });
 

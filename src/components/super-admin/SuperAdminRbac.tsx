@@ -1,5 +1,6 @@
 import { Check, Copy, HelpCircle, Lock as LockIcon, Save, ShieldCheck, Sliders, Users, X } from 'lucide-react';
-import React, { useState } from 'react';
+import React, { useEffect, useState } from 'react';
+import { authenticatedRequest } from '../../utils/authenticatedRequest';
 interface SuperAdminRbacProps {
   schools: any[];
   logAction: (action: string, details: string, section?: string) => void;
@@ -12,16 +13,11 @@ export default function SuperAdminRbac({
   triggerNotification
 }: SuperAdminRbacProps) {
 
-  // Built-in system roles
-  const roles = [
-    { id: 'role_school_owner', name: 'مالك المنشأة التعليمية', description: 'يملك سيطرة تامة على المدرسة وفروعها وصناديقها المالية' },
-    { id: 'role_school_admin', name: 'مدير النظام الفرعي للمدرسة', description: 'يدير عمليات الفروع، وجداول الحصص، وشؤون الموظفين' },
-    { id: 'role_accountant', name: 'المحاسب المالي العام', description: 'يملك صلاحية الدفاتر اليومية، سندات الصرف، والقبض والمستحقات والرسوم' },
-    { id: 'role_teacher', name: 'عضو الكادر التعليمي (معلم)', description: 'يسجل الغياب، ويدير درجات الطلاب، والأنشطة المدرسية' },
-    { id: 'role_parent', name: 'ولي الأمر', description: 'يتابع درجات أبنائه ومستحقات باصات النقل والرسوم المالية' }
-  ];
-
-  const [selectedRoleId, setSelectedRoleId] = useState('role_school_admin');
+  // Roles and permissions come from the canonical tenant-scoped RBAC API.
+  const [roles, setRoles] = useState<any[]>([]);
+  const [selectedRoleId, setSelectedRoleId] = useState('');
+  const [isLoading, setIsLoading] = useState(true);
+  const [isSaving, setIsSaving] = useState(false);
 
   // Permissions categorized by system modules
   const permissionModules = [
@@ -29,52 +25,58 @@ export default function SuperAdminRbac({
       id: 'mod_students',
       name: 'منظومة شؤون الطلاب والقبول',
       permissions: [
-        { key: 'students:registration:create', label: 'تسجيل وقبول طالب جديد' },
-        { key: 'students:records:edit', label: 'تعديل السجلات الأكاديمية والطبية' },
-        { key: 'students:archive:delete', label: 'أرشفة وحذف ملفات الطلاب تجميداً' },
-        { key: 'students:certificates:print', label: 'طباعة وتصدير الشهادات المعتمدة' }
+        { key: 'Student.View', label: 'عرض سجلات الطلاب' },
+        { key: 'Student.Write', label: 'إضافة وتعديل سجلات الطلاب' },
+        { key: 'Student.Delete', label: 'أرشفة ملفات الطلاب' },
+        { key: 'Student.Export', label: 'تصدير بيانات الطلاب' }
       ]
     },
     {
       id: 'mod_finance',
       name: 'منظومة الشؤون المالية والحسابات',
       permissions: [
-        { key: 'finance:invoice:issue', label: 'إصدار الفواتير الموحدة للرسوم' },
-        { key: 'finance:vouchers:approve', label: 'اعتماد سندات الصرف والقبض والقيود اليومية' },
-        { key: 'finance:ledger:edit', label: 'التعديل المباشر في شجرة الحسابات (Ledger)' },
-        { key: 'finance:reports:view', label: 'الاطلاع على الحسابات الختامية والأرباح' }
+        { key: 'Financial.Read', label: 'عرض الحسابات والقيود' },
+        { key: 'Financial.Write', label: 'إدخال العمليات المالية' },
+        { key: 'Financial.Approve', label: 'اعتماد العمليات المالية' },
+        { key: 'Financial.Export', label: 'تصدير التقارير المالية' }
       ]
     },
     {
       id: 'mod_hr',
       name: 'منظومة الموارد البشرية والرواتب (HR & Payroll)',
       permissions: [
-        { key: 'hr:contracts:create', label: 'صياغة العقود وتوظيف الكادر' },
-        { key: 'hr:salaries:approve', label: 'اعتماد كشوف الرواتب والمسيرات الشهرية' },
-        { key: 'hr:attendance:lock', label: 'قفل الغياب والحضور الإداري اليومي' }
+        { key: 'Hr.View', label: 'عرض ملفات الموارد البشرية' },
+        { key: 'Hr.Edit', label: 'إضافة وتعديل بيانات الموارد البشرية' },
+        { key: 'Hr.Approve', label: 'اعتماد الرواتب والإجراءات' }
       ]
     }
   ];
 
   // Permissions state per role
-  const [rolePermissions, setRolePermissions] = useState<Record<string, string[]>>({
-    role_school_owner: [
-      'students:registration:create', 'students:records:edit', 'students:archive:delete', 'students:certificates:print',
-      'finance:invoice:issue', 'finance:vouchers:approve', 'finance:ledger:edit', 'finance:reports:view',
-      'hr:contracts:create', 'hr:salaries:approve', 'hr:attendance:lock'
-    ],
-    role_school_admin: [
-      'students:registration:create', 'students:records:edit', 'students:certificates:print',
-      'hr:attendance:lock'
-    ],
-    role_accountant: [
-      'finance:invoice:issue', 'finance:vouchers:approve', 'finance:reports:view'
-    ],
-    role_teacher: [
-      'students:certificates:print'
-    ],
-    role_parent: []
-  });
+  const [rolePermissions, setRolePermissions] = useState<Record<string, string[]>>({});
+
+  useEffect(() => {
+    let mounted = true;
+    const loadRbac = async () => {
+      setIsLoading(true);
+      try {
+        const response = await authenticatedRequest('/api/admin/central/rbac');
+        const payload = await response.json().catch(() => ({}));
+        if (!response.ok || !payload?.success || !Array.isArray(payload.roles)) throw new Error(payload?.message || 'تعذر تحميل مصفوفة الصلاحيات المركزية.');
+        if (!mounted) return;
+        setRoles(payload.roles);
+        const permissions = Object.fromEntries(payload.roles.map((role: any) => [role.id, (role.permissions || []).map((permission: any) => permission.permissionKey)]));
+        setRolePermissions(permissions);
+        setSelectedRoleId((current) => payload.roles.some((role: any) => role.id === current) ? current : (payload.roles[0]?.id || ''));
+      } catch (error) {
+        if (mounted) triggerNotification(error instanceof Error ? error.message : 'تعذر تحميل مصفوفة الصلاحيات المركزية.', 'danger');
+      } finally {
+        if (mounted) setIsLoading(false);
+      }
+    };
+    void loadRbac();
+    return () => { mounted = false; };
+  }, []);
 
   // Copy Permissions Dialog State
   const [showCopyModal, setShowCopyModal] = useState(false);
@@ -102,9 +104,22 @@ export default function SuperAdminRbac({
   };
 
   // Saving requires a central RBAC transaction with audit/version checks.
-  const handleSaveRbacTemplate = () => {
+  const handleSaveRbacTemplate = async () => {
     const activeRole = roles.find(r => r.id === selectedRoleId);
-    triggerNotification(`تم تعديل المسودة محليًا لدور ${activeRole?.name} فقط؛ اعتمادها يحتاج خدمة RBAC مركزية، ولم تُحفظ صلاحيات إنتاجية.`, 'warning');
+    if (!activeRole) return;
+    setIsSaving(true);
+    try {
+      const response = await authenticatedRequest(`/api/admin/central/rbac/roles/${encodeURIComponent(activeRole.id)}`, {
+        method: 'PATCH', headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ permissionKeys: rolePermissions[activeRole.id] || [] }),
+      });
+      const payload = await response.json().catch(() => ({}));
+      if (!response.ok || !payload?.success) throw new Error(payload?.message || 'تعذر حفظ الصلاحيات المركزية.');
+      triggerNotification(`تم اعتماد صلاحيات دور ${activeRole.name} مركزيًا وتسجيلها في قاعدة البيانات ✅`, 'success');
+      logAction('UPDATE_RBAC', `اعتماد صلاحيات الدور [${activeRole.name}]`, 'المستخدمين والصلاحيات');
+    } catch (error) {
+      triggerNotification(error instanceof Error ? error.message : 'تعذر حفظ الصلاحيات؛ لم يتم تعديل الإنتاج.', 'danger');
+    } finally { setIsSaving(false); }
   };
 
   // Run Copy Permissions Wizard
@@ -133,7 +148,7 @@ export default function SuperAdminRbac({
     setCopyState({ srcRoleId: '', destRoleId: '' });
   };
 
-  const activeRoleName = roles.find(r => r.id === selectedRoleId)?.name || '';
+  const activeRoleName = roles.find(r => r.id === selectedRoleId)?.name || 'لا يوجد دور محدد';
 
   return (
     <div className="space-y-6 text-right animate-in fade-in duration-200" dir="rtl">
@@ -170,7 +185,7 @@ export default function SuperAdminRbac({
           </div>
 
           <div className="space-y-2">
-            {roles.map((role) => {
+            {isLoading ? <div className="text-xs text-slate-400">جاري تحميل الأدوار من المصدر المركزي...</div> : roles.length === 0 ? <div className="text-xs text-amber-400">لا توجد أدوار مركزية متاحة.</div> : roles.map((role) => {
               const isSelected = selectedRoleId === role.id;
               const countOfPerms = rolePermissions[role.id]?.length || 0;
               return (
@@ -258,11 +273,12 @@ export default function SuperAdminRbac({
             </span>
             <button
               type="button"
-              onClick={handleSaveRbacTemplate}
+              onClick={() => void handleSaveRbacTemplate()}
+              disabled={isSaving || !selectedRoleId}
               className="bg-amber-600 hover:bg-amber-500 text-white font-extrabold text-xs px-6 py-2.5 shadow-md cursor-pointer transition-colors flex items-center gap-1.5"
             >
               <Save className="w-4 h-4" />
-              <span>تطبيق وحفظ التعديلات الحالية</span>
+              <span>{isSaving ? 'جاري الاعتماد المركزي...' : 'تطبيق وحفظ التعديلات الحالية'}</span>
             </button>
           </div>
 
