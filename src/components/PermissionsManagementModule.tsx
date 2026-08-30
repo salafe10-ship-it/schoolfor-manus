@@ -520,20 +520,20 @@ export const PERMISSIONS_CATEGORIES_TREE: ModuleCategory[] = [
   },
   {
     id: 'buses',
-    label: 'النقل والمواصلات المدرسية',
+    label: 'إدارة النقل والترحيل المدرسي',
     icon: Bus,
     screens: [
-      { id: 'bus_routes', label: 'توزيع المسارات وحافلات النقل المدرسي' },
-      { id: 'bus_subscribers', label: 'توزيع الطلاب والمشرفين ومستحقات النقل' }
+      { id: 'bus_routes', label: 'الأسطول والمسارات ونقاط التوقف' },
+      { id: 'bus_subscribers', label: 'اشتراكات الطلاب وقوائم الركاب والرسوم' }
     ]
   },
   {
     id: 'uniform_management',
-    label: 'إدارة الزي والمستلزمات',
+    label: 'إدارة الزي المدرسي',
     icon: Shirt,
     screens: [
-      { id: 'uniform_sales', label: 'مبيعات الزي المدرسي وتسليم المشتريات' },
-      { id: 'uniform_orders', label: 'أوامر توريد ومخزون الألبسة والقياسات' }
+      { id: 'uniform_sales', label: 'صرف الزي للطلاب والقياسات والتسليم' },
+      { id: 'uniform_orders', label: 'الأصناف والمقاسات والمخزون والتوريد والمرتجعات' }
     ]
   },
   {

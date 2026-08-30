@@ -1,4 +1,4 @@
-import { BarChart3, BookOpen, Building2, Bus, CalendarCheck, ChevronDown, Container, DatabaseZap, FileBadge2, FileSpreadsheet, Globe2, GraduationCap, HardDriveDownload, MessageSquareDot, Settings2, ShieldCheck, UserSquare, Users, WalletCards, Workflow } from 'lucide-react';
+import { BarChart3, BookOpen, Building2, Bus, CalendarCheck, ChevronDown, Container, DatabaseZap, FileBadge2, FileSpreadsheet, Globe2, GraduationCap, HardDriveDownload, MessageSquareDot, Settings2, ShieldCheck, Shirt, UserSquare, Users, WalletCards, Workflow } from 'lucide-react';
 /**
  * @license
  * SPDX-License-Identifier: Apache-2.0
@@ -58,13 +58,15 @@ export default function TopNavigation({
       title: 'التشغيل والمرافق',
       items: [
         { id: 'inventory', label: 'إدارة المخزون والعهد', icon: Container },
-        { id: 'buses', label: 'باصات النقل والمواصلات', icon: Bus },
+        { id: 'school_transport', label: 'إدارة النقل والترحيل المدرسي', icon: Bus },
+        { id: 'school_uniform', label: 'إدارة الزي المدرسي', icon: Shirt },
       ]
     },
     {
       title: 'الرقابة والسحابة',
       items: [
         { id: 'audit_logs', label: 'سجلات الرقابة والعمليات', icon: Workflow },
+        { id: 'general_review', label: 'المراجعة العامة — قيد التجهيز', icon: ShieldCheck },
         { id: 'settings', label: 'إعدادات النظام العامة', icon: Settings2 },
         { id: 'db_schema', label: 'مخطط Supabase SQL', icon: DatabaseZap },
       ]
@@ -114,7 +116,7 @@ export default function TopNavigation({
             }
             // For non-SuperAdmins, filter out system configurations from "الرقابة والسحابة"
             if (currentRole !== 'SuperAdmin' && group.title === 'الرقابة والسحابة') {
-              return item.id === 'audit_logs';
+              return item.id === 'audit_logs' || item.id === 'general_review';
             }
             return true;
           })

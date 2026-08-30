@@ -29,10 +29,13 @@ const SECTION_PERMISSIONS: Record<string, string> = {
   procurement: 'Procurement.View',
   fixed_assets: 'Fixed_assets.View',
   buses: 'Buses.View',
+  school_transport: 'Buses.View',
   uniform_management: 'Uniform_management.View',
+  school_uniform: 'Uniform_management.View',
   permissions_admin: 'Permissions.View',
   settings: 'Settings.View',
-  audit_logs: PERMISSIONS.AUDIT_READ
+  audit_logs: PERMISSIONS.AUDIT_READ,
+  general_review: PERMISSIONS.AUDIT_READ
 };
 
 export function canAccessSection(

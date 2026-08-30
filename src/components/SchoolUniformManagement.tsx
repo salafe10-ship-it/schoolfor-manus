@@ -765,7 +765,7 @@ export default function SchoolUniformManagement({
   return (
     <div className="space-y-0 text-right w-full" dir="rtl" id="uniform_master_container">
       <EnterpriseActionToolbar
-        title="إدارة الزي والملابس المدرسية"
+        title="إدارة الزي المدرسي"
         stats={
           <div className="flex flex-wrap items-center gap-x-2.5 gap-y-1 text-[10px] sm:text-xs">
             <span className="text-slate-300 font-bold">القيمة التقديرية لإجمالي المخزون الحالي: <span className="text-amber-400 font-mono">{stats.totalInventoryValue.toLocaleString('ar-EG')}</span> د.ل</span>

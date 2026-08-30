@@ -91,8 +91,8 @@ export default function Sidebar({
         { id: 'inventory', label: 'إدارة المخزون والعهد', icon: Container },
         { id: 'procurement', label: 'إدارة المشتريات والتوريدات', icon: ShoppingBag },
         { id: 'fixed_assets', label: 'إدارة الأصول الثابتة والعهد', icon: Building2 },
-        { id: 'buses', label: 'باصات النقل والمواصلات', icon: Bus },
-        { id: 'uniform_management', label: 'إدارة الزي والملابس المدرسية', icon: Shirt },
+        { id: 'school_transport', label: 'إدارة النقل والترحيل المدرسي', icon: Bus },
+        { id: 'school_uniform', label: 'إدارة الزي المدرسي', icon: Shirt },
       ]
     },
     {
@@ -125,6 +125,7 @@ export default function Sidebar({
       title: 'الرقابة والسحابة',
       items: [
         { id: 'audit_logs', label: 'سجلات الرقابة والعمليات', icon: Workflow },
+        { id: 'general_review', label: 'المراجعة العامة — قيد التجهيز', icon: ShieldCheck },
         { id: 'permissions_admin', label: 'المستخدمون والصلاحيات', icon: ShieldCheck },
         { id: 'system_health', label: 'مركز مراقبة أداء النظام', icon: Settings2 },
         { id: 'db_schema', label: 'مخطط Supabase SQL', icon: DatabaseZap },
@@ -177,6 +178,7 @@ export default function Sidebar({
           'student_accounts': 'accounts',
           'inventory': 'inventory',
           'buses': 'transport',
+          'school_transport': 'transport',
         };
         const centerKey = mapToCenterKey[itemId];
         if (centerKey) {
@@ -212,7 +214,9 @@ export default function Sidebar({
       'student_accounts': 'student_accounts',
       'inventory': 'inventory',
       'buses': 'buses',
+      'school_transport': 'buses',
       'uniform_management': 'uniform_management',
+      'school_uniform': 'uniform_management',
       'db_schema': 'db_schema',
       'permissions_admin': 'permissions_admin',
     };
@@ -284,7 +288,9 @@ export default function Sidebar({
                 'student_accounts': { catId: 'fees', scrId: 'define_fees' },
                 'inventory': { catId: 'inventory', scrId: 'inventory_stock' },
                 'buses': { catId: 'buses', scrId: 'bus_routes' },
+                'school_transport': { catId: 'buses', scrId: 'bus_routes' },
                 'uniform_management': { catId: 'uniform_management', scrId: 'uniform_sales' },
+                'school_uniform': { catId: 'uniform_management', scrId: 'uniform_sales' },
                 'audit_logs': { catId: 'audit_logs', scrId: 'audit_logs' },
                 'permissions_admin': { catId: 'permissions_admin', scrId: 'permissions_matrix' },
                 'system_health': { catId: 'system_health', scrId: 'system_monitoring' },

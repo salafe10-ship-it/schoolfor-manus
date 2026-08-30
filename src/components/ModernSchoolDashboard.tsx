@@ -4,6 +4,7 @@ import {
   BookOpen,
   Building2,
   Calendar,
+  Bus,
   CheckCircle2,
   Clock,
   Coins,
@@ -15,6 +16,7 @@ import {
   Mail,
   Search,
   ShieldCheck,
+  Shirt,
   Sparkles,
   UserCheck,
   Users,
@@ -186,6 +188,8 @@ export default function ModernSchoolDashboard({
     { section: 'ai_assistant', label: 'المساعد الذكي', icon: Mail },
     { section: 'inventory', label: 'المخازن والمشتريات', icon: Container },
     { section: 'academic', label: 'الجداول الدراسية', icon: Calendar },
+    { section: 'school_transport', label: 'النقل والترحيل', icon: Bus },
+    { section: 'school_uniform', label: 'الزي المدرسي', icon: Shirt },
     { section: 'permissions_admin', label: 'المستخدمون والصلاحيات', icon: ShieldCheck },
   ];
 

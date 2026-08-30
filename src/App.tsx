@@ -29,6 +29,7 @@ const ExamsErrorBoundary = React.lazy(() => import('./components/ExamsErrorBound
 import AIAssistantPortal from './components/AIAssistantPortal';
 const SystemHealthCenter = React.lazy(() => import('./components/SystemHealthCenter'));
 const SchoolUniformManagement = React.lazy(() => import('./components/SchoolUniformManagement'));
+const SchoolTransportManagement = React.lazy(() => import('./components/SchoolTransportManagement'));
 const LibraryPortal = React.lazy(() => import('./components/LibraryPortal'));
 const InventoryManagementPortal = React.lazy(() => import('./components/inventory/InventoryManagementPortal'));
 const FixedAssetsPortal = React.lazy(() => import('./components/assets/FixedAssetsPortal'));
@@ -64,7 +65,6 @@ import {
   initialAttendance, 
   invoicesSeed, 
   inventorySeed, 
-  busRoutesSeed, 
   auditLogsSeed, 
   defaultPermissions,
   supabaseSchemaSQL,
@@ -86,7 +86,6 @@ import {
   Employee, 
   Invoice, 
   InventoryItem, 
-  BusRoute, 
   AuditLog, 
   UserRole, 
   Permission, 
@@ -308,8 +307,11 @@ export default function App() {
       'student_accounts': 'الرسوم والأقساط',
       'inventory': 'إدارة المخزون والعهد',
       'buses': 'باصات النقل والمواصلات',
+      'school_transport': 'إدارة النقل والترحيل المدرسي',
       'uniform_management': 'إدارة الزي والملابس المدرسية',
+      'school_uniform': 'إدارة الزي المدرسي',
       'audit_logs': 'سجلات الرقابة والعمليات',
+      'general_review': 'المراجعة العامة — قيد التجهيز',
       'permissions_admin': 'المستخدمون والصلاحيات',
       'system_health': 'مركز مراقبة أداء النظام',
       'db_schema': 'مخطط Supabase SQL'
@@ -544,7 +546,6 @@ export default function App() {
   const [employees, setEmployees] = useState<Employee[]>(employeesSeed);
   const [invoices, setInvoices] = useState<Invoice[]>(invoicesSeed);
   const [inventory, setInventory] = useState<InventoryItem[]>(inventorySeed);
-  const [busRoutes, setBusRoutes] = useState<BusRoute[]>(busRoutesSeed);
   const [auditLogs, setAuditLogs] = useState<AuditLog[]>(auditLogsSeed);
   const [attendance, setAttendance] = useState(initialAttendance);
 
@@ -1630,8 +1631,9 @@ export default function App() {
                          activeSection === 'hr' ? 'شؤون الموظفين والرواتب' :
                          activeSection === 'library' ? 'المكتبة المدرسية المركزية' :
                          activeSection === 'inventory' ? 'إدارة المستودعات والعهدة' :
-                         activeSection === 'buses' ? 'إدارة النقل والمواصلات' :
-                         activeSection === 'uniform_management' ? 'مستودع الزي المدرسي' :
+                         (activeSection === 'buses' || activeSection === 'school_transport') ? 'إدارة النقل والترحيل المدرسي' :
+                         (activeSection === 'uniform_management' || activeSection === 'school_uniform') ? 'إدارة الزي المدرسي' :
+                         activeSection === 'general_review' ? 'المراجعة العامة — قيد التجهيز' :
                          activeSection === 'permissions_admin' ? 'المستخدمون والصلاحيات' :
                          activeSection === 'db_schema' ? 'إدارة النسخ الاحتياطي' :
                          activeSection === 'security_permissions_cert' ? 'اعتماد الأمان والرقابة والصلاحيات' :
@@ -1920,9 +1922,9 @@ export default function App() {
             )}
 
             {/* ========================================================== */}
-            {/* VIEW: SCHOOL UNIFORM MANAGEMENT (إدارة الزي والملابس المدرسية) */}
+            {/* VIEW: SCHOOL UNIFORM MANAGEMENT (إدارة الزي المدرسي) */}
             {/* ========================================================== */}
-            {activeSection === 'uniform_management' && (
+            {(activeSection === 'uniform_management' || activeSection === 'school_uniform') && (
               <SchoolUniformManagement
                 students={students}
                 setStudents={setStudents}
@@ -1949,89 +1951,16 @@ export default function App() {
             )}
 
           {/* ========================================================== */}
-          {/* VIEW: BUSES & TRANSPORT (باصات النقل والمواصلات) */}
+          {/* VIEW: SCHOOL TRANSPORTATION MANAGEMENT (إدارة النقل والترحيل المدرسي) */}
           {/* ========================================================== */}
-          {activeSection === 'buses' && (
-            <div className="space-y-0 w-full text-right" dir="rtl">
-              <EnterpriseActionToolbar
-                title="إدارة باصات النقل والمواصلات المدرسية"
-                stats={
-                  <div className="flex flex-wrap items-center gap-x-2.5 gap-y-1 text-[10px] sm:text-xs">
-                    <span className="font-extrabold text-white">{selectedSchool?.name || 'مدارس رواد الإبداع الأهلية'}</span>
-                    <span className="text-slate-500 font-black">|</span>
-                    <span className="text-slate-300">الفرع الرئيسي</span>
-                    <span className="text-slate-500 font-black">|</span>
-                    <span className="text-slate-300">العام الدراسي: 1447-1448 هـ</span>
-                    <span className="text-slate-500 font-black">|</span>
-                    <span className="text-slate-300">خطوط السير: {busRoutes.length}</span>
-                    <span className="text-slate-500 font-black">|</span>
-                    <span className="flex items-center gap-1 text-emerald-400 font-bold">
-                      <span className="w-1.5 h-1.5 rounded-full bg-emerald-500 animate-pulse" />
-                      متصل سحابياً
-                    </span>
-                    <span className="text-slate-500 font-black">|</span>
-                    <span className="flex items-center gap-1 text-sky-400 font-bold">
-                      <span className="w-1.5 h-1.5 rounded-full bg-sky-500 animate-pulse" />
-                      نشط آلياً
-                    </span>
-                  </div>
-                }
-                onExit={() => setActiveSection('dashboard')}
-              />
-              <div className="p-3 sm:p-4 text-slate-900 dark:text-slate-100">
-                <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
-                  {busRoutes.map((bus) => (
-                    <div key={bus.id} className="bg-white dark:bg-[#0b0f19] border border-slate-200 dark:border-slate-800 rounded-2xl p-5 shadow-sm">
-                      <div className="flex justify-between items-center mb-3">
-                        <span className="font-bold text-slate-900 dark:text-white text-sm flex items-center gap-2">
-                          <Bus className="w-5 h-5 text-sky-600 dark:text-sky-400" />
-                          {bus.routeNumber}
-                        </span>
-                        <span className={`px-2 py-0.5 rounded text-[10px] font-bold ${
-                          bus.status === 'active' ? 'bg-emerald-100 dark:bg-emerald-950/40 text-emerald-700 dark:text-emerald-400' :
-                          'bg-amber-100 dark:bg-amber-950/40 text-amber-700 dark:text-amber-400'
-                        }`}>
-                          {bus.status === 'active' ? 'نشط بالخدمة اليومية' : 'قيد الصيانة الفنية'}
-                        </span>
-                      </div>
-
-                      <div className="space-y-2 text-xs pt-3 border-t border-slate-100 dark:border-slate-800">
-                        <div className="flex justify-between font-bold text-slate-800 dark:text-slate-200">
-                          <span>السائق المسؤول:</span>
-                          <span>{bus.driverName}</span>
-                        </div>
-                        <div className="flex justify-between text-slate-500 dark:text-slate-400 font-mono">
-                          <span>رقم الاتصال:</span>
-                          <span>{bus.driverPhone}</span>
-                        </div>
-                        <div className="flex justify-between text-slate-500 dark:text-slate-400">
-                          <span>نقطة التحرك الأساسية:</span>
-                          <span>{bus.startPoint}</span>
-                        </div>
-                        <div className="flex justify-between text-slate-500 dark:text-slate-400">
-                          <span>محطة الوصول الكلية:</span>
-                          <span>{bus.endPoint}</span>
-                        </div>
-
-                        {/* Capacity progress gauge */}
-                        <div className="mt-4 pt-2">
-                          <div className="flex justify-between text-[10px] font-bold text-slate-500 dark:text-slate-400 mb-1">
-                            <span>نسبة إشغال الباص من الطلاب:</span>
-                            <span>{bus.currentStudents} طالب من أصل {bus.capacity}</span>
-                          </div>
-                          <div className="w-full bg-slate-100 dark:bg-slate-800 rounded-full h-2">
-                            <div 
-                              className="bg-sky-600 dark:bg-sky-500 h-2 rounded-full transition-all"
-                              style={{ width: `${(bus.currentStudents / bus.capacity) * 100}%` }}
-                            />
-                          </div>
-                        </div>
-                      </div>
-                    </div>
-                  ))}
-                </div>
-              </div>
-            </div>
+          {(activeSection === 'buses' || activeSection === 'school_transport') && (
+            <SchoolTransportManagement
+              students={students}
+              selectedSchoolId={selectedSchool?.id}
+              selectedSchoolName={selectedSchool?.name}
+              triggerNotification={triggerNotification}
+              setActiveSection={setActiveSection}
+            />
           )}
 
           {/* ========================================================== */}
@@ -2171,6 +2100,43 @@ export default function App() {
                 selectedSchoolId={selectedSchool.id}
               />
             </React.Suspense>
+          )}
+
+          {/* ========================================================== */}
+          {/* VIEW: GENERAL REVIEW — RESERVED BY BUSINESS OWNER */}
+          {/* ========================================================== */}
+          {activeSection === 'general_review' && (
+            <div className="mx-auto max-w-4xl space-y-5 text-right" dir="rtl">
+              <div className="overflow-hidden rounded-3xl border border-violet-200 bg-white shadow-sm">
+                <div className="bg-gradient-to-l from-violet-900 via-slate-900 to-indigo-900 p-7 text-white">
+                  <div className="flex flex-wrap items-start justify-between gap-4">
+                    <div>
+                      <div className="inline-flex items-center gap-2 rounded-full border border-violet-300/30 bg-white/10 px-3 py-1 text-[11px] font-black text-violet-100">
+                        <ShieldCheck className="h-3.5 w-3.5" /> وحدة محجوزة للتخطيط
+                      </div>
+                      <h2 className="mt-4 text-xl font-black">المراجعة العامة</h2>
+                      <p className="mt-2 max-w-2xl text-sm font-bold leading-6 text-violet-100/85">أُضيفت الوحدة إلى هيكل المنظومة والتنقل فقط. لم يبدأ بناء إجراءاتها أو نماذجها أو تقاريرها، التزاماً بخطة العمل التي تحددها لاحقاً.</p>
+                    </div>
+                    <div className="rounded-2xl border border-white/15 bg-white/10 px-4 py-3 text-center">
+                      <div className="text-[10px] font-bold text-violet-200">حالة التنفيذ</div>
+                      <div className="mt-1 text-sm font-black text-white">قيد التجهيز</div>
+                    </div>
+                  </div>
+                </div>
+                <div className="grid gap-3 p-6 sm:grid-cols-3">
+                  {[
+                    ['النطاق', 'سيُحدد لاحقاً مع مالك الوحدة'],
+                    ['الصلاحيات', 'محكومة مؤقتاً بصلاحية الرقابة'],
+                    ['البيانات', 'لم تُنشأ أي جداول أو سجلات جديدة'],
+                  ].map(([label, value]) => (
+                    <div key={label} className="rounded-2xl border border-slate-200 bg-slate-50 p-4">
+                      <div className="text-[10px] font-black text-slate-400">{label}</div>
+                      <div className="mt-2 text-xs font-black leading-5 text-slate-700">{value}</div>
+                    </div>
+                  ))}
+                </div>
+              </div>
+            </div>
           )}
 
           {/* ========================================================== */}
