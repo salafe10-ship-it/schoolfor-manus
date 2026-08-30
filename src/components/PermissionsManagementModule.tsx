@@ -788,6 +788,7 @@ export const PermissionsManagementModule: React.FC<PermissionsModuleProps> = ({
   const [permissionSearch, setPermissionSearch] = useState<string>('');
   const [selectedDept, setSelectedDept] = useState<string>('all');
   const [selectedStatus, setSelectedStatus] = useState<string>('active');
+  const [selectedPermissionType, setSelectedPermissionType] = useState<PermissionType | 'all'>('all');
   const [currentPage, setCurrentPage] = useState<number>(1);
   const [pageSize, setPageSize] = useState<number>(10);
   const [activeTab, setActiveTab] = useState<'employee_matrix' | 'modules' | 'data' | 'reports'>('employee_matrix');
@@ -842,17 +843,25 @@ export const PermissionsManagementModule: React.FC<PermissionsModuleProps> = ({
     return Array.from(list);
   }, [employees]);
 
+  const permissionTypeOptions = useMemo(() => {
+    const types = new Set<PermissionType>();
+    employees.forEach(employee => types.add(employee.permissionType || resolvePermissionType(employee)));
+    return Array.from(types);
+  }, [employees]);
+
   // Filtered employees list
   const filteredEmployees = useMemo(() => {
     const search = employeeSearch.trim().toLocaleLowerCase();
     return employees.filter(emp => {
       const matchDept = selectedDept === 'all' || emp.department === selectedDept;
       const matchStatus = selectedStatus === 'all' || emp.status === selectedStatus;
+      const matchPermissionType = selectedPermissionType === 'all'
+        || (emp.permissionType || resolvePermissionType(emp)) === selectedPermissionType;
       const matchSearch = !search || [emp.name, emp.jobTitle, emp.id]
         .some(value => value.toLocaleLowerCase().includes(search));
-      return matchDept && matchStatus && matchSearch;
+      return matchDept && matchStatus && matchPermissionType && matchSearch;
     });
-  }, [employees, selectedDept, selectedStatus, employeeSearch]);
+  }, [employees, selectedDept, selectedStatus, selectedPermissionType, employeeSearch]);
 
   const filteredPermissionCategories = useMemo(() => {
     const search = permissionSearch.trim().toLocaleLowerCase();
@@ -1016,6 +1025,7 @@ export const PermissionsManagementModule: React.FC<PermissionsModuleProps> = ({
     setEmployeeSearch('');
     setSelectedDept('all');
     setSelectedStatus('all');
+    setSelectedPermissionType('all');
     setCurrentPage(1);
     setHasUnsavedChanges(true);
     triggerNotification(`تم تحميل ${PERMISSIONS_TEST_FIXTURE_SIZE} موظفاً اختبارياً من وظائف مختلفة. اضغط «حفظ التغييرات» لحفظ أنواع الصلاحيات.`, 'info');
@@ -1529,7 +1539,7 @@ export const PermissionsManagementModule: React.FC<PermissionsModuleProps> = ({
           )}
 
           {/* Filters Row */}
-          <div className="grid grid-cols-1 sm:grid-cols-3 gap-4">
+          <div className="grid grid-cols-1 gap-4 sm:grid-cols-2 xl:grid-cols-4">
             {/* Filter 1: Department selector */}
             <div className="border border-slate-200/80 px-3.5 py-2.5 flex items-center justify-between shadow-xs">
               <div className="flex items-center gap-2">
@@ -1585,6 +1595,28 @@ export const PermissionsManagementModule: React.FC<PermissionsModuleProps> = ({
                 className="w-full bg-transparent border-none text-xs font-bold text-slate-800 placeholder-slate-400 focus:outline-none"
               />
             </div>
+
+            {/* Filter 4: Permission profile selector */}
+            <div className="border border-slate-200/80 px-3.5 py-2.5 flex items-center justify-between shadow-xs">
+              <div className="flex items-center gap-2">
+                <ShieldCheck className="w-4 h-4 text-indigo-500" />
+                <span className="text-[11px] font-black text-slate-400">نوع الصلاحية:</span>
+              </div>
+              <select
+                value={selectedPermissionType}
+                onChange={(event) => {
+                  setSelectedPermissionType(event.target.value as PermissionType | 'all');
+                  setCurrentPage(1);
+                }}
+                className="max-w-[150px] bg-transparent border-none text-xs font-bold text-slate-800 focus:outline-none cursor-pointer"
+                aria-label="التصفية حسب نوع الصلاحية"
+              >
+                <option value="all">كل الأنواع</option>
+                {permissionTypeOptions.map(type => (
+                  <option key={type} value={type}>{PERMISSION_TYPE_LABELS[type]}</option>
+                ))}
+              </select>
+            </div>
           </div>
 
           <div className="flex flex-col gap-3 rounded-2xl border border-slate-200/80 bg-white p-3 shadow-xs sm:flex-row sm:items-center sm:justify-between">
@@ -1622,6 +1654,42 @@ export const PermissionsManagementModule: React.FC<PermissionsModuleProps> = ({
 
           {/* Matrix Card containing Tabs and Table */}
           <div className="border border-slate-200/80 rounded-3xl shadow-xs overflow-hidden flex flex-col h-[580px]">
+
+            {/* Compact ERP-style command bar: fast actions stay visible above the matrix. */}
+            <div className="flex flex-col gap-3 border-b border-slate-200 bg-slate-50/80 px-4 py-3 lg:flex-row lg:items-center lg:justify-between">
+              <div className="flex flex-wrap items-center gap-1.5">
+                <span className="ml-2 text-[10px] font-black text-slate-500">أدوات المصفوفة</span>
+                <button
+                  type="button"
+                  onClick={handleLoadTestFixture}
+                  disabled={canonicalPersistenceRequired}
+                  className="rounded-md border border-slate-200 bg-white px-2.5 py-1.5 text-[10px] font-black text-slate-600 transition hover:border-orange-300 hover:text-orange-600 disabled:cursor-not-allowed disabled:opacity-40"
+                  title="تحميل عينة اختبارية منفصلة من 35 موظفاً"
+                >
+                  عينة 35
+                </button>
+                <button
+                  type="button"
+                  onClick={() => setActiveTab('modules')}
+                  className="rounded-md border border-slate-200 bg-white px-2.5 py-1.5 text-[10px] font-black text-slate-600 transition hover:border-orange-300 hover:text-orange-600"
+                >
+                  تفاصيل الوظائف
+                </button>
+                <button
+                  type="button"
+                  onClick={handleSaveChanges}
+                  disabled={!activeEmployee || canonicalPersistenceRequired || !hasUnsavedChanges}
+                  className="rounded-md border border-orange-200 bg-orange-50 px-2.5 py-1.5 text-[10px] font-black text-orange-700 transition hover:bg-orange-100 disabled:cursor-not-allowed disabled:opacity-40"
+                >
+                  حفظ المصفوفة
+                </button>
+              </div>
+              <div className="flex flex-wrap items-center gap-2 text-[9px] font-bold text-slate-500">
+                <span className="rounded-md border border-emerald-200 bg-emerald-50 px-2 py-1 text-emerald-700">✓ ممنوح</span>
+                <span className="rounded-md border border-slate-200 bg-white px-2 py-1 text-slate-400">— غير ممنوح</span>
+                <span className="rounded-md border border-indigo-200 bg-indigo-50 px-2 py-1 text-indigo-700">النوع = قالب الصلاحية</span>
+              </div>
+            </div>
             
             {/* Tab Headers Row */}
             <div className="flex flex-wrap border-b border-slate-100 select-none">
@@ -1728,6 +1796,9 @@ export const PermissionsManagementModule: React.FC<PermissionsModuleProps> = ({
                             <th key={`${category.id}:${screen.id}`} title={screen.label} className="min-w-[155px] border-l border-slate-100 bg-slate-50 px-2 py-2 text-center text-[9px] font-black text-slate-500">
                               <span className="block truncate">{screen.label}</span>
                               <span className="mt-1 block font-mono text-[8px] font-semibold text-slate-400">{category.id}:{screen.id}</span>
+                              <span className="mt-1 grid grid-cols-5 gap-0.5 text-[8px] font-black text-slate-400" aria-label="ترتيب أزرار الصلاحيات">
+                                {MATRIX_COLUMNS.map(column => <span key={column.id}>{column.label.split(' ')[0]}</span>)}
+                              </span>
                             </th>
                           )))}
                         </tr>

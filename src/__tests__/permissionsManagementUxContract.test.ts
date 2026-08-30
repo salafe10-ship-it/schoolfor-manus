@@ -42,4 +42,14 @@ describe('Users and Permissions center UX contract', () => {
     expect(permissionsSource).not.toContain('>180</span>');
     expect(permissionsSource).not.toContain('>45</span>');
   });
+
+  it('keeps the dense ERP command-bar pattern while exposing a saved permission profile', () => {
+    expect(permissionsSource).toContain('أدوات المصفوفة');
+    expect(permissionsSource).toContain('تفاصيل الوظائف');
+    expect(permissionsSource).toContain('التصفية حسب نوع الصلاحية');
+    expect(permissionsSource).toContain('edupro_permission_profile_types_v1');
+    expect(permissionsSource).toContain('permissionTypeLabel');
+    expect(permissionsSource).toContain('✓ ممنوح');
+    expect(permissionsSource).toContain('— غير ممنوح');
+  });
 });
