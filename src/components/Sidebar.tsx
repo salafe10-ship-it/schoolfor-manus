@@ -1,4 +1,4 @@
-import { Activity, Award, BarChart3, BookOpen, BrainCircuit, Building2, Bus, CalendarCheck, ChevronLeft, ChevronRight, Coins, Container, Cpu, CreditCard, DatabaseZap, FileBadge2, FileSpreadsheet, Globe, Globe2, GraduationCap, HardDriveDownload, HeartHandshake, LayoutTemplate, Menu, MessageSquareDot, Network, Receipt, Server, Settings2, ShieldCheck, Shirt, ShoppingBag, Sparkles, Target, UserPlus, UserSquare, Users, WalletCards, Workflow, Zap } from 'lucide-react';
+import { Activity, Award, BarChart3, BookOpen, BrainCircuit, Building2, Bus, CalendarCheck, ChevronLeft, ChevronRight, Container, Cpu, CreditCard, DatabaseZap, FileBadge2, Globe, Globe2, GraduationCap, HardDriveDownload, HeartHandshake, LayoutTemplate, Menu, MessageSquareDot, Network, Receipt, Server, Settings2, ShieldCheck, Shirt, ShoppingBag, Sparkles, Target, UserPlus, UserSquare, Users, WalletCards, Workflow, Zap } from 'lucide-react';
 /**
  * @license
  * SPDX-License-Identifier: Apache-2.0
@@ -82,8 +82,6 @@ export default function Sidebar({
       items: [
         { id: 'teachers', label: 'المعلمون والموظفون', icon: Users },
         { id: 'accounts', label: 'الحسابات العامة', icon: WalletCards },
-        { id: 'treasury', label: 'الخزانة والمدفوعات البنكية', icon: Coins },
-        { id: 'financial_reports', label: 'التقارير المالية', icon: FileSpreadsheet },
         { id: 'student_accounts', label: 'الرسوم والأقساط', icon: CreditCard },
       ]
     },

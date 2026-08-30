@@ -17,7 +17,6 @@ import SuperAdminView from './components/SuperAdminView';
 const StudentFinancialPortal = React.lazy(() => import('./components/StudentFinancialPortal'));
 const GeneralLedgerPortal = React.lazy(() => import('./components/GeneralLedgerPortal'));
 import AccountingErrorBoundary from './components/AccountingErrorBoundary';
-const TreasuryPlatformPortal = React.lazy(() => import('./components/TreasuryPlatformPortal'));
 const StudentAffairsPortal = React.lazy(() => import('./components/StudentAffairsPortal'));
 const AdmissionsPortal = React.lazy(() => import('./components/AdmissionsPortal'));
 const AcademicAffairsPortal = React.lazy(() => import('./components/AcademicAffairsPortal'));
@@ -304,7 +303,7 @@ export default function App() {
       'library': 'المكتبة المدرسية',
       'teachers': 'المعلمون والموظفون',
       'accounts': 'الحسابات العامة',
-      'treasury': 'الخزانة والمدفوعات البنكية',
+      'treasury': 'الحسابات العامة — الخزينة والمدفوعات البنكية',
       'financial_reports': 'التقارير المالية',
       'student_accounts': 'الرسوم والأقساط',
       'inventory': 'إدارة المخزون والعهد',
@@ -1624,6 +1623,7 @@ export default function App() {
                           activeSection === 'admissions' ? 'القبول والتسجيل وصندوق الاستفسارات' :
                           activeSection === 'teachers' ? 'شؤون المعلمين والموظفين' :
                          activeSection === 'accounts' ? 'الحسابات العامة والقيود' :
+                         activeSection === 'treasury' ? 'الحسابات العامة — الخزينة والمدفوعات البنكية' :
                          activeSection === 'student_accounts' ? 'حسابات الطلاب المالية' :
                          activeSection === 'financial_reports' ? 'التقارير المالية والختامية' :
                          activeSection === 'exams' ? 'الامتحانات والكنترول والنتائج' :
@@ -1850,7 +1850,7 @@ export default function App() {
             {/* ========================================================== */}
             {/* VIEW: ACCOUNTS SECTION (الحسابات العامة) & FINANCIAL REPORTS */}
             {/* ========================================================== */}
-            {(activeSection === 'accounts' || activeSection === 'financial_reports') && (
+            {(activeSection === 'accounts' || activeSection === 'financial_reports' || activeSection === 'treasury') && (
               <React.Suspense fallback={<div>جاري تحميل وحدة المحاسبة...</div>}>
                 <AccountingErrorBoundary>
                   <GeneralLedgerPortal
@@ -1870,7 +1870,7 @@ export default function App() {
                     costCenters={costCenters}
                     setCostCenters={setCostCenters}
                     currentRole={currentRole}
-                    initialTab={activeSection === 'financial_reports' ? 'financial_reports' : 'dashboard'}
+                    initialTab={activeSection === 'financial_reports' ? 'financial_reports' : activeSection === 'treasury' ? 'treasury' : 'dashboard'}
                     users={simulatedUsers}
                     setUsers={setSimulatedUsers}
                     roles={roles}
@@ -1882,18 +1882,6 @@ export default function App() {
                   />
                 </AccountingErrorBoundary>
               </React.Suspense>
-            )}
-
-            {/* ========================================================== */}
-            {/* VIEW: TREASURY & PAYMENT PLATFORM (الخزانة والمدفوعات البنكية) */}
-            {/* ========================================================== */}
-            {activeSection === 'treasury' && (
-              <TreasuryPlatformPortal
-                selectedSchool={selectedSchool}
-                triggerNotification={triggerNotification}
-                logAction={logAction}
-                setActiveSection={setActiveSection}
-              />
             )}
 
             {/* ========================================================== */}

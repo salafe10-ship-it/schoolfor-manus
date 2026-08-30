@@ -5,6 +5,7 @@ import { describe, expect, it } from 'vitest';
 const source = readFileSync(resolve(process.cwd(), 'src/components/ModernSchoolDashboard.tsx'), 'utf8');
 const topbarSource = readFileSync(resolve(process.cwd(), 'src/components/Topbar.tsx'), 'utf8');
 const appSource = readFileSync(resolve(process.cwd(), 'src/App.tsx'), 'utf8');
+const ledgerSource = readFileSync(resolve(process.cwd(), 'src/components/GeneralLedgerPortal.tsx'), 'utf8');
 
 describe('Main School Dashboard contract', () => {
   it('does not present legacy or hardcoded operational values as live metrics', () => {
@@ -28,6 +29,20 @@ describe('Main School Dashboard contract', () => {
   it('routes academic and timetable shortcuts to the academic screen', () => {
     expect(source).toContain("{ section: 'academic', label: 'الأكاديمية'");
     expect(source).toContain("{ section: 'academic', label: 'الجداول الدراسية'");
+  });
+
+  it('does not expose duplicate reports or standalone treasury shortcuts on the main dashboard', () => {
+    expect(source).not.toContain("{ section: 'financial_reports'");
+    expect(source).not.toContain("{ section: 'treasury'");
+  });
+
+  it('keeps reports in accounting and nests treasury and banking there', () => {
+    expect(ledgerSource).toContain("const TreasuryPlatformPortal = React.lazy(() => import('./TreasuryPlatformPortal'));");
+    expect(ledgerSource).toContain('الخزينة والبنوك — ضمن الحسابات');
+    expect(ledgerSource).toContain("{ id: 'treasury', label: 'إدارة الخزينة والحسابات البنكية'");
+    expect(ledgerSource).toContain("{activeTab === 'treasury'");
+    expect(ledgerSource).toContain("{activeTab === 'financial_reports'");
+    expect(appSource).not.toContain("const TreasuryPlatformPortal = React.lazy(() => import('./components/TreasuryPlatformPortal'));");
   });
 
   it('renders interactive controls as semantic buttons with accessible labels', () => {

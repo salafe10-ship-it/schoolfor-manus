@@ -25,6 +25,7 @@ const EstimatedBudgetTab = React.lazy(() => import('../modules/accounting/presen
 const ClosingTab = React.lazy(() => import('../modules/accounting/presentation/ClosingTab').then(m => ({ default: m.ClosingTab })));
 const FinancialReportsTab = React.lazy(() => import('../modules/accounting/presentation/FinancialReportsTab').then(m => ({ default: m.FinancialReportsTab })));
 const CalcToolsTab = React.lazy(() => import('../modules/accounting/presentation/CalcToolsTab').then(m => ({ default: m.CalcToolsTab })));
+const TreasuryPlatformPortal = React.lazy(() => import('./TreasuryPlatformPortal'));
 
 interface GeneralLedgerPortalProps {
   students: Student[];
@@ -1931,6 +1932,11 @@ export default function GeneralLedgerPortal({
       case 'payment_voucher': 
       case 'bank_transfer':
         return hasUserPermission('fees:view') && hasUserPermission('show_module:ledger') && hasUserPermission('show_screen:ledger:vouchers');
+      case 'treasury':
+        return (
+          (hasUserPermission('treasury:treasury_vault:view') || hasUserPermission('treasury:bank_transfers:view') || hasUserPermission('ledger:view')) &&
+          hasUserPermission('show_module:ledger')
+        );
       case 'customers': 
         return hasUserPermission('students:view') && hasUserPermission('show_module:students') && hasUserPermission('show_screen:students:directory');
       case 'suppliers': 
@@ -3537,6 +3543,12 @@ export default function GeneralLedgerPortal({
       ]
     },
     {
+      title: "الخزينة والبنوك — ضمن الحسابات",
+      items: [
+        { id: 'treasury', label: 'إدارة الخزينة والحسابات البنكية', targetTab: 'treasury', icon: Landmark },
+      ]
+    },
+    {
       title: "الأستاذ المساعد",
       items: [
         { id: 'customers', label: 'ذمم الطلاب', targetTab: 'customers', icon: Users },
@@ -4314,6 +4326,23 @@ export default function GeneralLedgerPortal({
         {activeTab === 'payment_voucher' && (
           <React.Suspense fallback={<div className="p-8 text-center text-slate-500 animate-pulse">جاري تحميل سندات الصرف...</div>}>
             <PaymentVoucherTab />
+          </React.Suspense>
+        )}
+
+        {/* ========================================================== */}
+        {/* VIEW 7.5: TREASURY & BANKING WITHIN ACCOUNTING */}
+        {/* ========================================================== */}
+        {activeTab === 'treasury' && (
+          <React.Suspense fallback={<div className="p-8 text-center text-slate-500 animate-pulse">جاري تحميل الخزينة والحسابات البنكية ضمن الحسابات...</div>}>
+            <TreasuryPlatformPortal
+              selectedSchool={selectedSchool}
+              triggerNotification={triggerNotification}
+              logAction={logAction}
+              setActiveSection={() => {
+                setActiveTab('dashboard');
+                setActiveSidebarItem('dashboard');
+              }}
+            />
           </React.Suspense>
         )}
 

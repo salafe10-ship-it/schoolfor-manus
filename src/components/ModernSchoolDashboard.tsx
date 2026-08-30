@@ -1,7 +1,6 @@
 import React, { useEffect, useMemo, useState } from 'react';
 import {
   ArrowLeft,
-  BarChart2,
   BookOpen,
   Building2,
   Calendar,
@@ -184,11 +183,9 @@ export default function ModernSchoolDashboard({
     { section: 'academic', label: 'الأكاديمية', icon: BookOpen },
     { section: 'exams', label: 'الامتحانات والنتائج', icon: FileBadge2 },
     { section: 'teachers', label: 'الموارد البشرية', icon: Users },
-    { section: 'financial_reports', label: 'التقارير', icon: BarChart2 },
     { section: 'student_accounts', label: 'الرسوم الدراسية', icon: CreditCard },
     { section: 'ai_assistant', label: 'المساعد الذكي', icon: Mail },
     { section: 'inventory', label: 'المخازن والمشتريات', icon: Container },
-    { section: 'treasury', label: 'الخزينة والبنوك', icon: Building2 },
     { section: 'academic', label: 'الجداول الدراسية', icon: Calendar },
     { section: 'permissions_admin', label: 'الإعدادات', icon: Settings },
   ];
