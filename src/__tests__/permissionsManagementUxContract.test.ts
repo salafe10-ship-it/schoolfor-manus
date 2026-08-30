@@ -29,6 +29,9 @@ describe('Users and Permissions center UX contract', () => {
     expect(permissionsSource).toContain('بحث داخل الوحدات والشاشات');
     expect(permissionsSource).toContain('توسيع الكل');
     expect(permissionsSource).toContain('طي الكل');
+    expect(permissionsSource).toContain("useState<'employee_matrix' | 'modules' | 'data' | 'reports'>('employee_matrix')");
+    expect(permissionsSource).toContain('employeeGroupLabel');
+    expect(permissionsSource).toContain('مصفوفة الموظفين حسب الإدارة والمسمى');
   });
 
   it('renders every permission control as an accessible checkbox and avoids fake live counts', () => {

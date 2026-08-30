@@ -556,6 +556,19 @@ const DATA_SCOPE_KEYS = DATA_SCOPE_CATALOG.flatMap(scope => DATA_SCOPE_ACTIONS.m
 const REPORT_PERMISSION_KEYS = REPORT_PERMISSION_CATALOG.flatMap(report => REPORT_PERMISSION_ACTIONS.map(action => `report:${report.id}:${action.id}`));
 const ALL_AUTHORIZATION_KEYS = [...ALL_PERMISSION_KEYS, ...DATA_SCOPE_KEYS, ...REPORT_PERMISSION_KEYS];
 
+function employeeGroupLabel(employee: Employee): string {
+  const department = `${employee.department} ${employee.jobTitle}`.toLocaleLowerCase();
+  if (/(مال|حساب|خزينة|مالية|محاسب)/.test(department)) return 'الماليون والحسابات';
+  if (/(طالب|قبول|تسجيل|استقبال|علاقات)/.test(department)) return 'الإداريون وشؤون الطلاب';
+  if (/(موارد بشرية|شؤون الموظفين|عاملين|رواتب)/.test(department)) return 'الموارد البشرية والرواتب';
+  if (/(مخزن|مستودع|تموين|مشتريات)/.test(department)) return 'المخازن والمشتريات';
+  if (/(تقنية|دعم تقني|it)/.test(department)) return 'تقنية المعلومات';
+  if (/(مكتبة|مصادر تعلم)/.test(department)) return 'المكتبة ومصادر التعلم';
+  if (/(نقل|خدمات|مساندة)/.test(department)) return 'الخدمات المساندة والنقل';
+  if (/(كنترول|امتحان|أكاديم|معلم|تدريس)/.test(department)) return 'الهيئة الأكاديمية والكنترول';
+  return employee.department || 'الإداريون';
+}
+
 interface PermissionsModuleProps {
   users: any[];
   setUsers: React.Dispatch<React.SetStateAction<any[]>>;
@@ -613,7 +626,7 @@ export const PermissionsManagementModule: React.FC<PermissionsModuleProps> = ({
   const [selectedStatus, setSelectedStatus] = useState<string>('active');
   const [currentPage, setCurrentPage] = useState<number>(1);
   const [pageSize, setPageSize] = useState<number>(10);
-  const [activeTab, setActiveTab] = useState<'modules' | 'data' | 'reports'>('modules');
+  const [activeTab, setActiveTab] = useState<'employee_matrix' | 'modules' | 'data' | 'reports'>('employee_matrix');
 
   // Expanded categories state (Student Affairs is expanded by default)
   const [expandedCategories, setExpandedCategories] = useState<Record<string, boolean>>({
@@ -705,6 +718,22 @@ export const PermissionsManagementModule: React.FC<PermissionsModuleProps> = ({
     };
   }, [activeEmployee]);
 
+  const employeeGroups = useMemo(() => {
+    const grouped = new Map<string, Employee[]>();
+    filteredEmployees.forEach(employee => {
+      const label = employeeGroupLabel(employee);
+      const group = grouped.get(label) || [];
+      group.push(employee);
+      grouped.set(label, group);
+    });
+    return Array.from(grouped.entries()).map(([label, group]) => ({ label, employees: group }));
+  }, [filteredEmployees]);
+
+  const visibleScreenCount = useMemo(
+    () => filteredPermissionCategories.reduce((count, category) => count + category.screens.length, 0),
+    [filteredPermissionCategories]
+  );
+
   // Paginated employees for left side
   const paginatedEmployees = useMemo(() => {
     const start = (currentPage - 1) * pageSize;
@@ -743,18 +772,27 @@ export const PermissionsManagementModule: React.FC<PermissionsModuleProps> = ({
 
   // Check if a permission is enabled for active employee
   const isPermissionEnabled = (catId: string, screenId: string, actionId: string) => {
-    if (!activeEmployee) return false;
-    if (activeEmployee.permissions.includes('*')) return true;
+    return activeEmployee ? isPermissionEnabledForEmployee(activeEmployee, catId, screenId, actionId) : false;
+  };
+
+  const isPermissionEnabledForEmployee = (employee: Employee, catId: string, screenId: string, actionId: string) => {
+    if (employee.permissions.includes('*')) return true;
     const permKey = `${catId}:${screenId}:${actionId}`;
-    return activeEmployee.permissions.includes(permKey);
+    return employee.permissions.includes(permKey);
   };
 
   // Toggle single permission checkbox
   const handleTogglePermission = (catId: string, screenId: string, actionId: string) => {
     if (!activeEmployee || canonicalPersistenceRequired) return;
-    
+    handleToggleEmployeePermission(activeEmployee.id, catId, screenId, actionId);
+  };
+
+  const handleToggleEmployeePermission = (employeeId: string, catId: string, screenId: string, actionId: string) => {
+    if (canonicalPersistenceRequired) return;
     const permKey = `${catId}:${screenId}:${actionId}`;
-    let newPermissions = [...activeEmployee.permissions];
+    const selectedEmployee = employees.find(employee => employee.id === employeeId);
+    if (!selectedEmployee) return;
+    let newPermissions = [...selectedEmployee.permissions];
     
     if (newPermissions.includes('*')) {
       // Expand wildcard * to all possible keys EXCEPT the toggled one
@@ -766,7 +804,7 @@ export const PermissionsManagementModule: React.FC<PermissionsModuleProps> = ({
     }
 
     setEmployees(prev => prev.map(emp => {
-      if (emp.id === activeEmployee.id) {
+      if (emp.id === employeeId) {
         return { ...emp, permissions: newPermissions };
       }
       return emp;
@@ -1355,11 +1393,24 @@ export const PermissionsManagementModule: React.FC<PermissionsModuleProps> = ({
           <div className="border border-slate-200/80 rounded-3xl shadow-xs overflow-hidden flex flex-col h-[580px]">
             
             {/* Tab Headers Row */}
-            <div className="flex border-b border-slate-100 select-none">
+            <div className="flex flex-wrap border-b border-slate-100 select-none">
+              <button
+                type="button"
+                onClick={() => setActiveTab('employee_matrix')}
+                className={`min-w-[180px] flex-1 py-4.5 text-xs font-black transition-all flex items-center justify-center gap-2 border-b-2 ${
+                  activeTab === 'employee_matrix'
+                    ? 'border-orange-600 text-orange-600 bg-slate-50/20'
+                    : 'border-transparent text-slate-400 hover:text-slate-600'
+                }`}
+              >
+                <Users className="w-4 h-4" />
+                <span>مصفوفة الموظفين</span>
+              </button>
+
               <button
                 type="button"
                 onClick={() => setActiveTab('modules')}
-                className={`flex-1 py-4.5 text-xs font-black transition-all flex items-center justify-center gap-2 border-b-2 ${
+                className={`min-w-[150px] flex-1 py-4.5 text-xs font-black transition-all flex items-center justify-center gap-2 border-b-2 ${
                   activeTab === 'modules'
                     ? 'border-orange-600 text-orange-600 bg-slate-50/20'
                     : 'border-transparent text-slate-400 hover:text-slate-600'
@@ -1404,7 +1455,122 @@ export const PermissionsManagementModule: React.FC<PermissionsModuleProps> = ({
 
             {/* Matrix Table */}
             <div className="flex-1 overflow-auto scrollbar-thin scrollbar-thumb-slate-200 scrollbar-track-transparent">
-              {activeTab === 'modules' ? (
+              {activeTab === 'employee_matrix' ? (
+                <div className="min-w-max p-4">
+                  <div className="mb-4 flex flex-col gap-3 rounded-2xl border border-orange-100 bg-orange-50/50 p-4 lg:flex-row lg:items-center lg:justify-between">
+                    <div>
+                      <h4 className="text-xs font-black text-slate-800">مصفوفة الموظفين حسب الإدارة والمسمى</h4>
+                      <p className="mt-1 text-[10px] font-semibold leading-relaxed text-slate-500">كل صف موظف داخل مجموعته الإدارية، وكل خلية شاشة تحتوي على مربع مستقل لكل زر برمجي. علامة الصح تعني صلاحية ممنوحة، والخانة الفارغة تعني عدم وجود الصلاحية.</p>
+                    </div>
+                    <div className="flex flex-wrap items-center gap-2">
+                      {MATRIX_COLUMNS.map(column => (
+                        <span key={column.id} className="rounded-lg border border-slate-200 bg-white px-2 py-1 text-[9px] font-black text-slate-500" title={column.label}>
+                          {column.label.split(' ')[0]}
+                        </span>
+                      ))}
+                    </div>
+                  </div>
+
+                  {employeeGroups.length === 0 ? (
+                    <div className="flex min-h-[360px] flex-col items-center justify-center gap-3 rounded-2xl border border-dashed border-slate-300 bg-slate-50/60 p-8 text-center">
+                      <Users className="h-12 w-12 text-slate-300" />
+                      <h4 className="text-sm font-black text-slate-700">لا توجد حسابات مستخدمين معروضة</h4>
+                      <p className="max-w-md text-[10px] font-semibold leading-relaxed text-slate-400">
+                        {canonicalPersistenceRequired
+                          ? 'المصفوفة جاهزة، لكن بيانات المستخدمين يجب أن تصل من مصدر الهوية المركزي قبل منح أو تعديل أي صلاحية.'
+                          : 'أضف مستخدمين إلى بيئة التشغيل أو أزل فلاتر البحث والحالة لعرض المجموعات.'}
+                      </p>
+                    </div>
+                  ) : (
+                    <table className="w-full border-collapse text-right text-[10px]">
+                      <thead className="sticky top-0 z-20 bg-white shadow-sm">
+                        <tr className="border-b border-slate-200">
+                          <th rowSpan={2} className="sticky right-0 z-30 min-w-[210px] border-l border-slate-200 bg-slate-50 px-4 py-3 text-right text-xs font-black text-slate-800">المستخدم / المسمى الوظيفي</th>
+                          {filteredPermissionCategories.map(category => (
+                            <th key={category.id} colSpan={category.screens.length} className="border-l border-slate-200 bg-slate-100/80 px-3 py-2 text-center text-[10px] font-black text-slate-700">
+                              {category.label}
+                            </th>
+                          ))}
+                        </tr>
+                        <tr className="border-b border-slate-200">
+                          {filteredPermissionCategories.flatMap(category => category.screens.map(screen => (
+                            <th key={`${category.id}:${screen.id}`} title={screen.label} className="min-w-[155px] border-l border-slate-100 bg-slate-50 px-2 py-2 text-center text-[9px] font-black text-slate-500">
+                              <span className="block truncate">{screen.label}</span>
+                              <span className="mt-1 block font-mono text-[8px] font-semibold text-slate-400">{category.id}:{screen.id}</span>
+                            </th>
+                          )))}
+                        </tr>
+                      </thead>
+                      <tbody>
+                        {employeeGroups.map(group => (
+                          <React.Fragment key={group.label}>
+                            <tr>
+                              <th colSpan={visibleScreenCount + 1} className="border-y border-orange-100 bg-orange-50/70 px-4 py-3 text-right">
+                                <div className="flex items-center gap-2">
+                                  <div className="flex h-7 w-7 items-center justify-center rounded-lg bg-orange-100 text-orange-600"><Users className="h-4 w-4" /></div>
+                                  <span className="text-xs font-black text-orange-950">{group.label}</span>
+                                  <span className="rounded-full bg-white px-2 py-0.5 text-[9px] font-black text-orange-700">{group.employees.length} مستخدم</span>
+                                </div>
+                              </th>
+                            </tr>
+                            {group.employees.map(employee => (
+                              <tr key={employee.id} className="border-b border-slate-100 hover:bg-slate-50/50">
+                                <td className="sticky right-0 z-10 min-w-[210px] border-l border-slate-200 bg-white px-3 py-3 align-top">
+                                  <button
+                                    type="button"
+                                    onClick={() => {
+                                      setActiveEmployeeId(employee.id);
+                                      triggerNotification(`تم اختيار المستخدم ${employee.name} لمراجعة تفاصيله`, 'info');
+                                    }}
+                                    aria-pressed={activeEmployeeId === employee.id}
+                                    className={`w-full rounded-xl p-2 text-right transition focus:outline-none focus:ring-2 focus:ring-orange-300 ${activeEmployeeId === employee.id ? 'bg-orange-50' : 'hover:bg-slate-50'}`}
+                                  >
+                                    <span className="flex items-center justify-between gap-2">
+                                      <span className="truncate text-xs font-black text-slate-800">{employee.name}</span>
+                                      <span className={`h-2 w-2 shrink-0 rounded-full ${employee.status === 'active' ? 'bg-emerald-500' : 'bg-slate-300'}`} title={employee.status === 'active' ? 'نشط' : 'غير نشط'} />
+                                    </span>
+                                    <span className="mt-1 block truncate text-[9px] font-bold text-slate-500">{employee.jobTitle}</span>
+                                    <span className="mt-1 block text-[9px] font-black text-orange-600">
+                                      {employee.permissions.includes('*') ? 'كامل الصلاحيات' : `${ALL_AUTHORIZATION_KEYS.filter(key => employee.permissions.includes(key)).length} نقطة ممنوحة`}
+                                    </span>
+                                  </button>
+                                </td>
+                                {filteredPermissionCategories.flatMap(category => category.screens.map(screen => (
+                                  <td key={`${employee.id}:${category.id}:${screen.id}`} className="border-l border-slate-100 p-2 align-top">
+                                    <div className="grid grid-cols-5 gap-1">
+                                      {MATRIX_COLUMNS.map(column => {
+                                        const checked = isPermissionEnabledForEmployee(employee, category.id, screen.id, column.id);
+                                        return (
+                                          <button
+                                            key={column.id}
+                                            type="button"
+                                            role="checkbox"
+                                            aria-checked={checked}
+                                            aria-label={`${checked ? 'إلغاء' : 'منح'} ${column.label} — ${screen.label} — ${employee.name}`}
+                                            disabled={canonicalPersistenceRequired}
+                                            onClick={() => {
+                                              setActiveEmployeeId(employee.id);
+                                              handleToggleEmployeePermission(employee.id, category.id, screen.id, column.id);
+                                            }}
+                                            className={`flex h-6 min-w-6 items-center justify-center rounded-md border text-[9px] font-black transition active:scale-90 disabled:cursor-not-allowed disabled:opacity-40 ${checked ? 'border-orange-500 bg-orange-600 text-white' : 'border-slate-200 bg-white text-slate-300 hover:border-orange-300'}`}
+                                            title={`${employee.name} — ${category.label} — ${screen.label} — ${column.label} — ${checked ? 'ممنوحة' : 'غير ممنوحة'}`}
+                                          >
+                                            {checked ? <Check className="h-3.5 w-3.5 stroke-[3]" /> : '—'}
+                                          </button>
+                                        );
+                                      })}
+                                    </div>
+                                  </td>
+                                )))}
+                              </tr>
+                            ))}
+                          </React.Fragment>
+                        ))}
+                      </tbody>
+                    </table>
+                  )}
+                </div>
+              ) : activeTab === 'modules' ? (
                 <table className="w-full text-right border-collapse min-w-[900px]">
                   {/* Table Header */}
                   <thead className="sticky top-0 bg-slate-50/80 backdrop-blur-md z-10 border-b border-slate-200 select-none">
