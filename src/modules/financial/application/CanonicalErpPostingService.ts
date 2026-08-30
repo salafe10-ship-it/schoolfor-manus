@@ -12,7 +12,8 @@ export const CANONICAL_ERP_TABLES = [
 ] as const;
 
 type FinancialRow = Record<string, unknown>;
-type PostingSource = 'student_fee_invoice' | 'student_receipt' | 'payment_voucher' | 'expense_accrual' | 'journal_entry';
+type PostingSource = 'student_fee_invoice' | 'student_receipt' | 'payment_voucher' | 'expense_accrual' | 'journal_entry'
+  | 'inventory_receipt' | 'inventory_movement' | 'inventory_stocktake' | 'vendor_bill';
 type TransactionLike = Pick<TransactionSession, 'query'>;
 
 export type CanonicalPostingLine = {
@@ -61,15 +62,24 @@ const DEFAULT_MAPPING: Record<string, string> = {
   'student_fees.revenue': '4101',
   'treasury.cash': '1101',
   'expenses.default': '5270',
-  'liabilities.accrued_expense': '2101'
+  'liabilities.accrued_expense': '2101',
+  'inventory.asset': '1301',
+  'inventory.grni': '2101',
+  'inventory.ap': '2101',
+  'inventory.cogs': '5270',
+  'inventory.adjustment': '5280',
+  'inventory.input_vat': '1401'
 };
 
 const DEFAULT_ACCOUNTS: Array<{ code: string; name: string; nature: string }> = [
   { code: '1101', name: 'صندوق النقدية والخزينة', nature: 'asset' },
   { code: '1201', name: 'ذمم الطلاب المدينة', nature: 'asset' },
+  { code: '1301', name: 'مخزون وأصناف تشغيلية', nature: 'asset' },
+  { code: '1401', name: 'ضريبة مدخلات قابلة للاسترداد', nature: 'asset' },
   { code: '2101', name: 'مصروفات مستحقة والتزامات موردين', nature: 'liability' },
   { code: '4101', name: 'إيرادات الرسوم الدراسية', nature: 'revenue' },
-  { code: '5270', name: 'مصروفات تشغيلية وإدارية أخرى', nature: 'expense' }
+  { code: '5270', name: 'تكلفة الأصناف المصروفة', nature: 'expense' },
+  { code: '5280', name: 'فروقات وتسويات المخزون', nature: 'expense' }
 ];
 
 function rowValue(row: FinancialRow, ...keys: string[]): unknown {
@@ -254,6 +264,10 @@ export function buildCanonicalPosting(
       fiscalPeriod: fiscalPeriodFor(dateValue(rowValue(input, 'date', 'entryDate'))),
       lines
     };
+  }
+
+  if (['inventory_receipt', 'inventory_movement', 'inventory_stocktake', 'vendor_bill'].includes(sourceType)) {
+    throw new Error(`مصدر ${sourceType} يتطلب مسار مزامنة المخزون والمشتريات الكانوني.`);
   }
 
   const status = normalizedStatus(rowValue(input, 'status'));
@@ -480,6 +494,155 @@ export class CanonicalErpPostingService {
       );
     }
     return { created: true, ledgerLines: orderedLines.length, journalEntryId };
+  }
+
+  private static async ensureOpenPeriod(
+    transaction: TransactionLike,
+    tenantId: string,
+    schoolId: string,
+    actorId: string,
+    date: string
+  ): Promise<void> {
+    const period = fiscalPeriodFor(date);
+    await db(transaction).query(
+      `INSERT INTO public.erp_financial_periods
+        (tenant_id, school_id, period_code, starts_on, ends_on, status)
+       VALUES ($1::uuid, $2::uuid, $3, date_trunc('month', $4::date)::date,
+               (date_trunc('month', $4::date) + interval '1 month - 1 day')::date, 'open')
+       ON CONFLICT (school_id, period_code) DO NOTHING`,
+      [tenantId, schoolId, period, date]
+    );
+    // Keep the actor argument in the method contract so future period
+    // governance can record who opened an automatically provisioned UAT
+    // period without changing the posting transaction shape.
+    void actorId;
+  }
+
+  /**
+   * Posts inventory and procurement source documents to the same canonical
+   * double-entry ledger used by the finance module. The source snapshot is
+   * still a UI read model; journal rows and their source links are authoritative.
+   */
+  public static async syncInventoryProcurementSnapshot(
+    transaction: TransactionLike,
+    tenantId: string,
+    schoolId: string,
+    actorId: string,
+    payload: FinancialRow
+  ): Promise<CanonicalErpSyncResult> {
+    if (!(await this.isProvisioned(transaction))) {
+      throw new Error('المخطط المحاسبي الكانوني غير مثبت؛ طبّق ترحيل ERP المالي قبل ربط المخزون بالحسابات.');
+    }
+
+    const mappings = await this.loadMappings(transaction, schoolId);
+    const settings = payload.settings && typeof payload.settings === 'object' && !Array.isArray(payload.settings) ? payload.settings as FinancialRow : {};
+    const procurementSettings = payload.procurementSettings && typeof payload.procurementSettings === 'object' && !Array.isArray(payload.procurementSettings)
+      ? payload.procurementSettings as FinancialRow : {};
+    const configured = (key: string, value: unknown) => {
+      const text = textValue(value);
+      return text || mappings.get(key) || DEFAULT_MAPPING[key];
+    };
+    const inventoryAccount = (item: FinancialRow) => textValue(item.inventoryAccountId) || configured('inventory.asset', settings.inventoryAccountPrefix);
+    const cogsAccount = (item: FinancialRow) => textValue(item.costOfGoodsAccountId) || configured('inventory.cogs', settings.cogsAccountPrefix);
+    const adjustmentAccount = (item: FinancialRow) => textValue(item.adjustmentAccountId) || configured('inventory.adjustment', settings.adjustmentAccountPrefix);
+    const grniAccount = configured('inventory.grni', procurementSettings.grniGlAccount);
+    const payableAccount = configured('inventory.ap', procurementSettings.apGlAccount);
+    const vatAccount = configured('inventory.input_vat', procurementSettings.inputVatGlAccount);
+    const itemById = new Map((Array.isArray(payload.items) ? payload.items : [])
+      .filter((item): item is FinancialRow => Boolean(item && typeof item === 'object' && !Array.isArray(item)))
+      .map(item => [textValue(item.id), item]));
+
+    await this.ensureChartAccounts(transaction, tenantId, schoolId, actorId, {});
+    const documents: CanonicalPostingDocument[] = [];
+    const addReceipt = (raw: unknown) => {
+      if (!raw || typeof raw !== 'object' || Array.isArray(raw)) return;
+      const receipt = raw as FinancialRow;
+      const lines = Array.isArray(receipt.lines) ? receipt.lines : [];
+      const postingLines: CanonicalPostingLine[] = [];
+      let acceptedTotal = 0;
+      for (const [index, rawLine] of lines.entries()) {
+        if (!rawLine || typeof rawLine !== 'object' || Array.isArray(rawLine)) continue;
+        const line = rawLine as FinancialRow;
+        const acceptedQty = Number(line.acceptedQty || 0);
+        const amount = Number(line.totalCost || 0);
+        const item = itemById.get(textValue(line.itemId || line.itemCode)) || {};
+        if (!Number.isFinite(acceptedQty) || acceptedQty <= 0 || !Number.isFinite(amount) || amount <= 0) continue;
+        acceptedTotal += amount;
+        postingLines.push({ id: `${textValue(receipt.id)}-${textValue(line.lineId, String(index))}-D`, accountCode: inventoryAccount(item), debit: Number(amount.toFixed(2)), credit: 0, costCenter: textValue(item.costCenterId) || undefined });
+      }
+      if (acceptedTotal <= 0 || postingLines.length === 0) return;
+      postingLines.push({ id: `${textValue(receipt.id)}-GRNI-C`, accountCode: grniAccount, debit: 0, credit: Number(acceptedTotal.toFixed(2)) });
+      documents.push({ sourceType: 'inventory_receipt', sourceId: textValue(receipt.id), date: dateValue(rowValue(receipt, 'grnDate', 'date')), description: textValue(receipt.notes, `إثبات استلام مخزني ${textValue(receipt.grnNo, textValue(receipt.id))}`), lines: postingLines });
+    };
+    const addBill = (raw: unknown) => {
+      if (!raw || typeof raw !== 'object' || Array.isArray(raw)) return;
+      const bill = raw as FinancialRow;
+      if (!['approved', 'posted'].includes(normalizedStatus(bill.status))) return;
+      const subtotal = positiveAmount(bill.subtotal, `vendorBill.${textValue(bill.id)}.subtotal`);
+      const tax = Number(bill.taxAmount || 0);
+      if (!Number.isFinite(tax) || tax < 0) throw new Error(`ضريبة فاتورة المورد ${textValue(bill.id)} غير صالحة.`);
+      const total = Number((subtotal + tax).toFixed(2));
+      const lines: CanonicalPostingLine[] = [
+        { id: `${textValue(bill.id)}-GRNI-D`, accountCode: grniAccount, debit: subtotal, credit: 0 },
+      ];
+      if (tax > 0) lines.push({ id: `${textValue(bill.id)}-VAT-D`, accountCode: vatAccount, debit: Number(tax.toFixed(2)), credit: 0 });
+      lines.push({ id: `${textValue(bill.id)}-AP-C`, accountCode: payableAccount, debit: 0, credit: total });
+      documents.push({ sourceType: 'vendor_bill', sourceId: textValue(bill.id), date: dateValue(rowValue(bill, 'billDate', 'date')), description: textValue(bill.notes, `إثبات فاتورة مورد ${textValue(bill.billNo, textValue(bill.id))}`), lines });
+    };
+    const addMovement = (raw: unknown) => {
+      if (!raw || typeof raw !== 'object' || Array.isArray(raw)) return;
+      const movement = raw as FinancialRow;
+      if (normalizedStatus(movement.status) !== 'approved') return;
+      const type = textValue(movement.type).toLowerCase();
+      if (type === 'transfer') return; // A location transfer has no net GL impact.
+      const item = itemById.get(textValue(movement.itemId)) || {};
+      const quantity = positiveAmount(movement.quantity, `movement.${textValue(movement.id)}.quantity`);
+      const amount = positiveAmount(movement.totalAmount || quantity * Number(item.costPrice || 0), `movement.${textValue(movement.id)}.amount`);
+      const stockAccount = inventoryAccount(item);
+      const lines = type === 'sale'
+        ? [{ id: `${textValue(movement.id)}-COGS-D`, accountCode: cogsAccount(item), debit: amount, credit: 0 }, { id: `${textValue(movement.id)}-STOCK-C`, accountCode: stockAccount, debit: 0, credit: amount }]
+        : [{ id: `${textValue(movement.id)}-STOCK-D`, accountCode: stockAccount, debit: amount, credit: 0 }, { id: `${textValue(movement.id)}-GRNI-C`, accountCode: grniAccount, debit: 0, credit: amount }];
+      documents.push({ sourceType: 'inventory_movement', sourceId: textValue(movement.id), date: dateValue(rowValue(movement, 'date', 'movementDate')), description: textValue(movement.notes, `حركة مخزنية ${textValue(movement.id)}`), lines });
+    };
+    const addStocktake = (raw: unknown) => {
+      if (!raw || typeof raw !== 'object' || Array.isArray(raw)) return;
+      const stocktake = raw as FinancialRow;
+      if (normalizedStatus(stocktake.status) !== 'approved') return;
+      const item = itemById.get(textValue(stocktake.itemId)) || {};
+      const delta = Number(stocktake.actualQty) - Number(stocktake.bookQty);
+      if (!Number.isFinite(delta) || delta === 0) return;
+      const amount = positiveAmount(Math.abs(delta) * Number(item.costPrice || 0), `stocktake.${textValue(stocktake.id)}.amount`);
+      const stockAccount = inventoryAccount(item);
+      const lines = delta > 0
+        ? [{ id: `${textValue(stocktake.id)}-STOCK-D`, accountCode: stockAccount, debit: amount, credit: 0 }, { id: `${textValue(stocktake.id)}-ADJ-C`, accountCode: adjustmentAccount(item), debit: 0, credit: amount }]
+        : [{ id: `${textValue(stocktake.id)}-ADJ-D`, accountCode: adjustmentAccount(item), debit: amount, credit: 0 }, { id: `${textValue(stocktake.id)}-STOCK-C`, accountCode: stockAccount, debit: 0, credit: amount }];
+      const stocktakeDate = textValue(rowValue(stocktake, 'date')) || textValue(stocktake.createdAt).slice(0, 10);
+      documents.push({ sourceType: 'inventory_stocktake', sourceId: textValue(stocktake.id), date: dateValue(stocktakeDate), description: textValue(stocktake.notes, `تسوية جرد مخزني ${textValue(stocktake.id)}`), lines });
+    };
+
+    for (const row of Array.isArray(payload.goodsReceipts) ? payload.goodsReceipts : []) addReceipt(row);
+    for (const row of Array.isArray(payload.vendorBills) ? payload.vendorBills : []) addBill(row);
+    for (const row of Array.isArray(payload.movements) ? payload.movements : []) addMovement(row);
+    for (const row of Array.isArray(payload.stocktakes) ? payload.stocktakes : []) addStocktake(row);
+
+    let createdJournalCount = 0;
+    let existingJournalCount = 0;
+    let ledgerLineCount = 0;
+    const sourceLinks: CanonicalErpSyncResult['sourceLinks'] = [];
+    for (const document of documents) {
+      await this.ensureOpenPeriod(transaction, tenantId, schoolId, actorId, document.date);
+      const result = await this.postDocument(transaction, tenantId, schoolId, actorId, document);
+      if (result.created) { createdJournalCount += 1; ledgerLineCount += result.ledgerLines; }
+      else existingJournalCount += 1;
+      sourceLinks.push({ sourceType: document.sourceType, sourceId: document.sourceId, journalEntryId: result.journalEntryId });
+    }
+    await db(transaction).query(
+      `INSERT INTO public.erp_financial_audit_events
+        (tenant_id, school_id, operation, entity_type, entity_id, actor_user_id, after_payload)
+       VALUES ($1::uuid, $2::uuid, 'INVENTORY_PROCUREMENT_POSTING', 'inventory_procurement_snapshot', NULL, $3::uuid, $4::jsonb)`,
+      [tenantId, schoolId, actorId, JSON.stringify({ createdJournalCount, existingJournalCount, ledgerLineCount, sourceCount: documents.length })]
+    );
+    return { createdJournalCount, existingJournalCount, ledgerLineCount, expenseAccrualCount: 0, sourceLinks };
   }
 
   public static async syncSnapshot(

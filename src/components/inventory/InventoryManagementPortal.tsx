@@ -73,7 +73,7 @@ export default function InventoryManagementPortal({ selectedSchool, initialTab =
     const payload = await response.json();
     if (!response.ok || !payload?.success) throw new Error(payload?.message || 'تعذر حفظ المخزون والمشتريات.');
     versionRef.current = Number(payload?.meta?.version || versionRef.current + 1);
-    setDatabase(nextDatabase);
+    setDatabase(normalizeInventoryCanonicalDatabase(payload.data || nextDatabase));
     if (successMessage) notify(successMessage, 'success');
   };
 
@@ -109,6 +109,45 @@ export default function InventoryManagementPortal({ selectedSchool, initialTab =
     }
   };
 
+  const handleApproveMovement = async (movement: any) => {
+    if (!['pending_approval', 'approved'].includes(String(movement.status))) throw new Error('الحركة ليست في حالة اعتماد أو إعادة ترحيل.');
+    const item = database.items.find(row => row.id === movement.itemId);
+    if (!item) throw new Error('الصنف المرتبط بالحركة غير موجود.');
+    const quantity = Number(movement.quantity);
+    if (!Number.isInteger(quantity) || quantity <= 0) throw new Error('كمية الحركة غير صالحة للاعتماد.');
+    const isRetry = movement.status === 'approved';
+    const nextQuantity = !isRetry && movement.type === 'purchase' ? item.quantity + quantity : !isRetry && movement.type === 'sale' ? item.quantity - quantity : item.quantity;
+    if (!isRetry && nextQuantity < 0 && !database.settings.allowNegativeStock) {
+      throw new Error(`لا يمكن اعتماد الصرف؛ رصيد ${item.name} غير كافٍ.`);
+    }
+    const approvedMovement = isRetry ? movement : { ...movement, status: 'approved', statusLabel: movement.type === 'transfer' ? 'معتمد — تحويل داخلي' : 'معتمد — جارٍ ترحيل القيد', approvedAt: new Date().toISOString() };
+    await commitDatabase({
+      ...database,
+      items: isRetry ? database.items : database.items.map(row => row.id === item.id ? { ...row, quantity: nextQuantity } : row),
+      movements: database.movements.map(row => row.id === movement.id ? approvedMovement : row)
+    });
+    notify(`تم اعتماد الحركة ${movement.id} وتحديث رصيد المخزون؛ وسيظهر رقم القيد الكانوني عند نجاح الترحيل.`, 'success');
+  };
+
+  const handleApproveStocktake = async (stocktake: any) => {
+    if (stocktake.status !== 'pending_approval') throw new Error('محضر الجرد ليس في حالة انتظار الاعتماد.');
+    const item = database.items.find(row => row.id === stocktake.itemId);
+    if (!item) throw new Error('الصنف المرتبط بمحضر الجرد غير موجود.');
+    if (Number(item.quantity) !== Number(stocktake.bookQty)) throw new Error('تغير الرصيد الدفتري بعد إنشاء المحضر؛ أعد المطابقة قبل الاعتماد.');
+    const approvedStocktake = {
+      ...stocktake,
+      status: 'approved',
+      statusLabel: Number(stocktake.discrepancy) === 0 ? 'معتمد — لا أثر مالي' : 'معتمد — جارٍ ترحيل التسوية',
+      approvedAt: new Date().toISOString()
+    };
+    await commitDatabase({
+      ...database,
+      items: database.items.map(row => row.id === item.id ? { ...row, quantity: Number(stocktake.actualQty) } : row),
+      stocktakes: database.stocktakes.map(row => row.id === stocktake.id ? approvedStocktake : row)
+    });
+    notify(`تم اعتماد محضر الجرد ${stocktake.id} وتحديث رصيد الصنف؛ وسيظهر رقم قيد التسوية الكانوني عند نجاح الترحيل.`, 'success');
+  };
+
   const handleNew = () => {
     setActiveTab('items');
     notify('تم الانتقال لنموذج إضافة صنف جديد لدليل الأصناف 📦', 'info');
@@ -123,12 +162,33 @@ export default function InventoryManagementPortal({ selectedSchool, initialTab =
     notify('جاري تطبيق تصفية البحث في قائمة الأصناف 🔍', 'info');
   };
 
-  const handlePrint = () => {
-    window.print();
-    notify('تم إرسال جرد أصناف المستودعات إلى الطباعة 🖨️', 'info');
+  const auditReport = async (format: 'csv' | 'print') => {
+    const token = getTrustedAccessToken();
+    if (!token) throw new Error('انتهت جلسة الدخول الموثوقة.');
+    const response = await fetch('/api/inventory/reports/audit', {
+      method: 'POST',
+      headers: { Authorization: `Bearer ${token}`, 'Content-Type': 'application/json' },
+      body: JSON.stringify({ reportType: 'valuation', format, expectedVersion: versionRef.current })
+    });
+    const payload = await response.json();
+    if (!response.ok || !payload?.success) throw new Error(payload?.message || 'تعذر تدقيق تقرير المخزون.');
   };
 
-  const handleExportExcel = () => {
+  const handlePrint = async () => {
+    try {
+      await auditReport('print');
+      window.print();
+      notify('تم تدقيق جرد أصناف المستودعات وإرساله إلى الطباعة 🖨️', 'info');
+    } catch (error: any) {
+      notify(error?.message || 'تعذر تدقيق تقرير المخزون قبل الطباعة.', 'danger');
+    }
+  };
+
+  const handleExportExcel = async () => {
+    try { await auditReport('csv'); } catch (error: any) {
+      notify(error?.message || 'تعذر تدقيق تقرير المخزون قبل التصدير.', 'danger');
+      return;
+    }
     const csvContent = "data:text/csv;charset=utf-8,\uFEFF" + 
       "كود الصنف,اسم الصنف,الفئة,سعر التكلفة,سعر البيع,الكمية الحالية,المستودع\n" +
       items.map(i => `${i.sku || i.id},${i.name},${i.categoryId},${i.costPrice},${i.salePrice},${i.quantity},${i.warehouseId}`).join("\n");
@@ -142,9 +202,14 @@ export default function InventoryManagementPortal({ selectedSchool, initialTab =
     notify('تم تصدير كشف حركة الأصناف لملف CSV بنجاح 📊', 'success');
   };
 
-  const handleExportPdf = () => {
-    window.print();
-    notify('تم تجهيز وإرسال تقرير جرد المستودعات للطباعة / PDF 📄', 'success');
+  const handleExportPdf = async () => {
+    try {
+      await auditReport('print');
+      window.print();
+      notify('تم تدقيق وتجهيز تقرير جرد المستودعات للطباعة / PDF 📄', 'success');
+    } catch (error: any) {
+      notify(error?.message || 'تعذر تدقيق تقرير المخزون قبل تجهيز PDF.', 'danger');
+    }
   };
 
   const handleImportExcel = () => {
@@ -202,6 +267,8 @@ export default function InventoryManagementPortal({ selectedSchool, initialTab =
         onExportPdf={handleExportPdf}
         onImportExcel={handleImportExcel}
         onDownloadTemplate={handleDownloadTemplate}
+        onRefresh={() => { void loadDatabase(); }}
+        isLoading={isLoading}
         onExit={() => setActiveTab('dashboard')}
       />
       
@@ -260,12 +327,12 @@ export default function InventoryManagementPortal({ selectedSchool, initialTab =
           )}
 
           {activeTab === 'movements' && (
-            <StockMovementManager items={items} movements={database.movements} onSave={async movements => updateCollection('movements', movements)} triggerNotification={triggerNotification} />
+            <StockMovementManager items={items} movements={database.movements} onSave={async movements => updateCollection('movements', movements)} onApproveMovement={handleApproveMovement} triggerNotification={triggerNotification} />
           )}
 
           {activeTab === 'stocktakes' && (
             <StockCountManager items={items} stocktakes={database.stocktakes} settings={database.settings}
-              onSave={async stocktakes => updateCollection('stocktakes', stocktakes)} triggerNotification={triggerNotification} />
+              onSave={async stocktakes => updateCollection('stocktakes', stocktakes)} onApproveStocktake={handleApproveStocktake} triggerNotification={triggerNotification} />
           )}
 
           {activeTab === 'procurement' && (

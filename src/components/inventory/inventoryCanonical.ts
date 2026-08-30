@@ -31,7 +31,7 @@ export const emptyInventoryCanonicalDatabase = (): InventoryCanonicalDatabase =>
   settings: {
     allowNegativeStock: false,
     defaultValuationMethod: 'weighted_average',
-    autoPostingToGL: false,
+    autoPostingToGL: true,
     enableLowStockAlerts: true,
     requireApprovalForAdjustments: true,
     inventoryAccountPrefix: '',
@@ -44,6 +44,7 @@ export const emptyInventoryCanonicalDatabase = (): InventoryCanonicalDatabase =>
     requireRfqThreshold: 0,
     apGlAccount: '',
     grniGlAccount: '',
+    inputVatGlAccount: '',
     purchaseExpenseAccount: ''
   }
 });

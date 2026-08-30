@@ -106,6 +106,12 @@ CREATE TABLE IF NOT EXISTS public.erp_financial_periods (
     CONSTRAINT ck_erp_period_status CHECK (status IN ('open', 'closed'))
 );
 
+-- The financial tables may predate this migration in an existing deployment.
+-- Keep the migration additive so reversal journals can be enabled safely there.
+ALTER TABLE public.erp_journal_entries
+    ADD COLUMN IF NOT EXISTS reversal_of_journal_id text,
+    ADD COLUMN IF NOT EXISTS reversal_reason text;
+
 DO $$
 BEGIN
     IF NOT EXISTS (

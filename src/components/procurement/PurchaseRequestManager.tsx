@@ -4,13 +4,14 @@ import {
   Search, Filter, Edit, Trash2, Copy, ArrowRightLeft, 
   Printer, AlertCircle, ShieldCheck, User 
 } from 'lucide-react';
-import { PurchaseRequest, ProcurementItemLine, PurchaseRequestStatus } from '../../types';
+import { InventoryItem, PurchaseRequest, ProcurementItemLine, PurchaseRequestStatus } from '../../types';
 
 interface PurchaseRequestManagerProps {
   requests: PurchaseRequest[];
   onSaveRequest: (pr: PurchaseRequest) => Promise<void>;
   onDeleteRequest: (id: string) => Promise<void>;
   onConvertToOrder: (pr: PurchaseRequest) => Promise<void>;
+  items: InventoryItem[];
   triggerNotification?: (msg: string, type: 'success' | 'warning' | 'info' | 'danger') => void;
 }
 
@@ -19,6 +20,7 @@ export default function PurchaseRequestManager({
   onSaveRequest,
   onDeleteRequest,
   onConvertToOrder,
+  items,
   triggerNotification
 }: PurchaseRequestManagerProps) {
   const [searchTerm, setSearchTerm] = useState('');
@@ -31,8 +33,10 @@ export default function PurchaseRequestManager({
   const notify = (msg: string, type: 'success' | 'warning' | 'info' | 'danger' = 'info') => {
     if (triggerNotification) triggerNotification(msg, type);
   };
+  const editableStatuses = ['draft', 'pending_approval', 'rejected'];
 
   const handleOpenNew = () => {
+    if (!items.length) { notify('سجل صنفاً في دليل المخزون قبل إنشاء طلب شراء مرتبط محاسبياً.', 'warning'); return; }
     setEditingPR({
       requestNo: '',
       requestDate: new Date().toISOString().split('T')[0],
@@ -50,12 +54,15 @@ export default function PurchaseRequestManager({
 
   const handleAddLine = () => {
     if (!editingPR) return;
+    if (!items.length) { notify('لا يمكن إضافة بند قبل تسجيل أصناف المخزون.', 'warning'); return; }
     const lines = editingPR.lines || [];
+    const item = items[0];
     const newLine: ProcurementItemLine = {
       id: `line_${Date.now()}`,
-      itemCode: '',
-      itemName: '',
-      unit: '',
+      itemId: item.id,
+      itemCode: item.sku,
+      itemName: item.name,
+      unit: 'وحدة',
       quantityRequested: 0,
       estimatedUnitPrice: 0,
       totalAmount: 0
@@ -63,6 +70,15 @@ export default function PurchaseRequestManager({
     const updatedLines = [...lines, newLine];
     const total = updatedLines.reduce((s, l) => s + l.totalAmount, 0);
     setEditingPR({ ...editingPR, lines: updatedLines, totalEstimatedAmount: total });
+  };
+
+  const handleSelectItem = (index: number, itemId: string) => {
+    if (!editingPR?.lines) return;
+    const item = items.find(row => row.id === itemId);
+    if (!item) return;
+    const updatedLines = [...editingPR.lines];
+    updatedLines[index] = { ...updatedLines[index], itemId: item.id, itemCode: item.sku, itemName: item.name, unit: 'وحدة', estimatedUnitPrice: item.costPrice, totalAmount: updatedLines[index].quantityRequested * item.costPrice };
+    setEditingPR({ ...editingPR, lines: updatedLines, totalEstimatedAmount: updatedLines.reduce((sum, line) => sum + line.totalAmount, 0) });
   };
 
   const handleUpdateLine = (index: number, field: string, value: any) => {
@@ -90,7 +106,11 @@ export default function PurchaseRequestManager({
       notify('يرجى إدخال رقم طلب الشراء', 'warning');
       return;
     }
-    if (!editingPR.requesterName || !editingPR.department || !editingPR.purpose || !editingPR.lines?.length || editingPR.lines.some(l => !l.itemCode || !l.itemName || !Number.isInteger(l.quantityRequested) || l.quantityRequested <= 0 || !Number.isFinite(l.estimatedUnitPrice) || l.estimatedUnitPrice < 0)) {
+    if (editingPR.id && !editableStatuses.includes(String(editingPR.status))) {
+      notify('طلب الشراء محمي بعد الاعتماد أو التحويل ولا يقبل تعديلاً عاماً.', 'warning');
+      return;
+    }
+    if (!editingPR.requesterName || !editingPR.department || !editingPR.purpose || !editingPR.lines?.length || editingPR.lines.some(l => !l.itemId || !l.itemCode || !l.itemName || !Number.isInteger(l.quantityRequested) || l.quantityRequested <= 0 || !Number.isFinite(l.estimatedUnitPrice) || l.estimatedUnitPrice < 0)) {
       notify('لا يمكن حفظ الطلب دون بيانات مقدم الطلب والغرض وبنود وكميات وأسعار صحيحة', 'warning');
       return;
     }
@@ -275,9 +295,15 @@ export default function PurchaseRequestManager({
 
                       <button 
                         onClick={() => {
+                          if (!editableStatuses.includes(String(r.status))) {
+                            notify('طلب الشراء محمي بعد الاعتماد أو التحويل.', 'warning');
+                            return;
+                          }
                           setEditingPR(r);
                           setShowModal(true);
                         }}
+                        disabled={!editableStatuses.includes(String(r.status))}
+                        title={!editableStatuses.includes(String(r.status)) ? 'محمي بعد الاعتماد أو التحويل' : 'تعديل الطلب'}
                         className="p-1.5 text-slate-500 hover:text-slate-900 hover:bg-slate-100 rounded-lg transition"
                       >
                         <Edit className="w-4 h-4" />
@@ -375,12 +401,15 @@ export default function PurchaseRequestManager({
                     <div key={line.id} className="p-3 bg-transparent grid grid-cols-12 gap-2 items-center text-xs">
                       <div className="col-span-2">
                         <label className="block text-[10px] text-slate-500 font-bold mb-0.5">رمز الصنف *</label>
-                        <input
-                          type="text"
-                          value={line.itemCode}
-                          onChange={(e) => handleUpdateLine(idx, 'itemCode', e.target.value)}
+                        <select
+                          required
+                          value={line.itemId || items.find(item => item.sku === line.itemCode)?.id || ''}
+                          onChange={(e) => handleSelectItem(idx, e.target.value)}
                           className="w-full p-1.5 rounded-md font-mono font-bold"
-                        />
+                        >
+                          <option value="">اختر الصنف</option>
+                          {items.map(item => <option key={item.id} value={item.id}>{item.sku}</option>)}
+                        </select>
                       </div>
 
                       <div className="col-span-3">

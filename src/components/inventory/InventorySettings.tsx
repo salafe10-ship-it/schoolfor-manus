@@ -11,13 +11,13 @@ export default function InventorySettings({ settings: savedSettings, onSave, tri
   const [settings, setSettings] = useState({
     allowNegativeStock: false,
     defaultValuationMethod: 'weighted_average',
-    autoPostingToGL: true,
     enableLowStockAlerts: true,
     requireApprovalForAdjustments: true,
-    inventoryAccountPrefix: '110500',
-    cogsAccountPrefix: '510100',
-    adjustmentAccountPrefix: '',
-    ...(savedSettings || {})
+    inventoryAccountPrefix: '1301',
+    cogsAccountPrefix: '5270',
+    adjustmentAccountPrefix: '5280',
+    ...(savedSettings || {}),
+    autoPostingToGL: true
   });
 
   const notify = (msg: string, type: 'success' | 'warning' | 'info' | 'danger' = 'info') => {
@@ -63,14 +63,15 @@ export default function InventorySettings({ settings: savedSettings, onSave, tri
 
             <label className="flex items-center justify-between cursor-pointer border-t border-slate-200 pt-3">
               <div>
-                <span className="font-bold text-slate-800 text-sm block">الترحيل الآلي إلى دفتر الأستاذ العام عند اعتماد الإذن</span>
-                <span className="text-xs text-slate-500">توليد قيد اليومية تلقائياً فور اعتماد أذونات الإضافة والصرف والتسويات</span>
+                <span className="font-bold text-slate-800 text-sm block">الترحيل الكانوني إلى دفتر الأستاذ عند اعتماد الإذن</span>
+                <span className="text-xs text-slate-500">ينشئ النظام قيداً مزدوجاً متوازناً فور اعتماد الاستلام أو الصرف أو تسوية الجرد، وتظهر هوية القيد على المستند.</span>
               </div>
-              <input 
-                type="checkbox" 
-                checked={settings.autoPostingToGL}
-                onChange={(e) => setSettings({ ...settings, autoPostingToGL: e.target.checked })}
-                className="w-5 h-5 accent-slate-900 rounded"
+              <input
+                type="checkbox"
+                checked
+                readOnly
+                disabled
+                className="w-5 h-5 accent-emerald-600 rounded"
               />
             </label>
 
@@ -131,7 +132,7 @@ export default function InventorySettings({ settings: savedSettings, onSave, tri
 
         {/* Accounting Accounts Defaults */}
         <div className="space-y-4">
-          <h4 className="text-sm font-bold text-slate-900 uppercase tracking-wider border-b border-slate-100 pb-1">بادئات وأكواد الحسابات الافتراضية بدليل الحسابات</h4>
+          <h4 className="text-sm font-bold text-slate-900 uppercase tracking-wider border-b border-slate-100 pb-1">أكواد الحسابات الافتراضية بدليل الحسابات</h4>
           <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
             <div>
               <label className="block text-xs font-bold text-slate-700 mb-1">حساب أصل المخزون</label>

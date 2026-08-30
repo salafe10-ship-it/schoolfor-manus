@@ -11,6 +11,9 @@ describe('inventory and procurement canonical database contract', () => {
     expect(server).toContain('SELECT data, version FROM public.inventory_database');
     expect(server).toContain("'inventory_database', $2, 'write', 'InventoryDatabaseRoute'");
     expect(server).toContain("throw new ConflictError('تم تعديل المخزون أو المشتريات بواسطة مستخدم آخر");
+    expect(server).toContain('validateInventoryProcurementSnapshot');
+    expect(server).toContain('syncInventoryProcurementSnapshot');
+    expect(server).toContain("erpIntegration: canonicalErpReady ? 'ready' : 'not_provisioned'");
     expect(server).not.toContain('tenantScopedDatabaseFilePath(dataDir, "inventory_database"');
   });
 

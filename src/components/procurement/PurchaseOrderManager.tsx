@@ -4,12 +4,14 @@ import {
   Search, Filter, Edit, Printer, Send, Truck, 
   AlertCircle, ShieldCheck, FileCheck, Layers 
 } from 'lucide-react';
-import { PurchaseOrder, ProcurementItemLine, PurchaseOrderStatus } from '../../types';
+import { InventorySupplier, InventoryWarehouse, PurchaseOrder, ProcurementItemLine, PurchaseOrderStatus } from '../../types';
 
 interface PurchaseOrderManagerProps {
   orders: PurchaseOrder[];
   onSaveOrder: (po: PurchaseOrder) => Promise<void>;
   onReceiveItems: (po: PurchaseOrder) => void;
+  suppliers: InventorySupplier[];
+  warehouses: InventoryWarehouse[];
   triggerNotification?: (msg: string, type: 'success' | 'warning' | 'info' | 'danger') => void;
 }
 
@@ -17,6 +19,8 @@ export default function PurchaseOrderManager({
   orders,
   onSaveOrder,
   onReceiveItems,
+  suppliers,
+  warehouses,
   triggerNotification
 }: PurchaseOrderManagerProps) {
   const [searchTerm, setSearchTerm] = useState('');
@@ -54,7 +58,7 @@ export default function PurchaseOrderManager({
       notify('يرجى إدخال رقم أمر الشراء قبل الحفظ', 'warning');
       return;
     }
-    if (!editingPO.vendorId || !editingPO.warehouseId || !editingPO.lines?.length) {
+    if (!editingPO.vendorId || !editingPO.vendorName || !editingPO.warehouseId || !editingPO.lines?.length) {
       notify('لا يمكن حفظ أمر شراء دون مورد ومستودع وبند واحد على الأقل', 'warning');
       return;
     }
@@ -100,6 +104,15 @@ export default function PurchaseOrderManager({
       await onSaveOrder({ ...po, status: 'approved', approvedBy: 'المستخدم الحالي', approvalDate: new Date().toISOString().split('T')[0], updatedAt: new Date().toISOString() });
       notify(`تم اعتماد أمر الشراء ${po.poNo} مركزياً.`, 'success');
     } catch (error: any) { notify(error?.message || 'تعذر اعتماد أمر الشراء', 'danger'); }
+  };
+
+  const handleEditDraft = (po: PurchaseOrder) => {
+    if (!['draft', 'pending_approval'].includes(po.status)) {
+      notify('أوامر الشراء المعتمدة أو المستلمة محمية من التعديل.', 'warning');
+      return;
+    }
+    setEditingPO({ ...po });
+    setShowModal(true);
   };
 
   return (
@@ -177,15 +190,20 @@ export default function PurchaseOrderManager({
                       'bg-amber-50 text-amber-700 border border-amber-200'
                     }`}>
                       {po.status === 'fully_received' ? <CheckCircle2 className="w-3.5 h-3.5" /> : <Truck className="w-3.5 h-3.5" />}
-                      {po.status === 'fully_received' ? 'مستلم بالكامل' : po.status === 'partially_received' ? 'مستلم جزئياً' : 'جاهز للاستلام'}
+                      {po.status === 'fully_received' ? 'مستلم بالكامل' : po.status === 'partially_received' ? 'مستلم جزئياً' : po.status === 'draft' ? 'مسودة — تستكمل البيانات' : po.status === 'pending_approval' ? 'بانتظار الاعتماد' : po.status === 'cancelled' ? 'ملغى' : 'جاهز للاستلام'}
                     </span>
                   </td>
                   <td className="px-4 py-4 text-center">
                     <div className="flex justify-center items-center gap-2">
                       {['draft', 'pending_approval'].includes(po.status) && (
-                        <button onClick={() => handleApproveOrder(po)} className="px-3 py-1.5 bg-amber-600 text-white font-bold text-xs">
-                          اعتماد أمر الشراء
-                        </button>
+                        <>
+                          <button onClick={() => handleEditDraft(po)} className="px-3 py-1.5 bg-slate-100 text-slate-800 font-bold text-xs">
+                            استكمال الأمر
+                          </button>
+                          <button onClick={() => handleApproveOrder(po)} className="px-3 py-1.5 bg-amber-600 text-white font-bold text-xs">
+                            اعتماد أمر الشراء
+                          </button>
+                        </>
                       )}
                       <button 
                         onClick={() => onReceiveItems(po)}
@@ -234,13 +252,18 @@ export default function PurchaseOrderManager({
 
                 <div>
                   <label className="block text-xs font-bold text-slate-700 mb-1">المورد المتعاقد *</label>
-                  <input 
-                    type="text"
+                  <select
                     required
-                    value={editingPO.vendorName || ''}
-                    onChange={(e) => setEditingPO({ ...editingPO, vendorName: e.target.value })}
+                    value={editingPO.vendorId || ''}
+                    onChange={(e) => {
+                      const supplier = suppliers.find(item => item.id === e.target.value);
+                      setEditingPO({ ...editingPO, vendorId: e.target.value, vendorName: supplier?.name || '' });
+                    }}
                     className="w-full p-2.5 bg-transparent text-sm font-bold"
-                  />
+                  >
+                    <option value="">اختر المورد</option>
+                    {suppliers.map(supplier => <option key={supplier.id} value={supplier.id}>{supplier.name}</option>)}
+                  </select>
                 </div>
 
                 <div>
@@ -256,6 +279,18 @@ export default function PurchaseOrderManager({
               </div>
 
               <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+                <div>
+                  <label className="block text-xs font-bold text-slate-700 mb-1">المستودع المستلم *</label>
+                  <select
+                    required
+                    value={editingPO.warehouseId || ''}
+                    onChange={(e) => setEditingPO({ ...editingPO, warehouseId: e.target.value })}
+                    className="w-full p-2.5 bg-transparent text-sm font-bold"
+                  >
+                    <option value="">اختر المستودع</option>
+                    {warehouses.map(warehouse => <option key={warehouse.id} value={warehouse.id}>{warehouse.name}</option>)}
+                  </select>
+                </div>
                 <div>
                   <label className="block text-xs font-bold text-slate-700 mb-1">شروط التسليم والضمان</label>
                   <input 

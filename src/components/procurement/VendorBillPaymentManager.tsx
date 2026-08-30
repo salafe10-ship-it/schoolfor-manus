@@ -10,6 +10,7 @@ interface VendorBillPaymentManagerProps {
   receipts: GoodsReceiptNote[];
   orders: PurchaseOrder[];
   onSaveBill: (bill: VendorBill) => Promise<void>;
+  onApproveBill?: (bill: VendorBill) => Promise<void>;
   triggerNotification?: (msg: string, type: 'success' | 'warning' | 'info' | 'danger') => void;
 }
 
@@ -18,12 +19,14 @@ export default function VendorBillPaymentManager({
   receipts,
   orders,
   onSaveBill,
+  onApproveBill,
   triggerNotification
 }: VendorBillPaymentManagerProps) {
   const [searchTerm, setSearchTerm] = useState('');
   const [showBillForm, setShowBillForm] = useState(false);
   const [billReceiptId, setBillReceiptId] = useState('');
   const [vendorInvoiceNo, setVendorInvoiceNo] = useState('');
+  const billableReceipts = receipts.filter(receipt => receipt.status !== 'rejected' && Number(receipt.totalReceivedValue) > 0);
   const filtered = vendorBills.filter(b => 
     b.billNo.toLowerCase().includes(searchTerm.toLowerCase()) ||
     b.vendorName.toLowerCase().includes(searchTerm.toLowerCase()) ||
@@ -31,14 +34,14 @@ export default function VendorBillPaymentManager({
   );
 
   const openBillForm = () => {
-    const receipt = receipts.find(item => !vendorBills.some(bill => bill.grnId === item.id));
+    const receipt = billableReceipts.find(item => !vendorBills.some(bill => bill.grnId === item.id));
     if (!receipt) { triggerNotification?.('لا يوجد إذن استلام غير مفوتر لإنشاء فاتورة مورد.', 'warning'); return; }
     setBillReceiptId(receipt.id); setVendorInvoiceNo(''); setShowBillForm(true);
   };
 
   const handleCreateBill = async (event: React.FormEvent) => {
     event.preventDefault();
-    const receipt = receipts.find(item => item.id === billReceiptId && !vendorBills.some(bill => bill.grnId === item.id));
+    const receipt = billableReceipts.find(item => item.id === billReceiptId && !vendorBills.some(bill => bill.grnId === item.id));
     if (!receipt) { triggerNotification?.('اختر إذن استلام صالحاً وغير مفوتر.', 'warning'); return; }
     const po = orders.find(item => item.id === receipt.purchaseOrderId);
     if (!po) { triggerNotification?.('تعذر ربط إذن الاستلام بأمر الشراء.', 'warning'); return; }
@@ -56,6 +59,12 @@ export default function VendorBillPaymentManager({
     catch (error: any) { triggerNotification?.(error?.message || 'تعذر حفظ فاتورة المورد', 'danger'); }
   };
 
+  const handleApproveBill = async (bill: VendorBill) => {
+    if (!onApproveBill) { triggerNotification?.('لا يتوفر مسار اعتماد مركزي لفاتورة المورد.', 'warning'); return; }
+    try { await onApproveBill(bill); }
+    catch (error: any) { triggerNotification?.(error?.message || 'تعذر اعتماد الفاتورة وترحيلها.', 'danger'); }
+  };
+
   return (
     <div className="space-y-6" id="vendor-bill-payment-manager">
       {/* Top Header Card */}
@@ -64,7 +73,7 @@ export default function VendorBillPaymentManager({
           <h3 className="text-xl font-black text-slate-900 flex items-center gap-2">
             <DollarSign className="w-6 h-6 text-purple-600" /> مطابقة فواتير الموردين والمدفوعات (Three-Way Matching & AP)
           </h3>
-          <p className="text-xs text-slate-500 mt-0.5">توثيق فاتورة المورد وربطها بأمر الشراء وإذن الاستلام؛ الدفع والترحيل المالي محجوبان حتى اكتمال التكامل القانوني</p>
+          <p className="text-xs text-slate-500 mt-0.5">توثيق فاتورة المورد وربطها بأمر الشراء وإذن الاستلام؛ الاعتماد ينشئ قيد الالتزام، والسداد يتم من وحدة الخزينة</p>
         </div>
         <button onClick={openBillForm} className="px-4 py-2 bg-slate-900 text-white font-bold text-xs">تسجيل فاتورة مورد</button>
       </div>
@@ -74,7 +83,7 @@ export default function VendorBillPaymentManager({
           <form onSubmit={handleCreateBill} className="bg-white p-6 w-full max-w-lg space-y-4" dir="rtl">
             <h3 className="font-black text-lg">تسجيل فاتورة مورد مرتبطة بالاستلام</h3>
             <select required value={billReceiptId} onChange={event => setBillReceiptId(event.target.value)} className="w-full p-2.5 border border-slate-300">
-              {receipts.filter(receipt => !vendorBills.some(bill => bill.grnId === receipt.id)).map(receipt => <option key={receipt.id} value={receipt.id}>{receipt.grnNo} — {receipt.vendorName} — {receipt.totalReceivedValue.toLocaleString('ar-SA')}</option>)}
+              {billableReceipts.filter(receipt => !vendorBills.some(bill => bill.grnId === receipt.id)).map(receipt => <option key={receipt.id} value={receipt.id}>{receipt.grnNo} — {receipt.vendorName} — {receipt.totalReceivedValue.toLocaleString('ar-SA')}</option>)}
             </select>
             <input required value={vendorInvoiceNo} onChange={event => setVendorInvoiceNo(event.target.value)} placeholder="رقم فاتورة المورد" className="w-full p-2.5 border border-slate-300" />
             <div className="flex justify-end gap-2"><button type="button" onClick={() => setShowBillForm(false)} className="px-4 py-2 bg-slate-100">إلغاء</button><button type="submit" className="px-4 py-2 bg-slate-900 text-white font-bold">حفظ بانتظار المطابقة</button></div>
@@ -88,7 +97,7 @@ export default function VendorBillPaymentManager({
           <ShieldCheck className="w-5 h-5 text-purple-300" /> ميزة حوكمة المطابقة الثلاثية 3-Way Matching Engine
         </div>
         <p className="text-purple-100 text-xs leading-relaxed">
-          تُحفظ الفاتورة بحالة <strong>انتظار المطابقة</strong> مرتبطة بأمر الشراء وإذن الاستلام. لا يُتاح الصرف من هذه الوحدة قبل وجود اعتماد مالي وتكامل خزينة ودفتر أستاذ موثقين.
+          تُحفظ الفاتورة بحالة <strong>انتظار المطابقة</strong> مرتبطة بأمر الشراء وإذن الاستلام. بعد المطابقة والاعتماد ينشئ النظام قيداً كانونيًا (مدين GRNI وضريبة المدخلات / دائن الدائنين)، بينما يبقى تنفيذ السداد من اختصاص الخزينة.
         </p>
       </div>
 
@@ -133,12 +142,20 @@ export default function VendorBillPaymentManager({
                   <td className="px-4 py-4 font-bold text-emerald-700">{bill.paidAmount.toLocaleString('ar-SA')} د.ل</td>
                   <td className="px-4 py-4 font-black text-red-600">{bill.remainingAmount.toLocaleString('ar-SA')} د.ل</td>
                   <td className="px-4 py-4 text-center">
-                    {bill.remainingAmount > 0 ? (
+                    {bill.glJournalEntryId && <div className="text-[10px] font-mono text-emerald-700 mb-1">قيد: {bill.glJournalEntryId}</div>}
+                    {bill.status === 'pending_matching' ? (
                       <button
-                        onClick={() => triggerNotification?.('الصرف محجوب حتى يتوفر تكامل الخزينة ودفتر الأستاذ؛ لم تُسجل دفعة.', 'warning')}
+                        onClick={() => { void handleApproveBill(bill); }}
+                        className="px-3 py-1.5 bg-purple-700 text-white font-bold text-xs inline-flex items-center gap-1"
+                      >
+                        <FileCheck className="w-3.5 h-3.5" /> مطابقة واعتماد وترحيل
+                      </button>
+                    ) : bill.remainingAmount > 0 ? (
+                      <button
+                        onClick={() => triggerNotification?.('الفاتورة معتمدة ومرحلّة؛ أحل طلب السداد إلى وحدة الخزينة لتنفيذ الدفع.', 'info')}
                         className="px-3 py-1.5 bg-amber-100 text-amber-900 font-bold text-xs inline-flex items-center gap-1"
                       >
-                        <Coins className="w-3.5 h-3.5" /> الدفع محجوب بأمان
+                        <Coins className="w-3.5 h-3.5" /> إحالة إلى الخزينة
                       </button>
                     ) : (
                       <span className="px-2.5 py-1 bg-emerald-50 text-emerald-700 font-bold text-xs rounded-lg border border-emerald-200">

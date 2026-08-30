@@ -10,7 +10,7 @@ describe('purchase order creation integrity', () => {
     );
     expect(source).toContain("status: 'draft'");
     expect(source).toContain('lines: [],');
-    expect(source).toContain("if (!editingPO.vendorId || !editingPO.warehouseId || !editingPO.lines?.length)");
+    expect(source).toContain("if (!editingPO.vendorId || !editingPO.vendorName || !editingPO.warehouseId || !editingPO.lines?.length)");
     expect(source).not.toContain("vendorId: 'sup_sony'");
     expect(source).not.toContain("status: 'approved',\n      lines:");
   });

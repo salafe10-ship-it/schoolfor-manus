@@ -10,10 +10,11 @@ interface StockMovementManagerProps {
   items: InventoryItem[];
   movements?: any[];
   onSave?: (movements: any[]) => Promise<void>;
+  onApproveMovement?: (movement: any) => Promise<void>;
   triggerNotification?: (msg: string, type: 'success' | 'warning' | 'info' | 'danger') => void;
 }
 
-export default function StockMovementManager({ items, movements = [], onSave, triggerNotification }: StockMovementManagerProps) {
+export default function StockMovementManager({ items, movements = [], onSave, onApproveMovement, triggerNotification }: StockMovementManagerProps) {
 
   const [filterType, setFilterType] = useState('ALL');
   const [searchTerm, setSearchTerm] = useState('');
@@ -44,7 +45,7 @@ export default function StockMovementManager({ items, movements = [], onSave, tr
     const totalVal = newMovement.quantity * unitPrice;
 
     const created: any = {
-      id: `MV-2026-00${movements.length + 1}`,
+      id: `MV-${Date.now()}`,
       date: new Date().toISOString().split('T')[0],
       type: newMovement.type,
       typeLabel: newMovement.type === 'purchase' ? 'إضافة مخزنية (استلام)' :
@@ -70,12 +71,22 @@ export default function StockMovementManager({ items, movements = [], onSave, tr
     } catch (error: any) { notify(error?.message || 'تعذر حفظ الحركة مركزياً', 'danger'); }
   };
 
-  const handlePostMovement = (mv: any) => {
+  const handlePostMovement = async (mv: any) => {
     if (mv.status !== 'approved') {
       notify('لا يمكن ترحيل الحركة قبل اعتمادها من الجهة المخولة', 'warning');
       return;
     }
-    notify(`الترحيل المالي للحركة ${mv.id} متوقف حتى يتوفر عقد دفتر أستاذ كانوني؛ لم يُنشأ قيد.`, 'warning');
+    if (!onApproveMovement) { notify('لا يتوفر مسار إعادة ترحيل مركزي لهذه الحركة.', 'warning'); return; }
+    try {
+      await onApproveMovement(mv);
+      notify(`تمت إعادة محاولة الترحيل الكانوني للحركة ${mv.id}.`, 'success');
+    } catch (error: any) { notify(error?.message || 'تعذرت إعادة محاولة ترحيل الحركة.', 'danger'); }
+  };
+
+  const handleApprove = async (mv: any) => {
+    if (!onApproveMovement) { notify('لا يتوفر مسار اعتماد مركزي لهذه الحركة.', 'warning'); return; }
+    try { await onApproveMovement(mv); }
+    catch (error: any) { notify(error?.message || 'تعذر اعتماد الحركة وترحيلها.', 'danger'); }
   };
 
   const filtered = movements.filter(m => {
@@ -170,12 +181,20 @@ export default function StockMovementManager({ items, movements = [], onSave, tr
                   </td>
                   <td className="px-5 py-4 text-center">
                     <div className="flex justify-center items-center gap-2">
-                      {mv.status !== 'posted' && (
+                      {mv.status === 'pending_approval' && (
                         <button 
-                          onClick={() => handlePostMovement(mv)}
+                          onClick={() => { void handleApprove(mv); }}
                           className="px-3 py-1 bg-emerald-600 hover:bg-emerald-700 text-white font-bold text-xs rounded-lg transition"
                         >
-                          ترحيل محاسبي
+                          اعتماد وترحيل
+                        </button>
+                      )}
+                      {mv.status === 'approved' && mv.type !== 'transfer' && (
+                        <button
+                          onClick={() => { void handlePostMovement(mv); }}
+                          className="px-3 py-1 bg-amber-600 hover:bg-amber-700 text-white font-bold text-xs rounded-lg transition"
+                        >
+                          إعادة الترحيل
                         </button>
                       )}
                       <button 
@@ -222,9 +241,10 @@ export default function StockMovementManager({ items, movements = [], onSave, tr
                 <label className="block text-xs font-bold text-slate-700 mb-1">الصنف المخزني *</label>
                 <select 
                   value={newMovement.itemId}
-                  onChange={(e) => setNewMovement({ ...newMovement, itemId: e.target.value })}
+                  onChange={(e) => { const item = items.find(row => row.id === e.target.value); setNewMovement({ ...newMovement, itemId: e.target.value, unitCost: item?.costPrice ?? newMovement.unitCost }); }}
                   className="w-full p-2.5 bg-transparent text-sm font-bold"
                 >
+                  <option value="">اختر الصنف</option>
                   {items.map(i => (
                     <option key={i.id} value={i.id}>{i.name} (الكمية المتاحة: {i.quantity})</option>
                   ))}
@@ -254,6 +274,20 @@ export default function StockMovementManager({ items, movements = [], onSave, tr
                     className="w-full p-2.5 bg-transparent text-sm font-mono text-center"
                   />
                 </div>
+              </div>
+
+              <div>
+                <label className="block text-xs font-bold text-slate-700 mb-1">تكلفة الوحدة للترحيل المحاسبي *</label>
+                <input
+                  type="number"
+                  min="0"
+                  step="0.01"
+                  required
+                  value={newMovement.unitCost}
+                  onChange={(e) => setNewMovement({ ...newMovement, unitCost: Number(e.target.value) })}
+                  className="w-full p-2.5 bg-transparent text-sm font-bold text-center"
+                />
+                <p className="text-[11px] text-slate-500 mt-1">تُستخدم القيمة لبناء قيد المخزون/تكلفة الصرف عند اعتماد الحركة.</p>
               </div>
 
               <div className="flex justify-end gap-3 pt-4 border-t border-slate-100">

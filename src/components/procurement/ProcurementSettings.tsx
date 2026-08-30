@@ -13,13 +13,14 @@ export default function ProcurementSettings({ settings = {}, onSave, triggerNoti
   const [requireRfqThreshold, setRequireRfqThreshold] = useState<number>(Number(settings.requireRfqThreshold || 0));
   const [apGlAccount, setApGlAccount] = useState<string>(String(settings.apGlAccount || ''));
   const [grniGlAccount, setGrniGlAccount] = useState<string>(String(settings.grniGlAccount || ''));
+  const [inputVatGlAccount, setInputVatGlAccount] = useState<string>(String(settings.inputVatGlAccount || ''));
   const [purchaseExpenseAccount, setPurchaseExpenseAccount] = useState<string>(String(settings.purchaseExpenseAccount || ''));
 
   const handleSaveSettings = async (e: React.FormEvent) => {
     e.preventDefault();
     if (!onSave) { triggerNotification?.('حفظ إعدادات المشتريات متوقف حتى يتوفر المصدر المركزي.', 'warning'); return; }
     try {
-      await onSave({ managerApprovalLimit, boardApprovalLimit, requireRfqThreshold, apGlAccount, grniGlAccount, purchaseExpenseAccount });
+      await onSave({ managerApprovalLimit, boardApprovalLimit, requireRfqThreshold, apGlAccount, grniGlAccount, inputVatGlAccount, purchaseExpenseAccount });
       triggerNotification?.('✓ تم حفظ إعدادات وسقوف المشتريات مركزياً', 'success');
     } catch (error: any) { triggerNotification?.(error?.message || 'تعذر حفظ إعدادات المشتريات مركزياً', 'danger'); }
   };
@@ -82,7 +83,7 @@ export default function ProcurementSettings({ settings = {}, onSave, triggerNoti
             <DollarSign className="w-5 h-5 text-emerald-600" /> توجيه القيود المحاسبية الآلية بالدليل المالي
           </h4>
 
-          <div className="grid grid-cols-1 md:grid-cols-3 gap-5">
+          <div className="grid grid-cols-1 md:grid-cols-4 gap-5">
             <div>
               <label className="block text-xs font-bold text-slate-700 mb-1">حساب دائنو المشتريات (Accounts Payable)</label>
               <input 
@@ -99,6 +100,16 @@ export default function ProcurementSettings({ settings = {}, onSave, triggerNoti
                 type="text"
                 value={grniGlAccount}
                 onChange={(e) => setGrniGlAccount(e.target.value)}
+                className="w-full p-2.5 bg-transparent text-sm font-bold"
+              />
+            </div>
+
+            <div>
+              <label className="block text-xs font-bold text-slate-700 mb-1">حساب ضريبة المدخلات</label>
+              <input
+                type="text"
+                value={inputVatGlAccount}
+                onChange={(e) => setInputVatGlAccount(e.target.value)}
                 className="w-full p-2.5 bg-transparent text-sm font-bold"
               />
             </div>

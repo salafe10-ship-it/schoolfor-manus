@@ -11,10 +11,11 @@ interface StockCountManagerProps {
   stocktakes?: any[];
   settings?: Record<string, any>;
   onSave?: (stocktakes: any[]) => Promise<void>;
+  onApproveStocktake?: (stocktake: any) => Promise<void>;
   triggerNotification?: (msg: string, type: 'success' | 'warning' | 'info' | 'danger') => void;
 }
 
-export default function StockCountManager({ items, stocktakes = [], settings = {}, onSave, triggerNotification }: StockCountManagerProps) {
+export default function StockCountManager({ items, stocktakes = [], settings = {}, onSave, onApproveStocktake, triggerNotification }: StockCountManagerProps) {
   const [valuationPolicy, setValuationPolicy] = useState<'weighted_average' | 'fifo'>(settings.defaultValuationMethod === 'fifo' ? 'fifo' : 'weighted_average');
   const [showCountForm, setShowCountForm] = useState(false);
   const [countItemId, setCountItemId] = useState('');
@@ -25,8 +26,10 @@ export default function StockCountManager({ items, stocktakes = [], settings = {
     if (triggerNotification) triggerNotification(msg, type);
   };
 
-  const handleApproveDiscrepancy = (_rec: any) => {
-    notify('اعتماد الأثر المالي لتسوية الجرد متوقف حتى يتوفر عقد دفتر أستاذ كانوني؛ لم يُنشأ قيد.', 'warning');
+  const handleApproveDiscrepancy = async (rec: any) => {
+    if (!onApproveStocktake) { notify('لا يتوفر مسار اعتماد مركزي لمحضر الجرد.', 'warning'); return; }
+    try { await onApproveStocktake(rec); }
+    catch (error: any) { notify(error?.message || 'تعذر اعتماد محضر الجرد وترحيل التسوية.', 'danger'); }
   };
 
   const openStocktake = () => {
@@ -152,18 +155,18 @@ export default function StockCountManager({ items, stocktakes = [], settings = {
                   </td>
                   <td className="px-5 py-4">
                     <span className={`px-2.5 py-1 rounded-lg text-xs font-bold ${
-                      rec.status === 'approved_posted' ? 'bg-emerald-50 text-emerald-700 border border-emerald-200' : 'bg-amber-50 text-amber-700 border border-amber-200'
+                      rec.status === 'approved' ? 'bg-emerald-50 text-emerald-700 border border-emerald-200' : 'bg-amber-50 text-amber-700 border border-amber-200'
                     }`}>
-                      {rec.statusLabel}
+                      {rec.statusLabel}{rec.glJournalEntryId ? ` — قيد ${rec.glJournalEntryId}` : ''}
                     </span>
                   </td>
                   <td className="px-5 py-4 text-center">
-                    {rec.status !== 'approved_posted' && (
+                    {rec.status === 'pending_approval' && (
                       <button 
-                        onClick={() => handleApproveDiscrepancy(rec)}
+                        onClick={() => { void handleApproveDiscrepancy(rec); }}
                         className="px-3 py-1.5 bg-slate-900 hover:bg-slate-800 text-white font-bold text-xs transition"
                       >
-                        اعتماد وتسوية
+                        اعتماد وترحيل التسوية
                       </button>
                     )}
                   </td>

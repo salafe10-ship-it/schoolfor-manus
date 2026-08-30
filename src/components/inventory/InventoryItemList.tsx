@@ -466,9 +466,42 @@ export default function InventoryItemList({
                       type="number" 
                       min="0"
                       max="100"
-                      value={editingItem.vatRate || 15}
+                      value={editingItem.vatRate ?? 0}
                       onChange={(e) => setEditingItem({ ...editingItem, vatRate: parseFloat(e.target.value) || 0 })}
                       className="w-full p-2.5 bg-transparent text-sm font-bold text-center"
+                    />
+                  </div>
+                </div>
+
+                <div className="grid grid-cols-1 md:grid-cols-3 gap-4 border-t border-emerald-100 pt-4">
+                  <div>
+                    <label className="block text-xs font-bold text-slate-700 mb-1">حساب أصل المخزون</label>
+                    <input
+                      type="text"
+                      value={editingItem.inventoryAccountId || ''}
+                      onChange={(e) => setEditingItem({ ...editingItem, inventoryAccountId: e.target.value })}
+                      placeholder="افتراضي 1301"
+                      className="w-full p-2.5 bg-transparent font-mono text-sm font-bold"
+                    />
+                  </div>
+                  <div>
+                    <label className="block text-xs font-bold text-slate-700 mb-1">حساب تكلفة الصرف (COGS)</label>
+                    <input
+                      type="text"
+                      value={editingItem.costOfGoodsAccountId || ''}
+                      onChange={(e) => setEditingItem({ ...editingItem, costOfGoodsAccountId: e.target.value })}
+                      placeholder="افتراضي 5270"
+                      className="w-full p-2.5 bg-transparent font-mono text-sm font-bold"
+                    />
+                  </div>
+                  <div>
+                    <label className="block text-xs font-bold text-slate-700 mb-1">حساب فروقات الجرد</label>
+                    <input
+                      type="text"
+                      value={editingItem.adjustmentAccountId || ''}
+                      onChange={(e) => setEditingItem({ ...editingItem, adjustmentAccountId: e.target.value })}
+                      placeholder="افتراضي 5280"
+                      className="w-full p-2.5 bg-transparent font-mono text-sm font-bold"
                     />
                   </div>
                 </div>

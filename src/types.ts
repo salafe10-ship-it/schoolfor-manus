@@ -2297,6 +2297,7 @@ export interface ProcurementItemLine {
   quantityReceived?: number;
   estimatedUnitPrice: number;
   actualUnitPrice?: number;
+  discountAmount?: number;
   taxRate?: number;
   taxAmount?: number;
   totalAmount: number;
@@ -2566,5 +2567,4 @@ export interface FixedAsset {
   createdAt: string;
   updatedAt: string;
 }
-
 

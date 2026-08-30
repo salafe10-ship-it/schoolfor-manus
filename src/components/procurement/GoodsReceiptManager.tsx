@@ -23,40 +23,88 @@ export default function GoodsReceiptManager({
   const [selectedPoId, setSelectedPoId] = useState<string>('');
   const [inspectorName, setInspectorName] = useState<string>('المستخدم الحالي');
   const [inspectionResult, setInspectionResult] = useState<'passed' | 'conditional_pass' | 'failed'>('passed');
-  const [deliveryNoteNo, setDeliveryNoteNo] = useState<string>(`DN-${Math.floor(1000 + Math.random() * 9000)}`);
-  const [receivedQty, setReceivedQty] = useState<number>(0);
-  const [rejectedQty, setRejectedQty] = useState<number>(0);
+  const [deliveryNoteNo, setDeliveryNoteNo] = useState<string>('');
+  const [receivedQuantities, setReceivedQuantities] = useState<Record<string, number>>({});
+  const [rejectedQuantities, setRejectedQuantities] = useState<Record<string, number>>({});
   const [rejectionReason, setRejectionReason] = useState<string>('');
 
-  const selectedPO = orders.find(o => o.id === selectedPoId) || orders[0];
+  const eligibleOrders = orders.filter(order => ['approved', 'issued', 'partially_received'].includes(order.status));
+  const selectedPO = eligibleOrders.find(o => o.id === selectedPoId);
+  const selectedSourceLines = selectedPO?.lines || [];
+  const lineKey = (line: any, index: number) => String(line.id || line.itemId || line.itemCode || index);
+  const remainingByLine = selectedSourceLines.reduce<Record<string, number>>((result, line, index) => {
+    const key = lineKey(line, index);
+    const itemId = line.itemId || line.itemCode;
+    const ordered = Number(line.quantityOrdered ?? line.quantityRequested ?? 0);
+    const received = selectedPO ? receipts.filter(receipt => receipt.purchaseOrderId === selectedPO.id).reduce((sum, receipt) => sum + receipt.lines
+      .filter(receiptLine => (receiptLine.itemId || receiptLine.itemCode) === itemId)
+      .reduce((lineSum, receiptLine) => lineSum + Number(receiptLine.receivedQty || 0), 0), 0) : 0;
+    result[key] = Math.max(0, ordered - received);
+    return result;
+  }, {});
+  const remainingQty = Object.values(remainingByLine).reduce((sum, quantity) => sum + quantity, 0);
 
   const handleOpenNew = () => {
-    if (orders.length > 0) {
-      setSelectedPoId(orders[0].id);
+    if (eligibleOrders.length === 0) {
+      triggerNotification?.('لا يوجد أمر شراء معتمد ومفتوح للاستلام حالياً.', 'warning');
+      return;
     }
+    setSelectedPoId(eligibleOrders[0].id);
+    setReceivedQuantities({});
+    setRejectedQuantities({});
+    setDeliveryNoteNo('');
     setShowModal(true);
   };
 
   const handleCreateGRN = async (e: React.FormEvent) => {
     e.preventDefault();
-    if (!selectedPO) return;
-    const sourceLine = selectedPO.lines[0];
-    if (!sourceLine) {
+    if (!selectedPO) {
+      triggerNotification?.('اختر أمراً معتمداً ومفتوحاً للاستلام.', 'warning');
+      return;
+    }
+    if (!selectedSourceLines.length) {
       triggerNotification?.('لا يمكن إنشاء إذن استلام لأمر شراء بلا بنود موثقة', 'warning');
       return;
     }
-    if (!Number.isFinite(receivedQty) || receivedQty <= 0 || !Number.isFinite(rejectedQty) || rejectedQty < 0 || rejectedQty > receivedQty) {
-      triggerNotification?.('أدخل كمية مستلمة موجبة، ويجب ألا تتجاوز الكمية المرفوضة الكمية المستلمة', 'warning');
+    const invalidLine = selectedSourceLines.some((line, index) => {
+      const key = lineKey(line, index);
+      const received = Number(receivedQuantities[key] || 0);
+      const rejected = Number(rejectedQuantities[key] || 0);
+      return !Number.isInteger(received) || received < 0 || received > remainingByLine[key]
+        || !Number.isInteger(rejected) || rejected < 0 || rejected > received;
+    });
+    const hasReceivedLine = selectedSourceLines.some((line, index) => Number(receivedQuantities[lineKey(line, index)] || 0) > 0);
+    if (!deliveryNoteNo.trim() || !inspectorName.trim() || !hasReceivedLine || invalidLine) {
+      triggerNotification?.('أدخل كمية واردة لبند واحد على الأقل، ولا تتجاوز المتبقي، مع ضبط الكمية المرفوضة ضمن الواردة.', 'warning');
       return;
     }
-    const unitCost = sourceLine.actualUnitPrice ?? sourceLine.estimatedUnitPrice ?? 0;
-    const acceptedQty = receivedQty - rejectedQty;
-    const totalValue = acceptedQty * unitCost;
+    const grnLines = selectedSourceLines.map((sourceLine, index) => {
+      const key = lineKey(sourceLine, index);
+      const received = Number(receivedQuantities[key] || 0);
+      const rejected = Number(rejectedQuantities[key] || 0);
+      const unitCost = Number(sourceLine.actualUnitPrice ?? sourceLine.estimatedUnitPrice ?? 0);
+      const accepted = inspectionResult === 'failed' ? 0 : received - rejected;
+      const effectiveRejected = inspectionResult === 'failed' ? received : rejected;
+      return {
+        lineId: `grnl_${Date.now()}_${index}`,
+        itemId: sourceLine.itemId || sourceLine.itemCode,
+        itemCode: sourceLine.itemCode,
+        itemName: sourceLine.itemName,
+        orderedQty: sourceLine.quantityOrdered ?? sourceLine.quantityRequested,
+        receivedQty: received,
+        acceptedQty: accepted,
+        rejectedQty: effectiveRejected,
+        rejectionReason: inspectionResult === 'failed' ? (rejectionReason.trim() || 'رفض كامل بعد الفحص الفني') : rejectionReason.trim(),
+        unitCost,
+        totalCost: accepted * unitCost
+      };
+    }).filter(line => line.receivedQty > 0);
+    const totalValue = grnLines.reduce((sum, line) => sum + line.totalCost, 0);
 
     const newGRN: GoodsReceiptNote = {
       id: `grn_${Date.now()}`,
       schoolId: '',
-      grnNo: `GRN-2026-${Math.floor(100 + Math.random() * 900)}`,
+      grnNo: `GRN-${Date.now()}`,
       grnDate: new Date().toISOString().split('T')[0],
       purchaseOrderId: selectedPO.id,
       poNo: selectedPO.poNo,
@@ -67,30 +115,16 @@ export default function GoodsReceiptManager({
       inspectorName,
       inspectionResult,
       status: inspectionResult === 'failed' ? 'rejected' : inspectionResult === 'conditional_pass' ? 'partially_accepted' : 'inspected_received',
-      lines: [
-        {
-          lineId: `grnl_${Date.now()}`,
-          itemId: sourceLine.itemId,
-          itemCode: sourceLine.itemCode,
-          itemName: sourceLine.itemName,
-          orderedQty: sourceLine.quantityOrdered ?? sourceLine.quantityRequested,
-          receivedQty,
-          acceptedQty,
-          rejectedQty,
-          rejectionReason,
-          unitCost,
-          totalCost: totalValue
-        }
-      ],
+      lines: grnLines,
       totalReceivedValue: totalValue,
       isPostedToGL: false,
-      notes: 'تم فحص الشحنة وحفظ محضر الاستلام؛ الترحيل المالي يتطلب تكامل دفتر الأستاذ.',
+      notes: 'تم فحص الشحنة وحفظ محضر الاستلام؛ أضيفت الكمية المقبولة فقط، ويُنشئ الخادم قيد الاستلام الكانوني عند جاهزية دفتر الأستاذ.',
       createdAt: new Date().toISOString()
     };
 
     try {
       await onSaveReceipt(newGRN);
-      triggerNotification?.(`✓ تم حفظ إذن الاستلام والفحص (${newGRN.grnNo}) مركزياً؛ لم يُنشأ قيد مالي`, 'success');
+      triggerNotification?.(`✓ تم حفظ إذن الاستلام والفحص (${newGRN.grnNo}) مركزياً وإحالته إلى الترحيل الكانوني.`, 'success');
       setShowModal(false);
     } catch (error: any) { triggerNotification?.(error?.message || 'تعذر حفظ محضر الاستلام مركزياً', 'danger'); }
   };
@@ -165,7 +199,7 @@ export default function GoodsReceiptManager({
                   <td className="px-4 py-4 font-black text-emerald-700">{grn.totalReceivedValue.toLocaleString('ar-SA')} د.ل</td>
                   <td className="px-4 py-4">
                     <span className="px-2.5 py-1 bg-amber-100 text-amber-900 text-xs font-bold rounded-md">
-                      {grn.isPostedToGL && grn.glJournalEntryId ? grn.glJournalEntryId : 'لم يُرحّل — ينتظر دفتر الأستاذ'}
+                      {grn.isPostedToGL && grn.glJournalEntryId ? `مرحل: ${grn.glJournalEntryId}` : 'بانتظار جاهزية دفتر الأستاذ'}
                     </span>
                   </td>
                 </tr>
@@ -188,10 +222,10 @@ export default function GoodsReceiptManager({
                 <label className="block text-xs font-bold text-slate-700 mb-1">اختر أمر الشراء المرتبط (PO) *</label>
                 <select 
                   value={selectedPoId}
-                  onChange={(e) => setSelectedPoId(e.target.value)}
+                  onChange={(e) => { setSelectedPoId(e.target.value); setReceivedQuantities({}); setRejectedQuantities({}); setRejectionReason(''); }}
                   className="w-full p-2.5 bg-transparent text-sm font-bold text-slate-800"
                 >
-                  {orders.map((po) => (
+                  {eligibleOrders.map((po) => (
                     <option key={po.id} value={po.id}>
                       {po.poNo} - {po.vendorName} ({po.grandTotal.toLocaleString('ar-SA')} د.ل)
                     </option>
@@ -223,30 +257,54 @@ export default function GoodsReceiptManager({
                 </div>
               </div>
 
-              <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
-                <div>
-                  <label className="block text-xs font-bold text-slate-700 mb-1">الكمية المرفوضة</label>
-                  <input type="number" min="0" max={receivedQty} value={rejectedQty} onChange={e => setRejectedQty(Number(e.target.value))} className="w-full p-2.5 bg-transparent text-sm font-bold" />
+              <div className="space-y-3 border border-slate-200 p-4">
+                <div className="flex justify-between items-center">
+                  <h4 className="font-black text-slate-900 text-sm">تفاصيل الاستلام حسب بنود أمر الشراء</h4>
+                  <span className="text-[11px] text-slate-500">اترك البند بصفر إذا لم يصل في هذه الشحنة</span>
                 </div>
-                <div>
-                  <label className="block text-xs font-bold text-slate-700 mb-1">سبب الرفض/الملاحظات</label>
-                  <input type="text" value={rejectionReason} onChange={e => setRejectionReason(e.target.value)} className="w-full p-2.5 bg-transparent text-sm" />
-                </div>
+                {selectedSourceLines.map((sourceLine, index) => {
+                  const key = lineKey(sourceLine, index);
+                  const received = Number(receivedQuantities[key] || 0);
+                  return (
+                    <div key={key} className="grid grid-cols-1 md:grid-cols-5 gap-3 items-end border-t border-slate-100 pt-3">
+                      <div className="md:col-span-2">
+                        <span className="text-[10px] text-slate-500 font-bold block">الصنف</span>
+                        <span className="text-xs font-bold text-slate-900">{sourceLine.itemName} — {sourceLine.itemCode}</span>
+                        <span className="text-[10px] text-slate-500 block">المتبقي: {remainingByLine[key]} وحدة</span>
+                      </div>
+                      <div>
+                        <label className="block text-[10px] text-slate-500 font-bold mb-1">الواردة فعلياً</label>
+                        <input
+                          type="number"
+                          min="0"
+                          max={remainingByLine[key]}
+                          value={receivedQuantities[key] ?? 0}
+                          onChange={(e) => setReceivedQuantities({ ...receivedQuantities, [key]: Number(e.target.value) })}
+                          className="w-full p-2 bg-transparent text-sm font-bold text-center"
+                        />
+                      </div>
+                      <div>
+                        <label className="block text-[10px] text-slate-500 font-bold mb-1">المرفوضة</label>
+                        <input
+                          type="number"
+                          min="0"
+                          max={received}
+                          value={rejectedQuantities[key] ?? 0}
+                          onChange={(e) => setRejectedQuantities({ ...rejectedQuantities, [key]: Number(e.target.value) })}
+                          className="w-full p-2 bg-transparent text-sm font-bold text-center"
+                        />
+                      </div>
+                      <div className="text-[11px] text-slate-600 font-bold">المقبول: {inspectionResult === 'failed' ? 0 : Math.max(0, received - Number(rejectedQuantities[key] || 0))}</div>
+                    </div>
+                  );
+                })}
               </div>
 
               <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
                 <div>
-                  <label className="block text-xs font-bold text-slate-700 mb-1">الكمية المقبولة المستلمة فعلياً</label>
-                  <input 
-                    type="number"
-                    min="1"
-                    required
-                    value={receivedQty}
-                    onChange={(e) => setReceivedQty(parseInt(e.target.value) || 1)}
-                    className="w-full p-2.5 bg-transparent text-sm font-bold"
-                  />
+                  <label className="block text-xs font-bold text-slate-700 mb-1">سبب الرفض/الملاحظات</label>
+                  <input type="text" value={rejectionReason} onChange={e => setRejectionReason(e.target.value)} className="w-full p-2.5 bg-transparent text-sm" />
                 </div>
-
                 <div>
                   <label className="block text-xs font-bold text-slate-700 mb-1">نتيجة الفحص الفني</label>
                   <select 
@@ -262,12 +320,12 @@ export default function GoodsReceiptManager({
               </div>
 
               <div className="p-4 bg-amber-50/50 border border-amber-100 text-xs space-y-1">
-                <span className="font-bold text-amber-900 block flex items-center gap-1">
-                  <ShieldCheck className="w-4 h-4 text-amber-600" /> فصل الاستلام المخزني عن الترحيل المالي
-                </span>
-                <p className="text-slate-600">
-                  يحفظ النظام محضر الفحص ويحدّث الكمية المقبولة فقط. لا يُنشأ قيد يومية من هذه الشاشة؛ الترحيل يتطلب تكامل دفتر الأستاذ وخرائط الحسابات المعتمدة.
-                </p>
+                  <span className="font-bold text-amber-900 block flex items-center gap-1">
+                    <ShieldCheck className="w-4 h-4 text-amber-600" /> ربط الاستلام المخزني بالترحيل المالي
+                  </span>
+                  <p className="text-slate-600">
+                  المتبقي القابل للاستلام لكل بنود الأمر: <strong>{remainingQty}</strong> وحدة. يحفظ النظام محضر الفحص ويحدّث الكمية المقبولة فقط، ثم يمرر قيد الاستلام (مدين مخزون / دائن GRNI) إلى دفتر الأستاذ الكانوني.
+                  </p>
               </div>
 
               <div className="flex justify-end gap-3 pt-4 border-t border-slate-100">

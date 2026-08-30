@@ -78,7 +78,7 @@ export default function InventoryDashboard({ items = [], onNavigateTab }: Invent
           <div>
             <p className="text-xs text-slate-500 font-bold">إجمالي تقييم المخزون</p>
             <p className="text-xl font-black text-emerald-700 mt-0.5">{totalValuation.toLocaleString('ar-SA')} د.ل</p>
-            <p className="text-[11px] text-emerald-600 font-semibold">مطابق لدفتر الأستاذ العام</p>
+            <p className="text-[11px] text-amber-600 font-semibold">تقييم تشغيلي؛ تظهر هوية القيد الكانوني على مستندات الترحيل</p>
           </div>
         </div>
 

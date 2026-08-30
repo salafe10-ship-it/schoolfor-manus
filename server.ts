@@ -93,6 +93,7 @@ import {
   projectExamDatabaseForRead
 } from './src/modules/exams/application/ExamAuthorizationPolicy.js';
 import { calculatePayrollRun } from './src/modules/hr/domain/PayrollCalculation.js';
+import { validateInventoryProcurementSnapshot } from './src/modules/inventory/domain/InventoryProcurementValidation.js';
 
 type FinancialWriteMode = 'snapshot_read_only' | 'snapshot_write' | 'erp_integrated';
 
@@ -199,6 +200,63 @@ function validateHrSnapshotData(data: Record<string, any>): void {
   if (data.settings !== undefined && (!data.settings || typeof data.settings !== 'object' || Array.isArray(data.settings))) {
     throw new ValidationError('إعدادات الموارد البشرية يجب أن تكون كائناً.');
   }
+}
+
+const INVENTORY_FINANCIAL_COLLECTIONS = ['goodsReceipts', 'vendorBills', 'movements', 'stocktakes'] as const;
+
+function validateInventoryPostingMetadata(currentData: Record<string, any>, requestedData: Record<string, any>): void {
+  for (const collection of INVENTORY_FINANCIAL_COLLECTIONS) {
+    const currentById = new Map((Array.isArray(currentData[collection]) ? currentData[collection] : [])
+      .filter((row: any) => row && typeof row === 'object')
+      .map((row: any) => [String(row.id), row]));
+    for (const row of (Array.isArray(requestedData[collection]) ? requestedData[collection] : [])) {
+      if (!row || typeof row !== 'object') continue;
+      const hasPostingMetadata = Boolean(String(row.glJournalEntryId || row.journalEntryId || '').trim()) || row.isPostedToGL === true;
+      if (!hasPostingMetadata) continue;
+      const previous = currentById.get(String(row.id));
+      if (!previous || String(previous.glJournalEntryId || previous.journalEntryId || '').trim() !== String(row.glJournalEntryId || row.journalEntryId || '').trim()
+        || Boolean(previous.isPostedToGL) !== Boolean(row.isPostedToGL)) {
+        throw new ValidationError(`رابط القيد في ${collection}/${String(row.id || '')} لا يمكن إنشاؤه من المتصفح؛ يجب أن يصدره دفتر الأستاذ الكانوني.`);
+      }
+    }
+  }
+}
+
+function applyInventoryPostingLinks(data: Record<string, any>, sourceLinks: Array<{ sourceType: string; sourceId: string; journalEntryId: string }>): Record<string, any> {
+  const next = JSON.parse(JSON.stringify(data)) as Record<string, any>;
+  const sourceCollection: Record<string, string> = {
+    inventory_receipt: 'goodsReceipts',
+    vendor_bill: 'vendorBills',
+    inventory_movement: 'movements',
+    inventory_stocktake: 'stocktakes'
+  };
+  for (const link of sourceLinks) {
+    const collection = sourceCollection[link.sourceType];
+    if (!collection || !Array.isArray(next[collection])) continue;
+    const row = next[collection].find((candidate: any) => String(candidate?.id || '') === String(link.sourceId));
+    if (!row) continue;
+    row.glJournalEntryId = link.journalEntryId;
+    row.isPostedToGL = true;
+    if (collection === 'goodsReceipts') row.status = 'posted_to_gl';
+    if (collection === 'movements') { row.status = 'posted'; row.statusLabel = `مرحل محاسبياً — ${link.journalEntryId}`; }
+    if (collection === 'stocktakes') row.statusLabel = `مرحل محاسبياً — ${link.journalEntryId}`;
+  }
+  return next;
+}
+
+function isPurchaseOrderReceiptProgression(current: Record<string, any>, requested: Record<string, any>): boolean {
+  if (!['approved', 'issued', 'partially_received'].includes(String(current.status))
+    || !['partially_received', 'fully_received'].includes(String(requested.status))) return false;
+  const currentLines = Array.isArray(current.lines) ? current.lines : [];
+  const requestedLines = Array.isArray(requested.lines) ? requested.lines : [];
+  if (currentLines.length !== requestedLines.length) return false;
+  const stripProgress = (line: Record<string, any>) => {
+    const copy = { ...line };
+    delete copy.quantityReceived;
+    return copy;
+  };
+  return stableJsonStringify({ ...current, status: undefined, lines: currentLines.map(stripProgress) })
+    === stableJsonStringify({ ...requested, status: undefined, lines: requestedLines.map(stripProgress) });
 }
 
 function validateScheduleForApproval(payload: Record<string, any>): void {
@@ -2763,7 +2821,9 @@ async function startServer() {
       const tenantId = String(identity?.tenantId || '').trim();
       const schoolId = String(identity?.schoolId || '').trim();
       const expectedVersion = Number(req.body?.expectedVersion);
-      const requestedData = req.body?.data;
+      const requestedData = req.body?.data && typeof req.body.data === 'object' && !Array.isArray(req.body.data)
+        ? JSON.parse(JSON.stringify(req.body.data)) as Record<string, any>
+        : req.body?.data;
       const requestedCountryCode = String(req.body?.countryCode || 'ZZ').trim().toUpperCase();
       const requestedLegalConfiguration = req.body?.legalConfiguration ?? {};
       const tenantContext = (req as any).tenantContext;
@@ -4163,6 +4223,9 @@ async function startServer() {
         }
       }
       let nextVersion = expectedVersion + 1;
+      let persistedData = requestedData as Record<string, any>;
+      let canonicalErpReady = false;
+      let canonicalErpSync: Awaited<ReturnType<typeof CanonicalErpPostingService.syncInventoryProcurementSnapshot>> | null = null;
       await UnitOfWork.runInTransaction(schoolId, {
         operationName: 'Write versioned inventory database', tenantId, userId: identity.id,
         userName: identity.name || 'المستخدم الحالي', ipAddress: req.ip || 'unknown',
@@ -4176,6 +4239,15 @@ async function startServer() {
         );
         const actorId = actorResult.rows[0]?.id;
         if (!actorId) throw new AuthenticationError('تعذر ربط الجلسة بسجل المستخدم المؤسسي.');
+        // Materialize the version-zero row before reading it. Without this
+        // insert-if-missing, two first writers can both observe an absent row
+        // and one of them can silently overwrite the other.
+        await transaction.query(
+          `INSERT INTO public.inventory_database (tenant_id, school_id, data, version, updated_at, updated_by)
+           VALUES ($1, $2, $3::jsonb, 0, now(), $4)
+           ON CONFLICT (school_id) DO NOTHING`,
+          [tenantId, schoolId, JSON.stringify({}), actorId]
+        );
         const current = await transaction.query<{ data: Record<string, any>; version: number }>(
           `SELECT data, version FROM public.inventory_database WHERE tenant_id = $1 AND school_id = $2 FOR UPDATE`,
           [tenantId, schoolId]
@@ -4183,13 +4255,23 @@ async function startServer() {
         const actualVersion = Number(current.rows[0]?.version || 0);
         if (actualVersion !== expectedVersion) throw new ConflictError('تم تعديل المخزون أو المشتريات بواسطة مستخدم آخر. أعد المزامنة.', { expectedVersion, actualVersion });
         const currentData = current.rows[0]?.data || {};
+        validateInventoryPostingMetadata(currentData, requestedData as Record<string, any>);
+        validateInventoryProcurementSnapshot(requestedData as Record<string, any>, { allowCanonicalPostingReferences: true });
         for (const key of ['movements', 'stocktakes', 'purchaseRequests', 'rfqs', 'quotations', 'purchaseOrders', 'goodsReceipts', 'vendorBills', 'vendorPayments']) {
-          for (const locked of (Array.isArray(currentData[key]) ? currentData[key] : []).filter((row: any) => ['approved', 'issued', 'awarded', 'posted', 'closed', 'paid', 'posted_to_gl', 'partially_received', 'fully_received'].includes(String(row?.status)))) {
+          for (const locked of (Array.isArray(currentData[key]) ? currentData[key] : []).filter((row: any) => ['approved', 'issued', 'awarded', 'posted', 'closed', 'paid', 'posted_to_gl', 'fully_received', 'converted_to_po', 'responses_received', 'sent', 'inspected_received', 'partially_accepted'].includes(String(row?.status)))) {
             const requested = (requestedData as any)[key].find((row: any) => row?.id === locked.id);
+            if (key === 'purchaseOrders' && requested && isPurchaseOrderReceiptProgression(locked, requested)) continue;
             if (!requested || stableJsonStringify(requested) !== stableJsonStringify(locked)) {
               throw new ConflictError(`السجل ${locked.id} في ${key} محمي بعد الاعتماد ولا يقبل تعديلاً عاماً.`);
             }
           }
+        }
+        canonicalErpReady = await CanonicalErpPostingService.isProvisioned(transaction);
+        if (canonicalErpReady) {
+          canonicalErpSync = await CanonicalErpPostingService.syncInventoryProcurementSnapshot(
+            transaction, tenantId, schoolId, actorId, requestedData as Record<string, any>
+          );
+          persistedData = applyInventoryPostingLinks(requestedData as Record<string, any>, canonicalErpSync.sourceLinks);
         }
         const changedCollections = [...expectedArrays, 'settings', 'procurementSettings'].filter(key =>
           stableJsonStringify(currentData[key] ?? (expectedArrays.includes(key) ? [] : {})) !== stableJsonStringify((requestedData as any)[key])
@@ -4201,7 +4283,7 @@ async function startServer() {
            ON CONFLICT (school_id) DO UPDATE SET data = EXCLUDED.data, version = EXCLUDED.version,
              updated_at = now(), updated_by = EXCLUDED.updated_by
            WHERE public.inventory_database.tenant_id = EXCLUDED.tenant_id`,
-          [tenantId, schoolId, JSON.stringify(requestedData), nextVersion, actorId]
+          [tenantId, schoolId, JSON.stringify(persistedData), nextVersion, actorId]
         );
         await transaction.query(
           `INSERT INTO public.audit_events
@@ -4209,10 +4291,27 @@ async function startServer() {
            VALUES ($1, $2, $3, $4, 'inventory_database', $2, 'write', 'InventoryDatabaseRoute', 'حفظ المخزون والمشتريات', 'success', $5::jsonb)`,
           [tenantId, schoolId, identity.branchId || null, actorId, JSON.stringify({ expectedVersion, actualVersion, nextVersion, changedCollections,
             previousSnapshotHash: createHash('sha256').update(stableJsonStringify(currentData)).digest('hex'),
-            nextSnapshotHash: createHash('sha256').update(stableJsonStringify(requestedData)).digest('hex') })]
+            nextSnapshotHash: createHash('sha256').update(stableJsonStringify(persistedData)).digest('hex'),
+            accounting: canonicalErpSync ? {
+              createdJournalCount: canonicalErpSync.createdJournalCount,
+              existingJournalCount: canonicalErpSync.existingJournalCount,
+              ledgerLineCount: canonicalErpSync.ledgerLineCount,
+              sourceLinks: canonicalErpSync.sourceLinks
+            } : { status: canonicalErpReady ? 'no_postable_documents' : 'not_provisioned' } })]
         );
       }, tenantContext);
-      res.json({ success: true, data: { updated: true }, meta: { version: nextVersion }, message: "Inventory database saved successfully." });
+      res.json({ success: true, data: persistedData, meta: {
+        version: nextVersion,
+        erpIntegration: canonicalErpReady ? 'ready' : 'not_provisioned',
+        erpSync: canonicalErpSync ? {
+          createdJournalCount: canonicalErpSync.createdJournalCount,
+          existingJournalCount: canonicalErpSync.existingJournalCount,
+          ledgerLineCount: canonicalErpSync.ledgerLineCount,
+          sourceLinks: canonicalErpSync.sourceLinks
+        } : null
+      }, message: canonicalErpReady
+        ? "Inventory database saved and synchronized with the canonical ledger."
+        : "Inventory database saved; canonical ledger integration is not provisioned for this school." });
     } catch (err: any) {
       next(err instanceof AuthenticationError || err instanceof AuthorizationError || err instanceof ConflictError || err instanceof ValidationError || err instanceof DatabaseError
         ? err : new DatabaseError("Failed to save inventory database", err.message));

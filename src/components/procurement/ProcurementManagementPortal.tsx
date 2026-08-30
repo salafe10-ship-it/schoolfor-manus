@@ -86,10 +86,38 @@ export default function ProcurementManagementPortal({
   const handleSaveReceipt = async (grn: GoodsReceiptNote) => {
     try {
       const nextReceipts = goodsReceipts.some(item => item.id === grn.id) ? goodsReceipts.map(item => item.id === grn.id ? grn : item) : [grn, ...goodsReceipts];
-      const nextOrders = purchaseOrders.map(po => po.id === grn.purchaseOrderId ? { ...po, status: 'partially_received' as const } : po);
-      const acceptedByItem = new Map<string, number>();
-      for (const line of grn.lines) acceptedByItem.set(line.itemId, (acceptedByItem.get(line.itemId) || 0) + Number(line.acceptedQty || 0));
-      const nextItems = database.items.map(item => acceptedByItem.has(item.id) ? { ...item, quantity: item.quantity + (acceptedByItem.get(item.id) || 0) } : item);
+      const previousReceipt = goodsReceipts.find(item => item.id === grn.id);
+      const acceptedDeltaByItem = new Map<string, number>();
+      for (const line of previousReceipt?.lines || []) {
+        const itemId = line.itemId || line.itemCode;
+        acceptedDeltaByItem.set(itemId, (acceptedDeltaByItem.get(itemId) || 0) - Number(line.acceptedQty || 0));
+      }
+      for (const line of grn.lines) {
+        const itemId = line.itemId || line.itemCode;
+        acceptedDeltaByItem.set(itemId, (acceptedDeltaByItem.get(itemId) || 0) + Number(line.acceptedQty || 0));
+      }
+      const nextItems = database.items.map(item => {
+        const delta = acceptedDeltaByItem.get(item.id) || 0;
+        if (delta === 0) return item;
+        const quantity = item.quantity + delta;
+        if (quantity < 0) throw new Error(`لا يمكن أن يصبح رصيد الصنف ${item.name} سالباً بعد تصحيح محضر الاستلام.`);
+        return { ...item, quantity };
+      });
+      const nextOrders = purchaseOrders.map(po => {
+        if (po.id !== grn.purchaseOrderId) return po;
+        const orderReceipts = nextReceipts.filter(receipt => receipt.purchaseOrderId === po.id);
+        const nextLines = po.lines.map(orderLine => {
+          const itemId = orderLine.itemId || orderLine.itemCode;
+          const received = orderReceipts.reduce((sum, receipt) => sum + receipt.lines
+            .filter(line => (line.itemId || line.itemCode) === itemId)
+            .reduce((lineSum, line) => lineSum + Number(line.acceptedQty || 0), 0), 0);
+          return { ...orderLine, itemId, quantityReceived: received };
+        });
+        const ordered = nextLines.reduce((sum, line) => sum + Number(line.quantityOrdered ?? line.quantityRequested ?? 0), 0);
+        const accepted = nextLines.reduce((sum, line) => sum + Number(line.quantityReceived || 0), 0);
+        const status = accepted >= ordered && ordered > 0 ? 'fully_received' as const : accepted > 0 ? 'partially_received' as const : po.status;
+        return { ...po, lines: nextLines, status };
+      });
       await commitPatch({ goodsReceipts: nextReceipts, purchaseOrders: nextOrders, items: nextItems });
     } catch (error: any) {
       notify(error?.message || 'المشتريات متوقفة؛ تعذر حفظ محضر الاستلام.', 'warning');
@@ -107,7 +135,44 @@ export default function ProcurementManagementPortal({
     }
   };
 
+  const handleApproveBill = async (bill: VendorBill) => {
+    if (bill.status !== 'pending_matching') throw new Error('فاتورة المورد ليست في حالة انتظار المطابقة.');
+    const receipt = goodsReceipts.find(item => item.id === bill.grnId);
+    const order = receipt ? purchaseOrders.find(item => item.id === receipt.purchaseOrderId) : undefined;
+    if (!receipt || !order) throw new Error('تعذر استكمال المطابقة الثلاثية؛ المستند المرتبط غير موجود.');
+    if (!['approved', 'issued', 'partially_received', 'fully_received'].includes(String(order.status))) {
+      throw new Error('لا يمكن اعتماد الفاتورة قبل اعتماد أمر الشراء.');
+    }
+    if (!['inspected_received', 'partially_accepted', 'posted_to_gl'].includes(String(receipt.status))) {
+      throw new Error('لا يمكن اعتماد الفاتورة قبل وجود استلام مقبول ومفحوص.');
+    }
+    if (Math.abs(Number(bill.subtotal) - Number(receipt.totalReceivedValue)) > 0.01 || Math.abs(Number(bill.grandTotal) - Number(bill.subtotal + bill.taxAmount)) > 0.01) {
+      throw new Error('قيمة الفاتورة لا تطابق قيمة الاستلام بعد المطابقة الثلاثية.');
+    }
+    await handleSaveBill({
+      ...bill,
+      status: 'approved',
+      notes: `تمت المطابقة الثلاثية مع أمر الشراء ${order.poNo} وإذن الاستلام ${receipt.grnNo}؛ أُحيل القيد إلى دفتر الأستاذ الكانوني.`,
+    });
+    notify(`تم اعتماد فاتورة المورد ${bill.billNo} وإنشاء قيد الالتزام الكانوني عند توفر مخطط الحسابات.`, 'success');
+  };
+
   const handleConvertToOrder = async (pr: PurchaseRequest) => {
+    const poLines = pr.lines.map(line => {
+      const item = database.items.find(candidate => candidate.id === line.itemId || candidate.sku === line.itemCode);
+      if (!item) throw new Error(`لا يمكن تحويل الطلب؛ البند ${line.itemCode} غير مربوط بصنف في دليل المخزون.`);
+      const quantity = line.quantityApproved || line.quantityRequested;
+      return {
+        ...line,
+        itemId: item.id,
+        itemCode: item.sku,
+        itemName: item.name,
+        quantityOrdered: quantity,
+        quantityReceived: 0,
+        actualUnitPrice: line.estimatedUnitPrice,
+        totalAmount: quantity * line.estimatedUnitPrice
+      };
+    });
     const newPO: PurchaseOrder = {
       id: `po_${Date.now()}`,
       schoolId: pr.schoolId || '',
@@ -121,16 +186,11 @@ export default function ProcurementManagementPortal({
       paymentTerms: '',
       deliveryTerms: '',
       status: 'draft',
-      lines: pr.lines.map(l => ({
-        ...l,
-        quantityOrdered: l.quantityApproved || l.quantityRequested,
-        quantityReceived: 0,
-        actualUnitPrice: l.estimatedUnitPrice
-      })),
-      subtotal: pr.totalEstimatedAmount,
+      lines: poLines,
+      subtotal: poLines.reduce((sum, line) => sum + line.totalAmount, 0),
       taxAmount: 0,
       discountAmount: 0,
-      grandTotal: pr.totalEstimatedAmount,
+      grandTotal: poLines.reduce((sum, line) => sum + line.totalAmount, 0),
       createdAt: new Date().toISOString(),
       updatedAt: new Date().toISOString()
     };
@@ -144,10 +204,24 @@ export default function ProcurementManagementPortal({
   const handleAwardVendor = async (rfqId: string, vendorId: string, totalAmount: number) => {
     const supplier = database.suppliers.find(item => item.id === vendorId);
     if (!supplier) throw new Error('لا يمكن ترسية العرض على مورد غير مسجل في المصدر المركزي.');
+    const rfq = database.rfqs.find(item => item.id === rfqId);
+    if (!rfq || rfq.status === 'awarded' || rfq.status === 'closed') throw new Error('طلب العروض مغلق أو تمت ترسيته مسبقاً.');
     const quotation = database.quotations.find(item => item.rfqId === rfqId && item.vendorId === vendorId);
     if (!quotation) throw new Error('لا يمكن ترسية عرض غير موجود في المصدر المركزي.');
+    if (quotation.status === 'rejected') throw new Error('لا يمكن ترسية عرض مرفوض.');
+    if (Math.abs(Number(quotation.grandTotal) - Number(totalAmount)) > 0.01) throw new Error('تغير إجمالي العرض قبل الترسية؛ أعد تحميل مصفوفة العروض.');
     const warehouseId = database.warehouses[0]?.id;
     if (!warehouseId) throw new Error('يلزم مستودع مركزي معتمد قبل إنشاء أمر الشراء.');
+    const poLines = quotation.lines.map((line, index) => {
+      const item = database.items.find(candidate => candidate.id === line.itemId || candidate.sku === line.itemId);
+      if (!item) throw new Error(`لا يمكن ترسية العرض؛ البند ${line.itemId || index + 1} غير مربوط بدليل المخزون.`);
+      return {
+        id: `pol_${Date.now()}_${index}`, itemId: item.id, itemCode: item.sku, itemName: item.name,
+        unit: 'وحدة', quantityRequested: line.quantity, quantityOrdered: line.quantity, quantityReceived: 0,
+        estimatedUnitPrice: line.unitPrice, actualUnitPrice: line.unitPrice, discountAmount: line.discountAmount, taxAmount: line.taxAmount,
+        totalAmount: line.quantity * line.unitPrice - line.discountAmount
+      };
+    });
     const newPO: PurchaseOrder = {
       id: `po_rfq_${Date.now()}`,
       schoolId: '',
@@ -160,15 +234,11 @@ export default function ProcurementManagementPortal({
       paymentTerms: quotation.paymentTerms,
       deliveryTerms: `التسليم خلال ${quotation.deliveryDays} يوم`,
       status: 'pending_approval',
-      lines: quotation.lines.map((line, index) => ({
-        id: `pol_${Date.now()}_${index}`, itemId: line.itemId, itemCode: line.itemId, itemName: line.itemName,
-        unit: 'وحدة', quantityRequested: line.quantity, quantityOrdered: line.quantity, quantityReceived: 0,
-        estimatedUnitPrice: line.unitPrice, actualUnitPrice: line.unitPrice, taxAmount: line.taxAmount, totalAmount: line.totalAmount
-      })),
+      lines: poLines,
       subtotal: quotation.lines.reduce((sum, line) => sum + line.quantity * line.unitPrice - line.discountAmount, 0),
       taxAmount: quotation.lines.reduce((sum, line) => sum + line.taxAmount, 0),
-      discountAmount: 0,
-      grandTotal: totalAmount,
+      discountAmount: quotation.lines.reduce((sum, line) => sum + line.discountAmount, 0),
+      grandTotal: quotation.lines.reduce((sum, line) => sum + line.quantity * line.unitPrice - line.discountAmount + line.taxAmount, 0),
       createdAt: new Date().toISOString(),
       updatedAt: new Date().toISOString()
     };
@@ -257,6 +327,7 @@ export default function ProcurementManagementPortal({
         {activeTab === 'requests' && (
           <PurchaseRequestManager 
             requests={purchaseRequests}
+            items={database.items}
             onSaveRequest={handleSaveRequest}
             onDeleteRequest={handleDeleteRequest}
             onConvertToOrder={handleConvertToOrder}
@@ -285,6 +356,8 @@ export default function ProcurementManagementPortal({
             orders={purchaseOrders}
             onSaveOrder={handleSaveOrder}
             onReceiveItems={(po) => setActiveTab('receipts')}
+            suppliers={database.suppliers}
+            warehouses={database.warehouses}
             triggerNotification={triggerNotification}
           />
         )}
@@ -304,6 +377,7 @@ export default function ProcurementManagementPortal({
             receipts={goodsReceipts}
             orders={purchaseOrders}
             onSaveBill={handleSaveBill}
+            onApproveBill={handleApproveBill}
             triggerNotification={triggerNotification}
           />
         )}
@@ -317,6 +391,7 @@ export default function ProcurementManagementPortal({
             orders={purchaseOrders}
             receipts={goodsReceipts}
             vendorBills={vendorBills}
+            onAuditReport={auditReport}
           />
         )}
 

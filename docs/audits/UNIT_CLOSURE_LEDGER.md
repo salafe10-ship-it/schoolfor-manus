@@ -18,7 +18,7 @@
 | 10 | General Ledger | `BLOCKED — OWNER CONTRACT REQUIRED` | القراءة/الحواجز الأمنية مثبتة، بينما الترحيل والكتابة والإقفال والتقارير الكانونية غير قابلة للاعتماد قبل ACC-001/ACC-002. |
 | 11 | HR | `UNIT CLOSED — ACCEPTED WITH NON-BLOCKING INTEGRATION ITEMS` | UAT حي مكتمل: حفظ وإعادة تحميل مركزيان، تحقق وتراجع ذري، اعتماد مسير، تدقيق تقرير، تنظيف بيانات الاختبار، وصحة Staging. تكامل الملفات الثنائية والبصمة واختبار العزل الحي المعزز غير مانعة. راجع `UNIT_11_HR_COMPREHENSIVE_AUDIT_2026-08-27.md`. |
 | 12 | Payroll | `PENDING — ACCOUNT MAPPINGS REQUIRED` | اعتماد المسير داخل HR مثبت، لكن الدفع والترحيل المالي لم ينفذا لأن خرائط الحسابات المطلوبة `0/4`. لم يُنشأ أي قيد مالي. |
-| 13 | Inventory | `PENDING SOL GATE` | توجد إصلاحات واختبارات سابقة؛ يلزم تقرير الوحدة الكامل. |
+| 13 | Inventory | `UNIT CLOSED — TECHNICAL/STAGING DB UAT PASSED` | migrations المالية/المخزون مطبقة، حماية القيود والدفتر العام فعالة، وUAT خادمي معزول أثبت 4 قيود متوازنة و8 أسطر دفتر عام وإعادة ترحيل idempotent مع تنظيف كامل. نشر Render وUAT الواجهة المصادق عليهما بقيا بوابة تسليم خارجية لعدم توفر جلسة اختبارية معتمدة. راجع `UNIT_13_INVENTORY_PROCUREMENT_COMPREHENSIVE_AUDIT_2026-08-29.md`. |
 | 14 | Fixed Assets | `PENDING SOL GATE` | توجد إصلاحات واختبارات سابقة؛ يلزم تقرير الوحدة الكامل. |
 | 15 | Administration | `PENDING` | — |
 | 16 | Reports | `PENDING` | — |
