@@ -3,11 +3,12 @@ import {
   Truck, Plus, CheckCircle2, AlertTriangle, ShieldCheck, 
   Search, FileText, ArrowUpRight, DollarSign, Check, XCircle 
 } from 'lucide-react';
-import { GoodsReceiptNote, GoodsReceiptStatus, PurchaseOrder } from '../../types';
+import { GoodsReceiptNote, GoodsReceiptStatus, InventoryItem, PurchaseOrder } from '../../types';
 
 interface GoodsReceiptManagerProps {
   receipts: GoodsReceiptNote[];
   orders: PurchaseOrder[];
+  items: InventoryItem[];
   onSaveReceipt: (grn: GoodsReceiptNote) => Promise<void>;
   triggerNotification?: (msg: string, type: 'success' | 'warning' | 'info' | 'danger') => void;
 }
@@ -15,6 +16,7 @@ interface GoodsReceiptManagerProps {
 export default function GoodsReceiptManager({
   receipts,
   orders,
+  items,
   onSaveReceipt,
   triggerNotification
 }: GoodsReceiptManagerProps) {
@@ -82,14 +84,15 @@ export default function GoodsReceiptManager({
       const key = lineKey(sourceLine, index);
       const received = Number(receivedQuantities[key] || 0);
       const rejected = Number(rejectedQuantities[key] || 0);
+      const inventoryItem = items.find(item => item.id === sourceLine.itemId || item.sku === sourceLine.itemId || item.sku === sourceLine.itemCode || item.id === sourceLine.itemCode);
       const unitCost = Number(sourceLine.actualUnitPrice ?? sourceLine.estimatedUnitPrice ?? 0);
       const accepted = inspectionResult === 'failed' ? 0 : received - rejected;
       const effectiveRejected = inspectionResult === 'failed' ? received : rejected;
       return {
         lineId: `grnl_${Date.now()}_${index}`,
-        itemId: sourceLine.itemId || sourceLine.itemCode,
-        itemCode: sourceLine.itemCode,
-        itemName: sourceLine.itemName,
+        itemId: inventoryItem?.id || sourceLine.itemId || sourceLine.itemCode,
+        itemCode: inventoryItem?.sku || sourceLine.itemCode,
+        itemName: inventoryItem?.name || sourceLine.itemName,
         orderedQty: sourceLine.quantityOrdered ?? sourceLine.quantityRequested,
         receivedQty: received,
         acceptedQty: accepted,

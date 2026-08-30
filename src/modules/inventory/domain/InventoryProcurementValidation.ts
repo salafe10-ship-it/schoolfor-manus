@@ -90,7 +90,9 @@ function assertProcurementLine(line: Snapshot, label: string, quantityField: str
 
 function assertInventoryLineReference(line: Snapshot, label: string, items: Map<string, Snapshot>): void {
   if (!line.itemId) return;
-  const item = items.get(String(line.itemId));
+  const item = items.get(String(line.itemId))
+    || (line.itemCode ? items.get(String(line.itemCode)) : undefined)
+    || [...items.values()].find(candidate => String(candidate.sku || '') === String(line.itemId));
   if (!item) throw new ValidationError(`${label} مرتبط بصنف مخزون غير موجود.`);
   if (line.itemCode && item.sku && String(line.itemCode) !== String(item.sku)) throw new ValidationError(`${label} يحمل SKU لا يطابق بطاقة الصنف.`);
 }
@@ -112,6 +114,13 @@ export function validateInventoryProcurementSnapshot(data: Snapshot, options: { 
 
   const maps = Object.fromEntries(COLLECTIONS.map(collection => [collection, assertUniqueIds(data[collection], collection)])) as Record<string, Map<string, Snapshot>>;
   const items = maps.items;
+  // Older procurement snapshots used the SKU in itemId. Keep that legacy
+  // reference readable while new receipts continue writing the canonical id.
+  const itemReferences = new Map<string, Snapshot>();
+  for (const [id, item] of items) {
+    itemReferences.set(String(id), item);
+    if (String(item.sku || '').trim()) itemReferences.set(String(item.sku), item);
+  }
   const categories = maps.categories;
   const units = maps.units;
   const suppliers = maps.suppliers;
@@ -229,7 +238,7 @@ export function validateInventoryProcurementSnapshot(data: Snapshot, options: { 
       if (!closeEnough(lineTotal, accepted * cost)) throw new ValidationError(`قيمة إذن الاستلام ${id} لا تطابق الكمية المقبولة.`);
       const orderLine = (order.lines || []).find((candidate: Snapshot) => String(candidate.itemId || candidate.itemCode) === String(line.itemId || line.itemCode));
       if (!orderLine) throw new ValidationError(`بند إذن الاستلام ${id} غير موجود في أمر الشراء.`);
-      if (!items.has(String(line.itemId))) throw new ValidationError(`بند إذن الاستلام ${id} غير مربوط ببطاقة صنف مركزية.`);
+      if (!itemReferences.has(String(line.itemId || line.itemCode))) throw new ValidationError(`بند إذن الاستلام ${id} غير مربوط ببطاقة صنف مركزية.`);
       const lineKey = `${order.id}:${String(line.itemId || line.itemCode)}`;
       receivedByOrderLine.set(lineKey, (receivedByOrderLine.get(lineKey) || 0) + received);
       if ((receivedByOrderLine.get(lineKey) || 0) > Number(orderLine.quantityOrdered ?? orderLine.quantityRequested)) throw new ValidationError(`إذن الاستلام ${id} يتجاوز كمية أمر الشراء.`);
@@ -259,7 +268,7 @@ export function validateInventoryProcurementSnapshot(data: Snapshot, options: { 
   if (data.vendorPayments.length > 0) throw new ValidationError('مدفوعات الموردين تُدار من وحدة الخزينة ولا تُسجل داخل snapshot المشتريات.');
   for (const [id, movement] of maps.movements) {
     text(movement.itemId, `الصنف في الحركة ${id}`);
-    if (!items.has(String(movement.itemId))) throw new ValidationError(`الحركة ${id} مرتبطة بصنف غير موجود.`);
+    if (!itemReferences.has(String(movement.itemId))) throw new ValidationError(`الحركة ${id} مرتبطة بصنف غير موجود.`);
     if (!['purchase', 'sale', 'transfer', 'adjustment', 'stocktake'].includes(String(movement.type))) throw new ValidationError(`نوع الحركة ${id} غير معتمد.`);
     numberValue(movement.quantity, `كمية الحركة ${id}`, { integer: true, min: 1 });
     if (movement.unitCost !== undefined) numberValue(movement.unitCost, `تكلفة الحركة ${id}`, { min: 0 });
@@ -269,7 +278,7 @@ export function validateInventoryProcurementSnapshot(data: Snapshot, options: { 
   }
   for (const [id, stocktake] of maps.stocktakes) {
     text(stocktake.itemId, `الصنف في محضر الجرد ${id}`);
-    if (!items.has(String(stocktake.itemId))) throw new ValidationError(`محضر الجرد ${id} مرتبط بصنف غير موجود.`);
+    if (!itemReferences.has(String(stocktake.itemId))) throw new ValidationError(`محضر الجرد ${id} مرتبط بصنف غير موجود.`);
     numberValue(stocktake.bookQty, `الرصيد الدفتري في محضر الجرد ${id}`, { min: 0 });
     numberValue(stocktake.actualQty, `الجرد الفعلي في محضر الجرد ${id}`, { integer: true, min: 0 });
     if (stocktake.status && !['pending_approval', 'approved'].includes(String(stocktake.status))) throw new ValidationError(`حالة محضر الجرد ${id} غير معتمدة.`);

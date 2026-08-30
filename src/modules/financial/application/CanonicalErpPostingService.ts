@@ -548,9 +548,12 @@ export class CanonicalErpPostingService {
     const grniAccount = configured('inventory.grni', procurementSettings.grniGlAccount);
     const payableAccount = configured('inventory.ap', procurementSettings.apGlAccount);
     const vatAccount = configured('inventory.input_vat', procurementSettings.inputVatGlAccount);
-    const itemById = new Map((Array.isArray(payload.items) ? payload.items : [])
-      .filter((item): item is FinancialRow => Boolean(item && typeof item === 'object' && !Array.isArray(item)))
-      .map(item => [textValue(item.id), item]));
+    const itemById = new Map<string, FinancialRow>();
+    for (const item of (Array.isArray(payload.items) ? payload.items : [])
+      .filter((candidate): candidate is FinancialRow => Boolean(candidate && typeof candidate === 'object' && !Array.isArray(candidate)))) {
+      itemById.set(textValue(item.id), item);
+      if (textValue(item.sku)) itemById.set(textValue(item.sku), item);
+    }
 
     await this.ensureChartAccounts(transaction, tenantId, schoolId, actorId, {});
     const documents: CanonicalPostingDocument[] = [];

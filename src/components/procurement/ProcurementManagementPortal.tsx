@@ -366,6 +366,7 @@ export default function ProcurementManagementPortal({
           <GoodsReceiptManager 
             receipts={goodsReceipts}
             orders={purchaseOrders}
+            items={database.items}
             onSaveReceipt={handleSaveReceipt}
             triggerNotification={triggerNotification}
           />
