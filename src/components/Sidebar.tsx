@@ -125,7 +125,7 @@ export default function Sidebar({
       title: 'الرقابة والسحابة',
       items: [
         { id: 'audit_logs', label: 'سجلات الرقابة والعمليات', icon: Workflow },
-        { id: 'permissions_admin', label: 'إدارة المستخدمين والصلاحيات', icon: ShieldCheck },
+        { id: 'permissions_admin', label: 'المستخدمون والصلاحيات', icon: ShieldCheck },
         { id: 'system_health', label: 'مركز مراقبة أداء النظام', icon: Settings2 },
         { id: 'db_schema', label: 'مخطط Supabase SQL', icon: DatabaseZap },
       ]

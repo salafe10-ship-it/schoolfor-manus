@@ -14,7 +14,6 @@ import {
   GraduationCap,
   Mail,
   Search,
-  Settings,
   ShieldCheck,
   Sparkles,
   UserCheck,
@@ -187,7 +186,7 @@ export default function ModernSchoolDashboard({
     { section: 'ai_assistant', label: 'المساعد الذكي', icon: Mail },
     { section: 'inventory', label: 'المخازن والمشتريات', icon: Container },
     { section: 'academic', label: 'الجداول الدراسية', icon: Calendar },
-    { section: 'permissions_admin', label: 'الإعدادات', icon: Settings },
+    { section: 'permissions_admin', label: 'المستخدمون والصلاحيات', icon: ShieldCheck },
   ];
 
   return (

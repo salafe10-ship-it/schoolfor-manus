@@ -310,7 +310,7 @@ export default function App() {
       'buses': 'باصات النقل والمواصلات',
       'uniform_management': 'إدارة الزي والملابس المدرسية',
       'audit_logs': 'سجلات الرقابة والعمليات',
-      'permissions_admin': 'إدارة المستخدمين والصلاحيات',
+      'permissions_admin': 'المستخدمون والصلاحيات',
       'system_health': 'مركز مراقبة أداء النظام',
       'db_schema': 'مخطط Supabase SQL'
     };
@@ -1632,7 +1632,7 @@ export default function App() {
                          activeSection === 'inventory' ? 'إدارة المستودعات والعهدة' :
                          activeSection === 'buses' ? 'إدارة النقل والمواصلات' :
                          activeSection === 'uniform_management' ? 'مستودع الزي المدرسي' :
-                         activeSection === 'permissions_admin' ? 'الصلاحيات والمستخدمين' :
+                         activeSection === 'permissions_admin' ? 'المستخدمون والصلاحيات' :
                          activeSection === 'db_schema' ? 'إدارة النسخ الاحتياطي' :
                          activeSection === 'security_permissions_cert' ? 'اعتماد الأمان والرقابة والصلاحيات' :
                          activeSection === 'uiux_golden_standard_cert' ? 'اعتماد المعايير الذهبية وتوحيد الواجهات (UI/UX)' :
@@ -2222,7 +2222,7 @@ export default function App() {
 
 
           {/* ========================================================== */}
-          {/* VIEW: SETTINGS & RBAC (إعدادات النظام والـ RBAC) */}
+          {/* VIEW: GENERAL SYSTEM SETTINGS (separate from Users & Permissions) */}
           {/* ========================================================== */}
           {activeSection === 'settings' && (
             <div className="space-y-6">
@@ -2510,8 +2510,8 @@ export default function App() {
               <div className="bg-white border border-slate-200 rounded-xl shadow-sm p-6">
                 <div className="flex flex-col md:flex-row justify-between items-start md:items-center gap-4 border-b border-slate-100 pb-4 mb-6">
                   <div>
-                    <h2 className="text-xl font-bold text-slate-800">إدارة المستخدمين والصلاحيات المركزية</h2>
-                    <p className="text-xs text-slate-500 mt-1">الوحدة المركزية لإدارة جميع مستخدمي النظام وأدوارهم وصلاحياتهم المعتمدة بتوافق كامل مع سياسات الـ RBAC</p>
+                    <h2 className="text-xl font-bold text-slate-800">مركز المستخدمين والصلاحيات</h2>
+                    <p className="text-xs text-slate-500 mt-1">إدارة واضحة وشاملة للمستخدمين والأدوار والوحدات والشاشات وأزرار العمليات وفق سياسات RBAC الموثوقة</p>
                   </div>
                   <button
                     onClick={() => setActiveSection('super_dashboard')}

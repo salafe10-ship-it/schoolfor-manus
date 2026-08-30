@@ -65,7 +65,7 @@ export default function TopNavigation({
       title: 'الرقابة والسحابة',
       items: [
         { id: 'audit_logs', label: 'سجلات الرقابة والعمليات', icon: Workflow },
-        { id: 'settings', label: 'إعدادات النظام والـ RBAC', icon: Settings2 },
+        { id: 'settings', label: 'إعدادات النظام العامة', icon: Settings2 },
         { id: 'db_schema', label: 'مخطط Supabase SQL', icon: DatabaseZap },
       ]
     }

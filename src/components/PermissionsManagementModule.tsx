@@ -1,7 +1,6 @@
 import { Award, Ban, BarChart3, Bell, BookOpen, Building2, Bus, CalendarCheck, Check, CheckSquare, ChevronDown, ChevronRight, Coins, Container, CreditCard, Database, DatabaseZap, Eye, FileText, GraduationCap, HelpCircle, Layers, Search, Settings, Settings2, Shield, ShieldAlert, ShieldCheck, Shirt, Sliders, Terminal, UserCheck, Users, WalletCards, Workflow } from 'lucide-react';
 import React, { useState, useEffect, useMemo } from 'react';
 import { SecuritySimulationService } from '../modules/authorization/application/SecuritySimulationService';
-import { PermissionsCalculationService, Employee as ServiceEmployee } from '../modules/authorization/application/PermissionsCalculationService';
 import { FallbackStorage } from '../database/repositories/FallbackStorage';
 // ==========================================================
 // 1. TYPES & DATA DEFINITIONS
@@ -306,7 +305,7 @@ export interface ModuleCategory {
   screens: ScreenItem[];
 }
 
-const PERMISSIONS_CATEGORIES_TREE: ModuleCategory[] = [
+export const PERMISSIONS_CATEGORIES_TREE: ModuleCategory[] = [
   {
     id: 'dashboard',
     label: 'الرئيسية والإشراف',
@@ -329,6 +328,25 @@ const PERMISSIONS_CATEGORIES_TREE: ModuleCategory[] = [
       { id: 'transfer_students', label: 'نقل الطلاب بين الفروع والصفوف', limitedPermissionColumns: ['import'] },
       { id: 'archive_students', label: 'أرشفة سجلات الطلاب القدامى' },
       { id: 'restore_students', label: 'استعادة الطلاب المؤرشفين', limitedPermissionColumns: ['export'] }
+    ]
+  },
+  {
+    id: 'admissions',
+    label: 'القبول والتسجيل والاستفسارات',
+    icon: UserCheck,
+    screens: [
+      { id: 'admission_inquiries', label: 'صندوق استفسارات وطلبات القبول' },
+      { id: 'admission_workflow', label: 'دورة اعتماد طلبات التسجيل' }
+    ]
+  },
+  {
+    id: 'academic',
+    label: 'الأكاديمية والجداول الدراسية',
+    icon: BookOpen,
+    screens: [
+      { id: 'academic_classes', label: 'الفصول والمراحل والشعب الدراسية' },
+      { id: 'academic_timetable', label: 'الجداول الدراسية وتوزيع الحصص' },
+      { id: 'academic_calendar', label: 'التقويم والفترات الدراسية' }
     ]
   },
   {
@@ -427,6 +445,16 @@ const PERMISSIONS_CATEGORIES_TREE: ModuleCategory[] = [
     ]
   },
   {
+    id: 'fixed_assets',
+    label: 'الأصول الثابتة والعهد',
+    icon: Database,
+    screens: [
+      { id: 'asset_register', label: 'سجل الأصول والعهد ومواقعها' },
+      { id: 'asset_movements', label: 'نقل وتسليم واستلام العهد' },
+      { id: 'asset_depreciation', label: 'الإهلاك وإعادة التقييم والإقفال' }
+    ]
+  },
+  {
     id: 'buses',
     label: 'النقل والمواصلات المدرسية',
     icon: Bus,
@@ -475,8 +503,58 @@ const PERMISSIONS_CATEGORIES_TREE: ModuleCategory[] = [
     screens: [
       { id: 'database_editor', label: 'مخطط قاعدة بيانات Supabase وأدوات SQL' }
     ]
+  },
+  {
+    id: 'settings',
+    label: 'إعدادات النظام والبيانات المرجعية',
+    icon: Settings2,
+    screens: [
+      { id: 'system_settings', label: 'الإعدادات العامة والعملة والبيانات المرجعية' },
+      { id: 'configuration_audit', label: 'تدقيق تغييرات إعدادات النظام' }
+    ]
   }
 ];
+
+const ALL_PERMISSION_KEYS = PERMISSIONS_CATEGORIES_TREE.reduce<string[]>((keys, category) => {
+  category.screens.forEach(screen => {
+    MATRIX_COLUMNS.forEach(column => keys.push(`${category.id}:${screen.id}:${column.id}`));
+  });
+  return keys;
+}, []);
+
+const DATA_SCOPE_CATALOG = [
+  { id: 'organization', label: 'المؤسسة والمدارس', description: 'نطاق المؤسسة والمدارس التابعة لها' },
+  { id: 'branch', label: 'الفروع', description: 'فرع واحد أو مجموعة فروع مصرح بها' },
+  { id: 'academic', label: 'المراحل والصفوف', description: 'مراحل وصفوف وشعب محددة' },
+  { id: 'warehouse', label: 'المخازن والعهد', description: 'مخازن وعهد ومواقع تسليم محددة' },
+  { id: 'treasury', label: 'الخزائن والحسابات البنكية', description: 'خزائن وحسابات بنكية ضمن النطاق المالي' },
+  { id: 'personal', label: 'السجلات المنشأة بواسطة الموظف', description: 'السجلات التي أنشأها الموظف فقط' }
+] as const;
+
+const DATA_SCOPE_ACTIONS: ColumnDefinition[] = [
+  { id: 'view', label: 'عرض' },
+  { id: 'edit', label: 'تعديل' },
+  { id: 'export', label: 'تصدير' }
+];
+
+const REPORT_PERMISSION_CATALOG = [
+  { id: 'financial', label: 'التقارير والقوائم المالية' },
+  { id: 'students', label: 'تقارير الطلاب والحضور' },
+  { id: 'hr', label: 'تقارير العاملين والرواتب' },
+  { id: 'inventory', label: 'تقارير المخزون والمشتريات' },
+  { id: 'audit', label: 'تقارير الرقابة وسجل العمليات' }
+] as const;
+
+const REPORT_PERMISSION_ACTIONS: ColumnDefinition[] = [
+  { id: 'view', label: 'عرض' },
+  { id: 'export', label: 'تصدير' },
+  { id: 'print', label: 'طباعة' },
+  { id: 'approve', label: 'اعتماد' }
+];
+
+const DATA_SCOPE_KEYS = DATA_SCOPE_CATALOG.flatMap(scope => DATA_SCOPE_ACTIONS.map(action => `data_scope:${scope.id}:${action.id}`));
+const REPORT_PERMISSION_KEYS = REPORT_PERMISSION_CATALOG.flatMap(report => REPORT_PERMISSION_ACTIONS.map(action => `report:${report.id}:${action.id}`));
+const ALL_AUTHORIZATION_KEYS = [...ALL_PERMISSION_KEYS, ...DATA_SCOPE_KEYS, ...REPORT_PERMISSION_KEYS];
 
 interface PermissionsModuleProps {
   users: any[];
@@ -505,7 +583,9 @@ export const PermissionsManagementModule: React.FC<PermissionsModuleProps> = ({
   // Local high-fidelity state to track selected employee, searches, and configurations
   const [employees, setEmployees] = useState<Employee[]>(() => {
     if (canonicalPersistenceRequired) return [];
-    // Sync with existing props or localStorage, otherwise default to high fidelity
+    // Sync with existing props or localStorage. In compatibility mode only,
+    // existing users are projected into the editor; no synthetic employees are
+    // created and canonical mode remains fail-closed.
     const saved = localStorage.getItem('edupro_employees_permissions_v1');
     if (saved) {
       try {
@@ -514,11 +594,21 @@ export const PermissionsManagementModule: React.FC<PermissionsModuleProps> = ({
         // ignore
       }
     }
-    return [];
+    return users
+      .filter(user => user && (user.id || user.name))
+      .map(user => ({
+        id: String(user.id || user.name),
+        name: String(user.name || user.displayName || 'مستخدم'),
+        jobTitle: String(user.jobTitle || user.role || 'مستخدم النظام'),
+        department: String(user.department || 'غير مصنف'),
+        status: user.status === 'inactive' ? 'inactive' : 'active',
+        permissions: Array.isArray(user.permissions) ? user.permissions : []
+      }));
   });
 
   const [activeEmployeeId, setActiveEmployeeId] = useState<string>('');
   const [employeeSearch, setEmployeeSearch] = useState<string>('');
+  const [permissionSearch, setPermissionSearch] = useState<string>('');
   const [selectedDept, setSelectedDept] = useState<string>('all');
   const [selectedStatus, setSelectedStatus] = useState<string>('active');
   const [currentPage, setCurrentPage] = useState<number>(1);
@@ -572,15 +662,48 @@ export const PermissionsManagementModule: React.FC<PermissionsModuleProps> = ({
 
   // Filtered employees list
   const filteredEmployees = useMemo(() => {
+    const search = employeeSearch.trim().toLocaleLowerCase();
     return employees.filter(emp => {
       const matchDept = selectedDept === 'all' || emp.department === selectedDept;
       const matchStatus = selectedStatus === 'all' || emp.status === selectedStatus;
-      const matchSearch = emp.name.includes(employeeSearch) || 
-                          emp.jobTitle.includes(employeeSearch) || 
-                          emp.id.includes(employeeSearch);
+      const matchSearch = !search || [emp.name, emp.jobTitle, emp.id]
+        .some(value => value.toLocaleLowerCase().includes(search));
       return matchDept && matchStatus && matchSearch;
     });
   }, [employees, selectedDept, selectedStatus, employeeSearch]);
+
+  const filteredPermissionCategories = useMemo(() => {
+    const search = permissionSearch.trim().toLocaleLowerCase();
+    if (!search) return PERMISSIONS_CATEGORIES_TREE;
+    return PERMISSIONS_CATEGORIES_TREE
+      .map(category => ({
+        ...category,
+        screens: category.screens.filter(screen =>
+          `${category.label} ${category.id} ${screen.label} ${screen.id}`
+            .toLocaleLowerCase()
+            .includes(search)
+        )
+      }))
+      .filter(category => category.screens.length > 0);
+  }, [permissionSearch]);
+
+  const permissionStats = useMemo(() => {
+    const moduleCount = PERMISSIONS_CATEGORIES_TREE.length;
+    const screenCount = PERMISSIONS_CATEGORIES_TREE.reduce((count, category) => count + category.screens.length, 0);
+    const actionCount = ALL_AUTHORIZATION_KEYS.length;
+    const assignedCount = !activeEmployee
+      ? 0
+      : activeEmployee.permissions.includes('*')
+        ? actionCount
+        : ALL_AUTHORIZATION_KEYS.filter(permission => activeEmployee.permissions.includes(permission)).length;
+    return {
+      moduleCount,
+      screenCount,
+      actionCount,
+      assignedCount,
+      coverage: actionCount === 0 ? 0 : Math.round((assignedCount / actionCount) * 100)
+    };
+  }, [activeEmployee]);
 
   // Paginated employees for left side
   const paginatedEmployees = useMemo(() => {
@@ -599,6 +722,25 @@ export const PermissionsManagementModule: React.FC<PermissionsModuleProps> = ({
     }));
   };
 
+  const expandAllCategories = () => {
+    setExpandedCategories(Object.fromEntries(PERMISSIONS_CATEGORIES_TREE.map(category => [category.id, true])));
+  };
+
+  const collapseAllCategories = () => {
+    setExpandedCategories({});
+  };
+
+  const categoryPermissionKeys = (category: ModuleCategory) => category.screens.reduce<string[]>((keys, screen) => {
+    MATRIX_COLUMNS.forEach(column => keys.push(`${category.id}:${screen.id}:${column.id}`));
+    return keys;
+  }, []);
+
+  const categoryPermissionCount = (category: ModuleCategory) => {
+    if (!activeEmployee) return 0;
+    if (activeEmployee.permissions.includes('*')) return categoryPermissionKeys(category).length;
+    return categoryPermissionKeys(category).filter(key => activeEmployee.permissions.includes(key)).length;
+  };
+
   // Check if a permission is enabled for active employee
   const isPermissionEnabled = (catId: string, screenId: string, actionId: string) => {
     if (!activeEmployee) return false;
@@ -609,22 +751,14 @@ export const PermissionsManagementModule: React.FC<PermissionsModuleProps> = ({
 
   // Toggle single permission checkbox
   const handleTogglePermission = (catId: string, screenId: string, actionId: string) => {
-    if (!activeEmployee) return;
+    if (!activeEmployee || canonicalPersistenceRequired) return;
     
     const permKey = `${catId}:${screenId}:${actionId}`;
     let newPermissions = [...activeEmployee.permissions];
     
     if (newPermissions.includes('*')) {
       // Expand wildcard * to all possible keys EXCEPT the toggled one
-      const allPossibleKeys: string[] = [];
-      PERMISSIONS_CATEGORIES_TREE.forEach(cat => {
-        cat.screens.forEach(scr => {
-          MATRIX_COLUMNS.forEach(col => {
-            allPossibleKeys.push(`${cat.id}:${scr.id}:${col.id}`);
-          });
-        });
-      });
-      newPermissions = allPossibleKeys.filter(k => k !== permKey);
+      newPermissions = ALL_AUTHORIZATION_KEYS.filter(k => k !== permKey);
     } else if (newPermissions.includes(permKey)) {
       newPermissions = newPermissions.filter(p => p !== permKey);
     } else {
@@ -638,6 +772,19 @@ export const PermissionsManagementModule: React.FC<PermissionsModuleProps> = ({
       return emp;
     }));
 
+    setHasUnsavedChanges(true);
+  };
+
+  const handleToggleCategory = (category: ModuleCategory, enabled: boolean) => {
+    if (!activeEmployee || canonicalPersistenceRequired) return;
+    const categoryKeys = new Set(categoryPermissionKeys(category));
+    const newPermissions = activeEmployee.permissions.includes('*')
+      ? (enabled ? ALL_AUTHORIZATION_KEYS : ALL_AUTHORIZATION_KEYS.filter(key => !categoryKeys.has(key)))
+      : enabled
+        ? Array.from(new Set([...activeEmployee.permissions, ...categoryKeys]))
+        : activeEmployee.permissions.filter(permission => !categoryKeys.has(permission));
+
+    setEmployees(prev => prev.map(emp => emp.id === activeEmployee.id ? { ...emp, permissions: newPermissions } : emp));
     setHasUnsavedChanges(true);
   };
 
@@ -686,19 +833,11 @@ export const PermissionsManagementModule: React.FC<PermissionsModuleProps> = ({
 
   // Check all / Select all permissions for active employee
   const handleSelectAll = () => {
-    if (!activeEmployee) return;
-    const allKeys: string[] = [];
-    PERMISSIONS_CATEGORIES_TREE.forEach(cat => {
-      cat.screens.forEach(scr => {
-        MATRIX_COLUMNS.forEach(col => {
-          allKeys.push(`${cat.id}:${scr.id}:${col.id}`);
-        });
-      });
-    });
+    if (!activeEmployee || canonicalPersistenceRequired) return;
 
     setEmployees(prev => prev.map(emp => {
       if (emp.id === activeEmployee.id) {
-        return { ...emp, permissions: allKeys };
+        return { ...emp, permissions: ALL_AUTHORIZATION_KEYS };
       }
       return emp;
     }));
@@ -708,7 +847,7 @@ export const PermissionsManagementModule: React.FC<PermissionsModuleProps> = ({
 
   // Clear all / Deselect all permissions for active employee
   const handleDeselectAll = () => {
-    if (!activeEmployee) return;
+    if (!activeEmployee || canonicalPersistenceRequired) return;
     setEmployees(prev => prev.map(emp => {
       if (emp.id === activeEmployee.id) {
         return { ...emp, permissions: [] };
@@ -721,7 +860,7 @@ export const PermissionsManagementModule: React.FC<PermissionsModuleProps> = ({
 
   // Preset Template loader
   const handleApplyTemplate = (roleType: 'admin' | 'staff' | 'view_only') => {
-    if (!activeEmployee) return;
+    if (!activeEmployee || canonicalPersistenceRequired) return;
     let templatePerms: string[] = [];
 
     if (roleType === 'admin') {
@@ -730,9 +869,8 @@ export const PermissionsManagementModule: React.FC<PermissionsModuleProps> = ({
       // Visibility, View, Save, Edit, Print
       PERMISSIONS_CATEGORIES_TREE.forEach(cat => {
         cat.screens.forEach(scr => {
-          templatePerms.push(`${cat.id}:${scr.id}:visibility`);
           templatePerms.push(`${cat.id}:${scr.id}:view`);
-          templatePerms.push(`${cat.id}:${scr.id}:save`);
+          templatePerms.push(`${cat.id}:${scr.id}:insert`);
           templatePerms.push(`${cat.id}:${scr.id}:edit`);
           templatePerms.push(`${cat.id}:${scr.id}:print`);
         });
@@ -741,7 +879,6 @@ export const PermissionsManagementModule: React.FC<PermissionsModuleProps> = ({
       // Visibility and Read/view only
       PERMISSIONS_CATEGORIES_TREE.forEach(cat => {
         cat.screens.forEach(scr => {
-          templatePerms.push(`${cat.id}:${scr.id}:visibility`);
           templatePerms.push(`${cat.id}:${scr.id}:view`);
         });
       });
@@ -781,7 +918,13 @@ export const PermissionsManagementModule: React.FC<PermissionsModuleProps> = ({
             </span>
             <input
               type="text"
-              placeholder="البحث في الموظفين أو الصلاحيات..."
+              placeholder="البحث السريع عن مستخدم..."
+              value={employeeSearch}
+              onChange={(event) => {
+                setEmployeeSearch(event.target.value);
+                setCurrentPage(1);
+              }}
+              aria-label="البحث السريع عن مستخدم"
               className="bg-transparent pr-10 pl-16 py-1.5 text-xs font-semibold outline-none focus:border-orange-500 focus:w-[300px] transition-all"
             />
             <span className="absolute inset-y-0 left-3 flex items-center text-[9px] font-bold text-slate-400 bg-slate-100 px-1.5 py-0.5 rounded-lg my-1.5" dir="ltr">
@@ -832,18 +975,18 @@ export const PermissionsManagementModule: React.FC<PermissionsModuleProps> = ({
         {/* Title and Breadcrumbs */}
         <div className="flex items-center gap-4">
           <div className="w-12 h-12 bg-orange-50 border border-orange-100 flex items-center justify-center text-orange-600 shadow-orange-500/5">
-            <Shield className="w-6 h-6 text-orange-600" />
+            <ShieldCheck className="w-6 h-6 text-orange-600" />
           </div>
           <div>
             <h2 className="text-xl font-black text-slate-900 tracking-tight flex items-center gap-2">
-              <span>إدارة الصلاحيات</span>
+              <span>مركز المستخدمين والصلاحيات</span>
             </h2>
             <div className="text-xs text-slate-400 font-semibold mt-1 flex items-center gap-1.5 select-none">
               <span>الرئيسية</span>
               <span>•</span>
-              <span>إدارة المستخدمين</span>
+              <span>المستخدمون</span>
               <span>•</span>
-              <span className="text-slate-500 font-bold">إدارة الصلاحيات</span>
+              <span className="text-slate-500 font-bold">المصفوفة الموحدة للصلاحيات</span>
             </div>
           </div>
         </div>
@@ -854,7 +997,8 @@ export const PermissionsManagementModule: React.FC<PermissionsModuleProps> = ({
           <div className="relative group">
             <button 
               type="button"
-              className="px-4 py-2 hover:bg-transparent text-slate-700 font-bold text-xs flex items-center gap-2 shadow-xs transition-all cursor-pointer"
+              disabled={!activeEmployee || canonicalPersistenceRequired}
+              className="px-4 py-2 hover:bg-transparent text-slate-700 font-bold text-xs flex items-center gap-2 shadow-xs transition-all cursor-pointer disabled:cursor-not-allowed disabled:opacity-40"
             >
               <Layers className="w-4 h-4 text-slate-400" />
               <span>تطبيق قالب</span>
@@ -862,6 +1006,7 @@ export const PermissionsManagementModule: React.FC<PermissionsModuleProps> = ({
             <div className="absolute left-0 top-full mt-1.5 w-48 shadow-lg opacity-0 invisible group-hover:opacity-100 group-hover:visible transition-all z-50 p-1">
               <button 
                 onClick={() => handleApplyTemplate('admin')} 
+                disabled={canonicalPersistenceRequired}
                 className="w-full text-right px-3 py-2 text-xs font-semibold hover:bg-transparent rounded-lg text-slate-800 flex items-center gap-2"
               >
                 <ShieldCheck className="w-3.5 h-3.5 text-orange-600" />
@@ -869,6 +1014,7 @@ export const PermissionsManagementModule: React.FC<PermissionsModuleProps> = ({
               </button>
               <button 
                 onClick={() => handleApplyTemplate('staff')} 
+                disabled={canonicalPersistenceRequired}
                 className="w-full text-right px-3 py-2 text-xs font-semibold hover:bg-transparent rounded-lg text-slate-800 flex items-center gap-2"
               >
                 <Sliders className="w-3.5 h-3.5 text-orange-500" />
@@ -876,6 +1022,7 @@ export const PermissionsManagementModule: React.FC<PermissionsModuleProps> = ({
               </button>
               <button 
                 onClick={() => handleApplyTemplate('view_only')} 
+                disabled={canonicalPersistenceRequired}
                 className="w-full text-right px-3 py-2 text-xs font-semibold hover:bg-transparent rounded-lg text-slate-800 flex items-center gap-2"
               >
                 <Eye className="w-3.5 h-3.5 text-slate-500" />
@@ -885,33 +1032,41 @@ export const PermissionsManagementModule: React.FC<PermissionsModuleProps> = ({
           </div>
 
           <button
+            type="button"
             onClick={handleSelectAll}
-            className="px-4 py-2 hover:bg-transparent text-slate-700 font-bold text-xs flex items-center gap-2 shadow-xs transition-all cursor-pointer"
+            disabled={!activeEmployee || canonicalPersistenceRequired}
+            className="px-4 py-2 hover:bg-transparent text-slate-700 font-bold text-xs flex items-center gap-2 shadow-xs transition-all cursor-pointer disabled:cursor-not-allowed disabled:opacity-40"
           >
             <CheckSquare className="w-4 h-4 text-slate-400" />
             <span>تحديد الكل</span>
           </button>
 
           <button
+            type="button"
             onClick={handleDeselectAll}
-            className="px-4 py-2 hover:bg-transparent text-slate-700 font-bold text-xs flex items-center gap-2 shadow-xs transition-all cursor-pointer"
+            disabled={!activeEmployee || canonicalPersistenceRequired}
+            className="px-4 py-2 hover:bg-transparent text-slate-700 font-bold text-xs flex items-center gap-2 shadow-xs transition-all cursor-pointer disabled:cursor-not-allowed disabled:opacity-40"
           >
             <Ban className="w-4 h-4 text-slate-400" />
             <span>إلغاء الكل</span>
           </button>
 
           <button
+            type="button"
             onClick={() => triggerNotification('شاشة إعدادات الصلاحيات المتقدمة وقواعد الحماية', 'info')}
             className="px-4 py-2 hover:bg-transparent text-slate-700 font-bold text-xs flex items-center gap-2 shadow-xs transition-all cursor-pointer"
           >
             <Settings className="w-4 h-4 text-slate-400" />
-            <span>إعدادات الصلاحيات</span>
+            <span>سياسة الأمان</span>
           </button>
 
           {/* Highlighted Save Changes Button */}
           <button
+            type="button"
             onClick={handleSaveChanges}
-            className={`px-5 py-2 flex items-center gap-2 text-xs font-extrabold transition-all cursor-pointer border ${
+            disabled={!activeEmployee || canonicalPersistenceRequired || !hasUnsavedChanges}
+            title={canonicalPersistenceRequired ? 'الحفظ غير متاح قبل ربط مصدر الهوية المركزي' : 'حفظ التغييرات'}
+            className={`px-5 py-2 flex items-center gap-2 text-xs font-extrabold transition-all cursor-pointer border disabled:cursor-not-allowed disabled:opacity-40 ${
               hasUnsavedChanges 
                 ? 'bg-orange-600 hover:bg-orange-700 text-white border-orange-500 shadow-orange-500/10 animate-pulse' 
                 : 'bg-orange-600 text-white border-orange-500 hover:bg-orange-700 shadow-orange-500/5'
@@ -923,6 +1078,50 @@ export const PermissionsManagementModule: React.FC<PermissionsModuleProps> = ({
         </div>
       </div>
 
+      {/* Central authorization state: never imply that a browser-only change is production authority. */}
+      <div
+        role="status"
+        className={`mx-6 mt-5 flex flex-col gap-3 rounded-2xl border p-4 sm:flex-row sm:items-center sm:justify-between ${
+          canonicalPersistenceRequired
+            ? 'border-amber-200 bg-amber-50 text-amber-950'
+            : 'border-emerald-200 bg-emerald-50 text-emerald-950'
+        }`}
+      >
+        <div className="flex items-start gap-3">
+          <div className={`mt-0.5 flex h-9 w-9 shrink-0 items-center justify-center rounded-xl ${canonicalPersistenceRequired ? 'bg-amber-200 text-amber-800' : 'bg-emerald-200 text-emerald-800'}`}>
+            {canonicalPersistenceRequired ? <ShieldAlert className="h-5 w-5" /> : <ShieldCheck className="h-5 w-5" />}
+          </div>
+          <div>
+            <p className="text-xs font-black">
+              {canonicalPersistenceRequired ? 'وضع المراجعة الآمن — مصدر الهوية المركزي مطلوب للحفظ' : 'وضع التشغيل المحلي — التغييرات قابلة للحفظ في بيئة التطوير'}
+            </p>
+            <p className="mt-1 text-[10px] font-semibold opacity-80">
+              {canonicalPersistenceRequired
+                ? 'الكتالوج معروض للمراجعة فقط. لا تُحفظ أي صلاحية في المتصفح ولا تُمنح صلاحيات إنتاجية من هذه الجلسة.'
+                : 'تُراجع الصلاحيات على مستوى الوحدة والشاشة والعملية، ثم تُحفظ بعد اعتماد المسؤول.'}
+            </p>
+          </div>
+        </div>
+        <span className="shrink-0 rounded-full border border-current/20 px-3 py-1 text-[10px] font-black">
+          {canonicalPersistenceRequired ? 'CENTRAL SOURCE: READ ONLY' : 'LOCAL WORKSPACE: EDITABLE'}
+        </span>
+      </div>
+
+      <div className="grid grid-cols-2 gap-3 px-6 pt-5 md:grid-cols-4">
+        {[
+          { label: 'الوحدات', value: permissionStats.moduleCount, detail: 'نطاقات وظيفية' },
+          { label: 'الشاشات', value: permissionStats.screenCount, detail: 'شاشات قابلة للضبط' },
+          { label: 'أزرار العمليات', value: permissionStats.actionCount, detail: 'لكل شاشة' },
+          { label: 'تغطية المستخدم', value: `${permissionStats.coverage}%`, detail: activeEmployee ? `${permissionStats.assignedCount}/${permissionStats.actionCount} نقطة ممنوحة` : 'لا يوجد مستخدم محدد' }
+        ].map(card => (
+          <div key={card.label} className="rounded-2xl border border-slate-200 bg-white p-3 shadow-sm">
+            <span className="block text-[10px] font-black text-slate-500">{card.label}</span>
+            <span className="mt-1 block text-xl font-black text-slate-900">{card.value}</span>
+            <span className="mt-0.5 block text-[9px] font-bold text-slate-400">{card.detail}</span>
+          </div>
+        ))}
+      </div>
+
       {/* 3. CORE DUAL COLUMN SYSTEM LAYOUT */}
       <div className="flex-1 grid grid-cols-1 lg:grid-cols-12 gap-6 p-6 sm:p-8 bg-slate-50/50">
         
@@ -932,13 +1131,13 @@ export const PermissionsManagementModule: React.FC<PermissionsModuleProps> = ({
             {/* Header count label */}
             <div className="px-5 py-4 border-b border-slate-100 bg-white">
               <h3 className="text-sm font-black text-slate-900 select-none">
-                الموظفون <span className="text-slate-400 font-bold">({filteredEmployees.length})</span>
+                المستخدمون <span className="text-slate-400 font-bold">({filteredEmployees.length})</span>
               </h3>
             </div>
 
             {/* Sub-Header Column Labels */}
             <div className="px-5 py-2.5 bg-slate-50/70 border-b border-slate-100 flex items-center justify-between text-[11px] text-slate-400 font-black select-none">
-              <span>الموظف</span>
+              <span>المستخدم</span>
               <span>الوظيفة</span>
             </div>
 
@@ -947,13 +1146,15 @@ export const PermissionsManagementModule: React.FC<PermissionsModuleProps> = ({
               {paginatedEmployees.map((emp) => {
                 const isSelected = emp.id === activeEmployeeId;
                 return (
-                  <div
+                  <button
                     key={emp.id}
+                    type="button"
                     onClick={() => {
                       setActiveEmployeeId(emp.id);
                       triggerNotification(`عرض مصفوفة الصلاحيات لـ: ${emp.name}`, 'info');
                     }}
-                    className={`px-5 py-3.5 border-b border-slate-100/60 flex items-center justify-between cursor-pointer transition-all duration-150 select-none ${
+                    aria-pressed={isSelected}
+                    className={`w-full text-right px-5 py-3.5 border-b border-slate-100/60 flex items-center justify-between cursor-pointer transition-all duration-150 select-none ${
                       isSelected
                         ? 'bg-orange-600 text-white shadow-xs'
                         : 'hover:bg-transparent text-slate-800'
@@ -977,14 +1178,21 @@ export const PermissionsManagementModule: React.FC<PermissionsModuleProps> = ({
                         <div className="w-5 h-5 rounded-full bg-white" />
                       )}
                     </div>
-                  </div>
+                  </button>
                 );
               })}
 
               {filteredEmployees.length === 0 && (
                 <div className="p-8 text-center text-slate-400 flex flex-col items-center justify-center gap-2">
                   <Users className="w-8 h-8 text-slate-300" />
-                  <span className="text-xs font-bold">لا توجد سجلات تطابق البحث</span>
+                  <span className="text-xs font-bold">
+                    {canonicalPersistenceRequired ? 'لم ترد قائمة مستخدمين من مصدر الهوية المركزي' : 'لا توجد سجلات تطابق البحث'}
+                  </span>
+                  {canonicalPersistenceRequired && (
+                    <span className="max-w-[220px] text-[10px] font-semibold leading-relaxed text-slate-400">
+                      الكتالوج متاح للمراجعة، وتظهر ملفات الموظفين بعد ربط مصدر RBAC الموثوق.
+                    </span>
+                  )}
                 </div>
               )}
             </div>
@@ -1041,7 +1249,7 @@ export const PermissionsManagementModule: React.FC<PermissionsModuleProps> = ({
                   {activeEmployee.name.charAt(0)}
                 </div>
                 <div>
-                  <h4 className="text-xs font-black text-slate-900">أنت تقوم بتعديل صلاحيات: {activeEmployee.name}</h4>
+                  <h4 className="text-xs font-black text-slate-900">أنت تراجع صلاحيات المستخدم: {activeEmployee.name}</h4>
                   <p className="text-[10px] text-slate-500 font-semibold mt-0.5">الدور: {activeEmployee.jobTitle} • قسم: {activeEmployee.department}</p>
                 </div>
               </div>
@@ -1110,12 +1318,46 @@ export const PermissionsManagementModule: React.FC<PermissionsModuleProps> = ({
             </div>
           </div>
 
+          <div className="flex flex-col gap-3 rounded-2xl border border-slate-200/80 bg-white p-3 shadow-xs sm:flex-row sm:items-center sm:justify-between">
+            <div className="relative flex min-w-0 flex-1 items-center gap-2">
+              <Search className="h-4 w-4 shrink-0 text-orange-500" />
+              <input
+                type="text"
+                placeholder="ابحث داخل الوحدات والشاشات..."
+                value={permissionSearch}
+                onChange={(event) => setPermissionSearch(event.target.value)}
+                aria-label="البحث داخل الوحدات والشاشات"
+                className="w-full bg-transparent text-xs font-bold text-slate-800 outline-none placeholder:text-slate-400"
+              />
+            </div>
+            <div className="flex flex-wrap items-center gap-2">
+              <span className="text-[10px] font-black text-slate-400">
+                {filteredPermissionCategories.length} وحدة معروضة
+              </span>
+              <button
+                type="button"
+                onClick={expandAllCategories}
+                className="rounded-lg border border-slate-200 px-2.5 py-1.5 text-[10px] font-black text-slate-600 transition hover:border-orange-300 hover:text-orange-600"
+              >
+                توسيع الكل
+              </button>
+              <button
+                type="button"
+                onClick={collapseAllCategories}
+                className="rounded-lg border border-slate-200 px-2.5 py-1.5 text-[10px] font-black text-slate-600 transition hover:border-orange-300 hover:text-orange-600"
+              >
+                طي الكل
+              </button>
+            </div>
+          </div>
+
           {/* Matrix Card containing Tabs and Table */}
           <div className="border border-slate-200/80 rounded-3xl shadow-xs overflow-hidden flex flex-col h-[580px]">
             
             {/* Tab Headers Row */}
             <div className="flex border-b border-slate-100 select-none">
               <button
+                type="button"
                 onClick={() => setActiveTab('modules')}
                 className={`flex-1 py-4.5 text-xs font-black transition-all flex items-center justify-center gap-2 border-b-2 ${
                   activeTab === 'modules'
@@ -1128,6 +1370,7 @@ export const PermissionsManagementModule: React.FC<PermissionsModuleProps> = ({
               </button>
               
               <button
+                type="button"
                 onClick={() => {
                   setActiveTab('data');
                   triggerNotification('صلاحيات البيانات مخصصة لربط الموظف بالفروع والمستودعات والعهدة الجغرافية', 'info');
@@ -1143,6 +1386,7 @@ export const PermissionsManagementModule: React.FC<PermissionsModuleProps> = ({
               </button>
 
               <button
+                type="button"
                 onClick={() => {
                   setActiveTab('reports');
                   triggerNotification('صلاحيات التقارير مخصصة لاعتمادات القوائم الختامية والموازنات السنوية للفرع', 'info');
@@ -1176,27 +1420,64 @@ export const PermissionsManagementModule: React.FC<PermissionsModuleProps> = ({
                   
                   {/* Table Body */}
                   <tbody>
-                    {PERMISSIONS_CATEGORIES_TREE.map((cat) => {
+                    {filteredPermissionCategories.map((cat) => {
                       const isExpanded = !!expandedCategories[cat.id];
                       const IconComponent = cat.icon;
+                      const grantedCount = categoryPermissionCount(cat);
+                      const categoryTotal = categoryPermissionKeys(cat).length;
+                      const isCategoryFullyGranted = categoryTotal > 0 && grantedCount === categoryTotal;
                       
                       return (
                         <React.Fragment key={cat.id}>
                           {/* Module Main Category Row */}
                           <tr className="bg-slate-50/45 border-b border-slate-100 select-none">
-                            <td colSpan={10} className="px-4 py-3">
-                              <div 
-                                onClick={() => toggleCategory(cat.id)}
-                                className="flex items-center justify-between cursor-pointer hover:opacity-80 transition-all"
-                              >
+                            <td colSpan={MATRIX_COLUMNS.length + 1} className="px-4 py-3">
+                              <div className="flex items-center justify-between gap-3">
+                                <div
+                                  onClick={() => toggleCategory(cat.id)}
+                                  onKeyDown={(event) => {
+                                    if (event.key === 'Enter' || event.key === ' ') {
+                                      event.preventDefault();
+                                      toggleCategory(cat.id);
+                                    }
+                                  }}
+                                  role="button"
+                                  tabIndex={0}
+                                  aria-expanded={isExpanded}
+                                  aria-label={`${isExpanded ? 'طي' : 'توسيع'} وحدة ${cat.label}`}
+                                  className="flex min-w-0 flex-1 items-center gap-2.5 rounded-lg py-1 hover:opacity-80 focus:outline-none focus:ring-2 focus:ring-orange-300 transition-all"
+                                >
                                 <div className="flex items-center gap-2.5">
                                   <div className="w-7 h-7 rounded-lg bg-orange-50 border border-orange-100 flex items-center justify-center text-orange-600 shrink-0">
                                     <IconComponent className="w-4 h-4" />
                                   </div>
                                   <span className="text-xs font-black text-slate-800">{cat.label}</span>
+                                  <span className="rounded-full bg-slate-100 px-2 py-0.5 text-[9px] font-black text-slate-500">
+                                    {cat.screens.length} شاشات
+                                  </span>
                                 </div>
-                                <div className="text-slate-400 pl-2">
-                                  {isExpanded ? <ChevronDown className="w-4 h-4" /> : <ChevronRight className="w-4 h-4" />}
+                                </div>
+                                <div className="flex shrink-0 items-center gap-3 pl-2">
+                                  <button
+                                    type="button"
+                                    role="checkbox"
+                                    aria-checked={isCategoryFullyGranted}
+                                    aria-label={`${isCategoryFullyGranted ? 'إلغاء' : 'تحديد'} صلاحيات وحدة ${cat.label}`}
+                                    disabled={!activeEmployee || canonicalPersistenceRequired}
+                                    onClick={(event) => {
+                                      event.stopPropagation();
+                                      handleToggleCategory(cat, !isCategoryFullyGranted);
+                                    }}
+                                    className={`rounded-lg border px-2 py-1 text-[9px] font-black transition disabled:cursor-not-allowed disabled:opacity-40 ${
+                                      isCategoryFullyGranted
+                                        ? 'border-orange-200 bg-orange-50 text-orange-700'
+                                        : 'border-slate-200 bg-white text-slate-500 hover:border-orange-300 hover:text-orange-600'
+                                    }`}
+                                  >
+                                    {isCategoryFullyGranted ? 'الوحدة محددة' : 'تحديد الوحدة'}
+                                  </button>
+                                  <span className="text-[9px] font-black text-slate-400">{grantedCount}/{categoryTotal}</span>
+                                  {isExpanded ? <ChevronDown className="w-4 h-4 text-slate-400" /> : <ChevronRight className="w-4 h-4 text-slate-400" />}
                                 </div>
                               </div>
                             </td>
@@ -1218,46 +1499,45 @@ export const PermissionsManagementModule: React.FC<PermissionsModuleProps> = ({
                                 <td className="px-8 py-3.5 text-xs font-bold text-slate-700">
                                   <div className="flex items-center gap-2 pr-4 border-r-2 border-slate-200">
                                     {isFirstSubNode && <Users className="w-3.5 h-3.5 text-orange-500" />}
-                                    <span>{scr.label}</span>
+                                    <span className="flex flex-col gap-0.5">
+                                      <span>{scr.label}</span>
+                                      <span className="font-mono text-[9px] font-semibold text-slate-400">{cat.id}:{scr.id}</span>
+                                    </span>
                                   </div>
                                 </td>
 
-                                {/* 9 Operations Checkbox cells */}
+                                {/* Operations checkbox cells: every protected button is explicit and keyboard accessible. */}
                                 {MATRIX_COLUMNS.map((col) => {
                                   const checked = isPermissionEnabled(cat.id, scr.id, col.id);
                                   const isLimited = scr.limitedPermissionColumns?.includes(col.id);
 
                                   return (
                                     <td key={col.id} className="p-2 text-center">
-                                      <div className="flex items-center justify-center">
-                                        {isLimited ? (
-                                          // Limited Permission (Dashed Orange border)
-                                          <div 
-                                            onClick={() => {
-                                              handleTogglePermission(cat.id, scr.id, col.id);
-                                              triggerNotification(`تم تعيين صلاحية محدودة مشروطة لـ [${col.label}] على شاشة [${scr.label}]`, 'info');
-                                            }}
-                                            className="w-5 h-5 rounded-md border-2 border-dashed border-amber-500 bg-amber-50/30 flex items-center justify-center cursor-pointer hover:bg-amber-50 transition-all"
-                                            title="صلاحية محدودة"
-                                          >
-                                            <div className="w-2.5 h-2.5 rounded-full bg-amber-500" />
-                                          </div>
-                                        ) : checked ? (
-                                          // Full Permission (Blue box with checkmark)
-                                          <div 
-                                            onClick={() => handleTogglePermission(cat.id, scr.id, col.id)}
-                                            className="w-5 h-5 rounded-md bg-orange-600 text-white flex items-center justify-center cursor-pointer shadow-xs scale-100 active:scale-90 transition-all"
-                                          >
-                                            <Check className="w-3.5 h-3.5 stroke-[3]" />
-                                          </div>
-                                        ) : (
-                                          // No Permission (Gray outline box)
-                                          <div 
-                                            onClick={() => handleTogglePermission(cat.id, scr.id, col.id)}
-                                            className="w-5 h-5 rounded-md border border-slate-300 hover:border-slate-400 cursor-pointer scale-100 active:scale-90 transition-all"
-                                          />
-                                        )}
-                                      </div>
+                                      <button
+                                        type="button"
+                                        role="checkbox"
+                                        aria-checked={checked}
+                                        aria-label={`${checked ? 'إلغاء' : 'منح'} ${col.label} — ${scr.label} — ${cat.label}`}
+                                        disabled={!activeEmployee || canonicalPersistenceRequired}
+                                        onClick={() => {
+                                          handleTogglePermission(cat.id, scr.id, col.id);
+                                          if (isLimited) {
+                                            triggerNotification(`تم تعيين صلاحية محدودة مشروطة لـ [${col.label}] على شاشة [${scr.label}]`, 'info');
+                                          }
+                                        }}
+                                        className={`mx-auto flex h-6 w-6 items-center justify-center rounded-md transition-all active:scale-90 disabled:cursor-not-allowed disabled:opacity-40 ${
+                                          isLimited
+                                            ? checked
+                                              ? 'border-2 border-dashed border-amber-500 bg-amber-100 text-amber-700'
+                                              : 'border-2 border-dashed border-amber-400 bg-amber-50/30 hover:bg-amber-50'
+                                            : checked
+                                              ? 'bg-orange-600 text-white shadow-xs hover:bg-orange-700'
+                                              : 'border border-slate-300 hover:border-orange-400'
+                                        }`}
+                                        title={isLimited ? 'صلاحية محدودة مشروطة' : checked ? 'صلاحية ممنوحة' : 'صلاحية غير ممنوحة'}
+                                      >
+                                        {isLimited ? <span className="h-2.5 w-2.5 rounded-full bg-amber-500" /> : checked ? <Check className="w-3.5 h-3.5 stroke-[3]" /> : null}
+                                      </button>
                                     </td>
                                   );
                                 })}
@@ -1276,39 +1556,78 @@ export const PermissionsManagementModule: React.FC<PermissionsModuleProps> = ({
                     <div className="bg-orange-50/50 border border-orange-100 p-4 flex flex-col justify-between">
                       <span className="text-[11px] font-black text-slate-500">الشاشات والوحدات المراقبة</span>
                       <div className="flex items-baseline gap-2 mt-2">
-                        <span className="text-2xl font-black text-slate-800">18</span>
+                        <span className="text-2xl font-black text-slate-800">{permissionStats.moduleCount}</span>
                         <span className="text-xs font-semibold text-slate-400">وحدة برمجية</span>
                       </div>
                     </div>
                     <div className="bg-emerald-50/50 border border-emerald-100 p-4 flex flex-col justify-between">
-                      <span className="text-[11px] font-black text-slate-500">أزرار العمليات المحمية</span>
+                        <span className="text-[11px] font-black text-slate-500">أزرار العمليات المحمية</span>
                       <div className="flex items-baseline gap-2 mt-2">
-                        <span className="text-2xl font-black text-slate-800">180</span>
+                        <span className="text-2xl font-black text-slate-800">{permissionStats.actionCount}</span>
                         <span className="text-xs font-semibold text-slate-400">زر تفاعلي</span>
                       </div>
                     </div>
                     <div className="bg-violet-50/50 border border-violet-100 p-4 flex flex-col justify-between">
-                      <span className="text-[11px] font-black text-slate-500">مسارات الـ API الخلفية المؤمنة</span>
+                      <span className="text-[11px] font-black text-slate-500">قوالب الأدوار المحملة</span>
                       <div className="flex items-baseline gap-2 mt-2">
-                        <span className="text-2xl font-black text-slate-800">45</span>
-                        <span className="text-xs font-semibold text-slate-400">نقطة اتصال</span>
+                        <span className="text-2xl font-black text-slate-800">{roles.length}</span>
+                        <span className="text-xs font-semibold text-slate-400">دور معرف</span>
                       </div>
                     </div>
-                    <div className="bg-emerald-50/50 border border-emerald-150 p-4 flex flex-col justify-between">
-                      <span className="text-[11px] font-black text-slate-500">ثغرات ومسارات تسريب نشطة</span>
+                    <div className="bg-slate-50/80 border border-slate-200 p-4 flex flex-col justify-between">
+                      <span className="text-[11px] font-black text-slate-500">حالة مصفوفة المستخدم</span>
                       <div className="flex items-baseline gap-2 mt-2">
-                        <span className="text-2xl font-black text-emerald-600">0</span>
-                        <span className="text-xs font-semibold text-emerald-500">حالة آمنة بالكامل</span>
+                        <span className="text-2xl font-black text-slate-800">{permissionStats.coverage}%</span>
+                        <span className="text-xs font-semibold text-slate-400">نسبة التغطية</span>
                       </div>
                     </div>
+                  </div>
+
+                  <div className="rounded-2xl border border-slate-200 bg-white p-4 text-[10px] font-semibold leading-relaxed text-slate-500">
+                    النطاق المحسوب هنا هو كتالوج الصلاحيات المحمل من واجهة التطبيق: {permissionStats.moduleCount} وحدة، {permissionStats.screenCount} شاشة، و{permissionStats.actionCount} نقطة تحكم. أما الحماية الفعلية للـ API فتظل مفروضة من الخادم ومصدر الهوية المركزي.
+                  </div>
+
+                  <div className="grid grid-cols-1 gap-3 lg:grid-cols-2">
+                    {REPORT_PERMISSION_CATALOG.map(report => (
+                      <div key={report.id} className="rounded-2xl border border-slate-200 bg-white p-4">
+                        <div className="mb-3 flex items-center justify-between gap-3">
+                          <div className="flex items-center gap-2">
+                            <FileText className="h-4 w-4 text-violet-600" />
+                            <span className="text-xs font-black text-slate-800">{report.label}</span>
+                          </div>
+                          <span className="font-mono text-[9px] text-slate-400">report:{report.id}</span>
+                        </div>
+                        <div className="grid grid-cols-4 gap-2">
+                          {REPORT_PERMISSION_ACTIONS.map(action => {
+                            const checked = isPermissionEnabled('report', report.id, action.id);
+                            return (
+                              <button
+                                key={action.id}
+                                type="button"
+                                role="checkbox"
+                                aria-checked={checked}
+                                aria-label={`${checked ? 'إلغاء' : 'منح'} ${action.label} — ${report.label}`}
+                                disabled={!activeEmployee || canonicalPersistenceRequired}
+                                onClick={() => handleTogglePermission('report', report.id, action.id)}
+                                className={`rounded-lg border px-2 py-2 text-[10px] font-black transition disabled:cursor-not-allowed disabled:opacity-40 ${
+                                  checked ? 'border-violet-300 bg-violet-50 text-violet-700' : 'border-slate-200 text-slate-500 hover:border-violet-300 hover:text-violet-600'
+                                }`}
+                              >
+                                {action.label}
+                              </button>
+                            );
+                          })}
+                        </div>
+                      </div>
+                    ))}
                   </div>
 
                   {/* Section 2: Heatmap Visualizer */}
                   <div className="border border-slate-200/85 p-5 space-y-4 shadow-2xs">
                     <div className="flex justify-between items-center border-b border-slate-100 pb-3 flex-wrap gap-2">
                       <div>
-                        <strong className="text-xs font-black text-slate-800">مصفوفة الامتثال للوظائف والصلاحيات الـ 10 (Zero Trust Matrix)</strong>
-                        <p className="text-[10px] text-slate-400">خارطة الامتثال الحرارية تظهر الصلاحيات المسندة لكل دور وظيفي على الخادم الخلفي بشكل قاطع.</p>
+                        <strong className="text-xs font-black text-slate-800">مصفوفة امتثال قوالب الأدوار (Zero Trust Matrix)</strong>
+                        <p className="text-[10px] text-slate-400">مؤشر مراجعة للأدوار المحملة. قرار السماح النهائي يُحسم دائماً من الصلاحيات المشتقة على الخادم.</p>
                       </div>
                       <button
                         onClick={() => {
@@ -1340,27 +1659,20 @@ export const PermissionsManagementModule: React.FC<PermissionsModuleProps> = ({
                           </tr>
                         </thead>
                         <tbody>
-                          {[
-                            { r: 'مدير النظام / مالك المؤسسة', e: 'superadmin', perms: ['view','insert','edit','delete','approve','cancel','post','reverse','export','print'] },
-                            { r: 'المدير المالي (Financial Manager)', e: 'financial_manager', perms: ['view','insert','edit','delete','approve','cancel','post','reverse','export','print'] },
-                            { r: 'المحاسب العام (Accountant)', e: 'accountant', perms: ['view','insert','edit','post','export','print'] },
-                            { r: 'أمين الصندوق (Cashier)', e: 'cashier', perms: ['view','insert','print'] },
-                            { r: 'شؤون الطلاب والقبول (Student Affairs)', e: 'student_affairs', perms: ['view','insert','edit','export','print'] },
-                            { r: 'مسؤول الكنترول والنتائج (Control Room)', e: 'control', perms: ['view','insert','edit','delete','approve','cancel','post','export','print'] },
-                            { r: 'شؤون الموظفين والرواتب (HR Manager)', e: 'hr_manager', perms: ['view','insert','edit','delete','approve','cancel','post','export','print'] },
-                            { r: 'المعلم الأكاديمي (Teacher)', e: 'teacher', perms: ['view','insert','edit'] },
-                            { r: 'المدقق المالي المساعد (Auditor)', e: 'auditor', perms: ['view','export','print'] },
-                            { r: 'ولي الأمر / الطالب (Parent/Student)', e: 'parent', perms: ['view'] }
-                          ].map((roleRow, idx) => (
+                          {roles.map((roleRow: any, idx) => (
                             <tr key={idx} className="border-b border-slate-100 hover:bg-slate-50/50">
                               <td className="p-2.5 font-bold text-slate-850">
                                 <div className="flex flex-col">
-                                  <span>{roleRow.r}</span>
-                                  <span className="text-[9px] text-slate-400 font-mono">{roleRow.e}</span>
+                                  <span>{roleRow.name}</span>
+                                  <span className="text-[9px] text-slate-400 font-mono">{roleRow.id}</span>
                                 </div>
                               </td>
                               {['view','insert','edit','delete','approve','cancel','post','reverse','export','print'].map((actionId) => {
-                                const hasPerm = roleRow.perms.includes(actionId);
+                                const rolePermissions = Array.isArray(roleRow.permissions) ? roleRow.permissions : [];
+                                const hasPerm = rolePermissions.includes('*') || rolePermissions.some((permission: unknown) => {
+                                  const normalized = String(permission).toLocaleLowerCase();
+                                  return normalized.endsWith(`:${actionId}`) || normalized.endsWith(`.${actionId}`);
+                                });
                                 return (
                                   <td key={actionId} className="p-2.5 text-center">
                                     {hasPerm ? (
@@ -1376,6 +1688,31 @@ export const PermissionsManagementModule: React.FC<PermissionsModuleProps> = ({
                         </tbody>
                       </table>
                     </div>
+                  </div>
+
+                  <div className="rounded-2xl border border-slate-200 bg-white p-5">
+                    <div className="mb-3 flex items-center justify-between gap-3 border-b border-slate-100 pb-3">
+                      <div>
+                        <strong className="flex items-center gap-2 text-xs font-black text-slate-800">
+                          <Workflow className="h-4 w-4 text-slate-500" />
+                          سجل مراجعة تغييرات الصلاحيات
+                        </strong>
+                        <p className="mt-1 text-[10px] font-semibold text-slate-400">عرض آخر الأحداث المسلمة إلى الوحدة. لا يُنشئ هذا العرض سجلاً محلياً في الوضع الإنتاجي.</p>
+                      </div>
+                      <span className="rounded-full bg-slate-100 px-2.5 py-1 text-[10px] font-black text-slate-500">{permissionsAuditLog.length} حدث</span>
+                    </div>
+                    {permissionsAuditLog.length > 0 ? (
+                      <div className="space-y-2">
+                        {permissionsAuditLog.slice(0, 5).map((audit: any) => (
+                          <div key={audit.id} className="flex flex-col gap-1 rounded-xl bg-slate-50/80 p-3 text-[10px] sm:flex-row sm:items-center sm:justify-between">
+                            <span className="font-bold text-slate-700">{audit.action || 'تغيير صلاحيات'}</span>
+                            <span className="font-semibold text-slate-400">{audit.modifier || 'النظام'} • {audit.date || '—'}</span>
+                          </div>
+                        ))}
+                      </div>
+                    ) : (
+                      <p className="text-center text-[10px] font-semibold text-slate-400">لا توجد أحداث مراجعة محملة من المصدر الحالي.</p>
+                    )}
                   </div>
 
                   {/* Section 3: Interactive Zero-Trust Simulation Sandbox */}
@@ -1487,12 +1824,69 @@ export const PermissionsManagementModule: React.FC<PermissionsModuleProps> = ({
                   </div>
                 </div>
               ) : (
-                <div className="p-12 text-center text-slate-400 flex flex-col items-center justify-center gap-3">
-                  <Database className="w-12 h-12 text-slate-300 animate-pulse" />
-                  <h4 className="text-sm font-bold text-slate-700 font-sans">شاشة عزل وحماية البيانات الحساسة</h4>
-                  <p className="text-xs text-slate-500 max-w-md leading-relaxed font-sans bg-gradient-to-b from-[#fffefc] via-[#fbf8f0] to-[#f5eeea] border-2 border-[#d4af37]/30 hover:border-[#d4af37] rounded-3xl p-4 sm:p-5 shadow-md transition-all duration-300">
-                    تم تكوين حظر عزل تام للفرع. لا توجد قنوات اتصال مشتركة لتسريب بيانات كشوف الحسابات والمبيعات مع الفروع الخارجية للمؤسسة.
-                  </p>
+                <div className="p-5 space-y-5">
+                  <div className="flex flex-col gap-3 rounded-2xl border border-sky-100 bg-sky-50/60 p-4 sm:flex-row sm:items-center sm:justify-between">
+                    <div className="flex items-start gap-3">
+                      <Database className="mt-0.5 h-5 w-5 shrink-0 text-sky-600" />
+                      <div>
+                        <h4 className="text-xs font-black text-slate-800">نطاق البيانات — أين يستطيع الموظف رؤية السجلات؟</h4>
+                        <p className="mt-1 text-[10px] font-semibold leading-relaxed text-slate-500">افصل بين صلاحية تنفيذ العملية وبين نطاق البيانات التي تنطبق عليها. هذا يمنع منح موظف صلاحية واسعة لمجرد حاجته إلى فرع أو مخزن واحد.</p>
+                      </div>
+                    </div>
+                    <span className="shrink-0 rounded-full border border-sky-200 bg-white px-3 py-1 text-[10px] font-black text-sky-700">{DATA_SCOPE_CATALOG.length} نطاقات</span>
+                  </div>
+
+                  <div className="grid grid-cols-1 gap-3 md:grid-cols-2">
+                    {DATA_SCOPE_CATALOG.map(scope => (
+                      <div key={scope.id} className="rounded-2xl border border-slate-200 bg-white p-4 shadow-sm">
+                        <div className="flex items-start justify-between gap-3">
+                          <div>
+                            <h5 className="text-xs font-black text-slate-800">{scope.label}</h5>
+                            <p className="mt-1 text-[10px] font-semibold text-slate-400">{scope.description}</p>
+                          </div>
+                          <span className="font-mono text-[9px] text-slate-400">data_scope:{scope.id}</span>
+                        </div>
+                        <div className="mt-3 grid grid-cols-3 gap-2">
+                          {DATA_SCOPE_ACTIONS.map(action => {
+                            const checked = isPermissionEnabled('data_scope', scope.id, action.id);
+                            return (
+                              <button
+                                key={action.id}
+                                type="button"
+                                role="checkbox"
+                                aria-checked={checked}
+                                aria-label={`${checked ? 'إلغاء' : 'منح'} ${action.label} — ${scope.label}`}
+                                disabled={!activeEmployee || canonicalPersistenceRequired}
+                                onClick={() => handleTogglePermission('data_scope', scope.id, action.id)}
+                                className={`rounded-lg border px-2 py-2 text-[10px] font-black transition disabled:cursor-not-allowed disabled:opacity-40 ${
+                                  checked ? 'border-sky-300 bg-sky-50 text-sky-700' : 'border-slate-200 text-slate-500 hover:border-sky-300 hover:text-sky-600'
+                                }`}
+                              >
+                                {action.label}
+                              </button>
+                            );
+                          })}
+                        </div>
+                      </div>
+                    ))}
+                  </div>
+
+                  <div className="grid grid-cols-1 gap-3 md:grid-cols-3">
+                    {[
+                      { title: 'مبدأ أقل صلاحية', text: 'ابدأ بعرض محدود ثم امنح الإدخال والتعديل عند الحاجة الفعلية.', icon: ShieldCheck },
+                      { title: 'فصل المهام', text: 'لا تجمع الإدخال والاعتماد والترحيل لموظف واحد دون مبرر.', icon: Sliders },
+                      { title: 'نطاق موثق', text: 'الفروع والمخازن والخزائن تُربط بالسياق الموثوق لا بإدخال المتصفح.', icon: Shield }
+                    ].map(rule => {
+                      const RuleIcon = rule.icon;
+                      return (
+                        <div key={rule.title} className="rounded-xl border border-slate-100 bg-slate-50/70 p-3">
+                          <RuleIcon className="h-4 w-4 text-slate-500" />
+                          <strong className="mt-2 block text-[10px] font-black text-slate-700">{rule.title}</strong>
+                          <p className="mt-1 text-[9px] font-semibold leading-relaxed text-slate-400">{rule.text}</p>
+                        </div>
+                      );
+                    })}
+                  </div>
                 </div>
               )}
             </div>
