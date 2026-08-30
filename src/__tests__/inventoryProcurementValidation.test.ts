@@ -43,4 +43,16 @@ describe('inventory and procurement snapshot validation', () => {
 
     expect(() => validateInventoryProcurementSnapshot(snapshot)).toThrow('يتجاوز كمية أمر الشراء');
   });
+
+  it('validates RFQ items using the canonical RequestForQuotation field', () => {
+    const snapshot = emptySnapshot();
+    snapshot.items.push({ id: 'item-1', name: 'صنف تجريبي', sku: 'SKU-1', quantity: 0, minLevel: 0, maxLevel: 10, reorderLevel: 1, costPrice: 10, salePrice: 15, vatRate: 0, status: 'active', categoryId: '', unitId: '', supplierId: '', warehouseId: '' });
+    snapshot.rfqs.push({
+      id: 'rfq-1', schoolId: '', rfqNo: 'RFQ-1', title: 'توريد تجريبي', issueDate: '2026-08-30', deadlineDate: '2026-09-06', vendorIds: [],
+      items: [{ id: 'line-1', itemId: 'item-1', itemCode: 'SKU-1', itemName: 'صنف تجريبي', unit: 'وحدة', quantityRequested: 2, estimatedUnitPrice: 10, totalAmount: 20 }],
+      status: 'draft', createdAt: '2026-08-30T00:00:00.000Z'
+    });
+
+    expect(() => validateInventoryProcurementSnapshot(snapshot)).not.toThrow();
+  });
 });

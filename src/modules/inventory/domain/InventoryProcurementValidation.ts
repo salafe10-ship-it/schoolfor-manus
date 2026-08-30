@@ -60,11 +60,11 @@ function assertUniqueIds(rows: unknown[], collection: string): Map<string, Snaps
   return byId;
 }
 
-function lineRows(row: Snapshot, label: string): Snapshot[] {
-  if (!Array.isArray(row.lines)) throw new ValidationError(`${label} يتطلب قائمة بنود.`);
-  if (row.lines.length === 0) throw new ValidationError(`${label} يتطلب بنداً واحداً على الأقل.`);
+function lineRows(row: Snapshot, label: string, field = 'lines'): Snapshot[] {
+  if (!Array.isArray(row[field])) throw new ValidationError(`${label} يتطلب قائمة بنود.`);
+  if (row[field].length === 0) throw new ValidationError(`${label} يتطلب بنداً واحداً على الأقل.`);
   const ids = new Set<string>();
-  return row.lines.map((value: unknown, index: number) => {
+  return row[field].map((value: unknown, index: number) => {
     const line = record(value, `${label}.lines[${index}]`);
     const id = requiredId(line.id || line.lineId || `${index}`, `${label}.lines[${index}]`);
     if (ids.has(id)) throw new ValidationError(`المعرف ${id} مكرر داخل بنود ${label}.`);
@@ -158,7 +158,7 @@ export function validateInventoryProcurementSnapshot(data: Snapshot, options: { 
     if (!RFQ_STATUSES.includes(String(rfq.status))) throw new ValidationError(`حالة طلب العروض ${id} غير معتمدة.`);
     if (rfq.purchaseRequestId && !requests.has(String(rfq.purchaseRequestId))) throw new ValidationError(`طلب العروض ${id} مرتبط بطلب شراء غير موجود.`);
     if (!Array.isArray(rfq.vendorIds) || new Set(rfq.vendorIds.map(String)).size !== rfq.vendorIds.length || rfq.vendorIds.some((vendorId: unknown) => !suppliers.has(String(vendorId)))) throw new ValidationError(`قائمة موردي طلب العروض ${id} غير صالحة أو تحتوي مورداً غير مسجل.`);
-    lineRows(rfq, `طلب العروض ${id}`).forEach((line, index) => { assertProcurementLine(line, `طلب العروض ${id} البند ${index + 1}`, 'quantityRequested'); assertInventoryLineReference(line, `طلب العروض ${id} البند ${index + 1}`, items); });
+    lineRows(rfq, `طلب العروض ${id}`, 'items').forEach((line, index) => { assertProcurementLine(line, `طلب العروض ${id} البند ${index + 1}`, 'quantityRequested'); assertInventoryLineReference(line, `طلب العروض ${id} البند ${index + 1}`, items); });
   }
 
   for (const [id, quotation] of maps.quotations) {
