@@ -43,6 +43,12 @@ export default function ProcurementManagementPortal({
     if (triggerNotification) triggerNotification(msg, type);
   };
 
+  const canonicalItemId = (reference?: string) => {
+    const normalized = String(reference || '').trim();
+    if (!normalized) return '';
+    return database.items.find(item => item.id === normalized || item.sku === normalized)?.id || normalized;
+  };
+
   const auditReport = async (format: 'csv' | 'print') => {
     const token = getTrustedAccessToken();
     if (!token) throw new Error('انتهت جلسة الدخول الموثوقة.');
@@ -89,11 +95,11 @@ export default function ProcurementManagementPortal({
       const previousReceipt = goodsReceipts.find(item => item.id === grn.id);
       const acceptedDeltaByItem = new Map<string, number>();
       for (const line of previousReceipt?.lines || []) {
-        const itemId = line.itemId || line.itemCode;
+        const itemId = canonicalItemId(line.itemId || line.itemCode);
         acceptedDeltaByItem.set(itemId, (acceptedDeltaByItem.get(itemId) || 0) - Number(line.acceptedQty || 0));
       }
       for (const line of grn.lines) {
-        const itemId = line.itemId || line.itemCode;
+        const itemId = canonicalItemId(line.itemId || line.itemCode);
         acceptedDeltaByItem.set(itemId, (acceptedDeltaByItem.get(itemId) || 0) + Number(line.acceptedQty || 0));
       }
       const nextItems = database.items.map(item => {
@@ -107,9 +113,9 @@ export default function ProcurementManagementPortal({
         if (po.id !== grn.purchaseOrderId) return po;
         const orderReceipts = nextReceipts.filter(receipt => receipt.purchaseOrderId === po.id);
         const nextLines = po.lines.map(orderLine => {
-          const itemId = orderLine.itemId || orderLine.itemCode;
+          const itemId = canonicalItemId(orderLine.itemId || orderLine.itemCode);
           const received = orderReceipts.reduce((sum, receipt) => sum + receipt.lines
-            .filter(line => (line.itemId || line.itemCode) === itemId)
+            .filter(line => canonicalItemId(line.itemId || line.itemCode) === itemId)
             .reduce((lineSum, line) => lineSum + Number(line.acceptedQty || 0), 0), 0);
           return { ...orderLine, itemId, quantityReceived: received };
         });

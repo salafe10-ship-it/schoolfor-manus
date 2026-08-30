@@ -10,4 +10,11 @@ describe('procurement portal canonical loading', () => {
     expect(source).toContain('const { purchaseRequests, purchaseOrders, goodsReceipts, vendorBills } = database');
     expect(source).not.toContain('ProcurementRepository.getPurchaseRequests');
   });
+
+  it('reconciles legacy SKU references when deriving PO receipt progress', () => {
+    const source = readFileSync(resolve(process.cwd(), 'src/components/procurement/ProcurementManagementPortal.tsx'), 'utf8');
+    expect(source).toContain('const canonicalItemId = (reference?: string)');
+    expect(source).toContain('canonicalItemId(orderLine.itemId || orderLine.itemCode)');
+    expect(source).toContain('canonicalItemId(line.itemId || line.itemCode) === itemId');
+  });
 });
