@@ -1,6 +1,5 @@
 import { Archive, Ban, Calendar, CheckCircle, Copy, Edit2, ExternalLink, FileSpreadsheet, Globe, HardDrive, Key, Layers, Lock as LockIcon, Plus, RefreshCw, RotateCcw, Search, ShieldAlert, ShieldCheck, Sliders, Sparkles, Trash2, Users, X } from 'lucide-react';
-import React, { useState } from 'react';
-import { initializeCOAForSchool } from '../../utils/COAUtils';
+import React, { useEffect, useState } from 'react';
 import { getTrustedSchoolUrl, openTrustedSchoolPortal } from '../../utils/EnterpriseDomainUtils';
 import { authenticatedRequest } from '../../utils/authenticatedRequest';
 import ImpersonationModal from './ImpersonationModal';
@@ -25,7 +24,6 @@ export default function SuperAdminSchools({
   setBranches,
   logAction,
   triggerNotification,
-  onSetSuccessProvision,
   onOpenSchoolLogin,
   onImpersonateSchool,
   currentRole = 'SuperAdmin'
@@ -44,6 +42,8 @@ export default function SuperAdminSchools({
   const [showCloneModal, setShowCloneModal] = useState(false);
   const [showDeleteModal, setShowDeleteModal] = useState(false);
   const [impersonateTarget, setImpersonateTarget] = useState<any | null>(null);
+  const [isProvisioning, setIsProvisioning] = useState(false);
+  const [isDirectoryLoading, setIsDirectoryLoading] = useState(true);
 
   // Active object being edited/viewed
   const [currentSchool, setCurrentSchool] = useState<any | null>(null);
@@ -109,23 +109,72 @@ export default function SuperAdminSchools({
     }
     return payload.school;
   };
+
+  useEffect(() => {
+    let mounted = true;
+    const loadCentralSchools = async () => {
+      setIsDirectoryLoading(true);
+      try {
+        const response = await authenticatedRequest('/api/admin/central/schools');
+        const payload = await response.json().catch(() => ({}));
+        if (!response.ok || !payload?.success || !Array.isArray(payload.schools)) {
+          throw new Error(payload?.message || 'CENTRAL_SCHOOL_DIRECTORY_UNAVAILABLE');
+        }
+        if (!mounted) return;
+        const canonicalSchools = payload.schools.map((school: any) => ({
+          ...(school.central_metadata && typeof school.central_metadata === 'object' ? school.central_metadata : {}),
+          id: school.id,
+          tenantId: school.tenant_id,
+          name: school.display_name,
+          schoolShortName: school.display_name,
+          schoolCode: school.school_code,
+          status: school.status,
+          archived: school.status === 'archived',
+          timezone: school.timezone,
+          locale: school.locale,
+          schoolUrl: getTrustedSchoolUrl({ id: school.id }),
+          connectedDb: 'canonical-postgres',
+        }));
+        const canonicalBranches = payload.schools
+          .filter((school: any) => school.main_branch?.id)
+          .map((school: any) => ({
+            id: school.main_branch.id,
+            schoolId: school.id,
+            name: school.main_branch.name,
+            branchCode: school.main_branch.branch_code,
+            status: school.main_branch.status,
+            isMain: true,
+          }));
+        setSchools(canonicalSchools);
+        setBranches(canonicalBranches);
+      } catch (error) {
+        if (mounted) {
+          triggerNotification(error instanceof Error ? error.message : 'تعذر تحميل دليل المدارس المركزي.', 'danger');
+        }
+      } finally {
+        if (mounted) setIsDirectoryLoading(false);
+      }
+    };
+    void loadCentralSchools();
+    return () => { mounted = false; };
+  }, []);
   
   // Handle Add School (Provision Tenant)
   const handleProvisionSchool = async (e: React.FormEvent) => {
     e.preventDefault();
     
     // Check parameters
-    if (!newSchool.name || !newSchool.subdomain || !newSchool.managerName || !newSchool.adminEmail) {
-      triggerNotification('يرجى تعبئة جميع الحقول الأساسية للنظام', 'warning');
+    if (!newSchool.name.trim()) {
+      triggerNotification('يرجى إدخال اسم المدرسة لبدء التهيئة المركزية.', 'warning');
       return;
     }
 
-    // Check subdomain uniqueness
-    if (schools.some(s => s.subdomain === newSchool.subdomain)) {
-      triggerNotification('النطاق الفرعي مستخدم مسبقاً، اختر نطاق آخر', 'danger');
+    if (newSchool.schoolCode && schools.some(s => String(s.schoolCode || '').toUpperCase() === newSchool.schoolCode.toUpperCase())) {
+      triggerNotification('رمز المدرسة مستخدم مسبقاً داخل الدليل المركزي.', 'danger');
       return;
     }
 
+    setIsProvisioning(true);
     try {
       const response = await authenticatedRequest('/api/admin/central/schools', {
         method: 'POST',
@@ -133,6 +182,18 @@ export default function SuperAdminSchools({
         body: JSON.stringify({
           name: newSchool.name,
           schoolCode: newSchool.schoolCode || undefined,
+          shortName: newSchool.schoolShortName,
+          subdomain: newSchool.subdomain,
+          city: newSchool.city,
+          address: newSchool.address,
+          phone: newSchool.phone,
+          email: newSchool.email,
+          managerName: newSchool.managerName,
+          managerEmail: newSchool.adminEmail,
+          plan: newSchool.plan,
+          storageLimit: newSchool.storageLimit,
+          userLimit: newSchool.userLimit,
+          subscriptionDuration: newSchool.subscriptionDuration,
           timezone: 'Africa/Khartoum',
           locale: 'ar',
         }),
@@ -145,43 +206,24 @@ export default function SuperAdminSchools({
       const canonicalSchool = payload.school;
       const canonicalBranch = payload.branch;
       const createdSchool = {
+        ...(canonicalSchool.central_metadata && typeof canonicalSchool.central_metadata === 'object' ? canonicalSchool.central_metadata : {}),
         ...canonicalSchool,
         id: canonicalSchool.id,
         name: canonicalSchool.display_name,
-        schoolShortName: newSchool.schoolShortName || canonicalSchool.display_name,
+        schoolShortName: canonicalSchool.display_name,
         schoolCode: canonicalSchool.school_code,
-        type: newSchool.type,
-        city: newSchool.city,
-        address: newSchool.address,
-        phone: newSchool.phone,
-        email: newSchool.email,
-        subdomain: newSchool.subdomain,
-        domain: newSchool.subdomain ? `${newSchool.subdomain}.erpcloud.com` : '',
         status: canonicalSchool.status,
-        plan: newSchool.plan,
-        storageUsed: '0 GB',
-        storageLimit: `${newSchool.storageLimit} GB`,
-        usersCount: 0,
-        employeesCount: 0,
-        studentsCount: 0,
-        managerName: newSchool.managerName,
-        adminName: newSchool.managerName,
-        adminEmail: newSchool.adminEmail,
-        schoolUrl: getTrustedSchoolUrl({ id: canonicalSchool.id, subdomain: newSchool.subdomain }),
+        archived: false,
+        connectedDb: 'canonical-postgres',
+        schoolUrl: getTrustedSchoolUrl({ id: canonicalSchool.id }),
       };
       const createdBranch = {
         ...canonicalBranch,
         id: canonicalBranch.id,
         schoolId: canonicalBranch.school_id,
         name: canonicalBranch.name,
-        city: newSchool.city,
-        address: newSchool.address || 'العنوان الإداري',
-        phone: newSchool.phone || 'الهاتف الإداري',
         status: canonicalBranch.status,
         isMain: true,
-        usersCount: 0,
-        studentsCount: 0,
-        employeesCount: 0,
       };
       setSchools(prev => [...prev, createdSchool]);
       setBranches(prev => [...prev, createdBranch]);
@@ -194,103 +236,11 @@ export default function SuperAdminSchools({
       });
     } catch (error) {
       triggerNotification(error instanceof Error ? error.message : 'تعذر إنشاء المدرسة مركزياً؛ لم يتم تعديل البيانات.', 'danger');
+    } finally {
+      setIsProvisioning(false);
     }
     return;
 
-    const generatedPassword = newSchool.password || Math.random().toString(36).substring(2, 10).toUpperCase();
-    const newId = `school_${schools.length + 1}`;
-    
-    const createdSchool = {
-      id: newId,
-      name: newSchool.name,
-      schoolShortName: newSchool.schoolShortName || newSchool.name,
-      schoolCode: newSchool.schoolCode || `SCH-${Math.floor(1000 + Math.random() * 9000)}`,
-      logo: '🎓',
-      type: newSchool.type,
-      licenseNumber: `L-${new Date().getFullYear()}-${Math.floor(1000 + Math.random() * 9000)}`,
-      address: newSchool.address,
-      phone: newSchool.phone,
-      email: newSchool.email,
-      academicYear: '2026/2027',
-      domain: `${newSchool.subdomain}.erpcloud.com`,
-      subdomain: newSchool.subdomain,
-      status: 'active',
-      plan: newSchool.plan,
-      storageUsed: '0 GB',
-      storageLimit: `${newSchool.storageLimit} GB`,
-      usersCount: 1,
-      region: 'me-central1 (Dhahran)',
-      backupsCount: 0,
-      connectedDb: `logical_db_${newSchool.subdomain}_prod`,
-      createdAt: new Date().toISOString().split('T')[0],
-      country: 'المملكة العربية السعودية',
-      city: newSchool.city,
-      managerName: newSchool.managerName,
-      adminName: newSchool.managerName,
-      adminEmail: newSchool.adminEmail,
-      subscriptionDuration: newSchool.subscriptionDuration,
-      userLimit: newSchool.userLimit,
-      subscriptionStart: new Date().toISOString().split('T')[0],
-      subscriptionEnd: new Date(new Date().setMonth(new Date().getMonth() + parseInt(newSchool.subscriptionDuration))).toISOString().split('T')[0],
-      lastLogin: 'لم يسجل دخول بعد',
-      linkStatus: 'active',
-      schoolUrl: getTrustedSchoolUrl({ id: newId, subdomain: newSchool.subdomain })
-    };
-
-    // Append default branch for this new school
-    const defaultBranch = {
-      id: `branch_s${schools.length + 1}_b1`,
-      schoolId: newId,
-      name: 'الفرع الرئيسي العام',
-      city: newSchool.city,
-      address: newSchool.address || 'العنوان الإداري',
-      phone: newSchool.phone || 'الهاتف الإداري',
-      status: 'active',
-      isMain: true,
-      usersCount: 1,
-      studentsCount: 0,
-      employeesCount: 1
-    };
-
-    setSchools(prev => [...prev, createdSchool]);
-    setBranches(prev => [...prev, defaultBranch]);
-    initializeCOAForSchool(newId);
-    
-    logAction('CREATE_SCHOOL', `تأسيس مدرسة جديدة: ${newSchool.name} بنظام Tenant معزول وقاعدة بيانات فرعية`, 'الإدارة المركزية');
-    triggerNotification('تمت تهيئة المدرسة عبر الخدمة المركزية ✅', 'success');
-
-    // Launch Success Modal
-    if (onSetSuccessProvision) {
-      onSetSuccessProvision({
-        schoolName: createdSchool.name,
-        subdomain: createdSchool.subdomain,
-        accessLink: createdSchool.schoolUrl,
-        adminName: createdSchool.managerName,
-        adminEmail: createdSchool.adminEmail,
-        password: generatedPassword
-      });
-    }
-
-    setShowAddModal(false);
-    // Reset form
-    setNewSchool({
-      name: '',
-      schoolShortName: '',
-      schoolCode: '',
-      type: 'private',
-      city: 'الرياض',
-      address: '',
-      phone: '',
-      email: '',
-      subdomain: '',
-      managerName: '',
-      adminEmail: '',
-      password: '',
-      plan: 'Enterprise',
-      storageLimit: '500',
-      userLimit: '3000',
-      subscriptionDuration: '12'
-    });
   };
 
   // Edit School
@@ -301,8 +251,19 @@ export default function SuperAdminSchools({
     try {
       const school = await mutateCentralSchool(currentSchool.id, {
         operation: 'update', name: currentSchool.name, schoolCode: currentSchool.schoolCode,
+        profile: {
+          shortName: currentSchool.schoolShortName,
+          city: currentSchool.city,
+          address: currentSchool.address,
+          phone: currentSchool.phone,
+          email: currentSchool.email,
+          managerName: currentSchool.managerName,
+          managerEmail: currentSchool.adminEmail,
+          plan: currentSchool.plan,
+        },
       });
-      setSchools(prev => prev.map(item => item.id === school.id ? { ...item, ...currentSchool, ...school, name: school.display_name, schoolCode: school.school_code } : item));
+      const profile = school.central_metadata && typeof school.central_metadata === 'object' ? school.central_metadata : {};
+      setSchools(prev => prev.map(item => item.id === school.id ? { ...item, ...profile, ...school, name: school.display_name, schoolCode: school.school_code, schoolShortName: profile.shortName || school.display_name } : item));
       logAction('EDIT_SCHOOL', `تحديث بيانات المدرسة من المصدر المركزي: ${school.display_name}`, 'الإدارة المركزية');
       triggerNotification('تم تحديث بيانات المدرسة في قاعدة البيانات المركزية ✅', 'success');
       setShowEditModal(false);
@@ -380,25 +341,36 @@ export default function SuperAdminSchools({
   };
 
   // Update subscription limits & packages
-  const handleSaveLimits = (e: React.FormEvent) => {
+  const handleSaveLimits = async (e: React.FormEvent) => {
     e.preventDefault();
     if (!currentSchool) return;
 
-    triggerNotification('إدارة حدود الاشتراك تحتاج واجهة إعدادات مركزية؛ لم يتم حفظ تغييرات محلية.', 'warning');
-    return;
-
-    // Calculate end date based on duration
     const currentStart = new Date(currentSchool.subscriptionStart || new Date());
     const newEnd = new Date(currentStart.setMonth(currentStart.getMonth() + limitEditor.durationMonths)).toISOString().split('T')[0];
-
-    setSchools(prev => prev.map(s => s.id === currentSchool.id ? {
-      ...s,
-      plan: limitEditor.plan,
-      storageLimit: `${limitEditor.storageLimit} GB`,
-      userLimit: limitEditor.userLimit.toString(),
-      subscriptionEnd: newEnd,
-      status: limitEditor.status
-    } : s));
+    try {
+      const canonical = await mutateCentralSchool(currentSchool.id, {
+        operation: 'update',
+        name: currentSchool.name,
+        schoolCode: currentSchool.schoolCode,
+        status: limitEditor.status,
+        profile: {
+          shortName: currentSchool.schoolShortName || currentSchool.name,
+          plan: limitEditor.plan,
+          storageLimit: `${limitEditor.storageLimit} GB`,
+          userLimit: String(limitEditor.userLimit),
+          subscriptionDuration: String(limitEditor.durationMonths),
+          subscriptionStart: currentSchool.subscriptionStart || new Date().toISOString().split('T')[0],
+          subscriptionEnd: newEnd,
+        },
+      });
+      const profile = canonical.central_metadata && typeof canonical.central_metadata === 'object' ? canonical.central_metadata : {};
+      const next = { ...profile, ...canonical, name: canonical.display_name, schoolCode: canonical.school_code };
+      setSchools(prev => prev.map(s => s.id === canonical.id ? { ...s, ...next } : s));
+      setCurrentSchool(prev => prev?.id === canonical.id ? { ...prev, ...next } : prev);
+    } catch (error) {
+      triggerNotification(error instanceof Error ? error.message : 'تعذر حفظ حدود الاشتراك في الإدارة المركزية.', 'danger');
+      return;
+    }
 
     logAction(
       'UPDATE_LIMITS', 
@@ -409,7 +381,7 @@ export default function SuperAdminSchools({
     setShowLimitsModal(false);
   };
 
-  // Clone Copy Settings Wizard Simulator
+  // Copying configuration requires a dedicated, audited central transaction.
   const handleRunCloneSettings = () => {
     if (!cloneWizard.sourceSchoolId || !cloneWizard.destSchoolId) {
       triggerNotification('يرجى اختيار مدرسة المصدر ومدرسة الهدف للنسخ', 'warning');
@@ -420,63 +392,8 @@ export default function SuperAdminSchools({
       return;
     }
 
-    const srcName = schools.find(s => s.id === cloneWizard.sourceSchoolId)?.name || 'مدرسة المصدر';
-    const destName = schools.find(s => s.id === cloneWizard.destSchoolId)?.name || 'مدرسة الهدف';
-
-    setCloneWizard(prev => ({ 
-      ...prev, 
-      isProcessing: true, 
-      progress: 5, 
-      logs: [`[01:12] بدء محاذاة البيانات الكلية للمستأجرين...`] 
-    }));
-
-    // Step 1: Read config
-    setTimeout(() => {
-      setCloneWizard(prev => ({ 
-        ...prev, 
-        progress: 30, 
-        logs: [...prev.logs, `[01:13] تم استخراج قوالب الهيكل الأكاديمي والصفوف والتقاويم من [${srcName}].`] 
-      }));
-    }, 1000);
-
-    // Step 2: Permissions copy
-    setTimeout(() => {
-      setCloneWizard(prev => ({ 
-        ...prev, 
-        progress: 65, 
-        logs: [...prev.logs, `[01:15] تم نسخ مصفوفات صلاحيات الأدوار (RBAC Rules Template) المدمجة.`] 
-      }));
-    }, 2000);
-
-    // Step 3: Financial settings copy if enabled
-    setTimeout(() => {
-      const financeLog = cloneWizard.copyFinance 
-        ? `[01:17] تم نسخ شجرة الحسابات والدفاتر ومراكز التكلفة المحاسبية.` 
-        : `[01:17] تم تجاوز استنساخ الشق المالي بناء على خيارات المشرف.`;
-      
-      setCloneWizard(prev => ({ 
-        ...prev, 
-        progress: 90, 
-        logs: [...prev.logs, financeLog] 
-      }));
-    }, 3000);
-
-    // Step 4: Finalize
-    setTimeout(() => {
-      setCloneWizard(prev => ({ 
-        ...prev, 
-        progress: 100, 
-        isProcessing: false,
-        logs: [...prev.logs, `[01:18] اكتمل نسخ الإعدادات وتخصيص البنية بشكل آمن ١٠٠٪ بنجاح.`] 
-      }));
-      
-      logAction(
-        'COPY_SCHOOL_SETTINGS', 
-        `استنساخ إعدادات وهياكل الحوكمة والأكاديمية من [${srcName}] إلى [${destName}] بنجاح كلي`, 
-        'شؤون البنية والتهيئة'
-      );
-      triggerNotification('تمت عملية نسخ وتهيئة الإعدادات بنجاح 📋', 'success');
-    }, 4000);
+    setCloneWizard(prev => ({ ...prev, isProcessing: false, progress: 0, logs: [] }));
+    triggerNotification('النسخ بين المدارس يحتاج معاملة مركزية مدققة لم تُفعّل بعد؛ لم يتم تعديل أي مدرسة.', 'warning');
   };
 
   // Reset clone wizard
@@ -553,6 +470,11 @@ export default function SuperAdminSchools({
             <Plus className="w-4 h-4" />
             <span>تأسيس مستأجر مدرسة جديدة</span>
           </button>
+
+          <span className={`hidden lg:inline-flex items-center gap-1.5 px-3 text-[10px] font-bold border ${isDirectoryLoading ? 'text-amber-300 border-amber-900 bg-amber-950/30' : 'text-emerald-300 border-emerald-900 bg-emerald-950/30'}`}>
+            <span className={`w-1.5 h-1.5 rounded-full ${isDirectoryLoading ? 'bg-amber-400 animate-pulse' : 'bg-emerald-400'}`} />
+            {isDirectoryLoading ? 'جاري تحميل الدليل المركزي...' : 'الدليل المركزي متصل'}
+          </span>
 
           <button
             onClick={() => setShowCloneModal(true)}
@@ -893,7 +815,6 @@ export default function SuperAdminSchools({
                     </span>
                     <input
                       type="text"
-                      required
                       placeholder="shorooq"
                       value={newSchool.subdomain}
                       onChange={(e) => setNewSchool({...newSchool, subdomain: e.target.value.toLowerCase().replace(/[^a-z0-9]/g, '')})}
@@ -932,11 +853,10 @@ export default function SuperAdminSchools({
 
                 {/* Manager Name */}
                 <div className="space-y-1">
-                  <label className="text-xs font-bold text-slate-400 block">المدير المسؤول (صاحب الحساب):</label>
-                  <input
-                    type="text"
-                    required
-                    placeholder="اسم مدير المدرسة المسؤول"
+                  <label className="text-xs font-bold text-slate-400 block">المدير المسؤول (بيانات الملف):</label>
+                    <input
+                      type="text"
+                      placeholder="اسم مدير المدرسة المسؤول"
                     value={newSchool.managerName}
                     onChange={(e) => setNewSchool({...newSchool, managerName: e.target.value})}
                     className="w-full bg-slate-950 border border-slate-800 focus:border-amber-500 rounded-lg px-3 py-2 text-xs text-white focus:outline-none"
@@ -945,27 +865,14 @@ export default function SuperAdminSchools({
 
                 {/* Admin Email */}
                 <div className="space-y-1">
-                  <label className="text-xs font-bold text-slate-400 block">البريد الإلكتروني للولوج والتأسيس:</label>
-                  <input
-                    type="email"
-                    required
-                    placeholder="example@school.edu.sa"
+                  <label className="text-xs font-bold text-slate-400 block">بريد المدير (لا ينشئ حساب دخول):</label>
+                    <input
+                      type="email"
+                      placeholder="example@school.edu.sa"
                     value={newSchool.adminEmail}
                     onChange={(e) => setNewSchool({...newSchool, adminEmail: e.target.value})}
                     className="w-full bg-slate-950 border border-slate-800 focus:border-amber-500 rounded-lg px-3 py-2 text-xs text-white focus:outline-none font-mono"
                     dir="ltr"
-                  />
-                </div>
-
-                {/* Temporary Password */}
-                <div className="space-y-1">
-                  <label className="text-xs font-bold text-slate-400 block">كلمة المرور المؤقتة (تترك فارغة للتوليد العشوائي):</label>
-                  <input
-                    type="text"
-                    placeholder="توليد تلقائي مشفر..."
-                    value={newSchool.password}
-                    onChange={(e) => setNewSchool({...newSchool, password: e.target.value})}
-                    className="w-full bg-slate-950 border border-slate-800 focus:border-amber-500 rounded-lg px-3 py-2 text-xs text-white focus:outline-none font-mono"
                   />
                 </div>
 
@@ -1020,7 +927,7 @@ export default function SuperAdminSchools({
                   <ShieldCheck className="w-4 h-4" />
                   بروتوكول عزل الحوسبة المتعددة (Tenant isolation rules):
                 </span>
-                <p className="leading-relaxed">عند الضغط على تفعيل، سيقوم معالج السحابة بتخصيص خادم قواعد بيانات منطقي فرعي، وتخصيص RLS مستقل، مع إنشاء فرع رئيسي للمدرسة وحساب المسؤول مع توليد رابط الولوج الآمن.</p>
+                <p className="leading-relaxed">عند الضغط على التأسيس، يحفظ المركز المدرسة وملفها الإداري وينشئ الفرع الرئيسي وتهيئة HR والمخزون والمالية داخل قاعدة البيانات الكانونية مع عزل RLS. لا يتم حفظ كلمات المرور ولا يتم إنشاء هوية دخول المدير من هذا النموذج.</p>
               </div>
 
               <div className="pt-4 border-t border-slate-800 flex justify-end gap-2 text-xs">
@@ -1033,9 +940,10 @@ export default function SuperAdminSchools({
                 </button>
                 <button
                   type="submit"
-                  className="bg-amber-600 hover:bg-amber-500 text-white font-extrabold px-6 py-2 shadow-md cursor-pointer transition-colors"
+                  disabled={isProvisioning}
+                  className="bg-amber-600 hover:bg-amber-500 disabled:bg-slate-700 disabled:text-slate-400 disabled:cursor-wait text-white font-extrabold px-6 py-2 shadow-md cursor-pointer transition-colors"
                 >
-                  تأكيد وتأسيس الخادم السحابي ⚡
+                  {isProvisioning ? 'جاري الحفظ المركزي والتحقق...' : 'تأكيد وفتح المدرسة مركزيًا ⚡'}
                 </button>
               </div>
             </form>
@@ -1193,7 +1101,6 @@ export default function SuperAdminSchools({
                   >
                     <option value="active">نشط وفعال ومفعل الدفع</option>
                     <option value="suspended">موقوف معلق (لعدم السداد)</option>
-                    <option value="trial">تجريبي مجاني (Trial)</option>
                   </select>
                 </div>
 

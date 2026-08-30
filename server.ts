@@ -1523,12 +1523,42 @@ async function startServer() {
     if (!platformAdminPool) return next(new DatabaseError('مصدر قاعدة البيانات المركزية غير متاح.'));
     try {
       const result = await platformAdminPool.query(
-        `SELECT id, tenant_id, school_code, legal_name, display_name, timezone, locale, status, created_at, updated_at
-           FROM public.schools
-          WHERE deleted_at IS NULL
-          ORDER BY created_at DESC`,
+        `SELECT s.id, s.tenant_id, s.school_code, s.legal_name, s.display_name,
+                s.timezone, s.locale, s.status, s.central_metadata, s.deleted_at, s.created_at, s.updated_at,
+                b.id AS branch_id, b.branch_code, b.name AS branch_name, b.status AS branch_status
+           FROM public.schools s
+           LEFT JOIN LATERAL (
+             SELECT id, branch_code, name, status
+               FROM public.branches
+              WHERE tenant_id = s.tenant_id AND school_id = s.id AND deleted_at IS NULL
+              ORDER BY created_at ASC
+              LIMIT 1
+           ) b ON true
+          ORDER BY s.created_at DESC`,
       );
-      return res.json({ success: true, schools: result.rows });
+      return res.json({
+        success: true,
+        schools: result.rows.map((row) => ({
+          id: row.id,
+          tenant_id: row.tenant_id,
+          school_code: row.school_code,
+          legal_name: row.legal_name,
+          display_name: row.display_name,
+          timezone: row.timezone,
+          locale: row.locale,
+          status: row.status,
+          deleted_at: row.deleted_at,
+          central_metadata: row.central_metadata || {},
+          created_at: row.created_at,
+          updated_at: row.updated_at,
+          main_branch: row.branch_id ? {
+            id: row.branch_id,
+            branch_code: row.branch_code,
+            name: row.branch_name,
+            status: row.branch_status,
+          } : null,
+        })),
+      });
     } catch (error) {
       return next(new DatabaseError('تعذر تحميل دليل المدارس المركزي.', error instanceof Error ? error.message : String(error)));
     }
@@ -1543,24 +1573,46 @@ async function startServer() {
     const schoolCode = String(req.body?.schoolCode || '').trim().toUpperCase();
     const timezone = String(req.body?.timezone || 'Africa/Khartoum').trim();
     const locale = String(req.body?.locale || 'ar').trim();
+    const centralMetadata = {
+      shortName: String(req.body?.shortName || '').trim(),
+      subdomain: String(req.body?.subdomain || '').trim().toLowerCase(),
+      city: String(req.body?.city || '').trim(),
+      address: String(req.body?.address || '').trim(),
+      phone: String(req.body?.phone || '').trim(),
+      email: String(req.body?.email || '').trim().toLowerCase(),
+      managerName: String(req.body?.managerName || '').trim(),
+      managerEmail: String(req.body?.managerEmail || '').trim().toLowerCase(),
+      plan: String(req.body?.plan || 'Enterprise').trim(),
+      storageLimit: String(req.body?.storageLimit || '500').trim(),
+      userLimit: String(req.body?.userLimit || '3000').trim(),
+      subscriptionDuration: String(req.body?.subscriptionDuration || '12').trim(),
+      mainBranchId: '',
+    };
 
     if (!tenantId || !actorId) return next(new AuthenticationError('هوية الإدارة المركزية لا تحمل نطاق المستأجر الموثوق.'));
     if (name.length < 2 || name.length > 160) return next(new ValidationError('اسم المدرسة يجب أن يكون بين حرفين و160 حرفاً.'));
     if (schoolCode && !/^[A-Z0-9][A-Z0-9._/-]*$/.test(schoolCode)) return next(new ValidationError('رمز المدرسة غير صالح.'));
     if (!/^[A-Za-z_/-]+$/.test(timezone) || locale.length < 2) return next(new ValidationError('إعدادات اللغة أو المنطقة الزمنية غير صالحة.'));
+    if (centralMetadata.subdomain && !/^[a-z0-9][a-z0-9-]{1,61}[a-z0-9]$/.test(centralMetadata.subdomain)) {
+      return next(new ValidationError('النطاق الفرعي يجب أن يتكون من 3 إلى 63 رمزاً لاتينياً صغيراً.'));
+    }
+    if (centralMetadata.managerEmail && !/^\S+@\S+\.\S+$/.test(centralMetadata.managerEmail)) {
+      return next(new ValidationError('بريد مدير المدرسة غير صالح.'));
+    }
 
     const schoolId = randomUUID();
     const branchId = randomUUID();
+    centralMetadata.mainBranchId = branchId;
     const resolvedCode = schoolCode || `SCH-${schoolId.slice(0, 8).toUpperCase()}`;
     const client = await platformAdminPool.connect();
     try {
       await client.query('BEGIN');
       const school = await client.query(
         `INSERT INTO public.schools
-          (id, tenant_id, school_code, legal_name, display_name, timezone, locale, status, created_by, updated_by)
-         VALUES ($1, $2, $3, $4, $4, $5, $6, 'active', $7, $7)
-         RETURNING id, tenant_id, school_code, legal_name, display_name, timezone, locale, status, created_at, updated_at`,
-        [schoolId, tenantId, resolvedCode, name, timezone, locale, actorId],
+          (id, tenant_id, school_code, legal_name, display_name, timezone, locale, status, central_metadata, created_by, updated_by)
+         VALUES ($1, $2, $3, $4, $4, $5, $6, 'active', $7::jsonb, $8, $8)
+         RETURNING id, tenant_id, school_code, legal_name, display_name, timezone, locale, status, central_metadata, created_at, updated_at`,
+        [schoolId, tenantId, resolvedCode, name, timezone, locale, JSON.stringify(centralMetadata), actorId],
       );
       const branch = await client.query(
         `INSERT INTO public.branches
@@ -1630,14 +1682,24 @@ async function startServer() {
       if (operation === 'update') {
         const name = String(req.body?.name || '').trim();
         const schoolCode = String(req.body?.schoolCode || '').trim().toUpperCase();
+        const requestedProfile = req.body?.profile && typeof req.body.profile === 'object' ? req.body.profile : {};
+        const profileKeys = ['shortName', 'subdomain', 'domain', 'customDomain', 'sslStatus', 'city', 'address', 'phone', 'email', 'managerName', 'managerEmail', 'plan', 'storageLimit', 'userLimit', 'subscriptionDuration', 'subscriptionStart', 'subscriptionEnd'];
+        const profile = Object.fromEntries(profileKeys.map((key) => [key, String(requestedProfile[key] || '').trim()]));
+        const requestedStatus = String(req.body?.status || '').trim();
         if (name.length < 2 || name.length > 160) return next(new ValidationError('اسم المدرسة يجب أن يكون بين حرفين و160 حرفاً.'));
         if (!/^[A-Z0-9][A-Z0-9._/-]*$/.test(schoolCode)) return next(new ValidationError('رمز المدرسة غير صالح.'));
+        if (profile.subdomain && !/^[a-z0-9][a-z0-9-]{1,61}[a-z0-9]$/.test(profile.subdomain)) return next(new ValidationError('النطاق الفرعي غير صالح.'));
+        if (profile.managerEmail && !/^\S+@\S+\.\S+$/.test(profile.managerEmail)) return next(new ValidationError('بريد مدير المدرسة غير صالح.'));
+        if (requestedStatus && !['active', 'suspended'].includes(requestedStatus)) return next(new ValidationError('حالة المدرسة غير مسموح بها.'));
         result = await platformAdminPool.query(
           `UPDATE public.schools
-              SET legal_name = $3, display_name = $3, school_code = $4, updated_at = now(), updated_by = $5, version = version + 1
+              SET legal_name = $3, display_name = $3, school_code = $4,
+                  central_metadata = COALESCE(central_metadata, '{}'::jsonb) || $6::jsonb,
+                  status = COALESCE($7, status),
+                  updated_at = now(), updated_by = $5, version = version + 1
             WHERE id = $1 AND tenant_id = $2 AND deleted_at IS NULL
-          RETURNING id, tenant_id, school_code, legal_name, display_name, timezone, locale, status, created_at, updated_at`,
-          [schoolId, tenantId, name, schoolCode, actorId],
+          RETURNING id, tenant_id, school_code, legal_name, display_name, timezone, locale, status, central_metadata, created_at, updated_at`,
+          [schoolId, tenantId, name, schoolCode, actorId, JSON.stringify(profile), requestedStatus || null],
         );
       } else if (operation === 'status') {
         const status = String(req.body?.status || '').trim();
@@ -1645,14 +1707,27 @@ async function startServer() {
         result = await platformAdminPool.query(
           `UPDATE public.schools SET status = $3, updated_at = now(), updated_by = $4, version = version + 1
             WHERE id = $1 AND tenant_id = $2 AND deleted_at IS NULL
-          RETURNING id, tenant_id, school_code, legal_name, display_name, timezone, locale, status, created_at, updated_at`,
+          RETURNING id, tenant_id, school_code, legal_name, display_name, timezone, locale, status, central_metadata, created_at, updated_at`,
           [schoolId, tenantId, status, actorId],
+        );
+      } else if (operation === 'features') {
+        const features = req.body?.features;
+        if (!features || typeof features !== 'object' || Array.isArray(features)) return next(new ValidationError('مصفوفة ميزات المدرسة غير صالحة.'));
+        const invalidFeature = Object.values(features).find((value) => typeof value !== 'boolean');
+        if (invalidFeature !== undefined) return next(new ValidationError('كل قيمة في مصفوفة الميزات يجب أن تكون true أو false.'));
+        result = await platformAdminPool.query(
+          `UPDATE public.schools
+              SET central_metadata = COALESCE(central_metadata, '{}'::jsonb) || jsonb_build_object('features', $3::jsonb),
+                  updated_at = now(), updated_by = $4, version = version + 1
+            WHERE id = $1 AND tenant_id = $2 AND deleted_at IS NULL
+          RETURNING id, tenant_id, school_code, legal_name, display_name, timezone, locale, status, central_metadata, created_at, updated_at`,
+          [schoolId, tenantId, JSON.stringify(features), actorId],
         );
       } else if (operation === 'archive') {
         result = await platformAdminPool.query(
           `UPDATE public.schools SET status = 'archived', deleted_at = now(), deleted_by = $3, updated_at = now(), updated_by = $3, version = version + 1
             WHERE id = $1 AND tenant_id = $2 AND deleted_at IS NULL
-          RETURNING id, tenant_id, school_code, legal_name, display_name, timezone, locale, status, created_at, updated_at`,
+          RETURNING id, tenant_id, school_code, legal_name, display_name, timezone, locale, status, central_metadata, created_at, updated_at`,
           [schoolId, tenantId, actorId],
         );
       } else {
@@ -1664,6 +1739,151 @@ async function startServer() {
       return next(error instanceof Error && /duplicate|unique/i.test(error.message)
         ? new ConflictError('رمز المدرسة مستخدم مسبقاً داخل المستأجر.')
         : new DatabaseError('تعذر تحديث المدرسة في المصدر المركزي.', error instanceof Error ? error.message : String(error)));
+    }
+  });
+
+  // Central branch directory. Branches are managed through the same verified
+  // platform identity as schools; the browser never supplies tenant scope.
+  app.get('/api/admin/central/branches', authenticateRequest, requirePermissionOnly(PERMISSIONS.PLATFORM_ADMIN), async (req, res, next) => {
+    if (!platformAdminPool) return next(new DatabaseError('مصدر قاعدة البيانات المركزية غير متاح.'));
+    const identity = (req as any).user as { tenantId?: string };
+    const tenantId = String(identity?.tenantId || '').trim();
+    const schoolId = String(req.query?.schoolId || '').trim();
+    if (!tenantId) return next(new AuthenticationError('هوية الإدارة المركزية غير مكتملة.'));
+    if (schoolId && !/^[0-9a-f-]{36}$/i.test(schoolId)) return next(new ValidationError('معرف المدرسة غير صالح.'));
+    try {
+      const result = await platformAdminPool.query(
+        `SELECT b.id, b.tenant_id, b.school_id, b.branch_code, b.name, b.address, b.status,
+                (s.central_metadata->>'mainBranchId') = b.id::text AS is_main,
+                b.deleted_at, b.created_at, b.updated_at, s.display_name AS school_name
+           FROM public.branches b
+           JOIN public.schools s ON s.tenant_id = b.tenant_id AND s.id = b.school_id
+          WHERE b.tenant_id = $1
+            AND b.deleted_at IS NULL
+            AND ($2::uuid IS NULL OR b.school_id = $2::uuid)
+          ORDER BY s.display_name ASC, b.created_at ASC`,
+        [tenantId, schoolId || null],
+      );
+      return res.json({
+        success: true,
+        branches: result.rows.map((row) => ({
+          ...row,
+          address: row.address || {},
+          city: row.address?.city || '',
+          phone: row.address?.phone || '',
+          school_name: row.school_name,
+        })),
+      });
+    } catch (error) {
+      return next(new DatabaseError('تعذر تحميل فروع المدارس من المصدر المركزي.', error instanceof Error ? error.message : String(error)));
+    }
+  });
+
+  app.post('/api/admin/central/schools/:schoolId/branches', authenticateRequest, requirePermissionOnly(PERMISSIONS.PLATFORM_ADMIN), async (req, res, next) => {
+    if (!platformAdminPool) return next(new DatabaseError('مصدر قاعدة البيانات المركزية غير متاح.'));
+    const identity = (req as any).user as { id?: string; tenantId?: string };
+    const tenantId = String(identity?.tenantId || '').trim();
+    const actorId = String(identity?.id || '').trim();
+    const schoolId = String(req.params.schoolId || '').trim();
+    const name = String(req.body?.name || '').trim();
+    const branchCode = String(req.body?.branchCode || '').trim().toUpperCase();
+    const city = String(req.body?.city || '').trim();
+    const phone = String(req.body?.phone || '').trim();
+    const address = String(req.body?.address || '').trim();
+    if (!tenantId || !actorId || !schoolId) return next(new AuthenticationError('هوية الإدارة المركزية أو المدرسة غير مكتملة.'));
+    if (!/^[0-9a-f-]{36}$/i.test(schoolId)) return next(new ValidationError('معرف المدرسة غير صالح.'));
+    if (name.length < 2 || name.length > 160) return next(new ValidationError('اسم الفرع يجب أن يكون بين حرفين و160 حرفاً.'));
+    if (branchCode && !/^[A-Z0-9][A-Z0-9._/-]*$/.test(branchCode)) return next(new ValidationError('رمز الفرع غير صالح.'));
+    const branchId = randomUUID();
+    const resolvedCode = branchCode || `BR-${branchId.slice(0, 8).toUpperCase()}`;
+    try {
+      const result = await platformAdminPool.query(
+        `INSERT INTO public.branches
+          (id, tenant_id, school_id, branch_code, name, address, status, created_by, updated_by)
+         SELECT $1, $2, s.id, $3, $4,
+                jsonb_build_object('city', $5::text, 'phone', $6::text, 'address', $7::text),
+                'active', $8, $8
+           FROM public.schools s
+          WHERE s.id = $9 AND s.tenant_id = $2 AND s.deleted_at IS NULL
+         RETURNING id, tenant_id, school_id, branch_code, name, address, status, deleted_at, created_at, updated_at`,
+        [branchId, tenantId, resolvedCode, name, city, phone, address, actorId, schoolId],
+      );
+      if (result.rowCount !== 1) return next(new ConflictError('المدرسة غير موجودة أو لا تنتمي إلى المستأجر الموثوق.'));
+      return res.status(201).json({ success: true, branch: result.rows[0] });
+    } catch (error) {
+      return next(error instanceof Error && /duplicate|unique/i.test(error.message)
+        ? new ConflictError('رمز الفرع مستخدم مسبقاً داخل المدرسة.')
+        : new DatabaseError('تعذر إنشاء الفرع في المصدر المركزي.', error instanceof Error ? error.message : String(error)));
+    }
+  });
+
+  app.patch('/api/admin/central/branches/:branchId', authenticateRequest, requirePermissionOnly(PERMISSIONS.PLATFORM_ADMIN), async (req, res, next) => {
+    if (!platformAdminPool) return next(new DatabaseError('مصدر قاعدة البيانات المركزية غير متاح.'));
+    const identity = (req as any).user as { id?: string; tenantId?: string };
+    const tenantId = String(identity?.tenantId || '').trim();
+    const actorId = String(identity?.id || '').trim();
+    const branchId = String(req.params.branchId || '').trim();
+    const operation = String(req.body?.operation || 'update').trim();
+    if (!tenantId || !actorId || !branchId) return next(new AuthenticationError('هوية الإدارة المركزية أو الفرع غير مكتملة.'));
+    if (!/^[0-9a-f-]{36}$/i.test(branchId)) return next(new ValidationError('معرف الفرع غير صالح.'));
+    try {
+      let result;
+      if (operation === 'archive') {
+        result = await platformAdminPool.query(
+          `UPDATE public.branches
+              SET status = 'archived', deleted_at = now(), deleted_by = $3, updated_at = now(), updated_by = $3, version = version + 1
+            WHERE id = $1 AND tenant_id = $2 AND deleted_at IS NULL
+          RETURNING id, tenant_id, school_id, branch_code, name, address, status, deleted_at, created_at, updated_at`,
+          [branchId, tenantId, actorId],
+        );
+      } else if (operation === 'set_main') {
+        result = await platformAdminPool.query(
+          `WITH target AS (
+             SELECT school_id FROM public.branches
+              WHERE id = $1 AND tenant_id = $2 AND deleted_at IS NULL
+           )
+           UPDATE public.branches b
+              SET updated_at = now(), updated_by = $3, version = version + 1
+            FROM target
+           WHERE b.id = $1 AND b.tenant_id = $2
+          RETURNING b.id, b.tenant_id, b.school_id, b.branch_code, b.name, b.address, b.status, b.deleted_at, b.created_at, b.updated_at`,
+          [branchId, tenantId, actorId],
+        );
+        if (result.rowCount === 1) {
+          await platformAdminPool.query(
+            `UPDATE public.schools
+                SET central_metadata = COALESCE(central_metadata, '{}'::jsonb) || jsonb_build_object('mainBranchId', $3::text),
+                    updated_at = now(), updated_by = $2, version = version + 1
+              WHERE id = $1 AND tenant_id = $4 AND deleted_at IS NULL`,
+            [result.rows[0].school_id, actorId, branchId, tenantId],
+          );
+        }
+      } else {
+        const name = String(req.body?.name || '').trim();
+        const branchCode = String(req.body?.branchCode || '').trim().toUpperCase();
+        const city = String(req.body?.city || '').trim();
+        const phone = String(req.body?.phone || '').trim();
+        const address = String(req.body?.address || '').trim();
+        const status = String(req.body?.status || '').trim();
+        if (name.length < 2 || name.length > 160) return next(new ValidationError('اسم الفرع يجب أن يكون بين حرفين و160 حرفاً.'));
+        if (!/^[A-Z0-9][A-Z0-9._/-]*$/.test(branchCode)) return next(new ValidationError('رمز الفرع غير صالح.'));
+        if (status && !['active', 'closed'].includes(status)) return next(new ValidationError('حالة الفرع غير مسموح بها.'));
+        result = await platformAdminPool.query(
+          `UPDATE public.branches
+              SET name = $3, branch_code = $4,
+                  address = jsonb_build_object('city', $5::text, 'phone', $6::text, 'address', $7::text),
+                  status = COALESCE(NULLIF($8, ''), status), updated_at = now(), updated_by = $9, version = version + 1
+            WHERE id = $1 AND tenant_id = $2 AND deleted_at IS NULL
+          RETURNING id, tenant_id, school_id, branch_code, name, address, status, deleted_at, created_at, updated_at`,
+          [branchId, tenantId, name, branchCode, city, phone, address, status, actorId],
+        );
+      }
+      if (result.rowCount !== 1) return next(new ConflictError('الفرع غير موجود أو لا ينتمي إلى المستأجر الموثوق.'));
+      return res.json({ success: true, branch: result.rows[0] });
+    } catch (error) {
+      return next(error instanceof Error && /duplicate|unique/i.test(error.message)
+        ? new ConflictError('رمز الفرع مستخدم مسبقاً داخل المدرسة.')
+        : new DatabaseError('تعذر تحديث الفرع في المصدر المركزي.', error instanceof Error ? error.message : String(error)));
     }
   });
 

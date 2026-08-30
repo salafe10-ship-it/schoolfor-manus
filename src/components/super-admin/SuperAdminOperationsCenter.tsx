@@ -199,172 +199,38 @@ export default function SuperAdminOperationsCenter({
   };
 
   const toggleModuleProperty = (schoolId: string, moduleKey: string, prop: 'active' | 'visible' | 'premium') => {
-    const compositeKey = `${schoolId}_${moduleKey}`;
-    const current = schoolModules[compositeKey] || { active: true, visible: true, premium: false };
-    const updated = {
-      ...schoolModules,
-      [compositeKey]: {
-        ...current,
-        [prop]: !current[prop]
-      }
-    };
-    saveModulesConfig(updated);
-    
-    // Log the change
-    logAction(
-      'UPDATE_TENANT_MODULE',
-      `تم تعديل مصفوفة موديول [${moduleKey}] للمستأجر ${activeSchool?.name}. الحالة الجديدة: ${prop}=${!current[prop]}`,
-      'مركز العمليات - إدارة الوحدات'
-    );
-    
-    // Broadcast event so school view updates immediately
-    window.dispatchEvent(new Event('erp_modules_config_changed'));
-    triggerNotification(`تم تحديث إعدادات موديول ${moduleKey} بنجاح وانعكس على واجهة المدرسة فوراً`, 'success');
+    void schoolId;
+    void moduleKey;
+    void prop;
+    triggerNotification('إدارة وحدات المدرسة أصبحت متاحة من شاشة الميزات المركزية بعد ربطها بالدليل الموثوق؛ لم يتم تعديل أي إعداد محلي.', 'warning');
   };
 
   // Cloud Link Handler
   const handleUpdateLink = (e: React.FormEvent) => {
     e.preventDefault();
-    if (!newSubdomain.trim()) return;
-
-    // Check uniqueness
-    const normalizedSubdomain = newSubdomain.trim().toLowerCase();
-    const isDuplicate = schools.some(s => s.id !== activeSchool.id && s.subdomain?.toLowerCase() === normalizedSubdomain);
-
-    if (isDuplicate) {
-      triggerNotification('الرابط السحابي غير متوفر! تم حجز هذا الاسم لمستأجر آخر مسبقاً.', 'danger');
-      return;
-    }
-
-    const updatedSchools = schools.map(s => {
-      if (s.id === activeSchool.id) {
-        return {
-          ...s,
-          subdomain: normalizedSubdomain,
-          domain: `${normalizedSubdomain}.erpcloud.com`,
-          schoolUrl: `https://erp.yourdomain.com/schools/${normalizedSubdomain}`
-        };
-      }
-      return s;
-    });
-
-    setSchools(updatedSchools);
-    setIsEditingLink(false);
-    logAction(
-      'TENANT_LINK_UPDATE',
-      `تغيير النطاق الفرعي لـ ${activeSchool.name} إلى ${normalizedSubdomain}.erpcloud.com`,
-      'مركز العمليات - إدارة الروابط'
-    );
-    triggerNotification('تم تحديث الرابط السحابي الفرعي بنجاح وهو نشط الآن 🌐', 'success');
+    void newSubdomain;
+    triggerNotification('إدارة النطاقات تتم من شاشة النطاقات المركزية؛ لا يوجد موصل DNS هنا ولم يتم تعديل رابط محلي.', 'warning');
   };
 
   const handleRegenerateLink = () => {
-    const randomHex = Math.random().toString(36).substring(2, 6);
-    const newGen = `sch-${activeSchool.id.split('_')[1]}-${randomHex}`;
-    
-    const updatedSchools = schools.map(s => {
-      if (s.id === activeSchool.id) {
-        return {
-          ...s,
-          subdomain: newGen,
-          domain: `${newGen}.erpcloud.com`,
-          schoolUrl: `https://erp.yourdomain.com/schools/${newGen}`
-        };
-      }
-      return s;
-    });
-
-    setSchools(updatedSchools);
-    logAction(
-      'TENANT_LINK_REGEN',
-      `إعادة توليد وتأمين الرابط السحابي لـ ${activeSchool.name}. النطاق الجديد: ${newGen}.erpcloud.com`,
-      'مركز العمليات - إدارة الروابط'
-    );
-    triggerNotification('تمت إعادة توليد وتأمين الرابط السحابي الفرعي بنجاح', 'success');
+    triggerNotification('إعادة توليد النطاق تحتاج موصل بنية تحتية مركزيًا؛ لم يتم تغيير الرابط أو تسجيل نجاح وهمي.', 'warning');
   };
 
   // Subscription Details Handler
   const handleSaveSubscription = (e: React.FormEvent) => {
     e.preventDefault();
-    if (FallbackStorage.isCanonicalPersistenceRequired()) {
-      triggerNotification('تحديث اشتراك المستأجر متوقف حتى يتم ربط المصدر المركزي الموثوق.', 'warning');
-      return;
-    }
-    
-    const updatedSchools = schools.map(s => {
-      if (s.id === activeSchool.id) {
-        return {
-          ...s,
-          plan: tempPlan,
-          userLimit: tempUserLimit,
-          storageLimit: tempStorageLimit,
-          subscriptionEnd: tempEnd,
-          status: new Date(tempEnd) < new Date() ? 'expired' : s.status
-        };
-      }
-      return s;
-    });
-
-    setSchools(updatedSchools);
-    logAction(
-      'TENANT_SUBSCRIPTION_UPDATE',
-      `تم تعديل ترخيص ${activeSchool.name}. الخطة: ${tempPlan}، المستخدمون: ${tempUserLimit}، التخزين: ${tempStorageLimit}، الانتهاء: ${tempEnd}`,
-      'مركز العمليات - التراخيص'
-    );
-    triggerNotification('تم تحديث تفاصيل الاشتراك والترخيص وحفظها بنجاح 💾', 'success');
+    void tempPlan;
+    void tempUserLimit;
+    void tempStorageLimit;
+    void tempEnd;
+    triggerNotification('إدارة الاشتراكات تتم من شاشة الاشتراكات المركزية؛ لم يتم حفظ تعديل محلي.', 'warning');
   };
 
   const handleSubscriptionQuickAction = (actionType: 'renew' | 'suspend' | 'upgrade' | 'downgrade') => {
-    let updatedEnd = tempEnd;
-    let updatedPlan = tempPlan;
-    let updatedLimit = tempUserLimit;
-    let updatedStorage = tempStorageLimit;
-    let updatedStatus = activeSchool.status;
-
-    if (actionType === 'renew') {
-      const d = new Date(tempEnd);
-      d.setFullYear(d.getFullYear() + 1);
-      updatedEnd = d.toISOString().substring(0, 10);
-      updatedStatus = 'active';
-      triggerNotification('تم تجديد رخصة الاشتراك تلقائياً لمدة عام كامل من تاريخ الصلاحية الحالي!', 'success');
-    } else if (actionType === 'suspend') {
-      updatedStatus = activeSchool.status === 'suspended' ? 'active' : 'suspended';
-      triggerNotification(updatedStatus === 'suspended' ? 'تم تعليق رخصة المستأجر مؤقتاً ومصادرة الجلسات.' : 'تم تفعيل المستأجر وإعادة إيقاظ قاعدة البيانات.', 'warning');
-    } else if (actionType === 'upgrade') {
-      updatedPlan = 'Enterprise';
-      updatedLimit = '10000';
-      updatedStorage = '5120 GB';
-      triggerNotification('تم ترقية المستأجر إلى الباقة السيادية الفيدرالية Enterprise وزيادة الحدود مجاناً', 'success');
-    } else if (actionType === 'downgrade') {
-      updatedPlan = 'Basic';
-      updatedLimit = '1000';
-      updatedStorage = '250 GB';
-      triggerNotification('تم تخفيض رخصة المستأجر لباقة Basic وتطبيق قيود التخزين.', 'info');
-    }
-
-    const updatedSchools = schools.map(s => {
-      if (s.id === activeSchool.id) {
-        return {
-          ...s,
-          plan: updatedPlan,
-          userLimit: updatedLimit,
-          storageLimit: updatedStorage,
-          subscriptionEnd: updatedEnd,
-          status: updatedStatus
-        };
-      }
-      return s;
-    });
-
-    setSchools(updatedSchools);
-    logAction(
-      'TENANT_SUBSCRIPTION_QUICK_ACTION',
-      `إجراء سريع للترخيص (${actionType}) على مستأجر ${activeSchool.name}. الخطة: ${updatedPlan}، الحالة: ${updatedStatus}`,
-      'مركز العمليات - التراخيص'
-    );
+    triggerNotification(`إجراء الترخيص (${actionType}) متاح من شاشة الاشتراكات المركزية فقط؛ لم يتم تعديل أي بيانات محلية.`, 'warning');
   };
 
-  // Impersonation Login Support Handler
+  // Impersonation requires a short-lived server-issued session and audit trail.
   const handleStartImpersonate = (e: React.FormEvent) => {
     e.preventDefault();
     if (!supportReason.trim() || !engineerName.trim()) {
@@ -372,99 +238,25 @@ export default function SuperAdminOperationsCenter({
       return;
     }
 
-    setIsImpersonationSubmitting(true);
-
-    setTimeout(() => {
-      localStorage.setItem('impersonation_active', 'true');
-      localStorage.setItem('impersonator_name', engineerName);
-      localStorage.setItem('impersonated_school_id', activeSchool.id);
-      localStorage.setItem('impersonated_school_name', activeSchool.name);
-      localStorage.setItem('impersonation_start_time', new Date().toLocaleTimeString('ar-EG'));
-      localStorage.setItem('impersonation_reason', supportReason);
-
-      logAction(
-        'SUPPORT_IMPERSONATION_START',
-        `دخول إداري مؤقت للدعم الفني لمستأجر: ${activeSchool.name} بواسطة: ${engineerName}. السبب: ${supportReason}`,
-        'مركز العمليات - الدعم الفني'
-      );
-
-      triggerNotification(`جاري التحويل الآمن لبيئة المستأجر لـ ${activeSchool.name}...`, 'success');
-
-      setSelectedSchool(activeSchool);
-      setCurrentRole('SchoolAdmin');
-      setIsSuperAdminPortalActive(false);
-      if (setCurrentPortal) setCurrentPortal('school');
-      
-      setIsImpersonationSubmitting(false);
-    }, 1200);
+    setIsImpersonationSubmitting(false);
+    triggerNotification('جلسة الدعم الفني تحتاج إصدار رمز مركزي قصير العمر وتسجيل تدقيق؛ لم يتم فتح جلسة محلية.', 'warning');
   };
 
-  // Progressive simulated backup process
+  // Backups require a real storage connector and server-side snapshot job.
   const handleCreateBackup = () => {
-    if (isBackupLoading) return;
-    setIsBackupLoading(true);
-    setBackupProgress(0);
-    setBackupStatusText('جاري فحص اتصال التوجيه والـ Handshake مع عقدة المستأجر...');
-
-    const intervals = [
-      { p: 15, text: 'جاري حظر كتابة الجلسات المؤقتة وبدء تفريغ التخزين البارد...' },
-      { p: 35, text: 'جاري تصدير جداول بيانات الطلبة، الفواتير، وعقود الموظفين...' },
-      { p: 58, text: 'جاري تطبيق خوارزميات الضغط المتناظر وتشفير اللقطة عبر AES-256...' },
-      { p: 78, text: 'جاري تأمين المرفقات والملفات السحابية ورفع الحزمة لمخازن S3 المعتمدة...' },
-      { p: 92, text: 'جاري توليد المفتاح الرقمي وتدقيقChecksum لسلامة التخزين...' },
-      { p: 100, text: 'اكتملت المعاملة بنجاح سليم مائة بالمائة!' }
-    ];
-
-    let step = 0;
-    const progressInterval = setInterval(() => {
-      if (step < intervals.length) {
-        setBackupProgress(intervals[step].p);
-        setBackupStatusText(intervals[step].text);
-        step++;
-      } else {
-        clearInterval(progressInterval);
-        const id = `b_${Date.now()}`;
-        const newBackup = {
-          id,
-          schoolName: activeSchool.name,
-          date: new Date().toISOString().replace('T', ' ').substring(0, 16),
-          size: '1.4 GB',
-          type: 'يدوي فوري (SuperAdmin)',
-          status: 'success',
-          checksum: `sha256-${Math.random().toString(36).substring(2, 10)}...`
-        };
-
-        setBackupLogs([newBackup, ...backupLogs]);
-        setIsBackupLoading(false);
-        setBackupProgress(0);
-        
-        logAction(
-          'CREATE_TENANT_BACKUP',
-          `تم التقاط نسخة احتياطية فورية ولقطة حية كاملة لقاعدة بيانات ${activeSchool.name} وحفظها في التخزين السيادي.`,
-          'مركز العمليات - النسخ والتعافي'
-        );
-        triggerNotification('تم توليد النسخة الاحتياطية الفورية ولقطة قاعدة البيانات بنجاح سليم ١٠٠٪ 🔒', 'success');
-      }
-    }, 1200);
+    void isBackupLoading;
+    triggerNotification('إنشاء النسخ الاحتياطية يحتاج موصل تخزين مركزيًا ومهمة خادم موثقة؛ لم يتم إنشاء نسخة محلية أو تسجيل نجاح.', 'warning');
   };
 
   const handleRestoreBackup = (b: any) => {
     const isConfirmed = window.confirm(`⚠️ تحذير: هل أنت متأكد من استعادة النسخة الاحتياطية المؤرخة في [${b.date}]؟ سيتم الكتابة فوق قاعدة البيانات الحالية لـ ${b.schoolName} بالكامل ولا يمكن التراجع!`);
     if (!isConfirmed) return;
 
-    logAction(
-      'RESTORE_TENANT_BACKUP',
-      `تم استعادة نقطة استرجاع مؤرخة في ${b.date} لقاعدة بيانات المستأجر ${b.schoolName} بنجاح.`,
-      'مركز العمليات - النسخ والتعافي'
-    );
-    triggerNotification(`تمت استعادة نقطة تفتيش قاعدة البيانات لـ ${b.schoolName} بنجاح وتم تصفير الجلسات النشطة لضمان السلامة`, 'success');
+    triggerNotification(`استعادة نسخة ${b.schoolName} تحتاج مهمة خادم مركزية مع تحقق مزدوج؛ لم يتم تغيير قاعدة البيانات.`, 'warning');
   };
 
   const handleVerifyIntegrity = (b: any) => {
-    triggerNotification(`جاري فحص Parity Check للنسخة الاحتياطية [${b.id}]...`, 'info');
-    setTimeout(() => {
-      triggerNotification(`فحص السلامة سليم! تم التحقق من تجانس البيانات الرقمية (Checksum: ${b.checksum}) وهو متوافق تماماً.`, 'success');
-    }, 1000);
+    triggerNotification(`فحص سلامة النسخة [${b.id}] يحتاج قراءة فعلية من مخزن النسخ؛ لم تُعلن نتيجة وهمية.`, 'warning');
   };
 
   // Quick Stats Computations

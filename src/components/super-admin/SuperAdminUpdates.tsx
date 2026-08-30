@@ -20,62 +20,13 @@ export default function SuperAdminUpdates({
 
   const handleTriggerDeploy = () => {
     triggerNotification('خدمة النشر المركزية غير متاحة؛ لم يتم نشر إصدار أو تسجيل نجاح وهمي.', 'warning');
-    return;
-
-    setIsDeploying(true);
-    triggerNotification('بدء تحضير ونشر حزمة التحديث البرمجي الجديد على جميع خوادم المدارس والفروع...', 'info');
-    setTimeout(() => {
-      setIsDeploying(false);
-      
-      const newVersion = selectedChannel === 'stable' ? 'v2.4.3' : 'v2.5.0-beta.1';
-      const newRelease = {
-        version: newVersion,
-        date: new Date().toISOString().split('T')[0],
-        channel: selectedChannel,
-        desc: `تحديث وتحسينات أداء الاستعلامات والـ Microservices (قناة: ${selectedChannel === 'stable' ? 'المستقرة' : 'التجريبية'})`,
-        status: 'active',
-        author: 'سليمان بن غازي'
-      };
-
-      // Set all other active releases to deployed
-      const updated = releases.map(r => ({ ...r, status: r.status === 'active' ? 'deployed' : r.status }));
-      const newReleases = [newRelease, ...updated];
-      setReleases(newReleases);
-      localStorage.setItem('edupro_releases_v1', JSON.stringify(newReleases));
-
-      logAction(
-        'DEPLOY_SYSTEM_UPDATE',
-        `نشر التحديث الجديد ${newVersion} على قناة ${selectedChannel} لكافة مستأجري النظام الموحد`,
-        'مركز التحديثات والترقيات'
-      );
-
-      triggerNotification(`تم بنجاح نشر وترقية المنظومة بالكامل إلى الإصدار ${newVersion} 🚀`, 'success');
-    }, 3000);
   };
 
   const handleRollback = (ver: string) => {
     const confirm = window.confirm(`هل أنت متأكد من رغبتك في عمل تراجع (Rollback) للمنظومة بالكامل للإصدار ${ver}؟ قد تسبب هذه العملية إعادة ترحيل مؤقتة لجداول التخزين.`);
     if (!confirm) return;
 
-    triggerNotification(`جاري تفعيل خطة تراجع أمن البيانات للإصدار ${ver}...`, 'warning');
-    setTimeout(() => {
-      const rolled = releases.map(r => {
-        if (r.version === ver) {
-          return { ...r, status: 'active' };
-        }
-        return { ...r, status: r.status === 'active' ? 'deployed' : r.status };
-      });
-      setReleases(rolled);
-      localStorage.setItem('edupro_releases_v1', JSON.stringify(rolled));
-
-      logAction(
-        'ROLLBACK_SYSTEM_VERSION',
-        `تراجع أمني طارئ للمنظومة للإصدار ${ver} من لوحة التحكم المركزية`,
-        'مركز التحديثات والترقيات'
-      );
-
-      triggerNotification(`تمت مراجعة الهيكلة والتراجع بنجاح للإصدار ${ver} 🛡️`, 'success');
-    }, 2000);
+    triggerNotification(`التراجع للإصدار ${ver} يحتاج خدمة نشر مركزية وموافقة تغيير؛ لم يتم تعديل حالة الإصدار.`, 'warning');
   };
 
   return (

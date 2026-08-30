@@ -14,24 +14,9 @@ export default function SuperAdminUsers({
   triggerNotification
 }: SuperAdminUsersProps) {
 
-  // Load employees list from localStorage
-  const [employees, setEmployees] = useState<any[]>(() => {
-    const saved = localStorage.getItem('edupro_employees_permissions_v1');
-    if (saved) {
-      try {
-        const parsed = JSON.parse(saved);
-        // بيانات التدقيق الوظيفية تُعرض كما وردت من المصدر، ولا تُستكمل بقيم تجريبية.
-        return parsed.map((emp: any) => ({
-          ...emp,
-          status: emp.status || 'unknown',
-          forcePasswordChange: Boolean(emp.forcePasswordChange)
-        }));
-      } catch (e) {
-        // fallback
-      }
-    }
-    return [];
-  });
+  // The identity directory is intentionally empty until a verified central
+  // identity connector is available; localStorage is never authoritative.
+  const [employees] = useState<any[]>([]);
 
   // State for filters
   const [searchTerm, setSearchTerm] = useState('');
@@ -58,14 +43,6 @@ export default function SuperAdminUsers({
     initialRole: 'SchoolAdmin'
   });
 
-  // Save changes and sync to localStorage/Topbar
-  const syncEmployeesStore = (updatedList: any[]) => {
-    setEmployees(updatedList);
-    localStorage.setItem('edupro_employees_permissions_v1', JSON.stringify(updatedList));
-    // Dispatch system events so Topbar and Sidebar reload and show current user's actual permissions
-    window.dispatchEvent(new Event('active-employee-changed'));
-  };
-
   // Filter branches based on selected school in "Add User"
   const newUserBranches = branches.filter(b => b.schoolId === newUser.schoolId);
 
@@ -82,156 +59,49 @@ export default function SuperAdminUsers({
     }
 
     triggerNotification('خدمة الهوية المركزية غير متاحة؛ لم يُنشأ مستخدم أو تُحفظ صلاحيات محليًا.', 'warning');
-    return;
+  };
 
-    const matchedSchoolName = schools.find(s => s.id === newUser.schoolId)?.name || '';
-    const finalBranchId = newUser.branchId || branches.find(b => b.schoolId === newUser.schoolId)?.id || '';
-    const defaultPassword = newUser.password || Math.random().toString(36).substring(2, 10).toUpperCase();
-
-    const created: any = {
-      id: `emp_${Date.now()}`,
-      name: newUser.name,
-      jobTitle: newUser.jobTitle || 'موظف إداري',
-      department: newUser.department,
-      status: 'active',
-      permissions: ['dashboard:main:visibility', 'dashboard:main:view'], // default basic dashboard visibility
-      email: newUser.email,
-      schoolId: newUser.schoolId,
-      branchId: finalBranchId,
-      loginCount: 0,
-      lastLogin: 'لم يسجل دخول بعد',
-      device: 'لا توجد أجهزة مسبقة',
-      ip: '0.0.0.0',
-      forcePasswordChange: true
-    };
-
-    const updated = [...employees, created];
-    syncEmployeesStore(updated);
-    
-    logAction('CREATE_USER', `إنشاء حساب موظف جديد: [${newUser.name}] وتعيينه بـ [${matchedSchoolName}]`, 'المستخدمين والصلاحيات');
-    triggerNotification('تم إنشاء حساب المستخدم عبر خدمة الهوية المركزية ✅', 'success');
-
-    // Show credential modal
-    setResetDetails({ name: newUser.name, password: defaultPassword });
-    setShowPasswordResetModal(true);
-    
-    setShowAddModal(false);
-    // reset form
-    setNewUser({
-      name: '',
-      jobTitle: '',
-      department: 'شئون الطلاب',
-      email: '',
-      schoolId: schools[0]?.id || 'school_1',
-      branchId: '',
-      password: '',
-      initialRole: 'SchoolAdmin'
-    });
+  const identityUnavailable = (action: string) => {
+    triggerNotification(`${action} يحتاج خدمة الهوية المركزية؛ لم يتم تعديل مستخدم أو صلاحية محليًا.`, 'warning');
   };
 
   // Save Edit User
   const handleSaveEditUser = (e: React.FormEvent) => {
     e.preventDefault();
     if (!currentUser) return;
-
-    const updated = employees.map(emp => emp.id === currentUser.id ? currentUser : emp);
-    syncEmployeesStore(updated);
-
-    logAction('EDIT_USER', `تحديث بيانات حساب المستخدم: [${currentUser.name}]`, 'المستخدمين والصلاحيات');
-    triggerNotification('تم حفظ بيانات الموظف بنجاح', 'success');
-    setShowEditModal(false);
+    identityUnavailable(`حفظ بيانات ${currentUser.name}`);
   };
 
   // Toggle user state (Suspend / Resume)
   const handleToggleFreezeUser = (user: any) => {
-    const isSuspended = user.status === 'suspended';
-    const newStatus = isSuspended ? 'active' : 'suspended';
-
-    const updated = employees.map(emp => emp.id === user.id ? { ...emp, status: newStatus } : emp);
-    syncEmployeesStore(updated);
-
-    logAction(
-      isSuspended ? 'ACTIVATE_USER' : 'SUSPEND_USER',
-      `${isSuspended ? 'إعادة تنشيط' : 'تجميد حساب وسحب صلاحيات'} المستخدم: [${user.name}]`,
-      'الرقابة والحماية'
-    );
-    triggerNotification(
-      isSuspended ? `تم إعادة تفعيل الحساب بنجاح` : `تم تعليق الحساب وسحب التوكنات النشطة له`,
-      isSuspended ? 'success' : 'warning'
-    );
+    identityUnavailable(`تغيير حالة ${user.name}`);
   };
 
   // Lock / Unlock user account
   const handleToggleLockUser = (user: any) => {
-    const isLocked = user.status === 'locked';
-    const newStatus = isLocked ? 'active' : 'locked';
-
-    const updated = employees.map(emp => emp.id === user.id ? { ...emp, status: newStatus } : emp);
-    syncEmployeesStore(updated);
-
-    logAction(
-      isLocked ? 'UNLOCK_USER' : 'LOCK_USER',
-      `${isLocked ? 'إلغاء قفل الحماية' : 'تطبيق القفل المفرط'} لحساب المستخدم: [${user.name}]`,
-      'الرقابة والحماية'
-    );
-    triggerNotification(
-      isLocked ? `تم إلغاء قفل الحساب ويمكن للمستخدم محاولة تسجيل الدخول` : `تم قفل الحساب حمايةً من محاولات التسلل`,
-      isLocked ? 'success' : 'danger'
-    );
+    identityUnavailable(`قفل حساب ${user.name}`);
   };
 
   // Terminate/Delete User accounts
   const handleTerminateUser = (user: any) => {
     if (confirm(`⚠️ تحذير: هل أنت متأكد من إلغاء حساب الموظف [${user.name}] وحذف صلاحياته نهائياً من خادم السحاب؟`)) {
-      const updated = employees.filter(emp => emp.id !== user.id);
-      syncEmployeesStore(updated);
-
-      logAction('TERMINATE_USER', `إلغاء حساب ومحو بيانات الموظف: [${user.name}] نهائياً من مصلحة النظام`, 'المستخدمين والصلاحيات');
-      triggerNotification('تم حذف حساب المستخدم ومحو هويته الرقمية بأمان', 'danger');
+      identityUnavailable(`إلغاء حساب ${user.name}`);
     }
   };
 
   // Reset password wizard
   const handleResetPassword = (user: any) => {
-    const generated = Math.random().toString(36).substring(2, 10).toUpperCase();
-    
-    // Set user as forced password change on next login
-    const updated = employees.map(emp => emp.id === user.id ? { ...emp, forcePasswordChange: true } : emp);
-    syncEmployeesStore(updated);
-
-    logAction('RESET_PASSWORD', `إعادة تعيين كلمة مرور عشوائية وإلزام التغيير للموظف: [${user.name}]`, 'المستخدمين والصلاحيات');
-    
-    // Copy password to clipboard
-    try {
-      navigator.clipboard.writeText(generated);
-      triggerNotification('تم نسخ كلمة المرور المحدثة للحافظة تلقائياً 📋', 'success');
-    } catch (err) {}
-
-    setResetDetails({ name: user.name, password: generated });
-    setShowPasswordResetModal(true);
+    identityUnavailable(`إعادة كلمة مرور ${user.name}`);
   };
 
   // Toggle Force Password Change next login
   const handleToggleForcePassword = (user: any) => {
-    const currentForce = !!user.forcePasswordChange;
-    const updated = employees.map(emp => emp.id === user.id ? { ...emp, forcePasswordChange: !currentForce } : emp);
-    syncEmployeesStore(updated);
-
-    logAction(
-      'FORCE_PASSWORD_CHANGE',
-      `تعديل خيار فرض تغيير كلمة المرور لتصبح [${!currentForce ? 'إجبارية' : 'اختيارية'}] للموظف: [${user.name}]`,
-      'المستخدمين والصلاحيات'
-    );
-    triggerNotification(
-      !currentForce ? `تم إلزام المستخدم بتغيير كلمة مروره عند الدخول القادم` : `تم إيقاف فرض تغيير كلمة المرور الحالية`,
-      'info'
-    );
+    identityUnavailable(`تعديل إلزام كلمة مرور ${user.name}`);
   };
 
   // Forcefully terminate/end all user's active sessions (Token Eviction)
   const handleEvictSessions = (user: any) => {
-    logAction('EVICT_USER_SESSIONS', `طرد وإلغاء توكنات الجلسات الفعالة للمستخدم: [${user.name}]`, 'الرقابة والحماية');
-    triggerNotification(`تم طرد المستخدم وإنهاء جميع جلساته النشطة والاتصالات الحية بنجاح ✅`, 'success');
+    identityUnavailable(`إنهاء جلسات ${user.name}`);
   };
 
   // -------------------------------------------------------------

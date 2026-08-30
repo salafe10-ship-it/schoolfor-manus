@@ -101,11 +101,10 @@ export default function SuperAdminRbac({
     }));
   };
 
-  // Save changes to database simulated template
+  // Saving requires a central RBAC transaction with audit/version checks.
   const handleSaveRbacTemplate = () => {
     const activeRole = roles.find(r => r.id === selectedRoleId);
-    logAction('UPDATE_RBAC_TEMPLATE', `تحديث وتعميد قالب صلاحيات دور: [${activeRole?.name}]`, 'الصلاحيات والحوكمة');
-    triggerNotification(`تم تعميد قالب مصفوفة صلاحيات ${activeRole?.name} بنجاح ✅`, 'success');
+    triggerNotification(`تم تعديل المسودة محليًا لدور ${activeRole?.name} فقط؛ اعتمادها يحتاج خدمة RBAC مركزية، ولم تُحفظ صلاحيات إنتاجية.`, 'warning');
   };
 
   // Run Copy Permissions Wizard
@@ -129,8 +128,7 @@ export default function SuperAdminRbac({
     const srcName = roles.find(r => r.id === copyState.srcRoleId)?.name;
     const destName = roles.find(r => r.id === copyState.destRoleId)?.name;
 
-    logAction('COPY_RBAC_TEMPLATE', `نسخ ومحاذاة صلاحيات دور [${srcName}] إلى دور [${destName}] بالكامل`, 'الصلاحيات والحوكمة');
-    triggerNotification(`تم استنساخ مصفوفة صلاحيات ${srcName} وتطبيقها على ${destName} بنجاح`, 'success');
+    triggerNotification(`تم نسخ الصلاحيات إلى مسودة دور ${destName} داخل الشاشة فقط؛ لم تُعتمد مركزيًا.`, 'warning');
     setShowCopyModal(false);
     setCopyState({ srcRoleId: '', destRoleId: '' });
   };

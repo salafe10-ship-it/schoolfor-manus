@@ -29,69 +29,26 @@ export default function SuperAdminHealth({
   const [historyData, setHistoryData] = useState<any[]>([]);
 
   useEffect(() => {
-    // لا تُعرض قياسات أو رسوم محاكاة؛ القياس الحي لا يثبت إلا من موصل المراقبة المركزي.
-    return;
-
-    // Populate historic logs
-    const initialData = Array.from({ length: 15 }, (_, i) => ({
-      time: `${i * 2}ث`,
-      cpu: Math.floor(35 + Math.random() * 15),
-      memory: Math.floor(60 + Math.random() * 5),
-      queries: Math.floor(180 + Math.random() * 120),
-    }));
-    setHistoryData(initialData);
-
-    // Live update interval
-    const interval = setInterval(() => {
-      setCpuUsage(prev => Math.max(10, Math.min(95, prev + Math.floor(Math.random() * 11) - 5)));
-      setMemoryUsage(prev => Math.max(50, Math.min(90, prev + Math.floor(Math.random() * 5) - 2)));
-      setNetworkPing(prev => Math.max(8, Math.min(45, prev + Math.floor(Math.random() * 7) - 3)));
-
-      setHistoryData(prev => {
-        const sliced = prev.slice(1);
-        return [
-          ...sliced,
-          {
-            time: 'نشط',
-            cpu: Math.floor(30 + Math.random() * 30),
-            memory: Math.floor(60 + Math.random() * 10),
-            queries: Math.floor(200 + Math.random() * 150)
-          }
-        ];
-      });
-    }, 3000);
-
-    return () => clearInterval(interval);
+    // القياس الحي لا يثبت إلا من موصل مراقبة مركزي موثق.
+    setCpuUsage(0);
+    setMemoryUsage(0);
+    setNetworkPing(0);
+    setHistoryData([]);
   }, []);
 
   const handleVacuum = () => {
-    setIsVacuuming(true);
-    triggerNotification('جاري بدء عملية التنظيف والكنس الشامل لقاعدة البيانات (DB Vacuum & Reindex)...', 'info');
-    setTimeout(() => {
-      setIsVacuuming(false);
-      logAction('DB_VACUUM_OPTIMIZE', 'تنظيف ومطابقة فهارس الجداول المتعددة (Vacuum) في قاعدة البيانات الموحدة لتقليص مساحات الفهرسة', 'مركز سلامة النظام');
-      triggerNotification('اكتملت عملية Vacuum وتفريغ المساحات الميتة بنجاح ✅', 'success');
-    }, 2000);
+    setIsVacuuming(false);
+    triggerNotification('تنظيف قاعدة البيانات يحتاج مهمة خادم مركزية؛ لم يتم تنفيذ Vacuum محلي.', 'warning');
   };
 
   const handleFlushCache = () => {
-    setIsFlushCache(true);
-    triggerNotification('جاري إفراغ الذاكرة المخبئية وتنظيف مفاتيح Redis المترابطة...', 'info');
-    setTimeout(() => {
-      setIsFlushCache(false);
-      logAction('REDIS_CACHE_FLUSH', 'تنظيف الذاكرة المؤقتة (Redis/RAM Cache) لضمان اتساق البيانات والصفقات المالية', 'مركز سلامة النظام');
-      triggerNotification('تم تنظيف وإعادة بناء الكاش بنجاح 🧹', 'success');
-    }, 1500);
+    setIsFlushCache(false);
+    triggerNotification('تنظيف الذاكرة المؤقتة يحتاج موصل Redis مركزي؛ لم يتم تنفيذ العملية.', 'warning');
   };
 
   const handleSecScan = () => {
-    setIsScanningSec(true);
-    triggerNotification('بدء الفحص الأمني للثغرات والتحقق من جدران حماية الـ API...', 'info');
-    setTimeout(() => {
-      setIsScanningSec(false);
-      logAction('SECURITY_COMPLIANCE_SCAN', 'فحص أمني دوري ضد هجمات SQL Injection و Cross-Site Scripting على بوابات المدارس', 'مركز سلامة النظام');
-      triggerNotification('اكتمل الفحص الأمني الشامل بنجاح: درجة الأمان 100% (ممتاز) 🛡️', 'success');
-    }, 2500);
+    setIsScanningSec(false);
+    triggerNotification('الفحص الأمني يحتاج تشغيلًا من خدمة مراقبة مركزية؛ لم تُعرض درجة أمان مصطنعة.', 'warning');
   };
 
   return (

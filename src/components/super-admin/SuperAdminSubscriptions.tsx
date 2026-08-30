@@ -1,5 +1,6 @@
 import { AlertTriangle, Award, Ban, Calendar, CheckCircle, ChevronLeft, Clock, CreditCard, MessageSquare, RefreshCw, Send, ShieldAlert } from 'lucide-react';
 import React, { useState } from 'react';
+import { authenticatedRequest } from '../../utils/authenticatedRequest';
 interface SuperAdminSubscriptionsProps {
   schools: any[];
   setSchools: React.Dispatch<React.SetStateAction<any[]>>;
@@ -28,6 +29,24 @@ export default function SuperAdminSubscriptions({
   const [renewMonths, setRenewMonths] = useState('12');
   const [noticeText, setNoticeText] = useState('');
   const [noticeMethod, setNoticeMethod] = useState<'system' | 'email'>('system');
+
+  const updateCentralSchool = async (school: any, operation: 'status' | 'update', details: Record<string, unknown> = {}) => {
+    const response = await authenticatedRequest(`/api/admin/central/schools/${encodeURIComponent(school.id)}`, {
+      method: 'PATCH',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ operation, ...(operation === 'update' ? { name: school.name, schoolCode: school.schoolCode, profile: details } : details) }),
+    });
+    const payload = await response.json().catch(() => ({}));
+    if (!response.ok || !payload?.success || !payload?.school) throw new Error(payload?.message || 'تعذر حفظ التغيير في الدليل المركزي.');
+    return payload.school;
+  };
+
+  const applyCanonicalSchool = (canonical: any) => {
+    const profile = canonical.central_metadata && typeof canonical.central_metadata === 'object' ? canonical.central_metadata : {};
+    const next = { ...profile, ...canonical, name: canonical.display_name, schoolCode: canonical.school_code };
+    setSchools(prev => prev.map(item => item.id === canonical.id ? { ...item, ...next } : item));
+    setSelectedSchool(prev => prev?.id === canonical.id ? { ...prev, ...next } : prev);
+  };
 
   // Compute expiration days helper
   const getDaysRemaining = (endDateStr: string) => {
@@ -72,11 +91,16 @@ export default function SuperAdminSubscriptions({
   });
 
   // Action: Suspend / Freeze School
-  const handleToggleSuspend = (school: any) => {
+  const handleToggleSuspend = async (school: any) => {
     const shouldFreeze = school.status !== 'frozen' && school.status !== 'suspended';
-    const updatedStatus = shouldFreeze ? 'frozen' : 'active';
-    
-    setSchools(prev => prev.map(s => s.id === school.id ? { ...s, status: updatedStatus } : s));
+    const updatedStatus = shouldFreeze ? 'suspended' : 'active';
+    try {
+      const canonical = await updateCentralSchool(school, 'status', { status: updatedStatus });
+      applyCanonicalSchool(canonical);
+    } catch (error) {
+      triggerNotification(error instanceof Error ? error.message : 'تعذر تغيير حالة المدرسة مركزياً؛ لم يتم تعديل البيانات.', 'danger');
+      return;
+    }
     
     logAction(
       shouldFreeze ? 'SUSPEND_SCHOOL' : 'RESUME_SCHOOL',
@@ -93,17 +117,19 @@ export default function SuperAdminSubscriptions({
   };
 
   // Action: Renew Subscription
-  const handleRenew = () => {
+  const handleRenew = async () => {
     if (!selectedSchool) return;
     const months = parseInt(renewMonths);
     const currentEnd = new Date(selectedSchool.subscriptionEnd || new Date());
     currentEnd.setMonth(currentEnd.getMonth() + months);
     
-    setSchools(prev => prev.map(s => s.id === selectedSchool.id ? { 
-      ...s, 
-      subscriptionEnd: currentEnd.toISOString().split('T')[0],
-      status: 'active'
-    } : s));
+    try {
+      const canonical = await updateCentralSchool(selectedSchool, 'update', { subscriptionEnd: currentEnd.toISOString().split('T')[0] });
+      applyCanonicalSchool(canonical);
+    } catch (error) {
+      triggerNotification(error instanceof Error ? error.message : 'تعذر تجديد الاشتراك مركزياً؛ لم يتم تعديل البيانات.', 'danger');
+      return;
+    }
 
     logAction(
       'RENEW_SUBSCRIPTION',
@@ -116,17 +142,19 @@ export default function SuperAdminSubscriptions({
   };
 
   // Action: Extend Subscription
-  const handleExtend = () => {
+  const handleExtend = async () => {
     if (!selectedSchool) return;
     const days = parseInt(extendDays);
     const currentEnd = new Date(selectedSchool.subscriptionEnd || new Date());
     currentEnd.setDate(currentEnd.getDate() + days);
     
-    setSchools(prev => prev.map(s => s.id === selectedSchool.id ? { 
-      ...s, 
-      subscriptionEnd: currentEnd.toISOString().split('T')[0],
-      status: 'active'
-    } : s));
+    try {
+      const canonical = await updateCentralSchool(selectedSchool, 'update', { subscriptionEnd: currentEnd.toISOString().split('T')[0] });
+      applyCanonicalSchool(canonical);
+    } catch (error) {
+      triggerNotification(error instanceof Error ? error.message : 'تعذر تمديد الاشتراك مركزياً؛ لم يتم تعديل البيانات.', 'danger');
+      return;
+    }
 
     logAction(
       'EXTEND_SUBSCRIPTION',
@@ -139,7 +167,7 @@ export default function SuperAdminSubscriptions({
   };
 
   // Action: Change Plan
-  const handlePlanChange = () => {
+  const handlePlanChange = async () => {
     if (!selectedSchool) return;
     
     // Adjust limits based on plan
@@ -151,12 +179,17 @@ export default function SuperAdminSubscriptions({
     
     const limit = limits[newPlan] || limits['Enterprise'];
 
-    setSchools(prev => prev.map(s => s.id === selectedSchool.id ? { 
-      ...s, 
-      plan: newPlan,
-      storageLimit: limit.storage,
-      userLimit: limit.users
-    } : s));
+    try {
+      const canonical = await updateCentralSchool(selectedSchool, 'update', {
+        plan: newPlan,
+        storageLimit: limit.storage,
+        userLimit: limit.users,
+      });
+      applyCanonicalSchool(canonical);
+    } catch (error) {
+      triggerNotification(error instanceof Error ? error.message : 'تعذر تغيير الباقة مركزياً؛ لم يتم تعديل البيانات.', 'danger');
+      return;
+    }
 
     logAction(
       'CHANGE_PLAN',
@@ -171,16 +204,8 @@ export default function SuperAdminSubscriptions({
   // Action: Send Notification
   const handleSendNotice = () => {
     if (!selectedSchool || !noticeText) return;
-    
-    logAction(
-      'SEND_LICENSING_NOTICE',
-      `إرسال تنبيه ترخيص (${noticeMethod === 'email' ? 'بريد إلكتروني' : 'إشعار فوري'}) لمدرسة ${selectedSchool.name}: ${noticeText}`,
-      'إدارة الاشتراكات والتراخيص'
-    );
 
-    triggerNotification(`تم بث إشعار التنبيه بنجاح للمدرسة المستهدفة عبر القناة المحددة ✉️`, 'success');
-    setNoticeText('');
-    setShowNoticeModal(false);
+    triggerNotification(`إرسال تنبيهات الترخيص عبر ${noticeMethod === 'email' ? 'البريد الإلكتروني' : 'إشعارات النظام'} يحتاج موصل إشعارات مركزي؛ لم يتم تسجيل إرسال وهمي.`, 'warning');
   };
 
   return (

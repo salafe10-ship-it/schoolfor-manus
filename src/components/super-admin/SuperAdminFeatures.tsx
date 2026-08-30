@@ -1,5 +1,6 @@
 import { Building2, Check, CheckCircle, Info, Save, Server, ShieldAlert, Sliders, Sparkles, ToggleLeft, ToggleRight } from 'lucide-react';
-import React, { useState } from 'react';
+import React, { useEffect, useState } from 'react';
+import { authenticatedRequest } from '../../utils/authenticatedRequest';
 interface SuperAdminFeaturesProps {
   schools: any[];
   setSchools: React.Dispatch<React.SetStateAction<any[]>>;
@@ -14,6 +15,10 @@ export default function SuperAdminFeatures({
   triggerNotification
 }: SuperAdminFeaturesProps) {
   const [selectedSchoolId, setSelectedSchoolId] = useState(schools[0]?.id || '');
+
+  useEffect(() => {
+    if (!selectedSchoolId && schools[0]?.id) setSelectedSchoolId(schools[0].id);
+  }, [schools, selectedSchoolId]);
   
   // Feature list definitions
   const featureDefinitions = [
@@ -51,7 +56,23 @@ export default function SuperAdminFeatures({
     };
   };
 
-  const handleToggleFeature = (featureKey: string) => {
+  const persistFeatures = async (features: Record<string, boolean>) => {
+    const response = await authenticatedRequest(`/api/admin/central/schools/${encodeURIComponent(selectedSchoolId)}`, {
+      method: 'PATCH',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ operation: 'features', features }),
+    });
+    const payload = await response.json().catch(() => ({}));
+    if (!response.ok || !payload?.success || !payload?.school) throw new Error(payload?.message || 'تعذر حفظ ميزات المدرسة مركزيًا.');
+    return payload.school;
+  };
+
+  const applyCanonicalFeatures = (canonical: any) => {
+    const features = canonical.central_metadata?.features || {};
+    setSchools(prevSchools => prevSchools.map(s => s.id === canonical.id ? { ...s, features, central_metadata: canonical.central_metadata } : s));
+  };
+
+  const handleToggleFeature = async (featureKey: string) => {
     if (!selectedSchoolId) return;
 
     const currentFeatures = getSchoolFeatures();
@@ -60,27 +81,26 @@ export default function SuperAdminFeatures({
       [featureKey]: currentFeatures[featureKey] === false ? true : false
     };
 
-    // Update schools state
-    setSchools(prevSchools => {
-      const next = prevSchools.map(s => {
-        if (s.id === selectedSchoolId) {
-          return {
-            ...s,
-            features: updatedFeatures
-          };
-        }
-        return s;
-      });
-      // Store in localStorage for persistence
-      localStorage.setItem('saas_schools_data_v1', JSON.stringify(next));
-      return next;
-    });
+    try {
+      const canonical = await persistFeatures(updatedFeatures);
+      applyCanonicalFeatures(canonical);
+    } catch (error) {
+      triggerNotification(error instanceof Error ? error.message : 'تعذر حفظ الميزة مركزيًا؛ لم يتم تعديل البيانات.', 'danger');
+      return;
+    }
 
     triggerNotification(`تم تحديث حالة الخدمة (${featureDefinitions.find(f => f.key === featureKey)?.name}) بنجاح`, 'info');
   };
 
-  const handleSaveAllFeatures = () => {
+  const handleSaveAllFeatures = async () => {
     if (!activeSchool) return;
+    try {
+      const canonical = await persistFeatures(getSchoolFeatures());
+      applyCanonicalFeatures(canonical);
+    } catch (error) {
+      triggerNotification(error instanceof Error ? error.message : 'تعذر اعتماد مصفوفة الميزات مركزيًا؛ لم يتم تعديل البيانات.', 'danger');
+      return;
+    }
     
     logAction(
       'UPDATE_SCHOOL_FEATURES_MATRIX',
@@ -90,7 +110,7 @@ export default function SuperAdminFeatures({
     triggerNotification(`✓ تم حفظ واعتماد مصفوفة الخدمات بنجاح لـ ${activeSchool.name}. تم تطبيق الخيارات حياً على شاشاتهم وجوانب التصفح لديهم فوراً!`, 'success');
   };
 
-  const handleEnableAll = () => {
+  const handleEnableAll = async () => {
     if (!selectedSchoolId) return;
     const allEnabled = {
       students: true,
@@ -106,16 +126,13 @@ export default function SuperAdminFeatures({
       permissions_admin: true
     };
 
-    setSchools(prevSchools => {
-      const next = prevSchools.map(s => {
-        if (s.id === selectedSchoolId) {
-          return { ...s, features: allEnabled };
-        }
-        return s;
-      });
-      localStorage.setItem('saas_schools_data_v1', JSON.stringify(next));
-      return next;
-    });
+    try {
+      const canonical = await persistFeatures(allEnabled);
+      applyCanonicalFeatures(canonical);
+    } catch (error) {
+      triggerNotification(error instanceof Error ? error.message : 'تعذر تفعيل الميزات مركزيًا؛ لم يتم تعديل البيانات.', 'danger');
+      return;
+    }
 
     triggerNotification('تم تفعيل كافة ميزات المنظومة لـ ' + activeSchool?.name, 'success');
   };

@@ -56,151 +56,37 @@ export default function SuperAdminBackups({
   const handleCreateBackup = (e: React.FormEvent) => {
     e.preventDefault();
     triggerNotification('لم يتم إنشاء النسخة: خدمة التخزين المركزية غير متصلة أو غير موثقة.', 'warning');
-    return;
-    setIsCreatingBackup(true);
-    setBackupProgress(5);
-
-    const schoolObj = schools.find(s => s.id === selectedSchoolId);
-    const targetName = schoolObj ? schoolObj.name : 'قاعدة البيانات المركزية';
-
-    // Simulated progress loop
-    const interval = setInterval(() => {
-      setBackupProgress(prev => {
-        if (prev >= 100) {
-          clearInterval(interval);
-          
-          // Add new snapshot
-          const newSnap = {
-            id: `snap_${Date.now()}`,
-            name: backupNote || `نسخة احتياطية يدوية - ${schoolObj?.schoolShortName || 'مستأجر'}`,
-            type: 'manual',
-            schoolName: targetName,
-            size: `${(200 + Math.random() * 900).toFixed(0)} MB`,
-            hash: `SHA256:${Math.random().toString(36).substring(2, 10)}...${Math.random().toString(36).substring(2, 6)}`,
-            createdAt: new Date().toISOString().replace('T', ' ').substring(0, 16),
-            status: 'verified'
-          };
-
-          setBackups(prevSnaps => [newSnap, ...prevSnaps]);
-          setIsCreatingBackup(false);
-          setBackupNote('');
-          
-          logAction('CREATE_BACKUP', `إنشاء نسخة احتياطية فورية يدوية لقاعدة بيانات: [${targetName}] بأمان`, 'النسخ والإنقاذ');
-          triggerNotification(`تم إنشاء لقطة الحفظ (Database Snapshot) لـ ${schoolObj?.schoolShortName} وتأمين تخزينها في S3 ✅`, 'success');
-          
-          return 0;
-        }
-        return prev + 15;
-      });
-    }, 400);
   };
 
   // Run integrity verification check
   const handleCheckIntegrity = (snapshot: any) => {
-    setSelectedSnapshot(snapshot);
-    setShowIntegrityModal(true);
-    setIntegrityReport({ status: 'analyzing', logs: ['بدء قراءة ترويسة نسخة الحفظ...', 'حساب كود SHA256 لمطابقة التوقيع الرقمي...'] });
-
-    setTimeout(() => {
-      setIntegrityReport((prev: any) => ({
-        ...prev,
-        logs: [...prev.logs, `بنية ملف الترخيص مستقرة. كود المطابقة متطابق: [${snapshot.hash}].`, 'التحقق من جداول المستأجرين (schema alignment)...']
-      }));
-    }, 1000);
-
-    setTimeout(() => {
-      setIntegrityReport({
-        status: 'success',
-        logs: [
-          'بدء قراءة ترويسة نسخة الحفظ...',
-          'حساب كود SHA256 لمطابقة التوقيع الرقمي...',
-          `بنية ملف الترخيص مستقرة. كود المطابقة متطابق: [${snapshot.hash}].`,
-          'التحقق من جداول المستأجرين (schema alignment)...',
-          'تحليل كتل المزامنة المالية والقيود المحاسبية سليم.',
-          'النتيجة الكلية: النسخة سليمة وصالحة للاستعادة بنسبة ١٠٠٪ دون فقدان.'
-        ],
-        details: {
-          checksum: 'متطابق OK',
-          tablesChecked: 148,
-          integrityScore: '100%'
-        }
-      });
-      triggerNotification(`اكتمل فحص سلامة نسخة الحفظ بنجاح وتأكيد موثوقيتها`, 'success');
-    }, 2500);
+    void snapshot;
+    triggerNotification('فحص سلامة النسخ يحتاج قراءة فعلية من مخزن مركزي؛ لم تُعرض نتيجة محاكاة.', 'warning');
   };
 
   // Run Backup Restore Simulator
   const handleRestoreBackup = () => {
     if (!selectedSnapshot) return;
 
-    setShowRestoreModal(false);
-    triggerNotification(`جاري تحضير استعادة قاعدة البيانات إلى نقطة حفظ [${selectedSnapshot.createdAt}]...`, 'info');
-
-    logAction('RESTORE_BACKUP_INIT', `طلب استعادة قاعدة البيانات من اللقطة: ${selectedSnapshot.name}`, 'شؤون السيرفرات');
-
-    setTimeout(() => {
-      logAction('RESTORE_BACKUP_SUCCESS', `اكتمل استعادة قاعدة البيانات بنجاح من لقطة: ${selectedSnapshot.name}`, 'النسخ والإنقاذ');
-      triggerNotification(`تم استعادة النسخة بنجاح وإعادة تشغيل محركات البيانات المعزولة ✅`, 'success');
-      setSelectedSnapshot(null);
-    }, 3000);
+    triggerNotification(`استعادة النسخة [${selectedSnapshot.createdAt}] تحتاج مهمة خادم مركزية وموافقة مزدوجة؛ لم يتم تغيير قاعدة البيانات.`, 'warning');
   };
 
   // Schedule configuration save
   const handleSaveSchedule = (e: React.FormEvent) => {
     e.preventDefault();
-    logAction(
-      'UPDATE_BACKUP_SCHEDULE', 
-      `تحديث جدولة النسخ: دورية [${scheduleConfig.frequency}]، الحفاظ على [${scheduleConfig.retentionCount}] نسخة، التشفير [${scheduleConfig.encryptKey}]`, 
-      'النسخ والإنقاذ'
-    );
-    triggerNotification('تم تحديث وحفظ تفضيلات الجدولة التلقائية للنسخ السحابي', 'success');
-    setShowScheduleModal(false);
+    void scheduleConfig;
+    triggerNotification('جدولة النسخ تحتاج موصل مهام خادم مركزي؛ لم يتم حفظ إعداد محلي.', 'warning');
   };
 
   // Download snapshot simulation
   const handleDownloadBackup = (snapshot: any) => {
-    const s3Url = `https://s3.me-central1.amazonaws.com/edupro-backups/snapshots/${snapshot.id}.sql.gz?X-Amz-Algorithm=AWS4-HMAC-SHA256&X-Amz-Expires=3600`;
-    try {
-      navigator.clipboard.writeText(s3Url);
-      triggerNotification('تم نسخ رابط التحميل الآمن S3 المؤقت للحافظة 🔗', 'success');
-    } catch (err) {}
-    alert(`🔗 الرابط المؤقت المشفر لتحميل النسخة متاح وصالح لمدة ساعة:\n\n${s3Url}`);
-    logAction('DOWNLOAD_BACKUP_LINK', `توليد رابط تحميل آمن مؤقت للنسخة: [${snapshot.name}]`, 'النسخ والإنقاذ');
+    void snapshot;
+    triggerNotification('تنزيل النسخة يحتاج رابطًا موقّعًا يصدره مخزن مركزي؛ لم يتم توليد رابط وهمي.', 'warning');
   };
 
   // Disaster Recovery Failover Drill Simulator
   const handleRunDrill = () => {
-    setDrillState({ status: 'active', step: 1, logs: ['[طوارئ] بدء محاكاة انقطاع الاتصال التام بمركز بيانات سحابة الرياض الرئيسية...'] });
-
-    setTimeout(() => {
-      setDrillState(prev => ({
-        status: 'active',
-        step: 2,
-        logs: [...prev.logs, '[طوارئ] رصد انقطاع DNS وتحويل البث تلقائياً للبوابة الاحتياطية (Jeddah Region)...']
-      }));
-    }, 1500);
-
-    setTimeout(() => {
-      setDrillState(prev => ({
-        status: 'active',
-        step: 3,
-        logs: [...prev.logs, '[طوارئ] تفعيل النسخة المكررة الحية (Read-Replica DB Promotion) لتصبح قاعدة البيانات الرئيسية الفعالة.']
-      }));
-    }, 3000);
-
-    setTimeout(() => {
-      setDrillState(prev => ({
-        status: 'completed',
-        step: 4,
-        logs: [
-          ...prev.logs,
-          '[طوارئ] اكتمال استعادة اتصال الأنظمة بنسبة ١٠٠٪ وتصفير زمن الانقطاع.',
-          '[طوارئ] النتيجة: تم تفادي انقطاع خدمات المدارس بالكامل بنجاح واستقرار.'
-        ]
-      }));
-      logAction('RUN_DISASTER_RECOVERY_DRILL', 'إجراء محاكاة وبرومة طوارئ لإنقاذ السحابة ونقل البوابات بنجاح دون فقدان', 'شؤون السيرفرات والبنى');
-      triggerNotification('نجاح بروف طوارئ الكوارث والتحويل التلقائي للسيرفرات الاحتياطية ✅', 'success');
-    }, 4500);
+    triggerNotification('اختبار التعافي من الكوارث يحتاج بنية احتياطية حقيقية ونافذة صيانة معتمدة؛ لم تُعلن نتيجة محاكاة.', 'warning');
   };
 
   const resetDrillState = () => {

@@ -1,6 +1,7 @@
 import { AlertTriangle, CheckCircle, Copy, Database, Edit2, ExternalLink, Globe, Link, Plus, RefreshCw, Search, ShieldCheck, Trash2, Lock, ShieldAlert } from 'lucide-react';
 import React, { useState } from 'react';
 import { getTrustedSchoolUrl, getSSLCertificateStatus, openTrustedSchoolPortal } from '../../utils/EnterpriseDomainUtils';
+import { authenticatedRequest } from '../../utils/authenticatedRequest';
 
 interface SuperAdminDomainsProps {
   schools: any[];
@@ -28,6 +29,25 @@ export default function SuperAdminDomains({
   const [testingId, setTestingId] = useState<string | null>(null);
   const [testResult, setTestResult] = useState<Record<string, { status: 'healthy' | 'error' | 'unknown', latency: number | null, time: string | null }>>({});
 
+  const updateCentralDomain = async (school: any, profile: Record<string, unknown>) => {
+    const response = await authenticatedRequest(`/api/admin/central/schools/${encodeURIComponent(school.id)}`, {
+      method: 'PATCH',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ operation: 'update', name: school.name, schoolCode: school.schoolCode, profile }),
+    });
+    const payload = await response.json().catch(() => ({}));
+    if (!response.ok || !payload?.success || !payload?.school) throw new Error(payload?.message || 'تعذر حفظ نطاق المدرسة مركزيًا.');
+    return payload.school;
+  };
+
+  const applyCanonicalDomain = (canonical: any) => {
+    const profile = canonical.central_metadata && typeof canonical.central_metadata === 'object' ? canonical.central_metadata : {};
+    const schoolUrl = profile.domain
+      ? `https://${profile.domain}`
+      : getTrustedSchoolUrl({ id: canonical.id, subdomain: profile.subdomain });
+    setSchools(prev => prev.map(item => item.id === canonical.id ? { ...item, ...profile, ...canonical, name: canonical.display_name, schoolCode: canonical.school_code, schoolUrl } : item));
+  };
+
   // Subdomain uniqueness validation
   const checkSubdomainAvailability = (sub: string, schoolId?: string) => {
     if (!sub) return false;
@@ -36,16 +56,17 @@ export default function SuperAdminDomains({
   };
 
   // Action: Map Custom Domain
-  const handleMapCustomDomain = (e: React.FormEvent) => {
+  const handleMapCustomDomain = async (e: React.FormEvent) => {
     e.preventDefault();
     if (!selectedSchool || !customDomain) return;
 
-    // Save changes
-    setSchools(prev => prev.map(s => s.id === selectedSchool.id ? { 
-      ...s, 
-      domain: customDomain,
-      schoolUrl: `https://${customDomain}`
-    } : s));
+    try {
+      const canonical = await updateCentralDomain(selectedSchool, { domain: customDomain, customDomain, sslStatus: 'pending' });
+      applyCanonicalDomain(canonical);
+    } catch (error) {
+      triggerNotification(error instanceof Error ? error.message : 'تعذر ربط النطاق مركزيًا؛ لم يتم تعديل البيانات.', 'danger');
+      return;
+    }
 
     logAction(
       'MAP_CUSTOM_DOMAIN',
@@ -53,13 +74,13 @@ export default function SuperAdminDomains({
       'إدارة أسماء النطاقات والروابط'
     );
 
-    triggerNotification(`تم ربط النطاق الخاص https://${customDomain} بنجاح، شهادة SSL قيد التوطين تلقائياً 🛡️`, 'success');
+    triggerNotification(`تم حفظ النطاق الخاص https://${customDomain} في الإدارة المركزية، وحالة SSL قيد التحقق 🛡️`, 'success');
     setShowDomainModal(false);
     setCustomDomain('');
   };
 
   // Action: Change Subdomain
-  const handleUpdateSubdomain = (e: React.FormEvent) => {
+  const handleUpdateSubdomain = async (e: React.FormEvent) => {
     e.preventDefault();
     if (!selectedSchool || !subdomain) return;
 
@@ -70,11 +91,13 @@ export default function SuperAdminDomains({
       return;
     }
 
-    setSchools(prev => prev.map(s => s.id === selectedSchool.id ? { 
-      ...s, 
-      subdomain: subdomain,
-      schoolUrl: `https://${subdomain}.erpcloud.com`
-    } : s));
+    try {
+      const canonical = await updateCentralDomain(selectedSchool, { subdomain });
+      applyCanonicalDomain(canonical);
+    } catch (error) {
+      triggerNotification(error instanceof Error ? error.message : 'تعذر حفظ النطاق الفرعي مركزيًا؛ لم يتم تعديل البيانات.', 'danger');
+      return;
+    }
 
     logAction(
       'UPDATE_SUBDOMAIN',
@@ -82,7 +105,7 @@ export default function SuperAdminDomains({
       'إدارة أسماء النطاقات والروابط'
     );
 
-    triggerNotification(`تم تحديث النطاق الفرعي للرابط ليصبح https://${subdomain}.erpcloud.com بنجاح 🔗`, 'success');
+    triggerNotification(`تم حفظ النطاق الفرعي في الإدارة المركزية: https://${subdomain}.erpcloud.com 🔗`, 'success');
     setShowSubdomainModal(false);
     setSubdomain('');
   };
@@ -127,16 +150,7 @@ export default function SuperAdminDomains({
 
   // Action: Regenerate Link DNS Routes
   const handleRegenerateDNS = (school: any) => {
-    triggerNotification(`جاري إعادة توليد وضبط خوادم Nginx / Cloudflare للمستأجر ${school.name}...`, 'info');
-    
-    setTimeout(() => {
-      logAction(
-        'REGENERATE_DNS_ROUTES',
-        `إعادة توليد روابط المسار الافتراضي للنطاقات للمدرسة: ${school.name}`,
-        'إدارة أسماء النطاقات والروابط'
-      );
-      triggerNotification(`تم إعادة توليد شهادات SSL ومسارات DNS لـ ${school.name} بنجاح ✅`, 'success');
-    }, 2000);
+    triggerNotification(`إعادة توليد DNS وSSL تتطلب موصل البنية التحتية المركزي؛ لم يتم تسجيل نجاح وهمي لـ ${school.name}.`, 'warning');
   };
 
   return (
@@ -148,7 +162,7 @@ export default function SuperAdminDomains({
         <div className="space-y-1">
           <h4 className="text-xs font-black text-slate-100">مركز الحوكمة والتحكم في النطاقات والروابط</h4>
           <p className="text-[10px] text-slate-400 leading-relaxed">
-            يدعم النظام حركية التوجيه الذاتي للنطاقات من خلال ربط أسماء النطاقات الفرعية (Subdomains) على خادمنا الرئيسي <span className="font-mono text-amber-500">*.erpcloud.com</span> أو تفويض نطاق خاص بالكامل للمؤسسة (Custom Domain). شهادات التشفير SSL وحقن جداول خوادم التوجيه تتم آلياً في الخلفية.
+            تُحفظ أسماء النطاقات الفرعية والمخصصة في الدليل المركزي مع حالة SSL صريحة. أما فحص DNS/HTTP وإصدار الشهادة وتعديل سجلات البنية التحتية فتحتاج موصل تشغيل مركزي موثق قبل إعلان الجاهزية.
           </p>
         </div>
       </div>

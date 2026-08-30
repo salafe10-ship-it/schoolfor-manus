@@ -22,6 +22,7 @@ import SuperAdminFeatures from './super-admin/SuperAdminFeatures';
 import DeveloperPlatformCenter from '../developer/DeveloperPlatformCenter';
 
 import { EnterpriseLogger } from '../database/services/EnterpriseLogger';
+import { authenticatedRequest } from '../utils/authenticatedRequest';
 
 interface SuperAdminViewProps {
   activeSection: string;
@@ -100,25 +101,7 @@ export default function SuperAdminView({
 }: SuperAdminViewProps) {
 
   const handleImpersonateSchool = (school: any, reason: string) => {
-    localStorage.setItem('impersonation_active', 'true');
-    localStorage.setItem('impersonated_school_id', school.id);
-    localStorage.setItem('impersonated_school_name', school.name);
-    localStorage.setItem('impersonator_name', 'سليمان بن غازي (SuperAdmin)');
-    localStorage.setItem('impersonation_reason', reason);
-    localStorage.setItem('impersonation_start_time', new Date().toISOString());
-
-    if (setSelectedSchool) setSelectedSchool(school);
-    if (setCurrentRole) setCurrentRole('SchoolAdmin');
-    setIsSuperAdminPortalActive(false);
-    if (setCurrentPortal) setCurrentPortal('school');
-
-    logAction(
-      'IMPERSONATION_START',
-      `بدء جلسة دخول الدعم الفني والمحاكاة لـ ${school.name}. السبب: ${reason}`,
-      'التحكم المركزي والحوكمة'
-    );
-
-    triggerNotification(`تم بدء جلسة الدعم الفني بمحاكاة مشرف لـ ${school.name} بنجاح 🚀`, 'success');
+    triggerNotification(`دخول الدعم الفني إلى ${school.name} يتطلب جلسة انتحال مركزية قصيرة العمر مع تدقيق السبب (${reason})؛ لم يتم فتح جلسة محلية.`, 'warning');
   };
 
   const handleOpenSchoolLogin = (school: any) => {
@@ -133,6 +116,40 @@ export default function SuperAdminView({
     );
 
     triggerNotification(`فتح بوابة تسجيل الدخول المباشرة لـ ${school.name}`, 'info');
+  };
+
+  const refreshCentralDirectory = async () => {
+    try {
+      const response = await authenticatedRequest('/api/admin/central/schools');
+      const payload = await response.json().catch(() => ({}));
+      if (!response.ok || !payload?.success || !Array.isArray(payload.schools)) {
+        throw new Error(payload?.message || 'تعذر قراءة دليل المدارس المركزي.');
+      }
+      const nextSchools = payload.schools.map((school: any) => ({
+        ...(school.central_metadata && typeof school.central_metadata === 'object' ? school.central_metadata : {}),
+        id: school.id,
+        tenantId: school.tenant_id,
+        name: school.display_name,
+        schoolShortName: school.central_metadata?.shortName || school.display_name,
+        schoolCode: school.school_code,
+        status: school.status,
+        archived: school.status === 'archived',
+        connectedDb: 'canonical-postgres',
+      }));
+      const nextBranches = payload.schools.filter((school: any) => school.main_branch?.id).map((school: any) => ({
+        id: school.main_branch.id,
+        schoolId: school.id,
+        name: school.main_branch.name,
+        branchCode: school.main_branch.branch_code,
+        status: school.main_branch.status,
+        isMain: true,
+      }));
+      setSchools(nextSchools);
+      setBranches(nextBranches);
+      triggerNotification(`تم تحديث دليل المدارس المركزي: ${nextSchools.length} مدرسة`, 'success');
+    } catch (error) {
+      triggerNotification(error instanceof Error ? error.message : 'تعذر تحديث دليل المدارس المركزي.', 'danger');
+    }
   };
 
   // Right Sidebar collapsed state (RTL Layout)
@@ -357,9 +374,7 @@ export default function SuperAdminView({
             
             {/* Button: Refresh cluster data */}
             <button 
-              onClick={() => {
-                triggerNotification('تم تحديث البيانات وجلب تفاصيل الاتصال بالـ Cluster بنجاح.', 'success');
-              }}
+              onClick={() => { void refreshCentralDirectory(); }}
               className="p-2 bg-amber-50 dark:bg-amber-950/40 text-amber-600 dark:text-amber-400 border border-amber-100 dark:border-amber-900/60 hover:bg-amber-100 dark:hover:bg-amber-950/80 transition-all cursor-pointer flex items-center gap-1 text-xs font-black"
               title="تحديث البيانات"
             >

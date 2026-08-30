@@ -1,6 +1,7 @@
 import { ArrowRightLeft, Ban, CheckCircle, Edit2, HelpCircle, Plus, RefreshCw, Search, Server, ShieldAlert, Sliders, Star, Trash2, X } from 'lucide-react';
-import React, { useState } from 'react';
+import React, { useEffect, useState } from 'react';
 import { StudentAffairsValidationFramework } from '../../validation/StudentAffairsValidationFramework';
+import { authenticatedRequest } from '../../utils/authenticatedRequest';
 
 interface SuperAdminBranchesProps {
   schools: any[];
@@ -20,6 +21,7 @@ export default function SuperAdminBranches({
 
   // Active School selection (defaults to first school)
   const [selectedSchoolId, setSelectedSchoolId] = useState<string>(schools[0]?.id || '');
+  const [isDirectoryLoading, setIsDirectoryLoading] = useState(true);
 
   // Local state for modals
   const [showAddModal, setShowAddModal] = useState(false);
@@ -34,9 +36,7 @@ export default function SuperAdminBranches({
     name: '',
     city: 'الرياض',
     address: '',
-    phone: '',
-    studentsCount: 0,
-    employeesCount: 0
+    phone: ''
   });
 
   // Transfer Wizard State
@@ -50,6 +50,63 @@ export default function SuperAdminBranches({
     logs: [] as string[]
   });
 
+  useEffect(() => {
+    if (!selectedSchoolId && schools[0]?.id) setSelectedSchoolId(schools[0].id);
+  }, [schools, selectedSchoolId]);
+
+  useEffect(() => {
+    let mounted = true;
+    const loadCentralBranches = async () => {
+      setIsDirectoryLoading(true);
+      try {
+        const response = await authenticatedRequest('/api/admin/central/branches');
+        const payload = await response.json().catch(() => ({}));
+        if (!response.ok || !payload?.success || !Array.isArray(payload.branches)) throw new Error(payload?.message || 'تعذر تحميل دليل الفروع المركزي.');
+        if (!mounted) return;
+        setBranches(payload.branches.map((branch: any) => ({
+          ...branch,
+          schoolId: branch.school_id,
+          branchCode: branch.branch_code,
+          city: branch.city || branch.address?.city || '',
+          phone: branch.phone || branch.address?.phone || '',
+          address: branch.address?.address || '',
+          status: branch.status === 'closed' ? 'suspended' : branch.status,
+          isMain: Boolean(branch.is_main),
+          studentsCount: Number(branch.students_count || 0),
+          employeesCount: Number(branch.employees_count || 0),
+        })));
+      } catch (error) {
+        if (mounted) triggerNotification(error instanceof Error ? error.message : 'تعذر تحميل دليل الفروع المركزي.', 'danger');
+      } finally {
+        if (mounted) setIsDirectoryLoading(false);
+      }
+    };
+    void loadCentralBranches();
+    return () => { mounted = false; };
+  }, [setBranches, triggerNotification]);
+
+  const centralBranchMutation = async (branchId: string, body: Record<string, unknown>) => {
+    const response = await authenticatedRequest(`/api/admin/central/branches/${encodeURIComponent(branchId)}`, {
+      method: 'PATCH', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(body),
+    });
+    const payload = await response.json().catch(() => ({}));
+    if (!response.ok || !payload?.success || !payload?.branch) throw new Error(payload?.message || 'تعذر حفظ الفرع مركزيًا.');
+    return payload.branch;
+  };
+
+  const mapCanonicalBranch = (branch: any) => ({
+    ...branch,
+    schoolId: branch.school_id,
+    branchCode: branch.branch_code,
+    city: branch.city || branch.address?.city || '',
+    phone: branch.phone || branch.address?.phone || '',
+    address: branch.address?.address || '',
+    status: branch.status === 'closed' ? 'suspended' : branch.status,
+    isMain: Boolean(branch.is_main),
+    studentsCount: Number(branch.students_count || 0),
+    employeesCount: Number(branch.employees_count || 0),
+  });
+
   // Filter branches of the active school
   const schoolBranches = branches.filter(b => b.schoolId === selectedSchoolId);
   const activeSchoolName = schools.find(s => s.id === selectedSchoolId)?.name || 'المدرسة المختارة';
@@ -59,26 +116,27 @@ export default function SuperAdminBranches({
   // -------------------------------------------------------------
 
   // Handle Add Branch
-  const handleAddBranch = (e: React.FormEvent) => {
+  const handleAddBranch = async (e: React.FormEvent) => {
     e.preventDefault();
     if (!newBranch.name) {
       triggerNotification('يرجى تعبئة اسم الفرع', 'warning');
       return;
     }
 
-    const createdBranch = {
-      id: `branch_s${selectedSchoolId.split('_')[1] || '1'}_b${branches.length + 1}`,
-      schoolId: selectedSchoolId,
-      name: newBranch.name,
-      city: newBranch.city,
-      address: newBranch.address || 'العنوان الافتراضي للفرع',
-      phone: newBranch.phone || '+966',
-      status: 'active' as const,
-      isMain: schoolBranches.length === 0, // Make main if it's the first branch
-      usersCount: 1,
-      studentsCount: Number(newBranch.studentsCount) || 0,
-      employeesCount: Number(newBranch.employeesCount) || 0
-    };
+    if (!selectedSchoolId) { triggerNotification('يرجى اختيار مدرسة أولاً.', 'warning'); return; }
+    let createdBranch: any;
+    try {
+      const response = await authenticatedRequest(`/api/admin/central/schools/${encodeURIComponent(selectedSchoolId)}/branches`, {
+        method: 'POST', headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ name: newBranch.name, city: newBranch.city, address: newBranch.address, phone: newBranch.phone }),
+      });
+      const payload = await response.json().catch(() => ({}));
+      if (!response.ok || !payload?.success || !payload?.branch) throw new Error(payload?.message || 'تعذر إنشاء الفرع مركزيًا.');
+      createdBranch = mapCanonicalBranch(payload.branch);
+    } catch (error) {
+      triggerNotification(error instanceof Error ? error.message : 'تعذر إنشاء الفرع مركزيًا؛ لم يتم تعديل البيانات.', 'danger');
+      return;
+    }
 
     setBranches(prev => [...prev, createdBranch]);
     logAction('CREATE_BRANCH', `تأسيس فرع جديد [${newBranch.name}] لمدرسة: ${activeSchoolName}`, 'الإدارة المركزية');
@@ -87,31 +145,46 @@ export default function SuperAdminBranches({
     setShowAddModal(false);
     setNewBranch({
       name: '',
-      city: 'الرياض',
-      address: '',
-      phone: '',
-      studentsCount: 0,
-      employeesCount: 0
+       city: 'الرياض',
+       address: '',
+       phone: ''
     });
   };
 
   // Handle Edit Branch
-  const handleSaveEditBranch = (e: React.FormEvent) => {
+  const handleSaveEditBranch = async (e: React.FormEvent) => {
     e.preventDefault();
     if (!currentBranch) return;
 
-    setBranches(prev => prev.map(b => b.id === currentBranch.id ? currentBranch : b));
+    let canonical: any;
+    try {
+      canonical = await centralBranchMutation(currentBranch.id, {
+        operation: 'update', name: currentBranch.name, branchCode: currentBranch.branchCode || currentBranch.branch_code,
+        city: currentBranch.city, phone: currentBranch.phone, address: currentBranch.address,
+        status: currentBranch.status === 'suspended' ? 'closed' : currentBranch.status,
+      });
+    } catch (error) {
+      triggerNotification(error instanceof Error ? error.message : 'تعذر تحديث الفرع مركزيًا؛ لم يتم تعديل البيانات.', 'danger');
+      return;
+    }
+    setBranches(prev => prev.map(b => b.id === currentBranch.id ? mapCanonicalBranch(canonical) : b));
     logAction('EDIT_BRANCH', `تحديث بيانات الفرع [${currentBranch.name}] التابع لـ: ${activeSchoolName}`, 'الإدارة المركزية');
     triggerNotification('تم تحديث بيانات الفرع بنجاح', 'success');
     setShowEditModal(false);
   };
 
   // Handle Toggle Branch status (Freeze/Resume)
-  const handleToggleFreezeBranch = (branch: any) => {
+  const handleToggleFreezeBranch = async (branch: any) => {
     const isSuspended = branch.status === 'suspended';
     const newStatus = isSuspended ? 'active' : 'suspended';
 
-    setBranches(prev => prev.map(b => b.id === branch.id ? { ...b, status: newStatus } : b));
+    try {
+      const canonical = await centralBranchMutation(branch.id, { operation: 'update', name: branch.name, branchCode: branch.branchCode || branch.branch_code, city: branch.city, phone: branch.phone, address: branch.address, status: newStatus === 'suspended' ? 'closed' : 'active' });
+      setBranches(prev => prev.map(b => b.id === branch.id ? mapCanonicalBranch(canonical) : b));
+    } catch (error) {
+      triggerNotification(error instanceof Error ? error.message : 'تعذر تغيير حالة الفرع مركزيًا؛ لم يتم تعديل البيانات.', 'danger');
+      return;
+    }
     logAction(
       isSuspended ? 'ACTIVATE_BRANCH' : 'SUSPEND_BRANCH',
       `${isSuspended ? 'تفعيل' : 'تجميد مؤقت لخدمات'} فرع [${branch.name}] لمدرسة: ${activeSchoolName}`,
@@ -142,28 +215,34 @@ export default function SuperAdminBranches({
     }
 
     if (confirm(`هل أنت متأكد من حذف فرع "${branch.name}" نهائياً؟ لا يمكن التراجع عن هذه العملية.`)) {
-      setBranches(prev => prev.filter(b => b.id !== branch.id));
-      logAction('DELETE_BRANCH', `حذف فرع [${branch.name}] التابع لـ: ${activeSchoolName}`, 'الإدارة المركزية');
-      triggerNotification('تم حذف الفرع بنجاح ✅', 'success');
+      void centralBranchMutation(branch.id, { operation: 'archive' }).then(() => {
+        setBranches(prev => prev.filter(b => b.id !== branch.id));
+        logAction('DELETE_BRANCH', `أرشفة الفرع [${branch.name}] التابع لـ: ${activeSchoolName}`, 'الإدارة المركزية');
+        triggerNotification('تمت أرشفة الفرع في المصدر المركزي ✅', 'success');
+      }).catch((error) => {
+        triggerNotification(error instanceof Error ? error.message : 'تعذر أرشفة الفرع مركزيًا؛ لم يتم تعديل البيانات.', 'danger');
+      });
     }
   };
 
   // Set branch as main/primary
-  const handleSetMainBranch = (branch: any) => {
+  const handleSetMainBranch = async (branch: any) => {
     if (branch.isMain) return;
 
-    setBranches(prev => prev.map(b => {
-      if (b.schoolId === selectedSchoolId) {
-        return { ...b, isMain: b.id === branch.id };
-      }
-      return b;
-    }));
+    try {
+      const canonical = await centralBranchMutation(branch.id, { operation: 'set_main' });
+      setBranches(prev => prev.map(b => b.schoolId === selectedSchoolId ? { ...b, isMain: b.id === branch.id } : b));
+      void canonical;
+    } catch (error) {
+      triggerNotification(error instanceof Error ? error.message : 'تعذر اعتماد الفرع الرئيسي مركزيًا؛ لم يتم تعديل البيانات.', 'danger');
+      return;
+    }
 
     logAction('SET_MAIN_BRANCH', `تعيين فرع [${branch.name}] كفرع رئيسي معتمد لمدرسة: ${activeSchoolName}`, 'شؤون الفروع');
     triggerNotification(`تم اعتماد فرع ${branch.name} كفرع رئيسي عام لمدرسة ${activeSchoolName} بنجاح`, 'success');
   };
 
-  // Execute Data Transfer between branches
+  // Transfer requires a server-side transaction over student/HR records.
   const handleExecuteTransfer = () => {
     if (!transferState.sourceBranchId || !transferState.destBranchId) {
       triggerNotification('يرجى اختيار فرع المصدر وفرع الهدف لترحيل البيانات', 'warning');
@@ -174,80 +253,8 @@ export default function SuperAdminBranches({
       return;
     }
 
-    const srcBranch = branches.find(b => b.id === transferState.sourceBranchId);
-    const destBranch = branches.find(b => b.id === transferState.destBranchId);
-    const amountToTransfer = Number(transferState.amount) || 0;
-
-    if (!srcBranch || !destBranch) return;
-
-    // Validate if source has enough students/employees
-    if (transferState.transferType === 'students' && srcBranch.studentsCount < amountToTransfer) {
-      triggerNotification(`الرصيد غير كافٍ. فرع المصدر يحتوي فقط على ${srcBranch.studentsCount} طالب`, 'danger');
-      return;
-    }
-    if (transferState.transferType === 'teachers' && srcBranch.employeesCount < amountToTransfer) {
-      triggerNotification(`الرصيد غير كافٍ. فرع المصدر يحتوي فقط على ${srcBranch.employeesCount} موظف`, 'danger');
-      return;
-    }
-
-    setTransferState(prev => ({
-      ...prev,
-      isProcessing: true,
-      progress: 5,
-      logs: [`[02:14] تهيئة قنوات الاتصال والتحقق من RLS للموقعين...`]
-    }));
-
-    // Simulating progress
-    setTimeout(() => {
-      setTransferState(prev => ({
-        ...prev,
-        progress: 40,
-        logs: [...prev.logs, `[02:15] قفل سجلات الحسابات المهاجرة وتأمين التناسق بوضع Read-Only.`]
-      }));
-    }, 1000);
-
-    setTimeout(() => {
-      setTransferState(prev => ({
-        ...prev,
-        progress: 75,
-        logs: [...prev.logs, `[02:16] ترحيل السجلات الجسدية ونقل ملفات الطلاب المشمولين.`]
-      }));
-    }, 2000);
-
-    setTimeout(() => {
-      // Modify actual counts in the state
-      setBranches(prev => prev.map(b => {
-        if (b.id === srcBranch.id) {
-          if (transferState.transferType === 'students') {
-            return { ...b, studentsCount: b.studentsCount - amountToTransfer };
-          } else {
-            return { ...b, employeesCount: b.employeesCount - amountToTransfer };
-          }
-        }
-        if (b.id === destBranch.id) {
-          if (transferState.transferType === 'students') {
-            return { ...b, studentsCount: b.studentsCount + amountToTransfer };
-          } else {
-            return { ...b, employeesCount: b.employeesCount + amountToTransfer };
-          }
-        }
-        return b;
-      }));
-
-      setTransferState(prev => ({
-        ...prev,
-        progress: 100,
-        isProcessing: false,
-        logs: [...prev.logs, `[02:18] تم ترحيل عدد ${amountToTransfer} سجل وتحديث مؤشرات القياس كلياً.`]
-      }));
-
-      logAction(
-        'TRANSFER_BRANCH_DATA',
-        `ترحيل بيانات [${transferState.transferType === 'students' ? 'طلاب' : 'كوادر وموظفين'}] بعدد [${amountToTransfer}] من فرع [${srcBranch.name}] إلى [${destBranch.name}]`,
-        'شؤون الفروع والربط'
-      );
-      triggerNotification(`اكتمل ترحيل سجلات المنشآت بنجاح وتحديث قاعدة البيانات ⚡`, 'success');
-    }, 3500);
+    setTransferState(prev => ({ ...prev, isProcessing: false, progress: 0, logs: [] }));
+    triggerNotification('ترحيل سجلات الطلاب والموظفين يحتاج معاملة مركزية مدققة لم تُفعّل بعد؛ لم يتم تعديل أي سجل.', 'warning');
   };
 
   const resetTransferState = () => {
@@ -504,27 +511,6 @@ export default function SuperAdminBranches({
                     onChange={(e) => setNewBranch({...newBranch, address: e.target.value})}
                     className="w-full bg-slate-950 border border-slate-800 focus:border-amber-500 rounded-lg px-3 py-2 text-xs text-white"
                   />
-                </div>
-
-                <div className="grid grid-cols-2 gap-3">
-                  <div>
-                    <label className="text-xs font-bold text-slate-400 block mb-1">الطلاب المبدئيين (الرصيد):</label>
-                    <input
-                      type="number"
-                      value={newBranch.studentsCount}
-                      onChange={(e) => setNewBranch({...newBranch, studentsCount: parseInt(e.target.value) || 0})}
-                      className="w-full bg-slate-950 border border-slate-800 focus:border-amber-500 rounded-lg px-3 py-2 text-xs text-white font-mono"
-                    />
-                  </div>
-                  <div>
-                    <label className="text-xs font-bold text-slate-400 block mb-1">الكادر المبدئي (الرصيد):</label>
-                    <input
-                      type="number"
-                      value={newBranch.employeesCount}
-                      onChange={(e) => setNewBranch({...newBranch, employeesCount: parseInt(e.target.value) || 0})}
-                      className="w-full bg-slate-950 border border-slate-800 focus:border-amber-500 rounded-lg px-3 py-2 text-xs text-white font-mono"
-                    />
-                  </div>
                 </div>
 
               </div>
