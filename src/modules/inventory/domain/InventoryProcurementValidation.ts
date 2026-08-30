@@ -236,7 +236,12 @@ export function validateInventoryProcurementSnapshot(data: Snapshot, options: { 
       const cost = numberValue(line.unitCost, `تكلفة إذن الاستلام ${id} البند ${index + 1}`, { min: 0 });
       const lineTotal = numberValue(line.totalCost, `قيمة إذن الاستلام ${id} البند ${index + 1}`, { min: 0 });
       if (!closeEnough(lineTotal, accepted * cost)) throw new ValidationError(`قيمة إذن الاستلام ${id} لا تطابق الكمية المقبولة.`);
-      const orderLine = (order.lines || []).find((candidate: Snapshot) => String(candidate.itemId || candidate.itemCode) === String(line.itemId || line.itemCode));
+      const receiptItem = itemReferences.get(String(line.itemId || line.itemCode));
+      const orderLine = (order.lines || []).find((candidate: Snapshot) => {
+        const candidateItem = itemReferences.get(String(candidate.itemId || candidate.itemCode));
+        return (receiptItem && candidateItem && String(receiptItem.id) === String(candidateItem.id))
+          || String(candidate.itemId || candidate.itemCode) === String(line.itemId || line.itemCode);
+      });
       if (!orderLine) throw new ValidationError(`بند إذن الاستلام ${id} غير موجود في أمر الشراء.`);
       if (!itemReferences.has(String(line.itemId || line.itemCode))) throw new ValidationError(`بند إذن الاستلام ${id} غير مربوط ببطاقة صنف مركزية.`);
       const lineKey = `${order.id}:${String(line.itemId || line.itemCode)}`;

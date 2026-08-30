@@ -65,6 +65,10 @@ describe('inventory and procurement snapshot validation', () => {
       id: 'po-1', poNo: 'PO-1', poDate: '2026-08-30', expectedDeliveryDate: '2026-09-01', vendorId: 'sup-1', vendorName: 'مورد تجريبي', warehouseId: 'wh-1', paymentTerms: '', deliveryTerms: '', status: 'approved',
       lines: [{ id: 'pol-1', itemId: 'SKU-1', itemCode: 'SKU-1', itemName: 'صنف تجريبي', unit: 'وحدة', quantityRequested: 1, quantityOrdered: 1, quantityReceived: 0, estimatedUnitPrice: 10, actualUnitPrice: 10, totalAmount: 10 }], subtotal: 10, taxAmount: 0, discountAmount: 0, grandTotal: 10
     });
+    snapshot.goodsReceipts.push({
+      id: 'grn-1', grnNo: 'GRN-1', grnDate: '2026-08-30', purchaseOrderId: 'po-1', poNo: 'PO-1', vendorId: 'sup-1', vendorName: 'مورد تجريبي', deliveryNoteNo: 'DN-1', warehouseId: 'wh-1', inspectorName: 'مفتش', inspectionResult: 'passed', status: 'inspected_received', isPostedToGL: false,
+      lines: [{ lineId: 'grnl-1', itemId: 'item-1', itemCode: 'SKU-1', itemName: 'صنف تجريبي', orderedQty: 1, receivedQty: 1, acceptedQty: 1, rejectedQty: 0, unitCost: 10, totalCost: 10 }], totalReceivedValue: 10, createdAt: '2026-08-30T00:00:00.000Z'
+    });
 
     expect(() => validateInventoryProcurementSnapshot(snapshot)).not.toThrow();
   });
