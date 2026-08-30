@@ -1,5 +1,5 @@
 import { Award, Ban, BarChart3, Bell, BookOpen, Building2, Bus, CalendarCheck, Check, CheckSquare, ChevronDown, ChevronRight, Coins, Container, CreditCard, Database, DatabaseZap, Eye, FileText, GraduationCap, HelpCircle, Layers, Search, Settings, Settings2, Shield, ShieldAlert, ShieldCheck, Shirt, Sliders, Terminal, UserCheck, Users, WalletCards, Workflow } from 'lucide-react';
-import React, { useState, useEffect, useMemo } from 'react';
+import React, { useState, useEffect, useMemo, useRef } from 'react';
 import { SecuritySimulationService } from '../modules/authorization/application/SecuritySimulationService';
 import { FallbackStorage } from '../database/repositories/FallbackStorage';
 // ==========================================================
@@ -137,6 +137,33 @@ export const INITIAL_USERS = [
   }
 ];
 
+export type PermissionType =
+  | 'full'
+  | 'manager'
+  | 'operator'
+  | 'viewer'
+  | 'auditor'
+  | 'finance_operator'
+  | 'inventory_operator'
+  | 'academic_operator'
+  | 'hr_operator'
+  | 'it_operator'
+  | 'custom';
+
+export const PERMISSION_TYPE_LABELS: Record<PermissionType, string> = {
+  full: 'كامل الصلاحيات',
+  manager: 'مدير واعتماد',
+  operator: 'تشغيل وإدخال',
+  viewer: 'عرض فقط',
+  auditor: 'رقابة وتدقيق',
+  finance_operator: 'تشغيل مالي',
+  inventory_operator: 'تشغيل المخزون والمشتريات',
+  academic_operator: 'تشغيل أكاديمي وكنترول',
+  hr_operator: 'تشغيل الموارد البشرية والرواتب',
+  it_operator: 'إدارة تقنية',
+  custom: 'مخصص يدوياً'
+};
+
 export interface Employee {
   id: string;
   name: string;
@@ -144,7 +171,44 @@ export interface Employee {
   department: string;
   status: 'active' | 'inactive';
   permissions: string[]; // List of enabled "screenId:action" codes or "*" for Super Admin
+  permissionType?: PermissionType;
   avatar?: string;
+}
+
+function resolvePermissionType(user: any): PermissionType {
+  const explicitType = user?.permissionType as PermissionType | undefined;
+  if (explicitType && explicitType in PERMISSION_TYPE_LABELS) return explicitType;
+  if (Array.isArray(user?.permissions) && user.permissions.includes('*')) return 'full';
+
+  const roleText = `${user?.roleId || ''} ${user?.role || ''} ${user?.jobTitle || ''} ${user?.department || ''}`.toLocaleLowerCase();
+  if (/(مراجع|تدقيق|رقاب|مدقق|auditor)/.test(roleText)) return 'auditor';
+  if (/(تقنية|دعم تقني|it|بيانات)/.test(roleText)) return 'it_operator';
+  if (/(مخزن|مستودع|تموين|مشتريات|مخزون)/.test(roleText)) return 'inventory_operator';
+  if (/(موارد بشرية|شؤون الموظفين|عاملين|رواتب|hr)/.test(roleText)) return 'hr_operator';
+  if (/(مال|حساب|خزينة|مالية|محاسب|accountant|cashier)/.test(roleText)) return 'finance_operator';
+  if (/(كنترول|امتحان|أكاديم|معلم|تدريس|control)/.test(roleText)) return 'academic_operator';
+  if (/(مدير|رئيس|مشرف|manager)/.test(roleText)) return 'manager';
+  if (/(عرض|استعلام|viewer|قراءة)/.test(roleText)) return 'viewer';
+  return 'custom';
+}
+
+function employeePermissionTypeLabel(employee: Pick<Employee, 'permissionType' | 'permissions'>): string {
+  const type = employee.permissionType || (employee.permissions.includes('*') ? 'full' : 'custom');
+  return PERMISSION_TYPE_LABELS[type] || PERMISSION_TYPE_LABELS.custom;
+}
+
+function normalizeEmployee(user: any): Employee {
+  const permissions = Array.isArray(user?.permissions) ? user.permissions.filter((permission: unknown): permission is string => typeof permission === 'string') : [];
+  const permissionType = resolvePermissionType({ ...user, permissions });
+  return {
+    id: String(user?.id || user?.name || `employee_${Date.now()}`),
+    name: String(user?.name || user?.displayName || 'مستخدم'),
+    jobTitle: String(user?.jobTitle || user?.role || 'مستخدم النظام'),
+    department: String(user?.department || 'غير مصنف'),
+    status: user?.status === 'inactive' ? 'inactive' : 'active',
+    permissions,
+    permissionType
+  };
 }
 
 // 24 Real, high-fidelity Arabic employees to match the 24 count in the screenshot
@@ -556,6 +620,112 @@ const DATA_SCOPE_KEYS = DATA_SCOPE_CATALOG.flatMap(scope => DATA_SCOPE_ACTIONS.m
 const REPORT_PERMISSION_KEYS = REPORT_PERMISSION_CATALOG.flatMap(report => REPORT_PERMISSION_ACTIONS.map(action => `report:${report.id}:${action.id}`));
 const ALL_AUTHORIZATION_KEYS = [...ALL_PERMISSION_KEYS, ...DATA_SCOPE_KEYS, ...REPORT_PERMISSION_KEYS];
 
+const TEST_PERMISSION_PROFILE_ACTIONS: Record<PermissionType, string[]> = {
+  full: [],
+  manager: ['view', 'insert', 'edit', 'delete', 'approve', 'cancel', 'export', 'print'],
+  operator: ['view', 'insert', 'edit', 'print'],
+  viewer: ['view'],
+  auditor: ['view', 'export', 'print'],
+  finance_operator: ['view', 'insert', 'edit', 'approve', 'post', 'export', 'print'],
+  inventory_operator: ['view', 'insert', 'edit', 'export', 'print'],
+  academic_operator: ['view', 'insert', 'edit', 'approve', 'export', 'print'],
+  hr_operator: ['view', 'insert', 'edit', 'approve', 'export', 'print'],
+  it_operator: ['view', 'insert', 'edit', 'approve', 'export', 'print'],
+  custom: ['view']
+};
+
+function buildTestEmployeePermissions(permissionType: PermissionType, moduleIds: string[]): string[] {
+  if (permissionType === 'full') return ['*'];
+
+  const allowedActions = new Set(TEST_PERMISSION_PROFILE_ACTIONS[permissionType]);
+  const permissions = moduleIds.flatMap(moduleId => {
+    const category = PERMISSIONS_CATEGORIES_TREE.find(item => item.id === moduleId);
+    if (!category) return [];
+    return category.screens.flatMap(screen => MATRIX_COLUMNS
+      .filter(column => allowedActions.has(column.id))
+      .map(column => `${category.id}:${screen.id}:${column.id}`));
+  });
+
+  permissions.push('dashboard:main:view', 'dashboard:ai_assistant:view');
+  if (moduleIds.includes('financial_reports')) {
+    REPORT_PERMISSION_ACTIONS
+      .filter(action => allowedActions.has(action.id))
+      .forEach(action => permissions.push(`report:financial:${action.id}`));
+  }
+  if (moduleIds.includes('inventory')) {
+    REPORT_PERMISSION_ACTIONS
+      .filter(action => allowedActions.has(action.id))
+      .forEach(action => permissions.push(`report:inventory:${action.id}`));
+    DATA_SCOPE_ACTIONS
+      .filter(action => allowedActions.has(action.id))
+      .forEach(action => permissions.push(`data_scope:warehouse:${action.id}`));
+  }
+  if (moduleIds.includes('audit_logs')) {
+    REPORT_PERMISSION_ACTIONS
+      .filter(action => allowedActions.has(action.id))
+      .forEach(action => permissions.push(`report:audit:${action.id}`));
+  }
+  return Array.from(new Set(permissions.filter(permission => ALL_AUTHORIZATION_KEYS.includes(permission))));
+}
+
+interface TestEmployeeBlueprint {
+  id: string;
+  name: string;
+  jobTitle: string;
+  department: string;
+  permissionType: PermissionType;
+  modules: string[];
+}
+
+const TEST_EMPLOYEE_BLUEPRINTS: TestEmployeeBlueprint[] = [
+  { id: 'perm_test_001', name: 'أحمد ناصر عبد الله', jobTitle: 'مدير الإدارة العامة', department: 'الإدارة العامة', permissionType: 'manager', modules: ['dashboard', 'admissions', 'students', 'accounts', 'settings'] },
+  { id: 'perm_test_002', name: 'سارة محمد عثمان', jobTitle: 'نائب مدير المدرسة', department: 'الإدارة العامة', permissionType: 'manager', modules: ['dashboard', 'students', 'academic', 'attendance', 'financial_reports'] },
+  { id: 'perm_test_003', name: 'خالد حسن إبراهيم', jobTitle: 'مدير شؤون الطلاب', department: 'شؤون الطلاب', permissionType: 'manager', modules: ['dashboard', 'admissions', 'students', 'parent', 'attendance'] },
+  { id: 'perm_test_004', name: 'ريم عبد الرحمن صالح', jobTitle: 'أخصائي قبول وتسجيل', department: 'القبول والتسجيل', permissionType: 'operator', modules: ['admissions', 'students', 'parent'] },
+  { id: 'perm_test_005', name: 'محمد علي يوسف', jobTitle: 'موظف تسجيل طلاب', department: 'القبول والتسجيل', permissionType: 'operator', modules: ['admissions', 'students'] },
+  { id: 'perm_test_006', name: 'فاطمة أحمد نور', jobTitle: 'موظف ملفات ووثائق', department: 'القبول والتسجيل', permissionType: 'viewer', modules: ['students', 'parent'] },
+  { id: 'perm_test_007', name: 'مريم عبد القادر', jobTitle: 'مسؤول استقبال', department: 'الاستقبال', permissionType: 'operator', modules: ['dashboard', 'admissions', 'students'] },
+  { id: 'perm_test_008', name: 'عمر عبد الجليل', jobTitle: 'سكرتير الإدارة', department: 'الإدارة المدرسية', permissionType: 'viewer', modules: ['dashboard', 'admissions', 'students', 'settings'] },
+  { id: 'perm_test_009', name: 'سليمان غازي', jobTitle: 'المدير المالي العام', department: 'الإدارة المالية', permissionType: 'full', modules: ['accounts', 'treasury', 'financial_reports', 'fees'] },
+  { id: 'perm_test_010', name: 'منصور خلف', jobTitle: 'رئيس قسم الحسابات', department: 'الحسابات العامة', permissionType: 'finance_operator', modules: ['accounts', 'treasury', 'financial_reports', 'fees'] },
+  { id: 'perm_test_011', name: 'هند عبد العزيز', jobTitle: 'محاسب عام', department: 'الحسابات العامة', permissionType: 'finance_operator', modules: ['accounts', 'financial_reports', 'fees'] },
+  { id: 'perm_test_012', name: 'يوسف حمدان', jobTitle: 'أمين خزينة', department: 'الخزينة والبنوك', permissionType: 'operator', modules: ['accounts', 'treasury', 'fees'] },
+  { id: 'perm_test_013', name: 'نجلاء محمود', jobTitle: 'مراقب مالي', department: 'الرقابة المالية', permissionType: 'auditor', modules: ['accounts', 'treasury', 'financial_reports', 'audit_logs'] },
+  { id: 'perm_test_014', name: 'سالم الوحيشي', jobTitle: 'مراجع داخلي', department: 'التفتيش الداخلي', permissionType: 'auditor', modules: ['accounts', 'financial_reports', 'audit_logs', 'inventory'] },
+  { id: 'perm_test_015', name: 'عبد المطلب الزاوي', jobTitle: 'مسؤول المشتريات', department: 'المخازن والمشتريات', permissionType: 'inventory_operator', modules: ['inventory', 'fixed_assets', 'accounts'] },
+  { id: 'perm_test_016', name: 'فدوى البوسيفي', jobTitle: 'أمين المخزن الرئيسي', department: 'المخازن والمستودعات', permissionType: 'inventory_operator', modules: ['inventory', 'uniform_management'] },
+  { id: 'perm_test_017', name: 'طارق إسماعيل', jobTitle: 'مراقب مخزون', department: 'المخازن والمستودعات', permissionType: 'viewer', modules: ['inventory', 'fixed_assets'] },
+  { id: 'perm_test_018', name: 'ليلى عوض', jobTitle: 'مسؤول الأصول والتجهيزات', department: 'الأصول الثابتة', permissionType: 'operator', modules: ['fixed_assets', 'inventory', 'accounts'] },
+  { id: 'perm_test_019', name: 'عمر الخطيب', jobTitle: 'مدير الموارد البشرية', department: 'الموارد البشرية', permissionType: 'hr_operator', modules: ['teachers', 'attendance', 'settings'] },
+  { id: 'perm_test_020', name: 'أماني فضل', jobTitle: 'أخصائي شؤون العاملين', department: 'الموارد البشرية', permissionType: 'hr_operator', modules: ['teachers', 'attendance'] },
+  { id: 'perm_test_021', name: 'حسن التوم', jobTitle: 'مسؤول الرواتب', department: 'الرواتب', permissionType: 'operator', modules: ['teachers', 'accounts', 'financial_reports'] },
+  { id: 'perm_test_022', name: 'إيمان بشير', jobTitle: 'مسؤول حضور وانصراف الموظفين', department: 'الموارد البشرية', permissionType: 'viewer', modules: ['teachers', 'attendance'] },
+  { id: 'perm_test_023', name: 'عبد الله إبراهيم', jobTitle: 'مشرف أكاديمي', department: 'الشؤون الأكاديمية', permissionType: 'academic_operator', modules: ['academic', 'students', 'attendance', 'exams'] },
+  { id: 'perm_test_024', name: 'نور الهدى حسن', jobTitle: 'معلم لغة عربية', department: 'الهيئة التدريسية', permissionType: 'operator', modules: ['academic', 'attendance', 'exams'] },
+  { id: 'perm_test_025', name: 'مصعب أحمد', jobTitle: 'معلم رياضيات', department: 'الهيئة التدريسية', permissionType: 'operator', modules: ['academic', 'attendance', 'exams'] },
+  { id: 'perm_test_026', name: 'فاطمة الزهراء', jobTitle: 'رئيس الكنترول', department: 'الكنترول والامتحانات', permissionType: 'academic_operator', modules: ['exams', 'academic', 'students', 'financial_reports'] },
+  { id: 'perm_test_027', name: 'عبد الرحيم عمر', jobTitle: 'مسؤول نتائج وامتحانات', department: 'الكنترول والامتحانات', permissionType: 'operator', modules: ['exams', 'academic'] },
+  { id: 'perm_test_028', name: 'خالد عبد الرحمن', jobTitle: 'مدير تقنية المعلومات', department: 'تقنية المعلومات', permissionType: 'it_operator', modules: ['permissions_admin', 'system_health', 'db_schema', 'audit_logs', 'settings'] },
+  { id: 'perm_test_029', name: 'نورة صالح', jobTitle: 'مسؤول الدعم الفني', department: 'تقنية المعلومات', permissionType: 'it_operator', modules: ['system_health', 'audit_logs'] },
+  { id: 'perm_test_030', name: 'مازن الطيب', jobTitle: 'محلل بيانات وتقارير', department: 'تقنية المعلومات', permissionType: 'viewer', modules: ['dashboard', 'financial_reports', 'audit_logs'] },
+  { id: 'perm_test_031', name: 'نجلاء حامد', jobTitle: 'أمين المكتبة', department: 'المكتبة', permissionType: 'operator', modules: ['library', 'students'] },
+  { id: 'perm_test_032', name: 'صلاح الدين علي', jobTitle: 'أخصائي مصادر التعلم', department: 'المكتبة ومصادر التعلم', permissionType: 'viewer', modules: ['library', 'academic'] },
+  { id: 'perm_test_033', name: 'صالح أحمد', jobTitle: 'مشرف النقل المدرسي', department: 'الخدمات المساندة والنقل', permissionType: 'manager', modules: ['buses', 'students', 'settings'] },
+  { id: 'perm_test_034', name: 'محمود يوسف', jobTitle: 'مسؤول الصيانة والخدمات', department: 'الخدمات المساندة', permissionType: 'operator', modules: ['fixed_assets', 'inventory'] },
+  { id: 'perm_test_035', name: 'سعاد أحمد', jobTitle: 'أخصائي جودة وتطوير', department: 'الجودة والتطوير', permissionType: 'auditor', modules: ['audit_logs', 'financial_reports', 'students', 'settings'] }
+];
+
+export const PERMISSIONS_TEST_FIXTURE_SIZE = TEST_EMPLOYEE_BLUEPRINTS.length;
+export const PERMISSIONS_TEST_FIXTURE: Employee[] = TEST_EMPLOYEE_BLUEPRINTS.map(blueprint => ({
+  id: blueprint.id,
+  name: blueprint.name,
+  jobTitle: blueprint.jobTitle,
+  department: blueprint.department,
+  status: 'active',
+  permissionType: blueprint.permissionType,
+  permissions: buildTestEmployeePermissions(blueprint.permissionType, blueprint.modules)
+}));
+
 function employeeGroupLabel(employee: Employee): string {
   const department = `${employee.department} ${employee.jobTitle}`.toLocaleLowerCase();
   if (/(مال|حساب|خزينة|مالية|محاسب)/.test(department)) return 'الماليون والحسابات';
@@ -602,21 +772,15 @@ export const PermissionsManagementModule: React.FC<PermissionsModuleProps> = ({
     const saved = localStorage.getItem('edupro_employees_permissions_v1');
     if (saved) {
       try {
-        return JSON.parse(saved);
+        const parsed = JSON.parse(saved);
+        return Array.isArray(parsed) ? parsed.map(normalizeEmployee) : [];
       } catch (e) {
         // ignore
       }
     }
     return users
       .filter(user => user && (user.id || user.name))
-      .map(user => ({
-        id: String(user.id || user.name),
-        name: String(user.name || user.displayName || 'مستخدم'),
-        jobTitle: String(user.jobTitle || user.role || 'مستخدم النظام'),
-        department: String(user.department || 'غير مصنف'),
-        status: user.status === 'inactive' ? 'inactive' : 'active',
-        permissions: Array.isArray(user.permissions) ? user.permissions : []
-      }));
+      .map(normalizeEmployee);
   });
 
   const [activeEmployeeId, setActiveEmployeeId] = useState<string>('');
@@ -635,6 +799,7 @@ export const PermissionsManagementModule: React.FC<PermissionsModuleProps> = ({
 
   // Track active changes to highlight save button
   const [hasUnsavedChanges, setHasUnsavedChanges] = useState<boolean>(false);
+  const preserveUnsavedOnNextEmployeeChange = useRef(false);
 
   // Interactive Security Simulator States
   const [simRole, setSimRole] = useState<string>('accountant');
@@ -661,6 +826,10 @@ export const PermissionsManagementModule: React.FC<PermissionsModuleProps> = ({
 
   // Synchronize on active employee changes
   useEffect(() => {
+    if (preserveUnsavedOnNextEmployeeChange.current) {
+      preserveUnsavedOnNextEmployeeChange.current = false;
+      return;
+    }
     setHasUnsavedChanges(false);
   }, [activeEmployeeId]);
 
@@ -728,6 +897,11 @@ export const PermissionsManagementModule: React.FC<PermissionsModuleProps> = ({
     });
     return Array.from(grouped.entries()).map(([label, group]) => ({ label, employees: group }));
   }, [filteredEmployees]);
+
+  const isTestFixtureActive = useMemo(
+    () => employees.length === PERMISSIONS_TEST_FIXTURE_SIZE && employees.every(employee => employee.id.startsWith('perm_test_')),
+    [employees]
+  );
 
   const visibleScreenCount = useMemo(
     () => filteredPermissionCategories.reduce((count, category) => count + category.screens.length, 0),
@@ -826,29 +1000,66 @@ export const PermissionsManagementModule: React.FC<PermissionsModuleProps> = ({
     setHasUnsavedChanges(true);
   };
 
-  // Save changes to localStorage and synchronize with context props
+  const handleLoadTestFixture = () => {
+    if (canonicalPersistenceRequired) {
+      triggerNotification('بيانات الاختبار غير متاحة في الوضع المركزي حتى لا تختلط السجلات التجريبية بالإنتاج.', 'info');
+      return;
+    }
+
+    const fixture = PERMISSIONS_TEST_FIXTURE.map(employee => ({
+      ...employee,
+      permissions: [...employee.permissions]
+    }));
+    preserveUnsavedOnNextEmployeeChange.current = true;
+    setEmployees(fixture);
+    setActiveEmployeeId(fixture[0]?.id || '');
+    setEmployeeSearch('');
+    setSelectedDept('all');
+    setSelectedStatus('all');
+    setCurrentPage(1);
+    setHasUnsavedChanges(true);
+    triggerNotification(`تم تحميل ${PERMISSIONS_TEST_FIXTURE_SIZE} موظفاً اختبارياً من وظائف مختلفة. اضغط «حفظ التغييرات» لحفظ أنواع الصلاحيات.`, 'info');
+  };
+
+  // Save changes to the local compatibility workspace and synchronize with context props.
+  // Canonical production remains fail-closed until a trusted RBAC writer is available.
   const handleSaveChanges = () => {
     if (canonicalPersistenceRequired) {
       triggerNotification('إدارة الصلاحيات متوقفة حتى يتم ربط مصفوفة RBAC بمصدر الهوية المركزي الموثوق.', 'info');
       return;
     }
-    localStorage.setItem('edupro_employees_permissions_v1', JSON.stringify(employees));
+    const normalizedEmployees = employees.map(normalizeEmployee);
+    localStorage.setItem('edupro_employees_permissions_v1', JSON.stringify(normalizedEmployees));
+    localStorage.setItem('edupro_permission_profile_types_v1', JSON.stringify(
+      normalizedEmployees.map(employee => ({
+        employeeId: employee.id,
+        permissionType: employee.permissionType || 'custom',
+        permissionTypeLabel: employeePermissionTypeLabel(employee)
+      }))
+    ));
     setHasUnsavedChanges(false);
 
-    // Sync with global simulated users state to keep the ERP in total sync
-    const syncedUsers = users.map(u => {
-      // Try to find matching employee
-      const match = employees.find(e => e.name === u.name || e.id === u.id);
-      if (match) {
-        return { ...u, permissions: match.permissions };
-      }
-      return u;
+    // Sync the complete directory in the local compatibility workspace.
+    const syncedUsers = normalizedEmployees.map(employee => {
+      const existingUser = users.find(user => user.id === employee.id || user.name === employee.name) || {};
+      return {
+        ...existingUser,
+        id: employee.id,
+        name: employee.name,
+        jobTitle: employee.jobTitle,
+        department: employee.department,
+        status: employee.status,
+        roleId: employee.permissionType || 'custom',
+        role: employeePermissionTypeLabel(employee),
+        permissionType: employee.permissionType || 'custom',
+        permissions: employee.permissions
+      };
     });
     setUsers(syncedUsers);
     
     // Update active drill down user if matched
     if (currentDrillDownUser) {
-      const match = employees.find(e => e.id === activeEmployeeId);
+      const match = normalizedEmployees.find(e => e.id === activeEmployeeId);
       if (match) {
         setDrillDownUser({ ...currentDrillDownUser, permissions: match.permissions });
       }
@@ -860,13 +1071,13 @@ export const PermissionsManagementModule: React.FC<PermissionsModuleProps> = ({
       modifier: currentDrillDownUser?.name || 'أحمد محمد علي',
       targetUser: activeEmployee.name,
       date: new Date().toLocaleDateString('ar-SA') + ' - ' + new Date().toLocaleTimeString('ar-SA'),
-      action: `تعديل وحفظ مصفوفة الصلاحيات بالكامل لموظف: ${activeEmployee.name}`,
+      action: `تعديل وحفظ نوع الصلاحيات ومصفوفة التحكم بالكامل لموظف: ${activeEmployee.name}`,
       device: 'متصفح الإدارة الموحد',
       ip: '192.168.1.104'
     };
     setPermissionsAuditLog([newAuditLog, ...permissionsAuditLog]);
 
-    triggerNotification(`تم حفظ التغييرات ومزامنة الصلاحيات بنجاح للموظف: ${activeEmployee.name}`, 'success');
+    triggerNotification(`تم حفظ أنواع الصلاحيات ومزامنة المصفوفة بنجاح لـ ${normalizedEmployees.length} موظفاً`, 'success');
   };
 
   // Check all / Select all permissions for active employee
@@ -1071,6 +1282,17 @@ export const PermissionsManagementModule: React.FC<PermissionsModuleProps> = ({
 
           <button
             type="button"
+            onClick={handleLoadTestFixture}
+            disabled={canonicalPersistenceRequired}
+            title={canonicalPersistenceRequired ? 'بيانات الاختبار محجوبة في الوضع المركزي' : `تحميل عينة اختبارية من ${PERMISSIONS_TEST_FIXTURE_SIZE} موظفاً`}
+            className="px-4 py-2 hover:bg-transparent text-slate-700 font-bold text-xs flex items-center gap-2 shadow-xs transition-all cursor-pointer disabled:cursor-not-allowed disabled:opacity-40"
+          >
+            <DatabaseZap className="w-4 h-4 text-slate-400" />
+            <span>اختبار {PERMISSIONS_TEST_FIXTURE_SIZE} موظفاً</span>
+          </button>
+
+          <button
+            type="button"
             onClick={handleSelectAll}
             disabled={!activeEmployee || canonicalPersistenceRequired}
             className="px-4 py-2 hover:bg-transparent text-slate-700 font-bold text-xs flex items-center gap-2 shadow-xs transition-all cursor-pointer disabled:cursor-not-allowed disabled:opacity-40"
@@ -1131,17 +1353,23 @@ export const PermissionsManagementModule: React.FC<PermissionsModuleProps> = ({
           </div>
           <div>
             <p className="text-xs font-black">
-              {canonicalPersistenceRequired ? 'وضع المراجعة الآمن — مصدر الهوية المركزي مطلوب للحفظ' : 'وضع التشغيل المحلي — التغييرات قابلة للحفظ في بيئة التطوير'}
+              {canonicalPersistenceRequired
+                ? 'وضع المراجعة الآمن — مصدر الهوية المركزي مطلوب للحفظ'
+                : isTestFixtureActive
+                  ? `عينة اختبارية — ${PERMISSIONS_TEST_FIXTURE_SIZE} موظفاً وأنواع صلاحيات محفوظة محلياً`
+                  : 'وضع التشغيل المحلي — التغييرات قابلة للحفظ في بيئة التطوير'}
             </p>
             <p className="mt-1 text-[10px] font-semibold opacity-80">
               {canonicalPersistenceRequired
                 ? 'الكتالوج معروض للمراجعة فقط. لا تُحفظ أي صلاحية في المتصفح ولا تُمنح صلاحيات إنتاجية من هذه الجلسة.'
-                : 'تُراجع الصلاحيات على مستوى الوحدة والشاشة والعملية، ثم تُحفظ بعد اعتماد المسؤول.'}
+                : isTestFixtureActive
+                  ? 'هذه بيانات اختبارية منفصلة عن الإنتاج. عدّل الخانات ثم اضغط «حفظ التغييرات» لحفظ الصلاحيات ونوعها في مساحة الاختبار.'
+                  : 'تُراجع الصلاحيات على مستوى الوحدة والشاشة والعملية، ثم تُحفظ بعد اعتماد المسؤول.'}
             </p>
           </div>
         </div>
         <span className="shrink-0 rounded-full border border-current/20 px-3 py-1 text-[10px] font-black">
-          {canonicalPersistenceRequired ? 'CENTRAL SOURCE: READ ONLY' : 'LOCAL WORKSPACE: EDITABLE'}
+          {canonicalPersistenceRequired ? 'CENTRAL SOURCE: READ ONLY' : isTestFixtureActive ? 'TEST FIXTURE: 35 USERS' : 'LOCAL WORKSPACE: EDITABLE'}
         </span>
       </div>
 
@@ -1203,6 +1431,9 @@ export const PermissionsManagementModule: React.FC<PermissionsModuleProps> = ({
                       <span className="text-xs font-black">{emp.name}</span>
                       <span className={`text-[10px] ${isSelected ? 'text-orange-100' : 'text-slate-400'} font-bold`}>
                         {emp.jobTitle}
+                      </span>
+                      <span className={`text-[9px] ${isSelected ? 'text-orange-100' : 'text-slate-400'} font-semibold`}>
+                        نوع الصلاحية: {employeePermissionTypeLabel(emp)}
                       </span>
                     </div>
 
@@ -1288,7 +1519,7 @@ export const PermissionsManagementModule: React.FC<PermissionsModuleProps> = ({
                 </div>
                 <div>
                   <h4 className="text-xs font-black text-slate-900">أنت تراجع صلاحيات المستخدم: {activeEmployee.name}</h4>
-                  <p className="text-[10px] text-slate-500 font-semibold mt-0.5">الدور: {activeEmployee.jobTitle} • قسم: {activeEmployee.department}</p>
+                  <p className="text-[10px] text-slate-500 font-semibold mt-0.5">الدور: {activeEmployee.jobTitle} • قسم: {activeEmployee.department} • النوع: {employeePermissionTypeLabel(activeEmployee)}</p>
                 </div>
               </div>
               <div className="border border-orange-200/50 px-3 py-1 text-[10px] text-orange-700 font-black">
@@ -1485,7 +1716,7 @@ export const PermissionsManagementModule: React.FC<PermissionsModuleProps> = ({
                     <table className="w-full border-collapse text-right text-[10px]">
                       <thead className="sticky top-0 z-20 bg-white shadow-sm">
                         <tr className="border-b border-slate-200">
-                          <th rowSpan={2} className="sticky right-0 z-30 min-w-[210px] border-l border-slate-200 bg-slate-50 px-4 py-3 text-right text-xs font-black text-slate-800">المستخدم / المسمى الوظيفي</th>
+                          <th rowSpan={2} className="sticky right-0 z-30 min-w-[230px] border-l border-slate-200 bg-slate-50 px-4 py-3 text-right text-xs font-black text-slate-800">المستخدم / المسمى / نوع الصلاحية</th>
                           {filteredPermissionCategories.map(category => (
                             <th key={category.id} colSpan={category.screens.length} className="border-l border-slate-200 bg-slate-100/80 px-3 py-2 text-center text-[10px] font-black text-slate-700">
                               {category.label}
@@ -1515,7 +1746,7 @@ export const PermissionsManagementModule: React.FC<PermissionsModuleProps> = ({
                             </tr>
                             {group.employees.map(employee => (
                               <tr key={employee.id} className="border-b border-slate-100 hover:bg-slate-50/50">
-                                <td className="sticky right-0 z-10 min-w-[210px] border-l border-slate-200 bg-white px-3 py-3 align-top">
+                                <td className="sticky right-0 z-10 min-w-[230px] border-l border-slate-200 bg-white px-3 py-3 align-top">
                                   <button
                                     type="button"
                                     onClick={() => {
@@ -1530,6 +1761,7 @@ export const PermissionsManagementModule: React.FC<PermissionsModuleProps> = ({
                                       <span className={`h-2 w-2 shrink-0 rounded-full ${employee.status === 'active' ? 'bg-emerald-500' : 'bg-slate-300'}`} title={employee.status === 'active' ? 'نشط' : 'غير نشط'} />
                                     </span>
                                     <span className="mt-1 block truncate text-[9px] font-bold text-slate-500">{employee.jobTitle}</span>
+                                    <span className="mt-1 block truncate text-[9px] font-black text-indigo-600">{employeePermissionTypeLabel(employee)}</span>
                                     <span className="mt-1 block text-[9px] font-black text-orange-600">
                                       {employee.permissions.includes('*') ? 'كامل الصلاحيات' : `${ALL_AUTHORIZATION_KEYS.filter(key => employee.permissions.includes(key)).length} نقطة ممنوحة`}
                                     </span>
