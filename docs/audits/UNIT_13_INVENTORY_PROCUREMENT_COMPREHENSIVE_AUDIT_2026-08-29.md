@@ -2,7 +2,7 @@
 
 التاريخ: 2026-08-29  
 النطاق: المخزون + المشتريات والتوريدات  
-حالة الوثيقة: `PRODUCTION CLOSURE GATE — LIVE UAT-B OPERATIONAL UAT PASSED; PRODUCTION ROLLOUT READY`
+حالة الوثيقة: `UNIT CLOSED — LIVE UAT-B OPERATIONAL; SCHOOLFOR-MANUS RENDER BOUNDARY VERIFIED`
 
 ## القرار التنفيذي
 
@@ -10,9 +10,16 @@
 
 أُغلقت البوابة الفنية وطبقة Staging Database في 2026-08-30: طُبقت migrations المالية والمخزون، فُعّلت حماية السجل غير القابل للتعديل، ونجح UAT خادمي معزول يثبت إنشاء 4 قيود متوازنة و8 أسطر دفتر عام، وإعادة الترحيل دون تكرار، ثم تنظيف transaction بالكامل.
 
-أُنجزت بوابة التشغيل الحية على خدمة Render `schoolfor-manus-staging` بالفرع `codex/checkpoint-2026-08-23`، وأصبح commit `7eb6288` بحالة `Live` في deployment `dep-da9vfhmq1p3s738qpda0`. في مدرسة UAT-B المعزولة نُفذت دورة PR → RFQ → عرض → PO → GRN → فاتورة مورد من الواجهة، ثم أُعيد تحميل التطبيق والتحقق من استمرارية البيانات. ظهر أمر الشراء بحالة `مستلم بالكامل`، وظهر قيد الاستلام وقيد التزام المورد في المستندات، كما أظهر المخزون 15 وحدة بقيمة 375 د.ل.
+أُنجزت بوابة التشغيل الحية على خدمة Render `schoolfor-manus-staging` بالفرع `codex/checkpoint-2026-08-23`، وأصبح الإصدار `a9afacb` بحالة `Live` في آخر deployment ناجح `dep-da9vhkuk1f9s73cmnq7g` (ويتضمن إصلاح التشغيل `7eb6288`). في مدرسة UAT-B المعزولة نُفذت دورة PR → RFQ → عرض → PO → GRN → فاتورة مورد من الواجهة، ثم أُعيد تحميل التطبيق والتحقق من استمرارية البيانات. ظهر أمر الشراء بحالة `مستلم بالكامل`، وظهر قيد الاستلام وقيد التزام المورد في المستندات، كما أظهر المخزون 15 وحدة بقيمة 375 د.ل.
 
-هذا يثبت الإغلاق التشغيلي للوحدة وبوابة الجاهزية للنشر الإنتاجي. تظل خدمة Render الحالية بيئة UAT-B معزولة باسم staging وليست tenant إنتاجياً منفصلاً؛ نقل نفس الإصدار إلى tenant الإنتاج الفعلي يتطلب إعدادات البيئة الإنتاجية وموافقة نشر مستقلة.
+هذا يثبت الإغلاق التشغيلي للوحدة داخل مشروع `schoolfor-manus`. تم التحقق من أن خدمة Render الأخرى منفصلة فعلاً ومقصودة خارج نطاق هذا المستودع؛ لم تُعدّل ولم يُدفع إليها أي commit. لذلك لا يُعامل هذا الإصدار على أنه ترقية للمستودع الآخر، وتظل سجلات UAT-B معزولة عن بياناته.
+
+## فصل البيئات والمستودعات — تحقق 2026-08-30
+
+- **نطاق هذا المشروع:** Render project `My project` / environment `Staging` / service `schoolfor-manus-staging` (`srv-da7fl7gae00c73bn0cp0`)، المستودع `salafe10-ship-it/schoolfor-manus`، الفرع `codex/checkpoint-2026-08-23`، والرابط [schoolfor-manus-staging.onrender.com](https://schoolfor-manus-staging.onrender.com).
+- **المستودع الآخر:** Render project `My project` / environment `Production` / service `edupro-school-erp` (`srv-d8sjn8ugvqtc738b44u0`)، المستودع `salafe10-ship-it/edupro-school-erp`، الفرع `main`، وآخر commit منشور `2f9890c`، والرابط [edupro-school-erp.onrender.com](https://edupro-school-erp.onrender.com).
+- **نتيجة التحقق:** الخدمة والمستودع والفرع ومرجع النشر مختلفة؛ الفصل مقصود، وتم ترك المستودع الآخر وخدمته وبياناته كما هي.
+- **الإجراء التشغيلي:** أُغلق نطاق `schoolfor-manus` على Render الحالي فقط. لا توجد ترقية إنتاجية مطلوبة للمستودع الآخر ضمن هذه المهمة.
 
 ## نطاق الشاشات
 
@@ -85,14 +92,15 @@
 ## بوابة الإغلاق الحي
 
 - [x] تطبيق migration على Staging.
-- [x] push إلى GitHub ونجاح نشر Render: `7eb6288` / `dep-da9vfhmq1p3s738qpda0`.
+- [x] push إلى GitHub ونجاح نشر Render لهذا المشروع: `a9afacb` / `dep-da9vhkuk1f9s73cmnq7g`.
 - [x] فحص الصحة والجاهزية.
 - [x] UAT حي للبيانات الرئيسية والحفظ وإعادة التحميل.
 - [x] UAT حي لدورة PR → RFQ → عرض → PO → GRN → فاتورة.
 - [x] التحقق من ظهور أرقام قيود GRNI/AP والمخزون وتسويات الجرد في UAT الخادمي، ومنع أي رقم قيد مصدره المتصفح.
 - [x] التحقق من تدقيق التقرير وتصديره من الواجهة.
 - [ ] تنظيف بيانات UAT: لم تُحذف السجلات عمداً؛ احتُفظ بها كأدلة تشغيلية قابلة للتتبع داخل tenant UAT-B المعزول.
-- [x] تحديث سجل الإغلاق إلى `UNIT CLOSED — LIVE UAT-B OPERATIONAL; PRODUCTION ROLLOUT READY`.
+- [x] التحقق من فصل Render والمستودع الآخر، مع إبقائه دون تعديل.
+- [x] تحديث سجل الإغلاق إلى `UNIT CLOSED — LIVE UAT-B OPERATIONAL; SCHOOLFOR-MANUS RENDER BOUNDARY VERIFIED`.
 
 ## ملاحظة UAT الأولى
 
