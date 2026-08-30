@@ -1,5 +1,6 @@
 import { describe, expect, it } from 'vitest';
 import { validateInventoryProcurementSnapshot } from '../modules/inventory/domain/InventoryProcurementValidation';
+import { normalizeInventoryCanonicalDatabase } from '../components/inventory/inventoryCanonical';
 
 const emptySnapshot = (): any => ({
   items: [], categories: [], brands: [], units: [], suppliers: [], warehouses: [],
@@ -71,5 +72,23 @@ describe('inventory and procurement snapshot validation', () => {
     });
 
     expect(() => validateInventoryProcurementSnapshot(snapshot)).not.toThrow();
+  });
+
+  it('reconciles persisted GRN quantities into PO progress on reload', () => {
+    const snapshot = emptySnapshot();
+    snapshot.items.push({ id: 'item-1', name: 'صنف تجريبي', sku: 'SKU-1', quantity: 1, minLevel: 0, maxLevel: 10, reorderLevel: 1, costPrice: 10, salePrice: 15, vatRate: 0, status: 'active', categoryId: '', unitId: '', supplierId: '', warehouseId: '' });
+    snapshot.purchaseOrders.push({
+      id: 'po-1', poNo: 'PO-1', poDate: '2026-08-30', expectedDeliveryDate: '2026-09-01', vendorId: 'sup-1', vendorName: 'مورد تجريبي', warehouseId: 'wh-1', paymentTerms: '', deliveryTerms: '', status: 'approved',
+      lines: [{ id: 'pol-1', itemId: 'SKU-1', itemCode: 'SKU-1', itemName: 'صنف تجريبي', unit: 'وحدة', quantityRequested: 2, quantityOrdered: 2, quantityReceived: 0, estimatedUnitPrice: 10, actualUnitPrice: 10, totalAmount: 20 }], subtotal: 20, taxAmount: 0, discountAmount: 0, grandTotal: 20
+    });
+    snapshot.goodsReceipts.push({
+      id: 'grn-1', grnNo: 'GRN-1', grnDate: '2026-08-30', purchaseOrderId: 'po-1', poNo: 'PO-1', vendorId: 'sup-1', vendorName: 'مورد تجريبي', deliveryNoteNo: 'DN-1', warehouseId: 'wh-1', inspectorName: 'مفتش', inspectionResult: 'passed', status: 'posted_to_gl', isPostedToGL: true,
+      lines: [{ lineId: 'grnl-1', itemId: 'item-1', itemCode: 'SKU-1', itemName: 'صنف تجريبي', orderedQty: 2, receivedQty: 2, acceptedQty: 2, rejectedQty: 0, unitCost: 10, totalCost: 20 }], totalReceivedValue: 20, createdAt: '2026-08-30T00:00:00.000Z'
+    });
+
+    const normalized = normalizeInventoryCanonicalDatabase(snapshot);
+    expect(normalized.purchaseOrders[0].lines[0].itemId).toBe('item-1');
+    expect(normalized.purchaseOrders[0].lines[0].quantityReceived).toBe(2);
+    expect(normalized.purchaseOrders[0].status).toBe('fully_received');
   });
 });
