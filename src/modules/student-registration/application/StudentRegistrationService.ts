@@ -276,18 +276,7 @@ export class StudentRegistrationService {
     const guardianNumber = input.guardian.guardianNumber || `GDN-${guardianId.slice(0, 8).toUpperCase()}`;
     const enrollmentNumber = `ENR-${new Date().getUTCFullYear()}-${enrollmentId.slice(0, 8).toUpperCase()}`;
 
-    try {
-      return await UnitOfWork.runInTransaction(
-        context.schoolId,
-        {
-          operationName: 'SOP-001 Student Registration',
-          userId: context.userId,
-          userName: context.userId,
-          ipAddress: requestContext.ipAddress || 'unknown',
-          affectedTables: ['students', 'guardians', 'student_guardians', 'enrollments', 'student_academic_status', 'student_status_transitions', 'student_status_history', 'audit_events', 'outbox_events'],
-          tenantId: context.tenantId
-          },
-          async () => {
+    const work = async (): Promise<StudentRegistrationResult> => {
           const existing = await findIdempotentRegistration(context.tenantId, input.idempotencyKey);
           if (existing) {
             const storedFingerprint = typeof existing.payload.requestFingerprint === 'string'
@@ -410,7 +399,23 @@ export class StudentRegistrationService {
           enqueueOutboxEvent({ id: outboxEventId, tenantId: context.tenantId, studentId, idempotencyKey: input.idempotencyKey, requestId, correlationId, payload, payloadHash: hashPayload(payload), userId: actorUserId, auditId });
 
           return result;
+    };
+
+    try {
+      if (UnitOfWork.isTransactionActive()) {
+        return await work();
+      }
+      return await UnitOfWork.runInTransaction(
+        context.schoolId,
+        {
+          operationName: 'SOP-001 Student Registration',
+          userId: context.userId,
+          userName: context.userId,
+          ipAddress: requestContext.ipAddress || 'unknown',
+          affectedTables: ['students', 'guardians', 'student_guardians', 'enrollments', 'student_academic_status', 'student_status_transitions', 'student_status_history', 'audit_events', 'outbox_events'],
+          tenantId: context.tenantId
         },
+        work,
         context
       );
     } catch (error) {

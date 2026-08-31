@@ -25,4 +25,18 @@ describe('STU-SOL-015 canonical registration route boundary', () => {
     expect(route).toContain('toCanonicalRegistrationCommand(tenantContext, (req.body || {}) as Record<string, any>)');
     expect(route).toContain('data: { student: result }');
   });
+
+  it('keeps the batch import atomic and scoped to the trusted school context', () => {
+    expect(repositorySource).toContain("async importStudents(rows: any[], idempotencyKey: string)");
+    expect(repositorySource).toContain("'/api/students/import'");
+    const routeStart = serverSource.indexOf('app.post("/api/students/import"');
+    const routeEnd = serverSource.indexOf('app.post("/api/students/:id/reinstate"', routeStart);
+    expect(routeStart).toBeGreaterThan(-1);
+    expect(routeEnd).toBeGreaterThan(routeStart);
+    const route = serverSource.slice(routeStart, routeEnd);
+    expect(route).toContain('PERMISSIONS.STUDENT_REGISTRATION_CREATE');
+    expect(route).toContain('resolveStudentTenantMiddleware');
+    expect(route).toContain('canonicalStudentImportService.execute');
+    expect(route).toContain('toCanonicalRegistrationCommand(tenantContext, row as Record<string, any>, termId)');
+  });
 });

@@ -31,7 +31,7 @@ const school = {
 } as School;
 
 describe('Student Affairs Excel import contract', () => {
-  it('fails closed instead of reporting a simulated import success', () => {
+  it('exposes a real preview-first import path without claiming success before commit', () => {
     const notify = vi.fn();
     render(
       <StudentAffairsPortal
@@ -45,13 +45,11 @@ describe('Student Affairs Excel import contract', () => {
       />,
     );
 
-    const importButton = screen.getByRole('button', { name: 'استيراد Excel — غير مفعّل' });
+    const importButton = screen.getByRole('button', { name: 'استيراد Excel / CSV' });
 
-    expect((importButton as HTMLButtonElement).disabled).toBe(true);
-    expect(importButton.getAttribute('title')).toBe(
-      'يتطلب الاستيراد مسار تحقق ومعاملة ذرية وسياسة منع التكرار قبل تفعيله',
-    );
-    expect(screen.queryByRole('button', { name: 'تأكيد الاستيراد' })).toBeNull();
+    expect((importButton as HTMLButtonElement).disabled).toBe(false);
+    expect(importButton.getAttribute('title')).toContain('معاينة واعتماد دفعة ذرية');
+    expect(screen.queryByRole('button', { name: 'اعتماد الاستيراد الذري' })).toBeNull();
     expect(notify).not.toHaveBeenCalledWith(expect.stringContaining('تم استيراد'), 'success');
   });
 });

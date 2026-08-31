@@ -1,4 +1,4 @@
-import React, { useEffect, useState, useMemo } from 'react';
+import React, { useEffect, useState, useMemo, useRef } from 'react';
 import { 
   Users, UserPlus, GraduationCap, FileText, BarChart3, Settings, 
   Search, Bell, Mail, Filter, RotateCcw, Eye, Edit, Trash2, 
@@ -46,6 +46,47 @@ function printableText(value: unknown): string {
     '"': '&quot;',
     "'": '&#39;'
   }[character] || character));
+}
+
+const studentImportAliases: Record<string, string[]> = {
+  name: ['name', 'fullname', 'studentname', 'الاسم', 'اسم الطالب', 'الاسم الكامل'],
+  dateOfBirth: ['dateofbirth', 'birthdate', 'dob', 'تاريخ الميلاد', 'تاريخ الميلاد الطالب'],
+  parentName: ['parentname', 'guardianname', 'guardian', 'ولي الأمر', 'اسم ولي الأمر', 'اسم ولي الامر'],
+  parentPhone: ['parentphone', 'guardianphone', 'phone', 'هاتف ولي الأمر', 'هاتف ولي الامر', 'رقم ولي الأمر', 'رقم الهاتف'],
+  studentNumber: ['studentnumber', 'studentcode', 'code', 'الرقم الأكاديمي', 'رقم الطالب', 'كود الطالب'],
+  preferredName: ['preferredname', 'nickname', 'الاسم المختصر', 'الاسم المفضل'],
+  gender: ['gender', 'النوع', 'الجنس'],
+  nationality: ['nationality', 'الجنسية'],
+  parentEmail: ['parentemail', 'guardianemail', 'ولي الأمر بريد', 'بريد ولي الأمر', 'بريد ولي الامر'],
+  guardianRelation: ['guardianrelation', 'parentrelation', 'relationship', 'صلة القرابة', 'العلاقة']
+};
+
+function importHeaderKey(value: unknown): string {
+  return String(value ?? '').trim().toLowerCase().replace(/[\s_\-]+/g, '');
+}
+
+function importCell(row: Record<string, unknown>, aliases: string[]): unknown {
+  const normalized = new Map(Object.entries(row).map(([key, value]) => [importHeaderKey(key), value]));
+  for (const alias of aliases) {
+    const value = normalized.get(importHeaderKey(alias));
+    if (value !== undefined && value !== null && String(value).trim() !== '') return value;
+  }
+  return '';
+}
+
+function importDateValue(value: unknown): string {
+  if (value instanceof Date && !Number.isNaN(value.getTime())) {
+    const pad = (part: number) => String(part).padStart(2, '0');
+    return `${value.getFullYear()}-${pad(value.getMonth() + 1)}-${pad(value.getDate())}`;
+  }
+  return String(value ?? '').trim();
+}
+
+function normalizeStudentImportRow(row: Record<string, unknown>): Record<string, string> {
+  return Object.fromEntries(Object.entries(studentImportAliases).map(([field, aliases]) => [
+    field,
+    field === 'dateOfBirth' ? importDateValue(importCell(row, aliases)) : String(importCell(row, aliases) ?? '').trim()
+  ]));
 }
 
 function canonicalGuardianRelationship(value: string): string {
@@ -169,6 +210,10 @@ export default function StudentAffairsPortal({
   const [isExportingStudents, setIsExportingStudents] = useState<boolean>(false);
   const [isRepairingOperationalEnrollments, setIsRepairingOperationalEnrollments] = useState<boolean>(false);
   const [isRunningEnrollmentWorkflow, setIsRunningEnrollmentWorkflow] = useState<boolean>(false);
+  const [isImportingStudents, setIsImportingStudents] = useState<boolean>(false);
+  const [studentImportPreview, setStudentImportPreview] = useState<Record<string, string>[] | null>(null);
+  const [studentImportKey, setStudentImportKey] = useState<string | null>(null);
+  const importFileInputRef = useRef<HTMLInputElement | null>(null);
   const [studentLoadError, setStudentLoadError] = useState<string | null>(null);
   const [studentSaveError, setStudentSaveError] = useState<string | null>(null);
   const [studentRefreshToken, setStudentRefreshToken] = useState(0);
@@ -932,6 +977,64 @@ export default function StudentAffairsPortal({
     }
   };
 
+  const handleSelectStudentImportFile = () => {
+    if (!canWriteStudents || isImportingStudents) return;
+    importFileInputRef.current?.click();
+  };
+
+  const handleStudentImportFileChange = async (event: React.ChangeEvent<HTMLInputElement>) => {
+    const file = event.target.files?.[0];
+    event.target.value = '';
+    if (!file) return;
+    try {
+      const XLSX = await import('xlsx');
+      const workbook = XLSX.read(await file.arrayBuffer(), { type: 'array', cellDates: true });
+      const firstSheet = workbook.Sheets[workbook.SheetNames[0]];
+      if (!firstSheet) throw new Error('ملف Excel لا يحتوي على ورقة بيانات قابلة للقراءة.');
+      const rawRows = XLSX.utils.sheet_to_json<Record<string, unknown>>(firstSheet, { defval: '', raw: true });
+      const rows = rawRows.map(normalizeStudentImportRow).filter(row => Object.values(row).some(Boolean));
+      if (rows.length === 0) throw new Error('لم توجد صفوف طلاب في ملف Excel.');
+      const invalidIndex = rows.findIndex(row => !row.name || !row.dateOfBirth || !row.parentName || !row.parentPhone);
+      if (invalidIndex >= 0) {
+        throw new Error(`الصف ${invalidIndex + 2} ناقص: الاسم وتاريخ الميلاد واسم ولي الأمر ورقم الهاتف مطلوبة.`);
+      }
+      if (rows.length > 200) throw new Error('الحد الأقصى للاستيراد الذري هو 200 طالب في الدفعة الواحدة.');
+      setStudentImportPreview(rows);
+      setStudentImportKey(`student-affairs-import-${crypto.randomUUID()}`);
+      triggerNotification(`تمت معاينة ${rows.length} طالبًا. لم تُحفظ البيانات بعد؛ راجعها ثم اعتمد الدفعة.`, 'info');
+    } catch (error: any) {
+      setStudentImportPreview(null);
+      setStudentImportKey(null);
+      triggerNotification(error?.message || 'تعذر قراءة ملف Excel؛ لم يتم حفظ أي بيانات.', 'warning');
+    }
+  };
+
+  const handleCommitStudentImport = async () => {
+    if (!studentImportPreview || studentImportPreview.length === 0 || isImportingStudents) return;
+    if (!canWriteStudents) {
+      triggerNotification('لا تملك صلاحية استيراد بيانات الطلاب.', 'warning');
+      return;
+    }
+    if (!window.confirm(`سيتم اعتماد ${studentImportPreview.length} طالبًا في معاملة PostgreSQL ذرية داخل مدرسة ${selectedSchool.name}. عند وجود خطأ لن يُحفظ أي صف. هل تريد المتابعة؟`)) return;
+    setIsImportingStudents(true);
+    try {
+      const response = await StudentRepository.importStudents(
+        studentImportPreview,
+        studentImportKey || `student-affairs-import-${crypto.randomUUID()}`
+      );
+      const result = response?.data || {};
+      setStudentRefreshToken(value => value + 1);
+      logAction('IMPORT_STUDENTS_CANONICAL', `تم اعتماد ${Number(result.createdCount) || studentImportPreview.length} طالبًا في دفعة ذرية.`, 'شؤون الطلاب');
+      triggerNotification(`تم اعتماد الدفعة بنجاح: ${Number(result.createdCount) || 0} طالب جديد، مع منع التكرار والتدقيق الكامل.`, 'success');
+      setStudentImportPreview(null);
+      setStudentImportKey(null);
+    } catch (error: any) {
+      triggerNotification(error?.message || 'فشل اعتماد الدفعة؛ تم إلغاء العملية كاملة دون حفظ جزئي.', 'warning');
+    } finally {
+      setIsImportingStudents(false);
+    }
+  };
+
   // Export PDF / Print List
   const handlePrintList = (onlySelected = false) => {
     if (onlySelected && selectedStudentIds.length === 0) {
@@ -1409,16 +1512,50 @@ export default function StudentAffairsPortal({
                     {isRepairingOperationalEnrollments ? 'جارٍ تثبيت الربط...' : 'إصلاح ربط القيد التشغيلي'}
                   </button>
                 </section>
-                <button 
+                <input
+                  ref={importFileInputRef}
+                  type="file"
+                  accept=".xlsx,.xls,.csv"
+                  onChange={handleStudentImportFileChange}
+                  className="hidden"
+                  aria-label="ملف استيراد الطلاب"
+                />
+                <button
                   type="button"
-                  disabled
-                  aria-disabled="true"
-                  title="يتطلب الاستيراد مسار تحقق ومعاملة ذرية وسياسة منع التكرار قبل تفعيله"
-                  className="w-full py-2 bg-slate-200 text-slate-500 rounded-xl text-xs font-black flex items-center justify-center gap-2 border border-slate-300 cursor-not-allowed"
+                  onClick={handleSelectStudentImportFile}
+                  disabled={!canWriteStudents || isImportingStudents}
+                  aria-disabled={!canWriteStudents}
+                  aria-busy={isImportingStudents}
+                  title="قراءة XLSX/CSV ثم معاينة واعتماد دفعة ذرية داخل المدرسة الحالية"
+                  className="w-full py-2 bg-[#2a1a0e] text-amber-200 rounded-xl text-xs font-black flex items-center justify-center gap-2 border border-amber-500/40 hover:bg-[#3a2719] disabled:cursor-not-allowed disabled:opacity-50"
                 >
-                  <Upload className="w-4 h-4 text-amber-400" />
-                  <span>استيراد Excel — غير مفعّل</span>
+                  <Upload className="w-4 h-4 text-amber-300" />
+                  <span>استيراد Excel / CSV</span>
                 </button>
+                {studentImportPreview && (
+                  <div className="rounded-xl border border-emerald-300 bg-emerald-50 p-3 space-y-2" aria-label="معاينة استيراد الطلاب">
+                    <p className="text-[11px] font-black text-emerald-950">معاينة جاهزة: {studentImportPreview.length} طالبًا</p>
+                    <p className="text-[10px] leading-4 text-emerald-800">لن تُحفظ المعاينة حتى اعتمادك. الخادم سيتحقق من التكرار والسياق والسعة ويُلغي الدفعة كاملة عند أي خطأ.</p>
+                    <div className="flex gap-2">
+                      <button
+                        type="button"
+                        onClick={() => void handleCommitStudentImport()}
+                        disabled={isImportingStudents || !canWriteStudents}
+                        className="flex-1 rounded-lg bg-emerald-700 px-3 py-2 text-[11px] font-black text-white disabled:opacity-50"
+                      >
+                        {isImportingStudents ? 'جارٍ الاعتماد الذري...' : 'اعتماد الاستيراد الذري'}
+                      </button>
+                      <button
+                        type="button"
+                        onClick={() => { setStudentImportPreview(null); setStudentImportKey(null); }}
+                        disabled={isImportingStudents}
+                        className="rounded-lg border border-slate-300 bg-white px-3 py-2 text-[11px] font-black text-slate-700 disabled:opacity-50"
+                      >
+                        إلغاء
+                      </button>
+                    </div>
+                  </div>
+                )}
               </div>
 
             </div>

@@ -61,6 +61,7 @@ import { createHash, randomBytes, randomUUID } from "node:crypto";
 import { Pool } from "pg";
 import { createClient } from '@supabase/supabase-js';
 import { studentRegistrationService } from "./src/modules/student-registration/application/StudentRegistrationService.js";
+import { canonicalStudentImportService } from "./src/modules/student-registration/application/CanonicalStudentImportService.js";
 import { canonicalGuardianUpdateService } from "./src/modules/student-registration/application/CanonicalGuardianUpdateService.js";
 import { operationalEnrollmentAssignmentService } from "./src/modules/student-affairs/application/OperationalEnrollmentAssignmentService.js";
 import { canonicalEnrollmentWorkflowService } from "./src/modules/student-affairs/application/CanonicalEnrollmentWorkflowService.js";
@@ -3194,6 +3195,29 @@ async function startServer() {
     userId: string;
     role: string;
   }): Promise<string> {
+    const work = async (): Promise<string> => {
+      const transaction = UnitOfWork.getActiveContext()?.databaseTransaction;
+      if (!transaction) throw new DatabaseError("Student registration term lookup transaction is unavailable.");
+      const result = await transaction.query<{ id: string }>(
+        `SELECT id
+           FROM public.terms
+          WHERE tenant_id = $1
+            AND school_id = $2
+            AND academic_year_id = $3
+            AND (branch_id = $4 OR branch_id IS NULL)
+            AND deleted_at IS NULL
+            AND status = 'active'
+          ORDER BY starts_on DESC, sequence DESC, id ASC
+          LIMIT 1`,
+        [context.tenantId, context.schoolId, context.academicYear, context.branchId]
+      );
+      if (!result.rows[0]) {
+        throw new ValidationError("لا يمكن تسجيل طالب قبل إعداد فصل دراسي نشط للسنة الموثوقة.");
+      }
+      return result.rows[0].id;
+    };
+
+    if (UnitOfWork.isTransactionActive()) return work();
     return UnitOfWork.runInTransaction(
       context.schoolId,
       {
@@ -3204,27 +3228,7 @@ async function startServer() {
         ipAddress: "server",
         affectedTables: ["terms"]
       },
-      async () => {
-        const transaction = UnitOfWork.getActiveContext()?.databaseTransaction;
-        if (!transaction) throw new DatabaseError("Student registration term lookup transaction is unavailable.");
-        const result = await transaction.query<{ id: string }>(
-          `SELECT id
-             FROM public.terms
-            WHERE tenant_id = $1
-              AND school_id = $2
-              AND academic_year_id = $3
-              AND (branch_id = $4 OR branch_id IS NULL)
-              AND deleted_at IS NULL
-              AND status = 'active'
-            ORDER BY starts_on DESC, sequence DESC, id ASC
-            LIMIT 1`,
-          [context.tenantId, context.schoolId, context.academicYear, context.branchId]
-        );
-        if (!result.rows[0]) {
-          throw new ValidationError("لا يمكن تسجيل طالب قبل إعداد فصل دراسي نشط للسنة الموثوقة.");
-        }
-        return result.rows[0].id;
-      },
+      work,
       context
     );
   }
@@ -3247,7 +3251,7 @@ async function startServer() {
     academicYear: string;
     userId: string;
     role: string;
-  }, studentData: Record<string, any>) {
+  }, studentData: Record<string, any>, resolvedTermId?: string) {
     const name = splitCanonicalName(studentData.name || studentData.fullName || [studentData.legalFirstName, studentData.legalLastName].filter(Boolean).join(" "));
     const dateOfBirth = studentData.dateOfBirth || studentData.birthDate;
     if (!dateOfBirth) throw new ValidationError("تاريخ ميلاد الطالب مطلوب للتسجيل canonical.");
@@ -3263,7 +3267,7 @@ async function startServer() {
       gender: studentData.gender,
       nationality: studentData.nationality,
       birthCountryCode: studentData.birthCountryCode,
-      termId: await resolveActiveStudentTerm(context),
+      termId: resolvedTermId || await resolveActiveStudentTerm(context),
       admissionReference: "STUDENT-AFFAIRS-REGISTRATION",
       guardian: {
         legalFirstName: guardianParts[0],
@@ -3883,6 +3887,38 @@ async function startServer() {
     } catch (err: any) {
       next(err);
     }
+  });
+
+  // SOP-001 batch import: rows are normalized against the trusted school
+  // context before one PostgreSQL transaction commits the complete batch.
+  app.post("/api/students/import", authenticateRequest, requirePermission(PERMISSIONS.STUDENT_REGISTRATION_CREATE), resolveStudentTenantMiddleware, async (req, res, next) => {
+    try {
+      const tenantContext = (req as any).tenantContext || await resolveStudentTenantContext(req);
+      const body = req.body && typeof req.body === 'object' && !Array.isArray(req.body) ? req.body : {};
+      const rawRows = body.rows;
+      if (!Array.isArray(rawRows)) throw new ValidationError('ملف الاستيراد يجب أن يرسل مصفوفة rows صالحة.');
+      const idempotencyKey = req.get('Idempotency-Key') || body.idempotencyKey;
+      const termId = await resolveActiveStudentTerm(tenantContext);
+      const commands = await Promise.all(rawRows.map((row: unknown) => {
+        if (!row || typeof row !== 'object' || Array.isArray(row)) {
+          throw new ValidationError('كل صف في ملف الاستيراد يجب أن يكون سجلًا صالحًا.');
+        }
+        return toCanonicalRegistrationCommand(tenantContext, row as Record<string, any>, termId);
+      }));
+      const result = await canonicalStudentImportService.execute(tenantContext, {
+        rows: commands,
+        idempotencyKey,
+        requestId: randomUUID(),
+        correlationId: randomUUID(),
+        ipAddress: req.ip || 'unknown'
+      });
+      return res.status(result.createdCount > 0 ? 201 : 200).json({
+        success: true,
+        data: result,
+        message: result.idempotentCount > 0 ? 'تم اعتماد دفعة الطلاب ذريًا مع إعادة النتائج المكررة بأمان.' : 'تم اعتماد دفعة الطلاب كاملة في PostgreSQL دون حفظ جزئي.',
+        meta: { persistence: 'canonical-postgres', workflow: 'SOP-001-import-batch', schoolIsolation: 'trusted-context-only' }
+      });
+    } catch (error) { return next(error); }
   });
 
   app.post("/api/students/:id/reinstate", authenticateRequest, requirePermission(PERMISSIONS.STUDENT_WRITE), async (req, res, next) => {

@@ -8,7 +8,7 @@
 |---:|---|---|---|
 | 01 | Login | `ACCEPTED WITH NON-BLOCKING ITEMS` | Browser UAT المرئي Login → Dashboard → Reload ناجح؛ API trace وDB read-only موثقـان كـUNVERIFIED. |
 | 02 | Dashboard | `ACCEPTED WITH NON-BLOCKING ITEMS` | Browser UAT وReload والحالات الحية/غير المتاحة والحراسة نجحت؛ API trace وDB read-only موثقـان كـUNVERIFIED. |
-| 03 | Student Affairs | `IN PROGRESS — BLOCKERS REMAIN` | القراءة/الحفظ/التحرير/الحارس/التصدير/الطباعة/المصادقة مثبتة، وأُغلق مسار النقل/الترقية/إعادة القيد الجماعي بمعاملة كانونية ذرية؛ الشهادات وExcel import والتخزين الثنائي ومصدر التخرج/الترحيل الأكاديمي ما زالت تمنع إغلاق الوحدة. راجع `CODEX_STUDENT_AFFAIRS_FINAL_CLOSURE_REPORT.md`. |
+| 03 | Student Affairs | `IN PROGRESS — BLOCKERS REMAIN` | القراءة/الحفظ/التحرير/الحارس/التصدير/الطباعة/المصادقة واستيراد Excel الذري ومسار النقل/الترقية/إعادة القيد الجماعي مثبتة؛ الشهادات الرسمية والتخزين الثنائي ومصدر التخرج/الترحيل الأكاديمي ما زالت تمنع إغلاق الوحدة. راجع `CODEX_STUDENT_AFFAIRS_FINAL_CLOSURE_REPORT.md`. |
 | 04 | Academics / Academic Structure | `PENDING` | — |
 | 05 | Admissions / Registration | `PENDING` | — |
 | 06 | Attendance | `PENDING` | — |

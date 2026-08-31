@@ -103,6 +103,21 @@ export const StudentRepository = {
     return response.json();
   },
 
+  async importStudents(rows: any[], idempotencyKey: string): Promise<any> {
+    if (!idempotencyKey.trim()) throw new Error('مفتاح منع التكرار مطلوب قبل استيراد دفعة الطلاب.');
+    const response = await authenticatedRequest('/api/students/import', {
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/json',
+        'Idempotency-Key': idempotencyKey
+      },
+      body: JSON.stringify({ rows })
+    });
+    const data = await response.json().catch(() => ({}));
+    if (!response.ok) throw new Error(data.message || data.error || 'تعذر اعتماد ملف الطلاب؛ لم يتم حفظ أي صف جزئيًا.');
+    return data;
+  },
+
   async executeEnrollmentWorkflow(payload: {
     operation: 'transfer' | 'promote' | 're_enroll';
     studentIds: string[];
