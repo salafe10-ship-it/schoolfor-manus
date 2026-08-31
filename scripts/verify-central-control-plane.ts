@@ -10,7 +10,7 @@ const requiredLifecycleFunctions = [
   'dbsec004_resolve_login_username',
 ];
 
-const connectionString = process.env.DIRECT_URL || process.env.DATABASE_URL;
+const connectionString = process.env.DATABASE_URL || process.env.DIRECT_URL;
 
 if (!connectionString) {
   console.error(JSON.stringify({ success: false, code: 'DATABASE_URL_MISSING' }));

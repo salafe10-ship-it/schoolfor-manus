@@ -98,9 +98,17 @@ import { validateInventoryProcurementSnapshot } from './src/modules/inventory/do
 
 type FinancialWriteMode = 'snapshot_read_only' | 'snapshot_write' | 'erp_integrated';
 
-const platformAdminPool = (process.env.DIRECT_URL || process.env.DATABASE_URL)
+// Central administration deliberately uses a separate privileged connection.
+// Normal tenant traffic must use DATABASE_URL, which is configured with a
+// non-bypass RLS role in production. The fallback keeps local development
+// compatible until PLATFORM_ADMIN_DATABASE_URL is configured there as well.
+const platformAdminConnectionString = process.env.PLATFORM_ADMIN_DATABASE_URL
+  || process.env.DIRECT_URL
+  || process.env.DATABASE_URL;
+
+const platformAdminPool = platformAdminConnectionString
   ? new Pool({
-      connectionString: process.env.DIRECT_URL || process.env.DATABASE_URL,
+      connectionString: platformAdminConnectionString,
       max: Number(process.env.PG_PLATFORM_POOL_MAX || 5),
       connectionTimeoutMillis: Number(process.env.PG_CONNECTION_TIMEOUT_MS || 5_000),
       ssl: process.env.PGSSLMODE === 'disable' ? undefined : { rejectUnauthorized: false },

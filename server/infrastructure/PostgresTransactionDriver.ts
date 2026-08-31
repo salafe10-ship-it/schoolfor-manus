@@ -228,7 +228,9 @@ export class PostgresTransactionDriver implements TransactionDriver {
 }
 
 export function createPostgresTransactionDriverFromEnvironment(): PostgresTransactionDriver | null {
-  const connectionString = process.env.DIRECT_URL || process.env.DATABASE_URL;
+  // DATABASE_URL is the application data-plane connection and must use a
+  // non-bypass RLS role in production. DIRECT_URL remains a local fallback.
+  const connectionString = process.env.DATABASE_URL || process.env.DIRECT_URL;
   if (!connectionString) return null;
 
   const pool = new Pool({
