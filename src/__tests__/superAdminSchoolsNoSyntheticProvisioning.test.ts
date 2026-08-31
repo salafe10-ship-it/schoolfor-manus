@@ -8,10 +8,12 @@ const source = fs.readFileSync(
 );
 
 describe('super admin school provisioning evidence safety', () => {
-  it('fails closed without the central tenant provisioning service', () => {
-    const guard = 'خدمة تهيئة المستأجر المركزية غير متاحة';
-    expect(source).toContain(guard);
-    expect(source.indexOf(guard)).toBeLessThan(source.indexOf('const generatedPassword'));
-    expect(source).not.toContain('تم إنشاء وتهيئة المدرسة بنجاح');
+  it('routes provisioning through the central tenant service before claiming success', () => {
+    const request = "authenticatedRequest('/api/admin/central/schools',";
+    const success = 'تم إنشاء المدرسة والفرع في قاعدة البيانات المركزية';
+    expect(source).toContain(request);
+    expect(source.indexOf(request)).toBeLessThan(source.indexOf(success));
+    expect(source).toContain('تعذر إنشاء المدرسة مركزياً؛ لم يتم تعديل البيانات.');
+    expect(source).not.toContain('const generatedPassword');
   });
 });

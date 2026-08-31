@@ -9,8 +9,10 @@ const source = fs.readFileSync(
 
 describe('super admin updates evidence safety', () => {
   it('does not seed releases or simulate deployment locally', () => {
-    expect(source).toContain('return saved ? JSON.parse(saved) : []');
+    expect(source).toContain('const [releases] = useState<any[]>([]);');
     expect(source).toContain('خدمة النشر المركزية غير متاحة');
+    expect(source).not.toContain('localStorage');
+    expect(source).not.toContain('setTimeout');
     expect(source).not.toContain('v2.4.2');
     expect(source).not.toContain('v2.4.0');
   });

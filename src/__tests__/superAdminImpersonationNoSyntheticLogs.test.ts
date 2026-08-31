@@ -9,8 +9,9 @@ const source = fs.readFileSync(
 
 describe('super admin impersonation evidence safety', () => {
   it('does not seed historical sessions or simulate a successful session locally', () => {
-    expect(source).toContain('return saved ? JSON.parse(saved) : []');
+    expect(source).toContain('const [logs] = useState<any[]>([]);');
     expect(source).toContain('خدمة الولوج الآمن المركزية غير متاحة');
+    expect(source).not.toContain('localStorage');
     expect(source).not.toContain('imp_01');
     expect(source).not.toContain('imp_02');
   });

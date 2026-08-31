@@ -12,11 +12,11 @@ describe('central school provisioning contract', () => {
     expect(routeStart).toBeGreaterThan(-1);
     expect(route).toContain("app.post('/api/admin/central/schools'");
     expect(server).toContain('requirePermissionOnly(PERMISSIONS.PLATFORM_ADMIN)');
-    expect(route).toContain("const tenantId = String(identity?.tenantId || '').trim();");
+    expect(route).toContain("const tenantId = String(req.body?.targetTenantId || req.body?.tenantId || identity?.tenantId || '').trim();");
     expect(route).toContain("await client.query('BEGIN');");
     expect(route).toContain("await client.query('COMMIT');");
     expect(route).toContain("await client.query('ROLLBACK');");
-    expect(route).not.toContain('req.body?.tenantId');
+    expect(route).toContain('req.body?.targetTenantId');
     expect(route).not.toContain('req.body?.schoolId');
   });
 

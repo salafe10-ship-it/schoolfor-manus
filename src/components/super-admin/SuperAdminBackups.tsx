@@ -13,11 +13,9 @@ export default function SuperAdminBackups({
 }: SuperAdminBackupsProps) {
 
   // لا تُعرض لقطات أو بصمات قبل اتصال موثق بخدمة النسخ المركزية.
-  const [backups, setBackups] = useState<any[]>([]);
+  const backups: any[] = [];
 
   // Modal and wizard states
-  const [isCreatingBackup, setIsCreatingBackup] = useState(false);
-  const [backupProgress, setBackupProgress] = useState(0);
   const [showScheduleModal, setShowScheduleModal] = useState(false);
   const [showRestoreModal, setShowRestoreModal] = useState(false);
   const [showIntegrityModal, setShowIntegrityModal] = useState(false);
@@ -32,10 +30,10 @@ export default function SuperAdminBackups({
 
   // Schedule automated backup state
   const [scheduleConfig, setScheduleConfig] = useState({
-    frequency: 'daily', // hourly, daily, weekly, monthly
-    retentionCount: 30, // keep 30 copies
-    destination: 'AWS S3 (Riyadh)',
-    encryptKey: 'AES-256-SystemBuiltin'
+    frequency: '',
+    retentionCount: '',
+    destination: '',
+    encryptKey: ''
   });
 
   // Integrity Check report state
@@ -52,7 +50,7 @@ export default function SuperAdminBackups({
   // HANDLERS
   // -------------------------------------------------------------
 
-  // Run Immediate Backup creation simulator
+  // إنشاء النسخة يتطلب مهمة خادم ومخزنًا مركزيًا موثقًا.
   const handleCreateBackup = (e: React.FormEvent) => {
     e.preventDefault();
     triggerNotification('لم يتم إنشاء النسخة: خدمة التخزين المركزية غير متصلة أو غير موثقة.', 'warning');
@@ -64,7 +62,7 @@ export default function SuperAdminBackups({
     triggerNotification('فحص سلامة النسخ يحتاج قراءة فعلية من مخزن مركزي؛ لم تُعرض نتيجة محاكاة.', 'warning');
   };
 
-  // Run Backup Restore Simulator
+  // الاستعادة تتطلب مهمة خادم وموافقة مزدوجة.
   const handleRestoreBackup = () => {
     if (!selectedSnapshot) return;
 
@@ -78,13 +76,13 @@ export default function SuperAdminBackups({
     triggerNotification('جدولة النسخ تحتاج موصل مهام خادم مركزي؛ لم يتم حفظ إعداد محلي.', 'warning');
   };
 
-  // Download snapshot simulation
+  // التنزيل يتطلب رابطًا موقّعًا قصير العمر.
   const handleDownloadBackup = (snapshot: any) => {
     void snapshot;
     triggerNotification('تنزيل النسخة يحتاج رابطًا موقّعًا يصدره مخزن مركزي؛ لم يتم توليد رابط وهمي.', 'warning');
   };
 
-  // Disaster Recovery Failover Drill Simulator
+  // اختبار التعافي يتطلب بيئة احتياطية حقيقية ونافذة صيانة.
   const handleRunDrill = () => {
     triggerNotification('اختبار التعافي من الكوارث يحتاج بنية احتياطية حقيقية ونافذة صيانة معتمدة؛ لم تُعلن نتيجة محاكاة.', 'warning');
   };
@@ -114,7 +112,7 @@ export default function SuperAdminBackups({
             className="flex-1 md:flex-initial bg-rose-950/40 hover:bg-rose-950/80 border border-rose-900 text-rose-400 font-extrabold text-xs px-4 py-2.5 transition-all cursor-pointer flex items-center justify-center gap-1.5 shadow"
           >
             <ShieldAlert className="w-4 h-4 text-rose-400 animate-pulse" />
-            <span>محاكاة خطة الطوارئ (DR Drill)</span>
+            <span>خطة التعافي من الكوارث</span>
           </button>
         </div>
 
@@ -122,7 +120,6 @@ export default function SuperAdminBackups({
         <form onSubmit={handleCreateBackup} className="flex flex-col sm:flex-row items-center gap-2 w-full md:max-w-xl bg-gradient-to-b from-[#fffefc] via-[#fbf8f0] to-[#f5eeea] border-2 border-[#d4af37]/30 hover:border-[#d4af37] rounded-3xl p-4 sm:p-5 shadow-md transition-all duration-300">
           <select
             value={selectedSchoolId}
-            disabled={isCreatingBackup}
             onChange={(e) => setSelectedSchoolId(e.target.value)}
             className="w-full sm:w-1/3 bg-slate-950 border border-slate-800 px-2.5 py-2.5 text-xs text-white placeholder-slate-500 focus:outline-none transition-all font-bold"
           >
@@ -135,7 +132,6 @@ export default function SuperAdminBackups({
           <input
             type="text"
             placeholder="ملاحظة أو سبب النسخ اليدوي العاجل..."
-            disabled={isCreatingBackup}
             value={backupNote}
             required
             onChange={(e) => setBackupNote(e.target.value)}
@@ -144,43 +140,14 @@ export default function SuperAdminBackups({
 
           <button
             type="submit"
-            disabled={isCreatingBackup}
             className="w-full sm:w-auto bg-amber-600 hover:bg-amber-500 text-white font-extrabold text-xs px-4 py-2.5 flex items-center justify-center gap-1.5 cursor-pointer disabled:opacity-50 transition-colors"
           >
-            {isCreatingBackup ? (
-              <>
-                <RefreshCw className="w-4 h-4 animate-spin" />
-                <span>جاري النسخ...</span>
-              </>
-            ) : (
-              <>
-                <Play className="w-4 h-4" />
-                <span>لقطة فورية</span>
-              </>
-            )}
+            <Play className="w-4 h-4" />
+            <span>طلب لقطة فورية</span>
           </button>
         </form>
 
       </div>
-
-      {/* Progress display if creating backup */}
-      {isCreatingBackup && (
-        <div className="bg-slate-900 border border-amber-900/60 p-5 space-y-3 shadow-lg">
-          <div className="flex justify-between text-xs font-bold">
-            <span className="text-slate-300">جاري عمل نسخة قاعدة البيانات الفورية (Dumping Postgres to gzip)...</span>
-            <span className="text-amber-400 font-mono font-black">{backupProgress}%</span>
-          </div>
-          <div className="h-3 bg-slate-950 rounded-full overflow-hidden border border-slate-850">
-            <div 
-              className="h-full bg-amber-500 rounded-full transition-all duration-300" 
-              style={{ width: `${backupProgress}%` }}
-            />
-          </div>
-          <p className="text-[10px] text-slate-500 leading-relaxed">
-            يرجى عدم إغلاق نافذة العمليات، جاري ضغط الجداول وتشفير الحزم بمفتاح AES-256 للتخزين في مستودع النسخ السحابي المعزول بأمان تام.
-          </p>
-        </div>
-      )}
 
       {/* Snapshots Table List */}
       <div className="bg-slate-900 border border-slate-800 rounded-3xl overflow-hidden shadow-xl">
@@ -316,6 +283,7 @@ export default function SuperAdminBackups({
                     onChange={(e) => setScheduleConfig({...scheduleConfig, frequency: e.target.value})}
                     className="w-full bg-slate-950 border border-slate-800 rounded-lg px-3 py-2 text-xs text-white font-bold"
                   >
+                    <option value="" disabled>غير متحقق من إعداد مركزي</option>
                     <option value="hourly">كل ساعة (لقطات المعاملات المستمرة Transaction Logs)</option>
                     <option value="daily">كل يوم (النسخ الليلي العام)</option>
                     <option value="weekly">كل أسبوع (عزل أسبوعي تاريخي)</option>
@@ -328,10 +296,11 @@ export default function SuperAdminBackups({
                   <input
                     type="number"
                     value={scheduleConfig.retentionCount}
-                    onChange={(e) => setScheduleConfig({...scheduleConfig, retentionCount: parseInt(e.target.value) || 30})}
+                    onChange={(e) => setScheduleConfig({...scheduleConfig, retentionCount: e.target.value})}
+                    placeholder="غير متحقق"
                     className="w-full bg-slate-950 border border-slate-800 rounded-lg px-3 py-2 text-xs text-white font-mono"
                   />
-                  <span className="text-[9px] text-slate-500 block">سيتم تدوير وحذف النسخ الأقدم تلقائياً بعد استنفاد الحد الأقصى لتوفير التخزين.</span>
+                  <span className="text-[9px] text-slate-500 block">لا يُحفظ أو يُطبّق هذا الإعداد قبل توفر موصل مهام مركزي.</span>
                 </div>
 
                 <div className="space-y-1">
@@ -341,6 +310,7 @@ export default function SuperAdminBackups({
                     onChange={(e) => setScheduleConfig({...scheduleConfig, destination: e.target.value})}
                     className="w-full bg-slate-950 border border-slate-800 rounded-lg px-3 py-2 text-xs text-white"
                   >
+                    <option value="" disabled>غير متحقق من مخزن مركزي</option>
                     <option value="AWS S3 (Riyadh)">سحابة الرياض AWS Riyadh - bucket_primary_b2</option>
                     <option value="AWS S3 (Jeddah)">سحابة جدة AWS Jeddah - bucket_secondary_b3</option>
                     <option value="GCP Cloud Storage (Dhahran)">سحابة الظهران جوجل - bucket_gcp_me_central1</option>
@@ -351,7 +321,7 @@ export default function SuperAdminBackups({
 
               <div className="pt-4 border-t border-slate-800 flex justify-end gap-2 text-xs">
                 <button type="button" onClick={() => setShowScheduleModal(false)} className="px-4 py-2 border border-slate-800 hover:bg-slate-800 text-slate-400">إلغاء</button>
-                <button type="submit" className="bg-amber-600 hover:bg-amber-500 text-white font-extrabold px-5 py-2 rounded-xl">اعتماد وجدولة النسخ ⚡</button>
+                <button type="submit" className="bg-amber-600 hover:bg-amber-500 text-white font-extrabold px-5 py-2 rounded-xl">طلب اعتماد الجدولة ⚡</button>
               </div>
             </form>
           </div>
@@ -422,15 +392,15 @@ export default function SuperAdminBackups({
                 <div className="grid grid-cols-3 gap-3 pt-2.5">
                   <div className="p-2 bg-slate-950/40 border border-slate-850 rounded-lg text-center">
                     <span className="text-[9px] text-slate-500 font-bold block">مجموع التوقيع</span>
-                    <p className="text-[10px] text-emerald-400 font-mono font-bold mt-1">سليم OK</p>
+                    <p className="text-[10px] text-amber-400 font-mono font-bold mt-1">من تقرير المزود فقط</p>
                   </div>
                   <div className="p-2 bg-slate-950/40 border border-slate-850 rounded-lg text-center">
                     <span className="text-[9px] text-slate-500 font-bold block">الجداول المفحوصة</span>
-                    <p className="text-[10px] text-amber-400 font-mono font-bold mt-1">١٤٨ جدول</p>
+                    <p className="text-[10px] text-amber-400 font-mono font-bold mt-1">غير متحقق</p>
                   </div>
                   <div className="p-2 bg-slate-950/40 border border-slate-850 rounded-lg text-center">
                     <span className="text-[9px] text-slate-500 font-bold block">نسبة الموثوقية</span>
-                    <p className="text-[10px] text-amber-400 font-mono font-bold mt-1">١٠٠٪</p>
+                    <p className="text-[10px] text-amber-400 font-mono font-bold mt-1">غير متحقق</p>
                   </div>
                 </div>
               )}
@@ -449,7 +419,7 @@ export default function SuperAdminBackups({
         </div>
       )}
 
-      {/* Modal D: Disaster Recovery failover drill simulator */}
+      {/* Modal D: Disaster Recovery readiness */}
       {showDrillModal && (
         <div className="fixed inset-0 bg-slate-950/85 backdrop-blur-sm flex items-center justify-center z-50 p-4">
           <div className="bg-slate-900 border-2 border-rose-900 rounded-3xl shadow-2xl max-w-xl w-full overflow-hidden text-right animate-in fade-in zoom-in-95 duration-200">
@@ -457,13 +427,13 @@ export default function SuperAdminBackups({
               <button onClick={() => { resetDrillState(); setShowDrillModal(false); }} className="text-slate-400 hover:text-white bg-slate-950 p-1.5 rounded-lg border border-slate-850"><X className="w-4 h-4" /></button>
               <h3 className="text-sm font-black flex items-center gap-1.5">
                 <ShieldAlert className="w-5 h-5 text-rose-400 animate-pulse" />
-                محاكاة بروفة التعافي من كوارث انقطاع السيرفرات (SaaS Failover Drill)
+                جاهزية اختبار التعافي من كوارث انقطاع الخوادم
               </h3>
             </div>
 
             <div className="p-6 space-y-4">
               <p className="text-xs text-slate-300 leading-relaxed">
-                يقوم هذا الخيار بعمل اختبار ومحاكاة لإنقاذ السحابة في حال انقطاع التغذية والكهرباء بالكامل عن مركز بيانات الرياض السحابي الرئيسي (Riyadh Outage Scenario)، وتحويل كافة المستأجرين تلقائياً إلى مركز بيانات جدة دون فقدان للجلسات أو تلف في البيانات.
+                يتطلب اختبار التحويل موقعًا احتياطيًا موثقًا، وخطة تشغيل معتمدة، ونافذة صيانة، وقياسات RPO/RTO فعلية. لا توجد حاليًا بنية متصلة تسمح بتنفيذ الاختبار أو إعلان عدم فقدان البيانات.
               </p>
 
               {drillState.status !== 'idle' && (
@@ -490,17 +460,17 @@ export default function SuperAdminBackups({
                     onClick={handleRunDrill}
                     className="bg-rose-600 hover:bg-rose-500 text-white font-black px-6 py-2 shadow-md"
                   >
-                    بدء محاكاة طوارئ الكوارث ⚡
+                    طلب اختبار التعافي
                   </button>
                 ) : drillState.status === 'completed' ? (
                   <div className="bg-emerald-950 text-emerald-400 border border-emerald-900/60 px-3 py-2 font-bold flex items-center gap-1">
                     <CheckCircle2 className="w-4 h-4" />
-                    <span>تم إجراء الاختبار واجتياز الامتثال بنجاح</span>
+                    <span>لا تُعتمد النتيجة إلا من سجل اختبار مركزي موثق</span>
                   </div>
                 ) : (
                   <div className="bg-slate-950 text-slate-400 border border-slate-850 px-4 py-2 font-mono flex items-center gap-2">
                     <RefreshCw className="w-3.5 h-3.5 animate-spin text-rose-400" />
-                    <span>جاري تحويل السيرفرات والبوابات الاحتياطية...</span>
+                    <span>بانتظار موصل التعافي المركزي...</span>
                   </div>
                 )}
               </div>

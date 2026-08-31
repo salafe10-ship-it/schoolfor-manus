@@ -75,9 +75,9 @@ export default function ImpersonationModal({
           <div className="bg-rose-950/30 border border-rose-900/50 p-3.5 flex items-start gap-2.5 text-xs">
             <ShieldAlert className="w-4 h-4 text-rose-400 mt-0.5 shrink-0" />
             <div className="text-[11px] text-slate-300 leading-relaxed space-y-1">
-              <p className="font-bold text-rose-200">سجل تدقيق أمني مباشر (Enterprise Audit Trail):</p>
+              <p className="font-bold text-rose-200">متطلبات جلسة الدعم المركزية:</p>
               <p className="text-slate-400 text-[10px]">
-                سيتم تتبع هذه الجلسة وتسجيل هويتك، عنوان IP، الوقت، وسبب الدخول في سجلاّت الأمان المركزية للمنصة.
+                لن تبدأ الجلسة إلا بعد إصدار رمز خادم قصير العمر وربط الهوية والسبب بسجل تدقيق مركزي. الخدمة غير مهيأة حاليًا وسترفض الطلب بأمان.
               </p>
             </div>
           </div>
@@ -92,7 +92,7 @@ export default function ImpersonationModal({
             </div>
             <div className="text-left">
               <span className="text-slate-500 text-[10px] block">حالة الخدمة:</span>
-              <span className="text-emerald-400 font-bold text-[10px]">نشط وجاهز</span>
+              <span className="text-amber-400 font-bold text-[10px]">{school.status || 'غير متحقق'}</span>
             </div>
           </div>
 
@@ -135,7 +135,7 @@ export default function ImpersonationModal({
               className="mt-0.5 rounded text-rose-600 focus:ring-rose-500 bg-slate-900 border-slate-700"
             />
             <span className="text-[10px] text-slate-300 leading-normal font-bold">
-              أقر بصفتي مسؤول نظام أعلى (Super Administrator) بأن هذه الجلسة مخصصة لغرض العمل والتأكد من جودة التشغيل فقط، وأتحمل المسؤولية عن أي تغييرات تتم خلال وضع المحاكاة.
+              أقر بأن الطلب لغرض دعم مشروع، وأنه لا يمنحني صلاحيات مدرسة ما لم يصدر الخادم جلسة مركزية موثقة.
             </span>
           </label>
 
@@ -158,7 +158,7 @@ export default function ImpersonationModal({
               }`}
             >
               <Key className="w-3.5 h-3.5" />
-              <span>تأكيد وبدء جلسة المحاكاة</span>
+              <span>إرسال طلب جلسة مركزية</span>
             </button>
           </div>
 

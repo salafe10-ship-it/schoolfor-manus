@@ -200,7 +200,7 @@ export default function SuperAdminUsers({
     <div className="space-y-5 text-right animate-in fade-in duration-200" dir="rtl">
       
       {/* Search and school selector bar */}
-      <div className="bg-slate-900 border border-slate-800 p-4 flex flex-col md:flex-row gap-4 justify-between items-center">
+      <div className="rounded-3xl border-2 border-[#d4af37]/30 bg-gradient-to-b from-[#fffefc] via-[#fbf8f0] to-[#f5eeea] p-4 shadow-md flex flex-col md:flex-row gap-4 justify-between items-center">
         
         {/* Create user button */}
         <button
@@ -211,14 +211,14 @@ export default function SuperAdminUsers({
           <span>إنشاء حساب مستخدم جديد</span>
         </button>
 
-        <div className="flex flex-col sm:flex-row gap-3 w-full md:max-w-2xl bg-gradient-to-b from-[#fffefc] via-[#fbf8f0] to-[#f5eeea] border-2 border-[#d4af37]/30 hover:border-[#d4af37] rounded-3xl p-4 sm:p-5 shadow-md transition-all duration-300">
+        <div className="flex flex-col sm:flex-row gap-3 w-full md:max-w-2xl bg-gradient-to-b from-[#fffefc] via-[#fbf8f0] to-[#f5eeea] border-2 border-[#d4af37]/30 hover:border-[#d4af37] rounded-2xl px-4 py-2 shadow-sm transition-all duration-300">
           {/* School Select filter */}
           <div className="flex items-center gap-2 w-full sm:w-1/2">
             <span className="text-xs font-bold text-slate-400 shrink-0">تصفية حسب المنشأة:</span>
             <select
               value={filterSchoolId}
               onChange={(e) => setFilterSchoolId(e.target.value)}
-              className="w-full bg-slate-950 border border-slate-800 focus:border-amber-500 px-2.5 py-2 text-xs text-white placeholder-slate-500 focus:outline-none transition-all font-bold"
+              className="w-full bg-white border border-slate-200 focus:border-amber-500 px-2.5 py-1.5 text-xs text-slate-800 placeholder-slate-500 focus:outline-none transition-all font-bold"
             >
               <option value="all">كل المدارس والمنشآت</option>
               {schools.map(s => (
@@ -235,7 +235,7 @@ export default function SuperAdminUsers({
               placeholder="بحث باسم الموظف، الوظيفة، أو البريد الإلكتروني..."
               value={searchTerm}
               onChange={(e) => setSearchTerm(e.target.value)}
-              className="w-full bg-slate-950 border border-slate-800 focus:border-amber-500 pr-9 pl-4 py-2 text-xs text-white focus:outline-none"
+              className="w-full bg-white border border-slate-200 focus:border-amber-500 pr-9 pl-4 py-1.5 text-xs text-slate-800 focus:outline-none"
             />
           </div>
         </div>
@@ -243,8 +243,8 @@ export default function SuperAdminUsers({
       </div>
 
       {/* Users Interactive Directory Table */}
-      <div className="bg-slate-900 border border-slate-800 rounded-3xl overflow-hidden shadow-xl">
-        <div className="p-4 bg-slate-950/60 border-b border-slate-800 flex justify-between items-center text-xs">
+      <div className="rounded-3xl bg-[#fffdf8] border-2 border-[#d4af37]/30 overflow-hidden shadow-lg">
+        <div className="p-4 bg-[#2a1d13] border-b border-[#d4af37]/20 flex justify-between items-center text-xs">
           <span className="font-black text-white">دليل حسابات المستخدمين والكوادر الفيدرالي الموحد</span>
           <span className="bg-slate-900 px-2.5 py-1 rounded text-slate-400 font-mono font-bold">
             عدد الحسابات المعروضة: {filteredUsers.length}
@@ -253,7 +253,7 @@ export default function SuperAdminUsers({
 
         <div className="overflow-x-auto">
           <table className="w-full text-right text-xs">
-            <thead className="bg-slate-950 text-slate-400 font-extrabold uppercase border-b border-slate-800">
+            <thead className="bg-[#fbf8f0] text-slate-500 font-extrabold uppercase border-b border-amber-900/10">
               <tr>
                 <th className="p-4 text-center w-8">#</th>
                 <th className="p-4">هوية الموظف والمنشأة</th>
@@ -265,7 +265,7 @@ export default function SuperAdminUsers({
                 <th className="p-4 text-center w-64">إجراءات الحماية والتحكم</th>
               </tr>
             </thead>
-            <tbody className="divide-y divide-slate-800/60 text-slate-300">
+            <tbody className="divide-y divide-amber-900/10 text-slate-700">
               {filteredUsers.length === 0 ? (
                 <tr>
                   <td colSpan={8} className="p-12 text-center text-slate-500">
@@ -280,13 +280,13 @@ export default function SuperAdminUsers({
                   const branchLabel = branches.find(b => b.id === user.branchId)?.name || 'الفرع العام';
                   
                   return (
-                    <tr key={user.id} className="hover:bg-slate-950/40 transition-colors">
+                    <tr key={user.id} className="hover:bg-[#fbf8f0] transition-colors">
                       <td className="p-4 text-center text-slate-500 font-mono font-bold w-8">{idx + 1}</td>
                       
                       {/* Name and School */}
                       <td className="p-4">
                         <div>
-                          <span className="font-extrabold text-white text-sm hover:text-amber-400 transition-colors block">
+                          <span className="font-extrabold text-slate-900 text-sm hover:text-amber-700 transition-colors block">
                             {user.name}
                           </span>
                           <span className="text-[10px] text-slate-500 mt-1 block">
@@ -298,7 +298,7 @@ export default function SuperAdminUsers({
                       {/* Job Title */}
                       <td className="p-4 font-bold">
                         <div>
-                          <span className="text-slate-200 block">{user.jobTitle}</span>
+                          <span className="text-slate-800 block">{user.jobTitle}</span>
                           <span className="text-[10px] text-amber-400 mt-0.5 block">{user.department}</span>
                         </div>
                       </td>
@@ -314,7 +314,7 @@ export default function SuperAdminUsers({
                       </td>
 
                       {/* Login Count */}
-                      <td className="p-4 text-center font-mono font-extrabold text-white">
+                      <td className="p-4 text-center font-mono font-extrabold text-slate-900">
                         {user.loginCount || 0}
                       </td>
 

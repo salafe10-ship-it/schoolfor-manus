@@ -8,8 +8,11 @@ const source = fs.readFileSync(
 );
 
 describe('super admin audit evidence safety', () => {
-  it('starts with no audit history without persisted evidence', () => {
-    expect(source).toContain('return [];');
+  it('loads immutable audit history from the canonical API only', () => {
+    expect(source).toContain('const [logs, setLogs] = useState<any[]>([]);');
+    expect(source).toContain("authenticatedRequest('/api/admin/central/audit?limit=500')");
+    expect(source).toContain('سجل التدقيق المركزي غير قابل للمحو');
+    expect(source).not.toContain('localStorage');
     expect(source).not.toContain("id: 'log_01'");
     expect(source).not.toContain('185.220.101.44');
   });

@@ -2,10 +2,13 @@ import { Archive, Ban, Calendar, CheckCircle, Copy, Edit2, ExternalLink, FileSpr
 import React, { useEffect, useState } from 'react';
 import { getTrustedSchoolUrl, openTrustedSchoolPortal } from '../../utils/EnterpriseDomainUtils';
 import { authenticatedRequest } from '../../utils/authenticatedRequest';
+import { toDisplayPlan, updateCanonicalTenantSubscription } from '../../utils/centralTenantSubscription';
 import ImpersonationModal from './ImpersonationModal';
 
 interface SuperAdminSchoolsProps {
   schools: any[];
+  tenants?: any[];
+  setTenants?: React.Dispatch<React.SetStateAction<any[]>>;
   setSchools: React.Dispatch<React.SetStateAction<any[]>>;
   branches: any[];
   setBranches: React.Dispatch<React.SetStateAction<any[]>>;
@@ -19,6 +22,8 @@ interface SuperAdminSchoolsProps {
 
 export default function SuperAdminSchools({
   schools = [],
+  tenants = [],
+  setTenants,
   setSchools,
   branches = [],
   setBranches,
@@ -43,13 +48,14 @@ export default function SuperAdminSchools({
   const [showDeleteModal, setShowDeleteModal] = useState(false);
   const [impersonateTarget, setImpersonateTarget] = useState<any | null>(null);
   const [isProvisioning, setIsProvisioning] = useState(false);
-  const [isDirectoryLoading, setIsDirectoryLoading] = useState(true);
+  const [directoryStatus, setDirectoryStatus] = useState<'loading' | 'ready' | 'error'>('loading');
 
   // Active object being edited/viewed
   const [currentSchool, setCurrentSchool] = useState<any | null>(null);
 
   // New School Wizard state
   const [newSchool, setNewSchool] = useState({
+    targetTenantId: '',
     name: '',
     schoolShortName: '',
     schoolCode: '',
@@ -62,11 +68,13 @@ export default function SuperAdminSchools({
     managerName: '',
     adminEmail: '',
     password: '',
-    plan: 'Enterprise',
-    storageLimit: '500', // GB
-    userLimit: '3000',
-    subscriptionDuration: '12', // Months
   });
+
+  useEffect(() => {
+    if (!newSchool.targetTenantId && tenants[0]?.id) {
+      setNewSchool((current) => ({ ...current, targetTenantId: tenants[0].id }));
+    }
+  }, [newSchool.targetTenantId, tenants]);
 
   // Clone Wizard state
   const [cloneWizard, setCloneWizard] = useState({
@@ -82,10 +90,9 @@ export default function SuperAdminSchools({
 
   // Subscription Limits Wizard state
   const [limitEditor, setLimitEditor] = useState({
-    plan: 'Enterprise',
-    storageLimit: 500, // GB
-    userLimit: 3000,
-    studentLimit: 10000,
+    plan: '',
+    storageLimit: null as number | null,
+    userLimit: null as number | null,
     durationMonths: 12,
     status: 'active'
   });
@@ -110,15 +117,31 @@ export default function SuperAdminSchools({
     return payload.school;
   };
 
+  const getTenantForSchool = (school: any) => {
+    const tenantId = school?.tenantId || school?.tenant_id;
+    return tenants.find((tenant) => tenant.id === tenantId) || null;
+  };
+
+  const getEffectiveSchoolStatus = (school: any) => school?.tenantStatus === 'suspended' ? 'suspended' : school?.status;
+
+  const selectedTenant = tenants.find((tenant) => tenant.id === newSchool.targetTenantId) || null;
+
   useEffect(() => {
     let mounted = true;
     const loadCentralSchools = async () => {
-      setIsDirectoryLoading(true);
+      setDirectoryStatus('loading');
       try {
-        const response = await authenticatedRequest('/api/admin/central/schools');
+        const [response, branchesResponse] = await Promise.all([
+          authenticatedRequest('/api/admin/central/schools'),
+          authenticatedRequest('/api/admin/central/branches'),
+        ]);
         const payload = await response.json().catch(() => ({}));
+        const branchesPayload = await branchesResponse.json().catch(() => ({}));
         if (!response.ok || !payload?.success || !Array.isArray(payload.schools)) {
           throw new Error(payload?.message || 'CENTRAL_SCHOOL_DIRECTORY_UNAVAILABLE');
+        }
+        if (!branchesResponse.ok || !branchesPayload?.success || !Array.isArray(branchesPayload.branches)) {
+          throw new Error(branchesPayload?.message || 'CENTRAL_BRANCH_DIRECTORY_UNAVAILABLE');
         }
         if (!mounted) return;
         const canonicalSchools = payload.schools.map((school: any) => ({
@@ -129,30 +152,43 @@ export default function SuperAdminSchools({
           schoolShortName: school.display_name,
           schoolCode: school.school_code,
           status: school.status,
+          tenantStatus: school.tenant_status || undefined,
           archived: school.status === 'archived',
+          usersCount: Number(school.users_count || 0),
+          studentCount: Number(school.students_count || 0),
+          plan: school.subscription?.plan_code ? toDisplayPlan(school.subscription.plan_code) : undefined,
+          subscriptionStatus: school.subscription?.status || undefined,
+          subscriptionStart: school.subscription?.starts_at || undefined,
+          subscriptionEnd: school.subscription?.ends_at || undefined,
+          userLimit: school.subscription?.seat_limit ? Number(school.subscription.seat_limit) : undefined,
           timezone: school.timezone,
           locale: school.locale,
           schoolUrl: getTrustedSchoolUrl({ id: school.id }),
           connectedDb: 'canonical-postgres',
         }));
-        const canonicalBranches = payload.schools
-          .filter((school: any) => school.main_branch?.id)
-          .map((school: any) => ({
-            id: school.main_branch.id,
-            schoolId: school.id,
-            name: school.main_branch.name,
-            branchCode: school.main_branch.branch_code,
-            status: school.main_branch.status,
-            isMain: true,
-          }));
+        const canonicalBranches = branchesPayload.branches.map((branch: any) => ({
+          ...branch,
+          id: branch.id,
+          schoolId: branch.school_id,
+          schoolName: branch.school_name,
+          name: branch.name,
+          branchCode: branch.branch_code,
+          city: branch.city || branch.address?.city || '',
+          phone: branch.phone || branch.address?.phone || '',
+          address: branch.address?.address || '',
+          status: branch.status === 'closed' ? 'suspended' : branch.status,
+          isMain: Boolean(branch.is_main),
+          studentsCount: Number(branch.students_count || 0),
+          employeesCount: Number(branch.users_count || 0),
+        }));
         setSchools(canonicalSchools);
         setBranches(canonicalBranches);
+        setDirectoryStatus('ready');
       } catch (error) {
         if (mounted) {
+          setDirectoryStatus('error');
           triggerNotification(error instanceof Error ? error.message : 'تعذر تحميل دليل المدارس المركزي.', 'danger');
         }
-      } finally {
-        if (mounted) setIsDirectoryLoading(false);
       }
     };
     void loadCentralSchools();
@@ -180,6 +216,7 @@ export default function SuperAdminSchools({
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({
+          targetTenantId: newSchool.targetTenantId || tenants[0]?.id,
           name: newSchool.name,
           schoolCode: newSchool.schoolCode || undefined,
           shortName: newSchool.schoolShortName,
@@ -190,10 +227,6 @@ export default function SuperAdminSchools({
           email: newSchool.email,
           managerName: newSchool.managerName,
           managerEmail: newSchool.adminEmail,
-          plan: newSchool.plan,
-          storageLimit: newSchool.storageLimit,
-          userLimit: newSchool.userLimit,
-          subscriptionDuration: newSchool.subscriptionDuration,
           timezone: 'Africa/Khartoum',
           locale: 'ar',
         }),
@@ -213,7 +246,10 @@ export default function SuperAdminSchools({
         schoolShortName: canonicalSchool.display_name,
         schoolCode: canonicalSchool.school_code,
         status: canonicalSchool.status,
+        tenantStatus: selectedTenant?.status,
         archived: false,
+        usersCount: 0,
+        studentCount: 0,
         connectedDb: 'canonical-postgres',
         schoolUrl: getTrustedSchoolUrl({ id: canonicalSchool.id }),
       };
@@ -227,12 +263,15 @@ export default function SuperAdminSchools({
       };
       setSchools(prev => [...prev, createdSchool]);
       setBranches(prev => [...prev, createdBranch]);
+      setTenants?.((current) => current.map((tenant) => tenant.id === newSchool.targetTenantId
+        ? { ...tenant, schoolsCount: Number(tenant.schoolsCount || 0) + 1, branchesCount: Number(tenant.branchesCount || 0) + 1 }
+        : tenant));
       logAction('CREATE_SCHOOL', `تأسيس مدرسة جديدة من المصدر المركزي: ${canonicalSchool.display_name}`, 'الإدارة المركزية');
       triggerNotification('تم إنشاء المدرسة والفرع في قاعدة البيانات المركزية ✅', 'success');
       setShowAddModal(false);
       setNewSchool({
-        name: '', schoolShortName: '', schoolCode: '', type: 'private', city: 'الرياض', address: '', phone: '', email: '',
-        subdomain: '', managerName: '', adminEmail: '', password: '', plan: 'Enterprise', storageLimit: '500', userLimit: '3000', subscriptionDuration: '12'
+        targetTenantId: tenants[0]?.id || '', name: '', schoolShortName: '', schoolCode: '', type: 'private', city: 'الرياض', address: '', phone: '', email: '',
+        subdomain: '', managerName: '', adminEmail: '', password: ''
       });
     } catch (error) {
       triggerNotification(error instanceof Error ? error.message : 'تعذر إنشاء المدرسة مركزياً؛ لم يتم تعديل البيانات.', 'danger');
@@ -259,7 +298,6 @@ export default function SuperAdminSchools({
           email: currentSchool.email,
           managerName: currentSchool.managerName,
           managerEmail: currentSchool.adminEmail,
-          plan: currentSchool.plan,
         },
       });
       const profile = school.central_metadata && typeof school.central_metadata === 'object' ? school.central_metadata : {};
@@ -274,7 +312,12 @@ export default function SuperAdminSchools({
 
   // Toggle school frozen/active status
   const handleToggleFreezeSchool = async (school: any) => {
-    const isFrozen = school.status === 'suspended';
+    const tenant = getTenantForSchool(school);
+    if (tenant?.status === 'suspended') {
+      triggerNotification('المستأجر موقوف مركزيًا؛ فعّله من إدارة المستأجرين أو الاشتراكات قبل تغيير حالة المدرسة.', 'warning');
+      return;
+    }
+    const isFrozen = getEffectiveSchoolStatus(school) === 'suspended';
     const newStatus = isFrozen ? 'active' : 'suspended';
     try {
       const canonical = await mutateCentralSchool(school.id, { operation: 'status', status: newStatus });
@@ -290,12 +333,29 @@ export default function SuperAdminSchools({
   const handleToggleArchiveSchool = async (school: any) => {
     const isArchived = !!school.archived;
     if (isArchived) {
-      triggerNotification('استعادة المدرسة تحتاج مسار اعتماد مركزي مستقل؛ لم يتم تعديل البيانات.', 'warning');
+      try {
+        const canonical = await mutateCentralSchool(school.id, { operation: 'restore' });
+        setSchools(prev => prev.map(item => item.id === canonical.id ? { ...item, status: canonical.status, archived: false } : item));
+        setBranches(prev => prev.map(branch => branch.schoolId === school.id && branch.status === 'archived'
+          ? { ...branch, status: 'suspended', archived: false }
+          : branch));
+        setTenants?.((current) => current.map((tenant) => tenant.id === school.tenantId
+          ? { ...tenant, schoolsCount: Number(tenant.schoolsCount || 0) + 1, branchesCount: Number(tenant.branchesCount || 0) + branches.filter((branch) => branch.schoolId === school.id && branch.status === 'archived').length }
+          : tenant));
+        logAction('RESTORE_SCHOOL', `استعادة المدرسة كمعلقة للمراجعة المركزية: ${school.name}`, 'شؤون التخزين');
+        triggerNotification(`تمت استعادة ${school.name} كمعلقة؛ فعّل المدرسة والفروع والهويات بعد المراجعة.`, 'warning');
+      } catch (error) {
+        triggerNotification(error instanceof Error ? error.message : 'تعذر استعادة المدرسة مركزياً؛ لم يتم تعديل البيانات.', 'danger');
+      }
       return;
     }
     try {
       const canonical = await mutateCentralSchool(school.id, { operation: 'archive' });
       setSchools(prev => prev.map(item => item.id === canonical.id ? { ...item, status: canonical.status, archived: true } : item));
+      setBranches(prev => prev.map(branch => branch.schoolId === school.id ? { ...branch, status: 'archived', archived: true } : branch));
+      setTenants?.((current) => current.map((tenant) => tenant.id === school.tenantId
+        ? { ...tenant, schoolsCount: Math.max(0, Number(tenant.schoolsCount || 0) - 1), branchesCount: Math.max(0, Number(tenant.branchesCount || 0) - branches.filter((branch) => branch.schoolId === school.id).length) }
+        : tenant));
       logAction('ARCHIVE_SCHOOL', `أرشفة المدرسة مركزياً: ${school.name}`, 'شؤون التخزين');
       triggerNotification(`تمت أرشفة ${school.name} في قاعدة البيانات المركزية`, 'info');
     } catch (error) {
@@ -328,8 +388,11 @@ export default function SuperAdminSchools({
 
     try {
       await mutateCentralSchool(currentSchool.id, { operation: 'archive' });
-      setSchools(prev => prev.filter(s => s.id !== currentSchool.id));
-      setBranches(prev => prev.filter(b => b.schoolId !== currentSchool.id));
+        setSchools(prev => prev.filter(s => s.id !== currentSchool.id));
+        setBranches(prev => prev.filter(b => b.schoolId !== currentSchool.id));
+        setTenants?.((current) => current.map((tenant) => tenant.id === currentSchool.tenantId
+          ? { ...tenant, schoolsCount: Math.max(0, Number(tenant.schoolsCount || 0) - 1), branchesCount: Math.max(0, Number(tenant.branchesCount || 0) - branches.filter((branch) => branch.schoolId === currentSchool.id).length) }
+          : tenant));
       logAction('SOFT_DELETE_SCHOOL', `أرشفة آمنة للمستأجر في المصدر المركزي: ${currentSchool.name}`, 'الحوكمة');
       triggerNotification('تمت أرشفة المدرسة وفروعها من المصدر المركزي ✅', 'success');
       setShowDeleteModal(false);
@@ -345,28 +408,57 @@ export default function SuperAdminSchools({
     e.preventDefault();
     if (!currentSchool) return;
 
-    const currentStart = new Date(currentSchool.subscriptionStart || new Date());
+    const currentTenant = getTenantForSchool(currentSchool);
+    const currentStorageLimit = parseInt(String(currentSchool.storageLimit || ''), 10);
+    if (limitEditor.storageLimit !== null && Number.isFinite(currentStorageLimit) && currentStorageLimit !== limitEditor.storageLimit) {
+      triggerNotification('تعديل السعة التخزينية يحتاج موصل تخزين مركزي موثق؛ لم يتم حفظ أي جزء من التعديل.', 'warning');
+      return;
+    }
+    if (!currentTenant?.subscription) {
+      triggerNotification('لا يوجد اشتراك كانونى مرتبط بهذه المدرسة؛ أنشئ الاشتراك من دليل المستأجرين أولاً.', 'warning');
+      return;
+    }
+    if (!limitEditor.plan.trim()) {
+      triggerNotification('لم يتم التحقق من باقة الاشتراك الكانونية؛ لم يتم تعديل البيانات.', 'warning');
+      return;
+    }
+    if (!Number.isSafeInteger(limitEditor.userLimit) || limitEditor.userLimit < 1) {
+      triggerNotification('حد المستخدمين يجب أن يكون رقماً صحيحاً موجباً.', 'warning');
+      return;
+    }
+
+    const currentStart = new Date(currentTenant.subscription.startsAt || currentTenant.subscription.starts_at);
+    if (Number.isNaN(currentStart.getTime())) {
+      triggerNotification('تاريخ بداية الاشتراك الكانوني غير صالح؛ لم يتم تعديل البيانات.', 'danger');
+      return;
+    }
+    if (!Number.isSafeInteger(limitEditor.durationMonths) || limitEditor.durationMonths < 1) {
+      triggerNotification('فترة التمديد يجب أن تكون مدة موجبة ومتحققة من سجل الاشتراك الكانوني.', 'warning');
+      return;
+    }
+    if (!['active', 'suspended'].includes(limitEditor.status)) {
+      triggerNotification('لا يمكن تعديل اشتراك مستأجر في حالة غير قابلة للإدارة من هذه الشاشة.', 'warning');
+      return;
+    }
     const newEnd = new Date(currentStart.setMonth(currentStart.getMonth() + limitEditor.durationMonths)).toISOString().split('T')[0];
     try {
-      const canonical = await mutateCentralSchool(currentSchool.id, {
-        operation: 'update',
-        name: currentSchool.name,
-        schoolCode: currentSchool.schoolCode,
-        status: limitEditor.status,
-        profile: {
-          shortName: currentSchool.schoolShortName || currentSchool.name,
-          plan: limitEditor.plan,
-          storageLimit: `${limitEditor.storageLimit} GB`,
-          userLimit: String(limitEditor.userLimit),
-          subscriptionDuration: String(limitEditor.durationMonths),
-          subscriptionStart: currentSchool.subscriptionStart || new Date().toISOString().split('T')[0],
-          subscriptionEnd: newEnd,
-        },
+      const canonicalTenant = await updateCanonicalTenantSubscription(currentTenant, {
+        planCode: limitEditor.plan,
+        status: 'active',
+        seatLimit: limitEditor.userLimit,
+        endsAt: newEnd,
+        tenantStatus: limitEditor.status as 'active' | 'suspended',
       });
-      const profile = canonical.central_metadata && typeof canonical.central_metadata === 'object' ? canonical.central_metadata : {};
-      const next = { ...profile, ...canonical, name: canonical.display_name, schoolCode: canonical.school_code };
-      setSchools(prev => prev.map(s => s.id === canonical.id ? { ...s, ...next } : s));
-      setCurrentSchool(prev => prev?.id === canonical.id ? { ...prev, ...next } : prev);
+      setTenants?.((current) => current.map((tenant) => tenant.id === canonicalTenant.id ? { ...tenant, ...canonicalTenant } : tenant));
+      setSchools((current) => current.map((school) => {
+        const schoolTenantId = school.tenantId || school.tenant_id;
+        return schoolTenantId === canonicalTenant.id && canonicalTenant.subscription
+          ? { ...school, plan: toDisplayPlan(canonicalTenant.planCode), subscriptionStatus: canonicalTenant.subscription.status, subscriptionStart: canonicalTenant.subscription.startsAt, subscriptionEnd: canonicalTenant.subscription.endsAt, userLimit: canonicalTenant.subscription.seatLimit }
+          : school;
+      }));
+      setCurrentSchool((current) => current?.id === currentSchool.id && canonicalTenant.subscription
+        ? { ...current, plan: toDisplayPlan(canonicalTenant.planCode), subscriptionStatus: canonicalTenant.subscription.status, subscriptionStart: canonicalTenant.subscription.startsAt, subscriptionEnd: canonicalTenant.subscription.endsAt, userLimit: canonicalTenant.subscription.seatLimit }
+        : current);
     } catch (error) {
       triggerNotification(error instanceof Error ? error.message : 'تعذر حفظ حدود الاشتراك في الإدارة المركزية.', 'danger');
       return;
@@ -374,10 +466,10 @@ export default function SuperAdminSchools({
 
     logAction(
       'UPDATE_LIMITS', 
-      `تعديل رخص واشتراك ${currentSchool.name}: الباقة [${limitEditor.plan}]، سعة تخزين [${limitEditor.storageLimit} GB]، مستخدمين [${limitEditor.userLimit}]`, 
+      `تعديل رخص واشتراك ${currentSchool.name}: الباقة [${limitEditor.plan}]، سعة التخزين [غير متحقق دون موصل]، مستخدمين [${limitEditor.userLimit}]`,
       'الاشتراكات والتراخيص'
     );
-    triggerNotification('تم تعديل رخصة الاشتراك وحفظ القيود الجديدة بنجاح', 'success');
+    triggerNotification('تم تعديل الباقة وحد المقاعد وحالة المستأجر في المصدر المركزي. السعة التخزينية بقيت كما هي لأنها تحتاج موصل تخزين موثق.', 'success');
     setShowLimitsModal(false);
   };
 
@@ -413,16 +505,23 @@ export default function SuperAdminSchools({
   // Open limit editor with prefilled school info
   const openLimitEditor = (school: any) => {
     setCurrentSchool(school);
-    const rawStorage = parseInt(school.storageLimit) || 500;
-    const rawUsers = parseInt(school.userLimit) || 3000;
+    const tenant = getTenantForSchool(school);
+    const startsAt = new Date(tenant?.subscription?.startsAt || tenant?.subscription?.starts_at || '');
+    const endsAt = new Date(tenant?.subscription?.endsAt || tenant?.subscription?.ends_at || '');
+    const durationMonths = Number.isNaN(startsAt.getTime()) || Number.isNaN(endsAt.getTime())
+      ? null
+      : Math.max(0, (endsAt.getUTCFullYear() - startsAt.getUTCFullYear()) * 12 + (endsAt.getUTCMonth() - startsAt.getUTCMonth()));
+    const parsedStorage = parseInt(String(school.storageLimit || ''), 10);
+    const rawStorage = Number.isFinite(parsedStorage) ? parsedStorage : null;
+    const parsedUsers = parseInt(String(school.userLimit || ''), 10);
+    const rawUsers = Number.isFinite(parsedUsers) ? parsedUsers : null;
     
     setLimitEditor({
-      plan: school.plan || 'Enterprise',
+      plan: toDisplayPlan(tenant?.subscription?.planCode || tenant?.subscription?.plan_code || school.plan),
       storageLimit: rawStorage,
       userLimit: rawUsers,
-      studentLimit: school.plan === 'Enterprise' ? 10000 : school.plan === 'Business' ? 5000 : 2000,
-      durationMonths: parseInt(school.subscriptionDuration) || 12,
-      status: school.status || 'active'
+      durationMonths,
+      status: tenant?.status === 'suspended' ? 'suspended' : tenant?.status === 'active' ? 'active' : ''
     });
     setShowLimitsModal(true);
   };
@@ -449,7 +548,7 @@ export default function SuperAdminSchools({
     const matchesStatus = () => {
       if (selectedStatus === 'all') return !school.archived; // Default: show active non-archived
       if (selectedStatus === 'archived') return !!school.archived; // Archived
-      return school.status === selectedStatus && !school.archived;
+      return getEffectiveSchoolStatus(school) === selectedStatus && !school.archived;
     };
 
     return matchesSearch && matchesCity && matchesPlan && matchesStatus();
@@ -459,7 +558,7 @@ export default function SuperAdminSchools({
     <div className="space-y-5 text-right animate-in fade-in duration-200" dir="rtl">
       
       {/* Search and Action Bar */}
-      <div className="bg-slate-900 border border-slate-800 p-4 flex flex-col md:flex-row gap-3 justify-between items-center">
+      <div className="rounded-3xl border-2 border-[#d4af37]/30 bg-gradient-to-b from-[#fffefc] via-[#fbf8f0] to-[#f5eeea] p-4 shadow-md flex flex-col md:flex-row gap-3 justify-between items-center">
         
         {/* Actions button */}
         <div className="flex gap-2 w-full md:w-auto">
@@ -471,14 +570,14 @@ export default function SuperAdminSchools({
             <span>تأسيس مستأجر مدرسة جديدة</span>
           </button>
 
-          <span className={`hidden lg:inline-flex items-center gap-1.5 px-3 text-[10px] font-bold border ${isDirectoryLoading ? 'text-amber-300 border-amber-900 bg-amber-950/30' : 'text-emerald-300 border-emerald-900 bg-emerald-950/30'}`}>
-            <span className={`w-1.5 h-1.5 rounded-full ${isDirectoryLoading ? 'bg-amber-400 animate-pulse' : 'bg-emerald-400'}`} />
-            {isDirectoryLoading ? 'جاري تحميل الدليل المركزي...' : 'الدليل المركزي متصل'}
+          <span className={`hidden lg:inline-flex items-center gap-1.5 px-3 text-[10px] font-bold border ${directoryStatus === 'loading' ? 'text-amber-300 border-amber-900 bg-amber-950/30' : directoryStatus === 'ready' ? 'text-emerald-300 border-emerald-900 bg-emerald-950/30' : 'text-rose-300 border-rose-900 bg-rose-950/30'}`}>
+            <span className={`w-1.5 h-1.5 rounded-full ${directoryStatus === 'loading' ? 'bg-amber-400 animate-pulse' : directoryStatus === 'ready' ? 'bg-emerald-400' : 'bg-rose-400'}`} />
+            {directoryStatus === 'loading' ? 'جاري تحميل الدليل المركزي...' : directoryStatus === 'ready' ? 'الدليل المركزي متصل' : 'تعذر اتصال الدليل المركزي'}
           </span>
 
           <button
             onClick={() => setShowCloneModal(true)}
-            className="bg-slate-950 border border-slate-800 hover:border-slate-700 text-amber-400 hover:text-amber-300 px-3.5 py-2.5 text-xs font-bold transition-all flex items-center justify-center gap-1.5 cursor-pointer shadow"
+            className="rounded-2xl bg-[#2a1a0e] border border-[#d4af37]/30 hover:border-[#f7d174] text-amber-200 hover:text-white px-3.5 py-2.5 text-xs font-bold transition-all flex items-center justify-center gap-1.5 cursor-pointer shadow"
           >
             <Copy className="w-4 h-4" />
             <span>نسخ وتهيئة الإعدادات</span>
@@ -486,21 +585,21 @@ export default function SuperAdminSchools({
         </div>
 
         {/* Search input */}
-        <div className="relative w-full md:max-w-md bg-gradient-to-b from-[#fffefc] via-[#fbf8f0] to-[#f5eeea] border-2 border-[#d4af37]/30 hover:border-[#d4af37] rounded-3xl p-4 sm:p-5 shadow-md transition-all duration-300">
+        <div className="relative w-full md:max-w-md bg-gradient-to-b from-[#fffefc] via-[#fbf8f0] to-[#f5eeea] border-2 border-[#d4af37]/30 hover:border-[#d4af37] rounded-2xl px-10 py-2 shadow-sm transition-all duration-300">
           <Search className="w-4 h-4 text-slate-500 absolute top-3 right-3" />
           <input
             type="text"
             placeholder="بحث في مدارس المستأجرين (الاسم، الرمز، النطاق الفرعي...)"
             value={searchTerm}
             onChange={(e) => setSearchTerm(e.target.value)}
-            className="w-full bg-slate-950 border border-slate-800 focus:border-amber-500 focus:ring-1 focus:ring-amber-500 pr-9 pl-4 py-2.5 text-xs text-white placeholder-slate-500 focus:outline-none transition-all"
+            className="w-full bg-transparent border-0 focus:border-amber-500 focus:ring-0 pr-0 pl-4 py-1.5 text-xs text-slate-900 placeholder-slate-500 focus:outline-none transition-all"
           />
         </div>
 
       </div>
 
       {/* Advanced Filter Pills Row */}
-      <div className="flex flex-wrap gap-4 items-center bg-slate-900/40 p-4 border border-slate-800/80 text-xs">
+      <div className="flex flex-wrap gap-4 items-center rounded-2xl bg-white/60 p-4 border border-[#d4af37]/20 text-xs shadow-sm">
         <span className="text-slate-400 font-bold">فلترة متقدمة:</span>
         
         {/* City Filter */}
@@ -509,7 +608,7 @@ export default function SuperAdminSchools({
           <select
             value={selectedCity}
             onChange={(e) => setSelectedCity(e.target.value)}
-            className="bg-slate-950 border border-slate-800 text-slate-300 rounded-lg px-2.5 py-1 focus:outline-none focus:border-amber-500"
+            className="bg-white border border-slate-200 text-slate-700 rounded-xl px-2.5 py-1 focus:outline-none focus:border-amber-500"
           >
             <option value="all">الكل</option>
             <option value="الرياض">الرياض</option>
@@ -524,7 +623,7 @@ export default function SuperAdminSchools({
           <select
             value={selectedPlan}
             onChange={(e) => setSelectedPlan(e.target.value)}
-            className="bg-slate-950 border border-slate-800 text-slate-300 rounded-lg px-2.5 py-1 focus:outline-none focus:border-amber-500"
+            className="bg-white border border-slate-200 text-slate-700 rounded-xl px-2.5 py-1 focus:outline-none focus:border-amber-500"
           >
             <option value="all">الكل</option>
             <option value="Basic">أساسية (Basic)</option>
@@ -539,9 +638,9 @@ export default function SuperAdminSchools({
           <select
             value={selectedStatus}
             onChange={(e) => setSelectedStatus(e.target.value)}
-            className="bg-slate-950 border border-slate-800 text-slate-300 rounded-lg px-2.5 py-1 focus:outline-none focus:border-amber-500"
+            className="bg-white border border-slate-200 text-slate-700 rounded-xl px-2.5 py-1 focus:outline-none focus:border-amber-500"
           >
-            <option value="all">نشطة (غير مؤرشفة)</option>
+            <option value="all">كل المدارس غير المؤرشفة</option>
             <option value="active">نشطة (Active)</option>
             <option value="suspended">موقوفة/مجمدة</option>
             <option value="trial">تجريبية</option>
@@ -551,17 +650,17 @@ export default function SuperAdminSchools({
         </div>
 
         {/* Results Counter */}
-        <div className="mr-auto text-[10px] bg-slate-950/60 border border-slate-800 rounded px-2.5 py-1 text-slate-400 font-mono">
+        <div className="mr-auto text-[10px] bg-[#2a1a0e] border border-[#d4af37]/30 rounded-full px-2.5 py-1 text-amber-100 font-mono">
           تم العثور على: {filteredSchools.length} مدرسة
         </div>
 
       </div>
 
       {/* Main Grid / Directory Table */}
-      <div className="bg-slate-900 border border-slate-800 rounded-3xl overflow-hidden shadow-xl">
+      <div className="bg-[#fffdf8] border-2 border-[#d4af37]/30 rounded-3xl overflow-hidden shadow-lg">
         <div className="overflow-x-auto">
           <table className="w-full text-right text-xs">
-            <thead className="bg-slate-950 text-slate-400 font-extrabold uppercase border-b border-slate-800">
+            <thead className="bg-[#2a1d13] text-amber-100 font-extrabold uppercase border-b border-[#d4af37]/20">
               <tr>
                 <th className="p-4 text-center w-8">#</th>
                 <th className="p-4 text-center w-14">الشعار</th>
@@ -573,7 +672,7 @@ export default function SuperAdminSchools({
                 <th className="p-4 text-center w-56">العمليات والتحكم المركزي</th>
               </tr>
             </thead>
-            <tbody className="divide-y divide-slate-800/60 text-slate-300 font-sans">
+            <tbody className="divide-y divide-amber-900/10 text-slate-700 font-sans">
               {filteredSchools.length === 0 ? (
                 <tr>
                   <td colSpan={8} className="p-12 text-center text-slate-500">
@@ -584,7 +683,7 @@ export default function SuperAdminSchools({
                 </tr>
               ) : (
                 filteredSchools.map((school, idx) => (
-                  <tr key={school.id} className="hover:bg-slate-950/40 transition-colors group">
+                  <tr key={school.id} className="hover:bg-[#fbf8f0] transition-colors group">
                     
                     {/* Index */}
                     <td className="p-4 text-center text-slate-500 font-mono font-bold w-8">{idx + 1}</td>
@@ -597,13 +696,15 @@ export default function SuperAdminSchools({
                     {/* School Name */}
                     <td className="p-4">
                       <div>
-                        <span className="font-extrabold text-white text-sm hover:text-amber-400 transition-colors block">
+                        <span className="font-extrabold text-slate-900 text-sm hover:text-amber-700 transition-colors block">
                           {school.name}
                         </span>
                         <div className="text-[10px] text-slate-500 mt-1 flex items-center gap-1.5">
-                          <span>المدير: {school.managerName || 'أ. سليمان بن غازي'}</span>
+                          <span>المستأجر: {tenants.find((tenant) => tenant.id === school.tenantId)?.legalName || school.tenantId || 'غير متحقق'}</span>
                           <span className="w-1 h-1 rounded-full bg-slate-700" />
-                          <span>التأسيس: {school.createdAt}</span>
+                          <span>المدير: {school.managerName || 'غير متحقق'}</span>
+                          <span className="w-1 h-1 rounded-full bg-slate-700" />
+                          <span>التأسيس: {school.created_at ? new Date(school.created_at).toLocaleDateString('ar-EG') : 'غير متحقق'}</span>
                         </div>
                       </div>
                     </td>
@@ -611,17 +712,17 @@ export default function SuperAdminSchools({
                     {/* Code & City */}
                     <td className="p-4">
                       <div className="space-y-1">
-                        <span className="bg-slate-950 border border-slate-850 px-2 py-0.5 rounded font-mono text-[10px] text-amber-400 font-bold inline-block">
+                        <span className="bg-amber-50 border border-amber-200 px-2 py-0.5 rounded-full font-mono text-[10px] text-amber-700 font-bold inline-block">
                           {school.schoolCode}
                         </span>
-                        <div className="text-slate-400 font-bold">{school.city || 'الرياض'}</div>
+                        <div className="text-slate-400 font-bold">{school.city || 'غير متحقق'}</div>
                       </div>
                     </td>
 
                     {/* Domain & Link */}
                     <td className="p-4">
                       <div className="space-y-1 font-mono">
-                        <span className="text-[11px] text-slate-300 select-all block text-left font-bold" dir="ltr">
+                          <span className="text-[11px] text-slate-700 select-all block text-left font-bold" dir="ltr">
                           {school.subdomain}.erpcloud.com
                         </span>
                         <div className="flex items-center gap-1.5 text-left pt-0.5" dir="ltr">
@@ -634,9 +735,9 @@ export default function SuperAdminSchools({
                             <ExternalLink className="w-3 h-3 text-amber-400" />
                             <span>فتح</span>
                           </button>
-                          <span className="text-[9px] text-emerald-400 flex items-center gap-0.5 font-bold">
-                            <ShieldCheck className="w-3 h-3" />
-                            SSL
+                          <span className="text-[9px] text-amber-400 flex items-center gap-0.5 font-bold">
+                            <ShieldAlert className="w-3 h-3" />
+                            SSL غير متحقق
                           </span>
                         </div>
                       </div>
@@ -655,8 +756,8 @@ export default function SuperAdminSchools({
                           {school.plan || 'أساسية'}
                         </span>
                         <div className="text-[10px] text-slate-500 mt-1.5 space-y-0.5 font-mono">
-                          <div>التخزين: {school.storageLimit || '٥٠٠ جيجا'}</div>
-                          <div>المستخدمين: {school.userLimit || 'غير محدود'}</div>
+                          <div>التخزين: {school.storageLimit || 'غير متحقق'}</div>
+                          <div>المستخدمين: {school.userLimit || 'غير متحقق'}</div>
                         </div>
                       </div>
                     </td>
@@ -664,16 +765,16 @@ export default function SuperAdminSchools({
                     {/* Status badge */}
                     <td className="p-4">
                       <span className={`px-2.5 py-1 rounded-full text-[9px] font-extrabold flex items-center gap-1.5 w-fit ${
-                        school.status === 'active' 
+                        getEffectiveSchoolStatus(school) === 'active'
                           ? 'bg-emerald-950/40 text-emerald-400 border border-emerald-900/50' 
-                          : school.status === 'suspended'
+                          : getEffectiveSchoolStatus(school) === 'suspended'
                           ? 'bg-rose-950/40 text-rose-400 border border-rose-900/50'
                           : 'bg-slate-950 text-slate-500 border border-slate-850'
                       }`}>
-                        <span className={`w-1.5 h-1.5 rounded-full ${school.status === 'active' ? 'bg-emerald-400 animate-pulse' : 'bg-rose-400'}`} />
+                        <span className={`w-1.5 h-1.5 rounded-full ${getEffectiveSchoolStatus(school) === 'active' ? 'bg-emerald-400 animate-pulse' : 'bg-rose-400'}`} />
                         <span>
-                          {school.status === 'active' ? 'نشط وقائم' : 
-                           school.status === 'suspended' ? 'مجمد وموقوف' : 'مفسوخ الرابط'}
+                          {getEffectiveSchoolStatus(school) === 'active' ? 'نشط وقائم' :
+                           getEffectiveSchoolStatus(school) === 'suspended' ? (school.tenantStatus === 'suspended' ? 'المستأجر موقوف' : 'مجمد وموقوف') : 'مفسوخ الرابط'}
                         </span>
                       </span>
                     </td>
@@ -718,14 +819,15 @@ export default function SuperAdminSchools({
                         {/* Toggle Suspend/Freeze */}
                         <button
                           onClick={() => handleToggleFreezeSchool(school)}
-                          title={school.status === 'suspended' ? 'تنشيط الخدمة' : 'تجميد مؤقت للامتثال'}
-                          className={`p-1.5 rounded-lg border transition-colors cursor-pointer ${
-                            school.status === 'suspended'
+                          disabled={school.tenantStatus === 'suspended'}
+                          title={school.tenantStatus === 'suspended' ? 'يتطلب تفعيل المستأجر أولاً' : getEffectiveSchoolStatus(school) === 'suspended' ? 'تنشيط الخدمة' : 'تجميد مؤقت للامتثال'}
+                          className={`p-1.5 rounded-lg border transition-colors cursor-pointer disabled:cursor-not-allowed disabled:opacity-45 ${
+                            getEffectiveSchoolStatus(school) === 'suspended'
                               ? 'bg-emerald-950/30 border-emerald-900 text-emerald-400 hover:bg-emerald-950/60'
                               : 'bg-amber-950/30 border-amber-900 text-amber-400 hover:bg-amber-950/60'
                           }`}
                         >
-                          {school.status === 'suspended' ? <CheckCircle className="w-3.5 h-3.5" /> : <Ban className="w-3.5 h-3.5" />}
+                          {getEffectiveSchoolStatus(school) === 'suspended' ? <CheckCircle className="w-3.5 h-3.5" /> : <Ban className="w-3.5 h-3.5" />}
                         </button>
 
                         {/* Archive / Restore toggle */}
@@ -792,6 +894,23 @@ export default function SuperAdminSchools({
 
             <form onSubmit={handleProvisionSchool} className="p-6 space-y-4 max-h-[80vh] overflow-y-auto pr-2">
               <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
+
+                {/* Owning Tenant */}
+                <div className="space-y-1 sm:col-span-2">
+                  <label className="text-xs font-bold text-slate-400 block">المستأجر المالك للمدرسة:</label>
+                  <select
+                    required
+                    value={newSchool.targetTenantId}
+                    onChange={(e) => setNewSchool({...newSchool, targetTenantId: e.target.value})}
+                    className="w-full bg-slate-950 border border-slate-800 focus:border-amber-500 rounded-lg px-3 py-2 text-xs text-white focus:outline-none"
+                  >
+                    <option value="">-- اختر المستأجر المركزي --</option>
+                    {tenants.map((tenant) => (
+                      <option key={tenant.id} value={tenant.id}>{tenant.legalName || tenant.legal_name} ({tenant.slug})</option>
+                    ))}
+                  </select>
+                  {!tenants.length && <p className="text-[10px] font-bold text-rose-400">لا يمكن تأسيس مدرسة قبل اتصال دليل المستأجرين المركزي.</p>}
+                </div>
                 
                 {/* School Name */}
                 <div className="space-y-1">
@@ -876,48 +995,15 @@ export default function SuperAdminSchools({
                   />
                 </div>
 
-                {/* Subscription Plan */}
-                <div className="space-y-1">
-                  <label className="text-xs font-bold text-slate-400 block">باقة الاشتراك المبدئية:</label>
-                  <select
-                    value={newSchool.plan}
-                    onChange={(e) => setNewSchool({...newSchool, plan: e.target.value})}
-                    className="w-full bg-slate-950 border border-slate-800 focus:border-amber-500 rounded-lg px-3 py-2 text-xs text-white focus:outline-none"
-                  >
-                    <option value="Basic">الأساسية (Basic)</option>
-                    <option value="Business">الأعمال (Business)</option>
-                    <option value="Enterprise">المؤسسات الكبرى (Enterprise)</option>
-                  </select>
-                </div>
-
-                {/* Subscription Duration */}
-                <div className="space-y-1">
-                  <label className="text-xs font-bold text-slate-400 block">فترة رخصة التفعيل:</label>
-                  <select
-                    value={newSchool.subscriptionDuration}
-                    onChange={(e) => setNewSchool({...newSchool, subscriptionDuration: e.target.value})}
-                    className="w-full bg-slate-950 border border-slate-800 focus:border-amber-500 rounded-lg px-3 py-2 text-xs text-white focus:outline-none"
-                  >
-                    <option value="3">٣ أشهر (نسخة تجريبية)</option>
-                    <option value="6">٦ أشهر</option>
-                    <option value="12">١٢ شهر (ترخيص سنوي)</option>
-                    <option value="24">٢٤ شهر (عامين)</option>
-                  </select>
-                </div>
-
-                {/* Storage Limit */}
-                <div className="space-y-1">
-                  <label className="text-xs font-bold text-slate-400 block">مساحة التخزين المستهدفة (GB):</label>
-                  <select
-                    value={newSchool.storageLimit}
-                    onChange={(e) => setNewSchool({...newSchool, storageLimit: e.target.value})}
-                    className="w-full bg-slate-950 border border-slate-800 focus:border-amber-500 rounded-lg px-3 py-2 text-xs text-white focus:outline-none"
-                  >
-                    <option value="100">100 GB</option>
-                    <option value="250">250 GB</option>
-                    <option value="500">500 GB (Enterprise default)</option>
-                    <option value="1024">1 TB (1024 GB)</option>
-                  </select>
+                {/* Subscription ownership */}
+                <div className="sm:col-span-2 rounded-2xl border border-amber-900/60 bg-amber-950/30 p-4">
+                  <div className="flex flex-wrap items-center justify-between gap-2">
+                    <span className="text-xs font-black text-amber-400">اشتراك المدرسة موروث من المستأجر المركزي</span>
+                    <span className="rounded-full border border-amber-700/60 bg-slate-950 px-3 py-1 text-[10px] font-black text-white">
+                      {selectedTenant?.subscription?.planCode || selectedTenant?.planCode || 'غير متحقق'}
+                    </span>
+                  </div>
+                  <p className="mt-2 text-[10px] font-bold leading-5 text-slate-400">لا تُنشئ هذه الشاشة باقة أو حصة مستقلة للمدرسة. تُدار الباقة وحد المقاعد وتاريخ الانتهاء من دليل المستأجرين المركزي حتى لا تتعدد مصادر الحقيقة.</p>
                 </div>
 
               </div>
@@ -940,7 +1026,7 @@ export default function SuperAdminSchools({
                 </button>
                 <button
                   type="submit"
-                  disabled={isProvisioning}
+                  disabled={isProvisioning || !newSchool.targetTenantId}
                   className="bg-amber-600 hover:bg-amber-500 disabled:bg-slate-700 disabled:text-slate-400 disabled:cursor-wait text-white font-extrabold px-6 py-2 shadow-md cursor-pointer transition-colors"
                 >
                   {isProvisioning ? 'جاري الحفظ المركزي والتحقق...' : 'تأكيد وفتح المدرسة مركزيًا ⚡'}
@@ -1040,6 +1126,8 @@ export default function SuperAdminSchools({
                     onChange={(e) => setLimitEditor({...limitEditor, plan: e.target.value})}
                     className="w-full bg-slate-950 border border-slate-800 rounded-lg px-3 py-2 text-xs text-white"
                   >
+                    <option value="" disabled>غير متحقق من اشتراك المستأجر</option>
+                    <option value="Standard">الباقة القياسية (Standard)</option>
                     <option value="Basic">أساسية المحدودة (Basic Plan)</option>
                     <option value="Business">متقدمة لرواد الأعمال (Business Plan)</option>
                     <option value="Enterprise">المؤسسات والشركات العملاقة (Enterprise SaaS)</option>
@@ -1050,16 +1138,16 @@ export default function SuperAdminSchools({
                 <div className="space-y-1.5">
                   <div className="flex justify-between text-xs font-bold">
                     <span className="text-slate-400">تخصيص السعة التخزينية المخصصة S3 Space:</span>
-                    <span className="text-amber-400 font-mono">{limitEditor.storageLimit} GB</span>
+                    <span className="text-amber-400 font-mono">{limitEditor.storageLimit === null ? 'غير متحقق' : `${limitEditor.storageLimit} GB`}</span>
                   </div>
                   <input
                     type="range"
                     min="10"
                     max="2048"
                     step="10"
-                    value={limitEditor.storageLimit}
-                    onChange={(e) => setLimitEditor({...limitEditor, storageLimit: parseInt(e.target.value)})}
-                    className="w-full accent-amber-500 h-2 bg-slate-950 rounded-lg cursor-pointer"
+                    value={limitEditor.storageLimit ?? 10}
+                    disabled
+                    className="w-full accent-amber-500 h-2 bg-slate-950 rounded-lg cursor-not-allowed opacity-50"
                   />
                   <span className="text-[10px] text-slate-500 block">الحد الأقصى المتاح للمستأجر الفردي هو ٢ تيرا بايت قبل تفريد العتاد.</span>
                 </div>
@@ -1070,7 +1158,7 @@ export default function SuperAdminSchools({
                     <label className="text-xs font-bold text-slate-400 block">سقف حسابات الموظفين (User limit):</label>
                     <input
                       type="number"
-                      value={limitEditor.userLimit}
+                      value={limitEditor.userLimit ?? ''}
                       onChange={(e) => setLimitEditor({...limitEditor, userLimit: parseInt(e.target.value)})}
                       className="w-full bg-slate-950 border border-slate-800 rounded-lg px-3 py-2 text-xs text-white font-mono"
                     />
@@ -1079,8 +1167,8 @@ export default function SuperAdminSchools({
                   <div className="space-y-1">
                     <label className="text-xs font-bold text-slate-400 block">فترة رخصة التمديد المضافة:</label>
                     <select
-                      value={limitEditor.durationMonths}
-                      onChange={(e) => setLimitEditor({...limitEditor, durationMonths: parseInt(e.target.value)})}
+                      value={limitEditor.durationMonths ?? ''}
+                      onChange={(e) => setLimitEditor({...limitEditor, durationMonths: e.target.value ? parseInt(e.target.value, 10) : null})}
                       className="w-full bg-slate-950 border border-slate-800 rounded-lg px-3 py-2 text-xs text-white"
                     >
                       <option value="3">٣ أشهر إضافية</option>
@@ -1249,7 +1337,7 @@ export default function SuperAdminSchools({
                       <span>جاري النسخ...</span>
                     </>
                   ) : (
-                    <span>تشغيل معالج النسخ المباشر ⚡</span>
+                   <span>طلب نسخ الإعدادات المركزي ⚡</span>
                   )}
                 </button>
               </div>
@@ -1267,17 +1355,17 @@ export default function SuperAdminSchools({
               <button onClick={() => setShowDeleteModal(false)} className="text-slate-400 hover:text-white bg-slate-950 p-1.5 rounded-lg border border-slate-850"><X className="w-4 h-4" /></button>
               <h3 className="text-sm font-black flex items-center gap-1.5">
                 <ShieldAlert className="w-5 h-5 text-rose-400 animate-bounce" />
-                تحذير أمني: الحذف الآمن للمستأجر
+                 تحذير أمني: الأرشفة الآمنة للمدرسة
               </h3>
             </div>
 
             <div className="p-6 space-y-4">
               <p className="text-xs text-slate-300 leading-relaxed">
-                أنت على وشك القيام بحذف المدرسة <strong className="text-white">[{currentSchool.name}]</strong> من محرك العمليات السريع. سيؤدي هذا الإجراء لتعليق فوري لقنوات الدخول، وإخفاء بيانات الفروع المرتبطة وتجنيبها، لحمايتها من التدمير غير المقصود.
+                 أنت على وشك أرشفة المدرسة <strong className="text-white">[{currentSchool.name}]</strong> من الدليل المركزي. سيُغلق سجل المدرسة وفروعها منطقيًا دون حذف مادي، ولا يمكن تنفيذ الإجراء إلا بعد تأكيد الاسم المطابق.
               </p>
 
               <div className="p-3 bg-rose-950/20 border border-rose-900/30 text-[10px] text-rose-300">
-                ⚠️ لسلامة الإجراء، يتطلب هذا الخيار كتابة الاسم المطابق للمستأجر بالكامل لتأكيد الحذف:
+                 ⚠️ لسلامة الإجراء، يتطلب هذا الخيار كتابة اسم المدرسة بالكامل لتأكيد الأرشفة:
               </div>
 
               <div className="space-y-1">

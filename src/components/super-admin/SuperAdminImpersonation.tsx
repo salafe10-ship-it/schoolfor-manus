@@ -24,11 +24,9 @@ export default function SuperAdminImpersonation({
   const [agreedToTerms, setAgreedToTerms] = useState(false);
   const [durationMinutes, setDurationMinutes] = useState('30');
 
-  // Impersonation Log History
-  const [logs, setLogs] = useState<any[]>(() => {
-    const saved = localStorage.getItem('edupro_impersonation_logs_v1');
-    return saved ? JSON.parse(saved) : [];
-  });
+  // The session broker is intentionally fail-closed until a short-lived,
+  // server-issued support-session connector is configured.
+  const [logs] = useState<any[]>([]);
 
   const handleStartImpersonation = (e: React.FormEvent) => {
     e.preventDefault();
@@ -40,43 +38,13 @@ export default function SuperAdminImpersonation({
     const school = schools.find(s => s.id === targetSchoolId);
     if (!school) return;
 
+    void durationMinutes;
+    void logAction;
+    void setSelectedSchool;
+    void setCurrentRole;
+    void setIsSuperAdminPortalActive;
+    void setCurrentPortal;
     triggerNotification('خدمة الولوج الآمن المركزية غير متاحة؛ لم تبدأ جلسة محاكاة ولم يُسجل نجاح.', 'warning');
-    return;
-
-    // Log the secure impersonation action
-    const newLog = {
-      id: `imp_${Date.now()}`,
-      adminName: 'سليمان بن غازي (SuperAdmin)',
-      schoolName: school.name,
-      reason: reason,
-      date: new Date().toISOString().replace('T', ' ').substring(0, 16),
-      duration: `${durationMinutes} دقيقة`,
-      status: 'active'
-    };
-
-    const updatedLogs = [newLog, ...logs];
-    setLogs(updatedLogs);
-    localStorage.setItem('edupro_impersonation_logs_v1', JSON.stringify(updatedLogs));
-
-    // Save impersonation session state for global UI warning banner
-    localStorage.setItem('impersonating_school_id', school.id);
-    localStorage.setItem('impersonation_school_name', school.name);
-    localStorage.setItem('impersonation_reason', reason);
-    localStorage.setItem('impersonation_active', 'true');
-
-    logAction(
-      'IMPERSONATE_SESSION_START',
-      `ولوج ومحاكاة دخول الدعم الفني لمدرسة ${school.name}. السبب: ${reason}`,
-      'المحاكاة والولوج الآمن'
-    );
-
-    triggerNotification(`تم بنجاح محاكاة الدخول الفني لـ ${school.name} 🚀 أنت في وضع الدعم المباشر الآن.`, 'success');
-
-    // Switch view context in App.tsx
-    setSelectedSchool(school);
-    setCurrentRole('SchoolAdmin'); // Act as school administrator
-    setIsSuperAdminPortalActive(false); // Hide central portal
-    if (setCurrentPortal) setCurrentPortal('school');
   };
 
   return (
@@ -88,7 +56,7 @@ export default function SuperAdminImpersonation({
         <div className="space-y-1">
           <h4 className="text-xs font-black text-slate-100">تحذير أمني صارم: محاكاة دخول الكوادر الفنية</h4>
           <p className="text-[10px] text-slate-400 leading-relaxed">
-            يُحظر استخدام ميزة المحاكاة (Impersonation) إلا في حالات الدعم الفني الحقيقية المصدق عليها من المدارس المستضيفة. كافة العمليات، وحركات السجلات المباشرة، وحذف المرفقات التي تقوم بها أثناء الولوج سيتم تسجيلها وحفظها بالكامل تحت هويتك الحقيقية لغايات الامتثال والأمان القانوني.
+            خدمة الولوج الفني مغلقة حاليًا. عند ربط وسيط الجلسات يجب أن يكون الدخول بموافقة موثقة ورمز قصير العمر وسجل تدقيق مركزي؛ لا تُمنح أي صلاحية من المتصفح.
           </p>
         </div>
       </div>

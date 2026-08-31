@@ -13,6 +13,7 @@
     "restore": "git checkout -- src/components/ExamsResultsModule.tsx",
     "lint": "tsc --noEmit",
     "db:migrate": "tsx src/database/scripts/migrate.ts",
+    "db:verify-central": "tsx scripts/verify-central-control-plane.ts",
     "db:seed": "tsx src/database/scripts/seed.ts",
     "provisioning:bootstrap": "tsx scripts/provisioning-bootstrap.ts",
     "provisioning:admin": "tsx scripts/provisioning-admin.ts",

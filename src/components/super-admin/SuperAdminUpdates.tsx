@@ -12,11 +12,9 @@ export default function SuperAdminUpdates({
   const [isDeploying, setIsDeploying] = useState(false);
   const [selectedChannel, setSelectedChannel] = useState<'stable' | 'beta'>('stable');
 
-  // Releases Data
-  const [releases, setReleases] = useState<any[]>(() => {
-    const saved = localStorage.getItem('edupro_releases_v1');
-    return saved ? JSON.parse(saved) : [];
-  });
+  // Release history is hidden until a verified deployment provider is
+  // connected; local release rows must never be presented as production data.
+  const [releases] = useState<any[]>([]);
 
   const handleTriggerDeploy = () => {
     triggerNotification('خدمة النشر المركزية غير متاحة؛ لم يتم نشر إصدار أو تسجيل نجاح وهمي.', 'warning');

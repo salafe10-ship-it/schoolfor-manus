@@ -1,5 +1,6 @@
 import { AlertTriangle, CheckCircle, Download, Filter, Info, Lock as LockIcon, Printer, RefreshCw, Search, Server, ShieldAlert, Trash2, X } from 'lucide-react';
-import React, { useState } from 'react';
+import React, { useEffect, useState } from 'react';
+import { authenticatedRequest } from '../../utils/authenticatedRequest';
 interface SuperAdminAuditProps {
   logAction: (action: string, details: string, section?: string) => void;
   triggerNotification: (msg: string, type: 'success' | 'danger' | 'warning' | 'info') => void;
@@ -10,19 +11,37 @@ export default function SuperAdminAudit({
   triggerNotification
 }: SuperAdminAuditProps) {
 
-  // Load only persisted audit evidence; never present local demo events as real history.
-  const [logs, setLogs] = useState<any[]>(() => {
-    const saved = localStorage.getItem('edupro_central_system_logs_v1');
-    if (saved) {
+  // Audit evidence is read-only and comes from the canonical central audit API.
+  const [logs, setLogs] = useState<any[]>([]);
+  const [isLoading, setIsLoading] = useState(true);
+
+  useEffect(() => {
+    let mounted = true;
+    const loadAudit = async () => {
+      setIsLoading(true);
       try {
-        return JSON.parse(saved);
-      } catch (e) {
-        // fall back
+        const response = await authenticatedRequest('/api/admin/central/audit?limit=500');
+        const payload = await response.json().catch(() => ({}));
+        if (!response.ok || !payload?.success || !Array.isArray(payload.logs)) throw new Error(payload?.message || 'تعذر تحميل سجل النشاط المركزي.');
+        if (!mounted) return;
+        setLogs(payload.logs.map((entry: any) => ({
+          ...entry,
+          level: ['denied', 'error', 'failure'].includes(entry.result) ? 'critical' : entry.result === 'partial' ? 'warning' : 'info',
+          user: entry.actor_name || entry.actor_user_id || 'خدمة مركزية',
+          details: entry.reason || `${entry.source || 'مصدر مركزي'} / ${entry.event_type || 'activity'}`,
+          ip: entry.metadata?.ipAddress || 'غير متاح',
+          timestamp: entry.created_at,
+          section: entry.school_name || 'الإدارة المركزية',
+        })));
+      } catch (error) {
+        if (mounted) triggerNotification(error instanceof Error ? error.message : 'تعذر تحميل سجل النشاط المركزي.', 'danger');
+      } finally {
+        if (mounted) setIsLoading(false);
       }
-    }
-    
-    return [];
-  });
+    };
+    void loadAudit();
+    return () => { mounted = false; };
+  }, []);
 
   // State for filters
   const [search, setSearch] = useState('');
@@ -31,47 +50,20 @@ export default function SuperAdminAudit({
 
   // Clear logs modal state
   const [showClearModal, setShowClearModal] = useState(false);
-  const [adminPassword, setAdminPassword] = useState('');
 
   // -------------------------------------------------------------
   // HANDLERS
   // -------------------------------------------------------------
 
-  // Save updated log bank
-  const saveLogs = (updatedLogs: any[]) => {
-    setLogs(updatedLogs);
-    localStorage.setItem('edupro_central_system_logs_v1', JSON.stringify(updatedLogs));
-  };
-
   // Clear all system audit logs (highly audited action itself)
   const handleConfirmClearLogs = (e: React.FormEvent) => {
     e.preventDefault();
-    if (!adminPassword || adminPassword.trim().length < 4) {
-      triggerNotification('يرجى إدخال رمز التأكيد المركزي المعتمد', 'danger');
-      return;
-    }
-
-    // Keep only the new audit record indicating logs were wiped
-    const wipedEntry = {
-      id: `log_wipe_${Date.now()}`,
-      level: 'critical',
-      user: 'مدير المنصة العام',
-      action: 'AUDIT_LOG_WIPED',
-      details: 'تم إجراء مسح وتصفير كلي لسجلات التدقيق والرقابة وتطهير الذاكرة',
-      section: 'الأمان والرقابة',
-      ip: '127.0.0.1',
-      timestamp: new Date().toISOString().replace('T', ' ').substring(0, 16)
-    };
-
-    saveLogs([wipedEntry]);
     setShowClearModal(false);
-    setAdminPassword('');
-    
-    logAction('AUDIT_LOG_WIPED', 'تم إجراء تصفير كلي ومحو لسجلات التدقيق المعتمدة من لوحة الإدارة', 'الأمان والرقابة');
-    triggerNotification('تم تصفير وإفراغ سجلات المراقبة والرقابة بنجاح 🗑️', 'warning');
+    void logAction;
+    triggerNotification('سجل التدقيق المركزي غير قابل للمحو من الواجهة؛ لم يتم حذف أي دليل.', 'warning');
   };
 
-  // Export to JSON/CSV simulation
+  // Export the currently loaded canonical evidence; this does not mutate it.
   const handleExportLogs = () => {
     const dataStr = "data:text/json;charset=utf-8," + encodeURIComponent(JSON.stringify(logs, null, 2));
     const downloadAnchor = document.createElement('a');
@@ -82,7 +74,7 @@ export default function SuperAdminAudit({
     downloadAnchor.remove();
 
     logAction('EXPORT_COMPLIANCE_LOGS', 'تصدير وتحميل حزمة ملفات التدقيق الأمني بصيغة JSON لغايات الامتثال', 'الأمان والرقابة');
-    triggerNotification('تم تجهيز وتصدير ملف سجلات التدقيق بنجاح 💾', 'success');
+    triggerNotification('تم تصدير دليل التدقيق المحمّل من المصدر المركزي 💾', 'success');
   };
 
   // Print logs template
@@ -119,7 +111,7 @@ export default function SuperAdminAudit({
         <div className="bg-slate-900 border border-slate-800 p-4 flex items-center justify-between">
           <div>
             <span className="text-[10px] text-slate-500 font-bold block mb-1">إجمالي سجلات العمليات</span>
-            <span className="text-xl font-mono font-black text-white">{logs.length}</span>
+            <span className="text-xl font-mono font-black text-white">{isLoading ? '...' : logs.length}</span>
           </div>
           <div className="p-2 bg-amber-950/40 text-amber-400">
             <Server className="w-5 h-5" />
@@ -130,7 +122,7 @@ export default function SuperAdminAudit({
         <div className="bg-slate-900 border border-slate-800 p-4 flex items-center justify-between">
           <div>
             <span className="text-[10px] text-slate-500 font-bold block mb-1">التهديدات والحوادث الحرجة</span>
-            <span className="text-xl font-mono font-black text-rose-500">{criticalCount}</span>
+            <span className="text-xl font-mono font-black text-rose-500">{isLoading ? '...' : criticalCount}</span>
           </div>
           <div className="p-2 bg-rose-950/40 text-rose-400">
             <ShieldAlert className="w-5 h-5 animate-pulse" />
@@ -141,7 +133,7 @@ export default function SuperAdminAudit({
         <div className="bg-slate-900 border border-slate-800 p-4 flex items-center justify-between">
           <div>
             <span className="text-[10px] text-slate-500 font-bold block mb-1">مخالفات وسياسات معلقة</span>
-            <span className="text-xl font-mono font-black text-amber-500">{warningCount}</span>
+            <span className="text-xl font-mono font-black text-amber-500">{isLoading ? '...' : warningCount}</span>
           </div>
           <div className="p-2 bg-amber-950/40 text-amber-400">
             <AlertTriangle className="w-5 h-5" />
@@ -152,7 +144,7 @@ export default function SuperAdminAudit({
         <div className="bg-slate-900 border border-slate-800 p-4 flex items-center justify-between">
           <div>
             <span className="text-[10px] text-slate-500 font-bold block mb-1">حالة الجدار الناري الموحد (WAF)</span>
-            <span className="text-xs font-black text-emerald-400 bg-emerald-950/40 border border-emerald-900 px-2 py-0.5 rounded mt-1 inline-block">حماية قصوى ON</span>
+            <span className="text-xs font-black text-amber-400 bg-amber-950/40 border border-amber-900 px-2 py-0.5 rounded mt-1 inline-block">غير متحقق</span>
           </div>
           <div className="p-2 bg-emerald-950/40 text-emerald-400">
             <LockIcon className="w-5 h-5" />
@@ -185,10 +177,10 @@ export default function SuperAdminAudit({
           <button
             onClick={() => setShowClearModal(true)}
             className="bg-rose-950/30 hover:bg-rose-950/60 border border-rose-900/60 text-rose-400 font-extrabold text-xs px-3.5 py-2.5 transition-all cursor-pointer flex items-center justify-center gap-1.5"
-            title="تصفير ومحو سجلات التدقيق"
+            title="سياسة الاحتفاظ بسجلات التدقيق"
           >
             <Trash2 className="w-4 h-4" />
-            <span>تصفير كلي للوج</span>
+            <span>سياسة عدم الحذف</span>
           </button>
         </div>
 
@@ -342,7 +334,7 @@ export default function SuperAdminAudit({
           MODALS
       ------------------------------------------------------------- */}
 
-      {/* Modal A: Safe verification wipe logs */}
+      {/* Modal A: Immutable audit policy */}
       {showClearModal && (
         <div className="fixed inset-0 bg-slate-950/85 backdrop-blur-sm flex items-center justify-center z-50 p-4">
           <div className="bg-slate-900 border-2 border-rose-900 rounded-3xl shadow-2xl max-w-md w-full overflow-hidden text-right animate-in fade-in zoom-in-95 duration-200">
@@ -350,38 +342,21 @@ export default function SuperAdminAudit({
               <button onClick={() => setShowClearModal(false)} className="text-slate-400 hover:text-white bg-slate-950 p-1.5 rounded-lg border border-slate-850"><X className="w-4 h-4" /></button>
               <h3 className="text-sm font-black flex items-center gap-1.5">
                 <ShieldAlert className="w-5 h-5 text-rose-400 animate-bounce" />
-                تحذير حرج للغاية: مسح دفتر المراقبة والرقابة
+                سياسة الاحتفاظ بسجل المراقبة
               </h3>
             </div>
 
             <form onSubmit={handleConfirmClearLogs} className="p-6 space-y-4">
               <p className="text-xs text-slate-300 leading-relaxed">
-                مسح وحذف سجلات الرقابة هو إجراء حساس جداً وقد يخالف متطلبات الامتثال السحابي. بمجرد تأكيد الإجراء، لن يتمكن مدققي الحماية من تعقب الأحداث السابقة.
+                سجل التدقيق المركزي غير قابل للمحو من الواجهة. تُدار مدد الاحتفاظ والحذف القانوني من سياسة خادم معتمدة وبصلاحية مستقلة، مع تسجيل كل إجراء.
               </p>
 
-              <div className="p-3 bg-rose-950/20 border border-rose-900/30 text-[10px] text-rose-300">
-                للمتابعة، أدخل كلمة المرور الخاصة بحساب الإدارة المركزية المعتمد لتأكيد الموثوقية الأمنية.
-              </div>
-
-              <div>
-                <label className="text-xs font-bold text-slate-400 block mb-1">رمز تأكيد الموثوقية الموحد:</label>
-                <input
-                  type="password"
-                  required
-                  placeholder="أدخل كلمة المرور هنا..."
-                  value={adminPassword}
-                  onChange={(e) => setAdminPassword(e.target.value)}
-                  className="w-full bg-slate-950 border border-slate-800 focus:border-rose-500 rounded-lg px-3 py-2 text-xs text-white font-mono text-center"
-                />
-              </div>
-
               <div className="pt-4 border-t border-slate-800 flex justify-end gap-2 text-xs">
-                <button type="button" onClick={() => setShowClearModal(false)} className="px-4 py-2 border border-slate-850 hover:bg-slate-800 text-slate-400">تراجع وإلغاء</button>
                 <button 
                   type="submit" 
-                  className="bg-rose-600 hover:bg-rose-500 text-white font-black px-5 py-2 rounded-xl"
+                  className="bg-slate-800 hover:bg-slate-700 text-white font-black px-5 py-2 rounded-xl"
                 >
-                  تأكيد مسح وتطهير السجلات 🧹
+                  فهمت السياسة
                 </button>
               </div>
             </form>

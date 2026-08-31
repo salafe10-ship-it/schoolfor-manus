@@ -480,22 +480,6 @@ export default function App() {
     }
   }, [trustedSessionUser, activeSection]);
 
-  const [isImpersonating, setIsImpersonating] = useState<boolean>(() => {
-    return localStorage.getItem('impersonation_active') === 'true';
-  });
-
-  useEffect(() => {
-    const checkImpersonation = () => {
-      setIsImpersonating(localStorage.getItem('impersonation_active') === 'true');
-    };
-    window.addEventListener('storage', checkImpersonation);
-    window.addEventListener('erp_impersonation_changed', checkImpersonation);
-    return () => {
-      window.removeEventListener('storage', checkImpersonation);
-      window.removeEventListener('erp_impersonation_changed', checkImpersonation);
-    };
-  }, []);
-
   // Shared Central Permissions and Users states (Single Source of Truth)
   const [simulatedUsers, setSimulatedUsers] = useState<any[]>(() => {
     const saved = localStorage.getItem('erp_users_list_v1');
@@ -677,12 +661,8 @@ export default function App() {
     assignedClasses: 'الصف الأول الثانوي'
   });
 
-  const [backupLogs, setBackupLogs] = useState<string[]>([
-    'تأهب النظام وتدقيق الملفات الساقطة... مكتمل',
-    'تأسيس الاتصال الآمن مع خوادم النسخ الاحتياطية السحابية... متصل',
-    'شحن نسخة احتياطية مشفرة بكود SHA-256 للمستودع السحابي... ناجح'
-  ]);
-  const [isBackingUp, setIsBackingUp] = useState(false);
+  const backupLogs: string[] = [];
+  const isBackingUp = false;
 
   // Active searching terms
   const [studentSearch, setStudentSearch] = useState('');
@@ -1090,25 +1070,9 @@ export default function App() {
     });
   };
 
-  // Run dynamic backup routine simulation
+  // The UI stays fail-closed until a durable backup provider is configured.
   const startBackupProcess = () => {
-    if (isBackingUp) return;
-    setIsBackingUp(true);
-    setBackupLogs(prev => [`[${new Date().toLocaleTimeString()}] جاري فحص تكامل الجداول والتحقق من RLS للمستأجرين...`, ...prev]);
-    
-    setTimeout(() => {
-      setBackupLogs(prev => [`[${new Date().toLocaleTimeString()}] جاري إنشاء نسخة احتياطية مضغوطة من جداول (students, teachers, invoices)...`, ...prev]);
-    }, 1000);
-
-    setTimeout(() => {
-      setBackupLogs(prev => [
-        `[${new Date().toLocaleTimeString()}] نجحت عملية النسخ الاحتياطي! تم رفع الملف بنجاح إلى Supabase Bucket بالاسم: backup_sahab_erp_${Date.now().toString().slice(-6)}.tar.gz`,
-        ...prev
-      ]);
-      setIsBackingUp(false);
-      logAction('BACKUP_SYSTEM', 'تم إجراء نسخ احتياطي فوري متكامل لقواعد الفروع السحابية التابعة', 'إدارة النسخ الاحتياطي');
-      triggerNotification('تم رفع لقطة صيانة وقاعدة بيانات كاملة السيرفر بنجاح', 'success');
-    }, 2500);
+    triggerNotification('خدمة النسخ الاحتياطي المركزية غير مهيأة؛ لم يتم إنشاء أو رفع نسخة احتياطية.', 'warning');
   };
 
   // Update Supabase configuration endpoint patterns
@@ -1449,46 +1413,6 @@ export default function App() {
 
       {/* Main Area Wrapping Topbar and Dynamic Subview Stage */}
       <div className="flex-1 flex flex-col overflow-hidden w-full">
-        
-        {isImpersonating && (
-          <div className="bg-gradient-to-r from-rose-700 via-rose-600 to-rose-800 text-white p-3 flex justify-between items-center text-xs font-black shadow-lg relative z-50 select-none animate-in slide-in-from-top duration-300 border-b border-rose-800 shrink-0 font-sans" dir="rtl">
-            <div className="flex flex-wrap items-center gap-2">
-              <span className="w-2.5 h-2.5 rounded-full bg-white animate-ping shrink-0" />
-              <span>⚠️ أنت في وضع الدخول الإداري الفني المؤقت لـ:</span>
-              <span className="bg-white/20 px-2 py-0.5 rounded font-extrabold">{localStorage.getItem('impersonated_school_name') || selectedSchool.name}</span>
-              <span className="text-rose-100 text-[10px]">| المهندس المسؤول: {localStorage.getItem('impersonator_name') || 'سليمان غازي'}</span>
-              <span className="text-rose-100 text-[10px] hidden md:inline">| الغرض: {localStorage.getItem('impersonation_reason') || 'دعم فني وتفتيش'}</span>
-            </div>
-            <button
-              onClick={() => {
-                localStorage.removeItem('impersonation_active');
-                localStorage.removeItem('impersonator_name');
-                localStorage.removeItem('impersonated_school_id');
-                localStorage.removeItem('impersonated_school_name');
-                localStorage.removeItem('impersonation_start_time');
-                localStorage.removeItem('impersonation_reason');
-                
-                setCurrentRole('SuperAdmin');
-                setIsSuperAdminPortalActive(true);
-                setCurrentPortal('admin');
-                setIsImpersonating(false);
-                
-                logAction(
-                  'SUPPORT_IMPERSONATION_END',
-                  `إنهاء جلسة الدعم الفني للمستأجر والعودة المركزية الفورية للوحة مركز العمليات.`,
-                  'مركز العمليات - الدعم الفني'
-                );
-                triggerNotification('تم إنهاء جلسة الدعم الفني بنجاح والعودة للإدارة المركزية.', 'success');
-                
-                window.dispatchEvent(new Event('erp_impersonation_changed'));
-              }}
-              className="bg-white hover:bg-rose-50 text-rose-700 hover:text-rose-800 px-3 py-1.5 rounded-lg text-[10px] font-black transition-all cursor-pointer shadow-xs shrink-0 flex items-center gap-1 font-sans"
-            >
-              <LogOut className="w-3.5 h-3.5" />
-              <span>إنهاء الجلسة والعودة للإدارة المركزية</span>
-            </button>
-          </div>
-        )}
         
         {/* Top Header Actions Bar */}
         {!isSuperAdminViewActive && activeSection !== 'system_health' && activeSection !== 'student_accounts' && (

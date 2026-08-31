@@ -4,30 +4,37 @@ import { PieChart, Pie, Cell, ResponsiveContainer, Tooltip } from 'recharts';
 import { motion, AnimatePresence } from 'motion/react';
 import { copyTextToClipboard } from '../SuperAdminView';
 import { getTrustedSchoolUrl, openTrustedSchoolPortal } from '../../utils/EnterpriseDomainUtils';
-import { FallbackStorage } from '../../database/repositories/FallbackStorage';
+import { authenticatedRequest } from '../../utils/authenticatedRequest';
+import { toDisplayPlan, updateCanonicalTenantStatus, updateCanonicalTenantSubscription } from '../../utils/centralTenantSubscription';
 
 interface SuperAdminOperationsCenterProps {
   schools: any[];
   setSchools: React.Dispatch<React.SetStateAction<any[]>>;
   branches: any[];
+  tenants?: any[];
+  setTenants?: React.Dispatch<React.SetStateAction<any[]>>;
   logAction: (action: string, details: string, section?: string) => void;
   triggerNotification: (msg: string, type: 'success' | 'danger' | 'warning' | 'info') => void;
   setSelectedSchool: (school: any) => void;
   setCurrentRole: (role: any) => void;
   setIsSuperAdminPortalActive: (v: boolean) => void;
   setCurrentPortal?: (portal: any) => void;
+  onNavigateToTab?: (tab: string) => void;
 }
 
 export default function SuperAdminOperationsCenter({
   schools = [],
   setSchools,
   branches = [],
+  tenants = [],
+  setTenants,
   logAction,
   triggerNotification,
   setSelectedSchool,
   setCurrentRole,
   setIsSuperAdminPortalActive,
-  setCurrentPortal
+  setCurrentPortal,
+  onNavigateToTab
 }: SuperAdminOperationsCenterProps) {
 
   // Selected Tab inside Operations Center
@@ -57,96 +64,28 @@ export default function SuperAdminOperationsCenter({
   const [supportReason, setSupportReason] = useState('');
   const [isImpersonationSubmitting, setIsImpersonationSubmitting] = useState(false);
 
-  // Progressive backup loading simulation
-  const [isBackupLoading, setIsBackupLoading] = useState(false);
-  const [backupProgress, setBackupProgress] = useState(0);
-  const [backupStatusText, setBackupStatusText] = useState('');
-  
-  const [backupLogs, setBackupLogs] = useState<any[]>(() => {
-    return [];
-  });
-
-  // Simulated live system logs stream for operations center
-  const [liveLogs, setLiveLogs] = useState<string[]>([]);
-
-  // Telemetry real-time updates
-  const [telemetry, setTelemetry] = useState({
-    cpu: 0,
-    ram: 0,
-    ramLimit: 0,
-    latency: 0,
-    requestCount: 0,
-    errorCount: 0,
-    onlineUsers: 0,
-    activeSessions: 0
-  });
-
-  const [telemetryHistory, setTelemetryHistory] = useState<number[]>([]);
+  // لا تُعرض لقطات أو مهام نسخ من دون موصل تخزين مركزي موثق.
+  const backupLogs: any[] = [];
 
   // Keep state matching active school selection
   useEffect(() => {
     if (activeSchool) {
+      const tenantId = activeSchool.tenantId || activeSchool.tenant_id;
+      const tenant = tenants.find((item) => item.id === tenantId);
       setNewSubdomain(activeSchool.subdomain || '');
-      setTempPlan(activeSchool.plan || 'Enterprise');
-      setTempUserLimit(activeSchool.userLimit || '5000');
-      setTempStorageLimit(activeSchool.storageLimit || '1024 GB');
-      setTempEnd(activeSchool.subscriptionEnd || '2027-01-12');
+      setTempPlan(toDisplayPlan(tenant?.subscription?.planCode || tenant?.planCode || activeSchool.plan));
+      setTempUserLimit(tenant?.subscription?.seatLimit ? String(tenant.subscription.seatLimit) : activeSchool.userLimit || '');
+      setTempStorageLimit(activeSchool.storageLimit || '');
+      setTempEnd(tenant?.subscription?.endsAt || activeSchool.subscriptionEnd || '');
     }
-  }, [selectedSchoolId, activeSchool]);
-
-  // Simulated real-time telemetry oscillation
-  useEffect(() => {
-    // لا تُحاكى القياسات؛ تُملأ من موصل المراقبة المركزي عند توفره.
-    return;
-    const interval = setInterval(() => {
-      let nextCpu = 28;
-      setTelemetry(prev => {
-        nextCpu = Math.min(92, Math.max(12, prev.cpu + Math.round(Math.random() * 12 - 6)));
-        return {
-          cpu: nextCpu,
-          ram: Number(Math.min(15.8, Math.max(4.0, prev.ram + (Math.random() * 0.4 - 0.2))).toFixed(1)),
-          ramLimit: 16.0,
-          latency: Math.min(110, Math.max(15, prev.latency + Math.round(Math.random() * 6 - 3))),
-          requestCount: prev.requestCount + Math.round(Math.random() * 20 - 5),
-          errorCount: Math.random() > 0.85 ? Math.max(0, prev.errorCount + Math.round(Math.random() * 2 - 1)) : prev.errorCount,
-          onlineUsers: Math.min(1200, Math.max(250, prev.onlineUsers + Math.round(Math.random() * 8 - 4))),
-          activeSessions: Math.min(3000, Math.max(800, prev.activeSessions + Math.round(Math.random() * 12 - 6)))
-        };
-      });
-
-      setTelemetryHistory(prev => {
-        const next = [...prev.slice(1), nextCpu];
-        return next;
-      });
-    }, 4000);
-    return () => clearInterval(interval);
-  }, []);
-
-  // Simulated live syslog generator
-  useEffect(() => {
-    // لا تُولّد سجلات تشغيل محلية؛ السجل الحي يجب أن يأتي من المصدر المركزي.
-    return;
-    const interval = setInterval(() => {
-      const msgs = [
-        `[ROUTER] إعادة توجيه طلب آمن لـ ${activeSchool?.subdomain || 'alnoor'}.erpcloud.com في 2ms.`,
-        `[AUDIT] تحقق من صلاحيات الدخول الفيدرالية للـ Tenant ${activeSchool?.name || 'مدارس النور'}.`,
-        `[BACKUP] التحقق من سلامة البنية التحتية والمزامنة التلقائية لقواعد البيانات.`,
-        `[METRIC] الذاكرة المخصصة لمخدمات النطاق الموحد مستقرة وضمن الحدود الآمنة.`,
-        `[GATEWAY] استدعاء API لخدمة Supabase Auth تكلل بالنجاح (٢٢ مللي ثانية).`
-      ];
-      const selectedMsg = msgs[Math.floor(Math.random() * msgs.length)];
-      const now = new Date().toLocaleTimeString('ar-EG');
-      setLiveLogs(prev => [`[${now}] ${selectedMsg}`, ...prev.slice(0, 6)]);
-    }, 5000);
-    return () => clearInterval(interval);
-  }, [activeSchool]);
+  }, [selectedSchoolId, activeSchool, tenants]);
 
   // Alerts Center State
-  const [alerts, setAlerts] = useState<any[]>([]);
+  const alerts: any[] = [];
 
   const handleDismissAlert = (id: string) => {
-    setAlerts(prev => prev.filter(a => a.id !== id));
-    triggerNotification('تم تجاهل التنبيه وأرشفته مؤقتاً.', 'info');
+    void id;
+    triggerNotification('لا يوجد مصدر حوادث مركزي موثق للحذف أو الأرشفة؛ لم يتغير سجل التدقيق.', 'warning');
   };
 
   const handleResolveAlert = (alert: any) => {
@@ -158,44 +97,64 @@ export default function SuperAdminOperationsCenter({
     } else {
       setActiveTab('support');
     }
-    setAlerts(prev => prev.filter(a => a.id !== alert.id));
-    triggerNotification(`تم الانتقال للتعامل المباشر مع تنبيه: ${alert.category}`, 'success');
+    triggerNotification(`تم فتح مسار المعالجة المقترح للتنبيه: ${alert.category}. لم يُغلق التنبيه دون مصدر مركزي موثق.`, 'info');
   };
 
-  // Modules Configuration state helper
-  const [schoolModules, setSchoolModules] = useState<Record<string, { active: boolean; visible: boolean; premium: boolean }>>(() => {
-    const saved = localStorage.getItem('erp_tenant_modules_v1');
-    return saved ? JSON.parse(saved) : {
-      school_1_students: { active: true, visible: true, premium: true },
-      school_1_employees: { active: true, visible: true, premium: true },
-      school_1_accounts: { active: true, visible: true, premium: true },
-      school_1_transport: { active: true, visible: true, premium: false },
-      school_1_exams: { active: true, visible: true, premium: true },
-      school_1_inventory: { active: true, visible: true, premium: false },
-
-      school_2_students: { active: true, visible: true, premium: true },
-      school_2_employees: { active: true, visible: true, premium: true },
-      school_2_accounts: { active: true, visible: true, premium: false },
-      school_2_transport: { active: true, visible: true, premium: true },
-      school_2_exams: { active: true, visible: true, premium: true },
-      school_2_inventory: { active: false, visible: false, premium: false },
-
-      school_3_students: { active: true, visible: true, premium: false },
-      school_3_employees: { active: true, visible: true, premium: false },
-      school_3_accounts: { active: false, visible: false, premium: false },
-      school_3_transport: { active: false, visible: false, premium: false },
-      school_3_exams: { active: true, visible: true, premium: false },
-      school_3_inventory: { active: false, visible: false, premium: false }
-    };
-  });
-
-  const saveModulesConfig = (updated: typeof schoolModules) => {
-    if (FallbackStorage.isCanonicalPersistenceRequired()) {
-      triggerNotification('إدارة وحدات المستأجرين متوقفة حتى يتم ربط المصدر المركزي الموثوق.', 'warning');
-      return;
+  const updateCentralSchool = async (school: any, profile: Record<string, unknown>, status?: string) => {
+    if (!school?.id) throw new Error('يجب تحديد مدرسة من الدليل المركزي قبل الحفظ.');
+    const response = await authenticatedRequest(`/api/admin/central/schools/${encodeURIComponent(school.id)}`, {
+      method: 'PATCH',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        operation: 'update',
+        name: school.name,
+        schoolCode: school.schoolCode,
+        ...(status ? { status } : {}),
+        profile,
+      }),
+    });
+    const payload = await response.json().catch(() => ({}));
+    if (!response.ok || !payload?.success || !payload?.school) {
+      throw new Error(payload?.message || 'تعذر حفظ التغيير في الدليل المركزي.');
     }
-    setSchoolModules(updated);
-    localStorage.setItem('erp_tenant_modules_v1', JSON.stringify(updated));
+    return payload.school;
+  };
+
+  const applyCanonicalSchool = (canonical: any) => {
+    const profile = canonical.central_metadata && typeof canonical.central_metadata === 'object' ? canonical.central_metadata : {};
+    const nextSchool = {
+      ...profile,
+      ...canonical,
+      id: canonical.id,
+      name: canonical.display_name,
+      schoolCode: canonical.school_code,
+      archived: canonical.status === 'archived',
+      schoolUrl: getTrustedSchoolUrl({ ...profile, id: canonical.id }),
+    };
+    setSchools(prev => prev.map(item => item.id === canonical.id ? { ...item, ...nextSchool } : item));
+  };
+
+  const getTenantForSchool = (school: any) => {
+    const tenantId = school?.tenantId || school?.tenant_id;
+    return tenants.find((tenant) => tenant.id === tenantId) || null;
+  };
+
+  const activeTenant = getTenantForSchool(activeSchool);
+
+  const applyCanonicalTenant = (canonicalTenant: any) => {
+    setTenants?.((current) => current.map((tenant) => tenant.id === canonicalTenant.id ? { ...tenant, ...canonicalTenant } : tenant));
+    setSchools((current) => current.map((school) => {
+      const schoolTenantId = school.tenantId || school.tenant_id;
+      if (schoolTenantId !== canonicalTenant.id || !canonicalTenant.subscription) return school;
+      return {
+        ...school,
+        plan: toDisplayPlan(canonicalTenant.planCode),
+        subscriptionStatus: canonicalTenant.subscription.status,
+        subscriptionStart: canonicalTenant.subscription.startsAt,
+        subscriptionEnd: canonicalTenant.subscription.endsAt,
+        userLimit: canonicalTenant.subscription.seatLimit,
+      };
+    }));
   };
 
   const toggleModuleProperty = (schoolId: string, moduleKey: string, prop: 'active' | 'visible' | 'premium') => {
@@ -206,10 +165,21 @@ export default function SuperAdminOperationsCenter({
   };
 
   // Cloud Link Handler
-  const handleUpdateLink = (e: React.FormEvent) => {
+  const handleUpdateLink = async (e: React.FormEvent) => {
     e.preventDefault();
-    void newSubdomain;
-    triggerNotification('إدارة النطاقات تتم من شاشة النطاقات المركزية؛ لا يوجد موصل DNS هنا ولم يتم تعديل رابط محلي.', 'warning');
+    if (!activeSchool || !newSubdomain.trim()) {
+      triggerNotification('اختر مدرسة وأدخل نطاقاً فرعياً صالحاً قبل الحفظ.', 'warning');
+      return;
+    }
+    try {
+      const canonical = await updateCentralSchool(activeSchool, { subdomain: newSubdomain.trim().toLowerCase() });
+      applyCanonicalSchool(canonical);
+      logAction('UPDATE_SUBDOMAIN', `تحديث النطاق الفرعي من مركز العمليات للمدرسة: ${activeSchool.name}`, 'إدارة أسماء النطاقات والروابط');
+      triggerNotification('تم حفظ النطاق الفرعي في الدليل المركزي. فحص DNS/SSL ما زال يحتاج موصل البنية التحتية.', 'success');
+      setIsEditingLink(false);
+    } catch (error) {
+      triggerNotification(error instanceof Error ? error.message : 'تعذر حفظ النطاق؛ لم يتم تعديل البيانات.', 'danger');
+    }
   };
 
   const handleRegenerateLink = () => {
@@ -217,17 +187,97 @@ export default function SuperAdminOperationsCenter({
   };
 
   // Subscription Details Handler
-  const handleSaveSubscription = (e: React.FormEvent) => {
+  const handleSaveSubscription = async (e: React.FormEvent) => {
     e.preventDefault();
-    void tempPlan;
-    void tempUserLimit;
-    void tempStorageLimit;
-    void tempEnd;
-    triggerNotification('إدارة الاشتراكات تتم من شاشة الاشتراكات المركزية؛ لم يتم حفظ تعديل محلي.', 'warning');
+    if (!activeSchool) {
+      triggerNotification('لا توجد مدرسة محددة للحفظ.', 'warning');
+      return;
+    }
+    const tenant = getTenantForSchool(activeSchool);
+    const currentStorageLimit = parseInt(String(activeSchool.storageLimit || ''), 10);
+    const requestedStorageLimit = parseInt(String(tempStorageLimit || ''), 10);
+    const storageChanged = Number.isFinite(currentStorageLimit) !== Number.isFinite(requestedStorageLimit)
+      || (Number.isFinite(currentStorageLimit) && Number.isFinite(requestedStorageLimit) && currentStorageLimit !== requestedStorageLimit);
+    if (storageChanged) {
+      triggerNotification('تعديل السعة التخزينية يحتاج موصل تخزين مركزي موثق؛ لم يتم حفظ أي جزء من التعديل.', 'warning');
+      return;
+    }
+    const seatLimit = Number(tempUserLimit);
+    if (!tenant?.subscription || !Number.isSafeInteger(seatLimit) || seatLimit < 1) {
+      triggerNotification('بيانات المستأجر أو حد المستخدمين غير مكتملة؛ لم يتم حفظ تعديل جزئي.', 'warning');
+      return;
+    }
+    try {
+      const canonicalTenant = await updateCanonicalTenantSubscription(tenant, {
+        planCode: tempPlan.trim(),
+        status: tenant.subscription.status === 'expired' ? 'active' : tenant.subscription.status,
+        seatLimit,
+        endsAt: tempEnd.trim() || null,
+      });
+      applyCanonicalTenant(canonicalTenant);
+      logAction('UPDATE_SUBSCRIPTION', `حفظ اشتراك المدرسة من مركز العمليات: ${activeSchool.name}`, 'إدارة الاشتراكات والتراخيص');
+      triggerNotification(`تم حفظ باقة وحد مقاعد اشتراك ${activeSchool.name} في الدليل المركزي. السعة التخزينية بقيت كما هي لأنها تحتاج موصل تخزين موثق.`, 'success');
+    } catch (error) {
+      triggerNotification(error instanceof Error ? error.message : 'تعذر حفظ الاشتراك؛ لم يتم تعديل البيانات.', 'danger');
+    }
   };
 
-  const handleSubscriptionQuickAction = (actionType: 'renew' | 'suspend' | 'upgrade' | 'downgrade') => {
-    triggerNotification(`إجراء الترخيص (${actionType}) متاح من شاشة الاشتراكات المركزية فقط؛ لم يتم تعديل أي بيانات محلية.`, 'warning');
+  const handleSubscriptionQuickAction = async (actionType: 'renew' | 'suspend' | 'upgrade' | 'downgrade') => {
+    if (!activeSchool) {
+      triggerNotification('لا توجد مدرسة محددة لتنفيذ الإجراء.', 'warning');
+      return;
+    }
+    const tenant = getTenantForSchool(activeSchool);
+    if (!tenant?.subscription) {
+      triggerNotification('لا يوجد اشتراك كانونى مرتبط بهذه المدرسة؛ افتح دليل المستأجرين أولاً.', 'warning');
+      return;
+    }
+    const plans = ['Standard', 'Basic', 'Business', 'Enterprise'];
+    const currentPlan = String(activeSchool.plan || tenant.planCode || 'Business').toLowerCase();
+    const matchedPlanIndex = plans.findIndex((plan) => plan.toLowerCase() === currentPlan);
+    const currentPlanIndex = matchedPlanIndex >= 0 ? matchedPlanIndex : 1;
+    const targetPlan = actionType === 'upgrade'
+      ? plans[Math.min(plans.length - 1, currentPlanIndex + 1)]
+      : actionType === 'downgrade'
+        ? plans[Math.max(0, currentPlanIndex - 1)]
+        : plans[currentPlanIndex];
+    const limits: Record<string, { storageLimit: string; userLimit: string }> = {
+      Standard: { storageLimit: 'غير متحقق', userLimit: '100' },
+      Basic: { storageLimit: '100 GB', userLimit: '1000' },
+      Business: { storageLimit: '500 GB', userLimit: '3000' },
+      Enterprise: { storageLimit: '1024 GB', userLimit: '5000' },
+    };
+    try {
+      let canonicalTenant: any;
+      if (actionType === 'suspend') {
+        const nextStatus = tenant.status === 'suspended' ? 'active' : 'suspended';
+        canonicalTenant = await updateCanonicalTenantStatus(tenant, nextStatus);
+      } else {
+        const seatLimit = Number(limits[targetPlan].userLimit);
+        const rawEnd = tenant.subscription.endsAt || tenant.subscription.ends_at;
+        if (!rawEnd) throw new Error('لا يوجد تاريخ نهاية كانوني للاشتراك؛ لم يتم تنفيذ الإجراء.');
+        const currentEnd = new Date(rawEnd);
+        if (Number.isNaN(currentEnd.getTime())) throw new Error('تاريخ نهاية الاشتراك الكانوني غير صالح؛ لم يتم تنفيذ الإجراء.');
+        if (currentEnd.getTime() < Date.now()) currentEnd.setTime(Date.now());
+        if (actionType === 'renew') {
+          currentEnd.setMonth(currentEnd.getMonth() + 12);
+        }
+        canonicalTenant = await updateCanonicalTenantSubscription(tenant, {
+          planCode: targetPlan,
+          seatLimit,
+          status: actionType === 'renew' ? 'active' : tenant.subscription.status,
+          endsAt: currentEnd.toISOString().split('T')[0],
+        });
+      }
+      applyCanonicalTenant(canonicalTenant);
+      logAction(`CENTRAL_${actionType.toUpperCase()}_SUBSCRIPTION`, `تنفيذ إجراء ${actionType} مركزياً للمستأجر المرتبط بالمدرسة: ${activeSchool.name}`, 'إدارة الاشتراكات والتراخيص');
+      const storageNotice = actionType === 'suspend'
+        ? ''
+        : ' السعة التخزينية لم تتغير لأنها تحتاج موصل تخزين موثق.';
+      triggerNotification(`تم تنفيذ إجراء ${actionType} على ${activeSchool.name} عبر المصدر المركزي.${storageNotice}`, actionType === 'suspend' ? 'warning' : 'success');
+    } catch (error) {
+      triggerNotification(error instanceof Error ? error.message : 'تعذر تنفيذ الإجراء؛ لم يتم تعديل البيانات.', 'danger');
+    }
   };
 
   // Impersonation requires a short-lived server-issued session and audit trail.
@@ -244,7 +294,6 @@ export default function SuperAdminOperationsCenter({
 
   // Backups require a real storage connector and server-side snapshot job.
   const handleCreateBackup = () => {
-    void isBackupLoading;
     triggerNotification('إنشاء النسخ الاحتياطية يحتاج موصل تخزين مركزيًا ومهمة خادم موثقة؛ لم يتم إنشاء نسخة محلية أو تسجيل نجاح.', 'warning');
   };
 
@@ -259,16 +308,19 @@ export default function SuperAdminOperationsCenter({
     triggerNotification(`فحص سلامة النسخة [${b.id}] يحتاج قراءة فعلية من مخزن النسخ؛ لم تُعلن نتيجة وهمية.`, 'warning');
   };
 
-  // Quick Stats Computations
+  // Quick Stats Computations: tenant lifecycle values come from the canonical tenant directory.
   const totalSchools = schools.length;
-  const activeSchoolsCount = schools.filter(s => s.status === 'active').length;
-  const suspendedSchoolsCount = schools.filter(s => s.status === 'suspended' || s.status === 'frozen').length;
-  const trialSchoolsCount = schools.filter(s => s.plan === 'Basic' || s.plan === 'Trial' || s.plan === 'Standard').length;
-  const expiredSchoolsCount = schools.filter(s => s.status === 'expired' || s.status === 'frozen').length;
-  const totalStudentsCount = schools.reduce((acc, s) => acc + (s.usersCount || 0), 0);
-  const totalEmployeesCount = schools.reduce((acc, s) => acc + (s.employeesCount || 0), 0);
-  const totalUsersCount = totalStudentsCount + totalEmployeesCount;
-
+  const totalTenants = tenants.length;
+  const activeTenantsCount = tenants.filter(tenant => tenant.status === 'active').length;
+  const suspendedTenantsCount = tenants.filter(tenant => tenant.status === 'suspended' || tenant.status === 'archived').length;
+  const trialTenantsCount = tenants.filter(tenant => tenant.subscription?.status === 'trial').length;
+  const expiredTenantsCount = tenants.filter(tenant => {
+    if (tenant.subscription?.status === 'expired') return true;
+    const endsAt = tenant.subscription?.endsAt || tenant.subscription?.ends_at;
+    if (!endsAt) return false;
+    const timestamp = Date.parse(String(endsAt));
+    return Number.isFinite(timestamp) && timestamp < Date.now();
+  }).length;
   // Filter schools list based on search and tab selections
   const filteredSchools = schools.filter(school => {
     const matchesSearch = school.name.toLowerCase().includes(searchQuery.toLowerCase()) || 
@@ -300,6 +352,7 @@ export default function SuperAdminOperationsCenter({
   };
 
   const subscriptionChartData: { name: string; value: number; color: string }[] = [];
+  const schoolModules: Record<string, { active: boolean | null; visible: boolean | null; premium: boolean | null }> = {};
 
   const availableModules = [
     { key: 'students', label: 'الطلاب والقبول والتسجيل', icon: Users, desc: 'إدارة ملفات الطلاب الأكاديمية والشخصية والصحية.' },
@@ -314,7 +367,7 @@ export default function SuperAdminOperationsCenter({
     <div className="w-full min-h-screen text-right font-sans dir-rtl select-none transition-all duration-300 bg-gradient-to-br from-[#f8f5ee] via-[#efe9dc] to-[#e8e0d0] text-slate-900 p-2 sm:p-4 md:p-6 space-y-6" id="super-admin-operations-center" dir="rtl">
 
       {/* ================= HEADER: BRAND BANNER & TELEMETRY PILLS ================= */}
-      <div className="bg-gradient-to-br from-slate-900 via-slate-950 to-amber-950 p-6 relative overflow-hidden bg-gradient-to-b from-[#fffefc] via-[#fbf8f0] to-[#f5eeea] border-2 border-[#d4af37]/30 hover:border-[#d4af37] rounded-3xl p-4 sm:p-5 shadow-md transition-all duration-300">
+      <div className="relative overflow-hidden rounded-3xl border-2 border-[#d4af37]/40 bg-gradient-to-r from-[#1c120c] via-[#2d1e12] to-[#1a100a] p-5 text-white shadow-2xl sm:p-6">
         {/* Glow decorative background elements */}
         <div className="absolute -top-12 -right-12 w-72 h-72 bg-amber-500/8 rounded-full blur-3xl pointer-events-none" />
         <div className="absolute -bottom-16 -left-16 w-56 h-56 bg-emerald-500/4 rounded-full blur-2xl pointer-events-none" />
@@ -331,21 +384,21 @@ export default function SuperAdminOperationsCenter({
             <h2 className="text-xl sm:text-2xl font-black text-white mt-1.5 tracking-tight">
               لوحة التحكم والرقابة المركزية الموحدة
             </h2>
-            <p className="text-xs text-slate-400 mt-2 max-w-3xl leading-relaxed bg-gradient-to-b from-[#fffefc] via-[#fbf8f0] to-[#f5eeea] border-2 border-[#d4af37]/30 hover:border-[#d4af37] rounded-3xl p-4 sm:p-5 shadow-md transition-all duration-300">
-              منصة التحكم المركزية والحوكمة السيادية لمنظومة EduPro: رقابة المستأجرين الفورية، وتراخيص الوحدات التنظيمية، وإدارة الروابط والـ DNS، والدعم الفني المباشر، والتعافي السحابي الشامل.
+            <p className="text-xs text-amber-100/80 mt-2 max-w-3xl leading-relaxed">
+              منصة التحكم المركزية والحوكمة السيادية لمنظومة EduPro: إدارة المستأجرين والمدارس والفروع، وتراخيص الوحدات التنظيمية، مع عرض واضح لما هو موصول وما يحتاج إلى موصل بنية تحتية.
             </p>
           </div>
           
-          <div className="flex flex-wrap gap-2.5 bg-slate-900/40 p-2 border border-slate-800/50 backdrop-blur-md">
-            <div className="text-[10px] font-mono font-bold bg-slate-950 border border-slate-850/70 text-amber-300 px-3 py-2 rounded-lg flex items-center gap-2">
+          <div className="flex flex-wrap gap-2.5 rounded-2xl border border-[#d4af37]/20 bg-[#2a1d13]/90 p-2 backdrop-blur-md">
+            <div className="text-[10px] font-mono font-bold bg-[#1c120c] border border-[#d4af37]/20 text-amber-100 px-3 py-2 rounded-xl flex items-center gap-2">
               <Server className="w-3.5 h-3.5 text-amber-400" />
-              <span>Host Node:</span>
-              <span className="text-white">cluster-01-me</span>
+              <span>مصدر المراقبة:</span>
+              <span className="text-amber-300">غير متصل</span>
             </div>
-            <div className="text-[10px] font-mono font-bold bg-slate-950 border border-slate-850/70 text-emerald-400 px-3 py-2 rounded-lg flex items-center gap-2">
+            <div className="text-[10px] font-mono font-bold bg-[#1c120c] border border-[#d4af37]/20 text-emerald-200 px-3 py-2 rounded-xl flex items-center gap-2">
               <Activity className="w-3.5 h-3.5 text-emerald-400 animate-pulse" />
-              <span>Latency:</span>
-              <span className="text-white">{telemetry.latency}ms</span>
+              <span>زمن الاستجابة:</span>
+              <span className="text-amber-300">غير متحقق</span>
             </div>
           </div>
         </div>
@@ -355,106 +408,104 @@ export default function SuperAdminOperationsCenter({
       <div className="grid grid-cols-2 md:grid-cols-3 lg:grid-cols-6 gap-4">
         
         {/* Card 1: Total Tenants */}
-        <div className="dark:bg-slate-900 border border-slate-200/50 dark:border-slate-800/50 p-5 hover:shadow-md hover:border-amber-200 dark:hover:border-amber-950/60 transition-all duration-300 relative group cursor-pointer overflow-hidden">
+        <div className="bg-gradient-to-b from-[#fffefc] via-[#fbf8f0] to-[#f5eeea] border-2 border-[#d4af37]/25 rounded-3xl p-5 hover:shadow-lg hover:border-[#d4af37] transition-all duration-300 relative group cursor-pointer overflow-hidden">
           <div className="absolute top-0 right-0 w-1.5 h-full bg-amber-600 dark:bg-amber-500 rounded-r-2xl" />
           <div className="flex justify-between items-start">
             <div className="space-y-1">
-              <span className="text-[10px] font-black text-slate-400 dark:text-slate-500 block uppercase tracking-wider">إجمالي المدارس</span>
-              <h3 className="text-2xl font-black text-slate-900 dark:text-white font-mono">{totalSchools}</h3>
+              <span className="text-[10px] font-black text-slate-400 dark:text-slate-500 block uppercase tracking-wider">إجمالي المستأجرين</span>
+              <h3 className="text-2xl font-black text-slate-900 dark:text-white font-mono">{totalTenants}</h3>
             </div>
             <div className="p-2.5 bg-amber-50 dark:bg-amber-950/40 text-amber-600 dark:text-amber-400 group-hover:bg-amber-600 group-hover:text-white transition-colors duration-300">
               <Building className="w-4 h-4" />
             </div>
           </div>
           <div className="mt-4 flex items-center gap-1.5 text-[10px] text-slate-400 dark:text-slate-500 font-bold">
-            <span className="text-emerald-500 font-black font-mono">+12%</span>
-            <span>نمو ربع سنوي</span>
+            <span>{totalSchools} مدرسة تابعة في الدليل المركزي</span>
           </div>
         </div>
 
         {/* Card 2: Active Tenants */}
-        <div className="dark:bg-slate-900 border border-slate-200/50 dark:border-slate-800/50 p-5 hover:shadow-md hover:border-emerald-200 dark:hover:border-emerald-950/60 transition-all duration-300 relative group cursor-pointer overflow-hidden">
+        <div className="bg-gradient-to-b from-[#fffefc] via-[#fbf8f0] to-[#f5eeea] border-2 border-[#d4af37]/25 rounded-3xl p-5 hover:shadow-lg hover:border-[#d4af37] transition-all duration-300 relative group cursor-pointer overflow-hidden">
           <div className="absolute top-0 right-0 w-1.5 h-full bg-emerald-500 rounded-r-2xl" />
           <div className="flex justify-between items-start">
             <div className="space-y-1">
               <span className="text-[10px] font-black text-slate-400 dark:text-slate-500 block uppercase tracking-wider">المستأجرون النشطون</span>
-              <h3 className="text-2xl font-black text-emerald-600 dark:text-emerald-400 font-mono">{activeSchoolsCount}</h3>
+              <h3 className="text-2xl font-black text-emerald-600 dark:text-emerald-400 font-mono">{activeTenantsCount}</h3>
             </div>
             <div className="p-2.5 bg-emerald-50 dark:bg-emerald-950/40 text-emerald-600 dark:text-emerald-400 group-hover:bg-emerald-500 group-hover:text-white transition-colors duration-300">
               <CheckCircle className="w-4 h-4" />
             </div>
           </div>
           <div className="mt-4 flex items-center gap-1 text-[10px] text-emerald-600 dark:text-emerald-400 font-black">
-            <span>{Math.round((activeSchoolsCount/totalSchools)*100)}% معدل النشاط الكلي</span>
+            <span>من حالة المستأجر والاشتراك المسجلين</span>
           </div>
         </div>
 
         {/* Card 3: Suspended Tenants */}
-        <div className="dark:bg-slate-900 border border-slate-200/50 dark:border-slate-800/50 p-5 hover:shadow-md hover:border-rose-200 dark:hover:border-rose-950/60 transition-all duration-300 relative group cursor-pointer overflow-hidden">
+        <div className="bg-gradient-to-b from-[#fffefc] via-[#fbf8f0] to-[#f5eeea] border-2 border-[#d4af37]/25 rounded-3xl p-5 hover:shadow-lg hover:border-[#d4af37] transition-all duration-300 relative group cursor-pointer overflow-hidden">
           <div className="absolute top-0 right-0 w-1.5 h-full bg-rose-500 rounded-r-2xl" />
           <div className="flex justify-between items-start">
             <div className="space-y-1">
-              <span className="text-[10px] font-black text-slate-400 dark:text-slate-500 block uppercase tracking-wider">المدارس الموقوفة</span>
-              <h3 className="text-2xl font-black text-rose-600 dark:text-rose-400 font-mono">{suspendedSchoolsCount}</h3>
+              <span className="text-[10px] font-black text-slate-400 dark:text-slate-500 block uppercase tracking-wider">المستأجرون الموقوفون</span>
+              <h3 className="text-2xl font-black text-rose-600 dark:text-rose-400 font-mono">{suspendedTenantsCount}</h3>
             </div>
             <div className="p-2.5 bg-rose-50 dark:bg-rose-950/40 text-rose-600 dark:text-rose-400 group-hover:bg-rose-500 group-hover:text-white transition-colors duration-300">
               <X className="w-4 h-4" />
             </div>
           </div>
           <div className="mt-4 flex items-center gap-1 text-[10px] text-rose-600 dark:text-rose-400 font-black">
-            <span>{Math.round((suspendedSchoolsCount/totalSchools)*100)}% تجميد احترازي مؤقت</span>
+            <span>تعكس حالة الدليل المركزي فقط</span>
           </div>
         </div>
 
         {/* Card 4: Trial Tenants */}
-        <div className="dark:bg-slate-900 border border-slate-200/50 dark:border-slate-800/50 p-5 hover:shadow-md hover:border-orange-200 dark:hover:border-orange-950/60 transition-all duration-300 relative group cursor-pointer overflow-hidden">
+        <div className="bg-gradient-to-b from-[#fffefc] via-[#fbf8f0] to-[#f5eeea] border-2 border-[#d4af37]/25 rounded-3xl p-5 hover:shadow-lg hover:border-[#d4af37] transition-all duration-300 relative group cursor-pointer overflow-hidden">
           <div className="absolute top-0 right-0 w-1.5 h-full bg-orange-500 rounded-r-2xl" />
           <div className="flex justify-between items-start">
             <div className="space-y-1">
-              <span className="text-[10px] font-black text-slate-400 dark:text-slate-500 block uppercase tracking-wider">الفترات التجريبية</span>
-              <h3 className="text-2xl font-black text-orange-600 dark:text-orange-400 font-mono">{trialSchoolsCount}</h3>
+              <span className="text-[10px] font-black text-slate-400 dark:text-slate-500 block uppercase tracking-wider">الاشتراكات التجريبية</span>
+              <h3 className="text-2xl font-black text-orange-600 dark:text-orange-400 font-mono">{trialTenantsCount}</h3>
             </div>
             <div className="p-2.5 bg-orange-50 dark:bg-orange-950/40 text-orange-600 dark:text-orange-400 group-hover:bg-orange-500 group-hover:text-white transition-colors duration-300">
               <Cpu className="w-4 h-4" />
             </div>
           </div>
           <div className="mt-4 flex items-center gap-1 text-[10px] text-orange-600 dark:text-orange-400 font-black">
-            <span>باقات التطوير الأساسية</span>
+            <span>من حالة الاشتراك القانونية</span>
           </div>
         </div>
 
         {/* Card 5: Expired Subscriptions */}
-        <div className="dark:bg-slate-900 border border-slate-200/50 dark:border-slate-800/50 p-5 hover:shadow-md hover:border-amber-200 dark:hover:border-amber-950/60 transition-all duration-300 relative group cursor-pointer overflow-hidden">
+        <div className="bg-gradient-to-b from-[#fffefc] via-[#fbf8f0] to-[#f5eeea] border-2 border-[#d4af37]/25 rounded-3xl p-5 hover:shadow-lg hover:border-[#d4af37] transition-all duration-300 relative group cursor-pointer overflow-hidden">
           <div className="absolute top-0 right-0 w-1.5 h-full bg-amber-500 rounded-r-2xl" />
           <div className="flex justify-between items-start">
             <div className="space-y-1">
               <span className="text-[10px] font-black text-slate-400 dark:text-slate-500 block uppercase tracking-wider">الاشتراكات المنتهية</span>
-              <h3 className="text-2xl font-black text-amber-600 dark:text-amber-400 font-mono">{expiredSchoolsCount}</h3>
+              <h3 className="text-2xl font-black text-amber-600 dark:text-amber-400 font-mono">{expiredTenantsCount}</h3>
             </div>
             <div className="p-2.5 bg-amber-50 dark:bg-amber-950/40 text-amber-600 dark:text-amber-400 group-hover:bg-amber-500 group-hover:text-white transition-colors duration-300">
               <ShieldAlert className="w-4 h-4" />
             </div>
           </div>
           <div className="mt-4 flex items-center gap-1 text-[10px] text-amber-600 dark:text-amber-400 font-black">
-            <span className="animate-pulse">تتطلب تحديثاً عاجلاً</span>
+            <span>تتطلب مراجعة مركزية</span>
           </div>
         </div>
 
         {/* Card 6: Connected Active Sessions */}
-        <div className="dark:bg-slate-900 border border-slate-200/50 dark:border-slate-800/50 p-5 hover:shadow-md hover:border-violet-200 dark:hover:border-violet-950/60 transition-all duration-300 relative group cursor-pointer overflow-hidden">
+        <div className="bg-gradient-to-b from-[#fffefc] via-[#fbf8f0] to-[#f5eeea] border-2 border-[#d4af37]/25 rounded-3xl p-5 hover:shadow-lg hover:border-[#d4af37] transition-all duration-300 relative group cursor-pointer overflow-hidden">
           <div className="absolute top-0 right-0 w-1.5 h-full bg-violet-500 rounded-r-2xl" />
           <div className="flex justify-between items-start">
             <div className="space-y-1">
               <span className="text-[10px] font-black text-slate-400 dark:text-slate-500 block uppercase tracking-wider">المستخدمون النشطون</span>
-              <h3 className="text-2xl font-black text-violet-600 dark:text-violet-400 font-mono">{telemetry.onlineUsers}</h3>
+              <h3 className="text-lg font-black text-amber-600 dark:text-amber-400">غير متحقق</h3>
             </div>
             <div className="p-2.5 bg-violet-50 dark:bg-violet-950/40 text-violet-600 dark:text-violet-400 group-hover:bg-violet-500 group-hover:text-white transition-colors duration-300">
               <Users className="w-4 h-4" />
             </div>
           </div>
-          <div className="mt-4 flex items-center gap-1.5 text-[10px] text-emerald-600 dark:text-emerald-400 font-black">
-            <span className="w-1.5 h-1.5 rounded-full bg-emerald-500 animate-ping" />
-            <span>اتصال متزامن بالـ API</span>
+          <div className="mt-4 flex items-center gap-1.5 text-[10px] text-slate-500 font-black">
+            <span>موصل الجلسات المركزية غير متاح</span>
           </div>
         </div>
 
@@ -578,8 +629,8 @@ export default function SuperAdminOperationsCenter({
                           </PieChart>
                         </ResponsiveContainer>
                         <div className="absolute inset-0 flex flex-col items-center justify-center pointer-events-none">
-                          <span className="text-[9px] text-slate-400 dark:text-slate-500 font-extrabold uppercase">نشط بالكامل</span>
-                          <span className="text-xl font-black text-emerald-500 font-mono">86.7%</span>
+                          <span className="text-[9px] text-slate-400 dark:text-slate-500 font-extrabold uppercase">بيانات التوزيع</span>
+                          <span className="text-sm font-black text-amber-500">غير متحققة</span>
                         </div>
                       </div>
                     </div>
@@ -602,24 +653,20 @@ export default function SuperAdminOperationsCenter({
                     <div>
                       <h3 className="text-xs font-black text-slate-900 dark:text-white flex items-center gap-2 border-b border-slate-150 dark:border-slate-850 pb-4">
                         <Activity className="w-4 h-4 text-emerald-500 animate-pulse" />
-                        مؤشرات الصحة والاتصال السحابي الفوري
+                        مؤشرات الصحة والاتصال المسجلة
                       </h3>
 
                       <div className="grid grid-cols-2 gap-3 mt-4">
                         <div className="p-3 bg-transparent dark:bg-slate-950 border border-slate-100 dark:border-slate-900">
                           <span className="text-[9px] text-slate-400 dark:text-slate-500 block font-black uppercase">حالة الخوادم المركزية</span>
                           <span className="text-xs font-black text-slate-900 dark:text-white font-mono flex items-center gap-1.5 mt-1.5">
-                            <span className="flex h-1.5 w-1.5 relative">
-                              <span className="animate-ping absolute inline-flex h-full w-full rounded-full bg-emerald-400 opacity-75"></span>
-                              <span className="relative inline-flex rounded-full h-1.5 w-1.5 bg-emerald-500"></span>
-                            </span>
-                            12 / 12 متصلة ونشطة
+                            غير متحقق من موصل المراقبة
                           </span>
                         </div>
                         <div className="p-3 bg-transparent dark:bg-slate-950 border border-slate-100 dark:border-slate-900">
                           <span className="text-[9px] text-slate-400 dark:text-slate-500 block font-black uppercase">جلسات الدخول الجارية</span>
                           <span className="text-xs font-black text-amber-600 dark:text-amber-400 font-mono mt-1.5 block">
-                            {telemetry.activeSessions.toLocaleString('ar-EG')} جلسة نشطة
+                            غير متحقق
                           </span>
                         </div>
                       </div>
@@ -629,34 +676,29 @@ export default function SuperAdminOperationsCenter({
                         <div className="space-y-1.5">
                           <div className="flex justify-between text-xs">
                             <span className="text-slate-500 dark:text-slate-400 font-bold">استهلاك طاقة المعالجة (CPU Load)</span>
-                            <span className="font-mono text-amber-600 dark:text-amber-400 font-black">{telemetry.cpu}%</span>
+                            <span className="text-amber-600 dark:text-amber-400 font-black">غير متحقق</span>
                           </div>
-                          <div className="h-1.5 bg-slate-100 dark:bg-slate-950 rounded-full overflow-hidden">
-                            <div 
-                              className={`h-full transition-all duration-500 rounded-full ${
-                                telemetry.cpu > 80 ? 'bg-rose-500 animate-pulse' : telemetry.cpu > 60 ? 'bg-amber-500' : 'bg-amber-600 dark:bg-amber-500'
-                              }`} 
-                              style={{ width: `${telemetry.cpu}%` }} 
-                            />
+                          <div className="text-[9px] text-slate-500 border border-dashed border-slate-300 dark:border-slate-700 rounded px-2 py-1 text-center">
+                            لا توجد قراءة موثقة
                           </div>
                         </div>
 
                         <div className="space-y-1.5">
                           <div className="flex justify-between text-xs">
                             <span className="text-slate-500 dark:text-slate-400 font-bold">توزيع الذاكرة العشوائية (RAM Usage)</span>
-                            <span className="font-mono text-emerald-600 dark:text-emerald-400 font-black">{telemetry.ram} GB / {telemetry.ramLimit} GB</span>
+                            <span className="text-amber-600 dark:text-amber-400 font-black">غير متحقق</span>
                           </div>
-                          <div className="h-1.5 bg-slate-100 dark:bg-slate-950 rounded-full overflow-hidden">
-                            <div className="h-full bg-emerald-500 transition-all duration-500 rounded-full" style={{ width: `${(telemetry.ram / telemetry.ramLimit) * 100}%` }} />
+                          <div className="text-[9px] text-slate-500 border border-dashed border-slate-300 dark:border-slate-700 rounded px-2 py-1 text-center">
+                            لا توجد قراءة موثقة
                           </div>
                         </div>
 
                         <div className="space-y-1.5">
                           <div className="flex justify-between text-xs">
                             <span className="text-slate-500 dark:text-slate-400 font-bold">قاعدة بيانات الفيدرالية</span>
-                            <span className="text-xs text-emerald-500 font-extrabold flex items-center gap-1">
-                              <CheckCircle2 className="w-3.5 h-3.5" />
-                              سلامة تامة وبلا أي احتقان شبكي
+                            <span className="text-xs text-amber-500 font-extrabold flex items-center gap-1">
+                              <AlertTriangle className="w-3.5 h-3.5" />
+                              غير متحقق من موصل قاعدة البيانات
                             </span>
                           </div>
                         </div>
@@ -666,16 +708,7 @@ export default function SuperAdminOperationsCenter({
                     {/* Sparkline CPU Hist */}
                     <div className="mt-5 pt-4 border-t border-slate-150 dark:border-slate-850 text-[10px] text-slate-400 dark:text-slate-500 flex justify-between items-center">
                       <span className="font-black uppercase tracking-wider">مخطط التردد والذبذبات اللحظي:</span>
-                      <div className="w-40 h-8 flex items-end gap-[3px]" dir="ltr">
-                        {telemetryHistory.map((val, idx) => (
-                          <div 
-                            key={idx} 
-                            className="bg-amber-500/60 hover:bg-amber-500 rounded-sm flex-1 transition-all duration-300" 
-                            style={{ height: `${Math.max(15, val)}%` }} 
-                            title={`CPU Load: ${val}%`}
-                          />
-                        ))}
-                      </div>
+                      <span className="text-amber-500 font-bold">لا توجد سلسلة قياس موثقة</span>
                     </div>
                   </div>
 
@@ -729,8 +762,8 @@ export default function SuperAdminOperationsCenter({
                         ))}
                         {alerts.length === 0 && (
                           <div className="py-8 flex flex-col items-center justify-center text-center space-y-2">
-                            <CheckCircle className="w-8 h-8 text-emerald-500" />
-                            <span className="text-xs text-slate-400 dark:text-slate-500 font-bold">كل الأنظمة مستقرة وسليمة</span>
+                            <AlertTriangle className="w-8 h-8 text-amber-500" />
+                            <span className="text-xs text-slate-400 dark:text-slate-500 font-bold">لا توجد بيانات حوادث موثقة؛ حالة الأنظمة غير متحققة</span>
                           </div>
                         )}
                       </div>
@@ -739,7 +772,7 @@ export default function SuperAdminOperationsCenter({
                     <div className="mt-4 pt-3 border-t border-slate-100 dark:border-slate-850 flex justify-end">
                       <button 
                         onClick={() => {
-                          triggerNotification('تم توجيه أمر التحقق الذاتي لكافة مخدمات التخزين والترخيص...', 'info');
+                          triggerNotification('موصل التحقق الذاتي للمخدمات غير متاح؛ لم يبدأ أي فحص.', 'warning');
                         }}
                         className="text-[10px] font-black text-amber-600 dark:text-amber-400 hover:text-amber-700 dark:hover:text-amber-300 transition-colors cursor-pointer flex items-center gap-1"
                       >
@@ -803,7 +836,7 @@ export default function SuperAdminOperationsCenter({
                                   {s.plan}
                                 </span>
                               </td>
-                              <td className="p-4 font-mono text-slate-500 dark:text-slate-400 font-bold">{s.lastLogin || '2026-07-14'}</td>
+                              <td className="p-4 font-mono text-slate-500 dark:text-slate-400 font-bold">{s.lastLogin || 'غير متحقق'}</td>
                               <td className="p-4">
                                 <span className={`inline-flex items-center gap-1.5 px-3 py-1 rounded-lg text-[10px] font-black border ${
                                   s.status === 'active' 
@@ -833,10 +866,10 @@ export default function SuperAdminOperationsCenter({
                       <div className="space-y-1.5">
                         <div className="flex justify-between text-xs">
                           <span className="text-slate-500 dark:text-slate-400 font-bold">الطلاب الإجماليين في النظام</span>
-                          <span className="font-mono text-slate-900 dark:text-white font-bold">62% (133k)</span>
+                          <span className="font-mono text-amber-600 dark:text-amber-400 font-bold">غير متحقق</span>
                         </div>
-                        <div className="h-1.5 bg-slate-100 dark:bg-slate-950 rounded-full overflow-hidden">
-                          <div className="h-full bg-amber-600 rounded-full" style={{ width: '62%' }} />
+                        <div className="text-[9px] text-slate-500 border border-dashed border-slate-300 dark:border-slate-700 rounded px-2 py-1 text-center">
+                          لا توجد قراءة موثقة
                         </div>
                       </div>
 
@@ -844,10 +877,10 @@ export default function SuperAdminOperationsCenter({
                       <div className="space-y-1.5">
                         <div className="flex justify-between text-xs">
                           <span className="text-slate-500 dark:text-slate-400 font-bold">تراخيص المستخدمين والكوادر</span>
-                          <span className="font-mono text-slate-900 dark:text-white font-bold">58% (6,000)</span>
+                          <span className="font-mono text-amber-600 dark:text-amber-400 font-bold">غير متحقق</span>
                         </div>
-                        <div className="h-1.5 bg-slate-100 dark:bg-slate-950 rounded-full overflow-hidden">
-                          <div className="h-full bg-emerald-500 rounded-full" style={{ width: '58%' }} />
+                        <div className="text-[9px] text-slate-500 border border-dashed border-slate-300 dark:border-slate-700 rounded px-2 py-1 text-center">
+                          لا توجد قراءة موثقة
                         </div>
                       </div>
 
@@ -855,10 +888,10 @@ export default function SuperAdminOperationsCenter({
                       <div className="space-y-1.5">
                         <div className="flex justify-between text-xs">
                           <span className="text-slate-500 dark:text-slate-400 font-bold">مساحة قواعد البيانات (Postgres)</span>
-                          <span className="font-mono text-slate-900 dark:text-white font-bold">43% (10 GB)</span>
+                          <span className="font-mono text-amber-600 dark:text-amber-400 font-bold">غير متحقق</span>
                         </div>
-                        <div className="h-1.5 bg-slate-100 dark:bg-slate-950 rounded-full overflow-hidden">
-                          <div className="h-full bg-amber-500 rounded-full" style={{ width: '43%' }} />
+                        <div className="text-[9px] text-slate-500 border border-dashed border-slate-300 dark:border-slate-700 rounded px-2 py-1 text-center">
+                          لا توجد قراءة موثقة
                         </div>
                       </div>
 
@@ -866,10 +899,10 @@ export default function SuperAdminOperationsCenter({
                       <div className="space-y-1.5">
                         <div className="flex justify-between text-xs">
                           <span className="text-slate-500 dark:text-slate-400 font-bold">تخزين وسائط الطلاب S3</span>
-                          <span className="font-mono text-slate-900 dark:text-white font-bold">68% (10 TB)</span>
+                          <span className="font-mono text-amber-600 dark:text-amber-400 font-bold">غير متحقق</span>
                         </div>
-                        <div className="h-1.5 bg-slate-100 dark:bg-slate-950 rounded-full overflow-hidden">
-                          <div className="h-full bg-amber-600 rounded-full" style={{ width: '68%' }} />
+                        <div className="text-[9px] text-slate-500 border border-dashed border-slate-300 dark:border-slate-700 rounded px-2 py-1 text-center">
+                          لا توجد قراءة موثقة
                         </div>
                       </div>
                     </div>
@@ -883,21 +916,19 @@ export default function SuperAdminOperationsCenter({
                         لوحة تدفق السجلات والمراقبة
                       </h3>
                       
-                      <div className="space-y-2 font-mono text-[9px] text-slate-300 h-36 overflow-y-auto pt-3 select-text scrollbar-thin pr-1" dir="ltr">
-                        {liveLogs.map((log, idx) => (
-                          <div key={idx} className="p-1 rounded hover:bg-slate-900/40 transition-all leading-relaxed break-all">
-                            {log}
-                          </div>
-                        ))}
+                      <div className="space-y-2 font-mono text-[9px] text-slate-300 h-36 overflow-y-auto pt-3 select-text scrollbar-thin pr-1" dir="rtl">
+                        <div className="p-2 text-amber-400 leading-relaxed">
+                          لا توجد سجلات تشغيل حية موثقة. يلزم ربط موصل السجلات المركزي.
+                        </div>
                       </div>
                     </div>
 
                     <div className="mt-4 pt-3 border-t border-slate-850 flex justify-between items-center" dir="rtl">
                       <div className="flex items-center gap-1.5">
-                        <span className="w-1.5 h-1.5 rounded-full bg-amber-500 animate-ping" />
-                        <span className="text-[9px] text-slate-500 font-bold">Live Stream</span>
+                        <span className="w-1.5 h-1.5 rounded-full bg-slate-600" />
+                        <span className="text-[9px] text-slate-500 font-bold">المصدر غير متصل</span>
                       </div>
-                      <span className="text-[8px] text-amber-400 font-bold font-mono">5s Tick Rate</span>
+                      <span className="text-[8px] text-amber-400 font-bold">لا توجد بيانات</span>
                     </div>
                   </div>
 
@@ -912,7 +943,10 @@ export default function SuperAdminOperationsCenter({
 
                   <div className="grid grid-cols-2 sm:grid-cols-4 lg:grid-cols-8 gap-3 mt-4">
                     <button 
-                      onClick={() => triggerNotification('يرجى الانتقال لإدخال بيانات مدرسة جديدة من واجهة إضافة مدرسة', 'info')}
+                      onClick={() => {
+                        onNavigateToTab?.('schools');
+                        triggerNotification('تم فتح دليل المدارس المركزي؛ استخدم زر إضافة مدرسة لبدء التهيئة الذرية.', 'info');
+                      }}
                       className="p-3.5 bg-amber-50/40 dark:bg-amber-950/20 text-amber-600 dark:text-amber-400 hover:bg-amber-600 hover:text-white border border-amber-100/50 dark:border-amber-900/30 transition-all duration-300 hover:scale-[1.03] hover:shadow-md active:scale-[0.98] cursor-pointer flex flex-col items-center gap-2 text-center text-[10px] font-black"
                     >
                       <Plus className="w-4 h-4 shrink-0" />
@@ -920,7 +954,10 @@ export default function SuperAdminOperationsCenter({
                     </button>
 
                     <button 
-                      onClick={() => triggerNotification('جاري فتح دليل المستخدمين السحابي للتحكم وتحديث كلمات المرور...', 'info')}
+                      onClick={() => {
+                        onNavigateToTab?.('users');
+                        triggerNotification('تم فتح دليل المستخدمين المركزي لإدارة الهوية والصلاحيات.', 'info');
+                      }}
                       className="p-3.5 bg-amber-50/40 dark:bg-amber-950/20 text-amber-600 dark:text-amber-400 hover:bg-amber-600 hover:text-white border border-amber-100/50 dark:border-amber-900/30 transition-all duration-300 hover:scale-[1.03] hover:shadow-md active:scale-[0.98] cursor-pointer flex flex-col items-center gap-2 text-center text-[10px] font-black"
                     >
                       <Users className="w-4 h-4 shrink-0" />
@@ -929,8 +966,8 @@ export default function SuperAdminOperationsCenter({
 
                     <button 
                       onClick={() => {
-                        setActiveTab('subscriptions_modules');
-                        triggerNotification('تم تفعيل واجهة أتمتة الاشتراكات', 'info');
+                        onNavigateToTab?.('subscriptions');
+                        triggerNotification('تم فتح إدارة الاشتراكات المركزية؛ التغييرات تحفظ عبر المصدر الموثق.', 'info');
                       }}
                       className="p-3.5 bg-amber-50/40 dark:bg-amber-950/20 text-amber-600 dark:text-amber-400 hover:bg-amber-600 hover:text-white border border-amber-100/50 dark:border-amber-900/30 transition-all duration-300 hover:scale-[1.03] hover:shadow-md active:scale-[0.98] cursor-pointer flex flex-col items-center gap-2 text-center text-[10px] font-black"
                     >
@@ -940,8 +977,8 @@ export default function SuperAdminOperationsCenter({
 
                     <button 
                       onClick={() => {
-                        setActiveTab('subscriptions_modules');
-                        triggerNotification('تم الانتقال لمصفوفة تفعيل الميزات', 'info');
+                        onNavigateToTab?.('features');
+                        triggerNotification('تم فتح مصفوفة الميزات المركزية؛ التفعيل لا يتم إلا بعد الحفظ في الدليل.', 'info');
                       }}
                       className="p-3.5 bg-amber-50/40 dark:bg-amber-950/20 text-amber-600 dark:text-amber-400 hover:bg-amber-600 hover:text-white border border-amber-100/50 dark:border-amber-900/30 transition-all duration-300 hover:scale-[1.03] hover:shadow-md active:scale-[0.98] cursor-pointer flex flex-col items-center gap-2 text-center text-[10px] font-black"
                     >
@@ -951,9 +988,8 @@ export default function SuperAdminOperationsCenter({
 
                     <button 
                       onClick={() => {
-                        setActiveTab('links');
-                        setIsEditingLink(true);
-                        triggerNotification('تم تفعيل تعديل النطاق والـ DNS', 'info');
+                        onNavigateToTab?.('domains');
+                        triggerNotification('تم فتح إدارة الروابط المركزية؛ حفظ البيانات متاح وفحص DNS/SSL يحتاج موصلاً.', 'info');
                       }}
                       className="p-3.5 bg-amber-50/40 dark:bg-amber-950/20 text-amber-600 dark:text-amber-400 hover:bg-amber-600 hover:text-white border border-amber-100/50 dark:border-amber-900/30 transition-all duration-300 hover:scale-[1.03] hover:shadow-md active:scale-[0.98] cursor-pointer flex flex-col items-center gap-2 text-center text-[10px] font-black"
                     >
@@ -963,7 +999,8 @@ export default function SuperAdminOperationsCenter({
 
                     <button 
                       onClick={() => {
-                        triggerNotification('جاري توليد وإرسال التقارير الإحصائية لخوادم التحليلات المركزية...', 'success');
+                        onNavigateToTab?.('resources');
+                        triggerNotification('تم فتح التقارير والموارد؛ المؤشرات تظهر فقط عند توفر قراءات مركزية موثقة.', 'info');
                       }}
                       className="p-3.5 bg-amber-50/40 dark:bg-amber-950/20 text-amber-600 dark:text-amber-400 hover:bg-amber-600 hover:text-white border border-amber-100/50 dark:border-amber-900/30 transition-all duration-300 hover:scale-[1.03] hover:shadow-md active:scale-[0.98] cursor-pointer flex flex-col items-center gap-2 text-center text-[10px] font-black"
                     >
@@ -973,8 +1010,8 @@ export default function SuperAdminOperationsCenter({
 
                     <button 
                       onClick={() => {
-                        setActiveTab('backups');
-                        triggerNotification('تم فتح مركز النسخ الاحتياطي السريع', 'info');
+                        onNavigateToTab?.('backups');
+                        triggerNotification('تم فتح مركز النسخ والتعافي؛ التنفيذ محجوب حتى ربط مخزن مركزي موثق.', 'warning');
                       }}
                       className="p-3.5 bg-amber-50/40 dark:bg-amber-950/20 text-amber-600 dark:text-amber-400 hover:bg-amber-600 hover:text-white border border-amber-100/50 dark:border-amber-900/30 transition-all duration-300 hover:scale-[1.03] hover:shadow-md active:scale-[0.98] cursor-pointer flex flex-col items-center gap-2 text-center text-[10px] font-black"
                     >
@@ -984,7 +1021,8 @@ export default function SuperAdminOperationsCenter({
 
                     <button 
                       onClick={() => {
-                        triggerNotification('جاري الاتصال بخادم الحوكمة والإعدادات العامة للـ Cluster...', 'info');
+                        onNavigateToTab?.('health');
+                        triggerNotification('تم فتح سلامة النظام؛ قراءات البنية التحتية تحتاج موصل مراقبة مركزي.', 'warning');
                       }}
                       className="p-3.5 bg-amber-50/40 dark:bg-amber-950/20 text-amber-600 dark:text-amber-400 hover:bg-amber-600 hover:text-white border border-amber-100/50 dark:border-amber-900/30 transition-all duration-300 hover:scale-[1.03] hover:shadow-md active:scale-[0.98] cursor-pointer flex flex-col items-center gap-2 text-center text-[10px] font-black"
                     >
@@ -1096,9 +1134,9 @@ export default function SuperAdminOperationsCenter({
                             </div>
                             <div className="space-y-1 dark:bg-slate-900 p-3 rounded-lg border border-slate-150 dark:border-slate-850">
                               <span className="text-[10px] text-slate-400 dark:text-slate-500 block font-bold">حالة الـ SSL والاتصال:</span>
-                              <span className="text-xs text-emerald-500 font-extrabold flex items-center gap-1 mt-1">
-                                <CheckCircle className="w-3.5 h-3.5 animate-pulse" />
-                                شهادة SSL سارية ومحمية وموقعة
+                              <span className="text-xs text-amber-500 font-extrabold flex items-center gap-1 mt-1">
+                                <AlertTriangle className="w-3.5 h-3.5" />
+                                غير متحقق من موصل DNS وSSL المركزي
                               </span>
                             </div>
                           </div>
@@ -1165,10 +1203,7 @@ export default function SuperAdminOperationsCenter({
                             <button
                               type="button"
                               onClick={() => {
-                                triggerNotification('جاري اختبار اتصال التوجيه والـ DNS...', 'info');
-                                setTimeout(() => {
-                                  triggerNotification('اختبار سليم! النطاق يتصل ببيئة قاعدة البيانات بنجاح سليم ١٠٠٪.', 'success');
-                                }, 1000);
+                                triggerNotification('اختبار DNS وSSL متاح من شاشة النطاقات المركزية عند توفر الموصل؛ لم تُعلن نتيجة غير موثقة.', 'warning');
                               }}
                               className="dark:bg-slate-900 border border-slate-200/60 dark:border-slate-800 text-slate-800 dark:text-white px-3.5 py-2 rounded-lg text-xs font-black transition-all flex items-center gap-1.5 cursor-pointer hover:bg-transparent dark:hover:bg-slate-950"
                             >
@@ -1244,6 +1279,7 @@ export default function SuperAdminOperationsCenter({
                               onChange={(e) => setTempPlan(e.target.value)}
                               className="w-full dark:bg-slate-900 text-slate-900 dark:text-slate-200 rounded-lg border border-slate-200/80 dark:border-slate-800 p-2.5 text-xs font-semibold focus:ring-2 focus:ring-amber-500 focus:border-amber-500 transition-all outline-none"
                             >
+                              <option value="Standard">Standard (الباقة القياسية)</option>
                               <option value="Enterprise">Enterprise (الباقة السيادية الممتازة)</option>
                               <option value="Business">Business (باقة الأعمال الاحترافية)</option>
                               <option value="Basic">Basic (الباقة الأساسية للنمو)</option>
@@ -1271,7 +1307,7 @@ export default function SuperAdminOperationsCenter({
                           </div>
 
                           <div>
-                            <label className="text-[10px] font-bold text-slate-400 dark:text-slate-500 block mb-1.5">المساحة التخزينية المخصصة (S3 Buckets):</label>
+                            <label className="text-[10px] font-bold text-slate-400 dark:text-slate-500 block mb-1.5">المساحة التخزينية المخصصة (تحتاج موصل S3):</label>
                             <input 
                               type="text"
                               value={tempStorageLimit}
@@ -1303,12 +1339,12 @@ export default function SuperAdminOperationsCenter({
                               type="button"
                               onClick={() => handleSubscriptionQuickAction('suspend')}
                               className={`px-3.5 py-2 text-[10px] font-black rounded-lg cursor-pointer border transition-all active:scale-95 ${
-                                activeSchool.status === 'suspended'
+                                activeTenant?.status === 'suspended'
                                   ? 'bg-emerald-50/60 dark:bg-emerald-950/20 text-emerald-600 dark:text-emerald-400 border-emerald-100/50 hover:bg-emerald-600 hover:text-white'
                                   : 'bg-rose-50/60 dark:bg-rose-950/20 text-rose-600 dark:text-rose-400 border-rose-100/50 dark:border-rose-900/30 hover:bg-rose-600 hover:text-white'
                               }`}
                             >
-                              {activeSchool.status === 'suspended' ? 'إيقاظ وفك تجميد المستأجر 🔓' : 'تجميد وتعليق رخصة المستأجر 🔒'}
+                              {activeTenant?.status === 'suspended' ? 'إيقاظ وفك تجميد المستأجر 🔓' : 'تجميد وتعليق رخصة المستأجر 🔒'}
                             </button>
                           </div>
                         </div>
@@ -1352,7 +1388,7 @@ export default function SuperAdminOperationsCenter({
                       <tbody className="divide-y divide-amber-900/10 bg-white/60 backdrop-blur-sm rounded-b-2xl">
                         {availableModules.map(m => {
                           const configKey = `${activeSchool?.id}_${m.key}`;
-                          const config = schoolModules[configKey] || { active: true, visible: true, premium: false };
+                          const config = schoolModules[configKey] || { active: null, visible: null, premium: null };
                           const MIcon = m.icon;
 
                           return (
@@ -1374,12 +1410,14 @@ export default function SuperAdminOperationsCenter({
                                   type="button"
                                   onClick={() => toggleModuleProperty(activeSchool.id, m.key, 'active')}
                                   className={`px-3.5 py-1.5 rounded-lg font-black text-[10px] cursor-pointer transition-all hover:scale-[1.02] active:scale-[0.98] ${
-                                    config.active 
-                                      ? 'bg-emerald-50 dark:bg-emerald-950/30 text-emerald-600 dark:text-emerald-400 border border-emerald-100 dark:border-emerald-900/40' 
-                                      : 'bg-rose-50 dark:bg-rose-950/30 text-rose-600 dark:text-rose-400 border border-rose-100 dark:border-rose-900/40'
+                                    config.active === true
+                                      ? 'bg-emerald-50 dark:bg-emerald-950/30 text-emerald-600 dark:text-emerald-400 border border-emerald-100 dark:border-emerald-900/40'
+                                      : config.active === false
+                                      ? 'bg-rose-50 dark:bg-rose-950/30 text-rose-600 dark:text-rose-400 border border-rose-100 dark:border-rose-900/40'
+                                      : 'bg-amber-50 dark:bg-amber-950/30 text-amber-600 dark:text-amber-400 border border-amber-100 dark:border-amber-900/40'
                                   }`}
                                 >
-                                  {config.active ? 'نشط ومصرح به' : 'محظور من الاستخدام'}
+                                  {config.active === true ? 'نشط ومصرح به' : config.active === false ? 'محظور من الاستخدام' : 'غير متحقق'}
                                 </button>
                               </td>
 
@@ -1388,12 +1426,14 @@ export default function SuperAdminOperationsCenter({
                                   type="button"
                                   onClick={() => toggleModuleProperty(activeSchool.id, m.key, 'visible')}
                                   className={`px-3.5 py-1.5 rounded-lg font-black text-[10px] cursor-pointer transition-all hover:scale-[1.02] active:scale-[0.98] ${
-                                    config.visible 
-                                      ? 'bg-orange-50 dark:bg-orange-950/30 text-orange-600 dark:text-orange-400 border border-orange-100 dark:border-orange-900/40' 
-                                      : 'bg-slate-100 dark:bg-slate-800 text-slate-500 dark:text-slate-400 dark:border-slate-700'
+                                    config.visible === true
+                                      ? 'bg-orange-50 dark:bg-orange-950/30 text-orange-600 dark:text-orange-400 border border-orange-100 dark:border-orange-900/40'
+                                      : config.visible === false
+                                      ? 'bg-slate-100 dark:bg-slate-800 text-slate-500 dark:text-slate-400 dark:border-slate-700'
+                                      : 'bg-amber-50 dark:bg-amber-950/30 text-amber-600 dark:text-amber-400 border border-amber-100 dark:border-amber-900/40'
                                   }`}
                                 >
-                                  {config.visible ? 'مرئي في القائمة' : 'مخفي بالكامل'}
+                                  {config.visible === true ? 'مرئي في القائمة' : config.visible === false ? 'مخفي بالكامل' : 'غير متحقق'}
                                 </button>
                               </td>
 
@@ -1402,12 +1442,14 @@ export default function SuperAdminOperationsCenter({
                                   type="button"
                                   onClick={() => toggleModuleProperty(activeSchool.id, m.key, 'premium')}
                                   className={`px-3.5 py-1.5 rounded-lg font-black text-[10px] cursor-pointer transition-all hover:scale-[1.02] active:scale-[0.98] ${
-                                    config.premium 
-                                      ? 'bg-amber-50 dark:bg-amber-950/30 text-amber-600 dark:text-amber-400 border border-amber-100 dark:border-amber-900/40' 
-                                      : 'bg-slate-100 dark:bg-slate-800 text-slate-400 dark:border-slate-700'
+                                    config.premium === true
+                                      ? 'bg-amber-50 dark:bg-amber-950/30 text-amber-600 dark:text-amber-400 border border-amber-100 dark:border-amber-900/40'
+                                      : config.premium === false
+                                      ? 'bg-slate-100 dark:bg-slate-800 text-slate-400 dark:border-slate-700'
+                                      : 'bg-amber-50 dark:bg-amber-950/30 text-amber-600 dark:text-amber-400 border border-amber-100 dark:border-amber-900/40'
                                   }`}
                                 >
-                                  {config.premium ? 'وحدة VIP نشطة 👑' : 'تفعيل ميزات سوبر'}
+                                  {config.premium === true ? 'وحدة VIP نشطة 👑' : config.premium === false ? 'ليست ضمن الباقة' : 'غير متحقق'}
                                 </button>
                               </td>
                             </tr>
@@ -1437,32 +1479,12 @@ export default function SuperAdminOperationsCenter({
                   
                   <button
                     onClick={handleCreateBackup}
-                    disabled={isBackupLoading}
                     className="bg-amber-600 hover:bg-amber-700 text-white px-5 py-2.5 text-xs font-black transition-all flex items-center gap-2 shadow-amber-500/10 cursor-pointer disabled:opacity-50 hover:scale-[1.02] active:scale-[0.98]"
                   >
                     <Database className="w-4 h-4 text-amber-200 animate-pulse" />
                     <span>توليد لقطة فورية كاملة لقاعدة البيانات 🔒</span>
                   </button>
                 </div>
-
-                {/* Progressive backup loading indicator */}
-                {isBackupLoading && (
-                  <div className="bg-transparent dark:bg-slate-950 p-5 border border-slate-200/60 dark:border-slate-850 space-y-3.5 animate-in fade-in duration-300">
-                    <div className="flex justify-between items-center text-xs">
-                      <span className="text-amber-600 dark:text-amber-400 font-extrabold flex items-center gap-2">
-                        <RefreshCw className="w-4 h-4 animate-spin text-amber-500" />
-                        <span>{backupStatusText}</span>
-                      </span>
-                      <span className="font-mono text-amber-600 dark:text-amber-400 font-extrabold bg-amber-50 dark:bg-amber-950/40 px-2.5 py-1 rounded-md">{backupProgress}%</span>
-                    </div>
-                    <div className="h-2.5 bg-slate-200/60 dark:bg-slate-900 rounded-full overflow-hidden p-0.5 border border-slate-100 dark:border-slate-800">
-                      <div 
-                        className="h-full bg-gradient-to-r from-amber-500 via-purple-500 to-amber-600 rounded-full transition-all duration-300 shadow-amber-500/50"
-                        style={{ width: `${backupProgress}%` }}
-                      />
-                    </div>
-                  </div>
-                )}
 
                 <div className="overflow-x-auto border border-slate-150 dark:border-slate-850 shadow-xs">
                   <table className="w-full text-right text-xs">
@@ -1495,9 +1517,9 @@ export default function SuperAdminOperationsCenter({
                             </span>
                           </td>
                           <td className="p-4 text-center">
-                            <span className="inline-flex items-center gap-1.5 text-emerald-600 dark:text-emerald-400 font-black bg-emerald-50 dark:bg-emerald-950/20 border border-emerald-100/50 dark:border-emerald-900/30 px-2.5 py-1 rounded-lg text-[10px]">
-                              <CheckCircle className="w-3.5 h-3.5 text-emerald-500 animate-pulse" />
-                              سليمة ومؤمنة S3 🔒
+                            <span className="inline-flex items-center gap-1.5 text-amber-600 dark:text-amber-400 font-black bg-amber-50 dark:bg-amber-950/20 border border-amber-100/50 dark:border-amber-900/30 px-2.5 py-1 rounded-lg text-[10px]">
+                              <AlertTriangle className="w-3.5 h-3.5 text-amber-500" />
+                              غير متحقق من مخزن النسخ المركزي
                             </span>
                           </td>
                           <td className="p-4 text-left">
@@ -1548,7 +1570,7 @@ export default function SuperAdminOperationsCenter({
                     <div className="md:col-span-3 flex items-end">
                       <button
                         onClick={() => {
-                          triggerNotification('تم تحديث إعدادات جدولة خادم Cron وجدولتها بمخدمات الـ Tenant!', 'success');
+                          triggerNotification('موصل جدولة النسخ المركزي غير متاح؛ لم تُحفظ أو تُفعّل أي جدولة.', 'warning');
                         }}
                         className="w-full bg-amber-600 hover:bg-amber-700 text-white font-extrabold text-xs py-2.5 rounded-lg transition-all cursor-pointer hover:scale-[1.01] active:scale-[0.99]"
                       >
@@ -1572,7 +1594,7 @@ export default function SuperAdminOperationsCenter({
                       مركز الولوج الإداري المؤقت والتدقيق المباشر (Support Impersonation Hub)
                     </h3>
                     <p className="text-[10px] text-slate-400 dark:text-slate-500 mt-1 leading-relaxed">
-                      يمكّنك نظام الهوية الموحد من الولوج الفوري والآمن كمسؤول مطلق إلى بوابة أي مدرسة لحل الإشكاليات التقنية والدعم الميداني. يتم تشفير كافة الإجراءات وتدوينها لامتثال معايير الحوكمة السيبرانية.
+                      هذا المسار يجهّز طلب دعم فني مركزي. لا تُفتح جلسة انتحال أو وصول مباشر من المتصفح؛ يلزم إصدار جلسة قصيرة العمر من خدمة الهوية المركزية مع تسجيل التدقيق قبل التنفيذ.
                     </p>
                   </div>
                 </div>
@@ -1638,7 +1660,7 @@ export default function SuperAdminOperationsCenter({
                       className="w-full bg-gradient-to-r from-rose-600 to-rose-700 hover:from-rose-700 hover:to-rose-800 disabled:opacity-40 text-white text-xs font-black py-3.5 transition-all cursor-pointer flex items-center justify-center gap-2 shadow-rose-500/10 hover:scale-[1.01] active:scale-[0.99]"
                     >
                       <Play className="w-4 h-4 text-rose-200" />
-                      <span>{isImpersonationSubmitting ? 'جاري توجيه نفق الاتصال المشفر وتحويلك للـ Tenant...' : `دخول مباشر وآمن لـ ${activeSchool?.name} 🚀`}</span>
+                        <span>{isImpersonationSubmitting ? 'جاري إرسال طلب جلسة الدعم...' : `طلب جلسة دعم مركزية لـ ${activeSchool?.name || 'المدرسة المحددة'} 🚀`}</span>
                     </button>
                   </form>
 
@@ -1651,34 +1673,14 @@ export default function SuperAdminOperationsCenter({
                       </h4>
 
                       <div className="space-y-3 max-h-[290px] overflow-y-auto">
-                        <div className="p-3.5 dark:bg-slate-900 border border-slate-150 dark:border-slate-850 text-[10px] text-right space-y-2 shadow-2xs">
-                          <div className="flex justify-between items-center font-bold">
-                            <span className="text-slate-800 dark:text-slate-200">المهندس: سليمان غازي</span>
-                            <span className="text-rose-600 dark:text-rose-400 bg-rose-50 dark:bg-rose-950/30 border border-rose-100/50 dark:border-rose-900/30 px-2 py-0.5 rounded-md text-[8px] font-black">مكتملة ومؤرشفة</span>
-                          </div>
-                          <p className="text-slate-500 dark:text-slate-400 leading-normal">حل خلل في هيكل وجداول أجور المعلمين لشهر يونيو لمدارس النور.</p>
-                          <div className="text-slate-400 dark:text-slate-500 font-mono text-[9px] flex justify-between pt-2 border-t border-slate-100 dark:border-slate-800 mt-2">
-                            <span>المدخل: 10:30 ص | المخرج: 11:00 ص</span>
-                            <span className="font-sans font-bold bg-transparent dark:bg-slate-950 px-1.5 py-0.5 rounded text-[8px]">٣٠ دقيقة</span>
-                          </div>
-                        </div>
-
-                        <div className="p-3.5 dark:bg-slate-900 border border-slate-150 dark:border-slate-850 text-[10px] text-right space-y-2 shadow-2xs">
-                          <div className="flex justify-between items-center font-bold">
-                            <span className="text-slate-800 dark:text-slate-200">المهندس: سليمان غازي</span>
-                            <span className="text-rose-600 dark:text-rose-400 bg-rose-50 dark:bg-rose-950/30 border border-rose-100/50 dark:border-rose-900/30 px-2 py-0.5 rounded-md text-[8px] font-black">مكتملة ومؤرشفة</span>
-                          </div>
-                          <p className="text-slate-500 dark:text-slate-400 leading-normal">مزامنة باصات النقل وبناء خطط الموديول التكاملي لمدارس الفرسان.</p>
-                          <div className="text-slate-400 dark:text-slate-500 font-mono text-[9px] flex justify-between pt-2 border-t border-slate-100 dark:border-slate-800 mt-2">
-                            <span>المدخل: 14:15 م | المخرج: 15:15 م</span>
-                            <span className="font-sans font-bold bg-transparent dark:bg-slate-950 px-1.5 py-0.5 rounded text-[8px]">٦٠ دقيقة</span>
-                          </div>
+                        <div className="p-4 dark:bg-slate-900 border border-amber-200/50 dark:border-amber-900/30 text-[10px] text-amber-700 dark:text-amber-400 leading-relaxed">
+                          لا توجد جلسات دعم موثقة للعرض. لن تُنشأ جلسة دخول حتى يتوفر رمز مركزي قصير العمر وسجل تدقيق غير قابل للتلاعب.
                         </div>
                       </div>
                     </div>
 
                     <div className="text-[10px] text-slate-400 dark:text-slate-500 leading-relaxed pt-3.5 border-t border-slate-150 dark:border-slate-800 mt-4 text-right font-semibold">
-                      يتم إنهاء جلسة المحاكاة الأمنية فورا عند إغلاق متصفح الـ Admin أو بالضغط على زر المغادرة السريع في الهيدر.
+                      خدمة الولوج الفني مغلقة آمنًا حاليًا؛ لا تُمنح صلاحيات مدرسة من حالة محلية أو من المتصفح.
                     </div>
                   </div>
 

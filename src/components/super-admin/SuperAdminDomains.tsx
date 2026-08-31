@@ -1,6 +1,6 @@
 import { AlertTriangle, CheckCircle, Copy, Database, Edit2, ExternalLink, Globe, Link, Plus, RefreshCw, Search, ShieldCheck, Trash2, Lock, ShieldAlert } from 'lucide-react';
 import React, { useState } from 'react';
-import { getTrustedSchoolUrl, getSSLCertificateStatus, openTrustedSchoolPortal } from '../../utils/EnterpriseDomainUtils';
+import { getTrustedSchoolUrl, openTrustedSchoolPortal } from '../../utils/EnterpriseDomainUtils';
 import { authenticatedRequest } from '../../utils/authenticatedRequest';
 
 interface SuperAdminDomainsProps {
@@ -23,9 +23,9 @@ export default function SuperAdminDomains({
   // Form states
   const [customDomain, setCustomDomain] = useState('');
   const [subdomain, setSubdomain] = useState('');
-  const [sslStatus, setSslStatus] = useState<'pending' | 'valid' | 'none'>('valid');
+  const [sslStatus, setSslStatus] = useState<'pending' | 'none'>('pending');
 
-  // Test Link Simulation State
+  // Domain readiness state (only populated by a trusted diagnostic connector)
   const [testingId, setTestingId] = useState<string | null>(null);
   const [testResult, setTestResult] = useState<Record<string, { status: 'healthy' | 'error' | 'unknown', latency: number | null, time: string | null }>>({});
 
@@ -42,8 +42,9 @@ export default function SuperAdminDomains({
 
   const applyCanonicalDomain = (canonical: any) => {
     const profile = canonical.central_metadata && typeof canonical.central_metadata === 'object' ? canonical.central_metadata : {};
-    const schoolUrl = profile.domain
-      ? `https://${profile.domain}`
+    const domain = profile.domain || profile.customDomain || '';
+    const schoolUrl = domain
+      ? `https://${domain}`
       : getTrustedSchoolUrl({ id: canonical.id, subdomain: profile.subdomain });
     setSchools(prev => prev.map(item => item.id === canonical.id ? { ...item, ...profile, ...canonical, name: canonical.display_name, schoolCode: canonical.school_code, schoolUrl } : item));
   };
@@ -61,7 +62,7 @@ export default function SuperAdminDomains({
     if (!selectedSchool || !customDomain) return;
 
     try {
-      const canonical = await updateCentralDomain(selectedSchool, { domain: customDomain, customDomain, sslStatus: 'pending' });
+      const canonical = await updateCentralDomain(selectedSchool, { domain: customDomain, customDomain, sslStatus: sslStatus });
       applyCanonicalDomain(canonical);
     } catch (error) {
       triggerNotification(error instanceof Error ? error.message : 'تعذر ربط النطاق مركزيًا؛ لم يتم تعديل البيانات.', 'danger');
@@ -74,7 +75,7 @@ export default function SuperAdminDomains({
       'إدارة أسماء النطاقات والروابط'
     );
 
-    triggerNotification(`تم حفظ النطاق الخاص https://${customDomain} في الإدارة المركزية، وحالة SSL قيد التحقق 🛡️`, 'success');
+    triggerNotification(`تم حفظ النطاق الخاص https://${customDomain} في الإدارة المركزية، وحالة SSL: ${sslStatus === 'pending' ? 'بانتظار موصل البنية' : 'غير مفعلة'} 🛡️`, 'success');
     setShowDomainModal(false);
     setCustomDomain('');
   };
@@ -157,10 +158,10 @@ export default function SuperAdminDomains({
     <div id="super-admin-domains" className="space-y-6 text-right">
       
       {/* Alert Header Banner */}
-      <div className="bg-slate-900 border border-amber-500/20 p-4 flex items-start gap-3">
+      <div className="rounded-3xl border-2 border-[#d4af37]/30 bg-gradient-to-b from-[#fffefc] to-[#f8f3ea] p-4 flex items-start gap-3 shadow-sm">
         <Globe className="w-5 h-5 text-amber-400 mt-0.5 shrink-0" />
         <div className="space-y-1">
-          <h4 className="text-xs font-black text-slate-100">مركز الحوكمة والتحكم في النطاقات والروابط</h4>
+          <h4 className="text-xs font-black text-slate-900">مركز الحوكمة والتحكم في النطاقات والروابط</h4>
           <p className="text-[10px] text-slate-400 leading-relaxed">
             تُحفظ أسماء النطاقات الفرعية والمخصصة في الدليل المركزي مع حالة SSL صريحة. أما فحص DNS/HTTP وإصدار الشهادة وتعديل سجلات البنية التحتية فتحتاج موصل تشغيل مركزي موثق قبل إعلان الجاهزية.
           </p>
@@ -168,8 +169,8 @@ export default function SuperAdminDomains({
       </div>
 
       {/* Main Domains Management Console */}
-      <div className="bg-slate-900 border border-slate-800 overflow-hidden shadow-xl">
-        <div className="p-4 border-b border-slate-800 bg-slate-950 flex justify-between items-center flex-wrap gap-2">
+      <div className="rounded-3xl bg-[#fffdf8] border-2 border-[#d4af37]/30 overflow-hidden shadow-lg">
+        <div className="p-4 border-b border-[#d4af37]/20 bg-[#2a1d13] flex justify-between items-center flex-wrap gap-2">
           <h3 className="text-xs font-black text-white flex items-center gap-2">
             <Link className="w-4 h-4 text-amber-400" />
             روابط ونطاقات المدارس المستضيفة ({schools.length})
@@ -196,7 +197,7 @@ export default function SuperAdminDomains({
             <tbody className="divide-y divide-slate-800/60">
               {schools.map((school, idx) => {
                 const trustedUrl = getTrustedSchoolUrl(school);
-                const sslCert = getSSLCertificateStatus(school.domain || school.subdomain);
+                const customDomain = school.domain || school.customDomain || '';
                 const result = testResult[school.id];
                 const isTesting = testingId === school.id;
 
@@ -213,10 +214,10 @@ export default function SuperAdminDomains({
                       {school.subdomain ? `${school.subdomain}.erpcloud.com` : 'غير محدد'}
                     </td>
                     <td className="p-4 font-mono font-bold text-amber-400">
-                      {school.domain ? (
-                        <span className="flex items-center gap-1">
-                          <Globe className="w-3.5 h-3.5 shrink-0" />
-                          {school.domain}
+                       {customDomain ? (
+                         <span className="flex items-center gap-1">
+                           <Globe className="w-3.5 h-3.5 shrink-0" />
+                           {customDomain}
                         </span>
                       ) : (
                         <span className="text-slate-600 text-[10px]">لا يوجد نطاق مخصص</span>
@@ -224,12 +225,12 @@ export default function SuperAdminDomains({
                     </td>
                     <td className="p-4">
                       <div className="space-y-1">
-                        <span className="inline-flex items-center gap-1 px-2.5 py-0.5 rounded-full text-[9px] font-black border bg-emerald-950/40 text-emerald-400 border-emerald-900/60">
-                          <ShieldCheck className="w-3.5 h-3.5" />
-                          SSL موثوق وآمن (HTTPS)
+                        <span className="inline-flex items-center gap-1 px-2.5 py-0.5 rounded-full text-[9px] font-black border bg-amber-950/40 text-amber-300 border-amber-900/60">
+                          <ShieldAlert className="w-3.5 h-3.5" />
+                          DNS/SSL غير متحقق
                         </span>
                         <div className="text-[8px] text-slate-500 font-mono" dir="ltr">
-                          Issuer: {sslCert.issuer.split('/')[0]}
+                          المصدر: موصل البنية التحتية المركزي غير متاح
                         </div>
                       </div>
                     </td>
@@ -281,7 +282,7 @@ export default function SuperAdminDomains({
                         <button
                           onClick={() => {
                             setSelectedSchool(school);
-                            setCustomDomain(school.domain || '');
+                             setCustomDomain(school.domain || school.customDomain || '');
                             setShowDomainModal(true);
                           }}
                           className="bg-slate-800 hover:bg-slate-700 text-amber-400 p-1.5 rounded-lg border border-slate-700 text-[10px] font-bold cursor-pointer"
@@ -357,7 +358,7 @@ export default function SuperAdminDomains({
                   onChange={(e) => setSslStatus(e.target.value as any)}
                   className="w-full bg-slate-950 text-slate-100 border border-slate-850 p-2.5 text-xs focus:ring-1 focus:ring-amber-500"
                 >
-                  <option value="valid">شهادة مجانية تلقائية Let's Encrypt SSL (موصى بها)</option>
+                  <option value="pending">طلب إصدار الشهادة — بانتظار موصل DNS/SSL</option>
                   <option value="none">بدون شهادة أمنية مخصصة</option>
                 </select>
               </div>
@@ -419,7 +420,7 @@ export default function SuperAdminDomains({
                   {checkSubdomainAvailability(subdomain, selectedSchool.id) ? (
                     <span className="text-emerald-400 font-bold flex items-center gap-1">
                       <CheckCircle className="w-4 h-4" />
-                      متاح وجاهز للاستغلال
+                      غير مستخدم في الدليل المركزي المحمّل
                     </span>
                   ) : (
                     <span className="text-red-400 font-bold flex items-center gap-1">

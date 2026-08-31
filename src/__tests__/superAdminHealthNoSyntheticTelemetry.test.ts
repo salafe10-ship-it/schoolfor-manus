@@ -6,9 +6,11 @@ describe('SuperAdminHealth authoritative telemetry contract', () => {
   const source = readFileSync(resolve(process.cwd(), 'src/components/super-admin/SuperAdminHealth.tsx'), 'utf8');
 
   it('starts unverified and does not run random telemetry updates', () => {
-    expect(source).toContain('useState(0)');
-    expect(source).toContain('القياس الحي لا يثبت إلا من موصل مراقبة مركزي موثق');
-    expect(source).toContain('setHistoryData([]);');
+    expect(source).toContain('const historyData: any[] = [];');
+    expect(source).toContain('موصل القياس المركزي غير متصل');
+    expect(source).toContain('غير متحقق');
+    expect(source).not.toContain('Math.random');
+    expect(source).not.toContain('setInterval');
     expect(source).not.toContain('const [cpuUsage, setCpuUsage] = useState(42)');
   });
 });

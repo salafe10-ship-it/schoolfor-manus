@@ -1,5 +1,5 @@
 import { Activity, AlertTriangle, CheckCircle, Cpu, Database, Eye, FileCode, Globe, HardDrive, Key, Layers, Network, Play, RefreshCw, Server, Settings, ShieldAlert, Sliders, Terminal, Trash2, Wifi, Zap } from 'lucide-react';
-import React, { useState, useEffect } from 'react';
+import React, { useState } from 'react';
 import { AreaChart, Area, XAxis, YAxis, CartesianGrid, Tooltip, ResponsiveContainer } from 'recharts';
 import { copyTextToClipboard } from '../components/SuperAdminView';
 
@@ -19,83 +19,35 @@ export default function DeveloperPlatformCenter({
   const [activeTab, setActiveTab] = useState<'schema' | 'supabase' | 'deployment' | 'env_vars' | 'logs_audit' | 'monitor' | 'console'>('schema');
   
   // States
-  const [supabaseUrl, setSupabaseUrl] = useState('<public-project-url-placeholder>');
+  const [supabaseUrl] = useState('تُدار إعدادات الاتصال من بيئة الخادم المحمية');
   const [dbStatus, setDbStatus] = useState<'connected' | 'disconnected' | 'testing'>('disconnected');
   
-  // Mock Env Vars
-  const [envVars, setEnvVars] = useState([
-    { name: 'VITE_SUPABASE_URL', value: '<public-project-url-placeholder>', isPublic: true, isSecret: false },
-    { name: 'VITE_SUPABASE_ANON_KEY', value: '<public-anon-key-placeholder>', isPublic: true, isSecret: false },
-    { name: 'GEMINI_API_KEY', value: '<server-managed-api-key-placeholder>', isPublic: false, isSecret: true },
-    { name: 'POSTGRES_DB_PASSWORD', value: '<server-managed-password-placeholder>', isPublic: false, isSecret: true },
-    { name: 'REDIS_CACHE_URL', value: '<server-managed-cache-url-placeholder>', isPublic: false, isSecret: true },
-    { name: 'JWT_SECRET_KEY', value: '<server-managed-jwt-secret-placeholder>', isPublic: false, isSecret: true }
-  ]);
-  const [showSecrets, setShowSecrets] = useState(false);
+  const envVars = [
+    { name: 'VITE_SUPABASE_URL', value: 'الحالة غير متاحة من واجهة الإدارة', isPublic: true, isSecret: false },
+    { name: 'VITE_SUPABASE_ANON_KEY', value: 'القيمة غير معروضة', isPublic: true, isSecret: false },
+    { name: 'GEMINI_API_KEY', value: 'تُدار من الخادم فقط', isPublic: false, isSecret: true },
+    { name: 'POSTGRES_DB_PASSWORD', value: 'تُدار من الخادم فقط', isPublic: false, isSecret: true },
+    { name: 'REDIS_CACHE_URL', value: 'تُدار من الخادم فقط', isPublic: false, isSecret: true },
+    { name: 'JWT_SECRET_KEY', value: 'تُدار من الخادم فقط', isPublic: false, isSecret: true }
+  ];
 
   // Deployments state
-  const [deployments, setDeployments] = useState([
-    { id: 'dep-054', version: 'v3.5.2-stable', branch: 'main', status: 'success', timestamp: 'منذ ساعتين', commit: 'chore: build(production) unified action bar' },
-    { id: 'dep-053', version: 'v3.5.1-stable', branch: 'main', status: 'success', timestamp: 'أمس', commit: 'feat: add advanced search portal filters' },
-    { id: 'dep-052', version: 'v3.4.9-hotfix', branch: 'hotfix/printer-bypass', status: 'success', timestamp: 'منذ يومين', commit: 'fix: bypass secure print frames in chrome' }
-  ]);
-  const [isDeploying, setIsDeploying] = useState(false);
+  const deployments: any[] = [];
+  const isDeploying = false;
 
   // Live Performance Logs / Metrics
-  const [metricsHistory, setMetricsHistory] = useState<any[]>([]);
+  const metricsHistory: any[] = [];
   const [sqlConsoleHistory, setSqlConsoleHistory] = useState<string[]>([
-    '-- SQL Terminal Started. Connects directly to Dev & Platform DB.',
-    'SELECT count(*) FROM students WHERE status = \'active\';',
-    '>> Result: 124 records active.'
+    '-- SQL execution is disabled in the browser.',
+    '>> No query has been sent to PostgreSQL.'
   ]);
   const [inputQuery, setInputQuery] = useState('');
 
-  // SSL and DNS simulation
-  const [sslStatus, setSslStatus] = useState({
-    domain: 'enterprise.edupro-erp.com',
-    issuer: 'Let\'s Encrypt Authority X3',
-    expires: '2026-10-15 (متبقي 92 يوماً)',
-    status: 'valid'
-  });
-
   // Database tables metadata (Database Inspector)
   const tablesMetadata = [
-    { name: 'schools', rows: schools.length, columns: 12, size: '24 KB', rls: 'مفعل (RLS Enabled)' },
-    { name: 'students', rows: students.length, columns: 18, size: '156 KB', rls: 'مفعل (RLS Enabled)' },
-    { name: 'guardians', rows: students.length, columns: 10, size: '94 KB', rls: 'مفعل (RLS Enabled)' },
-    { name: 'invoices', rows: 142, columns: 15, size: '280 KB', rls: 'مفعل (RLS Enabled)' },
-    { name: 'audit_logs', rows: 840, columns: 8, size: '1.2 MB', rls: 'مفعل (RLS Enabled)' }
+    { name: 'schools', rows: schools.length, columns: 'غير متحقق', size: 'غير متحقق', rls: 'غير متحقق من كتالوج الخادم' },
+    { name: 'students', rows: students.length, columns: 'غير متحقق', size: 'غير متحقق', rls: 'غير متحقق من كتالوج الخادم' }
   ];
-
-  useEffect(() => {
-    // Generate live stream of CPU/Memory and DB connection pools
-    const data = Array.from({ length: 12 }, (_, i) => ({
-      time: `${i * 5}ث`,
-      latency: Math.floor(15 + Math.random() * 12),
-      cpu: Math.floor(25 + Math.random() * 10),
-      memory: Math.floor(58 + Math.random() * 3),
-      pool: Math.floor(8 + Math.random() * 4)
-    }));
-    setMetricsHistory(data);
-
-    const interval = setInterval(() => {
-      setMetricsHistory(prev => {
-        const sliced = prev.slice(1);
-        return [
-          ...sliced,
-          {
-            time: 'الآن',
-            latency: Math.floor(12 + Math.random() * 8),
-            cpu: Math.floor(20 + Math.random() * 20),
-            memory: Math.floor(58 + Math.random() * 2),
-            pool: Math.floor(6 + Math.random() * 6)
-          }
-        ];
-      });
-    }, 4000);
-
-    return () => clearInterval(interval);
-  }, []);
 
   const handleTestSupabase = async () => {
     setDbStatus('testing');
@@ -114,22 +66,7 @@ export default function DeveloperPlatformCenter({
   };
 
   const handleTriggerDeploy = () => {
-    setIsDeploying(true);
-    triggerNotification('جاري تحضير ملفات البناء (Build Phase) ومطابقة الحاويات...', 'info');
-    setTimeout(() => {
-      const newDep = {
-        id: `dep-0${Math.floor(55 + Math.random() * 20)}`,
-        version: 'v3.5.3-release',
-        branch: 'main',
-        status: 'success',
-        timestamp: 'الآن',
-        commit: 'feat: live automatic deploy from Developer Center'
-      };
-      setDeployments(prev => [newDep, ...prev]);
-      setIsDeploying(false);
-      triggerNotification('اكتمل البناء والنشر التلقائي بنجاح! تم نقل الإصدار الجديد للإنتاجية 🚀', 'success');
-      logAction('PLATFORM_REDEPLOY', 'تحفيز عملية إعادة النشر والبناء التلقائي للمنصة السحابية الموحدة', 'مركز المطورين');
-    }, 2500);
+    triggerNotification('موصل CI/CD غير متاح من واجهة الإدارة؛ لم يبدأ بناء أو نشر.', 'warning');
   };
 
   const executeConsoleQuery = (e: React.FormEvent) => {
@@ -137,37 +74,19 @@ export default function DeveloperPlatformCenter({
     if (!inputQuery.trim()) return;
 
     const query = inputQuery.trim();
-    let result = '';
-
-    if (query.toLowerCase().includes('select')) {
-      if (query.toLowerCase().includes('students')) {
-        result = `>> Returned ${students.length} rows inside (students) matching current Tenant Isolation schema.`;
-      } else if (query.toLowerCase().includes('schools')) {
-        result = `>> Returned ${schools.length} rows inside (schools) matching Global SaaS configuration.`;
-      } else {
-        result = '>> Success: Query executed successfully (Returned 0 rows or virtual records).';
-      }
-    } else if (query.toLowerCase().includes('update') || query.toLowerCase().includes('insert')) {
-      result = '>> Commit OK: Transaction recorded inside SQL simulator ledger.';
-    } else if (query.toLowerCase().includes('clear') || query.toLowerCase().includes('cls')) {
+    if (query.toLowerCase() === 'clear' || query.toLowerCase() === 'cls') {
       setSqlConsoleHistory([]);
       setInputQuery('');
       return;
-    } else {
-      result = '>> Error: Script warning. Relational parser simulation complete.';
     }
 
-    setSqlConsoleHistory(prev => [...prev, query, result]);
+    setSqlConsoleHistory(prev => [...prev, query, '>> BLOCKED: Browser SQL execution is disabled; no query reached the database.']);
     setInputQuery('');
-    logAction('CONSOLE_SQL_QUERY', `تنفيذ استعلام مباشر من وحدة المطور: ${query.substring(0, 50)}...`, 'مركز المطورين');
+    triggerNotification('تنفيذ SQL من المتصفح محظور؛ لم يصل الاستعلام إلى قاعدة البيانات.', 'warning');
   };
 
   const handleFlushPlatformCache = () => {
-    triggerNotification('جاري محو وتطهير الذاكرة المخبئية السحابية لضمان تطابق البيانات...', 'info');
-    setTimeout(() => {
-      triggerNotification('تم إفراغ الذاكرة المخبئية (Redis Server Cache) وبدء تجميع الأصول بنجاح! 🧹', 'success');
-      logAction('PLATFORM_CACHE_PURGE', 'تنظيف الذاكرة المخبئية السحابية وإعادة تحميل البنية الإدارية للمستأجرين', 'مركز المطورين');
-    }, 1200);
+    triggerNotification('موصل Redis المركزي غير متاح؛ لم تُحذف أي مفاتيح أو ذاكرة مؤقتة.', 'warning');
   };
 
   const dbSchemaSQLText = `-- ==========================================================
@@ -324,11 +243,11 @@ CREATE POLICY tenant_isolation_policy ON students
               <button
                 onClick={() => {
                   copyTextToClipboard(dbSchemaSQLText);
-                  triggerNotification('تم نسخ مخطط بناء الـ Database SQL كود بالكامل 📋', 'success');
+                  triggerNotification('تم نسخ المسودة المرجعية محليًا؛ لا يعني ذلك تطبيقها على قاعدة البيانات.', 'info');
                 }}
                 className="bg-indigo-600 hover:bg-indigo-700 text-white text-xs font-bold px-4 py-2 rounded-xl flex items-center gap-1.5 transition-colors cursor-pointer"
               >
-                <span>نسخ كود الـ SQL بالكامل 📋</span>
+                <span>نسخ المسودة المرجعية 📋</span>
               </button>
             </div>
 
@@ -417,7 +336,7 @@ CREATE POLICY tenant_isolation_policy ON students
                     <input 
                       type="text" 
                       value={supabaseUrl} 
-                      onChange={(e) => setSupabaseUrl(e.target.value)}
+                      readOnly
                       className="w-full bg-slate-900 border border-slate-800 p-2 text-xs font-mono text-indigo-300 rounded focus:outline-none focus:border-indigo-500" 
                     />
                   </div>
@@ -481,7 +400,7 @@ CREATE POLICY tenant_isolation_policy ON students
                   <Server className="w-4 h-4 text-sky-400" />
                   <span>سجل بناء وإعادة بناء النشر (CI/CD Production Deployment)</span>
                 </h3>
-                <p className="text-xs text-slate-400 mt-1">تتيح هذه الوحدة استدعاء نظام البناء والتحقق لإنشاء إصدار جديد تماماً من المنصة، وفحص الأخطاء قبل التمرير لجميع فروع المدارس المستأجرة.</p>
+                <p className="text-xs text-slate-400 mt-1">يعرض سجل النشر عند ربط موصل CI/CD مركزي. التشغيل من المتصفح مغلق حاليًا.</p>
               </div>
               <button
                 onClick={handleTriggerDeploy}
@@ -496,7 +415,7 @@ CREATE POLICY tenant_isolation_policy ON students
                 ) : (
                   <>
                     <Play className="w-4 h-4" />
-                    <span>إعادة نشر المنصة السحابية 🚀</span>
+                    <span>طلب نشر عبر CI/CD</span>
                   </>
                 )}
               </button>
@@ -518,11 +437,14 @@ CREATE POLICY tenant_isolation_policy ON students
                     </div>
                     <div className="flex items-center gap-2">
                       <span className="inline-flex items-center gap-1 text-emerald-400 bg-emerald-950/40 border border-emerald-900 px-2 py-0.5 rounded text-[10px] font-black">
-                        ● Succeeded
+                        ● {d.status || 'غير متحقق'}
                       </span>
                     </div>
                   </div>
                 ))}
+                {deployments.length === 0 && (
+                  <div className="p-5 text-xs text-amber-400 text-center">لا يوجد موصل نشر مركزي أو سجل نشر موثق متاح للعرض.</div>
+                )}
               </div>
             </div>
           </div>
@@ -537,10 +459,10 @@ CREATE POLICY tenant_isolation_policy ON students
                 <p className="text-xs text-slate-400 mt-1">تراقب هذه الوحدة سلامة ومتطلبات تشغيل السيرفر وقاعدة البيانات وقاموس ذكاء Gemini الاصطناعي.</p>
               </div>
               <button
-                onClick={() => setShowSecrets(!showSecrets)}
+                onClick={() => triggerNotification('القيم الحساسة محجوبة دائمًا وتُدار من بيئة الخادم فقط.', 'warning')}
                 className="bg-slate-800 hover:bg-slate-700 text-slate-300 text-xs font-bold px-3 py-2 rounded-xl border border-slate-700 cursor-pointer"
               >
-                {showSecrets ? 'إخفاء القيم الحساسة' : 'إظهار القيم الحساسة'}
+                القيم الحساسة محجوبة
               </button>
             </div>
 
@@ -559,7 +481,7 @@ CREATE POLICY tenant_isolation_policy ON students
                     </span>
                   </div>
                   <div className="bg-slate-900 p-2 rounded border border-slate-850 font-mono text-[10px] text-slate-300 truncate select-all">
-                    {v.isSecret && !showSecrets ? '••••••••••••••••••••••••••••••••' : v.value}
+                    {v.isSecret ? '••••••••••••••••••••••••••••••••' : v.value}
                   </div>
                 </div>
               ))}
@@ -580,19 +502,12 @@ CREATE POLICY tenant_isolation_policy ON students
             {/* Interactive logs monitor */}
             <div className="bg-slate-950 rounded-xl border border-slate-800 overflow-hidden">
               <div className="bg-slate-900 p-3 flex justify-between items-center border-b border-slate-800 text-xs text-slate-400 font-bold">
-                <span>سجل الاستعلامات والأحداث النشطة (Live Database Logs)</span>
-                <span className="text-[10px] bg-slate-850 text-indigo-400 px-2 py-0.5 rounded border border-slate-750">Ready</span>
+                <span>سجل الاستعلامات والأحداث المركزية</span>
+                <span className="text-[10px] bg-slate-850 text-amber-400 px-2 py-0.5 rounded border border-slate-750">غير متصل</span>
               </div>
               <div className="p-4 font-mono text-[11px] text-indigo-300 leading-relaxed space-y-1.5 max-h-[300px] overflow-y-auto text-left" dir="ltr">
-                <p className="text-slate-450">-- Continuous PostgreSQL Diagnostics Engine Active</p>
-                <p className="text-emerald-500">-- [INFO] SQL Server connected matching ISO Standards for Tenant Isolation.</p>
-                <p className="text-indigo-400">SELECT * FROM schools WHERE subdomain = 'alfaisal' LIMIT 1;</p>
-                <p className="text-slate-400">{" >> OK [Row Count: 1] (Latency: 2ms)"}</p>
-                <p className="text-indigo-400">SELECT id, name_ar, student_code, status FROM students WHERE school_id = '8f43-8ef2d' ORDER BY student_code ASC;</p>
-                <p className="text-slate-400">{" >> OK [Row Count: "}{students.length}{"] (Latency: 4ms)"}</p>
-                <p className="text-rose-400">-- [WARN] Multi-tenant context validated. Row level protection (RLS) checked: 100% Secure.</p>
-                <p className="text-indigo-400">INSERT INTO audit_logs (id, actor, action, timestamp) VALUES (uuid_generate_v4(), 'SuperAdmin', 'EXPORT_STUDENTS_EXCEL', NOW());</p>
-                <p className="text-slate-400">{" >> OK (Latency: 1ms)"}</p>
+                <p className="text-amber-400">-- لا يوجد موصل سجلات PostgreSQL حي.</p>
+                <p className="text-slate-400">-- استخدم شاشة سجل التدقيق المركزي للأدلة المتاحة حاليًا.</p>
               </div>
             </div>
           </div>
@@ -606,23 +521,23 @@ CREATE POLICY tenant_isolation_policy ON students
             <div className="grid grid-cols-1 md:grid-cols-4 gap-4">
               <div className="bg-slate-950 p-4 rounded-xl border border-slate-800 space-y-1">
                 <span className="text-[10px] text-slate-400 block font-bold">زمن استجابة الشبكة (Latency)</span>
-                <span className="text-lg font-black font-mono text-emerald-400">12 ms</span>
-                <span className="text-[9px] text-slate-500 block">ضمن النطاق الأمثل جداً</span>
+                <span className="text-lg font-black text-amber-400">غير متحقق</span>
+                <span className="text-[9px] text-slate-500 block">موصل القياس غير متصل</span>
               </div>
               <div className="bg-slate-950 p-4 rounded-xl border border-slate-800 space-y-1">
                 <span className="text-[10px] text-slate-400 block font-bold">صحة الشهادة الأمنية (SSL / HTTPS)</span>
-                <span className="text-lg font-black text-sky-400 font-mono">Secure (HTTPS)</span>
-                <span className="text-[9px] text-slate-500 block">بإصدار Let's Encrypt</span>
+                <span className="text-lg font-black text-amber-400">غير متحقق</span>
+                <span className="text-[9px] text-slate-500 block">لا توجد قراءة شهادة مركزية</span>
               </div>
               <div className="bg-slate-950 p-4 rounded-xl border border-slate-800 space-y-1">
                 <span className="text-[10px] text-slate-400 block font-bold">سلامة الروابط (DNS Routing)</span>
-                <span className="text-lg font-black text-indigo-400">Active (100%)</span>
-                <span className="text-[9px] text-slate-500 block">جميع النطاقات الفرعية مسجلة</span>
+                <span className="text-lg font-black text-amber-400">غير متحقق</span>
+                <span className="text-[9px] text-slate-500 block">استخدم شاشة النطاقات للفحص</span>
               </div>
               <div className="bg-slate-950 p-4 rounded-xl border border-slate-800 space-y-1">
                 <span className="text-[10px] text-slate-400 block font-bold">مجموع الترافيك اليومي (Requests)</span>
-                <span className="text-lg font-black text-yellow-400 font-mono">152,480 req</span>
-                <span className="text-[9px] text-slate-500 block">موزعة على كافة المستأجرين</span>
+                <span className="text-lg font-black text-amber-400">غير متحقق</span>
+                <span className="text-[9px] text-slate-500 block">لا يوجد مجمع طلبات مركزي</span>
               </div>
             </div>
 
@@ -661,9 +576,9 @@ CREATE POLICY tenant_isolation_policy ON students
             <div className="space-y-1">
               <h3 className="text-sm font-extrabold text-white flex items-center gap-1.5">
                 <Terminal className="w-4 h-4 text-cyan-400" />
-                <span>محرر ومحاكي الأوامر والاستعلامات السحابية (Interactive SQL Console)</span>
+                <span>سياسة تنفيذ أوامر SQL</span>
               </h3>
-              <p className="text-xs text-slate-400">امتحان وتجربة الاستعلامات المباشرة على قاعدة البيانات. يمكنك كتابة استعلامات SQL مثل SELECT * FROM students أو SELECT * FROM schools واختبار العزل فوراً.</p>
+              <p className="text-xs text-slate-400">تنفيذ SQL من المتصفح محظور. الحقل أدناه يثبت أن الأوامر تُرفض ولا تصل إلى قاعدة البيانات.</p>
             </div>
 
             <div className="bg-slate-950 rounded-xl border border-slate-800 flex flex-col h-[300px]">
@@ -688,7 +603,7 @@ CREATE POLICY tenant_isolation_policy ON students
                   type="submit"
                   className="bg-indigo-600 hover:bg-indigo-500 text-white font-black text-xs px-4 py-2 rounded-lg cursor-pointer"
                 >
-                  تشغيل استعلام
+                  تحقق من الحظر
                 </button>
               </form>
             </div>

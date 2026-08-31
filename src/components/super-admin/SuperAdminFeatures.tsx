@@ -41,19 +41,7 @@ export default function SuperAdminFeatures({
   // Initialize or get features
   const getSchoolFeatures = () => {
     if (!activeSchool) return {};
-    return activeSchool.features || {
-      students: true,
-      exams: true,
-      library: true,
-      teachers: true,
-      accounts: true,
-      student_accounts: true,
-      inventory: true,
-      buses: true,
-      uniform_management: true,
-      db_schema: true,
-      permissions_admin: true
-    };
+    return activeSchool.features || {};
   };
 
   const persistFeatures = async (features: Record<string, boolean>) => {
@@ -78,7 +66,7 @@ export default function SuperAdminFeatures({
     const currentFeatures = getSchoolFeatures();
     const updatedFeatures = {
       ...currentFeatures,
-      [featureKey]: currentFeatures[featureKey] === false ? true : false
+      [featureKey]: currentFeatures[featureKey] !== true
     };
 
     try {
@@ -107,7 +95,7 @@ export default function SuperAdminFeatures({
       `تعديل وتحديث مصفوفة الميزات والخدمات السحابية المفعَّلة لمدرسة ${activeSchool.name}`,
       'حوكمة الباقات والميزات'
     );
-    triggerNotification(`✓ تم حفظ واعتماد مصفوفة الخدمات بنجاح لـ ${activeSchool.name}. تم تطبيق الخيارات حياً على شاشاتهم وجوانب التصفح لديهم فوراً!`, 'success');
+    triggerNotification(`تم حفظ واعتماد مصفوفة الخدمات مركزيًا لمدرسة ${activeSchool.name}.`, 'success');
   };
 
   const handleEnableAll = async () => {
@@ -141,13 +129,13 @@ export default function SuperAdminFeatures({
     <div id="super-admin-features" className="space-y-6 text-right">
       
       {/* Selector Area */}
-      <div className="bg-slate-900 border border-slate-800 p-5 flex flex-col sm:flex-row justify-between items-center gap-4 shadow-lg">
+      <div className="rounded-3xl border-2 border-[#d4af37]/30 bg-gradient-to-b from-[#fffefc] via-[#fbf8f0] to-[#f5eeea] p-5 flex flex-col sm:flex-row justify-between items-center gap-4 shadow-md">
         <div className="flex items-center gap-3 text-right">
           <div className="w-10 h-10 bg-amber-600/20 border border-amber-500/30 flex items-center justify-center text-amber-400">
             <Sliders className="w-5 h-5" />
           </div>
           <div>
-            <h3 className="text-xs font-black text-white">تخصيص ميزات المستأجرين (Feature Flags)</h3>
+            <h3 className="text-xs font-black text-slate-900">تخصيص ميزات المستأجرين (Feature Flags)</h3>
             <p className="text-[10px] text-slate-400 mt-0.5">قم بتفعيل أو تعطيل لوحات النظام حياً لمواءمة اشتراك المدرسة أو نوع الباقة المشتراة</p>
           </div>
         </div>
@@ -156,7 +144,7 @@ export default function SuperAdminFeatures({
           <select
             value={selectedSchoolId}
             onChange={(e) => setSelectedSchoolId(e.target.value)}
-            className="bg-slate-950 text-slate-100 border border-slate-800 p-2 text-xs font-bold focus:ring-1 focus:ring-amber-500"
+            className="bg-white text-slate-800 border border-slate-200 rounded-xl p-2 text-xs font-bold focus:ring-1 focus:ring-amber-500"
           >
             {schools.map(s => (
               <option key={s.id} value={s.id}>{s.name} ({s.plan})</option>
@@ -165,7 +153,7 @@ export default function SuperAdminFeatures({
 
           <button
             onClick={handleEnableAll}
-            className="bg-amber-950 hover:bg-amber-900 border border-amber-900 text-amber-400 px-3 py-2 text-xs font-black transition-all cursor-pointer"
+            className="bg-[#2a1a0e] hover:bg-[#3b281a] border border-[#d4af37]/30 text-amber-200 px-3 py-2 rounded-xl text-xs font-black transition-all cursor-pointer"
           >
             تفعيل الكل
           </button>
@@ -174,9 +162,9 @@ export default function SuperAdminFeatures({
 
       {/* Main Grid: Features Control Card */}
       {activeSchool ? (
-        <div className="bg-slate-900 border border-slate-800 overflow-hidden shadow-xl">
+        <div className="rounded-3xl bg-[#fffdf8] border-2 border-[#d4af37]/30 overflow-hidden shadow-lg">
           
-          <div className="p-4 bg-slate-950 border-b border-slate-800 flex justify-between items-center">
+          <div className="p-4 bg-[#2a1d13] border-b border-[#d4af37]/20 flex justify-between items-center">
             <div className="flex items-center gap-1.5">
               <Building2 className="w-4 h-4 text-amber-400" />
               <span className="text-xs font-black text-white">تفصيل لوحات وميزات: <span className="text-amber-400">{activeSchool.name}</span></span>
@@ -186,18 +174,18 @@ export default function SuperAdminFeatures({
             </span>
           </div>
 
-          <div className="p-6 divide-y divide-slate-800/50 space-y-4">
+          <div className="p-6 divide-y divide-amber-900/10 space-y-4">
             
             {/* Feature Flags Checklist */}
             <div className="grid grid-cols-1 md:grid-cols-2 gap-x-8 gap-y-4 pt-1">
               {featureDefinitions.map((feat) => {
-                const isEnabled = getSchoolFeatures()[feat.key] !== false;
+                const isEnabled = getSchoolFeatures()[feat.key] === true;
                 return (
                   <div key={feat.key} className="flex items-start justify-between gap-4 py-3">
                     <div className="space-y-1">
                       <div className="flex items-center gap-1.5">
                         <span className={`w-1.5 h-1.5 rounded-full ${isEnabled ? 'bg-amber-500 animate-pulse' : 'bg-slate-600'}`} />
-                        <h4 className="text-[11px] font-black text-slate-200">{feat.name}</h4>
+                        <h4 className="text-[11px] font-black text-slate-900">{feat.name}</h4>
                       </div>
                       <p className="text-[9px] text-slate-400 leading-relaxed pl-3">{feat.desc}</p>
                     </div>
@@ -243,7 +231,7 @@ export default function SuperAdminFeatures({
 
         </div>
       ) : (
-        <div className="p-8 bg-slate-900 border border-slate-800 text-center text-xs text-slate-400">
+        <div className="rounded-3xl p-8 bg-[#fffdf8] border-2 border-[#d4af37]/30 text-center text-xs text-slate-500 shadow-md">
           الرجاء اختيار مدرسة مستهدفة لعرض وتعديل باقة خدماتها السحابية.
         </div>
       )}

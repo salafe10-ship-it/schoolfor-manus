@@ -11,7 +11,6 @@ dotenv.config();
 // ENTERPRISE POSTGRES REPOSITORY PATTERN
 // ==========================================
 import { DatabaseService } from "./src/database/services/DatabaseService.js";
-import { DatabaseHealthService } from "./src/database/services/DatabaseHealthService.js";
 import { StudentRepository } from "./src/database/repositories/StudentRepository.js";
 import { ExamsRepository } from "./src/database/repositories/ExamsRepository.js";
 import { AuditRepository } from "./src/database/repositories/AuditRepository.js";
@@ -1478,9 +1477,16 @@ async function startServer() {
     // lookup. It is never persisted, logged, or accepted from another source.
     (req as any).trustedAccessToken = token;
 
-    // 4. Strictly prevent client from sending a different school_id in headers, query, or body
+    // 4. Strictly prevent ordinary school requests from sending a different
+    // school_id. A verified platform-admin request is allowed to carry a
+    // target school for central administration; the central route still
+    // validates the target against the canonical database and never trusts
+    // the browser for authority.
     const clientSchoolId = req.headers["x-school-id"] || req.query.schoolId || req.body?.schoolId || req.body?.school_id;
-    if (clientSchoolId && String(clientSchoolId) !== String(identity.schoolId)) {
+    const isCentralPlatformRequest = String(req.originalUrl || '').split('?')[0].startsWith('/api/admin/central');
+    const hasServerDerivedPlatformAdmin = Array.isArray(identity.platformPermissions)
+      && identity.platformPermissions.includes(PERMISSIONS.PLATFORM_ADMIN);
+    if (clientSchoolId && String(clientSchoolId) !== String(identity.schoolId) && !(isCentralPlatformRequest && hasServerDerivedPlatformAdmin)) {
       // Log security violation in Audit Logs
       await AuditRepository.log(
         identity.schoolId,
@@ -1540,17 +1546,532 @@ async function startServer() {
     }
   });
 
+  // Every central-administration request is recorded as immutable access
+  // evidence after authentication/authorization and route execution finish.
+  // Request bodies are intentionally excluded so passwords and secrets never
+  // enter the audit ledger.
+  app.use('/api/admin/central', (req, res, next) => {
+    const startedAt = Date.now();
+    res.on('finish', () => {
+      if (!platformAdminPool) return;
+      const identity = (req as any).user as { id?: string; tenantId?: string } | undefined;
+      const tenantId = String(identity?.tenantId || '').trim();
+      const actorUserId = String(identity?.id || '').trim();
+      if (!/^[0-9a-f-]{36}$/i.test(tenantId) || !/^[0-9a-f-]{36}$/i.test(actorUserId)) return;
+
+      const requestPath = String(req.originalUrl || req.path || '').split('?')[0];
+      const resourceId = requestPath.match(/[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}/i)?.[0] || null;
+      const operation = typeof req.body?.operation === 'string' ? req.body.operation.trim() : '';
+      const resourceType = requestPath.includes('/schools') ? 'central_school'
+        : requestPath.includes('/tenants') ? 'central_tenant'
+        : requestPath.includes('/branches') ? 'central_branch'
+        : requestPath.includes('/users') ? 'central_user'
+        : requestPath.includes('/rbac') ? 'central_rbac'
+        : requestPath.includes('/notifications') ? 'central_notification'
+        : requestPath.includes('/audit') ? 'central_audit'
+        : 'central_administration';
+      const result = res.statusCode < 400 ? 'allowed' : res.statusCode === 401 || res.statusCode === 403 ? 'denied' : 'error';
+      const requestIp = String(req.ip || '').trim() || null;
+      const userAgent = String(req.get('user-agent') || '').slice(0, 1000) || null;
+
+      void platformAdminPool.query(
+        `INSERT INTO public.audit_access_events
+           (tenant_id, actor_user_id, resource_type, resource_id, action, source, reason, result,
+            request_method, request_path, ip_address, user_agent)
+         VALUES ($1::uuid, $2::uuid, $3, $4::uuid, $5, 'central_api', $6, $7, $8, $9,
+                 NULLIF($10, '')::inet, $11)`,
+        [
+          tenantId,
+          actorUserId,
+          resourceType,
+          resourceId,
+          `${req.method}:${operation || 'request'}`,
+          operation ? `operation:${operation}` : null,
+          result,
+          req.method,
+          requestPath,
+          requestIp,
+          userAgent,
+        ],
+      ).catch((error) => {
+        EnterpriseLogger.error('Central administration audit write failed', 'CentralAdministrationAudit', {
+          requestPath,
+          statusCode: res.statusCode,
+          durationMs: Date.now() - startedAt,
+          error: error instanceof Error ? error.message : String(error),
+        });
+      });
+    });
+    next();
+  });
+
+  // Central tenant directory. Tenant records are platform-scoped and are
+  // deliberately managed separately from the tenant's schools and branches.
+  // The browser never supplies authority; only the verified platform role can
+  // reach these routes, and all writes use the direct canonical PostgreSQL
+  // source in one transaction.
+  const stripLegacySchoolSubscriptionProfile = (metadata: unknown) => {
+    if (!metadata || typeof metadata !== 'object' || Array.isArray(metadata)) return {};
+    const legacyKeys = new Set(['plan', 'storageLimit', 'userLimit', 'subscriptionDuration', 'subscriptionStart', 'subscriptionEnd']);
+    return Object.fromEntries(Object.entries(metadata as Record<string, unknown>).filter(([key]) => !legacyKeys.has(key)));
+  };
+
+  // A small, truthful health probe for the canonical control-plane database.
+  // It reports the connection round trip plus migration drift for the objects
+  // required by the central directory. CPU, storage, network and backup
+  // telemetry still require their dedicated providers.
+  app.get('/api/admin/central/health', authenticateRequest, requirePermissionOnly(PERMISSIONS.PLATFORM_ADMIN), async (_req, res, next) => {
+    if (!platformAdminPool) return next(new DatabaseError('مصدر قاعدة البيانات المركزية غير متاح.'));
+    const startedAt = Date.now();
+    try {
+      const [result, schemaResult] = await Promise.all([
+        platformAdminPool.query<{ checked_at: string }>('SELECT now() AS checked_at'),
+        platformAdminPool.query<{ name: string }>(`
+          SELECT required.name
+            FROM (VALUES
+              ('index', 'uq_schools_live_central_subdomain'),
+              ('index', 'uq_schools_live_central_domain'),
+              ('function', 'dbsec004_current_tenant_id'),
+              ('function', 'dbsec004_current_school_id'),
+              ('function', 'dbsec004_current_branch_id'),
+              ('function', 'dbsec004_resolve_login_username')
+            ) AS required(kind, name)
+           WHERE (required.kind = 'index' AND NOT EXISTS (
+                    SELECT 1 FROM pg_class c
+                    JOIN pg_namespace n ON n.oid = c.relnamespace
+                   WHERE n.nspname = 'public' AND c.relkind = 'i' AND c.relname = required.name
+                 ))
+              OR (required.kind = 'function' AND NOT EXISTS (
+                    SELECT 1
+                      FROM pg_proc p
+                      JOIN pg_namespace n ON n.oid = p.pronamespace
+                     WHERE n.nspname = 'public'
+                       AND p.proname = required.name
+                       AND pg_get_functiondef(p.oid) LIKE '%public.tenants%'
+                 ))
+           ORDER BY required.kind, required.name
+        `),
+      ]);
+      const missingSchemaObjects = schemaResult.rows.map((row) => row.name);
+      return res.json({
+        success: true,
+        health: {
+          database: 'reachable',
+          responseMs: Date.now() - startedAt,
+          checkedAt: result.rows[0]?.checked_at ?? null,
+          source: 'canonical-postgres',
+          schemaStatus: missingSchemaObjects.length ? 'migration_pending' : 'ready',
+          missingSchemaObjects,
+        },
+      });
+    } catch (error) {
+      return next(new DatabaseError('تعذر قياس اتصال PostgreSQL المركزي.', error instanceof Error ? error.message : String(error)));
+    }
+  });
+
+  app.get('/api/admin/central/tenants', authenticateRequest, requirePermissionOnly(PERMISSIONS.PLATFORM_ADMIN), async (req, res, next) => {
+    if (!platformAdminPool) return next(new DatabaseError('مصدر قاعدة البيانات المركزية غير متاح.'));
+    const includeArchived = String(req.query?.includeArchived || '').toLowerCase() === 'true';
+    try {
+      const result = await platformAdminPool.query(
+        `SELECT t.id, t.legal_name, t.slug, t.plan_code, t.status,
+                t.deleted_at, t.created_at, t.updated_at,
+                (SELECT COUNT(*)::integer
+                   FROM public.schools s
+                  WHERE s.tenant_id = t.id AND s.deleted_at IS NULL) AS schools_count,
+                (SELECT COUNT(*)::integer
+                   FROM public.branches b
+                  WHERE b.tenant_id = t.id AND b.deleted_at IS NULL) AS branches_count,
+                (SELECT COUNT(*)::integer
+                   FROM public.users u
+                  WHERE u.tenant_id = t.id AND u.deleted_at IS NULL) AS users_count,
+                (SELECT COUNT(*)::integer
+                   FROM public.students st
+                  WHERE st.tenant_id = t.id AND st.deleted_at IS NULL) AS students_count,
+                sub.id AS subscription_id, sub.plan_code AS subscription_plan_code,
+                sub.starts_at AS subscription_starts_at, sub.ends_at AS subscription_ends_at,
+                sub.seat_limit AS subscription_seat_limit, sub.auto_renew AS subscription_auto_renew,
+                sub.status AS subscription_status
+           FROM public.tenants t
+           LEFT JOIN LATERAL (
+             SELECT s.id, s.plan_code, s.starts_at, s.ends_at, s.seat_limit, s.auto_renew, s.status
+               FROM public.subscriptions s
+              WHERE s.tenant_id = t.id AND s.deleted_at IS NULL
+              ORDER BY s.starts_at DESC, s.created_at DESC
+              LIMIT 1
+           ) sub ON true
+          WHERE t.deleted_at IS NULL OR $1::boolean
+          ORDER BY t.created_at DESC`,
+        [includeArchived],
+      );
+      return res.json({
+        success: true,
+        tenants: result.rows.map((row) => ({
+          id: row.id,
+          legal_name: row.legal_name,
+          slug: row.slug,
+          plan_code: row.plan_code,
+          status: row.status,
+          deleted_at: row.deleted_at,
+          created_at: row.created_at,
+          updated_at: row.updated_at,
+          schools_count: row.schools_count,
+          branches_count: row.branches_count,
+          users_count: row.users_count,
+          students_count: row.students_count,
+          subscription: row.subscription_id ? {
+            id: row.subscription_id,
+            plan_code: row.subscription_plan_code,
+            starts_at: row.subscription_starts_at,
+            ends_at: row.subscription_ends_at,
+            seat_limit: row.subscription_seat_limit,
+            auto_renew: row.subscription_auto_renew,
+            status: row.subscription_status,
+          } : null,
+        })),
+      });
+    } catch (error) {
+      return next(new DatabaseError('تعذر تحميل دليل المستأجرين المركزي.', error instanceof Error ? error.message : String(error)));
+    }
+  });
+
+  app.post('/api/admin/central/tenants', authenticateRequest, requirePermissionOnly(PERMISSIONS.PLATFORM_ADMIN), async (req, res, next) => {
+    if (!platformAdminPool) return next(new DatabaseError('مصدر قاعدة البيانات المركزية غير متاح.'));
+    const identity = (req as any).user as { id?: string };
+    const actorId = String(identity?.id || '').trim();
+    const legalName = String(req.body?.legalName || req.body?.name || '').trim();
+    const slug = String(req.body?.slug || '').trim().toLowerCase();
+    const planCode = String(req.body?.planCode || 'standard').trim().toLowerCase();
+    const tenantStatus = String(req.body?.status || 'provisioning').trim();
+    const subscriptionStatus = String(req.body?.subscriptionStatus || (tenantStatus === 'active' ? 'active' : 'trial')).trim();
+    const seatLimit = Number(req.body?.seatLimit ?? 100);
+    const startsAt = String(req.body?.startsAt || new Date().toISOString()).trim();
+    const endsAt = String(req.body?.endsAt || '').trim() || null;
+    const autoRenew = req.body?.autoRenew === undefined ? true : Boolean(req.body.autoRenew);
+
+    if (!actorId) return next(new AuthenticationError('هوية الإدارة المركزية غير مكتملة.'));
+    if (legalName.length < 2 || legalName.length > 160) return next(new ValidationError('الاسم القانوني للمستأجر يجب أن يكون بين حرفين و160 حرفاً.'));
+    if (!/^[a-z0-9]+(?:-[a-z0-9]+)*$/.test(slug) || slug.length > 63) return next(new ValidationError('معرف المستأجر يجب أن يكون لاتينياً صغيراً وبصيغة slug صحيحة.'));
+    if (!/^[a-z0-9][a-z0-9._-]{1,62}$/.test(planCode)) return next(new ValidationError('رمز الباقة غير صالح.'));
+    if (!['provisioning', 'active', 'suspended'].includes(tenantStatus)) return next(new ValidationError('حالة المستأجر غير مسموح بها.'));
+    if (!['trial', 'active', 'past_due', 'cancelled', 'expired'].includes(subscriptionStatus)) return next(new ValidationError('حالة الاشتراك غير مسموح بها.'));
+    if (!Number.isSafeInteger(seatLimit) || seatLimit < 1 || seatLimit > 1_000_000) return next(new ValidationError('حد المقاعد يجب أن يكون رقماً صحيحاً بين 1 و1,000,000.'));
+    const startDate = new Date(startsAt);
+    const endDate = endsAt ? new Date(endsAt) : null;
+    if (Number.isNaN(startDate.getTime()) || (endDate && Number.isNaN(endDate.getTime())) || (endDate && endDate <= startDate)) {
+      return next(new ValidationError('تواريخ الاشتراك غير صالحة أو تاريخ النهاية ليس بعد البداية.'));
+    }
+
+    const tenantId = randomUUID();
+    const subscriptionId = randomUUID();
+    const client = await platformAdminPool.connect();
+    try {
+      await client.query('BEGIN');
+      const tenant = await client.query(
+        `INSERT INTO public.tenants
+          (id, legal_name, slug, plan_code, status, created_by, updated_by)
+         VALUES ($1::uuid, $2, $3, $4, $5, $6::uuid, $6::uuid)
+         RETURNING id, legal_name, slug, plan_code, status, deleted_at, created_at, updated_at`,
+        [tenantId, legalName, slug, planCode, tenantStatus, actorId],
+      );
+      const subscription = await client.query(
+        `INSERT INTO public.subscriptions
+          (id, tenant_id, plan_code, starts_at, ends_at, seat_limit, auto_renew, status, created_by, updated_by)
+         VALUES ($1::uuid, $2::uuid, $3, $4::timestamptz, $5::timestamptz, $6, $7, $8, $9::uuid, $9::uuid)
+         RETURNING id, tenant_id, plan_code, starts_at, ends_at, seat_limit, auto_renew, status`,
+        [subscriptionId, tenantId, planCode, startDate.toISOString(), endDate?.toISOString() || null, seatLimit, autoRenew, subscriptionStatus, actorId],
+      );
+      await client.query('COMMIT');
+      return res.status(201).json({ success: true, tenant: { ...tenant.rows[0], subscription: subscription.rows[0] } });
+    } catch (error) {
+      await client.query('ROLLBACK').catch(() => undefined);
+      return next(error instanceof Error && /duplicate|unique/i.test(error.message)
+        ? new ConflictError('معرف المستأجر مستخدم مسبقاً.')
+        : new DatabaseError('تعذر إنشاء المستأجر والاشتراك في المصدر المركزي.', error instanceof Error ? error.message : String(error)));
+    } finally {
+      client.release();
+    }
+  });
+
+  app.patch('/api/admin/central/tenants/:tenantId', authenticateRequest, requirePermissionOnly(PERMISSIONS.PLATFORM_ADMIN), async (req, res, next) => {
+    if (!platformAdminPool) return next(new DatabaseError('مصدر قاعدة البيانات المركزية غير متاح.'));
+    const identity = (req as any).user as { id?: string };
+    const actorId = String(identity?.id || '').trim();
+    const tenantId = String(req.params.tenantId || '').trim();
+    const operation = String(req.body?.operation || 'update').trim();
+    if (!actorId || !/^[0-9a-f-]{36}$/i.test(tenantId)) return next(new AuthenticationError('هوية المستأجر أو الإدارة غير مكتملة.'));
+
+    const legalName = req.body?.legalName === undefined ? undefined : String(req.body.legalName || '').trim();
+    const slug = req.body?.slug === undefined ? undefined : String(req.body.slug || '').trim().toLowerCase();
+    const planCode = req.body?.planCode === undefined ? undefined : String(req.body.planCode || '').trim().toLowerCase();
+    const tenantStatus = req.body?.status === undefined ? undefined : String(req.body.status || '').trim();
+    if (legalName !== undefined && (legalName.length < 2 || legalName.length > 160)) return next(new ValidationError('الاسم القانوني للمستأجر غير صالح.'));
+    if (slug !== undefined && (!/^[a-z0-9]+(?:-[a-z0-9]+)*$/.test(slug) || slug.length > 63)) return next(new ValidationError('معرف المستأجر غير صالح.'));
+    if (planCode !== undefined && !/^[a-z0-9][a-z0-9._-]{1,62}$/.test(planCode)) return next(new ValidationError('رمز الباقة غير صالح.'));
+    if (tenantStatus !== undefined && !['provisioning', 'active', 'suspended'].includes(tenantStatus)) return next(new ValidationError('حالة المستأجر غير مسموح بها.'));
+
+    try {
+      const client = await platformAdminPool.connect();
+      try {
+        await client.query('BEGIN');
+        let tenant;
+        if (operation === 'archive') {
+          tenant = await client.query(
+            `UPDATE public.tenants
+                SET status = 'archived', deleted_at = now(), deleted_by = $2::uuid,
+                    updated_at = now(), updated_by = $2::uuid, version = version + 1
+              WHERE id = $1::uuid AND deleted_at IS NULL
+            RETURNING id, legal_name, slug, plan_code, status, deleted_at, created_at, updated_at`,
+            [tenantId, actorId],
+          );
+          if (tenant.rowCount === 1) {
+            await client.query(
+              `UPDATE public.schools
+                  SET status = 'archived', deleted_at = COALESCE(deleted_at, now()), deleted_by = COALESCE(deleted_by, $2::uuid),
+                      updated_at = now(), updated_by = $2::uuid, version = version + 1
+                WHERE tenant_id = $1::uuid AND deleted_at IS NULL`,
+              [tenantId, actorId],
+            );
+            await client.query(
+              `UPDATE public.branches
+                  SET status = 'archived', deleted_at = COALESCE(deleted_at, now()), deleted_by = COALESCE(deleted_by, $2::uuid),
+                      updated_at = now(), updated_by = $2::uuid, version = version + 1
+                WHERE tenant_id = $1::uuid AND deleted_at IS NULL`,
+              [tenantId, actorId],
+            );
+            await client.query(
+              `UPDATE public.users
+                  SET status = 'archived', deleted_at = COALESCE(deleted_at, now()), deleted_by = COALESCE(deleted_by, $2::uuid),
+                      updated_at = now(), updated_by = $2::uuid, version = version + 1
+                WHERE tenant_id = $1::uuid AND deleted_at IS NULL`,
+              [tenantId, actorId],
+            );
+            await client.query(
+              `UPDATE public.subscriptions
+                  SET status = 'cancelled', deleted_at = COALESCE(deleted_at, now()), deleted_by = COALESCE(deleted_by, $2::uuid),
+                      updated_at = now(), updated_by = $2::uuid, version = version + 1
+                WHERE tenant_id = $1::uuid AND deleted_at IS NULL`,
+              [tenantId, actorId],
+            );
+          }
+        } else if (operation === 'restore') {
+          tenant = await client.query(
+            `WITH restored_tenant AS (
+               UPDATE public.tenants
+                  SET status = 'suspended', deleted_at = NULL, deleted_by = NULL,
+                      updated_at = now(), updated_by = $2::uuid, version = version + 1
+                WHERE id = $1::uuid AND status = 'archived' AND deleted_at IS NOT NULL
+                RETURNING id, legal_name, slug, plan_code, status, deleted_at, created_at, updated_at
+             ), restored_schools AS (
+               UPDATE public.schools s
+                  SET status = 'suspended', deleted_at = NULL, deleted_by = NULL,
+                      updated_at = now(), updated_by = $2::uuid, version = version + 1
+                 FROM restored_tenant t
+                WHERE s.tenant_id = t.id AND s.status = 'archived' AND s.deleted_at IS NOT NULL
+             ), restored_branches AS (
+               UPDATE public.branches b
+                  SET status = 'closed', deleted_at = NULL, deleted_by = NULL,
+                      updated_at = now(), updated_by = $2::uuid, version = version + 1
+                 FROM restored_tenant t
+                WHERE b.tenant_id = t.id AND b.status = 'archived' AND b.deleted_at IS NOT NULL
+             ), restored_users AS (
+               UPDATE public.users u
+                  SET status = 'suspended', deleted_at = NULL, deleted_by = NULL,
+                      updated_at = now(), updated_by = $2::uuid, version = version + 1
+                 FROM restored_tenant t
+                WHERE u.tenant_id = t.id AND u.status = 'archived' AND u.deleted_at IS NOT NULL
+             )
+             SELECT * FROM restored_tenant`,
+            [tenantId, actorId],
+          );
+        } else if (operation === 'status') {
+          if (!tenantStatus || !['provisioning', 'active', 'suspended'].includes(tenantStatus)) throw new ValidationError('حالة المستأجر غير مسموح بها.');
+          tenant = await client.query(
+            `UPDATE public.tenants
+                SET status = $2, updated_at = now(), updated_by = $3::uuid, version = version + 1
+              WHERE id = $1::uuid AND deleted_at IS NULL
+            RETURNING id, legal_name, slug, plan_code, status, deleted_at, created_at, updated_at`,
+            [tenantId, tenantStatus, actorId],
+          );
+        } else if (operation === 'subscription') {
+          const requestedPlanCode = String(req.body?.subscription?.planCode || req.body?.planCode || 'standard').trim().toLowerCase();
+          const requestedStatus = String(req.body?.subscription?.status ?? req.body?.subscriptionStatus ?? '').trim();
+          const requestedSeatLimit = Number(req.body?.subscription?.seatLimit ?? req.body?.seatLimit);
+          const requestedStartsAt = String(req.body?.subscription?.startsAt ?? req.body?.startsAt ?? '').trim();
+          const requestedEndsAt = String(req.body?.subscription?.endsAt || req.body?.endsAt || '').trim() || null;
+          const requestedAutoRenew = req.body?.subscription?.autoRenew ?? req.body?.autoRenew;
+          const subscriptionAutoRenew = requestedAutoRenew === undefined ? true : Boolean(requestedAutoRenew);
+          const subscriptionStartDate = new Date(requestedStartsAt);
+          const subscriptionEndDate = requestedEndsAt ? new Date(requestedEndsAt) : null;
+          if (!/^[a-z0-9][a-z0-9._-]{1,62}$/.test(requestedPlanCode)) throw new ValidationError('رمز باقة الاشتراك غير صالح.');
+          if (!['trial', 'active', 'past_due', 'cancelled', 'expired'].includes(requestedStatus)) throw new ValidationError('حالة الاشتراك غير مسموح بها.');
+          if (!requestedStartsAt) throw new ValidationError('تاريخ بداية الاشتراك مطلوب من السجل الكانوني.');
+          if (!Number.isSafeInteger(requestedSeatLimit) || requestedSeatLimit < 1 || requestedSeatLimit > 1_000_000) throw new ValidationError('حد المقاعد غير صالح.');
+          if (Number.isNaN(subscriptionStartDate.getTime()) || (subscriptionEndDate && Number.isNaN(subscriptionEndDate.getTime())) || (subscriptionEndDate && subscriptionEndDate <= subscriptionStartDate)) throw new ValidationError('تواريخ الاشتراك غير صالحة.');
+          tenant = await client.query(
+            `UPDATE public.tenants
+                SET plan_code = $2, updated_at = now(), updated_by = $3::uuid, version = version + 1
+              WHERE id = $1::uuid AND deleted_at IS NULL
+            RETURNING id, legal_name, slug, plan_code, status, deleted_at, created_at, updated_at`,
+            [tenantId, requestedPlanCode, actorId],
+          );
+          if (tenant.rowCount === 1) {
+            const currentSubscription = await client.query(
+              `SELECT id FROM public.subscriptions
+                WHERE tenant_id = $1::uuid AND deleted_at IS NULL
+                ORDER BY starts_at DESC, created_at DESC LIMIT 1 FOR UPDATE`,
+              [tenantId],
+            );
+            if (currentSubscription.rowCount === 1) {
+              await client.query(
+                `UPDATE public.subscriptions
+                    SET plan_code = $2, starts_at = $3::timestamptz, ends_at = $4::timestamptz,
+                        seat_limit = $5, auto_renew = $6, status = $7,
+                        updated_at = now(), updated_by = $8::uuid, version = version + 1
+                  WHERE id = $1::uuid AND tenant_id = $9::uuid AND deleted_at IS NULL`,
+                [currentSubscription.rows[0].id, requestedPlanCode, subscriptionStartDate.toISOString(), subscriptionEndDate?.toISOString() || null, requestedSeatLimit, subscriptionAutoRenew, requestedStatus, actorId, tenantId],
+              );
+            } else {
+              await client.query(
+                `INSERT INTO public.subscriptions
+                  (tenant_id, plan_code, starts_at, ends_at, seat_limit, auto_renew, status, created_by, updated_by)
+                 VALUES ($1::uuid, $2, $3::timestamptz, $4::timestamptz, $5, $6, $7, $8::uuid, $8::uuid)`,
+                [tenantId, requestedPlanCode, subscriptionStartDate.toISOString(), subscriptionEndDate?.toISOString() || null, requestedSeatLimit, subscriptionAutoRenew, requestedStatus, actorId],
+              );
+            }
+          }
+        } else if (operation === 'update') {
+          tenant = await client.query(
+            `UPDATE public.tenants
+                SET legal_name = COALESCE($2, legal_name), slug = COALESCE($3, slug), plan_code = COALESCE($4, plan_code),
+                    status = COALESCE($5, status), updated_at = now(), updated_by = $6::uuid, version = version + 1
+              WHERE id = $1::uuid AND deleted_at IS NULL
+            RETURNING id, legal_name, slug, plan_code, status, deleted_at, created_at, updated_at`,
+            [tenantId, legalName ?? null, slug ?? null, planCode ?? null, tenantStatus ?? null, actorId],
+          );
+          const requestedSubscription = req.body?.subscription;
+          if (tenant.rowCount === 1 && requestedSubscription && typeof requestedSubscription === 'object' && !Array.isArray(requestedSubscription)) {
+            const requestedPlanCode = String(requestedSubscription.planCode ?? planCode ?? tenant.rows[0].plan_code).trim().toLowerCase();
+            const requestedStatus = String(requestedSubscription.status ?? '').trim();
+            const requestedSeatLimit = Number(requestedSubscription.seatLimit);
+            const requestedStartsAt = String(requestedSubscription.startsAt ?? '').trim();
+            const requestedEndsAt = String(requestedSubscription.endsAt || '').trim() || null;
+            const requestedAutoRenew = requestedSubscription.autoRenew === undefined ? true : Boolean(requestedSubscription.autoRenew);
+            const subscriptionStartDate = new Date(requestedStartsAt);
+            const subscriptionEndDate = requestedEndsAt ? new Date(requestedEndsAt) : null;
+            if (!/^[a-z0-9][a-z0-9._-]{1,62}$/.test(requestedPlanCode)) throw new ValidationError('رمز باقة الاشتراك غير صالح.');
+            if (!['trial', 'active', 'past_due', 'cancelled', 'expired'].includes(requestedStatus)) throw new ValidationError('حالة الاشتراك غير مسموح بها.');
+            if (!requestedStartsAt) throw new ValidationError('تاريخ بداية الاشتراك مطلوب من السجل الكانوني.');
+            if (!Number.isSafeInteger(requestedSeatLimit) || requestedSeatLimit < 1 || requestedSeatLimit > 1_000_000) throw new ValidationError('حد المقاعد غير صالح.');
+            if (Number.isNaN(subscriptionStartDate.getTime()) || (subscriptionEndDate && Number.isNaN(subscriptionEndDate.getTime())) || (subscriptionEndDate && subscriptionEndDate <= subscriptionStartDate)) throw new ValidationError('تواريخ الاشتراك غير صالحة.');
+            await client.query(
+              `UPDATE public.tenants SET plan_code = $2, updated_at = now(), updated_by = $3::uuid, version = version + 1 WHERE id = $1::uuid`,
+              [tenantId, requestedPlanCode, actorId],
+            );
+            const currentSubscription = await client.query(
+              `SELECT id FROM public.subscriptions
+                WHERE tenant_id = $1::uuid AND deleted_at IS NULL
+                ORDER BY starts_at DESC, created_at DESC LIMIT 1 FOR UPDATE`,
+              [tenantId],
+            );
+            if (currentSubscription.rowCount === 1) {
+              await client.query(
+                `UPDATE public.subscriptions
+                    SET plan_code = $2, starts_at = $3::timestamptz, ends_at = $4::timestamptz,
+                        seat_limit = $5, auto_renew = $6, status = $7,
+                        updated_at = now(), updated_by = $8::uuid, version = version + 1
+                  WHERE id = $1::uuid AND tenant_id = $9::uuid AND deleted_at IS NULL`,
+                [currentSubscription.rows[0].id, requestedPlanCode, subscriptionStartDate.toISOString(), subscriptionEndDate?.toISOString() || null, requestedSeatLimit, requestedAutoRenew, requestedStatus, actorId, tenantId],
+              );
+            } else {
+              await client.query(
+                `INSERT INTO public.subscriptions
+                  (tenant_id, plan_code, starts_at, ends_at, seat_limit, auto_renew, status, created_by, updated_by)
+                 VALUES ($1::uuid, $2, $3::timestamptz, $4::timestamptz, $5, $6, $7, $8::uuid, $8::uuid)`,
+                [tenantId, requestedPlanCode, subscriptionStartDate.toISOString(), subscriptionEndDate?.toISOString() || null, requestedSeatLimit, requestedAutoRenew, requestedStatus, actorId],
+              );
+            }
+          }
+        } else {
+          throw new ValidationError('عملية إدارة المستأجر غير معتمدة.');
+        }
+        if (tenant.rowCount !== 1) {
+          throw new ConflictError('المستأجر غير موجود أو مؤرشف مسبقاً.');
+        }
+        const enriched = await client.query(
+          `SELECT t.id, t.legal_name, t.slug, t.plan_code, t.status, t.deleted_at, t.created_at, t.updated_at,
+                  (SELECT COUNT(*)::integer FROM public.schools s WHERE s.tenant_id = t.id AND s.deleted_at IS NULL) AS schools_count,
+                  (SELECT COUNT(*)::integer FROM public.branches b WHERE b.tenant_id = t.id AND b.deleted_at IS NULL) AS branches_count,
+                  (SELECT COUNT(*)::integer FROM public.users u WHERE u.tenant_id = t.id AND u.deleted_at IS NULL) AS users_count,
+                  (SELECT COUNT(*)::integer FROM public.students st WHERE st.tenant_id = t.id AND st.deleted_at IS NULL) AS students_count,
+                  sub.id AS subscription_id, sub.plan_code AS subscription_plan_code, sub.starts_at AS subscription_starts_at,
+                  sub.ends_at AS subscription_ends_at, sub.seat_limit AS subscription_seat_limit,
+                  sub.auto_renew AS subscription_auto_renew, sub.status AS subscription_status
+             FROM public.tenants t
+             LEFT JOIN LATERAL (
+               SELECT s.id, s.plan_code, s.starts_at, s.ends_at, s.seat_limit, s.auto_renew, s.status
+                 FROM public.subscriptions s
+                WHERE s.tenant_id = t.id AND s.deleted_at IS NULL
+                ORDER BY s.starts_at DESC, s.created_at DESC LIMIT 1
+             ) sub ON true
+            WHERE t.id = $1::uuid`,
+          [tenantId],
+        );
+        await client.query('COMMIT');
+        const row = enriched.rows[0];
+        return res.json({ success: true, tenant: {
+          id: row.id, legal_name: row.legal_name, slug: row.slug, plan_code: row.plan_code, status: row.status,
+          deleted_at: row.deleted_at, created_at: row.created_at, updated_at: row.updated_at,
+          schools_count: row.schools_count, branches_count: row.branches_count, users_count: row.users_count, students_count: row.students_count,
+          subscription: row.subscription_id ? {
+            id: row.subscription_id, plan_code: row.subscription_plan_code, starts_at: row.subscription_starts_at,
+            ends_at: row.subscription_ends_at, seat_limit: row.subscription_seat_limit, auto_renew: row.subscription_auto_renew,
+            status: row.subscription_status,
+          } : null,
+        }});
+      } catch (error) {
+        await client.query('ROLLBACK').catch(() => undefined);
+        return next(error instanceof Error && /duplicate|unique/i.test(error.message)
+          ? new ConflictError('معرف المستأجر مستخدم مسبقاً.')
+          : error);
+      } finally {
+        client.release();
+      }
+    } catch (error) {
+      return next(error instanceof Error ? error : new DatabaseError('تعذر تحديث المستأجر في المصدر المركزي.'));
+    }
+  });
+
   // Central school directory. This path is the only browser-facing school
   // creation entry point: scope is derived from the verified platform
   // identity and the two records are committed atomically in PostgreSQL.
-  app.get('/api/admin/central/schools', authenticateRequest, requirePermissionOnly(PERMISSIONS.PLATFORM_ADMIN), async (_req, res, next) => {
+  app.get('/api/admin/central/schools', authenticateRequest, requirePermissionOnly(PERMISSIONS.PLATFORM_ADMIN), async (req, res, next) => {
     if (!platformAdminPool) return next(new DatabaseError('مصدر قاعدة البيانات المركزية غير متاح.'));
+    const requestedTenantId = String(req.query?.tenantId || '').trim();
+    if (requestedTenantId && !/^[0-9a-f-]{36}$/i.test(requestedTenantId)) return next(new ValidationError('معرف المستأجر غير صالح.'));
     try {
       const result = await platformAdminPool.query(
         `SELECT s.id, s.tenant_id, s.school_code, s.legal_name, s.display_name,
-                s.timezone, s.locale, s.status, s.central_metadata, s.deleted_at, s.created_at, s.updated_at,
+                s.timezone, s.locale, s.status, t.status AS tenant_status, s.central_metadata, s.deleted_at, s.created_at, s.updated_at,
+                (SELECT COUNT(*)::integer
+                   FROM public.users u
+                  WHERE u.tenant_id = s.tenant_id AND u.school_id = s.id AND u.deleted_at IS NULL) AS users_count,
+                (SELECT COUNT(*)::integer
+                   FROM public.students st
+                  WHERE st.tenant_id = s.tenant_id AND st.school_id = s.id AND st.deleted_at IS NULL) AS students_count,
+                sub.plan_code AS subscription_plan_code, sub.starts_at AS subscription_starts_at,
+                sub.ends_at AS subscription_ends_at, sub.seat_limit AS subscription_seat_limit,
+                sub.auto_renew AS subscription_auto_renew, sub.status AS subscription_status,
                 b.id AS branch_id, b.branch_code, b.name AS branch_name, b.status AS branch_status
            FROM public.schools s
+           JOIN public.tenants t ON t.id = s.tenant_id
+           LEFT JOIN LATERAL (
+             SELECT plan_code, starts_at, ends_at, seat_limit, auto_renew, status
+               FROM public.subscriptions
+              WHERE tenant_id = s.tenant_id AND deleted_at IS NULL
+              ORDER BY starts_at DESC, created_at DESC
+              LIMIT 1
+           ) sub ON true
            LEFT JOIN LATERAL (
              SELECT id, branch_code, name, status
                FROM public.branches
@@ -1558,7 +2079,9 @@ async function startServer() {
               ORDER BY created_at ASC
               LIMIT 1
            ) b ON true
+          WHERE ($1::uuid IS NULL OR s.tenant_id = $1::uuid)
           ORDER BY s.created_at DESC`,
+        [requestedTenantId || null],
       );
       return res.json({
         success: true,
@@ -1571,8 +2094,19 @@ async function startServer() {
           timezone: row.timezone,
           locale: row.locale,
           status: row.status,
+          tenant_status: row.tenant_status,
+          users_count: row.users_count,
+          students_count: row.students_count,
+          subscription: row.subscription_plan_code ? {
+            plan_code: row.subscription_plan_code,
+            starts_at: row.subscription_starts_at,
+            ends_at: row.subscription_ends_at,
+            seat_limit: row.subscription_seat_limit,
+            auto_renew: row.subscription_auto_renew,
+            status: row.subscription_status,
+          } : null,
           deleted_at: row.deleted_at,
-          central_metadata: row.central_metadata || {},
+          central_metadata: stripLegacySchoolSubscriptionProfile(row.central_metadata),
           created_at: row.created_at,
           updated_at: row.updated_at,
           main_branch: row.branch_id ? {
@@ -1591,7 +2125,7 @@ async function startServer() {
   app.post('/api/admin/central/schools', authenticateRequest, requirePermissionOnly(PERMISSIONS.PLATFORM_ADMIN), async (req, res, next) => {
     if (!platformAdminPool) return next(new DatabaseError('مصدر قاعدة البيانات المركزية غير متاح.'));
     const identity = (req as any).user as { id?: string; tenantId?: string };
-    const tenantId = String(identity?.tenantId || '').trim();
+    const tenantId = String(req.body?.targetTenantId || req.body?.tenantId || identity?.tenantId || '').trim();
     const actorId = String(identity?.id || '').trim();
     const name = String(req.body?.name || '').trim();
     const schoolCode = String(req.body?.schoolCode || '').trim().toUpperCase();
@@ -1606,14 +2140,10 @@ async function startServer() {
       email: String(req.body?.email || '').trim().toLowerCase(),
       managerName: String(req.body?.managerName || '').trim(),
       managerEmail: String(req.body?.managerEmail || '').trim().toLowerCase(),
-      plan: String(req.body?.plan || 'Enterprise').trim(),
-      storageLimit: String(req.body?.storageLimit || '500').trim(),
-      userLimit: String(req.body?.userLimit || '3000').trim(),
-      subscriptionDuration: String(req.body?.subscriptionDuration || '12').trim(),
       mainBranchId: '',
     };
 
-    if (!tenantId || !actorId) return next(new AuthenticationError('هوية الإدارة المركزية لا تحمل نطاق المستأجر الموثوق.'));
+    if (!tenantId || !/^[0-9a-f-]{36}$/i.test(tenantId) || !actorId) return next(new AuthenticationError('هوية الإدارة المركزية أو المستأجر المستهدف غير مكتمل.'));
     if (name.length < 2 || name.length > 160) return next(new ValidationError('اسم المدرسة يجب أن يكون بين حرفين و160 حرفاً.'));
     if (schoolCode && !/^[A-Z0-9][A-Z0-9._/-]*$/.test(schoolCode)) return next(new ValidationError('رمز المدرسة غير صالح.'));
     if (!/^[A-Za-z_/-]+$/.test(timezone) || locale.length < 2) return next(new ValidationError('إعدادات اللغة أو المنطقة الزمنية غير صالحة.'));
@@ -1631,6 +2161,17 @@ async function startServer() {
     const client = await platformAdminPool.connect();
     try {
       await client.query('BEGIN');
+      const targetTenant = await client.query<{ status: string }>(
+        `SELECT status
+           FROM public.tenants
+          WHERE id = $1::uuid AND deleted_at IS NULL
+          FOR UPDATE`,
+        [tenantId],
+      );
+      if (targetTenant.rowCount !== 1) throw new ConflictError('المستأجر المستهدف غير موجود أو مؤرشف.');
+      if (!['provisioning', 'active'].includes(targetTenant.rows[0].status)) {
+        throw new ConflictError('لا يمكن تأسيس مدرسة داخل مستأجر موقوف أو مؤرشف.');
+      }
       const school = await client.query(
         `INSERT INTO public.schools
           (id, tenant_id, school_code, legal_name, display_name, timezone, locale, status, central_metadata, created_by, updated_by)
@@ -1693,12 +2234,13 @@ async function startServer() {
 
   app.patch('/api/admin/central/schools/:schoolId', authenticateRequest, requirePermissionOnly(PERMISSIONS.PLATFORM_ADMIN), async (req, res, next) => {
     if (!platformAdminPool) return next(new DatabaseError('مصدر قاعدة البيانات المركزية غير متاح.'));
-    const identity = (req as any).user as { id?: string; tenantId?: string };
-    const tenantId = String(identity?.tenantId || '').trim();
+    const identity = (req as any).user as { id?: string };
+    const tenantId = String(req.body?.targetTenantId || '').trim();
     const actorId = String(identity?.id || '').trim();
     const schoolId = String(req.params.schoolId || '').trim();
     const operation = String(req.body?.operation || '').trim();
-    if (!tenantId || !actorId || !schoolId) return next(new AuthenticationError('هوية الإدارة المركزية أو المدرسة غير مكتملة.'));
+    if (!actorId || !schoolId) return next(new AuthenticationError('هوية الإدارة المركزية أو المدرسة غير مكتملة.'));
+    if (tenantId && !/^[0-9a-f-]{36}$/i.test(tenantId)) return next(new ValidationError('معرف المستأجر غير صالح.'));
     if (!/^[0-9a-f-]{36}$/i.test(schoolId)) return next(new ValidationError('معرف المدرسة غير صالح.'));
 
     try {
@@ -1707,32 +2249,59 @@ async function startServer() {
         const name = String(req.body?.name || '').trim();
         const schoolCode = String(req.body?.schoolCode || '').trim().toUpperCase();
         const requestedProfile = req.body?.profile && typeof req.body.profile === 'object' ? req.body.profile : {};
-        const profileKeys = ['shortName', 'subdomain', 'domain', 'customDomain', 'sslStatus', 'city', 'address', 'phone', 'email', 'managerName', 'managerEmail', 'plan', 'storageLimit', 'userLimit', 'subscriptionDuration', 'subscriptionStart', 'subscriptionEnd'];
-        const profile = Object.fromEntries(profileKeys.map((key) => [key, String(requestedProfile[key] || '').trim()]));
+        const legacySubscriptionKeys = ['plan', 'storageLimit', 'userLimit', 'subscriptionDuration', 'subscriptionStart', 'subscriptionEnd'];
+        const suppliedLegacySubscriptionKey = legacySubscriptionKeys.find((key) => Object.prototype.hasOwnProperty.call(requestedProfile, key));
+        if (suppliedLegacySubscriptionKey) return next(new ValidationError('بيانات الاشتراك تُدار من سجل المستأجر المركزي ولا تُحفظ داخل ملف المدرسة.'));
+        const profileKeys = ['shortName', 'subdomain', 'domain', 'customDomain', 'sslStatus', 'city', 'address', 'phone', 'email', 'managerName', 'managerEmail'];
+        const profile = Object.fromEntries(
+          profileKeys
+            .filter((key) => Object.prototype.hasOwnProperty.call(requestedProfile, key))
+            .map((key) => [key, String(requestedProfile[key] ?? '').trim()]),
+        );
+        const domainPattern = /^(?=.{1,253}$)(?:[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?\.)+[a-z]{2,63}$/i;
         const requestedStatus = String(req.body?.status || '').trim();
         if (name.length < 2 || name.length > 160) return next(new ValidationError('اسم المدرسة يجب أن يكون بين حرفين و160 حرفاً.'));
         if (!/^[A-Z0-9][A-Z0-9._/-]*$/.test(schoolCode)) return next(new ValidationError('رمز المدرسة غير صالح.'));
         if (profile.subdomain && !/^[a-z0-9][a-z0-9-]{1,61}[a-z0-9]$/.test(profile.subdomain)) return next(new ValidationError('النطاق الفرعي غير صالح.'));
         if (profile.managerEmail && !/^\S+@\S+\.\S+$/.test(profile.managerEmail)) return next(new ValidationError('بريد مدير المدرسة غير صالح.'));
+        if (profile.domain && !domainPattern.test(profile.domain)) return next(new ValidationError('النطاق الخاص غير صالح؛ أدخل اسم نطاق كاملًا دون بروتوكول أو مسار.'));
+        if (profile.customDomain && !domainPattern.test(profile.customDomain)) return next(new ValidationError('النطاق الخاص غير صالح؛ أدخل اسم نطاق كاملًا دون بروتوكول أو مسار.'));
+        if (profile.sslStatus && !['pending', 'valid', 'none'].includes(profile.sslStatus)) return next(new ValidationError('حالة شهادة SSL غير معتمدة.'));
         if (requestedStatus && !['active', 'suspended'].includes(requestedStatus)) return next(new ValidationError('حالة المدرسة غير مسموح بها.'));
+        const requestedSubdomain = String(profile.subdomain || '').toLowerCase();
+        const requestedDomain = String(profile.domain || profile.customDomain || '').toLowerCase();
+        if (requestedSubdomain || requestedDomain) {
+          const duplicate = await platformAdminPool.query(
+            `SELECT id
+               FROM public.schools
+              WHERE id <> $1::uuid AND deleted_at IS NULL
+                AND (
+                  ($2 <> '' AND lower(COALESCE(central_metadata->>'subdomain', '')) = $2)
+                  OR ($3 <> '' AND lower(COALESCE(NULLIF(btrim(central_metadata->>'domain'), ''), NULLIF(btrim(central_metadata->>'customDomain'), ''), '')) = $3)
+                )
+              LIMIT 1`,
+            [schoolId, requestedSubdomain, requestedDomain],
+          );
+          if (duplicate.rowCount) return next(new ConflictError('النطاق المطلوب مستخدم مسبقاً في مدرسة أخرى.'));
+        }
         result = await platformAdminPool.query(
           `UPDATE public.schools
               SET legal_name = $3, display_name = $3, school_code = $4,
                   central_metadata = COALESCE(central_metadata, '{}'::jsonb) || $6::jsonb,
                   status = COALESCE($7, status),
                   updated_at = now(), updated_by = $5, version = version + 1
-            WHERE id = $1 AND tenant_id = $2 AND deleted_at IS NULL
+            WHERE id = $1::uuid AND ($2::uuid IS NULL OR tenant_id = $2::uuid) AND deleted_at IS NULL
           RETURNING id, tenant_id, school_code, legal_name, display_name, timezone, locale, status, central_metadata, created_at, updated_at`,
-          [schoolId, tenantId, name, schoolCode, actorId, JSON.stringify(profile), requestedStatus || null],
+          [schoolId, tenantId || null, name, schoolCode, actorId, JSON.stringify(profile), requestedStatus || null],
         );
       } else if (operation === 'status') {
         const status = String(req.body?.status || '').trim();
         if (!['active', 'suspended'].includes(status)) return next(new ValidationError('حالة المدرسة غير مسموح بها.'));
         result = await platformAdminPool.query(
           `UPDATE public.schools SET status = $3, updated_at = now(), updated_by = $4, version = version + 1
-            WHERE id = $1 AND tenant_id = $2 AND deleted_at IS NULL
+            WHERE id = $1::uuid AND ($2::uuid IS NULL OR tenant_id = $2::uuid) AND deleted_at IS NULL
           RETURNING id, tenant_id, school_code, legal_name, display_name, timezone, locale, status, central_metadata, created_at, updated_at`,
-          [schoolId, tenantId, status, actorId],
+          [schoolId, tenantId || null, status, actorId],
         );
       } else if (operation === 'features') {
         const features = req.body?.features;
@@ -1743,22 +2312,71 @@ async function startServer() {
           `UPDATE public.schools
               SET central_metadata = COALESCE(central_metadata, '{}'::jsonb) || jsonb_build_object('features', $3::jsonb),
                   updated_at = now(), updated_by = $4, version = version + 1
-            WHERE id = $1 AND tenant_id = $2 AND deleted_at IS NULL
+            WHERE id = $1::uuid AND ($2::uuid IS NULL OR tenant_id = $2::uuid) AND deleted_at IS NULL
           RETURNING id, tenant_id, school_code, legal_name, display_name, timezone, locale, status, central_metadata, created_at, updated_at`,
-          [schoolId, tenantId, JSON.stringify(features), actorId],
+          [schoolId, tenantId || null, JSON.stringify(features), actorId],
         );
       } else if (operation === 'archive') {
         result = await platformAdminPool.query(
-          `UPDATE public.schools SET status = 'archived', deleted_at = now(), deleted_by = $3, updated_at = now(), updated_by = $3, version = version + 1
-            WHERE id = $1 AND tenant_id = $2 AND deleted_at IS NULL
-          RETURNING id, tenant_id, school_code, legal_name, display_name, timezone, locale, status, central_metadata, created_at, updated_at`,
-          [schoolId, tenantId, actorId],
+          `WITH archived_school AS (
+             UPDATE public.schools
+                SET status = 'archived', deleted_at = now(), deleted_by = $3::uuid,
+                    updated_at = now(), updated_by = $3::uuid, version = version + 1
+              WHERE id = $1::uuid AND ($2::uuid IS NULL OR tenant_id = $2::uuid) AND deleted_at IS NULL
+              RETURNING id, tenant_id, school_code, legal_name, display_name, timezone, locale, status, central_metadata, created_at, updated_at
+           ), archived_branches AS (
+             UPDATE public.branches b
+                SET status = 'archived', deleted_at = now(), deleted_by = $3::uuid,
+                    updated_at = now(), updated_by = $3::uuid, version = version + 1
+               FROM archived_school s
+              WHERE b.tenant_id = s.tenant_id AND b.school_id = s.id AND b.deleted_at IS NULL
+           ), archived_users AS (
+             UPDATE public.users u
+                SET status = 'archived', deleted_at = now(), deleted_by = $3::uuid,
+                    updated_at = now(), updated_by = $3::uuid, version = version + 1
+               FROM archived_school s
+              WHERE u.tenant_id = s.tenant_id AND u.school_id = s.id AND u.deleted_at IS NULL
+           )
+           SELECT * FROM archived_school`,
+          [schoolId, tenantId || null, actorId],
+        );
+      } else if (operation === 'restore') {
+        result = await platformAdminPool.query(
+          `WITH restored_school AS (
+             UPDATE public.schools
+                SET status = 'suspended', deleted_at = NULL, deleted_by = NULL,
+                    updated_at = now(), updated_by = $3::uuid, version = version + 1
+              WHERE id = $1::uuid AND ($2::uuid IS NULL OR tenant_id = $2::uuid)
+                AND status = 'archived' AND deleted_at IS NOT NULL
+                AND EXISTS (
+                  SELECT 1 FROM public.tenants t
+                   WHERE t.id = public.schools.tenant_id
+                     AND t.deleted_at IS NULL AND t.status IN ('provisioning', 'active')
+                )
+              RETURNING id, tenant_id, school_code, legal_name, display_name, timezone, locale, status, central_metadata, created_at, updated_at
+           ), restored_branches AS (
+             UPDATE public.branches b
+                SET status = 'closed', deleted_at = NULL, deleted_by = NULL,
+                    updated_at = now(), updated_by = $3::uuid, version = version + 1
+               FROM restored_school s
+              WHERE b.tenant_id = s.tenant_id AND b.school_id = s.id
+                AND b.status = 'archived' AND b.deleted_at IS NOT NULL
+           ), restored_users AS (
+             UPDATE public.users u
+                SET status = 'suspended', deleted_at = NULL, deleted_by = NULL,
+                    updated_at = now(), updated_by = $3::uuid, version = version + 1
+               FROM restored_school s
+              WHERE u.tenant_id = s.tenant_id AND u.school_id = s.id
+                AND u.status = 'archived' AND u.deleted_at IS NOT NULL
+           )
+           SELECT * FROM restored_school`,
+          [schoolId, tenantId || null, actorId],
         );
       } else {
         return next(new ValidationError('عملية إدارة المدرسة غير معتمدة.'));
       }
-      if (result.rowCount !== 1) return next(new ConflictError('المدرسة غير موجودة أو لا تنتمي إلى المستأجر الموثوق.'));
-      return res.json({ success: true, school: result.rows[0] });
+      if (result.rowCount !== 1) return next(new ConflictError('المدرسة غير موجودة أو لا تنتمي إلى نطاق الإدارة المركزية.'));
+      return res.json({ success: true, school: { ...result.rows[0], central_metadata: stripLegacySchoolSubscriptionProfile(result.rows[0].central_metadata) } });
     } catch (error) {
       return next(error instanceof Error && /duplicate|unique/i.test(error.message)
         ? new ConflictError('رمز المدرسة مستخدم مسبقاً داخل المستأجر.')
@@ -1770,28 +2388,35 @@ async function startServer() {
   // platform identity as schools; the browser never supplies tenant scope.
   app.get('/api/admin/central/branches', authenticateRequest, requirePermissionOnly(PERMISSIONS.PLATFORM_ADMIN), async (req, res, next) => {
     if (!platformAdminPool) return next(new DatabaseError('مصدر قاعدة البيانات المركزية غير متاح.'));
-    const identity = (req as any).user as { tenantId?: string };
-    const tenantId = String(identity?.tenantId || '').trim();
+    const tenantId = String(req.query?.tenantId || '').trim();
     const schoolId = String(req.query?.schoolId || '').trim();
-    if (!tenantId) return next(new AuthenticationError('هوية الإدارة المركزية غير مكتملة.'));
+    if (tenantId && !/^[0-9a-f-]{36}$/i.test(tenantId)) return next(new ValidationError('معرف المستأجر غير صالح.'));
     if (schoolId && !/^[0-9a-f-]{36}$/i.test(schoolId)) return next(new ValidationError('معرف المدرسة غير صالح.'));
     try {
       const result = await platformAdminPool.query(
         `SELECT b.id, b.tenant_id, b.school_id, b.branch_code, b.name, b.address, b.status,
                 (s.central_metadata->>'mainBranchId') = b.id::text AS is_main,
+                (SELECT COUNT(*)::integer
+                   FROM public.users u
+                  WHERE u.tenant_id = b.tenant_id AND u.school_id = b.school_id AND u.branch_id = b.id AND u.deleted_at IS NULL) AS users_count,
+                (SELECT COUNT(*)::integer
+                   FROM public.students st
+                  WHERE st.tenant_id = b.tenant_id AND st.school_id = b.school_id AND st.branch_id = b.id AND st.deleted_at IS NULL) AS students_count,
                 b.deleted_at, b.created_at, b.updated_at, s.display_name AS school_name
            FROM public.branches b
            JOIN public.schools s ON s.tenant_id = b.tenant_id AND s.id = b.school_id
-          WHERE b.tenant_id = $1
+          WHERE ($1::uuid IS NULL OR b.tenant_id = $1::uuid)
             AND b.deleted_at IS NULL
             AND ($2::uuid IS NULL OR b.school_id = $2::uuid)
           ORDER BY s.display_name ASC, b.created_at ASC`,
-        [tenantId, schoolId || null],
+        [tenantId || null, schoolId || null],
       );
       return res.json({
         success: true,
         branches: result.rows.map((row) => ({
           ...row,
+          users_count: row.users_count,
+          students_count: row.students_count,
           address: row.address || {},
           city: row.address?.city || '',
           phone: row.address?.phone || '',
@@ -1805,8 +2430,8 @@ async function startServer() {
 
   app.post('/api/admin/central/schools/:schoolId/branches', authenticateRequest, requirePermissionOnly(PERMISSIONS.PLATFORM_ADMIN), async (req, res, next) => {
     if (!platformAdminPool) return next(new DatabaseError('مصدر قاعدة البيانات المركزية غير متاح.'));
-    const identity = (req as any).user as { id?: string; tenantId?: string };
-    const tenantId = String(identity?.tenantId || '').trim();
+    const identity = (req as any).user as { id?: string };
+    const tenantId = String(req.body?.targetTenantId || '').trim();
     const actorId = String(identity?.id || '').trim();
     const schoolId = String(req.params.schoolId || '').trim();
     const name = String(req.body?.name || '').trim();
@@ -1814,7 +2439,8 @@ async function startServer() {
     const city = String(req.body?.city || '').trim();
     const phone = String(req.body?.phone || '').trim();
     const address = String(req.body?.address || '').trim();
-    if (!tenantId || !actorId || !schoolId) return next(new AuthenticationError('هوية الإدارة المركزية أو المدرسة غير مكتملة.'));
+    if (!actorId || !schoolId) return next(new AuthenticationError('هوية الإدارة المركزية أو المدرسة غير مكتملة.'));
+    if (tenantId && !/^[0-9a-f-]{36}$/i.test(tenantId)) return next(new ValidationError('معرف المستأجر غير صالح.'));
     if (!/^[0-9a-f-]{36}$/i.test(schoolId)) return next(new ValidationError('معرف المدرسة غير صالح.'));
     if (name.length < 2 || name.length > 160) return next(new ValidationError('اسم الفرع يجب أن يكون بين حرفين و160 حرفاً.'));
     if (branchCode && !/^[A-Z0-9][A-Z0-9._/-]*$/.test(branchCode)) return next(new ValidationError('رمز الفرع غير صالح.'));
@@ -1824,15 +2450,18 @@ async function startServer() {
       const result = await platformAdminPool.query(
         `INSERT INTO public.branches
           (id, tenant_id, school_id, branch_code, name, address, status, created_by, updated_by)
-         SELECT $1, $2, s.id, $3, $4,
+         SELECT $1, s.tenant_id, s.id, $3, $4,
                 jsonb_build_object('city', $5::text, 'phone', $6::text, 'address', $7::text),
                 'active', $8, $8
            FROM public.schools s
-          WHERE s.id = $9 AND s.tenant_id = $2 AND s.deleted_at IS NULL
+           JOIN public.tenants t ON t.id = s.tenant_id AND t.deleted_at IS NULL
+          WHERE s.id = $9 AND ($2::uuid IS NULL OR s.tenant_id = $2::uuid) AND s.deleted_at IS NULL
+            AND s.status IN ('provisioning', 'active')
+            AND t.status IN ('provisioning', 'active')
          RETURNING id, tenant_id, school_id, branch_code, name, address, status, deleted_at, created_at, updated_at`,
-        [branchId, tenantId, resolvedCode, name, city, phone, address, actorId, schoolId],
+        [branchId, tenantId || null, resolvedCode, name, city, phone, address, actorId, schoolId],
       );
-      if (result.rowCount !== 1) return next(new ConflictError('المدرسة غير موجودة أو لا تنتمي إلى المستأجر الموثوق.'));
+      if (result.rowCount !== 1) return next(new ConflictError('المدرسة غير موجودة أو لا تنتمي إلى نطاق الإدارة المركزية.'));
       return res.status(201).json({ success: true, branch: result.rows[0] });
     } catch (error) {
       return next(error instanceof Error && /duplicate|unique/i.test(error.message)
@@ -1843,12 +2472,13 @@ async function startServer() {
 
   app.patch('/api/admin/central/branches/:branchId', authenticateRequest, requirePermissionOnly(PERMISSIONS.PLATFORM_ADMIN), async (req, res, next) => {
     if (!platformAdminPool) return next(new DatabaseError('مصدر قاعدة البيانات المركزية غير متاح.'));
-    const identity = (req as any).user as { id?: string; tenantId?: string };
-    const tenantId = String(identity?.tenantId || '').trim();
+    const identity = (req as any).user as { id?: string };
+    const tenantId = String(req.body?.targetTenantId || '').trim();
     const actorId = String(identity?.id || '').trim();
     const branchId = String(req.params.branchId || '').trim();
     const operation = String(req.body?.operation || 'update').trim();
-    if (!tenantId || !actorId || !branchId) return next(new AuthenticationError('هوية الإدارة المركزية أو الفرع غير مكتملة.'));
+    if (!actorId || !branchId) return next(new AuthenticationError('هوية الإدارة المركزية أو الفرع غير مكتملة.'));
+    if (tenantId && !/^[0-9a-f-]{36}$/i.test(tenantId)) return next(new ValidationError('معرف المستأجر غير صالح.'));
     if (!/^[0-9a-f-]{36}$/i.test(branchId)) return next(new ValidationError('معرف الفرع غير صالح.'));
     try {
       let result;
@@ -1856,30 +2486,37 @@ async function startServer() {
         result = await platformAdminPool.query(
           `UPDATE public.branches
               SET status = 'archived', deleted_at = now(), deleted_by = $3, updated_at = now(), updated_by = $3, version = version + 1
-            WHERE id = $1 AND tenant_id = $2 AND deleted_at IS NULL
+            WHERE id = $1::uuid AND ($2::uuid IS NULL OR tenant_id = $2::uuid) AND deleted_at IS NULL
+              AND NOT EXISTS (
+                SELECT 1
+                 FROM public.schools s
+                 WHERE s.id = public.branches.school_id
+                   AND s.tenant_id = public.branches.tenant_id
+                   AND s.central_metadata->>'mainBranchId' = public.branches.id::text
+              )
           RETURNING id, tenant_id, school_id, branch_code, name, address, status, deleted_at, created_at, updated_at`,
-          [branchId, tenantId, actorId],
+          [branchId, tenantId || null, actorId],
         );
       } else if (operation === 'set_main') {
         result = await platformAdminPool.query(
           `WITH target AS (
              SELECT school_id FROM public.branches
-              WHERE id = $1 AND tenant_id = $2 AND deleted_at IS NULL
+              WHERE id = $1::uuid AND ($2::uuid IS NULL OR tenant_id = $2::uuid) AND deleted_at IS NULL
            )
            UPDATE public.branches b
               SET updated_at = now(), updated_by = $3, version = version + 1
             FROM target
-           WHERE b.id = $1 AND b.tenant_id = $2
+           WHERE b.id = $1::uuid AND ($2::uuid IS NULL OR b.tenant_id = $2::uuid)
           RETURNING b.id, b.tenant_id, b.school_id, b.branch_code, b.name, b.address, b.status, b.deleted_at, b.created_at, b.updated_at`,
-          [branchId, tenantId, actorId],
+          [branchId, tenantId || null, actorId],
         );
         if (result.rowCount === 1) {
           await platformAdminPool.query(
             `UPDATE public.schools
                 SET central_metadata = COALESCE(central_metadata, '{}'::jsonb) || jsonb_build_object('mainBranchId', $3::text),
                     updated_at = now(), updated_by = $2, version = version + 1
-              WHERE id = $1 AND tenant_id = $4 AND deleted_at IS NULL`,
-            [result.rows[0].school_id, actorId, branchId, tenantId],
+              WHERE id = $1::uuid AND ($4::uuid IS NULL OR tenant_id = $4::uuid) AND deleted_at IS NULL`,
+            [result.rows[0].school_id, actorId, branchId, tenantId || null],
           );
         }
       } else {
@@ -1897,12 +2534,12 @@ async function startServer() {
               SET name = $3, branch_code = $4,
                   address = jsonb_build_object('city', $5::text, 'phone', $6::text, 'address', $7::text),
                   status = COALESCE(NULLIF($8, ''), status), updated_at = now(), updated_by = $9, version = version + 1
-            WHERE id = $1 AND tenant_id = $2 AND deleted_at IS NULL
+              WHERE id = $1::uuid AND ($2::uuid IS NULL OR tenant_id = $2::uuid) AND deleted_at IS NULL
           RETURNING id, tenant_id, school_id, branch_code, name, address, status, deleted_at, created_at, updated_at`,
-          [branchId, tenantId, name, branchCode, city, phone, address, status, actorId],
+          [branchId, tenantId || null, name, branchCode, city, phone, address, status, actorId],
         );
       }
-      if (result.rowCount !== 1) return next(new ConflictError('الفرع غير موجود أو لا ينتمي إلى المستأجر الموثوق.'));
+      if (result.rowCount !== 1) return next(new ConflictError('الفرع غير موجود أو لا ينتمي إلى نطاق الإدارة المركزية.'));
       return res.json({ success: true, branch: result.rows[0] });
     } catch (error) {
       return next(error instanceof Error && /duplicate|unique/i.test(error.message)
@@ -1915,9 +2552,8 @@ async function startServer() {
   // public.users and RBAC rows are written only after Auth accepts the user.
   app.get('/api/admin/central/users', authenticateRequest, requirePermissionOnly(PERMISSIONS.PLATFORM_ADMIN), async (req, res, next) => {
     if (!platformAdminPool) return next(new DatabaseError('مصدر قاعدة البيانات المركزية غير متاح.'));
-    const identity = (req as any).user as { tenantId?: string };
-    const tenantId = String(identity?.tenantId || '').trim();
-    if (!tenantId) return next(new AuthenticationError('هوية الإدارة المركزية غير مكتملة.'));
+    const tenantId = String(req.query?.tenantId || '').trim();
+    if (tenantId && !/^[0-9a-f-]{36}$/i.test(tenantId)) return next(new ValidationError('معرف المستأجر غير صالح.'));
     try {
       const result = await platformAdminPool.query(
         `SELECT u.id, u.auth_user_id, u.tenant_id, u.school_id, u.branch_id,
@@ -1932,10 +2568,10 @@ async function startServer() {
            LEFT JOIN public.user_roles ur ON ur.tenant_id = u.tenant_id AND ur.user_id = u.id
                 AND ur.deleted_at IS NULL AND ur.status = 'active'
            LEFT JOIN public.roles r ON r.tenant_id = ur.tenant_id AND r.id = ur.role_id
-          WHERE u.tenant_id = $1 AND u.deleted_at IS NULL
+          WHERE ($1::uuid IS NULL OR u.tenant_id = $1::uuid) AND u.deleted_at IS NULL
           GROUP BY u.id, au.email, s.display_name, b.name
           ORDER BY u.created_at DESC`,
-        [tenantId],
+        [tenantId || null],
       );
       return res.json({ success: true, users: result.rows });
     } catch (error) {
@@ -1945,8 +2581,8 @@ async function startServer() {
 
   app.post('/api/admin/central/schools/:schoolId/users', authenticateRequest, requirePermissionOnly(PERMISSIONS.PLATFORM_ADMIN), async (req, res, next) => {
     if (!platformAdminPool || !platformAdminAuth) return next(new ExternalServiceError('خدمة Supabase Auth المركزية غير مهيأة.'));
-    const identity = (req as any).user as { id?: string; tenantId?: string };
-    const tenantId = String(identity?.tenantId || '').trim();
+    const identity = (req as any).user as { id?: string };
+    const tenantId = String(req.body?.targetTenantId || '').trim();
     const actorId = String(identity?.id || '').trim();
     const schoolId = String(req.params.schoolId || '').trim();
     const branchId = String(req.body?.branchId || '').trim();
@@ -1955,7 +2591,8 @@ async function startServer() {
     const requestedPassword = String(req.body?.password || '').trim();
     const roleKey = String(req.body?.initialRole || 'schooladmin').trim().toLowerCase().replace(/[^a-z]/g, '');
     const roleSpec = CENTRAL_IDENTITY_ROLE_CATALOG[roleKey];
-    if (!tenantId || !actorId || !schoolId) return next(new AuthenticationError('هوية الإدارة المركزية أو المدرسة غير مكتملة.'));
+    if (!actorId || !schoolId) return next(new AuthenticationError('هوية الإدارة المركزية أو المدرسة غير مكتملة.'));
+    if (tenantId && !/^[0-9a-f-]{36}$/i.test(tenantId)) return next(new ValidationError('معرف المستأجر غير صالح.'));
     if (!/^[0-9a-f-]{36}$/i.test(schoolId) || (branchId && !/^[0-9a-f-]{36}$/i.test(branchId))) return next(new ValidationError('معرف المدرسة أو الفرع غير صالح.'));
     if (displayName.length < 2 || displayName.length > 160) return next(new ValidationError('اسم الموظف يجب أن يكون بين حرفين و160 حرفاً.'));
     if (!/^\S+@\S+\.\S+$/.test(email)) return next(new ValidationError('البريد الإلكتروني غير صالح.'));
@@ -1970,18 +2607,19 @@ async function startServer() {
       authUserId = authResult.data.user.id;
       await client.query('BEGIN');
       const scope = await client.query(
-        `SELECT s.id, b.id AS branch_id
+        `SELECT s.id, s.tenant_id, b.id AS branch_id
            FROM public.schools s
            LEFT JOIN public.branches b ON b.tenant_id = s.tenant_id AND b.school_id = s.id AND b.id = $3::uuid AND b.deleted_at IS NULL
-          WHERE s.id = $1 AND s.tenant_id = $2 AND s.deleted_at IS NULL`,
-        [schoolId, tenantId, branchId || null],
+          WHERE s.id = $1::uuid AND ($2::uuid IS NULL OR s.tenant_id = $2::uuid) AND s.deleted_at IS NULL`,
+        [schoolId, tenantId || null, branchId || null],
       );
       if (scope.rowCount !== 1 || (branchId && !scope.rows[0].branch_id)) throw new ConflictError('المدرسة أو الفرع غير موجود في نطاق الإدارة المركزية.');
+      const targetTenantId = scope.rows[0].tenant_id;
       const userResult = await client.query(
         `INSERT INTO public.users (auth_user_id, tenant_id, school_id, branch_id, display_name, status, created_by, updated_by)
          VALUES ($1::uuid, $2::uuid, $3::uuid, $4::uuid, $5, 'active', $6::uuid, $6::uuid)
          RETURNING id, auth_user_id, tenant_id, school_id, branch_id, display_name, status, created_at`,
-        [authUserId, tenantId, schoolId, branchId || null, displayName, actorId],
+        [authUserId, targetTenantId, schoolId, branchId || null, displayName, actorId],
       );
       const userId = userResult.rows[0].id;
       const roleResult = await client.query(
@@ -1989,7 +2627,7 @@ async function startServer() {
          VALUES ($1::uuid, NULL, $2, $3, $4, true, 'active', $5::uuid, $5::uuid)
          ON CONFLICT (tenant_id, role_key) DO UPDATE SET updated_at = now()
          RETURNING id`,
-        [tenantId, roleKey, roleSpec.name, roleSpec.description, actorId],
+        [targetTenantId, roleKey, roleSpec.name, roleSpec.description, actorId],
       );
       const roleId = roleResult.rows[0].id;
       for (const permissionKey of roleSpec.permissions) {
@@ -2005,14 +2643,14 @@ async function startServer() {
           `INSERT INTO public.role_permissions (tenant_id, role_id, permission_id, status, created_by, updated_by)
            VALUES ($1::uuid, $2::uuid, $3::uuid, 'active', $4::uuid, $4::uuid)
            ON CONFLICT (role_id, permission_id) DO NOTHING`,
-          [tenantId, roleId, permissionResult.rows[0].id, actorId],
+          [targetTenantId, roleId, permissionResult.rows[0].id, actorId],
         );
       }
       const assignment = await client.query(
         `INSERT INTO public.user_roles (tenant_id, user_id, role_id, school_id, branch_id, status, created_by, updated_by)
          VALUES ($1::uuid, $2::uuid, $3::uuid, $4::uuid, $5::uuid, 'active', $6::uuid, $6::uuid)
          RETURNING id`,
-        [tenantId, userId, roleId, schoolId, branchId || null, actorId],
+        [targetTenantId, userId, roleId, schoolId, branchId || null, actorId],
       );
       await client.query('COMMIT');
       return res.status(201).json({ success: true, user: { ...userResult.rows[0], email, roles: [{ roleKey, name: roleSpec.name }], roleAssignmentId: assignment.rows[0].id }, temporaryPassword: requestedPassword ? null : password });
@@ -2027,14 +2665,15 @@ async function startServer() {
 
   app.patch('/api/admin/central/users/:userId', authenticateRequest, requirePermissionOnly(PERMISSIONS.PLATFORM_ADMIN), async (req, res, next) => {
     if (!platformAdminPool || !platformAdminAuth) return next(new ExternalServiceError('خدمة Supabase Auth المركزية غير مهيأة.'));
-    const identity = (req as any).user as { id?: string; tenantId?: string };
-    const tenantId = String(identity?.tenantId || '').trim();
+    const identity = (req as any).user as { id?: string };
+    const tenantId = String(req.body?.targetTenantId || '').trim();
     const actorId = String(identity?.id || '').trim();
     const userId = String(req.params.userId || '').trim();
     const operation = String(req.body?.operation || '').trim();
-    if (!tenantId || !actorId || !/^[0-9a-f-]{36}$/i.test(userId)) return next(new AuthenticationError('هوية المستخدم أو الإدارة غير مكتملة.'));
+    if (!actorId || !/^[0-9a-f-]{36}$/i.test(userId)) return next(new AuthenticationError('هوية المستخدم أو الإدارة غير مكتملة.'));
+    if (tenantId && !/^[0-9a-f-]{36}$/i.test(tenantId)) return next(new ValidationError('معرف المستأجر غير صالح.'));
     try {
-      const target = await platformAdminPool.query(`SELECT id, auth_user_id, display_name, status FROM public.users WHERE id = $1::uuid AND tenant_id = $2::uuid AND deleted_at IS NULL`, [userId, tenantId]);
+      const target = await platformAdminPool.query(`SELECT id, auth_user_id, display_name, status FROM public.users WHERE id = $1::uuid AND ($2::uuid IS NULL OR tenant_id = $2::uuid) AND deleted_at IS NULL`, [userId, tenantId || null]);
       if (target.rowCount !== 1) return next(new ConflictError('المستخدم غير موجود في نطاق الإدارة المركزية.'));
       const row = target.rows[0];
       if (operation === 'update') {
@@ -2045,9 +2684,9 @@ async function startServer() {
         const updated = await platformAdminPool.query(
           `UPDATE public.users
               SET display_name = $3, updated_at = now(), updated_by = $4::uuid, version = version + 1
-            WHERE id = $1::uuid AND tenant_id = $2::uuid AND deleted_at IS NULL
+            WHERE id = $1::uuid AND ($2::uuid IS NULL OR tenant_id = $2::uuid) AND deleted_at IS NULL
           RETURNING id, auth_user_id, tenant_id, school_id, branch_id, display_name, status, created_at`,
-          [userId, tenantId, displayName, actorId],
+          [userId, tenantId || null, displayName, actorId],
         );
         return res.json({ success: true, user: updated.rows[0] });
       }
@@ -2068,13 +2707,13 @@ async function startServer() {
         if (!['active', 'suspended', 'disabled'].includes(status)) return next(new ValidationError('حالة المستخدم غير مسموح بها.'));
         const authResult = await platformAdminAuth.auth.admin.updateUserById(row.auth_user_id, { ban_duration: status === 'active' ? 'none' : '876000h' });
         if (authResult.error) return next(new ExternalServiceError('تعذر تغيير حالة الهوية عبر Supabase Auth.'));
-        const updated = await platformAdminPool.query(`UPDATE public.users SET status = $3, updated_at = now(), updated_by = $4::uuid, version = version + 1 WHERE id = $1::uuid AND tenant_id = $2::uuid AND deleted_at IS NULL RETURNING id, auth_user_id, tenant_id, school_id, branch_id, display_name, status, created_at`, [userId, tenantId, status, actorId]);
+        const updated = await platformAdminPool.query(`UPDATE public.users SET status = $3, updated_at = now(), updated_by = $4::uuid, version = version + 1 WHERE id = $1::uuid AND ($2::uuid IS NULL OR tenant_id = $2::uuid) AND deleted_at IS NULL RETURNING id, auth_user_id, tenant_id, school_id, branch_id, display_name, status, created_at`, [userId, tenantId || null, status, actorId]);
         return res.json({ success: true, user: updated.rows[0] });
       }
       if (operation === 'archive') {
         const authResult = await platformAdminAuth.auth.admin.updateUserById(row.auth_user_id, { ban_duration: '876000h' });
         if (authResult.error) return next(new ExternalServiceError('تعذر تعطيل الهوية قبل أرشفتها.'));
-        const updated = await platformAdminPool.query(`UPDATE public.users SET status = 'archived', deleted_at = now(), deleted_by = $3::uuid, updated_at = now(), updated_by = $3::uuid, version = version + 1 WHERE id = $1::uuid AND tenant_id = $2::uuid AND deleted_at IS NULL RETURNING id, auth_user_id, tenant_id, school_id, branch_id, display_name, status, created_at`, [userId, tenantId, actorId]);
+        const updated = await platformAdminPool.query(`UPDATE public.users SET status = 'archived', deleted_at = now(), deleted_by = $3::uuid, updated_at = now(), updated_by = $3::uuid, version = version + 1 WHERE id = $1::uuid AND ($2::uuid IS NULL OR tenant_id = $2::uuid) AND deleted_at IS NULL RETURNING id, auth_user_id, tenant_id, school_id, branch_id, display_name, status, created_at`, [userId, tenantId || null, actorId]);
         return res.json({ success: true, user: updated.rows[0] });
       }
       return next(new ValidationError('عملية إدارة المستخدم غير معتمدة.'));
@@ -2275,6 +2914,50 @@ async function startServer() {
       }
     } catch (error) {
       return next(error instanceof Error ? error : new DatabaseError('تعذر وضع الإشعار في قائمة الإرسال المركزية.'));
+    }
+  });
+
+  // Central activity is an immutable read model over the canonical audit
+  // events. The UI must never manufacture, rewrite, or wipe audit evidence.
+  app.get('/api/admin/central/audit', authenticateRequest, requirePermissionOnly(PERMISSIONS.PLATFORM_ADMIN), async (req, res, next) => {
+    if (!platformAdminPool) return next(new DatabaseError('مصدر قاعدة البيانات المركزية غير متاح.'));
+    const identity = (req as any).user as { tenantId?: string };
+    const tenantId = String(identity?.tenantId || '').trim();
+    const requestedLimit = Number(req.query.limit || 250);
+    const limit = Number.isFinite(requestedLimit) ? Math.min(500, Math.max(1, Math.trunc(requestedLimit))) : 250;
+    if (!tenantId) return next(new AuthenticationError('هوية الإدارة المركزية غير مكتملة.'));
+    try {
+      const result = await platformAdminPool.query(
+        `SELECT activity.id, activity.event_type, activity.school_id, activity.actor_user_id,
+                activity.action, activity.source, activity.reason, activity.result, activity.metadata, activity.created_at,
+                u.display_name AS actor_name, s.display_name AS school_name
+           FROM (
+             SELECT ae.id, 'audit'::text AS event_type, ae.school_id, ae.actor_user_id,
+                    ae.action, ae.source, ae.reason, ae.result, ae.metadata, ae.created_at
+               FROM public.audit_events ae
+              WHERE ae.tenant_id = $1::uuid
+             UNION ALL
+             SELECT aa.id, 'access'::text AS event_type, aa.school_id, aa.actor_user_id,
+                    aa.action, aa.source, aa.reason, aa.result,
+                     jsonb_build_object(
+                       'requestMethod', aa.request_method,
+                       'requestPath', aa.request_path,
+                       'ipAddress', host(aa.ip_address),
+                       'userAgent', aa.user_agent
+                     ),
+                    aa.created_at
+               FROM public.audit_access_events aa
+              WHERE aa.tenant_id = $1::uuid
+           ) activity
+           LEFT JOIN public.users u ON u.tenant_id = $1::uuid AND u.id = activity.actor_user_id
+           LEFT JOIN public.schools s ON s.tenant_id = $1::uuid AND s.id = activity.school_id
+          ORDER BY activity.created_at DESC
+          LIMIT $2`,
+        [tenantId, limit],
+      );
+      return res.json({ success: true, logs: result.rows, limit });
+    } catch (error) {
+      return next(new DatabaseError('تعذر تحميل سجل النشاط المركزي.', error instanceof Error ? error.message : String(error)));
     }
   });
 
@@ -2854,106 +3537,26 @@ async function startServer() {
     }
   );
 
-  // Database Health, Sizing & Performance Monitoring Center
-  app.get("/api/database/monitor", authenticateRequest, requirePermission(PERMISSIONS.DATABASE_MONITOR), async (req, res, next) => {
-    const schoolId = (req as any).user.schoolId;
-    try {
-      const students = (await StudentRepository.search(schoolId, {})).data;
-      const audits = await AuditRepository.getAll(schoolId);
-      const report = await DatabaseService.getHealthReport(schoolId);
-
-      const dbSize = 14.2 + (students.length * 0.05) + (audits.length * 0.01);
-
-      res.json({
-        success: true,
-        data: {
-          databaseType: report.databaseType,
-          status: report.status === "connected" ? "connected" : "ready_local_postgres_active",
-          latencyMs: report.latencyMs,
-          sizeDiskMB: Number(dbSize.toFixed(2)),
-          totalTables: 15,
-          indexCoveragePercent: 100,
-          activeConnections: report.activeConnections,
-          poolCapacity: 100,
-          rowLevelSecurity: {
-            status: "active",
-            enforcedOnTables: ["students", "invoices", "exams", "teachers", "employees", "audit_logs"],
-            violationsDetected: 0
-          },
-          slowQueries: [
-            { query: "SELECT * FROM students WHERE name ILIKE '%خالد%' AND school_id = $1;", durationMs: 42, optimized: true }
-          ],
-          metrics: report.metrics
-        },
-        message: "Database metrics and health report retrieved successfully.",
-        meta: null
-      });
-    } catch (err: any) {
-      next(new DatabaseError("Failed to monitor database", err.message));
-    }
+  // Database observability and backup endpoints remain explicitly unavailable
+  // until a real provider is configured. Returning synthetic CPU, storage,
+  // query, alert, or backup values would create a false production signal.
+  const databaseObservabilityUnavailable = (_req: any, res: any) => res.status(503).json({
+    success: false,
+    code: 'OBSERVABILITY_CONNECTOR_UNAVAILABLE',
+    message: 'موصل مراقبة قاعدة البيانات والنسخ الاحتياطي غير مهيأ؛ لم يتم إصدار قياس أو نسخة وهمية.',
   });
 
-  // =========================================================================
-  // DATABASE HEALTH SERVICE ENTERPRISE ENDPOINTS
-  // =========================================================================
-  app.get("/api/database/health-service/metrics", authenticateRequest, requirePermission(PERMISSIONS.DATABASE_MONITOR), async (req, res, next) => {
-    try {
-      const schoolId = (req as any).user.schoolId;
-      const metrics = await DatabaseHealthService.getInstance().getHealthMetrics(schoolId);
-      res.json({ success: true, data: metrics });
-    } catch (err: any) {
-      next(new DatabaseError("Failed to fetch database health service metrics", err.message));
-    }
-  });
-
-  app.get("/api/database/health-service/thresholds", authenticateRequest, requirePermission(PERMISSIONS.DATABASE_SETTINGS), async (req, res) => {
-    const thresholds = DatabaseHealthService.getInstance().getThresholds();
-    res.json({ success: true, data: thresholds });
-  });
-
-  app.post("/api/database/health-service/thresholds", authenticateRequest, requirePermission(PERMISSIONS.DATABASE_SETTINGS), async (req, res) => {
-    const newThresholds = req.body;
-    const thresholds = DatabaseHealthService.getInstance().updateThresholds(newThresholds);
-    res.json({ success: true, data: thresholds, message: "تم تحديث حدود التنبيهات بنجاح" });
-  });
-
-  app.get("/api/database/health-service/alerts", authenticateRequest, requirePermission(PERMISSIONS.DATABASE_MONITOR), async (req, res) => {
-    const alerts = DatabaseHealthService.getInstance().getAlerts();
-    res.json({ success: true, data: alerts });
-  });
-
-  app.post("/api/database/health-service/alerts/resolve", authenticateRequest, requirePermission(PERMISSIONS.DATABASE_SETTINGS), async (req, res) => {
-    const { id } = req.body;
-    const success = DatabaseHealthService.getInstance().resolveAlert(id);
-    res.json({ success, message: success ? "تمت معالجة التنبيه وتأكيد سلامة الأداء" : "التنبيه غير موجود" });
-  });
-
-  app.post("/api/database/health-service/alerts/clear", authenticateRequest, requirePermission(PERMISSIONS.DATABASE_SETTINGS), async (req, res) => {
-    DatabaseHealthService.getInstance().clearAllAlerts();
-    res.json({ success: true, message: "تم تصفية أرشيف التنبيهات بنجاح" });
-  });
-
-  app.post("/api/database/health-service/simulate/deadlock", authenticateRequest, requirePermission(PERMISSIONS.DATABASE_SIMULATE), async (req, res) => {
-    DatabaseHealthService.getInstance().triggerDeadlockSim();
-    res.json({ success: true, message: "تمت محاكاة تعليق قاعدة البيانات (Deadlock) وتوليد تنبيه حرج بنجاح!" });
-  });
-
-  app.post("/api/database/health-service/simulate/failed-tx", authenticateRequest, requirePermission(PERMISSIONS.DATABASE_SIMULATE), async (req, res) => {
-    const { error } = req.body;
-    DatabaseHealthService.getInstance().triggerFailedTransactionSim(error);
-    res.json({ success: true, message: "تمت محاكاة عملية فاشلة (Failed Transaction) بنجاح!" });
-  });
-
-  app.post("/api/database/health-service/simulate/slow-query", authenticateRequest, requirePermission(PERMISSIONS.DATABASE_SIMULATE), async (req, res) => {
-    const { query, durationMs } = req.body;
-    DatabaseHealthService.getInstance().triggerSlowQuerySim(query, durationMs);
-    res.json({ success: true, message: "تمت محاكاة استعلام بطيء لتتبع سلامة الاستجابة ومحرك الفهرسة!" });
-  });
-
-  app.post("/api/database/health-service/optimize", authenticateRequest, requirePermission(PERMISSIONS.DATABASE_OPTIMIZE), async (req, res) => {
-    DatabaseHealthService.getInstance().optimizeSlowQueries();
-    res.json({ success: true, message: "تمت إعادة هيكلة فهارس التغطية وتحسين جميع الاستعلامات البطيئة بنجاح!" });
-  });
+  app.get("/api/database/monitor", authenticateRequest, requirePermission(PERMISSIONS.DATABASE_MONITOR), databaseObservabilityUnavailable);
+  app.get("/api/database/health-service/metrics", authenticateRequest, requirePermission(PERMISSIONS.DATABASE_MONITOR), databaseObservabilityUnavailable);
+  app.get("/api/database/health-service/thresholds", authenticateRequest, requirePermission(PERMISSIONS.DATABASE_SETTINGS), databaseObservabilityUnavailable);
+  app.post("/api/database/health-service/thresholds", authenticateRequest, requirePermission(PERMISSIONS.DATABASE_SETTINGS), databaseObservabilityUnavailable);
+  app.get("/api/database/health-service/alerts", authenticateRequest, requirePermission(PERMISSIONS.DATABASE_MONITOR), databaseObservabilityUnavailable);
+  app.post("/api/database/health-service/alerts/resolve", authenticateRequest, requirePermission(PERMISSIONS.DATABASE_SETTINGS), databaseObservabilityUnavailable);
+  app.post("/api/database/health-service/alerts/clear", authenticateRequest, requirePermission(PERMISSIONS.DATABASE_SETTINGS), databaseObservabilityUnavailable);
+  app.post("/api/database/health-service/simulate/deadlock", authenticateRequest, requirePermission(PERMISSIONS.DATABASE_SIMULATE), databaseObservabilityUnavailable);
+  app.post("/api/database/health-service/simulate/failed-tx", authenticateRequest, requirePermission(PERMISSIONS.DATABASE_SIMULATE), databaseObservabilityUnavailable);
+  app.post("/api/database/health-service/simulate/slow-query", authenticateRequest, requirePermission(PERMISSIONS.DATABASE_SIMULATE), databaseObservabilityUnavailable);
+  app.post("/api/database/health-service/optimize", authenticateRequest, requirePermission(PERMISSIONS.DATABASE_OPTIMIZE), databaseObservabilityUnavailable);
 
   // GET all Audit Logs with advanced filters
   app.get("/api/audit-logs", authenticateRequest, requirePermission(PERMISSIONS.AUDIT_READ), async (req, res, next) => {
@@ -3011,26 +3614,9 @@ async function startServer() {
     }
   });
 
-  // Database Backup Pipeline
-  app.post("/api/database/backup", authenticateRequest, requirePermission(PERMISSIONS.DATABASE_BACKUP), (req, res) => {
-    const schoolId = (req as any).user.schoolId;
-    const dateStr = new Date().toISOString().replace(/[-:T]/g, "").substring(0, 8);
-    const fileName = `backup_${schoolId}_snapshot_${dateStr}_${Math.floor(100 + Math.random() * 900)}.sql`;
-
-    res.json({
-      success: true,
-      data: {
-        fileName,
-        size: "14.2 MB",
-        checksum: "SHA-256:" + Math.random().toString(16).substring(2, 10).toUpperCase(),
-        encryption: "AES-256-GCM Active",
-        timestamp: new Date().toISOString(),
-        vaultPath: "/secure/backup/vault/" + fileName
-      },
-      message: "Database backup completed successfully.",
-      meta: null
-    });
-  });
+  // Database Backup Pipeline: fail closed until a durable backup provider and
+  // verifiable object-storage receipt are configured.
+  app.post("/api/database/backup", authenticateRequest, requirePermission(PERMISSIONS.DATABASE_BACKUP), databaseObservabilityUnavailable);
 
   // Student Data Export — true XLSX, server-side, tenant-scoped, bounded.
   app.get("/api/students/export", authenticateRequest, requirePermissionOnly(PERMISSIONS.STUDENT_EXPORT), async (req, res, next) => {

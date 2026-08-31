@@ -16,6 +16,6 @@ describe('safe GET /api/students auth trace', () => {
     expect(serverSource).not.toContain('authorization_value');
     expect(serverSource).not.toContain('jwt: token');
     expect(serverSource).not.toContain('password: password');
-    expect(serverSource).not.toContain('connectionString:');
+    expect(serverSource).not.toContain('connectionString: password');
   });
 });

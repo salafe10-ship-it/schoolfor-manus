@@ -1,4 +1,4 @@
-import { Activity, AlertOctagon, AlertTriangle, Archive, ArrowRight, ArrowUpDown, Building2, CheckCircle2, ChevronRight, Clipboard, Clock, Cpu, Database, DatabaseZap, FileSpreadsheet, FileText, Gauge, GraduationCap, HardDrive, HelpCircle, Play, Printer, RefreshCw, RotateCw, Search, Server, Settings, ShieldCheck, Sliders, ToggleLeft, ToggleRight, TrendingUp, Users, Wifi, WifiOff, Workflow, XCircle, Zap } from 'lucide-react';
+import { Activity, AlertOctagon, AlertTriangle, Archive, ArrowRight, ArrowUpDown, Building2, CheckCircle2, ChevronRight, Clipboard, Clock, Cpu, Database, DatabaseZap, FileSpreadsheet, FileText, Gauge, GraduationCap, HardDrive, HelpCircle, Play, Printer, RefreshCw, RotateCw, Search, Server, Settings, ShieldAlert, ShieldCheck, Sliders, ToggleLeft, ToggleRight, TrendingUp, Users, Wifi, WifiOff, Workflow, XCircle, Zap } from 'lucide-react';
 /**
  * @license
  * SPDX-License-Identifier: Apache-2.0
@@ -58,6 +58,11 @@ export default function SystemHealthCenter({
   const [dbMonitorMetrics, setDbMonitorMetrics] = useState<any>(null);
   const [isLoadingDbMetrics, setIsLoadingDbMetrics] = useState<boolean>(false);
   const [isReconnecting, setIsReconnecting] = useState<boolean>(false);
+  const [dbObservabilityStatus, setDbObservabilityStatus] = useState<'unknown' | 'ready' | 'unavailable'>('unknown');
+
+  const formatDbMetric = (value: unknown, suffix = '') => (
+    value === null || value === undefined || value === '' ? 'غير متحقق' : `${value}${suffix}`
+  );
 
   // Advanced Database Health Service States
   const [dbAlerts, setDbAlerts] = useState<any[]>([]);
@@ -125,6 +130,8 @@ export default function SystemHealthCenter({
       const result = await response.json();
       if (result.success) {
         setDbAlerts(result.data);
+      } else {
+        setDbObservabilityStatus('unavailable');
       }
     } catch (err: any) {
       EnterpriseLogger.error('Error fetching DB alerts:', "SystemHealthCenter", { error: err });
@@ -147,6 +154,8 @@ export default function SystemHealthCenter({
         setThresholdMinAvail(result.data.minAvailabilityPercent);
         setThresholdPoolUsage(result.data.connectionPoolUsageMaxPercent);
         setThresholdStorageMin(result.data.remainingStorageMinPercent);
+      } else {
+        setDbObservabilityStatus('unavailable');
       }
     } catch (err: any) {
       EnterpriseLogger.error('Error fetching DB thresholds:', "SystemHealthCenter", { error: err });
@@ -165,9 +174,17 @@ export default function SystemHealthCenter({
       const result = await response.json();
       if (result.success) {
         setDbMonitorMetrics(result.data);
+        setDbObservabilityStatus('ready');
+      } else {
+        setDbMonitorMetrics(null);
+        setDbAlerts([]);
+        setDbObservabilityStatus('unavailable');
       }
       await fetchDbAlerts();
     } catch (err: any) {
+      setDbMonitorMetrics(null);
+      setDbAlerts([]);
+      setDbObservabilityStatus('unavailable');
       EnterpriseLogger.error('Error fetching database metrics:', "SystemHealthCenter", { error: err });
     } finally {
       setIsLoadingDbMetrics(false);
@@ -384,8 +401,6 @@ export default function SystemHealthCenter({
     if (activeTab === 'db_monitor') {
       fetchDbThresholds();
       fetchDbMetrics();
-      const interval = setInterval(fetchDbMetrics, 4000); // Auto-refresh metrics every 4s
-      return () => clearInterval(interval);
     }
   }, [activeTab]);
 
@@ -1568,6 +1583,15 @@ export default function SystemHealthCenter({
           /* SECTION: DATABASE HEALTH SERVICE DASHBOARD */
           /* ============================================== */
           <div className="space-y-6 sm:space-y-8 font-sans">
+            {dbObservabilityStatus === 'unavailable' && (
+              <div className="flex items-start gap-3 rounded-3xl border border-amber-200 bg-amber-50 p-5 text-right text-amber-900 shadow-xs" dir="rtl">
+                <ShieldAlert className="mt-0.5 h-5 w-5 shrink-0 text-amber-600" />
+                <div>
+                  <h3 className="text-sm font-black">مراقبة قاعدة البيانات غير متاحة حالياً</h3>
+                  <p className="mt-1 text-xs font-bold leading-6 text-amber-800">لم يتم تهيئة موصل قياسات موثوق؛ لذلك تُعرض المؤشرات كـ «غير متحقق» ولا يتم إنشاء تنبيهات أو تحسينات وهمية.</p>
+                </div>
+              </div>
+            )}
             
             {/* Top Telemetry Summary cards */}
             <div className="grid grid-cols-1 md:grid-cols-3 gap-6">
@@ -1582,12 +1606,12 @@ export default function SystemHealthCenter({
                       ? 'bg-emerald-100 text-emerald-800 dark:bg-emerald-950 dark:text-emerald-400' 
                       : 'bg-rose-100 text-rose-800 dark:bg-rose-950 dark:text-rose-400'
                   }`}>
-                    {dbMonitorMetrics?.availabilityPercentage > 0 ? 'نشط ومستقر' : 'منقطع'}
+                    {dbMonitorMetrics?.availabilityPercentage > 0 ? 'نشط ومستقر' : 'غير متحقق'}
                   </span>
                 </div>
                 <div className="flex items-baseline gap-2">
                   <span className="text-3xl font-black text-slate-900 dark:text-white font-mono">
-                    {dbMonitorMetrics?.availabilityPercentage || 0}%
+                    {formatDbMetric(dbMonitorMetrics?.availabilityPercentage, '%')}
                   </span>
                 </div>
                 <p className="text-xs text-slate-400 dark:text-slate-500 mt-2">
@@ -1633,7 +1657,7 @@ export default function SystemHealthCenter({
                           ? 'text-rose-500 font-black'
                           : 'text-slate-950 dark:text-slate-200'
                       }`}>
-                        {dbMonitorMetrics?.cpu?.usagePercent || 0}%
+                        {formatDbMetric(dbMonitorMetrics?.cpu?.usagePercent, '%')}
                       </span>
                     </div>
                     <div className="w-full bg-slate-100 dark:bg-slate-800 h-2 rounded-full overflow-hidden">
@@ -1660,7 +1684,7 @@ export default function SystemHealthCenter({
                           ? 'text-rose-500 font-black'
                           : 'text-slate-950 dark:text-slate-200'
                       }`}>
-                        {dbMonitorMetrics?.memory?.usagePercent || 0}%
+                        {formatDbMetric(dbMonitorMetrics?.memory?.usagePercent, '%')}
                       </span>
                     </div>
                     <div className="w-full bg-slate-100 dark:bg-slate-800 h-2 rounded-full overflow-hidden">
@@ -1686,9 +1710,8 @@ export default function SystemHealthCenter({
                 </div>
                 <div className="flex items-baseline gap-1.5">
                   <span className="text-3xl font-black text-slate-900 dark:text-white font-mono">
-                    {dbMonitorMetrics?.storageGrowth?.sizeMB || 0}
+                    {formatDbMetric(dbMonitorMetrics?.storageGrowth?.sizeMB, ' MB')}
                   </span>
-                  <span className="text-xs text-slate-500">MB</span>
                 </div>
                 
                 {/* Disk Space Progress Bar */}
@@ -1700,8 +1723,8 @@ export default function SystemHealthCenter({
                 </div>
 
                 <div className="flex justify-between items-center text-[10px] text-slate-400 mt-2.5">
-                  <span>معدل النمو: <b className="font-mono text-amber-500">+{dbMonitorMetrics?.storageGrowth?.growthRateMBPerDay || 0} MB/يوم</b></span>
-                  <span>القرص الشاغر: <b className="font-mono text-emerald-500">{dbMonitorMetrics?.storageGrowth?.remainingSpacePercent || 0}%</b></span>
+                  <span>معدل النمو: <b className="font-mono text-amber-500">{formatDbMetric(dbMonitorMetrics?.storageGrowth?.growthRateMBPerDay, ' MB/يوم')}</b></span>
+                  <span>القرص الشاغر: <b className="font-mono text-emerald-500">{formatDbMetric(dbMonitorMetrics?.storageGrowth?.remainingSpacePercent, '%')}</b></span>
                 </div>
               </div>
 
@@ -1729,7 +1752,15 @@ export default function SystemHealthCenter({
                 )}
               </div>
 
-              {dbAlerts.length === 0 ? (
+              {dbObservabilityStatus === 'unavailable' ? (
+                <div className="flex flex-col items-center justify-center py-10 text-center">
+                  <div className="w-12 h-12 rounded-full bg-amber-50 dark:bg-amber-950/30 text-amber-600 flex items-center justify-center mb-3">
+                    <ShieldAlert className="w-6 h-6" />
+                  </div>
+                  <h4 className="text-sm font-black text-slate-800 dark:text-white">التنبيهات غير متحققة</h4>
+                  <p className="text-xs text-slate-400 mt-1 max-w-sm">لا يمكن اعتبار عدم وجود سجلات دليلاً على سلامة النظام قبل توصيل موصل المراقبة المركزي.</p>
+                </div>
+              ) : dbAlerts.length === 0 ? (
                 <div className="flex flex-col items-center justify-center py-10 text-center">
                   <div className="w-12 h-12 rounded-full bg-emerald-50 dark:bg-emerald-950/30 text-emerald-500 flex items-center justify-center mb-3">
                     <CheckCircle2 className="w-6 h-6" />
@@ -1819,10 +1850,10 @@ export default function SystemHealthCenter({
                     <span className="text-[10px] text-slate-400 block uppercase font-bold">نسبة استخدام مجمع الاتصالات (Connection Pool Usage)</span>
                     <div className="flex justify-between items-baseline mt-2 mb-1.5">
                       <span className="text-lg font-black text-slate-800 dark:text-white font-mono">
-                        {dbMonitorMetrics?.connectionPool?.active || 0} / {dbMonitorMetrics?.connectionPool?.capacity || 100}
+                        {formatDbMetric(dbMonitorMetrics?.connectionPool?.active)} / {formatDbMetric(dbMonitorMetrics?.connectionPool?.capacity)}
                       </span>
                       <span className="text-xs font-mono font-bold text-amber-500">
-                        {dbMonitorMetrics?.connectionPool?.usagePercent || 0}%
+                        {formatDbMetric(dbMonitorMetrics?.connectionPool?.usagePercent, '%')}
                       </span>
                     </div>
                     <div className="w-full bg-slate-200 dark:bg-slate-750 h-1.5 rounded-full overflow-hidden">
@@ -1832,8 +1863,8 @@ export default function SystemHealthCenter({
                       />
                     </div>
                     <div className="flex justify-between items-center text-[10px] text-slate-400 mt-2 font-mono">
-                      <span>الاتصالات الخاملة (Idle): {dbMonitorMetrics?.connectionPool?.idle || 0}</span>
-                      <span>سعة الأمان القصوى: {dbThresholds?.connectionPoolUsageMaxPercent || 80}%</span>
+                      <span>الاتصالات الخاملة (Idle): {formatDbMetric(dbMonitorMetrics?.connectionPool?.idle)}</span>
+                      <span>سعة الأمان القصوى: {formatDbMetric(dbThresholds?.connectionPoolUsageMaxPercent, '%')}</span>
                     </div>
                   </div>
 
@@ -1850,12 +1881,12 @@ export default function SystemHealthCenter({
                     </div>
                     <div className="flex justify-between items-center text-xs">
                       <span className="text-slate-400">وضع النسخ المتماثل:</span>
-                      <span className="text-slate-800 dark:text-slate-200 font-bold">{dbMonitorMetrics?.replicationStatus?.mode || 'لا يوجد'}</span>
+                      <span className="text-slate-800 dark:text-slate-200 font-bold">{formatDbMetric(dbMonitorMetrics?.replicationStatus?.mode)}</span>
                     </div>
                     <div className="flex justify-between items-center text-xs">
                       <span className="text-slate-400">فارق المزامنة الزمنية (Lag Delay):</span>
                       <span className="text-slate-800 dark:text-slate-200 font-mono font-bold">
-                        {dbMonitorMetrics?.replicationStatus?.lagMs === 99999 ? '∞' : `${dbMonitorMetrics?.replicationStatus?.lagMs || 0}ms`}
+                        {formatDbMetric(dbMonitorMetrics?.replicationStatus?.lagMs, 'ms')}
                       </span>
                     </div>
                   </div>
@@ -1881,13 +1912,13 @@ export default function SystemHealthCenter({
                     <div className="bg-transparent dark:bg-slate-850 p-4 border border-slate-100 dark:border-slate-800/40 text-right">
                       <span className="text-[10px] text-slate-400 block font-bold">كفاءة الفهرس (Index Hit Rate)</span>
                       <span className="text-xl font-black text-slate-900 dark:text-white mt-1.5 block font-mono">
-                        {dbMonitorMetrics?.indexUsage?.hitRatePercent || 0}%
+                        {formatDbMetric(dbMonitorMetrics?.indexUsage?.hitRatePercent, '%')}
                       </span>
                     </div>
                     <div className="bg-transparent dark:bg-slate-850 p-4 border border-slate-100 dark:border-slate-800/40 text-right">
                       <span className="text-[10px] text-slate-400 block font-bold">كفاءة الكاش للبيانات (Cache Hit Rate)</span>
                       <span className="text-xl font-black text-slate-900 dark:text-white mt-1.5 block font-mono">
-                        {dbMonitorMetrics?.indexUsage?.cacheHitRatePercent || 0}%
+                        {formatDbMetric(dbMonitorMetrics?.indexUsage?.cacheHitRatePercent, '%')}
                       </span>
                     </div>
                   </div>
@@ -1895,15 +1926,15 @@ export default function SystemHealthCenter({
                   <div className="bg-transparent dark:bg-slate-850 p-4 border border-slate-100 dark:border-slate-800/40 space-y-2.5 text-xs text-slate-500">
                     <div className="flex justify-between items-center">
                       <span>إجمالي عمليات الفحص بالفهرس (Index Scans):</span>
-                      <span className="font-mono font-bold text-slate-800 dark:text-slate-200">{dbMonitorMetrics?.indexUsage?.indexScans || 0}</span>
+                      <span className="font-mono font-bold text-slate-800 dark:text-slate-200">{formatDbMetric(dbMonitorMetrics?.indexUsage?.indexScans)}</span>
                     </div>
                     <div className="flex justify-between items-center">
                       <span>عمليات الفحص التتابعي البطيء (Seq Scans):</span>
-                      <span className="font-mono font-bold text-amber-500">{dbMonitorMetrics?.indexUsage?.sequentialScans || 0}</span>
+                      <span className="font-mono font-bold text-amber-500">{formatDbMetric(dbMonitorMetrics?.indexUsage?.sequentialScans)}</span>
                     </div>
                     <div className="flex justify-between items-center">
                       <span>متوسط وقت إكمال المعاملة (Avg Transaction):</span>
-                      <span className="font-mono font-bold text-amber-500">{dbMonitorMetrics?.transactionTime?.avgMs || 0} ms</span>
+                      <span className="font-mono font-bold text-amber-500">{formatDbMetric(dbMonitorMetrics?.transactionTime?.avgMs, ' ms')}</span>
                     </div>
                   </div>
                 </div>
@@ -1928,7 +1959,9 @@ export default function SystemHealthCenter({
                 </button>
               </div>
 
-              {!dbMonitorMetrics?.slowQueries || dbMonitorMetrics.slowQueries.length === 0 ? (
+              {!dbMonitorMetrics ? (
+                <p className="text-center text-xs text-slate-400 py-6">لا توجد بيانات موثقة عن الاستعلامات؛ موصل المراقبة غير متاح.</p>
+              ) : dbMonitorMetrics.slowQueries.length === 0 ? (
                 <p className="text-center text-xs text-slate-400 py-6">لا توجد استعلامات بطيئة مسجلة حالياً.</p>
               ) : (
                 <div className="overflow-x-auto">
@@ -1987,7 +2020,7 @@ export default function SystemHealthCenter({
                   <span className={`px-2 py-0.5 rounded-full text-[10px] font-mono font-black ${
                     (dbMonitorMetrics?.deadlocks?.count || 0) > 0 ? 'bg-rose-500 text-white' : 'bg-slate-100 dark:bg-slate-800 text-slate-500'
                   }`}>
-                    {dbMonitorMetrics?.deadlocks?.count || 0} جمود
+                    {formatDbMetric(dbMonitorMetrics?.deadlocks?.count)} جمود
                   </span>
                 </div>
 
@@ -2007,7 +2040,7 @@ export default function SystemHealthCenter({
                     ))}
                   </div>
                 ) : (
-                  <p className="text-center text-xs text-slate-400 py-6">لم يتم رصد أي حالات جمود ثنائي للمعاملات.</p>
+                  <p className="text-center text-xs text-slate-400 py-6">{dbMonitorMetrics ? 'لم يتم رصد أي حالات جمود ثنائي للمعاملات.' : 'لا توجد بيانات موثقة عن حالات الجمود؛ موصل المراقبة غير متاح.'}</p>
                 )}
               </div>
 
@@ -2018,7 +2051,7 @@ export default function SystemHealthCenter({
                   <span className={`px-2 py-0.5 rounded-full text-[10px] font-mono font-black ${
                     (dbMonitorMetrics?.failedTransactions?.count || 0) > 0 ? 'bg-amber-500 text-slate-900' : 'bg-slate-100 dark:bg-slate-800 text-slate-500'
                   }`}>
-                    {dbMonitorMetrics?.failedTransactions?.count || 0} فشل
+                    {formatDbMetric(dbMonitorMetrics?.failedTransactions?.count)} فشل
                   </span>
                 </div>
 
@@ -2037,7 +2070,7 @@ export default function SystemHealthCenter({
                     ))}
                   </div>
                 ) : (
-                  <p className="text-center text-xs text-slate-400 py-6">لم يتم تسجيل أي معاملات فاشلة أو مجهضة.</p>
+                  <p className="text-center text-xs text-slate-400 py-6">{dbMonitorMetrics ? 'لم يتم تسجيل أي معاملات فاشلة أو مجهضة.' : 'لا توجد بيانات موثقة عن المعاملات؛ موصل المراقبة غير متاح.'}</p>
                 )}
               </div>
 

@@ -84,23 +84,23 @@ export class DatabaseService {
   public static async getHealthReport(schoolId: string): Promise<{
     databaseType: string;
     status: string;
-    latencyMs: number;
-    activeConnections: number;
+    latencyMs: number | null;
+    activeConnections: number | null;
     metrics: any;
   }> {
+    void schoolId;
     const manager = DatabaseConnectionManager.getInstance();
     const connMetrics = manager.getMetrics();
     const supabase = getSupabaseClient();
     const startTime = Date.now();
     let status = connMetrics.status === 'CONNECTED' ? 'connected' : 'disconnected';
-    let activeConnections = 0;
+    let activeConnections: number | null = null;
 
     if (supabase && status === 'connected') {
       try {
         const { error } = await supabase.from('schools').select('id').limit(1);
         if (!error) {
           status = "connected";
-          activeConnections = Math.floor(10 + Math.random() * 5); // Simulated connection pool metrics
         } else {
           status = "disconnected";
         }
@@ -114,18 +114,18 @@ export class DatabaseService {
       }
     }
 
-    const latencyMs = status === "connected" ? (Date.now() - startTime) : 0;
+    const latencyMs = status === "connected" ? (Date.now() - startTime) : null;
 
     return {
       databaseType: supabase ? "PostgreSQL (Supabase Live Connection)" : "JSON / In-Memory Storage Fallback Engine",
       status,
-      latencyMs: latencyMs || Math.round(5 + Math.random() * 8),
+      latencyMs,
       activeConnections,
       metrics: {
-        cpuUsagePercent: Math.round(5 + Math.random() * 4),
-        memoryUsageMB: Math.round(95 + Math.random() * 15),
-        connectionPoolUsed: status === "connected" ? activeConnections : 0,
-        connectionPoolCapacity: 100,
+        cpuUsagePercent: null,
+        memoryUsageMB: null,
+        connectionPoolUsed: null,
+        connectionPoolCapacity: null,
         connectionManager: connMetrics
       }
     };

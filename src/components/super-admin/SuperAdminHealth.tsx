@@ -1,5 +1,6 @@
 import { Activity, AlertTriangle, CheckCircle, Clock, Cpu, Database, HardDrive, Play, RefreshCw, Server, ShieldCheck, Sliders, Trash2, Zap } from 'lucide-react';
-import React, { useState, useEffect } from 'react';
+import React, { useEffect, useState } from 'react';
+import { authenticatedRequest } from '../../utils/authenticatedRequest';
 import { 
   AreaChart, Area, XAxis, YAxis, CartesianGrid, Tooltip, ResponsiveContainer 
 } from 'recharts';
@@ -18,23 +19,40 @@ export default function SuperAdminHealth({
   triggerNotification
 }: SuperAdminHealthProps) {
   const [activeTab, setActiveTab] = useState<'realtime' | 'db_perf' | 'optimization'>('realtime');
-  const [cpuUsage, setCpuUsage] = useState(0);
-  const [memoryUsage, setMemoryUsage] = useState(0);
-  const [networkPing, setNetworkPing] = useState(0);
   const [isVacuuming, setIsVacuuming] = useState(false);
   const [isFlushCache, setIsFlushCache] = useState(false);
   const [isScanningSec, setIsScanningSec] = useState(false);
+  const [databaseHealth, setDatabaseHealth] = useState<{ responseMs: number; checkedAt: string | null; schemaStatus: 'ready' | 'migration_pending'; missingSchemaObjects: string[] } | null>(null);
+  const [isLoadingDatabaseHealth, setIsLoadingDatabaseHealth] = useState(false);
+  const [databaseHealthError, setDatabaseHealthError] = useState('');
+
+  const refreshDatabaseHealth = async () => {
+    setIsLoadingDatabaseHealth(true);
+    setDatabaseHealthError('');
+    try {
+      const response = await authenticatedRequest('/api/admin/central/health');
+      const payload = await response.json().catch(() => ({}));
+      if (!response.ok || !payload?.success || payload?.health?.database !== 'reachable') {
+        throw new Error(payload?.message || 'تعذر الوصول إلى PostgreSQL المركزي.');
+      }
+      setDatabaseHealth({
+        responseMs: Number(payload.health.responseMs),
+        checkedAt: payload.health.checkedAt || null,
+        schemaStatus: payload.health.schemaStatus === 'ready' ? 'ready' : 'migration_pending',
+        missingSchemaObjects: Array.isArray(payload.health.missingSchemaObjects) ? payload.health.missingSchemaObjects : [],
+      });
+    } catch (error) {
+      setDatabaseHealth(null);
+      setDatabaseHealthError(error instanceof Error ? error.message : 'تعذر الوصول إلى PostgreSQL المركزي.');
+    } finally {
+      setIsLoadingDatabaseHealth(false);
+    }
+  };
+
+  useEffect(() => { void refreshDatabaseHealth(); }, []);
 
   // Recharts live telemetry series
-  const [historyData, setHistoryData] = useState<any[]>([]);
-
-  useEffect(() => {
-    // القياس الحي لا يثبت إلا من موصل مراقبة مركزي موثق.
-    setCpuUsage(0);
-    setMemoryUsage(0);
-    setNetworkPing(0);
-    setHistoryData([]);
-  }, []);
+  const historyData: any[] = [];
 
   const handleVacuum = () => {
     setIsVacuuming(false);
@@ -94,10 +112,10 @@ export default function SuperAdminHealth({
             <div className="bg-slate-900 border border-slate-800 p-5 flex items-center justify-between shadow-md">
               <div>
                 <span className="text-[10px] text-slate-400 font-bold block">معدل استهلاك المعالج (CPU)</span>
-                <span className="text-2xl font-black text-white mt-1.5 block font-mono">{cpuUsage}%</span>
-                <span className="text-[9px] text-emerald-400 mt-1 block">ضمن النطاق الآمن والمعتدل</span>
+                <span className="text-lg font-black text-amber-400 mt-1.5 block">غير متحقق</span>
+                <span className="text-[9px] text-slate-400 mt-1 block">موصل القياس المركزي غير متصل</span>
               </div>
-              <div className={`p-3.5 ${cpuUsage > 80 ? 'bg-rose-950/40 text-rose-400 border border-rose-900' : 'bg-slate-950 text-amber-400 border border-slate-800'}`}>
+              <div className="p-3.5 bg-slate-950 text-amber-400 border border-slate-800">
                 <Cpu className="w-6 h-6" />
               </div>
             </div>
@@ -106,24 +124,25 @@ export default function SuperAdminHealth({
             <div className="bg-slate-900 border border-slate-800 p-5 flex items-center justify-between shadow-md">
               <div>
                 <span className="text-[10px] text-slate-400 font-bold block">معدل استهلاك الذاكرة العشوائية</span>
-                <span className="text-2xl font-black text-white mt-1.5 block font-mono">{memoryUsage}%</span>
-                <span className="text-[9px] text-slate-400 mt-1 block">المتوفر: 5.76 جيجابايت من أصل 16</span>
+                <span className="text-lg font-black text-amber-400 mt-1.5 block">غير متحقق</span>
+                <span className="text-[9px] text-slate-400 mt-1 block">لا توجد قراءة ذاكرة موثقة</span>
               </div>
               <div className="p-3.5 bg-slate-950 text-amber-400 border border-slate-800">
                 <HardDrive className="w-6 h-6" />
               </div>
             </div>
 
-            {/* Network Latency Card */}
+            {/* Canonical database round-trip card */}
             <div className="bg-slate-900 border border-slate-800 p-5 flex items-center justify-between shadow-md">
               <div>
-                <span className="text-[10px] text-slate-400 font-bold block">زمن الاستجابة للشبكة (Latency)</span>
-                <span className="text-2xl font-black text-white mt-1.5 block font-mono">{networkPing} ms</span>
-                <span className="text-[9px] text-emerald-400 mt-1 block">توجيه ذكي عبر CDN معزز بالشرق الأوسط</span>
+                <span className="text-[10px] text-slate-400 font-bold block">زمن استجابة PostgreSQL المركزي</span>
+                <span className="text-lg font-black text-amber-400 mt-1.5 block">{databaseHealth ? `${databaseHealth.responseMs} ms` : 'غير متحقق'}</span>
+                <span className="text-[9px] text-slate-400 mt-1 block">{databaseHealth?.checkedAt ? `آخر قياس: ${new Date(databaseHealth.checkedAt).toLocaleString('ar-EG')}` : databaseHealthError || 'قراءة اتصال مركزية فقط'}</span>
+                {databaseHealth?.schemaStatus === 'migration_pending' && <span className="text-[9px] text-amber-300 mt-1 block">ترحيلات الإدارة المركزية غير مكتملة ({databaseHealth.missingSchemaObjects.length} كائن)</span>}
               </div>
-              <div className="p-3.5 bg-slate-950 text-emerald-400 border border-slate-800">
-                <Activity className="w-6 h-6 animate-pulse" />
-              </div>
+              <button type="button" onClick={() => void refreshDatabaseHealth()} disabled={isLoadingDatabaseHealth} title="قياس اتصال PostgreSQL المركزي" className="p-3.5 bg-slate-950 text-emerald-400 border border-slate-800 disabled:opacity-45">
+                <Database className={`w-6 h-6 ${isLoadingDatabaseHealth ? 'animate-spin' : ''}`} />
+              </button>
             </div>
 
           </div>
@@ -173,26 +192,10 @@ export default function SuperAdminHealth({
             </h3>
 
             <div className="space-y-3">
-              <div className="bg-slate-950 border border-slate-850 p-4 flex items-center justify-between">
-                <div>
-                  <h4 className="text-xs font-black text-slate-100 flex items-center gap-1.5">
-                    pg_primary_cluster (Main node)
-                    <span className="text-[9px] bg-emerald-950 text-emerald-400 border border-emerald-900 px-1.5 py-0.5 rounded font-black">رئيسي للكتابة</span>
-                  </h4>
-                  <p className="text-[10px] text-slate-400 mt-1 font-mono">logical_db_federated_master • me-central1 (Dhahran)</p>
-                </div>
-                <span className="text-[10px] text-emerald-400 font-bold">نشط ومتصل</span>
-              </div>
-
-              <div className="bg-slate-950 border border-slate-850 p-4 flex items-center justify-between">
-                <div>
-                  <h4 className="text-xs font-black text-slate-100 flex items-center gap-1.5">
-                    pg_replica_dhahran_01
-                    <span className="text-[9px] bg-amber-950 text-amber-400 border border-amber-900 px-1.5 py-0.5 rounded font-black">قراءة فقط</span>
-                  </h4>
-                  <p className="text-[10px] text-slate-400 mt-1 font-mono">logical_db_replica_1 • me-central1 (Dhahran)</p>
-                </div>
-                <span className="text-[10px] text-emerald-400 font-bold">نشط ومستقر</span>
+              <div className={`border p-4 text-xs leading-relaxed ${databaseHealth ? 'border-emerald-900/40 bg-emerald-950/20 text-emerald-300' : 'border-amber-900/40 bg-slate-950 text-amber-400'}`}>
+                {databaseHealth
+                  ? `PostgreSQL المركزي قابل للوصول؛ زمن القياس ${databaseHealth.responseMs} ms. ${databaseHealth.schemaStatus === 'ready' ? 'مخطط الإدارة المركزية متحقق.' : `مخطط الإدارة المركزية يحتاج ترحيلات (${databaseHealth.missingSchemaObjects.length} كائن).`} لا تتوفر بعد بيانات العقد أو النسخ المقروءة من مزود قاعدة البيانات.`
+                  : 'بيانات العقد والنسخ المقروءة غير متاحة من مزود قاعدة البيانات. لا يمكن إعلان عقدة رئيسية أو نسخة احتياطية نشطة دون جرد مركزي موثق.'}
               </div>
             </div>
           </div>
@@ -208,25 +211,25 @@ export default function SuperAdminHealth({
               <div>
                 <div className="flex justify-between text-[11px] mb-1.5">
                   <span className="font-bold text-slate-300">الاتصالات المستغلة (Active Connections)</span>
-                  <span className="font-mono text-white">48 من أصل 500</span>
+                  <span className="font-mono text-amber-400">غير متحقق</span>
                 </div>
-                <div className="w-full bg-slate-950 h-2.5 rounded-full overflow-hidden border border-slate-800">
-                  <div className="bg-amber-500 h-full rounded-full" style={{ width: '9.6%' }} />
+                <div className="text-[9px] text-slate-500 border border-dashed border-slate-700 rounded px-2 py-1 text-center">
+                  لا توجد قراءة موثقة
                 </div>
               </div>
 
               <div>
                 <div className="flex justify-between text-[11px] mb-1.5">
                   <span className="font-bold text-slate-300">معدل الاستعلامات البطيئة (Slow Queries Rate)</span>
-                  <span className="font-mono text-white">0.02%</span>
+                  <span className="font-mono text-amber-400">غير متحقق</span>
                 </div>
-                <div className="w-full bg-slate-950 h-2.5 rounded-full overflow-hidden border border-slate-800">
-                  <div className="bg-emerald-500 h-full rounded-full" style={{ width: '1%' }} />
+                <div className="text-[9px] text-slate-500 border border-dashed border-slate-700 rounded px-2 py-1 text-center">
+                  لا توجد قراءة موثقة
                 </div>
               </div>
 
               <div className="bg-slate-950 p-3.5 text-[10px] text-slate-400 leading-relaxed border border-slate-850">
-                🚀 يتم حظر وتجميد العمليات التالفة وتنظيفها آلياً عبر خوارزميات الاسترداد لـ PostgreSQL RLS لضمان عدم تأثر المعالجات الفروع السحابية للشركاء.
+                لا توجد بيانات تشغيلية موثقة عن تجميد العمليات أو التنظيف الآلي. يلزم ربط موصل PostgreSQL قبل عرض هذه الحالة.
               </div>
             </div>
           </div>
@@ -282,7 +285,7 @@ export default function SuperAdminHealth({
               <ShieldCheck className="w-6 h-6 text-emerald-400" />
               <h4 className="text-xs font-black text-white">فحص الأمان والامتثال</h4>
               <p className="text-[10px] text-slate-400 leading-relaxed">
-                فحص فوري لقواعد التحقق في الجلسات، التشفير للأرقام القومية ومراجعة عزل الـ RLS السحابي لجميع المستأجرين بنجاح.
+                طلب فحص لقواعد الجلسات والتشفير وعزل المستأجرين. لا تُعرض نتيجة نجاح إلا بعد تشغيل خدمة فحص مركزية موثقة.
               </p>
             </div>
             <button

@@ -19,31 +19,43 @@ export default function SuperAdminResources({
   triggerNotification
 }: SuperAdminResourcesProps) {
   const [selectedSchoolId, setSelectedSchoolId] = useState<string>('all');
-  const [isOptimizing, setIsOptimizing] = useState<string | null>(null);
+  const [isOptimizing] = useState<string | null>(null);
 
-  // Parse resources
+  const parseResourceNumber = (value: unknown): number | null => {
+    if (value === null || value === undefined || String(value).trim() === '') return null;
+    const parsed = Number.parseFloat(String(value));
+    return Number.isFinite(parsed) && parsed >= 0 ? parsed : null;
+  };
+
+  // لا تُحوّل القيم المفقودة إلى أصفار؛ الصفر قيمة تشغيلية تحتاج دليلاً أيضًا.
   const getStorageDetails = (school: any) => {
-    const used = parseFloat(school.storageUsed || '0');
-    const limit = parseFloat(school.storageLimit || '0');
-    const percent = limit > 0 ? Math.min(100, Math.round((used / limit) * 100)) : 0;
+    const used = parseResourceNumber(school.storageUsed);
+    const limit = parseResourceNumber(school.storageLimit);
+    const percent = used !== null && limit !== null && limit > 0
+      ? Math.min(100, Math.round((used / limit) * 100))
+      : null;
     return { used, limit, percent };
   };
 
   // Aggregated data across all schools
-  const totalStorageUsed = schools.reduce((acc, s) => acc + parseFloat(s.storageUsed || '0'), 0);
-  const totalStorageLimit = schools.reduce((acc, s) => acc + parseFloat(s.storageLimit || '0'), 0);
-  const totalStudents = schools.reduce((acc, s) => acc + Number(s.studentCount || 0), 0);
-  const totalActiveUsers = schools.reduce((acc, s) => acc + Number(s.usersCount || 0), 0);
+  const verifiedStorage = schools.map(getStorageDetails).filter(item => item.used !== null && item.limit !== null);
+  const totalStorageUsed = verifiedStorage.reduce((acc, item) => acc + (item.used ?? 0), 0);
+  const totalStorageLimit = verifiedStorage.reduce((acc, item) => acc + (item.limit ?? 0), 0);
+  const hasStorageEvidence = verifiedStorage.length > 0;
+  const userCountEvidence = schools.map(s => parseResourceNumber(s.usersCount)).filter((value): value is number => value !== null);
+  const studentCountEvidence = schools.map(s => parseResourceNumber(s.studentCount)).filter((value): value is number => value !== null);
+  const totalStudents = studentCountEvidence.reduce((acc, value) => acc + value, 0);
+  const totalActiveUsers = userCountEvidence.reduce((acc, value) => acc + value, 0);
   
   // Chart 1 Data: Storage Consumption per School (Top 5)
-  const schoolStorageChartData = schools.slice(0, 5).map(s => {
+  const schoolStorageChartData = schools.map(s => {
     const { used, limit } = getStorageDetails(s);
     return {
       name: s.name.substring(0, 15) + '...',
       used: used,
       limit: limit
     };
-  });
+  }).filter(item => item.used !== null && item.limit !== null).slice(0, 5);
 
   // Chart 2 Data: DB query consumption / storage history
   const historyData: any[] = [];
@@ -72,13 +84,17 @@ export default function SuperAdminResources({
           <div className="flex justify-between items-start">
             <div>
               <p className="text-[10px] font-bold text-slate-400 uppercase tracking-wider">سعة تخزين S3 الفيدرالية</p>
-              <h3 className="text-xl font-black text-white mt-1.5 font-mono">{totalStorageUsed.toFixed(1)} GB</h3>
+              <h3 className="text-xl font-black text-white mt-1.5 font-mono">{hasStorageEvidence ? `${totalStorageUsed.toFixed(1)} GB` : 'غير متحقق'}</h3>
             </div>
             <div className="p-2 bg-orange-950/50 text-orange-400 border border-orange-900 group-hover:scale-110 transition-transform">
               <HardDrive className="w-5 h-5" />
             </div>
           </div>
-          <p className="text-[9px] text-slate-500 mt-3 font-semibold">إجمالي المسموح به: {totalStorageLimit} GB • نسبة الاستهلاك {(totalStorageUsed / (totalStorageLimit || 1) * 100).toFixed(1)}%</p>
+          <p className="text-[9px] text-slate-500 mt-3 font-semibold">
+            {hasStorageEvidence && totalStorageLimit > 0
+              ? `إجمالي الحد الموثق: ${totalStorageLimit} GB • نسبة الاستهلاك ${(totalStorageUsed / totalStorageLimit * 100).toFixed(1)}% • تغطية ${verifiedStorage.length}/${schools.length}`
+              : 'لم يرد قياس تخزين موثق من مزود الموارد المركزي'}
+          </p>
         </div>
 
         {/* Metric 2: Global Users Activity */}
@@ -87,13 +103,13 @@ export default function SuperAdminResources({
           <div className="flex justify-between items-start">
             <div>
               <p className="text-[10px] font-bold text-slate-400 uppercase tracking-wider">الحسابات والكوادر النشطة</p>
-              <h3 className="text-xl font-black text-white mt-1.5 font-mono">{totalActiveUsers} مستخدم</h3>
+              <h3 className="text-xl font-black text-white mt-1.5 font-mono">{userCountEvidence.length ? `${totalActiveUsers} مستخدم` : 'غير متحقق'}</h3>
             </div>
             <div className="p-2 bg-emerald-950/50 text-emerald-400 border border-emerald-900 group-hover:scale-110 transition-transform">
               <Users className="w-5 h-5" />
             </div>
           </div>
-          <p className="text-[9px] text-slate-500 mt-3 font-semibold">يقابله {totalStudents} طالب مسجل بقواعد المدارس</p>
+          <p className="text-[9px] text-slate-500 mt-3 font-semibold">{studentCountEvidence.length ? `يقابله ${totalStudents} طالب وفق الدليل الحالي` : 'عدد الطلاب غير متحقق من دليل مركزي'}</p>
         </div>
 
         {/* Metric 3: Active Postgres Connections */}
@@ -233,10 +249,6 @@ export default function SuperAdminResources({
                 .map((school, idx) => {
                   const { used, limit, percent } = getStorageDetails(school);
                   
-                  // Simulated file counts and DB table counts
-                  const fileCount = Math.round(used * 240);
-                  const dbSize = Math.round(4.5 + (used * 0.45)); // MB
-
                   return (
                     <tr key={school.id} className="hover:bg-slate-850/40 transition-colors">
                       <td className="p-4 text-center text-slate-500 font-mono font-bold w-8">{idx + 1}</td>
@@ -247,29 +259,29 @@ export default function SuperAdminResources({
                         </div>
                       </td>
                       <td className="p-4 font-mono font-bold text-slate-200">
-                        {school.storageUsed || '0 GB'}
+                        {used !== null ? `${used} GB` : 'غير متحقق'}
                       </td>
                       <td className="p-4 font-mono text-slate-400">
-                        {school.storageLimit || '500 GB'}
+                        {limit !== null ? `${limit} GB` : 'غير متحقق'}
                       </td>
                       <td className="p-4">
                         <div className="flex items-center gap-2 min-w-[120px]">
                           <div className="flex-1 bg-slate-950 h-2 rounded-full overflow-hidden">
                             <div 
                               className={`h-full rounded-full ${
-                                percent > 85 ? 'bg-red-500' : percent > 60 ? 'bg-amber-500' : 'bg-orange-500'
+                                percent === null ? 'bg-slate-700' : percent > 85 ? 'bg-red-500' : percent > 60 ? 'bg-amber-500' : 'bg-orange-500'
                               }`} 
-                              style={{ width: `${percent}%` }}
+                              style={{ width: `${percent ?? 0}%` }}
                             />
                           </div>
-                          <span className="text-[10px] font-mono font-bold text-slate-300">{percent}%</span>
+                          <span className="text-[10px] font-mono font-bold text-slate-300">{percent === null ? 'غير متحقق' : `${percent}%`}</span>
                         </div>
                       </td>
                       <td className="p-4 font-mono text-slate-400">
-                        {fileCount.toLocaleString('ar-EG')} ملف مرفق
+                        غير متحقق
                       </td>
                       <td className="p-4 font-mono font-bold text-purple-400">
-                        {dbSize} MB
+                        غير متحقق
                       </td>
                       <td className="p-4">
                         <div className="flex justify-center gap-2">

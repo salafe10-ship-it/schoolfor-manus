@@ -1,6 +1,5 @@
 import { ArrowRightLeft, Ban, CheckCircle, Edit2, HelpCircle, Plus, RefreshCw, Search, Server, ShieldAlert, Sliders, Star, Trash2, X } from 'lucide-react';
 import React, { useEffect, useState } from 'react';
-import { StudentAffairsValidationFramework } from '../../validation/StudentAffairsValidationFramework';
 import { authenticatedRequest } from '../../utils/authenticatedRequest';
 
 interface SuperAdminBranchesProps {
@@ -140,7 +139,7 @@ export default function SuperAdminBranches({
 
     setBranches(prev => [...prev, createdBranch]);
     logAction('CREATE_BRANCH', `تأسيس فرع جديد [${newBranch.name}] لمدرسة: ${activeSchoolName}`, 'الإدارة المركزية');
-    triggerNotification('تم إنشاء الفرع وتفعيل قنواته بنجاح ✅', 'success');
+    triggerNotification('تم إنشاء الفرع في المصدر المركزي بنجاح ✅', 'success');
     
     setShowAddModal(false);
     setNewBranch({
@@ -198,17 +197,6 @@ export default function SuperAdminBranches({
 
   // Handle Delete Branch
   const handleDeleteBranch = (branch: any) => {
-    try {
-      StudentAffairsValidationFramework.validateBranchDeletionSafety(
-        branch.id,
-        undefined, // will fallback to FallbackStorage for student list
-        undefined  // will fallback to FallbackStorage for employee list
-      );
-    } catch (error: any) {
-      triggerNotification(error.message, 'danger');
-      return;
-    }
-
     if (branch.isMain) {
       triggerNotification(`لا يمكن حذف الفرع "${branch.name}" لأنه الفرع الرئيسي المعتمد حالياً للتشغيل.`, 'danger');
       return;
@@ -273,7 +261,7 @@ export default function SuperAdminBranches({
     <div className="space-y-5 text-right animate-in fade-in duration-200" dir="rtl">
       
       {/* Selector & Actions bar */}
-      <div className="bg-slate-900 border border-slate-800 p-4 flex flex-col md:flex-row gap-4 justify-between items-center">
+      <div className="rounded-3xl border-2 border-[#d4af37]/30 bg-gradient-to-b from-[#fffefc] via-[#fbf8f0] to-[#f5eeea] p-4 shadow-md flex flex-col md:flex-row gap-4 justify-between items-center">
         
         {/* Actions */}
         <div className="flex gap-2 w-full md:w-auto">
@@ -287,7 +275,7 @@ export default function SuperAdminBranches({
 
           <button
             onClick={() => setShowTransferModal(true)}
-            className="bg-slate-950 border border-slate-800 hover:border-slate-700 text-amber-400 hover:text-amber-300 px-3.5 py-2.5 text-xs font-bold transition-all flex items-center justify-center gap-1.5 cursor-pointer shadow"
+            className="rounded-2xl bg-[#2a1a0e] border border-[#d4af37]/30 hover:border-[#f7d174] text-amber-200 hover:text-white px-3.5 py-2.5 text-xs font-bold transition-all flex items-center justify-center gap-1.5 cursor-pointer shadow"
           >
             <ArrowRightLeft className="w-4 h-4" />
             <span>ترحيل ونقل بيانات الفروع</span>
@@ -295,12 +283,12 @@ export default function SuperAdminBranches({
         </div>
 
         {/* School Select filter */}
-        <div className="flex items-center gap-3 w-full md:max-w-md bg-gradient-to-b from-[#fffefc] via-[#fbf8f0] to-[#f5eeea] border-2 border-[#d4af37]/30 hover:border-[#d4af37] rounded-3xl p-4 sm:p-5 shadow-md transition-all duration-300">
+        <div className="flex items-center gap-3 w-full md:max-w-md bg-gradient-to-b from-[#fffefc] via-[#fbf8f0] to-[#f5eeea] border-2 border-[#d4af37]/30 hover:border-[#d4af37] rounded-2xl px-4 py-2 shadow-sm transition-all duration-300">
           <span className="text-xs font-bold text-slate-400 shrink-0">المدرسة المستأجرة:</span>
           <select
             value={selectedSchoolId}
             onChange={(e) => setSelectedSchoolId(e.target.value)}
-            className="w-full bg-slate-950 border border-slate-800 focus:border-amber-500 focus:ring-1 focus:ring-amber-500 px-3 py-2.5 text-xs text-white placeholder-slate-500 focus:outline-none transition-all font-bold"
+            className="w-full bg-transparent border-0 focus:border-amber-500 focus:ring-0 px-3 py-1.5 text-xs text-slate-900 placeholder-slate-500 focus:outline-none transition-all font-bold"
           >
             {schools.map(s => (
               <option key={s.id} value={s.id}>{s.name} ({s.city})</option>
@@ -311,19 +299,19 @@ export default function SuperAdminBranches({
       </div>
 
       {/* Branches Table List */}
-      <div className="bg-slate-900 border border-slate-800 rounded-3xl overflow-hidden shadow-xl">
-        <div className="p-4 bg-slate-950/60 border-b border-slate-800 flex justify-between items-center">
+      <div className="bg-[#fffdf8] border-2 border-[#d4af37]/30 rounded-3xl overflow-hidden shadow-lg">
+        <div className="p-4 bg-[#2a1d13] border-b border-[#d4af37]/20 flex justify-between items-center">
           <span className="text-xs font-black text-white">
             قائمة الفروع والمقرات التابعة لـ: <span className="text-amber-400 font-extrabold">{activeSchoolName}</span>
           </span>
-          <span className="bg-slate-900 px-2.5 py-1 rounded text-[10px] text-slate-400 font-mono">
+          <span className="bg-[#1c120c] px-2.5 py-1 rounded-full text-[10px] text-amber-100 font-mono">
             عدد الفروع: {schoolBranches.length}
           </span>
         </div>
 
         <div className="overflow-x-auto">
           <table className="w-full text-right text-xs">
-            <thead className="bg-slate-950/40 text-slate-400 font-extrabold border-b border-slate-800/80">
+            <thead className="bg-[#fbf8f0] text-slate-500 font-extrabold border-b border-amber-900/10">
               <tr>
                 <th className="p-4 text-center w-8">#</th>
                 <th className="p-4 w-12 text-center">رئيسي</th>
@@ -335,7 +323,7 @@ export default function SuperAdminBranches({
                 <th className="p-4 text-center w-40">العمليات والتحكم</th>
               </tr>
             </thead>
-            <tbody className="divide-y divide-slate-800/60 text-slate-300">
+            <tbody className="divide-y divide-amber-900/10 text-slate-700">
               {schoolBranches.length === 0 ? (
                 <tr>
                   <td colSpan={8} className="p-12 text-center text-slate-500">
@@ -346,7 +334,7 @@ export default function SuperAdminBranches({
                 </tr>
               ) : (
                 schoolBranches.map((branch, idx) => (
-                  <tr key={branch.id} className="hover:bg-slate-950/40 transition-colors">
+                  <tr key={branch.id} className="hover:bg-[#fbf8f0] transition-colors">
                     
                     {/* Index */}
                     <td className="p-4 text-center text-slate-500 font-mono font-bold w-8">{idx + 1}</td>
@@ -368,7 +356,7 @@ export default function SuperAdminBranches({
                     </td>
 
                     {/* Name */}
-                    <td className="p-4 font-bold text-white text-sm">
+                    <td className="p-4 font-bold text-slate-900 text-sm">
                       <div className="flex items-center gap-2">
                         <span>{branch.name}</span>
                         {branch.isMain && (
@@ -386,7 +374,7 @@ export default function SuperAdminBranches({
                     </td>
 
                     {/* Students Count */}
-                    <td className="p-4 text-center font-mono font-extrabold text-white text-sm">
+                    <td className="p-4 text-center font-mono font-extrabold text-slate-900 text-sm">
                       {(branch.studentsCount || 0).toLocaleString('ar-EG')}
                     </td>
 
@@ -589,7 +577,7 @@ export default function SuperAdminBranches({
             <div className="p-6 space-y-4">
               
               <div className="p-3 bg-amber-950/20 border border-amber-900/40 text-amber-400 text-xs leading-relaxed">
-                يسمح هذا المعالج بترحيل السجلات الإدارية ونقل حزم الطلاب أو الموظفين من فرع لأخر في نفس المنشأة بشكل فوري وآمن.
+                 هذا المسار مخصص لطلب ترحيل السجلات بين فرعين داخل المدرسة. التنفيذ محجوب حتى تتوفر معاملة مركزية مدققة؛ لن تُنقل أي بيانات من هذه النافذة حالياً.
               </div>
 
               <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
