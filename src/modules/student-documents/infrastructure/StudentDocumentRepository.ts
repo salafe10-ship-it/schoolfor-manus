@@ -109,6 +109,18 @@ export type VersionRow = {
   version: number;
 };
 
+export type StorageObjectRow = {
+  id: string;
+  document_id: string;
+  document_version_id: string;
+  bucket_id: 'student-documents-private';
+  object_key: string;
+  media_type: string;
+  byte_size: number;
+  content_hash: string;
+  original_file_name: string;
+};
+
 export type AccessLogRow = {
   id: string;
   document_id: string;
@@ -314,6 +326,25 @@ export async function listVersions(context: StudentDocumentRequestContext, docum
   );
 }
 
+export async function getCurrentStorageObject(context: StudentDocumentRequestContext, documentId: string): Promise<StorageObjectRow | null> {
+  return one<StorageObjectRow>(
+    `SELECT so.id, so.document_id, so.document_version_id, so.bucket_id, so.object_key,
+            so.media_type, so.byte_size, so.content_hash, v.original_file_name
+       FROM student_document_storage_objects so
+       JOIN student_document_versions v
+         ON v.tenant_id = so.tenant_id
+        AND v.document_id = so.document_id
+        AND v.id = so.document_version_id
+        AND v.is_current = true
+      WHERE so.tenant_id = $1::uuid
+        AND so.school_id = $2::uuid
+        AND so.branch_id = $3::uuid
+        AND so.document_id = $4::uuid
+      LIMIT 1`,
+    [context.tenantId, context.schoolId, context.branchId, documentId]
+  );
+}
+
 export async function listAccessLogs(context: StudentDocumentRequestContext, documentId: string, limit: number): Promise<AccessLogRow[]> {
   return many<AccessLogRow>(
     `SELECT id, document_id, document_version_id, actor_user_id, access_type, access_result,
@@ -393,6 +424,20 @@ export function insertVersion(input: { id: string; tenantId: string; schoolId: s
      VALUES ($1::uuid, $2::uuid, $3::uuid, $4::uuid, $5::uuid, $6::uuid, $7, $8, $9, $10, $11, $12, true, $13::uuid, $13::uuid, $13::uuid, $14::uuid, $15::uuid, $16::uuid)`,
     [input.id, input.tenantId, input.schoolId, input.branchId, input.studentId, input.documentId, input.versionNumber, input.revisionReason, input.originalFileName, input.mediaType, input.byteSize, input.contentHash, input.actorUserId, input.auditId, input.requestId, input.correlationId],
     { id: input.id, tenantId: input.tenantId, documentId: input.documentId, versionNumber: input.versionNumber });
+}
+
+export function insertStorageObject(input: { id: string; tenantId: string; schoolId: string; branchId: string; studentId: string; documentId: string; documentVersionId: string; bucketId: 'student-documents-private'; objectKey: string; mediaType: string; byteSize: number; contentHash: string; actorUserId: string; auditId: string; requestId: string; correlationId: string }): void {
+  enqueue('student_document_storage_objects', input.id,
+    `INSERT INTO student_document_storage_objects
+      (id, tenant_id, school_id, branch_id, student_id, document_id, document_version_id,
+       bucket_id, object_key, media_type, byte_size, content_hash, created_by, audit_id,
+       request_id, correlation_id)
+     VALUES ($1::uuid, $2::uuid, $3::uuid, $4::uuid, $5::uuid, $6::uuid, $7::uuid,
+             $8, $9, $10, $11, $12, $13::uuid, $14::uuid, $15::uuid, $16::uuid)`,
+    [input.id, input.tenantId, input.schoolId, input.branchId, input.studentId, input.documentId,
+      input.documentVersionId, input.bucketId, input.objectKey, input.mediaType, input.byteSize,
+      input.contentHash, input.actorUserId, input.auditId, input.requestId, input.correlationId],
+    { id: input.id, tenantId: input.tenantId, schoolId: input.schoolId, documentId: input.documentId, documentVersionId: input.documentVersionId });
 }
 
 export function updateCurrentVersion(input: { id: string; tenantId: string; schoolId: string; branchId: string; documentId: string }): void {

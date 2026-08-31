@@ -3,6 +3,9 @@ export type StartupReadinessState = 'INITIALIZING' | 'READY' | 'DEGRADED' | 'FAI
 export interface StartupReadinessSnapshot {
   state: StartupReadinessState;
   database: 'PENDING' | 'CONNECTED' | 'UNAVAILABLE' | 'FAILED';
+  dataPlane: 'PENDING' | 'RESTRICTED' | 'NOT_REQUIRED' | 'UNSAFE' | 'UNAVAILABLE';
+  databaseRole: string | null;
+  expectedDatabaseRoles: string[];
   ready: boolean;
   startedAt: string;
   completedAt: string | null;
@@ -14,17 +17,30 @@ export function createStartupReadiness() {
   let snapshot: StartupReadinessSnapshot = {
     state: 'INITIALIZING',
     database: 'PENDING',
+    dataPlane: 'PENDING',
+    databaseRole: null,
+    expectedDatabaseRoles: [],
     ready: false,
     startedAt,
     completedAt: null,
     reason: null,
   };
 
-  const complete = (next: StartupReadinessSnapshot['state'], database: StartupReadinessSnapshot['database'], reason: string | null) => {
+  const complete = (
+    next: StartupReadinessSnapshot['state'],
+    database: StartupReadinessSnapshot['database'],
+    dataPlane: StartupReadinessSnapshot['dataPlane'],
+    reason: string | null,
+    databaseRole: string | null = null,
+    expectedDatabaseRoles: string[] = [],
+  ) => {
     snapshot = {
       ...snapshot,
       state: next,
       database,
+      dataPlane,
+      databaseRole,
+      expectedDatabaseRoles: [...expectedDatabaseRoles],
       ready: next === 'READY',
       completedAt: new Date().toISOString(),
       reason,
@@ -32,9 +48,24 @@ export function createStartupReadiness() {
   };
 
   return {
-    markDatabaseConnected: () => complete('READY', 'CONNECTED', null),
-    markDatabaseUnavailable: (reason: string) => complete('DEGRADED', 'UNAVAILABLE', reason),
-    markFailed: (reason: string) => complete('FAILED', 'FAILED', reason),
+    markDatabaseConnected: (databaseRole?: string, expectedDatabaseRoles: string[] = []) => complete(
+      'READY',
+      'CONNECTED',
+      databaseRole ? 'RESTRICTED' : 'NOT_REQUIRED',
+      null,
+      databaseRole || null,
+      expectedDatabaseRoles,
+    ),
+    markUnsafeDataPlaneRole: (databaseRole: string | null, expectedDatabaseRoles: string[]) => complete(
+      'FAILED',
+      'CONNECTED',
+      'UNSAFE',
+      'Restricted database role verification failed.',
+      databaseRole,
+      expectedDatabaseRoles,
+    ),
+    markDatabaseUnavailable: (reason: string) => complete('DEGRADED', 'UNAVAILABLE', 'UNAVAILABLE', reason),
+    markFailed: (reason: string) => complete('FAILED', 'FAILED', 'UNAVAILABLE', reason),
     snapshot: (): StartupReadinessSnapshot => ({ ...snapshot }),
   };
 }

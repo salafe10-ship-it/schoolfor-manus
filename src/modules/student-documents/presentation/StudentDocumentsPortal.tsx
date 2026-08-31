@@ -164,6 +164,7 @@ export default function StudentDocumentsPortal({ students, currentRole, triggerN
   const [pendingConfirmation, setPendingConfirmation] = useState<PendingDocumentConfirmation | null>(null);
   const confirmationCancelRef = useRef<HTMLButtonElement>(null);
   const [showVersion, setShowVersion] = useState(false);
+  const [selectedFile, setSelectedFile] = useState<File | null>(null);
   const [form, setForm] = useState({
     studentId: '', categoryId: '', documentReference: '', title: '', description: '', classification: 'confidential',
     verificationStatus: 'pending', originalFileName: '', mediaType: 'application/pdf', byteSize: '', contentHash: '',
@@ -197,7 +198,7 @@ export default function StudentDocumentsPortal({ students, currentRole, triggerN
       return primary || left.id.localeCompare(right.id);
     });
   }, [rows, sortKey]);
-  const formDirty = useMemo(() => JSON.stringify(form) !== JSON.stringify(formBaseline), [form, formBaseline]);
+  const formDirty = useMemo(() => JSON.stringify(form) !== JSON.stringify(formBaseline) || Boolean(selectedFile), [form, formBaseline, selectedFile]);
   const selectedLifecycle = selected?.document.lifecycle_status;
   const selectedToday = new Date().toISOString().slice(0, 10);
   const selectedHasCurrentVersion = Boolean(selected
@@ -369,6 +370,7 @@ export default function StudentDocumentsPortal({ students, currentRole, triggerN
 
   const discardCreate = () => {
     setForm(formBaseline);
+    setSelectedFile(null);
     setDiscardPrompt(false);
     setShowCreate(false);
   };
@@ -378,7 +380,7 @@ export default function StudentDocumentsPortal({ students, currentRole, triggerN
     if (!canMutate) return;
     setSubmissionError('');
     if (!formDirty) {
-      triggerNotification('لا توجد تغييرات metadata لإرسالها.', 'warning');
+      triggerNotification('لا توجد بيانات أو ملف لإرساله.', 'warning');
       return;
     }
     const normalized = {
@@ -388,17 +390,15 @@ export default function StudentDocumentsPortal({ students, currentRole, triggerN
       documentReference: form.documentReference.trim(),
       title: form.title.trim(),
       description: form.description.trim(),
-      originalFileName: form.originalFileName.trim(),
-      mediaType: form.mediaType.trim().toLowerCase(),
-      byteSize: form.byteSize.trim(),
-      contentHash: form.contentHash.trim(),
+      originalFileName: selectedFile?.name || '',
+      mediaType: selectedFile?.type || '',
+      byteSize: selectedFile ? String(selectedFile.size) : '',
+      contentHash: '',
       retentionUntil: form.retentionUntil.trim(),
       archiveEligibleOn: form.archiveEligibleOn.trim()
     };
-    const required = [normalized.studentId, normalized.categoryId, normalized.documentReference, normalized.title, normalized.originalFileName, normalized.mediaType, normalized.byteSize, normalized.contentHash];
-    const mediaTypeValid = /^[a-z0-9][a-z0-9!#$&^_.+-]*\/[a-z0-9][a-z0-9!#$&^_.+-]*$/.test(normalized.mediaType);
+    const mediaTypeValid = ['application/pdf', 'image/png', 'image/jpeg'].includes(normalized.mediaType);
     const byteSize = Number(normalized.byteSize);
-    const datesValid = (!normalized.retentionUntil || /^\d{4}-\d{2}-\d{2}$/.test(normalized.retentionUntil)) && (!normalized.archiveEligibleOn || /^\d{4}-\d{2}-\d{2}$/.test(normalized.archiveEligibleOn));
     const datesOrdered = !normalized.retentionUntil || !normalized.archiveEligibleOn || normalized.archiveEligibleOn <= normalized.retentionUntil;
     const nextErrors: Partial<Record<MetadataField, string>> = {};
     if (!normalized.studentId) nextErrors.studentId = 'اختر الطالب.';
@@ -407,29 +407,41 @@ export default function StudentDocumentsPortal({ students, currentRole, triggerN
     else if (normalized.documentReference.length > 160) nextErrors.documentReference = 'المرجع أطول من الحد المسموح.';
     if (!normalized.title) nextErrors.title = 'أدخل العنوان.';
     else if (normalized.title.length > 250) nextErrors.title = 'العنوان أطول من الحد المسموح.';
-    if (!normalized.originalFileName) nextErrors.originalFileName = 'أدخل اسم الملف الوصفي.';
-    else if (normalized.originalFileName.length > 255 || normalized.originalFileName.includes('/') || normalized.originalFileName.includes('\\') || normalized.originalFileName === '.' || normalized.originalFileName === '..') nextErrors.originalFileName = 'اسم الملف الوصفي غير صالح.';
-    if (!normalized.mediaType || !mediaTypeValid) nextErrors.mediaType = 'أدخل نوع محتوى صالحًا.';
-    if (!normalized.byteSize || !Number.isInteger(byteSize) || byteSize < 0 || byteSize > 500 * 1024 * 1024) nextErrors.byteSize = 'أدخل حجمًا صحيحًا ضمن الحد المسموح.';
-    if (!normalized.contentHash || normalized.contentHash.length < 32 || !/^[a-z0-9:_-]+$/i.test(normalized.contentHash)) nextErrors.contentHash = 'مرجع سلامة المحتوى غير صالح.';
+    if (!selectedFile) nextErrors.originalFileName = 'اختر ملفاً للرفع.';
+    else if (normalized.originalFileName.length > 255 || normalized.originalFileName.includes('/') || normalized.originalFileName.includes('\\')) nextErrors.originalFileName = 'اسم الملف غير صالح.';
+    if (selectedFile && !mediaTypeValid) nextErrors.mediaType = 'يسمح فقط بملفات PDF وPNG وJPEG.';
+    if (selectedFile && (!Number.isInteger(byteSize) || byteSize < 1 || byteSize > 10 * 1024 * 1024)) nextErrors.byteSize = 'يجب أن يكون حجم الملف بين 1 بايت و10MB.';
     if (normalized.retentionUntil && !/^\d{4}-\d{2}-\d{2}$/.test(normalized.retentionUntil)) nextErrors.retentionUntil = 'تاريخ الاحتفاظ غير صالح.';
     if (normalized.archiveEligibleOn && !/^\d{4}-\d{2}-\d{2}$/.test(normalized.archiveEligibleOn)) nextErrors.archiveEligibleOn = 'تاريخ الأرشفة غير صالح.';
     if (!nextErrors.retentionUntil && !nextErrors.archiveEligibleOn && !datesOrdered) nextErrors.archiveEligibleOn = 'يجب ألا يسبق تاريخ الأرشفة تاريخ الاحتفاظ.';
     if (Object.keys(nextErrors).length) {
       setFormErrors(nextErrors);
-      setMutationAnnouncement('يوجد خطأ في بيانات metadata. راجع الحقول المحددة.');
-      triggerNotification('راجع الحقول المطلوبة وقيم metadata غير الصالحة قبل الحفظ.', 'warning');
+      setMutationAnnouncement('يوجد خطأ في بيانات المستند أو الملف.');
+      triggerNotification('راجع الحقول المطلوبة والملف قبل الرفع.', 'warning');
       focusFormField(Object.keys(nextErrors)[0] as MetadataField);
       return;
     }
     setFormErrors({});
     if (metadataSubmissionInFlight.current) return;
     metadataSubmissionInFlight.current = true;
-    setMutationAnnouncement('جارٍ حفظ metadata…');
+    setMutationAnnouncement('جارٍ رفع الملف وحفظ السجل الكانوني…');
     setActionBusy(true);
     try {
-      const registration = await request<DocumentRegistrationResult>(`/api/students/${normalized.studentId}/documents`, {
-        method: 'POST', body: JSON.stringify({ ...normalized, byteSize, retentionUntil: normalized.retentionUntil || null, archiveEligibleOn: normalized.archiveEligibleOn || null })
+      if (!selectedFile) throw new Error('اختر ملفاً للرفع.');
+      const query = new URLSearchParams({
+        categoryId: normalized.categoryId,
+        documentReference: normalized.documentReference,
+        title: normalized.title,
+        description: normalized.description,
+        classification: normalized.classification,
+        verificationStatus: normalized.verificationStatus,
+        originalFileName: normalized.originalFileName,
+        retentionUntil: normalized.retentionUntil,
+        archiveEligibleOn: normalized.archiveEligibleOn,
+        legalHold: String(normalized.legalHold)
+      });
+      const registration = await request<DocumentRegistrationResult>(`/api/students/${normalized.studentId}/document-content?${query.toString()}`, {
+        method: 'POST', headers: { 'Content-Type': normalized.mediaType }, body: selectedFile
       }, true);
       const documentId = typeof registration?.documentId === 'string' ? registration.documentId.trim() : '';
       if (!documentId) throw unknownOutcomeError('تم حفظ الطلب مبدئيًا، لكن الخادم لم يُرجع معرّف المستند الكانوني. لم يتم إعلان العملية ناجحة.', 'CANONICAL_DOCUMENT_ID_MISSING');
@@ -443,10 +455,11 @@ export default function StudentDocumentsPortal({ students, currentRole, triggerN
         && Number(canonicalDocument.current_version_number) === 1;
       if (!canonicalMatches) throw unknownOutcomeError('تم حفظ الطلب مبدئيًا، لكن لم يُثبت السجل المطابق من التفاصيل الكانونية. لم يتم إعلان العملية ناجحة.', 'CANONICAL_DOCUMENT_MISMATCH');
       await loadDocuments();
-      const nextForm = { ...normalized, byteSize: '', documentReference: '', title: '', description: '', originalFileName: '', contentHash: '' };
+      const nextForm = { ...normalized, byteSize: '', documentReference: '', title: '', description: '', originalFileName: '', mediaType: 'application/pdf', contentHash: '' };
+      setSelectedFile(null);
       setShowCreate(false); setDiscardPrompt(false); setPage(1); setForm(nextForm); setFormBaseline(nextForm);
       setSubmissionError('');
-      setMutationAnnouncement('تم حفظ metadata بنجاح.');
+      setMutationAnnouncement('تم رفع الملف الخاص وحفظ سجله الكانوني بنجاح.');
       triggerNotification('تم تسجيل بيانات المستند بنجاح.', 'success');
     } catch (err: any) { const message = documentErrorMessage(err, 'تعذر تسجيل المستند.', 'ليست لديك صلاحية إنشاء مستندات.'); setSubmissionError(message); setMutationAnnouncement(message); triggerNotification(message, 'warning'); if (isConflict(err)) setError(message); setTimeout(() => formErrorRef.current?.focus(), 0); }
     finally { metadataSubmissionInFlight.current = false; setActionBusy(false); }
@@ -479,13 +492,29 @@ export default function StudentDocumentsPortal({ students, currentRole, triggerN
     if (!selected || !canMutate) return;
     const target = event.currentTarget as HTMLFormElement;
     const data = new FormData(target);
+    const file = data.get('file');
+    if (!(file instanceof File) || !file.size) { triggerNotification('اختر ملف الإصدار الجديد.', 'warning'); return; }
+    if (!['application/pdf', 'image/png', 'image/jpeg'].includes(file.type) || file.size > 10 * 1024 * 1024) { triggerNotification('الملف يجب أن يكون PDF أو PNG أو JPEG وبحجم لا يتجاوز 10MB.', 'warning'); return; }
     setActionBusy(true);
     try {
-      await request(`/api/student-documents/${selected.document.id}/versions`, { method: 'POST', body: JSON.stringify({ revisionReason: data.get('revisionReason'), originalFileName: data.get('originalFileName'), mediaType: data.get('mediaType'), byteSize: Number(data.get('byteSize')), contentHash: data.get('contentHash') }) }, true);
+      const query = new URLSearchParams({ revisionReason: String(data.get('revisionReason') || ''), originalFileName: file.name });
+      await request(`/api/student-documents/${selected.document.id}/content-versions?${query.toString()}`, { method: 'POST', headers: { 'Content-Type': file.type }, body: file }, true);
       await refreshCanonicalAfterMutation(selected.document.id, { operation: 'add_version', previousVersion: selected.document.current_version_number });
       triggerNotification('تم إنشاء إصدار جديد للمستند.', 'success'); closeDetail();
     } catch (err: any) { const message = documentErrorMessage(err, 'تعذر إنشاء الإصدار.', 'ليست لديك صلاحية إنشاء إصدار.'); setMutationAnnouncement(message); triggerNotification(message, 'warning'); if (isConflict(err)) setError(message); }
     finally { setActionBusy(false); }
+  };
+
+  const downloadCurrentFile = async () => {
+    if (!selected) return;
+    setActionBusy(true);
+    try {
+      const content = await request<{ url: string }>(`/api/student-documents/${selected.document.id}/content`);
+      const opened = window.open(content.url, '_blank', 'noopener,noreferrer');
+      if (!opened) triggerNotification('اسمح بفتح نافذة جديدة لعرض المستند.', 'warning');
+    } catch (err: any) {
+      triggerNotification(documentErrorMessage(err, 'تعذر إنشاء رابط المستند المؤقت.'), 'warning');
+    } finally { setActionBusy(false); }
   };
 
   const resetSelectedForFilterChange = () => { detailRequestSequence.current += 1; selectedDocumentIdRef.current = null; setSelected(null); setPendingConfirmation(null); setAccessHistory(null); setAccessError(''); setActionReason(''); setShowVersion(false); };
@@ -494,9 +523,12 @@ export default function StudentDocumentsPortal({ students, currentRole, triggerN
   return <section className="min-h-full overflow-x-hidden bg-gradient-to-b from-[#fffefc] to-[#f8f3ea] text-slate-900 p-4 sm:p-6" dir="rtl" aria-labelledby="student-documents-title">
     <div className="max-w-7xl min-w-0 mx-auto space-y-5">
       <div className="sr-only" aria-live="polite" aria-atomic="true">{mutationAnnouncement}</div>
+      {showCreate && <label className="fixed left-5 top-5 z-[60] w-[min(90vw,28rem)] rounded-2xl border border-emerald-300 bg-emerald-50 p-4 text-xs font-black text-emerald-950 shadow-2xl">اختر الملف الخاص أولاً (PDF/PNG/JPEG حتى 10MB)<input type="file" required accept="application/pdf,image/png,image/jpeg" className="mt-2 w-full rounded-lg border border-emerald-300 bg-white p-2 text-sm" onChange={event => { const file = event.target.files?.[0] || null; setSelectedFile(file); setForm(current => ({ ...current, originalFileName: file?.name || '', mediaType: file?.type || '', byteSize: file ? String(file.size) : '', contentHash: file ? '0000000000000000000000000000000000000000000000000000000000000000' : '' })); setFormErrors({}); }} />{selectedFile && <span className="mt-2 block">{selectedFile.name} • {(selectedFile.size / 1024).toFixed(1)} KB</span>}</label>}
+      {selected && <div className="fixed bottom-5 left-5 z-[60] flex gap-2 rounded-2xl border border-sky-200 bg-white p-3 shadow-2xl"><button type="button" disabled={actionBusy} onClick={() => void downloadCurrentFile()} className="rounded-xl bg-sky-700 px-4 py-2 text-xs font-black text-white disabled:opacity-40"><Eye className="w-4 h-4 inline ml-1" /> عرض/تنزيل الملف</button></div>}
+      {selected && showVersion && <div className="fixed inset-0 z-[70] flex items-center justify-center bg-slate-950/70 p-4"><form onSubmit={addVersion} className="grid w-full max-w-lg gap-3 rounded-2xl bg-white p-5 shadow-2xl"><div className="flex items-center justify-between"><h3 className="text-lg font-black">رفع إصدار جديد خاص</h3><button type="button" onClick={() => setShowVersion(false)} aria-label="إغلاق"><X /></button></div><label className="text-xs font-black">الملف (PDF/PNG/JPEG حتى 10MB)<input name="file" type="file" required accept="application/pdf,image/png,image/jpeg" className="mt-1 w-full rounded-lg border p-2 text-sm" /></label><label className="text-xs font-black">سبب الإصدار<input name="revisionReason" required maxLength={1000} className="mt-1 w-full rounded-lg border p-2 text-sm" /></label><button disabled={actionBusy} className="rounded-xl bg-[#2a1a0e] px-4 py-2 text-xs font-black text-amber-200 disabled:opacity-40">{actionBusy ? 'جارٍ الرفع…' : 'رفع الإصدار'}</button></form></div>}
       <header className="flex flex-col lg:flex-row gap-4 lg:items-center lg:justify-between border-b border-amber-200 pb-4">
-        <div><div className="flex items-center gap-2 text-amber-800 text-xs font-black"><FileText className="w-4 h-4" /> شؤون الطلاب / المستندات</div><h2 id="student-documents-title" className="text-2xl font-black mt-1">مركز مستندات الطلاب</h2><p className="text-sm text-slate-500 mt-1">بيانات وصفية وإصدارات وسجل وصول ضمن النطاق الموثوق. رفع الملفات الثنائية وتنزيلها ومعاينتها وOCR والمسح الضوئي غير متاحة في هذا المسار.</p></div>
-        <div className="flex gap-2"><button type="button" onClick={() => void loadDocuments()} className="rounded-xl border border-amber-300 px-3 py-2 text-xs font-black text-amber-900 hover:bg-amber-50" aria-label="تحديث قائمة المستندات"><RefreshCw className={`w-4 h-4 inline ml-1 ${busy ? 'animate-spin' : ''}`} /> تحديث</button>{canMutate && <button type="button" onClick={() => { const nextForm = { studentId: studentId || students[0]?.id || '', categoryId: '', documentReference: '', title: '', description: '', classification: 'confidential', verificationStatus: 'pending', originalFileName: '', mediaType: 'application/pdf', byteSize: '', contentHash: '', retentionUntil: '', archiveEligibleOn: '', legalHold: false }; setForm(nextForm); setFormBaseline(nextForm); setFormErrors({}); setSubmissionError(''); setDiscardPrompt(false); setShowCreate(true); }} className="rounded-xl bg-[#2a1a0e] px-4 py-2 text-xs font-black text-amber-200 hover:bg-[#422914]" aria-label="تسجيل بيانات مستند جديد"><FilePlus2 className="w-4 h-4 inline ml-1" /> تسجيل مستند</button>}</div>
+        <div><div className="flex items-center gap-2 text-amber-800 text-xs font-black"><FileText className="w-4 h-4" /> شؤون الطلاب / المستندات</div><h2 id="student-documents-title" className="text-2xl font-black mt-1">مركز مستندات الطلاب</h2><p className="text-sm text-slate-500 mt-1">ملفات خاصة مشفرة الصلاحية، وإصدارات وسجل وصول معزول بالكامل حسب المدرسة والفرع.</p></div>
+        <div className="flex gap-2"><button type="button" onClick={() => void loadDocuments()} className="rounded-xl border border-amber-300 px-3 py-2 text-xs font-black text-amber-900 hover:bg-amber-50" aria-label="تحديث قائمة المستندات"><RefreshCw className={`w-4 h-4 inline ml-1 ${busy ? 'animate-spin' : ''}`} /> تحديث</button>{canMutate && <button type="button" onClick={() => { const nextForm = { studentId: studentId || students[0]?.id || '', categoryId: '', documentReference: '', title: '', description: '', classification: 'confidential', verificationStatus: 'pending', originalFileName: '', mediaType: 'application/pdf', byteSize: '', contentHash: '', retentionUntil: '', archiveEligibleOn: '', legalHold: false }; setForm(nextForm); setFormBaseline(nextForm); setSelectedFile(null); setFormErrors({}); setSubmissionError(''); setDiscardPrompt(false); setShowCreate(true); }} className="rounded-xl bg-[#2a1a0e] px-4 py-2 text-xs font-black text-amber-200 hover:bg-[#422914]" aria-label="تسجيل بيانات مستند جديد"><FilePlus2 className="w-4 h-4 inline ml-1" /> رفع مستند</button>}</div>
       </header>
 
       <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-4 gap-3 bg-white border border-amber-200 rounded-2xl p-4 shadow-sm">

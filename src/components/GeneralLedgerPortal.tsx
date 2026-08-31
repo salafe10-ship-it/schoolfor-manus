@@ -5,7 +5,6 @@ import { PostingEngine } from '../database/services/PostingEngine';
 import { FallbackStorage } from '../database/repositories/FallbackStorage';
 import { useCurrency } from '../utils/currency';
 import EnterpriseActionToolbar from './shared/EnterpriseActionToolbar';
-import { EnterpriseAuditLogger } from '../utils/EnterpriseAuditLogger';
 import { PermissionsManagementModule, MODULES_SCHEMA } from './PermissionsManagementModule';
 import { AccountingContext, type AccountNode } from '../modules/accounting/presentation/AccountingContext';
 import { authenticatedRequest } from '../utils/authenticatedRequest';
@@ -3319,47 +3318,17 @@ export default function GeneralLedgerPortal({
           if (canonicalFinancialStatus !== 'ready') {
             throw new Error('المصدر المالي المركزي غير جاهز لإلغاء القيد.');
           }
-          const voidedAt = new Date().toLocaleDateString('ar-LY') + ' ' + new Date().toLocaleTimeString('ar-LY');
-          const reversalId = `${jvId}-REV-${Date.now().toString().slice(-6)}`;
-          const reversalLines = (jv.lines || []).map((line: any, index: number) => ({
-            ...line,
-            id: `${reversalId}-${index + 1}`,
-            debit: Number(line.credit || 0),
-            credit: Number(line.debit || 0),
-            description: `عكس: ${line.description || jv.description || ''}`
-          }));
-          const reversalEntry = {
-            id: reversalId,
-            date: new Date().toISOString().slice(0, 10),
-            description: `قيد عكسي لإلغاء ${jvId}: ${cancelReason}`,
-            status: 'مرحل',
-            type: jv.type || 'مركب',
-            debitTotal: Number(jv.creditTotal || 0),
-            creditTotal: Number(jv.debitTotal || 0),
-            isSystemGenerated: true,
-            reversalOf: jvId,
-            lines: reversalLines,
-            createdAt: new Date().toISOString()
-          };
-          const cancelledEntry = { ...jv, status: 'ملغى' as any, voidReason: cancelReason, voidedBy: 'سليمان غازي', voidedAt, reversalEntryId: reversalId };
-          const updatedEntries = [reversalEntry, ...journalEntries.map(item => item.id === jvId ? cancelledEntry : item)];
-          const updatedAccounts = adjustAccountsForLines(accounts, reversalLines);
-          await persistCanonicalFinancialSnapshot({ journalEntries: updatedEntries, chartOfAccounts: updatedAccounts });
-          setJournalEntries(updatedEntries);
-          setAccounts(updatedAccounts);
-
-          // Log in unified EnterpriseAuditLogger
-          EnterpriseAuditLogger.log({
-            action: 'إلغاء اعتماد',
-            oldValue: jv,
-            newValue: { ...jv, status: 'ملغى', voidReason: cancelReason, voidedBy: 'سليمان غازي', voidedAt },
-            userName: 'سليمان غازي',
-            userRole: 'Manager',
-            module: 'الحسابات العامة',
-            device: 'نظام الإدارة المالية المركزي'
+          const response = await authenticatedRequest(`/api/financial/journals/${encodeURIComponent(jvId)}/reverse`, {
+            method: 'POST',
+            headers: { 'Accept': 'application/json', 'Content-Type': 'application/json' },
+            body: JSON.stringify({ reason: cancelReason })
           });
-
-          triggerNotification(`✓ تم إلغاء القيد ${jvId} وتوليد القيد العكسي ${reversalId} مركزيًا.`, 'success');
+          const result = await response.json().catch(() => ({}));
+          if (!response.ok || !result.success || !result.data?.reversalId) {
+            throw new Error(result.message || 'لم يثبت الخادم إنشاء القيد العكسي الكانوني.');
+          }
+          refreshCanonicalFinancialData();
+          triggerNotification(`✓ تم عكس القيد ${jvId} بالقيد الكانوني ${result.data.reversalId}.`, 'success');
           setIsJvFullscreen(false);
           setSelectedJvId(null);
         } catch (error: any) {
@@ -3430,26 +3399,7 @@ export default function GeneralLedgerPortal({
       triggerNotification('القيد غير مرحل (مسودة بالفعل)', 'info');
       return;
     }
-
-    try {
-      if (canonicalFinancialStatus !== 'ready') {
-        throw new Error('المصدر المالي المركزي غير جاهز لإلغاء ترحيل القيد.');
-      }
-      const updatedJv = { ...jv, status: 'مسودة' as const, updatedAt: new Date().toISOString() };
-      const updatedEntries = journalEntries.map(item => item.id === jvId ? updatedJv : item);
-      const updatedAccounts = adjustAccountsForLines(accounts, jv.lines || [], -1);
-      await persistCanonicalFinancialSnapshot({ journalEntries: updatedEntries, chartOfAccounts: updatedAccounts });
-      setJournalEntries(updatedEntries);
-      setAccounts(updatedAccounts);
-
-      addJvAuditEvent(jvId, 'إلغاء ترحيل قيد', 'سليمان غازي', `إلغاء ترحيل القيد وعكس أرصدته من الأستاذ المساعد`);
-      logAction('JOURNAL_ENTRY', `إلغاء ترحيل قيد ${jvId}`, 'الحسابات العامة');
-      triggerNotification(`↩ تم إلغاء ترحيل القيد ${jvId} ونقله للمسودات للتحرير`, 'success');
-      
-      setActiveJvState(updatedJv);
-    } catch (error: any) {
-      triggerNotification(`فشل إلغاء الترحيل: ${error.message || String(error)}`, 'warning');
-    }
+    triggerNotification('لا يمكن إعادة القيد المرحل إلى مسودة. استخدم «إلغاء/عكس القيد» لإنشاء قيد عكسي غير قابل للمحو.', 'warning');
   };
 
   const validateJvIntegrity = (jv: any): { isValid: boolean; error?: string } => {

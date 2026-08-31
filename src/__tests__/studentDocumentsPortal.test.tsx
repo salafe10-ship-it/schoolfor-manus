@@ -17,6 +17,11 @@ function response(data: unknown, status = 200): Response {
   return { ok: status >= 200 && status < 300, status, json: async () => data } as Response;
 }
 
+function chooseUploadFile(name = 'id.pdf', type = 'application/pdf') {
+  const file = new File([new Uint8Array([0x25, 0x50, 0x44, 0x46, 0x2d, 0x31])], name, { type });
+  fireEvent.change(screen.getByLabelText(/اختر الملف الخاص أولاً/), { target: { files: [file] } });
+}
+
 function fillValidRegistration(dialog: HTMLElement, reference = 'DOC-REGISTRATION', title = 'هوية الطالب') {
   fireEvent.change(within(dialog).getByLabelText('الطالب'), { target: { value: student.id } });
   fireEvent.change(within(dialog).getAllByLabelText('التصنيف')[0], { target: { value: 'cat-1' } });
@@ -26,6 +31,7 @@ function fillValidRegistration(dialog: HTMLElement, reference = 'DOC-REGISTRATIO
   fireEvent.change(within(dialog).getByLabelText('نوع المحتوى'), { target: { value: 'application/pdf' } });
   fireEvent.change(within(dialog).getByLabelText('الحجم بالبايت'), { target: { value: '12' } });
   fireEvent.change(within(dialog).getByLabelText('مرجع سلامة المحتوى'), { target: { value: 'a'.repeat(32) } });
+  chooseUploadFile();
 }
 
 function canonicalRegisteredDocument(documentId: string, reference = 'DOC-REGISTRATION', title = 'هوية الطالب') {
@@ -467,11 +473,12 @@ describe('DOC-003 StudentDocumentsPortal', () => {
     fireEvent.change(within(dialog).getByLabelText('نوع المحتوى'), { target: { value: 'application/pdf' } });
     fireEvent.change(within(dialog).getByLabelText('الحجم بالبايت'), { target: { value: '12' } });
     fireEvent.change(within(dialog).getByLabelText('مرجع سلامة المحتوى'), { target: { value: 'bad-hash' } });
+    chooseUploadFile('bad.txt', 'text/plain');
     expect((save as HTMLButtonElement).disabled).toBe(false);
     fireEvent.submit(dialog.querySelector('form') as HTMLFormElement);
-    await waitFor(() => expect(notify).toHaveBeenCalledWith('راجع الحقول المطلوبة وقيم metadata غير الصالحة قبل الحفظ.', 'warning'));
-    expect(document.activeElement?.id).toBe('student-document-contentHash');
-    expect(document.getElementById('student-document-contentHash')?.getAttribute('aria-describedby')).toBe('contentHash-error');
+    await waitFor(() => expect(notify).toHaveBeenCalledWith('راجع الحقول المطلوبة والملف قبل الرفع.', 'warning'));
+    expect(document.activeElement?.id).toBe('student-document-mediaType');
+    expect(document.getElementById('student-document-mediaType')?.getAttribute('aria-describedby')).toBe('mediaType-error');
     expect(fetchMock.mock.calls.filter(([, init]) => (init as RequestInit | undefined)?.method === 'POST')).toHaveLength(0);
   });
 
@@ -591,6 +598,7 @@ describe('DOC-003 StudentDocumentsPortal', () => {
     fireEvent.change(within(dialog).getByLabelText('نوع المحتوى'), { target: { value: 'application/pdf' } });
     fireEvent.change(within(dialog).getByLabelText('الحجم بالبايت'), { target: { value: '12' } });
     fireEvent.change(within(dialog).getByLabelText('مرجع سلامة المحتوى'), { target: { value: 'a'.repeat(32) } });
+    chooseUploadFile();
     const form = dialog.querySelector('form') as HTMLFormElement;
     fireEvent.submit(form);
     fireEvent.submit(form);
@@ -619,6 +627,7 @@ describe('DOC-003 StudentDocumentsPortal', () => {
     fireEvent.change(document.getElementById('student-document-mediaType') as HTMLInputElement, { target: { value: 'application/pdf' } });
     fireEvent.change(document.getElementById('student-document-byteSize') as HTMLInputElement, { target: { value: '12' } });
     fireEvent.change(document.getElementById('student-document-contentHash') as HTMLInputElement, { target: { value: 'b'.repeat(32) } });
+    chooseUploadFile('old.pdf');
     fireEvent.submit(dialog.querySelector('form') as HTMLFormElement);
     await waitFor(() => expect(notify).toHaveBeenCalledWith('تم تسجيل بيانات المستند بنجاح.', 'success'));
     fireEvent.click(screen.getByRole('button', { name: 'تسجيل بيانات مستند جديد' }));

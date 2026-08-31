@@ -65,6 +65,7 @@ import { canonicalStudentImportService } from "./src/modules/student-registratio
 import { canonicalGuardianUpdateService } from "./src/modules/student-registration/application/CanonicalGuardianUpdateService.js";
 import { operationalEnrollmentAssignmentService } from "./src/modules/student-affairs/application/OperationalEnrollmentAssignmentService.js";
 import { canonicalEnrollmentWorkflowService } from "./src/modules/student-affairs/application/CanonicalEnrollmentWorkflowService.js";
+import { canonicalGraduationService } from "./src/modules/student-affairs/application/CanonicalGraduationService.js";
 import { canonicalExamClassSyncService } from "./src/modules/exams/application/CanonicalExamClassSyncService.js";
 import {
   findScheduleResourceConflicts,
@@ -75,7 +76,7 @@ import { CanonicalStudentTimelineRepository } from "./src/database/repositories/
 import { CANONICAL_STUDENT_SORT_FIELDS, type StudentReadDiagnostic } from "./src/database/repositories/CanonicalStudentReadRepository.js";
 import { createPerf004Trace } from "./src/performance/Perf004LatencyDiagnostics.js";
 import { normalizeStudentReadError } from "./src/middleware/studentReadError.js";
-import { normalizeDocumentListFilters, studentDocumentService } from "./src/modules/student-documents/application/StudentDocumentService.js";
+import { MAX_DOCUMENT_BYTES, STUDENT_DOCUMENT_BUCKET, normalizeDocumentListFilters, studentDocumentService } from "./src/modules/student-documents/application/StudentDocumentService.js";
 import type { StudentDocumentRequestContext } from "./src/modules/student-documents/domain/types.js";
 import { tenantScopedDatabaseFilePath } from "./src/security/tenantScopedFilePath.js";
 import { generateStudentExport, STUDENT_EXPORT_CONTENT_TYPE } from "./src/modules/student-export/application/StudentExportService.js";
@@ -120,6 +121,35 @@ const platformAdminPool = platformAdminConnectionString
 const platformAdminAuth = process.env.SUPABASE_URL && process.env.SUPABASE_SERVICE_ROLE_KEY
   ? createClient(process.env.SUPABASE_URL, process.env.SUPABASE_SERVICE_ROLE_KEY, { auth: { autoRefreshToken: false, persistSession: false } })
   : null;
+
+const STUDENT_DOCUMENT_MEDIA_TYPES = ['application/pdf', 'image/png', 'image/jpeg'] as const;
+type StudentDocumentMediaType = typeof STUDENT_DOCUMENT_MEDIA_TYPES[number];
+
+export function validateStudentDocumentBinary(body: Buffer, declaredMediaType: string): { mediaType: StudentDocumentMediaType; contentHash: string; extension: 'pdf' | 'png' | 'jpg' } {
+  const mediaType = declaredMediaType.toLowerCase().split(';', 1)[0].trim() as StudentDocumentMediaType;
+  if (!STUDENT_DOCUMENT_MEDIA_TYPES.includes(mediaType)) throw new ValidationError('Only PDF, PNG, and JPEG student documents are permitted.');
+  if (!Buffer.isBuffer(body) || body.length < 4 || body.length > MAX_DOCUMENT_BYTES) throw new ValidationError('The document file is empty or exceeds the 10 MB limit.');
+  const isPdf = body.subarray(0, 5).toString('ascii') === '%PDF-';
+  const isPng = body.length >= 8 && body.subarray(0, 8).equals(Buffer.from([0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a]));
+  const isJpeg = body[0] === 0xff && body[1] === 0xd8 && body[2] === 0xff;
+  if ((mediaType === 'application/pdf' && !isPdf) || (mediaType === 'image/png' && !isPng) || (mediaType === 'image/jpeg' && !isJpeg)) {
+    throw new ValidationError('The file signature does not match its declared content type.');
+  }
+  return {
+    mediaType,
+    contentHash: createHash('sha256').update(body).digest('hex'),
+    extension: mediaType === 'application/pdf' ? 'pdf' : mediaType === 'image/png' ? 'png' : 'jpg'
+  };
+}
+
+function safeDocumentFileName(value: unknown): string {
+  if (typeof value !== 'string') throw new ValidationError('originalFileName is required.');
+  const normalized = value.trim();
+  if (!normalized || normalized.length > 255 || normalized.includes('/') || normalized.includes('\\') || normalized === '.' || normalized === '..') {
+    throw new ValidationError('originalFileName is invalid.');
+  }
+  return normalized;
+}
 
 const CENTRAL_IDENTITY_ROLE_CATALOG: Record<string, { name: string; description: string; permissions: string[] }> = {
   schooladmin: {
@@ -1252,12 +1282,46 @@ async function startServer() {
   }
 
   // Start database initialization without blocking route registration or the
-  // liveness listener. Readiness remains false until the trusted database
-  // connection is confirmed, so a slow/unavailable Supabase cannot hide the
-  // service behind an unbounded startup barrier.
-  void DatabaseService.initialize()
-    .then((result) => {
+  // liveness listener. Staging and production are not ready until the actual
+  // tenant data-plane pool proves that every sampled connection uses an
+  // approved non-superuser, non-bypass role. The privileged central pool is
+  // deliberately separate and is never accepted as tenant readiness evidence.
+  const deploymentEnvironment = String(process.env.EDUPRO_ENVIRONMENT || '').trim().toLowerCase();
+  const restrictedDataPlaneRequired = deploymentEnvironment === 'staging' || deploymentEnvironment === 'production';
+  const configuredExpectedRoles = String(process.env.DATABASE_ROLE_EXPECTED || '')
+    .split(',')
+    .map(role => role.trim())
+    .filter(Boolean);
+  const expectedDataPlaneRoles = configuredExpectedRoles.length > 0
+    ? configuredExpectedRoles
+    : ['edupro_app'];
+  const identityProbe = restrictedDataPlaneRequired
+    ? transactionDriver?.inspectPoolIdentity(2) || Promise.reject(new Error('Restricted transaction driver is unavailable.'))
+    : Promise.resolve([]);
+
+  void Promise.all([DatabaseService.initialize(), identityProbe])
+    .then(([result, identities]) => {
       if (result.supabaseConnected) {
+        if (restrictedDataPlaneRequired) {
+          const restricted = identities.length === 2 && identities.every(identity =>
+            expectedDataPlaneRoles.includes(identity.current_user)
+            && identity.session_user === identity.current_user
+            && identity.rolsuper === false
+            && identity.rolbypassrls === false
+          );
+          if (!restricted) {
+            const observedRole = identities[0]?.current_user || null;
+            EnterpriseLogger.error('Tenant data-plane role verification failed.', 'ServerBootstrap', {
+              observedRole,
+              expectedRoles: expectedDataPlaneRoles,
+              sampleCount: identities.length,
+            });
+            startupReadiness.markUnsafeDataPlaneRole(observedRole, expectedDataPlaneRoles);
+            return;
+          }
+          startupReadiness.markDatabaseConnected(identities[0].current_user, expectedDataPlaneRoles);
+          return;
+        }
         startupReadiness.markDatabaseConnected();
       } else {
         startupReadiness.markDatabaseUnavailable('Trusted Supabase connection is unavailable.');
@@ -3983,8 +4047,8 @@ async function startServer() {
     }
   });
 
-  // DOC-001R: canonical Student Documents metadata path.
-  // Binary storage, OCR, scanning, and external providers are intentionally out of scope.
+  // DOC-001R/STU-AFFAIRS-STORAGE-001: canonical metadata plus private binary storage.
+  // OCR, scanning, and external document providers remain outside this trusted path.
   // Every identity, tenant, school, branch, actor, timestamp, request and audit value is
   // resolved server-side; request bodies only carry business metadata.
   function studentDocumentContext(req: express.Request): StudentDocumentRequestContext {
@@ -4001,6 +4065,58 @@ async function startServer() {
 
   function normalizeDocumentQuery(query: express.Request["query"]) {
     return normalizeDocumentListFilters(query as Record<string, unknown>);
+  }
+
+  const studentDocumentRawUpload = express.raw({
+    type: [...STUDENT_DOCUMENT_MEDIA_TYPES],
+    limit: MAX_DOCUMENT_BYTES
+  });
+
+  function uploadedDocumentInput(req: express.Request, binary: ReturnType<typeof validateStudentDocumentBinary>) {
+    return {
+      categoryId: req.query.categoryId,
+      documentReference: req.query.documentReference,
+      title: req.query.title,
+      description: req.query.description,
+      classification: req.query.classification || 'confidential',
+      verificationStatus: req.query.verificationStatus || 'pending',
+      retentionUntil: req.query.retentionUntil,
+      archiveEligibleOn: req.query.archiveEligibleOn,
+      legalHold: req.query.legalHold === 'true',
+      revisionReason: req.query.revisionReason,
+      originalFileName: safeDocumentFileName(req.query.originalFileName),
+      mediaType: binary.mediaType,
+      byteSize: (req.body as Buffer).length,
+      contentHash: binary.contentHash
+    };
+  }
+
+  async function uploadPrivateStudentDocument(context: StudentDocumentRequestContext, studentId: string, idempotencyKey: string, binary: ReturnType<typeof validateStudentDocumentBinary>, body: Buffer) {
+    if (!platformAdminAuth) throw new ExternalServiceError('Private student document storage is not configured.');
+    if (!/^[\x21-\x7e]{1,200}$/.test(idempotencyKey)) throw new ValidationError('A valid Idempotency-Key header is required.');
+    const objectFingerprint = createHash('sha256').update(`${idempotencyKey}:${binary.contentHash}`).digest('hex');
+    const objectKey = `${context.tenantId.toLowerCase()}/${context.schoolId.toLowerCase()}/${context.branchId.toLowerCase()}/${studentId.toLowerCase()}/${objectFingerprint}.${binary.extension}`;
+    const upload = await platformAdminAuth.storage.from(STUDENT_DOCUMENT_BUCKET).upload(objectKey, body, {
+      contentType: binary.mediaType,
+      cacheControl: '3600',
+      upsert: false
+    });
+    const status = Number((upload.error as any)?.statusCode || (upload.error as any)?.status || 0);
+    const duplicate = Boolean(upload.error && (status === 409 || /already exists|duplicate/i.test(upload.error.message || '')));
+    if (upload.error && !duplicate) throw new ExternalServiceError('The private document upload failed.');
+    return { objectKey, uploadedNow: !upload.error };
+  }
+
+  async function removePrivateStudentDocument(objectKey: string, context: StudentDocumentRequestContext): Promise<void> {
+    if (!platformAdminAuth) return;
+    const removal = await platformAdminAuth.storage.from(STUDENT_DOCUMENT_BUCKET).remove([objectKey]);
+    if (removal.error) {
+      EnterpriseLogger.warn('Orphan private document cleanup requires attention.', 'StudentDocumentStorage', {
+        tenantId: context.tenantId,
+        schoolId: context.schoolId,
+        requestId: context.requestId
+      });
+    }
   }
 
   app.get("/api/student-document-categories", authenticateRequest, requirePermission(PERMISSIONS.STUDENT_DOCUMENT_VIEW), resolveStudentTenantMiddleware, async (req, res, next) => {
@@ -4047,11 +4163,90 @@ async function startServer() {
     } catch (error) { next(error); }
   });
 
+  app.post("/api/students/:studentId/document-content", authenticateRequest, requirePermission(PERMISSIONS.STUDENT_DOCUMENT_CREATE), resolveStudentTenantMiddleware, studentDocumentRawUpload, async (req, res, next) => {
+    let uploaded: { objectKey: string; uploadedNow: boolean } | null = null;
+    let context: StudentDocumentRequestContext | null = null;
+    try {
+      context = studentDocumentContext(req);
+      const idempotencyKey = req.get('Idempotency-Key') || '';
+      const body = req.body as Buffer;
+      const binary = validateStudentDocumentBinary(body, req.get('Content-Type') || '');
+      uploaded = await uploadPrivateStudentDocument(context, req.params.studentId, idempotencyKey, binary, body);
+      const result = await studentDocumentService.registerUploadedDocument(
+        context,
+        req.params.studentId,
+        uploadedDocumentInput(req, binary) as any,
+        { bucketId: STUDENT_DOCUMENT_BUCKET, objectKey: uploaded.objectKey }
+      );
+      res.status(result.idempotent ? 200 : 201).json({
+        success: true,
+        data: result,
+        message: result.idempotent ? 'The previous private document result was returned idempotently.' : 'Student document uploaded to private storage successfully.',
+        meta: { persistence: 'canonical-postgres', storage: 'private', signedDownloadOnly: true }
+      });
+    } catch (error) {
+      if (uploaded?.uploadedNow && context) await removePrivateStudentDocument(uploaded.objectKey, context);
+      next(error);
+    }
+  });
+
   app.get("/api/student-documents/:id", authenticateRequest, requirePermission(PERMISSIONS.STUDENT_DOCUMENT_VIEW), resolveStudentTenantMiddleware, async (req, res, next) => {
     try {
       const result = await studentDocumentService.getDocument(studentDocumentContext(req), req.params.id);
       res.json({ success: true, data: result, message: "Student document metadata retrieved successfully." });
     } catch (error) { next(error); }
+  });
+
+  app.get("/api/student-documents/:id/content", authenticateRequest, requirePermission(PERMISSIONS.STUDENT_DOCUMENT_VIEW), resolveStudentTenantMiddleware, async (req, res, next) => {
+    try {
+      if (!platformAdminAuth) throw new ExternalServiceError('Private student document storage is not configured.');
+      const descriptor = await studentDocumentService.getContentDescriptor(studentDocumentContext(req), req.params.id);
+      const signed = await platformAdminAuth.storage.from(descriptor.bucket_id).createSignedUrl(
+        descriptor.object_key,
+        300,
+        { download: descriptor.original_file_name }
+      );
+      if (signed.error || !signed.data?.signedUrl) throw new ExternalServiceError('A temporary document link could not be created.');
+      res.set('Cache-Control', 'no-store, private');
+      res.json({
+        success: true,
+        data: { url: signed.data.signedUrl, expiresInSeconds: 300, fileName: descriptor.original_file_name, mediaType: descriptor.media_type },
+        message: 'Temporary private document link created successfully.'
+      });
+    } catch (error) { next(error); }
+  });
+
+  app.post("/api/student-documents/:id/content-versions", authenticateRequest, requirePermission(PERMISSIONS.STUDENT_DOCUMENT_VERSION_CREATE), resolveStudentTenantMiddleware, studentDocumentRawUpload, async (req, res, next) => {
+    let uploaded: { objectKey: string; uploadedNow: boolean } | null = null;
+    let context: StudentDocumentRequestContext | null = null;
+    try {
+      context = studentDocumentContext(req);
+      const idempotencyKey = req.get('Idempotency-Key') || '';
+      const body = req.body as Buffer;
+      const binary = validateStudentDocumentBinary(body, req.get('Content-Type') || '');
+      const current = await studentDocumentService.getDocument(context, req.params.id);
+      uploaded = await uploadPrivateStudentDocument(context, current.document.student_id, idempotencyKey, binary, body);
+      const result = await studentDocumentService.addUploadedVersion(
+        context,
+        req.params.id,
+        {
+          revisionReason: req.query.revisionReason as string,
+          originalFileName: safeDocumentFileName(req.query.originalFileName),
+          mediaType: binary.mediaType,
+          byteSize: body.length,
+          contentHash: binary.contentHash
+        },
+        { bucketId: STUDENT_DOCUMENT_BUCKET, objectKey: uploaded.objectKey }
+      );
+      res.status(result.idempotent ? 200 : 201).json({
+        success: true,
+        data: result,
+        message: result.idempotent ? 'The previous private version result was returned idempotently.' : 'A private document version was uploaded successfully.'
+      });
+    } catch (error) {
+      if (uploaded?.uploadedNow && context) await removePrivateStudentDocument(uploaded.objectKey, context);
+      next(error);
+    }
   });
 
   app.post("/api/student-documents/:id/versions", authenticateRequest, requirePermission(PERMISSIONS.STUDENT_DOCUMENT_VERSION_CREATE), resolveStudentTenantMiddleware, async (req, res, next) => {
@@ -4171,13 +4366,29 @@ async function startServer() {
 
   // GRADUATION
   app.post("/api/students/:id/graduate", authenticateRequest, requirePermission(PERMISSIONS.STUDENT_WRITE), resolveStudentTenantMiddleware, async (req, res, next) => {
-    void req;
-    void next;
-    res.status(409).json({
-      success: false,
-      errorCode: "GRADUATION_NOT_READY",
-      message: "عملية التخرج موقوفة مؤقتًا حتى يتوفر سجل تخرج أكاديمي موثوق وقابل للتدقيق."
-    });
+    try {
+      const tenantContext = (req as any).tenantContext || await resolveStudentTenantContext(req);
+      const result = await canonicalGraduationService.execute(
+        {
+          ...tenantContext,
+          requestId: randomUUID(),
+          correlationId: randomUUID(),
+          ipAddress: req.ip || 'unknown'
+        },
+        {
+          studentId: req.params.id,
+          reason: req.body?.reason,
+          resultArchiveId: req.body?.resultArchiveId,
+          idempotencyKey: req.get('Idempotency-Key') || ''
+        }
+      );
+      res.status(result.idempotent ? 200 : 201).json({
+        success: true,
+        data: result,
+        message: result.idempotent ? 'تمت إعادة نتيجة التخرج السابقة بأمان.' : 'تم اعتماد تخرج الطالب من نتيجة نهائية مقفلة وإغلاق القيد.',
+        meta: { persistence: 'canonical-postgres', evidence: 'immutable-exam-archive', financialClearance: true }
+      });
+    } catch (error) { next(error); }
   });
 
   // DISMISSAL / SUSPENSION

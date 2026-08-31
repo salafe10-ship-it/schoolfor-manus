@@ -9,6 +9,7 @@ describe('INF-001A startup readiness contract', () => {
     expect(readiness.snapshot()).toMatchObject({
       state: 'INITIALIZING',
       database: 'PENDING',
+      dataPlane: 'PENDING',
       ready: false,
     });
   });
@@ -19,6 +20,7 @@ describe('INF-001A startup readiness contract', () => {
     expect(readiness.snapshot()).toMatchObject({
       state: 'READY',
       database: 'CONNECTED',
+      dataPlane: 'NOT_REQUIRED',
       ready: true,
       reason: null,
     });
@@ -30,6 +32,7 @@ describe('INF-001A startup readiness contract', () => {
     expect(readiness.snapshot()).toMatchObject({
       state: 'DEGRADED',
       database: 'UNAVAILABLE',
+      dataPlane: 'UNAVAILABLE',
       ready: false,
       reason: 'Supabase readiness probe timed out.',
     });
@@ -43,9 +46,23 @@ describe('INF-001A startup readiness contract', () => {
 
   it('keeps listener startup independent from database initialization', () => {
     const serverSource = readFileSync(resolve(process.cwd(), 'server.ts'), 'utf8');
-    expect(serverSource).toContain('void DatabaseService.initialize()');
+    expect(serverSource).toContain('Promise.all([DatabaseService.initialize(), identityProbe])');
     expect(serverSource).toContain('app.get("/api/ready"');
-    expect(serverSource).not.toContain('await DatabaseService.initialize()');
+    expect(serverSource).toContain('identity.rolbypassrls === false');
+    expect(serverSource).toContain('startupReadiness.markUnsafeDataPlaneRole');
+  });
+
+  it('fails closed when a deployment uses an unsafe tenant database role', () => {
+    const readiness = createStartupReadiness();
+    readiness.markUnsafeDataPlaneRole('postgres', ['edupro_app']);
+    expect(readiness.snapshot()).toMatchObject({
+      state: 'FAILED',
+      database: 'CONNECTED',
+      dataPlane: 'UNSAFE',
+      databaseRole: 'postgres',
+      expectedDatabaseRoles: ['edupro_app'],
+      ready: false,
+    });
   });
 
   it('does not permit startup migrations or seeds in production', () => {

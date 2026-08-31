@@ -27,14 +27,15 @@ describe('STU-AFFAIRS-P0-DATA-001 graduation false-success containment', () => {
     expect(graduationServiceSource).not.toContain('success: true');
   });
 
-  it('blocks the authenticated, authorized, tenant-scoped endpoint without mutation', () => {
+  it('executes only the authenticated, authorized, tenant-scoped canonical workflow', () => {
     const route = graduationRouteBlock();
     expect(route).toContain('authenticateRequest');
     expect(route).toContain('requirePermission(PERMISSIONS.STUDENT_WRITE)');
     expect(route).toContain('resolveStudentTenantMiddleware');
-    expect(route).toContain('status(409)');
-    expect(route).toContain('GRADUATION_NOT_READY');
+    expect(route).toContain('canonicalGraduationService.execute');
+    expect(route).toContain("evidence: 'immutable-exam-archive'");
+    expect(route).toContain('financialClearance: true');
     expect(route).not.toContain('StudentService.graduateStudent');
-    expect(route).not.toContain('success: true');
+    expect(route).toContain('success: true');
   });
 });

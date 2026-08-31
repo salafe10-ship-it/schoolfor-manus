@@ -1,7 +1,7 @@
 import { createHash, randomUUID } from 'node:crypto';
 import { UnitOfWork } from '../../../database/UnitOfWork.js';
 import { AuthorizationError, ConflictError, DatabaseError, NotFoundError, ValidationError } from '../../../utils/errors.js';
-import { DOCUMENT_CLASSIFICATIONS, DOCUMENT_LIFECYCLE_STATUSES, DOCUMENT_VERIFICATION_STATUSES, type DocumentCategoryInput, type DocumentDecision, type DocumentListFilters, type DocumentOperationResult, type DocumentVersionInput, type StudentDocumentInput, type StudentDocumentRequestContext } from '../domain/types.js';
+import { DOCUMENT_CLASSIFICATIONS, DOCUMENT_LIFECYCLE_STATUSES, DOCUMENT_VERIFICATION_STATUSES, type DocumentCategoryInput, type DocumentDecision, type DocumentListFilters, type DocumentOperationResult, type DocumentStorageInput, type DocumentVersionInput, type StudentDocumentInput, type StudentDocumentRequestContext } from '../domain/types.js';
 import {
   assertDocumentReferenceAvailable,
   assertStudentInScope,
@@ -10,11 +10,13 @@ import {
   getCategoryById,
   getDocument,
   getDocumentForUpdate,
+  getCurrentStorageObject,
   insertAccessLog,
   insertAuditEvent,
   insertCategory,
   insertDocument,
   insertOutboxEvent,
+  insertStorageObject,
   insertVersion,
   listAccessLogs,
   listCategories,
@@ -28,7 +30,9 @@ import {
   type DocumentRow,
 } from '../infrastructure/StudentDocumentRepository.js';
 
-const MAX_METADATA_BYTES = 500 * 1024 * 1024;
+export const MAX_DOCUMENT_BYTES = 10 * 1024 * 1024;
+export const STUDENT_DOCUMENT_BUCKET = 'student-documents-private' as const;
+const STORED_MEDIA_TYPES = new Set(['application/pdf', 'image/png', 'image/jpeg']);
 
 function text(value: unknown, field: string, maxLength = 500): string {
   if (typeof value !== 'string') throw new ValidationError(`${field} is required.`);
@@ -99,7 +103,7 @@ function validateFileMetadata(input: DocumentVersionInput): DocumentVersionInput
   if (!/^[a-z0-9][a-z0-9!#$&^_.+-]*\/[a-z0-9][a-z0-9!#$&^_.+-]*$/.test(mediaType)) {
     throw new ValidationError('mediaType is invalid.');
   }
-  if (!Number.isInteger(input.byteSize) || input.byteSize < 0 || input.byteSize > MAX_METADATA_BYTES) {
+  if (!Number.isInteger(input.byteSize) || input.byteSize < 0 || input.byteSize > MAX_DOCUMENT_BYTES) {
     throw new ValidationError('byteSize is outside the deployment limit.');
   }
   const contentHash = text(input.contentHash, 'contentHash', 512);
@@ -107,6 +111,25 @@ function validateFileMetadata(input: DocumentVersionInput): DocumentVersionInput
     throw new ValidationError('contentHash must be a normalized integrity reference.');
   }
   return { revisionReason: optionalText(input.revisionReason, 'revisionReason', 1000), originalFileName, mediaType, byteSize: input.byteSize, contentHash };
+}
+
+function validateStorageInput(storage: DocumentStorageInput | undefined, file: DocumentVersionInput): DocumentStorageInput | undefined {
+  if (!storage) return undefined;
+  if (storage.bucketId !== STUDENT_DOCUMENT_BUCKET) throw new ValidationError('The private document bucket is invalid.');
+  if (!STORED_MEDIA_TYPES.has(file.mediaType) || file.byteSize < 1 || !/^[0-9a-f]{64}$/.test(file.contentHash)) {
+    throw new ValidationError('Stored document metadata is outside the approved binary policy.');
+  }
+  if (!/^[0-9a-f-]+\/[0-9a-f-]+\/[0-9a-f-]+\/[0-9a-f-]+\/[0-9a-f]{64}\.(pdf|png|jpg)$/.test(storage.objectKey)) {
+    throw new ValidationError('The private document object key is invalid.');
+  }
+  return storage;
+}
+
+function assertIdempotentFingerprint(existing: Awaited<ReturnType<typeof findIdempotentResult>>, fingerprint: string): void {
+  const previous = existing?.payload?.requestFingerprint;
+  if (previous && previous !== fingerprint) {
+    throw new ConflictError('Idempotency-Key was already used with a different document payload.');
+  }
 }
 
 function validateRetention(retentionUntil: string | null, archiveEligibleOn: string | null): void {
@@ -252,7 +275,7 @@ export class StudentDocumentService {
     });
   }
 
-  async registerDocument(context: StudentDocumentRequestContext, studentIdValue: string, input: StudentDocumentInput): Promise<DocumentOperationResult> {
+  async registerDocument(context: StudentDocumentRequestContext, studentIdValue: string, input: StudentDocumentInput, storageInput?: DocumentStorageInput): Promise<DocumentOperationResult> {
     const studentId = uuid(studentIdValue, 'studentId');
     const key = requireIdempotency(context, `document:register:${studentId}`);
     const categoryId = uuid(input.categoryId, 'categoryId');
@@ -260,6 +283,7 @@ export class StudentDocumentService {
     const title = text(input.title, 'title', 250);
     const description = optionalText(input.description, 'description');
     const file = validateFileMetadata(input);
+    const storage = validateStorageInput(storageInput, file);
     const documentClassification = classification(input.classification);
     const retentionUntil = dateOnly(input.retentionUntil, 'retentionUntil');
     const archiveEligibleOn = dateOnly(input.archiveEligibleOn, 'archiveEligibleOn');
@@ -267,8 +291,10 @@ export class StudentDocumentService {
     const legalHold = input.legalHold === true;
     const requestedVerification = input.verificationStatus || 'not_required';
     if (!['not_required', 'pending'].includes(requestedVerification)) throw new ValidationError('A new document can only start as not_required or pending.');
-    return this.transaction(context, 'DOC-001R register student document', ['student_documents', 'student_document_versions', 'audit_events', 'outbox_events'], async () => {
+    const requestFingerprint = payloadHash({ studentId, categoryId, reference, title, description, file, documentClassification, retentionUntil, archiveEligibleOn, legalHold, requestedVerification, objectKey: storage?.objectKey || null });
+    return this.transaction(context, 'DOC-001R register student document', ['student_documents', 'student_document_versions', 'student_document_storage_objects', 'audit_events', 'outbox_events'], async () => {
       const existing = await findIdempotentResult(context.tenantId, key);
+      assertIdempotentFingerprint(existing, requestFingerprint);
       if (existing?.payload?.result) return { ...(existing.payload.result as DocumentOperationResult), idempotent: true };
       await assertStudentInScope(context, studentId);
       if (!await getActiveCategory(context.tenantId, categoryId)) throw new ValidationError('Category is not active in the trusted tenant.');
@@ -276,25 +302,34 @@ export class StudentDocumentService {
       const actorUserId = await resolveInternalActorUserId(context.tenantId, context.userId, context.schoolId, context.branchId);
       const documentId = randomUUID();
       const versionId = randomUUID();
+      const storageId = storage ? randomUUID() : null;
       const auditId = randomUUID();
       const outboxId = randomUUID();
       const lifecycleStatus = requestedVerification === 'pending' ? 'pending_verification' : 'draft';
-      const result: DocumentOperationResult = { documentId, documentReference: reference, versionNumber: 1, requestId: context.requestId, correlationId: context.correlationId, idempotent: false };
-      await insertAuditEvent({ id: auditId, tenantId: context.tenantId, schoolId: context.schoolId, branchId: context.branchId, actorUserId, entityType: 'student_document', entityId: documentId, action: 'CREATE', requestId: context.requestId, correlationId: context.correlationId, metadata: { documentId, studentId, categoryId, documentReference: reference, classification: documentClassification } });
+      const result: DocumentOperationResult = { documentId, documentReference: reference, versionId, versionNumber: 1, stored: Boolean(storage), requestId: context.requestId, correlationId: context.correlationId, idempotent: false };
+      await insertAuditEvent({ id: auditId, tenantId: context.tenantId, schoolId: context.schoolId, branchId: context.branchId, actorUserId, entityType: 'student_document', entityId: documentId, action: 'CREATE', requestId: context.requestId, correlationId: context.correlationId, metadata: { documentId, studentId, categoryId, documentReference: reference, classification: documentClassification, stored: Boolean(storage), contentHash: file.contentHash } });
       insertDocument({ id: documentId, tenantId: context.tenantId, schoolId: context.schoolId, branchId: context.branchId, studentId, categoryId, reference, title, description, lifecycle: lifecycleStatus, verification: requestedVerification, classification: documentClassification, retentionUntil, legalHold, archiveEligibleOn, actorUserId, auditId, requestId: context.requestId, correlationId: context.correlationId });
       insertVersion({ id: versionId, tenantId: context.tenantId, schoolId: context.schoolId, branchId: context.branchId, studentId, documentId, versionNumber: 1, revisionReason: file.revisionReason, originalFileName: file.originalFileName, mediaType: file.mediaType, byteSize: file.byteSize, contentHash: file.contentHash, actorUserId, auditId, requestId: context.requestId, correlationId: context.correlationId });
-      const eventPayload = { result, studentId, categoryId, classification: documentClassification, lifecycleStatus, requestId: context.requestId, correlationId: context.correlationId };
+      if (storage && storageId) insertStorageObject({ id: storageId, tenantId: context.tenantId, schoolId: context.schoolId, branchId: context.branchId, studentId, documentId, documentVersionId: versionId, bucketId: storage.bucketId, objectKey: storage.objectKey, mediaType: file.mediaType, byteSize: file.byteSize, contentHash: file.contentHash, actorUserId, auditId, requestId: context.requestId, correlationId: context.correlationId });
+      const eventPayload = { result, studentId, categoryId, classification: documentClassification, lifecycleStatus, requestFingerprint, requestId: context.requestId, correlationId: context.correlationId };
       await insertOutboxEvent({ id: outboxId, tenantId: context.tenantId, eventType: 'StudentDocument.Registered', aggregateType: 'student_document', aggregateId: documentId, payload: eventPayload, payloadHash: payloadHash(eventPayload), idempotencyKey: key, requestId: context.requestId, correlationId: context.correlationId, actorUserId, auditId });
       return result;
     });
   }
 
-  async addVersion(context: StudentDocumentRequestContext, documentIdValue: string, input: DocumentVersionInput): Promise<DocumentOperationResult> {
+  async registerUploadedDocument(context: StudentDocumentRequestContext, studentIdValue: string, input: StudentDocumentInput, storage: DocumentStorageInput): Promise<DocumentOperationResult> {
+    return this.registerDocument(context, studentIdValue, input, storage);
+  }
+
+  async addVersion(context: StudentDocumentRequestContext, documentIdValue: string, input: DocumentVersionInput, storageInput?: DocumentStorageInput): Promise<DocumentOperationResult> {
     const documentId = uuid(documentIdValue, 'documentId');
     const key = requireIdempotency(context, `document:version:${documentId}`);
     const file = validateFileMetadata(input);
-    return this.transaction(context, 'DOC-001R add student document version', ['student_documents', 'student_document_versions', 'audit_events', 'outbox_events'], async () => {
+    const storage = validateStorageInput(storageInput, file);
+    const requestFingerprint = payloadHash({ documentId, file, objectKey: storage?.objectKey || null });
+    return this.transaction(context, 'DOC-001R add student document version', ['student_documents', 'student_document_versions', 'student_document_storage_objects', 'audit_events', 'outbox_events'], async () => {
       const existing = await findIdempotentResult(context.tenantId, key);
+      assertIdempotentFingerprint(existing, requestFingerprint);
       if (existing?.payload?.result) return { ...(existing.payload.result as DocumentOperationResult), idempotent: true };
       const document = requireDocument(await getDocumentForUpdate(context, documentId));
       if (document.lifecycle_status === 'archived') throw new ConflictError('Archived documents cannot receive a new version.');
@@ -305,15 +340,33 @@ export class StudentDocumentService {
       const auditId = randomUUID();
       const outboxId = randomUUID();
       const versionId = randomUUID();
-      const result: DocumentOperationResult = { documentId, documentReference: document.document_reference, versionNumber, requestId: context.requestId, correlationId: context.correlationId, idempotent: false };
-      await insertAuditEvent({ id: auditId, tenantId: context.tenantId, schoolId: context.schoolId, branchId: context.branchId, actorUserId, entityType: 'student_document_version', entityId: versionId, action: 'CREATE', requestId: context.requestId, correlationId: context.correlationId, metadata: { documentId, versionNumber, previousVersion: currentVersion?.version_number || null } });
+      const storageId = storage ? randomUUID() : null;
+      const result: DocumentOperationResult = { documentId, documentReference: document.document_reference, versionId, versionNumber, stored: Boolean(storage), requestId: context.requestId, correlationId: context.correlationId, idempotent: false };
+      await insertAuditEvent({ id: auditId, tenantId: context.tenantId, schoolId: context.schoolId, branchId: context.branchId, actorUserId, entityType: 'student_document_version', entityId: versionId, action: 'CREATE', requestId: context.requestId, correlationId: context.correlationId, metadata: { documentId, versionNumber, previousVersion: currentVersion?.version_number || null, stored: Boolean(storage), contentHash: file.contentHash } });
       if (currentVersion) updateCurrentVersion({ id: currentVersion.id, tenantId: context.tenantId, schoolId: context.schoolId, branchId: context.branchId, documentId });
       insertVersion({ id: versionId, tenantId: context.tenantId, schoolId: context.schoolId, branchId: context.branchId, studentId: document.student_id, documentId, versionNumber, revisionReason: file.revisionReason, originalFileName: file.originalFileName, mediaType: file.mediaType, byteSize: file.byteSize, contentHash: file.contentHash, actorUserId, auditId, requestId: context.requestId, correlationId: context.correlationId });
+      if (storage && storageId) insertStorageObject({ id: storageId, tenantId: context.tenantId, schoolId: context.schoolId, branchId: context.branchId, studentId: document.student_id, documentId, documentVersionId: versionId, bucketId: storage.bucketId, objectKey: storage.objectKey, mediaType: file.mediaType, byteSize: file.byteSize, contentHash: file.contentHash, actorUserId, auditId, requestId: context.requestId, correlationId: context.correlationId });
       const requiresVerification = document.verification_status !== 'not_required';
       updateDocument({ id: documentId, tenantId: context.tenantId, schoolId: context.schoolId, branchId: context.branchId, lifecycle: requiresVerification ? 'pending_verification' : document.lifecycle_status, verification: requiresVerification ? 'pending' : document.verification_status, classification: document.classification, currentVersionNumber: versionNumber, retentionUntil: document.retention_until, legalHold: document.legal_hold, archiveEligibleOn: document.archive_eligible_on, verifiedAt: null, verifiedBy: null, deletedAt: null, deletedBy: null, actorUserId, expectedVersion: document.version });
-      const eventPayload = { result, documentId, versionNumber, requestId: context.requestId, correlationId: context.correlationId };
+      const eventPayload = { result, documentId, versionNumber, requestFingerprint, requestId: context.requestId, correlationId: context.correlationId };
       await insertOutboxEvent({ id: outboxId, tenantId: context.tenantId, eventType: 'StudentDocument.VersionAdded', aggregateType: 'student_document', aggregateId: documentId, payload: eventPayload, payloadHash: payloadHash(eventPayload), idempotencyKey: key, requestId: context.requestId, correlationId: context.correlationId, actorUserId, auditId });
       return result;
+    });
+  }
+
+  async addUploadedVersion(context: StudentDocumentRequestContext, documentIdValue: string, input: DocumentVersionInput, storage: DocumentStorageInput): Promise<DocumentOperationResult> {
+    return this.addVersion(context, documentIdValue, input, storage);
+  }
+
+  async getContentDescriptor(context: StudentDocumentRequestContext, documentIdValue: string) {
+    const documentId = uuid(documentIdValue, 'documentId');
+    return this.transaction(context, 'DOC-001R authorize document download', ['student_documents', 'student_document_versions', 'student_document_storage_objects', 'student_document_access_log', 'audit_events'], async () => {
+      const document = requireDocument(await getDocument(context, documentId));
+      const storage = await getCurrentStorageObject(context, documentId);
+      if (!storage) throw new NotFoundError('Binary content is not available for the current document version.');
+      const actorUserId = await resolveInternalActorUserId(context.tenantId, context.userId, context.schoolId, context.branchId);
+      await this.recordAccess(context, actorUserId, document, 'download', 'signed-url', storage.document_version_id);
+      return storage;
     });
   }
 

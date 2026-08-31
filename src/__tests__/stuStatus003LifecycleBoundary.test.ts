@@ -5,14 +5,14 @@ import { describe, expect, it } from 'vitest';
 const read = (relativePath: string) => readFileSync(resolve(process.cwd(), relativePath), 'utf8');
 
 describe('STU-STATUS-003 lifecycle release boundary discovery', () => {
-  it('proves the inspected lifecycle routes are registered and graduation is fail-closed', () => {
+  it('proves the inspected lifecycle routes are registered and graduation is canonical', () => {
     const server = read('server.ts');
     expect(server).toContain('app.post("/api/students/:id/transfer"');
     expect(server).toContain('app.post("/api/students/:id/promote"');
     expect(server).toContain('app.post("/api/students/:id/re-enroll"');
     expect(server).toContain('app.post("/api/students/:id/dismiss"');
     expect(server).toContain('app.post("/api/students/:id/archive"');
-    expect(server).toContain('errorCode: "GRADUATION_NOT_READY"');
+    expect(server).toContain('canonicalGraduationService.execute');
   });
 
   it('proves the canonical registration status tables and initial applicant write exist', () => {

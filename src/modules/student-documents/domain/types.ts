@@ -52,6 +52,11 @@ export type DocumentVersionInput = {
   contentHash: string;
 };
 
+export type DocumentStorageInput = {
+  bucketId: 'student-documents-private';
+  objectKey: string;
+};
+
 export type StudentDocumentInput = DocumentVersionInput & {
   categoryId: string;
   documentReference: string;
@@ -81,7 +86,9 @@ export type DocumentDecision = 'verify' | 'reject' | 'expire';
 export type DocumentOperationResult = {
   documentId: string;
   documentReference: string;
+  versionId?: string;
   versionNumber: number;
+  stored?: boolean;
   requestId: string;
   correlationId: string;
   idempotent: boolean;
