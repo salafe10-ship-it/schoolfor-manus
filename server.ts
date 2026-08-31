@@ -63,6 +63,7 @@ import { createClient } from '@supabase/supabase-js';
 import { studentRegistrationService } from "./src/modules/student-registration/application/StudentRegistrationService.js";
 import { canonicalGuardianUpdateService } from "./src/modules/student-registration/application/CanonicalGuardianUpdateService.js";
 import { operationalEnrollmentAssignmentService } from "./src/modules/student-affairs/application/OperationalEnrollmentAssignmentService.js";
+import { canonicalEnrollmentWorkflowService } from "./src/modules/student-affairs/application/CanonicalEnrollmentWorkflowService.js";
 import { canonicalExamClassSyncService } from "./src/modules/exams/application/CanonicalExamClassSyncService.js";
 import {
   findScheduleResourceConflicts,
@@ -3451,7 +3452,7 @@ async function startServer() {
         status: "healthy",
         timestamp: new Date().toISOString(),
         service: "SchoolForManus School Management System",
-        architecture: "Express.js + React Vite SPA + PostgreSQL Simulation Model",
+        architecture: "Express.js + React Vite SPA + PostgreSQL-backed canonical runtime",
         tenantIsolationMode: "Row-Level Security (RLS) Active"
       },
       startup: startupReadiness.snapshot(),
@@ -3884,6 +3885,20 @@ async function startServer() {
     }
   });
 
+  app.post("/api/students/:id/reinstate", authenticateRequest, requirePermission(PERMISSIONS.STUDENT_WRITE), async (req, res, next) => {
+    try {
+      const context = await resolveStudentTenantContext(req);
+      const result = await CanonicalStudentWriteRepository.resumeSuspended(context, String(req.params.id), {
+        action: 'UPDATE',
+        reason: String(req.body?.reason || 'إعادة قيد الطالب بعد مراجعة الجهة المختصة.'),
+        requestId: randomUUID(),
+        correlationId: randomUUID(),
+        ipAddress: req.ip || 'unknown'
+      });
+      return res.json({ success: true, data: { student: result }, message: 'تمت إعادة قيد الطالب وتسجيل التصحيح الأكاديمي تدقيقيًا.', meta: { persistence: 'canonical-postgres', workflow: 'academic-status-correction' } });
+    } catch (error) { return next(error); }
+  });
+
   // Repairs only missing academic placements through one canonical,
   // all-or-nothing transaction. The server owns the student selection,
   // configured classes, capacity calculation and activation audit; the browser
@@ -4034,9 +4049,24 @@ async function startServer() {
   });
 
   app.post("/api/students/bulk", authenticateRequest, requirePermission(PERMISSIONS.STUDENT_WRITE), resolveStudentTenantMiddleware, async (req, res, next) => {
-    void req;
-    void next;
-    return canonicalEnrollmentWorkflowRequired(res, 'العملية الجماعية للطلاب');
+    try {
+      const payload = req.body && typeof req.body === 'object' && !Array.isArray(req.body) ? req.body : {};
+      const context = (req as any).tenantContext || await resolveStudentTenantContext(req);
+      const idempotencyKey = req.get('Idempotency-Key') || payload.idempotencyKey;
+      const result = await canonicalEnrollmentWorkflowService.execute(context, {
+        operation: payload.operation,
+        studentIds: payload.studentIds,
+        targetClassId: payload.targetClassId,
+        targetGradeId: payload.targetGradeId,
+        targetSection: payload.targetSection,
+        reason: payload.reason,
+        idempotencyKey,
+        ipAddress: req.ip || 'unknown'
+      });
+      return res.json({ success: true, data: result, message: 'تم تنفيذ عملية القيد الذرية وتسجيلها تدقيقيًا.', meta: { persistence: 'canonical-postgres', workflow: 'enrollment' } });
+    } catch (error) {
+      return next(error);
+    }
   });
 
   app.delete("/api/students/:id", authenticateRequest, requirePermission(PERMISSIONS.STUDENT_DELETE), async (req, res, next) => {
@@ -4067,25 +4097,40 @@ async function startServer() {
     }
   });
 
-  // Legacy Enrollment mutations are fail-closed until their canonical workflow exists.
-  // Authentication, permission, and trusted tenant resolution still run before refusal.
-  // No Student aggregate or legacy audit record is mutated by these routes.
   app.post("/api/students/:id/transfer", authenticateRequest, requirePermission(PERMISSIONS.STUDENT_WRITE), resolveStudentTenantMiddleware, async (req, res, next) => {
-    void req;
-    void next;
-    return canonicalEnrollmentWorkflowRequired(res, 'النقل الأكاديمي أو بين الفروع');
+    try {
+      const context = (req as any).tenantContext || await resolveStudentTenantContext(req);
+      const result = await canonicalEnrollmentWorkflowService.execute(context, {
+        operation: 'transfer', studentIds: [req.params.id], targetClassId: req.body?.targetClassId || req.body?.classroom,
+        targetGradeId: req.body?.targetGradeId || req.body?.gradeId, targetSection: req.body?.targetSection || req.body?.section,
+        reason: req.body?.reason, idempotencyKey: req.get('Idempotency-Key') || `student-transfer:${req.params.id}:${randomUUID()}`, ipAddress: req.ip || 'unknown'
+      });
+      return res.json({ success: true, data: result, message: 'تم نقل قيد الطالب وتسجيل العملية تدقيقيًا.', meta: { persistence: 'canonical-postgres' } });
+    } catch (error) { return next(error); }
   });
 
   app.post("/api/students/:id/promote", authenticateRequest, requirePermission(PERMISSIONS.STUDENT_WRITE), resolveStudentTenantMiddleware, async (req, res, next) => {
-    void req;
-    void next;
-    return canonicalEnrollmentWorkflowRequired(res, 'الترقية السنوية');
+    try {
+      const context = (req as any).tenantContext || await resolveStudentTenantContext(req);
+      const result = await canonicalEnrollmentWorkflowService.execute(context, {
+        operation: 'promote', studentIds: [req.params.id], targetClassId: req.body?.targetClassId || req.body?.targetClassroom,
+        targetGradeId: req.body?.targetGradeId || req.body?.targetStageId, targetSection: req.body?.targetSection || req.body?.section,
+        reason: req.body?.reason, idempotencyKey: req.get('Idempotency-Key') || `student-promote:${req.params.id}:${randomUUID()}`, ipAddress: req.ip || 'unknown'
+      });
+      return res.json({ success: true, data: result, message: 'تمت ترقية قيد الطالب وتسجيل العملية تدقيقيًا.', meta: { persistence: 'canonical-postgres' } });
+    } catch (error) { return next(error); }
   });
 
   app.post("/api/students/:id/re-enroll", authenticateRequest, requirePermission(PERMISSIONS.STUDENT_WRITE), resolveStudentTenantMiddleware, async (req, res, next) => {
-    void req;
-    void next;
-    return canonicalEnrollmentWorkflowRequired(res, 'إعادة القيد');
+    try {
+      const context = (req as any).tenantContext || await resolveStudentTenantContext(req);
+      const result = await canonicalEnrollmentWorkflowService.execute(context, {
+        operation: 're_enroll', studentIds: [req.params.id], targetClassId: req.body?.targetClassId || req.body?.classroom,
+        targetGradeId: req.body?.targetGradeId || req.body?.gradeId, targetSection: req.body?.targetSection || req.body?.section,
+        reason: req.body?.reason, idempotencyKey: req.get('Idempotency-Key') || `student-re-enroll:${req.params.id}:${randomUUID()}`, ipAddress: req.ip || 'unknown'
+      });
+      return res.json({ success: true, data: result, message: 'تمت إعادة قيد الطالب وتسجيل العملية تدقيقيًا.', meta: { persistence: 'canonical-postgres' } });
+    } catch (error) { return next(error); }
   });
 
   // GRADUATION

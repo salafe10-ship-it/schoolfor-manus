@@ -23,19 +23,22 @@ describe('STU-STATUS-003 lifecycle release boundary discovery', () => {
     expect(registration).toContain("'applicant'");
   });
 
-  it('proves legacy Enrollment mutations fail closed before any StudentService write', () => {
+  it('proves enrollment mutations use the canonical workflow before any legacy StudentService write', () => {
     const server = read('server.ts');
-    for (const route of ['/api/students/:id/transfer', '/api/students/:id/promote', '/api/students/:id/re-enroll', '/api/students/:id/dismiss']) {
+    for (const route of ['/api/students/:id/transfer', '/api/students/:id/promote', '/api/students/:id/re-enroll']) {
       const start = server.indexOf(`app.post("${route}"`);
       expect(start).toBeGreaterThanOrEqual(0);
       const nextRoute = server.indexOf('app.', start + 8);
       const block = server.slice(start, nextRoute > start ? nextRoute : start + 900);
-      expect(block).toContain('canonicalEnrollmentWorkflowRequired');
+      expect(block).toContain('canonicalEnrollmentWorkflowService.execute');
       expect(block).not.toContain('StudentService.transferStudent');
       expect(block).not.toContain('StudentService.promoteStudent');
       expect(block).not.toContain('StudentService.reEnrollStudent');
       expect(block).not.toContain('StudentService.dismissStudent');
     }
+    const dismissStart = server.indexOf('app.post("/api/students/:id/dismiss"');
+    const dismissEnd = server.indexOf('app.post("/api/students/:id/archive"', dismissStart);
+    expect(server.slice(dismissStart, dismissEnd)).toContain('canonicalEnrollmentWorkflowRequired');
   });
 
   it('proves canonical schema vocabulary and one-current-status constraint', () => {

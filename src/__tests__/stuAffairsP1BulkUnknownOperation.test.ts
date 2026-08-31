@@ -49,12 +49,12 @@ describe('STU-AFFAIRS-P1-006-26 unknown Bulk operation fail-closed contract', ()
     expect(block).not.toContain("'restore'");
   });
 
-  it('fails closed at the route boundary before invoking legacy bulk mutation', () => {
+  it('uses the canonical enrollment workflow at the route boundary', () => {
     const route = bulkRouteBlock();
     expect(route).toContain('resolveStudentTenantMiddleware');
-    expect(route).toContain('canonicalEnrollmentWorkflowRequired');
+    expect(route).toContain('canonicalEnrollmentWorkflowService.execute');
     expect(route).not.toContain('StudentService.executeBulkOperation');
-    expect(route).toContain("'العملية الجماعية للطلاب'");
+    expect(route).toContain("meta: { persistence: 'canonical-postgres', workflow: 'enrollment' }");
   });
 
   it('does not provide a success envelope for unknown operations', () => {

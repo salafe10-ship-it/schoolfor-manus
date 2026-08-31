@@ -459,4 +459,105 @@ export class CanonicalStudentWriteRepository {
         context
       );
   }
+
+  public static async resumeSuspended(
+    context: TenantContext,
+    studentId: string,
+    audit: WriteAudit
+  ): Promise<Record<string, unknown>> {
+    requireContext(context);
+    if (!UnitOfWork.hasTransactionDriver()) throw new DatabaseError('Canonical Student writes require the configured PostgreSQL transaction driver.');
+
+    const run = async () => {
+      const db = transaction();
+      const currentResult = await db.query<CanonicalStudent>(
+        `SELECT id, tenant_id, school_id, branch_id, student_number,
+                legal_first_name, legal_middle_name, legal_last_name,
+                preferred_name, date_of_birth, gender, nationality, status,
+                version, created_at, updated_at, deleted_at
+           FROM public.students
+          WHERE id = $1 AND tenant_id = $2 AND school_id = $3
+            AND (branch_id = $4 OR branch_id IS NULL) AND deleted_at IS NULL
+          FOR UPDATE`,
+        [studentId, context.tenantId, context.schoolId, context.branchId]
+      );
+      const current = currentResult.rows[0];
+      if (!current) throw new NotFoundError('Student record was not found in the trusted school context.');
+      if (current.status !== 'suspended') throw new ValidationError('Only a suspended student can be reinstated through this workflow.');
+
+      const internalActor = await actorId(context);
+      const auditId = await writeAudit(context, studentId, audit, internalActor);
+      const transitionId = randomUUID();
+      const historyId = randomUUID();
+      const requestId = uuidOrGenerate(audit.requestId);
+      const correlationId = uuidOrGenerate(audit.correlationId);
+      const idempotencyKey = `student-reinstatement:${studentId}:${requestId}`;
+
+      await db.query(
+        `INSERT INTO public.student_status_transitions (
+           id, tenant_id, school_id, branch_id, student_id, from_status, to_status,
+           transition_kind, approval_status, effective_on, reason_code, reason_notes,
+           correction_reference, requested_at, approved_at, completed_at,
+           requested_by, approved_by, completed_by, idempotency_key, version,
+           created_by, updated_by, audit_id, request_id, correlation_id
+         ) VALUES ($1, $2, $3, $4, $5, 'suspended', 'active', 'correction', 'completed',
+                   CURRENT_DATE, 'administrative_reinstatement', $6,
+                   'STUDENT-AFFAIRS-SUSPENSION-REVERSAL', now(), now(), now(),
+                   $7, $7, $7, $8, 1, $7, $7, $9, $10, $11)`,
+        [transitionId, context.tenantId, context.schoolId, context.branchId, studentId, audit.reason, internalActor, idempotencyKey, auditId, requestId, correlationId]
+      );
+      await db.query(
+        `INSERT INTO public.student_status_history (
+           id, tenant_id, school_id, branch_id, student_id, transition_id,
+           from_status, to_status, event_type, effective_on, reason_code,
+           reason_notes, approved_at, approved_by, recorded_by, status, version,
+           created_by, updated_by, audit_id, request_id, correlation_id
+         ) VALUES ($1, $2, $3, $4, $5, $6, 'suspended', 'active', 'correction', CURRENT_DATE,
+                   'administrative_reinstatement', $7, now(), $8, $8, 'active', 1,
+                   $8, $8, $9, $10, $11)`,
+        [historyId, context.tenantId, context.schoolId, context.branchId, studentId, transitionId, audit.reason, internalActor, auditId, requestId, correlationId]
+      );
+      const statusUpdate = await db.query(
+        `UPDATE public.student_academic_status
+            SET status = 'active', effective_on = CURRENT_DATE,
+                reason_code = 'administrative_reinstatement', reason_notes = $1,
+                approved_at = now(), approved_by = $2, updated_at = now(),
+                updated_by = $2, version = version + 1, audit_id = $3,
+                request_id = $4, correlation_id = $5
+          WHERE tenant_id = $6 AND school_id = $7 AND student_id = $8 AND deleted_at IS NULL`,
+        [audit.reason, internalActor, auditId, requestId, correlationId, context.tenantId, context.schoolId, studentId]
+      );
+      if (statusUpdate.rowCount !== 1) throw new ValidationError('The current academic status record is missing; reinstatement was rolled back.');
+      const updated = await db.query<CanonicalStudent>(
+        `UPDATE public.students
+            SET status = 'active', updated_at = now(), updated_by = $1,
+                version = version + 1, audit_id = $2, request_id = $3, correlation_id = $4
+          WHERE id = $5 AND tenant_id = $6 AND school_id = $7
+            AND (branch_id = $8 OR branch_id IS NULL) AND status = 'suspended'
+          RETURNING id, tenant_id, school_id, branch_id, student_number,
+                    legal_first_name, legal_middle_name, legal_last_name,
+                    preferred_name, date_of_birth, gender, nationality, status,
+                    version, created_at, updated_at, deleted_at`,
+        [internalActor, auditId, requestId, correlationId, studentId, context.tenantId, context.schoolId, context.branchId]
+      );
+      if (!updated.rows[0]) throw new ConflictError('Student status changed concurrently; no reinstatement was committed.');
+      return mapStudent(updated.rows[0]);
+    };
+
+    return UnitOfWork.isTransactionActive()
+      ? run()
+      : UnitOfWork.runInTransaction(
+        context.schoolId,
+        {
+          operationName: 'Canonical Student Reinstatement',
+          tenantId: context.tenantId,
+          userId: context.userId,
+          userName: context.userId,
+          ipAddress: audit.ipAddress,
+          affectedTables: ['students', 'student_academic_status', 'student_status_transitions', 'student_status_history', 'audit_events']
+        },
+        run,
+        context
+      );
+  }
 }

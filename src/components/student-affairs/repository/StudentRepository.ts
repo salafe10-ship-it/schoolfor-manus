@@ -51,6 +51,17 @@ export const StudentRepository = {
     return data;
   },
 
+  async reinstateStudent(studentId: string, reason = 'إعادة قيد الطالب بعد مراجعة الجهة المختصة.'): Promise<any> {
+    const response = await authenticatedRequest(`/api/students/${encodeURIComponent(studentId)}/reinstate`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ reason })
+    });
+    const data = await response.json().catch(() => ({}));
+    if (!response.ok) throw new Error(data.message || data.error || 'تعذر إعادة قيد الطالب من المسار الكانوني.');
+    return data;
+  },
+
   async registerStudent(studentData: any, idempotencyKey: string): Promise<any> {
     if (!idempotencyKey.trim()) throw new Error('مفتاح idempotency مطلوب قبل بدء تسجيل الطالب.');
     const response = await authenticatedRequest("/api/student-registration", {
@@ -90,6 +101,29 @@ export const StudentRepository = {
       throw new Error("Bulk write to backend database failed");
     }
     return response.json();
+  },
+
+  async executeEnrollmentWorkflow(payload: {
+    operation: 'transfer' | 'promote' | 're_enroll';
+    studentIds: string[];
+    targetClassId?: string;
+    targetGradeId: string;
+    targetSection: string;
+    reason: string;
+    idempotencyKey: string;
+  }): Promise<any> {
+    if (!payload.idempotencyKey.trim()) throw new Error('مفتاح منع التكرار مطلوب قبل تنفيذ عملية القيد.');
+    const response = await authenticatedRequest('/api/students/bulk', {
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/json',
+        'Idempotency-Key': payload.idempotencyKey
+      },
+      body: JSON.stringify(payload)
+    });
+    const data = await response.json().catch(() => ({}));
+    if (!response.ok) throw new Error(data.message || data.error || 'تعذر تنفيذ عملية القيد الذرية من الخادم.');
+    return data;
   },
 
   async transferStudent(studentId: string, payload: { classroom: string; section: string; stageId?: string; branchId?: string }): Promise<any> {

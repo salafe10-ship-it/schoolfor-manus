@@ -168,6 +168,7 @@ export default function StudentAffairsPortal({
   const [isLoadingStudents, setIsLoadingStudents] = useState<boolean>(false);
   const [isExportingStudents, setIsExportingStudents] = useState<boolean>(false);
   const [isRepairingOperationalEnrollments, setIsRepairingOperationalEnrollments] = useState<boolean>(false);
+  const [isRunningEnrollmentWorkflow, setIsRunningEnrollmentWorkflow] = useState<boolean>(false);
   const [studentLoadError, setStudentLoadError] = useState<string | null>(null);
   const [studentSaveError, setStudentSaveError] = useState<string | null>(null);
   const [studentRefreshToken, setStudentRefreshToken] = useState(0);
@@ -820,7 +821,9 @@ export default function StudentAffairsPortal({
     const actionLabel = isSuspended ? 'إعادة القيد' : 'إيقاف القيد';
     if (!window.confirm(`هل تريد ${actionLabel} للطالب (${student.name})؟`)) return;
     try {
-      const response = await StudentRepository.saveStudent({ id: student.id, status: newStatus });
+      const response = isSuspended
+        ? await StudentRepository.reinstateStudent(student.id)
+        : await StudentRepository.saveStudent({ id: student.id, status: newStatus });
       const persistedStudent = response?.data?.student || response?.student;
       if (!persistedStudent) {
         throw new Error('لم يُرجع الخادم سجل الطالب بعد تغيير الحالة.');
@@ -855,14 +858,37 @@ export default function StudentAffairsPortal({
       triggerNotification('يرجى تحديد طالب واحد على الأقل لنقله أو ترقيته', 'warning');
       return;
     }
-
-    // A batch transfer must be one canonical, durable transaction. Calling the
-    // legacy single-student endpoint in a loop can commit a partial batch, so
-    // fail closed until the approved TransferOperation service exists.
-    triggerNotification(
-      'النقل الجماعي موقوف مؤقتًا حتى اعتماد العملية الذرية وسجل idempotency. لم يتم تعديل أي طالب.',
-      'warning'
-    );
+    if (!canWriteStudents) {
+      triggerNotification('لا تملك صلاحية تنفيذ عملية القيد.', 'warning');
+      return;
+    }
+    if (!transferTargetGrade || !transferTargetSection) {
+      triggerNotification('اختر الصف والشعبة من الهيكل الأكاديمي الموثوق قبل التنفيذ.', 'warning');
+      return;
+    }
+    if (!window.confirm(`سيتم نقل/ترقية ${selectedStudentIds.length} طالب إلى الصف والشعبة المحددين داخل نفس المدرسة. هل تريد المتابعة؟`)) return;
+    if (isRunningEnrollmentWorkflow) return;
+    setIsRunningEnrollmentWorkflow(true);
+    try {
+      const response = await StudentRepository.executeEnrollmentWorkflow({
+        operation: 'promote',
+        studentIds: selectedStudentIds,
+        targetGradeId: transferTargetGrade,
+        targetSection: transferTargetSection,
+        reason: 'نقل أو ترقية جماعية معتمدة من شؤون الطلاب.',
+        idempotencyKey: `student-affairs-enrollment-${crypto.randomUUID()}`
+      });
+      const result = response?.data || {};
+      setStudentRefreshToken(value => value + 1);
+      setSelectedStudentIds([]);
+      setIsTransferModalOpen(false);
+      logAction('CANONICAL_ENROLLMENT_WORKFLOW', `تمت معالجة ${Number(result.processedCount) || selectedStudentIds.length} طالبًا في معاملة قيد ذرية.`, 'شؤون الطلاب');
+      triggerNotification(`تمت العملية بنجاح: ${Number(result.processedCount) || selectedStudentIds.length} طالب، مع حفظ سجل التدقيق.`, 'success');
+    } catch (error: any) {
+      triggerNotification(error?.message || 'تعذر تنفيذ عملية القيد الذرية. لم يتم اعتماد أي تعديل جزئي.', 'warning');
+    } finally {
+      setIsRunningEnrollmentWorkflow(false);
+    }
   };
 
   // Student Data Export: the server owns scope, filtering, privacy, and XLSX generation.
@@ -2567,15 +2593,16 @@ export default function StudentAffairsPortal({
               <button onClick={() => setIsTransferModalOpen(false)} className="px-4 py-2 bg-slate-100 rounded-xl text-xs font-bold">إلغاء</button>
               <div className="space-y-2 text-right">
                 <p role="alert" className="text-[10px] leading-5 text-amber-900 bg-amber-50 border border-amber-200 rounded-xl px-3 py-2">
-                  النقل الجماعي غير متاح حاليًا. سيُفتح بعد اعتماد معاملة ذرية واحدة تمنع الحفظ الجزئي وتدعم idempotency والتدقيق.
+                  العملية خادمية ذرية داخل نطاق المدرسة: يتحقق الخادم من الصف والشعبة والسعة، ويثبت كل التغييرات وسجل التدقيق في معاملة واحدة.
                 </p>
                 <button
                   onClick={handleBatchTransfer}
-                  disabled
-                  aria-disabled="true"
-                  className="px-6 py-2 bg-slate-300 text-slate-500 font-black rounded-xl text-xs cursor-not-allowed"
+                  disabled={!canWriteStudents || isRunningEnrollmentWorkflow || !transferTargetGrade || !transferTargetSection}
+                  aria-disabled={!canWriteStudents || isRunningEnrollmentWorkflow || !transferTargetGrade || !transferTargetSection}
+                  aria-busy={isRunningEnrollmentWorkflow}
+                  className="px-6 py-2 bg-gradient-to-r from-[#9a6a1d] to-[#d4af37] text-slate-950 font-black rounded-xl text-xs disabled:cursor-not-allowed disabled:opacity-50"
                 >
-                  النقل الجماعي غير متاح حاليًا
+                  {isRunningEnrollmentWorkflow ? 'جارٍ تنفيذ العملية الذرية...' : 'تنفيذ النقل / الترقية واعتمادها'}
                 </button>
               </div>
             </div>

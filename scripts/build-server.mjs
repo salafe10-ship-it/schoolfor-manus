@@ -10,15 +10,17 @@ const workspaceRoot = path.resolve(projectRoot, '..');
 // executable on Linux. Render must therefore execute it directly instead of
 // asking Node to parse a native ELF binary as JavaScript.
 const esbuildCli = path.join(workspaceRoot, 'node_modules', 'esbuild', 'bin', 'esbuild');
+const serverEntry = path.join(workspaceRoot, 'server.ts');
+const serverOutput = path.join(workspaceRoot, 'dist', 'server.cjs');
 const cliArgs = [
   esbuildCli,
-  '././server.ts',
+  serverEntry,
   '--bundle',
   '--platform=node',
   '--format=cjs',
   '--packages=external',
   '--sourcemap',
-  '--outfile=././dist/server.cjs'
+  `--outfile=${serverOutput}`
 ];
 
 const command = process.platform === 'win32' ? process.execPath : esbuildCli;
