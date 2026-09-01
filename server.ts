@@ -118,6 +118,46 @@ const platformAdminPool = platformAdminConnectionString
     })
   : null;
 
+// Platform permissions are a control-plane concern.  They must never be
+// resolved through the tenant data-plane transaction, because that channel is
+// intentionally RLS-restricted to a school context.  The query still accepts
+// only the verified Auth user id and returns the single canonical platform
+// permission; it never accepts role or scope from a request.
+if (platformAdminPool) {
+  roleResolver.configurePlatformDatabaseLoader(async (identity) => {
+    const authUserId = String(identity?.id || '').trim();
+    if (!authUserId) throw new Error('Trusted auth_user_id is required for platform role resolution.');
+    const result = await platformAdminPool.query<{ roleKey: string; permissionKey: string }>(
+      `SELECT pr.role_key AS "roleKey", pp.permission_key AS "permissionKey"
+         FROM public.platform_users pu
+         JOIN public.platform_user_roles pur
+           ON pur.platform_user_id = pu.id
+         JOIN public.platform_roles pr
+           ON pr.id = pur.role_id
+         JOIN public.platform_role_permissions prp
+           ON prp.role_id = pr.id
+         JOIN public.platform_permissions pp
+           ON pp.id = prp.permission_id
+        WHERE pu.auth_user_id = $1::uuid
+          AND pu.status = 'active'
+          AND pu.deleted_at IS NULL
+          AND pur.status = 'active'
+          AND pur.deleted_at IS NULL
+          AND pur.starts_at <= now()
+          AND (pur.ends_at IS NULL OR pur.ends_at > now())
+          AND pr.status = 'active'
+          AND pr.deleted_at IS NULL
+          AND prp.status = 'active'
+          AND prp.deleted_at IS NULL
+          AND pp.status = 'active'
+          AND pp.deleted_at IS NULL
+        ORDER BY pr.role_key, pp.permission_key`,
+      [authUserId]
+    );
+    return result.rows;
+  });
+}
+
 const platformAdminAuth = process.env.SUPABASE_URL && process.env.SUPABASE_SERVICE_ROLE_KEY
   ? createClient(process.env.SUPABASE_URL, process.env.SUPABASE_SERVICE_ROLE_KEY, { auth: { autoRefreshToken: false, persistSession: false } })
   : null;
