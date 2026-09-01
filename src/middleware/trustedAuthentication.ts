@@ -14,7 +14,8 @@ export type TrustedIdentity = {
   name: string;
   /** Server-resolved from public.users after Auth; absent on raw claims by design. */
   tenantId?: string;
-  schoolId: string;
+  /** Absent only for a canonical platform administrator; school users must have it. */
+  schoolId?: string;
   role: UserRole;
   school?: TrustedSchoolPresentation;
   branchId?: string;
@@ -152,7 +153,10 @@ export function extractTrustedIdentity(user: SupabaseUser): TrustedIdentity {
   const role = normalizeTrustedRole(metadata.role);
   const branchId = String(metadata.branch_id || '').trim();
   const academicYear = String(metadata.academic_year_id || metadata.academic_year || '').trim();
-  if (!schoolId) throw new TrustedAuthenticationError('INVALID_SCHOOL');
+  // A central platform administrator is intentionally not attached to any
+  // school. The canonical platform RBAC assignment is checked immediately
+  // after this claim extraction; all other roles remain school-bound.
+  if (!schoolId && role !== 'SuperAdmin') throw new TrustedAuthenticationError('INVALID_SCHOOL');
   if (!role) throw new TrustedAuthenticationError('INVALID_ROLE');
 
   return {
@@ -193,6 +197,41 @@ async function attachTrustedEffectivePermissions(identity: TrustedIdentity): Pro
   return attachTrustedPlatformPermissions(tenantIdentity);
 }
 
+function hasPlatformAdminPermission(identity: TrustedIdentity): boolean {
+  return Array.isArray(identity.platformPermissions)
+    && identity.platformPermissions.includes('Platform.Admin');
+}
+
+async function resolveTrustedScope(
+  supabase: SupabaseClient,
+  identity: TrustedIdentity,
+): Promise<{ identity: TrustedIdentity; school?: TrustedSchoolPresentation }> {
+  if (!identity.schoolId) {
+    // A central identity may not carry a branch or a school. Its platform
+    // assignment is resolved from the canonical platform RBAC tables, never
+    // from browser claims or user-editable metadata.
+    if (identity.branchId) throw new TrustedAuthenticationError('INVALID_BRANCH');
+    return { identity };
+  }
+
+  const school = await assertTrustedSchoolExists(supabase, identity.schoolId);
+  const scopedIdentity = await assertTrustedBranchScope(supabase, identity);
+  return { identity: scopedIdentity, school };
+}
+
+async function finalizeTrustedIdentity(
+  supabase: SupabaseClient,
+  identity: TrustedIdentity,
+  tenantId: string,
+): Promise<TrustedIdentity> {
+  const scoped = await resolveTrustedScope(supabase, identity);
+  const trustedIdentity = await attachTrustedEffectivePermissions({ ...scoped.identity, tenantId, ...(scoped.school ? { school: scoped.school } : {}) });
+  if (!trustedIdentity.schoolId && !hasPlatformAdminPermission(trustedIdentity)) {
+    throw new TrustedAuthenticationError('INVALID_SCHOOL');
+  }
+  return trustedIdentity;
+}
+
 export async function authenticateTrustedUser(
   supabase: SupabaseClient,
   identifier: unknown,
@@ -221,10 +260,7 @@ export async function authenticateTrustedUser(
   if (requestedSchoolId && identity.schoolId !== requestedSchoolId) {
     throw new TrustedAuthenticationError('INVALID_SCHOOL');
   }
-  const school = await assertTrustedSchoolExists(supabase, identity.schoolId);
-
-  const scopedIdentity = await assertTrustedBranchScope(supabase, identity);
-  const trustedIdentity = await attachTrustedEffectivePermissions({ ...scopedIdentity, tenantId, school });
+  const trustedIdentity = await finalizeTrustedIdentity(supabase, identity, tenantId);
   return { identity: trustedIdentity, session: data.session };
 }
 
@@ -260,9 +296,7 @@ export async function refreshTrustedSession(
   }
   const identity = extractTrustedIdentity(data.user);
   const tenantId = await resolveTrustedTenantId(supabase);
-  const school = await assertTrustedSchoolExists(supabase, identity.schoolId);
-  const scopedIdentity = await assertTrustedBranchScope(supabase, identity);
-  const trustedIdentity = await attachTrustedEffectivePermissions({ ...scopedIdentity, tenantId, school });
+  const trustedIdentity = await finalizeTrustedIdentity(supabase, identity, tenantId);
   return { identity: trustedIdentity, session: data.session };
 }
 
@@ -275,7 +309,5 @@ export async function verifyTrustedSession(
   if (error || !user) throw new TrustedAuthenticationError('INVALID_CREDENTIALS');
   const identity = extractTrustedIdentity(user);
   const tenantId = await resolveTrustedTenantId(supabase);
-  const school = await assertTrustedSchoolExists(supabase, identity.schoolId);
-  const scopedIdentity = await assertTrustedBranchScope(supabase, identity);
-  return attachTrustedEffectivePermissions({ ...scopedIdentity, tenantId, school });
+  return finalizeTrustedIdentity(supabase, identity, tenantId);
 }

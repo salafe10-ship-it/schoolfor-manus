@@ -381,13 +381,14 @@ export default function App() {
   const [saasSchools, setSaasSchools] = useState<any[]>([]);
 
   const applyTrustedSessionUser = useCallback((user: TrustedSessionUser): School => {
+    const hasPlatformAdmin = hasTrustedPlatformAdminAccess(user);
     const trustedSchool = user.school && user.school.id === user.schoolId ? user.school : null;
     const validRoles: UserRole[] = ['SuperAdmin', 'SchoolAdmin', 'Teacher', 'Accountant', 'Parent', 'Control', 'Auditor', 'Student'];
-    if (!trustedSchool || !validRoles.includes(user.role as UserRole)) {
+    if ((!trustedSchool && !hasPlatformAdmin) || !validRoles.includes(user.role as UserRole)) {
       throw new Error('Invalid trusted session identity');
     }
 
-    const targetSchool: School = {
+    const targetSchool: School = trustedSchool ? {
       id: trustedSchool.id,
       name: trustedSchool.name,
       logo: trustedSchool.logo,
@@ -399,14 +400,19 @@ export default function App() {
       academicYear: trustedSchool.academicYear || user.academicYear || '',
       status: trustedSchool.status,
       connectedDb: trustedSchool.connectedDb
+    } : {
+      ...UNRESOLVED_SCHOOL,
+      name: 'الإدارة المركزية',
+      logo: '🏢',
+      status: 'active',
+      connectedDb: 'central-platform-scope'
     };
 
     const trustedRole = user.role as UserRole;
-    const hasPlatformAdmin = hasTrustedPlatformAdminAccess(user);
     setTrustedSessionUser(user);
     setSelectedSchool(targetSchool);
     setCurrentRole(hasPlatformAdmin ? 'SuperAdmin' : trustedRole);
-    const trustedBranch = user.branch && user.branch.schoolId === user.schoolId
+    const trustedBranch = user.branch && user.schoolId && user.branch.schoolId === user.schoolId
       ? { id: user.branch.id, schoolId: user.branch.schoolId, name: user.branch.name, city: user.branch.city, manager: '', studentCount: 0, teacherCount: 0 }
       : null;
     setSelectedBranch(trustedBranch);

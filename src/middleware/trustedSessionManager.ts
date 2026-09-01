@@ -7,7 +7,7 @@ export type TrustedSessionUser = {
   id: string;
   email: string;
   name: string;
-  schoolId: string;
+  schoolId?: string;
   role: string;
   school?: TrustedSchoolPresentation;
   branchId?: string;
@@ -60,8 +60,9 @@ function normalizeUser(value: unknown): TrustedSessionUser {
       .map((permission: string) => permission.trim())
     : undefined;
   const name = String(value.name || email).trim();
-  if (!id || !email || !schoolId || !role) throw new TrustedSessionError('INVALID_SESSION');
-  const school = isRecord(value.school) && String(value.school.id || '').trim() === schoolId
+  const isPlatformAdmin = Array.isArray(platformPermissions) && platformPermissions.includes('Platform.Admin');
+  if (!id || !email || !role || (!schoolId && !isPlatformAdmin)) throw new TrustedSessionError('INVALID_SESSION');
+  const school = schoolId && isRecord(value.school) && String(value.school.id || '').trim() === schoolId
     ? value.school as TrustedSchoolPresentation
     : undefined;
   const branch = isRecord(value.branch)
@@ -73,7 +74,7 @@ function normalizeUser(value: unknown): TrustedSessionUser {
     id,
     email,
     name,
-    schoolId,
+    ...(schoolId ? { schoolId } : {}),
     role,
     ...(school ? { school } : {}),
     ...(branchId ? { branchId } : {}),

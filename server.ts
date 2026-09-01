@@ -1361,7 +1361,7 @@ async function startServer() {
           expiresAt: session.expires_at,
           user: {
             id: identity.id,
-            school_id: identity.schoolId,
+            school_id: identity.schoolId || null,
             role: identity.role,
             permissions: identity.permissions || [],
             platform_permissions: identity.platformPermissions || [],
@@ -1470,7 +1470,7 @@ async function startServer() {
           expiresAt: session.expires_at,
           user: {
             id: identity.id,
-            school_id: identity.schoolId,
+            school_id: identity.schoolId || null,
             role: identity.role,
             permissions: identity.permissions || [],
             platform_permissions: identity.platformPermissions || [],
@@ -1543,7 +1543,9 @@ async function startServer() {
         authTrace.supabaseVerification = 'SUCCESS';
         authTrace.userIdPresent = identity?.id ? 'YES' : 'NO';
         authTrace.trustedIdentity = identity ? 'SUCCESS' : 'FAIL';
-        authTrace.schoolContext = identity?.schoolId ? 'SUCCESS' : 'FAIL';
+        // Central platform sessions intentionally have no school context;
+        // authentication is still complete because platform RBAC is verified.
+        authTrace.schoolContext = identity ? 'SUCCESS' : 'FAIL';
         authTrace.branchContext = identity?.branchId ? 'SUCCESS' : 'FAIL';
         if (!identity) authTrace.rejectionStage = 'trusted_identity';
       }
@@ -1575,14 +1577,14 @@ async function startServer() {
     if (clientSchoolId && String(clientSchoolId) !== String(identity.schoolId) && !(isCentralPlatformRequest && hasServerDerivedPlatformAdmin)) {
       // Log security violation in Audit Logs
       await AuditRepository.log(
-        identity.schoolId,
+        identity.schoolId || 'central-platform',
         identity.id,
         identity.name,
         identity.role,
         "CROSS_TENANT_ACCESS_VIOLATION",
         "Authentication",
         req.ip || "127.0.0.1",
-        `محاولة اختراق أمني: حاول المستخدم الوصول إلى بيانات المدرسة (${clientSchoolId}) بينما ينتمي للمدرسة (${identity.schoolId})`
+        `محاولة اختراق أمني: حاول المستخدم الوصول إلى بيانات المدرسة (${clientSchoolId}) بينما ينتمي للمدرسة (${identity.schoolId || 'الإدارة المركزية'})`
       );
       
       return next(new AuthorizationError("غير مسموح. محاولة الوصول إلى بيانات مدرسة أخرى تم كشفها وتسجيلها أمنياً."));
