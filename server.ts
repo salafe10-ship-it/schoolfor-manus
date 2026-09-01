@@ -2765,7 +2765,21 @@ async function startServer() {
     let authUserId = '';
     const client = await platformAdminPool.connect();
     try {
-      const authResult = await platformAdminAuth.auth.admin.createUser({ email, password, email_confirm: true, user_metadata: { display_name: displayName } });
+      const authResult = await platformAdminAuth.auth.admin.createUser({
+        email,
+        password,
+        email_confirm: true,
+        user_metadata: { display_name: displayName },
+        // These claims are server-owned and are the source used by the
+        // trusted identity/RLS boundary for every school user.
+        app_metadata: {
+          tenant_id: tenantId,
+          school_id: schoolId,
+          ...(branchId ? { branch_id: branchId } : {}),
+          role: roleKey,
+          status: 'active',
+        },
+      });
       if (authResult.error || !authResult.data.user) throw new ExternalServiceError(authResult.error?.message || 'تعذر إنشاء هوية Supabase Auth.');
       authUserId = authResult.data.user.id;
       await client.query('BEGIN');
@@ -2836,7 +2850,20 @@ async function startServer() {
     if (!actorId || !/^[0-9a-f-]{36}$/i.test(userId)) return next(new AuthenticationError('هوية المستخدم أو الإدارة غير مكتملة.'));
     if (tenantId && !/^[0-9a-f-]{36}$/i.test(tenantId)) return next(new ValidationError('معرف المستأجر غير صالح.'));
     try {
-      const target = await platformAdminPool.query(`SELECT id, auth_user_id, display_name, status FROM public.users WHERE id = $1::uuid AND ($2::uuid IS NULL OR tenant_id = $2::uuid) AND deleted_at IS NULL`, [userId, tenantId || null]);
+      const target = await platformAdminPool.query(`
+        SELECT u.id, u.auth_user_id, u.tenant_id, u.school_id, u.branch_id, u.display_name, u.status,
+               COALESCE((
+                 SELECT r.role_key
+                   FROM public.user_roles ur
+                   JOIN public.roles r ON r.tenant_id = ur.tenant_id AND r.id = ur.role_id
+                  WHERE ur.tenant_id = u.tenant_id AND ur.user_id = u.id
+                    AND ur.status = 'active' AND ur.deleted_at IS NULL
+                    AND r.status = 'active' AND r.deleted_at IS NULL
+                  ORDER BY ur.created_at ASC
+                  LIMIT 1
+               ), 'schooladmin') AS role_key
+          FROM public.users u
+         WHERE u.id = $1::uuid AND ($2::uuid IS NULL OR u.tenant_id = $2::uuid) AND u.deleted_at IS NULL`, [userId, tenantId || null]);
       if (target.rowCount !== 1) return next(new ConflictError('المستخدم غير موجود في نطاق الإدارة المركزية.'));
       const row = target.rows[0];
       if (operation === 'update') {
@@ -2861,7 +2888,19 @@ async function startServer() {
       }
       if (operation === 'force_password') {
         const forced = Boolean(req.body?.forcePasswordChange);
-        const authResult = await platformAdminAuth.auth.admin.updateUserById(row.auth_user_id, { user_metadata: { forcePasswordChange: forced } });
+        const authResult = await platformAdminAuth.auth.admin.updateUserById(row.auth_user_id, {
+          user_metadata: { forcePasswordChange: forced },
+          // Re-assert server-owned scope claims whenever central identity is
+          // touched. This repairs legacy accounts without trusting metadata
+          // supplied by the browser.
+          app_metadata: {
+            tenant_id: row.tenant_id,
+            ...(row.school_id ? { school_id: row.school_id } : {}),
+            ...(row.branch_id ? { branch_id: row.branch_id } : {}),
+            role: row.role_key,
+            status: row.status,
+          },
+        });
         if (authResult.error) return next(new ExternalServiceError('تعذر تحديث سياسة كلمة المرور المركزية.'));
         return res.json({ success: true, user: { ...row, forcePasswordChange: forced } });
       }

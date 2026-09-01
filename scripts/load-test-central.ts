@@ -142,7 +142,28 @@ async function main(): Promise<void> {
   const usersResponse = await api(`/api/admin/central/users?tenantId=${encodeURIComponent(String(tenant.id))}`);
   const usersPayload = await readJson(usersResponse);
   if (!usersResponse.ok || !Array.isArray(usersPayload.users)) throw new Error(`Identity directory unavailable: HTTP ${usersResponse.status}`);
-  const existingUsers = new Set((usersPayload.users as JsonRecord[]).map((item) => String(item.email || '').toLowerCase()));
+  const existingUsers = new Map((usersPayload.users as JsonRecord[])
+    .map((item) => [String(item.email || '').toLowerCase(), item] as const)
+    .filter(([email]) => email));
+
+  // Re-assert server-owned claims for resumable synthetic accounts. This is
+  // intentionally done through the central identity route, never by trusting
+  // browser-provided metadata.
+  const existingSyntheticUsers = Array.from(existingUsers.entries())
+    .filter(([email]) => /^loadtest-user-\d{4}@example\.invalid$/.test(email));
+  await bounded(existingSyntheticUsers, userConcurrency, async ([, item]) => {
+    const response = await api(`/api/admin/central/users/${encodeURIComponent(String(item.id))}`, {
+      method: 'PATCH',
+      body: JSON.stringify({
+        targetTenantId: tenant.id,
+        operation: 'force_password',
+        forcePasswordChange: false,
+      }),
+    });
+    const payload = await readJson(response);
+    if (!response.ok || !payload.success) throw new Error(`Existing user claims repair failed: HTTP ${response.status}`);
+    return true;
+  });
 
   let userDone = 0;
   const userJobs = Array.from({ length: userCount }, (_, offset) => offset + 1)
@@ -165,7 +186,8 @@ async function main(): Promise<void> {
     });
     const payload = await readJson(response);
     if (!response.ok || !payload.success || !payload.user?.id) {
-      throw new Error(`User ${suffix} failed: HTTP ${response.status} ${String(payload.message || '')}`.trim());
+      const detail = typeof payload.details === 'string' ? payload.details : payload.details?.cause || payload.details?.message || payload.error || '';
+      throw new Error(`User ${suffix} failed: HTTP ${response.status} ${String(payload.message || '')} ${String(detail)}`.trim());
     }
     userDone += 1;
     if (userDone % 25 === 0 || userDone === userCount) console.log(`USERS ${userDone}/${userCount}`);
