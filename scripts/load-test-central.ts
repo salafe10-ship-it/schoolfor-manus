@@ -201,16 +201,30 @@ async function main(): Promise<void> {
 
   let loginDone = 0;
   const loginResults = await bounded(allUsers, loginConcurrency, async (user) => {
-    const client = createClient(supabaseUrl, supabaseAnonKey, { auth: { autoRefreshToken: false, persistSession: false } });
-    const signedIn = await client.auth.signInWithPassword({ email: user.email, password: user.password });
-    if (signedIn.error || !signedIn.data.session) return { ok: false, reason: signedIn.error?.message || 'no session' };
-    const response = await fetch(`${baseUrl}/api/dashboard/metrics`, { headers: { Authorization: `Bearer ${signedIn.data.session.access_token}` } });
+    // Use the same trusted login contract as the browser. This verifies Auth,
+    // server-owned scope claims, database permissions, and RLS together.
+    const loginResponse = await fetch(`${baseUrl}/api/auth/login`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ identifier: user.email, password: user.password }),
+    });
+    const loginPayload = await readJson(loginResponse);
+    const trustedToken = String(loginPayload.data?.token || '').trim();
+    if (!loginResponse.ok || !loginPayload.success || !trustedToken) return { ok: false, reason: String(loginPayload.message || `login HTTP ${loginResponse.status}`) };
+    const response = await fetch(`${baseUrl}/api/dashboard/metrics`, { headers: { Authorization: `Bearer ${trustedToken}` } });
     loginDone += 1;
     if (loginDone % 25 === 0 || loginDone === allUsers.length) console.log(`CONCURRENT USERS ${loginDone}/${allUsers.length}`);
-    return { ok: response.ok, status: response.status };
+    return { ok: response.ok, status: response.status, reason: response.ok ? undefined : `metrics HTTP ${response.status}` };
   });
 
   const successfulLogins = loginResults.filter(result => result.ok).length;
+  const failedReasons = loginResults
+    .filter(result => !result.ok)
+    .reduce<Record<string, number>>((acc, result) => {
+      const key = String(result.reason || 'unknown').slice(0, 120);
+      acc[key] = (acc[key] || 0) + 1;
+      return acc;
+    }, {});
   console.log(JSON.stringify({
     success: true,
     target: baseUrl,
@@ -219,6 +233,7 @@ async function main(): Promise<void> {
     concurrentLoginChecks: loginResults.length,
     successfulLoginChecks: successfulLogins,
     failedLoginChecks: loginResults.length - successfulLogins,
+    failedLoginReasons: failedReasons,
     note: 'Synthetic records remain available for an explicit cleanup/archive pass by their LOADTEST prefix.',
   }));
 }
