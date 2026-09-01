@@ -608,7 +608,7 @@ export default function SuperAdminBranches({
                   >
                     <option value="">-- اختر فرع المصدر --</option>
                     {schoolBranches.map(b => (
-                      <option key={b.id} value={b.id}>{b.name} ({b.city})</option>
+                      <option key={b.id} value={b.id}>{displayText(b.name) || 'فرع غير مسمى'} ({displayText(b.city) || 'غير محدد'})</option>
                     ))}
                   </select>
                 </div>
@@ -624,7 +624,7 @@ export default function SuperAdminBranches({
                   >
                     <option value="">-- اختر فرع الهدف --</option>
                     {schoolBranches.map(b => (
-                      <option key={b.id} value={b.id}>{b.name} ({b.city})</option>
+                      <option key={b.id} value={b.id}>{displayText(b.name) || 'فرع غير مسمى'} ({displayText(b.city) || 'غير محدد'})</option>
                     ))}
                   </select>
                 </div>
