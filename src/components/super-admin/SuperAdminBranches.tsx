@@ -10,6 +10,25 @@ interface SuperAdminBranchesProps {
   triggerNotification: (msg: string, type: 'success' | 'danger' | 'warning' | 'info') => void;
 }
 
+function displayText(value: unknown): string {
+  if (typeof value === 'string' || typeof value === 'number') return String(value);
+  if (!value || typeof value !== 'object' || Array.isArray(value)) return '';
+  const record = value as Record<string, unknown>;
+  for (const key of ['city', 'name', 'label', 'address', 'value']) {
+    const candidate = record[key];
+    if (typeof candidate === 'string' || typeof candidate === 'number') return String(candidate);
+  }
+  return '';
+}
+
+function branchLocation(branch: any) {
+  return {
+    city: displayText(branch?.city) || displayText(branch?.address?.city),
+    phone: displayText(branch?.phone) || displayText(branch?.address?.phone),
+    address: displayText(branch?.address?.address) || displayText(branch?.address),
+  };
+}
+
 export default function SuperAdminBranches({
   schools = [],
   branches = [],
@@ -66,9 +85,7 @@ export default function SuperAdminBranches({
           ...branch,
           schoolId: branch.school_id,
           branchCode: branch.branch_code,
-          city: branch.city || branch.address?.city || '',
-          phone: branch.phone || branch.address?.phone || '',
-          address: branch.address?.address || '',
+          ...branchLocation(branch),
           status: branch.status === 'closed' ? 'suspended' : branch.status,
           isMain: Boolean(branch.is_main),
           studentsCount: Number(branch.students_count || 0),
@@ -97,9 +114,7 @@ export default function SuperAdminBranches({
     ...branch,
     schoolId: branch.school_id,
     branchCode: branch.branch_code,
-    city: branch.city || branch.address?.city || '',
-    phone: branch.phone || branch.address?.phone || '',
-    address: branch.address?.address || '',
+    ...branchLocation(branch),
     status: branch.status === 'closed' ? 'suspended' : branch.status,
     isMain: Boolean(branch.is_main),
     studentsCount: Number(branch.students_count || 0),
@@ -291,7 +306,7 @@ export default function SuperAdminBranches({
             className="w-full bg-transparent border-0 focus:border-amber-500 focus:ring-0 px-3 py-1.5 text-xs text-slate-900 placeholder-slate-500 focus:outline-none transition-all font-bold"
           >
             {schools.map(s => (
-              <option key={s.id} value={s.id}>{s.name} ({s.city})</option>
+              <option key={s.id} value={s.id}>{displayText(s.name) || 'مدرسة غير مسماة'} ({displayText(s.city) || 'غير محدد'})</option>
             ))}
           </select>
         </div>
@@ -368,8 +383,8 @@ export default function SuperAdminBranches({
                     {/* Address & City */}
                     <td className="p-4">
                       <div>
-                        <span className="font-bold">{branch.city}</span>
-                        <p className="text-[10px] text-slate-500 mt-0.5">{branch.address}</p>
+                        <span className="font-bold">{displayText(branch.city) || 'غير محدد'}</span>
+                        <p className="text-[10px] text-slate-500 mt-0.5">{displayText(branch.address)}</p>
                       </div>
                     </td>
 
