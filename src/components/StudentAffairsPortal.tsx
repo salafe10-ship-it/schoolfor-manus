@@ -61,6 +61,9 @@ const studentImportAliases: Record<string, string[]> = {
   guardianRelation: ['guardianrelation', 'parentrelation', 'relationship', 'صلة القرابة', 'العلاقة']
 };
 
+const MAX_STUDENT_IMPORT_FILE_BYTES = 10 * 1024 * 1024;
+const STUDENT_IMPORT_EXTENSIONS = ['.xlsx', '.xls', '.csv'];
+
 function importHeaderKey(value: unknown): string {
   return String(value ?? '').trim().toLowerCase().replace(/[\s_\-]+/g, '');
 }
@@ -987,6 +990,13 @@ export default function StudentAffairsPortal({
     event.target.value = '';
     if (!file) return;
     try {
+      const fileName = file.name.toLowerCase();
+      if (file.size > MAX_STUDENT_IMPORT_FILE_BYTES) {
+        throw new Error('تعذر الاستيراد: الحد الأقصى لحجم ملف الطلاب 10 ميجابايت.');
+      }
+      if (!STUDENT_IMPORT_EXTENSIONS.some(extension => fileName.endsWith(extension))) {
+        throw new Error('نوع ملف الطلاب غير مدعوم. استخدم XLSX أو XLS أو CSV فقط.');
+      }
       const XLSX = await import('xlsx');
       const workbook = XLSX.read(await file.arrayBuffer(), { type: 'array', cellDates: true });
       const firstSheet = workbook.Sheets[workbook.SheetNames[0]];

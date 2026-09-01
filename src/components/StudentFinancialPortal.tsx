@@ -41,6 +41,9 @@ interface StudentFinancialPortalProps {
 }
 
 const STUDENT_RECEIVABLE_ACCOUNT = '1201';
+const MAX_FEE_CONFIG_IMPORT_FILE_BYTES = 10 * 1024 * 1024;
+const FEE_CONFIG_IMPORT_EXTENSIONS = ['.xlsx', '.xls', '.csv'];
+const MAX_FEE_CONFIG_IMPORT_ROWS = 500;
 
 export default function StudentFinancialPortal({
   students,
@@ -1327,11 +1330,21 @@ export default function StudentFinancialPortal({
     if (!ensureFinancialWriteReady()) return;
 
     try {
+      const fileName = file.name.toLowerCase();
+      if (file.size > MAX_FEE_CONFIG_IMPORT_FILE_BYTES) {
+        throw new Error('تعذر الاستيراد: الحد الأقصى لحجم ملف بنود الرسوم 10 ميجابايت.');
+      }
+      if (!FEE_CONFIG_IMPORT_EXTENSIONS.some(extension => fileName.endsWith(extension))) {
+        throw new Error('نوع ملف بنود الرسوم غير مدعوم. استخدم XLSX أو XLS أو CSV فقط.');
+      }
       const XLSX = await import('xlsx');
       const workbook = XLSX.read(await file.arrayBuffer(), { type: 'array' });
       const firstSheet = workbook.Sheets[workbook.SheetNames[0]];
       const rows = XLSX.utils.sheet_to_json<Record<string, unknown>>(firstSheet, { defval: '' });
       if (!rows.length) throw new Error('ملف الاستيراد لا يحتوي على صفوف بيانات.');
+      if (rows.length > MAX_FEE_CONFIG_IMPORT_ROWS) {
+        throw new Error(`الحد الأقصى لاستيراد بنود الرسوم هو ${MAX_FEE_CONFIG_IMPORT_ROWS} صفًا في الدفعة الواحدة.`);
+      }
 
       const imported = rows.map((row, index) => {
         const type = String(row['نوع الرسوم'] ?? row.type ?? '').trim();
