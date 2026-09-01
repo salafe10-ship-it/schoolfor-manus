@@ -23,6 +23,8 @@ describe('LOGIN USERNAME/EMAIL contract', () => {
     expect(serverSource).toContain('const { identifier: requestedIdentifier, email, username, password } = req.body || {};');
     expect(serverSource).toContain('authenticateTrustedUser(supabase, identifier, password)');
     expect(serverSource).toContain('resolveTrustedLoginIdentifier(supabase, identifier)');
+    expect(serverSource).toContain('PUBLIC_APP_URL');
+    expect(serverSource).toContain('redirectTo');
     expect(serverSource).not.toContain('password_hash');
   });
 

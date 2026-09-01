@@ -1407,8 +1407,20 @@ async function startServer() {
         throw error;
       }
 
-      const { error } = await supabase.auth.resetPasswordForEmail(resolvedEmail);
-      if (error) return next(new ExternalServiceError("تعذر إرسال رابط الاستعادة."));
+      const configuredPublicAppUrl = String(process.env.PUBLIC_APP_URL || '').trim().replace(/\/+$/, '');
+      const recoveryOptions = configuredPublicAppUrl
+        ? { redirectTo: `${configuredPublicAppUrl}/` }
+        : undefined;
+      const { error } = recoveryOptions
+        ? await supabase.auth.resetPasswordForEmail(resolvedEmail, recoveryOptions)
+        : await supabase.auth.resetPasswordForEmail(resolvedEmail);
+      if (error) {
+        EnterpriseLogger.error('Password recovery email dispatch failed.', 'AuthRecovery', {
+          providerErrorCode: error.code || 'UNKNOWN_PROVIDER_ERROR',
+          providerStatus: error.status || null,
+        });
+        return next(new ExternalServiceError("تعذر إرسال رابط الاستعادة."));
+      }
       disableAuthCaching(res);
       res.json({ success: true, message: "إذا كانت البيانات صحيحة فسيتم إرسال رابط الاستعادة." });
     } catch (error) {
