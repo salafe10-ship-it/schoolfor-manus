@@ -1702,7 +1702,29 @@ async function startServer() {
       const requestIp = String(req.ip || '').trim() || null;
       const userAgent = String(req.get('user-agent') || '').slice(0, 1000) || null;
 
-      void platformAdminPool.query(
+      // The trusted request identity carries the Supabase Auth UUID, while
+      // audit_access_events.actor_user_id references public.users.id. Resolve
+      // the canonical row before writing the immutable access record; using
+      // the Auth UUID directly violates the composite FK and can turn an
+      // otherwise valid central operation into a 500 in downstream clients.
+      void platformAdminPool.query<{ id: string }>(
+        `SELECT id
+           FROM public.users
+          WHERE tenant_id = $1::uuid
+            AND (id = $2::uuid OR auth_user_id = $2::uuid)
+            AND deleted_at IS NULL
+          LIMIT 1`,
+        [tenantId, actorUserId],
+      ).then((actorResult) => {
+        const canonicalActorUserId = actorResult.rows[0]?.id;
+        if (!canonicalActorUserId) {
+          EnterpriseLogger.warn('Central administration audit skipped: canonical actor row not found', 'CentralAdministrationAudit', {
+            requestPath,
+            statusCode: res.statusCode,
+          });
+          return;
+        }
+        return platformAdminPool.query(
         `INSERT INTO public.audit_access_events
            (tenant_id, actor_user_id, resource_type, resource_id, action, source, reason, result,
             request_method, request_path, ip_address, user_agent)
@@ -1710,7 +1732,7 @@ async function startServer() {
                  NULLIF($10, '')::inet, $11)`,
         [
           tenantId,
-          actorUserId,
+          canonicalActorUserId,
           resourceType,
           resourceId,
           `${req.method}:${operation || 'request'}`,
@@ -1721,7 +1743,8 @@ async function startServer() {
           requestIp,
           userAgent,
         ],
-      ).catch((error) => {
+        );
+      }).catch((error) => {
         EnterpriseLogger.error('Central administration audit write failed', 'CentralAdministrationAudit', {
           requestPath,
           statusCode: res.statusCode,

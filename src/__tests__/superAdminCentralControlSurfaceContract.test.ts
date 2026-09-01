@@ -61,6 +61,8 @@ describe('central administration control-surface contract', () => {
     expect(server).toContain('FROM public.audit_access_events aa');
     expect(server).toContain("app.use('/api/admin/central'");
     expect(server).toContain('INSERT INTO public.audit_access_events');
+    expect(server).toContain('auth_user_id = $2::uuid');
+    expect(server).toContain('canonicalActorUserId');
     expect(server).not.toContain("'requestPath', aa.request_path) || aa.metadata");
   });
 
