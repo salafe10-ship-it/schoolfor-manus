@@ -2277,7 +2277,7 @@ async function startServer() {
     if (!platformAdminPool) return next(new DatabaseError('مصدر قاعدة البيانات المركزية غير متاح.'));
     const identity = (req as any).user as { id?: string; tenantId?: string };
     const tenantId = String(req.body?.targetTenantId || req.body?.tenantId || identity?.tenantId || '').trim();
-    const actorId = String(identity?.id || '').trim();
+    const actorAuthUserId = String(identity?.id || '').trim();
     const name = String(req.body?.name || '').trim();
     const schoolCode = String(req.body?.schoolCode || '').trim().toUpperCase();
     const timezone = String(req.body?.timezone || 'Africa/Khartoum').trim();
@@ -2294,7 +2294,7 @@ async function startServer() {
       mainBranchId: '',
     };
 
-    if (!tenantId || !/^[0-9a-f-]{36}$/i.test(tenantId) || !actorId) return next(new AuthenticationError('هوية الإدارة المركزية أو المستأجر المستهدف غير مكتمل.'));
+    if (!tenantId || !/^[0-9a-f-]{36}$/i.test(tenantId) || !/^[0-9a-f-]{36}$/i.test(actorAuthUserId)) return next(new AuthenticationError('هوية الإدارة المركزية أو المستأجر المستهدف غير مكتمل.'));
     if (name.length < 2 || name.length > 160) return next(new ValidationError('اسم المدرسة يجب أن يكون بين حرفين و160 حرفاً.'));
     if (schoolCode && !/^[A-Z0-9][A-Z0-9._/-]*$/.test(schoolCode)) return next(new ValidationError('رمز المدرسة غير صالح.'));
     if (!/^[A-Za-z_/-]+$/.test(timezone) || locale.length < 2) return next(new ValidationError('إعدادات اللغة أو المنطقة الزمنية غير صالحة.'));
@@ -2311,6 +2311,18 @@ async function startServer() {
     const resolvedCode = schoolCode || `SCH-${schoolId.slice(0, 8).toUpperCase()}`;
     const client = await platformAdminPool.connect();
     try {
+      const actorResult = await client.query<{ id: string }>(
+        `SELECT id
+           FROM public.users
+          WHERE tenant_id = $1::uuid
+            AND auth_user_id = $2::uuid
+            AND status = 'active'
+            AND deleted_at IS NULL
+          LIMIT 1`,
+        [tenantId, actorAuthUserId],
+      );
+      if (actorResult.rowCount !== 1) throw new AuthenticationError('المنفذ المركزي غير موجود في دليل المستخدمين القانوني.');
+      const actorId = actorResult.rows[0].id;
       await client.query('BEGIN');
       const targetTenant = await client.query<{ status: string }>(
         `SELECT status

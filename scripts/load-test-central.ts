@@ -90,7 +90,8 @@ async function main(): Promise<void> {
     });
     const payload = await readJson(response);
     if (!response.ok || !payload.success || !payload.school?.id || !payload.branch?.id) {
-      throw new Error(`School ${suffix} failed: HTTP ${response.status} ${String(payload.message || '')}`.trim());
+      const detail = typeof payload.details === 'string' ? payload.details : payload.details?.cause || payload.details?.message || '';
+      throw new Error(`School ${suffix} failed: HTTP ${response.status} ${String(payload.message || '')} ${String(detail)}`.trim());
     }
     schoolDone += 1;
     if (schoolDone % 25 === 0 || schoolDone === schoolCount) console.log(`SCHOOLS ${schoolDone}/${schoolCount}`);
