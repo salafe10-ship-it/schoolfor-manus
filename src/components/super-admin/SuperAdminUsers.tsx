@@ -60,8 +60,10 @@ export default function SuperAdminUsers({
           email: user.email || '',
           schoolId: user.school_id,
           branchId: user.branch_id,
-          jobTitle: user.roles?.[0]?.name || 'موظف نظام',
-          department: user.school_name || 'المدرسة',
+          // A platform identity intentionally has no school scope.  Do not
+          // present it as a school staff member in the central directory.
+          jobTitle: user.school_id ? (user.roles?.[0]?.name || 'موظف نظام') : 'مدير المنصة المركزي',
+          department: user.school_id ? (user.school_name || 'المدرسة') : 'الإدارة المركزية',
           forcePasswordChange: false,
           loginCount: 0,
           lastLogin: 'غير متاح من الدليل الحالي',
@@ -82,8 +84,8 @@ export default function SuperAdminUsers({
     email: user.email || '',
     schoolId: user.school_id,
     branchId: user.branch_id,
-    jobTitle: user.roles?.[0]?.name || user.jobTitle || 'موظف نظام',
-    department: user.school_name || 'المدرسة',
+    jobTitle: user.school_id ? (user.roles?.[0]?.name || user.jobTitle || 'موظف نظام') : 'مدير المنصة المركزي',
+    department: user.school_id ? (user.school_name || 'المدرسة') : 'الإدارة المركزية',
   });
 
   const mutateCentralUser = async (userId: string, body: Record<string, unknown>) => {
