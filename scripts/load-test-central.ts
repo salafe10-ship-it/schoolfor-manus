@@ -4,6 +4,7 @@ import { createClient } from '@supabase/supabase-js';
 const baseUrl = String(process.env.EDUPRO_LOADTEST_BASE_URL || 'https://schoolfor-manus-staging.onrender.com').replace(/\/$/, '');
 const adminEmail = String(process.env.EDUPRO_LOADTEST_ADMIN_EMAIL || '').trim().toLowerCase();
 const adminPassword = String(process.env.EDUPRO_LOADTEST_ADMIN_PASSWORD || '');
+const requestedTenantId = String(process.env.EDUPRO_LOADTEST_TENANT_ID || '').trim();
 const schoolCount = Number.parseInt(process.env.EDUPRO_LOADTEST_SCHOOLS || '500', 10);
 const userCount = Number.parseInt(process.env.EDUPRO_LOADTEST_USERS || '200', 10);
 const schoolConcurrency = Number.parseInt(process.env.EDUPRO_LOADTEST_SCHOOL_CONCURRENCY || '8', 10);
@@ -68,12 +69,41 @@ async function main(): Promise<void> {
   if (!tenantsResponse.ok || !Array.isArray(tenantsPayload.tenants)) throw new Error(`Tenant directory unavailable: HTTP ${tenantsResponse.status}`);
   const tenants = tenantsPayload.tenants.filter((tenant: JsonRecord) => ['active', 'provisioning'].includes(String(tenant.status || '').toLowerCase()));
   if (!tenants.length) throw new Error('No active or provisioning tenant is available for the synthetic load test.');
+  const tenant = requestedTenantId
+    ? tenants.find((item: JsonRecord) => String(item.id) === requestedTenantId)
+    : tenants[0];
+  if (!tenant) throw new Error('EDUPRO_LOADTEST_TENANT_ID is not an active tenant in the central directory.');
 
-  const schoolJobs = Array.from({ length: schoolCount }, (_, offset) => offset + 1);
+  // The canonical HR actor FK is tenant-scoped. Keep the synthetic run inside
+  // one tenant so the test exercises central control without crossing the
+  // data-plane isolation boundary.
+  const schoolsResponse = await api(`/api/admin/central/schools?tenantId=${encodeURIComponent(String(tenant.id))}`);
+  const schoolsPayload = await readJson(schoolsResponse);
+  if (!schoolsResponse.ok || !Array.isArray(schoolsPayload.schools)) throw new Error(`School directory unavailable: HTTP ${schoolsResponse.status}`);
+  const existingSchools = new Map<string, SchoolRecord>();
+  for (const item of schoolsPayload.schools as JsonRecord[]) {
+    const code = String(item.school_code || '').toUpperCase();
+    const match = /^LT-(\d{4})$/.exec(code);
+    const branchId = String(item.main_branch?.id || item.branch_id || '').trim();
+    if (match && branchId) {
+      const suffix = match[1];
+      existingSchools.set(code, {
+        id: String(item.id),
+        tenant_id: String(item.tenant_id || tenant.id),
+        branchId,
+        name: `LOADTEST School ${suffix}`,
+        email: `loadtest-user-${suffix}@example.invalid`,
+        password: `LoadTest!${suffix}`,
+      });
+    }
+  }
+  if (existingSchools.size > schoolCount) throw new Error(`Existing synthetic schools (${existingSchools.size}) exceed requested total (${schoolCount}).`);
+
+  const schoolJobs = Array.from({ length: schoolCount }, (_, offset) => offset + 1)
+    .filter((sequence) => !existingSchools.has(`LT-${String(sequence).padStart(4, '0')}`));
   let schoolDone = 0;
   const schools = await bounded(schoolJobs, schoolConcurrency, async (sequence) => {
     const suffix = String(sequence).padStart(4, '0');
-    const tenant = tenants[(sequence - 1) % tenants.length];
     const response = await api('/api/admin/central/schools', {
       method: 'POST',
       body: JSON.stringify({
@@ -104,12 +134,22 @@ async function main(): Promise<void> {
       password: `LoadTest!${suffix}`,
     } satisfies SchoolRecord;
   });
+  const allSchools = Array.from({ length: schoolCount }, (_, offset) => offset + 1)
+    .map((sequence) => existingSchools.get(`LT-${String(sequence).padStart(4, '0')}`) || schools.find((item) => item.name.endsWith(String(sequence).padStart(4, '0'))))
+    .filter((item): item is SchoolRecord => Boolean(item));
+  if (allSchools.length !== schoolCount) throw new Error(`School total mismatch: expected ${schoolCount}, found ${allSchools.length}.`);
+
+  const usersResponse = await api(`/api/admin/central/users?tenantId=${encodeURIComponent(String(tenant.id))}`);
+  const usersPayload = await readJson(usersResponse);
+  if (!usersResponse.ok || !Array.isArray(usersPayload.users)) throw new Error(`Identity directory unavailable: HTTP ${usersResponse.status}`);
+  const existingUsers = new Set((usersPayload.users as JsonRecord[]).map((item) => String(item.email || '').toLowerCase()));
 
   let userDone = 0;
-  const userJobs = Array.from({ length: userCount }, (_, offset) => offset + 1);
+  const userJobs = Array.from({ length: userCount }, (_, offset) => offset + 1)
+    .filter((sequence) => !existingUsers.has(`loadtest-user-${String(sequence).padStart(4, '0')}@example.invalid`));
   const users = await bounded(userJobs, userConcurrency, async (sequence) => {
     const suffix = String(sequence).padStart(4, '0');
-    const school = schools[(sequence - 1) % schools.length];
+    const school = allSchools[(sequence - 1) % allSchools.length];
     const email = `loadtest-user-${suffix}@example.invalid`;
     const password = `LoadTest!${suffix}`;
     const response = await api(`/api/admin/central/schools/${encodeURIComponent(school.id)}/users`, {
@@ -131,15 +171,20 @@ async function main(): Promise<void> {
     if (userDone % 25 === 0 || userDone === userCount) console.log(`USERS ${userDone}/${userCount}`);
     return { email, password, schoolId: school.id };
   });
+  const allUsers = Array.from({ length: userCount }, (_, offset) => offset + 1)
+    .map((sequence) => {
+      const suffix = String(sequence).padStart(4, '0');
+      return { email: `loadtest-user-${suffix}@example.invalid`, password: `LoadTest!${suffix}`, schoolId: allSchools[(sequence - 1) % allSchools.length].id };
+    });
 
   let loginDone = 0;
-  const loginResults = await bounded(users, loginConcurrency, async (user) => {
+  const loginResults = await bounded(allUsers, loginConcurrency, async (user) => {
     const client = createClient(supabaseUrl, supabaseAnonKey, { auth: { autoRefreshToken: false, persistSession: false } });
     const signedIn = await client.auth.signInWithPassword({ email: user.email, password: user.password });
     if (signedIn.error || !signedIn.data.session) return { ok: false, reason: signedIn.error?.message || 'no session' };
     const response = await fetch(`${baseUrl}/api/dashboard/metrics`, { headers: { Authorization: `Bearer ${signedIn.data.session.access_token}` } });
     loginDone += 1;
-    if (loginDone % 25 === 0 || loginDone === users.length) console.log(`CONCURRENT USERS ${loginDone}/${users.length}`);
+    if (loginDone % 25 === 0 || loginDone === allUsers.length) console.log(`CONCURRENT USERS ${loginDone}/${allUsers.length}`);
     return { ok: response.ok, status: response.status };
   });
 
@@ -147,8 +192,8 @@ async function main(): Promise<void> {
   console.log(JSON.stringify({
     success: true,
     target: baseUrl,
-    syntheticSchoolsCreated: schools.length,
-    syntheticUsersCreated: users.length,
+    syntheticSchoolsCreated: allSchools.length,
+    syntheticUsersCreated: allUsers.length,
     concurrentLoginChecks: loginResults.length,
     successfulLoginChecks: successfulLogins,
     failedLoginChecks: loginResults.length - successfulLogins,
