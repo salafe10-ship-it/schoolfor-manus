@@ -124,6 +124,44 @@ const platformAdminPool = platformAdminConnectionString
 // only the verified Auth user id and returns the single canonical platform
 // permission; it never accepts role or scope from a request.
 if (platformAdminPool) {
+  // Permission resolution for authenticated school requests must use the
+  // trusted control-plane connection. Render's data-plane database role is
+  // RLS-scoped for application writes and may not be a PostgREST
+  // `authenticated` role, which would make a valid assignment appear empty.
+  // Scope is still explicit and derived only from the verified identity.
+  roleResolver.configureDatabaseLoader(async (identity) => {
+    const tenantId = String(identity?.tenantId || '').trim();
+    const schoolId = String(identity?.schoolId || '').trim();
+    const authUserId = String(identity?.id || '').trim();
+    if (!tenantId || !schoolId || !authUserId) throw new Error('Trusted tenant identity is incomplete for role resolution.');
+    const result = await platformAdminPool.query<{ roleKey: string; permissionKey: string }>(
+      `SELECT r.role_key AS "roleKey", p.permission_key AS "permissionKey"
+         FROM public.users u
+         JOIN public.user_roles ur
+           ON ur.tenant_id = u.tenant_id AND ur.user_id = u.id
+         JOIN public.roles r
+           ON r.tenant_id = ur.tenant_id AND r.id = ur.role_id
+         JOIN public.role_permissions rp
+           ON rp.tenant_id = ur.tenant_id AND rp.role_id = r.id
+         JOIN public.permissions p
+           ON p.id = rp.permission_id
+        WHERE u.tenant_id = $1::uuid
+          AND u.auth_user_id = $2::uuid
+          AND u.school_id = $3::uuid
+          AND u.deleted_at IS NULL AND u.status IN ('invited', 'active')
+          AND ur.deleted_at IS NULL AND ur.status = 'active'
+          AND ur.starts_at <= now() AND (ur.ends_at IS NULL OR ur.ends_at > now())
+          AND (ur.school_id IS NULL OR ur.school_id = $3::uuid)
+          AND (ur.branch_id IS NULL OR ur.branch_id = $4::uuid)
+          AND r.deleted_at IS NULL AND r.status = 'active'
+          AND rp.deleted_at IS NULL AND rp.status = 'active'
+          AND p.deleted_at IS NULL AND p.status = 'active'
+          AND (p.tenant_id IS NULL OR p.tenant_id = $1::uuid)
+        ORDER BY r.role_key, p.permission_key`,
+      [tenantId, authUserId, schoolId, identity?.branchId || null],
+    );
+    return result.rows;
+  });
   roleResolver.configurePlatformDatabaseLoader(async (identity) => {
     const authUserId = String(identity?.id || '').trim();
     if (!authUserId) throw new Error('Trusted auth_user_id is required for platform role resolution.');
