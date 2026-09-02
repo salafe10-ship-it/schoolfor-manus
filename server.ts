@@ -1445,8 +1445,17 @@ async function startServer() {
       });
     } catch (err: any) {
       if (err instanceof TrustedAuthenticationError) {
+        // Keep the client response deliberately generic, but leave a bounded
+        // diagnostic for operators so production login failures can be
+        // distinguished between bad credentials and trusted identity scope.
+        EnterpriseLogger.warn('Trusted authentication rejected a login request.', 'TrustedAuthentication', {
+          code: err.code,
+        });
         return next(new AuthenticationError("بيانات الدخول غير صحيحة"));
       }
+      EnterpriseLogger.error('Trusted authentication failed unexpectedly.', 'TrustedAuthentication', {
+        error: err?.message || String(err),
+      });
       next(err);
     }
   });
