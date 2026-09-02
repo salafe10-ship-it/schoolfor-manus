@@ -2311,6 +2311,9 @@ async function startServer() {
     const timezone = String(req.body?.timezone || 'Africa/Khartoum').trim();
     const locale = String(req.body?.locale || 'ar').trim();
     const centralMetadata = {
+      // New schools are provisioned into the commercial school workspace. It
+      // is consumed only through the server-resolved trusted school session.
+      portal_profile: 'customer_production',
       shortName: String(req.body?.shortName || '').trim(),
       subdomain: String(req.body?.subdomain || '').trim().toLowerCase(),
       city: String(req.body?.city || '').trim(),
@@ -3607,39 +3610,31 @@ async function startServer() {
         supabase.from('enrollments').select('id', { count: 'exact', head: true })
       ]);
 
-      const liveMetric = (count: number | null, source: string) => ({
+      const liveMetric = (count: number | null) => ({
         status: 'live' as const,
-        count: count ?? 0,
-        source
+        count: count ?? 0
       });
-      const unavailableMetric = (message: string) => ({
+      const unavailableMetric = () => ({
         status: 'unavailable' as const,
-        count: null,
-        source: null,
-        message
+        count: null
       });
 
       res.setHeader('Cache-Control', 'no-store');
       return res.json({
         success: true,
         data: {
-          scope: {
-            tenantId: identity.tenantId,
-            schoolId: identity.schoolId,
-            branchId: identity.branchId
-          },
           students: studentsResult.error
-            ? unavailableMetric('تعذر تحميل مصدر الطلاب الحي: ' + studentsResult.error.message)
-            : liveMetric(studentsResult.count, 'public.students (RLS)'),
+            ? unavailableMetric()
+            : liveMetric(studentsResult.count),
           enrollments: enrollmentsResult.error
-            ? unavailableMetric('تعذر تحميل مصدر التسجيلات الحي: ' + enrollmentsResult.error.message)
-            : liveMetric(enrollmentsResult.count, 'public.enrollments (RLS)'),
-          attendance: unavailableMetric('لا يوجد مصدر حضور حي منشور في مخطط Supabase الحالي.'),
-          teachers: unavailableMetric('لا يوجد جدول معلمين حي مربوط بعقد Dashboard الحالي.'),
-          finance: unavailableMetric('لا يوجد مصدر مالي حي مربوط بعقد Dashboard الحالي.'),
-          exams: unavailableMetric('لا يوجد مصدر امتحانات حي مربوط بعقد Dashboard الحالي.'),
-          notifications: unavailableMetric('لا يوجد مصدر Notifications حي مربوط بعقد Dashboard الحالي.'),
-          activities: unavailableMetric('لا يوجد Query نشاط حي مربوط بعقد Dashboard الحالي.')
+            ? unavailableMetric()
+            : liveMetric(enrollmentsResult.count),
+          attendance: unavailableMetric(),
+          teachers: unavailableMetric(),
+          finance: unavailableMetric(),
+          exams: unavailableMetric(),
+          notifications: unavailableMetric(),
+          activities: unavailableMetric()
         }
       });
     } catch (error) {
@@ -3669,18 +3664,13 @@ async function startServer() {
   // ==========================================
 
   // Health Status
-  app.get("/api/health", (req, res) => {
+  app.get("/api/health", (_req, res) => {
     res.json({
       success: true,
       data: {
-        status: "healthy",
-        timestamp: new Date().toISOString(),
-        service: "SchoolForManus School Management System",
-        architecture: "Express.js + React Vite SPA + PostgreSQL-backed canonical runtime",
-        tenantIsolationMode: "Row-Level Security (RLS) Active"
+        status: "available"
       },
-      startup: startupReadiness.snapshot(),
-      message: "Health status retrieved successfully.",
+      message: "الخدمة متاحة.",
       meta: null
     });
   });
@@ -3689,21 +3679,21 @@ async function startServer() {
     const readiness = startupReadiness.snapshot();
     res.status(readiness.ready ? 200 : 503).json({
       success: readiness.ready,
-      data: readiness,
-      message: readiness.ready ? "Service readiness confirmed." : "Service is not ready for database-backed traffic.",
+      data: { ready: readiness.ready, status: readiness.ready ? 'ready' : 'unavailable' },
+      message: readiness.ready ? "الخدمة جاهزة." : "الخدمة غير جاهزة مؤقتاً.",
       meta: null,
     });
   });
 
   // Temporary, server-side gated Staging diagnostic. It is deliberately
   // unavailable unless both explicit Staging flags are present and the
-  // caller has a trusted authenticated identity with database-monitoring
-  // permission. No secret or connection detail is ever returned.
+  // caller has a dedicated platform-administration identity. No school role,
+  // including a tenant SuperAdmin label, can open this diagnostics surface.
   app.get(
     "/api/internal/staging/connection-identity",
     diagnosticLimiter,
     authenticateRequest,
-    requirePermissionOnly(PERMISSIONS.DATABASE_MONITOR),
+    requirePermissionOnly(PERMISSIONS.PLATFORM_ADMIN),
     async (_req, res, next) => {
       if (!isStagingConnectionDiagnosticsEnabled()) {
         return res.status(404).json({ success: false, message: "Not found" });
@@ -3779,17 +3769,17 @@ async function startServer() {
     message: 'موصل مراقبة قاعدة البيانات والنسخ الاحتياطي غير مهيأ؛ لم يتم إصدار قياس أو نسخة وهمية.',
   });
 
-  app.get("/api/database/monitor", authenticateRequest, requirePermission(PERMISSIONS.DATABASE_MONITOR), databaseObservabilityUnavailable);
-  app.get("/api/database/health-service/metrics", authenticateRequest, requirePermission(PERMISSIONS.DATABASE_MONITOR), databaseObservabilityUnavailable);
-  app.get("/api/database/health-service/thresholds", authenticateRequest, requirePermission(PERMISSIONS.DATABASE_SETTINGS), databaseObservabilityUnavailable);
-  app.post("/api/database/health-service/thresholds", authenticateRequest, requirePermission(PERMISSIONS.DATABASE_SETTINGS), databaseObservabilityUnavailable);
-  app.get("/api/database/health-service/alerts", authenticateRequest, requirePermission(PERMISSIONS.DATABASE_MONITOR), databaseObservabilityUnavailable);
-  app.post("/api/database/health-service/alerts/resolve", authenticateRequest, requirePermission(PERMISSIONS.DATABASE_SETTINGS), databaseObservabilityUnavailable);
-  app.post("/api/database/health-service/alerts/clear", authenticateRequest, requirePermission(PERMISSIONS.DATABASE_SETTINGS), databaseObservabilityUnavailable);
-  app.post("/api/database/health-service/simulate/deadlock", authenticateRequest, requirePermission(PERMISSIONS.DATABASE_SIMULATE), databaseObservabilityUnavailable);
-  app.post("/api/database/health-service/simulate/failed-tx", authenticateRequest, requirePermission(PERMISSIONS.DATABASE_SIMULATE), databaseObservabilityUnavailable);
-  app.post("/api/database/health-service/simulate/slow-query", authenticateRequest, requirePermission(PERMISSIONS.DATABASE_SIMULATE), databaseObservabilityUnavailable);
-  app.post("/api/database/health-service/optimize", authenticateRequest, requirePermission(PERMISSIONS.DATABASE_OPTIMIZE), databaseObservabilityUnavailable);
+  app.get("/api/database/monitor", authenticateRequest, requirePermissionOnly(PERMISSIONS.PLATFORM_ADMIN), databaseObservabilityUnavailable);
+  app.get("/api/database/health-service/metrics", authenticateRequest, requirePermissionOnly(PERMISSIONS.PLATFORM_ADMIN), databaseObservabilityUnavailable);
+  app.get("/api/database/health-service/thresholds", authenticateRequest, requirePermissionOnly(PERMISSIONS.PLATFORM_ADMIN), databaseObservabilityUnavailable);
+  app.post("/api/database/health-service/thresholds", authenticateRequest, requirePermissionOnly(PERMISSIONS.PLATFORM_ADMIN), databaseObservabilityUnavailable);
+  app.get("/api/database/health-service/alerts", authenticateRequest, requirePermissionOnly(PERMISSIONS.PLATFORM_ADMIN), databaseObservabilityUnavailable);
+  app.post("/api/database/health-service/alerts/resolve", authenticateRequest, requirePermissionOnly(PERMISSIONS.PLATFORM_ADMIN), databaseObservabilityUnavailable);
+  app.post("/api/database/health-service/alerts/clear", authenticateRequest, requirePermissionOnly(PERMISSIONS.PLATFORM_ADMIN), databaseObservabilityUnavailable);
+  app.post("/api/database/health-service/simulate/deadlock", authenticateRequest, requirePermissionOnly(PERMISSIONS.PLATFORM_ADMIN), databaseObservabilityUnavailable);
+  app.post("/api/database/health-service/simulate/failed-tx", authenticateRequest, requirePermissionOnly(PERMISSIONS.PLATFORM_ADMIN), databaseObservabilityUnavailable);
+  app.post("/api/database/health-service/simulate/slow-query", authenticateRequest, requirePermissionOnly(PERMISSIONS.PLATFORM_ADMIN), databaseObservabilityUnavailable);
+  app.post("/api/database/health-service/optimize", authenticateRequest, requirePermissionOnly(PERMISSIONS.PLATFORM_ADMIN), databaseObservabilityUnavailable);
 
   // GET all Audit Logs with advanced filters
   app.get("/api/audit-logs", authenticateRequest, requirePermission(PERMISSIONS.AUDIT_READ), async (req, res, next) => {
@@ -3820,7 +3810,7 @@ async function startServer() {
   });
 
   // Reconnect Database Connection Manager
-  app.post("/api/database/reconnect", authenticateRequest, requirePermission(PERMISSIONS.DATABASE_MONITOR), async (req, res, next) => {
+  app.post("/api/database/reconnect", authenticateRequest, requirePermissionOnly(PERMISSIONS.PLATFORM_ADMIN), async (req, res, next) => {
     try {
       const metrics = await DatabaseService.reconnect();
       res.json({
@@ -3834,7 +3824,7 @@ async function startServer() {
   });
 
   // Disconnect Database Connection Manager
-  app.post("/api/database/disconnect", authenticateRequest, requirePermission(PERMISSIONS.DATABASE_MONITOR), async (req, res, next) => {
+  app.post("/api/database/disconnect", authenticateRequest, requirePermissionOnly(PERMISSIONS.PLATFORM_ADMIN), async (req, res, next) => {
     try {
       const metrics = await DatabaseService.disconnect();
       res.json({
@@ -3849,7 +3839,7 @@ async function startServer() {
 
   // Database Backup Pipeline: fail closed until a durable backup provider and
   // verifiable object-storage receipt are configured.
-  app.post("/api/database/backup", authenticateRequest, requirePermission(PERMISSIONS.DATABASE_BACKUP), databaseObservabilityUnavailable);
+  app.post("/api/database/backup", authenticateRequest, requirePermissionOnly(PERMISSIONS.PLATFORM_ADMIN), databaseObservabilityUnavailable);
 
   // Student Data Export — true XLSX, server-side, tenant-scoped, bounded.
   app.get("/api/students/export", authenticateRequest, requirePermissionOnly(PERMISSIONS.STUDENT_EXPORT), async (req, res, next) => {
@@ -6396,7 +6386,7 @@ ${JSON.stringify(snapshot)}
 
   // SOL reviews and plans; LUNA proposes implementation; SOL performs the gate review.
   // This endpoint never writes source files. Applying patches remains an explicit, audited action.
-  app.post("/api/ai/sol-luna/review", authenticateRequest, requirePermission(PERMISSIONS.AI_CHAT), async (req, res, next) => {
+  app.post("/api/ai/sol-luna/review", authenticateRequest, requirePermissionOnly(PERMISSIONS.PLATFORM_ADMIN), async (req, res, next) => {
     try {
       const { goal, files = [], constraints = [] } = req.body || {};
       if (typeof goal !== 'string' || goal.trim().length < 10) {
@@ -6447,6 +6437,19 @@ ${JSON.stringify(snapshot)}
     const details = err.details || null;
     const traceId = "tr_" + Math.random().toString(36).substring(2, 15);
     const timestamp = new Date().toISOString();
+    const isPlatformAdmin = Array.isArray((req as any).user?.platformPermissions)
+      && (req as any).user.platformPermissions.includes(PERMISSIONS.PLATFORM_ADMIN);
+    const containsTechnicalDetail = /supabase|postgres|database|sql|schema|token|bearer|connection|stack/i.test(String(message));
+    const publicMessage = statusCode >= 500 || containsTechnicalDetail
+      ? 'تعذر إتمام الطلب الآن. حاول مرة أخرى لاحقاً.'
+      : message;
+    const publicErrorCode = statusCode === 401
+      ? 'AUTHENTICATION_REQUIRED'
+      : statusCode === 403
+        ? 'ACCESS_DENIED'
+        : statusCode === 429
+          ? 'REQUEST_LIMITED'
+          : 'REQUEST_FAILED';
 
     // Log critical or database errors to enterprise Audit Log system
     if (statusCode >= 500 || errorCode === "DATABASE_ERROR") {
@@ -6467,12 +6470,17 @@ ${JSON.stringify(snapshot)}
       }
     }
 
-    res.status(statusCode).json({
+    res.status(statusCode).json(isPlatformAdmin ? {
       success: false,
       errorCode,
       message,
       details,
       traceId,
+      timestamp
+    } : {
+      success: false,
+      errorCode: publicErrorCode,
+      message: publicMessage,
       timestamp
     });
   });

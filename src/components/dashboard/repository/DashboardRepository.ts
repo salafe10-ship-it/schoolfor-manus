@@ -3,16 +3,12 @@ import { authenticatedRequest } from '../../../utils/authenticatedRequest';
 export type DashboardMetric = {
   status: 'live' | 'unavailable';
   count: number | null;
-  source: string | null;
+  /** Legacy internal clients may still omit these fields; customer responses do. */
+  source?: string | null;
   message?: string;
 };
 
 export type DashboardMetrics = {
-  scope: {
-    tenantId: string;
-    schoolId: string;
-    branchId: string;
-  };
   students: DashboardMetric;
   enrollments: DashboardMetric;
   attendance: DashboardMetric;

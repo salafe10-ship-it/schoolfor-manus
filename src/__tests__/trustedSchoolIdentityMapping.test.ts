@@ -21,7 +21,8 @@ describe('IDMAP-001 trusted school identity mapping', () => {
               school_code: 'P003',
               legal_name: 'PERF003 Test Tenant',
               display_name: 'PERF003 Test School',
-              status: 'active'
+              status: 'active',
+              central_metadata: { portal_profile: 'customer_production' }
             },
             error: null
           } : { data: { name: '2025-2026', code: '2025-2026' }, error: null })
@@ -34,7 +35,8 @@ describe('IDMAP-001 trusted school identity mapping', () => {
       id: schoolId,
       name: 'PERF003 Test School',
       licenseNumber: 'P003',
-      status: 'active'
+      status: 'active',
+      portalProfile: 'customer_production'
     });
   });
 

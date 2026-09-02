@@ -1,15 +1,8 @@
 import { PERMISSIONS } from './PermissionRegistry';
-import { AuthorizationIdentity, roleResolver } from './RoleResolver';
+import { AuthorizationIdentity } from './RoleResolver';
+import { CENTRAL_SECTION_IDS } from '../security/CustomerProductionPortalPolicy';
 
-const CENTRAL_SECTIONS = new Set([
-  'system_health', 'db_schema', 'super_dashboard', 'super_stats', 'super_schools', 'super_domains', 'super_operations', 'super_license',
-  'super_databases', 'super_users', 'super_settings', 'super_audit', 'super_system_governance', 'super_deployment', 'super_rbac',
-  'super_security', 'super_backups', 'super_finance', 'super_infra', 'core_certification', 'business_logic_audit', 'accounting_integrity',
-  'security_permissions_cert', 'uiux_golden_standard_cert', 'performance_stability_cert', 'maintainability_scalability_cert',
-  'zero_regression_cert', 'production_readiness_gate', 'docs_hardening', 'wave1_certification', 'core_system_cert',
-  'operational_excellence_cert', 'user_trust_cert', 'commercial_release', 'commercial_competitiveness', 'product_maturity',
-  'golden_release_exec', 'ddd_reconstruction'
-]);
+const CENTRAL_SECTIONS = CENTRAL_SECTION_IDS;
 
 const SECTION_PERMISSIONS: Record<string, string> = {
   dashboard: PERMISSIONS.DASHBOARD_VIEW,
@@ -45,14 +38,12 @@ export function canAccessSection(
 ): boolean {
   if (!identity || context.currentPortal === 'login') return false;
   if (CENTRAL_SECTIONS.has(sectionId)) {
-    try {
-      const hasServerDerivedPlatformPermission = Array.isArray(identity.platformPermissions)
-        ? identity.platformPermissions.includes(PERMISSIONS.PLATFORM_ADMIN)
-        : roleResolver.isSuperAdmin(identity);
-      return context.currentPortal === 'admin' && hasServerDerivedPlatformPermission;
-    } catch {
-      return false;
-    }
+    // A tenant role named SuperAdmin is not a platform role.  The central
+    // workspace is available only after the server projects Platform.Admin
+    // from the dedicated platform RBAC tables.
+    const hasServerDerivedPlatformPermission = Array.isArray(identity.platformPermissions)
+      && identity.platformPermissions.includes(PERMISSIONS.PLATFORM_ADMIN);
+    return context.currentPortal === 'admin' && hasServerDerivedPlatformPermission;
   }
   const permission = SECTION_PERMISSIONS[sectionId];
   if (!permission) return false;

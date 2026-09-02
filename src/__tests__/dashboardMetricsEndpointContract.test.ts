@@ -14,12 +14,13 @@ describe('Dashboard live metrics endpoint contract', () => {
     expect(routeSource).toContain('getSupabaseClientForAccessToken');
   });
 
-  it('reads only RLS-backed counts and returns explicit unavailable states', () => {
+  it('reads only RLS-backed counts and returns explicit unavailable states without exposing implementation names', () => {
     expect(routeSource).toContain("from('students').select('id', { count: 'exact', head: true })");
     expect(routeSource).toContain("from('enrollments').select('id', { count: 'exact', head: true })");
     expect(routeSource).toContain("status: 'unavailable'");
-    expect(routeSource).toContain('public.students (RLS)');
-    expect(routeSource).toContain('public.enrollments (RLS)');
+    expect(routeSource).not.toContain('public.students (RLS)');
+    expect(routeSource).not.toContain('public.enrollments (RLS)');
+    expect(routeSource).not.toContain('tenantId: identity.tenantId');
   });
 
   it('does not accept client-selected scope or service-role access', () => {

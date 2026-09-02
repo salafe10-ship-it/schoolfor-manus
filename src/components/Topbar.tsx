@@ -25,6 +25,7 @@ interface TopbarProps {
   theme: 'light' | 'dark';
   onThemeToggle: () => void;
   isClientMode?: boolean;
+  isCustomerProductionPortal?: boolean;
   onOpenSuperAdminPortal?: () => void;
 }
 
@@ -46,6 +47,7 @@ export default function Topbar({
   theme,
   onThemeToggle,
   isClientMode = false,
+  isCustomerProductionPortal = false,
   onOpenSuperAdminPortal
 }: TopbarProps) {
   const [showNotifications, setShowNotifications] = useState(false);
@@ -110,6 +112,18 @@ export default function Topbar({
   const searchContainerRef = useRef<HTMLDivElement>(null);
 
   const getRoleLabel = (role: UserRole) => {
+    if (isCustomerProductionPortal) {
+      const customerLabels: Partial<Record<UserRole, string>> = {
+        SchoolAdmin: 'مدير المدرسة',
+        Teacher: 'معلم',
+        Accountant: 'محاسب المدرسة',
+        Parent: 'ولي الأمر',
+        Control: 'لجنة الامتحانات',
+        Auditor: 'مراجع المدرسة',
+        Student: 'طالب',
+      };
+      return customerLabels[role] || 'مستخدم المدرسة';
+    }
     switch(role) {
       case 'SuperAdmin': return 'المطور العام (SaaS)';
       case 'SchoolAdmin': return 'مدير النظام (Admin)';
@@ -211,7 +225,7 @@ export default function Topbar({
               <div className="flex items-center gap-2 bg-[#2a1d13] border border-[#d4af37]/30 px-4 py-2 text-xs font-black text-amber-100 select-none shadow-2xs">
                 <Building className="w-3.5 h-3.5 text-amber-400" />
                 <span>{selectedSchool.name}</span>
-                <span className="text-[9px] text-emerald-300 bg-emerald-950/60 px-2 py-0.5 rounded border border-emerald-800 font-black mr-1.5">بيئة معزولة ✅</span>
+                <span className="text-[9px] text-emerald-300 bg-emerald-950/60 px-2 py-0.5 rounded border border-emerald-800 font-black mr-1.5">{isCustomerProductionPortal ? 'حساب المدرسة' : 'بيئة معزولة ✅'}</span>
               </div>
             )}
           </div>
@@ -253,7 +267,9 @@ export default function Topbar({
               <Layers className="w-3.5 h-3.5 text-amber-400" />
               <span>{selectedBranch?.name || 'الفرع غير محدد'}</span>
                 <span className={`text-[9px] px-2 py-0.5 rounded border font-black mr-1.5 ${trustedScopeReady ? 'text-emerald-300 bg-emerald-950/60 border-emerald-800' : 'text-amber-300 bg-amber-950/60 border-amber-800'}`}>
-                  {trustedScopeReady ? 'سياق موثوق ✅' : 'بانتظار سياق موثوق'}
+                  {isCustomerProductionPortal
+                    ? (trustedScopeReady ? 'الفرع الحالي' : 'جارٍ تحميل الفرع')
+                    : (trustedScopeReady ? 'سياق موثوق ✅' : 'بانتظار سياق موثوق')}
                 </span>
             </div>
           )}
@@ -263,8 +279,8 @@ export default function Topbar({
         <div className="hidden sm:flex items-center gap-1.5">
           <div id="trusted-academic-year-display" className="flex items-center gap-2 bg-[#2a1d13] border border-[#d4af37]/30 px-4 py-2 text-xs font-black text-amber-100 select-none shadow-2xs">
             <Calendar className="w-3.5 h-3.5 text-amber-400" />
-            <span>{selectedSchool.academicYear || 'السنة غير محددة في السجل الموثوق'}</span>
-            <span className="text-[9px] text-amber-300/70">من الهوية الموثوقة</span>
+            <span>{selectedSchool.academicYear || (isCustomerProductionPortal ? 'العام الدراسي غير محدد' : 'السنة غير محددة في السجل الموثوق')}</span>
+            <span className="text-[9px] text-amber-300/70">{isCustomerProductionPortal ? 'العام الدراسي' : 'من الهوية الموثوقة'}</span>
           </div>
         </div>
       </div>

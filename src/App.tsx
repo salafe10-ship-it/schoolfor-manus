@@ -26,7 +26,7 @@ import PasswordRecoveryScreen from './components/PasswordRecoveryScreen';
 const HumanResourcesPortal = React.lazy(() => import('./components/hr/HumanResourcesPortal'));
 const ExamsResultsModule = React.lazy(() => import('./components/ExamsResultsModule'));
 const ExamsErrorBoundary = React.lazy(() => import('./components/ExamsErrorBoundary'));
-import AIAssistantPortal from './components/AIAssistantPortal';
+const AIAssistantPortal = React.lazy(() => import('./components/AIAssistantPortal'));
 const SystemHealthCenter = React.lazy(() => import('./components/SystemHealthCenter'));
 const SchoolUniformManagement = React.lazy(() => import('./components/SchoolUniformManagement'));
 const SchoolTransportManagement = React.lazy(() => import('./components/SchoolTransportManagement'));
@@ -99,7 +99,12 @@ import { TransactionService } from './database/transactions/TransactionService';
 import { useCurrency, saveCurrencyConfig, formatAmount } from './utils/currency';
 import { TrustedSessionManager, TrustedSessionUser } from './middleware/trustedSessionManager';
 import { canAccessSection } from './authorization/ClientAuthorization';
-import { PERMISSIONS } from './authorization/PermissionRegistry';
+import {
+  canAccessCustomerProductionSection,
+  customerProductionLandingSection,
+  hasExplicitPlatformAdminPermission,
+  isCustomerProductionPortal as isCustomerProductionPortalSession,
+} from './security/CustomerProductionPortalPolicy';
 
 const UNRESOLVED_SCHOOL: School = {
   id: '',
@@ -115,12 +120,7 @@ const UNRESOLVED_SCHOOL: School = {
 };
 
 function hasTrustedPlatformAdminAccess(user: TrustedSessionUser | null | undefined): boolean {
-  if (Array.isArray(user?.platformPermissions)) {
-    return user.platformPermissions.includes(PERMISSIONS.PLATFORM_ADMIN);
-  }
-  // Backward-compatible fallback for legacy SuperAdmin sessions issued before
-  // the platform permission projection was added to the trusted session.
-  return user?.role === 'SuperAdmin';
+  return hasExplicitPlatformAdminPermission(user);
 }
 
 // Bulletproof copy-to-clipboard function supporting sandboxed frames and secure/non-secure origins
@@ -222,10 +222,17 @@ export default function App() {
     return false;
   }, [currentPortal, trustedSessionUser]);
 
-  const checkSectionPermission = (sectionId: string): boolean => canAccessSection(
-    trustedSessionUser,
-    sectionId,
-    { currentPortal }
+  // This profile comes from the school row after the server has verified the
+  // authenticated identity. It cannot be turned on with browser state, a
+  // URL parameter, or a role label.
+  const isCustomerProductionPortal = useMemo(
+    () => isCustomerProductionPortalSession(trustedSessionUser),
+    [trustedSessionUser]
+  );
+
+  const checkSectionPermission = (sectionId: string): boolean => (
+    (!isCustomerProductionPortal || canAccessCustomerProductionSection(sectionId))
+    && canAccessSection(trustedSessionUser, sectionId, { currentPortal })
   );
 
   const canUseTrustedPermission = (permission: string): boolean => {
@@ -243,6 +250,29 @@ export default function App() {
       'commercial_release', 'commercial_competitiveness', 'product_maturity', 
       'golden_release_exec', 'ddd_reconstruction'
     ].includes(sectionId);
+
+    if (isCustomerProductionPortal) {
+      return (
+        <div className="min-h-[65vh] flex items-center justify-center p-6 bg-[#f8f5ee] rounded-3xl m-4" dir="rtl">
+          <div className="max-w-md w-full text-center space-y-5 rounded-3xl border border-[#d4af37]/35 bg-white p-8 shadow-xl">
+            <div className="mx-auto flex h-16 w-16 items-center justify-center rounded-2xl bg-[#2a1a0e] text-amber-300">
+              <LockIcon className="h-8 w-8" />
+            </div>
+            <div className="space-y-2">
+              <h2 className="text-lg font-black text-slate-900">هذه الخدمة غير متاحة لحسابك الحالي</h2>
+              <p className="text-sm font-bold leading-6 text-slate-500">يمكنك العودة إلى لوحة المدرسة ومتابعة أعمالك المعتادة.</p>
+            </div>
+            <button
+              type="button"
+              onClick={() => setActiveSection('dashboard')}
+              className="w-full rounded-xl bg-gradient-to-r from-[#d4af37] to-[#9a6a1d] py-3 text-sm font-black text-[#1a100a] shadow"
+            >
+              العودة إلى لوحة المدرسة
+            </button>
+          </div>
+        </div>
+      );
+    }
 
     if (isCentralAdminSection && isClientMode) {
       return (
@@ -481,10 +511,15 @@ export default function App() {
   // with a school-scoped role while the portal state is still settling, leaving
   // the initial `super_dashboard` route visible and producing a false 403.
   useEffect(() => {
+    if (isCustomerProductionPortal) {
+      const safeSection = customerProductionLandingSection(activeSection);
+      if (safeSection !== activeSection) setActiveSection(safeSection);
+      return;
+    }
     if (!hasTrustedPlatformAdminAccess(trustedSessionUser) && (activeSection.startsWith('super_') || activeSection === 'system_health' || activeSection === 'db_schema')) {
       setActiveSection('dashboard');
     }
-  }, [trustedSessionUser, activeSection]);
+  }, [trustedSessionUser, activeSection, isCustomerProductionPortal]);
 
   // Shared Central Permissions and Users states (Single Source of Truth)
   const [simulatedUsers, setSimulatedUsers] = useState<any[]>(() => {
@@ -544,6 +579,30 @@ export default function App() {
   const [grades, setGrades] = useState<Grade[]>(gradesSeed);
   const [academicClasses, setAcademicClasses] = useState<AcademicClass[]>(academicClassesSeed);
   const [costCenters, setCostCenters] = useState<CostCenter[]>(costCentersSeed);
+
+  // A newly provisioned customer workspace must never inherit in-memory
+  // demonstration records from the internal workspace. Canonical modules may
+  // hydrate their own data after authentication; until then they show empty,
+  // honest states rather than another school's sample records.
+  useEffect(() => {
+    if (!isCustomerProductionPortal) return;
+    setBranches(selectedBranch ? [selectedBranch] : []);
+    setTeachers([]);
+    setEmployees([]);
+    setInvoices([]);
+    setInventory([]);
+    setAuditLogs([]);
+    setAttendance([]);
+    setStages([]);
+    setGrades([]);
+    setAcademicClasses([]);
+    setCostCenters([]);
+    setSimulatedUsers([]);
+    setRoles([]);
+    setPermissionsAuditLog([]);
+    setDrillDownUser(null);
+    setShowConfigModal(false);
+  }, [isCustomerProductionPortal, selectedBranch]);
 
   // Expanded Student Enterprise States
   const [selectedStudentEnterpriseId, setSelectedStudentEnterpriseId] = useState<string>('stud_1');
@@ -1437,6 +1496,7 @@ export default function App() {
             theme={theme}
             onThemeToggle={toggleTheme}
             isClientMode={isClientMode}
+            isCustomerProductionPortal={isCustomerProductionPortal}
             onOpenSuperAdminPortal={hasTrustedPlatformAdminAccess(trustedSessionUser) ? () => {
               setIsSuperAdminPortalActive(true);
               setCurrentPortal('admin');
@@ -1492,7 +1552,7 @@ export default function App() {
                 <div className="bg-[#1c120c] border-b border-[#d4af37]/30 p-2.5 px-4 flex flex-col md:flex-row items-stretch md:items-center justify-between gap-3 select-none transition-all text-amber-100">
                   {/* Left: Operational Quick Actions (No repeated school/branch/connection info) */}
                   <div className="flex flex-wrap items-center gap-2">
-                    {currentRole === 'SuperAdmin' && (
+                    {hasTrustedPlatformAdminAccess(trustedSessionUser) && (
                       <button 
                         onClick={() => {
                           setIsSuperAdminPortalActive(true);
@@ -1625,6 +1685,7 @@ export default function App() {
                 triggerNotification={triggerNotification}
                 canAccessSection={checkSectionPermission}
                 isClientMode={isClientMode}
+                isCustomerProductionPortal={isCustomerProductionPortal}
               />
             )}
 
@@ -2089,7 +2150,7 @@ export default function App() {
                           <span className="text-xs text-sky-600 font-medium">📍 فرع {br.city} الكلي</span>
                         </div>
                         <span className="text-xs font-semibold px-2.5 py-1 bg-slate-50 border border-slate-200 text-slate-700 rounded-full">
-                          معرف السحابة: {br.id}
+                          {isCustomerProductionPortal ? 'فرع معتمد' : `معرف السحابة: ${br.id}`}
                         </span>
                       </div>
 
@@ -2410,10 +2471,10 @@ export default function App() {
                     <p className="text-xs text-slate-500 mt-1">إدارة واضحة وشاملة للمستخدمين والأدوار والوحدات والشاشات وأزرار العمليات وفق سياسات RBAC الموثوقة</p>
                   </div>
                   <button
-                    onClick={() => setActiveSection('super_dashboard')}
+                    onClick={() => setActiveSection('dashboard')}
                     className="flex items-center gap-2 px-4 py-2 border border-slate-200 rounded-lg text-xs font-bold text-[#0284c7] hover:bg-sky-50 hover:text-[#0369a1] transition-all duration-200 shadow-sm"
                   >
-                    <span>العودة إلى الشاشة الرئيسية</span>
+                    <span>العودة إلى لوحة المدرسة</span>
                     <span className="text-lg">←</span>
                   </button>
                 </div>

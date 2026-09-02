@@ -36,6 +36,7 @@ interface ModernSchoolDashboardProps {
   triggerNotification: (msg: string, type: 'info' | 'warning' | 'success') => void;
   canAccessSection: (section: string) => boolean;
   isClientMode?: boolean;
+  isCustomerProductionPortal?: boolean;
   userName?: string;
 }
 
@@ -101,6 +102,7 @@ export default function ModernSchoolDashboard({
   triggerNotification,
   canAccessSection,
   isClientMode: _isClientMode,
+  isCustomerProductionPortal = false,
   userName = 'مستخدم المدرسة',
 }: ModernSchoolDashboardProps) {
   const [timeString, setTimeString] = useState('—');
@@ -163,10 +165,11 @@ export default function ModernSchoolDashboard({
     metric?.status === 'live' ? (metric.count ?? 0).toLocaleString('ar-EG') : '—'
   );
   const describeMetric = (metric?: DashboardMetric) => {
-    if (metric?.status === 'live') return `مصدر حي: ${metric.source}`;
-    if (metric?.message) return metric.message;
-    if (metricsError) return 'تعذر تحميل المؤشر من المصدر الحي';
-    return 'جار التحقق من المصدر الحي';
+    if (metric?.status === 'live') return isCustomerProductionPortal || !metric.source ? 'مؤشر محدث من سجلات المدرسة' : `مصدر حي: ${metric.source}`;
+    if (metric?.status === 'unavailable') return 'البيانات غير متاحة حالياً.';
+    if (metric?.message) return isCustomerProductionPortal ? 'البيانات غير متاحة حالياً.' : metric.message;
+    if (metricsError) return isCustomerProductionPortal ? 'تعذر تحديث المؤشر الآن.' : 'تعذر تحميل المؤشر من المصدر الحي';
+    return isCustomerProductionPortal ? 'جارٍ تحديث المؤشر' : 'جار التحقق من المصدر الحي';
   };
   const studentCount = formatMetric(metrics?.students);
   const studentDetail = describeMetric(metrics?.students);
@@ -264,7 +267,7 @@ export default function ModernSchoolDashboard({
             <div className="flex h-8 w-8 items-center justify-center rounded-xl bg-[#2a1a0e] text-amber-400"><ShieldCheck className="h-4 w-4" aria-hidden="true" /></div>
             <h3 className="text-sm font-black text-slate-900">تنبيهات اليوم</h3>
           </div>
-          <EmptyPanel title="لا توجد تنبيهات موثقة" description="لم يتم تمرير مصدر Notifications حي إلى Dashboard، لذلك لا تُعرض أرقام أو تنبيهات ثابتة." />
+          <EmptyPanel title="لا توجد تنبيهات موثقة" description={isCustomerProductionPortal ? 'لا توجد تنبيهات تستدعي المتابعة اليوم.' : 'لم يتم تمرير مصدر Notifications حي إلى Dashboard، لذلك لا تُعرض أرقام أو تنبيهات ثابتة.'} />
         </div>
 
         <div className="rounded-3xl border-2 border-[#d4af37]/30 bg-gradient-to-b from-[#fffefc] to-[#f8f3ea] p-5 shadow-lg lg:col-span-8">
@@ -290,15 +293,15 @@ export default function ModernSchoolDashboard({
 
       <section aria-label="تحليلات Dashboard" className="grid grid-cols-1 gap-4 md:grid-cols-2 lg:grid-cols-4">
         <div className="rounded-3xl border-2 border-[#d4af37]/30 bg-gradient-to-b from-[#fffefc] to-[#f8f3ea] p-4 shadow-lg"><h4 className="mb-3 border-b border-amber-900/10 pb-2 text-xs font-black text-slate-900">الإيرادات والمصروفات</h4><EmptyPanel title="الرسم غير متاح" description={describeMetric(metrics?.finance)} /></div>
-        <div className="rounded-3xl border-2 border-[#d4af37]/30 bg-gradient-to-b from-[#fffefc] to-[#f8f3ea] p-4 shadow-lg"><h4 className="mb-3 border-b border-amber-900/10 pb-2 text-xs font-black text-slate-900">توزيع الطلاب حسب المرحلة</h4><EmptyPanel title="الرسم غير متاح" description="لا يوجد Query حي لتوزيع المراحل والصفوف في عقد Dashboard الحالي." /></div>
-        <div className="rounded-3xl border-2 border-[#d4af37]/30 bg-gradient-to-b from-[#fffefc] to-[#f8f3ea] p-4 shadow-lg"><h4 className="mb-3 border-b border-amber-900/10 pb-2 text-xs font-black text-slate-900">نسبة التحصيل الكلية</h4><EmptyPanel title="المؤشر غير متاح" description="لا تُعرض نسبة ثابتة دون إثبات Query وRLS ومصدرها في قاعدة البيانات." /></div>
-        <div className="rounded-3xl border-2 border-[#d4af37]/30 bg-gradient-to-b from-[#fffefc] to-[#f8f3ea] p-4 shadow-lg"><h4 className="mb-3 border-b border-amber-900/10 pb-2 text-xs font-black text-slate-900">تحصيل الرسوم خلال الأشهر</h4><EmptyPanel title="الرسم غير متاح" description="لا يوجد مصدر مالي حي مربوط بهذه الشاشة حاليًا." /></div>
+        <div className="rounded-3xl border-2 border-[#d4af37]/30 bg-gradient-to-b from-[#fffefc] to-[#f8f3ea] p-4 shadow-lg"><h4 className="mb-3 border-b border-amber-900/10 pb-2 text-xs font-black text-slate-900">توزيع الطلاب حسب المرحلة</h4><EmptyPanel title="الرسم غير متاح" description={isCustomerProductionPortal ? 'سيظهر هذا التحليل عند توفر بياناته.' : 'لا يوجد Query حي لتوزيع المراحل والصفوف في عقد Dashboard الحالي.'} /></div>
+        <div className="rounded-3xl border-2 border-[#d4af37]/30 bg-gradient-to-b from-[#fffefc] to-[#f8f3ea] p-4 shadow-lg"><h4 className="mb-3 border-b border-amber-900/10 pb-2 text-xs font-black text-slate-900">نسبة التحصيل الكلية</h4><EmptyPanel title="المؤشر غير متاح" description={isCustomerProductionPortal ? 'سيظهر المؤشر عند اكتمال بيانات الرسوم.' : 'لا تُعرض نسبة ثابتة دون إثبات Query وRLS ومصدرها في قاعدة البيانات.'} /></div>
+        <div className="rounded-3xl border-2 border-[#d4af37]/30 bg-gradient-to-b from-[#fffefc] to-[#f8f3ea] p-4 shadow-lg"><h4 className="mb-3 border-b border-amber-900/10 pb-2 text-xs font-black text-slate-900">تحصيل الرسوم خلال الأشهر</h4><EmptyPanel title="الرسم غير متاح" description={isCustomerProductionPortal ? 'سيظهر التحليل المالي عند توفر بياناته.' : 'لا يوجد مصدر مالي حي مربوط بهذه الشاشة حاليًا.'} /></div>
       </section>
 
       <section className="grid grid-cols-1 gap-6 lg:grid-cols-12">
         <div className="rounded-3xl border-2 border-[#d4af37]/30 bg-gradient-to-b from-[#fffefc] to-[#f8f3ea] p-5 shadow-lg lg:col-span-8">
-          <div className="mb-4 flex items-center justify-between border-b border-amber-900/10 pb-3"><h3 className="text-sm font-black text-slate-900">آخر العمليات المعتمدة</h3><span className="text-[10px] font-bold text-amber-800">مصدر Audit حي مطلوب</span></div>
-          <EmptyPanel title="لا توجد عمليات موثقة للعرض" description="تم إخفاء السجلات التجريبية القديمة حتى لا تظهر كأنها عمليات حقيقية للمستخدم الحالي." />
+          <div className="mb-4 flex items-center justify-between border-b border-amber-900/10 pb-3"><h3 className="text-sm font-black text-slate-900">آخر العمليات المعتمدة</h3>{!isCustomerProductionPortal && <span className="text-[10px] font-bold text-amber-800">مصدر Audit حي مطلوب</span>}</div>
+          <EmptyPanel title="لا توجد عمليات موثقة للعرض" description={isCustomerProductionPortal ? 'ستظهر العمليات المعتمدة هنا عند تنفيذها.' : 'تم إخفاء السجلات التجريبية القديمة حتى لا تظهر كأنها عمليات حقيقية للمستخدم الحالي.'} />
         </div>
         <div className="rounded-3xl border-2 border-[#d4af37]/30 bg-gradient-to-b from-[#fffefc] to-[#f8f3ea] p-5 shadow-lg lg:col-span-4">
           <div className="mb-4 flex items-center justify-between border-b border-amber-900/10 pb-3"><h3 className="text-sm font-black text-slate-900">جدول اليوم</h3><Calendar className="h-4 w-4 text-amber-800" aria-hidden="true" /></div>
@@ -306,13 +309,13 @@ export default function ModernSchoolDashboard({
         </div>
       </section>
 
-      <section className="flex flex-wrap items-center justify-between gap-4 rounded-3xl border-2 border-[#d4af37]/50 bg-gradient-to-r from-[#1c120c] via-[#2d1e12] to-[#1a100a] p-4 text-white shadow-2xl">
+      {canAccessSection('ai_assistant') && <section className="flex flex-wrap items-center justify-between gap-4 rounded-3xl border-2 border-[#d4af37]/50 bg-gradient-to-r from-[#1c120c] via-[#2d1e12] to-[#1a100a] p-4 text-white shadow-2xl">
         <div className="flex items-center gap-3">
           <div className="flex h-11 w-11 items-center justify-center rounded-2xl bg-[#2a1a0e] text-amber-300"><Sparkles className="h-6 w-6" aria-hidden="true" /></div>
           <div><h4 className="flex items-center gap-1.5 text-sm font-black text-amber-200">المساعد الذكي SchoolForManus</h4><p className="mt-0.5 text-xs font-bold text-amber-100/80">يفتح المسار المخصص للمساعد دون ادعاء تنفيذ تحليل غير مربوط بمصدر.</p></div>
         </div>
         <button type="button" onClick={() => handleNav('ai_assistant')} className="flex items-center gap-1 rounded-xl bg-gradient-to-r from-[#d4af37] to-[#c58a22] px-4 py-1.5 text-xs font-black text-[#1a100a] shadow transition hover:brightness-110 focus:outline-none focus:ring-2 focus:ring-amber-200/70"><span>فتح المساعد</span><ArrowLeft className="h-3.5 w-3.5" aria-hidden="true" /></button>
-      </section>
+      </section>}
     </div>
   );
 }

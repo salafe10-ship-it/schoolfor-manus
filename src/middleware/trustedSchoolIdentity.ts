@@ -16,6 +16,8 @@ export type TrustedSchoolPresentation = {
   email: string;
   academicYear: string;
   status: 'active' | 'frozen';
+  /** Server-derived customer UX profile; no central metadata is exposed. */
+  portalProfile: 'standard' | 'customer_production';
   connectedDb?: string;
 };
 
@@ -25,10 +27,15 @@ type SchoolRecord = {
   legal_name?: string | null;
   school_code?: string | null;
   status?: string | null;
+  central_metadata?: Record<string, unknown> | null;
 };
 
 function normalizeSchoolStatus(value: unknown): TrustedSchoolPresentation['status'] {
   return String(value || '').trim().toLowerCase() === 'active' ? 'active' : 'frozen';
+}
+
+function normalizePortalProfile(value: unknown): TrustedSchoolPresentation['portalProfile'] {
+  return value === 'customer_production' ? 'customer_production' : 'standard';
 }
 
 export function toTrustedSchoolPresentation(record: SchoolRecord): TrustedSchoolPresentation {
@@ -47,6 +54,7 @@ export function toTrustedSchoolPresentation(record: SchoolRecord): TrustedSchool
     email: '',
     academicYear: '',
     status: normalizeSchoolStatus(record.status),
+    portalProfile: normalizePortalProfile(record.central_metadata?.portal_profile),
     connectedDb: 'trusted-school-scope'
   };
 }
@@ -60,7 +68,7 @@ export async function resolveTrustedSchoolPresentation(
 
   const { data, error } = await supabase
     .from('schools')
-    .select('id, school_code, legal_name, display_name, status')
+    .select('id, school_code, legal_name, display_name, status, central_metadata')
     .eq('id', trustedSchoolId)
     .maybeSingle();
 
