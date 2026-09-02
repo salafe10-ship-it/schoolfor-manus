@@ -1,0 +1,102 @@
+name: Staging uptime
+
+on:
+  schedule:
+    # Render free instances may cold-start. The probe retries for two minutes
+    # before treating a non-200 response as an outage.
+    - cron: '*/5 * * * *'
+  workflow_dispatch:
+
+permissions:
+  contents: read
+  issues: write
+
+concurrency:
+  group: schoolfor-manus-staging-uptime
+  cancel-in-progress: false
+
+jobs:
+  probe:
+    name: Probe staging readiness
+    runs-on: ubuntu-latest
+    timeout-minutes: 6
+    steps:
+      - name: Probe readiness endpoint with cold-start tolerance
+        id: readiness
+        env:
+          HEALTH_URL: https://schoolfor-manus-staging.onrender.com/api/ready
+        shell: bash
+        run: |
+          set -u
+          last_status="unreachable"
+
+          for attempt in 1 2 3 4 5; do
+            last_status="$(curl --silent --show-error --location --max-time 20 --output /tmp/health.json --write-out '%{http_code}' "$HEALTH_URL" || true)"
+            if [ "$last_status" = "200" ]; then
+              echo "state=healthy" >> "$GITHUB_OUTPUT"
+              echo "http_status=$last_status" >> "$GITHUB_OUTPUT"
+              exit 0
+            fi
+
+            if [ "$attempt" -lt 5 ]; then
+              sleep 30
+            fi
+          done
+
+          echo "state=failed" >> "$GITHUB_OUTPUT"
+          echo "http_status=$last_status" >> "$GITHUB_OUTPUT"
+
+      - name: Open or update an outage alert
+        if: steps.readiness.outputs.state == 'failed'
+        uses: actions/github-script@v7
+        env:
+          HTTP_STATUS: ${{ steps.readiness.outputs.http_status }}
+        with:
+          script: |
+            const marker = '<!-- schoolfor-manus-staging-uptime -->';
+            const title = 'Staging readiness check failed';
+            const details = `The staging readiness endpoint returned \`${process.env.HTTP_STATUS}\` after five attempts.\n\n${marker}`;
+            const { owner, repo } = context.repo;
+            const { data: openIssues } = await github.rest.issues.listForRepo({
+              owner,
+              repo,
+              state: 'open',
+              per_page: 100,
+            });
+            const existing = openIssues.find((issue) => issue.title === title && issue.body?.includes(marker));
+            if (existing) {
+              await github.rest.issues.createComment({
+                owner,
+                repo,
+                issue_number: existing.number,
+                body: `Still failing at ${new Date().toISOString()}: HTTP \`${process.env.HTTP_STATUS}\`.`,
+              });
+            } else {
+              await github.rest.issues.create({ owner, repo, title, body: details });
+            }
+
+      - name: Close a recovered outage alert
+        if: steps.readiness.outputs.state == 'healthy'
+        uses: actions/github-script@v7
+        env:
+          HTTP_STATUS: ${{ steps.readiness.outputs.http_status }}
+        with:
+          script: |
+            const marker = '<!-- schoolfor-manus-staging-uptime -->';
+            const title = 'Staging readiness check failed';
+            const { owner, repo } = context.repo;
+            const { data: openIssues } = await github.rest.issues.listForRepo({
+              owner,
+              repo,
+              state: 'open',
+              per_page: 100,
+            });
+            for (const issue of openIssues.filter((item) => item.title === title && item.body?.includes(marker))) {
+              await github.rest.issues.createComment({
+                owner,
+                repo,
+                issue_number: issue.number,
+                body: `Recovered at ${new Date().toISOString()}: HTTP \`${process.env.HTTP_STATUS}\`.`,
+              });
+              await github.rest.issues.update({ owner, repo, issue_number: issue.number, state: 'closed' });
+            }
