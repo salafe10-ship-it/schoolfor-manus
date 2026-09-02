@@ -6,10 +6,13 @@ const adminEmail = String(process.env.EDUPRO_LOADTEST_ADMIN_EMAIL || '').trim().
 const adminPassword = String(process.env.EDUPRO_LOADTEST_ADMIN_PASSWORD || '');
 const requestedTenantId = String(process.env.EDUPRO_LOADTEST_TENANT_ID || '').trim();
 const schoolCount = Number.parseInt(process.env.EDUPRO_LOADTEST_SCHOOLS || '500', 10);
-const userCount = Number.parseInt(process.env.EDUPRO_LOADTEST_USERS || '200', 10);
+const userCount = Number.parseInt(process.env.EDUPRO_LOADTEST_USERS || '2000', 10);
 const schoolConcurrency = Number.parseInt(process.env.EDUPRO_LOADTEST_SCHOOL_CONCURRENCY || '8', 10);
 const userConcurrency = Number.parseInt(process.env.EDUPRO_LOADTEST_USER_CONCURRENCY || '12', 10);
 const loginConcurrency = Number.parseInt(process.env.EDUPRO_LOADTEST_LOGIN_CONCURRENCY || '40', 10);
+const loadTestMode = String(process.env.EDUPRO_LOADTEST_MODE || 'plan').trim().toLowerCase();
+const LOADTEST_APPLY_CONFIRMATION = 'SCHOOLFORMANUS_500_LOADTEST_APPLY';
+const MAX_CERTIFICATION_SCHOOLS = 500;
 
 type JsonRecord = Record<string, any>;
 type SchoolRecord = { id: string; tenant_id: string; branchId: string; name: string; email: string; password: string };
@@ -43,13 +46,35 @@ async function bounded<T, R>(items: T[], concurrency: number, worker: (item: T, 
 }
 
 async function main(): Promise<void> {
-  required(adminEmail, 'EDUPRO_LOADTEST_ADMIN_EMAIL');
-  required(adminPassword, 'EDUPRO_LOADTEST_ADMIN_PASSWORD');
   assertPositive(schoolCount, 'EDUPRO_LOADTEST_SCHOOLS');
   assertPositive(userCount, 'EDUPRO_LOADTEST_USERS');
   assertPositive(schoolConcurrency, 'EDUPRO_LOADTEST_SCHOOL_CONCURRENCY');
   assertPositive(userConcurrency, 'EDUPRO_LOADTEST_USER_CONCURRENCY');
   assertPositive(loginConcurrency, 'EDUPRO_LOADTEST_LOGIN_CONCURRENCY');
+  if (!['plan', 'apply'].includes(loadTestMode)) throw new Error('EDUPRO_LOADTEST_MODE_MUST_BE_PLAN_OR_APPLY');
+  if (schoolCount > MAX_CERTIFICATION_SCHOOLS) throw new Error(`EDUPRO_LOADTEST_SCHOOLS_MUST_BE_AT_MOST_${MAX_CERTIFICATION_SCHOOLS}`);
+
+  if (loadTestMode === 'plan') {
+    console.log(JSON.stringify({
+      success: true,
+      mode: 'plan',
+      target: baseUrl,
+      requestedSchoolCount: schoolCount,
+      requestedUserCount: userCount,
+      schoolConcurrency,
+      userConcurrency,
+      loginConcurrency,
+      writesEnabled: false,
+      note: `No remote login or data mutation was performed. To run the isolated staging certification, set EDUPRO_LOADTEST_MODE=apply and EDUPRO_LOADTEST_CONFIRM=${LOADTEST_APPLY_CONFIRMATION}.`,
+    }, null, 2));
+    return;
+  }
+
+  if (process.env.EDUPRO_LOADTEST_CONFIRM !== LOADTEST_APPLY_CONFIRMATION) {
+    throw new Error(`EDUPRO_LOADTEST_CONFIRM_REQUIRED:${LOADTEST_APPLY_CONFIRMATION}`);
+  }
+  required(adminEmail, 'EDUPRO_LOADTEST_ADMIN_EMAIL');
+  required(adminPassword, 'EDUPRO_LOADTEST_ADMIN_PASSWORD');
 
   const supabaseUrl = required(String(process.env.SUPABASE_URL || process.env.VITE_SUPABASE_URL || '').trim(), 'SUPABASE_URL');
   const supabaseAnonKey = required(String(process.env.SUPABASE_ANON_KEY || process.env.VITE_SUPABASE_ANON_KEY || '').trim(), 'SUPABASE_ANON_KEY');
