@@ -30,13 +30,14 @@
 
 ## الدليل الحي المسجل
 
-- المستودع المنشور: `salafe10-ship-it/schoolfor-manus`، الفرع `master`، الالتزام `30bc8ff`.
+- المستودع المنشور: `salafe10-ship-it/schoolfor-manus`، الفرع `master`، الالتزام النهائي `d316098` (ويتضمن `30bc8ff`).
 - خدمة Render: `schoolfor-manus-staging`، والخدمة تعرض `Deploy succeeded | Live`.
 - عنوان الخدمة: `https://schoolfor-manus-staging.onrender.com`.
-- نشر الالتزام `30bc8ff` نجح مع تشغيل الخادم، اتصال PostgreSQL، وربط Supabase.
+- نشر الالتزامين `30bc8ff` و`d316098` نجح؛ وسجل التشغيل يثبت تشغيل الخادم، اتصال PostgreSQL، وربط Supabase.
 - `/api/health`: HTTP `200`، والحالة `healthy` مع `tenantIsolationMode: Row-Level Security (RLS Active)`.
 - `/api/ready`: HTTP `200`، والحالة `READY`، وقاعدة البيانات `CONNECTED`، و`ready: true`.
 - تم تحديث Health Check في Render إلى `/api/ready`، ثم نجح نشر الإعداد الجديد.
+- تشغيل GitHub Actions `Staging uptime #1` على الالتزام `d316098` نجح خلال `7s`، والجدولة الدورية كل خمس دقائق مفعّلة.
 
 ## البنود التي تحتاج دليلًا خارجيًا قبل ختم التسليم
 
