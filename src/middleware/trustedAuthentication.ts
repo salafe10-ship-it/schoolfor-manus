@@ -7,6 +7,7 @@ import {
   type TrustedBranchPresentation
 } from './trustedSchoolIdentity';
 import { roleResolver } from '../authorization/RoleResolver';
+import { EnterpriseLogger } from '../database/services/EnterpriseLogger';
 
 export type TrustedIdentity = {
   id: string;
@@ -191,9 +192,12 @@ async function attachTrustedPlatformPermissions(identity: TrustedIdentity): Prom
   try {
     const permissions = await roleResolver.resolvePlatformPermissions(identity);
     return { ...identity, platformPermissions: [...permissions] };
-  } catch {
+  } catch (error: any) {
     // Platform access is independent from tenant RBAC and fails closed when
     // the canonical platform assignment cannot be resolved.
+    EnterpriseLogger.warn('Platform permission resolution failed closed.', 'TrustedAuthentication', {
+      error: error?.message || String(error),
+    });
     return { ...identity, platformPermissions: [] };
   }
 }
