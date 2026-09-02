@@ -3189,7 +3189,7 @@ async function startServer() {
       const tenantId = String(req.body?.targetTenantId || '').trim();
       const actorAuthUserId = String(identity?.id || '').trim();
       const schoolId = String(req.params.schoolId || '').trim();
-      const branchId = String(req.body?.branchId || '').trim();
+      let branchId = String(req.body?.branchId || '').trim();
       const displayName = String(req.body?.name || '').trim();
       const email = String(req.body?.email || '').trim().toLowerCase();
       const requestedPassword = String(req.body?.password || '').trim();
@@ -3209,6 +3209,20 @@ async function startServer() {
         if (scopeError) throw scopeError;
         if (!scope || (tenantId && scope.tenant_id !== tenantId)) throw new ConflictError('المدرسة غير موجودة في نطاق الإدارة المركزية.');
         const targetTenantId = scope.tenant_id;
+        if (!branchId) {
+          const { data: mainBranch, error: mainBranchError } = await platformControl
+            .from('branches')
+            .select('id')
+            .eq('school_id', schoolId)
+            .eq('status', 'active')
+            .is('deleted_at', null)
+            .order('created_at', { ascending: true })
+            .limit(1)
+            .maybeSingle();
+          if (mainBranchError) throw mainBranchError;
+          branchId = String(mainBranch?.id || '').trim();
+        }
+        if (!branchId) throw new ConflictError('لا يوجد فرع رئيسي نشط داخل المدرسة.');
         if (branchId) {
           const { data: branch, error: branchError } = await platformControl.from('branches').select('id').eq('id', branchId).eq('school_id', schoolId).is('deleted_at', null).maybeSingle();
           if (branchError) throw branchError;
@@ -3238,6 +3252,12 @@ async function startServer() {
         if (inventorySeed.error) throw inventorySeed.error;
         const financeSeed = await platformControl.from('financial_portal_snapshots').upsert({ tenant_id: targetTenantId, school_id: schoolId, data: {}, version: 0, updated_by: seedActorId }, { onConflict: 'school_id', ignoreDuplicates: true });
         if (financeSeed.error) throw financeSeed.error;
+        const tenantActivation = await platformControl
+          .from('tenants')
+          .update({ status: 'active', updated_at: new Date().toISOString() })
+          .eq('id', targetTenantId)
+          .eq('status', 'provisioning');
+        if (tenantActivation.error) throw tenantActivation.error;
         return res.status(201).json({ success: true, user: { ...user, email, roles: [{ roleKey, name: roleSpec.name }], roleAssignmentId: assignment.id }, temporaryPassword: requestedPassword ? null : password });
       } catch (error) {
         if (authUserId) await platformAdminAuth!.auth.admin.deleteUser(authUserId).catch(() => undefined);
@@ -3249,7 +3269,7 @@ async function startServer() {
     const tenantId = String(req.body?.targetTenantId || '').trim();
     const actorId = String(identity?.id || '').trim();
     const schoolId = String(req.params.schoolId || '').trim();
-    const branchId = String(req.body?.branchId || '').trim();
+    let branchId = String(req.body?.branchId || '').trim();
     const displayName = String(req.body?.name || '').trim();
     const email = String(req.body?.email || '').trim().toLowerCase();
     const requestedPassword = String(req.body?.password || '').trim();
@@ -3266,6 +3286,19 @@ async function startServer() {
     let authUserId = '';
     const client = await platformAdminPool.connect();
     try {
+      if (!branchId) {
+        const mainBranch = await client.query<{ id: string }>(
+          `SELECT id
+             FROM public.branches
+            WHERE tenant_id = $1::uuid AND school_id = $2::uuid
+              AND status = 'active' AND deleted_at IS NULL
+            ORDER BY created_at ASC
+            LIMIT 1`,
+          [tenantId, schoolId],
+        );
+        if (mainBranch.rowCount !== 1) throw new ConflictError('لا يوجد فرع رئيسي نشط داخل المدرسة.');
+        branchId = mainBranch.rows[0].id;
+      }
       const authResult = await platformAdminAuth.auth.admin.createUser({
         email,
         password,
@@ -3329,6 +3362,11 @@ async function startServer() {
          VALUES ($1::uuid, $2::uuid, $3::uuid, $4::uuid, $5::uuid, 'active', $6::uuid, $6::uuid)
          RETURNING id`,
         [targetTenantId, userId, roleId, schoolId, branchId || null, actorId],
+      );
+      await client.query(
+        `UPDATE public.tenants SET status = 'active', updated_at = now()
+          WHERE id = $1::uuid AND status = 'provisioning'`,
+        [targetTenantId],
       );
       await client.query('COMMIT');
       return res.status(201).json({ success: true, user: { ...userResult.rows[0], email, roles: [{ roleKey, name: roleSpec.name }], roleAssignmentId: assignment.rows[0].id }, temporaryPassword: requestedPassword ? null : password });
