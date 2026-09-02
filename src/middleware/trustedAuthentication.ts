@@ -150,7 +150,13 @@ export function extractTrustedIdentity(user: SupabaseUser): TrustedIdentity {
   // Security claims come only from server-controlled app_metadata. user_metadata is user-editable.
   const metadata = user.app_metadata || {};
   const schoolId = String(metadata.school_id || '').trim();
-  const role = normalizeTrustedRole(metadata.role);
+  const declaredRole = normalizeTrustedRole(metadata.role);
+  // Platform identities are intentionally schoolless.  Their authority is
+  // never inferred from this fallback: finalizeTrustedIdentity subsequently
+  // requires the canonical Platform.Admin assignment from the platform RBAC
+  // tables.  This allows a correctly provisioned platform identity to sign
+  // in even if an older Auth record was created before the role claim existed.
+  const role = declaredRole || (!schoolId ? 'SuperAdmin' : null);
   const branchId = String(metadata.branch_id || '').trim();
   const academicYear = String(metadata.academic_year_id || metadata.academic_year || '').trim();
   // A central platform administrator is intentionally not attached to any

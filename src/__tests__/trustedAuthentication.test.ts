@@ -66,6 +66,14 @@ describe('Wave 1A trusted authentication foundation', () => {
       .rejects.toMatchObject({ code: 'INVALID_SCHOOL' });
   });
 
+  it('keeps a schoolless legacy Auth record eligible only for platform RBAC verification', () => {
+    const legacyPlatformUser = baseUser({ school_id: undefined, branch_id: undefined, role: undefined });
+    expect(extractTrustedIdentity(legacyPlatformUser)).toMatchObject({
+      schoolId: '',
+      role: 'SuperAdmin'
+    });
+  });
+
   it('ignores client-editable user_metadata for identity claims', () => {
     const identity = extractTrustedIdentity(baseUser());
     expect(identity.schoolId).toBe('school-1');
