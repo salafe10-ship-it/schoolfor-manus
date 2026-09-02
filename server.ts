@@ -326,6 +326,42 @@ const readPlatformAuthUsers = async () => {
   return users;
 };
 
+// School identities use the same secure control-plane channel for RBAC
+// hydration. This is still strictly scoped by the verified Auth id, tenant,
+// school and branch; no scope is accepted from the browser.
+if (platformControl) {
+  roleResolver.configureDatabaseLoader(async (identity) => {
+    const authUserId = String(identity?.id || '').trim();
+    const tenantId = String(identity?.tenantId || '').trim();
+    const schoolId = String(identity?.schoolId || '').trim();
+    const branchId = String(identity?.branchId || '').trim();
+    if (!authUserId || !tenantId || !schoolId) throw new Error('Trusted tenant identity is incomplete for role resolution.');
+    const users = await readPlatformRows('users', 'id, tenant_id, school_id, branch_id, auth_user_id, status, deleted_at', (query) => query.eq('auth_user_id', authUserId).eq('tenant_id', tenantId).eq('school_id', schoolId).is('deleted_at', null));
+    const user = users.find((row: any) => ['invited', 'active'].includes(row.status) && (!branchId || !row.branch_id || row.branch_id === branchId));
+    if (!user) return [];
+    const assignments = await readPlatformRows('user_roles', 'role_id, school_id, branch_id, starts_at, ends_at, status, deleted_at', (query) => query.eq('user_id', user.id).eq('tenant_id', tenantId).eq('status', 'active').is('deleted_at', null));
+    const now = new Date().toISOString();
+    const activeAssignments = assignments.filter((assignment: any) =>
+      (!assignment.school_id || assignment.school_id === schoolId)
+      && (!assignment.branch_id || !branchId || assignment.branch_id === branchId)
+      && (!assignment.starts_at || assignment.starts_at <= now)
+      && (!assignment.ends_at || assignment.ends_at > now)
+    );
+    const roleIds = [...new Set(activeAssignments.map((assignment: any) => assignment.role_id).filter(Boolean))];
+    if (!roleIds.length) return [];
+    const roles = await readPlatformRows('roles', 'id, role_key, tenant_id, school_id, status, deleted_at', (query) => query.in('id', roleIds).eq('tenant_id', tenantId).eq('status', 'active').is('deleted_at', null));
+    const roleById = new Map(roles.map((role: any) => [role.id, role]));
+    const activeRoleIds = roles.map((role: any) => role.id);
+    if (!activeRoleIds.length) return [];
+    const rolePermissions = await readPlatformRows('role_permissions', 'role_id, permission_id, tenant_id, status, deleted_at', (query) => query.in('role_id', activeRoleIds).eq('tenant_id', tenantId).eq('status', 'active').is('deleted_at', null));
+    const permissionIds = [...new Set(rolePermissions.map((entry: any) => entry.permission_id).filter(Boolean))];
+    if (!permissionIds.length) return [];
+    const permissions = await readPlatformRows('permissions', 'id, permission_key, tenant_id, status, deleted_at', (query) => query.in('id', permissionIds).eq('status', 'active').is('deleted_at', null));
+    const permissionById = new Map(permissions.filter((permission: any) => !permission.tenant_id || permission.tenant_id === tenantId).map((permission: any) => [permission.id, permission.permission_key]));
+    return rolePermissions.map((entry: any) => ({ roleKey: roleById.get(entry.role_id)?.role_key || '', permissionKey: permissionById.get(entry.permission_id) || '' })).filter((entry: { roleKey: string; permissionKey: string }) => Boolean(entry.roleKey && entry.permissionKey));
+  });
+}
+
 const STUDENT_DOCUMENT_MEDIA_TYPES = ['application/pdf', 'image/png', 'image/jpeg'] as const;
 type StudentDocumentMediaType = typeof STUDENT_DOCUMENT_MEDIA_TYPES[number];
 
