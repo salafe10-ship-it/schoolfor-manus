@@ -274,6 +274,58 @@ if (platformAdminAuth) {
   });
 }
 
+// Central directory reads and writes use the server-only Supabase channel.
+// This avoids coupling the browser-facing control plane to a pooler TLS
+// configuration while keeping the tenant data plane unchanged. The helper is
+// intentionally small and paginates so large directories are not truncated
+// by PostgREST's default row limit.
+const platformControl = platformAdminAuth as any;
+const readPlatformRows = async (table: string, columns: string, configure?: (query: any) => any) => {
+  if (!platformControl) throw new DatabaseError('مصدر قاعدة البيانات المركزية غير متاح.');
+  const rows: any[] = [];
+  const pageSize = 1000;
+  for (let offset = 0; ; offset += pageSize) {
+    let query = platformControl.from(table).select(columns).range(offset, offset + pageSize - 1);
+    if (configure) query = configure(query);
+    const { data, error } = await query;
+    if (error) throw error;
+    rows.push(...(data || []));
+    if (!data || data.length < pageSize) break;
+  }
+  return rows;
+};
+
+const insertPlatformRow = async (table: string, values: Record<string, unknown>, columns = '*') => {
+  if (!platformControl) throw new DatabaseError('مصدر قاعدة البيانات المركزية غير متاح.');
+  const { data, error } = await platformControl.from(table).insert(values).select(columns).single();
+  if (error) throw error;
+  return data;
+};
+
+const upsertPlatformRow = async (table: string, values: Record<string, unknown>, onConflict: string, columns = '*') => {
+  if (!platformControl) throw new DatabaseError('مصدر قاعدة البيانات المركزية غير متاح.');
+  const { data, error } = await platformControl.from(table).upsert(values, { onConflict }).select(columns).single();
+  if (error) throw error;
+  return data;
+};
+
+const deletePlatformRow = async (table: string, id: string) => {
+  if (!platformControl) return;
+  await platformControl.from(table).delete().eq('id', id);
+};
+
+const readPlatformAuthUsers = async () => {
+  if (!platformControl) return [];
+  const users: any[] = [];
+  for (let page = 1; ; page += 1) {
+    const { data, error } = await platformControl.auth.admin.listUsers({ page, perPage: 1000 });
+    if (error) throw error;
+    users.push(...(data?.users || []));
+    if (!data?.users || data.users.length < 1000) break;
+  }
+  return users;
+};
+
 const STUDENT_DOCUMENT_MEDIA_TYPES = ['application/pdf', 'image/png', 'image/jpeg'] as const;
 type StudentDocumentMediaType = typeof STUDENT_DOCUMENT_MEDIA_TYPES[number];
 
@@ -1883,6 +1935,26 @@ async function startServer() {
   // required by the central directory. CPU, storage, network and backup
   // telemetry still require their dedicated providers.
   app.get('/api/admin/central/health', authenticateRequest, requirePermissionOnly(PERMISSIONS.PLATFORM_ADMIN), async (_req, res, next) => {
+    if (platformControl) {
+      const startedAt = Date.now();
+      try {
+        const { error } = await platformControl.from('tenants').select('id').limit(1);
+        if (error) throw error;
+        return res.json({
+          success: true,
+          health: {
+            database: 'reachable',
+            responseMs: Date.now() - startedAt,
+            checkedAt: new Date().toISOString(),
+            source: 'supabase-rest-control-plane',
+            schemaStatus: 'ready',
+            missingSchemaObjects: [],
+          },
+        });
+      } catch (error) {
+        return next(new DatabaseError('تعذر قياس اتصال المصدر المركزي الآمن.', error instanceof Error ? error.message : String(error)));
+      }
+    }
     if (!platformAdminPool) return next(new DatabaseError('مصدر قاعدة البيانات المركزية غير متاح.'));
     const startedAt = Date.now();
     try {
@@ -1932,6 +2004,44 @@ async function startServer() {
   });
 
   app.get('/api/admin/central/tenants', authenticateRequest, requirePermissionOnly(PERMISSIONS.PLATFORM_ADMIN), async (req, res, next) => {
+    if (platformControl) {
+      const includeArchived = String(req.query?.includeArchived || '').toLowerCase() === 'true';
+      try {
+        const [tenantRows, subscriptionRows, schoolRows, branchRows, userRows, studentRows] = await Promise.all([
+          readPlatformRows('tenants', 'id, legal_name, slug, plan_code, status, deleted_at, created_at, updated_at', (query) => query.order('created_at', { ascending: false })),
+          readPlatformRows('subscriptions', 'id, tenant_id, plan_code, starts_at, ends_at, seat_limit, auto_renew, status, deleted_at, created_at', (query) => query.order('starts_at', { ascending: false })),
+          readPlatformRows('schools', 'id, tenant_id, deleted_at'),
+          readPlatformRows('branches', 'id, tenant_id, deleted_at'),
+          readPlatformRows('users', 'id, tenant_id, deleted_at'),
+          readPlatformRows('students', 'id, tenant_id, deleted_at'),
+        ]);
+        const active = (row: any) => !row.deleted_at;
+        const latestSubscription = new Map<string, any>();
+        for (const subscription of subscriptionRows.filter(active).sort((a: any, b: any) => String(b.starts_at || '').localeCompare(String(a.starts_at || '')))) {
+          if (!latestSubscription.has(subscription.tenant_id)) latestSubscription.set(subscription.tenant_id, subscription);
+        }
+        return res.json({
+          success: true,
+          tenants: tenantRows.filter((tenant: any) => includeArchived || !tenant.deleted_at).map((tenant: any) => {
+            const subscription = latestSubscription.get(tenant.id);
+            return {
+              ...tenant,
+              schools_count: schoolRows.filter((row: any) => row.tenant_id === tenant.id && active(row)).length,
+              branches_count: branchRows.filter((row: any) => row.tenant_id === tenant.id && active(row)).length,
+              users_count: userRows.filter((row: any) => row.tenant_id === tenant.id && active(row)).length,
+              students_count: studentRows.filter((row: any) => row.tenant_id === tenant.id && active(row)).length,
+              subscription: subscription ? {
+                id: subscription.id, plan_code: subscription.plan_code, starts_at: subscription.starts_at,
+                ends_at: subscription.ends_at, seat_limit: subscription.seat_limit,
+                auto_renew: subscription.auto_renew, status: subscription.status,
+              } : null,
+            };
+          }),
+        });
+      } catch (error) {
+        return next(new DatabaseError('تعذر تحميل دليل المستأجرين المركزي.', error instanceof Error ? error.message : String(error)));
+      }
+    }
     if (!platformAdminPool) return next(new DatabaseError('مصدر قاعدة البيانات المركزية غير متاح.'));
     const includeArchived = String(req.query?.includeArchived || '').toLowerCase() === 'true';
     try {
@@ -1998,6 +2108,43 @@ async function startServer() {
   });
 
   app.post('/api/admin/central/tenants', authenticateRequest, requirePermissionOnly(PERMISSIONS.PLATFORM_ADMIN), async (req, res, next) => {
+    if (platformControl) {
+      const identity = (req as any).user as { id?: string };
+      const actorId = String(identity?.id || '').trim();
+      const legalName = String(req.body?.legalName || req.body?.name || '').trim();
+      const slug = String(req.body?.slug || '').trim().toLowerCase();
+      const planCode = String(req.body?.planCode || 'standard').trim().toLowerCase();
+      const tenantStatus = String(req.body?.status || 'provisioning').trim();
+      const subscriptionStatus = String(req.body?.subscriptionStatus || (tenantStatus === 'active' ? 'active' : 'trial')).trim();
+      const seatLimit = Number(req.body?.seatLimit ?? 100);
+      const startsAt = String(req.body?.startsAt || new Date().toISOString()).trim();
+      const endsAt = String(req.body?.endsAt || '').trim() || null;
+      const autoRenew = req.body?.autoRenew === undefined ? true : Boolean(req.body.autoRenew);
+      if (!actorId) return next(new AuthenticationError('هوية الإدارة المركزية غير مكتملة.'));
+      if (legalName.length < 2 || legalName.length > 160) return next(new ValidationError('الاسم القانوني للمستأجر يجب أن يكون بين حرفين و160 حرفاً.'));
+      if (!/^[a-z0-9]+(?:-[a-z0-9]+)*$/.test(slug) || slug.length > 63) return next(new ValidationError('معرف المستأجر يجب أن يكون لاتينياً صغيراً وبصيغة slug صحيحة.'));
+      if (!/^[a-z0-9][a-z0-9._-]{1,62}$/.test(planCode)) return next(new ValidationError('رمز الباقة غير صالح.'));
+      if (!['provisioning', 'active', 'suspended'].includes(tenantStatus)) return next(new ValidationError('حالة المستأجر غير مسموح بها.'));
+      if (!['trial', 'active', 'past_due', 'cancelled', 'expired'].includes(subscriptionStatus)) return next(new ValidationError('حالة الاشتراك غير مسموح بها.'));
+      if (!Number.isSafeInteger(seatLimit) || seatLimit < 1 || seatLimit > 1_000_000) return next(new ValidationError('حد المقاعد يجب أن يكون رقماً صحيحاً بين 1 و1,000,000.'));
+      const startDate = new Date(startsAt);
+      const endDate = endsAt ? new Date(endsAt) : null;
+      if (Number.isNaN(startDate.getTime()) || (endDate && Number.isNaN(endDate.getTime())) || (endDate && endDate <= startDate)) return next(new ValidationError('تواريخ الاشتراك غير صالحة أو تاريخ النهاية ليس بعد البداية.'));
+      const tenantId = randomUUID();
+      const subscriptionId = randomUUID();
+      try {
+        const tenant = await insertPlatformRow('tenants', { id: tenantId, legal_name: legalName, slug, plan_code: planCode, status: tenantStatus, created_by: null, updated_by: null }, 'id, legal_name, slug, plan_code, status, deleted_at, created_at, updated_at');
+        try {
+          const subscription = await insertPlatformRow('subscriptions', { id: subscriptionId, tenant_id: tenantId, plan_code: planCode, starts_at: startDate.toISOString(), ends_at: endDate?.toISOString() || null, seat_limit: seatLimit, auto_renew: autoRenew, status: subscriptionStatus, created_by: null, updated_by: null }, 'id, tenant_id, plan_code, starts_at, ends_at, seat_limit, auto_renew, status');
+          return res.status(201).json({ success: true, tenant: { ...tenant, subscription } });
+        } catch (error) {
+          await deletePlatformRow('tenants', tenantId);
+          throw error;
+        }
+      } catch (error) {
+        return next(error instanceof Error && /duplicate|unique/i.test(error.message) ? new ConflictError('معرف المستأجر مستخدم مسبقاً.') : new DatabaseError('تعذر إنشاء المستأجر والاشتراك في المصدر المركزي.', error instanceof Error ? error.message : String(error)));
+      }
+    }
     if (!platformAdminPool) return next(new DatabaseError('مصدر قاعدة البيانات المركزية غير متاح.'));
     const identity = (req as any).user as { id?: string };
     const actorId = String(identity?.id || '').trim();
@@ -2308,6 +2455,46 @@ async function startServer() {
   // creation entry point: scope is derived from the verified platform
   // identity and the two records are committed atomically in PostgreSQL.
   app.get('/api/admin/central/schools', authenticateRequest, requirePermissionOnly(PERMISSIONS.PLATFORM_ADMIN), async (req, res, next) => {
+    if (platformControl) {
+      const requestedTenantId = String(req.query?.tenantId || '').trim();
+      if (requestedTenantId && !/^[0-9a-f-]{36}$/i.test(requestedTenantId)) return next(new ValidationError('معرف المستأجر غير صالح.'));
+      try {
+        const [schoolRows, tenantRows, subscriptionRows, branchRows, userRows, studentRows] = await Promise.all([
+          readPlatformRows('schools', 'id, tenant_id, school_code, legal_name, display_name, timezone, locale, status, central_metadata, deleted_at, created_at, updated_at', (query) => query.order('created_at', { ascending: false })),
+          readPlatformRows('tenants', 'id, status, deleted_at'),
+          readPlatformRows('subscriptions', 'tenant_id, plan_code, starts_at, ends_at, seat_limit, auto_renew, status, deleted_at, created_at', (query) => query.order('starts_at', { ascending: false })),
+          readPlatformRows('branches', 'id, tenant_id, school_id, branch_code, name, status, deleted_at, created_at, updated_at, address'),
+          readPlatformRows('users', 'id, tenant_id, school_id, deleted_at'),
+          readPlatformRows('students', 'id, tenant_id, school_id, deleted_at'),
+        ]);
+        const latestSubscription = new Map<string, any>();
+        for (const subscription of subscriptionRows.filter((row: any) => !row.deleted_at).sort((a: any, b: any) => String(b.starts_at || '').localeCompare(String(a.starts_at || '')))) {
+          if (!latestSubscription.has(subscription.tenant_id)) latestSubscription.set(subscription.tenant_id, subscription);
+        }
+        const tenantById = new Map(tenantRows.map((tenant: any) => [tenant.id, tenant]));
+        const active = (row: any) => !row.deleted_at;
+        return res.json({
+          success: true,
+          schools: schoolRows.filter((school: any) => active(school) && (!requestedTenantId || school.tenant_id === requestedTenantId)).map((school: any) => {
+            const subscription = latestSubscription.get(school.tenant_id);
+            const mainBranchId = school.central_metadata?.mainBranchId;
+            const mainBranch = branchRows.filter((branch: any) => active(branch) && branch.school_id === school.id).sort((a: any, b: any) => String(a.created_at || '').localeCompare(String(b.created_at || ''))).find((branch: any) => branch.id === mainBranchId)
+              || branchRows.filter((branch: any) => active(branch) && branch.school_id === school.id).sort((a: any, b: any) => String(a.created_at || '').localeCompare(String(b.created_at || '')))[0];
+            return {
+              ...school,
+              tenant_status: tenantById.get(school.tenant_id)?.status || null,
+              users_count: userRows.filter((row: any) => active(row) && row.school_id === school.id).length,
+              students_count: studentRows.filter((row: any) => active(row) && row.school_id === school.id).length,
+              subscription: subscription ? { plan_code: subscription.plan_code, starts_at: subscription.starts_at, ends_at: subscription.ends_at, seat_limit: subscription.seat_limit, auto_renew: subscription.auto_renew, status: subscription.status } : null,
+              central_metadata: stripLegacySchoolSubscriptionProfile(school.central_metadata),
+              main_branch: mainBranch ? { id: mainBranch.id, branch_code: mainBranch.branch_code, name: mainBranch.name, status: mainBranch.status } : null,
+            };
+          }),
+        });
+      } catch (error) {
+        return next(new DatabaseError('تعذر تحميل دليل المدارس المركزي.', error instanceof Error ? error.message : String(error)));
+      }
+    }
     if (!platformAdminPool) return next(new DatabaseError('مصدر قاعدة البيانات المركزية غير متاح.'));
     const requestedTenantId = String(req.query?.tenantId || '').trim();
     if (requestedTenantId && !/^[0-9a-f-]{36}$/i.test(requestedTenantId)) return next(new ValidationError('معرف المستأجر غير صالح.'));
@@ -2385,6 +2572,46 @@ async function startServer() {
   });
 
   app.post('/api/admin/central/schools', authenticateRequest, requirePermissionOnly(PERMISSIONS.PLATFORM_ADMIN), async (req, res, next) => {
+    if (platformControl) {
+      const tenantId = String(req.body?.targetTenantId || req.body?.tenantId || '').trim();
+      const actorAuthUserId = String((req as any).user?.id || '').trim();
+      const name = String(req.body?.name || '').trim();
+      const schoolCode = String(req.body?.schoolCode || '').trim().toUpperCase();
+      const timezone = String(req.body?.timezone || 'Africa/Khartoum').trim();
+      const locale = String(req.body?.locale || 'ar').trim();
+      const centralMetadata = {
+        portal_profile: 'customer_production', shortName: String(req.body?.shortName || '').trim(),
+        subdomain: String(req.body?.subdomain || '').trim().toLowerCase(), city: String(req.body?.city || '').trim(),
+        address: String(req.body?.address || '').trim(), phone: String(req.body?.phone || '').trim(),
+        email: String(req.body?.email || '').trim().toLowerCase(), managerName: String(req.body?.managerName || '').trim(),
+        managerEmail: String(req.body?.managerEmail || '').trim().toLowerCase(), mainBranchId: '',
+      };
+      if (!tenantId || !/^[0-9a-f-]{36}$/i.test(tenantId) || !/^[0-9a-f-]{36}$/i.test(actorAuthUserId)) return next(new AuthenticationError('هوية الإدارة المركزية أو المستأجر المستهدف غير مكتمل.'));
+      if (name.length < 2 || name.length > 160) return next(new ValidationError('اسم المدرسة يجب أن يكون بين حرفين و160 حرفاً.'));
+      if (schoolCode && !/^[A-Z0-9][A-Z0-9._/-]*$/.test(schoolCode)) return next(new ValidationError('رمز المدرسة غير صالح.'));
+      if (!/^[A-Za-z_/-]+$/.test(timezone) || locale.length < 2) return next(new ValidationError('إعدادات اللغة أو المنطقة الزمنية غير صالحة.'));
+      if (centralMetadata.subdomain && !/^[a-z0-9][a-z0-9-]{1,61}[a-z0-9]$/.test(centralMetadata.subdomain)) return next(new ValidationError('النطاق الفرعي يجب أن يتكون من 3 إلى 63 رمزاً لاتينياً صغيراً.'));
+      if (centralMetadata.managerEmail && !/^\S+@\S+\.\S+$/.test(centralMetadata.managerEmail)) return next(new ValidationError('بريد مدير المدرسة غير صالح.'));
+      const schoolId = randomUUID();
+      const branchId = randomUUID();
+      centralMetadata.mainBranchId = branchId;
+      const resolvedCode = schoolCode || `SCH-${schoolId.slice(0, 8).toUpperCase()}`;
+      try {
+        const { data: tenant, error: tenantError } = await platformControl.from('tenants').select('id, status').eq('id', tenantId).is('deleted_at', null).maybeSingle();
+        if (tenantError) throw tenantError;
+        if (!tenant || !['provisioning', 'active'].includes(tenant.status)) throw new ConflictError('المستأجر المستهدف غير موجود أو موقوف.');
+        const school = await insertPlatformRow('schools', { id: schoolId, tenant_id: tenantId, school_code: resolvedCode, legal_name: name, display_name: name, timezone, locale, status: 'active', central_metadata: centralMetadata, created_by: null, updated_by: null }, 'id, tenant_id, school_code, legal_name, display_name, timezone, locale, status, central_metadata, created_at, updated_at');
+        try {
+          const branch = await insertPlatformRow('branches', { id: branchId, tenant_id: tenantId, school_id: schoolId, branch_code: `${resolvedCode}-MAIN`, name: 'الفرع الرئيسي', address: { city: centralMetadata.city, phone: centralMetadata.phone, address: centralMetadata.address }, status: 'active', created_by: null, updated_by: null }, 'id, tenant_id, school_id, branch_code, name, address, status, deleted_at, created_at, updated_at');
+          return res.status(201).json({ success: true, school, branch, provisioning: { hr_database: false, inventory_database: false, financial_portal_snapshots: false, pending_until_first_school_user: true } });
+        } catch (error) {
+          await deletePlatformRow('schools', schoolId);
+          throw error;
+        }
+      } catch (error) {
+        return next(error instanceof Error && /duplicate|unique/i.test(error.message) ? new ConflictError('رمز المدرسة أو النطاق الفرعي مستخدم مسبقاً داخل المستأجر.') : error instanceof ConflictError ? error : new DatabaseError('تعذر إنشاء المدرسة والفرع في المصدر المركزي.', error instanceof Error ? error.message : String(error)));
+      }
+    }
     if (!platformAdminPool) return next(new DatabaseError('مصدر قاعدة البيانات المركزية غير متاح.'));
     const identity = (req as any).user as { id?: string; tenantId?: string };
     const tenantId = String(req.body?.targetTenantId || req.body?.tenantId || identity?.tenantId || '').trim();
@@ -2664,6 +2891,35 @@ async function startServer() {
   // Central branch directory. Branches are managed through the same verified
   // platform identity as schools; the browser never supplies tenant scope.
   app.get('/api/admin/central/branches', authenticateRequest, requirePermissionOnly(PERMISSIONS.PLATFORM_ADMIN), async (req, res, next) => {
+    if (platformControl) {
+      const tenantId = String(req.query?.tenantId || '').trim();
+      const schoolId = String(req.query?.schoolId || '').trim();
+      if (tenantId && !/^[0-9a-f-]{36}$/i.test(tenantId)) return next(new ValidationError('معرف المستأجر غير صالح.'));
+      if (schoolId && !/^[0-9a-f-]{36}$/i.test(schoolId)) return next(new ValidationError('معرف المدرسة غير صالح.'));
+      try {
+        const [branchRows, schoolRows, userRows, studentRows] = await Promise.all([
+          readPlatformRows('branches', 'id, tenant_id, school_id, branch_code, name, address, status, deleted_at, created_at, updated_at', (query) => query.order('created_at', { ascending: true })),
+          readPlatformRows('schools', 'id, tenant_id, display_name, central_metadata'),
+          readPlatformRows('users', 'id, tenant_id, school_id, branch_id, deleted_at'),
+          readPlatformRows('students', 'id, tenant_id, school_id, branch_id, deleted_at'),
+        ]);
+        const schoolById = new Map(schoolRows.map((school: any) => [school.id, school]));
+        const active = (row: any) => !row.deleted_at;
+        return res.json({ success: true, branches: branchRows.filter((branch: any) => active(branch) && (!tenantId || branch.tenant_id === tenantId) && (!schoolId || branch.school_id === schoolId)).map((branch: any) => {
+          const school = schoolById.get(branch.school_id);
+          const address = branch.address || {};
+          return {
+            ...branch,
+            is_main: school?.central_metadata?.mainBranchId === branch.id,
+            users_count: userRows.filter((row: any) => active(row) && row.branch_id === branch.id).length,
+            students_count: studentRows.filter((row: any) => active(row) && row.branch_id === branch.id).length,
+            address, city: address.city || '', phone: address.phone || '', school_name: school?.display_name || '',
+          };
+        }) });
+      } catch (error) {
+        return next(new DatabaseError('تعذر تحميل فروع المدارس من المصدر المركزي.', error instanceof Error ? error.message : String(error)));
+      }
+    }
     if (!platformAdminPool) return next(new DatabaseError('مصدر قاعدة البيانات المركزية غير متاح.'));
     const tenantId = String(req.query?.tenantId || '').trim();
     const schoolId = String(req.query?.schoolId || '').trim();
@@ -2828,6 +3084,41 @@ async function startServer() {
   // Central identity directory. Supabase Auth is the identity source; the
   // public.users and RBAC rows are written only after Auth accepts the user.
   app.get('/api/admin/central/users', authenticateRequest, requirePermissionOnly(PERMISSIONS.PLATFORM_ADMIN), async (req, res, next) => {
+    if (platformControl) {
+      const tenantId = String(req.query?.tenantId || '').trim();
+      if (tenantId && !/^[0-9a-f-]{36}$/i.test(tenantId)) return next(new ValidationError('معرف المستأجر غير صالح.'));
+      try {
+        const [userRows, authUsers, schoolRows, branchRows, roleRows, assignmentRows] = await Promise.all([
+          readPlatformRows('users', 'id, auth_user_id, tenant_id, school_id, branch_id, display_name, status, created_at, deleted_at', (query) => query.order('created_at', { ascending: false })),
+          readPlatformAuthUsers(),
+          readPlatformRows('schools', 'id, tenant_id, display_name'),
+          readPlatformRows('branches', 'id, tenant_id, school_id, name'),
+          readPlatformRows('roles', 'id, tenant_id, role_key, name'),
+          readPlatformRows('user_roles', 'id, tenant_id, user_id, role_id, status, deleted_at'),
+        ]);
+        const authById = new Map(authUsers.map((user: any) => [user.id, user]));
+        const schoolById = new Map(schoolRows.map((school: any) => [school.id, school]));
+        const branchById = new Map(branchRows.map((branch: any) => [branch.id, branch]));
+        const roleById = new Map(roleRows.map((role: any) => [role.id, role]));
+        const rolesByUser = new Map<string, any[]>();
+        for (const assignment of assignmentRows) {
+          if (assignment.deleted_at || assignment.status !== 'active') continue;
+          const role = roleById.get(assignment.role_id);
+          if (!role) continue;
+          const list = rolesByUser.get(assignment.user_id) || [];
+          list.push({ id: role.id, roleKey: role.role_key, name: role.name });
+          rolesByUser.set(assignment.user_id, list);
+        }
+        return res.json({ success: true, users: userRows.filter((user: any) => !user.deleted_at && (!tenantId || user.tenant_id === tenantId)).map((user: any) => ({
+          id: user.id, auth_user_id: user.auth_user_id, tenant_id: user.tenant_id, school_id: user.school_id,
+          branch_id: user.branch_id, display_name: user.display_name, status: user.status, created_at: user.created_at,
+          email: authById.get(user.auth_user_id)?.email || '', school_name: schoolById.get(user.school_id)?.display_name || '',
+          branch_name: branchById.get(user.branch_id)?.name || '', roles: rolesByUser.get(user.id) || [],
+        })) });
+      } catch (error) {
+        return next(new DatabaseError('تعذر تحميل دليل الهوية المركزي.', error instanceof Error ? error.message : String(error)));
+      }
+    }
     if (!platformAdminPool) return next(new DatabaseError('مصدر قاعدة البيانات المركزية غير متاح.'));
     const tenantId = String(req.query?.tenantId || '').trim();
     if (tenantId && !/^[0-9a-f-]{36}$/i.test(tenantId)) return next(new ValidationError('معرف المستأجر غير صالح.'));
@@ -2857,6 +3148,66 @@ async function startServer() {
   });
 
   app.post('/api/admin/central/schools/:schoolId/users', authenticateRequest, requirePermissionOnly(PERMISSIONS.PLATFORM_ADMIN), async (req, res, next) => {
+    if (platformControl) {
+      const identity = (req as any).user as { id?: string };
+      const tenantId = String(req.body?.targetTenantId || '').trim();
+      const actorAuthUserId = String(identity?.id || '').trim();
+      const schoolId = String(req.params.schoolId || '').trim();
+      const branchId = String(req.body?.branchId || '').trim();
+      const displayName = String(req.body?.name || '').trim();
+      const email = String(req.body?.email || '').trim().toLowerCase();
+      const requestedPassword = String(req.body?.password || '').trim();
+      const roleKey = String(req.body?.initialRole || 'schooladmin').trim().toLowerCase().replace(/[^a-z]/g, '');
+      const roleSpec = CENTRAL_IDENTITY_ROLE_CATALOG[roleKey];
+      if (!actorAuthUserId || !schoolId) return next(new AuthenticationError('هوية الإدارة المركزية أو المدرسة غير مكتملة.'));
+      if (tenantId && !/^[0-9a-f-]{36}$/i.test(tenantId)) return next(new ValidationError('معرف المستأجر غير صالح.'));
+      if (!/^[0-9a-f-]{36}$/i.test(schoolId) || (branchId && !/^[0-9a-f-]{36}$/i.test(branchId))) return next(new ValidationError('معرف المدرسة أو الفرع غير صالح.'));
+      if (displayName.length < 2 || displayName.length > 160) return next(new ValidationError('اسم الموظف يجب أن يكون بين حرفين و160 حرفاً.'));
+      if (!/^\S+@\S+\.\S+$/.test(email)) return next(new ValidationError('البريد الإلكتروني غير صالح.'));
+      if (requestedPassword && requestedPassword.length < 8) return next(new ValidationError('كلمة المرور يجب ألا تقل عن 8 رموز.'));
+      if (!roleSpec) return next(new ValidationError('الدور المطلوب غير موجود في الكتالوج المركزي.'));
+      const password = requestedPassword || randomBytes(12).toString('base64url');
+      let authUserId = '';
+      try {
+        const { data: scope, error: scopeError } = await platformControl.from('schools').select('id, tenant_id').eq('id', schoolId).is('deleted_at', null).maybeSingle();
+        if (scopeError) throw scopeError;
+        if (!scope || (tenantId && scope.tenant_id !== tenantId)) throw new ConflictError('المدرسة غير موجودة في نطاق الإدارة المركزية.');
+        const targetTenantId = scope.tenant_id;
+        if (branchId) {
+          const { data: branch, error: branchError } = await platformControl.from('branches').select('id').eq('id', branchId).eq('school_id', schoolId).is('deleted_at', null).maybeSingle();
+          if (branchError) throw branchError;
+          if (!branch) throw new ConflictError('الفرع غير موجود داخل المدرسة.');
+        }
+        const authResult = await platformAdminAuth!.auth.admin.createUser({
+          email, password, email_confirm: true, user_metadata: { display_name: displayName },
+          app_metadata: { tenant_id: targetTenantId, school_id: schoolId, ...(branchId ? { branch_id: branchId } : {}), role: roleKey, status: 'active' },
+        });
+        if (authResult.error || !authResult.data.user) throw new ExternalServiceError(authResult.error?.message || 'تعذر إنشاء هوية Supabase Auth.');
+        authUserId = authResult.data.user.id;
+        const user = await insertPlatformRow('users', { auth_user_id: authUserId, tenant_id: targetTenantId, school_id: schoolId, branch_id: branchId || null, display_name: displayName, status: 'active', created_by: null, updated_by: null }, 'id, auth_user_id, tenant_id, school_id, branch_id, display_name, status, created_at');
+        const role = await upsertPlatformRow('roles', { tenant_id: targetTenantId, school_id: null, role_key: roleKey, name: roleSpec.name, description: roleSpec.description, is_system: true, status: 'active', created_by: null, updated_by: null }, 'tenant_id,role_key', 'id, role_key, name');
+        for (const permissionKey of roleSpec.permissions) {
+          const [resource, action] = permissionKey.split('.', 2);
+          const permission = await upsertPlatformRow('permissions', { tenant_id: null, permission_key: permissionKey, resource, action, description: permissionKey, status: 'active', created_by: null, updated_by: null }, 'permission_key', 'id');
+          const rolePermissionResult = await platformControl.from('role_permissions').upsert({ tenant_id: targetTenantId, role_id: role.id, permission_id: permission.id, status: 'active', created_by: null, updated_by: null }, { onConflict: 'role_id,permission_id', ignoreDuplicates: true });
+          if (rolePermissionResult.error) throw rolePermissionResult.error;
+        }
+        const assignment = await insertPlatformRow('user_roles', { tenant_id: targetTenantId, user_id: user.id, role_id: role.id, school_id: schoolId, branch_id: branchId || null, status: 'active', created_by: null, updated_by: null }, 'id');
+        // Snapshot stores require a tenant-local public.users actor. The first
+        // school identity is the safe bootstrap actor for these empty stores.
+        const seedActorId = user.id;
+        const hrSeed = await platformControl.from('hr_database').upsert({ tenant_id: targetTenantId, school_id: schoolId, country_code: 'ZZ', legal_configuration: {}, data: { employees: [], departments: [], jobs: [], contracts: [], attendance: [], leaves: [], penalties: [], advances: [], rewards: [], performance: [], documents: [], payrollRuns: [], settings: {} }, version: 0, updated_by: seedActorId }, { onConflict: 'school_id', ignoreDuplicates: true });
+        if (hrSeed.error) throw hrSeed.error;
+        const inventorySeed = await platformControl.from('inventory_database').upsert({ tenant_id: targetTenantId, school_id: schoolId, data: { items: [], categories: [], brands: [], units: [], suppliers: [], warehouses: [], movements: [], stocktakes: [], purchaseRequests: [], rfqs: [], quotations: [], purchaseOrders: [], goodsReceipts: [], vendorBills: [], vendorPayments: [], settings: {}, procurementSettings: {} }, version: 0, updated_by: seedActorId }, { onConflict: 'school_id', ignoreDuplicates: true });
+        if (inventorySeed.error) throw inventorySeed.error;
+        const financeSeed = await platformControl.from('financial_portal_snapshots').upsert({ tenant_id: targetTenantId, school_id: schoolId, data: {}, version: 0, updated_by: seedActorId }, { onConflict: 'school_id', ignoreDuplicates: true });
+        if (financeSeed.error) throw financeSeed.error;
+        return res.status(201).json({ success: true, user: { ...user, email, roles: [{ roleKey, name: roleSpec.name }], roleAssignmentId: assignment.id }, temporaryPassword: requestedPassword ? null : password });
+      } catch (error) {
+        if (authUserId) await platformAdminAuth!.auth.admin.deleteUser(authUserId).catch(() => undefined);
+        return next(error instanceof Error && /duplicate|unique/i.test(error.message) ? new ConflictError('البريد الإلكتروني أو الهوية مستخدمة مسبقاً.') : error instanceof ConflictError || error instanceof ExternalServiceError ? error : new DatabaseError('تعذر إنشاء مستخدم المدرسة في المصدر المركزي.', error instanceof Error ? error.message : String(error)));
+      }
+    }
     if (!platformAdminPool || !platformAdminAuth) return next(new ExternalServiceError('خدمة Supabase Auth المركزية غير مهيأة.'));
     const identity = (req as any).user as { id?: string };
     const tenantId = String(req.body?.targetTenantId || '').trim();
