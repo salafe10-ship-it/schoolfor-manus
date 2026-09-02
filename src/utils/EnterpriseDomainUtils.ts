@@ -52,6 +52,16 @@ export function getTrustedSchoolUrl(school: SchoolDomainInfo): string {
     return `https://${cleanCustom}`;
   }
 
+  // Render is the currently deployed public gateway. Until wildcard DNS for
+  // *.erpcloud.com is configured, route the school through the live gateway
+  // with its canonical school id instead of returning an unreachable vanity
+  // hostname. This keeps the link usable and preserves tenant resolution.
+  const hostedGateway = typeof window !== 'undefined' && window.location &&
+    (window.location.hostname.endsWith('.onrender.com') || window.location.hostname.endsWith('.run.app'))
+    ? window.location.origin
+    : null;
+  if (hostedGateway) return `${hostedGateway}/?school=${encodeURIComponent(school.id || rawSubdomain)}`;
+
   // Always return clean production public URL format
   return `https://${rawSubdomain}.erpcloud.com`;
 }
@@ -94,7 +104,10 @@ export function openTrustedSchoolPortal(school: SchoolDomainInfo): Window | null
     window.location.hostname.includes('aistudio.google.com')
   );
 
-  const url = isDev && typeof window !== 'undefined' && window.location
+  const isHostedGateway = typeof window !== 'undefined' && window.location &&
+    (window.location.hostname.endsWith('.onrender.com') || window.location.hostname.endsWith('.run.app'));
+
+  const url = (isDev || isHostedGateway) && typeof window !== 'undefined' && window.location
     ? `${window.location.origin}/?school=${rawSubdomain}`
     : `https://${rawSubdomain}.erpcloud.com`;
 
