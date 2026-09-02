@@ -1,4 +1,4 @@
-import * as XLSX from 'xlsx';
+import ExcelJS from 'exceljs';
 import { CanonicalStudentReadRepository, type CanonicalStudentReadParams } from '../../../database/repositories/CanonicalStudentReadRepository';
 import type { TenantContext } from '../../../tenant/TenantContext';
 import type { AuditMetadata } from '../../../types';
@@ -30,26 +30,33 @@ function safeCell(value: unknown): string {
   return /^[=+\-@]/.test(text) ? `'${text}` : text;
 }
 
-export function buildStudentExportXlsx(rows: Record<string, unknown>[]): Buffer {
-  const data = rows.map(row => ({
-    [EXPORT_HEADERS[0]]: safeCell(row.studentNumber || row.studentCode),
-    [EXPORT_HEADERS[1]]: safeCell(row.name),
-    [EXPORT_HEADERS[2]]: safeCell(row.classroom),
-    [EXPORT_HEADERS[3]]: safeCell(row.section),
-    [EXPORT_HEADERS[4]]: safeCell(row.status),
-    [EXPORT_HEADERS[5]]: safeCell(row.registrationDate)
+export async function buildStudentExportXlsx(rows: Record<string, unknown>[]): Promise<Buffer> {
+  const workbook = new ExcelJS.Workbook();
+  const worksheet = workbook.addWorksheet('Students');
+  worksheet.addRow([...EXPORT_HEADERS]);
+  worksheet.getRow(1).font = { bold: true };
+  worksheet.addRows(rows.map(row => [
+    safeCell(row.studentNumber || row.studentCode),
+    safeCell(row.name),
+    safeCell(row.classroom),
+    safeCell(row.section),
+    safeCell(row.status),
+    safeCell(row.registrationDate)
+  ]));
+  worksheet.columns = EXPORT_HEADERS.map((header, index) => ({
+    header,
+    key: `column-${index}`,
+    width: 24
   }));
+  worksheet.views = [{ state: 'frozen', ySplit: 1 }];
+  worksheet.autoFilter = { from: 'A1', to: `F${Math.max(rows.length + 1, 1)}` };
 
-  const workbook = XLSX.utils.book_new();
-  const worksheet = XLSX.utils.json_to_sheet(data, { header: [...EXPORT_HEADERS] });
-  worksheet['!cols'] = EXPORT_HEADERS.map(() => ({ wch: 24 }));
-  XLSX.utils.book_append_sheet(workbook, worksheet, 'Students');
-
-  const buffer = XLSX.write(workbook, { type: 'buffer', bookType: 'xlsx', compression: true }) as Buffer;
-  if (buffer.length < 4 || buffer[0] !== 0x50 || buffer[1] !== 0x4b) {
+  const buffer = await workbook.xlsx.writeBuffer();
+  const bytes = Uint8Array.from(buffer as unknown as ArrayLike<number>);
+  if (bytes.length < 4 || bytes[0] !== 0x50 || bytes[1] !== 0x4b) {
     throw new Error('XLSX artifact validation failed.');
   }
-  return buffer;
+  return Buffer.from(bytes);
 }
 
 export function studentExportFileName(now = new Date()): string {
@@ -72,6 +79,6 @@ export async function generateStudentExport(
     throw new ValidationError(`تجاوزت نتائج التصدير الحد الأقصى المسموح وهو ${STUDENT_EXPORT_MAX_ROWS} سجل.`);
   }
 
-  const buffer = buildStudentExportXlsx(result.data);
+  const buffer = await buildStudentExportXlsx(result.data);
   return { buffer, rowCount: result.totalCount, fileName: studentExportFileName() };
 }

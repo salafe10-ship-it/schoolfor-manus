@@ -62,7 +62,7 @@ const studentImportAliases: Record<string, string[]> = {
 };
 
 const MAX_STUDENT_IMPORT_FILE_BYTES = 10 * 1024 * 1024;
-const STUDENT_IMPORT_EXTENSIONS = ['.xlsx', '.xls', '.csv'];
+const STUDENT_IMPORT_EXTENSIONS = ['.xlsx', '.csv'];
 
 function importHeaderKey(value: unknown): string {
   return String(value ?? '').trim().toLowerCase().replace(/[\s_\-]+/g, '');
@@ -995,13 +995,10 @@ export default function StudentAffairsPortal({
         throw new Error('تعذر الاستيراد: الحد الأقصى لحجم ملف الطلاب 10 ميجابايت.');
       }
       if (!STUDENT_IMPORT_EXTENSIONS.some(extension => fileName.endsWith(extension))) {
-        throw new Error('نوع ملف الطلاب غير مدعوم. استخدم XLSX أو XLS أو CSV فقط.');
+        throw new Error('نوع ملف الطلاب غير مدعوم. استخدم XLSX أو CSV فقط.');
       }
-      const XLSX = await import('xlsx');
-      const workbook = XLSX.read(await file.arrayBuffer(), { type: 'array', cellDates: true });
-      const firstSheet = workbook.Sheets[workbook.SheetNames[0]];
-      if (!firstSheet) throw new Error('ملف Excel لا يحتوي على ورقة بيانات قابلة للقراءة.');
-      const rawRows = XLSX.utils.sheet_to_json<Record<string, unknown>>(firstSheet, { defval: '', raw: true });
+      const { readSpreadsheetRecords } = await import('../utils/ExcelWorkbookUtils');
+      const rawRows = await readSpreadsheetRecords(await file.arrayBuffer());
       const rows = rawRows.map(normalizeStudentImportRow).filter(row => Object.values(row).some(Boolean));
       if (rows.length === 0) throw new Error('لم توجد صفوف طلاب في ملف Excel.');
       const invalidIndex = rows.findIndex(row => !row.name || !row.dateOfBirth || !row.parentName || !row.parentPhone);
@@ -1525,7 +1522,7 @@ export default function StudentAffairsPortal({
                 <input
                   ref={importFileInputRef}
                   type="file"
-                  accept=".xlsx,.xls,.csv"
+                  accept=".xlsx,.csv"
                   onChange={handleStudentImportFileChange}
                   className="hidden"
                   aria-label="ملف استيراد الطلاب"

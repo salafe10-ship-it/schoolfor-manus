@@ -149,39 +149,49 @@ export default function ExamsAssessmentPanel({ state, actorId, candidateIds, per
     setBusy(`export.xlsx.${assessment.id}`);
     setMessage(null);
     try {
-      const XLSX = await import('xlsx');
+      const ExcelJS = (await import('exceljs')).default;
+      const { safeSpreadsheetCell } = await import('../../utils/ExcelWorkbookUtils');
       const { lifecycle, blueprint, questions, attempts } = exportRowsFor(assessment);
-      const workbook = XLSX.utils.book_new();
-      XLSX.utils.book_append_sheet(workbook, XLSX.utils.json_to_sheet([{
-        معرف_الامتحان: assessment.id,
-        العنوان: assessment.title,
-        الحالة: lifecycle ? assessmentLifecycleLabel[lifecycle.state] : '',
-        المدة_بالدقائق: assessment.durationMinutes,
-        مجموع_الدرجات: blueprint?.totalPoints || 0,
-        عدد_الأسئلة: questions.length,
-        عدد_المحاولات: attempts.length
-      }]), 'الامتحان');
-      XLSX.utils.book_append_sheet(workbook, XLSX.utils.json_to_sheet(questions.map(question => ({
-        معرف_السؤال: question.id,
-        الإصدار: question.version,
-        السؤال: question.prompt,
-        النوع: assessmentQuestionTypeLabel[question.type],
-        الدرجة: question.points,
-        المادة: question.classification.subjectId,
-        الصف: question.classification.gradeId,
-        الحالة: question.status
-      }))), 'الأسئلة');
-      XLSX.utils.book_append_sheet(workbook, XLSX.utils.json_to_sheet(attempts.map(attempt => ({
-        معرف_الطالب: attempt.candidateId,
-        حالة_المحاولة: attempt.status || '',
-        الدرجة: attempt.recordedTotal,
-        النهاية_العظمى: attempt.maximumTotal,
-        النسبة: attempt.maximumTotal > 0 ? Number(((attempt.recordedTotal / attempt.maximumTotal) * 100).toFixed(2)) : 0,
-        التسليم_التلقائي: attempt.autoSubmitted ? 'نعم' : 'لا',
-        وقت_البدء: attempt.startedAt || '',
-        وقت_التسليم: attempt.submittedAt || ''
-      }))), 'النتائج');
-      const buffer = XLSX.write(workbook, { bookType: 'xlsx', type: 'array', compression: true });
+      const workbook = new ExcelJS.Workbook();
+      const overview = workbook.addWorksheet('الامتحان');
+      overview.addRow(['معرف_الامتحان', 'العنوان', 'الحالة', 'المدة_بالدقائق', 'مجموع_الدرجات', 'عدد_الأسئلة', 'عدد_المحاولات'].map(safeSpreadsheetCell));
+      overview.addRow([
+        assessment.id,
+        assessment.title,
+        lifecycle ? assessmentLifecycleLabel[lifecycle.state] : '',
+        assessment.durationMinutes,
+        blueprint?.totalPoints || 0,
+        questions.length,
+        attempts.length
+      ].map(safeSpreadsheetCell));
+      overview.getRow(1).font = { bold: true };
+      const questionsSheet = workbook.addWorksheet('الأسئلة');
+      questionsSheet.addRow(['معرف_السؤال', 'الإصدار', 'السؤال', 'النوع', 'الدرجة', 'المادة', 'الصف', 'الحالة'].map(safeSpreadsheetCell));
+      questionsSheet.addRows(questions.map(question => [
+        question.id,
+        question.version,
+        question.prompt,
+        assessmentQuestionTypeLabel[question.type],
+        question.points,
+        question.classification.subjectId,
+        question.classification.gradeId,
+        question.status
+      ].map(safeSpreadsheetCell)));
+      questionsSheet.getRow(1).font = { bold: true };
+      const resultsSheet = workbook.addWorksheet('النتائج');
+      resultsSheet.addRow(['معرف_الطالب', 'حالة_المحاولة', 'الدرجة', 'النهاية_العظمى', 'النسبة', 'التسليم_التلقائي', 'وقت_البدء', 'وقت_التسليم'].map(safeSpreadsheetCell));
+      resultsSheet.addRows(attempts.map(attempt => [
+        attempt.candidateId,
+        attempt.status || '',
+        attempt.recordedTotal,
+        attempt.maximumTotal,
+        attempt.maximumTotal > 0 ? Number(((attempt.recordedTotal / attempt.maximumTotal) * 100).toFixed(2)) : 0,
+        attempt.autoSubmitted ? 'نعم' : 'لا',
+        attempt.startedAt || '',
+        attempt.submittedAt || ''
+      ].map(safeSpreadsheetCell)));
+      resultsSheet.getRow(1).font = { bold: true };
+      const buffer = await workbook.xlsx.writeBuffer();
       downloadBlob(new Blob([buffer], { type: 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet' }), `نتائج_الامتحان_${assessment.id}.xlsx`);
       setMessage({ tone: 'success', text: 'تم تنزيل ملف XLSX للامتحان والأسئلة ونتائج الطلاب.' });
     } catch (error) {

@@ -800,7 +800,7 @@ export default function GeneralLedgerPortal({
     }
     const input = document.createElement('input');
     input.type = 'file';
-    input.accept = '.xlsx,.xls,.csv,text/csv,application/vnd.openxmlformats-officedocument.spreadsheetml.sheet';
+    input.accept = '.xlsx,.csv,text/csv,application/vnd.openxmlformats-officedocument.spreadsheetml.sheet';
     input.onchange = async () => {
       const file = input.files?.[0];
       if (!file) return;
@@ -809,10 +809,8 @@ export default function GeneralLedgerPortal({
         return;
       }
       try {
-        const XLSX = await import('xlsx');
-        const workbook = XLSX.read(await file.arrayBuffer(), { type: 'array' });
-        const firstSheet = workbook.Sheets[workbook.SheetNames[0]];
-        const rows = XLSX.utils.sheet_to_json<Record<string, any>>(firstSheet, { defval: '' });
+        const { readSpreadsheetRecords } = await import('../utils/ExcelWorkbookUtils');
+        const rows = await readSpreadsheetRecords(await file.arrayBuffer());
         const read = (row: Record<string, any>, keys: string[]) => {
           const key = Object.keys(row).find(candidate => keys.includes(candidate.trim().toLowerCase()));
           return key ? row[key] : '';

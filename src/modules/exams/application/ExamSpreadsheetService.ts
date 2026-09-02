@@ -1,4 +1,5 @@
-import * as XLSX from 'xlsx';
+import ExcelJS from 'exceljs';
+import { readSpreadsheetMatrix } from '../../../utils/ExcelWorkbookUtils';
 
 export const EXAM_GRADE_XLSX_CONTENT_TYPE = 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet';
 export const EXAM_GRADE_CSV_CONTENT_TYPE = 'text/csv;charset=utf-8';
@@ -290,10 +291,10 @@ function exportGradeValue(grade: number | null | undefined, maxScore: number, ro
   return grade;
 }
 
-export function buildExamGradeWorkbook(input: ExamGradeWorkbookInput): XLSX.WorkBook {
+function buildExamGradeRows(input: ExamGradeWorkbookInput): unknown[][] {
   requireValidSubject(input.subject);
   const seenStudentIds = new Set<string>();
-  const dataRows = input.rows.map((row, index) => {
+  return input.rows.map((row, index) => {
     const sourceRow = index + 2;
     const studentId = String(row.studentId || '').trim();
     if (!studentId) {
@@ -329,47 +330,39 @@ export function buildExamGradeWorkbook(input: ExamGradeWorkbookInput): XLSX.Work
     ];
   });
 
-  const worksheet = XLSX.utils.aoa_to_sheet([
-    [...EXAM_GRADE_EXPORT_HEADERS],
-    ...dataRows
-  ]);
-  worksheet['!cols'] = [
-    { wch: 38 },
-    { wch: 20 },
-    { wch: 20 },
-    { wch: 16 },
-    { wch: 30 },
-    { wch: 20 },
-    { wch: 14 },
-    { wch: 24 },
-    { wch: 16 },
-    { wch: 14 }
-  ];
-  worksheet['!autofilter'] = { ref: `A1:J${Math.max(dataRows.length + 1, 1)}` };
+}
 
-  const workbook = XLSX.utils.book_new();
-  XLSX.utils.book_append_sheet(workbook, worksheet, safeSheetName(input.sheetName));
+export function buildExamGradeWorkbook(input: ExamGradeWorkbookInput): ExcelJS.Workbook {
+  const dataRows = buildExamGradeRows(input);
+  const workbook = new ExcelJS.Workbook();
+  const worksheet = workbook.addWorksheet(safeSheetName(input.sheetName));
+  worksheet.addRow([...EXAM_GRADE_EXPORT_HEADERS]);
+  worksheet.getRow(1).font = { bold: true };
+  worksheet.addRows(dataRows);
+  worksheet.columns = [38, 20, 20, 16, 30, 20, 14, 24, 16, 14].map((width, index) => ({
+    header: EXAM_GRADE_EXPORT_HEADERS[index],
+    key: `column-${index}`,
+    width
+  }));
+  worksheet.views = [{ state: 'frozen', ySplit: 1 }];
+  worksheet.autoFilter = { from: 'A1', to: `J${Math.max(dataRows.length + 1, 1)}` };
   return workbook;
 }
 
-export function writeExamGradeXlsx(input: ExamGradeWorkbookInput): ArrayBuffer {
+export async function writeExamGradeXlsx(input: ExamGradeWorkbookInput): Promise<ArrayBuffer> {
   const workbook = buildExamGradeWorkbook(input);
-  const output = XLSX.write(workbook, {
-    type: 'array',
-    bookType: 'xlsx',
-    compression: true
-  }) as ArrayBuffer;
-  const signature = new Uint8Array(output, 0, Math.min(output.byteLength, 2));
+  const output = await workbook.xlsx.writeBuffer();
+  const bytes = Uint8Array.from(output as unknown as ArrayLike<number>);
+  const signature = bytes.subarray(0, Math.min(bytes.length, 2));
   if (signature.length < 2 || signature[0] !== 0x50 || signature[1] !== 0x4B) {
     throw new Error('XLSX artifact validation failed.');
   }
-  return output;
+  return bytes.buffer;
 }
 
 export function writeExamGradeCsv(input: ExamGradeWorkbookInput): string {
-  const workbook = buildExamGradeWorkbook(input);
-  const worksheet = workbook.Sheets[workbook.SheetNames[0]];
-  return `\uFEFF${XLSX.utils.sheet_to_csv(worksheet, { FS: ',', RS: '\r\n', blankrows: false })}`;
+  const rows = [[...EXAM_GRADE_EXPORT_HEADERS], ...buildExamGradeRows(input)];
+  return `\uFEFF${rows.map(row => row.map(value => `"${String(value ?? '').replaceAll('"', '""')}"`).join(',')).join('\r\n')}`;
 }
 
 function isEmptyCell(value: unknown): boolean {
@@ -668,13 +661,13 @@ function validateImportOptions(options: ExamGradeImportOptions): void {
 }
 
 /**
- * Reads XLSX, legacy XLS, or CSV bytes and returns one complete validated
+ * Reads XLSX or CSV bytes and returns one complete validated
  * batch. Any issue rejects the whole file; no partial grade map is returned.
  */
-export function readExamGradeSpreadsheet(
+export async function readExamGradeSpreadsheet(
   fileData: ArrayBuffer,
   options: ExamGradeImportOptions
-): ExamGradeImportResult {
+): Promise<ExamGradeImportResult> {
   validateImportOptions(options);
   // Files selected in an iframe, worker, or test DOM can originate from a
   // different JavaScript realm. `instanceof ArrayBuffer` rejects those valid
@@ -687,43 +680,15 @@ export function readExamGradeSpreadsheet(
     }]);
   }
 
-  let workbook: XLSX.WorkBook;
+  let table: unknown[][];
   try {
-    workbook = XLSX.read(new Uint8Array(fileData.slice(0)), {
-      type: 'array',
-      raw: true,
-      cellDates: false
-    });
+    table = await readSpreadsheetMatrix(fileData, options.sheetName);
   } catch {
     throw new ExamSpreadsheetValidationError([{
       code: 'invalid_file',
-      message: 'تعذر قراءة الملف كـ XLSX أو XLS أو CSV صالح.'
+      message: 'تعذر قراءة الملف كـ XLSX أو CSV صالح.'
     }]);
   }
-
-  if (!Array.isArray(workbook.SheetNames) || workbook.SheetNames.length === 0) {
-    throw new ExamSpreadsheetValidationError([{
-      code: 'empty_workbook',
-      message: 'ملف الدرجات لا يحتوي أي ورقة عمل.'
-    }]);
-  }
-
-  const sheetName = options.sheetName || workbook.SheetNames[0];
-  const worksheet = workbook.Sheets[sheetName];
-  if (!worksheet) {
-    throw new ExamSpreadsheetValidationError([{
-      code: 'worksheet_not_found',
-      message: `ورقة العمل ${sheetName} غير موجودة في الملف.`,
-      value: sheetName
-    }]);
-  }
-
-  const table = XLSX.utils.sheet_to_json<unknown[]>(worksheet, {
-    header: 1,
-    defval: '',
-    raw: true,
-    blankrows: true
-  });
   const headerIndex = findHeaderRowIndex(table);
   if (headerIndex < 0) {
     throw new ExamSpreadsheetValidationError([{

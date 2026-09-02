@@ -1,6 +1,6 @@
 import { jsPDF } from "jspdf";
 import "jspdf-autotable";
-import * as XLSX from "xlsx";
+import { writeXlsxBuffer } from './ExcelWorkbookUtils';
 
 /**
  * Utility to generate PDF reports with RTL and branding.
@@ -38,13 +38,23 @@ export const generatePDFReport = (
 /**
  * Utility to generate Excel reports.
  */
-export const generateExcelReport = (
+export const generateExcelReport = async (
   title: string,
   data: any[],
   columns: { header: string; dataKey: string }[]
 ) => {
-  const ws = XLSX.utils.json_to_sheet(data);
-  const wb = XLSX.utils.book_new();
-  XLSX.utils.book_append_sheet(wb, ws, title);
-  XLSX.writeFile(wb, `${title}.xlsx`);
+  const buffer = await writeXlsxBuffer([{
+    name: title,
+    headers: columns.map(column => column.header),
+    rows: data.map(row => columns.map(column => row[column.dataKey])),
+    columnWidths: columns.map(() => 24)
+  }]);
+  const downloadUrl = URL.createObjectURL(new Blob([buffer], {
+    type: 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet'
+  }));
+  const link = document.createElement('a');
+  link.href = downloadUrl;
+  link.download = `${title}.xlsx`;
+  link.click();
+  URL.revokeObjectURL(downloadUrl);
 };

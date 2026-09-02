@@ -1,13 +1,13 @@
 services:
-  # Live deployment verification checkpoint: 2026-08-26.
+  # Live deployment verification checkpoint: 2026-09-02.
   - type: web
     name: schoolfor-manus-staging
     runtime: node
     plan: free
     autoDeployTrigger: commit
-    buildCommand: npm ci && npm run build
+    buildCommand: npm ci --include=dev && npm run build
     startCommand: npm start
-    healthCheckPath: /api/health
+    healthCheckPath: /api/ready
     envVars:
       - key: EDUPRO_ENVIRONMENT
         value: staging

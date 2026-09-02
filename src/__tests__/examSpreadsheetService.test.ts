@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import * as XLSX from 'xlsx';
+import ExcelJS from 'exceljs';
 import {
   EXAM_GRADE_EXPORT_HEADERS,
   ExamSpreadsheetValidationError,
@@ -10,6 +10,7 @@ import {
   writeExamGradeXlsx,
   type ExamGradeWorkbookInput
 } from '../modules/exams/application/ExamSpreadsheetService';
+import { parseCsvMatrix, worksheetToMatrix } from '../utils/ExcelWorkbookUtils';
 
 const students = [
   {
@@ -54,19 +55,21 @@ const exportInput: ExamGradeWorkbookInput = {
   ]
 };
 
-function workbookBytes(rows: unknown[][], bookType: 'xlsx' | 'xls' = 'xlsx'): ArrayBuffer {
-  const workbook = XLSX.utils.book_new();
-  XLSX.utils.book_append_sheet(workbook, XLSX.utils.aoa_to_sheet(rows), 'Grades');
-  return XLSX.write(workbook, { type: 'array', bookType }) as ArrayBuffer;
+async function workbookBytes(rows: unknown[][]): Promise<ArrayBuffer> {
+  const workbook = new ExcelJS.Workbook();
+  const worksheet = workbook.addWorksheet('Grades');
+  worksheet.addRows(rows);
+  const output = await workbook.xlsx.writeBuffer();
+  return Uint8Array.from(output as unknown as ArrayLike<number>).buffer;
 }
 
 function utf8Bytes(value: string): ArrayBuffer {
   return new TextEncoder().encode(value).buffer as ArrayBuffer;
 }
 
-function capturedValidationError(run: () => unknown): ExamSpreadsheetValidationError {
+async function capturedValidationError(run: () => unknown | Promise<unknown>): Promise<ExamSpreadsheetValidationError> {
   try {
-    run();
+    await run();
   } catch (error) {
     expect(error).toBeInstanceOf(ExamSpreadsheetValidationError);
     return error as ExamSpreadsheetValidationError;
@@ -75,19 +78,16 @@ function capturedValidationError(run: () => unknown): ExamSpreadsheetValidationE
 }
 
 describe('ExamSpreadsheetService', () => {
-  it('builds a real XLSX workbook with Arabic headers, Arabic rows, and numeric grades', () => {
+  it('builds a real XLSX workbook with Arabic headers, Arabic rows, and numeric grades', async () => {
     const workbook = buildExamGradeWorkbook(exportInput);
-    expect(workbook.SheetNames).toEqual(['درجات الامتحان']);
+    expect(workbook.worksheets.map(worksheet => worksheet.name)).toEqual(['درجات الامتحان']);
 
-    const output = writeExamGradeXlsx(exportInput);
+    const output = await writeExamGradeXlsx(exportInput);
     expect(Array.from(new Uint8Array(output, 0, 2))).toEqual([0x50, 0x4B]);
 
-    const parsed = XLSX.read(output, { type: 'array' });
-    const rows = XLSX.utils.sheet_to_json<unknown[]>(parsed.Sheets['درجات الامتحان'], {
-      header: 1,
-      defval: '',
-      raw: true
-    });
+    const parsed = new ExcelJS.Workbook();
+    await parsed.xlsx.load(output as unknown as Buffer);
+    const rows = worksheetToMatrix(parsed.getWorksheet('درجات الامتحان')!);
     expect(rows[0]).toEqual([...EXAM_GRADE_EXPORT_HEADERS]);
     expect(rows[1]).toEqual([
       'student-1',
@@ -123,12 +123,7 @@ describe('ExamSpreadsheetService', () => {
     });
     expect(csv.charCodeAt(0)).toBe(0xFEFF);
 
-    const parsed = XLSX.read(utf8Bytes(csv), { type: 'array' });
-    const rows = XLSX.utils.sheet_to_json<string[]>(parsed.Sheets[parsed.SheetNames[0]], {
-      header: 1,
-      defval: '',
-      raw: true
-    });
+    const rows = parseCsvMatrix(new TextDecoder().decode(utf8Bytes(csv)));
     expect(rows[1][0]).toBe("'=1+1");
     expect(rows[1][1]).toBe("'+cmd|calc");
     expect(rows[1][2]).toBe("'-2+3");
@@ -147,8 +142,8 @@ describe('ExamSpreadsheetService', () => {
     expect(normalizeExamSpreadsheetHeader('unknown column')).toBeNull();
   });
 
-  it('reads XLSX rows with Arabic headers and returns a complete grade map', () => {
-    const result = readExamGradeSpreadsheet(workbookBytes([
+  it('reads XLSX rows with Arabic headers and returns a complete grade map', async () => {
+    const result = await readExamGradeSpreadsheet(await workbookBytes([
       ['ملاحظات كشف اللغة العربية'],
       ['رقم الطالب', 'اسم الطالب', 'الدرجة الحالية'],
       ['ST-001', 'آمنة محمد', 91.5],
@@ -167,12 +162,12 @@ describe('ExamSpreadsheetService', () => {
     ]);
   });
 
-  it('reads legacy XLS bytes with English headers', () => {
-    const result = readExamGradeSpreadsheet(workbookBytes([
+  it('reads XLSX bytes with English headers', async () => {
+    const result = await readExamGradeSpreadsheet(await workbookBytes([
       ['Student ID', 'Student Name', 'Mark'],
       ['student-1', 'آمنة محمد', 66],
       ['student-2', 'مصطفى علي', 77]
-    ], 'xls'), {
+    ]), {
       subjectId: 'science',
       maxScore: 100,
       students
@@ -182,9 +177,9 @@ describe('ExamSpreadsheetService', () => {
     expect(result.rows.every(row => row.matchedBy === 'studentId')).toBe(true);
   });
 
-  it('reads UTF-8 CSV ArrayBuffer and accepts Arabic-Indic decimal grades', () => {
+  it('reads UTF-8 CSV ArrayBuffer and accepts Arabic-Indic decimal grades', async () => {
     const csv = '\uFEFFرقم الجلوس,اسم الطالب,Score\r\n101,آمنة محمد,٨٧٫٥\r\n102,مصطفى علي,٦٢';
-    const result = readExamGradeSpreadsheet(utf8Bytes(csv), {
+    const result = await readExamGradeSpreadsheet(utf8Bytes(csv), {
       subjectId: 'arabic',
       maxScore: 100,
       students
@@ -194,8 +189,8 @@ describe('ExamSpreadsheetService', () => {
     expect(result.rows.every(row => row.matchedBy === 'seatNumber')).toBe(true);
   });
 
-  it('rejects the whole file and reports invalid, missing, duplicate, and out-of-range rows together', () => {
-    const error = capturedValidationError(() => readExamGradeSpreadsheet(workbookBytes([
+  it('rejects the whole file and reports invalid, missing, duplicate, and out-of-range rows together', async () => {
+    const error = await capturedValidationError(() => workbookBytes([
       ['Student Number', 'Grade'],
       ['ST-001', 80],
       ['ST-001', 70],
@@ -203,11 +198,11 @@ describe('ExamSpreadsheetService', () => {
       ['ST-002', 101],
       ['', 50],
       ['ST-002', '=1+1']
-    ]), {
+    ]).then(value => readExamGradeSpreadsheet(value, {
       subjectId: 'arabic',
       maxScore: 100,
       students
-    }));
+    })));
 
     const codes = error.issues.map(issue => issue.code);
     expect(codes).toEqual(expect.arrayContaining([
@@ -220,68 +215,68 @@ describe('ExamSpreadsheetService', () => {
     expect(error.message).toContain('تم رفض ملف الدرجات بالكامل');
   });
 
-  it('rejects duplicate students even when different identifier columns are used', () => {
-    const error = capturedValidationError(() => readExamGradeSpreadsheet(workbookBytes([
+  it('rejects duplicate students even when different identifier columns are used', async () => {
+    const error = await capturedValidationError(() => workbookBytes([
       ['معرف الطالب', 'رقم الطالب', 'الدرجة'],
       ['student-1', '', 90],
       ['', 'NAT-001', 80]
-    ]), {
+    ]).then(value => readExamGradeSpreadsheet(value, {
       subjectId: 'arabic',
       maxScore: 100,
       students
-    }));
+    })));
     expect(error.issues).toEqual(expect.arrayContaining([
       expect.objectContaining({ code: 'duplicate_student', row: 3, value: 'student-1' })
     ]));
   });
 
-  it('rejects conflicting identifiers and ambiguous roster identifiers without guessing a student', () => {
-    const conflicting = capturedValidationError(() => readExamGradeSpreadsheet(workbookBytes([
+  it('rejects conflicting identifiers and ambiguous roster identifiers without guessing a student', async () => {
+    const conflicting = await capturedValidationError(() => workbookBytes([
       ['Student ID', 'Seat Number', 'Grade'],
       ['student-1', '102', 88]
-    ]), {
+    ]).then(value => readExamGradeSpreadsheet(value, {
       subjectId: 'arabic',
       maxScore: 100,
       students
-    }));
+    })));
     expect(conflicting.issues).toEqual(expect.arrayContaining([
       expect.objectContaining({ code: 'conflicting_student_identifiers', row: 2 })
     ]));
 
-    const ambiguous = capturedValidationError(() => readExamGradeSpreadsheet(workbookBytes([
+    const ambiguous = await capturedValidationError(() => workbookBytes([
       ['Seat Number', 'Grade'],
       ['101', 88]
-    ]), {
+    ]).then(value => readExamGradeSpreadsheet(value, {
       subjectId: 'arabic',
       maxScore: 100,
       students: [...students, { id: 'student-3', seatNumber: '101', name: 'طالب آخر' }]
-    }));
+    })));
     expect(ambiguous.issues).toEqual(expect.arrayContaining([
       expect.objectContaining({ code: 'ambiguous_student_identifier', row: 2 })
     ]));
   });
 
-  it('rejects missing required headers and header-only files', () => {
-    const missingHeader = capturedValidationError(() => readExamGradeSpreadsheet(workbookBytes([
+  it('rejects missing required headers and header-only files', async () => {
+    const missingHeader = await capturedValidationError(() => workbookBytes([
       ['اسم الطالب', 'المادة'],
       ['آمنة محمد', 'العربية']
-    ]), {
+    ]).then(value => readExamGradeSpreadsheet(value, {
       subjectId: 'arabic',
       maxScore: 100,
       students
-    }));
+    })));
     expect(missingHeader.issues.map(issue => issue.code)).toEqual([
       'missing_required_header',
       'missing_required_header'
     ]);
 
-    const noRows = capturedValidationError(() => readExamGradeSpreadsheet(workbookBytes([
+    const noRows = await capturedValidationError(() => workbookBytes([
       ['Student ID', 'Grade']
-    ]), {
+    ]).then(value => readExamGradeSpreadsheet(value, {
       subjectId: 'arabic',
       maxScore: 100,
       students
-    }));
+    })));
     expect(noRows.issues).toEqual([
       expect.objectContaining({ code: 'no_data_rows' })
     ]);

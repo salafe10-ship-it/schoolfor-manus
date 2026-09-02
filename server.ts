@@ -3,7 +3,6 @@ import path from "path";
 import { createServer as createViteServer } from "vite";
 import dotenv from "dotenv";
 import helmet from "helmet";
-import rateLimit from "express-rate-limit";
 
 dotenv.config();
 
@@ -35,6 +34,7 @@ import {
   requirePermissionOnly,
 } from "./src/middleware/auth.js";
 import { requestTarget } from "./src/middleware/tenantValidation.js";
+import { createMemoryRateLimiter } from "./src/middleware/memoryRateLimit.js";
 import { tenantEngine } from "./src/tenant/TenantEngine.js";
 import { PERMISSIONS, permissionRegistry } from "./src/authorization/PermissionRegistry.js";
 import { roleResolver } from "./src/authorization/RoleResolver.js";
@@ -1303,26 +1303,16 @@ async function startServer() {
     frameguard: false,
   }));
   
-  // Rate Limiting
-  const limiter = rateLimit({
-    windowMs: 15 * 60 * 1000, // 15 minutes
-    max: 100, // limit each IP to 100 requests per windowMs
-    validate: { trustProxy: false }
-  });
-  // app.use(limiter);
-  const authLimiter = rateLimit({
+  // Rate limiting is applied explicitly to authentication and diagnostics
+  // below. General API traffic remains governed by route authorization and
+  // database scope checks instead of a blanket limiter.
+  const authLimiter = createMemoryRateLimiter({
     windowMs: 15 * 60 * 1000,
     max: 20,
-    standardHeaders: true,
-    legacyHeaders: false,
-    validate: { trustProxy: false }
   });
-  const diagnosticLimiter = rateLimit({
+  const diagnosticLimiter = createMemoryRateLimiter({
     windowMs: 15 * 60 * 1000,
     max: 10,
-    standardHeaders: true,
-    legacyHeaders: false,
-    validate: { trustProxy: false }
   });
   const disableAuthCaching = (res: express.Response) => {
     res.set('Cache-Control', 'no-store, no-cache, must-revalidate, private');

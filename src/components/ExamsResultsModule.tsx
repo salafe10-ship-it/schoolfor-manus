@@ -1705,21 +1705,19 @@ export default function ExamsResultsModule({
     triggerNotification('تم ملء درجات جميع الطلاب المفلترين في هذه المادة بنجاح', 'success');
   };
 
-  // Excel (CSV) Real Import Engine
-  const handleExcelImport = (e: React.ChangeEvent<HTMLInputElement>) => {
+  // XLSX/CSV import engine. Both formats are normalized to literal cells by
+  // the shared reader; formulas and cached formula results are never trusted.
+  const handleExcelImport = async (e: React.ChangeEvent<HTMLInputElement>) => {
     if (approvalStatus.approved) {
       triggerNotification('النتائج معتمدة ومغلقة ولا يمكن الاستيراد حالياً', 'warning');
       return;
     }
     if (e.target.files && e.target.files[0]) {
       const file = e.target.files[0];
-      const reader = new FileReader();
-      reader.onload = (evt) => {
-        const text = evt.target?.result as string;
-        if (!text) return;
-
-        const lines = text.split(/\r?\n/);
-        if (lines.length < 2) {
+      try {
+        const { readSpreadsheetMatrix } = await import('../utils/ExcelWorkbookUtils');
+        const rows = await readSpreadsheetMatrix(await file.arrayBuffer());
+        if (rows.length < 2) {
           triggerNotification('ملف الاستيراد غير صالح أو لا يحتوي صفوفاً كافية. لم يتم تعديل أي درجة.', 'warning');
           return;
         }
@@ -1729,11 +1727,10 @@ export default function ExamsResultsModule({
         const importedKeys = new Set<string>();
         const validationErrors: string[] = [];
 
-        for (let i = 1; i < lines.length; i++) {
-          const line = lines[i].trim();
-          if (!line) continue;
+        for (let i = 1; i < rows.length; i++) {
+          const values = rows[i].map(value => String(value ?? '').trim());
+          if (values.every(value => !value)) continue;
 
-          const values = line.split(/,(?=(?:(?:[^"]*"){2})*[^"]*$)/).map(v => v.replace(/^"|"$/g, '').trim());
           const studentIdentifier = values[0];
           const gradeStr = values[5];
 
@@ -1775,10 +1772,12 @@ export default function ExamsResultsModule({
         setGradesMatrix(updated);
         setModifiedGradesKeys(previous => new Set([...previous, ...importedKeys]));
         triggerNotification(`تمت إضافة ${importedKeys.size} درجة إلى المسودة بعد تحقق كامل. اضغط حفظ التغييرات لإثباتها مركزيًا.`, 'info');
-        logAction('استيراد مسودة درجات من ملف CSV بعد تحقق ذري', 'إدخال الدرجات');
+        logAction('استيراد مسودة درجات من ملف XLSX/CSV بعد تحقق ذري', 'إدخال الدرجات');
+      } catch (error) {
+        triggerNotification(error instanceof Error ? error.message : 'تعذر قراءة ملف XLSX أو CSV.', 'warning');
+      } finally {
         e.target.value = '';
-      };
-      reader.readAsText(file);
+      }
     }
   };
 
@@ -6567,8 +6566,8 @@ export default function ExamsResultsModule({
                     <span>استيراد Excel</span>
                     <input
                       type="file"
-                      accept=".xlsx, .xls, .csv"
-                      onChange={handleExcelImport}
+                      accept=".xlsx, .csv"
+                      onChange={event => void handleExcelImport(event)}
                       className="hidden"
                     />
                   </label>

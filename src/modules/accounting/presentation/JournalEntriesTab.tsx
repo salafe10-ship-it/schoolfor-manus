@@ -322,7 +322,7 @@ const handleCloneJv = (jvId: string) => {
     triggerNotification(`📋 تم استنساخ القيد ${jvId} إلى مسودة جديدة برقم ${nextId}`, 'info');
   };
 
-const handleExportJv = (format: string, jvToExport: any = activeJvState) => {
+const handleExportJv = async (format: string, jvToExport: any = activeJvState) => {
     const title = `سند قيد تسوية مالي - ${jvToExport.id}`;
     const headerDetails = `رقم القيد: ${jvToExport.id} | التاريخ: ${jvToExport.date} | الحالة: ${jvToExport.status}`;
     
@@ -343,51 +343,42 @@ const handleExportJv = (format: string, jvToExport: any = activeJvState) => {
       link.click();
       document.body.removeChild(link);
       triggerNotification('✓ تم تصدير القيد بصيغة CSV بنجاح', 'success');
-    } else if (format === 'xls') {
-      const html = `
-        <html xmlns:o="urn:schemas-microsoft-com:office:office" xmlns:x="urn:schemas-microsoft-com:office:excel" xmlns="http://www.w3.org/TR/REC-html40">
-        <head><meta charset="utf-8" /></head>
-        <body style="direction: rtl; font-family: Arial, sans-serif;">
-          <h2>${title}</h2>
-          <p>${headerDetails}</p>
-          <table border="1" style="border-collapse: collapse; text-align: right;">
-            <tr style="background-color: #f2f2f2; font-weight: bold;">
-              <th>رقم الحساب</th>
-              <th>اسم بند الحساب</th>
-              <th>البيان والشرط</th>
-              <th>مدين (Debit)</th>
-              <th>دائن (Credit)</th>
-              <th>مركز التكلفة</th>
-            </tr>
-            ${jvToExport.lines.map((l: any) => `
-              <tr>
-                <td>${l.accountCode}</td>
-                <td>${l.accountName}</td>
-                <td>${l.description || jvToExport.description}</td>
-                <td>${l.debit}</td>
-                <td>${l.credit}</td>
-                <td>${l.costCenter}</td>
-              </tr>
-            `).join('')}
-            <tr style="font-weight: bold; background-color: #e6e6e6;">
-              <td colspan="3">المجموع العام المتوازن</td>
-              <td>${jvToExport.debitTotal}</td>
-              <td>${jvToExport.creditTotal}</td>
-              <td>-</td>
-            </tr>
-          </table>
-        </body>
-        </html>
-      `;
-      const blob = new Blob([html], { type: 'application/vnd.ms-excel' });
+    } else if (format === 'xlsx') {
+      const { writeXlsxBuffer } = await import('../../../utils/ExcelWorkbookUtils');
+      const buffer = await writeXlsxBuffer([{
+        name: 'القيد',
+        headers: ['رقم الحساب', 'اسم بند الحساب', 'البيان والشرط', 'مدين', 'دائن', 'مركز التكلفة'],
+        rows: jvToExport.lines.map((line: any) => [
+          line.accountCode,
+          line.accountName,
+          line.description || jvToExport.description,
+          line.debit,
+          line.credit,
+          line.costCenter,
+        ]),
+        columnWidths: [16, 28, 36, 16, 16, 20],
+      }, {
+        name: 'الملخص',
+        headers: ['الحقل', 'القيمة'],
+        rows: [
+          ['رقم القيد', jvToExport.id],
+          ['التاريخ', jvToExport.date],
+          ['الحالة', jvToExport.status],
+          ['الإجمالي المدين', jvToExport.debitTotal],
+          ['الإجمالي الدائن', jvToExport.creditTotal],
+        ],
+        columnWidths: [24, 32],
+      }]);
+      const blob = new Blob([buffer], { type: 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet' });
       const url = URL.createObjectURL(blob);
       const link = document.createElement("a");
       link.href = url;
-      link.setAttribute("download", `JV_Export_${jvToExport.id}.xls`);
+      link.setAttribute("download", `JV_Export_${jvToExport.id}.xlsx`);
       document.body.appendChild(link);
       link.click();
       document.body.removeChild(link);
-      triggerNotification('✓ تم تصدير القيد بصيغة Excel بنجاح', 'success');
+      URL.revokeObjectURL(url);
+      triggerNotification('✓ تم تصدير القيد بصيغة XLSX حقيقية وآمنة بنجاح', 'success');
     } else if (format === 'doc') {
       const html = `
         <html>
@@ -662,9 +653,9 @@ const handleImportJvLinesFromCSV = (csvText: string) => {
                           <span>تصدير</span>
                         </button>
                         <div role="menu" className="hidden group-hover:block group-focus-within:block absolute top-8 right-0 bg-white border border-slate-200 rounded-xl shadow-xl py-1.5 w-36 z-50 text-[11px]">
-                          <button onClick={() => handleExportJv('xls')} className="w-full text-right px-3 py-2 hover:bg-slate-50 flex items-center gap-2 text-slate-700 font-semibold">
+                          <button onClick={() => void handleExportJv('xlsx')} className="w-full text-right px-3 py-2 hover:bg-slate-50 flex items-center gap-2 text-slate-700 font-semibold">
                             <FileSpreadsheet className="w-3.5 h-3.5 text-emerald-600" />
-                            <span>ملف Excel (.xls)</span>
+                            <span>ملف Excel (.xlsx)</span>
                           </button>
                           <button onClick={() => handleExportJv('csv')} className="w-full text-right px-3 py-2 hover:bg-slate-50 flex items-center gap-2 text-slate-700 font-semibold">
                             <FileText className="w-3.5 h-3.5 text-cyan-600" />

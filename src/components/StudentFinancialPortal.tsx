@@ -42,7 +42,7 @@ interface StudentFinancialPortalProps {
 
 const STUDENT_RECEIVABLE_ACCOUNT = '1201';
 const MAX_FEE_CONFIG_IMPORT_FILE_BYTES = 10 * 1024 * 1024;
-const FEE_CONFIG_IMPORT_EXTENSIONS = ['.xlsx', '.xls', '.csv'];
+const FEE_CONFIG_IMPORT_EXTENSIONS = ['.xlsx', '.csv'];
 const MAX_FEE_CONFIG_IMPORT_ROWS = 500;
 
 export default function StudentFinancialPortal({
@@ -1304,14 +1304,13 @@ export default function StudentFinancialPortal({
 
   const handleDownloadFeeTemplate = async () => {
     try {
-      const XLSX = await import('xlsx');
-      const worksheet = XLSX.utils.aoa_to_sheet([
-        feeConfigHeaders,
-        ['', 'رسوم دراسية فصليّة', 0, '4101', '1', '']
-      ]);
-      const workbook = XLSX.utils.book_new();
-      XLSX.utils.book_append_sheet(workbook, worksheet, 'FeeConfigs');
-      const buffer = XLSX.write(workbook, { bookType: 'xlsx', type: 'array' });
+      const { writeXlsxBuffer } = await import('../utils/ExcelWorkbookUtils');
+      const buffer = await writeXlsxBuffer([{
+        name: 'FeeConfigs',
+        headers: feeConfigHeaders,
+        rows: [['', 'رسوم دراسية فصليّة', 0, '4101', '1', '']],
+        columnWidths: feeConfigHeaders.map(() => 22)
+      }]);
       downloadFile(new Blob([buffer], { type: 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet' }), 'قالب_بنود_رسوم_الطلاب.xlsx');
       triggerNotification('✓ تم تنزيل قالب XLSX الحقيقي لبنود الرسوم.', 'success');
     } catch (error: any) {
@@ -1335,12 +1334,10 @@ export default function StudentFinancialPortal({
         throw new Error('تعذر الاستيراد: الحد الأقصى لحجم ملف بنود الرسوم 10 ميجابايت.');
       }
       if (!FEE_CONFIG_IMPORT_EXTENSIONS.some(extension => fileName.endsWith(extension))) {
-        throw new Error('نوع ملف بنود الرسوم غير مدعوم. استخدم XLSX أو XLS أو CSV فقط.');
+        throw new Error('نوع ملف بنود الرسوم غير مدعوم. استخدم XLSX أو CSV فقط.');
       }
-      const XLSX = await import('xlsx');
-      const workbook = XLSX.read(await file.arrayBuffer(), { type: 'array' });
-      const firstSheet = workbook.Sheets[workbook.SheetNames[0]];
-      const rows = XLSX.utils.sheet_to_json<Record<string, unknown>>(firstSheet, { defval: '' });
+      const { readSpreadsheetRecords } = await import('../utils/ExcelWorkbookUtils');
+      const rows = await readSpreadsheetRecords(await file.arrayBuffer());
       if (!rows.length) throw new Error('ملف الاستيراد لا يحتوي على صفوف بيانات.');
       if (rows.length > MAX_FEE_CONFIG_IMPORT_ROWS) {
         throw new Error(`الحد الأقصى لاستيراد بنود الرسوم هو ${MAX_FEE_CONFIG_IMPORT_ROWS} صفًا في الدفعة الواحدة.`);
@@ -1386,7 +1383,7 @@ export default function StudentFinancialPortal({
       triggerNotification('⚠️ لا توجد سجلات لتصديرها في الكشف الحالي المصفى.', 'warning');
       return;
     }
-    const XLSX = await import('xlsx');
+    const { writeXlsxBuffer } = await import('../utils/ExcelWorkbookUtils');
     const rows = filteredReceiptVouchers.map(v => ({
       'رقم السند': v.id,
       'تاريخ السند': v.date,
@@ -1398,10 +1395,13 @@ export default function StudentFinancialPortal({
       'حالة السند': voucherStatusLabel(v.status),
       'البيان ومصوغ القبض': v.against || ''
     }));
-    const worksheet = XLSX.utils.json_to_sheet(rows);
-    const workbook = XLSX.utils.book_new();
-    XLSX.utils.book_append_sheet(workbook, worksheet, 'StudentReceipts');
-    const buffer = XLSX.write(workbook, { bookType: 'xlsx', type: 'array' });
+    const headers = Object.keys(rows[0]);
+    const buffer = await writeXlsxBuffer([{
+      name: 'StudentReceipts',
+      headers,
+      rows: rows.map(row => headers.map(header => row[header])),
+      columnWidths: headers.map(() => 22)
+    }]);
     downloadFile(new Blob([buffer], { type: 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet' }), `كشف_سندات_قبض_الطلاب_ERP_${new Date().toISOString().split('T')[0]}.xlsx`);
     logAction('EXPORT_XLSX', `تصدير عدد ${filteredReceiptVouchers.length} سند قبض طلاب لملف XLSX`, 'الحسابات');
     EnterpriseAuditLogger.log({
@@ -1417,7 +1417,7 @@ export default function StudentFinancialPortal({
   };
 
   const handleExportFinancialReport = async () => {
-    const XLSX = await import('xlsx');
+    const { writeXlsxBuffer } = await import('../utils/ExcelWorkbookUtils');
     const rows = financialReportRows.map(row => ({
       'نوع السجل': row.recordType,
       'المرجع': row.id,
@@ -1431,10 +1431,13 @@ export default function StudentFinancialPortal({
       triggerNotification('⚠️ لا توجد حركات مطابقة لفلاتر التقرير الحالية.', 'warning');
       return;
     }
-    const worksheet = XLSX.utils.json_to_sheet(rows);
-    const workbook = XLSX.utils.book_new();
-    XLSX.utils.book_append_sheet(workbook, worksheet, 'StudentFeesReport');
-    const buffer = XLSX.write(workbook, { bookType: 'xlsx', type: 'array' });
+    const headers = Object.keys(rows[0]);
+    const buffer = await writeXlsxBuffer([{
+      name: 'StudentFeesReport',
+      headers,
+      rows: rows.map(row => headers.map(header => row[header])),
+      columnWidths: headers.map(() => 22)
+    }]);
     downloadFile(new Blob([buffer], { type: 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet' }), `تقرير_رسوم_الطلاب_${new Date().toISOString().split('T')[0]}.xlsx`);
     logAction('EXPORT_FINANCIAL_REPORT', `تصدير تقرير رسوم الطلاب بعدد ${rows.length} حركة`, 'حسابات الطلاب');
     EnterpriseAuditLogger.log({
@@ -2768,7 +2771,7 @@ export default function StudentFinancialPortal({
       <input
         ref={feeImportInputRef}
         type="file"
-        accept=".xlsx,.xls,.csv,text/csv,application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
+              accept=".xlsx,.csv,text/csv,application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
         className="hidden"
         aria-label="استيراد بنود الرسوم"
         onChange={(event) => { void handleFeeConfigFileChange(event); }}

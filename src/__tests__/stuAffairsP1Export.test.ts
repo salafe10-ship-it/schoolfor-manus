@@ -1,10 +1,11 @@
 import { describe, expect, it, vi } from 'vitest';
-import * as XLSX from 'xlsx';
+import ExcelJS from 'exceljs';
 import { AuthorizationEngine } from '../authorization/AuthorizationEngine';
 import { PERMISSIONS, permissionRegistry } from '../authorization/PermissionRegistry';
 import { RoleResolver } from '../authorization/RoleResolver';
 import { CanonicalStudentReadRepository } from '../database/repositories/CanonicalStudentReadRepository';
 import { buildStudentExportXlsx, generateStudentExport, STUDENT_EXPORT_MAX_ROWS } from '../modules/student-export/application/StudentExportService';
+import { worksheetToMatrix } from '../utils/ExcelWorkbookUtils';
 
 const identity = { id: 'export-user', schoolId: 'school-1', branchId: 'branch-1', role: 'student_affairs', name: 'Export Operator' };
 const context = { tenantId: 'school-1', schoolId: 'school-1', branchId: 'branch-1', academicYear: '2026', userId: 'export-user', role: 'student_affairs' };
@@ -29,8 +30,8 @@ describe('STU-AFFAIRS-P1-006-03 Student Export', () => {
     expect(engine.can(identity, PERMISSIONS.STUDENT_EXPORT)).toBe(true);
   });
 
-  it('generates a real XLSX workbook with operational fields only', () => {
-    const buffer = buildStudentExportXlsx([{
+  it('generates a real XLSX workbook with operational fields only', async () => {
+    const buffer = await buildStudentExportXlsx([{
       studentNumber: 'ST-001',
       name: '=Unsafe Formula',
       classroom: 'الرابع',
@@ -41,8 +42,9 @@ describe('STU-AFFAIRS-P1-006-03 Student Export', () => {
       parentPhone: 'MUST-NOT-EXPORT'
     }]);
     expect(buffer.subarray(0, 2).toString()).toBe('PK');
-    const workbook = XLSX.read(buffer, { type: 'buffer' });
-    const rows = XLSX.utils.sheet_to_json<any[]>(workbook.Sheets.Students, { header: 1 });
+    const workbook = new ExcelJS.Workbook();
+    await workbook.xlsx.load(buffer);
+    const rows = worksheetToMatrix(workbook.getWorksheet('Students')!);
     expect(rows[0]).toEqual(['رقم الطالب', 'اسم الطالب', 'الفصل', 'الشعبة', 'الحالة', 'تاريخ التسجيل']);
     expect(rows[1][1]).toBe("'=Unsafe Formula");
     expect(JSON.stringify(rows)).not.toContain('MUST-NOT-EXPORT');
