@@ -200,6 +200,80 @@ const platformAdminAuth = process.env.SUPABASE_URL && process.env.SUPABASE_SERVI
   ? createClient(process.env.SUPABASE_URL, process.env.SUPABASE_SERVICE_ROLE_KEY, { auth: { autoRefreshToken: false, persistSession: false } })
   : null;
 
+// Prefer the server-only Supabase service-role channel for platform RBAC.
+// This keeps control-plane authorization independent from pooler certificate
+// quirks while preserving the existing PostgreSQL pool for tenant work. The
+// verified Auth user id is the only lookup input; role and permission values
+// are still read from the canonical platform tables.
+if (platformAdminAuth) {
+  roleResolver.configurePlatformDatabaseLoader(async (identity) => {
+    const authUserId = String(identity?.id || '').trim();
+    if (!authUserId) throw new Error('Trusted auth_user_id is required for platform role resolution.');
+
+    const now = new Date().toISOString();
+    const { data: platformUsers, error: platformUserError } = await platformAdminAuth
+      .from('platform_users')
+      .select('id')
+      .eq('auth_user_id', authUserId)
+      .eq('status', 'active')
+      .is('deleted_at', null)
+      .limit(1);
+    if (platformUserError) throw platformUserError;
+    const platformUserId = platformUsers?.[0]?.id;
+    if (!platformUserId) return [];
+
+    const { data: assignments, error: assignmentError } = await platformAdminAuth
+      .from('platform_user_roles')
+      .select('role_id, starts_at, ends_at')
+      .eq('platform_user_id', platformUserId)
+      .eq('status', 'active')
+      .is('deleted_at', null);
+    if (assignmentError) throw assignmentError;
+    const activeAssignments = (assignments || []).filter((assignment: any) =>
+      (!assignment.starts_at || assignment.starts_at <= now)
+      && (!assignment.ends_at || assignment.ends_at > now)
+    );
+    const roleIds = [...new Set(activeAssignments.map((assignment: any) => assignment.role_id).filter(Boolean))];
+    if (!roleIds.length) return [];
+
+    const { data: roles, error: roleError } = await platformAdminAuth
+      .from('platform_roles')
+      .select('id, role_key')
+      .in('id', roleIds)
+      .eq('status', 'active')
+      .is('deleted_at', null);
+    if (roleError) throw roleError;
+    const activeRoles = (roles || []).filter((role: any) => role.role_key === 'platformadmin');
+    if (!activeRoles.length) return [];
+
+    const activeRoleIds = activeRoles.map((role: any) => role.id);
+    const { data: rolePermissions, error: rolePermissionError } = await platformAdminAuth
+      .from('platform_role_permissions')
+      .select('role_id, permission_id')
+      .in('role_id', activeRoleIds)
+      .eq('status', 'active')
+      .is('deleted_at', null);
+    if (rolePermissionError) throw rolePermissionError;
+    const permissionIds = [...new Set((rolePermissions || []).map((entry: any) => entry.permission_id).filter(Boolean))];
+    if (!permissionIds.length) return [];
+
+    const { data: permissions, error: permissionError } = await platformAdminAuth
+      .from('platform_permissions')
+      .select('id, permission_key')
+      .in('id', permissionIds)
+      .eq('status', 'active')
+      .is('deleted_at', null);
+    if (permissionError) throw permissionError;
+    const permissionById = new Map((permissions || []).map((permission: any) => [permission.id, permission.permission_key]));
+    return (rolePermissions || [])
+      .map((entry: any) => ({
+        roleKey: activeRoles.find((role: any) => role.id === entry.role_id)?.role_key || '',
+        permissionKey: permissionById.get(entry.permission_id) || '',
+      }))
+      .filter((entry: { roleKey: string; permissionKey: string }) => Boolean(entry.roleKey && entry.permissionKey));
+  });
+}
+
 const STUDENT_DOCUMENT_MEDIA_TYPES = ['application/pdf', 'image/png', 'image/jpeg'] as const;
 type StudentDocumentMediaType = typeof STUDENT_DOCUMENT_MEDIA_TYPES[number];
 
