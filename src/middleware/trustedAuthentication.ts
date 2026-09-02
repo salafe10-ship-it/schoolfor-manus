@@ -228,10 +228,17 @@ async function resolveTrustedScope(
 async function finalizeTrustedIdentity(
   supabase: SupabaseClient,
   identity: TrustedIdentity,
-  tenantId: string,
+  tenantId?: string,
 ): Promise<TrustedIdentity> {
   const scoped = await resolveTrustedScope(supabase, identity);
-  const trustedIdentity = await attachTrustedEffectivePermissions({ ...scoped.identity, tenantId, ...(scoped.school ? { school: scoped.school } : {}) });
+  // Platform administrators are intentionally schoolless and may not have a
+  // public.users row. Tenant scope is required only for school identities;
+  // central authorization is resolved from the canonical platform RBAC.
+  const trustedIdentity = await attachTrustedEffectivePermissions({
+    ...scoped.identity,
+    ...(tenantId ? { tenantId } : {}),
+    ...(scoped.school ? { school: scoped.school } : {})
+  });
   if (!trustedIdentity.schoolId && !hasPlatformAdminPermission(trustedIdentity)) {
     throw new TrustedAuthenticationError('INVALID_SCHOOL');
   }
@@ -262,7 +269,7 @@ export async function authenticateTrustedUser(
   }
 
   const identity = extractTrustedIdentity(data.user);
-  const tenantId = await resolveTrustedTenantId(supabase);
+  const tenantId = identity.schoolId ? await resolveTrustedTenantId(supabase) : undefined;
   if (requestedSchoolId && identity.schoolId !== requestedSchoolId) {
     throw new TrustedAuthenticationError('INVALID_SCHOOL');
   }
@@ -301,7 +308,7 @@ export async function refreshTrustedSession(
     throw new TrustedAuthenticationError('INVALID_CREDENTIALS');
   }
   const identity = extractTrustedIdentity(data.user);
-  const tenantId = await resolveTrustedTenantId(supabase);
+  const tenantId = identity.schoolId ? await resolveTrustedTenantId(supabase) : undefined;
   const trustedIdentity = await finalizeTrustedIdentity(supabase, identity, tenantId);
   return { identity: trustedIdentity, session: data.session };
 }
@@ -314,6 +321,6 @@ export async function verifyTrustedSession(
   const { data: { user }, error } = await supabase.auth.getUser(token);
   if (error || !user) throw new TrustedAuthenticationError('INVALID_CREDENTIALS');
   const identity = extractTrustedIdentity(user);
-  const tenantId = await resolveTrustedTenantId(supabase);
+  const tenantId = identity.schoolId ? await resolveTrustedTenantId(supabase) : undefined;
   return finalizeTrustedIdentity(supabase, identity, tenantId);
 }
