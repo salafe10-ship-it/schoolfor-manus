@@ -7,8 +7,8 @@
 الحالة الحالية:
 
 - **الإغلاق البرمجي:** `CLOSED`
-- **الإغلاق التشغيلي الحي:** `PENDING EXTERNAL EVIDENCE`
-- **التسليم التجاري النهائي:** `NOT APPROVED`
+- **الإغلاق التشغيلي الحي:** `PARTIALLY CLOSED — LIVE READINESS VERIFIED`
+- **التسليم التجاري النهائي:** `PENDING OWNER ACCEPTANCE`
 
 ## ما تم إغلاقه
 
