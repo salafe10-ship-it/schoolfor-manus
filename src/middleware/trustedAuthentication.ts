@@ -8,6 +8,7 @@ import {
 } from './trustedSchoolIdentity';
 import { roleResolver } from '../authorization/RoleResolver';
 import { EnterpriseLogger } from '../database/services/EnterpriseLogger';
+import { getSupabaseClientForAccessToken } from '../database/client';
 
 export type TrustedIdentity = {
   id: string;
@@ -273,11 +274,16 @@ export async function authenticateTrustedUser(
   }
 
   const identity = extractTrustedIdentity(data.user);
-  const tenantId = identity.schoolId ? await resolveTrustedTenantId(supabase) : undefined;
+  // The shared login client can return a valid Auth session without reliably
+  // propagating that session into the next PostgREST request on every server
+  // runtime. Bind all post-login scope checks to the returned access token so
+  // auth.uid() is present for tenant, school, and branch RPC/RLS evaluation.
+  const authenticatedSupabase = getSupabaseClientForAccessToken(data.session.access_token) || supabase;
+  const tenantId = identity.schoolId ? await resolveTrustedTenantId(authenticatedSupabase) : undefined;
   if (requestedSchoolId && identity.schoolId !== requestedSchoolId) {
     throw new TrustedAuthenticationError('INVALID_SCHOOL');
   }
-  const trustedIdentity = await finalizeTrustedIdentity(supabase, identity, tenantId);
+  const trustedIdentity = await finalizeTrustedIdentity(authenticatedSupabase, identity, tenantId);
   return { identity: trustedIdentity, session: data.session };
 }
 
