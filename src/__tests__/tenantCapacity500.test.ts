@@ -9,7 +9,7 @@ type CapacityScope = {
   academicYear: string;
 };
 
-const scopes: CapacityScope[] = Array.from({ length: 500 }, (_, index) => {
+const scopes: CapacityScope[] = Array.from({ length: 5000 }, (_, index) => {
   const suffix = String(index + 1).padStart(4, '0');
   return {
     tenantId: `tenant-${suffix}`,
@@ -34,8 +34,8 @@ function identityFor(scope: CapacityScope) {
   };
 }
 
-describe('500-school tenant capacity contract', () => {
-  it('resolves 500 independent tenant contexts concurrently without scope collisions', async () => {
+describe('5000-school tenant capacity contract', () => {
+  it('resolves 5000 independent tenant contexts concurrently without scope collisions', async () => {
     const resolver = new TenantContextResolver({
       schoolExists: async (tenantId, schoolId) => scopeBySchool.get(schoolId)?.tenantId === tenantId,
       listBranches: async (_tenantId, schoolId) => {
@@ -50,9 +50,9 @@ describe('500-school tenant capacity contract', () => {
 
     const resolved = await Promise.all(scopes.map(scope => resolver.resolve(identityFor(scope))));
 
-    expect(resolved).toHaveLength(500);
-    expect(new Set(resolved.map(context => context.tenantId)).size).toBe(500);
-    expect(new Set(resolved.map(context => context.schoolId)).size).toBe(500);
+    expect(resolved).toHaveLength(5000);
+    expect(new Set(resolved.map(context => context.tenantId)).size).toBe(5000);
+    expect(new Set(resolved.map(context => context.schoolId)).size).toBe(5000);
     expect(resolved).toEqual(scopes.map(scope => ({
       ...scope,
       userId: `user-${scope.schoolId}`,
@@ -80,8 +80,8 @@ describe('500-school tenant capacity contract', () => {
     })).rejects.toMatchObject({ reason: 'INVALID_TENANT' });
   });
 
-  it('keeps 500 tenant cache keys distinct and clears only the selected scope', () => {
-    const cache = new TenantAwareCache<string>(60_000, 1_000);
+  it('keeps 5000 tenant cache keys distinct and clears only the selected scope', () => {
+    const cache = new TenantAwareCache<string>(60_000, 6_000);
     const contexts = scopes.map(scope => ({ ...scope, userId: `user-${scope.schoolId}`, role: 'SchoolAdmin' }));
 
     contexts.forEach(context => cache.set(context, 'dashboard', `${context.schoolId}-data`));
