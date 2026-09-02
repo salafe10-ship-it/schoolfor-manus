@@ -27,6 +27,7 @@ GRANT SELECT, INSERT, UPDATE, DELETE ON TABLE
   public.permissions,
   public.role_permissions,
   public.user_roles,
+  public.students,
   public.hr_database,
   public.inventory_database,
   public.financial_portal_snapshots
