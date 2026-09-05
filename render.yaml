@@ -5,7 +5,9 @@ services:
     runtime: node
     plan: free
     autoDeployTrigger: commit
-    buildCommand: npm ci --include=dev && npm run build
+    # Refuse a deployment build until the production/staging configuration is
+    # complete and secure; the gate never prints secret values.
+    buildCommand: npm ci --include=dev && npm run production:gate && npm run build
     startCommand: npm start
     healthCheckPath: /api/ready
     envVars:
@@ -16,4 +18,28 @@ services:
       - key: SUPABASE_ANON_KEY
         sync: false
       - key: SUPABASE_SERVICE_ROLE_KEY
+        sync: false
+      # The server intentionally fails readiness until the tenant data-plane
+      # and separate control-plane connections are configured.
+      - key: DATABASE_URL
+        sync: false
+      - key: DIRECT_URL
+        sync: false
+      - key: PLATFORM_ADMIN_DATABASE_URL
+        sync: false
+      - key: DATABASE_ROLE_EXPECTED
+        value: edupro_staging_app
+      - key: PGSSL_REJECT_UNAUTHORIZED
+        value: "true"
+      - key: JWT_SECRET
+        sync: false
+      - key: PUBLIC_APP_URL
+        sync: false
+      - key: ALLOW_IFRAME_EMBEDDING
+        value: "false"
+      - key: EDUPRO_AI_FORECAST_ENABLED
+        value: "false"
+      - key: GEMINI_API_KEY
+        sync: false
+      - key: OPENAI_API_KEY
         sync: false

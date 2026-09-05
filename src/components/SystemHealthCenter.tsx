@@ -123,7 +123,7 @@ export default function SystemHealthCenter({
 
   const fetchDbAlerts = async () => {
     try {
-      const token = localStorage.getItem('token');
+      const token = getTrustedAccessToken();
       const response = await fetch('/api/database/health-service/alerts', {
         headers: { 'Authorization': `Bearer ${token}` }
       });
@@ -140,7 +140,7 @@ export default function SystemHealthCenter({
 
   const fetchDbThresholds = async () => {
     try {
-      const token = localStorage.getItem('token');
+      const token = getTrustedAccessToken();
       const response = await fetch('/api/database/health-service/thresholds', {
         headers: { 'Authorization': `Bearer ${token}` }
       });
@@ -165,7 +165,7 @@ export default function SystemHealthCenter({
   const fetchDbMetrics = async () => {
     setIsLoadingDbMetrics(true);
     try {
-      const token = localStorage.getItem('token');
+      const token = getTrustedAccessToken();
       const response = await fetch('/api/database/health-service/metrics', {
         headers: {
           'Authorization': `Bearer ${token}`
@@ -194,7 +194,7 @@ export default function SystemHealthCenter({
   const handleUpdateThresholds = async (updatedThresholds: any) => {
     setIsSavingThresholds(true);
     try {
-      const token = localStorage.getItem('token');
+      const token = getTrustedAccessToken();
       const response = await fetch('/api/database/health-service/thresholds', {
         method: 'POST',
         headers: {
@@ -218,7 +218,7 @@ export default function SystemHealthCenter({
 
   const handleResolveAlert = async (alertId: string) => {
     try {
-      const token = localStorage.getItem('token');
+      const token = getTrustedAccessToken();
       const response = await fetch('/api/database/health-service/alerts/resolve', {
         method: 'POST',
         headers: {
@@ -239,7 +239,7 @@ export default function SystemHealthCenter({
 
   const handleClearAlerts = async () => {
     try {
-      const token = localStorage.getItem('token');
+      const token = getTrustedAccessToken();
       const response = await fetch('/api/database/health-service/alerts/clear', {
         method: 'POST',
         headers: {
@@ -260,7 +260,7 @@ export default function SystemHealthCenter({
   const handleSimulateDeadlock = async () => {
     setIsSimulatingDeadlock(true);
     try {
-      const token = localStorage.getItem('token');
+      const token = getTrustedAccessToken();
       const response = await fetch('/api/database/health-service/simulate/deadlock', {
         method: 'POST',
         headers: {
@@ -283,7 +283,7 @@ export default function SystemHealthCenter({
   const handleSimulateFailedTx = async () => {
     setIsSimulatingFailedTx(true);
     try {
-      const token = localStorage.getItem('token');
+      const token = getTrustedAccessToken();
       const response = await fetch('/api/database/health-service/simulate/failed-tx', {
         method: 'POST',
         headers: {
@@ -307,7 +307,7 @@ export default function SystemHealthCenter({
   const handleSimulateSlowQuery = async () => {
     setIsSimulatingSlowQuery(true);
     try {
-      const token = localStorage.getItem('token');
+      const token = getTrustedAccessToken();
       const response = await fetch('/api/database/health-service/simulate/slow-query', {
         method: 'POST',
         headers: {
@@ -331,7 +331,7 @@ export default function SystemHealthCenter({
   const handleOptimizeSlowQueries = async () => {
     setIsOptimizing(true);
     try {
-      const token = localStorage.getItem('token');
+      const token = getTrustedAccessToken();
       const response = await fetch('/api/database/health-service/optimize', {
         method: 'POST',
         headers: {
@@ -355,7 +355,7 @@ export default function SystemHealthCenter({
     setIsReconnecting(true);
     triggerNotification('جاري تفعيل سياسة إعادة الاتصال التلقائي (Exponential Backoff)...', 'info');
     try {
-      const token = localStorage.getItem('token');
+      const token = getTrustedAccessToken();
       const response = await fetch('/api/database/reconnect', {
         method: 'POST',
         headers: {
@@ -379,7 +379,7 @@ export default function SystemHealthCenter({
 
   const handleDisconnectDb = async () => {
     try {
-      const token = localStorage.getItem('token');
+      const token = getTrustedAccessToken();
       const response = await fetch('/api/database/disconnect', {
         method: 'POST',
         headers: {
@@ -528,6 +528,9 @@ export default function SystemHealthCenter({
 
   // Run Performance Load Simulation
   const handleStartLoadTest = () => {
+    triggerNotification('اختبار التحمل الحقيقي غير مهيأ؛ لم تُنشأ حركة أو مؤشرات أداء اصطناعية.', 'warning');
+    return;
+
     setShowTestDisclaimer(false);
     setIsTestRunning(true);
     setTestProgress(0);
@@ -791,6 +794,9 @@ export default function SystemHealthCenter({
 
   // --- ACTIONS FOR ENTERPRISE OPTIMIZATION ---
   const handleApplyIndexes = () => {
+    triggerNotification('خدمة إنشاء الفهارس المركزية غير مهيأة؛ لم يتم تعديل مخطط قاعدة البيانات.', 'warning');
+    return;
+
     setIsIndexing(true);
     setIndexingProgress(0);
     const interval = setInterval(() => {
@@ -813,6 +819,9 @@ export default function SystemHealthCenter({
   };
 
   const handleRunArchiving = () => {
+    triggerNotification('خدمة أرشفة سجل العمليات غير مهيأة؛ لم يتم نقل أو حذف أي سجل.', 'warning');
+    return;
+
     setIsArchiving(true);
     setArchivingProgress(0);
     const interval = setInterval(() => {
@@ -839,6 +848,9 @@ export default function SystemHealthCenter({
   };
 
   const toggleReplicaFailure = () => {
+    triggerNotification('خدمة النسخ المقروءة غير مهيأة؛ لا يمكن محاكاة أو إعلان تحويل حقيقي.', 'warning');
+    return;
+
     setReplicaServerHealthy(prev => {
       const next = !prev;
       if (prev) {
@@ -851,11 +863,8 @@ export default function SystemHealthCenter({
   };
 
   const handleFlushCache = () => {
-    triggerNotification('جاري إفراغ الذاكرة المؤقتة Redis وتنظيف كافة مفاتيح التهيئة...', 'info');
-    setTimeout(() => {
-      setCacheMemory(0);
-      triggerNotification('تم إفراغ ذاكرة Redis المؤقتة بنجاح 🧹', 'success');
-    }, 1000);
+    triggerNotification('موصل Redis غير مهيأ؛ لم يتم إفراغ ذاكرة أو تعديل مفاتيح مؤقتة.', 'warning');
+    return;
   };
 
   // Filter health items based on search & severity
@@ -1576,7 +1585,7 @@ export default function SystemHealthCenter({
             cacheMemory={cacheMemory}
             setCacheMemory={setCacheMemory}
             triggerNotification={triggerNotification}
-            schoolId={activeSchool?.id || 'school_1'}
+            schoolId={activeSchool?.id || ''}
           />
         ) : activeTab === 'db_monitor' ? (
           /* ============================================== */
@@ -2005,7 +2014,7 @@ export default function SystemHealthCenter({
 
             {/* DATABASE SCHEMA & INDEX AUDITOR (INTEGRATED) */}
             <DatabaseSchemaAuditor 
-              schoolId={activeSchool?.id || 'school_1'}
+              schoolId={activeSchool?.id || ''}
               triggerNotification={(msg, type) => triggerNotification(msg, type === 'error' ? 'danger' : type)}
               onOptimizationApplied={handleOptimizeSlowQueries}
             />

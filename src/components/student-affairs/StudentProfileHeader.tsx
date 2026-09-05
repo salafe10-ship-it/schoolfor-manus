@@ -15,12 +15,21 @@ export default function StudentProfileHeader({ formStudent, studentObj, status, 
       {/* Photo & Main Status Column */}
       <div className="flex flex-col sm:flex-row items-center gap-5 xl:w-[35%] shrink-0">
         <div className="relative shrink-0">
-          <img 
-            src={formStudent.avatarUrl || 'https://images.unsplash.com/photo-1535713875002-d1d0cf377fde?w=120&h=120&fit=crop&crop=face'} 
-            alt={formStudent.fullNameAr} 
-            className="w-20 h-20 object-cover border-4 border-white dark:border-slate-800 shadow-md transition-transform hover:scale-105"
-            referrerPolicy="no-referrer"
-          />
+          {formStudent.avatarUrl ? (
+            <img
+              src={formStudent.avatarUrl}
+              alt={formStudent.fullNameAr}
+              className="w-20 h-20 object-cover border-4 border-white dark:border-slate-800 shadow-md transition-transform hover:scale-105"
+              referrerPolicy="no-referrer"
+            />
+          ) : (
+            <div
+              aria-label="صورة الطالب غير متاحة"
+              className="w-20 h-20 flex items-center justify-center rounded-full bg-amber-100 text-amber-800 text-3xl font-black border-4 border-white dark:border-slate-800 shadow-md"
+            >
+              {(formStudent.fullNameAr || studentObj?.name || 'ط').trim().slice(0, 1)}
+            </div>
+          )}
           <span className={`absolute -bottom-1 -right-1 w-5 h-5 rounded-full border-4 border-white dark:border-slate-800 ${status.dot} animate-pulse`}></span>
         </div>
         

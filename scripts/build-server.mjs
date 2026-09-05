@@ -19,6 +19,10 @@ const cliArgs = [
   '--platform=node',
   '--format=cjs',
   '--packages=external',
+  // Vite's import.meta.env is a browser-only compile-time contract. The
+  // bundled server must not evaluate it at runtime; production behavior is
+  // driven by the explicit Node environment variables instead.
+  '--define:import.meta.env.PROD=false',
   '--sourcemap',
   `--outfile=${serverOutput}`
 ];

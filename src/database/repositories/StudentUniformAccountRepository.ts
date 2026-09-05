@@ -6,6 +6,23 @@ import { IBaseRepository } from './IBaseRepository';
 import { UnitOfWork } from '../UnitOfWork';
 
 export class StudentUniformAccountRepository implements IBaseRepository<StudentUniformAccount> {
+  private static mapRow(row: any): StudentUniformAccount {
+    return {
+      id: String(row.id),
+      studentId: row.student_id ?? row.studentId ?? '',
+      uniformSize: row.uniform_size ?? row.uniformSize,
+      piecesReceivedCount: Number(row.pieces_received_count ?? row.piecesReceivedCount ?? 0),
+      totalFees: Number(row.total_fees ?? row.totalFees ?? 0),
+      paymentStatus: row.payment_status ?? row.paymentStatus ?? 'unpaid'
+    } as StudentUniformAccount;
+  }
+
+  private static belongsToSchool(record: any, schoolId: string): boolean {
+    if (record.schoolId === schoolId || record.school_id === schoolId) return true;
+    const student = FallbackStorage.getStudents().find(item => item.id === record.studentId || item.id === record.student_id);
+    return (student as any)?.schoolId === schoolId || (student as any)?.school_id === schoolId;
+  }
+
   public async getById(schoolId: string, id: string): Promise<StudentUniformAccount | null> {
     const isHealthy = await FallbackStorage.isHealthy();
     if (isHealthy) {
@@ -14,17 +31,18 @@ export class StudentUniformAccountRepository implements IBaseRepository<StudentU
         if (supabase) {
           const { data, error } = await supabase
             .from('student_uniform_accounts')
-            .select('*')
+            .select('*, students!inner(school_id)')
+            .eq('students.school_id', schoolId)
             .eq('id', id)
             .single();
-          if (!error && data) return data as StudentUniformAccount;
+          if (!error && data) return StudentUniformAccountRepository.mapRow(data);
         }
       } catch (err: any) {
         EnterpriseLogger.error("Failed to fetch student uniform account by id:", "StudentUniformAccountRepository", { error: err });
       }
     }
     FallbackStorage.assertCanonicalPersistence('student uniform account by id read');
-    return FallbackStorage.getStudentUniformAccounts().find(uni => uni.id === id) || null;
+    return FallbackStorage.getStudentUniformAccounts().find(uni => uni.id === id && StudentUniformAccountRepository.belongsToSchool(uni, schoolId)) || null;
   }
 
   public async getByStudentId(schoolId: string, studentId: string): Promise<StudentUniformAccount | null> {
@@ -35,17 +53,18 @@ export class StudentUniformAccountRepository implements IBaseRepository<StudentU
         if (supabase) {
           const { data, error } = await supabase
             .from('student_uniform_accounts')
-            .select('*')
+            .select('*, students!inner(school_id)')
+            .eq('students.school_id', schoolId)
             .eq('student_id', studentId)
             .maybeSingle();
-          if (!error && data) return data as StudentUniformAccount;
+          if (!error && data) return StudentUniformAccountRepository.mapRow(data);
         }
       } catch (err: any) {
         EnterpriseLogger.error("Failed to fetch student uniform account by studentId:", "StudentUniformAccountRepository", { error: err });
       }
     }
     FallbackStorage.assertCanonicalPersistence('student uniform account by student read');
-    return FallbackStorage.getStudentUniformAccounts().find(uni => uni.studentId === studentId) || null;
+    return FallbackStorage.getStudentUniformAccounts().find(uni => uni.studentId === studentId && StudentUniformAccountRepository.belongsToSchool(uni, schoolId)) || null;
   }
 
   public async getAll(schoolId: string, options?: { studentId?: string }): Promise<{ data: StudentUniformAccount[]; count: number }> {
@@ -54,13 +73,13 @@ export class StudentUniformAccountRepository implements IBaseRepository<StudentU
       try {
         const supabase = getSupabaseClient();
         if (supabase) {
-          let query = supabase.from('student_uniform_accounts').select('*', { count: 'exact' });
+          let query = supabase.from('student_uniform_accounts').select('*, students!inner(school_id)', { count: 'exact' }).eq('students.school_id', schoolId);
           if (options?.studentId) {
             query = query.eq('student_id', options.studentId);
           }
           const { data, count, error } = await query;
           if (!error && data) {
-            return { data: data as StudentUniformAccount[], count: count || data.length };
+            return { data: data.map(StudentUniformAccountRepository.mapRow), count: count || data.length };
           }
         }
       } catch (err: any) {
@@ -68,7 +87,7 @@ export class StudentUniformAccountRepository implements IBaseRepository<StudentU
       }
     }
     FallbackStorage.assertCanonicalPersistence('student uniform account list read');
-    let data = FallbackStorage.getStudentUniformAccounts();
+    let data = FallbackStorage.getStudentUniformAccounts().filter(uni => StudentUniformAccountRepository.belongsToSchool(uni, schoolId));
     if (options?.studentId) {
       data = data.filter(uni => uni.studentId === options.studentId);
     }
@@ -95,9 +114,17 @@ export class StudentUniformAccountRepository implements IBaseRepository<StudentU
       async () => {
         const supabase = getSupabaseClient();
         if (!supabase) throw new Error("No Supabase client");
-        const { data, error } = await supabase.from('student_uniform_accounts').insert([newRecord]).select().single();
+        const { data, error } = await supabase.from('student_uniform_accounts').insert([{
+          id,
+          student_id: newRecord.studentId,
+          uniform_size: newRecord.uniformSize,
+          pieces_received_count: newRecord.piecesReceivedCount,
+          total_fees: newRecord.totalFees,
+          payment_status: newRecord.paymentStatus,
+          status: 'active'
+        }]).select().single();
         if (error) throw error;
-        return data as StudentUniformAccount;
+        return StudentUniformAccountRepository.mapRow(data);
       },
       () => {
         const all = FallbackStorage.getStudentUniformAccounts();
@@ -120,9 +147,15 @@ export class StudentUniformAccountRepository implements IBaseRepository<StudentU
       async () => {
         const supabase = getSupabaseClient();
         if (!supabase) throw new Error("No Supabase client");
-        const { data, error } = await supabase.from('student_uniform_accounts').update(item).eq('id', id).select().single();
+        const dbItem: Record<string, unknown> = {};
+        if (item.studentId !== undefined) dbItem.student_id = item.studentId;
+        if (item.uniformSize !== undefined) dbItem.uniform_size = item.uniformSize;
+        if (item.piecesReceivedCount !== undefined) dbItem.pieces_received_count = item.piecesReceivedCount;
+        if (item.totalFees !== undefined) dbItem.total_fees = item.totalFees;
+        if (item.paymentStatus !== undefined) dbItem.payment_status = item.paymentStatus;
+        const { data, error } = await supabase.from('student_uniform_accounts').update(dbItem).eq('id', id).select().single();
         if (error) throw error;
-        return data as StudentUniformAccount;
+        return StudentUniformAccountRepository.mapRow(data);
       },
       () => {
         const all = FallbackStorage.getStudentUniformAccounts();
@@ -145,13 +178,15 @@ export class StudentUniformAccountRepository implements IBaseRepository<StudentU
       async () => {
         const supabase = getSupabaseClient();
         if (!supabase) throw new Error("No Supabase client");
+        const existing = await this.getById(schoolId, id);
+        if (!existing) return false;
         const { error } = await supabase.from('student_uniform_accounts').delete().eq('id', id);
         if (error) throw error;
         return true;
       },
       () => {
         const all = FallbackStorage.getStudentUniformAccounts();
-        const filtered = all.filter(uni => uni.id !== id);
+        const filtered = all.filter(uni => !(uni.id === id && StudentUniformAccountRepository.belongsToSchool(uni, schoolId)));
         FallbackStorage.saveStudentUniformAccounts(filtered);
       }
     );

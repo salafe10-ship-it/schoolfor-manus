@@ -2,6 +2,8 @@ import { AlertTriangle, Barcode, BookOpen, Calendar, CheckCircle2, Clock, Edit3,
 import React, { useEffect, useState } from 'react';
 import EnterpriseActionToolbar from './shared/EnterpriseActionToolbar';
 import { LibraryRepository } from '../database/repositories/LibraryRepository';
+import { FallbackStorage } from '../database/repositories/FallbackStorage';
+import { authenticatedRequest } from '../utils/authenticatedRequest';
 
 interface LibraryPortalProps {
   selectedSchool?: any;
@@ -44,7 +46,10 @@ export default function LibraryPortal({
   const [books, setBooks] = useState<BookItem[]>([]);
 
   const [borrows, setBorrows] = useState<BorrowRecord[]>([]);
-  const schoolId = selectedSchool?.id || selectedSchool?.school_id || 'school_1';
+  // Never infer a tenant from demo data.  Canonical reads derive the school
+  // from the trusted server session; compatibility mode still requires the
+  // caller to provide an explicitly selected school.
+  const schoolId = selectedSchool?.id || selectedSchool?.school_id || '';
 
   const [newBook, setNewBook] = useState({ title: '', author: '', category: '', totalCopies: 0, location: '' });
   const [isAddingBook, setIsAddingBook] = useState(false);
@@ -60,11 +65,34 @@ export default function LibraryPortal({
     location: String(book.location || book.shelf_location || '')
   });
 
+  const toBorrowRecord = (borrow: any): BorrowRecord => ({
+    id: String(borrow.id),
+    studentName: String(borrow.studentName || borrow.student_name || 'طالب غير محدد'),
+    studentCode: String(borrow.studentCode || borrow.student_code || borrow.studentId || borrow.student_id || ''),
+    bookTitle: String(borrow.bookTitle || borrow.book_title || ''),
+    bookCode: String(borrow.bookCode || borrow.book_code || ''),
+    borrowDate: String(borrow.borrowDate || borrow.borrowed_at || '').slice(0, 10),
+    dueDate: String(borrow.dueDate || borrow.due_at || '').slice(0, 10),
+    status: ['active', 'returned', 'overdue'].includes(String(borrow.status)) ? String(borrow.status) as BorrowRecord['status'] : 'active',
+    fine: Number(borrow.fine || 0)
+  });
+
   useEffect(() => {
     let cancelled = false;
     const loadBooks = async () => {
       try {
-        const rows = await LibraryRepository.getAll(schoolId);
+        let rows: any[];
+        if (FallbackStorage.isCanonicalPersistenceRequired()) {
+          const response = await authenticatedRequest('/api/library/books');
+          const payload = await response.json().catch(() => ({}));
+          if (!response.ok || !payload?.success || !Array.isArray(payload.data)) {
+            throw new Error(payload?.message || 'تعذر تحميل فهرس المكتبة المركزي.');
+          }
+          rows = payload.data;
+        } else {
+          if (!schoolId) throw new Error('لم يتم تحديد مدرسة نشطة لقراءة فهرس المكتبة.');
+          rows = await LibraryRepository.getAll(schoolId);
+        }
         if (!cancelled) setBooks(rows.map(toBookItem));
       } catch (error) {
         if (!cancelled) {
@@ -72,6 +100,22 @@ export default function LibraryPortal({
           triggerNotification('المكتبة متوقفة حتى يتوفر مصدر مركزي موثوق؛ لم تُعرض سجلات محلية تجريبية.', 'warning');
         }
         console.error('Library source unavailable:', error);
+      }
+      if (FallbackStorage.isCanonicalPersistenceRequired() && !cancelled) {
+        try {
+          const borrowResponse = await authenticatedRequest('/api/library/borrowings');
+          const borrowPayload = await borrowResponse.json().catch(() => ({}));
+          if (!borrowResponse.ok || !borrowPayload?.success || !Array.isArray(borrowPayload.data)) {
+            throw new Error(borrowPayload?.message || 'تعذر تحميل سجل إعارات المكتبة المركزي.');
+          }
+          if (!cancelled) setBorrows(borrowPayload.data.map(toBorrowRecord));
+        } catch (error) {
+          if (!cancelled) {
+            setBorrows([]);
+            triggerNotification('تعذر تحميل سجل الإعارات المركزي؛ بقي فهرس الكتب معروضًا دون بيانات إعارة.', 'warning');
+          }
+          console.error('Library borrowing source unavailable:', error);
+        }
       }
     };
     void loadBooks();
@@ -95,7 +139,25 @@ export default function LibraryPortal({
       location: newBook.location
     };
     try {
-      const saved = await LibraryRepository.create(schoolId, created);
+      const saved = FallbackStorage.isCanonicalPersistenceRequired()
+        ? await (async () => {
+            const response = await authenticatedRequest('/api/library/books', {
+              method: 'POST',
+              headers: { 'Content-Type': 'application/json' },
+              body: JSON.stringify({
+                code: created.code,
+                title: created.title,
+                author: created.author,
+                category: created.category,
+                totalCopies: created.totalCopies,
+                location: created.location
+              })
+            });
+            const payload = await response.json().catch(() => ({}));
+            if (!response.ok || !payload?.success || !payload.data) throw new Error(payload?.message || 'تعذر حفظ الكتاب مركزيًا.');
+            return payload.data;
+          })()
+        : await LibraryRepository.create(schoolId, created);
       setBooks(prev => [toBookItem(saved), ...prev]);
     } catch (error) {
       triggerNotification('المكتبة متوقفة؛ تعذر حفظ الكتاب في المصدر المركزي.', 'warning');
@@ -107,8 +169,25 @@ export default function LibraryPortal({
     triggerNotification('تم إضافة الكتاب بنجاح وفهرسته آلياً', 'success');
   };
 
-  const handleReturnBook = (_borrowId: string) => {
-    triggerNotification('إغلاق الإعارة متوقف حتى يتوفر مستودع مركزي لسجلات borrowed_books؛ لم يتم تغيير الحالة محليًا.', 'warning');
+  const handleReturnBook = async (borrowId: string) => {
+    if (!FallbackStorage.isCanonicalPersistenceRequired()) {
+      triggerNotification('إغلاق الإعارة المحلية غير متاح دون سجل مركزي موثوق.', 'warning');
+      return;
+    }
+    try {
+      const response = await authenticatedRequest(`/api/library/borrowings/${encodeURIComponent(borrowId)}/return`, { method: 'PATCH' });
+      const payload = await response.json().catch(() => ({}));
+      if (!response.ok || !payload?.success) throw new Error(payload?.message || 'تعذر إغلاق الإعارة مركزيًا.');
+      setBorrows(previous => previous.map(item => item.id === borrowId ? { ...item, status: 'returned' } : item));
+      setBooks(previous => previous.map(book => {
+        const returned = payload.data?.book_id === book.id;
+        return returned ? { ...book, availableCopies: Math.min(book.totalCopies, book.availableCopies + 1) } : book;
+      }));
+      triggerNotification('تم إغلاق الإعارة وتحديث رصيد الكتاب وتسجيل العملية تدقيقيًا.', 'success');
+    } catch (error) {
+      triggerNotification('تعذر إغلاق الإعارة في المصدر المركزي؛ لم تتغير الحالة محليًا.', 'warning');
+      console.error('Library borrowing return failed:', error);
+    }
   };
 
   const filteredBooks = books.filter(b => 

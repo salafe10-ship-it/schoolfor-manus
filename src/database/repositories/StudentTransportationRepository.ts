@@ -6,6 +6,18 @@ import { IBaseRepository } from './IBaseRepository';
 import { UnitOfWork } from '../UnitOfWork';
 import { SQLCommandBuilder } from '../transactions/SQLCommand';
 
+function mapTransportationRow(row: any): StudentTransportation {
+  return {
+    id: String(row.id),
+    studentId: String(row.student_id ?? row.studentId ?? ''),
+    routeNumber: row.route_number ?? row.routeNumber ?? '',
+    pickupPoint: row.pickup_point ?? row.pickupPoint ?? undefined,
+    dropoffPoint: row.drop_off_point ?? row.dropoffPoint ?? undefined,
+    monthlyFees: Number(row.monthly_fees ?? row.monthlyFees ?? 0),
+    status: row.status || 'active',
+  };
+}
+
 export class StudentTransportationRepository implements IBaseRepository<StudentTransportation> {
   public async getById(schoolId: string, id: string): Promise<StudentTransportation | null> {
     const isHealthy = await FallbackStorage.isHealthy();
@@ -16,9 +28,10 @@ export class StudentTransportationRepository implements IBaseRepository<StudentT
           const { data, error } = await supabase
             .from('student_transportation')
             .select('*')
+            .eq('school_id', schoolId)
             .eq('id', id)
             .single();
-          if (!error && data) return data as StudentTransportation;
+          if (!error && data) return mapTransportationRow(data);
         }
       } catch (err: any) {
         EnterpriseLogger.error("Failed to fetch student transportation by id:", "StudentTransportationRepository", { error: err });
@@ -37,9 +50,10 @@ export class StudentTransportationRepository implements IBaseRepository<StudentT
           const { data, error } = await supabase
             .from('student_transportation')
             .select('*')
+            .eq('school_id', schoolId)
             .eq('student_id', studentId)
             .maybeSingle();
-          if (!error && data) return data as StudentTransportation;
+          if (!error && data) return mapTransportationRow(data);
         }
       } catch (err: any) {
         EnterpriseLogger.error("Failed to fetch student transportation by studentId:", "StudentTransportationRepository", { error: err });
@@ -55,13 +69,13 @@ export class StudentTransportationRepository implements IBaseRepository<StudentT
       try {
         const supabase = getSupabaseClient();
         if (supabase) {
-          let query = supabase.from('student_transportation').select('*', { count: 'exact' });
+          let query = supabase.from('student_transportation').select('*', { count: 'exact' }).eq('school_id', schoolId);
           if (options?.studentId) {
             query = query.eq('student_id', options.studentId);
           }
           const { data, count, error } = await query;
           if (!error && data) {
-            return { data: data as StudentTransportation[], count: count || data.length };
+            return { data: data.map(mapTransportationRow), count: count || data.length };
           }
         }
       } catch (err: any) {
@@ -97,9 +111,18 @@ export class StudentTransportationRepository implements IBaseRepository<StudentT
       async () => {
         const supabase = getSupabaseClient();
         if (!supabase) throw new Error("No Supabase client");
-        const { data, error } = await supabase.from('student_transportation').insert([newRecord]).select().single();
+        const { data, error } = await supabase.from('student_transportation').insert([{
+          id,
+          school_id: schoolId,
+          student_id: newRecord.studentId,
+          route_number: newRecord.routeNumber,
+          pickup_point: newRecord.pickupPoint,
+          drop_off_point: newRecord.dropoffPoint,
+          monthly_fees: newRecord.monthlyFees,
+          status: newRecord.status,
+        }]).select().single();
         if (error) throw error;
-        return data as StudentTransportation;
+        return mapTransportationRow(data);
       },
       () => {
         const all = FallbackStorage.getStudentTransportation();
@@ -122,9 +145,16 @@ export class StudentTransportationRepository implements IBaseRepository<StudentT
       async () => {
         const supabase = getSupabaseClient();
         if (!supabase) throw new Error("No Supabase client");
-        const { data, error } = await supabase.from('student_transportation').update(item).eq('id', id).select().single();
+        const { data, error } = await supabase.from('student_transportation').update({
+          ...(item.studentId !== undefined ? { student_id: item.studentId } : {}),
+          ...(item.routeNumber !== undefined ? { route_number: item.routeNumber } : {}),
+          ...(item.pickupPoint !== undefined ? { pickup_point: item.pickupPoint } : {}),
+          ...(item.dropoffPoint !== undefined ? { drop_off_point: item.dropoffPoint } : {}),
+          ...(item.monthlyFees !== undefined ? { monthly_fees: item.monthlyFees } : {}),
+          ...(item.status !== undefined ? { status: item.status } : {}),
+        }).eq('school_id', schoolId).eq('id', id).select().single();
         if (error) throw error;
-        return data as StudentTransportation;
+        return mapTransportationRow(data);
       },
       () => {
         const all = FallbackStorage.getStudentTransportation();
@@ -147,7 +177,7 @@ export class StudentTransportationRepository implements IBaseRepository<StudentT
       async () => {
         const supabase = getSupabaseClient();
         if (!supabase) throw new Error("No Supabase client");
-        const { error } = await supabase.from('student_transportation').delete().eq('id', id);
+        const { error } = await supabase.from('student_transportation').delete().eq('school_id', schoolId).eq('id', id);
         if (error) throw error;
         return true;
       },

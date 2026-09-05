@@ -72,7 +72,7 @@ export class TransportationRepository implements IBaseRepository<BusRoute> {
       async () => {
         const supabase = getSupabaseClient();
         if (!supabase) throw new Error('Supabase client is unavailable');
-        const { data, error } = await supabase.from('student_buses').select('id').eq('student_id', studentId);
+        const { data, error } = await supabase.from('student_buses').select('id').eq('school_id', schoolId).eq('student_id', studentId);
         if (error) throw error;
         return (data || []) as { id: string }[];
       },

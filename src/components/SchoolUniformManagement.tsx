@@ -4,7 +4,7 @@ import { AlertCircle, AlertTriangle, ArrowRightLeft, Barcode, Boxes, Building2, 
  * SPDX-License-Identifier: Apache-2.0
  */
 
-import React, { useState, useMemo } from 'react';
+import React, { useEffect, useState, useMemo } from 'react';
 import { 
   AreaChart, Area, XAxis, YAxis, CartesianGrid, Tooltip, ResponsiveContainer, BarChart, Bar, Cell, PieChart, Pie
 } from 'recharts';
@@ -24,6 +24,8 @@ import {
 } from './UniformSeeds';
 import { SQLTransactionEngine } from '../database/transactions/transactionManager';
 import { SQLCommandBuilder, ParameterizedCommand } from '../database/transactions/SQLCommand';
+import { FallbackStorage } from '../database/repositories/FallbackStorage';
+import { authenticatedRequest } from '../utils/authenticatedRequest';
 import EnterpriseActionToolbar from './shared/EnterpriseActionToolbar';
 
 interface SchoolUniformManagementProps {
@@ -44,13 +46,27 @@ export default function SchoolUniformManagement({
   setStudents,
   invoices,
   setInvoices,
-  selectedSchoolId = 'sch_1',
+  selectedSchoolId,
   triggerNotification,
   logAction,
   currentRole,
   setActiveSection,
   selectedSchool
 }: SchoolUniformManagementProps) {
+  const schoolScopeId = selectedSchoolId?.trim() || '';
+  const guardCanonicalMutation = (operation: string): boolean => {
+    if (!schoolScopeId) {
+      triggerNotification('العملية متوقفة', 'لم يتم تحديد مدرسة موثوقة؛ لم يتم تنفيذ أي تعديل.', 'warning');
+      return false;
+    }
+    if (!FallbackStorage.isCanonicalPersistenceRequired()) return true;
+    triggerNotification(
+      'العملية متوقفة',
+      `تعذر تنفيذ ${operation}: لا يوجد مسار مركزي موثوق يحفظ مخزون الزي والتدقيق المحاسبي. لم يتم تعديل أي بيانات.`,
+      'warning'
+    );
+    return false;
+  };
   
   // Tab control
   const [activeTab, setActiveTab] = useState<'dashboard' | 'items' | 'purchase' | 'sales' | 'returns' | 'accounting' | 'schema'>('dashboard');
@@ -69,6 +85,47 @@ export default function SchoolUniformManagement({
   const [returns, setReturns] = useState<UniformReturn[]>([]);
   const [inventoryCounts, setInventoryCounts] = useState<UniformInventoryCount[]>([]);
   const [journals, setJournals] = useState<AccountingJournalEntry[]>([]);
+
+  useEffect(() => {
+    if (!FallbackStorage.isCanonicalPersistenceRequired() || !schoolScopeId) return;
+    let cancelled = false;
+    const loadItems = async () => {
+      try {
+        const response = await authenticatedRequest('/api/uniform/items');
+        const payload = await response.json().catch(() => ({}));
+        if (!response.ok || !payload?.success || !Array.isArray(payload.data)) {
+          throw new Error(payload?.message || 'تعذر تحميل أصناف الزي من المصدر المركزي.');
+        }
+        if (!cancelled) setItems(payload.data as UniformItem[]);
+      } catch (error) {
+        if (!cancelled) {
+          setItems([]);
+          triggerNotification('مصدر الزي غير متاح', 'الزي المدرسي متوقف حتى يتوفر مصدر مركزي موثوق؛ لم تُعرض بيانات محلية.', 'warning');
+        }
+        console.error('Uniform canonical source unavailable:', error);
+      }
+    };
+    void loadItems();
+    return () => { cancelled = true; };
+  }, [schoolScopeId, triggerNotification]);
+
+  useEffect(() => {
+    if (!FallbackStorage.isCanonicalPersistenceRequired() || !schoolScopeId) return;
+    let cancelled = false;
+    const loadVariants = async () => {
+      try {
+        const response = await authenticatedRequest('/api/uniform/variants');
+        const payload = await response.json().catch(() => ({}));
+        if (!response.ok || !payload?.success || !Array.isArray(payload.data)) throw new Error(payload?.message || 'تعذر تحميل مخزون الزي المركزي.');
+        if (!cancelled) setVariants(payload.data as UniformVariant[]);
+      } catch (error) {
+        if (!cancelled) { setVariants([]); triggerNotification('مصدر مخزون الزي غير متاح', 'لم تُعرض أرصدة محلية غير موثقة.', 'warning'); }
+        console.error('Uniform variant source unavailable:', error);
+      }
+    };
+    void loadVariants();
+    return () => { cancelled = true; };
+  }, [schoolScopeId, triggerNotification]);
 
   // Search, edit & creation states
   const [itemSearchTerm, setItemSearchTerm] = useState('');
@@ -202,12 +259,13 @@ export default function SchoolUniformManagement({
 
   // Handle fitting save
   const handleSaveStudentMeasurements = async (studentId: string) => {
+    if (!guardCanonicalMutation('حفظ قياسات الطالب')) return;
     const recommended = calculateRecommendedSize(fittingForm.height, fittingForm.weight, fittingForm.chest);
     
     // DB transaction logic
     const opResult = await TransactionService.run({
       operationName: 'SAVE_STUDENT_MEASUREMENTS',
-      tenantId: selectedSchoolId,
+      tenantId: schoolScopeId,
       userId: 'salafe10@gmail.com',
       userName: 'مدير النظام المالي والمخزني',
       ipAddress: '192.168.10.43',
@@ -282,6 +340,19 @@ export default function SchoolUniformManagement({
   };
 
   const handleCheckout = async () => {
+    if (FallbackStorage.isCanonicalPersistenceRequired()) {
+      if (!selectedStudent || cart.length === 0) { triggerNotification('تعذر صرف الزي', 'اختر طالبًا وأضف صنفًا متاحًا إلى السلة أولاً.', 'warning'); return; }
+      try {
+        const response = await authenticatedRequest('/api/uniform/sales', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ studentId: selectedStudent.id, paymentMethod: checkoutPaymentMethod, discount: checkoutDiscount, lines: cart.map(line => ({ variantId: line.variantId, quantity: line.qty })) }) });
+        const payload = await response.json().catch(() => ({}));
+        if (!response.ok || !payload?.success || !payload.data) throw new Error(payload?.message || 'تعذر ترحيل بيع الزي مركزيًا.');
+        setVariants(previous => previous.map(variant => { const line = cart.find(item => item.variantId === variant.id); return line ? { ...variant, stockQty: Math.max(0, variant.stockQty - line.qty) } : variant; }));
+        setCart([]); setCheckoutDiscount(0);
+        triggerNotification('تم ترحيل بيع الزي', `تم خصم المخزون وإنشاء القيد المركزي رقم ${payload.data.journalEntryId || '—'}.`, 'success');
+      } catch (error) { triggerNotification('فشل بيع الزي', 'لم تتغير السلة أو المخزون؛ تعذر إتمام الترحيل المركزي.', 'warning'); console.error('Uniform sale failed:', error); }
+      return;
+    }
+    if (!guardCanonicalMutation('صرف الزي المدرسي')) return;
     if (!selectedStudent) {
       triggerNotification('تنبيه هام', 'الرجاء اختيار طالب أولاً لإتمام الصرف الفوري', 'warning');
       return;
@@ -349,7 +420,7 @@ export default function SchoolUniformManagement({
     // Execute through local state update
     const opResult = await SQLTransactionEngine.run({
       operationName: 'CHECKOUT_UNIFORM_SALE',
-      tenantId: selectedSchoolId,
+      tenantId: schoolScopeId,
       userId: 'salafe10@gmail.com',
       userName: 'أمين المستودع المدرسي',
       ipAddress: '192.168.10.12',
@@ -479,7 +550,7 @@ export default function SchoolUniformManagement({
 
     const opResult = await SQLTransactionEngine.run({
       operationName: 'RECEIVE_PURCHASE_ORDER',
-      tenantId: selectedSchoolId,
+      tenantId: schoolScopeId,
       userId: 'salafe10@gmail.com',
       userName: 'مدير المشتريات والمستودعات',
       ipAddress: '192.168.10.15',
@@ -524,6 +595,7 @@ export default function SchoolUniformManagement({
 
   // --- BULK PRICING MODIFIER ---
   const handleApplyBulkPricing = async () => {
+    if (!guardCanonicalMutation('تعديل أسعار الزي بالجملة')) return;
     const changeFactor = bulkPriceForm.type === 'increase' 
       ? 1 + (bulkPriceForm.percent / 100) 
       : 1 - (bulkPriceForm.percent / 100);
@@ -536,7 +608,7 @@ export default function SchoolUniformManagement({
 
     const opResult = await SQLTransactionEngine.run({
       operationName: 'BULK_PRICE_UPDATE',
-      tenantId: selectedSchoolId,
+      tenantId: schoolScopeId,
       userId: 'salafe10@gmail.com',
       userName: 'المدير المالي التنفيذي',
       ipAddress: '192.168.1.101',
@@ -585,6 +657,7 @@ export default function SchoolUniformManagement({
 
   // --- CRUD: NEW SUPPLIER ---
   const handleCreateSupplier = async () => {
+    if (!guardCanonicalMutation('إضافة مورد الزي')) return;
     const sid = `sup_${Date.now()}`;
     const query = SQLCommandBuilder.create({
       sqlText: `INSERT INTO uniform_suppliers (id, code, name, phone, mobile, email, address, tax_number, bank_name, iban, payment_terms, classification, status) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, 'active');`,
@@ -594,7 +667,7 @@ export default function SchoolUniformManagement({
 
     const opResult = await SQLTransactionEngine.run({
       operationName: 'CREATE_UNIFORM_SUPPLIER',
-      tenantId: selectedSchoolId,
+      tenantId: schoolScopeId,
       userId: 'salafe10@gmail.com',
       userName: 'مدير المشتريات',
       ipAddress: '192.168.10.15',
@@ -643,6 +716,33 @@ export default function SchoolUniformManagement({
 
   // --- CRUD: NEW ITEM ---
   const handleCreateItem = async () => {
+    if (!schoolScopeId) {
+      triggerNotification('العملية متوقفة', 'لم يتم تحديد مدرسة موثوقة؛ لم يتم تنفيذ أي تعديل.', 'warning');
+      return;
+    }
+    if (FallbackStorage.isCanonicalPersistenceRequired()) {
+      if (!newItem.code || !newItem.nameAr || !newItem.barcode || !Number.isFinite(newItem.buyPrice) || !Number.isFinite(newItem.sellPrice) || newItem.buyPrice < 0 || newItem.sellPrice < newItem.buyPrice) {
+        triggerNotification('خطأ في البيانات', 'الرجاء تعبئة الكود والاسم العربي والباركود والأسعار بصورة صحيحة.', 'error');
+        return;
+      }
+      try {
+        const response = await authenticatedRequest('/api/uniform/items', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify(newItem)
+        });
+        const payload = await response.json().catch(() => ({}));
+        if (!response.ok || !payload?.success || !payload.data) throw new Error(payload?.message || 'تعذر حفظ صنف الزي مركزيًا.');
+        setItems(previous => [payload.data as UniformItem, ...previous]);
+        setShowAddItemModal(false);
+        setNewItem({ code: '', barcode: '', nameAr: '', nameEn: '', categoryId: '', group: '', division: '', season: '', gender: '', description: '', brand: '', fabricType: '', cottonPercent: 0, weightGsm: 0, washInstructions: '', buyPrice: 0, sellPrice: 0 });
+        triggerNotification('تم تسجيل صنف الزي', 'تم حفظ الصنف مركزيًا مع سجل تدقيقي.', 'success');
+      } catch (error) {
+        triggerNotification('تعذر حفظ صنف الزي', 'الزي المدرسي متوقف؛ تعذر حفظ الصنف في المصدر المركزي.', 'warning');
+        console.error('Uniform canonical item save failed:', error);
+      }
+      return;
+    }
     const item_id = `item_${Date.now()}`;
     const variant_id = `var_${Date.now()}`;
     const sku = `SKU-${newItem.code}`;
@@ -661,7 +761,7 @@ export default function SchoolUniformManagement({
 
     const opResult = await SQLTransactionEngine.run({
       operationName: 'CREATE_UNIFORM_ITEM',
-      tenantId: selectedSchoolId,
+      tenantId: schoolScopeId,
       userId: 'salafe10@gmail.com',
       userName: 'مدير المستودع المركزي',
       ipAddress: '192.168.10.15',

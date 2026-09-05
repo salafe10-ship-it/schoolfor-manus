@@ -3,9 +3,10 @@ import fs from 'node:fs';
 import path from 'node:path';
 
 describe('fallback storage browser production guard', () => {
-  it('recognizes Vite production bundles as canonical persistence mode', () => {
+  it('recognizes non-local browser origins without importing Vite metadata into the server bundle', () => {
     const file = fs.readFileSync(path.resolve(process.cwd(), 'src/database/repositories/FallbackStorage.ts'), 'utf8');
-    expect(file).toContain("(import.meta as any).env?.PROD === true");
-    expect(file).toContain('return viteProduction ||');
+    expect(file).toContain('const browserProduction = typeof window !== \'undefined\'');
+    expect(file).toContain('return browserProduction ||');
+    expect(file).not.toContain('(import.meta as any).env?.PROD === true');
   });
 });

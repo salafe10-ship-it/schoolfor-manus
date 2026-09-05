@@ -216,7 +216,7 @@ export class TrustedSessionManager {
     return responseUser(payload);
   }
 
-  async login(identifier: string, password: string, rememberMe = true): Promise<TrustedSessionUser> {
+  async login(identifier: string, password: string, rememberMe = false): Promise<TrustedSessionUser> {
     if (!identifier.trim() || !password) throw new TrustedSessionError('INVALID_SESSION');
     this.activeStorage = rememberMe ? this.persistentStorage : this.transientStorage;
     clearTrustedSession(rememberMe ? this.transientStorage : this.persistentStorage);

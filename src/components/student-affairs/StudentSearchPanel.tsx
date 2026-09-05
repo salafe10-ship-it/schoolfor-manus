@@ -380,12 +380,21 @@ export default function StudentSearchPanel({
                   />
                 </div>
 
-                <img
-                  src={student.avatarUrl || `https://images.unsplash.com/photo-1535713875002-d1d0cf377fde?w=120&h=120&fit=crop&crop=face`}
-                  alt=""
-                  referrerPolicy="no-referrer"
-                  className="w-10 h-10 rounded-full object-cover shrink-0 shadow-xs mt-0.5"
-                />
+                {student.avatarUrl ? (
+                  <img
+                    src={student.avatarUrl}
+                    alt=""
+                    referrerPolicy="no-referrer"
+                    className="w-10 h-10 rounded-full object-cover shrink-0 shadow-xs mt-0.5"
+                  />
+                ) : (
+                  <div
+                    aria-label="صورة الطالب غير متاحة"
+                    className="w-10 h-10 rounded-full flex items-center justify-center bg-amber-100 text-amber-800 text-sm font-black shrink-0 shadow-xs mt-0.5"
+                  >
+                    {(student.name || 'ط').trim().slice(0, 1)}
+                  </div>
+                )}
                 <div className="flex-1 min-w-0">
                   <div className="flex justify-between items-start gap-1 flex-row-reverse">
                     <h4 className="font-extrabold text-slate-900 text-xs truncate text-right">{student.name}</h4>

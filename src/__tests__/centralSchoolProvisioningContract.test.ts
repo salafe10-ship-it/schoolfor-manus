@@ -8,14 +8,22 @@ describe('central school provisioning contract', () => {
 
   it('derives central school scope from verified identity and commits school plus branch together', () => {
     const routeStart = server.indexOf("app.post('/api/admin/central/schools'");
-    const route = server.slice(routeStart, routeStart + 7_500);
+    const routeEnd = server.indexOf("\n  app.", routeStart + 1);
+    const route = server.slice(routeStart, routeEnd > routeStart ? routeEnd : undefined);
+    const fallbackRouteStart = route.indexOf("if (!platformAdminPool)");
+    const fallbackRoute = fallbackRouteStart >= 0 ? route.slice(fallbackRouteStart) : '';
     expect(routeStart).toBeGreaterThan(-1);
+    expect(routeEnd).toBeGreaterThan(routeStart);
     expect(route).toContain("app.post('/api/admin/central/schools'");
     expect(server).toContain('requirePermissionOnly(PERMISSIONS.PLATFORM_ADMIN)');
     expect(route).toContain("const tenantId = String(req.body?.targetTenantId || req.body?.tenantId || identity?.tenantId || '').trim();");
-    expect(route).toContain("await client.query('BEGIN');");
-    expect(route).toContain("await client.query('COMMIT');");
-    expect(route).toContain("await client.query('ROLLBACK');");
+    expect(route).toContain("if (platformControl)");
+    expect(route).toContain("insertPlatformRow('schools'");
+    expect(route).toContain("insertPlatformRow('branches'");
+    expect(route).toContain("await deletePlatformRow('schools', schoolId);");
+    expect(fallbackRoute).toContain("await client.query('BEGIN');");
+    expect(fallbackRoute).toContain("await client.query('COMMIT');");
+    expect(fallbackRoute).toContain("await client.query('ROLLBACK');");
     expect(route).toContain('req.body?.targetTenantId');
     expect(route).not.toContain('req.body?.schoolId');
   });

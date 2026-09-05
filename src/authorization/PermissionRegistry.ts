@@ -110,4 +110,3 @@ export class PermissionRegistry {
 }
 
 export const permissionRegistry = new PermissionRegistry();
-

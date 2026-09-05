@@ -165,7 +165,11 @@ export class FallbackStorage {
    */
   public static isCanonicalPersistenceRequired(): boolean {
     const runtime = typeof process !== 'undefined' ? process.env : {};
-    const viteProduction = typeof import.meta !== 'undefined' && (import.meta as any).env?.PROD === true;
+    // Do not read Vite's import.meta contract from the Node CommonJS bundle.
+    // A non-local browser origin is the production-like signal here; explicit
+    // EDUPRO_* variables still remain authoritative for server-side startup.
+    const browserProduction = typeof window !== 'undefined'
+      && !['localhost', '127.0.0.1', '::1'].includes(window.location.hostname);
     const supabaseUrl = runtime?.SUPABASE_URL;
     const supabaseKey = runtime?.SUPABASE_ANON_KEY;
     const hasConfiguredSupabase = Boolean(
@@ -175,7 +179,7 @@ export class FallbackStorage {
       !supabaseKey.includes('your-anon-key')
     );
 
-    return viteProduction ||
+    return browserProduction ||
       runtime?.NODE_ENV === 'production' ||
       runtime?.EDUPRO_ENVIRONMENT === 'staging' ||
       runtime?.EDUPRO_PERSISTENCE_MODE === 'canonical' ||

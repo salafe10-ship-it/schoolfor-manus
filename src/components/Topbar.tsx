@@ -158,7 +158,7 @@ export default function Topbar({
     }
 
     const filtered = students.filter(student => {
-      const nameMatch = student.fullName?.toLowerCase().includes(query.toLowerCase());
+      const nameMatch = (student.fullName || student.name || '').toLowerCase().includes(query.toLowerCase());
       const nationalIdMatch = student.nationalId?.includes(query);
       const studentIdMatch = student.id?.toLowerCase().includes(query.toLowerCase());
       return nameMatch || nationalIdMatch || studentIdMatch;
@@ -350,7 +350,7 @@ export default function Topbar({
                           </div>
                           <div>
                             <p className="text-xs font-black text-slate-900 dark:text-slate-100 group-hover:text-amber-600 dark:group-hover:text-amber-400 transition-colors">
-                              {student.fullName}
+                            {student.fullName || student.name}
                             </p>
                             <p className="text-[10px] text-slate-500 dark:text-slate-400 mt-0.5">
                               رقم الهوية: {student.nationalId}
@@ -358,7 +358,7 @@ export default function Topbar({
                           </div>
                         </div>
                         <span className="bg-gradient-to-r from-[#2a1d13] via-[#3a2719] to-[#2a1d13] text-amber-200 font-extrabold">
-                          الصف {student.grade}
+                          الصف {student.grade || student.classroom || 'غير محدد'}
                         </span>
                       </button>
                     ))}

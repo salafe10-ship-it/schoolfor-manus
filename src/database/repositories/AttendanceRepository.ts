@@ -65,6 +65,29 @@ export class AttendanceRepository implements IBaseRepository<Attendance> {
 
   // --- Static Methods ---
 
+  private static mapRow(row: any): Attendance {
+    return {
+      id: String(row.id),
+      studentId: row.student_id ?? row.studentId ?? '',
+      studentName: row.student_name ?? row.studentName ?? '',
+      classroom: row.classroom ?? row.class_reference ?? '',
+      date: row.date ?? row.attendance_date ?? '',
+      status: row.status ?? row.attendance_status ?? 'present'
+    } as Attendance;
+  }
+
+  private static toDbRecord(schoolId: string, record: Partial<Attendance>) {
+    return {
+      id: record.id,
+      school_id: schoolId,
+      student_id: record.studentId,
+      student_name: record.studentName,
+      classroom: record.classroom,
+      date: record.date,
+      status: record.status
+    };
+  }
+
   /**
    * Checks if a student has any attendance records.
    */
@@ -75,7 +98,7 @@ export class AttendanceRepository implements IBaseRepository<Attendance> {
       async () => {
         const supabase = getSupabaseClient();
         if (!supabase) throw new Error('Supabase client is unavailable');
-        const { data, error } = await supabase.from('attendance').select('id').eq('student_id', studentId);
+        const { data, error } = await supabase.from('attendance').select('id').eq('school_id', schoolId).eq('student_id', studentId);
         if (error) throw error;
         return (data || []) as { id: string }[];
       },
@@ -100,14 +123,14 @@ export class AttendanceRepository implements IBaseRepository<Attendance> {
         if (!supabase) throw new Error('Supabase client is unavailable');
         const { data, error } = await supabase
           .from('attendance')
-          .select('*, students!inner(school_id)')
-          .eq('students.school_id', schoolId)
+          .select('*')
+          .eq('school_id', schoolId)
           .eq('id', id)
           .maybeSingle();
         if (error) throw error;
-        return data ? [data as Attendance] : [];
+        return data ? [AttendanceRepository.mapRow(data)] : [];
       },
-      () => FallbackStorage.getAttendance().filter(record => record.id === id)
+      () => FallbackStorage.getAttendance().filter(record => record.id === id && ((record as any).schoolId === schoolId || (record as any).school_id === schoolId))
     );
     return rows[0] || null;
   }
@@ -129,16 +152,16 @@ export class AttendanceRepository implements IBaseRepository<Attendance> {
         if (!supabase) throw new Error('Supabase client is unavailable');
         let query = supabase
           .from('attendance')
-          .select('*, students!inner(school_id)')
-          .eq('students.school_id', schoolId);
+          .select('*')
+          .eq('school_id', schoolId);
         if (options?.date) query = query.eq('date', options.date);
         if (options?.classroom) query = query.eq('classroom', options.classroom);
         const { data, error } = await query;
         if (error) throw error;
-        return (data || []) as Attendance[];
+        return (data || []).map(AttendanceRepository.mapRow);
       },
       () => {
-        let records = FallbackStorage.getAttendance();
+        let records = FallbackStorage.getAttendance().filter(r => ((r as any).schoolId === schoolId || (r as any).school_id === schoolId));
         if (options?.date) records = records.filter(r => r.date === options.date);
         if (options?.classroom) records = records.filter(r => r.classroom === options.classroom);
         return records;
@@ -169,10 +192,10 @@ export class AttendanceRepository implements IBaseRepository<Attendance> {
       try {
         const { data, error } = await supabase
           .from('attendance')
-          .insert([newRecord])
+          .insert([AttendanceRepository.toDbRecord(schoolId, newRecord)])
           .select()
           .single();
-        if (!error && data) return data as Attendance;
+        if (!error && data) return AttendanceRepository.mapRow(data);
       } catch (err: any) {
         EnterpriseLogger.error("Failed to insert attendance into Supabase:", "AttendanceRepository", { error: err });
       }
@@ -181,7 +204,7 @@ export class AttendanceRepository implements IBaseRepository<Attendance> {
     FallbackStorage.assertCanonicalPersistence(`attendance create ${id}`);
 
     const all = FallbackStorage.getAttendance();
-    all.unshift(newRecord);
+    all.unshift({ ...newRecord, schoolId } as Attendance);
     FallbackStorage.saveAttendance(all);
     return newRecord;
   }
@@ -206,11 +229,12 @@ export class AttendanceRepository implements IBaseRepository<Attendance> {
       try {
         const { data, error } = await supabase
           .from('attendance')
-          .update(item)
+          .update(AttendanceRepository.toDbRecord(schoolId, { ...item, id }))
+          .eq('school_id', schoolId)
           .eq('id', id)
           .select()
           .single();
-        if (!error && data) return data as Attendance;
+        if (!error && data) return AttendanceRepository.mapRow(data);
       } catch (err: any) {
         EnterpriseLogger.error("Failed to update attendance in Supabase:", "AttendanceRepository", { error: err });
       }
@@ -219,7 +243,7 @@ export class AttendanceRepository implements IBaseRepository<Attendance> {
     FallbackStorage.assertCanonicalPersistence(`attendance update ${id}`);
 
     const all = FallbackStorage.getAttendance();
-    const idx = all.findIndex(r => r.id === id);
+    const idx = all.findIndex(r => r.id === id && ((r as any).schoolId === schoolId || (r as any).school_id === schoolId));
     if (idx > -1) {
       all[idx] = updated;
       FallbackStorage.saveAttendance(all);
@@ -239,6 +263,7 @@ export class AttendanceRepository implements IBaseRepository<Attendance> {
         const { error } = await supabase
           .from('attendance')
           .delete()
+          .eq('school_id', schoolId)
           .eq('id', id);
         if (!error) return true;
       } catch (err: any) {
@@ -249,7 +274,7 @@ export class AttendanceRepository implements IBaseRepository<Attendance> {
     FallbackStorage.assertCanonicalPersistence(`attendance delete ${id}`);
 
     const all = FallbackStorage.getAttendance();
-    const filtered = all.filter(r => r.id !== id);
+    const filtered = all.filter(r => !(r.id === id && ((r as any).schoolId === schoolId || (r as any).school_id === schoolId)));
     if (filtered.length === all.length) return false;
     FallbackStorage.saveAttendance(filtered);
     return true;
@@ -291,7 +316,7 @@ export class AttendanceRepository implements IBaseRepository<Attendance> {
       try {
         const { data, error } = await supabase
           .from('attendance')
-          .insert(prepared)
+          .insert(prepared.map(record => AttendanceRepository.toDbRecord(schoolId, record)))
           .select();
         if (!error && data) return data.length;
       } catch (err: any) {
@@ -302,7 +327,7 @@ export class AttendanceRepository implements IBaseRepository<Attendance> {
     FallbackStorage.assertCanonicalPersistence(`attendance bulk save ${prepared.length}`);
 
     const all = FallbackStorage.getAttendance();
-    FallbackStorage.saveAttendance([...prepared as Attendance[], ...all]);
+    FallbackStorage.saveAttendance([...prepared.map(record => ({ ...record, schoolId } as Attendance)), ...all]);
     return prepared.length;
   }
 

@@ -99,6 +99,7 @@ import { TransactionService } from './database/transactions/TransactionService';
 import { useCurrency, saveCurrencyConfig, formatAmount } from './utils/currency';
 import { TrustedSessionManager, TrustedSessionUser } from './middleware/trustedSessionManager';
 import { canAccessSection } from './authorization/ClientAuthorization';
+import { authenticatedRequest } from './utils/authenticatedRequest';
 import {
   canAccessCustomerProductionSection,
   customerProductionLandingSection,
@@ -162,6 +163,7 @@ export const copyTextToClipboard = async (text: string): Promise<boolean> => {
 
 export default function App() {
   const { currencyConfig, format: formatCurrency, saveCurrency } = useCurrency();
+  const canonicalPersistenceRequired = FallbackStorage.isCanonicalPersistenceRequired();
   const sessionManager = useMemo(() => new TrustedSessionManager(window.localStorage, window.sessionStorage), []);
   const [passwordRecovery, setPasswordRecovery] = useState<{ accessToken: string; refreshToken: string } | null>(() => {
     if (typeof window === 'undefined') return null;
@@ -523,16 +525,19 @@ export default function App() {
 
   // Shared Central Permissions and Users states (Single Source of Truth)
   const [simulatedUsers, setSimulatedUsers] = useState<any[]>(() => {
+    if (FallbackStorage.isCanonicalPersistenceRequired()) return [];
     const saved = localStorage.getItem('erp_users_list_v1');
     return saved ? JSON.parse(saved) : INITIAL_USERS;
   });
 
   const [roles, setRoles] = useState<any[]>(() => {
+    if (FallbackStorage.isCanonicalPersistenceRequired()) return [];
     const saved = localStorage.getItem('erp_roles_list_v1');
     return saved ? JSON.parse(saved) : DEFAULT_ROLES;
   });
 
   const [permissionsAuditLog, setPermissionsAuditLog] = useState<any[]>(() => {
+    if (FallbackStorage.isCanonicalPersistenceRequired()) return [];
     const saved = localStorage.getItem('erp_permissions_audit_log_v1');
     return saved ? JSON.parse(saved) : [
       { id: 'audit_0', modifier: 'سليمان غازي', targetUser: 'منصور خلف', date: '2026-06-30 08:30:12', action: 'إنشاء حساب وتخصيص صلاحيات ترحيل الحسابات العامة' },
@@ -541,6 +546,7 @@ export default function App() {
   });
 
   const [drillDownUser, setDrillDownUser] = useState<any>(() => {
+    if (FallbackStorage.isCanonicalPersistenceRequired()) return undefined;
     const saved = localStorage.getItem('erp_users_list_v1');
     const initial = saved ? JSON.parse(saved) : INITIAL_USERS;
     return initial[0];
@@ -556,7 +562,7 @@ export default function App() {
   }, [currencyConfig]);
 
   // Branch dynamic list state
-  const [branches, setBranches] = useState<any[]>(branchesSeed);
+  const [branches, setBranches] = useState<any[]>(() => canonicalPersistenceRequired ? [] : branchesSeed);
 
   // Supabase Configuration State
   const [supabaseConfig, setSupabaseConfig] = useState(initialSupabaseConfig);
@@ -567,18 +573,18 @@ export default function App() {
   // Student Affairs is database-backed. The shell starts empty and the portal
   // hydrates this collection from the authenticated server session.
   const [students, setStudents] = useState<Student[]>([]);
-  const [teachers, setTeachers] = useState<Teacher[]>(teachersSeed);
-  const [employees, setEmployees] = useState<Employee[]>(employeesSeed);
-  const [invoices, setInvoices] = useState<Invoice[]>(invoicesSeed);
-  const [inventory, setInventory] = useState<InventoryItem[]>(inventorySeed);
-  const [auditLogs, setAuditLogs] = useState<AuditLog[]>(auditLogsSeed);
-  const [attendance, setAttendance] = useState(initialAttendance);
+  const [teachers, setTeachers] = useState<Teacher[]>(() => canonicalPersistenceRequired ? [] : teachersSeed);
+  const [employees, setEmployees] = useState<Employee[]>(() => canonicalPersistenceRequired ? [] : employeesSeed);
+  const [invoices, setInvoices] = useState<Invoice[]>(() => canonicalPersistenceRequired ? [] : invoicesSeed);
+  const [inventory, setInventory] = useState<InventoryItem[]>(() => canonicalPersistenceRequired ? [] : inventorySeed);
+  const [auditLogs, setAuditLogs] = useState<AuditLog[]>(() => canonicalPersistenceRequired ? [] : auditLogsSeed);
+  const [attendance, setAttendance] = useState(() => canonicalPersistenceRequired ? [] : initialAttendance);
 
   // Multi-Stage Academic & Cost Centers States
-  const [stages, setStages] = useState<Stage[]>(stagesSeed);
-  const [grades, setGrades] = useState<Grade[]>(gradesSeed);
-  const [academicClasses, setAcademicClasses] = useState<AcademicClass[]>(academicClassesSeed);
-  const [costCenters, setCostCenters] = useState<CostCenter[]>(costCentersSeed);
+  const [stages, setStages] = useState<Stage[]>(() => canonicalPersistenceRequired ? [] : stagesSeed);
+  const [grades, setGrades] = useState<Grade[]>(() => canonicalPersistenceRequired ? [] : gradesSeed);
+  const [academicClasses, setAcademicClasses] = useState<AcademicClass[]>(() => canonicalPersistenceRequired ? [] : academicClassesSeed);
+  const [costCenters, setCostCenters] = useState<CostCenter[]>(() => canonicalPersistenceRequired ? [] : costCentersSeed);
 
   // A newly provisioned customer workspace must never inherit in-memory
   // demonstration records from the internal workspace. Canonical modules may
@@ -602,15 +608,15 @@ export default function App() {
     setPermissionsAuditLog([]);
     setDrillDownUser(null);
     setShowConfigModal(false);
-  }, [isCustomerProductionPortal, selectedBranch]);
+  }, [isCustomerProductionPortal, selectedBranch, canonicalPersistenceRequired]);
 
   // Expanded Student Enterprise States
-  const [selectedStudentEnterpriseId, setSelectedStudentEnterpriseId] = useState<string>('stud_1');
+  const [selectedStudentEnterpriseId, setSelectedStudentEnterpriseId] = useState<string>('');
   const [activeStudentTab, setActiveStudentTab] = useState<string>('gap_analysis');
   const [autosaveIndicator, setAutosaveIndicator] = useState<'idle' | 'saving' | 'saved'>('idle');
   const [softDeletedStudentIds, setSoftDeletedStudentIds] = useState<string[]>([]);
   const [showSoftTrashOnly, setShowSoftTrashOnly] = useState<boolean>(false);
-  const [gateBarcodeSimulatorVal, setGateBarcodeSimulatorVal] = useState<string>('stud_1');
+  const [gateBarcodeSimulatorVal, setGateBarcodeSimulatorVal] = useState<string>('');
   const [gateScanDirection, setGateScanDirection] = useState<'check_in' | 'check_out'>('check_in');
   const [attendanceSmsLog, setAttendanceSmsLog] = useState<{timestamp: string; phone: string; message: string}[]>([]);
   const [isOcrProcessing, setIsOcrProcessing] = useState<boolean>(false);
@@ -626,25 +632,25 @@ export default function App() {
 
   // Uniform & Dress Code Management States
   const [showUniformModal, setShowUniformModal] = useState<boolean>(false);
-  const [uniformInventory, setUniformInventory] = useState([
+  const [uniformInventory, setUniformInventory] = useState(() => canonicalPersistenceRequired ? [] : [
     { id: 'uni_1', name: 'زي مدرسي بنين - أساسي (كافة المقاسات)', category: 'بنين', size: 'M, L, XL', stock: 140, price: 45, alertLimit: 20 },
     { id: 'uni_2', name: 'زي مدرسي بنات - أساسي (كافة المقاسات)', category: 'بنات', size: 'S, M, L', stock: 185, price: 45, alertLimit: 25 },
     { id: 'uni_3', name: 'بدلة رياضة مدرسية - بنين وبنات', category: 'رياضة', size: 'S, M, L, XL', stock: 95, price: 35, alertLimit: 15 },
     { id: 'uni_4', name: 'سترة شتوية فاخرة (Blazer) - ثانوي', category: 'شتاء', size: 'M, L, XL', stock: 60, price: 120, alertLimit: 10 },
     { id: 'uni_5', name: 'قميص قطني إضافي - أبيض ناصع', category: 'قمصان', size: 'S, M, L', stock: 210, price: 15, alertLimit: 30 }
   ]);
-  const [selectedUniformToAllocate, setSelectedUniformToAllocate] = useState<string>('uni_1');
-  const [allocateToStudentId, setAllocateToStudentId] = useState<string>('stud_1');
+  const [selectedUniformToAllocate, setSelectedUniformToAllocate] = useState<string>('');
+  const [allocateToStudentId, setAllocateToStudentId] = useState<string>('');
   const [allocateUniformSize, setAllocateUniformSize] = useState<string>('M');
   const [allocateUniformQty, setAllocateUniformQty] = useState<number>(1);
-  const [uniformAllocationHistory, setUniformAllocationHistory] = useState([
+  const [uniformAllocationHistory, setUniformAllocationHistory] = useState(() => canonicalPersistenceRequired ? [] : [
     { id: 'alloc_1', studentName: 'أحمد محمود العريبي', uniformName: 'زي مدرسي بنين - أساسي (كافة المقاسات)', size: 'L', date: '2026-05-15', qty: 1, total: 45 },
     { id: 'alloc_2', studentName: 'فاطمة محمد الورفلي', uniformName: 'زي مدرسي بنات - أساسي (كافة المقاسات)', size: 'M', date: '2026-05-18', qty: 1, total: 45 },
     { id: 'alloc_3', studentName: 'عبد الرحمن صالح التاجوري', uniformName: 'سترة شتوية فاخرة (Blazer) - ثانوي', size: 'XL', date: '2026-05-20', qty: 1, total: 120 }
   ]);
   
   // Simulated school subjects/grades state specifically for the academcial tab
-  const [academicGrades, setAcademicGrades] = useState<{ [studentId: string]: { subject: string; score: number; maxScore: number; behaviorRating: 'ممتاز' | 'جيد جداً' | 'مقبول' | 'يحتاج توجيه'; achievements: string[] }[] }>({
+  const [academicGrades, setAcademicGrades] = useState<{ [studentId: string]: { subject: string; score: number; maxScore: number; behaviorRating: 'ممتاز' | 'جيد جداً' | 'مقبول' | 'يحتاج توجيه'; achievements: string[] }[] }>(() => canonicalPersistenceRequired ? {} : ({
     'stud_1': [
       { subject: 'الرياضيات المتقدمة', score: 48, maxScore: 50, behaviorRating: 'ممتاز', achievements: ['دروع التميز الرياضي 🏆', 'أولمبياد العلوم'] },
       { subject: 'الفيزياء الكونية', score: 92, maxScore: 100, behaviorRating: 'ممتاز', achievements: ['مبتكر الغد الأخضر 🌱'] },
@@ -659,7 +665,7 @@ export default function App() {
       { subject: 'العلوم العامة', score: 25, maxScore: 30, behaviorRating: 'جيد جداً', achievements: ['المعرض العلمي السنوي'] },
       { subject: 'اللغة العربية', score: 27, maxScore: 30, behaviorRating: 'ممتاز', achievements: [] }
     ]
-  });
+  }));
 
   // Synchronized Transactions log history state
   const [transactions, setTransactions] = useState<any[]>([]);
@@ -684,11 +690,10 @@ export default function App() {
 
 
   // Notifications State
-  const [notifications, setNotifications] = useState([
-    { id: '1', text: 'تم إجراء مزامنة تلقائية ناجحة للبيانات مع مستودع Supabase السحابي', time: 'منذ دقيقة', type: 'success' as const },
-    { id: '2', text: 'تنبيه لقرب نفاذ مخزون الزي المدرسي والكتب المعتمدة للمرحلة الابتدائية', time: 'منذ ١٢ دقيقة', type: 'warning' as const },
-    { id: '3', text: 'تم مراجعة الميزانية وإصدار التقارير الضريبية السنوية لمدير النظام المعين', time: 'منذ ساعة', type: 'info' as const }
-  ]);
+  // Notifications are populated only by real actions or a canonical server
+  // feed. Static seed messages must not imply that a sync, stock alert, or
+  // financial review actually occurred.
+  const [notifications, setNotifications] = useState<any[]>([]);
 
   // Form states for creating/editing records
   const [showSmartHeader, setShowSmartHeader] = useState(false);
@@ -812,6 +817,71 @@ export default function App() {
         ...prev
       ]);
     });
+  };
+
+  // Hydrate the student attendance register from the canonical server read
+  // model.  Local seed attendance is intentionally not used in canonical
+  // mode, and a failed read leaves the screen empty rather than implying
+  // that a class was present.
+  useEffect(() => {
+    if (!canonicalPersistenceRequired || !selectedSchool.id || !trustedSessionUser) return;
+    let cancelled = false;
+    const loadAttendance = async () => {
+      try {
+        const response = await authenticatedRequest('/api/attendance/records');
+        const payload = await response.json().catch(() => ({}));
+        if (!response.ok || !payload?.success || !Array.isArray(payload.data)) {
+          throw new Error(payload?.message || 'تعذر تحميل سجل الحضور المركزي.');
+        }
+        const studentById = new Map<string, Student>(students.map(student => [student.id, student] as [string, Student]));
+        const rows = payload.data.map((row: any) => {
+          const student = studentById.get(String(row.student_id ?? row.studentId ?? ''));
+          return {
+            id: String(row.id),
+            studentId: String(row.student_id ?? row.studentId ?? ''),
+            studentName: student?.name || String(row.student_name || 'طالب غير معروف'),
+            classroom: String(row.classroom || ''),
+            date: String(row.date || ''),
+            status: row.status === 'late' ? 'late' : row.status === 'excused' ? 'excused' : row.status === 'absent' ? 'absent' : 'present',
+            sessionId: String(row.session_id || ''),
+            version: Number(row.version || 1)
+          };
+        });
+        if (!cancelled) setAttendance(rows);
+      } catch (error) {
+        if (!cancelled) setAttendance([]);
+        EnterpriseLogger.warn('Canonical attendance read unavailable; keeping register empty.', 'App', { error });
+      }
+    };
+    void loadAttendance();
+    return () => { cancelled = true; };
+  }, [canonicalPersistenceRequired, selectedSchool.id, trustedSessionUser, students]);
+
+  const correctCanonicalAttendance = async (record: any, status: 'present' | 'absent') => {
+    if (!canonicalPersistenceRequired) {
+      triggerNotification('مسار الحضور المحلي غير متاح لهذا الإجراء؛ استخدم مصدر الحضور المعتمد.', 'warning');
+      return;
+    }
+    try {
+      const response = await authenticatedRequest(`/api/attendance/records/${encodeURIComponent(record.id)}`, {
+        method: 'PATCH',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          expectedVersion: Number(record.version || 1),
+          status,
+          reason: status === 'present' ? 'تصحيح حالة الحضور من سجل التحضير المعتمد' : 'تصحيح حالة الغياب من سجل التحضير المعتمد',
+          requestId: crypto.randomUUID(),
+          correlationId: crypto.randomUUID()
+        })
+      });
+      const payload = await response.json().catch(() => ({}));
+      if (!response.ok || !payload?.success) throw new Error(payload?.message || 'تعذر تصحيح سجل الحضور.');
+      setAttendance(prev => prev.map(item => item.id === record.id ? { ...item, status, version: Number(payload.data?.version || record.version + 1) } : item));
+      triggerNotification('تم تصحيح سجل الحضور وحفظ التدقيق المركزي.', 'success');
+    } catch (error: any) {
+      EnterpriseLogger.warn('Canonical attendance correction failed.', 'App', { error: error?.message || error });
+      triggerNotification('تعذر تصحيح سجل الحضور؛ لم يتم تغيير السجل.', 'warning');
+    }
   };
 
   // Portal Authentication Controllers
@@ -1076,6 +1146,12 @@ export default function App() {
   };
 
   // Invoice creation action
+  const guardLegacyMutation = (operation: string): boolean => {
+    if (!FallbackStorage.isCanonicalPersistenceRequired()) return true;
+    triggerNotification(`تعذر تنفيذ ${operation}: مسار الحفظ المركزي غير متاح، ولم يتم تعديل أي بيانات.`, 'warning');
+    return false;
+  };
+
   const handleInvoiceCreateSubmit = (e: React.FormEvent) => {
     e.preventDefault();
 
@@ -1108,10 +1184,16 @@ export default function App() {
   // Teacher Action
   const handleTeacherSubmit = (e: React.FormEvent) => {
     e.preventDefault();
+    if (!guardLegacyMutation('إضافة المعلم')) return;
+    const teacherBranchId = selectedBranch?.id || branches.find(b => b.schoolId === selectedSchool.id)?.id;
+    if (!teacherBranchId) {
+      triggerNotification('تعذر إضافة المعلم: لم يتم تحديد فرع موثوق للمدرسة.', 'warning');
+      return;
+    }
     const newT: Teacher = {
       id: `teach_${Date.now()}`,
       schoolId: selectedSchool.id,
-      branchId: selectedBranch?.id || branches.filter(b => b.schoolId === selectedSchool.id)[0]?.id || 'branch_1_1',
+      branchId: teacherBranchId,
       name: teacherForm.name,
       specialization: teacherForm.specialization,
       email: teacherForm.email,
@@ -1149,11 +1231,10 @@ export default function App() {
       ...supabaseConfig,
       url: tempUrl,
       anonKey: tempKey,
-      status: 'connected'
+      status: 'pending'
     });
     setShowConfigModal(false);
-    logAction('CONFIG_SUPABASE', 'تحديث معالم وعناوين الإتصال ببوابات Supabase API ورمز التحقق الأصلي', 'إعدادات النظام');
-    triggerNotification('تم الاتصال ببوابات الدخول السحابية لفرعك وربط الـ Schema الكلي', 'success');
+    triggerNotification('تم تحديث إعدادات العرض محلياً فقط؛ لم يتم اعتماد اتصال Supabase دون فحص الخادم المركزي.', 'warning');
   };
 
   const handleStudentPaymentSubmit = (e: React.FormEvent, studentId: string, amount: number, method: string) => {
@@ -1490,11 +1571,14 @@ export default function App() {
             branches={currentBranchesOfSchool}
             selectedBranch={selectedBranch}
             onBranchChange={handleBranchChange}
+            students={filteredStudents}
+            onStudentSelect={() => setActiveSection('student_affairs')}
             currentRole={currentRole}
             notifications={notifications}
             clearNotifications={() => setNotifications([])}
             userName={trustedSessionUser?.name || 'مستخدم المدرسة'}
             onLogout={handleLogout}
+            onSettingsClick={() => setActiveSection('settings')}
             theme={theme}
             onThemeToggle={toggleTheme}
             isClientMode={isClientMode}
@@ -1984,9 +2068,9 @@ export default function App() {
                 <div className="flex justify-between items-center mb-4 pb-3 border-b border-slate-100">
                   <h3 className="font-bold text-slate-900 text-sm">سجل التحضير اليومي للطلاب - {new Date().toLocaleDateString('ar-SA')}</h3>
                   <button 
-                    onClick={() => {
-                      triggerNotification('تم حفظ وتثبيت جدول التحضير بنجاح وإرسال الرقابة المباشرة', 'success');
-                    }}
+                   onClick={() => {
+                       triggerNotification('اعتماد التحضير متوقف: لا يوجد مسار مركزي يحفظ سجل الحضور والتدقيق.', 'warning');
+                     }}
                     className="bg-indigo-600 hover:bg-indigo-700 text-white text-xs font-bold px-4 py-2 rounded-lg"
                   >
                     اعتماد التحضير الفوري للفصول
@@ -2022,17 +2106,13 @@ export default function App() {
                           <td className="px-6 py-4 text-center">
                             <div className="flex justify-center gap-1">
                               <button 
-                                onClick={() => {
-                                  setAttendance(prev => prev.map(a => a.id === att.id ? { ...a, status: 'present' } : a));
-                                }}
+                                onClick={() => { void correctCanonicalAttendance(att, 'present'); }}
                                 className="px-2 py-1 bg-slate-100 hover:bg-emerald-50 text-slate-700 hover:text-emerald-700 rounded text-[10px] font-bold"
                               >
                                 تحضير
                               </button>
                               <button 
-                                onClick={() => {
-                                  setAttendance(prev => prev.map(a => a.id === att.id ? { ...a, status: 'absent' } : a));
-                                }}
+                                onClick={() => { void correctCanonicalAttendance(att, 'absent'); }}
                                 className="px-2 py-1 bg-slate-100 hover:bg-red-50 text-slate-700 hover:text-red-700 rounded text-[10px] font-bold"
                               >
                                 غياب
@@ -2067,7 +2147,7 @@ export default function App() {
                       </div>
 
                       <button 
-                        onClick={() => triggerNotification(`تم إشعال رسالة نصية دولية فورية برابط الدخول لولي الأمر: ${st.parentName}`, 'success')}
+                        onClick={() => triggerNotification(`خدمة الرسائل المركزية غير مهيأة؛ لم يتم إرسال رسالة إلى ${st.parentName}.`, 'warning')}
                         className="bg-slate-900 hover:bg-slate-800 text-white text-xs font-bold px-3 py-1.5 rounded-lg flex items-center gap-1"
                       >
                         <MessageSquareDot className="w-4 h-4" />
@@ -2375,9 +2455,9 @@ export default function App() {
                     <div className="border-t border-slate-100 pt-4 flex justify-between items-center">
                       <button
                         onClick={() => {
+                          if (!guardLegacyMutation('تحديث إعدادات العملة')) return;
                           saveCurrency(currencyForm);
-                          logAction('UPDATE_CURRENCY_SETTINGS', `تحديث تهيئة العملة المخصصة لتكون: ${currencyForm.name} (${currencyForm.symbol}) بـ ${currencyForm.decimalPlaces} خانات عشرية`, 'إعدادات النظام');
-                          triggerNotification('✓ تم حفظ إعدادات العملة الجديدة وتحديث النظام بالكامل تلقائياً!', 'success');
+                          triggerNotification('تم حفظ إعدادات العملة محلياً فقط؛ لم يتم اعتمادها كمصدر مركزي.', 'warning');
                         }}
                         className="bg-sky-600 hover:bg-sky-700 text-white font-extrabold text-xs px-6 py-2.5 rounded-lg flex items-center gap-2 shadow transition-all hover:scale-[1.02] cursor-pointer"
                       >
@@ -3192,6 +3272,7 @@ export default function App() {
                       onClick={() => {
                         const item = uniformInventory.find(u => u.id === selectedUniformToAllocate);
                         const stud = students.find(s => s.id === allocateToStudentId);
+                        if (!guardLegacyMutation('صرف الزي المدرسي')) return;
                         if (item && stud) {
                           if (item.stock < allocateUniformQty) {
                             triggerNotification('المخزون الحالي غير كافٍ لصرف هذه الكمية!', 'warning');
@@ -3213,8 +3294,7 @@ export default function App() {
                             },
                             ...uniformAllocationHistory
                           ]);
-                          triggerNotification(`تم تسجيل صرف وتسليم الزي المدرسي للطالب ${stud.fullName} بنجاح ✅`, 'success');
-                          logAction('صرف زي مدرسي', `تم صرف زي مدرسي (${item.name}) لصالح الطالب ${stud.fullName}`, 'إدارة المخزون واللبس');
+                          triggerNotification('تم تحديث الحالة المحلية فقط؛ لا يوجد مسار مخزون مركزي معتمد لصرف الزي.', 'warning');
                         }
                       }}
                       className="w-full py-2.5 bg-indigo-600 hover:bg-indigo-700 text-white rounded-xl font-bold hover:shadow-md transition-all cursor-pointer text-center"
