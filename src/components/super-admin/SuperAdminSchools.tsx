@@ -163,7 +163,7 @@ export default function SuperAdminSchools({
           userLimit: school.subscription?.seat_limit ? Number(school.subscription.seat_limit) : undefined,
           timezone: school.timezone,
           locale: school.locale,
-          schoolUrl: getTrustedSchoolUrl({ id: school.id }),
+          schoolUrl: getTrustedSchoolUrl({ id: school.id, subdomain: school.central_metadata?.subdomain || school.subdomain }),
           connectedDb: 'canonical-postgres',
         }));
         const canonicalBranches = branchesPayload.branches.map((branch: any) => ({
@@ -251,7 +251,7 @@ export default function SuperAdminSchools({
         usersCount: 0,
         studentCount: 0,
         connectedDb: 'canonical-postgres',
-        schoolUrl: getTrustedSchoolUrl({ id: canonicalSchool.id }),
+        schoolUrl: getTrustedSchoolUrl({ id: canonicalSchool.id, subdomain: canonicalSchool.central_metadata?.subdomain || canonicalSchool.subdomain }),
       };
       const createdBranch = {
         ...canonicalBranch,
@@ -769,7 +769,7 @@ export default function SuperAdminSchools({
                     <td className="p-4">
                       <div className="space-y-1 font-mono">
                           <span className="text-[11px] text-slate-700 select-all block text-left font-bold" dir="ltr">
-                          {school.subdomain}.erpcloud.com
+                          {getTrustedSchoolUrl(school).replace(/^https?:\/\//, '')}
                         </span>
                         <div className="flex items-center gap-1.5 text-left pt-0.5" dir="ltr">
                           <button

@@ -821,7 +821,7 @@ export default function SuperAdminOperationsCenter({
                                   <span className="text-base select-none">{s.logo}</span>
                                   <div>
                                     <span className="font-extrabold text-slate-900 dark:text-slate-100 block">{s.name}</span>
-                                    <span className="text-[10px] text-slate-400 dark:text-slate-500 font-mono block mt-0.5">{s.subdomain}.erpcloud.com</span>
+                                    <span className="text-[10px] text-slate-400 dark:text-slate-500 font-mono block mt-0.5">{getTrustedSchoolUrl(s).replace(/^https?:\/\//, '')}</span>
                                   </div>
                                 </div>
                               </td>
@@ -1049,7 +1049,7 @@ export default function SuperAdminOperationsCenter({
                     </p>
                   </div>
                   <span className="text-[10px] font-black text-amber-600 dark:text-amber-400 bg-amber-50/60 dark:bg-amber-950/30 border border-amber-100/40 dark:border-amber-900/30 px-3 py-1.5 rounded-lg font-mono">
-                    Active Link: {activeSchool?.subdomain}.erpcloud.com
+                                Active Link: {activeSchool ? getTrustedSchoolUrl(activeSchool).replace(/^https?:\/\//, '') : 'غير محدد'}
                   </span>
                 </div>
 
@@ -1130,7 +1130,7 @@ export default function SuperAdminOperationsCenter({
                           <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
                             <div className="space-y-1 dark:bg-slate-900 p-3 rounded-lg border border-slate-150 dark:border-slate-850">
                               <span className="text-[10px] text-slate-400 dark:text-slate-500 block font-bold">النطاق السحابي الموجه:</span>
-                              <span className="font-mono text-amber-600 dark:text-amber-400 text-xs font-black block mt-1">{activeSchool?.domain || `${activeSchool?.subdomain}.erpcloud.com`}</span>
+                              <span className="font-mono text-amber-600 dark:text-amber-400 text-xs font-black block mt-1">{activeSchool ? getTrustedSchoolUrl(activeSchool).replace(/^https?:\/\//, '') : 'غير محدد'}</span>
                             </div>
                             <div className="space-y-1 dark:bg-slate-900 p-3 rounded-lg border border-slate-150 dark:border-slate-850">
                               <span className="text-[10px] text-slate-400 dark:text-slate-500 block font-bold">حالة الـ SSL والاتصال:</span>
@@ -1614,7 +1614,7 @@ export default function SuperAdminOperationsCenter({
                         <div className="dark:bg-slate-900 p-3.5 border border-slate-200/80 dark:border-slate-800 font-extrabold text-amber-600 dark:text-amber-400 text-xs shadow-2xs flex items-center justify-between">
                           <span>{activeSchool?.name}</span>
                           <span className="font-mono bg-amber-50 dark:bg-amber-950/40 border border-amber-100/30 dark:border-amber-900/40 px-2 py-0.5 rounded text-[10px]">
-                            {activeSchool?.subdomain}.erpcloud.com
+                            {activeSchool ? getTrustedSchoolUrl(activeSchool).replace(/^https?:\/\//, '') : 'غير محدد'}
                           </span>
                         </div>
                       </div>

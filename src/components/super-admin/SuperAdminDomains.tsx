@@ -211,7 +211,7 @@ export default function SuperAdminDomains({
                       </div>
                     </td>
                     <td className="p-4 font-mono font-bold text-slate-300">
-                      {school.subdomain ? `${school.subdomain}.erpcloud.com` : 'غير محدد'}
+                      {school.subdomain ? trustedUrl.replace(/^https?:\/\//, '') : 'غير محدد'}
                     </td>
                     <td className="p-4 font-mono font-bold text-amber-400">
                        {customDomain ? (

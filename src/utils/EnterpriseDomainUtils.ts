@@ -57,7 +57,10 @@ export function getTrustedSchoolUrl(school: SchoolDomainInfo): string {
   // with its canonical school id instead of returning an unreachable vanity
   // hostname. This keeps the link usable and preserves tenant resolution.
   const hostedGateway = typeof window !== 'undefined' && window.location &&
-    (window.location.hostname.endsWith('.onrender.com') || window.location.hostname.endsWith('.run.app'))
+    (window.location.hostname.endsWith('.onrender.com') ||
+      window.location.hostname.endsWith('.run.app') ||
+      window.location.hostname === 'localhost' ||
+      window.location.hostname === '127.0.0.1')
     ? window.location.origin
     : null;
   if (hostedGateway) return `${hostedGateway}/?school=${encodeURIComponent(school.id || rawSubdomain)}`;
