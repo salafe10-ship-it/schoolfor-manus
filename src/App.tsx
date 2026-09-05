@@ -815,10 +815,10 @@ export default function App() {
   };
 
   // Portal Authentication Controllers
-  const authenticateAndOpenSession = async (identifier: string, password: string, rememberMe = true) => {
+  const authenticateAndOpenSession = async (identifier: string, password: string, rememberMe = false) => {
     if (!identifier.trim() || !password) {
       triggerNotification('يرجى إدخال بيانات الدخول كاملة', 'warning');
-      return;
+      return false;
     }
 
     try {
@@ -828,13 +828,15 @@ export default function App() {
 
       logAction('PORTAL_LOGIN', `تم تسجيل الدخول الموثوق إلى ${targetSchool.name}`, 'المصادقة والأمان');
       triggerNotification(`تم تسجيل الدخول إلى ${targetSchool.name} بنجاح`, 'success');
+      return true;
     } catch {
       sessionManager.logout();
       triggerNotification('بيانات الدخول غير صحيحة أو أن الحساب غير متاح', 'warning');
+      return false;
     }
   };
 
-  const handleSchoolLogin = (username: string, password: string, rememberMe = true) => {
+  const handleSchoolLogin = (username: string, password: string, rememberMe = false) => {
     return authenticateAndOpenSession(username, password, rememberMe);
   };
 
