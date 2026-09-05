@@ -17,6 +17,8 @@ import { BusRoute, Student, StudentTransportation } from '../types';
 import { StudentTransportationRepository } from '../database/repositories/StudentTransportationRepository';
 import { TransportationRepository } from '../database/repositories/TransportationRepository';
 import EnterpriseActionToolbar from './shared/EnterpriseActionToolbar';
+import { FallbackStorage } from '../database/repositories/FallbackStorage';
+import { authenticatedRequest } from '../utils/authenticatedRequest';
 
 type TransportTab = 'dashboard' | 'routes' | 'assignments' | 'safety' | 'reports';
 
@@ -66,6 +68,27 @@ export default function SchoolTransportManagement({
 
   const schoolStudentIds = useMemo(() => new Set(students.map(student => student.id)), [students]);
 
+  const mapRoute = (row: any): BusRoute => ({
+    ...row,
+    id: String(row.id),
+    routeNumber: row.routeNumber ?? row.route_number ?? '',
+    driverName: row.driverName ?? row.driver_name ?? '',
+    currentStudents: Number(row.currentStudents ?? row.current_students ?? 0),
+    capacity: Number(row.capacity ?? 0),
+    status: row.status || 'active'
+  });
+
+  const mapAssignment = (row: any): StudentTransportation => ({
+    ...row,
+    id: String(row.id),
+    studentId: row.studentId ?? row.student_id ?? '',
+    routeNumber: row.routeNumber ?? row.route_number ?? '',
+    pickupPoint: row.pickupPoint ?? row.pickup_point ?? undefined,
+    dropoffPoint: row.dropoffPoint ?? row.drop_off_point ?? undefined,
+    monthlyFees: Number(row.monthlyFees ?? row.monthly_fees ?? 0),
+    status: row.status || 'active'
+  });
+
   const loadTransportations = useCallback(async () => {
     if (!selectedSchoolId) {
       setTransportations([]);
@@ -78,14 +101,31 @@ export default function SchoolTransportManagement({
     setIsLoading(true);
     setLoadError('');
     try {
-      const [transportationResult, routes] = await Promise.all([
-        studentTransportationRepository.getAll(selectedSchoolId),
-        transportationRepository.getAll(selectedSchoolId),
-      ]);
+      let transportationRows: StudentTransportation[];
+      let routeRows: BusRoute[];
+      if (FallbackStorage.isCanonicalPersistenceRequired()) {
+        const [assignmentsResponse, routesResponse] = await Promise.all([
+          authenticatedRequest('/api/transport/assignments'),
+          authenticatedRequest('/api/transport/routes'),
+        ]);
+        const assignmentsPayload = await assignmentsResponse.json().catch(() => ({}));
+        const routesPayload = await routesResponse.json().catch(() => ({}));
+        if (!assignmentsResponse.ok || !assignmentsPayload?.success) throw new Error(assignmentsPayload?.message || 'تعذر تحميل اشتراكات النقل.');
+        if (!routesResponse.ok || !routesPayload?.success) throw new Error(routesPayload?.message || 'تعذر تحميل مسارات النقل.');
+        transportationRows = Array.isArray(assignmentsPayload.data) ? assignmentsPayload.data.map(mapAssignment) : [];
+        routeRows = Array.isArray(routesPayload.data) ? routesPayload.data.map(mapRoute) : [];
+      } else {
+        const [transportationResult, routes] = await Promise.all([
+          studentTransportationRepository.getAll(selectedSchoolId),
+          transportationRepository.getAll(selectedSchoolId),
+        ]);
+        transportationRows = transportationResult.data;
+        routeRows = routes;
+      }
       // StudentTransportation is linked to the student master. Limit the operational
       // register to students already loaded for the active school.
-      setTransportations(transportationResult.data.filter(record => schoolStudentIds.has(record.studentId)));
-      setBusRoutes(routes);
+      setTransportations(transportationRows.filter(record => schoolStudentIds.has(record.studentId)));
+      setBusRoutes(routeRows);
     } catch (error) {
       setTransportations([]);
       setLoadError('تعذر تحميل سجل اشتراكات النقل من المصدر المركزي. أعد المحاولة بعد التحقق من الاتصال.');
@@ -177,7 +217,15 @@ export default function SchoolTransportManagement({
         monthlyFees: form.monthlyFees === '' ? 0 : Number(form.monthlyFees),
         status: 'active',
       };
-      if (existing) {
+      if (FallbackStorage.isCanonicalPersistenceRequired()) {
+        const response = await authenticatedRequest(existing ? `/api/transport/assignments/${encodeURIComponent(existing.id)}` : '/api/transport/assignments', {
+          method: existing ? 'PATCH' : 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify(payload),
+        });
+        const result = await response.json().catch(() => ({}));
+        if (!response.ok || !result?.success) throw new Error(result?.message || 'تعذر حفظ اشتراك النقل مركزيًا.');
+      } else if (existing) {
         await studentTransportationRepository.update(selectedSchoolId, existing.id, payload);
       } else {
         await studentTransportationRepository.create(selectedSchoolId, payload);

@@ -5,12 +5,14 @@ import {
 } from 'lucide-react';
 import { FixedAsset } from '../../types';
 import { FixedAssetsRepository } from '../../database/repositories/FixedAssetsRepository';
+import { FallbackStorage } from '../../database/repositories/FallbackStorage';
 import FixedAssetsDashboard from './FixedAssetsDashboard';
 import AssetRegistryManager from './AssetRegistryManager';
 import AssetDetailCardModal from './AssetDetailCardModal';
 import AssetLifecycleOperationsModal from './AssetLifecycleOperationsModal';
 import AssetReportsAndDepreciation from './AssetReportsAndDepreciation';
 import EnterpriseFixedAssetsQualityAudit from './EnterpriseFixedAssetsQualityAudit';
+import { authenticatedRequest } from '../../utils/authenticatedRequest';
 
 interface ToastNotification {
   id: string;
@@ -19,6 +21,7 @@ interface ToastNotification {
 }
 
 export default function FixedAssetsPortal() {
+  const canonicalPersistenceRequired = FallbackStorage.isCanonicalPersistenceRequired();
   const [activeTab, setActiveTab] = useState<'dashboard' | 'registry' | 'reports' | 'audit'>('dashboard');
   const [assets, setAssets] = useState<FixedAsset[]>([]);
   const [selectedAsset, setSelectedAsset] = useState<FixedAsset | null>(null);
@@ -38,9 +41,26 @@ export default function FixedAssetsPortal() {
     }, 4000);
   };
 
-  const loadAssets = () => {
+  const toCanonicalAsset = (row: any): FixedAsset => ({
+    ...(row || {}),
+    id: String(row?.id || ''), code: String(row?.code || ''), name: String(row?.name || ''), category: String(row?.category || ''),
+    status: ({ active: 'نشط / قيد التشغيل', maintenance: 'تحت الصيانة', loaned: 'معار / مستخدم', disposed: 'مستبعد / كلي', sold: 'تم بيعه' } as any)[String(row?.status || 'active')] || row?.status,
+    cost: Number(row?.cost || 0), capitalExp: Number(row?.capitalExp || 0), accDep: Number(row?.accDep || 0), netValue: Number(row?.netValue || 0),
+    maintenanceLogs: Array.isArray(row?.maintenanceLogs) ? row.maintenanceLogs : [], transferLogs: Array.isArray(row?.transferLogs) ? row.transferLogs : [],
+    depreciationHistory: Array.isArray(row?.depreciationHistory) ? row.depreciationHistory : [], timeline: Array.isArray(row?.timeline) ? row.timeline : [],
+    createdAt: String(row?.createdAt || new Date().toISOString()), updatedAt: String(row?.updatedAt || new Date().toISOString())
+  } as FixedAsset);
+
+  const loadAssets = async () => {
     try {
-      const data = FixedAssetsRepository.getAll();
+      const data = canonicalPersistenceRequired
+        ? ((await (async () => {
+            const response = await authenticatedRequest('/api/fixed-assets');
+            const payload = await response.json().catch(() => ({}));
+            if (!response.ok || !payload?.success || !Array.isArray(payload.data)) throw new Error(payload?.message || 'تعذر تحميل سجل الأصول المركزي.');
+            return payload.data.map(toCanonicalAsset);
+          })()))
+        : FixedAssetsRepository.getAll();
       setAssets(data);
       if (selectedAsset) {
         const updatedSelected = data.find(a => a.id === selectedAsset.id);
@@ -53,14 +73,27 @@ export default function FixedAssetsPortal() {
   };
 
   useEffect(() => {
-    loadAssets();
+    void loadAssets();
   }, []);
 
   // Handlers
-  const handleSaveAsset = (asset: FixedAsset) => {
+  const handleSaveAsset = async (asset: FixedAsset) => {
+    if (canonicalPersistenceRequired) {
+      try {
+        const isUuid = /^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i.test(asset.id);
+        const response = await authenticatedRequest(isUuid ? `/api/fixed-assets/${encodeURIComponent(asset.id)}` : '/api/fixed-assets', {
+          method: isUuid ? 'PATCH' : 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(asset)
+        });
+        const payload = await response.json().catch(() => ({}));
+        if (!response.ok || !payload?.success || !payload.data) throw new Error(payload?.message || 'تعذر حفظ الأصل مركزيًا.');
+        await loadAssets(); setSelectedAsset(toCanonicalAsset(payload.data));
+        addToast('✓ تم حفظ الأصل وربطه بالقيد والتدقيق المركزي.', 'success');
+      } catch (e: any) { addToast(e.message || 'تعذر حفظ الأصل مركزيًا.', 'danger'); }
+      return;
+    }
     try {
       const saved = FixedAssetsRepository.save(asset);
-      loadAssets();
+      void loadAssets();
       setSelectedAsset(saved);
       addToast(`✓ تم حفظ ورسملة الأصل الثابت (${saved.name}) بنجاح`, 'success');
     } catch (e: any) {
@@ -69,6 +102,10 @@ export default function FixedAssetsPortal() {
   };
 
   const handleDeleteAsset = (id: string) => {
+    if (canonicalPersistenceRequired) {
+      addToast('حذف الأصول متوقف حتى يتوفر دفتر أصول مركزي مرتبط بالتدقيق المحاسبي.', 'warning');
+      return;
+    }
     try {
       FixedAssetsRepository.delete(id);
       loadAssets();
@@ -79,10 +116,21 @@ export default function FixedAssetsPortal() {
     }
   };
 
-  const handleConfirmTransfer = (assetId: string, log: any) => {
+  const postCanonicalEvent = async (assetId: string, type: string, payload: any = {}) => {
+    const response = await authenticatedRequest(`/api/fixed-assets/${encodeURIComponent(assetId)}/events`, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ ...payload, type }) });
+    const result = await response.json().catch(() => ({}));
+    if (!response.ok || !result?.success || !result.data) throw new Error(result?.message || 'تعذر ترحيل حركة الأصل مركزيًا.');
+    await loadAssets(); setSelectedAsset(toCanonicalAsset(result.data));
+  };
+
+  const handleConfirmTransfer = async (assetId: string, log: any) => {
+    if (canonicalPersistenceRequired) {
+      try { await postCanonicalEvent(assetId, 'transfer', log); addToast('✓ تم تسجيل نقل العهدة مركزيًا.', 'success'); } catch (e: any) { addToast(e.message || 'فشل تسجيل النقل.', 'danger'); }
+      return;
+    }
     try {
       const updated = FixedAssetsRepository.addTransferLog(assetId, log);
-      loadAssets();
+      void loadAssets();
       setSelectedAsset(updated);
       addToast('✓ تم إثبات وتحديث حركة نقل العهدة بنجاح', 'success');
     } catch (e: any) {
@@ -90,10 +138,14 @@ export default function FixedAssetsPortal() {
     }
   };
 
-  const handleConfirmMaintenance = (assetId: string, log: any) => {
+  const handleConfirmMaintenance = async (assetId: string, log: any) => {
+    if (canonicalPersistenceRequired) {
+      try { await postCanonicalEvent(assetId, 'maintenance', log); addToast('✓ تم تسجيل الصيانة وترحيل تكلفتها مركزيًا.', 'success'); } catch (e: any) { addToast(e.message || 'فشل تسجيل الصيانة.', 'danger'); }
+      return;
+    }
     try {
       const updated = FixedAssetsRepository.addMaintenanceLog(assetId, log);
-      loadAssets();
+      void loadAssets();
       setSelectedAsset(updated);
       addToast('✓ تم تسجيل أمر الصيانة وربطه بالتكلفة المباشرة', 'success');
     } catch (e: any) {
@@ -101,10 +153,14 @@ export default function FixedAssetsPortal() {
     }
   };
 
-  const handleConfirmDepreciation = (assetId: string, fiscalYear: string) => {
+  const handleConfirmDepreciation = async (assetId: string, fiscalYear: string) => {
+    if (canonicalPersistenceRequired) {
+      try { await postCanonicalEvent(assetId, 'depreciation', { fiscalYear, eventDate: `${fiscalYear}-12-31` }); addToast(`✓ تم ترحيل إهلاك سنة ${fiscalYear} للدفتر العام.`, 'success'); } catch (e: any) { addToast(e.message || 'فشل ترحيل الإهلاك.', 'danger'); }
+      return;
+    }
     try {
       const updated = FixedAssetsRepository.postDepreciation(assetId, fiscalYear);
-      loadAssets();
+      void loadAssets();
       setSelectedAsset(updated);
       addToast(`✓ تم احتساب وقيد قسط الإهلاك السنوي لسنة ${fiscalYear} وترحيله للقيد اليومي`, 'success');
     } catch (e: any) {
@@ -112,10 +168,14 @@ export default function FixedAssetsPortal() {
     }
   };
 
-  const handleConfirmSale = (assetId: string, price: number, buyer: string, notes: string) => {
+  const handleConfirmSale = async (assetId: string, price: number, buyer: string, notes: string) => {
+    if (canonicalPersistenceRequired) {
+      try { await postCanonicalEvent(assetId, 'sale', { price, buyer, notes }); addToast('✓ تم إثبات بيع الأصل وترحيل أثره المالي مركزيًا.', 'success'); } catch (e: any) { addToast(e.message || 'فشل ترحيل بيع الأصل.', 'danger'); }
+      return;
+    }
     try {
       const updated = FixedAssetsRepository.sellAsset(assetId, price, buyer, notes);
-      loadAssets();
+      void loadAssets();
       setSelectedAsset(updated);
       addToast('✓ تم إثبات بيع الأصل الثابت وتحديث قيمته الدفترية', 'warning');
     } catch (e: any) {
@@ -123,10 +183,14 @@ export default function FixedAssetsPortal() {
     }
   };
 
-  const handleConfirmDiscard = (assetId: string, notes: string) => {
+  const handleConfirmDiscard = async (assetId: string, notes: string) => {
+    if (canonicalPersistenceRequired) {
+      try { await postCanonicalEvent(assetId, 'discard', { notes }); addToast('✓ تم استبعاد الأصل وترحيل الشطب مركزيًا.', 'success'); } catch (e: any) { addToast(e.message || 'فشل ترحيل استبعاد الأصل.', 'danger'); }
+      return;
+    }
     try {
       const updated = FixedAssetsRepository.discardAsset(assetId, notes);
-      loadAssets();
+      void loadAssets();
       setSelectedAsset(updated);
       addToast('✓ تم استبعاد وتكهين الأصل الثابت بنجاح', 'info');
     } catch (e: any) {
@@ -176,6 +240,10 @@ export default function FixedAssetsPortal() {
         <div className="flex items-center gap-2">
           <button
             onClick={() => {
+              if (canonicalPersistenceRequired) {
+                addToast('تسجيل أصل جديد متوقف حتى يتم ربط دفتر الأصول المركزي.', 'warning');
+                return;
+              }
               setModalTargetAsset(null);
               setActiveModal('new_asset');
             }}

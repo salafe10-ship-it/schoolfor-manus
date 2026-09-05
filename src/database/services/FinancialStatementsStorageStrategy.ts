@@ -121,12 +121,10 @@ export class FinancialStatementsStorageResolver {
     const nodeEnv = typeof process !== 'undefined' && process.env?.NODE_ENV;
     const isNodeProd = nodeEnv === 'production';
     
-    const isViteProd = typeof import.meta !== 'undefined' && (import.meta as any).env?.PROD === true;
-    
     const isLocalHost = typeof window !== 'undefined' && 
       (window.location.hostname === 'localhost' || window.location.hostname === '127.0.0.1');
 
-    return isNodeProd || isViteProd || (typeof window !== 'undefined' && !isLocalHost) || FallbackStorage.isCanonicalPersistenceRequired();
+    return isNodeProd || (typeof window !== 'undefined' && !isLocalHost) || FallbackStorage.isCanonicalPersistenceRequired();
   }
 
   public static async resolveProvider(): Promise<IFinancialStatementsStorageProvider> {

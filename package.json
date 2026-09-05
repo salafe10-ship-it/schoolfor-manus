@@ -1,7 +1,7 @@
 {
-  "name": "react-example",
+  "name": "edupro-school-erp",
   "private": true,
-  "version": "0.0.0",
+  "version": "1.0.0",
   "type": "module",
   "overrides": {
     "nanoid": "3.3.18",
@@ -15,6 +15,7 @@
     "dev": "tsx server.ts",
     "build": "vite build --configLoader runner && node scripts/build-server.mjs",
     "build:spa": "vite build --configLoader runner",
+    "production:gate": "node scripts/production-release-gate.mjs",
     "start": "node dist/server.cjs",
     "start:spa": "vite preview --port ${PORT:-10000} --host 0.0.0.0",
     "clean": "rm -rf dist server.js",
@@ -22,6 +23,8 @@
     "lint": "tsc --noEmit",
     "db:migrate": "tsx src/database/scripts/migrate.ts",
     "db:verify-central": "tsx scripts/verify-central-control-plane.ts",
+    "db:apply-owner-workspace": "tsx scripts/apply-owner-workspace-releases.ts",
+    "db:bind-owner-school": "tsx scripts/bind-owner-school.ts",
     "db:seed": "tsx src/database/scripts/seed.ts",
     "loadtest:central": "tsx scripts/load-test-central.ts",
     "provisioning:bootstrap": "tsx scripts/provisioning-bootstrap.ts",

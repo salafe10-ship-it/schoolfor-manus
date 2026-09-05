@@ -94,7 +94,7 @@ export default function SmartPortalGateway({
   const [adminPassword, setAdminPassword] = useState('');
   const [showPassword, setShowPassword] = useState(false);
   const [showAdminPassword, setShowAdminPassword] = useState(false);
-  const [rememberMe, setRememberMe] = useState(true);
+  const [rememberMe, setRememberMe] = useState(false);
   
   // Progress simulation state
   const [isLoggingIn, setIsLoggingIn] = useState(false);

@@ -50,6 +50,8 @@ const ROLE_DEFINITIONS: Record<string, string[]> = {
   control: ['dashboard:view', 'exam:view', 'exam:insert', 'exam:edit', 'exam:delete', 'exam:approve', 'exam:cancel', 'exam:post', 'exam:export', 'exam:print', 'exam:read', 'exam:write'],
   warehouse_keeper: ['dashboard:view', 'warehouse:view', 'warehouse:insert', 'warehouse:edit', 'warehouse:export', 'warehouse:print'],
   assets_manager: ['dashboard:view', 'assets:view', 'assets:insert', 'assets:edit', 'assets:export', 'assets:print'],
+  librarian: ['dashboard:view', 'library:view', 'library:insert', 'library:edit', 'library:delete', 'library:borrow:view', 'library:borrow:insert', 'library:borrow:edit'],
+  transport_manager: ['dashboard:view', 'buses:view', 'buses:insert', 'buses:edit'],
   auditor: ['dashboard:view', 'student:view', 'student:export', 'student:print', 'student:read', 'invoice:view', 'invoice:export', 'invoice:print', 'ledger:view', 'ledger:export', 'ledger:print', 'financial:read', 'attendance:view', 'attendance:export', 'attendance:print', 'exam:view', 'exam:export', 'exam:print', 'exam:read', 'audit:read', 'audit:view'],
   teacher: ['dashboard:view', 'student:view', 'student:read', 'student:print', 'student:export', 'attendance:view', 'attendance:insert', 'attendance:edit', 'exam:view', 'exam:read', 'exam:write', 'ai:chat', 'library:view'],
   parent: ['student:view', 'student:read', 'exam:view', 'exam:read', 'ai:chat'],

@@ -45,14 +45,23 @@ export default function SuperAdminFeatures({
   };
 
   const persistFeatures = async (features: Record<string, boolean>) => {
-    const response = await authenticatedRequest(`/api/admin/central/schools/${encodeURIComponent(selectedSchoolId)}`, {
-      method: 'PATCH',
+    const response = await authenticatedRequest('/api/admin/central/releases', {
+      method: 'POST',
       headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ operation: 'features', features }),
+      body: JSON.stringify({
+        scope: 'school',
+        schoolId: selectedSchoolId,
+        releaseKind: 'features',
+        channel: 'stable',
+        title: 'تحديث ميزات المدرسة',
+        notes: 'اعتماد مصفوفة الوحدات من مركز المالك.',
+        featureOverrides: features,
+      }),
     });
     const payload = await response.json().catch(() => ({}));
-    if (!response.ok || !payload?.success || !payload?.school) throw new Error(payload?.message || 'تعذر حفظ ميزات المدرسة مركزيًا.');
-    return payload.school;
+    const canonical = Array.isArray(payload?.schools) ? payload.schools[0] : null;
+    if (!response.ok || !payload?.success || !canonical) throw new Error(payload?.message || 'تعذر اعتماد ميزات المدرسة مركزيًا.');
+    return canonical;
   };
 
   const applyCanonicalFeatures = (canonical: any) => {

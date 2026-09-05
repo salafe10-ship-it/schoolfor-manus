@@ -70,7 +70,7 @@ export class LibraryRepository implements IBaseRepository<any> {
       FallbackStorage.assertCanonicalPersistence(`borrowed books read ${studentId}`);
       return false;
     }
-    const { data, error } = await supabase.from('borrowed_books').select('id').eq('student_id', studentId).eq('returned_at', null);
+    const { data, error } = await supabase.from('borrowed_books').select('id').eq('school_id', schoolId).eq('student_id', studentId).eq('returned_at', null);
     return error ? false : (data && data.length > 0);
   }
 
@@ -128,9 +128,9 @@ export class LibraryRepository implements IBaseRepository<any> {
     let books = FallbackStorage.getLibrary().filter(b => b.schoolId === schoolId || b.school_id === schoolId);
     if (options?.search) {
       const sLower = options.search.toLowerCase();
-      books = books.filter(b => 
-        b.title.toLowerCase().includes(sLower) || 
-        b.author.toLowerCase().includes(sLower)
+      books = books.filter(b =>
+        String(b.title || '').toLowerCase().includes(sLower) ||
+        String(b.author || '').toLowerCase().includes(sLower)
       );
     }
     return books;
@@ -208,7 +208,7 @@ export class LibraryRepository implements IBaseRepository<any> {
 
     FallbackStorage.assertCanonicalPersistence(`library book delete ${id}`);
     const all = FallbackStorage.getLibrary();
-    const filtered = all.filter(b => b.id !== id);
+    const filtered = all.filter(b => !(b.id === id && (b.schoolId === schoolId || b.school_id === schoolId)));
     if (filtered.length === all.length) return false;
     FallbackStorage.saveLibrary(filtered);
     return true;

@@ -239,7 +239,9 @@ export function createPostgresTransactionDriverFromEnvironment(): PostgresTransa
     idleTimeoutMillis: Number(process.env.PG_IDLE_TIMEOUT_MS || 30_000),
     connectionTimeoutMillis: Number(process.env.PG_CONNECTION_TIMEOUT_MS || 5_000),
     allowExitOnIdle: process.env.NODE_ENV !== "production",
-    ssl: process.env.PGSSLMODE === "disable" ? undefined : { rejectUnauthorized: false },
+    ssl: process.env.PGSSLMODE === "disable"
+      ? undefined
+      : { rejectUnauthorized: process.env.PGSSL_REJECT_UNAUTHORIZED === "true" },
   });
 
   return new PostgresTransactionDriver(pool);

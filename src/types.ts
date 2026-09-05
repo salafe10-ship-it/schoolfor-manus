@@ -35,6 +35,13 @@ export interface School {
   watermark?: string;
   reportHeader?: string;
   certificateHeader?: string;
+  /** Server-derived per-school feature flags; never populated from browser storage. */
+  features?: Record<string, boolean>;
+  templateId?: string;
+  templateVersion?: number;
+  releaseVersion?: number;
+  /** Server-derived configuration manifest from the school's active release. */
+  templateManifest?: Record<string, unknown>;
 }
 
 export interface Branch {
@@ -2567,4 +2574,3 @@ export interface FixedAsset {
   createdAt: string;
   updatedAt: string;
 }
-

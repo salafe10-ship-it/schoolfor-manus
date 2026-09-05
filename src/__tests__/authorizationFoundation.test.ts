@@ -27,6 +27,14 @@ describe('Wave 1C authorization foundation', () => {
     expect(permissionRegistry.isKnown('Unknown.Resource.Action')).toBe(false);
   });
 
+  it('normalizes the complete control-plane permission catalog', () => {
+    expect(permissionRegistry.normalize('assets:delete')).toBe('Assets.Delete');
+    expect(permissionRegistry.normalize('attendance:delete')).toBe('Attendance.Delete');
+    expect(permissionRegistry.normalize('library:borrow')).toBe('Library.Borrow');
+    expect(permissionRegistry.normalize('permissions:audit_logs')).toBe('Permissions.Audit_logs');
+    expect(permissionRegistry.normalize('uniform_management:sales')).toBe('Uniform_management.Sales');
+  });
+
   it('keeps platform authorization separate from school-admin wildcard access', () => {
     const engine = new AuthorizationEngine();
     expect(engine.can(superadmin, PERMISSIONS.PLATFORM_ADMIN)).toBe(false);

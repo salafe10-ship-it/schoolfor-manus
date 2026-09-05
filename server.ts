@@ -101,20 +101,36 @@ import { validateInventoryProcurementSnapshot } from './src/modules/inventory/do
 
 type FinancialWriteMode = 'snapshot_read_only' | 'snapshot_write' | 'erp_integrated';
 
+const deploymentEnvironment = String(process.env.EDUPRO_ENVIRONMENT || '').trim().toLowerCase();
+const productionLikeEnvironment = deploymentEnvironment === 'staging' || deploymentEnvironment === 'production';
+const unsafeLocalDatabaseRoleOptIn = process.env.ALLOW_UNSAFE_LOCAL_DATABASE_ROLE === 'true';
+const supabaseOrigin = (() => {
+  try {
+    return process.env.SUPABASE_URL ? new URL(process.env.SUPABASE_URL).origin : null;
+  } catch {
+    return null;
+  }
+})();
+
 // Central administration deliberately uses a separate privileged connection.
 // Normal tenant traffic must use DATABASE_URL, which is configured with a
-// non-bypass RLS role in production. The fallback keeps local development
-// compatible until PLATFORM_ADMIN_DATABASE_URL is configured there as well.
+// non-bypass RLS role in production. A fallback is retained only for explicit
+// non-production use; production-like deployments require a dedicated
+// PLATFORM_ADMIN_DATABASE_URL so control-plane access cannot reuse the tenant
+// connection accidentally.
 const platformAdminConnectionString = process.env.PLATFORM_ADMIN_DATABASE_URL
-  || process.env.DIRECT_URL
-  || process.env.DATABASE_URL;
+  || (unsafeLocalDatabaseRoleOptIn && !productionLikeEnvironment
+    ? (process.env.DIRECT_URL || process.env.DATABASE_URL)
+    : undefined);
 
 const platformAdminPool = platformAdminConnectionString
   ? new Pool({
       connectionString: platformAdminConnectionString,
       max: Number(process.env.PG_PLATFORM_POOL_MAX || 5),
       connectionTimeoutMillis: Number(process.env.PG_CONNECTION_TIMEOUT_MS || 5_000),
-      ssl: process.env.PGSSLMODE === 'disable' ? undefined : { rejectUnauthorized: false },
+      ssl: process.env.PGSSLMODE === 'disable'
+        ? undefined
+        : { rejectUnauthorized: process.env.PGSSL_REJECT_UNAUTHORIZED === 'true' },
     })
   : null;
 
@@ -1459,15 +1475,27 @@ async function startServer() {
   // Trust the proxy (Express/Vite reverse proxy setup)
   app.set('trust proxy', 1);
 
-  // Security Headers (Configured to allow iframe embedding in the AI Studio platform)
+  // Security headers are strict by default. Embedding is an explicit opt-in
+  // for deployments that genuinely require an iframe host.
+  const allowIframeEmbedding = process.env.ALLOW_IFRAME_EMBEDDING === 'true';
   app.use(helmet({
-    contentSecurityPolicy: false,
-    frameguard: false,
+    contentSecurityPolicy: {
+      useDefaults: true,
+      directives: {
+        'script-src': ["'self'"],
+        'style-src': ["'self'", "'unsafe-inline'"],
+        'img-src': ["'self'", 'data:', 'blob:', 'https:'],
+        'connect-src': ["'self'", ...(supabaseOrigin ? [supabaseOrigin] : [])],
+        'frame-ancestors': allowIframeEmbedding ? ["'self'"] : ["'none'"],
+      },
+    },
+    frameguard: allowIframeEmbedding ? false : { action: 'deny' },
   }));
   
-  // Rate limiting is applied explicitly to authentication and diagnostics
-  // below. General API traffic remains governed by route authorization and
-  // database scope checks instead of a blanket limiter.
+  // Authentication and diagnostics use tighter limits below. A bounded
+  // per-client API limiter also protects read-heavy dashboards and write
+  // endpoints from accidental loops or low-volume abuse. Multi-instance
+  // deployments should additionally enforce a shared gateway limiter.
   const authLimiter = createMemoryRateLimiter({
     windowMs: 15 * 60 * 1000,
     max: 20,
@@ -1475,6 +1503,11 @@ async function startServer() {
   const diagnosticLimiter = createMemoryRateLimiter({
     windowMs: 15 * 60 * 1000,
     max: 10,
+  });
+  const apiLimiter = createMemoryRateLimiter({
+    windowMs: 5 * 60 * 1000,
+    max: 600,
+    message: 'تم تجاوز حد الطلبات المؤقت؛ أعد المحاولة لاحقاً.',
   });
   const disableAuthCaching = (res: express.Response) => {
     res.set('Cache-Control', 'no-store, no-cache, must-revalidate, private');
@@ -1485,6 +1518,12 @@ async function startServer() {
   // history, can legitimately exceed Express's 100kb default. Keep a bounded
   // parser limit so canonical writes fail safely without truncating UAT cycles.
   app.use(express.json({ limit: '2mb' }));
+  app.use('/api', (req, res, next) => {
+    // Health/readiness probes and authentication routes have their own
+    // semantics/limits and should not consume the general application quota.
+    if (req.path === '/health' || req.path === '/ready' || req.path.startsWith('/auth/')) return next();
+    return apiLimiter(req, res, next);
+  });
   app.use((req, res, next) => {
     startSafeAuthTrace(req, res);
     if (req.method === 'GET' && req.path === '/api/students') {
@@ -1512,12 +1551,15 @@ async function startServer() {
   }
 
   // Start database initialization without blocking route registration or the
-  // liveness listener. Staging and production are not ready until the actual
-  // tenant data-plane pool proves that every sampled connection uses an
+  // liveness listener. The service is not ready until the actual tenant
+  // data-plane pool proves that every sampled connection uses an
   // approved non-superuser, non-bypass role. The privileged central pool is
   // deliberately separate and is never accepted as tenant readiness evidence.
-  const deploymentEnvironment = String(process.env.EDUPRO_ENVIRONMENT || '').trim().toLowerCase();
-  const restrictedDataPlaneRequired = deploymentEnvironment === 'staging' || deploymentEnvironment === 'production';
+  // Fail closed by default. A privileged role is permitted only when a
+  // developer explicitly opts into an unsafe local database for a non-test
+  // environment. This prevents a missing EDUPRO_ENVIRONMENT variable from
+  // silently making a BYPASSRLS connection appear production-ready.
+  const restrictedDataPlaneRequired = !unsafeLocalDatabaseRoleOptIn && process.env.NODE_ENV !== 'test';
   const configuredExpectedRoles = String(process.env.DATABASE_ROLE_EXPECTED || '')
     .split(',')
     .map(role => role.trim())
@@ -1965,6 +2007,545 @@ async function startServer() {
     const legacyKeys = new Set(['plan', 'storageLimit', 'userLimit', 'subscriptionDuration', 'subscriptionStart', 'subscriptionEnd']);
     return Object.fromEntries(Object.entries(metadata as Record<string, unknown>).filter(([key]) => !legacyKeys.has(key)));
   };
+
+  // Owner workspace helpers.  These records are deliberately served only by
+  // the verified Platform.Admin control plane; tenant requests never receive
+  // another school's release manifest or target list.
+  const isUuid = (value: unknown): value is string => /^[0-9a-f-]{36}$/i.test(String(value || '').trim());
+  const readObject = (value: unknown): Record<string, unknown> => (
+    value && typeof value === 'object' && !Array.isArray(value) ? value as Record<string, unknown> : {}
+  );
+  const isOwnerWorkspaceMetadata = (metadata: Record<string, unknown>): boolean => {
+    const workspace = readObject(metadata.ownerWorkspace);
+    return metadata.portal_profile === 'owner_controlled'
+      || workspace.mode === 'owner'
+      || workspace.kind === 'owner';
+  };
+  const normalizeFeatureOverrides = (value: unknown): Record<string, boolean> => {
+    if (value === undefined || value === null) return {};
+    if (!value || typeof value !== 'object' || Array.isArray(value)) throw new ValidationError('مصفوفة ميزات الإصدار غير صالحة.');
+    const entries = Object.entries(value as Record<string, unknown>);
+    if (entries.length > 100) throw new ValidationError('عدد ميزات الإصدار يتجاوز الحد المسموح.');
+    const normalized: Record<string, boolean> = {};
+    for (const [rawKey, rawValue] of entries) {
+      const key = String(rawKey || '').trim();
+      if (!/^[A-Za-z0-9_-]{1,80}$/.test(key)) throw new ValidationError('مفتاح الميزة غير صالح.');
+      if (typeof rawValue !== 'boolean') throw new ValidationError('كل قيمة في ميزات الإصدار يجب أن تكون true أو false.');
+      normalized[key] = rawValue;
+    }
+    return normalized;
+  };
+  const normalizeTemplateManifest = (value: unknown): Record<string, unknown> => {
+    const manifest = readObject(value);
+    return { ...manifest, features: normalizeFeatureOverrides(manifest.features) };
+  };
+  const mergeTemplateManifest = (templateManifest: unknown, manifestOverrides: unknown, featureOverrides: unknown): Record<string, unknown> => {
+    const base = normalizeTemplateManifest(templateManifest);
+    const overrides = readObject(manifestOverrides);
+    const merged = { ...base, ...overrides };
+    merged.features = {
+      ...normalizeFeatureOverrides(base.features),
+      ...normalizeFeatureOverrides(overrides.features),
+      ...normalizeFeatureOverrides(featureOverrides),
+    };
+    return merged;
+  };
+  const workspaceColumns = `
+    id, school_id, template_id, release_version, release_kind, scope, channel,
+    status, title, notes, feature_overrides, payload, created_by_auth_user_id,
+    created_at, activated_at, rolled_back_at`;
+  const workspaceSelectColumns = workspaceColumns.split(',').map((column) => `r.${column.trim()}`).join(', ');
+
+  app.get('/api/admin/central/workspaces', authenticateRequest, requirePermissionOnly(PERMISSIONS.PLATFORM_ADMIN), async (_req, res, next) => {
+    if (!platformAdminPool) return next(new DatabaseError('مصدر مساحة المالك المركزية غير متاح.'));
+    try {
+      const result = await platformAdminPool.query(`
+        SELECT s.id AS school_id, s.tenant_id, s.display_name, s.school_code, s.status,
+               s.central_metadata,
+               latest.id AS latest_release_id,
+               latest.release_version AS latest_release_version,
+               latest.release_kind AS latest_release_kind,
+               latest.channel AS latest_release_channel,
+               latest.title AS latest_release_title,
+               latest.created_at AS latest_release_at,
+               latest.template_id AS latest_template_id,
+               template.template_key AS latest_template_key,
+               template.name AS latest_template_name,
+               template.version AS latest_template_version,
+               template.manifest AS latest_template_manifest,
+               latest.feature_overrides AS latest_feature_overrides,
+               latest.payload AS latest_release_payload
+          FROM public.schools s
+          LEFT JOIN LATERAL (
+            SELECT r.*
+              FROM public.platform_school_releases r
+             WHERE r.school_id = s.id
+               AND r.status = 'active'
+             ORDER BY r.release_version DESC
+             LIMIT 1
+          ) latest ON true
+          LEFT JOIN public.platform_templates template ON template.id = latest.template_id
+         WHERE s.deleted_at IS NULL
+         ORDER BY s.created_at DESC
+      `);
+      const templates = await platformAdminPool.query(`
+        SELECT id, template_key, name, description, version, status, manifest, created_at, updated_at
+          FROM public.platform_templates
+         WHERE status <> 'archived'
+         ORDER BY updated_at DESC, name ASC
+      `);
+      const workspaces = result.rows.map((row: any) => {
+        const metadata = readObject(row.central_metadata);
+        const workspace = readObject(metadata.ownerWorkspace);
+        const releasePayload = readObject(row.latest_release_payload);
+        const effectiveManifest = mergeTemplateManifest(
+          row.latest_template_manifest || releasePayload.template || {},
+          releasePayload.overrides,
+          row.latest_feature_overrides,
+        );
+        return {
+          schoolId: row.school_id,
+          tenantId: row.tenant_id,
+          schoolName: row.display_name,
+          schoolCode: row.school_code,
+          schoolStatus: row.status,
+          mode: isOwnerWorkspaceMetadata(metadata) ? 'owner' : 'customer',
+          isOwnerWorkspace: isOwnerWorkspaceMetadata(metadata),
+          releaseChannel: String(workspace.releaseChannel || row.latest_release_channel || 'stable'),
+          currentReleaseId: row.latest_release_id || workspace.currentReleaseId || null,
+          currentReleaseVersion: Number(row.latest_release_version || workspace.currentReleaseVersion || 0),
+          templateId: row.latest_template_id || workspace.templateId || null,
+          templateKey: row.latest_template_key || workspace.templateKey || null,
+          templateVersion: Number(row.latest_template_version || workspace.templateVersion || 0),
+          lastReleaseTitle: row.latest_release_title || null,
+          lastReleaseAt: row.latest_release_at || null,
+          features: normalizeFeatureOverrides(effectiveManifest.features),
+          templateManifest: effectiveManifest,
+        };
+      });
+      return res.json({ success: true, workspaces, templates: templates.rows });
+    } catch (error) {
+      return next(new DatabaseError('تعذر قراءة مساحات المدارس وإصداراتها.', error instanceof Error ? error.message : String(error)));
+    }
+  });
+
+  app.get('/api/admin/central/templates', authenticateRequest, requirePermissionOnly(PERMISSIONS.PLATFORM_ADMIN), async (_req, res, next) => {
+    if (!platformAdminPool) return next(new DatabaseError('مصدر قوالب المالك غير متاح.'));
+    try {
+      const result = await platformAdminPool.query(`
+        SELECT id, template_key, name, description, version, status, manifest, created_at, updated_at
+          FROM public.platform_templates
+         WHERE status <> 'archived'
+         ORDER BY updated_at DESC, name ASC
+      `);
+      return res.json({ success: true, templates: result.rows });
+    } catch (error) {
+      return next(new DatabaseError('تعذر قراءة قوالب النظام.', error instanceof Error ? error.message : String(error)));
+    }
+  });
+
+  app.post('/api/admin/central/templates', authenticateRequest, requirePermissionOnly(PERMISSIONS.PLATFORM_ADMIN), async (req, res, next) => {
+    if (!platformAdminPool) return next(new DatabaseError('مصدر قوالب المالك غير متاح.'));
+    const identity = (req as any).user as { id?: string };
+    const actorAuthUserId = String(identity?.id || '').trim();
+    const requestedSourceSchoolId = String(req.body?.sourceSchoolId || '').trim();
+    const templateKey = String(req.body?.templateKey || '').trim().toLowerCase();
+    const name = String(req.body?.name || '').trim();
+    const description = String(req.body?.description || '').trim() || null;
+    if (!isUuid(actorAuthUserId)) return next(new AuthenticationError('هوية مالك المنصة غير مكتملة.'));
+    if (!/^[a-z0-9](?:[a-z0-9._-]{0,126}[a-z0-9])?$/.test(templateKey)) return next(new ValidationError('مفتاح القالب غير صالح.'));
+    if (name.length < 2 || name.length > 160) return next(new ValidationError('اسم القالب يجب أن يكون بين حرفين و160 حرفاً.'));
+    if (requestedSourceSchoolId && !isUuid(requestedSourceSchoolId)) return next(new ValidationError('مدرسة مصدر القالب غير صالحة.'));
+    try {
+      let manifest = readObject(req.body?.manifest);
+      const ownerSchool = await platformAdminPool.query<{ id: string; central_metadata: unknown }>(
+        `SELECT id, central_metadata
+           FROM public.schools
+          WHERE deleted_at IS NULL
+            AND (central_metadata->>'portal_profile') = 'owner_controlled'
+          ORDER BY created_at ASC
+          LIMIT 1`,
+      );
+      if (ownerSchool.rowCount !== 1) return next(new ConflictError('لا توجد مدرسة مالك مربوطة بمركز الإدارة المركزية.'));
+      const sourceSchoolId = requestedSourceSchoolId || ownerSchool.rows[0].id;
+      if (sourceSchoolId !== ownerSchool.rows[0].id) return next(new ConflictError('قوالب المنصة يجب أن تُنشأ من مدرسة المالك فقط.'));
+      {
+        const source = await platformAdminPool.query<{ central_metadata: unknown }>(
+          `SELECT central_metadata FROM public.schools WHERE id = $1::uuid AND deleted_at IS NULL`,
+          [sourceSchoolId],
+        );
+        if (source.rowCount !== 1) return next(new ConflictError('مدرسة مصدر القالب غير موجودة.'));
+        const metadata = readObject(source.rows[0].central_metadata);
+        manifest = {
+          ...manifest,
+          features: normalizeFeatureOverrides(metadata.features),
+          sourceSchoolId,
+          capturedAt: new Date().toISOString(),
+        };
+      }
+      const result = await platformAdminPool.query(
+        `INSERT INTO public.platform_templates
+          (template_key, name, description, version, status, manifest, created_by_auth_user_id, updated_by_auth_user_id)
+         VALUES ($1, $2, $3, 1, 'draft', $4::jsonb, $5::uuid, $5::uuid)
+         RETURNING id, template_key, name, description, version, status, manifest, created_at, updated_at`,
+        [templateKey, name, description, JSON.stringify(manifest), actorAuthUserId],
+      );
+      return res.status(201).json({ success: true, template: result.rows[0] });
+    } catch (error) {
+      if (error instanceof ConflictError) return next(error);
+      return next(/duplicate|unique/i.test(error instanceof Error ? error.message : '')
+        ? new ConflictError('مفتاح القالب مستخدم مسبقاً.')
+        : new DatabaseError('تعذر إنشاء قالب النظام.', error instanceof Error ? error.message : String(error)));
+    }
+  });
+
+  app.patch('/api/admin/central/templates/:templateId', authenticateRequest, requirePermissionOnly(PERMISSIONS.PLATFORM_ADMIN), async (req, res, next) => {
+    if (!platformAdminPool) return next(new DatabaseError('مصدر قوالب المالك غير متاح.'));
+    const identity = (req as any).user as { id?: string };
+    const actorAuthUserId = String(identity?.id || '').trim();
+    const templateId = String(req.params.templateId || '').trim();
+    const operation = String(req.body?.operation || '').trim();
+    if (!isUuid(actorAuthUserId) || !isUuid(templateId)) return next(new ValidationError('معرف القالب أو هوية المالك غير صالح.'));
+    if (!['publish', 'archive', 'update'].includes(operation)) return next(new ValidationError('عملية القالب غير معتمدة.'));
+    try {
+      let result;
+      if (operation === 'archive') {
+        result = await platformAdminPool.query(
+          `UPDATE public.platform_templates
+              SET status = 'archived', updated_at = now(), updated_by_auth_user_id = $2::uuid
+            WHERE id = $1::uuid AND status <> 'archived'
+          RETURNING id, template_key, name, description, version, status, manifest, created_at, updated_at`,
+          [templateId, actorAuthUserId],
+        );
+      } else {
+        const manifest = readObject(req.body?.manifest);
+        const name = String(req.body?.name || '').trim();
+        if (name && (name.length < 2 || name.length > 160)) return next(new ValidationError('اسم القالب غير صالح.'));
+        result = await platformAdminPool.query(
+          `UPDATE public.platform_templates
+              SET name = COALESCE(NULLIF($2, ''), name),
+                  description = COALESCE($3, description),
+                  manifest = CASE WHEN $4::jsonb = '{}'::jsonb THEN manifest ELSE $4::jsonb END,
+                  version = version + 1,
+                  status = $5,
+                  updated_at = now(), updated_by_auth_user_id = $6::uuid
+            WHERE id = $1::uuid AND status <> 'archived'
+          RETURNING id, template_key, name, description, version, status, manifest, created_at, updated_at`,
+          [templateId, name, String(req.body?.description || '').trim() || null, JSON.stringify(manifest), operation === 'publish' ? 'published' : 'draft', actorAuthUserId],
+        );
+      }
+      if (result.rowCount !== 1) return next(new ConflictError('القالب غير موجود أو مؤرشف.'));
+      return res.json({ success: true, template: result.rows[0] });
+    } catch (error) {
+      return next(new DatabaseError('تعذر تحديث قالب النظام.', error instanceof Error ? error.message : String(error)));
+    }
+  });
+
+  app.get('/api/admin/central/releases', authenticateRequest, requirePermissionOnly(PERMISSIONS.PLATFORM_ADMIN), async (req, res, next) => {
+    if (!platformAdminPool) return next(new DatabaseError('مصدر إصدارات المالك غير متاح.'));
+    const schoolId = String(req.query?.schoolId || '').trim();
+    if (schoolId && !isUuid(schoolId)) return next(new ValidationError('معرف المدرسة غير صالح.'));
+    try {
+      const result = await platformAdminPool.query(`
+        SELECT ${workspaceSelectColumns},
+               s.display_name AS school_name, s.school_code,
+               t.template_key, t.name AS template_name, t.version AS template_version
+          FROM public.platform_school_releases r
+          JOIN public.schools s ON s.id = r.school_id
+          LEFT JOIN public.platform_templates t ON t.id = r.template_id
+         WHERE ($1::uuid IS NULL OR r.school_id = $1::uuid)
+         ORDER BY r.created_at DESC
+         LIMIT 250
+      `, [schoolId || null]);
+      return res.json({ success: true, releases: result.rows });
+    } catch (error) {
+      return next(new DatabaseError('تعذر قراءة سجل إصدارات المدارس.', error instanceof Error ? error.message : String(error)));
+    }
+  });
+
+  app.post('/api/admin/central/releases', authenticateRequest, requirePermissionOnly(PERMISSIONS.PLATFORM_ADMIN), async (req, res, next) => {
+    if (!platformAdminPool) return next(new DatabaseError('مصدر إصدارات المالك غير متاح.'));
+    const identity = (req as any).user as { id?: string };
+    const actorAuthUserId = String(identity?.id || '').trim();
+    const requestBody = (req.body && typeof req.body === 'object' ? req.body : {}) as Record<string, unknown>;
+    const scope = String(req.body?.scope || 'school').trim() as 'school' | 'selected' | 'global';
+    const requestedSchoolIds = Array.isArray(requestBody.schoolIds) ? requestBody.schoolIds.map((id: unknown) => String(id || '').trim()).filter(Boolean) : [];
+    const singleSchoolId = String(req.body?.schoolId || '').trim();
+    const templateId = String(req.body?.templateId || '').trim();
+    const title = String(req.body?.title || '').trim();
+    const notes = String(req.body?.notes || '').trim() || null;
+    const channel = String(req.body?.channel || 'stable').trim() as 'stable' | 'pilot';
+    const manifestOverrides = requestBody.manifestOverrides === undefined ? {} : readObject(requestBody.manifestOverrides);
+    if (requestBody.manifestOverrides !== undefined && (typeof requestBody.manifestOverrides !== 'object' || Array.isArray(requestBody.manifestOverrides))) {
+      return next(new ValidationError('فروقات إعدادات المدرسة غير صالحة.'));
+    }
+    let featureOverrides: Record<string, boolean> = {};
+    try {
+      featureOverrides = normalizeFeatureOverrides(req.body?.featureOverrides);
+    } catch (error) {
+      return next(error);
+    }
+    const hasFeatures = Object.keys(featureOverrides).length > 0;
+    if (!isUuid(actorAuthUserId)) return next(new AuthenticationError('هوية مالك المنصة غير مكتملة.'));
+    if (!['school', 'selected', 'global'].includes(scope)) return next(new ValidationError('نطاق الإصدار غير معتمد.'));
+    if (scope === 'school' && !isUuid(singleSchoolId)) return next(new ValidationError('اختر مدرسة واحدة للإصدار الموجّه.'));
+    if (scope === 'selected' && (!requestedSchoolIds.length || requestedSchoolIds.length > 200)) return next(new ValidationError('اختر مدرسة واحدة على الأقل وبحد أقصى 200 مدرسة.'));
+    if (requestedSchoolIds.some((id: string) => !isUuid(id)) || (templateId && !isUuid(templateId))) return next(new ValidationError('معرف المدرسة أو القالب غير صالح.'));
+    if (!title || title.length < 2 || title.length > 200) return next(new ValidationError('عنوان الإصدار يجب أن يكون بين حرفين و200 حرفاً.'));
+    if (!['stable', 'pilot'].includes(channel)) return next(new ValidationError('قناة الإصدار غير معتمدة.'));
+    if (!templateId && !hasFeatures) return next(new ValidationError('الإصدار يحتاج قالباً أو ميزة واحدة على الأقل.'));
+    const targetIds = [...new Set(scope === 'school' ? [singleSchoolId] : requestedSchoolIds)];
+    const client = await platformAdminPool.connect();
+    try {
+      await client.query('BEGIN');
+      await client.query("SET LOCAL statement_timeout = '20s'");
+      const targets = scope === 'global'
+        ? await client.query<{ id: string; tenant_id: string; central_metadata: unknown; display_name: string }>(
+          `SELECT id, tenant_id, central_metadata, display_name
+             FROM public.schools
+            WHERE status = 'active' AND deleted_at IS NULL
+              AND COALESCE(central_metadata->>'portal_profile', '') <> 'owner_controlled'
+              AND COALESCE(central_metadata->'ownerWorkspace'->>'mode', '') <> 'owner'
+            ORDER BY created_at ASC
+            FOR UPDATE`,
+        )
+        : await client.query<{ id: string; tenant_id: string; central_metadata: unknown; display_name: string }>(
+          `SELECT id, tenant_id, central_metadata, display_name
+             FROM public.schools
+            WHERE id = ANY($1::uuid[]) AND status <> 'archived' AND deleted_at IS NULL
+            ORDER BY created_at ASC
+            FOR UPDATE`,
+          [targetIds],
+        );
+      if (!targets.rows.length || targets.rows.length !== (scope === 'global' ? targets.rows.length : targetIds.length)) {
+        throw new ConflictError('مدرسة مستهدفة غير موجودة أو مؤرشفة؛ لم يُطبق الإصدار على أي مدرسة.');
+      }
+      let template: any = null;
+      if (templateId) {
+        const templateResult = await client.query(
+          `SELECT id, template_key, name, version, status, manifest
+             FROM public.platform_templates
+            WHERE id = $1::uuid AND status IN ('draft', 'published')
+            FOR SHARE`,
+          [templateId],
+        );
+        if (templateResult.rowCount !== 1) throw new ConflictError('القالب غير موجود أو مؤرشف.');
+        template = templateResult.rows[0];
+        template.manifest = normalizeTemplateManifest(template.manifest);
+      }
+      const releases: any[] = [];
+      const updatedSchools: any[] = [];
+      for (const target of targets.rows) {
+        const previousVersion = await client.query<{ next_version: number }>(
+          `SELECT COALESCE(MAX(release_version), 0) + 1 AS next_version
+             FROM public.platform_school_releases
+            WHERE school_id = $1::uuid`,
+          [target.id],
+        );
+        const releaseVersion = Number(previousVersion.rows[0]?.next_version || 1);
+        const releaseId = randomUUID();
+        const metadata = readObject(target.central_metadata);
+        const previousWorkspace = readObject(metadata.ownerWorkspace);
+        const ownerWorkspace = isOwnerWorkspaceMetadata(metadata);
+        const templateFeatures = template ? normalizeFeatureOverrides(template.manifest.features) : {};
+        const nextFeatures = {
+          ...(template ? templateFeatures : readObject(metadata.features)),
+          ...featureOverrides,
+        };
+        const nextMetadata: Record<string, unknown> = {
+          ...metadata,
+          ownerWorkspace: {
+            ...previousWorkspace,
+            mode: ownerWorkspace ? 'owner' : 'customer',
+            releaseChannel: channel,
+            currentReleaseId: releaseId,
+            currentReleaseVersion: releaseVersion,
+            ...(template ? { templateId: template.id, templateKey: template.template_key, templateVersion: template.version } : {}),
+            lastReleaseTitle: title,
+            lastReleaseAt: new Date().toISOString(),
+          },
+          ...(template || hasFeatures ? { features: nextFeatures } : {}),
+        };
+        const releaseResult = await client.query(
+          `INSERT INTO public.platform_school_releases
+            (id, school_id, template_id, release_version, release_kind, scope, channel, status, title, notes, feature_overrides, payload, created_by_auth_user_id)
+           VALUES ($1::uuid, $2::uuid, $3::uuid, $4, $5, $6, $7, 'active', $8, $9, $10::jsonb, $11::jsonb, $12::uuid)
+           RETURNING ${workspaceColumns}`,
+          [
+            releaseId,
+            target.id,
+            template?.id || null,
+            releaseVersion,
+            template && hasFeatures ? 'combined' : template ? 'template' : 'features',
+            scope,
+            channel,
+            title,
+            notes,
+            JSON.stringify(featureOverrides),
+            JSON.stringify({
+              template: template?.manifest || null,
+              overrides: manifestOverrides,
+              templateKey: template?.template_key || null,
+              templateVersion: template?.version || null,
+              features: nextFeatures,
+            }),
+            actorAuthUserId,
+          ],
+        );
+        const schoolResult = await client.query(
+          `UPDATE public.schools
+              SET central_metadata = $2::jsonb,
+                  updated_at = now(), version = version + 1
+            WHERE id = $1::uuid
+          RETURNING id, tenant_id, display_name, school_code, status, central_metadata`,
+          [target.id, JSON.stringify(nextMetadata)],
+        );
+        releases.push(releaseResult.rows[0]);
+        updatedSchools.push(schoolResult.rows[0]);
+      }
+      await client.query('COMMIT');
+      return res.status(201).json({
+        success: true,
+        scope,
+        targetCount: updatedSchools.length,
+        releases,
+        schools: updatedSchools,
+      });
+    } catch (error) {
+      try { await client.query('ROLLBACK'); } catch { /* preserve original error */ }
+      return next(error instanceof ConflictError || error instanceof ValidationError
+        ? error
+        : new DatabaseError('تعذر اعتماد الإصدار الموجّه؛ لم يتم تعديل أي مدرسة.', error instanceof Error ? error.message : String(error)));
+    } finally {
+      client.release();
+    }
+  });
+
+  app.post('/api/admin/central/releases/:releaseId/rollback', authenticateRequest, requirePermissionOnly(PERMISSIONS.PLATFORM_ADMIN), async (req, res, next) => {
+    if (!platformAdminPool) return next(new DatabaseError('مصدر إصدارات المالك غير متاح.'));
+    const identity = (req as any).user as { id?: string };
+    const actorAuthUserId = String(identity?.id || '').trim();
+    const releaseId = String(req.params.releaseId || '').trim();
+    if (!isUuid(actorAuthUserId) || !isUuid(releaseId)) return next(new ValidationError('معرف الإصدار أو هوية المالك غير صالح.'));
+    const client = await platformAdminPool.connect();
+    try {
+      await client.query('BEGIN');
+      const current = await client.query<any>(
+        `SELECT r.*, s.central_metadata
+           FROM public.platform_school_releases r
+           JOIN public.schools s ON s.id = r.school_id
+          WHERE r.id = $1::uuid AND r.status = 'active'
+          FOR UPDATE`,
+        [releaseId],
+      );
+      if (current.rowCount !== 1) throw new ConflictError('الإصدار غير موجود أو تمت معالجته مسبقًا.');
+      const row = current.rows[0];
+      const previous = await client.query<any>(
+        `SELECT * FROM public.platform_school_releases
+          WHERE school_id = $1::uuid AND status = 'active' AND release_version < $2
+          ORDER BY release_version DESC LIMIT 1`,
+        [row.school_id, row.release_version],
+      );
+      const previousRow = previous.rows[0] || null;
+      const metadata = readObject(row.central_metadata);
+      const currentWorkspace = readObject(metadata.ownerWorkspace);
+      const fallbackFeatures = previousRow?.payload?.features && typeof previousRow.payload.features === 'object'
+        ? previousRow.payload.features
+        : readObject(metadata.features);
+      const nextMetadata = {
+        ...metadata,
+        features: fallbackFeatures,
+        ownerWorkspace: {
+          ...currentWorkspace,
+          currentReleaseId: previousRow?.id || null,
+          currentReleaseVersion: Number(previousRow?.release_version || 0),
+          templateId: previousRow?.template_id || null,
+          templateVersion: Number(previousRow?.payload?.templateVersion || 0),
+          lastReleaseTitle: previousRow?.title || 'لا يوجد إصدار سابق',
+          lastReleaseAt: previousRow?.created_at || null,
+        },
+      };
+      await client.query(
+        `UPDATE public.platform_school_releases SET status = 'rolled_back', rolled_back_at = now() WHERE id = $1::uuid`,
+        [releaseId],
+      );
+      const school = await client.query(
+        `UPDATE public.schools SET central_metadata = $2::jsonb, updated_at = now(), version = version + 1
+          WHERE id = $1::uuid
+        RETURNING id, tenant_id, display_name, school_code, status, central_metadata`,
+        [row.school_id, JSON.stringify(nextMetadata)],
+      );
+      await client.query('COMMIT');
+      return res.json({ success: true, rolledBackReleaseId: releaseId, previousReleaseId: previousRow?.id || null, school: school.rows[0] });
+    } catch (error) {
+      try { await client.query('ROLLBACK'); } catch { /* preserve original error */ }
+      return next(error instanceof ConflictError ? error : new DatabaseError('تعذر التراجع عن الإصدار؛ لم تتغير المدرسة.', error instanceof Error ? error.message : String(error)));
+    } finally {
+      client.release();
+    }
+  });
+
+  // Tenant-facing workspace state is intentionally restricted to the
+  // verified school in the session. It supports near-real-time refresh of
+  // targeted feature releases without exposing the central control plane.
+  app.get('/api/school/workspace', authenticateRequest, async (req, res, next) => {
+    if (!platformAdminPool) return next(new DatabaseError('مصدر إعدادات المدرسة غير متاح.'));
+    const identity = (req as any).user as { schoolId?: string };
+    const schoolId = String(identity?.schoolId || '').trim();
+    if (!isUuid(schoolId)) return next(new AuthorizationError('هذه النقطة متاحة فقط داخل جلسة مدرسة موثقة.'));
+    disableAuthCaching(res);
+    try {
+      const result = await platformAdminPool.query<any>(
+        `SELECT s.id, s.display_name, s.status, s.central_metadata,
+                r.id AS release_id, r.release_version, r.release_kind, r.channel,
+                r.title AS release_title, r.created_at AS release_created_at,
+                r.feature_overrides, r.payload AS release_payload,
+                r.template_id, t.template_key, t.version AS template_version, t.manifest AS template_manifest
+           FROM public.schools s
+           LEFT JOIN LATERAL (
+             SELECT * FROM public.platform_school_releases
+              WHERE school_id = s.id AND status = 'active'
+              ORDER BY release_version DESC LIMIT 1
+           ) r ON true
+           LEFT JOIN public.platform_templates t ON t.id = r.template_id
+          WHERE s.id = $1::uuid AND s.status = 'active' AND s.deleted_at IS NULL`,
+        [schoolId],
+      );
+      if (result.rowCount !== 1) return next(new ConflictError('إعدادات المدرسة غير متاحة.'));
+      const row = result.rows[0];
+      const metadata = readObject(row.central_metadata);
+      const workspace = readObject(metadata.ownerWorkspace);
+      const releasePayload = readObject(row.release_payload);
+      const effectiveManifest = mergeTemplateManifest(
+        row.template_manifest || releasePayload.template || {},
+        releasePayload.overrides,
+        row.feature_overrides,
+      );
+      return res.json({
+        success: true,
+        workspace: {
+          schoolId: row.id,
+          schoolName: row.display_name,
+          status: row.status,
+          mode: isOwnerWorkspaceMetadata(metadata) ? 'owner' : 'customer',
+          isOwnerWorkspace: isOwnerWorkspaceMetadata(metadata),
+          features: normalizeFeatureOverrides(effectiveManifest.features),
+          templateManifest: effectiveManifest,
+          releaseId: row.release_id || workspace.currentReleaseId || null,
+          releaseVersion: Number(row.release_version || workspace.currentReleaseVersion || 0),
+          releaseKind: row.release_kind || null,
+          releaseChannel: row.channel || workspace.releaseChannel || 'stable',
+          releaseTitle: row.release_title || workspace.lastReleaseTitle || null,
+          releaseAt: row.release_created_at || workspace.lastReleaseAt || null,
+          templateId: row.template_id || workspace.templateId || null,
+          templateKey: row.template_key || workspace.templateKey || null,
+          templateVersion: Number(row.template_version || workspace.templateVersion || 0),
+        },
+      });
+    } catch (error) {
+      return next(new DatabaseError('تعذر قراءة إعدادات مساحة المدرسة.', error instanceof Error ? error.message : String(error)));
+    }
+  });
 
   // A small, truthful health probe for the canonical control-plane database.
   // It reports the connection round trip plus migration drift for the objects
@@ -2636,11 +3217,52 @@ async function startServer() {
         const { data: tenant, error: tenantError } = await platformControl.from('tenants').select('id, status').eq('id', tenantId).is('deleted_at', null).maybeSingle();
         if (tenantError) throw tenantError;
         if (!tenant || !['provisioning', 'active'].includes(tenant.status)) throw new ConflictError('المستأجر المستهدف غير موجود أو موقوف.');
+        const { data: templateRows, error: templateError } = await platformControl
+          .from('platform_templates')
+          .select('id, template_key, name, version, status, manifest')
+          .eq('status', 'published')
+          .order('updated_at', { ascending: false })
+          .limit(1);
+        if (templateError) throw templateError;
+        if (!templateRows?.length) throw new ConflictError('لا يوجد قالب مالك منشور؛ انشر قالبًا قبل فتح مدرسة جديدة.');
+        const defaultTemplate = templateRows[0];
+        const defaultManifest = normalizeTemplateManifest(defaultTemplate.manifest);
+        const defaultFeatures = normalizeFeatureOverrides(defaultManifest.features);
         const school = await insertPlatformRow('schools', { id: schoolId, tenant_id: tenantId, school_code: resolvedCode, legal_name: name, display_name: name, timezone, locale, status: 'active', central_metadata: centralMetadata, created_by: null, updated_by: null }, 'id, tenant_id, school_code, legal_name, display_name, timezone, locale, status, central_metadata, created_at, updated_at');
         try {
           const branch = await insertPlatformRow('branches', { id: branchId, tenant_id: tenantId, school_id: schoolId, branch_code: `${resolvedCode}-MAIN`, name: 'الفرع الرئيسي', address: { city: centralMetadata.city, phone: centralMetadata.phone, address: centralMetadata.address }, status: 'active', created_by: null, updated_by: null }, 'id, tenant_id, school_id, branch_code, name, address, status, deleted_at, created_at, updated_at');
-          return res.status(201).json({ success: true, school, branch, provisioning: { hr_database: false, inventory_database: false, financial_portal_snapshots: false, pending_until_first_school_user: true } });
+          const releaseId = randomUUID();
+          const nextMetadata = {
+            ...centralMetadata,
+            features: defaultFeatures,
+            ownerWorkspace: {
+              mode: 'customer', releaseChannel: 'stable', currentReleaseId: releaseId,
+              currentReleaseVersion: 1, templateId: defaultTemplate.id,
+              templateKey: defaultTemplate.template_key, templateVersion: defaultTemplate.version,
+              lastReleaseTitle: `النسخة الأساسية من قالب ${defaultTemplate.name}`,
+              lastReleaseAt: new Date().toISOString(),
+            },
+          };
+          const { error: releaseError } = await platformControl.from('platform_school_releases').insert({
+            id: releaseId, school_id: schoolId, template_id: defaultTemplate.id,
+            release_version: 1, release_kind: 'template', scope: 'school', channel: 'stable',
+            status: 'active', title: `النسخة الأساسية من قالب ${defaultTemplate.name}`,
+            notes: 'تطبيق تلقائي للقالب المنشور عند إنشاء المدرسة.',
+            feature_overrides: {},
+            payload: { template: defaultManifest, templateKey: defaultTemplate.template_key, templateVersion: defaultTemplate.version, features: defaultFeatures },
+            created_by_auth_user_id: actorAuthUserId,
+          });
+          if (releaseError) throw releaseError;
+          const { data: updatedSchool, error: schoolUpdateError } = await platformControl.from('schools')
+            .update({ central_metadata: nextMetadata })
+            .eq('id', schoolId)
+            .select('id, tenant_id, school_code, legal_name, display_name, timezone, locale, status, central_metadata, created_at, updated_at')
+            .single();
+          if (schoolUpdateError) throw schoolUpdateError;
+          return res.status(201).json({ success: true, school: updatedSchool, branch, template: defaultTemplate, release: { id: releaseId, version: 1 }, provisioning: { hr_database: false, inventory_database: false, financial_portal_snapshots: false, pending_until_first_school_user: true } });
         } catch (error) {
+          await platformControl.from('platform_school_releases').delete().eq('school_id', schoolId);
+          await platformControl.from('branches').delete().eq('id', branchId);
           await deletePlatformRow('schools', schoolId);
           throw error;
         }
@@ -2712,6 +3334,18 @@ async function startServer() {
       if (!['provisioning', 'active'].includes(targetTenant.rows[0].status)) {
         throw new ConflictError('لا يمكن تأسيس مدرسة داخل مستأجر موقوف أو مؤرشف.');
       }
+      const templateResult = await client.query<any>(
+        `SELECT id, template_key, name, version, status, manifest
+           FROM public.platform_templates
+          WHERE status = 'published'
+          ORDER BY updated_at DESC
+          LIMIT 1
+          FOR SHARE`,
+      );
+      if (templateResult.rowCount !== 1) throw new ConflictError('لا يوجد قالب مالك منشور؛ انشر قالبًا قبل فتح مدرسة جديدة.');
+      const defaultTemplate = templateResult.rows[0];
+      const defaultManifest = normalizeTemplateManifest(defaultTemplate.manifest);
+      const defaultFeatures = normalizeFeatureOverrides(defaultManifest.features);
       const school = await client.query(
         `INSERT INTO public.schools
           (id, tenant_id, school_code, legal_name, display_name, timezone, locale, status, central_metadata, created_by, updated_by)
@@ -2751,11 +3385,38 @@ async function startServer() {
          ON CONFLICT (school_id) DO NOTHING`,
         [tenantId, schoolId, actorId],
       );
+      const releaseId = randomUUID();
+      const releaseTitle = `النسخة الأساسية من قالب ${defaultTemplate.name}`;
+      const nextMetadata = {
+        ...centralMetadata,
+        features: defaultFeatures,
+        ownerWorkspace: {
+          mode: 'customer', releaseChannel: 'stable', currentReleaseId: releaseId,
+          currentReleaseVersion: 1, templateId: defaultTemplate.id,
+          templateKey: defaultTemplate.template_key, templateVersion: defaultTemplate.version,
+          lastReleaseTitle: releaseTitle, lastReleaseAt: new Date().toISOString(),
+        },
+      };
+      await client.query(
+        `INSERT INTO public.platform_school_releases
+          (id, school_id, template_id, release_version, release_kind, scope, channel, status, title, notes, feature_overrides, payload, created_by_auth_user_id)
+         VALUES ($1::uuid, $2::uuid, $3::uuid, 1, 'template', 'school', 'stable', 'active', $4, $5, $6::jsonb, $7::jsonb, $8::uuid)`,
+        [releaseId, schoolId, defaultTemplate.id, releaseTitle, 'تطبيق تلقائي للقالب المنشور عند إنشاء المدرسة.', JSON.stringify({}), JSON.stringify({ template: defaultManifest, templateKey: defaultTemplate.template_key, templateVersion: defaultTemplate.version, features: defaultFeatures }), actorAuthUserId],
+      );
+      const updatedSchool = await client.query(
+        `UPDATE public.schools
+            SET central_metadata = $2::jsonb, updated_at = now(), version = version + 1
+          WHERE id = $1::uuid
+        RETURNING id, tenant_id, school_code, legal_name, display_name, timezone, locale, status, central_metadata, created_at, updated_at`,
+        [schoolId, JSON.stringify(nextMetadata)],
+      );
       await client.query('COMMIT');
       return res.status(201).json({
         success: true,
-        school: school.rows[0],
+        school: updatedSchool.rows[0],
         branch: branch.rows[0],
+        template: defaultTemplate,
+        release: { id: releaseId, version: 1 },
         provisioning: {
           hr_database: true,
           inventory_database: true,
@@ -4093,6 +4754,853 @@ async function startServer() {
       res.json({ success: true, data: { academicYear: yearResult.data, stages, grades, classes, sections } });
     } catch (error) {
       next(error);
+    }
+  });
+
+  // Canonical student-attendance read model.  The browser never supplies a
+  // school or tenant identifier; both the session list and its records are
+  // constrained by the verified identity and (when present) branch scope.
+  // Writes remain behind the dedicated attendance application service until
+  // its repository/audit adapter is deployed against the attendance schema.
+  app.get('/api/attendance/records', authenticateRequest, requirePermission('attendance:view'), async (req, res, next) => {
+    try {
+      const identity = (req as any).user as { schoolId?: string; branchId?: string };
+      const schoolId = String(identity?.schoolId || '').trim();
+      if (!schoolId) throw new AuthenticationError('هوية المدرسة الموثوقة غير مكتملة.');
+      const date = String(req.query?.date || '').trim();
+      if (date && !/^\d{4}-\d{2}-\d{2}$/.test(date)) throw new ValidationError('تاريخ الحضور غير صالح.');
+      const classroom = String(req.query?.classroom || '').trim();
+      const supabase = getSupabaseClientForAccessToken((req as any).trustedAccessToken) || getSupabaseClient();
+      if (!supabase) throw new DatabaseError('مصدر الحضور المركزي غير متاح.');
+
+      let sessionsQuery = supabase
+        .from('attendance_sessions')
+        .select('id,attendance_date,class_reference,branch_id')
+        .eq('school_id', schoolId)
+        .order('attendance_date', { ascending: false });
+      if (identity?.branchId) sessionsQuery = sessionsQuery.eq('branch_id', identity.branchId);
+      if (date) sessionsQuery = sessionsQuery.eq('attendance_date', date);
+      if (classroom) sessionsQuery = sessionsQuery.eq('class_reference', classroom);
+      const { data: sessions, error: sessionsError } = await sessionsQuery;
+      if (sessionsError) throw sessionsError;
+      const sessionRows = Array.isArray(sessions) ? sessions : [];
+      if (!sessionRows.length) {
+        res.set('Cache-Control', 'no-store');
+        return res.json({ success: true, data: [] });
+      }
+
+      const sessionIds = sessionRows.map((row: any) => row.id).filter(Boolean);
+      const sessionById = new Map(sessionRows.map((row: any) => [String(row.id), row]));
+      const { data: records, error: recordsError } = await supabase
+        .from('attendance_records')
+        .select('id,student_id,attendance_session_id,attendance_status,recorded_at,version')
+        .eq('school_id', schoolId)
+        .in('attendance_session_id', sessionIds)
+        .order('recorded_at', { ascending: false });
+      if (recordsError) throw recordsError;
+      const result = (records || []).map((record: any) => {
+        const session = sessionById.get(String(record.attendance_session_id));
+        return {
+          id: String(record.id),
+          student_id: record.student_id,
+          status: record.attendance_status,
+          date: session?.attendance_date || '',
+          classroom: session?.class_reference || '',
+          session_id: record.attendance_session_id,
+          recorded_at: record.recorded_at,
+          version: record.version,
+        };
+      });
+      res.set('Cache-Control', 'no-store');
+      return res.json({ success: true, data: result });
+    } catch (error) {
+      return next(error);
+    }
+  });
+
+  // Correct an existing canonical attendance record atomically.  Creation is
+  // still intentionally owned by the dedicated attendance application
+  // service, but corrections can be safely exposed here because the record,
+  // session, actor, version and audit event are all checked in one UoW.
+  app.patch('/api/attendance/records/:id', authenticateRequest, requirePermission('attendance:edit'), async (req, res, next) => {
+    try {
+      const identity = (req as any).user as { tenantId?: string; schoolId?: string; branchId?: string; id?: string; role?: string; name?: string; academicYear?: string };
+      const tenantId = String(identity?.tenantId || '').trim();
+      const schoolId = String(identity?.schoolId || '').trim();
+      const recordId = String(req.params.id || '').trim();
+      const expectedVersion = Number(req.body?.expectedVersion);
+      const status = String(req.body?.status || '').trim();
+      const reason = String(req.body?.reason || '').trim();
+      const requestId = String(req.body?.requestId || randomUUID()).trim();
+      const correlationId = String(req.body?.correlationId || randomUUID()).trim();
+      const uuid = (candidate: string) => /^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i.test(candidate);
+      if (!tenantId || !schoolId || !identity?.id || !uuid(recordId) || !Number.isInteger(expectedVersion) || expectedVersion < 1
+        || !['present', 'absent', 'late', 'excused'].includes(status) || reason.length < 3 || reason.length > 500
+        || !uuid(requestId) || !uuid(correlationId)) {
+        throw new ValidationError('تصحيح الحضور يتطلب معرفاً صالحاً وإصداراً متوقعاً وحالة وسبباً واضحين.');
+      }
+      const tenantContext = (req as any).tenantContext;
+      if (!tenantContext || tenantContext.tenantId !== tenantId || tenantContext.schoolId !== schoolId) {
+        throw new AuthenticationError('السياق الموثوق لتصحيح الحضور غير مكتمل.');
+      }
+
+      let updated: Record<string, unknown> | null = null;
+      await UnitOfWork.runInTransaction(schoolId, {
+        operationName: 'Correct canonical attendance record', tenantId, userId: identity.id,
+        userName: identity.name || identity.id, ipAddress: req.ip || 'unknown',
+        affectedTables: ['attendance_records', 'audit_events']
+      }, async () => {
+        const transaction = UnitOfWork.getActiveContext()?.databaseTransaction;
+        if (!transaction) throw new DatabaseError('معاملة تصحيح الحضور غير متاحة.');
+        const actor = await transaction.query<{ id: string }>(
+          `SELECT id FROM public.users
+            WHERE tenant_id = $1 AND auth_user_id = $2 AND school_id = $3
+              AND status = 'active' AND deleted_at IS NULL
+            LIMIT 1`, [tenantId, identity.id, schoolId]
+        );
+        const actorId = actor.rows[0]?.id;
+        if (!actorId) throw new AuthenticationError('تعذر ربط هوية الجلسة بمستخدم المدرسة المعتمد.');
+        const current = await transaction.query<any>(
+          `SELECT ar.id, ar.attendance_status, ar.version, ar.school_id, ar.branch_id, ar.attendance_session_id,
+                  s.status AS session_status
+             FROM public.attendance_records ar
+             JOIN public.attendance_sessions s
+               ON s.tenant_id = ar.tenant_id AND s.school_id = ar.school_id
+              AND s.branch_id = ar.branch_id AND s.id = ar.attendance_session_id
+            WHERE ar.tenant_id = $1 AND ar.school_id = $2 AND ar.id = $3
+            FOR UPDATE`, [tenantId, schoolId, recordId]
+        );
+        const row = current.rows[0];
+        if (!row) throw new ValidationError('سجل الحضور المطلوب غير موجود ضمن المدرسة الحالية.');
+        if (identity.branchId && row.branch_id !== identity.branchId) throw new AuthorizationError('سجل الحضور خارج نطاق الفرع الحالي.');
+        if (Number(row.version) !== expectedVersion) throw new ConflictError('تغير سجل الحضور؛ أعد تحميله قبل التصحيح.', { expectedVersion, actualVersion: Number(row.version) });
+        const result = await transaction.query<any>(
+          `UPDATE public.attendance_records
+              SET attendance_status = $4, corrected_at = now(), corrected_by = $5,
+                  correction_reason = $6, version = version + 1, updated_at = now(),
+                  updated_by = $5, request_id = $7, correlation_id = $8
+            WHERE tenant_id = $1 AND school_id = $2 AND id = $3
+            RETURNING id, student_id, attendance_session_id, attendance_status, version, recorded_at`,
+          [tenantId, schoolId, recordId, status, actorId, reason, requestId, correlationId]
+        );
+        updated = result.rows[0] || null;
+        await transaction.query(
+          `INSERT INTO public.audit_events
+             (tenant_id, school_id, branch_id, actor_user_id, entity_type, entity_id, action, source, reason, result, metadata, request_id, correlation_id)
+           VALUES ($1, $2, $3, $4, 'attendance_record', $5, 'correct', 'AttendanceCorrectionRoute', $6, 'success', $7::jsonb, $8, $9)`,
+          [tenantId, schoolId, row.branch_id, actorId, recordId, reason,
+            JSON.stringify({ oldStatus: row.attendance_status, newStatus: status, expectedVersion, newVersion: Number(updated?.version || expectedVersion + 1) }), requestId, correlationId]
+        );
+      }, tenantContext);
+      return res.json({ success: true, data: updated });
+    } catch (error) {
+      return next(error);
+    }
+  });
+
+  // School-scoped uniform catalogue. Rich uniform fields are kept in the
+  // canonical data column while identity/scope/status remain first-class.
+  app.get('/api/uniform/items', authenticateRequest, requirePermission('uniform_management:view'), async (req, res, next) => {
+    try {
+      const identity = (req as any).user as { tenantId?: string; schoolId?: string; id?: string; name?: string };
+      const tenantId = String(identity?.tenantId || '').trim();
+      const schoolId = String(identity?.schoolId || '').trim();
+      if (!tenantId || !schoolId || !identity?.id) throw new AuthenticationError('هوية المدرسة الموثوقة غير مكتملة.');
+      const tenantContext = (req as any).tenantContext;
+      if (!tenantContext || tenantContext.tenantId !== tenantId || tenantContext.schoolId !== schoolId) throw new AuthenticationError('السياق الموثوق للزي غير مكتمل.');
+      const search = String(req.query?.search || '').trim().replace(/[,%()]/g, ' ');
+      let data: any[] = [];
+      await UnitOfWork.runInTransaction(schoolId, { operationName: 'Read canonical uniform items', tenantId, userId: identity.id, userName: identity.name || identity.id, ipAddress: req.ip || 'unknown', affectedTables: ['uniforms'] }, async () => {
+        const transaction = UnitOfWork.getActiveContext()?.databaseTransaction;
+        if (!transaction) throw new DatabaseError('معاملة قراءة أصناف الزي غير متاحة.');
+        const result = await transaction.query<any>(`SELECT id, tenant_id, school_id, branch_id, code, name, status, data, created_at, updated_at FROM public.uniforms WHERE tenant_id = $1 AND school_id = $2 AND ($3 = '' OR name ILIKE $4 OR code ILIKE $4 OR COALESCE(data->>'barcode','') ILIKE $4) ORDER BY name ASC, code ASC`, [tenantId, schoolId, search, `%${search}%`]);
+        data = result.rows.map((row: any) => ({ ...(row.data || {}), id: row.id, code: row.code || row.data?.code || '', nameAr: row.data?.nameAr || row.name, nameEn: row.data?.nameEn || '', status: row.status, branchId: row.branch_id, createdAt: row.created_at, updatedAt: row.updated_at }));
+      }, tenantContext);
+      res.set('Cache-Control', 'no-store');
+      return res.json({ success: true, data });
+    } catch (error) { return next(error); }
+  });
+
+  app.post('/api/uniform/items', authenticateRequest, requirePermission('uniform_management:insert'), async (req, res, next) => {
+    try {
+      const identity = (req as any).user as { tenantId?: string; schoolId?: string; branchId?: string; id?: string; name?: string };
+      const tenantId = String(identity?.tenantId || '').trim();
+      const schoolId = String(identity?.schoolId || '').trim();
+      const body = req.body || {};
+      const code = String(body.code || '').trim();
+      const nameAr = String(body.nameAr || body.name_ar || '').trim();
+      const barcode = String(body.barcode || '').trim();
+      const buyPrice = Number(body.buyPrice ?? body.buy_price ?? 0);
+      const sellPrice = Number(body.sellPrice ?? body.sell_price ?? 0);
+      if (!tenantId || !schoolId || !identity?.id || !code || code.length > 80 || !nameAr || nameAr.length > 240 || !barcode || barcode.length > 120 || !Number.isFinite(buyPrice) || buyPrice < 0 || !Number.isFinite(sellPrice) || sellPrice < buyPrice) throw new ValidationError('بيانات صنف الزي غير مكتملة أو غير صالحة.');
+      const tenantContext = (req as any).tenantContext;
+      if (!tenantContext || tenantContext.tenantId !== tenantId || tenantContext.schoolId !== schoolId) throw new AuthenticationError('السياق الموثوق للزي غير مكتمل.');
+      const allowed = new Set(['Male', 'Female', 'Unisex', '']);
+      const gender = String(body.gender || '');
+      if (!allowed.has(gender)) throw new ValidationError('نوع الجنس لصنف الزي غير صالح.');
+      const uniformId = randomUUID();
+      let created: any = null;
+      await UnitOfWork.runInTransaction(schoolId, { operationName: 'Create canonical uniform item', tenantId, userId: identity.id, userName: identity.name || identity.id, ipAddress: req.ip || 'unknown', affectedTables: ['uniforms', 'audit_events'] }, async () => {
+        const transaction = UnitOfWork.getActiveContext()?.databaseTransaction;
+        if (!transaction) throw new DatabaseError('معاملة إنشاء صنف الزي غير متاحة.');
+        const actor = await transaction.query<{ id: string }>(`SELECT id FROM public.users WHERE tenant_id = $1 AND auth_user_id = $2 AND school_id = $3 AND status = 'active' AND deleted_at IS NULL LIMIT 1`, [tenantId, identity.id, schoolId]);
+        const actorId = actor.rows[0]?.id;
+        if (!actorId) throw new AuthenticationError('تعذر ربط هوية المستخدم بسجل المدرسة.');
+        const data = { ...body, code, barcode, nameAr, buyPrice, sellPrice, minPrice: buyPrice, maxPrice: sellPrice * 2, marginPercent: buyPrice > 0 ? Math.round(((sellPrice - buyPrice) / buyPrice) * 100) : 0 };
+        const result = await transaction.query<any>(`INSERT INTO public.uniforms (id, tenant_id, school_id, branch_id, code, name, status, data, created_by, updated_by) VALUES ($1, $2, $3, $4, $5, $6, 'active', $7::jsonb, $8, $8) RETURNING id, tenant_id, school_id, branch_id, code, name, status, data, created_at, updated_at`, [uniformId, tenantId, schoolId, identity.branchId || null, code, nameAr, JSON.stringify(data), actorId]);
+        const defaultVariantId = randomUUID();
+        await transaction.query(`INSERT INTO public.uniform_item_variants (id, tenant_id, school_id, branch_id, item_id, size_code, color_code, sku, stock_qty, buy_price, sell_price, data, created_by, updated_by) VALUES ($1, $2, $3, $4, $5, '', '', $6, 0, $7, $8, '{}'::jsonb, $9, $9)`, [defaultVariantId, tenantId, schoolId, identity.branchId || null, uniformId, `SKU-${code}`, buyPrice, sellPrice, actorId]);
+        created = { ...(result.rows[0].data || {}), id: result.rows[0].id, code: result.rows[0].code, nameAr: result.rows[0].name, status: result.rows[0].status, branchId: result.rows[0].branch_id, defaultVariantId, createdAt: result.rows[0].created_at, updatedAt: result.rows[0].updated_at };
+        await transaction.query(`INSERT INTO public.audit_events (tenant_id, school_id, branch_id, actor_user_id, entity_type, entity_id, action, source, result, metadata) VALUES ($1, $2, $3, $4, 'uniform_item', $5, 'create', 'UniformCanonicalRoute', 'success', $6::jsonb)`, [tenantId, schoolId, identity.branchId || null, actorId, uniformId, JSON.stringify({ code, barcode, buyPrice, sellPrice })]);
+      }, tenantContext);
+      return res.status(201).json({ success: true, data: created });
+    } catch (error) { return next(error); }
+  });
+
+  app.patch('/api/uniform/items/:id', authenticateRequest, requirePermission('uniform_management:edit'), async (req, res, next) => {
+    try {
+      const identity = (req as any).user as { tenantId?: string; schoolId?: string; branchId?: string; id?: string; name?: string };
+      const tenantId = String(identity?.tenantId || '').trim();
+      const schoolId = String(identity?.schoolId || '').trim();
+      const itemId = String(req.params.id || '').trim();
+      const uuid = (candidate: string) => /^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i.test(candidate);
+      if (!tenantId || !schoolId || !identity?.id || !uuid(itemId)) throw new ValidationError('معرف صنف الزي أو هوية المستخدم غير صالح.');
+      const tenantContext = (req as any).tenantContext;
+      if (!tenantContext || tenantContext.tenantId !== tenantId || tenantContext.schoolId !== schoolId) throw new AuthenticationError('السياق الموثوق للزي غير مكتمل.');
+      let updated: any = null;
+      await UnitOfWork.runInTransaction(schoolId, { operationName: 'Update canonical uniform item', tenantId, userId: identity.id, userName: identity.name || identity.id, ipAddress: req.ip || 'unknown', affectedTables: ['uniforms', 'audit_events'] }, async () => {
+        const transaction = UnitOfWork.getActiveContext()?.databaseTransaction;
+        if (!transaction) throw new DatabaseError('معاملة تعديل صنف الزي غير متاحة.');
+        const actor = await transaction.query<{ id: string }>(`SELECT id FROM public.users WHERE tenant_id = $1 AND auth_user_id = $2 AND school_id = $3 AND status = 'active' AND deleted_at IS NULL LIMIT 1`, [tenantId, identity.id, schoolId]);
+        const actorId = actor.rows[0]?.id;
+        if (!actorId) throw new AuthenticationError('تعذر ربط هوية المستخدم بسجل المدرسة.');
+        const current = await transaction.query<any>(`SELECT * FROM public.uniforms WHERE tenant_id = $1 AND school_id = $2 AND id = $3 FOR UPDATE`, [tenantId, schoolId, itemId]);
+        const row = current.rows[0];
+        if (!row) throw new ValidationError('صنف الزي غير موجود في المدرسة الحالية.');
+        const incoming = req.body || {};
+        const merged = { ...(row.data || {}), ...incoming };
+        const code = incoming.code === undefined ? String(row.code || merged.code || '') : String(incoming.code).trim();
+        const nameAr = incoming.nameAr === undefined && incoming.name_ar === undefined ? String(row.name || merged.nameAr || '') : String(incoming.nameAr ?? incoming.name_ar).trim();
+        const status = incoming.status === undefined ? String(row.status || 'active') : String(incoming.status);
+        const buyPrice = Number(merged.buyPrice ?? merged.buy_price ?? 0);
+        const sellPrice = Number(merged.sellPrice ?? merged.sell_price ?? 0);
+        if (!code || code.length > 80 || !nameAr || nameAr.length > 240 || !['active', 'inactive', 'archived'].includes(status) || !Number.isFinite(buyPrice) || buyPrice < 0 || !Number.isFinite(sellPrice) || sellPrice < buyPrice) throw new ValidationError('بيانات صنف الزي أو حالته غير صالحة.');
+        merged.code = code; merged.nameAr = nameAr; merged.buyPrice = buyPrice; merged.sellPrice = sellPrice;
+        const result = await transaction.query<any>(`UPDATE public.uniforms SET code = $4, name = $5, status = $6, data = $7::jsonb, updated_by = $8, updated_at = now() WHERE tenant_id = $1 AND school_id = $2 AND id = $3 RETURNING id, branch_id, code, name, status, data, created_at, updated_at`, [tenantId, schoolId, itemId, code, nameAr, status, JSON.stringify(merged), actorId]);
+        const record = result.rows[0];
+        updated = { ...(record.data || {}), id: record.id, code: record.code, nameAr: record.name, status: record.status, branchId: record.branch_id, createdAt: record.created_at, updatedAt: record.updated_at };
+        await transaction.query(`INSERT INTO public.audit_events (tenant_id, school_id, branch_id, actor_user_id, entity_type, entity_id, action, source, result, metadata) VALUES ($1, $2, $3, $4, 'uniform_item', $5, 'update', 'UniformCanonicalRoute', 'success', $6::jsonb)`, [tenantId, schoolId, record.branch_id || null, actorId, itemId, JSON.stringify({ before: row, after: record })]);
+      }, tenantContext);
+      return res.json({ success: true, data: updated });
+    } catch (error) { return next(error); }
+  });
+
+  app.delete('/api/uniform/items/:id', authenticateRequest, requirePermission('uniform_management:delete'), async (req, res, next) => {
+    try {
+      const identity = (req as any).user as { tenantId?: string; schoolId?: string; id?: string; name?: string };
+      const tenantId = String(identity?.tenantId || '').trim();
+      const schoolId = String(identity?.schoolId || '').trim();
+      const itemId = String(req.params.id || '').trim();
+      const uuid = (candidate: string) => /^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i.test(candidate);
+      if (!tenantId || !schoolId || !identity?.id || !uuid(itemId)) throw new ValidationError('معرف صنف الزي أو هوية المستخدم غير صالح.');
+      const tenantContext = (req as any).tenantContext;
+      if (!tenantContext || tenantContext.tenantId !== tenantId || tenantContext.schoolId !== schoolId) throw new AuthenticationError('السياق الموثوق للزي غير مكتمل.');
+      await UnitOfWork.runInTransaction(schoolId, { operationName: 'Delete canonical uniform item', tenantId, userId: identity.id, userName: identity.name || identity.id, ipAddress: req.ip || 'unknown', affectedTables: ['uniforms', 'audit_events'] }, async () => {
+        const transaction = UnitOfWork.getActiveContext()?.databaseTransaction;
+        if (!transaction) throw new DatabaseError('معاملة حذف صنف الزي غير متاحة.');
+        const actor = await transaction.query<{ id: string }>(`SELECT id FROM public.users WHERE tenant_id = $1 AND auth_user_id = $2 AND school_id = $3 AND status = 'active' AND deleted_at IS NULL LIMIT 1`, [tenantId, identity.id, schoolId]);
+        const actorId = actor.rows[0]?.id;
+        if (!actorId) throw new AuthenticationError('تعذر ربط هوية المستخدم بسجل المدرسة.');
+        const result = await transaction.query<any>(`DELETE FROM public.uniforms WHERE tenant_id = $1 AND school_id = $2 AND id = $3 RETURNING id, branch_id`, [tenantId, schoolId, itemId]);
+        if (!result.rows[0]) throw new ValidationError('صنف الزي غير موجود في المدرسة الحالية.');
+        await transaction.query(`INSERT INTO public.audit_events (tenant_id, school_id, branch_id, actor_user_id, entity_type, entity_id, action, source, result, metadata) VALUES ($1, $2, $3, $4, 'uniform_item', $5, 'delete', 'UniformCanonicalRoute', 'success', '{}'::jsonb)`, [tenantId, schoolId, result.rows[0].branch_id || null, actorId, itemId]);
+      }, tenantContext);
+      return res.json({ success: true, data: { id: itemId, deleted: true } });
+    } catch (error) { return next(error); }
+  });
+
+  // Canonical fixed-asset register. Lifecycle mutations are transactional:
+  // the register, immutable event, canonical GL posting and audit either all
+  // commit or none of them do.
+  app.get('/api/fixed-assets', authenticateRequest, requirePermission('fixed_assets:view'), async (req, res, next) => {
+    try {
+      const identity = (req as any).user as { tenantId?: string; schoolId?: string; id?: string; name?: string };
+      const tenantId = String(identity?.tenantId || '').trim();
+      const schoolId = String(identity?.schoolId || '').trim();
+      if (!tenantId || !schoolId || !identity?.id) throw new AuthenticationError('هوية المدرسة الموثوقة غير مكتملة.');
+      const tenantContext = (req as any).tenantContext;
+      if (!tenantContext || tenantContext.tenantId !== tenantId || tenantContext.schoolId !== schoolId) throw new AuthenticationError('السياق الموثوق للأصول غير مكتمل.');
+      let data: any[] = [];
+      await UnitOfWork.runInTransaction(schoolId, { operationName: 'Read canonical fixed assets', tenantId, userId: identity.id, userName: identity.name || identity.id, ipAddress: req.ip || 'unknown', affectedTables: ['fixed_assets', 'fixed_asset_events'] }, async () => {
+        const transaction = UnitOfWork.getActiveContext()?.databaseTransaction;
+        if (!transaction) throw new DatabaseError('معاملة قراءة الأصول غير متاحة.');
+        const result = await transaction.query<any>(`SELECT id, tenant_id, school_id, branch_id, code, name, category, status, cost, accumulated_depreciation, net_book_value, data, created_at, updated_at FROM public.fixed_assets WHERE tenant_id = $1 AND school_id = $2 ORDER BY code ASC`, [tenantId, schoolId]);
+        const events = await transaction.query<any>(`SELECT id, asset_id, event_type, event_date, amount, journal_entry_id, data, created_at FROM public.fixed_asset_events WHERE tenant_id = $1 AND school_id = $2 ORDER BY event_date DESC, created_at DESC`, [tenantId, schoolId]);
+        const eventsByAsset = new Map<string, any[]>();
+        for (const event of events.rows) eventsByAsset.set(event.asset_id, [...(eventsByAsset.get(event.asset_id) || []), event]);
+        data = result.rows.map((row: any) => ({ ...(row.data || {}), id: row.id, code: row.code, name: row.name, category: row.category, status: row.status, cost: Number(row.cost), accDep: Number(row.accumulated_depreciation), netValue: Number(row.net_book_value), maintenanceLogs: eventsByAsset.get(row.id)?.filter((e: any) => e.event_type === 'maintenance') || [], transferLogs: eventsByAsset.get(row.id)?.filter((e: any) => e.event_type === 'transfer') || [], depreciationHistory: eventsByAsset.get(row.id)?.filter((e: any) => e.event_type === 'depreciation') || [], timeline: eventsByAsset.get(row.id) || [], createdAt: row.created_at, updatedAt: row.updated_at }));
+      }, tenantContext);
+      res.set('Cache-Control', 'no-store');
+      return res.json({ success: true, data });
+    } catch (error) { return next(error); }
+  });
+
+  app.post('/api/fixed-assets', authenticateRequest, requirePermission('fixed_assets:insert'), async (req, res, next) => {
+    try {
+      const identity = (req as any).user as { tenantId?: string; schoolId?: string; branchId?: string; id?: string; name?: string };
+      const tenantId = String(identity?.tenantId || '').trim();
+      const schoolId = String(identity?.schoolId || '').trim();
+      const body = req.body || {};
+      const code = String(body.code || '').trim();
+      const name = String(body.name || '').trim();
+      const cost = Number(body.cost || 0);
+      if (!tenantId || !schoolId || !identity?.id || !code || code.length > 80 || !name || name.length > 240 || !Number.isFinite(cost) || cost <= 0) throw new ValidationError('كود واسم وتكلفة الأصل حقول مطلوبة.');
+      const tenantContext = (req as any).tenantContext;
+      if (!tenantContext || tenantContext.tenantId !== tenantId || tenantContext.schoolId !== schoolId) throw new AuthenticationError('السياق الموثوق للأصول غير مكتمل.');
+      const assetId = randomUUID();
+      let created: any = null;
+      await UnitOfWork.runInTransaction(schoolId, { operationName: 'Create canonical fixed asset', tenantId, userId: identity.id, userName: identity.name || identity.id, ipAddress: req.ip || 'unknown', affectedTables: ['fixed_assets', 'fixed_asset_events', 'erp_journal_entries', 'erp_general_ledger', 'audit_events'] }, async () => {
+        const transaction = UnitOfWork.getActiveContext()?.databaseTransaction;
+        if (!transaction) throw new DatabaseError('معاملة إنشاء الأصل غير متاحة.');
+        const actor = await transaction.query<{ id: string }>(`SELECT id FROM public.users WHERE tenant_id = $1 AND auth_user_id = $2 AND school_id = $3 AND status = 'active' AND deleted_at IS NULL LIMIT 1`, [tenantId, identity.id, schoolId]);
+        const actorId = actor.rows[0]?.id;
+        if (!actorId) throw new AuthenticationError('تعذر ربط هوية المستخدم بسجل المدرسة.');
+        if (!await CanonicalErpPostingService.isProvisioned(transaction)) throw new DatabaseError('دفتر الأستاذ الكانوني غير مهيأ؛ لا يمكن رسملة الأصل دون قيد موثق.');
+        const capitalExp = Number(body.capitalExp || 0);
+        const totalCost = Number((cost + (Number.isFinite(capitalExp) && capitalExp > 0 ? capitalExp : 0)).toFixed(2));
+        const data = { ...body, code, name, cost, capitalExp: Number.isFinite(capitalExp) ? capitalExp : 0, accDep: 0, netValue: totalCost };
+        await transaction.query(`INSERT INTO public.fixed_assets (id, tenant_id, school_id, branch_id, code, name, category, status, cost, accumulated_depreciation, net_book_value, data, created_by, updated_by) VALUES ($1, $2, $3, $4, $5, $6, $7, 'active', $8, 0, $8, $9::jsonb, $10, $10)`, [assetId, tenantId, schoolId, identity.branchId || null, code, name, String(body.category || ''), totalCost, JSON.stringify(data), actorId]);
+        const sourceId = `fixed-asset:${assetId}:acquisition`;
+        const posting = await CanonicalErpPostingService.syncSnapshot(transaction, tenantId, schoolId, actorId, { journalEntries: [{ id: sourceId, status: 'posted', date: String(body.purchaseDate || new Date().toISOString().slice(0, 10)).slice(0, 10), description: `رسملة أصل ثابت ${code}`, lines: [{ id: `${sourceId}-D`, accountCode: '1301', debit: totalCost, credit: 0 }, { id: `${sourceId}-C`, accountCode: String(body.paymentAccount || '2101'), debit: 0, credit: totalCost }] }] });
+        await transaction.query(`INSERT INTO public.fixed_asset_events (id, tenant_id, school_id, branch_id, asset_id, event_type, event_date, amount, journal_entry_id, data, created_by) VALUES ($1, $2, $3, $4, $5, 'acquisition', $6, $7, $8, $9::jsonb, $10)`, [randomUUID(), tenantId, schoolId, identity.branchId || null, assetId, String(body.purchaseDate || new Date().toISOString().slice(0, 10)).slice(0, 10), totalCost, posting.sourceLinks[0]?.journalEntryId || null, JSON.stringify({ code, sourceId }), actorId]);
+        await transaction.query(`INSERT INTO public.audit_events (tenant_id, school_id, branch_id, actor_user_id, entity_type, entity_id, action, source, result, metadata) VALUES ($1, $2, $3, $4, 'fixed_asset', $5, 'create', 'FixedAssetsCanonicalRoute', 'success', $6::jsonb)`, [tenantId, schoolId, identity.branchId || null, actorId, assetId, JSON.stringify({ code, cost: totalCost })]);
+        created = { ...data, id: assetId, status: 'active', cost: totalCost, accDep: 0, netValue: totalCost, createdAt: new Date().toISOString(), updatedAt: new Date().toISOString() };
+      }, tenantContext);
+      return res.status(201).json({ success: true, data: created });
+    } catch (error) { return next(error); }
+  });
+
+  app.patch('/api/fixed-assets/:id', authenticateRequest, requirePermission('fixed_assets:edit'), async (req, res, next) => {
+    try {
+      const identity = (req as any).user as { tenantId?: string; schoolId?: string; id?: string; name?: string };
+      const tenantId = String(identity?.tenantId || '').trim(); const schoolId = String(identity?.schoolId || '').trim(); const assetId = String(req.params.id || '').trim();
+      if (!tenantId || !schoolId || !identity?.id || !assetId) throw new ValidationError('معرف الأصل أو هوية المستخدم غير صالح.');
+      const tenantContext = (req as any).tenantContext;
+      if (!tenantContext || tenantContext.tenantId !== tenantId || tenantContext.schoolId !== schoolId) throw new AuthenticationError('السياق الموثوق للأصول غير مكتمل.');
+      let updated: any = null;
+      await UnitOfWork.runInTransaction(schoolId, { operationName: 'Update fixed asset metadata', tenantId, userId: identity.id, userName: identity.name || identity.id, ipAddress: req.ip || 'unknown', affectedTables: ['fixed_assets', 'audit_events'] }, async () => {
+        const transaction = UnitOfWork.getActiveContext()?.databaseTransaction; if (!transaction) throw new DatabaseError('معاملة تعديل الأصل غير متاحة.');
+        const actor = await transaction.query<{ id: string }>(`SELECT id FROM public.users WHERE tenant_id = $1 AND auth_user_id = $2 AND school_id = $3 AND status = 'active' AND deleted_at IS NULL LIMIT 1`, [tenantId, identity.id, schoolId]);
+        const actorId = actor.rows[0]?.id; if (!actorId) throw new AuthenticationError('تعذر ربط هوية المستخدم بسجل المدرسة.');
+        const current = await transaction.query<any>(`SELECT * FROM public.fixed_assets WHERE tenant_id = $1 AND school_id = $2 AND id = $3 FOR UPDATE`, [tenantId, schoolId, assetId]);
+        const row = current.rows[0]; if (!row) throw new ValidationError('الأصل غير موجود في المدرسة الحالية.');
+        const incoming = req.body || {}; const data = { ...(row.data || {}), ...incoming };
+        const code = incoming.code === undefined ? row.code : String(incoming.code).trim(); const name = incoming.name === undefined ? row.name : String(incoming.name).trim();
+        if (!code || code.length > 80 || !name || name.length > 240) throw new ValidationError('كود أو اسم الأصل غير صالح.');
+        const result = await transaction.query<any>(`UPDATE public.fixed_assets SET code = $4, name = $5, category = $6, data = $7::jsonb, updated_by = $8, updated_at = now() WHERE tenant_id = $1 AND school_id = $2 AND id = $3 RETURNING *`, [tenantId, schoolId, assetId, code, name, String(incoming.category ?? row.category), JSON.stringify(data), actorId]);
+        updated = { ...(result.rows[0].data || {}), id: result.rows[0].id, code: result.rows[0].code, name: result.rows[0].name, category: result.rows[0].category, status: result.rows[0].status, cost: Number(result.rows[0].cost), accDep: Number(result.rows[0].accumulated_depreciation), netValue: Number(result.rows[0].net_book_value), updatedAt: result.rows[0].updated_at };
+        await transaction.query(`INSERT INTO public.audit_events (tenant_id, school_id, branch_id, actor_user_id, entity_type, entity_id, action, source, result, metadata) VALUES ($1, $2, $3, $4, 'fixed_asset', $5, 'update', 'FixedAssetsCanonicalRoute', 'success', $6::jsonb)`, [tenantId, schoolId, row.branch_id || null, actorId, assetId, JSON.stringify({ before: row, after: result.rows[0] })]);
+      }, tenantContext);
+      return res.json({ success: true, data: updated });
+    } catch (error) { return next(error); }
+  });
+
+  app.post('/api/fixed-assets/:id/events', authenticateRequest, requirePermission('fixed_assets:edit'), async (req, res, next) => {
+    try {
+      const identity = (req as any).user as { tenantId?: string; schoolId?: string; branchId?: string; id?: string; name?: string };
+      const tenantId = String(identity?.tenantId || '').trim();
+      const schoolId = String(identity?.schoolId || '').trim();
+      const assetId = String(req.params.id || '').trim();
+      const type = String(req.body?.type || req.body?.eventType || '').trim();
+      const eventDate = String(req.body?.eventDate || new Date().toISOString().slice(0, 10)).slice(0, 10);
+      if (!tenantId || !schoolId || !identity?.id || !assetId || !['transfer', 'maintenance', 'depreciation', 'sale', 'discard'].includes(type) || !/^\d{4}-\d{2}-\d{2}$/.test(eventDate)) throw new ValidationError('نوع وتاريخ حركة الأصل غير صالحين.');
+      const tenantContext = (req as any).tenantContext;
+      if (!tenantContext || tenantContext.tenantId !== tenantId || tenantContext.schoolId !== schoolId) throw new AuthenticationError('السياق الموثوق للأصول غير مكتمل.');
+      let updated: any = null;
+      await UnitOfWork.runInTransaction(schoolId, { operationName: `Post fixed asset ${type} event`, tenantId, userId: identity.id, userName: identity.name || identity.id, ipAddress: req.ip || 'unknown', affectedTables: ['fixed_assets', 'fixed_asset_events', 'erp_journal_entries', 'erp_general_ledger', 'audit_events'] }, async () => {
+        const transaction = UnitOfWork.getActiveContext()?.databaseTransaction;
+        if (!transaction) throw new DatabaseError('معاملة حركة الأصل غير متاحة.');
+        const actor = await transaction.query<{ id: string }>(`SELECT id FROM public.users WHERE tenant_id = $1 AND auth_user_id = $2 AND school_id = $3 AND status = 'active' AND deleted_at IS NULL LIMIT 1`, [tenantId, identity.id, schoolId]);
+        const actorId = actor.rows[0]?.id;
+        if (!actorId) throw new AuthenticationError('تعذر ربط هوية المستخدم بسجل المدرسة.');
+        const current = await transaction.query<any>(`SELECT * FROM public.fixed_assets WHERE tenant_id = $1 AND school_id = $2 AND id = $3 FOR UPDATE`, [tenantId, schoolId, assetId]);
+        const asset = current.rows[0];
+        if (!asset) throw new ValidationError('الأصل غير موجود في المدرسة الحالية.');
+        if (['sale', 'discard'].includes(type) && ['sold', 'disposed'].includes(asset.status)) throw new ConflictError('الأصل مغلق بحركة بيع أو استبعاد سابقة.');
+        let amount = Number(req.body?.amount || 0);
+        let nextAccDep = Number(asset.accumulated_depreciation);
+        let nextStatus = asset.status;
+        const lines: any[] = [];
+        if (type === 'depreciation') {
+          const data = asset.data || {};
+          const life = Math.max(1, Number(data.usefulLife || 1));
+          const residual = Math.max(0, Number(data.scrapValue || 0));
+          amount = amount > 0 ? amount : Number(((Number(asset.cost) - residual) / life).toFixed(2));
+          amount = Math.min(amount, Number(asset.cost) - nextAccDep);
+          if (!(amount > 0)) throw new ConflictError('لا يوجد رصيد قابل للإهلاك لهذا الأصل.');
+          nextAccDep = Number((nextAccDep + amount).toFixed(2));
+          lines.push({ id: `${assetId}-dep-${eventDate}-D`, accountCode: '5280', debit: amount, credit: 0 }, { id: `${assetId}-dep-${eventDate}-C`, accountCode: '1301', debit: 0, credit: amount });
+        } else if (type === 'sale') {
+          amount = Number(req.body?.price || req.body?.amount || 0);
+          if (!Number.isFinite(amount) || amount <= 0) throw new ValidationError('سعر بيع الأصل يجب أن يكون أكبر من صفر.');
+          const net = Number(asset.net_book_value);
+          lines.push({ id: `${assetId}-sale-${eventDate}-cash`, accountCode: '1101', debit: amount, credit: 0 }, { id: `${assetId}-sale-${eventDate}-asset`, accountCode: '1301', debit: 0, credit: Math.min(net, amount) });
+          if (net > amount) lines.push({ id: `${assetId}-sale-${eventDate}-loss`, accountCode: '5280', debit: net - amount, credit: 0 });
+          if (amount > net) lines.push({ id: `${assetId}-sale-${eventDate}-gain`, accountCode: '4101', debit: 0, credit: amount - net });
+          nextStatus = 'sold';
+        } else if (type === 'discard') {
+          amount = Number(asset.net_book_value);
+          if (!(amount > 0)) throw new ConflictError('الأصل لا يحمل قيمة دفترية قابلة للشطب.');
+          lines.push({ id: `${assetId}-discard-${eventDate}-loss`, accountCode: '5280', debit: amount, credit: 0 }, { id: `${assetId}-discard-${eventDate}-asset`, accountCode: '1301', debit: 0, credit: amount });
+          nextStatus = 'disposed';
+        } else if (type === 'maintenance') {
+          amount = Number(req.body?.amount || 0);
+          if (!Number.isFinite(amount) || amount <= 0) throw new ValidationError('تكلفة الصيانة يجب أن تكون أكبر من صفر.');
+          lines.push({ id: `${assetId}-mnt-${eventDate}-D`, accountCode: '5280', debit: amount, credit: 0 }, { id: `${assetId}-mnt-${eventDate}-C`, accountCode: String(req.body?.paymentAccount || '2101'), debit: 0, credit: amount });
+        }
+        let journalEntryId: string | null = null;
+        if (lines.length) {
+          if (!await CanonicalErpPostingService.isProvisioned(transaction)) throw new DatabaseError('دفتر الأستاذ الكانوني غير مهيأ؛ لم تُسجل الحركة.');
+          const sourceId = `fixed-asset:${assetId}:${type}:${eventDate}:${randomUUID()}`;
+          const posting = await CanonicalErpPostingService.syncSnapshot(transaction, tenantId, schoolId, actorId, { journalEntries: [{ id: sourceId, status: 'posted', date: eventDate, description: `حركة أصل ثابت ${asset.code} — ${type}`, lines }] });
+          journalEntryId = posting.sourceLinks[0]?.journalEntryId || null;
+        }
+        const netValue = Number((Number(asset.cost) - nextAccDep - (type === 'sale' || type === 'discard' ? Number(asset.net_book_value) - Number(asset.accumulated_depreciation) : 0)).toFixed(2));
+        const safeNet = Math.max(0, type === 'sale' || type === 'discard' ? 0 : netValue);
+        const eventId = randomUUID();
+        await transaction.query(`INSERT INTO public.fixed_asset_events (id, tenant_id, school_id, branch_id, asset_id, event_type, event_date, amount, journal_entry_id, data, created_by) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10::jsonb, $11)`, [eventId, tenantId, schoolId, identity.branchId || asset.branch_id || null, assetId, type, eventDate, amount, journalEntryId, JSON.stringify(req.body || {}), actorId]);
+        const result = await transaction.query<any>(`UPDATE public.fixed_assets SET status = $4, accumulated_depreciation = $5, net_book_value = $6, updated_by = $7, updated_at = now(), data = data || $8::jsonb WHERE tenant_id = $1 AND school_id = $2 AND id = $3 RETURNING *`, [tenantId, schoolId, assetId, nextStatus, nextAccDep, safeNet, JSON.stringify({ lastEventId: eventId, lastEventType: type }) , actorId]);
+        updated = { ...(result.rows[0].data || {}), id: result.rows[0].id, code: result.rows[0].code, name: result.rows[0].name, category: result.rows[0].category, status: result.rows[0].status, cost: Number(result.rows[0].cost), accDep: Number(result.rows[0].accumulated_depreciation), netValue: Number(result.rows[0].net_book_value), updatedAt: result.rows[0].updated_at };
+        await transaction.query(`INSERT INTO public.audit_events (tenant_id, school_id, branch_id, actor_user_id, entity_type, entity_id, action, source, result, metadata) VALUES ($1, $2, $3, $4, 'fixed_asset', $5, $6, 'FixedAssetsCanonicalRoute', 'success', $7::jsonb)`, [tenantId, schoolId, identity.branchId || asset.branch_id || null, actorId, assetId, type, JSON.stringify({ amount, journalEntryId, eventId })]);
+      }, tenantContext);
+      return res.json({ success: true, data: updated });
+    } catch (error) { return next(error); }
+  });
+
+  app.get('/api/uniform/variants', authenticateRequest, requirePermission('uniform_management:stock:view'), async (req, res, next) => {
+    try {
+      const identity = (req as any).user; const tenantId = String(identity?.tenantId || '').trim(); const schoolId = String(identity?.schoolId || '').trim();
+      if (!tenantId || !schoolId || !identity?.id) throw new AuthenticationError('هوية المدرسة الموثوقة غير مكتملة.');
+      const tenantContext = (req as any).tenantContext; if (!tenantContext || tenantContext.tenantId !== tenantId || tenantContext.schoolId !== schoolId) throw new AuthenticationError('السياق الموثوق للمخزون غير مكتمل.');
+      let data: any[] = [];
+      await UnitOfWork.runInTransaction(schoolId, { operationName: 'Read canonical uniform variants', tenantId, userId: identity.id, userName: identity.name || identity.id, ipAddress: req.ip || 'unknown', affectedTables: ['uniform_item_variants', 'uniforms'] }, async () => {
+        const transaction = UnitOfWork.getActiveContext()?.databaseTransaction; if (!transaction) throw new DatabaseError('معاملة قراءة مخزون الزي غير متاحة.');
+        const result = await transaction.query<any>(`SELECT v.*, u.code AS item_code, u.name AS item_name FROM public.uniform_item_variants v JOIN public.uniforms u ON u.school_id = v.school_id AND u.id = v.item_id WHERE v.tenant_id = $1 AND v.school_id = $2 ORDER BY u.name, v.sku`, [tenantId, schoolId]);
+        data = result.rows.map((row: any) => ({ ...row.data, id: row.id, itemId: row.item_id, itemCode: row.item_code, itemName: row.item_name, sizeCode: row.size_code, colorCode: row.color_code, sku: row.sku, stockQty: Number(row.stock_qty), buyPrice: Number(row.buy_price), sellPrice: Number(row.sell_price), alertLimit: Number(row.alert_limit) }));
+      }, tenantContext);
+      res.set('Cache-Control', 'no-store'); return res.json({ success: true, data });
+    } catch (error) { return next(error); }
+  });
+
+  app.post('/api/uniform/variants', authenticateRequest, requirePermission('uniform_management:stock:insert'), async (req, res, next) => {
+    try {
+      const identity = (req as any).user; const tenantId = String(identity?.tenantId || '').trim(); const schoolId = String(identity?.schoolId || '').trim(); const itemId = String(req.body?.itemId || '').trim();
+      const sku = String(req.body?.sku || '').trim(); const buyPrice = Number(req.body?.buyPrice || 0); const sellPrice = Number(req.body?.sellPrice || 0); const stockQty = Number(req.body?.stockQty || 0);
+      if (!tenantId || !schoolId || !identity?.id || !itemId || !sku || !Number.isInteger(stockQty) || stockQty < 0 || !Number.isFinite(buyPrice) || buyPrice < 0 || !Number.isFinite(sellPrice) || sellPrice < buyPrice) throw new ValidationError('بيانات متغير الزي أو الأسعار غير صالحة.');
+      const tenantContext = (req as any).tenantContext; if (!tenantContext || tenantContext.tenantId !== tenantId || tenantContext.schoolId !== schoolId) throw new AuthenticationError('السياق الموثوق للمخزون غير مكتمل.');
+      let created: any = null;
+      await UnitOfWork.runInTransaction(schoolId, { operationName: 'Create canonical uniform variant', tenantId, userId: identity.id, userName: identity.name || identity.id, ipAddress: req.ip || 'unknown', affectedTables: ['uniform_item_variants', 'uniform_stock_movements', 'audit_events'] }, async () => {
+        const transaction = UnitOfWork.getActiveContext()?.databaseTransaction; if (!transaction) throw new DatabaseError('معاملة إنشاء متغير الزي غير متاحة.');
+        const actor = await transaction.query<{ id: string }>(`SELECT id FROM public.users WHERE tenant_id = $1 AND auth_user_id = $2 AND school_id = $3 AND status = 'active' AND deleted_at IS NULL LIMIT 1`, [tenantId, identity.id, schoolId]); const actorId = actor.rows[0]?.id; if (!actorId) throw new AuthenticationError('تعذر ربط هوية المستخدم بسجل المدرسة.');
+        const item = await transaction.query<any>(`SELECT id, branch_id FROM public.uniforms WHERE tenant_id = $1 AND school_id = $2 AND id = $3`, [tenantId, schoolId, itemId]); if (!item.rows[0]) throw new ValidationError('صنف الزي الأساسي غير موجود.');
+        const variantId = randomUUID();
+        await transaction.query(`INSERT INTO public.uniform_item_variants (id, tenant_id, school_id, branch_id, item_id, size_code, color_code, sku, stock_qty, buy_price, sell_price, alert_limit, data, created_by, updated_by) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13::jsonb, $14, $14)`, [variantId, tenantId, schoolId, item.rows[0].branch_id || null, itemId, String(req.body?.sizeCode || ''), String(req.body?.colorCode || ''), sku, stockQty, buyPrice, sellPrice, Number(req.body?.alertLimit || 0), JSON.stringify(req.body || {}), actorId]);
+        if (stockQty > 0) await transaction.query(`INSERT INTO public.uniform_stock_movements (id, tenant_id, school_id, branch_id, variant_id, movement_type, quantity_delta, unit_cost, reference_id, created_by, data) VALUES ($1, $2, $3, $4, $5, 'purchase', $6, $7, $8, $9, $10::jsonb)`, [randomUUID(), tenantId, schoolId, item.rows[0].branch_id || null, variantId, stockQty, buyPrice, `variant:${variantId}:opening`, actorId, JSON.stringify({ opening: true })]);
+        created = { id: variantId, itemId, sku, stockQty, buyPrice, sellPrice, sizeCode: String(req.body?.sizeCode || ''), colorCode: String(req.body?.colorCode || '') };
+        await transaction.query(`INSERT INTO public.audit_events (tenant_id, school_id, branch_id, actor_user_id, entity_type, entity_id, action, source, result, metadata) VALUES ($1, $2, $3, $4, 'uniform_variant', $5, 'create', 'UniformInventoryCanonicalRoute', 'success', $6::jsonb)`, [tenantId, schoolId, item.rows[0].branch_id || null, actorId, variantId, JSON.stringify({ sku, stockQty })]);
+      }, tenantContext); return res.status(201).json({ success: true, data: created });
+    } catch (error) { return next(error); }
+  });
+
+  app.post('/api/uniform/stock', authenticateRequest, requirePermission('uniform_management:stock:insert'), async (req, res, next) => {
+    try {
+      const identity = (req as any).user; const tenantId = String(identity?.tenantId || '').trim(); const schoolId = String(identity?.schoolId || '').trim(); const variantId = String(req.body?.variantId || '').trim(); const delta = Number(req.body?.quantityDelta ?? req.body?.qty ?? 0); const type = String(req.body?.type || 'adjustment');
+      if (!tenantId || !schoolId || !identity?.id || !variantId || !Number.isInteger(delta) || delta === 0 || !['purchase', 'return', 'adjustment'].includes(type)) throw new ValidationError('حركة مخزون الزي غير صالحة.');
+      const tenantContext = (req as any).tenantContext; if (!tenantContext || tenantContext.tenantId !== tenantId || tenantContext.schoolId !== schoolId) throw new AuthenticationError('السياق الموثوق للمخزون غير مكتمل.');
+      let resultData: any = null;
+      await UnitOfWork.runInTransaction(schoolId, { operationName: 'Post canonical uniform stock movement', tenantId, userId: identity.id, userName: identity.name || identity.id, ipAddress: req.ip || 'unknown', affectedTables: ['uniform_item_variants', 'uniform_stock_movements', 'erp_journal_entries', 'erp_general_ledger', 'audit_events'] }, async () => {
+        const transaction = UnitOfWork.getActiveContext()?.databaseTransaction; if (!transaction) throw new DatabaseError('معاملة حركة مخزون الزي غير متاحة.');
+        const actor = await transaction.query<{ id: string }>(`SELECT id FROM public.users WHERE tenant_id = $1 AND auth_user_id = $2 AND school_id = $3 AND status = 'active' AND deleted_at IS NULL LIMIT 1`, [tenantId, identity.id, schoolId]); const actorId = actor.rows[0]?.id; if (!actorId) throw new AuthenticationError('تعذر ربط هوية المستخدم بسجل المدرسة.');
+        const current = await transaction.query<any>(`SELECT * FROM public.uniform_item_variants WHERE tenant_id = $1 AND school_id = $2 AND id = $3 FOR UPDATE`, [tenantId, schoolId, variantId]); const variant = current.rows[0]; if (!variant) throw new ValidationError('متغير الزي غير موجود.');
+        const next = Number(variant.stock_qty) + delta; if (next < 0) throw new ConflictError('الرصيد المتاح لا يكفي لحركة المخزون.');
+        if (!await CanonicalErpPostingService.isProvisioned(transaction)) throw new DatabaseError('دفتر الأستاذ الكانوني غير مهيأ؛ لم تُسجل حركة المخزون.');
+        const amount = Number((Math.abs(delta) * Number(variant.buy_price)).toFixed(2)); if (!(amount > 0)) throw new ValidationError('تكلفة الحركة غير صالحة.');
+        const sourceId = `uniform-stock:${variantId}:${randomUUID()}`; const lines = delta > 0 ? [{ id: `${sourceId}-D`, accountCode: '1301', debit: amount, credit: 0 }, { id: `${sourceId}-C`, accountCode: '2101', debit: 0, credit: amount }] : [{ id: `${sourceId}-D`, accountCode: '5280', debit: amount, credit: 0 }, { id: `${sourceId}-C`, accountCode: '1301', debit: 0, credit: amount }];
+        const posting = await CanonicalErpPostingService.syncSnapshot(transaction, tenantId, schoolId, actorId, { journalEntries: [{ id: sourceId, status: 'posted', date: new Date().toISOString().slice(0, 10), description: `حركة مخزون زي ${variant.sku}`, lines }] });
+        await transaction.query(`UPDATE public.uniform_item_variants SET stock_qty = $4, updated_by = $5, updated_at = now() WHERE tenant_id = $1 AND school_id = $2 AND id = $3`, [tenantId, schoolId, variantId, next, actorId]);
+        const movementId = randomUUID(); await transaction.query(`INSERT INTO public.uniform_stock_movements (id, tenant_id, school_id, branch_id, variant_id, movement_type, quantity_delta, unit_cost, reference_id, created_by, data) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11::jsonb)`, [movementId, tenantId, schoolId, variant.branch_id || null, variantId, type, delta, variant.buy_price, sourceId, actorId, JSON.stringify({ journalEntryId: posting.sourceLinks[0]?.journalEntryId })]);
+        resultData = { id: movementId, variantId, quantityDelta: delta, stockQty: next, journalEntryId: posting.sourceLinks[0]?.journalEntryId || null };
+      }, tenantContext); return res.status(201).json({ success: true, data: resultData });
+    } catch (error) { return next(error); }
+  });
+
+  app.get('/api/uniform/sales', authenticateRequest, requirePermission('uniform_management:sales:view'), async (req, res, next) => {
+    try { const identity = (req as any).user; const tenantId = String(identity?.tenantId || '').trim(); const schoolId = String(identity?.schoolId || '').trim(); const tenantContext = (req as any).tenantContext; if (!tenantId || !schoolId || !identity?.id || !tenantContext || tenantContext.tenantId !== tenantId || tenantContext.schoolId !== schoolId) throw new AuthenticationError('السياق الموثوق لمبيعات الزي غير مكتمل.'); let data: any[] = []; await UnitOfWork.runInTransaction(schoolId, { operationName: 'Read canonical uniform sales', tenantId, userId: identity.id, userName: identity.name || identity.id, ipAddress: req.ip || 'unknown', affectedTables: ['uniform_sales', 'uniform_sale_lines'] }, async () => { const transaction = UnitOfWork.getActiveContext()?.databaseTransaction; if (!transaction) throw new DatabaseError('معاملة قراءة مبيعات الزي غير متاحة.'); const result = await transaction.query<any>(`SELECT s.*, json_agg(json_build_object('variantId', l.variant_id, 'quantity', l.quantity, 'unitPrice', l.unit_price, 'lineTotal', l.line_total)) AS lines FROM public.uniform_sales s LEFT JOIN public.uniform_sale_lines l ON l.school_id = s.school_id AND l.sale_id = s.id WHERE s.tenant_id = $1 AND s.school_id = $2 GROUP BY s.school_id, s.id ORDER BY s.sale_date DESC, s.created_at DESC`, [tenantId, schoolId]); data = result.rows; }, tenantContext); res.set('Cache-Control', 'no-store'); return res.json({ success: true, data }); } catch (error) { return next(error); }
+  });
+
+  app.post('/api/uniform/sales', authenticateRequest, requirePermission('uniform_management:sales:insert'), async (req, res, next) => {
+    try {
+      const identity = (req as any).user; const tenantId = String(identity?.tenantId || '').trim(); const schoolId = String(identity?.schoolId || '').trim(); const studentId = String(req.body?.studentId || '').trim(); const paymentMethod = String(req.body?.paymentMethod || 'Cash'); const linesInput = Array.isArray(req.body?.lines) ? req.body.lines : [];
+      const uuid = (candidate: string) => /^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i.test(candidate);
+      if (!tenantId || !schoolId || !identity?.id || !uuid(studentId) || !['Cash', 'Card', 'BankTransfer', 'StudentAccount'].includes(paymentMethod) || linesInput.length === 0) throw new ValidationError('الطالب وطريقة الدفع وبنود البيع حقول مطلوبة.');
+      const tenantContext = (req as any).tenantContext; if (!tenantContext || tenantContext.tenantId !== tenantId || tenantContext.schoolId !== schoolId) throw new AuthenticationError('السياق الموثوق لمبيعات الزي غير مكتمل.');
+      let sale: any = null;
+      await UnitOfWork.runInTransaction(schoolId, { operationName: 'Post canonical uniform sale', tenantId, userId: identity.id, userName: identity.name || identity.id, ipAddress: req.ip || 'unknown', affectedTables: ['uniform_sales', 'uniform_sale_lines', 'uniform_item_variants', 'uniform_stock_movements', 'erp_journal_entries', 'erp_general_ledger', 'audit_events'] }, async () => {
+        const transaction = UnitOfWork.getActiveContext()?.databaseTransaction; if (!transaction) throw new DatabaseError('معاملة بيع الزي غير متاحة.');
+        const actor = await transaction.query<{ id: string }>(`SELECT id FROM public.users WHERE tenant_id = $1 AND auth_user_id = $2 AND school_id = $3 AND status = 'active' AND deleted_at IS NULL LIMIT 1`, [tenantId, identity.id, schoolId]); const actorId = actor.rows[0]?.id; if (!actorId) throw new AuthenticationError('تعذر ربط هوية المستخدم بسجل المدرسة.');
+        const student = await transaction.query(`SELECT id FROM public.students WHERE tenant_id = $1 AND school_id = $2 AND id = $3 AND deleted_at IS NULL`, [tenantId, schoolId, studentId]); if (!student.rows[0]) throw new ValidationError('الطالب غير موجود في المدرسة الحالية.');
+        const unique = new Set<string>(); let subtotal = 0; let cogs = 0; const locked: any[] = [];
+        for (const raw of linesInput) { const variantId = String(raw?.variantId || '').trim(); const qty = Number(raw?.quantity ?? raw?.qty); if (!variantId || unique.has(variantId) || !Number.isInteger(qty) || qty <= 0) throw new ValidationError('بنود بيع الزي غير صالحة أو مكررة.'); unique.add(variantId); const row = await transaction.query<any>(`SELECT * FROM public.uniform_item_variants WHERE tenant_id = $1 AND school_id = $2 AND id = $3 FOR UPDATE`, [tenantId, schoolId, variantId]); const variant = row.rows[0]; if (!variant) throw new ValidationError('متغير الزي غير موجود.'); if (Number(variant.stock_qty) < qty) throw new ConflictError(`الرصيد غير كافٍ للصنف ${variant.sku}.`); subtotal += Number(variant.sell_price) * qty; cogs += Number(variant.buy_price) * qty; locked.push({ variant, qty }); }
+        const discount = Number(req.body?.discount || 0); const tax = Number(req.body?.tax || 0); const grandTotal = Number((subtotal - discount + tax).toFixed(2)); if (!(grandTotal > 0) || discount < 0 || tax < 0 || discount > subtotal) throw new ValidationError('إجمالي بيع الزي غير صالح.');
+        if (!await CanonicalErpPostingService.isProvisioned(transaction)) throw new DatabaseError('دفتر الأستاذ الكانوني غير مهيأ؛ لم تُسجل عملية البيع.');
+        const saleId = randomUUID(); const sourceId = `uniform-sale:${saleId}`; const cashAccount = paymentMethod === 'StudentAccount' ? '1201' : '1101'; const revenue = Number((subtotal - discount).toFixed(2)); const journalLines: any[] = [{ id: `${sourceId}-AR`, accountCode: cashAccount, debit: grandTotal, credit: 0 }, { id: `${sourceId}-REV`, accountCode: '4101', debit: 0, credit: revenue }, { id: `${sourceId}-COGS`, accountCode: '5270', debit: cogs, credit: 0 }, { id: `${sourceId}-STOCK`, accountCode: '1301', debit: 0, credit: cogs }]; if (tax > 0) journalLines.push({ id: `${sourceId}-TAX`, accountCode: '2101', debit: 0, credit: tax });
+        const posting = await CanonicalErpPostingService.syncSnapshot(transaction, tenantId, schoolId, actorId, { journalEntries: [{ id: sourceId, status: 'posted', date: new Date().toISOString().slice(0, 10), description: `بيع زي مدرسي للطالب ${studentId}`, lines: journalLines }] });
+        await transaction.query(`INSERT INTO public.uniform_sales (id, tenant_id, school_id, branch_id, student_id, subtotal, discount, tax, grand_total, payment_method, journal_entry_id, created_by) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12)`, [saleId, tenantId, schoolId, identity.branchId || null, studentId, subtotal, discount, tax, grandTotal, paymentMethod, posting.sourceLinks[0]?.journalEntryId || null, actorId]);
+        for (const line of locked) { const lineTotal = Number((Number(line.variant.sell_price) * line.qty).toFixed(2)); await transaction.query(`UPDATE public.uniform_item_variants SET stock_qty = stock_qty - $4, updated_by = $5, updated_at = now() WHERE tenant_id = $1 AND school_id = $2 AND id = $3`, [tenantId, schoolId, line.variant.id, line.qty, actorId]); await transaction.query(`INSERT INTO public.uniform_sale_lines (id, tenant_id, school_id, sale_id, variant_id, quantity, unit_price, unit_cost, line_total) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9)`, [randomUUID(), tenantId, schoolId, saleId, line.variant.id, line.qty, line.variant.sell_price, line.variant.buy_price, lineTotal]); await transaction.query(`INSERT INTO public.uniform_stock_movements (id, tenant_id, school_id, branch_id, variant_id, movement_type, quantity_delta, unit_cost, reference_id, created_by, data) VALUES ($1, $2, $3, $4, $5, 'sale', $6, $7, $8, $9, $10::jsonb)`, [randomUUID(), tenantId, schoolId, identity.branchId || line.variant.branch_id || null, line.variant.id, -line.qty, line.variant.buy_price, saleId, actorId, JSON.stringify({ journalEntryId: posting.sourceLinks[0]?.journalEntryId })]); }
+        await transaction.query(`INSERT INTO public.audit_events (tenant_id, school_id, branch_id, actor_user_id, entity_type, entity_id, action, source, result, metadata) VALUES ($1, $2, $3, $4, 'uniform_sale', $5, 'post', 'UniformSalesCanonicalRoute', 'success', $6::jsonb)`, [tenantId, schoolId, identity.branchId || null, actorId, saleId, JSON.stringify({ studentId, grandTotal, journalEntryId: posting.sourceLinks[0]?.journalEntryId })]); sale = { id: saleId, studentId, subtotal, discount, tax, grandTotal, paymentMethod, journalEntryId: posting.sourceLinks[0]?.journalEntryId || null };
+      }, tenantContext); return res.status(201).json({ success: true, data: sale });
+    } catch (error) { return next(error); }
+  });
+
+  // School-scoped library catalogue and borrowing ledger. These routes use
+  // the trusted PostgreSQL transaction so the app.* RLS context is present;
+  // the browser never supplies tenant or school scope.
+  app.get('/api/library/books', authenticateRequest, requirePermission('library:view'), async (req, res, next) => {
+    try {
+      const identity = (req as any).user as { tenantId?: string; schoolId?: string; branchId?: string; id?: string; role?: string; name?: string; academicYear?: string };
+      const tenantId = String(identity?.tenantId || '').trim();
+      const schoolId = String(identity?.schoolId || '').trim();
+      if (!tenantId || !schoolId || !identity?.id) throw new AuthenticationError('هوية المدرسة الموثوقة غير مكتملة.');
+      const tenantContext = (req as any).tenantContext;
+      if (!tenantContext || tenantContext.tenantId !== tenantId || tenantContext.schoolId !== schoolId) throw new AuthenticationError('السياق الموثوق للمكتبة غير مكتمل.');
+      const search = String(req.query?.search || '').trim().replace(/[,%()]/g, ' ');
+      let data: any[] = [];
+      await UnitOfWork.runInTransaction(schoolId, {
+        operationName: 'Read canonical library catalogue', tenantId, userId: identity.id,
+        userName: identity.name || identity.id, ipAddress: req.ip || 'unknown', affectedTables: ['library']
+      }, async () => {
+        const transaction = UnitOfWork.getActiveContext()?.databaseTransaction;
+        if (!transaction) throw new DatabaseError('معاملة قراءة فهرس المكتبة غير متاحة.');
+        const result = await transaction.query<any>(
+          `SELECT id, tenant_id, school_id, branch_id, code, title, author, category,
+                  total_copies, available_copies, location, data, created_at, updated_at
+             FROM public.library
+            WHERE tenant_id = $1 AND school_id = $2
+              AND ($3 = '' OR title ILIKE $4 OR author ILIKE $4 OR code ILIKE $4)
+            ORDER BY title ASC, code ASC`, [tenantId, schoolId, search, `%${search}%`]
+        );
+        data = result.rows;
+      }, tenantContext);
+      res.set('Cache-Control', 'no-store');
+      return res.json({ success: true, data });
+    } catch (error) {
+      return next(error);
+    }
+  });
+
+  app.post('/api/library/books', authenticateRequest, requirePermission('library:insert'), async (req, res, next) => {
+    try {
+      const identity = (req as any).user as { tenantId?: string; schoolId?: string; branchId?: string; id?: string; role?: string; name?: string };
+      const tenantId = String(identity?.tenantId || '').trim();
+      const schoolId = String(identity?.schoolId || '').trim();
+      const title = String(req.body?.title || '').trim();
+      const author = String(req.body?.author || '').trim();
+      const category = String(req.body?.category || '').trim();
+      const location = String(req.body?.location || '').trim();
+      const code = String(req.body?.code || '').trim();
+      const totalCopies = Number(req.body?.totalCopies ?? req.body?.total_copies);
+      if (!tenantId || !schoolId || !identity?.id || title.length < 1 || title.length > 240 || author.length < 1 || author.length > 200
+        || !Number.isInteger(totalCopies) || totalCopies < 1 || totalCopies > 1_000_000 || location.length > 200 || code.length > 80) {
+        throw new ValidationError('بيانات الكتاب غير مكتملة أو خارج الحدود المسموحة.');
+      }
+      const tenantContext = (req as any).tenantContext;
+      if (!tenantContext || tenantContext.tenantId !== tenantId || tenantContext.schoolId !== schoolId) throw new AuthenticationError('السياق الموثوق للمكتبة غير مكتمل.');
+      const bookId = randomUUID();
+      const resolvedCode = code || `BK-${bookId.slice(0, 8).toUpperCase()}`;
+      let created: any = null;
+      await UnitOfWork.runInTransaction(schoolId, {
+        operationName: 'Create canonical library book', tenantId, userId: identity.id,
+        userName: identity.name || identity.id, ipAddress: req.ip || 'unknown', affectedTables: ['library', 'audit_events']
+      }, async () => {
+        const transaction = UnitOfWork.getActiveContext()?.databaseTransaction;
+        if (!transaction) throw new DatabaseError('معاملة إنشاء كتاب المكتبة غير متاحة.');
+        const actor = await transaction.query<{ id: string }>(`SELECT id FROM public.users WHERE tenant_id = $1 AND auth_user_id = $2 AND school_id = $3 AND status = 'active' AND deleted_at IS NULL LIMIT 1`, [tenantId, identity.id, schoolId]);
+        const actorId = actor.rows[0]?.id;
+        if (!actorId) throw new AuthenticationError('تعذر ربط هوية المستخدم بسجل المدرسة.');
+        const result = await transaction.query<any>(
+          `INSERT INTO public.library (id, tenant_id, school_id, branch_id, code, title, author, category, total_copies, available_copies, location, created_by, updated_by)
+           VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $9, $10, $11, $11)
+           RETURNING *`, [bookId, tenantId, schoolId, identity.branchId || null, resolvedCode, title, author, category, totalCopies, location, actorId]
+        );
+        created = result.rows[0];
+        await transaction.query(
+          `INSERT INTO public.audit_events (tenant_id, school_id, branch_id, actor_user_id, entity_type, entity_id, action, source, result, metadata)
+           VALUES ($1, $2, $3, $4, 'library_book', $5, 'create', 'LibraryCanonicalRoute', 'success', $6::jsonb)`,
+          [tenantId, schoolId, identity.branchId || null, actorId, bookId, JSON.stringify({ code: resolvedCode, totalCopies })]
+        );
+      }, tenantContext);
+      return res.status(201).json({ success: true, data: created });
+    } catch (error) {
+      return next(error);
+    }
+  });
+
+  app.patch('/api/library/books/:id', authenticateRequest, requirePermission('library:edit'), async (req, res, next) => {
+    try {
+      const identity = (req as any).user as { tenantId?: string; schoolId?: string; branchId?: string; id?: string; name?: string };
+      const tenantId = String(identity?.tenantId || '').trim();
+      const schoolId = String(identity?.schoolId || '').trim();
+      const bookId = String(req.params.id || '').trim();
+      const uuid = (candidate: string) => /^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i.test(candidate);
+      if (!tenantId || !schoolId || !identity?.id || !uuid(bookId)) throw new ValidationError('معرف الكتاب أو هوية المستخدم غير صالح.');
+      const tenantContext = (req as any).tenantContext;
+      if (!tenantContext || tenantContext.tenantId !== tenantId || tenantContext.schoolId !== schoolId) throw new AuthenticationError('السياق الموثوق للمكتبة غير مكتمل.');
+      let updated: any = null;
+      await UnitOfWork.runInTransaction(schoolId, {
+        operationName: 'Update canonical library book', tenantId, userId: identity.id,
+        userName: identity.name || identity.id, ipAddress: req.ip || 'unknown', affectedTables: ['library', 'audit_events']
+      }, async () => {
+        const transaction = UnitOfWork.getActiveContext()?.databaseTransaction;
+        if (!transaction) throw new DatabaseError('معاملة تعديل كتاب المكتبة غير متاحة.');
+        const actor = await transaction.query<{ id: string }>(`SELECT id FROM public.users WHERE tenant_id = $1 AND auth_user_id = $2 AND school_id = $3 AND status = 'active' AND deleted_at IS NULL LIMIT 1`, [tenantId, identity.id, schoolId]);
+        const actorId = actor.rows[0]?.id;
+        if (!actorId) throw new AuthenticationError('تعذر ربط هوية المستخدم بسجل المدرسة.');
+        const current = await transaction.query<any>(`SELECT * FROM public.library WHERE tenant_id = $1 AND school_id = $2 AND id = $3 FOR UPDATE`, [tenantId, schoolId, bookId]);
+        const row = current.rows[0];
+        if (!row) throw new ValidationError('الكتاب غير موجود في المدرسة الحالية.');
+        const title = req.body?.title === undefined ? row.title : String(req.body.title).trim();
+        const author = req.body?.author === undefined ? row.author : String(req.body.author).trim();
+        const category = req.body?.category === undefined ? row.category : String(req.body.category).trim();
+        const location = req.body?.location === undefined ? row.location : String(req.body.location).trim();
+        const totalCopies = req.body?.totalCopies === undefined && req.body?.total_copies === undefined ? Number(row.total_copies) : Number(req.body?.totalCopies ?? req.body?.total_copies);
+        const borrowed = Number(row.total_copies) - Number(row.available_copies);
+        if (!title || !author || !Number.isInteger(totalCopies) || totalCopies < borrowed || totalCopies > 1_000_000) throw new ValidationError('بيانات الكتاب أو عدد النسخ غير صالح.');
+        const availableCopies = totalCopies - borrowed;
+        const result = await transaction.query<any>(`UPDATE public.library SET title = $4, author = $5, category = $6, total_copies = $7, available_copies = $8, location = $9, updated_by = $10, updated_at = now() WHERE tenant_id = $1 AND school_id = $2 AND id = $3 RETURNING *`, [tenantId, schoolId, bookId, title, author, category, totalCopies, availableCopies, location, actorId]);
+        updated = result.rows[0];
+        await transaction.query(`INSERT INTO public.audit_events (tenant_id, school_id, branch_id, actor_user_id, entity_type, entity_id, action, source, result, metadata) VALUES ($1, $2, $3, $4, 'library_book', $5, 'update', 'LibraryCanonicalRoute', 'success', $6::jsonb)`, [tenantId, schoolId, row.branch_id, actorId, bookId, JSON.stringify({ before: row, after: updated })]);
+      }, tenantContext);
+      return res.json({ success: true, data: updated });
+    } catch (error) {
+      return next(error);
+    }
+  });
+
+  app.delete('/api/library/books/:id', authenticateRequest, requirePermission('library:delete'), async (req, res, next) => {
+    try {
+      const identity = (req as any).user as { tenantId?: string; schoolId?: string; branchId?: string; id?: string; name?: string };
+      const tenantId = String(identity?.tenantId || '').trim();
+      const schoolId = String(identity?.schoolId || '').trim();
+      const bookId = String(req.params.id || '').trim();
+      const uuid = (candidate: string) => /^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i.test(candidate);
+      if (!tenantId || !schoolId || !identity?.id || !uuid(bookId)) throw new ValidationError('معرف الكتاب أو هوية المستخدم غير صالح.');
+      const tenantContext = (req as any).tenantContext;
+      if (!tenantContext || tenantContext.tenantId !== tenantId || tenantContext.schoolId !== schoolId) throw new AuthenticationError('السياق الموثوق للمكتبة غير مكتمل.');
+      await UnitOfWork.runInTransaction(schoolId, {
+        operationName: 'Delete canonical library book', tenantId, userId: identity.id,
+        userName: identity.name || identity.id, ipAddress: req.ip || 'unknown', affectedTables: ['library', 'audit_events']
+      }, async () => {
+        const transaction = UnitOfWork.getActiveContext()?.databaseTransaction;
+        if (!transaction) throw new DatabaseError('معاملة حذف كتاب المكتبة غير متاحة.');
+        const actor = await transaction.query<{ id: string }>(`SELECT id FROM public.users WHERE tenant_id = $1 AND auth_user_id = $2 AND school_id = $3 AND status = 'active' AND deleted_at IS NULL LIMIT 1`, [tenantId, identity.id, schoolId]);
+        const actorId = actor.rows[0]?.id;
+        if (!actorId) throw new AuthenticationError('تعذر ربط هوية المستخدم بسجل المدرسة.');
+        const active = await transaction.query(`SELECT id FROM public.borrowed_books WHERE tenant_id = $1 AND school_id = $2 AND book_id = $3 AND status IN ('active', 'overdue') LIMIT 1`, [tenantId, schoolId, bookId]);
+        if (active.rows.length) throw new ConflictError('لا يمكن حذف كتاب له إعارة نشطة.');
+        const result = await transaction.query<any>(`DELETE FROM public.library WHERE tenant_id = $1 AND school_id = $2 AND id = $3 RETURNING id, branch_id`, [tenantId, schoolId, bookId]);
+        if (!result.rows[0]) throw new ValidationError('الكتاب غير موجود في المدرسة الحالية.');
+        await transaction.query(`INSERT INTO public.audit_events (tenant_id, school_id, branch_id, actor_user_id, entity_type, entity_id, action, source, result, metadata) VALUES ($1, $2, $3, $4, 'library_book', $5, 'delete', 'LibraryCanonicalRoute', 'success', '{}'::jsonb)`, [tenantId, schoolId, result.rows[0].branch_id, actorId, bookId]);
+      }, tenantContext);
+      return res.json({ success: true, data: { id: bookId, deleted: true } });
+    } catch (error) {
+      return next(error);
+    }
+  });
+
+  app.get('/api/library/borrowings', authenticateRequest, requirePermission('library:borrow:view'), async (req, res, next) => {
+    try {
+      const identity = (req as any).user as { tenantId?: string; schoolId?: string; id?: string; name?: string };
+      const tenantId = String(identity?.tenantId || '').trim();
+      const schoolId = String(identity?.schoolId || '').trim();
+      if (!tenantId || !schoolId || !identity?.id) throw new AuthenticationError('هوية المدرسة الموثوقة غير مكتملة.');
+      const tenantContext = (req as any).tenantContext;
+      if (!tenantContext || tenantContext.tenantId !== tenantId || tenantContext.schoolId !== schoolId) throw new AuthenticationError('السياق الموثوق للمكتبة غير مكتمل.');
+      let data: any[] = [];
+      await UnitOfWork.runInTransaction(schoolId, { operationName: 'Read canonical library borrowings', tenantId, userId: identity.id, userName: identity.name || identity.id, ipAddress: req.ip || 'unknown', affectedTables: ['borrowed_books', 'library', 'students'] }, async () => {
+        const transaction = UnitOfWork.getActiveContext()?.databaseTransaction;
+        if (!transaction) throw new DatabaseError('معاملة قراءة إعارات المكتبة غير متاحة.');
+        const result = await transaction.query<any>(`SELECT bb.id, bb.book_id, bb.student_id, bb.borrowed_at, bb.due_at, bb.returned_at, bb.fine, bb.status, l.title AS book_title, l.code AS book_code, concat_ws(' ', s.legal_first_name, s.legal_middle_name, s.legal_last_name) AS student_name, s.student_number AS student_code FROM public.borrowed_books bb JOIN public.library l ON l.id = bb.book_id AND l.tenant_id = bb.tenant_id AND l.school_id = bb.school_id JOIN public.students s ON s.id = bb.student_id AND s.tenant_id = bb.tenant_id AND s.school_id = bb.school_id WHERE bb.tenant_id = $1 AND bb.school_id = $2 ORDER BY bb.borrowed_at DESC`, [tenantId, schoolId]);
+        data = result.rows;
+      }, tenantContext);
+      res.set('Cache-Control', 'no-store');
+      return res.json({ success: true, data });
+    } catch (error) {
+      return next(error);
+    }
+  });
+
+  app.post('/api/library/borrowings', authenticateRequest, requirePermission('library:borrow:insert'), async (req, res, next) => {
+    try {
+      const identity = (req as any).user as { tenantId?: string; schoolId?: string; branchId?: string; id?: string; name?: string };
+      const tenantId = String(identity?.tenantId || '').trim();
+      const schoolId = String(identity?.schoolId || '').trim();
+      const bookId = String(req.body?.bookId || req.body?.book_id || '').trim();
+      const studentId = String(req.body?.studentId || req.body?.student_id || '').trim();
+      const dueAt = new Date(String(req.body?.dueAt || req.body?.due_at || ''));
+      const uuid = (candidate: string) => /^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i.test(candidate);
+      if (!tenantId || !schoolId || !identity?.id || !bookId || !uuid(studentId) || Number.isNaN(dueAt.getTime()) || dueAt <= new Date()) {
+        throw new ValidationError('الكتاب والطالب وموعد الإعادة حقول مطلوبة ويجب أن يكون الموعد مستقبليًا.');
+      }
+      const tenantContext = (req as any).tenantContext;
+      if (!tenantContext || tenantContext.tenantId !== tenantId || tenantContext.schoolId !== schoolId) throw new AuthenticationError('السياق الموثوق للمكتبة غير مكتمل.');
+      let created: any = null;
+      await UnitOfWork.runInTransaction(schoolId, { operationName: 'Create canonical library borrowing', tenantId, userId: identity.id, userName: identity.name || identity.id, ipAddress: req.ip || 'unknown', affectedTables: ['borrowed_books', 'library', 'audit_events'] }, async () => {
+        const transaction = UnitOfWork.getActiveContext()?.databaseTransaction;
+        if (!transaction) throw new DatabaseError('معاملة إنشاء إعارة المكتبة غير متاحة.');
+        const actor = await transaction.query<{ id: string }>(`SELECT id FROM public.users WHERE tenant_id = $1 AND auth_user_id = $2 AND school_id = $3 AND status = 'active' AND deleted_at IS NULL LIMIT 1`, [tenantId, identity.id, schoolId]);
+        const actorId = actor.rows[0]?.id;
+        if (!actorId) throw new AuthenticationError('تعذر ربط هوية المستخدم بسجل المدرسة.');
+        const student = await transaction.query(`SELECT id FROM public.students WHERE tenant_id = $1 AND school_id = $2 AND id = $3 AND deleted_at IS NULL LIMIT 1`, [tenantId, schoolId, studentId]);
+        if (!student.rows[0]) throw new ValidationError('الطالب غير موجود في المدرسة الحالية.');
+        const book = await transaction.query<any>(`SELECT id, branch_id, available_copies FROM public.library WHERE tenant_id = $1 AND school_id = $2 AND id = $3 FOR UPDATE`, [tenantId, schoolId, bookId]);
+        if (!book.rows[0]) throw new ValidationError('الكتاب غير موجود في المدرسة الحالية.');
+        if (Number(book.rows[0].available_copies) < 1) throw new ConflictError('لا توجد نسخ متاحة من هذا الكتاب.');
+        const active = await transaction.query(`SELECT id FROM public.borrowed_books WHERE tenant_id = $1 AND school_id = $2 AND book_id = $3 AND student_id = $4 AND status IN ('active', 'overdue') LIMIT 1`, [tenantId, schoolId, bookId, studentId]);
+        if (active.rows.length) throw new ConflictError('لدى الطالب إعارة نشطة لهذا الكتاب.');
+        const borrowingId = randomUUID();
+        const result = await transaction.query<any>(`INSERT INTO public.borrowed_books (id, tenant_id, school_id, branch_id, book_id, student_id, due_at, status, created_by, updated_by) VALUES ($1, $2, $3, $4, $5, $6, $7, 'active', $8, $8) RETURNING *`, [borrowingId, tenantId, schoolId, identity.branchId || book.rows[0].branch_id || null, bookId, studentId, dueAt.toISOString(), actorId]);
+        await transaction.query(`UPDATE public.library SET available_copies = available_copies - 1, updated_by = $4, updated_at = now() WHERE tenant_id = $1 AND school_id = $2 AND id = $3`, [tenantId, schoolId, bookId, actorId]);
+        created = result.rows[0];
+        await transaction.query(`INSERT INTO public.audit_events (tenant_id, school_id, branch_id, actor_user_id, entity_type, entity_id, action, source, result, metadata) VALUES ($1, $2, $3, $4, 'borrowed_book', $5, 'create', 'LibraryCanonicalRoute', 'success', $6::jsonb)`, [tenantId, schoolId, created.branch_id, actorId, borrowingId, JSON.stringify({ bookId, studentId, dueAt: dueAt.toISOString() })]);
+      }, tenantContext);
+      return res.status(201).json({ success: true, data: created });
+    } catch (error) {
+      return next(error);
+    }
+  });
+
+  app.patch('/api/library/borrowings/:id/return', authenticateRequest, requirePermission('library:borrow:edit'), async (req, res, next) => {
+    try {
+      const identity = (req as any).user as { tenantId?: string; schoolId?: string; id?: string; name?: string };
+      const tenantId = String(identity?.tenantId || '').trim();
+      const schoolId = String(identity?.schoolId || '').trim();
+      const borrowingId = String(req.params.id || '').trim();
+      if (!tenantId || !schoolId || !identity?.id || !borrowingId) throw new ValidationError('معرف الإعارة أو هوية المستخدم غير صالح.');
+      const tenantContext = (req as any).tenantContext;
+      if (!tenantContext || tenantContext.tenantId !== tenantId || tenantContext.schoolId !== schoolId) throw new AuthenticationError('السياق الموثوق للمكتبة غير مكتمل.');
+      let returned: any = null;
+      await UnitOfWork.runInTransaction(schoolId, { operationName: 'Return canonical library borrowing', tenantId, userId: identity.id, userName: identity.name || identity.id, ipAddress: req.ip || 'unknown', affectedTables: ['borrowed_books', 'library', 'audit_events'] }, async () => {
+        const transaction = UnitOfWork.getActiveContext()?.databaseTransaction;
+        if (!transaction) throw new DatabaseError('معاملة إغلاق إعارة المكتبة غير متاحة.');
+        const actor = await transaction.query<{ id: string }>(`SELECT id FROM public.users WHERE tenant_id = $1 AND auth_user_id = $2 AND school_id = $3 AND status = 'active' AND deleted_at IS NULL LIMIT 1`, [tenantId, identity.id, schoolId]);
+        const actorId = actor.rows[0]?.id;
+        if (!actorId) throw new AuthenticationError('تعذر ربط هوية المستخدم بسجل المدرسة.');
+        const current = await transaction.query<any>(`SELECT * FROM public.borrowed_books WHERE tenant_id = $1 AND school_id = $2 AND id = $3 FOR UPDATE`, [tenantId, schoolId, borrowingId]);
+        const row = current.rows[0];
+        if (!row) throw new ValidationError('الإعارة غير موجودة في المدرسة الحالية.');
+        if (row.status === 'returned' || row.status === 'cancelled') throw new ConflictError('الإعارة مغلقة بالفعل.');
+        const book = await transaction.query<any>(`SELECT id, available_copies, total_copies, branch_id FROM public.library WHERE tenant_id = $1 AND school_id = $2 AND id = $3 FOR UPDATE`, [tenantId, schoolId, row.book_id]);
+        if (!book.rows[0]) throw new ValidationError('كتاب الإعارة غير موجود.');
+        await transaction.query(`UPDATE public.library SET available_copies = LEAST(total_copies, available_copies + 1), updated_by = $4, updated_at = now() WHERE tenant_id = $1 AND school_id = $2 AND id = $3`, [tenantId, schoolId, row.book_id, actorId]);
+        const result = await transaction.query<any>(`UPDATE public.borrowed_books SET status = 'returned', returned_at = now(), updated_by = $4, updated_at = now() WHERE tenant_id = $1 AND school_id = $2 AND id = $3 RETURNING *`, [tenantId, schoolId, borrowingId, actorId]);
+        returned = result.rows[0];
+        await transaction.query(`INSERT INTO public.audit_events (tenant_id, school_id, branch_id, actor_user_id, entity_type, entity_id, action, source, result, metadata) VALUES ($1, $2, $3, $4, 'borrowed_book', $5, 'return', 'LibraryCanonicalRoute', 'success', $6::jsonb)`, [tenantId, schoolId, book.rows[0].branch_id, actorId, borrowingId, JSON.stringify({ bookId: row.book_id, studentId: row.student_id })]);
+      }, tenantContext);
+      return res.json({ success: true, data: returned });
+    } catch (error) {
+      return next(error);
+    }
+  });
+
+  // School-scoped transport reads and assignment writes. The server derives
+  // school scope from the verified identity; request bodies never choose it.
+  app.get('/api/transport/routes', authenticateRequest, requirePermission('buses:view'), async (req, res, next) => {
+    try {
+      const identity = (req as any).user as { schoolId?: string };
+      const schoolId = String(identity?.schoolId || '').trim();
+      if (!schoolId) throw new AuthenticationError('هوية المدرسة الموثوقة غير مكتملة.');
+      const supabase = getSupabaseClientForAccessToken((req as any).trustedAccessToken) || getSupabaseClient();
+      if (!supabase) throw new DatabaseError('مصدر مسارات النقل غير متاح.');
+      const { data, error } = await supabase.from('buses').select('*').eq('school_id', schoolId).order('route_number');
+      if (error) throw error;
+      res.set('Cache-Control', 'no-store');
+      return res.json({ success: true, data: data || [] });
+    } catch (error) {
+      return next(error);
+    }
+  });
+
+  app.get('/api/transport/assignments', authenticateRequest, requirePermission('buses:view'), async (req, res, next) => {
+    try {
+      const identity = (req as any).user as { schoolId?: string };
+      const schoolId = String(identity?.schoolId || '').trim();
+      if (!schoolId) throw new AuthenticationError('هوية المدرسة الموثوقة غير مكتملة.');
+      const supabase = getSupabaseClientForAccessToken((req as any).trustedAccessToken) || getSupabaseClient();
+      if (!supabase) throw new DatabaseError('مصدر اشتراكات النقل غير متاح.');
+      const { data, error } = await supabase.from('student_transportation').select('*').eq('school_id', schoolId).order('created_at', { ascending: false });
+      if (error) throw error;
+      res.set('Cache-Control', 'no-store');
+      return res.json({ success: true, data: data || [] });
+    } catch (error) {
+      return next(error);
+    }
+  });
+
+  app.post('/api/transport/assignments', authenticateRequest, requirePermission('buses:insert'), async (req, res, next) => {
+    try {
+      const identity = (req as any).user as { schoolId?: string; id?: string };
+      const schoolId = String(identity?.schoolId || '').trim();
+      const studentId = String(req.body?.studentId || req.body?.student_id || '').trim();
+      const routeNumber = String(req.body?.routeNumber || req.body?.route_number || '').trim();
+      if (!schoolId || !studentId || !routeNumber) throw new ValidationError('الطالب ومسار النقل حقول مطلوبة.');
+      const monthlyFees = Number(req.body?.monthlyFees ?? req.body?.monthly_fees ?? 0);
+      if (!Number.isFinite(monthlyFees) || monthlyFees < 0) throw new ValidationError('الرسوم الشهرية غير صالحة.');
+      const supabase = getSupabaseClientForAccessToken((req as any).trustedAccessToken) || getSupabaseClient();
+      if (!supabase) throw new DatabaseError('مصدر اشتراكات النقل غير متاح.');
+      const id = randomUUID();
+      const record = {
+        id,
+        school_id: schoolId,
+        student_id: studentId,
+        route_number: routeNumber,
+        pickup_point: String(req.body?.pickupPoint || req.body?.pickup_point || '').trim() || null,
+        drop_off_point: String(req.body?.dropoffPoint || req.body?.drop_off_point || '').trim() || null,
+        monthly_fees: monthlyFees,
+        status: 'active',
+        created_by: identity?.id || null,
+        updated_by: identity?.id || null,
+      };
+      const { data, error } = await supabase.from('student_transportation').insert([record]).select('*').single();
+      if (error) throw error;
+      return res.status(201).json({ success: true, data });
+    } catch (error) {
+      return next(error);
+    }
+  });
+
+  app.patch('/api/transport/assignments/:id', authenticateRequest, requirePermission('buses:edit'), async (req, res, next) => {
+    try {
+      const identity = (req as any).user as { schoolId?: string; id?: string };
+      const schoolId = String(identity?.schoolId || '').trim();
+      const id = String(req.params.id || '').trim();
+      if (!schoolId || !id) throw new ValidationError('معرف اشتراك النقل غير صالح.');
+      const patch: Record<string, unknown> = { updated_by: identity?.id || null };
+      if (req.body?.routeNumber !== undefined) patch.route_number = String(req.body.routeNumber).trim();
+      if (req.body?.pickupPoint !== undefined) patch.pickup_point = String(req.body.pickupPoint).trim() || null;
+      if (req.body?.dropoffPoint !== undefined) patch.drop_off_point = String(req.body.dropoffPoint).trim() || null;
+      if (req.body?.monthlyFees !== undefined) {
+        const monthlyFees = Number(req.body.monthlyFees);
+        if (!Number.isFinite(monthlyFees) || monthlyFees < 0) throw new ValidationError('الرسوم الشهرية غير صالحة.');
+        patch.monthly_fees = monthlyFees;
+      }
+      if (req.body?.status !== undefined && ['active', 'inactive', 'archived'].includes(String(req.body.status))) patch.status = String(req.body.status);
+      const supabase = getSupabaseClientForAccessToken((req as any).trustedAccessToken) || getSupabaseClient();
+      if (!supabase) throw new DatabaseError('مصدر اشتراكات النقل غير متاح.');
+      const { data, error } = await supabase.from('student_transportation').update(patch).eq('school_id', schoolId).eq('id', id).select('*').single();
+      if (error) throw error;
+      return res.json({ success: true, data });
+    } catch (error) {
+      return next(error);
     }
   });
 
@@ -6669,38 +8177,49 @@ async function startServer() {
     } catch (err: any) { next(err); }
   });
 
-  // Supabase Connectivity Status
-  app.get("/api/supabase/status", (req, res) => {
-    const supabaseUrl = process.env.SUPABASE_URL || "";
-    const supabaseKey = process.env.SUPABASE_ANON_KEY || "";
-    const isConfigured = !!(supabaseUrl && supabaseKey);
-    
-    res.json({
-      success: true,
+  // Supabase connectivity is an authenticated control-plane diagnostic. Do
+  // not expose project URLs or claim readiness from environment-variable
+  // presence alone; readiness is established only by the startup gate above.
+  app.get("/api/supabase/status", authenticateRequest, requirePermissionOnly(PERMISSIONS.PLATFORM_ADMIN), (_req, res) => {
+    const configured = Boolean(process.env.SUPABASE_URL && process.env.SUPABASE_ANON_KEY);
+    const readiness = startupReadiness.snapshot();
+    const ready = configured && readiness.ready;
+    res.status(ready ? 200 : 503).json({
+      success: ready,
       data: {
-        configured: isConfigured,
+        configured,
         databaseType: "Supabase (PostgreSQL)",
-        supabaseUrl: supabaseUrl ? `${supabaseUrl.substring(0, 25)}...` : null,
-        connectionStatus: isConfigured ? "ready" : "ready_local_postgres_active"
+        connectionStatus: readiness.ready ? "ready" : readiness.state.toLowerCase(),
       },
-      message: isConfigured 
-        ? "Supabase dynamic configuration verified successfully. Ready to bind operational ERP tables." 
-        : "Supabase environment variables are fallback-routed. Active local multi-tenant Postgres database engine is running beautifully.",
-      meta: null
+      message: ready ? "اتصال Supabase جاهز." : "اتصال Supabase غير جاهز أو لم يتم اجتياز فحص دور قاعدة البيانات.",
+      meta: null,
     });
   });
 
   // AI-powered Financial Insights & Delayed Payment Risk Prediction
-  app.post("/api/ai/forecast", authenticateRequest, requirePermission(PERMISSIONS.AI_FORECAST), (req, res) => {
-    const { students = [] } = req.body;
-    
-    // Heuristic predictive insights for financial risk analysis
-    const highRisk: any[] = [];
-    const mediumRisk: any[] = [];
-    let totalAssessedFees = 0;
-    let expectedDelayedFees = 0;
+  app.post("/api/ai/forecast", authenticateRequest, requirePermission(PERMISSIONS.AI_FORECAST), async (req, res, next) => {
+    try {
+      if (process.env.EDUPRO_AI_FORECAST_ENABLED !== 'true') {
+        return res.status(503).json({
+          success: false,
+          code: 'AI_FORECAST_CANONICAL_SOURCE_UNAVAILABLE',
+          message: 'التنبؤ المالي متوقف حتى يتم اعتماد مصدر رسوم مركزي موثق وموافقة سياسة الخصوصية.',
+        });
+      }
+      const schoolId = String((req as any).user?.schoolId || '').trim();
+      if (!schoolId) throw new AuthenticationError('لا توجد مدرسة موثقة للجلسة الحالية.');
 
-    students.forEach((s: any) => {
+      // Never trust student or fee values supplied by the browser. Forecasts
+      // are computed from the authenticated school's server-side repository.
+      const canonicalStudents = (await StudentRepository.search(schoolId, { page: 1, pageSize: 500 })).data;
+
+      // Heuristic predictive insights for financial risk analysis
+      const highRisk: any[] = [];
+      const mediumRisk: any[] = [];
+      let totalAssessedFees = 0;
+      let expectedDelayedFees = 0;
+
+      canonicalStudents.forEach((s: any) => {
       const remaining = s.feesRemaining || 0;
       totalAssessedFees += remaining;
       if (remaining > 2500) {
@@ -6724,9 +8243,9 @@ async function startServer() {
         });
         expectedDelayedFees += remaining * 0.25;
       }
-    });
+      });
 
-    res.json({
+      res.json({
       success: true,
       data: {
         timestamp: new Date().toISOString(),
@@ -6746,8 +8265,11 @@ async function startServer() {
         }
       },
       message: "AI Financial Forecast generated successfully.",
-      meta: null
-    });
+        meta: { source: 'canonical-school-repository', ignoredClientStudents: Array.isArray(req.body?.students) }
+      });
+    } catch (error) {
+      next(error);
+    }
   });
 
   // ========================================================
@@ -6961,20 +8483,27 @@ ${JSON.stringify(snapshot)}
 
     // Log critical or database errors to enterprise Audit Log system
     if (statusCode >= 500 || errorCode === "DATABASE_ERROR") {
-      const user = (req as any).user || { id: "system", name: "النظام المركزي", role: "system", schoolId: "school_1" };
-      try {
-        await AuditRepository.log(
-          user.schoolId,
-          user.id,
-          user.name,
-          user.role,
-          "SYSTEM_CRITICAL_ERROR",
-          "SystemError",
-          req.ip || "127.0.0.1",
-          `خطأ في النظام: ${message} (TraceID: ${traceId})`
-        );
-      } catch (logErr: any) {
-        EnterpriseLogger.error("Failed to write critical error to Audit Logs:", "ServerBootstrap", { error: logErr?.message || logErr });
+      const user = (req as any).user as { id?: string; name?: string; role?: string; schoolId?: string } | undefined;
+      // Never manufacture a tenant/user merely to make an audit insert look
+      // complete.  Unauthenticated process-level failures are still emitted
+      // to the server logger and can be correlated by traceId.
+      if (user?.schoolId && user?.id) {
+        try {
+          await AuditRepository.log(
+            String(user.schoolId),
+            String(user.id),
+            String(user.name || user.id),
+            String(user.role || 'unknown'),
+            "SYSTEM_CRITICAL_ERROR",
+            "SystemError",
+            req.ip || "127.0.0.1",
+            `خطأ في النظام: ${message} (TraceID: ${traceId})`
+          );
+        } catch (logErr: any) {
+          EnterpriseLogger.error("Failed to write critical error to Audit Logs:", "ServerBootstrap", { error: logErr?.message || logErr, traceId });
+        }
+      } else {
+        EnterpriseLogger.error("Critical request error had no trusted tenant identity for audit persistence.", "ServerBootstrap", { traceId, statusCode, errorCode });
       }
     }
 

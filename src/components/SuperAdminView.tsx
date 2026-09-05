@@ -20,6 +20,7 @@ import SuperAdminHealth from './super-admin/SuperAdminHealth';
 import SuperAdminUpdates from './super-admin/SuperAdminUpdates';
 import SuperAdminCentralNotifications from './super-admin/SuperAdminCentralNotifications';
 import SuperAdminFeatures from './super-admin/SuperAdminFeatures';
+import SuperAdminWorkspaceControl from './super-admin/SuperAdminWorkspaceControl';
 import DeveloperPlatformCenter from '../developer/DeveloperPlatformCenter';
 
 import { EnterpriseLogger } from '../database/services/EnterpriseLogger';
@@ -272,6 +273,7 @@ export default function SuperAdminView({
         { id: 'users', label: 'إدارة المستخدمين', icon: Users },
         { id: 'subscriptions', label: 'إدارة الاشتراكات', icon: CreditCard },
         { id: 'features', label: 'إدارة الوحدات', icon: Sliders },
+        { id: 'workspace_control', label: 'مركز المالك والإصدارات', icon: GitBranch },
         { id: 'domains', label: 'الروابط السحابية', icon: Globe },
       ]
     },
@@ -624,6 +626,15 @@ export default function SuperAdminView({
 
             {localTab === 'features' && (
               <SuperAdminFeatures 
+                schools={schools}
+                setSchools={setSchools}
+                logAction={handleSubmoduleLog}
+                triggerNotification={triggerNotification}
+              />
+            )}
+
+            {localTab === 'workspace_control' && (
+              <SuperAdminWorkspaceControl
                 schools={schools}
                 setSchools={setSchools}
                 logAction={handleSubmoduleLog}

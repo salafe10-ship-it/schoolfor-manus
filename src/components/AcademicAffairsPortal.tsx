@@ -1,4 +1,4 @@
-import React, { useState, useMemo } from 'react';
+import React, { useState, useMemo, useEffect } from 'react';
 import { 
   BookOpen, GraduationCap, Calendar, Layers, CheckCircle2, AlertTriangle, 
   Search, Filter, RotateCcw, Plus, Edit, Trash2, Eye, Printer, FileSpreadsheet, 
@@ -7,6 +7,8 @@ import {
   Grid, List, FileText, HelpCircle, RefreshCw, Award, Compass, LayoutGrid
 } from 'lucide-react';
 import { Student, Teacher, School, UserRole, Stage, Grade, AcademicClass } from '../types';
+import { FallbackStorage } from '../database/repositories/FallbackStorage';
+import { authenticatedRequest } from '../utils/authenticatedRequest';
 
 interface AcademicAffairsPortalProps {
   students: Student[];
@@ -53,6 +55,13 @@ interface SchedulePeriod {
   roomName: string;
 }
 
+const escapeHtml = (value: unknown): string => String(value ?? '')
+  .replace(/&/g, '&amp;')
+  .replace(/</g, '&lt;')
+  .replace(/>/g, '&gt;')
+  .replace(/"/g, '&quot;')
+  .replace(/'/g, '&#39;');
+
 export default function AcademicAffairsPortal({
   students,
   teachers,
@@ -81,6 +90,36 @@ export default function AcademicAffairsPortal({
 
   // Timetable State
   const [schedulePeriods, setSchedulePeriods] = useState<SchedulePeriod[]>([]);
+
+  useEffect(() => {
+    if (!FallbackStorage.isCanonicalPersistenceRequired()) return;
+    let cancelled = false;
+    const loadCanonicalContext = async () => {
+      try {
+        const response = await authenticatedRequest('/api/academic/context');
+        const payload = await response.json().catch(() => ({}));
+        if (!response.ok || !payload?.success || !payload?.data) {
+          throw new Error(payload?.message || 'تعذر تحميل الهيكل الأكاديمي المركزي.');
+        }
+        if (cancelled) return;
+        const data = payload.data as any;
+        const year = data.academicYear;
+        setSelectedAcademicYear(String(year?.name || year?.code || 'غير متحقق'));
+        if (setStages) setStages(Array.isArray(data.stages) ? data.stages : []);
+        if (setGrades) setGrades(Array.isArray(data.grades) ? data.grades : []);
+        if (setAcademicClasses) setAcademicClasses(Array.isArray(data.classes) ? data.classes : []);
+      } catch (error) {
+        if (!cancelled) {
+          triggerNotification(
+            error instanceof Error ? error.message : 'تعذر تحميل الهيكل الأكاديمي المركزي.',
+            'warning'
+          );
+        }
+      }
+    };
+    void loadCanonicalContext();
+    return () => { cancelled = true; };
+  }, [selectedSchool.id, setStages, setGrades, setAcademicClasses]);
 
   // Search & Filters State
   const [searchKeyword, setSearchKeyword] = useState<string>('');
@@ -184,8 +223,15 @@ export default function AcademicAffairsPortal({
   const activeTeachersCount = teachers.length;
   const conflictCount = scheduleConflicts.length;
 
+  const guardAcademicMutation = (operation: string): boolean => {
+    if (!FallbackStorage.isCanonicalPersistenceRequired()) return true;
+    triggerNotification(`تعذر ${operation}: لا يوجد مسار أكاديمي مركزي يحفظ التغيير والتدقيق.`, 'warning');
+    return false;
+  };
+
   // Save Subject
   const handleSaveSubject = () => {
+    if (!guardAcademicMutation('حفظ المادة الدراسية')) return;
     if (!subjectForm.name.trim() || !subjectForm.code.trim()) {
       triggerNotification('يرجى ملء رمز واسم المادة الدراسية بصورة صحيحة', 'warning');
       return;
@@ -261,6 +307,7 @@ export default function AcademicAffairsPortal({
 
   // Delete Subject
   const handleDeleteSubject = (subj: SubjectItem) => {
+    if (!guardAcademicMutation('حذف المادة الدراسية')) return;
     if (window.confirm(`هل أنت تأكد من حذف المادة الدراسية (${subj.name})؟`)) {
       setSubjects(prev => prev.filter(s => s.id !== subj.id));
       logAction('DELETE_SUBJECT', `حذف المادة الدراسية: ${subj.name}`, 'الشؤون الأكاديمية');
@@ -270,6 +317,7 @@ export default function AcademicAffairsPortal({
 
   // Add Schedule Period
   const handleSaveSchedulePeriod = () => {
+    if (!guardAcademicMutation('حفظ الحصة الدراسية')) return;
     const selectedSubj = subjects.find(s => s.id === scheduleForm.subjectId);
     const selectedTeach = teachers.find(t => t.id === scheduleForm.teacherId);
 
@@ -326,12 +374,12 @@ export default function AcademicAffairsPortal({
     const rowsHTML = filteredSubjects.map((sb, idx) => `
       <tr>
         <td style="padding: 8px; border: 1px solid #ddd; text-align: center;">${idx + 1}</td>
-        <td style="padding: 8px; border: 1px solid #ddd; text-align: center; font-family: monospace; font-weight: bold;">${sb.code}</td>
-        <td style="padding: 8px; border: 1px solid #ddd; font-weight: bold;">${sb.name}</td>
-        <td style="padding: 8px; border: 1px solid #ddd;">${sb.stageName} - ${sb.gradeName}</td>
-        <td style="padding: 8px; border: 1px solid #ddd; text-align: center;">${sb.creditHours} ساعات</td>
-        <td style="padding: 8px; border: 1px solid #ddd; text-align: center;">${sb.weeklyPeriods} حصص</td>
-        <td style="padding: 8px; border: 1px solid #ddd;">${sb.assignedTeacherName}</td>
+        <td style="padding: 8px; border: 1px solid #ddd; text-align: center; font-family: monospace; font-weight: bold;">${escapeHtml(sb.code)}</td>
+        <td style="padding: 8px; border: 1px solid #ddd; font-weight: bold;">${escapeHtml(sb.name)}</td>
+        <td style="padding: 8px; border: 1px solid #ddd;">${escapeHtml(sb.stageName)} - ${escapeHtml(sb.gradeName)}</td>
+        <td style="padding: 8px; border: 1px solid #ddd; text-align: center;">${escapeHtml(sb.creditHours)} ساعات</td>
+        <td style="padding: 8px; border: 1px solid #ddd; text-align: center;">${escapeHtml(sb.weeklyPeriods)} حصص</td>
+        <td style="padding: 8px; border: 1px solid #ddd;">${escapeHtml(sb.assignedTeacherName)}</td>
       </tr>
     `).join('');
 
@@ -664,9 +712,10 @@ export default function AcademicAffairsPortal({
               </div>
 
               <button 
-                onClick={() => {
-                  triggerNotification('تم اعتماد وتحديث العام الأكاديمي والفصل لجميع الشاشات بنجاح', 'success');
-                  logAction('SWITCH_ACADEMIC_YEAR', `تغيير العام الدراسي إلى ${selectedAcademicYear} - ${selectedSemester}`, 'الشؤون الأكاديمية');
+              onClick={() => {
+                if (!guardAcademicMutation('اعتماد العام الأكاديمي')) return;
+                triggerNotification('تم اعتماد وتحديث العام الأكاديمي والفصل لجميع الشاشات بنجاح', 'success');
+                logAction('SWITCH_ACADEMIC_YEAR', `تغيير العام الدراسي إلى ${selectedAcademicYear} - ${selectedSemester}`, 'الشؤون الأكاديمية');
                 }}
                 className="w-full py-2.5 bg-gradient-to-r from-[#2a1d13] via-[#3a2719] to-[#2a1d13] text-amber-300 font-black text-xs border border-[#d4af37]/40 shadow hover:scale-[1.01] transition-all cursor-pointer flex items-center justify-center gap-2"
               >
@@ -927,7 +976,7 @@ export default function AcademicAffairsPortal({
             </div>
             <button 
               onClick={() => {
-                triggerNotification('تم تحديث فحص الطاقة الاستيعابية الفائقة لجميع شعب المدرسة', 'success');
+                triggerNotification('فحص الكثافة المركزية غير مهيأ؛ لم يتم اعتماد أو تحديث طاقة أي شعبة.', 'warning');
               }}
               className="bg-[#2a1a0e] text-amber-300 px-3.5 py-2 text-xs font-bold border border-[#d4af37]/40 flex items-center gap-1.5 shadow cursor-pointer"
             >
@@ -1120,6 +1169,7 @@ export default function AcademicAffairsPortal({
 
           <button 
             onClick={() => {
+              if (!guardAcademicMutation('حفظ السياسات الأكاديمية')) return;
               triggerNotification('تم حفظ الإعدادات الأكاديمية وتحديث السياسات الحاكمة بنجاح', 'success');
               logAction('UPDATE_ACADEMIC_SETTINGS', 'تعديل سياسات الكنترول والكثافة الطلابية', 'الشؤون الأكاديمية');
             }}

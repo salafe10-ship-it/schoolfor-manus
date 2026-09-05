@@ -6,6 +6,23 @@ import { UnitOfWork } from '../UnitOfWork';
 import { SQLCommandBuilder } from '../transactions/SQLCommand';
 
 export class StudentLibraryAccountRepository implements IBaseRepository<StudentLibraryAccount> {
+  private static mapRow(row: any): StudentLibraryAccount {
+    return {
+      id: String(row.id),
+      studentId: row.student_id ?? row.studentId ?? '',
+      libraryCardNumber: row.library_card_number ?? row.libraryCardNumber ?? '',
+      status: row.status ?? 'active',
+      booksBorrowedCount: Number(row.books_borrowed_count ?? row.booksBorrowedCount ?? 0),
+      unpaidFines: Number(row.unpaid_fines ?? row.unpaidFines ?? 0)
+    } as StudentLibraryAccount;
+  }
+
+  private static belongsToSchool(record: any, schoolId: string): boolean {
+    if (record.schoolId === schoolId || record.school_id === schoolId) return true;
+    const student = FallbackStorage.getStudents().find(item => item.id === record.studentId || item.id === record.student_id);
+    return (student as any)?.schoolId === schoolId || (student as any)?.school_id === schoolId;
+  }
+
   public async getById(schoolId: string, id: string): Promise<StudentLibraryAccount | null> {
     const rows = await FallbackStorage.performRead<StudentLibraryAccount>(
       schoolId,
@@ -15,13 +32,14 @@ export class StudentLibraryAccountRepository implements IBaseRepository<StudentL
         if (!supabase) throw new Error('Supabase client is unavailable');
         const { data, error } = await supabase
           .from('student_library_accounts')
-          .select('*')
+          .select('*, students!inner(school_id)')
+          .eq('students.school_id', schoolId)
           .eq('id', id)
           .maybeSingle();
         if (error) throw error;
-        return data ? [data as StudentLibraryAccount] : [];
+        return data ? [StudentLibraryAccountRepository.mapRow(data)] : [];
       },
-      () => FallbackStorage.getStudentLibraryAccounts().filter(lib => lib.id === id)
+      () => FallbackStorage.getStudentLibraryAccounts().filter(lib => lib.id === id && StudentLibraryAccountRepository.belongsToSchool(lib, schoolId))
     );
     return rows[0] || null;
   }
@@ -35,13 +53,14 @@ export class StudentLibraryAccountRepository implements IBaseRepository<StudentL
         if (!supabase) throw new Error('Supabase client is unavailable');
         const { data, error } = await supabase
           .from('student_library_accounts')
-          .select('*')
+          .select('*, students!inner(school_id)')
+          .eq('students.school_id', schoolId)
           .eq('student_id', studentId)
           .maybeSingle();
         if (error) throw error;
-        return data ? [data as StudentLibraryAccount] : [];
+        return data ? [StudentLibraryAccountRepository.mapRow(data)] : [];
       },
-      () => FallbackStorage.getStudentLibraryAccounts().filter(lib => lib.studentId === studentId)
+      () => FallbackStorage.getStudentLibraryAccounts().filter(lib => lib.studentId === studentId && StudentLibraryAccountRepository.belongsToSchool(lib, schoolId))
     );
     return rows[0] || null;
   }
@@ -53,14 +72,14 @@ export class StudentLibraryAccountRepository implements IBaseRepository<StudentL
       async () => {
         const supabase = getSupabaseClient();
         if (!supabase) throw new Error('Supabase client is unavailable');
-        let query = supabase.from('student_library_accounts').select('*', { count: 'exact' });
+        let query = supabase.from('student_library_accounts').select('*, students!inner(school_id)', { count: 'exact' }).eq('students.school_id', schoolId);
         if (options?.studentId) query = query.eq('student_id', options.studentId);
         const { data, error } = await query;
         if (error) throw error;
-        return (data || []) as StudentLibraryAccount[];
+        return (data || []).map(StudentLibraryAccountRepository.mapRow);
       },
       () => {
-        let fallback = FallbackStorage.getStudentLibraryAccounts();
+        let fallback = FallbackStorage.getStudentLibraryAccounts().filter(lib => StudentLibraryAccountRepository.belongsToSchool(lib, schoolId));
         if (options?.studentId) fallback = fallback.filter(lib => lib.studentId === options.studentId);
         return fallback;
       }
@@ -88,9 +107,16 @@ export class StudentLibraryAccountRepository implements IBaseRepository<StudentL
       async () => {
         const supabase = getSupabaseClient();
         if (!supabase) throw new Error("No Supabase client");
-        const { data, error } = await supabase.from('student_library_accounts').insert([newRecord]).select().single();
+        const { data, error } = await supabase.from('student_library_accounts').insert([{
+          id,
+          student_id: newRecord.studentId,
+          library_card_number: newRecord.libraryCardNumber,
+          status: newRecord.status,
+          books_borrowed_count: newRecord.booksBorrowedCount,
+          unpaid_fines: newRecord.unpaidFines
+        }]).select().single();
         if (error) throw error;
-        return data as StudentLibraryAccount;
+        return StudentLibraryAccountRepository.mapRow(data);
       },
       () => {
         const all = FallbackStorage.getStudentLibraryAccounts();
@@ -113,9 +139,15 @@ export class StudentLibraryAccountRepository implements IBaseRepository<StudentL
       async () => {
         const supabase = getSupabaseClient();
         if (!supabase) throw new Error("No Supabase client");
-        const { data, error } = await supabase.from('student_library_accounts').update(item).eq('id', id).select().single();
+        const dbItem: Record<string, unknown> = {};
+        if (item.studentId !== undefined) dbItem.student_id = item.studentId;
+        if (item.libraryCardNumber !== undefined) dbItem.library_card_number = item.libraryCardNumber;
+        if (item.status !== undefined) dbItem.status = item.status;
+        if (item.booksBorrowedCount !== undefined) dbItem.books_borrowed_count = item.booksBorrowedCount;
+        if (item.unpaidFines !== undefined) dbItem.unpaid_fines = item.unpaidFines;
+        const { data, error } = await supabase.from('student_library_accounts').update(dbItem).eq('id', id).select().single();
         if (error) throw error;
-        return data as StudentLibraryAccount;
+        return StudentLibraryAccountRepository.mapRow(data);
       },
       () => {
         const all = FallbackStorage.getStudentLibraryAccounts();
@@ -138,13 +170,15 @@ export class StudentLibraryAccountRepository implements IBaseRepository<StudentL
       async () => {
         const supabase = getSupabaseClient();
         if (!supabase) throw new Error("No Supabase client");
+        const existing = await this.getById(schoolId, id);
+        if (!existing) return false;
         const { error } = await supabase.from('student_library_accounts').delete().eq('id', id);
         if (error) throw error;
         return true;
       },
       () => {
         const all = FallbackStorage.getStudentLibraryAccounts();
-        const filtered = all.filter(lib => lib.id !== id);
+        const filtered = all.filter(lib => !(lib.id === id && StudentLibraryAccountRepository.belongsToSchool(lib, schoolId)));
         FallbackStorage.saveStudentLibraryAccounts(filtered);
       }
     );

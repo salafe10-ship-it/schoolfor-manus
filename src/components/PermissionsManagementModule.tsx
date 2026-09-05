@@ -1195,7 +1195,12 @@ export const PermissionsManagementModule: React.FC<PermissionsModuleProps> = ({
         {/* Right Side: Quick status / Avatar / Notifications */}
         <div className="flex items-center gap-4">
           {/* Quick Theme Toggle */}
-          <button className="p-2 hover:bg-slate-100 text-slate-500 transition-all cursor-pointer">
+          <button
+            type="button"
+            aria-label="تبديل المظهر"
+            onClick={() => triggerNotification('تبديل المظهر غير مهيأ في هذه الشاشة؛ لم يتم تغيير الإعداد.', 'warning')}
+            className="p-2 hover:bg-slate-100 text-slate-500 transition-all cursor-pointer"
+          >
             <svg className="w-5 h-5" fill="none" stroke="currentColor" strokeWidth="2" viewBox="0 0 24 24">
               <path strokeLinecap="round" strokeLinejoin="round" d="M12 3v1m0 16v1m9-9h-1M4 12H3m15.364-6.364l-.707.707M6.343 17.657l-.707.707m0-12.728l.707.707m12.728 12.728l.707.707M12 8a4 4 0 100 8 4 4 0 000-8z" />
             </svg>
@@ -1203,7 +1208,12 @@ export const PermissionsManagementModule: React.FC<PermissionsModuleProps> = ({
 
           {/* Notification bell */}
           <div className="relative">
-            <button className="p-2 hover:bg-slate-100 text-slate-500 transition-all cursor-pointer">
+            <button
+              type="button"
+              aria-label="عرض التنبيهات"
+              onClick={() => triggerNotification('التنبيهات المركزية غير محملة في هذه الشاشة؛ لم يتم فتح سجل وهمي.', 'warning')}
+              className="p-2 hover:bg-slate-100 text-slate-500 transition-all cursor-pointer"
+            >
               <Bell className="w-5 h-5" />
             </button>
             <span className="absolute top-0.5 right-0.5 w-4 h-4 bg-orange-600 text-[9px] font-black text-white flex items-center justify-center rounded-full border-2 border-white select-none">
@@ -1212,18 +1222,21 @@ export const PermissionsManagementModule: React.FC<PermissionsModuleProps> = ({
           </div>
 
           {/* Help circle */}
-          <button className="p-2 hover:bg-slate-100 text-slate-500 transition-all cursor-pointer">
+          <button
+            type="button"
+            aria-label="المساعدة"
+            onClick={() => triggerNotification('مركز المساعدة غير مهيأ بعد؛ لا توجد تعليمات وهمية لعرضها.', 'info')}
+            className="p-2 hover:bg-slate-100 text-slate-500 transition-all cursor-pointer"
+          >
             <HelpCircle className="w-5 h-5" />
           </button>
 
           {/* User Profile Avatar */}
           <div className="flex items-center gap-2 border-r border-slate-100 pr-4">
-            <img 
-              src="https://images.unsplash.com/photo-1534528741775-53994a69daeb?w=120&auto=format&fit=crop&q=80" 
-              alt="User" 
-              className="w-8 h-8 rounded-full object-cover border border-slate-200"
-              referrerPolicy="no-referrer"
-            />
+            <div
+              aria-label="صورة المستخدم غير متاحة"
+              className="w-8 h-8 rounded-full flex items-center justify-center bg-amber-100 text-amber-800 text-xs font-black border border-slate-200"
+            >م</div>
           </div>
         </div>
       </div>
