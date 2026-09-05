@@ -81,9 +81,11 @@ export type TrustedLoginIdentifier = {
 };
 
 /**
- * Resolve a non-email login identifier without ever handling the password.
- * The pre-Auth lookup crosses the database boundary only through the narrow
- * SECURITY DEFINER RPC; public.users is never opened to anon for direct reads.
+ * Resolve a login identifier without ever handling the password in the
+ * pre-auth lookup. Username resolution crosses the database boundary only
+ * through the narrow SECURITY DEFINER RPC; public.users is never opened to
+ * anon for direct reads. Email-shaped identifiers fall back to direct Auth
+ * only when no username row resolves.
  */
 export async function resolveTrustedLoginIdentifier(
   supabase: SupabaseClient,
@@ -92,16 +94,19 @@ export async function resolveTrustedLoginIdentifier(
   if (typeof identifier !== 'string' || !identifier.trim()) {
     throw new TrustedAuthenticationError('INVALID_CREDENTIALS');
   }
-  const normalized = identifier.trim();
-  if (isEmailIdentifier(normalized)) return { email: normalized.toLowerCase() };
+  const rawIdentifier = identifier;
+  const normalized = rawIdentifier.trim();
 
   const { data, error } = await supabase.rpc('dbsec004_resolve_login_username', {
-    p_username: normalized
+    p_username: rawIdentifier
   });
-  if (error || typeof data !== 'string' || !data.trim()) {
-    throw new TrustedAuthenticationError('INVALID_CREDENTIALS');
+  if (!error && typeof data === 'string' && data.trim()) {
+    return { email: data.trim().toLowerCase() };
   }
-  return { email: data.trim().toLowerCase() };
+  // An email-shaped identifier may still be a valid Auth email even when it
+  // has no public.users username row (for example, a platform administrator).
+  if (isEmailIdentifier(normalized)) return { email: normalized.toLowerCase() };
+  throw new TrustedAuthenticationError('INVALID_CREDENTIALS');
 }
 
 async function resolveTrustedTenantId(supabase: SupabaseClient): Promise<string> {

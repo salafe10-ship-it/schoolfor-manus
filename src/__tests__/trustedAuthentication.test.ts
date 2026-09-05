@@ -25,10 +25,10 @@ const baseUser = (metadata: Record<string, unknown> = {}): SupabaseUser => ({
 
 const fakeClient = ({ loginError = null, user = baseUser(), session = { access_token: 'access-token', refresh_token: 'refresh-token', expires_at: 2000 }, school = { id: 'school-1', display_name: 'Test School', status: 'active' }, schoolError = null, branch = { id: 'branch-1', school_id: 'school-1', name: 'Main Branch', address: { city: 'Riyadh' }, status: 'active', deleted_at: null }, branchError = null }: any = {}): any => ({ auth: { signInWithPassword: vi.fn().mockResolvedValue({ data: loginError ? { user: null, session: null } : { user, session }, error: loginError }), getUser: vi.fn().mockResolvedValue({ data: { user }, error: loginError }), refreshSession: vi.fn().mockResolvedValue({ data: loginError ? { user: null, session: null } : { user, session }, error: loginError }) }, rpc: vi.fn(async (functionName: string) => functionName === 'dbsec004_current_tenant_id' ? { data: 'tenant-1', error: null } : { data: null, error: new Error('unexpected RPC invocation') }), from: vi.fn((table: string) => { const filters: Record<string, unknown> = {}; const query: any = { select: vi.fn(() => query), eq: vi.fn((column: string, value: unknown) => { filters[column] = value; return query; }), is: vi.fn((column: string, value: unknown) => { filters[column] = value; return query; }), order: vi.fn(() => query), limit: vi.fn(() => query), maybeSingle: vi.fn().mockImplementation(async () => { if (table === 'schools') return { data: school, error: schoolError }; if (table === 'academic_years') return { data: { name: '2025-2026', code: '2025-2026' }, error: null }; if (table === 'branches') { const matches = Boolean(branch && branch.id === filters.id && branch.school_id === filters.school_id && branch.status === 'active' && branch.deleted_at === null); return { data: matches ? branch : null, error: branchError }; } return { data: null, error: null }; }) }; return query; }) });
 
-const usernameClient = (row: Record<string, unknown> | null, options: { user?: SupabaseUser; school?: any; branch?: any } = {}): any => {
+const usernameClient = (row: Record<string, unknown> | null, options: { user?: SupabaseUser; school?: any; branch?: any } = {}, expectedUsername = 'schooladmin'): any => {
   const client = fakeClient({ user: options.user || baseUser(), school: options.school, branch: options.branch });
   const rpc = vi.fn(async (functionName: string, args: Record<string, unknown>) => {
-    if (functionName !== 'dbsec004_resolve_login_username' || args.p_username !== 'schooladmin') {
+    if (functionName !== 'dbsec004_resolve_login_username' || String(args.p_username || '').trim() !== expectedUsername) {
       return { data: null, error: new Error('unexpected username RPC invocation') };
     }
     return { data: typeof row?.email === 'string' ? row.email : null, error: null };
@@ -127,6 +127,22 @@ describe('Login identifier resolution', () => {
     expect(client.auth.signInWithPassword).toHaveBeenCalledWith({ email: 'user@example.com', password: 'correct' });
     expect(rpc).toHaveBeenCalledWith('dbsec004_resolve_login_username', { p_username: 'schooladmin' });
     expect(rpc.mock.calls[0][1]).not.toHaveProperty('password');
+  });
+
+  it('preserves arbitrary surrounding username whitespace for the server-side resolver', async () => {
+    const { client, rpc } = usernameClient({ email: 'user@example.com', school_id: 'school-1' });
+    await authenticateTrustedUser(client, '  schooladmin  ', 'correct');
+    expect(rpc).toHaveBeenCalledWith('dbsec004_resolve_login_username', { p_username: '  schooladmin  ' });
+  });
+
+  it('resolves an email-shaped username before falling back to direct Auth email login', async () => {
+    const { client } = usernameClient(
+      { email: 'mapped@example.com', school_id: 'school-1' },
+      {},
+      'name@example.com',
+    );
+    await authenticateTrustedUser(client, 'name@example.com', 'correct');
+    expect(client.auth.signInWithPassword).toHaveBeenCalledWith({ email: 'mapped@example.com', password: 'correct' });
   });
 
   it('denies a username whose authenticated trusted identity is outside the requested school', async () => {

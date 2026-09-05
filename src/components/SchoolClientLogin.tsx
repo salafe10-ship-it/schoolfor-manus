@@ -22,7 +22,7 @@ import { School } from '../types';
 
 interface SchoolClientLoginProps {
   selectedSchool: School;
-  onSchoolLogin: (username: string, password: string, rememberMe: boolean) => void | Promise<void>;
+  onSchoolLogin: (username: string, password: string, rememberMe: boolean) => boolean | void | Promise<boolean | void>;
   onForgotPassword?: (identifier: string) => boolean | Promise<boolean>;
   onSwitchToSuperAdminLogin?: () => void;
   triggerNotification: (msg: string, type: 'success' | 'warning' | 'info') => void;
@@ -46,23 +46,30 @@ export default function SchoolClientLogin({
   const [showRecoveryRequest, setShowRecoveryRequest] = useState(false);
   const [isSendingRecovery, setIsSendingRecovery] = useState(false);
   const [showPassword, setShowPassword] = useState(false);
-  const [rememberMe, setRememberMe] = useState(true);
+  const [rememberMe, setRememberMe] = useState(false);
 
   const [isLoggingIn, setIsLoggingIn] = useState(false);
+  const [loginError, setLoginError] = useState('');
 
   const handleLoginSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
     if (!username.trim()) {
+      setLoginError('يرجى إدخال اسم المستخدم أو البريد الإلكتروني للوصول للنظام');
       triggerNotification('يرجى إدخال اسم المستخدم أو البريد الإلكتروني للوصول للنظام', 'warning');
       return;
     }
     if (!password.trim()) {
+      setLoginError('يرجى إدخال كلمة المرور الخاصة بك');
       triggerNotification('يرجى إدخال كلمة المرور الخاصة بك', 'warning');
       return;
     }
+    setLoginError('');
     setIsLoggingIn(true);
     try {
-      await onSchoolLogin(username.trim(), password, rememberMe);
+      const authenticated = await onSchoolLogin(username, password, rememberMe);
+      if (authenticated === false) {
+        setLoginError('بيانات الدخول غير صحيحة أو أن الحساب غير متاح');
+      }
     } finally {
       setIsLoggingIn(false);
     }
@@ -282,6 +289,14 @@ export default function SchoolClientLogin({
           </div>
 
           {/* LOGIN FORM */}
+          {loginError && (
+            <div role="alert" aria-live="polite" className={`mb-4 border px-4 py-3 text-xs font-black leading-relaxed ${
+              isDark ? 'border-rose-500/40 bg-rose-950/30 text-rose-200' : 'border-rose-300 bg-rose-50 text-rose-800'
+            }`}>
+              {loginError}
+            </div>
+          )}
+
           <form onSubmit={handleLoginSubmit} className="space-y-4">
             
             {/* Username Field */}
@@ -297,7 +312,7 @@ export default function SchoolClientLogin({
                   inputMode="text"
                   autoComplete='username'
                   value={username}
-                  onChange={(e) => setUsername(e.target.value)}
+                  onChange={(e) => { setUsername(e.target.value); setLoginError(''); }}
                   placeholder="أدخل اسم المستخدم أو البريد الإلكتروني"
                   required
                   className={`w-full border text-xs font-bold pr-10 pl-4 py-3 outline-none transition-all shadow-inner ${
@@ -326,7 +341,7 @@ export default function SchoolClientLogin({
                   type={showPassword ? "text" : "password"}
                   autoComplete='current-password'
                   value={password}
-                  onChange={(e) => setPassword(e.target.value)}
+                  onChange={(e) => { setPassword(e.target.value); setLoginError(''); }}
                   placeholder="أدخل كلمة المرور"
                   required
                   className={`w-full border text-xs font-bold pr-10 pl-10 py-3 outline-none transition-all shadow-inner ${

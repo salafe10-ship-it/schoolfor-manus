@@ -53,6 +53,7 @@ const MIGRATIONS = [
   '202608311600_canonical_student_graduation.sql',
   '202608311700_production_closure_immutability.sql',
   '202609011000_platform_rbac_catalog_seed.sql',
+  '202609051000_unrestricted_username_login.sql',
 ] as const;
 
 function requireExact(value: string | undefined, code: string): string {

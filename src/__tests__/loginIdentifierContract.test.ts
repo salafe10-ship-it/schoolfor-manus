@@ -33,4 +33,17 @@ describe('LOGIN USERNAME/EMAIL contract', () => {
     expect(source).not.toContain('schooladmin');
     expect(source).not.toContain('School@2026#Test');
   });
+
+  it('keeps username shape unrestricted while preserving trusted lookup normalization', () => {
+    const migration = read('supabase/migrations/202609051000_unrestricted_username_login.sql');
+    expect(migration).toContain('DROP CONSTRAINT IF EXISTS ck_users_username_format');
+    expect(migration).toContain('lower(btrim(u.username)) = lower(btrim(p_username))');
+    expect(migration).not.toContain("username !~");
+  });
+
+  it('shows a visible login error when the trusted server rejects credentials', () => {
+    const source = read('src/components/SchoolClientLogin.tsx');
+    expect(source).toContain('role="alert"');
+    expect(source).toContain('authenticated === false');
+  });
 });
