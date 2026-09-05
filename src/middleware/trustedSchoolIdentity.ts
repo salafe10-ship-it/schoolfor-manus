@@ -18,6 +18,8 @@ export type TrustedSchoolPresentation = {
   status: 'active' | 'frozen';
   /** Server-derived customer UX profile; no central metadata is exposed. */
   portalProfile: 'standard' | 'customer_production';
+  /** Safe, boolean-only feature flags for this school; no control-plane data. */
+  features?: Record<string, boolean>;
   connectedDb?: string;
 };
 
@@ -43,6 +45,11 @@ export function toTrustedSchoolPresentation(record: SchoolRecord): TrustedSchool
   const name = String(record.display_name || record.legal_name || id).trim();
   if (!id || !name) throw new Error('Trusted school record is incomplete.');
 
+  const rawFeatures = record.central_metadata?.features;
+  const features = rawFeatures && typeof rawFeatures === 'object' && !Array.isArray(rawFeatures)
+    ? Object.fromEntries(Object.entries(rawFeatures).filter(([, value]) => typeof value === 'boolean')) as Record<string, boolean>
+    : {};
+
   return {
     id,
     name,
@@ -55,6 +62,7 @@ export function toTrustedSchoolPresentation(record: SchoolRecord): TrustedSchool
     academicYear: '',
     status: normalizeSchoolStatus(record.status),
     portalProfile: normalizePortalProfile(record.central_metadata?.portal_profile),
+    features,
     connectedDb: 'trusted-school-scope'
   };
 }

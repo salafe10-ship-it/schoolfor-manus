@@ -474,7 +474,7 @@ export default function SuperAdminSchools({
   };
 
   // Copying configuration requires a dedicated, audited central transaction.
-  const handleRunCloneSettings = () => {
+  const handleRunCloneSettings = async () => {
     if (!cloneWizard.sourceSchoolId || !cloneWizard.destSchoolId) {
       triggerNotification('يرجى اختيار مدرسة المصدر ومدرسة الهدف للنسخ', 'warning');
       return;
@@ -484,8 +484,54 @@ export default function SuperAdminSchools({
       return;
     }
 
-    setCloneWizard(prev => ({ ...prev, isProcessing: false, progress: 0, logs: [] }));
-    triggerNotification('النسخ بين المدارس يحتاج معاملة مركزية مدققة لم تُفعّل بعد؛ لم يتم تعديل أي مدرسة.', 'warning');
+    const sourceSchool = schools.find((school) => school.id === cloneWizard.sourceSchoolId);
+    const destinationSchool = schools.find((school) => school.id === cloneWizard.destSchoolId);
+    if (!sourceSchool || !destinationSchool) {
+      triggerNotification('تعذر التحقق من مدرسة المصدر أو الهدف؛ لم يتم تعديل أي مدرسة.', 'danger');
+      return;
+    }
+    const sourceFeatures = sourceSchool.features && typeof sourceSchool.features === 'object' ? sourceSchool.features : {};
+    if (!Object.keys(sourceFeatures).length && !sourceSchool.templateId) {
+      triggerNotification('مدرسة المصدر لا تحتوي قالبًا أو ميزات موثقة قابلة للنقل.', 'warning');
+      return;
+    }
+    setCloneWizard(prev => ({ ...prev, isProcessing: true, progress: 20, logs: ['تم التحقق من المصدر والهدف.'] }));
+    try {
+      const response = await authenticatedRequest('/api/admin/central/releases', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          scope: 'school',
+          schoolId: destinationSchool.id,
+          templateId: sourceSchool.templateId || undefined,
+          featureOverrides: Object.keys(sourceFeatures).length ? sourceFeatures : undefined,
+          channel: 'pilot',
+          title: `نقل إعدادات موثق من ${sourceSchool.name}`,
+          notes: `نسخ إعدادات القالب والميزات فقط. الخيارات الأكاديمية والمالية لا تنقل بيانات تشغيلية بين المدارس. طلبه المالك من شاشة المدارس.`,
+        }),
+      });
+      const payload = await response.json().catch(() => ({}));
+      if (!response.ok || !payload?.success) throw new Error(payload?.message || 'تعذر نقل إعدادات المدرسة.');
+      const canonical = Array.isArray(payload.schools) ? payload.schools[0] : null;
+      if (canonical) {
+        const metadata = canonical.central_metadata && typeof canonical.central_metadata === 'object' ? canonical.central_metadata : {};
+        setSchools((current) => current.map((school) => school.id === canonical.id ? {
+          ...school,
+          ...metadata,
+          name: canonical.display_name,
+          schoolCode: canonical.school_code,
+          status: canonical.status,
+          features: metadata.features || {},
+        } : school));
+      }
+      setCloneWizard(prev => ({ ...prev, isProcessing: false, progress: 100, logs: [...prev.logs, 'تم اعتماد الإصدار الموجّه للمدرسة الهدف.'] }));
+      logAction('PUBLISH_SCHOOL_CONFIGURATION_RELEASE', `نقل قالب وميزات موثقة من ${sourceSchool.name} إلى ${destinationSchool.name}`, 'مركز المالك والإصدارات');
+      triggerNotification(`تم نقل الإعدادات الموثقة إلى ${destinationSchool.name} فقط. لم تُنقل أي بيانات تشغيلية أو مالية.`, 'success');
+      setShowCloneModal(false);
+    } catch (error) {
+      setCloneWizard(prev => ({ ...prev, isProcessing: false, progress: 0, logs: [...prev.logs, 'فشل النقل ولم يتم تغيير الهدف.'] }));
+      triggerNotification(error instanceof Error ? error.message : 'تعذر نقل الإعدادات؛ لم تتغير المدرسة الهدف.', 'danger');
+    }
   };
 
   // Reset clone wizard

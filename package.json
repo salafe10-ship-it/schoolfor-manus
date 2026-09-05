@@ -23,6 +23,7 @@
     "lint": "tsc --noEmit",
     "db:migrate": "tsx src/database/scripts/migrate.ts",
     "db:verify-central": "tsx scripts/verify-central-control-plane.ts",
+    "db:apply-owner-workspace": "tsx scripts/apply-owner-workspace-releases.ts",
     "db:seed": "tsx src/database/scripts/seed.ts",
     "loadtest:central": "tsx scripts/load-test-central.ts",
     "provisioning:bootstrap": "tsx scripts/provisioning-bootstrap.ts",

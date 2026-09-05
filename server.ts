@@ -2008,6 +2008,477 @@ async function startServer() {
     return Object.fromEntries(Object.entries(metadata as Record<string, unknown>).filter(([key]) => !legacyKeys.has(key)));
   };
 
+  // Owner workspace helpers.  These records are deliberately served only by
+  // the verified Platform.Admin control plane; tenant requests never receive
+  // another school's release manifest or target list.
+  const isUuid = (value: unknown): value is string => /^[0-9a-f-]{36}$/i.test(String(value || '').trim());
+  const readObject = (value: unknown): Record<string, unknown> => (
+    value && typeof value === 'object' && !Array.isArray(value) ? value as Record<string, unknown> : {}
+  );
+  const normalizeFeatureOverrides = (value: unknown): Record<string, boolean> => {
+    if (value === undefined || value === null) return {};
+    if (!value || typeof value !== 'object' || Array.isArray(value)) throw new ValidationError('مصفوفة ميزات الإصدار غير صالحة.');
+    const entries = Object.entries(value as Record<string, unknown>);
+    if (entries.length > 100) throw new ValidationError('عدد ميزات الإصدار يتجاوز الحد المسموح.');
+    const normalized: Record<string, boolean> = {};
+    for (const [rawKey, rawValue] of entries) {
+      const key = String(rawKey || '').trim();
+      if (!/^[A-Za-z0-9_-]{1,80}$/.test(key)) throw new ValidationError('مفتاح الميزة غير صالح.');
+      if (typeof rawValue !== 'boolean') throw new ValidationError('كل قيمة في ميزات الإصدار يجب أن تكون true أو false.');
+      normalized[key] = rawValue;
+    }
+    return normalized;
+  };
+  const workspaceColumns = `
+    id, school_id, template_id, release_version, release_kind, scope, channel,
+    status, title, notes, feature_overrides, payload, created_by_auth_user_id,
+    created_at, activated_at, rolled_back_at`;
+  const workspaceSelectColumns = workspaceColumns.split(',').map((column) => `r.${column.trim()}`).join(', ');
+
+  app.get('/api/admin/central/workspaces', authenticateRequest, requirePermissionOnly(PERMISSIONS.PLATFORM_ADMIN), async (_req, res, next) => {
+    if (!platformAdminPool) return next(new DatabaseError('مصدر مساحة المالك المركزية غير متاح.'));
+    try {
+      const result = await platformAdminPool.query(`
+        SELECT s.id AS school_id, s.tenant_id, s.display_name, s.school_code, s.status,
+               s.central_metadata,
+               latest.id AS latest_release_id,
+               latest.release_version AS latest_release_version,
+               latest.release_kind AS latest_release_kind,
+               latest.channel AS latest_release_channel,
+               latest.title AS latest_release_title,
+               latest.created_at AS latest_release_at,
+               latest.template_id AS latest_template_id,
+               template.template_key AS latest_template_key,
+               template.name AS latest_template_name,
+               template.version AS latest_template_version
+          FROM public.schools s
+          LEFT JOIN LATERAL (
+            SELECT r.*
+              FROM public.platform_school_releases r
+             WHERE r.school_id = s.id
+               AND r.status = 'active'
+             ORDER BY r.release_version DESC
+             LIMIT 1
+          ) latest ON true
+          LEFT JOIN public.platform_templates template ON template.id = latest.template_id
+         WHERE s.deleted_at IS NULL
+         ORDER BY s.created_at DESC
+      `);
+      const templates = await platformAdminPool.query(`
+        SELECT id, template_key, name, description, version, status, manifest, created_at, updated_at
+          FROM public.platform_templates
+         WHERE status <> 'archived'
+         ORDER BY updated_at DESC, name ASC
+      `);
+      const workspaces = result.rows.map((row: any) => {
+        const metadata = readObject(row.central_metadata);
+        const workspace = readObject(metadata.ownerWorkspace);
+        return {
+          schoolId: row.school_id,
+          tenantId: row.tenant_id,
+          schoolName: row.display_name,
+          schoolCode: row.school_code,
+          schoolStatus: row.status,
+          mode: String(workspace.mode || 'customer'),
+          releaseChannel: String(workspace.releaseChannel || row.latest_release_channel || 'stable'),
+          currentReleaseId: row.latest_release_id || workspace.currentReleaseId || null,
+          currentReleaseVersion: Number(row.latest_release_version || workspace.currentReleaseVersion || 0),
+          templateId: row.latest_template_id || workspace.templateId || null,
+          templateKey: row.latest_template_key || workspace.templateKey || null,
+          templateVersion: Number(row.latest_template_version || workspace.templateVersion || 0),
+          lastReleaseTitle: row.latest_release_title || null,
+          lastReleaseAt: row.latest_release_at || null,
+          features: readObject(metadata.features),
+        };
+      });
+      return res.json({ success: true, workspaces, templates: templates.rows });
+    } catch (error) {
+      return next(new DatabaseError('تعذر قراءة مساحات المدارس وإصداراتها.', error instanceof Error ? error.message : String(error)));
+    }
+  });
+
+  app.get('/api/admin/central/templates', authenticateRequest, requirePermissionOnly(PERMISSIONS.PLATFORM_ADMIN), async (_req, res, next) => {
+    if (!platformAdminPool) return next(new DatabaseError('مصدر قوالب المالك غير متاح.'));
+    try {
+      const result = await platformAdminPool.query(`
+        SELECT id, template_key, name, description, version, status, manifest, created_at, updated_at
+          FROM public.platform_templates
+         WHERE status <> 'archived'
+         ORDER BY updated_at DESC, name ASC
+      `);
+      return res.json({ success: true, templates: result.rows });
+    } catch (error) {
+      return next(new DatabaseError('تعذر قراءة قوالب النظام.', error instanceof Error ? error.message : String(error)));
+    }
+  });
+
+  app.post('/api/admin/central/templates', authenticateRequest, requirePermissionOnly(PERMISSIONS.PLATFORM_ADMIN), async (req, res, next) => {
+    if (!platformAdminPool) return next(new DatabaseError('مصدر قوالب المالك غير متاح.'));
+    const identity = (req as any).user as { id?: string };
+    const actorAuthUserId = String(identity?.id || '').trim();
+    const sourceSchoolId = String(req.body?.sourceSchoolId || '').trim();
+    const templateKey = String(req.body?.templateKey || '').trim().toLowerCase();
+    const name = String(req.body?.name || '').trim();
+    const description = String(req.body?.description || '').trim() || null;
+    if (!isUuid(actorAuthUserId)) return next(new AuthenticationError('هوية مالك المنصة غير مكتملة.'));
+    if (!/^[a-z0-9](?:[a-z0-9._-]{0,126}[a-z0-9])?$/.test(templateKey)) return next(new ValidationError('مفتاح القالب غير صالح.'));
+    if (name.length < 2 || name.length > 160) return next(new ValidationError('اسم القالب يجب أن يكون بين حرفين و160 حرفاً.'));
+    if (sourceSchoolId && !isUuid(sourceSchoolId)) return next(new ValidationError('مدرسة مصدر القالب غير صالحة.'));
+    try {
+      let manifest = readObject(req.body?.manifest);
+      if (sourceSchoolId) {
+        const source = await platformAdminPool.query<{ central_metadata: unknown }>(
+          `SELECT central_metadata FROM public.schools WHERE id = $1::uuid AND deleted_at IS NULL`,
+          [sourceSchoolId],
+        );
+        if (source.rowCount !== 1) return next(new ConflictError('مدرسة مصدر القالب غير موجودة.'));
+        const metadata = readObject(source.rows[0].central_metadata);
+        manifest = {
+          ...manifest,
+          features: readObject(metadata.features),
+          sourceSchoolId,
+          capturedAt: new Date().toISOString(),
+        };
+      }
+      const result = await platformAdminPool.query(
+        `INSERT INTO public.platform_templates
+          (template_key, name, description, version, status, manifest, created_by_auth_user_id, updated_by_auth_user_id)
+         VALUES ($1, $2, $3, 1, 'draft', $4::jsonb, $5::uuid, $5::uuid)
+         RETURNING id, template_key, name, description, version, status, manifest, created_at, updated_at`,
+        [templateKey, name, description, JSON.stringify(manifest), actorAuthUserId],
+      );
+      return res.status(201).json({ success: true, template: result.rows[0] });
+    } catch (error) {
+      if (error instanceof ConflictError) return next(error);
+      return next(/duplicate|unique/i.test(error instanceof Error ? error.message : '')
+        ? new ConflictError('مفتاح القالب مستخدم مسبقاً.')
+        : new DatabaseError('تعذر إنشاء قالب النظام.', error instanceof Error ? error.message : String(error)));
+    }
+  });
+
+  app.patch('/api/admin/central/templates/:templateId', authenticateRequest, requirePermissionOnly(PERMISSIONS.PLATFORM_ADMIN), async (req, res, next) => {
+    if (!platformAdminPool) return next(new DatabaseError('مصدر قوالب المالك غير متاح.'));
+    const identity = (req as any).user as { id?: string };
+    const actorAuthUserId = String(identity?.id || '').trim();
+    const templateId = String(req.params.templateId || '').trim();
+    const operation = String(req.body?.operation || '').trim();
+    if (!isUuid(actorAuthUserId) || !isUuid(templateId)) return next(new ValidationError('معرف القالب أو هوية المالك غير صالح.'));
+    if (!['publish', 'archive', 'update'].includes(operation)) return next(new ValidationError('عملية القالب غير معتمدة.'));
+    try {
+      let result;
+      if (operation === 'archive') {
+        result = await platformAdminPool.query(
+          `UPDATE public.platform_templates
+              SET status = 'archived', updated_at = now(), updated_by_auth_user_id = $2::uuid
+            WHERE id = $1::uuid AND status <> 'archived'
+          RETURNING id, template_key, name, description, version, status, manifest, created_at, updated_at`,
+          [templateId, actorAuthUserId],
+        );
+      } else {
+        const manifest = readObject(req.body?.manifest);
+        const name = String(req.body?.name || '').trim();
+        if (name && (name.length < 2 || name.length > 160)) return next(new ValidationError('اسم القالب غير صالح.'));
+        result = await platformAdminPool.query(
+          `UPDATE public.platform_templates
+              SET name = COALESCE(NULLIF($2, ''), name),
+                  description = COALESCE($3, description),
+                  manifest = CASE WHEN $4::jsonb = '{}'::jsonb THEN manifest ELSE $4::jsonb END,
+                  version = version + 1,
+                  status = $5,
+                  updated_at = now(), updated_by_auth_user_id = $6::uuid
+            WHERE id = $1::uuid AND status <> 'archived'
+          RETURNING id, template_key, name, description, version, status, manifest, created_at, updated_at`,
+          [templateId, name, String(req.body?.description || '').trim() || null, JSON.stringify(manifest), operation === 'publish' ? 'published' : 'draft', actorAuthUserId],
+        );
+      }
+      if (result.rowCount !== 1) return next(new ConflictError('القالب غير موجود أو مؤرشف.'));
+      return res.json({ success: true, template: result.rows[0] });
+    } catch (error) {
+      return next(new DatabaseError('تعذر تحديث قالب النظام.', error instanceof Error ? error.message : String(error)));
+    }
+  });
+
+  app.get('/api/admin/central/releases', authenticateRequest, requirePermissionOnly(PERMISSIONS.PLATFORM_ADMIN), async (req, res, next) => {
+    if (!platformAdminPool) return next(new DatabaseError('مصدر إصدارات المالك غير متاح.'));
+    const schoolId = String(req.query?.schoolId || '').trim();
+    if (schoolId && !isUuid(schoolId)) return next(new ValidationError('معرف المدرسة غير صالح.'));
+    try {
+      const result = await platformAdminPool.query(`
+        SELECT ${workspaceSelectColumns},
+               s.display_name AS school_name, s.school_code,
+               t.template_key, t.name AS template_name, t.version AS template_version
+          FROM public.platform_school_releases r
+          JOIN public.schools s ON s.id = r.school_id
+          LEFT JOIN public.platform_templates t ON t.id = r.template_id
+         WHERE ($1::uuid IS NULL OR r.school_id = $1::uuid)
+         ORDER BY r.created_at DESC
+         LIMIT 250
+      `, [schoolId || null]);
+      return res.json({ success: true, releases: result.rows });
+    } catch (error) {
+      return next(new DatabaseError('تعذر قراءة سجل إصدارات المدارس.', error instanceof Error ? error.message : String(error)));
+    }
+  });
+
+  app.post('/api/admin/central/releases', authenticateRequest, requirePermissionOnly(PERMISSIONS.PLATFORM_ADMIN), async (req, res, next) => {
+    if (!platformAdminPool) return next(new DatabaseError('مصدر إصدارات المالك غير متاح.'));
+    const identity = (req as any).user as { id?: string };
+    const actorAuthUserId = String(identity?.id || '').trim();
+    const requestBody = (req.body && typeof req.body === 'object' ? req.body : {}) as Record<string, unknown>;
+    const scope = String(req.body?.scope || 'school').trim() as 'school' | 'selected' | 'global';
+    const requestedSchoolIds = Array.isArray(requestBody.schoolIds) ? requestBody.schoolIds.map((id: unknown) => String(id || '').trim()).filter(Boolean) : [];
+    const singleSchoolId = String(req.body?.schoolId || '').trim();
+    const templateId = String(req.body?.templateId || '').trim();
+    const title = String(req.body?.title || '').trim();
+    const notes = String(req.body?.notes || '').trim() || null;
+    const channel = String(req.body?.channel || 'stable').trim() as 'stable' | 'pilot';
+    let featureOverrides: Record<string, boolean> = {};
+    try {
+      featureOverrides = normalizeFeatureOverrides(req.body?.featureOverrides);
+    } catch (error) {
+      return next(error);
+    }
+    const hasFeatures = Object.keys(featureOverrides).length > 0;
+    if (!isUuid(actorAuthUserId)) return next(new AuthenticationError('هوية مالك المنصة غير مكتملة.'));
+    if (!['school', 'selected', 'global'].includes(scope)) return next(new ValidationError('نطاق الإصدار غير معتمد.'));
+    if (scope === 'school' && !isUuid(singleSchoolId)) return next(new ValidationError('اختر مدرسة واحدة للإصدار الموجّه.'));
+    if (scope === 'selected' && (!requestedSchoolIds.length || requestedSchoolIds.length > 200)) return next(new ValidationError('اختر مدرسة واحدة على الأقل وبحد أقصى 200 مدرسة.'));
+    if (requestedSchoolIds.some((id: string) => !isUuid(id)) || (templateId && !isUuid(templateId))) return next(new ValidationError('معرف المدرسة أو القالب غير صالح.'));
+    if (!title || title.length < 2 || title.length > 200) return next(new ValidationError('عنوان الإصدار يجب أن يكون بين حرفين و200 حرفاً.'));
+    if (!['stable', 'pilot'].includes(channel)) return next(new ValidationError('قناة الإصدار غير معتمدة.'));
+    if (!templateId && !hasFeatures) return next(new ValidationError('الإصدار يحتاج قالباً أو ميزة واحدة على الأقل.'));
+    const targetIds = [...new Set(scope === 'school' ? [singleSchoolId] : requestedSchoolIds)];
+    const client = await platformAdminPool.connect();
+    try {
+      await client.query('BEGIN');
+      await client.query("SET LOCAL statement_timeout = '20s'");
+      const targets = scope === 'global'
+        ? await client.query<{ id: string; tenant_id: string; central_metadata: unknown; display_name: string }>(
+          `SELECT id, tenant_id, central_metadata, display_name
+             FROM public.schools
+            WHERE status = 'active' AND deleted_at IS NULL
+            ORDER BY created_at ASC
+            FOR UPDATE`,
+        )
+        : await client.query<{ id: string; tenant_id: string; central_metadata: unknown; display_name: string }>(
+          `SELECT id, tenant_id, central_metadata, display_name
+             FROM public.schools
+            WHERE id = ANY($1::uuid[]) AND status <> 'archived' AND deleted_at IS NULL
+            ORDER BY created_at ASC
+            FOR UPDATE`,
+          [targetIds],
+        );
+      if (!targets.rows.length || targets.rows.length !== (scope === 'global' ? targets.rows.length : targetIds.length)) {
+        throw new ConflictError('مدرسة مستهدفة غير موجودة أو مؤرشفة؛ لم يُطبق الإصدار على أي مدرسة.');
+      }
+      let template: any = null;
+      if (templateId) {
+        const templateResult = await client.query(
+          `SELECT id, template_key, name, version, status, manifest
+             FROM public.platform_templates
+            WHERE id = $1::uuid AND status IN ('draft', 'published')
+            FOR SHARE`,
+          [templateId],
+        );
+        if (templateResult.rowCount !== 1) throw new ConflictError('القالب غير موجود أو مؤرشف.');
+        template = templateResult.rows[0];
+      }
+      const releases: any[] = [];
+      const updatedSchools: any[] = [];
+      for (const target of targets.rows) {
+        const previousVersion = await client.query<{ next_version: number }>(
+          `SELECT COALESCE(MAX(release_version), 0) + 1 AS next_version
+             FROM public.platform_school_releases
+            WHERE school_id = $1::uuid`,
+          [target.id],
+        );
+        const releaseVersion = Number(previousVersion.rows[0]?.next_version || 1);
+        const releaseId = randomUUID();
+        const metadata = readObject(target.central_metadata);
+        const previousWorkspace = readObject(metadata.ownerWorkspace);
+        const nextMetadata: Record<string, unknown> = {
+          ...metadata,
+          ownerWorkspace: {
+            ...previousWorkspace,
+            mode: 'customer',
+            releaseChannel: channel,
+            currentReleaseId: releaseId,
+            currentReleaseVersion: releaseVersion,
+            ...(template ? { templateId: template.id, templateKey: template.template_key, templateVersion: template.version } : {}),
+            lastReleaseTitle: title,
+            lastReleaseAt: new Date().toISOString(),
+          },
+          ...(hasFeatures ? { features: { ...readObject(metadata.features), ...featureOverrides } } : {}),
+        };
+        const releaseResult = await client.query(
+          `INSERT INTO public.platform_school_releases
+            (id, school_id, template_id, release_version, release_kind, scope, channel, status, title, notes, feature_overrides, payload, created_by_auth_user_id)
+           VALUES ($1::uuid, $2::uuid, $3::uuid, $4, $5, $6, $7, 'active', $8, $9, $10::jsonb, $11::jsonb, $12::uuid)
+           RETURNING ${workspaceColumns}`,
+          [
+            releaseId,
+            target.id,
+            template?.id || null,
+            releaseVersion,
+            template && hasFeatures ? 'combined' : template ? 'template' : 'features',
+            scope,
+            channel,
+            title,
+            notes,
+            JSON.stringify(featureOverrides),
+            JSON.stringify({
+              templateKey: template?.template_key || null,
+              templateVersion: template?.version || null,
+              features: nextMetadata.features || {},
+            }),
+            actorAuthUserId,
+          ],
+        );
+        const schoolResult = await client.query(
+          `UPDATE public.schools
+              SET central_metadata = $2::jsonb,
+                  updated_at = now(), version = version + 1
+            WHERE id = $1::uuid
+          RETURNING id, tenant_id, display_name, school_code, status, central_metadata`,
+          [target.id, JSON.stringify(nextMetadata)],
+        );
+        releases.push(releaseResult.rows[0]);
+        updatedSchools.push(schoolResult.rows[0]);
+      }
+      await client.query('COMMIT');
+      return res.status(201).json({
+        success: true,
+        scope,
+        targetCount: updatedSchools.length,
+        releases,
+        schools: updatedSchools,
+      });
+    } catch (error) {
+      try { await client.query('ROLLBACK'); } catch { /* preserve original error */ }
+      return next(error instanceof ConflictError || error instanceof ValidationError
+        ? error
+        : new DatabaseError('تعذر اعتماد الإصدار الموجّه؛ لم يتم تعديل أي مدرسة.', error instanceof Error ? error.message : String(error)));
+    } finally {
+      client.release();
+    }
+  });
+
+  app.post('/api/admin/central/releases/:releaseId/rollback', authenticateRequest, requirePermissionOnly(PERMISSIONS.PLATFORM_ADMIN), async (req, res, next) => {
+    if (!platformAdminPool) return next(new DatabaseError('مصدر إصدارات المالك غير متاح.'));
+    const identity = (req as any).user as { id?: string };
+    const actorAuthUserId = String(identity?.id || '').trim();
+    const releaseId = String(req.params.releaseId || '').trim();
+    if (!isUuid(actorAuthUserId) || !isUuid(releaseId)) return next(new ValidationError('معرف الإصدار أو هوية المالك غير صالح.'));
+    const client = await platformAdminPool.connect();
+    try {
+      await client.query('BEGIN');
+      const current = await client.query<any>(
+        `SELECT r.*, s.central_metadata
+           FROM public.platform_school_releases r
+           JOIN public.schools s ON s.id = r.school_id
+          WHERE r.id = $1::uuid AND r.status = 'active'
+          FOR UPDATE`,
+        [releaseId],
+      );
+      if (current.rowCount !== 1) throw new ConflictError('الإصدار غير موجود أو تمت معالجته مسبقًا.');
+      const row = current.rows[0];
+      const previous = await client.query<any>(
+        `SELECT * FROM public.platform_school_releases
+          WHERE school_id = $1::uuid AND status = 'active' AND release_version < $2
+          ORDER BY release_version DESC LIMIT 1`,
+        [row.school_id, row.release_version],
+      );
+      const previousRow = previous.rows[0] || null;
+      const metadata = readObject(row.central_metadata);
+      const currentWorkspace = readObject(metadata.ownerWorkspace);
+      const fallbackFeatures = previousRow?.payload?.features && typeof previousRow.payload.features === 'object'
+        ? previousRow.payload.features
+        : readObject(metadata.features);
+      const nextMetadata = {
+        ...metadata,
+        features: fallbackFeatures,
+        ownerWorkspace: {
+          ...currentWorkspace,
+          currentReleaseId: previousRow?.id || null,
+          currentReleaseVersion: Number(previousRow?.release_version || 0),
+          templateId: previousRow?.template_id || null,
+          templateVersion: Number(previousRow?.payload?.templateVersion || 0),
+          lastReleaseTitle: previousRow?.title || 'لا يوجد إصدار سابق',
+          lastReleaseAt: previousRow?.created_at || null,
+        },
+      };
+      await client.query(
+        `UPDATE public.platform_school_releases SET status = 'rolled_back', rolled_back_at = now() WHERE id = $1::uuid`,
+        [releaseId],
+      );
+      const school = await client.query(
+        `UPDATE public.schools SET central_metadata = $2::jsonb, updated_at = now(), version = version + 1
+          WHERE id = $1::uuid
+        RETURNING id, tenant_id, display_name, school_code, status, central_metadata`,
+        [row.school_id, JSON.stringify(nextMetadata)],
+      );
+      await client.query('COMMIT');
+      return res.json({ success: true, rolledBackReleaseId: releaseId, previousReleaseId: previousRow?.id || null, school: school.rows[0] });
+    } catch (error) {
+      try { await client.query('ROLLBACK'); } catch { /* preserve original error */ }
+      return next(error instanceof ConflictError ? error : new DatabaseError('تعذر التراجع عن الإصدار؛ لم تتغير المدرسة.', error instanceof Error ? error.message : String(error)));
+    } finally {
+      client.release();
+    }
+  });
+
+  // Tenant-facing workspace state is intentionally restricted to the
+  // verified school in the session. It supports near-real-time refresh of
+  // targeted feature releases without exposing the central control plane.
+  app.get('/api/school/workspace', authenticateRequest, async (req, res, next) => {
+    if (!platformAdminPool) return next(new DatabaseError('مصدر إعدادات المدرسة غير متاح.'));
+    const identity = (req as any).user as { schoolId?: string };
+    const schoolId = String(identity?.schoolId || '').trim();
+    if (!isUuid(schoolId)) return next(new AuthorizationError('هذه النقطة متاحة فقط داخل جلسة مدرسة موثقة.'));
+    disableAuthCaching(res);
+    try {
+      const result = await platformAdminPool.query<any>(
+        `SELECT s.id, s.display_name, s.status, s.central_metadata,
+                r.id AS release_id, r.release_version, r.release_kind, r.channel,
+                r.title AS release_title, r.created_at AS release_created_at,
+                r.template_id, t.template_key, t.version AS template_version
+           FROM public.schools s
+           LEFT JOIN LATERAL (
+             SELECT * FROM public.platform_school_releases
+              WHERE school_id = s.id AND status = 'active'
+              ORDER BY release_version DESC LIMIT 1
+           ) r ON true
+           LEFT JOIN public.platform_templates t ON t.id = r.template_id
+          WHERE s.id = $1::uuid AND s.status = 'active' AND s.deleted_at IS NULL`,
+        [schoolId],
+      );
+      if (result.rowCount !== 1) return next(new ConflictError('إعدادات المدرسة غير متاحة.'));
+      const row = result.rows[0];
+      const metadata = readObject(row.central_metadata);
+      const workspace = readObject(metadata.ownerWorkspace);
+      return res.json({
+        success: true,
+        workspace: {
+          schoolId: row.id,
+          schoolName: row.display_name,
+          status: row.status,
+          features: readObject(metadata.features),
+          releaseId: row.release_id || workspace.currentReleaseId || null,
+          releaseVersion: Number(row.release_version || workspace.currentReleaseVersion || 0),
+          releaseKind: row.release_kind || null,
+          releaseChannel: row.channel || workspace.releaseChannel || 'stable',
+          releaseTitle: row.release_title || workspace.lastReleaseTitle || null,
+          releaseAt: row.release_created_at || workspace.lastReleaseAt || null,
+          templateId: row.template_id || workspace.templateId || null,
+          templateKey: row.template_key || workspace.templateKey || null,
+          templateVersion: Number(row.template_version || workspace.templateVersion || 0),
+        },
+      });
+    } catch (error) {
+      return next(new DatabaseError('تعذر قراءة إعدادات مساحة المدرسة.', error instanceof Error ? error.message : String(error)));
+    }
+  });
+
   // A small, truthful health probe for the canonical control-plane database.
   // It reports the connection round trip plus migration drift for the objects
   // required by the central directory. CPU, storage, network and backup

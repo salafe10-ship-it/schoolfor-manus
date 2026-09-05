@@ -431,7 +431,8 @@ export default function App() {
       email: trustedSchool.email,
       academicYear: trustedSchool.academicYear || user.academicYear || '',
       status: trustedSchool.status,
-      connectedDb: trustedSchool.connectedDb
+      connectedDb: trustedSchool.connectedDb,
+      features: trustedSchool.features || {}
     } : {
       ...UNRESOLVED_SCHOOL,
       name: 'الإدارة المركزية',
@@ -609,6 +610,47 @@ export default function App() {
     setDrillDownUser(null);
     setShowConfigModal(false);
   }, [isCustomerProductionPortal, selectedBranch, canonicalPersistenceRequired]);
+
+  // School-specific releases are refreshed from the trusted server.  This
+  // keeps an already-open customer portal aligned with a targeted owner
+  // release without ever accepting a browser-supplied school id.
+  useEffect(() => {
+    if (!isCustomerProductionPortal || !trustedSessionUser?.schoolId) return;
+    let cancelled = false;
+    const refreshWorkspace = async () => {
+      try {
+        const response = await authenticatedRequest('/api/school/workspace', { cache: 'no-store' });
+        const payload = await response.json().catch(() => ({}));
+        if (cancelled || !response.ok || !payload?.success || !payload.workspace) return;
+        const workspace = payload.workspace;
+        if (workspace.schoolId !== trustedSessionUser.schoolId) return;
+        setSelectedSchool((current) => current.id === workspace.schoolId
+          ? {
+              ...current,
+              features: workspace.features && typeof workspace.features === 'object' ? workspace.features : current.features || {},
+              releaseVersion: Number(workspace.releaseVersion || 0),
+              templateId: workspace.templateId || current.templateId,
+              templateVersion: Number(workspace.templateVersion || current.templateVersion || 0),
+            }
+          : current);
+        window.dispatchEvent(new CustomEvent('erp_workspace_changed', { detail: workspace }));
+      } catch {
+        // The customer portal keeps its last trusted state during a transient
+        // network failure; it never falls back to local or synthetic flags.
+      }
+    };
+    void refreshWorkspace();
+    const handleRefresh = () => { void refreshWorkspace(); };
+    window.addEventListener('focus', handleRefresh);
+    window.addEventListener('visibilitychange', handleRefresh);
+    const intervalId = window.setInterval(refreshWorkspace, 30_000);
+    return () => {
+      cancelled = true;
+      window.removeEventListener('focus', handleRefresh);
+      window.removeEventListener('visibilitychange', handleRefresh);
+      window.clearInterval(intervalId);
+    };
+  }, [isCustomerProductionPortal, trustedSessionUser?.schoolId]);
 
   // Expanded Student Enterprise States
   const [selectedStudentEnterpriseId, setSelectedStudentEnterpriseId] = useState<string>('');

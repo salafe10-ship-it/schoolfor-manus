@@ -135,6 +135,7 @@ async function main() {
         'supabase/migrations/202609031300_uniform_inventory_sales.sql',
         'supabase/migrations/202609031400_arabic_username_login.sql',
         'supabase/migrations/202609051000_unrestricted_username_login.sql',
+        'supabase/migrations/202609051100_owner_workspace_releases.sql',
       ]) migrations.push(await applyMigration(client, migration));
 
       const tenantId = randomUUID();
