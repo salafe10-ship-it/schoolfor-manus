@@ -2096,6 +2096,99 @@ async function startServer() {
     status, title, notes, feature_overrides, payload, created_by_auth_user_id,
     created_at, activated_at, rolled_back_at`;
   const workspaceSelectColumns = workspaceColumns.split(',').map((column) => `r.${column.trim()}`).join(', ');
+  const CANONICAL_SCHOOL_TEMPLATE_KEY = 'central-schools-default';
+
+  /**
+   * Publishes one immutable, auditable release per customer school currently
+   * subscribed to the canonical template. Operational records (students,
+   * finance, HR, and inventory) are never copied; this is configuration and
+   * feature policy only. The caller owns the surrounding transaction.
+   */
+  const propagateCanonicalTemplate = async (client: any, template: any, actorAuthUserId: string) => {
+    if (template.template_key !== CANONICAL_SCHOOL_TEMPLATE_KEY || template.status !== 'published') {
+      return { targetCount: 0, releases: [], schools: [] };
+    }
+    const targets = await client.query(
+      `SELECT id, central_metadata
+         FROM public.schools
+        WHERE status = 'active' AND deleted_at IS NULL
+          AND COALESCE(central_metadata->>'portal_profile', '') <> 'owner_controlled'
+          AND COALESCE(central_metadata->'ownerWorkspace'->>'mode', '') <> 'owner'
+          AND (
+            central_metadata->'ownerWorkspace'->>'templateId' = $1::text
+            OR central_metadata->'ownerWorkspace'->>'templateKey' = $2
+          )
+        ORDER BY created_at ASC
+        FOR UPDATE`,
+      [template.id, CANONICAL_SCHOOL_TEMPLATE_KEY],
+    );
+    const releases: any[] = [];
+    const schools: any[] = [];
+    const templateManifest = normalizeTemplateManifest(template.manifest);
+    const templateFeatures = normalizeFeatureOverrides(templateManifest.features);
+    const releaseTitle = `تحديث تلقائي من ${template.name} — الإصدار ${template.version}`;
+    for (const target of targets.rows) {
+      const versionResult = await client.query(
+        `SELECT COALESCE(MAX(release_version), 0) + 1 AS next_version
+           FROM public.platform_school_releases
+          WHERE school_id = $1::uuid`,
+        [target.id],
+      );
+      const releaseVersion = Number(versionResult.rows[0]?.next_version || 1);
+      const releaseId = randomUUID();
+      const metadata = readObject(target.central_metadata);
+      const workspace = readObject(metadata.ownerWorkspace);
+      const nextMetadata = {
+        ...metadata,
+        features: templateFeatures,
+        ownerWorkspace: {
+          ...workspace,
+          mode: 'customer',
+          releaseChannel: 'stable',
+          currentReleaseId: releaseId,
+          currentReleaseVersion: releaseVersion,
+          templateId: template.id,
+          templateKey: template.template_key,
+          templateVersion: template.version,
+          lastReleaseTitle: releaseTitle,
+          lastReleaseAt: new Date().toISOString(),
+        },
+      };
+      const release = await client.query(
+        `INSERT INTO public.platform_school_releases
+          (id, school_id, template_id, release_version, release_kind, scope, channel, status, title, notes, feature_overrides, payload, created_by_auth_user_id)
+         VALUES ($1::uuid, $2::uuid, $3::uuid, $4, 'template', 'global', 'stable', 'active', $5, $6, '{}'::jsonb, $7::jsonb, $8::uuid)
+         RETURNING ${workspaceColumns}`,
+        [
+          releaseId,
+          target.id,
+          template.id,
+          releaseVersion,
+          releaseTitle,
+          'توزيع تلقائي من قالب المدارس المركزي؛ لا يشمل بيانات التشغيل الخاصة بالمدرسة.',
+          JSON.stringify({
+            template: templateManifest,
+            overrides: {},
+            templateKey: template.template_key,
+            templateVersion: template.version,
+            features: templateFeatures,
+            automaticPropagation: true,
+          }),
+          actorAuthUserId,
+        ],
+      );
+      const school = await client.query(
+        `UPDATE public.schools
+            SET central_metadata = $2::jsonb, updated_at = now(), version = version + 1
+          WHERE id = $1::uuid
+        RETURNING id, tenant_id, display_name, school_code, status, central_metadata`,
+        [target.id, JSON.stringify(nextMetadata)],
+      );
+      releases.push(release.rows[0]);
+      schools.push(school.rows[0]);
+    }
+    return { targetCount: schools.length, releases, schools };
+  };
 
   app.get('/api/admin/central/workspaces', authenticateRequest, requirePermissionOnly(PERMISSIONS.PLATFORM_ADMIN), async (_req, res, next) => {
     if (!platformAdminPool) return next(new DatabaseError('مصدر مساحة المالك المركزية غير متاح.'));
@@ -2248,10 +2341,12 @@ async function startServer() {
     const operation = String(req.body?.operation || '').trim();
     if (!isUuid(actorAuthUserId) || !isUuid(templateId)) return next(new ValidationError('معرف القالب أو هوية المالك غير صالح.'));
     if (!['publish', 'archive', 'update', 'capture'].includes(operation)) return next(new ValidationError('عملية القالب غير معتمدة.'));
+    const client = await platformAdminPool.connect();
     try {
-      let result;
+      await client.query('BEGIN');
+      let result: any;
       if (operation === 'archive') {
-        result = await platformAdminPool.query(
+        result = await client.query(
           `UPDATE public.platform_templates
               SET status = 'archived', updated_at = now(), updated_by_auth_user_id = $2::uuid
             WHERE id = $1::uuid AND status <> 'archived'
@@ -2259,7 +2354,7 @@ async function startServer() {
           [templateId, actorAuthUserId],
         );
       } else if (operation === 'capture') {
-        const ownerSchool = await platformAdminPool.query<{ id: string; central_metadata: unknown }>(
+        const ownerSchool = await client.query<{ id: string; central_metadata: unknown }>(
           `SELECT id, central_metadata
              FROM public.schools
             WHERE deleted_at IS NULL
@@ -2267,28 +2362,28 @@ async function startServer() {
             ORDER BY created_at ASC
             LIMIT 1`,
         );
-        if (ownerSchool.rowCount !== 1) return next(new ConflictError('لا توجد مدرسة مركزية مربوطة لالتقاط القالب الأساسي.'));
+        if (ownerSchool.rowCount !== 1) throw new ConflictError('لا توجد مدرسة مركزية مربوطة لالتقاط القالب الأساسي.');
         const ownerMetadata = readObject(ownerSchool.rows[0].central_metadata);
         const capturedManifest = {
           features: normalizeFeatureOverrides(ownerMetadata.features),
           sourceSchoolId: ownerSchool.rows[0].id,
           capturedAt: new Date().toISOString(),
         };
-        result = await platformAdminPool.query(
+        result = await client.query(
           `UPDATE public.platform_templates
               SET manifest = manifest || $2::jsonb,
                   version = version + 1,
-                  status = 'draft',
-                  updated_at = now(), updated_by_auth_user_id = $3::uuid
+                  status = CASE WHEN template_key = $3 THEN 'published' ELSE 'draft' END,
+                  updated_at = now(), updated_by_auth_user_id = $4::uuid
             WHERE id = $1::uuid AND status <> 'archived'
           RETURNING id, template_key, name, description, version, status, manifest, created_at, updated_at`,
-          [templateId, JSON.stringify(capturedManifest), actorAuthUserId],
+          [templateId, JSON.stringify(capturedManifest), CANONICAL_SCHOOL_TEMPLATE_KEY, actorAuthUserId],
         );
       } else {
         const manifest = readObject(req.body?.manifest);
         const name = String(req.body?.name || '').trim();
         if (name && (name.length < 2 || name.length > 160)) return next(new ValidationError('اسم القالب غير صالح.'));
-        result = await platformAdminPool.query(
+        result = await client.query(
           `UPDATE public.platform_templates
               SET name = COALESCE(NULLIF($2, ''), name),
                   description = COALESCE($3, description),
@@ -2301,10 +2396,20 @@ async function startServer() {
           [templateId, name, String(req.body?.description || '').trim() || null, JSON.stringify(manifest), operation === 'publish' ? 'published' : 'draft', actorAuthUserId],
         );
       }
-      if (result.rowCount !== 1) return next(new ConflictError('القالب غير موجود أو مؤرشف.'));
-      return res.json({ success: true, template: result.rows[0] });
+      if (result.rowCount !== 1) throw new ConflictError('القالب غير موجود أو مؤرشف.');
+      const template = result.rows[0];
+      const propagation = (operation === 'capture' || operation === 'publish')
+        ? await propagateCanonicalTemplate(client, template, actorAuthUserId)
+        : { targetCount: 0, releases: [], schools: [] };
+      await client.query('COMMIT');
+      return res.json({ success: true, template, propagation });
     } catch (error) {
-      return next(new DatabaseError('تعذر تحديث قالب النظام.', error instanceof Error ? error.message : String(error)));
+      try { await client.query('ROLLBACK'); } catch { /* preserve original error */ }
+      return next(error instanceof ConflictError || error instanceof ValidationError
+        ? error
+        : new DatabaseError('تعذر تحديث قالب النظام.', error instanceof Error ? error.message : String(error)));
+    } finally {
+      client.release();
     }
   });
 
@@ -3290,7 +3395,7 @@ async function startServer() {
           .from('platform_templates')
           .select('id, template_key, name, version, status, manifest')
           .eq('status', 'published')
-          .order('updated_at', { ascending: false })
+          .eq('template_key', CANONICAL_SCHOOL_TEMPLATE_KEY)
           .limit(1);
         if (templateError) throw templateError;
         if (!templateRows?.length) throw new ConflictError('لا يوجد قالب مالك منشور؛ انشر قالبًا قبل فتح مدرسة جديدة.');
@@ -3408,10 +3513,10 @@ async function startServer() {
       const templateResult = await client.query<any>(
         `SELECT id, template_key, name, version, status, manifest
            FROM public.platform_templates
-          WHERE status = 'published'
-          ORDER BY updated_at DESC
+          WHERE status = 'published' AND template_key = $1
           LIMIT 1
           FOR SHARE`,
+        [CANONICAL_SCHOOL_TEMPLATE_KEY],
       );
       if (templateResult.rowCount !== 1) throw new ConflictError('لا يوجد قالب مالك منشور؛ انشر قالبًا قبل فتح مدرسة جديدة.');
       const defaultTemplate = templateResult.rows[0];

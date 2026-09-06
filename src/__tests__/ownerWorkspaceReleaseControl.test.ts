@@ -60,15 +60,18 @@ describe('owner workspace and targeted release contract', () => {
     expect(component).toContain('diffFeatures(features, releaseBaseFeatures)');
   });
 
-  it('captures central-school changes as a reviewed draft before distribution', () => {
+  it('automatically publishes canonical template updates to bound customer schools', () => {
     const server = read('server.ts');
     const component = read('src/components/super-admin/SuperAdminWorkspaceControl.tsx');
     expect(server).toContain("['publish', 'archive', 'update', 'capture']");
-    expect(server).toContain("status = 'draft'");
+    expect(server).toContain("CANONICAL_SCHOOL_TEMPLATE_KEY = 'central-schools-default'");
+    expect(server).toContain('propagateCanonicalTemplate');
+    expect(server).toContain('automaticPropagation: true');
+    expect(server).toContain("status = CASE WHEN template_key = $3 THEN 'published' ELSE 'draft' END");
     expect(server).toContain('manifest = manifest || $2::jsonb');
     expect(component).toContain("body: JSON.stringify({ operation: 'capture' })");
-    expect(component).toContain('التقاط آخر إعدادات المدرسة');
-    expect(component).toContain('اعتماد القالب للتوزيع');
+    expect(component).toContain('حفظ وتوزيع تحديث القالب');
+    expect(component).toContain('توزيعها تلقائياً');
   });
 
   it('requires an explicit release scope and writes versioned target records', () => {

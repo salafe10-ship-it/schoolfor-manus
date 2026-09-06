@@ -258,7 +258,7 @@ export default function SuperAdminWorkspaceControl({
 
   const captureTemplate = async () => {
     if (!managedTemplateId || !ownerWorkspace) return;
-    if (managedTemplate?.status === 'published' && !window.confirm('سيتم التقاط إعدادات المدرسة المركزية وإعادة القالب إلى حالة المسودة للمراجعة. هل تريد المتابعة؟')) return;
+    if (managedTemplate?.status === 'published' && !window.confirm('سيتم حفظ آخر إعدادات المدرسة المركزية كإصدار جديد وتوزيعها تلقائياً على المدارس المرتبطة بالقالب. هل تريد المتابعة؟')) return;
     setIsCapturingTemplate(true);
     try {
       const response = await authenticatedRequest(`/api/admin/central/templates/${encodeURIComponent(managedTemplateId)}`, {
@@ -269,9 +269,11 @@ export default function SuperAdminWorkspaceControl({
       const payload = await response.json().catch(() => ({}));
       if (!response.ok || !payload?.success || !payload.template) throw new Error(payload?.message || 'تعذر التقاط إعدادات المدرسة المركزية.');
       setTemplates((current) => current.map((template) => template.id === payload.template.id ? payload.template : template));
-      if (releaseTemplateId === payload.template.id) setReleaseTemplateId('');
-      logAction('CAPTURE_CENTRAL_SCHOOL_TEMPLATE', `التقاط الإصدار ${payload.template.version} من المدرسة المركزية`, 'المدرسة المركزية والقوالب');
-      triggerNotification('تم التقاط التغييرات كمسودة جديدة. المدارس الحالية لم تتأثر.', 'success');
+      setReleaseTemplateId(payload.template.id);
+      const targetCount = Number(payload?.propagation?.targetCount || 0);
+      logAction('CAPTURE_AND_AUTO_PROPAGATE_CENTRAL_TEMPLATE', `تحديث الإصدار ${payload.template.version} من المدرسة المركزية وتوزيعه تلقائياً على ${targetCount} مدرسة`, 'المدرسة المركزية والقوالب');
+      triggerNotification(`تم حفظ إصدار القالب وتوزيعه تلقائياً على ${targetCount} مدرسة مرتبطة.`, 'success');
+      await loadControlPlane();
     } catch (error) {
       triggerNotification(error instanceof Error ? error.message : 'تعذر التقاط إعدادات المدرسة المركزية.', 'danger');
     } finally {
@@ -292,9 +294,10 @@ export default function SuperAdminWorkspaceControl({
       if (!response.ok || !payload?.success || !payload.template) throw new Error(payload?.message || 'تعذر اعتماد القالب.');
       setTemplates((current) => current.map((template) => template.id === payload.template.id ? payload.template : template));
       setReleaseTemplateId(payload.template.id);
-      logAction('PUBLISH_CENTRAL_SCHOOL_TEMPLATE', `اعتماد القالب [${payload.template.name}] للإصدارات الموجّهة`, 'المدرسة المركزية والقوالب');
-      triggerNotification('تم اعتماد القالب وأصبح جاهزًا للتوزيع. لا تزال المدارس دون تغيير حتى نشر إصدار.', 'success');
-      scrollToSection('release-builder');
+      const targetCount = Number(payload?.propagation?.targetCount || 0);
+      logAction('PUBLISH_AND_AUTO_PROPAGATE_CENTRAL_TEMPLATE', `اعتماد القالب [${payload.template.name}] وتوزيعه تلقائياً على ${targetCount} مدرسة`, 'المدرسة المركزية والقوالب');
+      triggerNotification(`تم اعتماد القالب وتوزيعه تلقائياً على ${targetCount} مدرسة مرتبطة.`, 'success');
+      await loadControlPlane();
     } catch (error) {
       triggerNotification(error instanceof Error ? error.message : 'تعذر اعتماد القالب.', 'danger');
     } finally {
@@ -435,7 +438,7 @@ export default function SuperAdminWorkspaceControl({
 
       <section id="base-template" className="scroll-mt-6 rounded-3xl border border-slate-200 bg-white p-5 shadow-lg dark:border-slate-800 dark:bg-slate-900">
         <div className="flex flex-col gap-3 border-b border-slate-100 pb-4 sm:flex-row sm:items-center sm:justify-between dark:border-slate-800">
-          <div><h3 className="flex items-center gap-2 text-sm font-black text-slate-900 dark:text-white"><Layers3 className="h-5 w-5 text-indigo-600" />٢. القالب الأساسي — التقاط ثم اعتماد</h3><p className="mt-1 text-[10px] font-bold text-slate-500">الالتقاط يصنع مسودة فقط؛ الاعتماد لا يغيّر أي مدرسة حتى تنفيذ خطوة التوزيع.</p></div>
+          <div><h3 className="flex items-center gap-2 text-sm font-black text-slate-900 dark:text-white"><Layers3 className="h-5 w-5 text-indigo-600" />٢. القالب الأساسي — حفظ وتوزيع تلقائي</h3><p className="mt-1 text-[10px] font-bold text-slate-500">حفظ تحديث قالب المدارس المركزي ينشئ إصداراً موثقاً ويصل تلقائياً إلى المدارس المرتبطة؛ بيانات الطلاب والمالية لا تُنسخ.</p></div>
           {managedTemplate && <span className={`w-fit rounded-full px-3 py-1.5 text-[10px] font-black ${managedTemplate.status === 'published' ? 'bg-emerald-100 text-emerald-700 dark:bg-emerald-950/40 dark:text-emerald-300' : 'bg-amber-100 text-amber-800 dark:bg-amber-950/40 dark:text-amber-300'}`}>{templateStatusLabel(managedTemplate.status)}</span>}
         </div>
         {templates.length > 0 ? (
@@ -448,7 +451,7 @@ export default function SuperAdminWorkspaceControl({
                 <div className="col-span-2"><InfoBox label="آخر التقاط" value={formatDate(managedManifest.capturedAt || managedTemplate?.updated_at)} /></div>
               </div>
               <div className="flex flex-wrap gap-2">
-                <button type="button" onClick={() => void captureTemplate()} disabled={!ownerWorkspace || !managedTemplateId || isCapturingTemplate} className="inline-flex items-center gap-2 rounded-xl border border-indigo-200 bg-indigo-50 px-4 py-2.5 text-[11px] font-black text-indigo-700 transition hover:bg-indigo-100 disabled:opacity-40 dark:border-indigo-900/50 dark:bg-indigo-950/30 dark:text-indigo-300"><ClipboardCopy className="h-4 w-4" />{isCapturingTemplate ? 'جارٍ الالتقاط...' : 'التقاط آخر إعدادات المدرسة'}</button>
+                <button type="button" onClick={() => void captureTemplate()} disabled={!ownerWorkspace || !managedTemplateId || isCapturingTemplate} className="inline-flex items-center gap-2 rounded-xl border border-indigo-200 bg-indigo-50 px-4 py-2.5 text-[11px] font-black text-indigo-700 transition hover:bg-indigo-100 disabled:opacity-40 dark:border-indigo-900/50 dark:bg-indigo-950/30 dark:text-indigo-300"><ClipboardCopy className="h-4 w-4" />{isCapturingTemplate ? 'جارٍ الحفظ والتوزيع...' : 'حفظ وتوزيع تحديث القالب'}</button>
                 <button type="button" onClick={() => void publishTemplate()} disabled={!managedTemplateId || managedTemplate?.status === 'published' || isPublishingTemplate} className="inline-flex items-center gap-2 rounded-xl bg-emerald-600 px-4 py-2.5 text-[11px] font-black text-white transition hover:bg-emerald-700 disabled:cursor-not-allowed disabled:opacity-40"><ShieldCheck className="h-4 w-4" />{isPublishingTemplate ? 'جارٍ الاعتماد...' : 'اعتماد القالب للتوزيع'}</button>
               </div>
             </div>
@@ -529,7 +532,7 @@ export default function SuperAdminWorkspaceControl({
         </div>
       </section>
 
-      <div className="rounded-2xl border border-emerald-200 bg-emerald-50 p-4 text-[11px] font-bold leading-6 text-emerald-900 dark:border-emerald-900/40 dark:bg-emerald-950/20 dark:text-emerald-300"><CheckCircle2 className="ml-1 inline h-4 w-4" /> النموذج التشغيلي الآن واضح: المدرسة المركزية تُجهّز وتختبر، الإدارة المركزية تلتقط وتعتمد وتوزّع، والمدارس العميلة تستقبل إصدارًا معزولًا قابلًا للتراجع.</div>
+      <div className="rounded-2xl border border-emerald-200 bg-emerald-50 p-4 text-[11px] font-bold leading-6 text-emerald-900 dark:border-emerald-900/40 dark:bg-emerald-950/20 dark:text-emerald-300"><CheckCircle2 className="ml-1 inline h-4 w-4" /> النموذج التشغيلي الآن واضح: تعديلات «قالب المدارس المركزي» تحفظ كإصدار موثق وتنتقل تلقائياً إلى المدارس المرتبطة، بينما تبقى بيانات كل مدرسة وعملاؤها ومعاملاتها معزولة وقابلة للتراجع لكل مدرسة.</div>
     </div>
   );
 }
