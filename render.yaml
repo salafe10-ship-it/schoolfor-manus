@@ -5,6 +5,9 @@ services:
     runtime: node
     plan: free
     autoDeployTrigger: commit
+    # Keep the staging service pinned to the tested release branch. Without an
+    # explicit branch, a Blueprint recreation can fall back to master.
+    branch: codex/checkpoint-2026-08-23
     # Refuse a deployment build until the production/staging configuration is
     # complete and secure; the gate never prints secret values.
     buildCommand: npm ci --include=dev && npm run production:gate && npm run build
