@@ -24,7 +24,6 @@ interface SchoolClientLoginProps {
   selectedSchool: School;
   onSchoolLogin: (username: string, password: string, rememberMe: boolean) => boolean | void | Promise<boolean | void>;
   onForgotPassword?: (identifier: string) => boolean | Promise<boolean>;
-  onSwitchToSuperAdminLogin?: () => void;
   triggerNotification: (msg: string, type: 'success' | 'warning' | 'info') => void;
   theme: 'light' | 'dark';
   onThemeToggle: () => void;
@@ -34,7 +33,6 @@ export default function SchoolClientLogin({
   selectedSchool,
   onSchoolLogin,
   onForgotPassword,
-  onSwitchToSuperAdminLogin,
   triggerNotification,
   theme,
   onThemeToggle
@@ -97,7 +95,7 @@ export default function SchoolClientLogin({
   const isDark = theme === 'dark';
 
   return (
-    <div className={`min-h-screen w-full flex flex-col justify-between relative overflow-x-hidden font-sans dir-rtl select-none transition-colors duration-300 ${
+    <div className={`login-school-shell min-h-screen w-full flex flex-col justify-between relative overflow-x-hidden font-sans dir-rtl select-none transition-colors duration-300 ${
       isDark 
         ? 'bg-slate-950 text-slate-100' 
         : 'bg-gradient-to-b from-[#dfcaaa] via-[#f3e7d3] to-[#cbb28d] text-[#3d2b0f]'
@@ -166,7 +164,7 @@ export default function SchoolClientLogin({
       </div>
 
       {/* TOP HEADER CONTROLS */}
-      <header className="relative z-20 w-full max-w-7xl mx-auto px-6 pt-5 pb-2 flex items-center justify-between">
+      <header className="login-school-header relative z-20 w-full max-w-7xl mx-auto px-6 pt-5 pb-2 flex items-center justify-between">
         
         {/* Top-Right: Language Dropdown & Theme Toggle */}
         <div className="flex items-center gap-2">
@@ -213,26 +211,12 @@ export default function SchoolClientLogin({
             <span>الدعم الفني</span>
           </button>
 
-          {onSwitchToSuperAdminLogin && (
-            <button
-              type="button"
-              onClick={onSwitchToSuperAdminLogin}
-              className={`font-bold text-xs px-3.5 py-2 rounded-full border shadow-md flex items-center gap-1.5 transition-all cursor-pointer ${
-                isDark 
-                  ? 'bg-amber-500 text-slate-950 hover:bg-amber-400 border-amber-300' 
-                  : 'bg-[#2a1d0f] hover:bg-[#3d2c18] text-[#fef08a] border-[#c5a059]/60'
-              }`}
-            >
-              <ShieldCheck className="w-4 h-4 text-amber-400" />
-              <span className="hidden sm:inline">الإدارة المركزية</span>
-            </button>
-          )}
         </div>
 
       </header>
 
       {/* MAIN CENTER SECTION */}
-      <main className="relative z-10 my-auto w-full max-w-7xl mx-auto px-4 py-4 flex flex-col items-center justify-center">
+      <main className="login-school-main relative z-10 my-auto w-full max-w-7xl mx-auto px-4 py-4 flex flex-col items-center justify-center">
         
         {/* BRAND IDENTITY LOGO AT TOP OF FORM */}
         <div className="flex flex-col items-center justify-center text-center mb-6">
@@ -488,7 +472,7 @@ export default function SchoolClientLogin({
       </main>
 
       {/* BOTTOM FLOATING FEATURE HIGHLIGHTS PANEL */}
-      <footer className="relative z-20 w-full max-w-6xl mx-auto px-4 pb-6 pt-2">
+      <footer className="login-school-footer relative z-20 w-full max-w-6xl mx-auto px-4 pb-6 pt-2">
         <div className={`border p-3.5 grid grid-cols-2 sm:grid-cols-5 gap-3 text-center ${
           isDark 
             ? 'bg-slate-900/90 border-amber-500/30 text-slate-200' 

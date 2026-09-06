@@ -8,7 +8,7 @@ import { storageService } from './services/storage/StorageService';
 import { EnterpriseLogger } from './database/services/EnterpriseLogger';
 import { NotificationEngine, NotificationType, NotificationCategory } from './database/services/NotificationEngine';
 import * as React from 'react';
-import { useState, useMemo, useEffect, useCallback } from 'react';
+import { useState, useMemo, useEffect, useCallback, useRef } from 'react';
 import Sidebar from './components/Sidebar';
 import EnterpriseActionToolbar from './components/shared/EnterpriseActionToolbar';
 import TopNavigation from './components/TopNavigation';
@@ -23,6 +23,7 @@ const AcademicAffairsPortal = React.lazy(() => import('./components/AcademicAffa
 import SmartPortalGateway from './components/SmartPortalGateway';
 import SchoolClientLogin from './components/SchoolClientLogin';
 import PasswordRecoveryScreen from './components/PasswordRecoveryScreen';
+import { isSaveActionLabel, withSaveSuccessMessage } from './utils/saveConfirmation';
 const HumanResourcesPortal = React.lazy(() => import('./components/hr/HumanResourcesPortal'));
 const ExamsResultsModule = React.lazy(() => import('./components/ExamsResultsModule'));
 const ExamsErrorBoundary = React.lazy(() => import('./components/ExamsErrorBoundary'));
@@ -213,16 +214,15 @@ export default function App() {
   };
 
   // Client Mode isolation detector
-  const isClientMode = useMemo(() => {
-    if (hasTrustedPlatformAdminAccess(trustedSessionUser)) return false;
-    if (currentPortal === 'school') return true;
-    if (typeof window !== 'undefined') {
-      const params = new URLSearchParams(window.location.search);
-      const schoolParam = params.get('school') || params.get('tenant') || params.get('schoolId');
-      if (schoolParam) return true;
-    }
-    return false;
-  }, [currentPortal, trustedSessionUser]);
+  const schoolPortalContext = useMemo(() => {
+    if (typeof window === 'undefined') return '';
+    const params = new URLSearchParams(window.location.search);
+    return (params.get('school') || params.get('tenant') || params.get('schoolId') || '').trim();
+  }, []);
+
+  const isClientMode = useMemo(() => (
+    currentPortal === 'school' || Boolean(schoolPortalContext)
+  ), [currentPortal, schoolPortalContext]);
 
   // This profile comes from the school row after the server has verified the
   // authenticated identity. It cannot be turned on with browser state, a
@@ -255,7 +255,7 @@ export default function App() {
 
     if (isCustomerProductionPortal) {
       return (
-        <div className="min-h-[65vh] flex items-center justify-center p-6 bg-[#f8f5ee] rounded-3xl m-4" dir="rtl">
+        <div className="access-denied-screen min-h-[65vh] flex items-center justify-center p-6 bg-[#f8f5ee] rounded-3xl m-4" dir="rtl">
           <div className="max-w-md w-full text-center space-y-5 rounded-3xl border border-[#d4af37]/35 bg-white p-8 shadow-xl">
             <div className="mx-auto flex h-16 w-16 items-center justify-center rounded-2xl bg-[#2a1a0e] text-amber-300">
               <LockIcon className="h-8 w-8" />
@@ -278,7 +278,7 @@ export default function App() {
 
     if (isCentralAdminSection && isClientMode) {
       return (
-        <div className="min-h-[75vh] flex items-center justify-center p-6 bg-slate-900 text-white rounded-3xl border border-rose-900/60 shadow-2xl m-4" dir="rtl">
+        <div className="access-denied-screen min-h-[75vh] flex items-center justify-center p-6 bg-slate-900 text-white rounded-3xl border border-rose-900/60 shadow-2xl m-4" dir="rtl">
           <div className="max-w-md w-full text-center space-y-6">
             <div className="relative mx-auto w-20 h-20 flex items-center justify-center bg-rose-950/80 rounded-3xl border border-rose-800/80 shadow-xl">
               <ShieldAlert className="w-10 h-10 text-rose-500 animate-pulse" />
@@ -351,7 +351,7 @@ export default function App() {
     const sectionName = sectionNames[sectionId] || sectionId;
 
     return (
-      <div className="min-h-[70vh] flex items-center justify-center p-6 bg-slate-50 dark:bg-slate-900 rounded-2xl border border-slate-200/80 dark:border-slate-800/80 shadow-xs" dir="rtl">
+      <div className="access-denied-screen min-h-[70vh] flex items-center justify-center p-6 bg-slate-50 dark:bg-slate-900 rounded-2xl border border-slate-200/80 dark:border-slate-800/80 shadow-xs" dir="rtl">
         <div className="max-w-md w-full text-center space-y-6">
           <div className="relative mx-auto w-24 h-24 flex items-center justify-center bg-rose-50 dark:bg-rose-950/30 rounded-3xl border border-rose-100 dark:border-rose-900/50 animate-pulse">
             <LockIcon className="w-12 h-12 text-rose-600 dark:text-rose-400" />
@@ -397,7 +397,14 @@ export default function App() {
 
   // Login flow state is intentionally limited to the portal mode. Identity,
   // role, school, and branch are all supplied by the trusted server session.
-  const [loginPortalMode, setLoginPortalMode] = useState<'school' | 'gateway'>('school');
+  const [loginPortalMode, setLoginPortalMode] = useState<'school' | 'gateway'>(() => (
+    typeof window !== 'undefined' && (() => {
+      const params = new URLSearchParams(window.location.search);
+      return Boolean(params.get('school') || params.get('tenant') || params.get('schoolId'));
+    })()
+      ? 'school'
+      : 'gateway'
+  ));
   
   useEffect(() => {
     if (trustedSessionUser?.schoolId && selectedSchool.id === trustedSessionUser.schoolId) {
@@ -480,6 +487,19 @@ export default function App() {
   useEffect(() => {
     if (!sessionManager.getAccessToken()) return;
 
+    // Never reuse a session from another portal. A school URL always starts
+    // at the school login boundary; the server will validate the submitted
+    // identity against that exact school before issuing a new session.
+    if (schoolPortalContext) {
+      sessionManager.logout();
+      setTrustedSessionUser(null);
+      setCurrentPortal('login');
+      setLoginPortalMode('school');
+      setIsSuperAdminPortalActive(false);
+      setActiveSection('login');
+      return;
+    }
+
     sessionManager.restore()
       .then(user => {
         applyTrustedSessionUser(user);
@@ -492,7 +512,7 @@ export default function App() {
         setIsSuperAdminPortalActive(false);
         setActiveSection('login');
       });
-  }, [applyTrustedSessionUser, saasSchools, sessionManager]);
+  }, [applyTrustedSessionUser, saasSchools, schoolPortalContext, sessionManager]);
 
   // App General Navigation
   const [isSuperAdminPortalActive, setIsSuperAdminPortalActive] = useState<boolean>(false);
@@ -737,6 +757,31 @@ export default function App() {
   // feed. Static seed messages must not imply that a sync, stock alert, or
   // financial review actually occurred.
   const [notifications, setNotifications] = useState<any[]>([]);
+  const [activeToast, setActiveToast] = useState<any>(null);
+  const saveIntentRef = useRef<number | null>(null);
+  const toastTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+
+  useEffect(() => {
+    const markSaveIntent = (label: string) => {
+      if (isSaveActionLabel(label)) saveIntentRef.current = Date.now();
+    };
+    const handleClick = (event: MouseEvent) => {
+      const target = event.target;
+      if (!(target instanceof Element)) return;
+      const control = target.closest('button, [role="button"], input[type="submit"]');
+      markSaveIntent(control?.textContent || (control as HTMLInputElement | null)?.value || '');
+    };
+    const handleSubmit = (event: Event) => {
+      const submitter = (event as SubmitEvent).submitter as HTMLElement | null;
+      markSaveIntent(submitter?.textContent || (submitter as HTMLInputElement | null)?.value || 'حفظ');
+    };
+    document.addEventListener('click', handleClick, true);
+    document.addEventListener('submit', handleSubmit, true);
+    return () => {
+      document.removeEventListener('click', handleClick, true);
+      document.removeEventListener('submit', handleSubmit, true);
+    };
+  }, []);
 
   // Form states for creating/editing records
   const [showSmartHeader, setShowSmartHeader] = useState(false);
@@ -850,15 +895,29 @@ export default function App() {
       type = arg3 as NotificationType;
     }
 
+    const saveIntentIsFresh = saveIntentRef.current !== null && Date.now() - saveIntentRef.current <= 15_000;
+    if (saveIntentIsFresh && (type === 'success' || type === 'info')) {
+      message = withSaveSuccessMessage(message);
+      type = 'success';
+      saveIntentRef.current = null;
+    } else if (saveIntentIsFresh && (type === 'warning' || type === 'error')) {
+      // A failed save must never leave a later success toast attached to it.
+      saveIntentRef.current = null;
+    }
+
     await NotificationEngine.notify({
       message: title ? `${title}: ${message}` : message,
       type: type,
       channels: ['ui']
     }, (msg, t) => {
+      const notification = { id: Date.now().toString(), text: msg, time: 'الآن', type: t };
       setNotifications(prev => [
-        { id: Date.now().toString(), text: msg, time: 'الآن', type: t },
+        notification,
         ...prev
       ]);
+      setActiveToast(notification);
+      if (toastTimerRef.current) clearTimeout(toastTimerRef.current);
+      toastTimerRef.current = setTimeout(() => setActiveToast(null), 5_000);
     });
   };
 
@@ -935,9 +994,12 @@ export default function App() {
     }
 
     try {
-      const user = await sessionManager.login(identifier, password, rememberMe);
+      const user = await sessionManager.login(identifier, password, rememberMe, schoolPortalContext);
       const targetSchool = applyTrustedSessionUser(user);
-      setCurrentPortal(hasTrustedPlatformAdminAccess(user) ? 'admin' : 'school');
+      // A school URL is a hard portal boundary.  A central identity must not
+      // silently escape to the central console just because it has a platform
+      // permission; the server has already verified the requested school.
+      setCurrentPortal(schoolPortalContext ? 'school' : (hasTrustedPlatformAdminAccess(user) ? 'admin' : 'school'));
 
       logAction('PORTAL_LOGIN', `تم تسجيل الدخول الموثوق إلى ${targetSchool.name}`, 'المصادقة والأمان');
       triggerNotification(`تم تسجيل الدخول إلى ${targetSchool.name} بنجاح`, 'success');
@@ -1574,7 +1636,6 @@ export default function App() {
           selectedSchool={selectedSchool}
           onSchoolLogin={handleSchoolLogin}
           onForgotPassword={handleForgotPassword}
-          onSwitchToSuperAdminLogin={() => setLoginPortalMode('gateway')}
           triggerNotification={triggerNotification}
           theme={theme}
           onThemeToggle={toggleTheme}
@@ -1598,7 +1659,8 @@ export default function App() {
   const isSuperAdminViewActive = !isClientMode && hasTrustedPlatformAdminAccess(trustedSessionUser) && isSuperAdminPortalActive && activeSection !== 'system_health';
 
   return (
-    <div className="flex h-screen overflow-hidden bg-slate-50 font-sans text-slate-900 selection:bg-sky-500 selection:text-white w-full" dir="rtl">
+    <div className="workspace-shell flex h-screen min-h-0 overflow-hidden bg-slate-50 font-sans text-slate-900 selection:bg-sky-500 selection:text-white w-full" dir="rtl">
+      <GlobalNotificationToast notification={activeToast} />
       
       {/* Sidebar removed completely as requested */}
 
@@ -1636,7 +1698,7 @@ export default function App() {
         )}
 
         {/* Outer view frame enclosing the interactive visual content of ERP */}
-        <main className={`flex-1 overflow-y-auto bg-gradient-to-br from-[#130b04] via-[#1a1108] to-[#100903] text-[#f7eee1] ${activeSection === 'dashboard' ? 'p-4 sm:p-6' : 'p-0'}`}>
+        <main className={`workspace-main min-h-0 overflow-x-hidden overflow-y-auto bg-gradient-to-br from-[#130b04] via-[#1a1108] to-[#100903] text-[#f7eee1] ${activeSection === 'dashboard' ? 'p-4 sm:p-6' : 'p-0'}`}>
           {isSuperAdminViewActive ? (
             <SuperAdminView
               activeSection={activeSection}
@@ -3401,6 +3463,30 @@ export default function App() {
 
       {/* Global Floating AI Assistant */}
       <AIAssistantPortal />
+    </div>
+  );
+}
+
+function GlobalNotificationToast({ notification }: { notification: { text: string; type: string } | null }) {
+  if (!notification) return null;
+  const isSuccess = notification.type === 'success';
+  const isDanger = notification.type === 'danger' || notification.type === 'error';
+  return (
+    <div
+      role="status"
+      aria-live="polite"
+      className={`pointer-events-none fixed left-1/2 top-5 z-[200] flex max-w-[min(92vw,560px)] -translate-x-1/2 items-center gap-3 rounded-2xl border px-5 py-3 text-xs font-black shadow-2xl backdrop-blur-md ${
+        isSuccess
+          ? 'border-emerald-300 bg-emerald-50/95 text-emerald-800 dark:border-emerald-800 dark:bg-emerald-950/95 dark:text-emerald-200'
+          : isDanger
+            ? 'border-rose-300 bg-rose-50/95 text-rose-800 dark:border-rose-800 dark:bg-rose-950/95 dark:text-rose-200'
+            : 'border-amber-300 bg-amber-50/95 text-amber-800 dark:border-amber-800 dark:bg-amber-950/95 dark:text-amber-200'
+      }`}
+    >
+      <span aria-hidden="true" className={`flex h-6 w-6 shrink-0 items-center justify-center rounded-full text-sm ${isSuccess ? 'bg-emerald-600 text-white' : isDanger ? 'bg-rose-600 text-white' : 'bg-amber-500 text-white'}`}>
+        {isSuccess ? '✓' : isDanger ? '!' : 'i'}
+      </span>
+      <span>{notification.text}</span>
     </div>
   );
 }

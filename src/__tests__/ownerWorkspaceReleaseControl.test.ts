@@ -48,14 +48,27 @@ describe('owner workspace and targeted release contract', () => {
     expect(server).toContain('const sourceSchoolId = requestedSourceSchoolId || ownerSchool.rows[0].id');
   });
 
-  it('keeps school changes as overrides while resolving the latest template at read time', () => {
+  it('keeps school changes as overrides while resolving the immutable release snapshot at read time', () => {
     const server = read('server.ts');
     const component = read('src/components/super-admin/SuperAdminWorkspaceControl.tsx');
     expect(server).toContain('mergeTemplateManifest(');
+    expect(server).toContain('resolveReleaseBaseManifest(');
+    expect(server).toContain('releasePayload.templateVersion || row.template_version');
     expect(server).toContain('t.manifest AS template_manifest');
     expect(server).toContain('r.feature_overrides');
     expect(server).toContain('overrides: manifestOverrides');
-    expect(component).toContain('diffFeatures(features, templateFeatures)');
+    expect(component).toContain('diffFeatures(features, releaseBaseFeatures)');
+  });
+
+  it('captures central-school changes as a reviewed draft before distribution', () => {
+    const server = read('server.ts');
+    const component = read('src/components/super-admin/SuperAdminWorkspaceControl.tsx');
+    expect(server).toContain("['publish', 'archive', 'update', 'capture']");
+    expect(server).toContain("status = 'draft'");
+    expect(server).toContain('manifest = manifest || $2::jsonb');
+    expect(component).toContain("body: JSON.stringify({ operation: 'capture' })");
+    expect(component).toContain('التقاط آخر إعدادات المدرسة');
+    expect(component).toContain('اعتماد القالب للتوزيع');
   });
 
   it('requires an explicit release scope and writes versioned target records', () => {
@@ -63,6 +76,8 @@ describe('owner workspace and targeted release contract', () => {
     expect(server).toContain("app.post('/api/admin/central/releases', authenticateRequest, requirePermissionOnly(PERMISSIONS.PLATFORM_ADMIN)");
     expect(server).toContain("['school', 'selected', 'global']");
     expect(server).toContain('COALESCE(MAX(release_version), 0) + 1');
+    expect(server).toContain("WHERE id = $1::uuid AND status = 'published'");
+    expect(server).toContain("central_metadata->>'portal_profile', '') <> 'owner_controlled'");
     expect(server).toContain("app.post('/api/admin/central/releases/:releaseId/rollback'");
     expect(server).toContain("app.get('/api/school/workspace', authenticateRequest");
     expect(server).not.toContain('req.body.schoolId');
@@ -72,8 +87,10 @@ describe('owner workspace and targeted release contract', () => {
   it('renders the owner control surface and keeps school feature flags server-derived', () => {
     const component = read('src/components/super-admin/SuperAdminWorkspaceControl.tsx');
     const identity = read('src/middleware/trustedSchoolIdentity.ts');
-    expect(component).toContain('مركز المالك ونشر التحديثات الموجّه');
+    expect(component).toContain('المدرسة المركزية والقالب الأساسي');
+    expect(component).toContain('المدرسة المركزية لا تظهر ضمن المستلمين');
     expect(component).toContain("scope === 'global'");
+    expect(component).toContain('globalConfirmation');
     expect(component).toContain('/api/admin/central/releases');
     expect(identity).toContain('Safe, boolean-only feature flags');
     expect(identity).toContain('typeof value === \'boolean\'');

@@ -51,7 +51,14 @@ export function canAccessSection(
   // fall back to the legacy role map for tenant modules. The dashboard is a
   // safe landing surface after authentication; every protected module must
   // remain hidden until the trusted server response includes its permissions.
-  if (!Array.isArray(identity.permissions)) return sectionId === 'dashboard';
+  // The API deliberately serializes an unavailable permission hint as an
+  // empty array.  The dashboard is the safe post-login landing surface, so a
+  // valid trusted school session must not be trapped on a false 403 merely
+  // because the optional visibility hint was unavailable.  Protected modules
+  // still fail closed until explicit server-derived permissions are present.
+  if (!Array.isArray(identity.permissions) || identity.permissions.length === 0) {
+    return sectionId === 'dashboard';
+  }
   return identity.permissions.includes('*') || identity.permissions.includes(permission);
 }
 

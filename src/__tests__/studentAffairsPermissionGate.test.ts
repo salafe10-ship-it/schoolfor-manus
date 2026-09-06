@@ -28,7 +28,8 @@ describe('Student Affairs permission gate', () => {
 
   it('fails closed when the server permission hint is absent', () => {
     const authorization = read('src/authorization/ClientAuthorization.ts');
-    expect(authorization).toContain("if (!Array.isArray(identity.permissions)) return sectionId === 'dashboard';");
+    expect(authorization).toContain("if (!Array.isArray(identity.permissions) || identity.permissions.length === 0) {");
+    expect(authorization).toContain("return sectionId === 'dashboard';");
     expect(authorization).toContain('tenant modules');
   });
 

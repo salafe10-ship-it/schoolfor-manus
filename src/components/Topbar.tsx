@@ -374,7 +374,7 @@ export default function Topbar({
       <div className="flex items-center gap-3">
 
         {/* Central Admin Portal Button (Always accessible for SuperAdmin or if handler provided) */}
-        {onOpenSuperAdminPortal && (
+        {onOpenSuperAdminPortal && !isClientMode && (
           <button
             type="button"
             id="superadmin-portal-header-btn"

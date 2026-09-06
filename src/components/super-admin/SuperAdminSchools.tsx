@@ -974,18 +974,22 @@ export default function SuperAdminSchools({
                 {/* Subdomain */}
                 <div className="space-y-1">
                   <label className="text-xs font-bold text-slate-400 block">النطاق الفرعي السحابي (Subdomain):</label>
-                  <div className="flex bg-slate-950 border border-slate-800 rounded-lg overflow-hidden focus-within:border-amber-500">
-                    <span className="bg-slate-900 border-r border-slate-800 px-3 py-2 text-slate-500 font-mono text-[10px] select-none">
-                      .erpcloud.com
-                    </span>
+                  <div dir="ltr" className="flex bg-slate-950 border border-slate-800 rounded-lg overflow-hidden focus-within:border-amber-500">
                     <input
                       type="text"
                       placeholder="shorooq"
                       value={newSchool.subdomain}
                       onChange={(e) => setNewSchool({...newSchool, subdomain: e.target.value.toLowerCase().replace(/[^a-z0-9]/g, '')})}
-                      className="w-full bg-transparent border-0 px-3 py-2 text-xs text-white focus:outline-none font-mono text-left"
+                      className="min-w-0 flex-1 bg-transparent border-0 px-3 py-2 text-xs text-white focus:outline-none font-mono text-left"
                       dir="ltr"
                     />
+                    <span className="shrink-0 bg-slate-900 border-l border-slate-800 px-3 py-2 text-slate-500 font-mono text-[10px] select-none">
+                      .erpcloud.com
+                    </span>
+                  </div>
+                  <div className="mt-1 flex items-center justify-between gap-2 rounded-lg border border-slate-800/80 bg-slate-950/60 px-3 py-1.5 text-[10px] font-bold text-slate-500">
+                    <span>العنوان الذي سيُحفظ</span>
+                    <code dir="ltr" className="font-mono text-amber-300">{newSchool.subdomain ? `${newSchool.subdomain}.erpcloud.com` : 'اكتب النطاق الفرعي أولاً'}</code>
                   </div>
                 </div>
 

@@ -21,6 +21,7 @@ import SuperAdminUpdates from './super-admin/SuperAdminUpdates';
 import SuperAdminCentralNotifications from './super-admin/SuperAdminCentralNotifications';
 import SuperAdminFeatures from './super-admin/SuperAdminFeatures';
 import SuperAdminWorkspaceControl from './super-admin/SuperAdminWorkspaceControl';
+import SuperAdminIncidentCommandCenter from './super-admin/SuperAdminIncidentCommandCenter';
 import DeveloperPlatformCenter from '../developer/DeveloperPlatformCenter';
 
 import { EnterpriseLogger } from '../database/services/EnterpriseLogger';
@@ -224,7 +225,7 @@ export default function SuperAdminView({
   });
 
   // Local control tab router containing all operational control modules
-  const [localTab, setLocalTab] = useState<string>('operations_center');
+  const [localTab, setLocalTab] = useState<string>('incident_command');
 
   useEffect(() => {
     void refreshCentralDirectory(false);
@@ -266,7 +267,8 @@ export default function SuperAdminView({
     {
       title: 'العمليات والرقابة',
       items: [
-        { id: 'operations_center', label: 'لوحة العمليات', icon: Activity },
+        { id: 'incident_command', label: 'مركز الدعم والفريق', icon: ShieldAlert },
+        { id: 'operations_center', label: 'تشغيل المستأجرين', icon: Activity },
         { id: 'tenants', label: 'إدارة المستأجرين', icon: Building2 },
         { id: 'schools', label: 'إدارة المدارس', icon: Server },
         { id: 'branches', label: 'إدارة الفروع', icon: GitBranch },
@@ -305,7 +307,7 @@ export default function SuperAdminView({
   };
 
   return (
-    <div id="super-admin-portal" className="flex h-screen bg-[#f4efe5] dark:bg-[#070D19] text-slate-800 dark:text-slate-100 font-sans overflow-hidden w-full" dir="rtl">
+    <div id="super-admin-portal" className="flex h-full min-h-0 bg-[#f4efe5] dark:bg-[#070D19] text-slate-800 dark:text-slate-100 font-sans overflow-hidden w-full" dir="rtl">
       
       {/* ================= ثانياً : القائمة الجانبية (Right Sidebar) ================= */}
       <aside 
@@ -409,7 +411,7 @@ export default function SuperAdminView({
       </aside>
 
       {/* ================= Left content frame (Header + Workspace) ================= */}
-      <div className="flex-1 flex flex-col overflow-hidden h-full">
+      <div className="flex-1 min-h-0 min-w-0 flex flex-col overflow-hidden h-full">
         
         {/* ================= ثالثاً : Header ================= */}
         <header id="sa-header" className="bg-[#fffdf8] dark:bg-slate-900 border-b border-[#d4af37]/25 dark:border-slate-800 h-20 px-6 flex items-center justify-between shrink-0 relative z-30 shadow-sm">
@@ -510,7 +512,7 @@ export default function SuperAdminView({
         </header>
 
         {/* ================= Main Sub-Stage Workspace Area ================= */}
-        <main className="flex-1 overflow-y-auto p-6 bg-[#f4efe5] dark:bg-[#070D19] scrollbar-thin scrollbar-thumb-slate-200 dark:scrollbar-thumb-slate-800">
+        <main className="flex-1 min-h-0 min-w-0 overflow-y-auto p-6 bg-[#f4efe5] dark:bg-[#070D19] scrollbar-thin scrollbar-thumb-slate-200 dark:scrollbar-thumb-slate-800">
           <div className="max-w-7xl mx-auto space-y-6">
 
             <section className="rounded-3xl border-2 border-[#d4af37]/30 bg-gradient-to-r from-[#fffefc] via-[#fbf8f0] to-[#f5eeea] p-4 shadow-md" aria-label="حالة الدليل المركزي">
@@ -558,6 +560,15 @@ export default function SuperAdminView({
                 setCurrentRole={setCurrentRole!}
                 setIsSuperAdminPortalActive={setIsSuperAdminPortalActive}
                 setCurrentPortal={setCurrentPortal}
+                onNavigateToTab={setLocalTab}
+              />
+            )}
+
+            {localTab === 'incident_command' && (
+              <SuperAdminIncidentCommandCenter
+                schools={schools}
+                logAction={handleSubmoduleLog}
+                triggerNotification={triggerNotification}
                 onNavigateToTab={setLocalTab}
               />
             )}
@@ -639,6 +650,7 @@ export default function SuperAdminView({
                 setSchools={setSchools}
                 logAction={handleSubmoduleLog}
                 triggerNotification={triggerNotification}
+                onOpenOwnerSchool={handleOpenSchoolLogin}
               />
             )}
 

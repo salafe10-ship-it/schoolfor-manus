@@ -54,6 +54,10 @@ export class TrustedAuthenticationError extends Error {
 const ROLE_ALIASES: Record<string, UserRole> = {
   superadmin: 'SuperAdmin',
   'super-admin': 'SuperAdmin',
+  // Some existing owner records use the short `admin` role label. Treat it
+  // as the school administrator unless the canonical platform RBAC lookup
+  // separately grants Platform.Admin.
+  admin: 'SchoolAdmin',
   schooladmin: 'SchoolAdmin',
   'school-admin': 'SchoolAdmin',
   teacher: 'Teacher',

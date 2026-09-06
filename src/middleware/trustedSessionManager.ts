@@ -216,12 +216,17 @@ export class TrustedSessionManager {
     return responseUser(payload);
   }
 
-  async login(identifier: string, password: string, rememberMe = false): Promise<TrustedSessionUser> {
+  async login(identifier: string, password: string, rememberMe = false, schoolContext?: string): Promise<TrustedSessionUser> {
     if (!identifier.trim() || !password) throw new TrustedSessionError('INVALID_SESSION');
     this.activeStorage = rememberMe ? this.persistentStorage : this.transientStorage;
     clearTrustedSession(rememberMe ? this.transientStorage : this.persistentStorage);
     const version = this.lifecycleVersion;
-    const payload = await this.postJson('/api/auth/login', { identifier, password });
+    const normalizedSchoolContext = typeof schoolContext === 'string' ? schoolContext.trim() : '';
+    const payload = await this.postJson('/api/auth/login', {
+      identifier,
+      password,
+      ...(normalizedSchoolContext ? { schoolContext: normalizedSchoolContext } : {}),
+    });
     const session = responseSession(payload);
     this.saveSession(session.token, session.refreshToken, session.expiresAt, version);
     return session.user;

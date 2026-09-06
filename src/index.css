@@ -57,6 +57,314 @@ a:focus-visible {
   outline-offset: 2px;
 }
 
+/* --------------------------------------------------------------------------
+   Viewport-fit layout
+   Keep scrolling available for long tables and forms, but hide scrollbar
+   chrome so each workspace reads as a clean, full-screen surface. Height-aware
+   density rules reduce spacing before content needs to overflow.
+---------------------------------------------------------------------------- */
+html,
+body,
+#root {
+  width: 100%;
+  min-width: 0;
+  min-height: 100%;
+  margin: 0;
+}
+
+body {
+  overflow: hidden;
+}
+
+.workspace-shell,
+.login-gateway-shell,
+.login-school-shell {
+  min-width: 0;
+}
+
+/* Every full-screen surface owns its viewport and may scroll internally.  The
+   scrollbar chrome remains hidden, so a short viewport never clips the form,
+   footer, or action area when the browser is zoomed or resized. */
+.workspace-shell > div.flex-1,
+.workspace-main,
+.login-gateway-shell,
+.login-school-shell {
+  min-height: 0;
+  min-width: 0;
+}
+
+.login-gateway-shell,
+.login-school-shell {
+  height: 100dvh;
+  min-height: 100dvh;
+  overflow-x: hidden;
+  overflow-y: auto;
+}
+
+.login-gateway-main,
+.login-school-main {
+  overflow: visible;
+}
+
+.workspace-main {
+  overflow-x: auto;
+  scroll-padding-block: 1rem 5rem;
+}
+
+#super-admin-portal,
+#super-admin-portal > aside,
+#super-admin-portal > div,
+#super-admin-portal > div > main {
+  min-height: 0;
+  min-width: 0;
+}
+
+.access-denied-screen {
+  box-sizing: border-box;
+  min-height: clamp(26rem, calc(100dvh - 8.5rem), 48rem) !important;
+}
+
+.access-denied-screen > div {
+  max-width: min(100%, 38rem);
+}
+
+#ai_assistant_floating_root {
+  max-width: min(22rem, calc(100vw - 1.5rem));
+  bottom: max(0.75rem, env(safe-area-inset-bottom)) !important;
+}
+
+.workspace-main,
+.login-gateway-shell,
+.login-school-shell,
+.overflow-auto,
+.overflow-x-auto,
+.overflow-y-auto {
+  scrollbar-width: none;
+  -ms-overflow-style: none;
+}
+
+.workspace-main::-webkit-scrollbar,
+.login-gateway-shell::-webkit-scrollbar,
+.login-school-shell::-webkit-scrollbar,
+.overflow-auto::-webkit-scrollbar,
+.overflow-x-auto::-webkit-scrollbar,
+.overflow-y-auto::-webkit-scrollbar {
+  display: none;
+  width: 0;
+  height: 0;
+}
+
+.workspace-shell > *,
+.workspace-shell main,
+.login-gateway-shell > *,
+.login-school-shell > * {
+  min-width: 0;
+}
+
+@media (max-height: 820px) and (min-width: 768px) {
+  .workspace-shell { font-size: 0.95rem; }
+  .workspace-shell .p-8 { padding: 1.25rem !important; }
+  .workspace-shell .p-7 { padding: 1.125rem !important; }
+  .workspace-shell .p-6 { padding: 1rem !important; }
+  .workspace-shell .p-5 { padding: 0.875rem !important; }
+  .workspace-shell .p-4 { padding: 0.75rem !important; }
+  .workspace-shell .gap-6 { gap: 1rem !important; }
+  .workspace-shell .gap-5 { gap: 0.875rem !important; }
+  .workspace-shell .gap-4 { gap: 0.75rem !important; }
+  .workspace-shell .space-y-6 > :not([hidden]) ~ :not([hidden]) { margin-top: 1rem !important; }
+  .workspace-shell .space-y-5 > :not([hidden]) ~ :not([hidden]) { margin-top: 0.875rem !important; }
+  .workspace-shell .space-y-4 > :not([hidden]) ~ :not([hidden]) { margin-top: 0.75rem !important; }
+  .workspace-shell .rounded-3xl { border-radius: 1.25rem !important; }
+
+  .login-gateway-main {
+    padding: 0.75rem 1rem !important;
+    gap: 0.75rem !important;
+  }
+
+  .login-gateway-main > div {
+    max-height: 470px;
+    padding: 1rem !important;
+  }
+
+  .login-gateway-main .space-y-4 > :not([hidden]) ~ :not([hidden]) {
+    margin-top: 0.65rem !important;
+  }
+
+  .login-gateway-footer {
+    padding-bottom: 0.5rem !important;
+  }
+
+  .login-school-header {
+    padding-top: 0.5rem !important;
+    padding-bottom: 0.25rem !important;
+  }
+
+  .login-school-main {
+    padding-top: 0.5rem !important;
+    padding-bottom: 0.5rem !important;
+  }
+
+  .login-school-main > div:first-child {
+    margin-bottom: 0.5rem !important;
+    transform: scale(0.88);
+    transform-origin: center top;
+  }
+
+  .login-school-main > div:nth-child(2) {
+    padding: 0.9rem 1.25rem 0.85rem !important;
+  }
+
+  .login-school-main > div:nth-child(2) > div:first-child {
+    width: 3.25rem !important;
+    height: 3.25rem !important;
+    margin-top: -2.75rem !important;
+  }
+
+  .login-school-main > div:nth-child(2) > div:nth-child(2) {
+    margin-top: 0.35rem !important;
+    margin-bottom: 0.75rem !important;
+  }
+
+  .login-school-main > div:nth-child(2) h2 {
+    font-size: 1.25rem !important;
+  }
+
+  .login-school-main form > .space-y-1 > :not([hidden]) ~ :not([hidden]),
+  .login-school-main form.space-y-4 > :not([hidden]) ~ :not([hidden]) {
+    margin-top: 0.55rem !important;
+  }
+
+  .login-school-main form input:not([type="checkbox"]) {
+    padding-top: 0.6rem !important;
+    padding-bottom: 0.6rem !important;
+  }
+
+  .login-school-main form > div.pt-3 {
+    padding-top: 0.45rem !important;
+  }
+
+  .login-school-main form button[type="submit"] {
+    padding-top: 0.7rem !important;
+    padding-bottom: 0.7rem !important;
+  }
+
+  .login-school-main form > div:last-child {
+    padding-top: 0.15rem !important;
+  }
+
+  .login-school-footer {
+    padding-bottom: 0.5rem !important;
+  }
+
+  .login-school-footer > div {
+    padding: 0.65rem !important;
+    gap: 0.5rem !important;
+  }
+
+  .login-school-footer .w-9.h-9 {
+    width: 1.75rem !important;
+    height: 1.75rem !important;
+  }
+
+  .access-denied-screen {
+    min-height: calc(100dvh - 8rem) !important;
+    padding: 1rem !important;
+  }
+
+  #ai_assistant_floating_root {
+    transform: scale(0.9);
+    transform-origin: bottom left;
+  }
+}
+
+@media (max-height: 760px) and (min-width: 768px) {
+  /* A modest second density step keeps the complete dashboard visible on
+     laptop-sized viewports without making the interface feel miniature. */
+  .workspace-shell { font-size: 0.92rem; }
+  .workspace-shell .p-6 { padding: 0.85rem !important; }
+  .workspace-shell .p-5 { padding: 0.75rem !important; }
+  .workspace-shell .p-4 { padding: 0.65rem !important; }
+  .workspace-shell .gap-4 { gap: 0.65rem !important; }
+  .workspace-shell .gap-3 { gap: 0.55rem !important; }
+
+  #sa-header {
+    height: 4.25rem !important;
+    padding-inline: 1rem !important;
+  }
+
+  #super-admin-portal > aside > div.flex-1 {
+    padding-top: 0.75rem !important;
+    padding-bottom: 0.75rem !important;
+  }
+
+  #super-admin-portal > div > main {
+    padding: 1rem !important;
+  }
+
+  #top-navigation-bar .py-4 {
+    padding-top: 0.65rem !important;
+    padding-bottom: 0.65rem !important;
+  }
+
+  #top-navigation-bar .py-3 {
+    padding-top: 0.5rem !important;
+    padding-bottom: 0.5rem !important;
+  }
+}
+
+@media (max-width: 767px) {
+  body { overflow: hidden; }
+
+  .login-gateway-shell,
+  .login-school-shell {
+    height: 100dvh;
+    min-height: 100dvh;
+    overflow-y: auto;
+    overflow-x: hidden;
+  }
+
+  .login-gateway-main,
+  .login-school-main {
+    flex: none;
+    overflow: visible;
+  }
+
+  .login-school-header {
+    padding-inline: 1rem !important;
+    padding-top: 0.75rem !important;
+  }
+
+  .login-school-main {
+    padding: 0.75rem 1rem !important;
+  }
+
+  .login-school-main > div:first-child {
+    margin-bottom: 1rem !important;
+    transform: scale(0.92);
+    transform-origin: center top;
+  }
+
+  .login-school-main > div:nth-child(2) {
+    padding: 1.25rem !important;
+  }
+
+  .login-school-footer {
+    padding-bottom: 0.75rem !important;
+  }
+
+  .access-denied-screen {
+    min-height: calc(100dvh - 4.5rem) !important;
+    margin: 0.75rem !important;
+    padding: 1rem !important;
+  }
+
+  #ai_assistant_floating_root {
+    left: 0.75rem !important;
+    transform: scale(0.9);
+    transform-origin: bottom left;
+  }
+}
+
 /* Shared school-workspace chrome. Keeps navigation visually aligned with the
    gold/mahogany dashboard and Student Affairs surfaces. */
 #top-navigation-bar,

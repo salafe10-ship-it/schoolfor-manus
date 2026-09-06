@@ -41,6 +41,7 @@ const usernameClient = (row: Record<string, unknown> | null, options: { user?: S
 };
 describe('Wave 1A trusted authentication foundation', () => {
   it('normalizes only supported application roles', () => {
+    expect(normalizeTrustedRole('admin')).toBe('SchoolAdmin');
     expect(normalizeTrustedRole('school-admin')).toBe('SchoolAdmin');
     expect(normalizeTrustedRole('control')).toBe('Control');
     expect(normalizeTrustedRole('auditor')).toBe('Auditor');

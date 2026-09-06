@@ -20,8 +20,8 @@ describe('LOGIN USERNAME/EMAIL contract', () => {
     const appSource = read('src/App.tsx');
     const serverSource = read('server.ts');
     expect(appSource).toContain('body: JSON.stringify({ identifier })');
-    expect(serverSource).toContain('const { identifier: requestedIdentifier, email, username, password } = req.body || {};');
-    expect(serverSource).toContain('authenticateTrustedUser(supabase, identifier, password)');
+    expect(serverSource).toContain('const { identifier: requestedIdentifier, email, username, password, schoolContext } = req.body || {};');
+    expect(serverSource).toContain('authenticateTrustedUser(supabase, identifier, password, expectedSchoolId)');
     expect(serverSource).toContain('resolveTrustedLoginIdentifier(supabase, identifier)');
     expect(serverSource).toContain('PUBLIC_APP_URL');
     expect(serverSource).toContain('redirectTo');

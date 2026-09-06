@@ -1611,7 +1611,7 @@ async function startServer() {
   app.post("/api/auth/login", authLimiter, async (req, res, next) => {
     try {
       (req as any).perf004Trace?.mark('authentication_started');
-      const { identifier: requestedIdentifier, email, username, password } = req.body || {};
+      const { identifier: requestedIdentifier, email, username, password, schoolContext } = req.body || {};
       const identifier = requestedIdentifier || email || username;
       if (typeof identifier !== 'string' || !identifier.trim() || typeof password !== 'string' || !password) {
         return next(new AuthenticationError("بيانات الدخول غير صحيحة"));
@@ -1621,7 +1621,33 @@ async function startServer() {
         return next(new ExternalServiceError("خدمة المصادقة غير مهيأة. لا يمكن إنشاء جلسة آمنة."));
       }
 
-      const result = await authenticateTrustedUser(supabase, identifier, password);
+      // A school URL is a hard authentication boundary. Resolve its public
+      // subdomain (or UUID) on the server, then require the trusted identity
+      // returned by Supabase Auth to belong to that exact school. Without this
+      // check a platform administrator could be silently redirected into the
+      // central console from a customer school URL.
+      let expectedSchoolId: string | undefined;
+      const requestedSchoolContext = typeof schoolContext === 'string' ? schoolContext.trim() : '';
+      if (requestedSchoolContext) {
+        if (isUuid(requestedSchoolContext)) {
+          expectedSchoolId = requestedSchoolContext;
+        } else if (platformAdminPool) {
+          const schoolResult = await platformAdminPool.query<{ id: string }>(
+            `SELECT id
+               FROM public.schools
+              WHERE deleted_at IS NULL
+                AND status = 'active'
+                AND (lower(COALESCE(central_metadata->>'subdomain', '')) = lower($1)
+                  OR lower(school_code) = lower($1))
+              LIMIT 1`,
+            [requestedSchoolContext],
+          );
+          expectedSchoolId = schoolResult.rows[0]?.id;
+        }
+        if (!expectedSchoolId) throw new TrustedAuthenticationError('INVALID_SCHOOL');
+      }
+
+      const result = await authenticateTrustedUser(supabase, identifier, password, expectedSchoolId);
       const { identity, session } = result;
 
       disableAuthCaching(res);
@@ -2050,6 +2076,21 @@ async function startServer() {
     };
     return merged;
   };
+  const resolveReleaseBaseManifest = (
+    releasePayloadValue: unknown,
+    currentTemplateManifest: unknown,
+    schoolMetadata: Record<string, unknown>,
+  ): Record<string, unknown> => {
+    const releasePayload = readObject(releasePayloadValue);
+    const templateSnapshot = readObject(releasePayload.template);
+    if (Object.keys(templateSnapshot).length > 0) return templateSnapshot;
+    if (Object.prototype.hasOwnProperty.call(releasePayload, 'features')) {
+      return { features: normalizeFeatureOverrides(releasePayload.features) };
+    }
+    const currentTemplate = readObject(currentTemplateManifest);
+    if (Object.keys(currentTemplate).length > 0) return currentTemplate;
+    return { features: normalizeFeatureOverrides(schoolMetadata.features) };
+  };
   const workspaceColumns = `
     id, school_id, template_id, release_version, release_kind, scope, channel,
     status, title, notes, feature_overrides, payload, created_by_auth_user_id,
@@ -2099,7 +2140,7 @@ async function startServer() {
         const workspace = readObject(metadata.ownerWorkspace);
         const releasePayload = readObject(row.latest_release_payload);
         const effectiveManifest = mergeTemplateManifest(
-          row.latest_template_manifest || releasePayload.template || {},
+          resolveReleaseBaseManifest(releasePayload, row.latest_template_manifest, metadata),
           releasePayload.overrides,
           row.latest_feature_overrides,
         );
@@ -2115,8 +2156,8 @@ async function startServer() {
           currentReleaseId: row.latest_release_id || workspace.currentReleaseId || null,
           currentReleaseVersion: Number(row.latest_release_version || workspace.currentReleaseVersion || 0),
           templateId: row.latest_template_id || workspace.templateId || null,
-          templateKey: row.latest_template_key || workspace.templateKey || null,
-          templateVersion: Number(row.latest_template_version || workspace.templateVersion || 0),
+          templateKey: releasePayload.templateKey || row.latest_template_key || workspace.templateKey || null,
+          templateVersion: Number(releasePayload.templateVersion || row.latest_template_version || workspace.templateVersion || 0),
           lastReleaseTitle: row.latest_release_title || null,
           lastReleaseAt: row.latest_release_at || null,
           features: normalizeFeatureOverrides(effectiveManifest.features),
@@ -2206,7 +2247,7 @@ async function startServer() {
     const templateId = String(req.params.templateId || '').trim();
     const operation = String(req.body?.operation || '').trim();
     if (!isUuid(actorAuthUserId) || !isUuid(templateId)) return next(new ValidationError('معرف القالب أو هوية المالك غير صالح.'));
-    if (!['publish', 'archive', 'update'].includes(operation)) return next(new ValidationError('عملية القالب غير معتمدة.'));
+    if (!['publish', 'archive', 'update', 'capture'].includes(operation)) return next(new ValidationError('عملية القالب غير معتمدة.'));
     try {
       let result;
       if (operation === 'archive') {
@@ -2216,6 +2257,32 @@ async function startServer() {
             WHERE id = $1::uuid AND status <> 'archived'
           RETURNING id, template_key, name, description, version, status, manifest, created_at, updated_at`,
           [templateId, actorAuthUserId],
+        );
+      } else if (operation === 'capture') {
+        const ownerSchool = await platformAdminPool.query<{ id: string; central_metadata: unknown }>(
+          `SELECT id, central_metadata
+             FROM public.schools
+            WHERE deleted_at IS NULL
+              AND (central_metadata->>'portal_profile') = 'owner_controlled'
+            ORDER BY created_at ASC
+            LIMIT 1`,
+        );
+        if (ownerSchool.rowCount !== 1) return next(new ConflictError('لا توجد مدرسة مركزية مربوطة لالتقاط القالب الأساسي.'));
+        const ownerMetadata = readObject(ownerSchool.rows[0].central_metadata);
+        const capturedManifest = {
+          features: normalizeFeatureOverrides(ownerMetadata.features),
+          sourceSchoolId: ownerSchool.rows[0].id,
+          capturedAt: new Date().toISOString(),
+        };
+        result = await platformAdminPool.query(
+          `UPDATE public.platform_templates
+              SET manifest = manifest || $2::jsonb,
+                  version = version + 1,
+                  status = 'draft',
+                  updated_at = now(), updated_by_auth_user_id = $3::uuid
+            WHERE id = $1::uuid AND status <> 'archived'
+          RETURNING id, template_key, name, description, version, status, manifest, created_at, updated_at`,
+          [templateId, JSON.stringify(capturedManifest), actorAuthUserId],
         );
       } else {
         const manifest = readObject(req.body?.manifest);
@@ -2312,24 +2379,26 @@ async function startServer() {
         : await client.query<{ id: string; tenant_id: string; central_metadata: unknown; display_name: string }>(
           `SELECT id, tenant_id, central_metadata, display_name
              FROM public.schools
-            WHERE id = ANY($1::uuid[]) AND status <> 'archived' AND deleted_at IS NULL
+             WHERE id = ANY($1::uuid[]) AND status <> 'archived' AND deleted_at IS NULL
+               AND COALESCE(central_metadata->>'portal_profile', '') <> 'owner_controlled'
+               AND COALESCE(central_metadata->'ownerWorkspace'->>'mode', '') <> 'owner'
             ORDER BY created_at ASC
             FOR UPDATE`,
           [targetIds],
         );
       if (!targets.rows.length || targets.rows.length !== (scope === 'global' ? targets.rows.length : targetIds.length)) {
-        throw new ConflictError('مدرسة مستهدفة غير موجودة أو مؤرشفة؛ لم يُطبق الإصدار على أي مدرسة.');
+          throw new ConflictError('مدرسة مستهدفة غير موجودة أو مؤرشفة أو هي المدرسة المركزية؛ لم يُطبق الإصدار على أي مدرسة.');
       }
       let template: any = null;
       if (templateId) {
         const templateResult = await client.query(
           `SELECT id, template_key, name, version, status, manifest
              FROM public.platform_templates
-            WHERE id = $1::uuid AND status IN ('draft', 'published')
+            WHERE id = $1::uuid AND status = 'published'
             FOR SHARE`,
           [templateId],
         );
-        if (templateResult.rowCount !== 1) throw new ConflictError('القالب غير موجود أو مؤرشف.');
+        if (templateResult.rowCount !== 1) throw new ConflictError('القالب غير منشور؛ راجعه وانشره قبل توزيعه على المدارس.');
         template = templateResult.rows[0];
         template.manifest = normalizeTemplateManifest(template.manifest);
       }
@@ -2517,7 +2586,7 @@ async function startServer() {
       const workspace = readObject(metadata.ownerWorkspace);
       const releasePayload = readObject(row.release_payload);
       const effectiveManifest = mergeTemplateManifest(
-        row.template_manifest || releasePayload.template || {},
+        resolveReleaseBaseManifest(releasePayload, row.template_manifest, metadata),
         releasePayload.overrides,
         row.feature_overrides,
       );
@@ -2538,8 +2607,8 @@ async function startServer() {
           releaseTitle: row.release_title || workspace.lastReleaseTitle || null,
           releaseAt: row.release_created_at || workspace.lastReleaseAt || null,
           templateId: row.template_id || workspace.templateId || null,
-          templateKey: row.template_key || workspace.templateKey || null,
-          templateVersion: Number(row.template_version || workspace.templateVersion || 0),
+          templateKey: releasePayload.templateKey || row.template_key || workspace.templateKey || null,
+          templateVersion: Number(releasePayload.templateVersion || row.template_version || workspace.templateVersion || 0),
         },
       });
     } catch (error) {
@@ -3310,18 +3379,20 @@ async function startServer() {
     const resolvedCode = schoolCode || `SCH-${schoolId.slice(0, 8).toUpperCase()}`;
     const client = await platformAdminPool.connect();
     try {
-      const actorResult = await client.query<{ id: string }>(
-        `SELECT id
+      const actorResult = await client.query<{ id: string; tenant_id: string }>(
+        `SELECT id, tenant_id
            FROM public.users
-          WHERE tenant_id = $1::uuid
-            AND auth_user_id = $2::uuid
+          WHERE auth_user_id = $1::uuid
             AND status = 'active'
             AND deleted_at IS NULL
           LIMIT 1`,
-        [tenantId, actorAuthUserId],
+        [actorAuthUserId],
       );
       if (actorResult.rowCount !== 1) throw new AuthenticationError('المنفذ المركزي غير موجود في دليل المستخدمين القانوني.');
-      const actorId = actorResult.rows[0].id;
+      // The platform administrator may provision a brand-new tenant. Tenant-scoped
+      // audit foreign keys must therefore remain null until a user exists inside
+      // that tenant; the immutable platform actor is recorded on the release row.
+      const actorId = actorResult.rows[0].tenant_id === tenantId ? actorResult.rows[0].id : null;
       await client.query('BEGIN');
       const targetTenant = await client.query<{ status: string }>(
         `SELECT status
@@ -3360,7 +3431,7 @@ async function startServer() {
          RETURNING id, tenant_id, school_id, branch_code, name, status, created_at, updated_at`,
         [branchId, tenantId, schoolId, `${resolvedCode}-MAIN`, actorId],
       );
-      await client.query(
+      if (actorId) await client.query(
         `INSERT INTO public.hr_database
           (tenant_id, school_id, country_code, legal_configuration, data, version, updated_by)
          VALUES ($1, $2, 'ZZ', '{}'::jsonb,
@@ -3369,7 +3440,7 @@ async function startServer() {
          ON CONFLICT (school_id) DO NOTHING`,
         [tenantId, schoolId, actorId],
       );
-      await client.query(
+      if (actorId) await client.query(
         `INSERT INTO public.inventory_database
           (tenant_id, school_id, data, version, updated_by)
          VALUES ($1, $2,
@@ -3378,7 +3449,7 @@ async function startServer() {
          ON CONFLICT (school_id) DO NOTHING`,
         [tenantId, schoolId, actorId],
       );
-      await client.query(
+      if (actorId) await client.query(
         `INSERT INTO public.financial_portal_snapshots
           (tenant_id, school_id, data, version, updated_by)
          VALUES ($1, $2, '{}'::jsonb, 0, $3)
@@ -3418,9 +3489,10 @@ async function startServer() {
         template: defaultTemplate,
         release: { id: releaseId, version: 1 },
         provisioning: {
-          hr_database: true,
-          inventory_database: true,
-          financial_portal_snapshots: true,
+          hr_database: Boolean(actorId),
+          inventory_database: Boolean(actorId),
+          financial_portal_snapshots: Boolean(actorId),
+          pending_until_first_school_user: !actorId,
         },
       });
     } catch (error) {
@@ -4233,6 +4305,380 @@ async function startServer() {
     } catch (error) {
       await client.query('ROLLBACK').catch(() => undefined);
       return next(error instanceof Error ? error : new DatabaseError('تعذر حفظ مصفوفة الصلاحيات المركزية.'));
+    } finally {
+      client.release();
+    }
+  });
+
+  // Central incident command. Incidents contain operational coordination data
+  // only; tenant business records stay inside their isolated school domains.
+  const incidentStatuses = ['detected', 'triaged', 'assigned', 'in_progress', 'monitoring', 'resolved', 'closed'] as const;
+  const incidentSeverities = ['sev1', 'sev2', 'sev3', 'sev4'] as const;
+  const incidentCategories = ['application', 'database', 'access', 'performance', 'subscription', 'integration', 'release', 'security', 'other'] as const;
+  const incidentImpactScopes = ['school', 'tenant', 'multi_school', 'platform'] as const;
+  const incidentSources = ['automated', 'audit', 'school_report', 'central_review'] as const;
+  const incidentTransitions: Record<string, string[]> = {
+    detected: ['triaged'],
+    triaged: [],
+    assigned: ['in_progress'],
+    in_progress: ['monitoring'],
+    monitoring: ['in_progress'],
+    resolved: [],
+    closed: [],
+  };
+  const defaultIncidentDueAt = (severity: string): string => {
+    const hours = severity === 'sev1' ? 1 : severity === 'sev2' ? 4 : severity === 'sev3' ? 24 : 72;
+    return new Date(Date.now() + hours * 60 * 60 * 1000).toISOString();
+  };
+  const incidentSelectColumns = `
+    i.id, i.incident_number, i.tenant_id, i.school_id, i.source, i.source_event_id,
+    i.trace_id, i.title, i.description, i.category, i.severity, i.impact_scope,
+    i.status, i.owner_auth_user_id, i.owner_name, i.due_at, i.detected_at,
+    i.acknowledged_at, i.resolved_at, i.closed_at, i.resolution_summary,
+    i.root_cause, i.linked_release_id, i.version, i.created_at, i.updated_at,
+    s.display_name AS school_name, s.school_code, t.legal_name AS tenant_name`;
+  const incidentAssignableTeamSelect = `
+    SELECT DISTINCT pu.auth_user_id,
+           COALESCE(NULLIF(profile.display_name, ''), 'عضو الإدارة المركزية') AS display_name,
+           pu.status
+      FROM public.platform_users pu
+      JOIN public.platform_user_roles pur
+        ON pur.platform_user_id = pu.id
+      JOIN public.platform_roles pr
+        ON pr.id = pur.role_id
+      LEFT JOIN LATERAL (
+        SELECT u.display_name
+          FROM public.users u
+         WHERE u.auth_user_id = pu.auth_user_id
+           AND u.status = 'active'
+           AND u.deleted_at IS NULL
+         ORDER BY u.created_at ASC
+         LIMIT 1
+      ) profile ON true
+     WHERE pu.status = 'active'
+       AND pu.deleted_at IS NULL
+       AND pur.status = 'active'
+       AND pur.deleted_at IS NULL
+       AND pur.starts_at <= now()
+       AND (pur.ends_at IS NULL OR pur.ends_at > now())
+       AND pr.role_key = 'platformadmin'
+       AND pr.status = 'active'
+       AND pr.deleted_at IS NULL`;
+
+  app.get('/api/admin/central/incidents', authenticateRequest, requirePermissionOnly(PERMISSIONS.PLATFORM_ADMIN), async (req, res, next) => {
+    if (!platformAdminPool) return next(new DatabaseError('مصدر مركز قيادة الحوادث غير متاح.'));
+    const status = String(req.query?.status || '').trim();
+    const schoolId = String(req.query?.schoolId || '').trim();
+    if (status && !incidentStatuses.includes(status as any)) return next(new ValidationError('حالة الحادثة غير صالحة.'));
+    if (schoolId && !isUuid(schoolId)) return next(new ValidationError('معرف المدرسة غير صالح.'));
+    try {
+      const incidentResult = await platformAdminPool.query(
+        `SELECT ${incidentSelectColumns}
+           FROM public.platform_incidents i
+           LEFT JOIN public.schools s ON s.id = i.school_id
+           LEFT JOIN public.tenants t ON t.id = i.tenant_id
+          WHERE ($1 = '' OR i.status = $1)
+            AND ($2::uuid IS NULL OR i.school_id = $2::uuid)
+          ORDER BY
+            CASE i.severity WHEN 'sev1' THEN 1 WHEN 'sev2' THEN 2 WHEN 'sev3' THEN 3 ELSE 4 END,
+            CASE WHEN i.status IN ('resolved', 'closed') THEN 1 ELSE 0 END,
+            i.due_at ASC NULLS LAST,
+            i.updated_at DESC
+          LIMIT 300`,
+        [status, schoolId || null],
+      );
+      const incidentIds = incidentResult.rows.map((row: any) => row.id);
+      const eventResult = incidentIds.length
+        ? await platformAdminPool.query(
+          `SELECT id, incident_id, event_type, from_status, to_status, note,
+                  actor_auth_user_id, actor_name, metadata, created_at
+             FROM (
+               SELECT pie.*,
+                      row_number() OVER (PARTITION BY pie.incident_id ORDER BY pie.created_at DESC) AS event_position
+                 FROM public.platform_incident_events pie
+                WHERE pie.incident_id = ANY($1::uuid[])
+             ) ranked_events
+            WHERE event_position <= 30
+            ORDER BY incident_id, created_at DESC`,
+          [incidentIds],
+        )
+        : { rows: [] as any[] };
+      const eventsByIncident = new Map<string, any[]>();
+      for (const event of eventResult.rows) {
+        const timeline = eventsByIncident.get(event.incident_id) || [];
+        if (timeline.length < 30) timeline.push(event);
+        eventsByIncident.set(event.incident_id, timeline);
+      }
+      const incidents = incidentResult.rows.map((incident: any) => ({
+        ...incident,
+        events: eventsByIncident.get(incident.id) || [],
+      }));
+
+      const signalResult = await platformAdminPool.query(
+        `SELECT ae.id, ae.tenant_id, ae.school_id, ae.action, ae.source, ae.reason,
+                ae.result, ae.metadata, ae.created_at, s.display_name AS school_name,
+                t.legal_name AS tenant_name
+           FROM public.audit_events ae
+           LEFT JOIN public.platform_incidents pi
+             ON pi.source_event_id = ae.id AND pi.source IN ('audit', 'automated')
+           LEFT JOIN public.schools s ON s.id = ae.school_id
+           LEFT JOIN public.tenants t ON t.id = ae.tenant_id
+          WHERE pi.id IS NULL
+            AND ae.created_at >= now() - interval '7 days'
+            AND (
+              lower(COALESCE(ae.result, '')) IN ('error', 'failure', 'failed', 'denied', 'partial')
+              OR ae.action = 'SYSTEM_CRITICAL_ERROR'
+            )
+          ORDER BY ae.created_at DESC
+          LIMIT 80`,
+      );
+      const signals = signalResult.rows.map((signal: any) => ({
+        ...signal,
+        suggestedSeverity: signal.action === 'SYSTEM_CRITICAL_ERROR' || ['error', 'failure', 'failed'].includes(String(signal.result || '').toLowerCase()) ? 'sev2' : 'sev3',
+      }));
+      const teamResult = await platformAdminPool.query(
+        `${incidentAssignableTeamSelect} ORDER BY display_name, auth_user_id`,
+      );
+      return res.json({ success: true, incidents, signals, team: teamResult.rows, generatedAt: new Date().toISOString() });
+    } catch (error) {
+      return next(new DatabaseError('تعذر تحميل مركز قيادة الحوادث.', error instanceof Error ? error.message : String(error)));
+    }
+  });
+
+  app.post('/api/admin/central/incidents', authenticateRequest, requirePermissionOnly(PERMISSIONS.PLATFORM_ADMIN), async (req, res, next) => {
+    if (!platformAdminPool) return next(new DatabaseError('مصدر مركز قيادة الحوادث غير متاح.'));
+    const identity = (req as any).user as { id?: string; name?: string };
+    const actorAuthUserId = String(identity?.id || '').trim();
+    const actorName = String(identity?.name || 'الإدارة المركزية').trim().slice(0, 160);
+    const schoolId = String(req.body?.schoolId || '').trim();
+    const sourceEventId = String(req.body?.sourceEventId || '').trim();
+    const title = String(req.body?.title || '').trim();
+    const description = String(req.body?.description || '').trim() || null;
+    const category = String(req.body?.category || 'application').trim();
+    const severity = String(req.body?.severity || 'sev3').trim();
+    const impactScope = String(req.body?.impactScope || (schoolId ? 'school' : 'platform')).trim();
+    const source = String(req.body?.source || 'central_review').trim();
+    const traceId = String(req.body?.traceId || '').trim() || null;
+    const ownerAuthUserId = String(req.body?.ownerAuthUserId || '').trim();
+    const requestedDueAt = String(req.body?.dueAt || '').trim();
+    if (!isUuid(actorAuthUserId)) return next(new AuthenticationError('هوية عضو فريق الإدارة المركزية غير مكتملة.'));
+    if (schoolId && !isUuid(schoolId)) return next(new ValidationError('معرف المدرسة غير صالح.'));
+    if (sourceEventId && !isUuid(sourceEventId)) return next(new ValidationError('مرجع إشارة الاكتشاف غير صالح.'));
+    if (ownerAuthUserId && !isUuid(ownerAuthUserId)) return next(new ValidationError('هوية المسؤول المعين غير صالحة.'));
+    if (title.length < 4 || title.length > 200 || (description && description.length > 5000)) return next(new ValidationError('عنوان أو وصف الحادثة غير صالح.'));
+    if (!incidentCategories.includes(category as any) || !incidentSeverities.includes(severity as any) || !incidentImpactScopes.includes(impactScope as any) || !incidentSources.includes(source as any)) return next(new ValidationError('تصنيف الحادثة غير صالح.'));
+    const dueAt = requestedDueAt || defaultIncidentDueAt(severity);
+    if (Number.isNaN(Date.parse(dueAt))) return next(new ValidationError('موعد الاستجابة غير صالح.'));
+
+    const client = await platformAdminPool.connect();
+    try {
+      await client.query('BEGIN');
+      let tenantId: string | null = null;
+      if (schoolId) {
+        const school = await client.query<{ tenant_id: string }>(
+          `SELECT tenant_id FROM public.schools WHERE id = $1::uuid AND deleted_at IS NULL FOR SHARE`,
+          [schoolId],
+        );
+        if (school.rowCount !== 1) throw new ConflictError('المدرسة المحددة غير موجودة في الدليل المركزي.');
+        tenantId = school.rows[0].tenant_id;
+      }
+      let ownerName: string | null = null;
+      if (ownerAuthUserId) {
+        const owner = await client.query<{ display_name: string }>(
+          `SELECT display_name
+             FROM (${incidentAssignableTeamSelect}) assignable_team
+            WHERE auth_user_id = $1::uuid
+            LIMIT 1`,
+          [ownerAuthUserId],
+        );
+        if (owner.rowCount !== 1) throw new ConflictError('لا يمكن الإسناد إلا لعضو نشط ومخوّل في فريق الإدارة المركزية.');
+        ownerName = owner.rows[0].display_name;
+      }
+      const status = ownerAuthUserId ? 'assigned' : 'detected';
+      const incidentResult = await client.query(
+        `INSERT INTO public.platform_incidents
+          (tenant_id, school_id, source, source_event_id, trace_id, title, description,
+           category, severity, impact_scope, status, owner_auth_user_id, owner_name,
+           due_at, acknowledged_at, created_by_auth_user_id, updated_by_auth_user_id)
+         VALUES ($1::uuid, $2::uuid, $3, $4::uuid, $5, $6, $7, $8, $9, $10, $11,
+                 $12::uuid, $13, $14::timestamptz, CASE WHEN $12::uuid IS NULL THEN NULL ELSE now() END,
+                 $15::uuid, $15::uuid)
+         RETURNING *`,
+        [tenantId, schoolId || null, source, sourceEventId || null, traceId, title, description, category, severity, impactScope, status, ownerAuthUserId || null, ownerName, dueAt, actorAuthUserId],
+      );
+      const incident = incidentResult.rows[0];
+      const eventResult = await client.query(
+        `INSERT INTO public.platform_incident_events
+          (incident_id, event_type, to_status, note, actor_auth_user_id, actor_name, metadata)
+         VALUES ($1::uuid, 'created', $2, $3, $4::uuid, $5, $6::jsonb)
+         RETURNING *`,
+        [incident.id, status, description, actorAuthUserId, actorName, JSON.stringify({ source, sourceEventId: sourceEventId || null, ownerAuthUserId: ownerAuthUserId || null })],
+      );
+      await client.query('COMMIT');
+      return res.status(201).json({ success: true, incident: { ...incident, events: eventResult.rows } });
+    } catch (error) {
+      await client.query('ROLLBACK').catch(() => undefined);
+      if (error instanceof ConflictError || error instanceof ValidationError) return next(error);
+      return next(/duplicate|unique/i.test(error instanceof Error ? error.message : '')
+        ? new ConflictError('تم فتح حادثة لهذه الإشارة مسبقًا؛ استخدم سجلها الحالي.')
+        : new DatabaseError('تعذر فتح الحادثة؛ لم يتم إنشاء سجل جزئي.', error instanceof Error ? error.message : String(error)));
+    } finally {
+      client.release();
+    }
+  });
+
+  app.patch('/api/admin/central/incidents/:incidentId', authenticateRequest, requirePermissionOnly(PERMISSIONS.PLATFORM_ADMIN), async (req, res, next) => {
+    if (!platformAdminPool) return next(new DatabaseError('مصدر مركز قيادة الحوادث غير متاح.'));
+    const identity = (req as any).user as { id?: string; name?: string };
+    const actorAuthUserId = String(identity?.id || '').trim();
+    const actorName = String(identity?.name || 'الإدارة المركزية').trim().slice(0, 160);
+    const incidentId = String(req.params.incidentId || '').trim();
+    const operation = String(req.body?.operation || '').trim();
+    const expectedVersion = Number(req.body?.expectedVersion);
+    const note = String(req.body?.note || '').trim() || null;
+    if (!isUuid(actorAuthUserId) || !isUuid(incidentId)) return next(new ValidationError('معرف الحادثة أو هوية عضو الفريق غير صالح.'));
+    if (!['assign', 'transition', 'comment', 'resolve', 'close', 'reopen', 'link_release', 'update'].includes(operation)) return next(new ValidationError('عملية الحادثة غير معتمدة.'));
+    if (!Number.isSafeInteger(expectedVersion) || expectedVersion < 1) return next(new ValidationError('نسخة الحادثة مطلوبة لمنع تعارض تحديثات الفريق.'));
+    if (note && note.length > 5000) return next(new ValidationError('ملاحظة الحادثة طويلة جدًا.'));
+
+    const client = await platformAdminPool.connect();
+    try {
+      await client.query('BEGIN');
+      const currentResult = await client.query<any>(
+        `SELECT * FROM public.platform_incidents WHERE id = $1::uuid FOR UPDATE`,
+        [incidentId],
+      );
+      if (currentResult.rowCount !== 1) throw new ConflictError('الحادثة غير موجودة.');
+      const current = currentResult.rows[0];
+      if (Number(current.version) !== expectedVersion) throw new ConflictError('حدّث عضو آخر هذه الحادثة. أعد تحميلها قبل حفظ تعديلك.');
+
+      let nextStatus = current.status;
+      let ownerAuthUserId = current.owner_auth_user_id;
+      let ownerName = current.owner_name;
+      let dueAt = current.due_at;
+      let acknowledgedAt = current.acknowledged_at;
+      let resolvedAt = current.resolved_at;
+      let closedAt = current.closed_at;
+      let resolutionSummary = current.resolution_summary;
+      let rootCause = current.root_cause;
+      let linkedReleaseId = current.linked_release_id;
+      let title = current.title;
+      let description = current.description;
+      let category = current.category;
+      let severity = current.severity;
+      let impactScope = current.impact_scope;
+      let eventType = 'updated';
+      let eventMetadata: Record<string, unknown> = {};
+
+      if (operation === 'assign') {
+        if (['resolved', 'closed'].includes(current.status)) throw new ConflictError('أعد فتح الحادثة قبل تغيير مسؤولها.');
+        const requestedOwnerId = String(req.body?.ownerAuthUserId || '').trim();
+        if (!isUuid(requestedOwnerId)) throw new ValidationError('اختر عضو فريق نشطًا لإسناد الحادثة.');
+        const owner = await client.query<{ display_name: string }>(
+          `SELECT display_name
+             FROM (${incidentAssignableTeamSelect}) assignable_team
+            WHERE auth_user_id = $1::uuid
+            LIMIT 1`,
+          [requestedOwnerId],
+        );
+        if (owner.rowCount !== 1) throw new ConflictError('لا يمكن الإسناد إلا لعضو نشط ومخوّل في فريق الإدارة المركزية.');
+        ownerAuthUserId = requestedOwnerId;
+        ownerName = owner.rows[0].display_name;
+        if (['detected', 'triaged'].includes(current.status)) nextStatus = 'assigned';
+        acknowledgedAt = acknowledgedAt || new Date().toISOString();
+        eventType = 'assigned';
+        eventMetadata = { ownerAuthUserId, ownerName };
+      } else if (operation === 'transition') {
+        const requestedStatus = String(req.body?.status || '').trim();
+        if (!incidentStatuses.includes(requestedStatus as any) || !incidentTransitions[current.status]?.includes(requestedStatus)) throw new ConflictError('انتقال حالة الحادثة غير مسموح من مرحلتها الحالية.');
+        if (requestedStatus === 'in_progress' && !ownerAuthUserId) throw new ConflictError('يجب إسناد مسؤول واضح قبل بدء المعالجة.');
+        nextStatus = requestedStatus;
+        acknowledgedAt = acknowledgedAt || (requestedStatus !== 'detected' ? new Date().toISOString() : null);
+        eventType = requestedStatus === 'triaged' ? 'triaged' : 'status_changed';
+      } else if (operation === 'comment') {
+        if (!note || note.length < 2) throw new ValidationError('اكتب ملاحظة واضحة قبل الإضافة.');
+        eventType = 'comment';
+      } else if (operation === 'resolve') {
+        const summary = String(req.body?.resolutionSummary || '').trim();
+        const cause = String(req.body?.rootCause || '').trim() || null;
+        if (summary.length < 4 || summary.length > 5000 || (cause && cause.length > 5000)) throw new ValidationError('ملخص المعالجة أو السبب الجذري غير صالح.');
+        if (!['in_progress', 'monitoring'].includes(current.status)) throw new ConflictError('ابدأ المعالجة أو التحقق قبل تسجيل الحل.');
+        if (['sev1', 'sev2'].includes(current.severity) && (!cause || cause.length < 4)) throw new ValidationError('السبب الجذري إلزامي للحوادث الحرجة والعالية.');
+        nextStatus = 'resolved';
+        resolvedAt = new Date().toISOString();
+        closedAt = null;
+        resolutionSummary = summary;
+        rootCause = cause;
+        eventType = 'resolved';
+      } else if (operation === 'close') {
+        if (current.status !== 'resolved') throw new ConflictError('لا يمكن الإغلاق قبل المعالجة والتحقق.');
+        nextStatus = 'closed';
+        closedAt = new Date().toISOString();
+        eventType = 'closed';
+      } else if (operation === 'reopen') {
+        if (!['resolved', 'closed'].includes(current.status)) throw new ConflictError('إعادة الفتح متاحة للحوادث المعالجة أو المغلقة فقط.');
+        nextStatus = 'in_progress';
+        resolvedAt = null;
+        closedAt = null;
+        eventType = 'reopened';
+      } else if (operation === 'link_release') {
+        const releaseId = String(req.body?.releaseId || '').trim();
+        if (!isUuid(releaseId)) throw new ValidationError('معرف الإصدار المرتبط غير صالح.');
+        const release = await client.query<{ school_id: string }>(
+          `SELECT school_id FROM public.platform_school_releases WHERE id = $1::uuid`,
+          [releaseId],
+        );
+        if (release.rowCount !== 1 || (current.school_id && release.rows[0].school_id !== current.school_id)) throw new ConflictError('الإصدار لا ينتمي إلى نطاق هذه الحادثة.');
+        linkedReleaseId = releaseId;
+        eventType = 'release_linked';
+        eventMetadata = { releaseId };
+      } else if (operation === 'update') {
+        const requestedTitle = String(req.body?.title || current.title).trim();
+        const requestedDescription = String(req.body?.description ?? current.description ?? '').trim() || null;
+        const requestedCategory = String(req.body?.category || current.category).trim();
+        const requestedSeverity = String(req.body?.severity || current.severity).trim();
+        const requestedImpact = String(req.body?.impactScope || current.impact_scope).trim();
+        const requestedDueAt = String(req.body?.dueAt || current.due_at || '').trim();
+        if (requestedTitle.length < 4 || requestedTitle.length > 200 || (requestedDescription && requestedDescription.length > 5000)) throw new ValidationError('عنوان أو وصف الحادثة غير صالح.');
+        if (!incidentCategories.includes(requestedCategory as any) || !incidentSeverities.includes(requestedSeverity as any) || !incidentImpactScopes.includes(requestedImpact as any)) throw new ValidationError('تصنيف الحادثة غير صالح.');
+        if (requestedDueAt && Number.isNaN(Date.parse(requestedDueAt))) throw new ValidationError('موعد الاستجابة غير صالح.');
+        title = requestedTitle;
+        description = requestedDescription;
+        category = requestedCategory;
+        severity = requestedSeverity;
+        impactScope = requestedImpact;
+        dueAt = requestedDueAt || null;
+        eventType = 'updated';
+      }
+
+      const updatedResult = await client.query(
+        `UPDATE public.platform_incidents
+            SET title = $3, description = $4, category = $5, severity = $6,
+                impact_scope = $7, status = $8, owner_auth_user_id = $9::uuid,
+                owner_name = $10, due_at = $11::timestamptz,
+                acknowledged_at = $12::timestamptz, resolved_at = $13::timestamptz,
+                closed_at = $14::timestamptz, resolution_summary = $15,
+                root_cause = $16, linked_release_id = $17::uuid,
+                version = version + 1, updated_at = now(), updated_by_auth_user_id = $18::uuid
+          WHERE id = $1::uuid AND version = $2
+          RETURNING *`,
+        [incidentId, expectedVersion, title, description, category, severity, impactScope, nextStatus, ownerAuthUserId, ownerName, dueAt, acknowledgedAt, resolvedAt, closedAt, resolutionSummary, rootCause, linkedReleaseId, actorAuthUserId],
+      );
+      if (updatedResult.rowCount !== 1) throw new ConflictError('تعارض تحديث الحادثة؛ أعد تحميل البيانات.');
+      const eventResult = await client.query(
+        `INSERT INTO public.platform_incident_events
+          (incident_id, event_type, from_status, to_status, note, actor_auth_user_id, actor_name, metadata)
+         VALUES ($1::uuid, $2, $3, $4, $5, $6::uuid, $7, $8::jsonb)
+         RETURNING *`,
+        [incidentId, eventType, current.status, nextStatus, note || (eventType === 'resolved' ? resolutionSummary : null), actorAuthUserId, actorName, JSON.stringify(eventMetadata)],
+      );
+      await client.query('COMMIT');
+      return res.json({ success: true, incident: { ...updatedResult.rows[0], events: [eventResult.rows[0]] } });
+    } catch (error) {
+      await client.query('ROLLBACK').catch(() => undefined);
+      return next(error instanceof ConflictError || error instanceof ValidationError
+        ? error
+        : new DatabaseError('تعذر تحديث الحادثة؛ لم يُحفظ أي تغيير جزئي.', error instanceof Error ? error.message : String(error)));
     } finally {
       client.release();
     }

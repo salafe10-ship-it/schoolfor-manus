@@ -188,7 +188,7 @@ export default function SmartPortalGateway({
   };
 
   return (
-    <div className="h-screen w-screen overflow-hidden bg-slate-950 text-slate-100 flex flex-col justify-between font-sans select-none relative" dir="rtl">
+    <div className="login-gateway-shell h-screen w-screen overflow-hidden bg-slate-950 text-slate-100 flex flex-col justify-between font-sans select-none relative" dir="rtl">
       
       {/* Background Decorative Ambient Canvas */}
       <div className="absolute inset-0 bg-[radial-gradient(ellipse_at_top_right,_var(--tw-gradient-stops))] from-amber-950/40 via-slate-950 to-black pointer-events-none z-0" />
@@ -276,7 +276,7 @@ export default function SmartPortalGateway({
       </header>
 
       {/* MAIN SPLIT SCREEN CONTAINER (Strictly Full Bleed, No Scroll) */}
-      <main className="relative z-10 flex-1 w-full max-w-7xl mx-auto p-4 sm:p-6 lg:p-8 grid grid-cols-1 md:grid-cols-12 gap-6 items-center my-auto overflow-hidden">
+      <main className="login-gateway-main relative z-10 flex-1 min-h-0 w-full max-w-7xl mx-auto p-4 sm:p-6 lg:p-8 grid grid-cols-1 md:grid-cols-12 gap-6 items-center my-auto overflow-hidden">
         
         {/* LEFT COLUMN: SCHOOL BRANDING & INSTITUTIONAL PRESENTATION (5 Cols) */}
         <div className="md:col-span-5 lg:col-span-5 bg-gradient-to-b from-slate-900/90 to-slate-950 border border-slate-800/80 rounded-3xl p-6 lg:p-8 flex flex-col justify-between shadow-2xl relative overflow-hidden h-full max-h-[560px]">
@@ -555,7 +555,7 @@ export default function SmartPortalGateway({
       </main>
 
       {/* FOOTER */}
-      <footer className="relative z-10 w-full px-6 py-3 border-t border-slate-800/80 bg-slate-950/80 backdrop-blur-md flex flex-col sm:flex-row justify-between items-center text-[10px] text-slate-400 gap-2 shrink-0">
+      <footer className="login-gateway-footer relative z-10 w-full px-6 py-3 border-t border-slate-800/80 bg-slate-950/80 backdrop-blur-md flex flex-col sm:flex-row justify-between items-center text-[10px] text-slate-400 gap-2 shrink-0">
         <div>
           منظومة سحاب التعليمية ERP © {new Date().getFullYear()} — جميع الحقوق محفوظة للمدرسة المعتمدة.
         </div>
