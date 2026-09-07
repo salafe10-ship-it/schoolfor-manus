@@ -1,20 +1,45 @@
-# Disaster Recovery Report
+# تقرير النسخ الاحتياطي والاستعادة — EduPro
 
-## Executive Summary
-This report outlines the disaster recovery (DR) capabilities and objectives for the application. The system is designed to provide robust data protection and restoration capabilities utilizing GCP native database features.
+تاريخ المراجعة: 2026-09-06
 
-## Recovery Objectives
-- **Recovery Time Objective (RTO)**: 4 hours (Target time to restore services).
-- **Recovery Point Objective (RPO)**: 1 hour (Target maximum data loss in a catastrophic event).
+## النطاق الصحيح
 
-## Backup Strategy
-- **Cloud SQL (PostgreSQL)**: Automated nightly backups enabled. Point-in-Time Recovery (PITR) active with 7-day retention for transaction-level recovery.
-- **Firestore**: Scheduled daily snapshots to GCS with 30-day lifecycle policies.
+مصدر البيانات الفعلي لهذا النظام هو PostgreSQL المُدار داخل مشروع Supabase المرتبط
+بالمعرّف `wjhraxvxvvthxqlpyohh`. التطبيق يعمل على Render، ولا يستخدم Cloud SQL أو
+Firestore كمصدر بيانات. لذلك لا يجوز اعتماد أي تقرير قديم يذكر GCP/Firestore كدليل
+نسخ لهذا النظام.
 
-## Restoration Procedures
-1. **Database Corruption**: Utilize SQL PITR to recover to the state immediately preceding the corruption event.
-2. **Region Failure**: Utilize GCS bucket cross-region replication for Firestore exports and automated SQL replica promotion if configured.
-3. **Data Verification**: Post-restore checksum validation of ledger balances and academic marks.
+## الحالة الحالية
 
-## Conclusion
-The implemented disaster recovery strategy leverages GCP’s robust managed services to meet stringent data protection requirements. Regular testing of the restoration procedure is required to guarantee the RTO/RPO targets.
+| البند | الحالة | الدليل/الإجراء التالي |
+| --- | --- | --- |
+| قاعدة البيانات الصحيحة | منجز | فحوص الترحيل والاتصال تشير إلى مشروع Supabase الصحيح |
+| النسخ المُدار من Supabase | يحتاج تحقق من لوحة المشروع | مراجعة Retention وPITR وخطة المشروع من Backup settings |
+| نسخة خارجية مشفرة | غير مثبتة بعد | تفعيل تصدير دوري إلى مخزن يحدده المالك مع تشفير ومهلة احتفاظ |
+| تجربة استعادة فعلية | غير منفذة | استعادة نسخة إلى مشروع اختبار منفصل ثم فحص المخطط والبيانات |
+| توثيق RPO/RTO | مسودة فقط | اعتماد أرقام بعد تجربة الاستعادة، لا قبلها |
+
+## إجراء التفعيل المعتمد
+
+1. من لوحة مشروع Supabase المرتبط، فعّل النسخ المتاحة للخطة وسجّل مدة الاحتفاظ وPITR
+   إن كانت متاحة. لا تُنشئ مشروعاً جديداً ولا تغيّر قاعدة البيانات الحالية.
+2. أنشئ نسخة خارجية دورية مشفرة، واحفظ مفاتيحها خارج المستودع وRender.
+3. نفّذ استعادة اختبارية إلى مشروع اختبار منفصل. يمنع منعاً باتاً تنفيذ الاستعادة
+   فوق قاعدة الإنتاج مباشرة.
+4. بعد الاستعادة، شغّل فحص المخطط والترحيلات وفحوص العزل والصحة، ثم طابق عدد
+   المستأجرين والمدارس وسجل الترحيلات مع المصدر.
+5. سجّل وقت النسخ، وقت الاستعادة، النتيجة، وأي فارق في البيانات في سجل تشغيل مستقل.
+
+## معايير القبول
+
+- لا توجد ترحيلات مفقودة أو إضافية غير معتمدة.
+- لا توجد مدارس أو مستأجرون أو مستخدمون غير متوقعين.
+- `/api/ready` و`/api/health` يعملان بعد ربط نسخة الاختبار.
+- فحوص RLS والعزل لا تسمح برؤية مدرسة أخرى.
+- توثيق RPO/RTO مبني على قياس فعلي، وليس على افتراضات مزود الاستضافة.
+
+## قرار المراجعة
+
+لا تُعلن ميزة النسخ والاستعادة «مفعّلة ومختبرة» قبل وجود دليل من لوحة Supabase
+وتجربة استعادة منفصلة ناجحة. التقرير السابق الذي نسب النسخ إلى Cloud SQL/Firestore
+غير صالح لهذا المشروع وتم استبداله بهذا التوثيق.

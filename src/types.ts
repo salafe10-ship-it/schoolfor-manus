@@ -147,8 +147,27 @@ export interface Student {
   guardianOccupation?: string;
   motherName?: string;
   motherPhone?: string;
+  motherWhatsapp?: string;
   educationLevel?: string;
   guardianRelation?: string;
+
+  // Student Affairs additional profile (academic, health, and social)
+  academicPreviousSchool?: string;
+  academicPreviousGrade?: string;
+  academicPreviousYear?: string;
+  academicPerformanceLevel?: string;
+  academicWritingLevel?: string;
+  academicReadingLevel?: string;
+  academicSpellingLevel?: string;
+  academicAverage?: string;
+  academicNotes?: string;
+  healthChronicDiseases?: string;
+  healthMedications?: string;
+  healthNotes?: string;
+  socialLivingWith?: string;
+  socialBirthOrder?: string;
+  socialFamilyView?: string;
+  socialOutsideTraits?: string;
   
   // Enterprise Audit/Locking Fields
   deletedAt?: string;

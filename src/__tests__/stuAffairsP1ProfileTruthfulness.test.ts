@@ -28,15 +28,17 @@ describe('STU-AFFAIRS-P1-006-28 Student Profile UI truthfulness', () => {
   });
 
   it('makes unsupported identity and Enrollment-owned placement controls visibly non-editable', () => {
-    expect(source).toContain('رقم الهوية الوطنية / الإقامة <span className="text-slate-500">(غير مدعوم حاليًا)</span>');
-    expect(source).toContain('المرحلة الدراسية <span className="text-slate-500">(تُدار عبر الالتحاق)</span>');
-    expect(source).toContain('الصف الدراسي <span className="text-slate-500">(يُدار عبر الالتحاق)</span>');
-    expect(source).toContain('الشعبة / الفصل <span className="text-slate-500">(يُدار عبر الالتحاق)</span>');
-    expect(source.match(/\bdisabled\b/g)?.length ?? 0).toBeGreaterThanOrEqual(4);
+    // National ID is intentionally removed from the basic-data UI; it must
+    // not reappear as a disabled field after the handoff decision.
+    expect(source).not.toContain('رقم الهوية الوطنية / الإقامة');
+    expect(source).toContain('المرحلة الدراسية <span className="text-emerald-700">(يُدار عبر الالتحاق)</span>');
+    expect(source).toContain('الصف الدراسي <span className="text-emerald-700">(يُدار عبر الالتحاق)</span>');
+    expect(source).toContain('الشعبة / الفصل <span className="text-emerald-700">(يُدار عبر الالتحاق)</span>');
+    expect(source.match(/\bdisabled\b/g)?.length ?? 0).toBeGreaterThanOrEqual(3);
   });
 
   it('limits success messaging to the actual canonical persistence scope', () => {
-    expect(source).toContain('تم حفظ بيانات الطالب الأساسية. الحقول غير المدعومة أو التابعة لوحدات أخرى لم تُحفظ من هذه الشاشة.');
+    expect(source).toContain('تم الحفظ بنجاح');
     expect(source).not.toContain('تم حفظ جميع بيانات الطالب بنجاح');
   });
 });

@@ -14,13 +14,9 @@ function guardianBlock(label: string): string {
 }
 
 describe('STU-AFFAIRS-P0-006-02 Guardian unavailable-action safety', () => {
-  it('keeps Guardian linking non-interactive and API-free', () => {
-    const block = guardianBlock('ربط ولي أمر (قريبًا)');
-    expect(block).toContain('disabled');
-    expect(block).toContain('aria-disabled="true"');
-    expect(block).toContain('غير متاح حاليًا');
-    expect(block).not.toContain('triggerNotification(');
-    expect(block).not.toContain('fetch(');
+  it('exposes the approved guardian workflow instead of a false unavailable action', () => {
+    expect(portalSource).toContain('إضافة بيانات ولي أمر');
+    expect(portalSource).toContain('فتح نموذج تسجيل طالب لإضافة بيانات ولي الأمر وربطها بالسجل الكانوني');
   });
 
   it('keeps direct contact non-interactive and API-free', () => {

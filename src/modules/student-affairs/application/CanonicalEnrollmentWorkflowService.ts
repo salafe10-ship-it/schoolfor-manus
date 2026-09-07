@@ -275,10 +275,14 @@ export class CanonicalEnrollmentWorkflowService {
         }
 
         await db.query(
-          `INSERT INTO public.enrollment_history (id, tenant_id, school_id, branch_id, student_id, enrollment_id, event_type, from_status, to_status,
-             effective_on, reason_code, reason_notes, approved_at, approved_by, recorded_by, created_by, updated_by, audit_id, request_id, correlation_id)
-           VALUES ($1, $2, $3, $4, $5, $6, 'amended', $7, $8, CURRENT_DATE, $9, $10, now(), $11, $11, $11, $11, $12, $13, $14)`,
-          [randomUUID(), context.tenantId, context.schoolId, context.branchId, student.id, enrollmentId, fromStatus, toStatus, `student_${operation}`, reason, actorId, auditId, studentRequestId, studentCorrelationId]
+          `INSERT INTO public.enrollment_history (id, tenant_id, school_id, branch_id, student_id, academic_year_id, term_id,
+             enrollment_id, transfer_id, event_type, from_status, to_status, effective_on, reason_code, reason_notes,
+             recorded_at, recorded_by, created_by, updated_by, audit_id, request_id, correlation_id)
+           VALUES ($1, $2, $3, $4, $5, $6, $7, $8, NULL, 'amended', $9, $10, CURRENT_DATE, $11, $12,
+                   now(), $13, $13, $13, $14, $15, $16)`,
+          [randomUUID(), context.tenantId, context.schoolId, context.branchId, student.id,
+            currentAcademic.academic_year_id, currentAcademic.term_id, enrollmentId, fromStatus, toStatus,
+            `student_${operation}`, reason, actorId, auditId, studentRequestId, studentCorrelationId]
         );
       }
 

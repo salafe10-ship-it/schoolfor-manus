@@ -6,6 +6,7 @@ import { PERMISSIONS } from '../../../authorization/PermissionRegistry.js';
 import { AuthorizationError, ConflictError, DatabaseError, ValidationError } from '../../../utils/errors.js';
 import {
   assertAcademicContext,
+  allocateStudentNumber,
   assertNoDatabaseConflict,
   assertNoDuplicateStudent,
   assertStudentNumberAvailable,
@@ -33,6 +34,23 @@ export type StudentRegistrationCommand = {
   gender?: unknown;
   nationality?: unknown;
   birthCountryCode?: unknown;
+  academicPreviousSchool?: unknown;
+  academicPreviousGrade?: unknown;
+  academicPreviousYear?: unknown;
+  academicPerformanceLevel?: unknown;
+  academicWritingLevel?: unknown;
+  academicReadingLevel?: unknown;
+  academicSpellingLevel?: unknown;
+  academicAverage?: unknown;
+  academicNotes?: unknown;
+  healthChronicDiseases?: unknown;
+  healthMedications?: unknown;
+  healthAllergies?: unknown;
+  healthNotes?: unknown;
+  socialLivingWith?: unknown;
+  socialBirthOrder?: unknown;
+  socialFamilyView?: unknown;
+  socialOutsideTraits?: unknown;
   termId?: unknown;
   admissionReference?: unknown;
   idempotencyKey?: unknown;
@@ -74,6 +92,23 @@ type NormalizedCommand = {
   gender: string | null;
   nationality: string | null;
   birthCountryCode: string | null;
+  academicPreviousSchool: string | null;
+  academicPreviousGrade: string | null;
+  academicPreviousYear: string | null;
+  academicPerformanceLevel: string | null;
+  academicWritingLevel: string | null;
+  academicReadingLevel: string | null;
+  academicSpellingLevel: string | null;
+  academicAverage: string | null;
+  academicNotes: string | null;
+  healthChronicDiseases: string | null;
+  healthMedications: string | null;
+  healthAllergies: string | null;
+  healthNotes: string | null;
+  socialLivingWith: string | null;
+  socialBirthOrder: string | null;
+  socialFamilyView: string | null;
+  socialOutsideTraits: string | null;
   termId: string;
   admissionReference: string | null;
   duplicateOverride: boolean;
@@ -141,6 +176,11 @@ function guardianInput(value: unknown): GuardianInput {
     legalLastName: stringValue(input.legalLastName, 'guardian.legalLastName') || undefined,
     phone: stringValue(input.phone, 'guardian.phone') || undefined,
     email: stringValue(input.email, 'guardian.email')?.toLowerCase() || undefined,
+    occupation: stringValue(input.occupation, 'guardian.occupation') || undefined,
+    educationLevel: stringValue(input.educationLevel, 'guardian.educationLevel') || undefined,
+    motherName: stringValue(input.motherName, 'guardian.motherName') || undefined,
+    motherPhone: stringValue(input.motherPhone, 'guardian.motherPhone') || undefined,
+    motherWhatsapp: stringValue(input.motherWhatsapp, 'guardian.motherWhatsapp') || undefined,
     addressLine1: stringValue(input.addressLine1, 'guardian.addressLine1') || undefined,
     addressLine2: stringValue(input.addressLine2, 'guardian.addressLine2') || undefined,
     city: stringValue(input.city, 'guardian.city') || undefined,
@@ -175,6 +215,23 @@ function normalizeCommand(command: StudentRegistrationCommand, requestIdempotenc
     gender: stringValue(command.gender, 'gender'),
     nationality: stringValue(command.nationality, 'nationality'),
     birthCountryCode: stringValue(command.birthCountryCode, 'birthCountryCode')?.toUpperCase() || null,
+    academicPreviousSchool: stringValue(command.academicPreviousSchool, 'academicPreviousSchool'),
+    academicPreviousGrade: stringValue(command.academicPreviousGrade, 'academicPreviousGrade'),
+    academicPreviousYear: stringValue(command.academicPreviousYear, 'academicPreviousYear'),
+    academicPerformanceLevel: stringValue(command.academicPerformanceLevel, 'academicPerformanceLevel'),
+    academicWritingLevel: stringValue(command.academicWritingLevel, 'academicWritingLevel'),
+    academicReadingLevel: stringValue(command.academicReadingLevel, 'academicReadingLevel'),
+    academicSpellingLevel: stringValue(command.academicSpellingLevel, 'academicSpellingLevel'),
+    academicAverage: stringValue(command.academicAverage, 'academicAverage'),
+    academicNotes: stringValue(command.academicNotes, 'academicNotes'),
+    healthChronicDiseases: stringValue(command.healthChronicDiseases, 'healthChronicDiseases'),
+    healthMedications: stringValue(command.healthMedications, 'healthMedications'),
+    healthAllergies: stringValue(command.healthAllergies, 'healthAllergies'),
+    healthNotes: stringValue(command.healthNotes, 'healthNotes'),
+    socialLivingWith: stringValue(command.socialLivingWith, 'socialLivingWith'),
+    socialBirthOrder: stringValue(command.socialBirthOrder, 'socialBirthOrder'),
+    socialFamilyView: stringValue(command.socialFamilyView, 'socialFamilyView'),
+    socialOutsideTraits: stringValue(command.socialOutsideTraits, 'socialOutsideTraits'),
     termId: stringValue(command.termId, 'termId', true)!,
     admissionReference: stringValue(command.admissionReference, 'admissionReference'),
     duplicateOverride: booleanValue(command.duplicateOverride, 'duplicateOverride'),
@@ -223,6 +280,23 @@ function studentFingerprint(input: NormalizedCommand): string {
     gender: input.gender,
     nationality: input.nationality,
     birthCountryCode: input.birthCountryCode,
+    academicPreviousSchool: input.academicPreviousSchool,
+    academicPreviousGrade: input.academicPreviousGrade,
+    academicPreviousYear: input.academicPreviousYear,
+    academicPerformanceLevel: input.academicPerformanceLevel,
+    academicWritingLevel: input.academicWritingLevel,
+    academicReadingLevel: input.academicReadingLevel,
+    academicSpellingLevel: input.academicSpellingLevel,
+    academicAverage: input.academicAverage,
+    academicNotes: input.academicNotes,
+    healthChronicDiseases: input.healthChronicDiseases,
+    healthMedications: input.healthMedications,
+    healthAllergies: input.healthAllergies,
+    healthNotes: input.healthNotes,
+    socialLivingWith: input.socialLivingWith,
+    socialBirthOrder: input.socialBirthOrder,
+    socialFamilyView: input.socialFamilyView,
+    socialOutsideTraits: input.socialOutsideTraits,
     termId: input.termId,
     admissionReference: input.admissionReference,
     duplicateOverride: input.duplicateOverride,
@@ -272,7 +346,6 @@ export class StudentRegistrationService {
     const statusHistoryId = randomUUID();
     const auditId = randomUUID();
     const outboxEventId = randomUUID();
-    const studentNumber = input.studentNumber || `STU-${new Date().getUTCFullYear()}-${studentId.slice(0, 8).toUpperCase()}`;
     const guardianNumber = input.guardian.guardianNumber || `GDN-${guardianId.slice(0, 8).toUpperCase()}`;
     const enrollmentNumber = `ENR-${new Date().getUTCFullYear()}-${enrollmentId.slice(0, 8).toUpperCase()}`;
 
@@ -298,6 +371,11 @@ export class StudentRegistrationService {
           const actorUserId = await resolveInternalActorUserId(context.tenantId, context.userId);
 
           await assertAcademicContext(context.tenantId, context.schoolId, context.academicYear, input.termId);
+          const studentNumber = input.studentNumber || await allocateStudentNumber(
+            context.tenantId,
+            context.schoolId,
+            context.academicYear
+          );
           await assertStudentNumberAvailable(context.tenantId, context.schoolId, studentNumber);
           await assertNoDuplicateStudent(
             context.tenantId,
@@ -354,6 +432,23 @@ export class StudentRegistrationService {
             gender: input.gender,
             nationality: input.nationality,
             birthCountryCode: input.birthCountryCode,
+            academicPreviousSchool: input.academicPreviousSchool,
+            academicPreviousGrade: input.academicPreviousGrade,
+            academicPreviousYear: input.academicPreviousYear,
+            academicPerformanceLevel: input.academicPerformanceLevel,
+            academicWritingLevel: input.academicWritingLevel,
+            academicReadingLevel: input.academicReadingLevel,
+            academicSpellingLevel: input.academicSpellingLevel,
+            academicAverage: input.academicAverage,
+            academicNotes: input.academicNotes,
+            healthChronicDiseases: input.healthChronicDiseases,
+            healthMedications: input.healthMedications,
+            healthAllergies: input.healthAllergies,
+            healthNotes: input.healthNotes,
+            socialLivingWith: input.socialLivingWith,
+            socialBirthOrder: input.socialBirthOrder,
+            socialFamilyView: input.socialFamilyView,
+            socialOutsideTraits: input.socialOutsideTraits,
              userId: actorUserId,
             auditId,
             requestId,

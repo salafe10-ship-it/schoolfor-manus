@@ -5210,6 +5210,23 @@ async function startServer() {
       gender: studentData.gender,
       nationality: studentData.nationality,
       birthCountryCode: studentData.birthCountryCode,
+      academicPreviousSchool: studentData.academicPreviousSchool,
+      academicPreviousGrade: studentData.academicPreviousGrade,
+      academicPreviousYear: studentData.academicPreviousYear,
+      academicPerformanceLevel: studentData.academicPerformanceLevel,
+      academicWritingLevel: studentData.academicWritingLevel,
+      academicReadingLevel: studentData.academicReadingLevel,
+      academicSpellingLevel: studentData.academicSpellingLevel,
+      academicAverage: studentData.academicAverage,
+      academicNotes: studentData.academicNotes,
+      healthChronicDiseases: studentData.healthChronicDiseases,
+      healthMedications: studentData.healthMedications,
+      healthAllergies: studentData.healthAllergies,
+      healthNotes: studentData.healthNotes,
+      socialLivingWith: studentData.socialLivingWith,
+      socialBirthOrder: studentData.socialBirthOrder,
+      socialFamilyView: studentData.socialFamilyView,
+      socialOutsideTraits: studentData.socialOutsideTraits,
       termId: resolvedTermId || await resolveActiveStudentTerm(context),
       admissionReference: "STUDENT-AFFAIRS-REGISTRATION",
       guardian: {
@@ -5219,6 +5236,11 @@ async function startServer() {
         phone: studentData.parentPhone,
         // Guardian email must be explicit; never derive it from the student's email.
         email: studentData.parentEmail,
+        occupation: studentData.parentJob || studentData.guardianOccupation,
+        educationLevel: studentData.parentEducationLevel || studentData.educationLevel,
+        motherName: studentData.motherName,
+        motherPhone: studentData.motherPhone,
+        motherWhatsapp: studentData.motherWhatsapp,
         relationshipType: studentData.guardianRelation || "parent",
         isPrimary: true,
         isEmergencyContact: true,
@@ -5241,11 +5263,29 @@ async function startServer() {
     if (studentData.gender !== undefined) patch.gender = studentData.gender;
     if (studentData.nationality !== undefined) patch.nationality = studentData.nationality;
     if (studentData.studentNumber !== undefined || studentData.studentCode !== undefined) patch.studentNumber = studentData.studentNumber || studentData.studentCode;
+    if (studentData.academicPreviousSchool !== undefined) patch.academicPreviousSchool = studentData.academicPreviousSchool;
+    if (studentData.academicPreviousGrade !== undefined) patch.academicPreviousGrade = studentData.academicPreviousGrade;
+    if (studentData.academicPreviousYear !== undefined) patch.academicPreviousYear = studentData.academicPreviousYear;
+    if (studentData.academicPerformanceLevel !== undefined) patch.academicPerformanceLevel = studentData.academicPerformanceLevel;
+    if (studentData.academicWritingLevel !== undefined) patch.academicWritingLevel = studentData.academicWritingLevel;
+    if (studentData.academicReadingLevel !== undefined) patch.academicReadingLevel = studentData.academicReadingLevel;
+    if (studentData.academicSpellingLevel !== undefined) patch.academicSpellingLevel = studentData.academicSpellingLevel;
+    if (studentData.academicAverage !== undefined) patch.academicAverage = studentData.academicAverage;
+    if (studentData.academicNotes !== undefined) patch.academicNotes = studentData.academicNotes;
+    if (studentData.healthChronicDiseases !== undefined) patch.healthChronicDiseases = studentData.healthChronicDiseases;
+    if (studentData.healthMedications !== undefined) patch.healthMedications = studentData.healthMedications;
+    if (studentData.healthAllergies !== undefined) patch.healthAllergies = studentData.healthAllergies;
+    if (studentData.healthNotes !== undefined) patch.healthNotes = studentData.healthNotes;
+    if (studentData.socialLivingWith !== undefined) patch.socialLivingWith = studentData.socialLivingWith;
+    if (studentData.socialBirthOrder !== undefined) patch.socialBirthOrder = studentData.socialBirthOrder;
+    if (studentData.socialFamilyView !== undefined) patch.socialFamilyView = studentData.socialFamilyView;
+    if (studentData.socialOutsideTraits !== undefined) patch.socialOutsideTraits = studentData.socialOutsideTraits;
     return patch;
   }
 
   const guardianUpdateFields = [
     "parentName", "parentPhone", "parentEmail", "parentNationalId", "parentRelation", "parentJob",
+    "guardianOccupation", "parentEducationLevel", "educationLevel", "motherName", "motherPhone", "motherWhatsapp",
     "guardianId", "guardianNumber", "guardianRelation", "guardianEmail", "relationshipType",
     "expectedGuardianVersion", "expectedRelationshipVersion"
   ] as const;

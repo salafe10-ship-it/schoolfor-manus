@@ -36,7 +36,7 @@ describe('STU-AFFAIRS-P1-PRIV-008 sensitive data exposure', () => {
   });
 
   it('retains sensitive fields only where explicitly needed for controlled editing', () => {
-    expect(portalSource).toContain('value={formData.nationalId}');
+    expect(portalSource).not.toContain('value={formData.nationalId}');
     expect(portalSource).toContain('value={formData.parentPhone}');
     expect(portalSource).not.toContain('الهوية الوطنية: {viewStudent.nationalId');
   });

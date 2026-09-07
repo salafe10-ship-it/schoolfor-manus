@@ -22,6 +22,11 @@ type GuardianUpdateCommand = {
   legalLastName?: unknown;
   phone?: unknown;
   email?: unknown;
+  occupation?: unknown;
+  educationLevel?: unknown;
+  motherName?: unknown;
+  motherPhone?: unknown;
+  motherWhatsapp?: unknown;
   addressLine1?: unknown;
   addressLine2?: unknown;
   city?: unknown;
@@ -52,6 +57,11 @@ type GuardianRow = {
   legal_last_name: string;
   phone: string | null;
   email: string | null;
+  occupation: string | null;
+  education_level: string | null;
+  mother_name: string | null;
+  mother_phone: string | null;
+  mother_whatsapp: string | null;
   address_line1: string | null;
   address_line2: string | null;
   city: string | null;
@@ -174,6 +184,11 @@ export class CanonicalGuardianUpdateService {
       if (email && (!email.includes('@') || email.startsWith('@'))) throw new ValidationError('email is invalid.');
       guardianFields.push(['email', email]);
     }
+    if (command.occupation !== undefined) guardianFields.push(['occupation', optionalText(command.occupation, 'occupation')]);
+    if (command.educationLevel !== undefined) guardianFields.push(['education_level', optionalText(command.educationLevel, 'educationLevel')]);
+    if (command.motherName !== undefined) guardianFields.push(['mother_name', optionalText(command.motherName, 'motherName')]);
+    if (command.motherPhone !== undefined) guardianFields.push(['mother_phone', optionalText(command.motherPhone, 'motherPhone')]);
+    if (command.motherWhatsapp !== undefined) guardianFields.push(['mother_whatsapp', optionalText(command.motherWhatsapp, 'motherWhatsapp')]);
     if (command.addressLine1 !== undefined) guardianFields.push(['address_line1', optionalText(command.addressLine1, 'addressLine1')]);
     if (command.addressLine2 !== undefined) guardianFields.push(['address_line2', optionalText(command.addressLine2, 'addressLine2')]);
     if (command.city !== undefined) guardianFields.push(['city', optionalText(command.city, 'city')]);
@@ -218,7 +233,8 @@ export class CanonicalGuardianUpdateService {
                     g.version AS guardian_version,
                     sg.version AS relationship_version,
                     g.guardian_number, g.legal_first_name, g.legal_middle_name, g.legal_last_name,
-                    g.phone, g.email, g.address_line1, g.address_line2, g.city, g.country_code,
+                    g.phone, g.email, g.occupation, g.education_level, g.mother_name, g.mother_phone, g.mother_whatsapp,
+                    g.address_line1, g.address_line2, g.city, g.country_code,
                     sg.relationship_type, sg.is_primary, sg.is_emergency_contact,
                     sg.can_collect_student, sg.custody_status, sg.consent_status
                FROM public.students AS s

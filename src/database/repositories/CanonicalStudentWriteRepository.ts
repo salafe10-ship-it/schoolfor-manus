@@ -13,6 +13,23 @@ type StudentWritePatch = {
   gender?: string | null;
   nationality?: string | null;
   studentNumber?: string;
+  academicPreviousSchool?: string | null;
+  academicPreviousGrade?: string | null;
+  academicPreviousYear?: string | null;
+  academicPerformanceLevel?: string | null;
+  academicWritingLevel?: string | null;
+  academicReadingLevel?: string | null;
+  academicSpellingLevel?: string | null;
+  academicAverage?: string | null;
+  academicNotes?: string | null;
+  healthChronicDiseases?: string | null;
+  healthMedications?: string | null;
+  healthAllergies?: string | null;
+  healthNotes?: string | null;
+  socialLivingWith?: string | null;
+  socialBirthOrder?: string | null;
+  socialFamilyView?: string | null;
+  socialOutsideTraits?: string | null;
 };
 
 type WriteAudit = {
@@ -36,6 +53,23 @@ type CanonicalStudent = {
   date_of_birth: string;
   gender: string | null;
   nationality: string | null;
+  academic_previous_school: string | null;
+  academic_previous_grade: string | null;
+  academic_previous_year: string | null;
+  academic_performance_level: string | null;
+  academic_writing_level: string | null;
+  academic_reading_level: string | null;
+  academic_spelling_level: string | null;
+  academic_average: string | null;
+  academic_notes: string | null;
+  health_chronic_diseases: string | null;
+  health_medications: string | null;
+  health_allergies: string | null;
+  health_notes: string | null;
+  social_living_with: string | null;
+  social_birth_order: string | null;
+  social_family_view: string | null;
+  social_outside_traits: string | null;
   status: string;
   version: number;
   created_at: string;
@@ -150,6 +184,23 @@ function mapStudent(row: CanonicalStudent): Record<string, unknown> {
     dateOfBirth: row.date_of_birth,
     gender: row.gender || undefined,
     nationality: row.nationality || undefined,
+    academicPreviousSchool: row.academic_previous_school || '',
+    academicPreviousGrade: row.academic_previous_grade || '',
+    academicPreviousYear: row.academic_previous_year || '',
+    academicPerformanceLevel: row.academic_performance_level || '',
+    academicWritingLevel: row.academic_writing_level || '',
+    academicReadingLevel: row.academic_reading_level || '',
+    academicSpellingLevel: row.academic_spelling_level || '',
+    academicAverage: row.academic_average || '',
+    academicNotes: row.academic_notes || '',
+    healthChronicDiseases: row.health_chronic_diseases || '',
+    healthMedications: row.health_medications || '',
+    healthAllergies: row.health_allergies || '',
+    healthNotes: row.health_notes || '',
+    socialLivingWith: row.social_living_with || '',
+    socialBirthOrder: row.social_birth_order || '',
+    socialFamilyView: row.social_family_view || '',
+    socialOutsideTraits: row.social_outside_traits || '',
     status: row.status === 'admitted' ? 'accepted' : row.status,
     version: row.version,
     registrationDate: row.created_at,
@@ -201,6 +252,23 @@ export class CanonicalStudentWriteRepository {
       if (patch.gender !== undefined) fields.push(['gender', text(patch.gender, 'gender')]);
       if (patch.nationality !== undefined) fields.push(['nationality', text(patch.nationality, 'nationality')]);
       if (patch.studentNumber !== undefined) fields.push(['student_number', text(patch.studentNumber, 'studentNumber', true)]);
+      if (patch.academicPreviousSchool !== undefined) fields.push(['academic_previous_school', text(patch.academicPreviousSchool, 'academicPreviousSchool')]);
+      if (patch.academicPreviousGrade !== undefined) fields.push(['academic_previous_grade', text(patch.academicPreviousGrade, 'academicPreviousGrade')]);
+      if (patch.academicPreviousYear !== undefined) fields.push(['academic_previous_year', text(patch.academicPreviousYear, 'academicPreviousYear')]);
+      if (patch.academicPerformanceLevel !== undefined) fields.push(['academic_performance_level', text(patch.academicPerformanceLevel, 'academicPerformanceLevel')]);
+      if (patch.academicWritingLevel !== undefined) fields.push(['academic_writing_level', text(patch.academicWritingLevel, 'academicWritingLevel')]);
+      if (patch.academicReadingLevel !== undefined) fields.push(['academic_reading_level', text(patch.academicReadingLevel, 'academicReadingLevel')]);
+      if (patch.academicSpellingLevel !== undefined) fields.push(['academic_spelling_level', text(patch.academicSpellingLevel, 'academicSpellingLevel')]);
+      if (patch.academicAverage !== undefined) fields.push(['academic_average', text(patch.academicAverage, 'academicAverage')]);
+      if (patch.academicNotes !== undefined) fields.push(['academic_notes', text(patch.academicNotes, 'academicNotes')]);
+      if (patch.healthChronicDiseases !== undefined) fields.push(['health_chronic_diseases', text(patch.healthChronicDiseases, 'healthChronicDiseases')]);
+      if (patch.healthMedications !== undefined) fields.push(['health_medications', text(patch.healthMedications, 'healthMedications')]);
+      if (patch.healthAllergies !== undefined) fields.push(['health_allergies', text(patch.healthAllergies, 'healthAllergies')]);
+      if (patch.healthNotes !== undefined) fields.push(['health_notes', text(patch.healthNotes, 'healthNotes')]);
+      if (patch.socialLivingWith !== undefined) fields.push(['social_living_with', text(patch.socialLivingWith, 'socialLivingWith')]);
+      if (patch.socialBirthOrder !== undefined) fields.push(['social_birth_order', text(patch.socialBirthOrder, 'socialBirthOrder')]);
+      if (patch.socialFamilyView !== undefined) fields.push(['social_family_view', text(patch.socialFamilyView, 'socialFamilyView')]);
+      if (patch.socialOutsideTraits !== undefined) fields.push(['social_outside_traits', text(patch.socialOutsideTraits, 'socialOutsideTraits')]);
       if (fields.length === 0) throw new ValidationError('No canonical student fields were supplied for update.');
 
       const internalActor = await actorId(context);
@@ -224,7 +292,13 @@ export class CanonicalStudentWriteRepository {
             AND version = $${versionIndex + 8}
         RETURNING id, tenant_id, school_id, branch_id, student_number,
                   legal_first_name, legal_middle_name, legal_last_name,
-                  preferred_name, date_of_birth, gender, nationality, status,
+                  preferred_name, date_of_birth, gender, nationality,
+                  academic_previous_school, academic_previous_grade, academic_previous_year,
+                  academic_performance_level, academic_writing_level, academic_reading_level,
+                  academic_spelling_level, academic_average, academic_notes,
+                  health_chronic_diseases, health_medications, health_allergies, health_notes,
+                  social_living_with, social_birth_order, social_family_view, social_outside_traits,
+                  status,
                   version, created_at, updated_at, deleted_at`,
         [
           ...values,

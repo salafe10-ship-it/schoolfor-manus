@@ -3471,22 +3471,32 @@ function GlobalNotificationToast({ notification }: { notification: { text: strin
   if (!notification) return null;
   const isSuccess = notification.type === 'success';
   const isDanger = notification.type === 'danger' || notification.type === 'error';
+  const isSaveConfirmation = isSuccess && notification.text.trim().startsWith('تم الحفظ بنجاح');
   return (
     <div
       role="status"
       aria-live="polite"
       className={`pointer-events-none fixed left-1/2 top-5 z-[200] flex max-w-[min(92vw,560px)] -translate-x-1/2 items-center gap-3 rounded-2xl border px-5 py-3 text-xs font-black shadow-2xl backdrop-blur-md ${
-        isSuccess
-          ? 'border-emerald-300 bg-emerald-50/95 text-emerald-800 dark:border-emerald-800 dark:bg-emerald-950/95 dark:text-emerald-200'
+        isSaveConfirmation
+          ? 'border-[#d4af37] bg-gradient-to-r from-[#fffaf0] via-[#fffefb] to-[#f8f0df] text-[#2a1d13] shadow-[#d4af37]/30'
+          : isSuccess
+            ? 'border-emerald-300 bg-emerald-50/95 text-emerald-800 dark:border-emerald-800 dark:bg-emerald-950/95 dark:text-emerald-200'
           : isDanger
             ? 'border-rose-300 bg-rose-50/95 text-rose-800 dark:border-rose-800 dark:bg-rose-950/95 dark:text-rose-200'
             : 'border-amber-300 bg-amber-50/95 text-amber-800 dark:border-amber-800 dark:bg-amber-950/95 dark:text-amber-200'
       }`}
     >
-      <span aria-hidden="true" className={`flex h-6 w-6 shrink-0 items-center justify-center rounded-full text-sm ${isSuccess ? 'bg-emerald-600 text-white' : isDanger ? 'bg-rose-600 text-white' : 'bg-amber-500 text-white'}`}>
+      <span aria-hidden="true" className={`flex h-7 w-7 shrink-0 items-center justify-center rounded-full text-sm ${isSaveConfirmation ? 'bg-[#2a1d13] text-[#f7d174]' : isSuccess ? 'bg-emerald-600 text-white' : isDanger ? 'bg-rose-600 text-white' : 'bg-amber-500 text-white'}`}>
         {isSuccess ? '✓' : isDanger ? '!' : 'i'}
       </span>
-      <span>{notification.text}</span>
+      {isSaveConfirmation ? (
+        <span className="flex items-center gap-2">
+          <span className="text-[9px] font-black uppercase tracking-[0.18em] text-[#9a6a1d]">EduPro</span>
+          <span className="text-sm font-black">تم الحفظ بنجاح</span>
+        </span>
+      ) : (
+        <span>{notification.text}</span>
+      )}
     </div>
   );
 }

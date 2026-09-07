@@ -76,6 +76,50 @@ export async function assertStudentNumberAvailable(tenantId: string, schoolId: s
   if (row) throw new ConflictError('Student number is already in use.', { field: 'studentNumber' });
 }
 
+/**
+ * Allocate the next human-facing student number for the trusted school/year.
+ * The advisory transaction lock makes the max+1 calculation safe when two
+ * admissions are submitted at the same time; the internal student UUID
+ * remains the immutable canonical identifier.
+ */
+export async function allocateStudentNumber(
+  tenantId: string,
+  schoolId: string,
+  academicYearId: string
+): Promise<string> {
+  const year = await one<{ code: string }>(
+    `SELECT code
+       FROM academic_years
+      WHERE tenant_id = $1
+        AND school_id = $2
+        AND id = $3
+        AND deleted_at IS NULL
+      LIMIT 1`,
+    [tenantId, schoolId, academicYearId]
+  );
+  const yearPrefix = String(year?.code || '').match(/\d{4}/)?.[0];
+  if (!yearPrefix) throw new ValidationError('تعذر تحديد سنة الترقيم الأكاديمي الموثوقة.');
+
+  await transaction().query(
+    `SELECT pg_advisory_xact_lock(hashtextextended($1::text, 0))`,
+    [`student-number:${tenantId}:${schoolId}:${academicYearId}`]
+  );
+
+  const next = await one<{ next_number: string }>(
+    `SELECT (COALESCE(MAX(((regexp_match(student_number, $1))[1])::integer), 0) + 1)::text AS next_number
+      FROM students
+      WHERE tenant_id = $2
+        AND school_id = $3
+        AND student_number ~ $1`,
+    [`^STU-${yearPrefix}-([0-9]+)$`, tenantId, schoolId]
+  );
+  const sequence = Number(next?.next_number || 1);
+  if (!Number.isSafeInteger(sequence) || sequence < 1) {
+    throw new DatabaseError('تعذر تخصيص رقم طالب متسلسل آمن.');
+  }
+  return `STU-${yearPrefix}-${String(sequence).padStart(4, '0')}`;
+}
+
 function normalizedName(value: string | null | undefined): string {
   return (value || '').normalize('NFKD').replace(/[\u0300-\u036f]/g, '').trim().toLocaleLowerCase();
 }
@@ -199,6 +243,11 @@ export type GuardianInput = {
   legalLastName?: string;
   phone?: string;
   email?: string;
+  occupation?: string;
+  educationLevel?: string;
+  motherName?: string;
+  motherPhone?: string;
+  motherWhatsapp?: string;
   addressLine1?: string;
   addressLine2?: string;
   city?: string;
@@ -265,17 +314,19 @@ export async function resolveGuardian(
     `INSERT INTO guardians (
        id, tenant_id, school_id, branch_id, guardian_number,
        legal_first_name, legal_middle_name, legal_last_name,
-       phone, email, address_line1, address_line2, city, country_code,
+       phone, email, occupation, education_level, mother_name, mother_phone, mother_whatsapp,
+       address_line1, address_line2, city, country_code,
        verification_status, status, version, created_by, updated_by,
        audit_id, request_id, correlation_id
-     ) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14,
-               'unverified', 'active', 1, $15, $15, $16, $17, $18)`,
+     ) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16, $17, $18, $19,
+               'unverified', 'active', 1, $20, $20, $21, $22, $23)`,
     [
       generatedId, context.tenantId, context.schoolId, context.branchId, guardianNumber,
       input.legalFirstName, input.legalMiddleName || null, input.legalLastName,
-      input.phone || null, input.email || null, input.addressLine1 || null,
-      input.addressLine2 || null, input.city || null, input.countryCode || null,
-      context.userId, auditId, requestId, correlationId
+      input.phone || null, input.email || null, input.occupation || null,
+      input.educationLevel || null, input.motherName || null, input.motherPhone || null,
+      input.motherWhatsapp || null, input.addressLine1 || null, input.addressLine2 || null,
+      input.city || null, input.countryCode || null, context.userId, auditId, requestId, correlationId
     ],
     { id: generatedId, guardianNumber }
   );
@@ -296,6 +347,23 @@ export function enqueueStudent(values: {
   gender: string | null;
   nationality: string | null;
   birthCountryCode: string | null;
+  academicPreviousSchool: string | null;
+  academicPreviousGrade: string | null;
+  academicPreviousYear: string | null;
+  academicPerformanceLevel: string | null;
+  academicWritingLevel: string | null;
+  academicReadingLevel: string | null;
+  academicSpellingLevel: string | null;
+  academicAverage: string | null;
+  academicNotes: string | null;
+  healthChronicDiseases: string | null;
+  healthMedications: string | null;
+  healthAllergies: string | null;
+  healthNotes: string | null;
+  socialLivingWith: string | null;
+  socialBirthOrder: string | null;
+  socialFamilyView: string | null;
+  socialOutsideTraits: string | null;
   userId: string;
   auditId: string;
   requestId: string;
@@ -307,14 +375,25 @@ export function enqueueStudent(values: {
     `INSERT INTO students (
        id, tenant_id, school_id, branch_id, student_number,
        legal_first_name, legal_middle_name, legal_last_name, preferred_name,
-       date_of_birth, gender, nationality, birth_country_code, status, version,
-       created_by, updated_by, audit_id, request_id, correlation_id
+       date_of_birth, gender, nationality, birth_country_code,
+       academic_previous_school, academic_previous_grade, academic_previous_year,
+       academic_performance_level, academic_writing_level, academic_reading_level,
+       academic_spelling_level, academic_average, academic_notes,
+       health_chronic_diseases, health_medications, health_allergies, health_notes,
+       social_living_with, social_birth_order, social_family_view, social_outside_traits,
+       status, version, created_by, updated_by, audit_id, request_id, correlation_id
      ) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10::date, $11, $12, $13,
-               'applicant', 1, $14, $14, $15, $16, $17)`,
+               $14, $15, $16, $17, $18, $19, $20, $21, $22, $23, $24, $25, $26, $27, $28, $29, $30,
+               'applicant', 1, $31, $31, $32, $33, $34)`,
     [
       values.id, values.tenantId, values.schoolId, values.branchId, values.studentNumber,
       values.legalFirstName, values.legalMiddleName, values.legalLastName, values.preferredName,
       values.dateOfBirth, values.gender, values.nationality, values.birthCountryCode,
+      values.academicPreviousSchool, values.academicPreviousGrade, values.academicPreviousYear,
+      values.academicPerformanceLevel, values.academicWritingLevel, values.academicReadingLevel,
+      values.academicSpellingLevel, values.academicAverage, values.academicNotes,
+      values.healthChronicDiseases, values.healthMedications, values.healthAllergies, values.healthNotes,
+      values.socialLivingWith, values.socialBirthOrder, values.socialFamilyView, values.socialOutsideTraits,
       values.userId, values.auditId, values.requestId, values.correlationId
     ],
     { id: values.id, studentNumber: values.studentNumber }

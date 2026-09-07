@@ -45,12 +45,34 @@ type CanonicalStudentRow = {
   date_of_birth: string;
   gender: string | null;
   nationality: string | null;
+  academic_previous_school: string | null;
+  academic_previous_grade: string | null;
+  academic_previous_year: string | null;
+  academic_performance_level: string | null;
+  academic_writing_level: string | null;
+  academic_reading_level: string | null;
+  academic_spelling_level: string | null;
+  academic_average: string | null;
+  academic_notes: string | null;
+  health_chronic_diseases: string | null;
+  health_medications: string | null;
+  health_allergies: string | null;
+  health_notes: string | null;
+  social_living_with: string | null;
+  social_birth_order: string | null;
+  social_family_view: string | null;
+  social_outside_traits: string | null;
   guardian_id: string | null;
   guardian_version: number | null;
   guardian_relationship_id: string | null;
   guardian_relationship_version: number | null;
   parent_name: string | null;
   parent_phone: string | null;
+  guardian_occupation: string | null;
+  guardian_education_level: string | null;
+  mother_name: string | null;
+  mother_phone: string | null;
+  mother_whatsapp: string | null;
   guardian_relation: string | null;
   class_reference: string | null;
   section_reference: string | null;
@@ -137,6 +159,11 @@ export function mapCanonicalStudentRow(row: CanonicalStudentRow): Record<string,
     section: row.section_reference || '',
     parentName: row.parent_name || '',
     parentPhone: row.parent_phone || '',
+    guardianOccupation: row.guardian_occupation || '',
+    educationLevel: row.guardian_education_level || '',
+    motherName: row.mother_name || '',
+    motherPhone: row.mother_phone || '',
+    motherWhatsapp: row.mother_whatsapp || '',
     guardianRelation: row.guardian_relation || '',
     guardianId: row.guardian_id || undefined,
     guardianVersion: row.guardian_version || undefined,
@@ -146,6 +173,23 @@ export function mapCanonicalStudentRow(row: CanonicalStudentRow): Record<string,
     birthDate: row.date_of_birth,
     gender: row.gender || undefined,
     nationality: row.nationality || undefined,
+    academicPreviousSchool: row.academic_previous_school || '',
+    academicPreviousGrade: row.academic_previous_grade || '',
+    academicPreviousYear: row.academic_previous_year || '',
+    academicPerformanceLevel: row.academic_performance_level || '',
+    academicWritingLevel: row.academic_writing_level || '',
+    academicReadingLevel: row.academic_reading_level || '',
+    academicSpellingLevel: row.academic_spelling_level || '',
+    academicAverage: row.academic_average || '',
+    academicNotes: row.academic_notes || '',
+    healthChronicDiseases: row.health_chronic_diseases || '',
+    healthMedications: row.health_medications || '',
+    healthAllergies: row.health_allergies || '',
+    healthNotes: row.health_notes || '',
+    socialLivingWith: row.social_living_with || '',
+    socialBirthOrder: row.social_birth_order || '',
+    socialFamilyView: row.social_family_view || '',
+    socialOutsideTraits: row.social_outside_traits || '',
     academicYearId: row.academic_year_id || undefined,
     academicYear: row.academic_year_name || undefined,
     status: mapStatus(row.status),
@@ -218,12 +262,19 @@ async function queryCanonicalStudents(
       s.id, s.tenant_id, s.school_id, s.branch_id, s.student_number,
       s.legal_first_name, s.legal_middle_name, s.legal_last_name,
       s.preferred_name, s.date_of_birth::text AS date_of_birth, s.gender, s.nationality,
+      s.academic_previous_school, s.academic_previous_grade, s.academic_previous_year,
+      s.academic_performance_level, s.academic_writing_level, s.academic_reading_level,
+      s.academic_spelling_level, s.academic_average, s.academic_notes,
+      s.health_chronic_diseases, s.health_medications, s.health_allergies, s.health_notes,
+      s.social_living_with, s.social_birth_order, s.social_family_view, s.social_outside_traits,
       s.status, s.version, s.created_at, s.deleted_at,
       enrollment.class_reference, enrollment.section_reference,
       enrollment.academic_year_id, enrollment.academic_year_name,
       guardian.guardian_id, guardian.guardian_version,
       guardian.guardian_relationship_id, guardian.guardian_relationship_version,
       guardian.parent_name, guardian.parent_phone, guardian.guardian_relation,
+      guardian.guardian_occupation, guardian.guardian_education_level,
+      guardian.mother_name, guardian.mother_phone, guardian.mother_whatsapp,
       COUNT(*) OVER()::integer AS total_count
     FROM public.students AS s
     LEFT JOIN LATERAL (
@@ -252,6 +303,11 @@ async function queryCanonicalStudents(
         sg.version AS guardian_relationship_version,
         concat_ws(' ', g.legal_first_name, g.legal_middle_name, g.legal_last_name) AS parent_name,
         g.phone AS parent_phone,
+        g.occupation AS guardian_occupation,
+        g.education_level AS guardian_education_level,
+        g.mother_name,
+        g.mother_phone,
+        g.mother_whatsapp,
         sg.relationship_type AS guardian_relation
       FROM public.student_guardians AS sg
       INNER JOIN public.guardians AS g
@@ -328,7 +384,7 @@ async function queryCanonicalStudentsFromSupabase(
 
   let studentQuery = supabase
     .from('students')
-    .select('id,tenant_id,school_id,branch_id,student_number,legal_first_name,legal_middle_name,legal_last_name,preferred_name,date_of_birth,gender,nationality,status,version,created_at,deleted_at', { count: 'exact' })
+    .select('id,tenant_id,school_id,branch_id,student_number,legal_first_name,legal_middle_name,legal_last_name,preferred_name,date_of_birth,gender,nationality,academic_previous_school,academic_previous_grade,academic_previous_year,academic_performance_level,academic_writing_level,academic_reading_level,academic_spelling_level,academic_average,academic_notes,health_chronic_diseases,health_medications,health_allergies,health_notes,social_living_with,social_birth_order,social_family_view,social_outside_traits,status,version,created_at,deleted_at', { count: 'exact' })
     .eq('tenant_id', context.tenantId)
     .eq('school_id', context.schoolId)
     .eq('branch_id', context.branchId)
@@ -412,7 +468,7 @@ async function queryCanonicalStudentsFromSupabase(
   if (guardianIds.length) {
     const { data, error } = await supabase
       .from('guardians')
-      .select('id,version,tenant_id,school_id,branch_id,legal_first_name,legal_middle_name,legal_last_name,phone,status,deleted_at')
+      .select('id,version,tenant_id,school_id,branch_id,legal_first_name,legal_middle_name,legal_last_name,phone,occupation,education_level,mother_name,mother_phone,mother_whatsapp,status,deleted_at')
       .eq('tenant_id', context.tenantId)
       .eq('school_id', context.schoolId)
       .in('id', guardianIds)
@@ -438,6 +494,11 @@ async function queryCanonicalStudentsFromSupabase(
       guardian_relationship_version: link?.version || null,
       parent_name: guardian ? [guardian.legal_first_name, guardian.legal_middle_name, guardian.legal_last_name].filter(Boolean).join(' ') : null,
       parent_phone: guardian?.phone || null,
+      guardian_occupation: guardian?.occupation || null,
+      guardian_education_level: guardian?.education_level || null,
+      mother_name: guardian?.mother_name || null,
+      mother_phone: guardian?.mother_phone || null,
+      mother_whatsapp: guardian?.mother_whatsapp || null,
       guardian_relation: link?.relationship_type || null,
       class_reference: enrollment?.class_reference || null,
       section_reference: enrollment?.section_reference || null,

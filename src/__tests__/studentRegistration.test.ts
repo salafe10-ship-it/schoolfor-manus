@@ -24,6 +24,9 @@ class RegistrationSession implements TransactionSession {
     if (/^SELECT id[\s\S]*FROM terms/.test(normalizedSql)) return { rows: [{ id: 'term-1' }] as unknown as Row[], rowCount: 1 };
     if (/^SELECT id, guardian_number[\s\S]*FROM guardians/.test(normalizedSql)) return { rows: [], rowCount: 0 };
     if (/^SELECT aggregate_id, payload[\s\S]*FROM outbox_events/.test(normalizedSql)) return { rows: [], rowCount: 0 };
+    if (/^SELECT code[\s\S]*FROM academic_years/.test(normalizedSql)) return { rows: [{ code: '2026-2027' }] as unknown as Row[], rowCount: 1 };
+    if (/^SELECT pg_advisory_xact_lock/.test(normalizedSql)) return { rows: [], rowCount: 1 } as TransactionQueryResult<Row>;
+    if (/^SELECT \(COALESCE\(MAX[\s\S]*FROM students/.test(normalizedSql)) return { rows: [{ next_number: '1' }] as unknown as Row[], rowCount: 1 };
     if (/^SELECT id, student_number[\s\S]*FROM students/.test(normalizedSql)) return { rows: [], rowCount: 0 };
     if (/^SELECT id[\s\S]*FROM students/.test(normalizedSql)) return { rows: [], rowCount: 0 };
     if (this.failOnWrite && normalizedSql.startsWith(this.failOnWrite)) throw new Error('simulated SOP-001 write failure');
@@ -113,6 +116,7 @@ describe('SOP-001 Student Registration', () => {
 
     expect(result.idempotent).toBe(false);
     expect(result.studentId).toBeTruthy();
+    expect(result.studentNumber).toBe('STU-2026-0001');
     expect(result.guardianId).toBeTruthy();
     expect(result.enrollmentId).toBeTruthy();
     expect(driver.session?.committed).toBe(true);

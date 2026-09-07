@@ -141,6 +141,126 @@ export const StudentRepository = {
     return data;
   },
 
+  async listStudentDocuments(studentId: string): Promise<any[]> {
+    const response = await authenticatedRequest(`/api/students/${encodeURIComponent(studentId)}/documents?limit=100`, {
+      method: 'GET',
+      headers: { Accept: 'application/json' },
+      cache: 'no-store'
+    });
+    const data = await response.json().catch(() => ({}));
+    if (!response.ok) throw new Error(data.message || data.error || 'تعذر تحميل صور ومستندات الطالب.');
+    return Array.isArray(data?.data) ? data.data : [];
+  },
+
+  async listStudentDocumentCategories(search = ''): Promise<any[]> {
+    const query = search ? `?search=${encodeURIComponent(search)}` : '';
+    const response = await authenticatedRequest(`/api/student-document-categories${query}`, {
+      method: 'GET',
+      headers: { Accept: 'application/json' },
+      cache: 'no-store'
+    });
+    const data = await response.json().catch(() => ({}));
+    if (!response.ok) throw new Error(data.message || data.error || 'تعذر تحميل تصنيفات مستندات الطالب.');
+    return Array.isArray(data?.data) ? data.data : [];
+  },
+
+  async ensureStudentDocumentCategory(categoryCode: string, displayName: string): Promise<string> {
+    const normalizedCode = categoryCode.trim().toUpperCase();
+    const existing = await this.listStudentDocumentCategories(normalizedCode);
+    const category = existing.find(item => String(item?.category_code || item?.categoryCode || '').toUpperCase() === normalizedCode);
+    if (category?.id) return String(category.id);
+    const response = await authenticatedRequest('/api/student-document-categories', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json', 'Idempotency-Key': `student-document-category-${normalizedCode}-${crypto.randomUUID()}` },
+      body: JSON.stringify({ categoryCode: normalizedCode, displayName, description: `مستند طالب اختياري: ${displayName}` })
+    });
+    const data = await response.json().catch(() => ({}));
+    if (!response.ok) throw new Error(data.message || data.error || `تعذر تهيئة تصنيف المستند ${displayName}.`);
+    const categoryId = data?.data?.categoryId || data?.data?.id;
+    if (!categoryId) throw new Error(`لم يُرجع الخادم معرف تصنيف المستند ${displayName}.`);
+    return String(categoryId);
+  },
+
+  async ensureStudentProfilePhotoCategory(): Promise<string> {
+    return this.ensureStudentDocumentCategory('STUDENT_PROFILE_PHOTO', 'الصورة الشخصية للطالب');
+  },
+
+  async getStudentDocumentContent(documentId: string): Promise<string> {
+    const response = await authenticatedRequest(`/api/student-documents/${encodeURIComponent(documentId)}/content`, {
+      method: 'GET',
+      headers: { Accept: 'application/json' },
+      cache: 'no-store'
+    });
+    const data = await response.json().catch(() => ({}));
+    if (!response.ok) throw new Error(data.message || data.error || 'تعذر إنشاء رابط الصورة الخاصة.');
+    const url = data?.data?.url;
+    if (!url) throw new Error('لم يُرجع الخادم رابط الصورة الخاصة.');
+    return String(url);
+  },
+
+  async uploadStudentProfilePhoto(studentId: string, file: File): Promise<string> {
+    const categoryId = await this.ensureStudentProfilePhotoCategory();
+    const documents = await this.listStudentDocuments(studentId);
+    const existing = documents.find(item => String(item?.category_code || item?.categoryCode || '').toUpperCase() === 'STUDENT_PROFILE_PHOTO');
+    const query = new URLSearchParams({
+      originalFileName: file.name || 'student-profile-photo',
+      ...(existing ? { revisionReason: 'تحديث الصورة الشخصية من ملف الطالب.' } : {
+        categoryId,
+        documentReference: `STUDENT-PHOTO-${studentId}-${Date.now()}`,
+        title: 'الصورة الشخصية للطالب',
+        description: 'صورة شخصية خاصة بملف الطالب.',
+        classification: 'confidential',
+        verificationStatus: 'not_required'
+      })
+    });
+    const endpoint = existing
+      ? `/api/student-documents/${encodeURIComponent(existing.id)}/content-versions?${query.toString()}`
+      : `/api/students/${encodeURIComponent(studentId)}/document-content?${query.toString()}`;
+    const response = await authenticatedRequest(endpoint, {
+      method: 'POST',
+      headers: {
+        'Content-Type': file.type,
+        'Idempotency-Key': `student-profile-photo-${studentId}-${crypto.randomUUID()}`
+      },
+      body: file
+    });
+    const data = await response.json().catch(() => ({}));
+    if (!response.ok) throw new Error(data.message || data.error || 'تعذر رفع الصورة الشخصية إلى التخزين الخاص.');
+    const documentId = existing?.id || data?.data?.documentId;
+    if (!documentId) throw new Error('لم يُرجع الخادم معرف مستند الصورة الشخصية.');
+    return this.getStudentDocumentContent(String(documentId));
+  },
+
+  async uploadStudentDocument(studentId: string, file: File, categoryCode: string, title: string): Promise<any> {
+    const categoryId = await this.ensureStudentDocumentCategory(categoryCode, title);
+    const documents = await this.listStudentDocuments(studentId);
+    const existing = documents.find(item => String(item?.category_code || item?.categoryCode || '').toUpperCase() === categoryCode.toUpperCase());
+    const query = new URLSearchParams({
+      originalFileName: file.name || 'student-document',
+      ...(existing ? { revisionReason: `تحديث ${title} من ملف الطالب.` } : {
+        categoryId,
+        documentReference: `STUDENT-DOC-${categoryCode}-${studentId}-${Date.now()}`,
+        title,
+        description: `مستند اختياري من ملف الطالب: ${title}`,
+        classification: 'confidential',
+        verificationStatus: 'not_required'
+      })
+    });
+    const response = await authenticatedRequest(
+      existing
+        ? `/api/student-documents/${encodeURIComponent(existing.id)}/content-versions?${query.toString()}`
+        : `/api/students/${encodeURIComponent(studentId)}/document-content?${query.toString()}`,
+      {
+        method: 'POST',
+        headers: { 'Content-Type': file.type, 'Idempotency-Key': `student-document-${categoryCode}-${studentId}-${crypto.randomUUID()}` },
+        body: file
+      }
+    );
+    const data = await response.json().catch(() => ({}));
+    if (!response.ok) throw new Error(data.message || data.error || `تعذر رفع ${title}.`);
+    return data?.data || data;
+  },
+
   async transferStudent(studentId: string, payload: { classroom: string; section: string; stageId?: string; branchId?: string }): Promise<any> {
     const response = await authenticatedRequest(`/api/students/${studentId}/transfer`, {
       method: "POST",

@@ -61,6 +61,18 @@ const studentImportAliases: Record<string, string[]> = {
   guardianRelation: ['guardianrelation', 'parentrelation', 'relationship', 'صلة القرابة', 'العلاقة']
 };
 
+const STUDENT_DOCUMENT_DEFINITIONS = [
+  { id: 'national_id', categoryCode: 'STUDENT_NATIONAL_ID', label: 'الرقم الوطني', accept: '.pdf,.jpg,.jpeg,.png' },
+  { id: 'birth_certificate', categoryCode: 'STUDENT_BIRTH_CERTIFICATE', label: 'شهادة الميلاد', accept: '.pdf,.jpg,.jpeg,.png' },
+  { id: 'previous_school_certificate', categoryCode: 'STUDENT_PREVIOUS_SCHOOL_CERTIFICATE', label: 'شهادة المدرسة الأخرى', accept: '.pdf,.jpg,.jpeg,.png' },
+  { id: 'medical_report', categoryCode: 'STUDENT_MEDICAL_REPORT', label: 'التقرير الطبي', accept: '.pdf,.jpg,.jpeg,.png' },
+  { id: 'passport', categoryCode: 'STUDENT_PASSPORT', label: 'رقم الجواز', accept: '.pdf,.jpg,.jpeg,.png' },
+  { id: 'other_attachment', categoryCode: 'STUDENT_OTHER_ATTACHMENT', label: 'مرفقات أخرى', accept: '.pdf,.jpg,.jpeg,.png' }
+] as const;
+
+type StudentDocumentDefinition = typeof STUDENT_DOCUMENT_DEFINITIONS[number];
+type StudentDocumentStatus = 'idle' | 'selected' | 'uploading' | 'uploaded' | 'error';
+
 const MAX_STUDENT_IMPORT_FILE_BYTES = 10 * 1024 * 1024;
 const STUDENT_IMPORT_EXTENSIONS = ['.xlsx', '.csv'];
 
@@ -301,9 +313,180 @@ export default function StudentAffairsPortal({
     parentNationalId: '',
     parentRelation: 'أب',
     parentJob: '',
+    parentEducationLevel: '',
+    motherName: '',
+    motherPhone: '',
+    motherWhatsapp: '',
+    academicPreviousSchool: '',
+    academicPreviousGrade: '',
+    academicPreviousYear: '',
+    academicPerformanceLevel: '',
+    academicWritingLevel: '',
+    academicReadingLevel: '',
+    academicSpellingLevel: '',
+    academicAverage: '',
+    academicNotes: '',
+    healthChronicDiseases: '',
+    healthMedications: '',
+    healthAllergies: '',
+    healthNotes: '',
+    socialLivingWith: '',
+    socialBirthOrder: '',
+    socialFamilyView: '',
+    socialOutsideTraits: '',
     avatarUrl: '',
     notes: ''
   });
+  const [selectedAvatarFile, setSelectedAvatarFile] = useState<File | null>(null);
+  const [isUploadingAvatar, setIsUploadingAvatar] = useState(false);
+  const avatarFileInputRef = useRef<HTMLInputElement | null>(null);
+  const [selectedDocumentFiles, setSelectedDocumentFiles] = useState<Record<string, File | null>>({});
+  const [documentStatuses, setDocumentStatuses] = useState<Record<string, StudentDocumentStatus>>({});
+  const [isSavingStudent, setIsSavingStudent] = useState(false);
+  const documentFileInputsRef = useRef<Record<string, HTMLInputElement | null>>({});
+  const activeStageOptions = useMemo(
+    () => stages.filter(stage => stage?.isActive !== false && stage?.id),
+    [stages]
+  );
+  const formGradeOptions = useMemo(
+    () => grades.filter(grade => grade?.isActive !== false && grade?.id && (!formData.stage || String(grade?.stageId || '') === String(formData.stage))),
+    [grades, formData.stage]
+  );
+  const formClassOptions = useMemo(
+    () => academicClasses.filter(item => item?.isActive !== false && item?.id && (!formData.grade || String(item?.gradeId || '') === String(formData.grade))),
+    [academicClasses, formData.grade]
+  );
+
+  const defaultPlacement = () => {
+    const stage = activeStageOptions[0];
+    const grade = formGradeOptions[0] || grades.find(item => item?.isActive !== false && String(item?.stageId || '') === String(stage?.id));
+    return {
+      stage: String(stage?.id || ''),
+      grade: String(grade?.id || ''),
+      classSection: canonicalSections[0] || ''
+    };
+  };
+
+  const loadStudentPhoto = async (studentId: string) => {
+    try {
+      const documents = await StudentRepository.listStudentDocuments(studentId);
+      const photo = documents.find(item => String(item?.category_code || item?.categoryCode || '').toUpperCase() === 'STUDENT_PROFILE_PHOTO');
+      if (!photo?.id) return '';
+      return await StudentRepository.getStudentDocumentContent(String(photo.id));
+    } catch (error: any) {
+      console.warn('[StudentAffairs] student photo could not be loaded', error?.message || error);
+      return '';
+    }
+  };
+
+  const handleAvatarFileSelected = async (event: React.ChangeEvent<HTMLInputElement>) => {
+    const file = event.target.files?.[0];
+    event.target.value = '';
+    if (!file) return;
+    if (!['image/jpeg', 'image/png'].includes(file.type)) {
+      triggerNotification('الصورة يجب أن تكون بصيغة JPG أو PNG.', 'warning');
+      return;
+    }
+    if (file.size <= 0 || file.size > 10 * 1024 * 1024) {
+      triggerNotification('حجم الصورة يجب ألا يتجاوز 10 ميجابايت.', 'warning');
+      return;
+    }
+    setSelectedAvatarFile(file);
+    setFormData(current => ({ ...current, avatarUrl: URL.createObjectURL(file) }));
+    if (isEditMode && selectedStudent?.id) {
+      setIsUploadingAvatar(true);
+      try {
+        const signedUrl = await StudentRepository.uploadStudentProfilePhoto(selectedStudent.id, file);
+        setFormData(current => ({ ...current, avatarUrl: signedUrl }));
+        triggerNotification('تم رفع الصورة الشخصية وحفظها في التخزين الخاص.', 'success');
+      } catch (error: any) {
+        setSelectedAvatarFile(null);
+        setFormData(current => ({ ...current, avatarUrl: selectedStudent?.avatarUrl || '' }));
+        triggerNotification(error?.message || 'تعذر رفع الصورة الشخصية.', 'warning');
+      } finally {
+        setIsUploadingAvatar(false);
+      }
+    }
+  };
+
+  const resetDocumentState = () => {
+    setSelectedDocumentFiles({});
+    setDocumentStatuses({});
+    documentFileInputsRef.current = {};
+  };
+
+  const uploadOneStudentDocument = async (studentId: string, definition: StudentDocumentDefinition, file: File) => {
+    setDocumentStatuses(current => ({ ...current, [definition.id]: 'uploading' }));
+    try {
+      await StudentRepository.uploadStudentDocument(studentId, file, definition.categoryCode, definition.label);
+      setSelectedDocumentFiles(current => ({ ...current, [definition.id]: null }));
+      setDocumentStatuses(current => ({ ...current, [definition.id]: 'uploaded' }));
+      return true;
+    } catch (error: any) {
+      setDocumentStatuses(current => ({ ...current, [definition.id]: 'error' }));
+      throw error;
+    }
+  };
+
+  const handleStudentDocumentSelected = async (definition: StudentDocumentDefinition, event: React.ChangeEvent<HTMLInputElement>) => {
+    const file = event.target.files?.[0] || null;
+    event.target.value = '';
+    if (!file) return;
+    const allowedTypes = ['application/pdf', 'image/jpeg', 'image/png'];
+    if (!allowedTypes.includes(file.type)) {
+      triggerNotification(`ملف ${definition.label} يجب أن يكون PDF أو JPG أو PNG.`, 'warning');
+      return;
+    }
+    if (file.size <= 0 || file.size > 10 * 1024 * 1024) {
+      triggerNotification(`حجم ${definition.label} يجب ألا يتجاوز 10 ميجابايت.`, 'warning');
+      return;
+    }
+    setSelectedDocumentFiles(current => ({ ...current, [definition.id]: file }));
+    setDocumentStatuses(current => ({ ...current, [definition.id]: 'selected' }));
+    if (isEditMode && selectedStudent?.id) {
+      try {
+        await uploadOneStudentDocument(selectedStudent.id, definition, file);
+        triggerNotification(`تم رفع ${definition.label} وحفظه في ملف الطالب.`, 'success');
+      } catch (error: any) {
+        triggerNotification(error?.message || `تعذر رفع ${definition.label}.`, 'warning');
+      }
+    }
+  };
+
+  const uploadPendingStudentDocuments = async (studentId: string) => {
+    const pending = STUDENT_DOCUMENT_DEFINITIONS
+      .map(definition => ({ definition, file: selectedDocumentFiles[definition.id] }))
+      .filter(item => item.file) as Array<{ definition: StudentDocumentDefinition; file: File }>;
+    if (!pending.length) return;
+    const failures: string[] = [];
+    for (const item of pending) {
+      try {
+        await uploadOneStudentDocument(studentId, item.definition, item.file);
+      } catch (error: any) {
+        failures.push(`${item.definition.label}: ${error?.message || 'تعذر الرفع'}`);
+      }
+    }
+    if (failures.length) {
+      triggerNotification(`تم حفظ الطالب، لكن تعذر رفع بعض المستندات الاختيارية:\n${failures.join('\n')}`, 'warning');
+    } else {
+      triggerNotification('تم حفظ المستندات الاختيارية في ملف الطالب.', 'success');
+    }
+  };
+
+  const loadStudentDocumentsStatus = async (studentId: string) => {
+    try {
+      const documents = await StudentRepository.listStudentDocuments(studentId);
+      const statuses: Record<string, StudentDocumentStatus> = {};
+      for (const definition of STUDENT_DOCUMENT_DEFINITIONS) {
+        if (documents.some(item => String(item?.category_code || item?.categoryCode || '').toUpperCase() === definition.categoryCode)) {
+          statuses[definition.id] = 'uploaded';
+        }
+      }
+      setDocumentStatuses(statuses);
+    } catch (error: any) {
+      console.warn('[StudentAffairs] student documents could not be loaded', error?.message || error);
+    }
+  };
 
   // Student Affairs renders one server-authoritative page. The server derives
   // school/tenant scope from the trusted session; schoolId is only a
@@ -578,6 +761,7 @@ export default function StudentAffairsPortal({
 
   // Open Add Modal
   const handleOpenAddModal = () => {
+    const placement = defaultPlacement();
     setFormData({
       fullName: '',
       preferredName: '',
@@ -586,9 +770,9 @@ export default function StudentAffairsPortal({
       gender: 'ذكر',
       birthDate: '',
       birthPlace: '',
-      stage: '',
-      grade: '',
-      classSection: '',
+      stage: placement.stage,
+      grade: placement.grade,
+      classSection: placement.classSection,
       nationality: '',
       religion: '',
       status: '',
@@ -600,9 +784,32 @@ export default function StudentAffairsPortal({
       parentNationalId: '',
       parentRelation: 'أب',
       parentJob: '',
+      parentEducationLevel: '',
+      motherName: '',
+      motherPhone: '',
+      motherWhatsapp: '',
+      academicPreviousSchool: '',
+      academicPreviousGrade: '',
+      academicPreviousYear: '',
+      academicPerformanceLevel: '',
+      academicWritingLevel: '',
+      academicReadingLevel: '',
+      academicSpellingLevel: '',
+      academicAverage: '',
+      academicNotes: '',
+      healthChronicDiseases: '',
+      healthMedications: '',
+      healthAllergies: '',
+      healthNotes: '',
+      socialLivingWith: '',
+      socialBirthOrder: '',
+      socialFamilyView: '',
+      socialOutsideTraits: '',
       avatarUrl: '',
       notes: ''
     });
+    setSelectedAvatarFile(null);
+    resetDocumentState();
     setIsEditMode(false);
     setSelectedStudent(null);
     setRegistrationIdempotencyKey(`student-affairs-registration-${crypto.randomUUID()}`);
@@ -624,9 +831,9 @@ export default function StudentAffairsPortal({
       gender: student.gender || '',
       birthDate: canonicalDateInput(student.birthDate),
       birthPlace: (student as any).birthPlace || '',
-      stage: '',
-      grade: '',
-      classSection: '',
+      stage: String((student as any).stageId || ''),
+      grade: String((student as any).gradeId || ''),
+      classSection: String((student as any).section || ''),
       nationality: student.nationality || '',
       religion: '',
       status: (student.status as string) || '',
@@ -638,14 +845,41 @@ export default function StudentAffairsPortal({
       parentPhone: student.parentPhone || '',
       parentNationalId: (student as any).parentNationalId || '',
       parentRelation: guardianRelationshipForForm((student as any).guardianRelation || (student as any).parentRelation),
-      parentJob: (student as any).parentJob || '',
+      parentJob: (student as any).guardianOccupation || (student as any).parentJob || '',
+      parentEducationLevel: (student as any).educationLevel || '',
+      motherName: (student as any).motherName || '',
+      motherPhone: (student as any).motherPhone || '',
+      motherWhatsapp: (student as any).motherWhatsapp || '',
+      academicPreviousSchool: (student as any).academicPreviousSchool || '',
+      academicPreviousGrade: (student as any).academicPreviousGrade || '',
+      academicPreviousYear: (student as any).academicPreviousYear || '',
+      academicPerformanceLevel: (student as any).academicPerformanceLevel || '',
+      academicWritingLevel: (student as any).academicWritingLevel || '',
+      academicReadingLevel: (student as any).academicReadingLevel || '',
+      academicSpellingLevel: (student as any).academicSpellingLevel || '',
+      academicAverage: (student as any).academicAverage || '',
+      academicNotes: (student as any).academicNotes || '',
+      healthChronicDiseases: (student as any).healthChronicDiseases || '',
+      healthMedications: (student as any).healthMedications || '',
+      healthAllergies: (student as any).healthAllergies || '',
+      healthNotes: (student as any).healthNotes || '',
+      socialLivingWith: (student as any).socialLivingWith || '',
+      socialBirthOrder: (student as any).socialBirthOrder || '',
+      socialFamilyView: (student as any).socialFamilyView || '',
+      socialOutsideTraits: (student as any).socialOutsideTraits || '',
       avatarUrl: student.avatarUrl || '',
       notes: (student as any).notes || ''
     });
+    setSelectedAvatarFile(null);
+    resetDocumentState();
     setIsEditMode(true);
     setStudentSaveError(null);
     setModalTab('basic');
     setIsModalOpen(true);
+    void loadStudentPhoto(student.id).then(url => {
+      if (url) setFormData(current => ({ ...current, avatarUrl: url }));
+    });
+    void loadStudentDocumentsStatus(student.id);
   };
 
   // Save Student (Add / Edit)
@@ -678,6 +912,10 @@ export default function StudentAffairsPortal({
       rejectSave('الجنس والحالة الدراسية حقول مطلوبة ولا تُملأ تلقائيًا.');
       return;
     }
+    if (!isEditMode && (!formData.stage || !formData.grade || !formData.classSection)) {
+      rejectSave('اختر المرحلة والصف والشعبة قبل تسجيل الطالب؛ هذه البيانات تُعتمد عبر مسار الالتحاق الموثوق.');
+      return;
+    }
 
     let guardianUpdateResult: any = null;
     let guardianChanged = false;
@@ -697,15 +935,39 @@ export default function StudentAffairsPortal({
       birthDate: formData.birthDate,
       nationality: formData.nationality,
       status: formData.status,
+      stageId: formData.stage,
+      gradeId: formData.grade,
+      academicPreviousSchool: formData.academicPreviousSchool,
+      academicPreviousGrade: formData.academicPreviousGrade,
+      academicPreviousYear: formData.academicPreviousYear,
+      academicPerformanceLevel: formData.academicPerformanceLevel,
+      academicWritingLevel: formData.academicWritingLevel,
+      academicReadingLevel: formData.academicReadingLevel,
+      academicSpellingLevel: formData.academicSpellingLevel,
+      academicAverage: formData.academicAverage,
+      academicNotes: formData.academicNotes,
+      healthChronicDiseases: formData.healthChronicDiseases,
+      healthMedications: formData.healthMedications,
+      healthAllergies: formData.healthAllergies,
+      healthNotes: formData.healthNotes,
+      socialLivingWith: formData.socialLivingWith,
+      socialBirthOrder: formData.socialBirthOrder,
+      socialFamilyView: formData.socialFamilyView,
+      socialOutsideTraits: formData.socialOutsideTraits,
     };
 
-    const persistenceNotice = 'تم حفظ بيانات الطالب الأساسية. الحقول غير المدعومة أو التابعة لوحدات أخرى لم تُحفظ من هذه الشاشة.';
+    const persistenceNotice = 'تم الحفظ بنجاح — تم حفظ ملف الطالب وربط بياناته الأكاديمية عبر مسار الالتحاق الموثوق.';
 
     if (!isEditMode) {
       Object.assign(studentPayload, {
         parentName: formData.parentName,
         parentPhone: formData.parentPhone,
-        guardianRelation: canonicalGuardianRelationship(formData.parentRelation)
+        guardianRelation: canonicalGuardianRelationship(formData.parentRelation),
+        parentJob: formData.parentJob,
+        parentEducationLevel: formData.parentEducationLevel,
+        motherName: formData.motherName,
+        motherPhone: formData.motherPhone,
+        motherWhatsapp: formData.motherWhatsapp
       });
     }
 
@@ -716,11 +978,15 @@ export default function StudentAffairsPortal({
         const existingGuardianRelation = (selectedStudent as any).guardianRelation || (selectedStudent as any).parentRelation || '';
         guardianChanged = formData.parentName !== existingGuardianName
           || formData.parentPhone !== existingGuardianPhone
-          || formData.parentRelation !== existingGuardianRelation;
-        const unsupportedGuardianChanged = ((selectedStudent as any).parentNationalId || '') !== formData.parentNationalId
-          || ((selectedStudent as any).parentJob || '') !== formData.parentJob;
+          || formData.parentRelation !== existingGuardianRelation
+          || ((selectedStudent as any).guardianOccupation || (selectedStudent as any).parentJob || '') !== formData.parentJob
+          || ((selectedStudent as any).educationLevel || '') !== formData.parentEducationLevel
+          || ((selectedStudent as any).motherName || '') !== formData.motherName
+          || ((selectedStudent as any).motherPhone || '') !== formData.motherPhone
+          || ((selectedStudent as any).motherWhatsapp || '') !== formData.motherWhatsapp;
+        const unsupportedGuardianChanged = ((selectedStudent as any).parentNationalId || '') !== formData.parentNationalId;
         if (unsupportedGuardianChanged) {
-          throw new Error('الحقول الوطنية والوظيفية لولي الأمر ليست ضمن عقد التعديل الكانوني الحالي؛ لم يتم حفظ أي تغيير.');
+          throw new Error('رقم الهوية الوطنية لولي الأمر ليس ضمن عقد التعديل الكانوني الحالي؛ لم يتم حفظ أي تغيير.');
         }
         if (guardianChanged) {
           const guardianId = (selectedStudent as any).guardianId;
@@ -742,7 +1008,12 @@ export default function StudentAffairsPortal({
             legalMiddleName: parts.length > 2 ? parts.slice(1, -1).join(' ') : null,
             legalLastName: parts[parts.length - 1],
             phone: formData.parentPhone.trim(),
-            relationshipType: canonicalGuardianRelationship(formData.parentRelation)
+            relationshipType: canonicalGuardianRelationship(formData.parentRelation),
+            occupation: formData.parentJob,
+            educationLevel: formData.parentEducationLevel,
+            motherName: formData.motherName,
+            motherPhone: formData.motherPhone,
+            motherWhatsapp: formData.motherWhatsapp
           });
           guardianPersisted = true;
         }
@@ -751,11 +1022,49 @@ export default function StudentAffairsPortal({
       const response = isEditMode
         ? await StudentRepository.saveStudent(studentPayload)
         : await StudentRepository.registerStudent(studentPayload, registrationIdempotencyKey || '');
-      const persistedStudent = response?.data?.student || response?.student;
+      const rawPersistedStudent = response?.data?.student || response?.student;
+      const persistedStudentId = String(rawPersistedStudent?.id || rawPersistedStudent?.studentId || '').trim();
+      const persistedStudent = rawPersistedStudent && persistedStudentId
+        ? { ...rawPersistedStudent, id: persistedStudentId }
+        : null;
       if (!persistedStudent) {
         throw new Error('لم يُرجع الخادم سجل الطالب بعد الحفظ.');
       }
       studentPersisted = true;
+
+      // Placement is a canonical enrollment operation, not a cosmetic profile
+      // field. It is executed immediately after registration so the pending
+      // enrollment created by SOP-001 becomes active and auditable.
+      if (formData.grade && formData.classSection && (isEditMode || formData.stage)) {
+        try {
+          await StudentRepository.executeEnrollmentWorkflow({
+            operation: isEditMode ? 'transfer' : 're_enroll',
+            studentIds: [String(persistedStudent.id)],
+            targetGradeId: String(formData.grade),
+            targetSection: String(formData.classSection),
+            reason: isEditMode ? 'تحديث الالتحاق من ملف الطالب.' : 'إسناد الالتحاق الأولي من تسجيل الطالب.',
+            idempotencyKey: `student-affairs-placement-${persistedStudent.id}-${crypto.randomUUID()}`
+          });
+        } catch (error: any) {
+          throw new Error(`تم حفظ بيانات الطالب، لكن تعذر اعتماد الالتحاق الأكاديمي: ${error?.message || 'خطأ غير محدد'}`);
+        }
+      }
+
+      if (selectedAvatarFile && !isEditMode) {
+        setIsUploadingAvatar(true);
+        try {
+          const signedUrl = await StudentRepository.uploadStudentProfilePhoto(String(persistedStudent.id), selectedAvatarFile);
+          setFormData(current => ({ ...current, avatarUrl: signedUrl }));
+        } catch (error: any) {
+          throw new Error(`تم حفظ الطالب والالتحاق، لكن تعذر رفع الصورة الشخصية: ${error?.message || 'خطأ غير محدد'}`);
+        } finally {
+          setIsUploadingAvatar(false);
+        }
+      }
+
+      if (persistedStudent.id && Object.values(selectedDocumentFiles).some(Boolean)) {
+        await uploadPendingStudentDocuments(String(persistedStudent.id));
+      }
 
       if (isEditMode && selectedStudent) {
         const updatedGuardian = guardianUpdateResult?.data?.guardian;
@@ -767,7 +1076,12 @@ export default function StudentAffairsPortal({
           guardianId: updatedGuardian.guardianId,
           guardianVersion: updatedGuardian.guardianVersion,
           guardianRelationshipId: updatedGuardian.relationshipId,
-          guardianRelationshipVersion: updatedGuardian.relationshipVersion
+          guardianRelationshipVersion: updatedGuardian.relationshipVersion,
+          guardianOccupation: formData.parentJob,
+          educationLevel: formData.parentEducationLevel,
+          motherName: formData.motherName,
+          motherPhone: formData.motherPhone,
+          motherWhatsapp: formData.motherWhatsapp
         } : persistedStudent;
         setStudents(current => current.map(student => student.id === selectedStudent.id ? mergedStudent : student));
         setStudentRefreshToken(value => value + 1);
@@ -778,6 +1092,7 @@ export default function StudentAffairsPortal({
             : `${persistenceNotice} تم تعديل الطالب ${formData.fullName}.`,
           'success'
         );
+        setIsSavingStudent(false);
         setIsModalOpen(false);
       } else {
         // Registration returns a canonical registration summary, not a list row.
@@ -797,9 +1112,7 @@ export default function StudentAffairsPortal({
             gender: 'ذكر',
             birthDate: '',
             birthPlace: '',
-            stage: '',
-            grade: '',
-            classSection: '',
+            ...defaultPlacement(),
             nationality: '',
             religion: '',
             status: '',
@@ -811,15 +1124,41 @@ export default function StudentAffairsPortal({
             parentNationalId: '',
             parentRelation: 'أب',
             parentJob: '',
+            parentEducationLevel: '',
+            motherName: '',
+            motherPhone: '',
+            motherWhatsapp: '',
+            academicPreviousSchool: '',
+            academicPreviousGrade: '',
+            academicPreviousYear: '',
+            academicPerformanceLevel: '',
+            academicWritingLevel: '',
+            academicReadingLevel: '',
+            academicSpellingLevel: '',
+            academicAverage: '',
+            academicNotes: '',
+            healthChronicDiseases: '',
+            healthMedications: '',
+            healthAllergies: '',
+            healthNotes: '',
+            socialLivingWith: '',
+            socialBirthOrder: '',
+            socialFamilyView: '',
+            socialOutsideTraits: '',
             avatarUrl: '',
             notes: ''
           });
+          setSelectedAvatarFile(null);
+          resetDocumentState();
+          setIsSavingStudent(false);
         } else {
           setRegistrationIdempotencyKey(null);
+          setIsSavingStudent(false);
           setIsModalOpen(false);
         }
       }
     } catch (error: any) {
+      setIsSavingStudent(false);
       const errorMessage = error?.message || 'تعذر حفظ سجل الطالب في الخادم.';
       setStudentSaveError(errorMessage);
       if (isEditMode && selectedStudent && guardianChanged && guardianPersisted && !studentPersisted) {
@@ -1192,14 +1531,14 @@ export default function StudentAffairsPortal({
   return (
     <div 
       id="student-affairs-master-command-center"
-      className="w-full min-h-screen text-right font-sans dir-rtl select-none transition-all duration-300 bg-gradient-to-br from-[#f8f5ee] via-[#efe9dc] to-[#e8e0d0] text-slate-900 p-2 sm:p-4 md:p-6 space-y-6"
+      className="w-full min-h-screen text-right font-sans dir-rtl select-none transition-all duration-300 bg-[radial-gradient(circle_at_top_right,_rgba(212,175,55,0.14),_transparent_32%),linear-gradient(135deg,#f8f5ee_0%,#efe9dc_52%,#e5dccd_100%)] text-slate-900 p-2 sm:p-4 md:p-6 space-y-6"
       dir="rtl"
     >
 
       {/* ==========================================
           LUXURY GOLD METALLIC TOP HEADER
          ========================================== */}
-      <div className="bg-gradient-to-r from-[#1c120c] via-[#2d1e12] to-[#1a100a] text-white rounded-3xl p-4 sm:p-5 border-2 border-[#d4af37]/40 shadow-2xl flex flex-wrap items-center justify-between gap-4 relative overflow-hidden">
+      <div className="bg-gradient-to-r from-[#1c120c] via-[#2d1e12] to-[#1a100a] text-white rounded-[28px] p-4 sm:p-5 border border-[#d4af37]/45 shadow-[0_20px_55px_rgba(42,29,19,0.28)] flex flex-wrap items-center justify-between gap-4 relative overflow-hidden">
         <div className="absolute top-0 right-1/4 w-96 h-20 bg-[#d4af37]/10 blur-3xl pointer-events-none" />
         
         {/* Module Title & Breadcrumbs */}
@@ -1215,9 +1554,16 @@ export default function StudentAffairsPortal({
               <span>‹</span>
               <span className="text-amber-100">شؤون الطلاب</span>
             </div>
-            <h1 className="text-xl sm:text-2xl font-black bg-gradient-to-r from-[#ffe5a3] via-[#fce79a] to-[#d4af37] bg-clip-text text-transparent">
+            <div className="flex flex-wrap items-center gap-2">
+              <h1 className="text-xl sm:text-2xl font-black tracking-tight bg-gradient-to-r from-[#ffe5a3] via-[#fce79a] to-[#d4af37] bg-clip-text text-transparent">
               منظومة شؤون الطلاب والأنشطة الأكاديمية
-            </h1>
+              </h1>
+              <span className="inline-flex items-center gap-1 rounded-full border border-emerald-300/30 bg-emerald-300/10 px-2.5 py-1 text-[10px] font-black text-emerald-200">
+                <CheckCircle2 className="h-3.5 w-3.5" />
+                جاهز للعمل
+              </span>
+            </div>
+            <p className="mt-1 text-[10px] font-bold text-amber-100/65">ملف الطالب الكانوني • التسجيل • أولياء الأمور • المستندات</p>
           </div>
         </div>
 
@@ -1327,7 +1673,7 @@ export default function StudentAffairsPortal({
       <div className="grid grid-cols-2 sm:grid-cols-3 md:grid-cols-5 gap-3 sm:gap-4">
         
         {/* KPI 1: Total Students */}
-        <div className="bg-gradient-to-b from-[#fffefc] via-[#fbf8f0] to-[#f5eeea] border-2 border-[#d4af37]/30 hover:border-[#d4af37] rounded-3xl p-3.5 shadow-md transition-all duration-300 flex items-center justify-between group">
+        <div className="bg-gradient-to-b from-[#fffefc] via-[#fbf8f0] to-[#f5eeea] border border-[#d4af37]/35 hover:border-[#d4af37] hover:-translate-y-1 hover:shadow-xl rounded-3xl p-3.5 shadow-md transition-all duration-300 flex items-center justify-between group">
           <div>
             <span className="text-[11px] font-black text-slate-700 block">إجمالي الطلاب المسجلين</span>
             <span className="text-2xl font-black text-slate-900 font-mono tracking-tight block mt-1">{totalCount.toLocaleString('ar-EG')}</span>
@@ -1339,7 +1685,7 @@ export default function StudentAffairsPortal({
         </div>
 
         {/* KPI 2: Active Students */}
-        <div className="bg-gradient-to-b from-[#fffefc] via-[#fbf8f0] to-[#f5eeea] border-2 border-[#d4af37]/30 hover:border-[#d4af37] rounded-3xl p-3.5 shadow-md transition-all duration-300 flex items-center justify-between group">
+        <div className="bg-gradient-to-b from-[#fffefc] via-[#fbf8f0] to-[#f5eeea] border border-[#d4af37]/35 hover:border-[#d4af37] hover:-translate-y-1 hover:shadow-xl rounded-3xl p-3.5 shadow-md transition-all duration-300 flex items-center justify-between group">
           <div>
             <span className="text-[11px] font-black text-slate-700 block">الطلاب النشطون</span>
             <span className="text-2xl font-black text-slate-900 font-mono tracking-tight block mt-1">{activeCount.toLocaleString('ar-EG')}</span>
@@ -1351,7 +1697,7 @@ export default function StudentAffairsPortal({
         </div>
 
         {/* KPI 3: New Registered */}
-        <div className="bg-gradient-to-b from-[#fffefc] via-[#fbf8f0] to-[#f5eeea] border-2 border-[#d4af37]/30 hover:border-[#d4af37] rounded-3xl p-3.5 shadow-md transition-all duration-300 flex items-center justify-between group">
+        <div className="bg-gradient-to-b from-[#fffefc] via-[#fbf8f0] to-[#f5eeea] border border-[#d4af37]/35 hover:border-[#d4af37] hover:-translate-y-1 hover:shadow-xl rounded-3xl p-3.5 shadow-md transition-all duration-300 flex items-center justify-between group">
           <div>
             <span className="text-[11px] font-black text-slate-700 block">الطلاب الجدد (هذا العام)</span>
             <span className="text-2xl font-black text-slate-900 font-mono tracking-tight block mt-1">{newCount.toLocaleString('ar-EG')}</span>
@@ -1363,7 +1709,7 @@ export default function StudentAffairsPortal({
         </div>
 
         {/* KPI 4: Suspended / Inactive */}
-        <div className="bg-gradient-to-b from-[#fffefc] via-[#fbf8f0] to-[#f5eeea] border-2 border-[#d4af37]/30 hover:border-[#d4af37] rounded-3xl p-3.5 shadow-md transition-all duration-300 flex items-center justify-between group">
+        <div className="bg-gradient-to-b from-[#fffefc] via-[#fbf8f0] to-[#f5eeea] border border-[#d4af37]/35 hover:border-[#d4af37] hover:-translate-y-1 hover:shadow-xl rounded-3xl p-3.5 shadow-md transition-all duration-300 flex items-center justify-between group">
           <div>
             <span className="text-[11px] font-black text-slate-700 block">الموقوفون والمنسحبون</span>
             <span className="text-2xl font-black text-slate-900 font-mono tracking-tight block mt-1">{suspendedCount.toLocaleString('ar-EG')}</span>
@@ -1375,7 +1721,7 @@ export default function StudentAffairsPortal({
         </div>
 
         {/* KPI 5: Pending Documents */}
-        <div className="bg-gradient-to-b from-[#fffefc] via-[#fbf8f0] to-[#f5eeea] border-2 border-[#d4af37]/30 hover:border-[#d4af37] rounded-3xl p-3.5 shadow-md transition-all duration-300 flex items-center justify-between group">
+        <div className="bg-gradient-to-b from-[#fffefc] via-[#fbf8f0] to-[#f5eeea] border border-[#d4af37]/35 hover:border-[#d4af37] hover:-translate-y-1 hover:shadow-xl rounded-3xl p-3.5 shadow-md transition-all duration-300 flex items-center justify-between group">
           <div>
             <span className="text-[11px] font-black text-slate-700 block">مستندات غير مكتملة</span>
             <span className="text-2xl font-black text-amber-700 font-mono tracking-tight block mt-1">{pendingDocsCount.toLocaleString('ar-EG')}</span>
@@ -1849,13 +2195,12 @@ export default function StudentAffairsPortal({
             </div>
             <button
               type="button"
-              disabled
-              title="ربط ولي الأمر غير متاح حاليًا حتى اعتماد مسار API"
-              className="bg-slate-200 text-slate-600 px-4 py-2 rounded-xl text-xs font-black flex items-center gap-1.5 border border-slate-300 shadow cursor-not-allowed"
-              aria-disabled="true"
+              onClick={() => { handleOpenAddModal(); setModalTab('guardian'); }}
+              title="فتح نموذج تسجيل طالب لإضافة بيانات ولي الأمر وربطها بالسجل الكانوني"
+              className="bg-amber-100 text-amber-900 hover:bg-amber-200 px-4 py-2 rounded-xl text-xs font-black flex items-center gap-1.5 border border-amber-300 shadow cursor-pointer"
             >
               <UserPlus className="w-4 h-4" />
-              <span>ربط ولي أمر (قريبًا)</span>
+              <span>إضافة بيانات ولي أمر</span>
             </button>
           </div>
 
@@ -1877,9 +2222,24 @@ export default function StudentAffairsPortal({
                     <Users className="w-3.5 h-3.5 text-amber-700" />
                     <span>الطلاب المرتبطون: <strong className="text-slate-900">{st.name}</strong></span>
                   </div>
+                  <div className="grid grid-cols-1 gap-1 pt-1 text-[11px]">
+                    <span>الوظيفة: <strong className="text-slate-900">{(st as any).guardianOccupation || 'غير محددة'}</strong></span>
+                    <span>المستوى التعليمي: <strong className="text-slate-900">{(st as any).educationLevel || 'غير محدد'}</strong></span>
+                    <span>الأم: <strong className="text-slate-900">{(st as any).motherName || 'غير محدد'}</strong></span>
+                    <span>هاتف الأم: <strong className="text-slate-900">{(st as any).motherPhone || 'غير محدد'}</strong></span>
+                    <span>واتساب الأم: <strong className="text-slate-900">{(st as any).motherWhatsapp || 'غير محدد'}</strong></span>
+                  </div>
                 </div>
 
                 <div className="flex items-center justify-end gap-2 pt-2 border-t border-slate-100">
+                  <button
+                    type="button"
+                    onClick={() => handleOpenEditModal(st)}
+                    className="bg-amber-100 text-amber-900 hover:bg-amber-200 px-3 py-1 rounded-lg text-[11px] font-bold flex items-center gap-1"
+                  >
+                    <Edit className="w-3 h-3" />
+                    <span>تعديل البيانات</span>
+                  </button>
                   <button
                     type="button"
                     disabled
@@ -2060,16 +2420,24 @@ export default function StudentAffairsPortal({
                         </div>
                       )}
                     </div>
+                    <input
+                      ref={avatarFileInputRef}
+                      type="file"
+                      accept="image/jpeg,image/png"
+                      className="hidden"
+                      onChange={handleAvatarFileSelected}
+                    />
                     <button 
                       type="button"
-                      disabled
-                      aria-disabled="true"
-                      title="رفع صورة الطالب غير متاح حتى اعتماد مسار التخزين الموثوق"
-                      className="bg-slate-200 text-slate-500 font-black text-xs px-4 py-2 rounded-xl flex items-center gap-1.5 border border-slate-300 cursor-not-allowed"
+                      disabled={isUploadingAvatar}
+                      onClick={() => avatarFileInputRef.current?.click()}
+                      title="رفع صورة JPG أو PNG إلى التخزين الخاص للمدرسة"
+                      className="bg-amber-100 text-amber-900 hover:bg-amber-200 disabled:opacity-60 font-black text-xs px-4 py-2 rounded-xl flex items-center gap-1.5 border border-amber-300 cursor-pointer disabled:cursor-wait"
                     >
                       <Camera className="w-4 h-4" />
-                      <span>رفع صورة (غير متاح)</span>
+                      <span>{isUploadingAvatar ? 'جارٍ رفع الصورة...' : 'رفع صورة الطالب'}</span>
                     </button>
+                    <p className="text-[10px] text-slate-500 text-center">JPG أو PNG — بحد أقصى 10 ميجابايت، مع رابط مؤقت آمن.</p>
                   </div>
 
                   {/* Input Fields */}
@@ -2110,20 +2478,8 @@ export default function StudentAffairsPortal({
                       />
                     </div>
 
-                    {/* Row 2: National ID, Gender, Birth Date */}
-                    <div className="grid grid-cols-1 sm:grid-cols-3 gap-4">
-                      <div>
-                        <label className="block text-slate-800 font-extrabold mb-1">رقم الهوية الوطنية / الإقامة <span className="text-slate-500">(غير مدعوم حاليًا)</span></label>
-                        <input 
-                          type="text"
-                          value={formData.nationalId}
-                          disabled
-                          aria-describedby="student-national-id-support-note"
-                          className="w-full bg-slate-100 border border-slate-300 rounded-xl p-2.5 text-xs font-bold font-mono text-slate-500 outline-none shadow-xs"
-                        />
-                        <p id="student-national-id-support-note" className="mt-1 text-[10px] font-bold text-slate-500">لا يتم حفظ هذا الحقل في عقد ملف الطالب الحالي.</p>
-                      </div>
-
+                    {/* Row 2: Gender & Birth Date */}
+                    <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
                       <div>
                         <label className="block text-slate-800 font-extrabold mb-1">الجنس</label>
                         <select 
@@ -2139,10 +2495,10 @@ export default function StudentAffairsPortal({
                       <div>
                         <label className="block text-slate-800 font-extrabold mb-1">تاريخ الميلاد</label>
                         <input 
-                          type="text"
-                          inputMode="numeric"
-                          placeholder="YYYY-MM-DD"
+                          type="date"
+                          max={new Date().toISOString().slice(0, 10)}
                           aria-label="تاريخ الميلاد"
+                          title="اضغط لاختيار تاريخ الميلاد من التقويم"
                           value={formData.birthDate}
                           onChange={e => setFormData(current => ({ ...current, birthDate: e.target.value }))}
                           className="w-full bg-white border border-slate-300 rounded-xl p-2.5 text-xs font-bold text-slate-900 focus:border-[#9a6a1d] outline-none shadow-xs"
@@ -2167,44 +2523,48 @@ export default function StudentAffairsPortal({
                     {/* Row 3: Stage, Grade, Section */}
                     <div className="grid grid-cols-1 sm:grid-cols-3 gap-4">
                       <div>
-                        <label className="block text-slate-800 font-extrabold mb-1">المرحلة الدراسية <span className="text-slate-500">(تُدار عبر الالتحاق)</span></label>
+                        <label className="block text-slate-800 font-extrabold mb-1">المرحلة الدراسية <span className="text-emerald-700">(يُدار عبر الالتحاق)</span></label>
                         <select 
                           value={formData.stage}
-                          disabled
-                          className="w-full bg-slate-100 border border-slate-300 rounded-xl p-2.5 text-xs font-bold text-slate-500 outline-none shadow-xs"
+                          onChange={e => {
+                            const nextStage = e.target.value;
+                            const nextGrade = grades.find(grade => grade?.isActive !== false && String(grade?.stageId || '') === nextStage);
+                            setFormData(current => ({ ...current, stage: nextStage, grade: String(nextGrade?.id || ''), classSection: canonicalSections[0] || '' }));
+                          }}
+                          className="w-full bg-white border border-emerald-300 rounded-xl p-2.5 text-xs font-bold text-slate-900 focus:border-[#9a6a1d] outline-none shadow-xs"
                         >
-                          <option value="المرحلة الابتدائية">المرحلة الابتدائية</option>
-                          <option value="المرحلة المتوسطة">المرحلة المتوسطة</option>
-                          <option value="المرحلة الثانوية">المرحلة الثانوية</option>
-                          <option value="رياض الأطفال">رياض الأطفال</option>
+                          <option value="">اختر المرحلة</option>
+                          {activeStageOptions.map(stage => <option key={stage.id} value={stage.id}>{stage.name || stage.label}</option>)}
                         </select>
                       </div>
 
                       <div>
-                        <label className="block text-slate-800 font-extrabold mb-1">الصف الدراسي <span className="text-slate-500">(يُدار عبر الالتحاق)</span></label>
+                        <label className="block text-slate-800 font-extrabold mb-1">الصف الدراسي <span className="text-emerald-700">(يُدار عبر الالتحاق)</span></label>
                         <select 
                           value={formData.grade}
-                          disabled
-                          className="w-full bg-slate-100 border border-slate-300 rounded-xl p-2.5 text-xs font-bold text-slate-500 outline-none shadow-xs"
+                          onChange={e => setFormData(current => ({ ...current, grade: e.target.value, classSection: canonicalSections[0] || '' }))}
+                          className="w-full bg-white border border-emerald-300 rounded-xl p-2.5 text-xs font-bold text-slate-900 focus:border-[#9a6a1d] outline-none shadow-xs"
                         >
-                          <option value="الصف الأول الابتدائي">الصف الأول الابتدائي</option>
-                          <option value="الصف الثاني الابتدائي">الصف الثاني الابتدائي</option>
-                          <option value="الصف الثالث الابتدائي">الصف الثالث الابتدائي</option>
-                          <option value="الصف الرابع الابتدائي">الصف الرابع الابتدائي</option>
+                          <option value="">اختر الصف</option>
+                          {formGradeOptions.map(grade => <option key={grade.id} value={grade.id}>{grade.name || grade.label}</option>)}
                         </select>
                       </div>
 
                       <div>
-                        <label className="block text-slate-800 font-extrabold mb-1">الشعبة / الفصل <span className="text-slate-500">(يُدار عبر الالتحاق)</span></label>
+                        <label className="block text-slate-800 font-extrabold mb-1">الشعبة / الفصل <span className="text-emerald-700">(يُدار عبر الالتحاق)</span></label>
                         <select 
                           value={formData.classSection}
-                          disabled
-                          className="w-full bg-slate-100 border border-slate-300 rounded-xl p-2.5 text-xs font-bold text-slate-500 outline-none shadow-xs"
+                          onChange={e => setFormData(current => ({ ...current, classSection: e.target.value }))}
+                          className="w-full bg-white border border-emerald-300 rounded-xl p-2.5 text-xs font-bold text-slate-900 focus:border-[#9a6a1d] outline-none shadow-xs"
                         >
+                          <option value="">اختر الشعبة</option>
                           {canonicalSections.map(section => <option key={section} value={section}>شعبة {section}</option>)}
                         </select>
                       </div>
                     </div>
+                    <p className="rounded-xl border border-emerald-200 bg-emerald-50 px-3 py-2 text-[10px] font-bold text-emerald-800 sm:col-span-3">
+                      كانت الحقول غير نشطة لأن النظام كان يمنع التعديل النصي عليها حتى لا ينفصل ملف الطالب عن سجل الالتحاق. الآن تُختار من الهيكل الأكاديمي الموثوق وتُعتمد مباشرة كسجل التحاق قابل للتدقيق.
+                    </p>
 
                   </div>
                 </div>
@@ -2251,17 +2611,281 @@ export default function StudentAffairsPortal({
                     </select>
                   </div>
 
-                  <div className="rounded-xl border border-slate-200 bg-slate-50 p-3 text-[11px] font-bold text-slate-500 sm:col-span-2">
-                    بيانات المهنة / جهة العمل لولي الأمر غير مدعومة في عقد الحفظ الحالي، لذلك لا تُعرض كحقل قابل للتحرير.
+                  <div>
+                    <label className="block text-slate-800 font-extrabold mb-1">وظيفة ولي الأمر</label>
+                    <input
+                      type="text"
+                      value={formData.parentJob}
+                      onChange={e => setFormData(current => ({ ...current, parentJob: e.target.value }))}
+                      placeholder="مثال: مهندس / معلم / تاجر"
+                      className="w-full bg-white border border-slate-300 rounded-xl p-2.5 text-xs font-bold text-slate-900 outline-none shadow-xs"
+                    />
+                  </div>
+
+                  <div>
+                    <label className="block text-slate-800 font-extrabold mb-1">المستوى التعليمي لولي الأمر</label>
+                    <select
+                      value={formData.parentEducationLevel}
+                      onChange={e => setFormData(current => ({ ...current, parentEducationLevel: e.target.value }))}
+                      className="w-full bg-white border border-slate-300 rounded-xl p-2.5 text-xs font-bold text-slate-900 outline-none shadow-xs"
+                    >
+                      <option value="">غير محدد</option>
+                      <option value="أمي">أمي</option>
+                      <option value="ابتدائي">ابتدائي</option>
+                      <option value="متوسط">متوسط</option>
+                      <option value="ثانوي">ثانوي</option>
+                      <option value="دبلوم">دبلوم</option>
+                      <option value="جامعي">جامعي</option>
+                      <option value="دراسات عليا">دراسات عليا</option>
+                    </select>
+                  </div>
+
+                  <div className="sm:col-span-2 rounded-2xl border border-rose-200 bg-rose-50/60 p-4">
+                    <div className="mb-3 text-xs font-black text-rose-900">بيانات الأم</div>
+                    <div className="grid grid-cols-1 sm:grid-cols-3 gap-3">
+                      <div>
+                        <label className="block text-slate-800 font-extrabold mb-1">اسم الأم</label>
+                        <input
+                          type="text"
+                          value={formData.motherName}
+                          onChange={e => setFormData(current => ({ ...current, motherName: e.target.value }))}
+                          placeholder="الاسم الكامل للأم"
+                          className="w-full bg-white border border-slate-300 rounded-xl p-2.5 text-xs font-bold text-slate-900 outline-none shadow-xs"
+                        />
+                      </div>
+                      <div>
+                        <label className="block text-slate-800 font-extrabold mb-1">رقم هاتف الأم</label>
+                        <input
+                          type="tel"
+                          value={formData.motherPhone}
+                          onChange={e => setFormData(current => ({ ...current, motherPhone: e.target.value }))}
+                          placeholder="05xxxxxxxx"
+                          className="w-full bg-white border border-slate-300 rounded-xl p-2.5 text-xs font-bold text-slate-900 font-mono outline-none shadow-xs"
+                        />
+                      </div>
+                      <div>
+                        <label className="block text-slate-800 font-extrabold mb-1">واتساب الأم</label>
+                        <input
+                          type="tel"
+                          value={formData.motherWhatsapp}
+                          onChange={e => setFormData(current => ({ ...current, motherWhatsapp: e.target.value }))}
+                          placeholder="رقم واتساب الأم"
+                          className="w-full bg-white border border-slate-300 rounded-xl p-2.5 text-xs font-bold text-slate-900 font-mono outline-none shadow-xs"
+                        />
+                      </div>
+                    </div>
+                  </div>
+
+                  <div className="rounded-xl border border-emerald-200 bg-emerald-50 p-3 text-[11px] font-bold text-emerald-800 sm:col-span-2">
+                    تُحفظ هذه البيانات في السجل الكانوني لولي الأمر داخل نطاق المدرسة، مع سجل تدقيق وإصدارات التعديل.
                   </div>
                 </div>
               )}
 
-              {modalTab !== 'basic' && modalTab !== 'guardian' && (
+              {modalTab === 'extra' && (
+                <div className="space-y-5 text-xs" dir="rtl">
+                  <section className="rounded-2xl border border-indigo-200 bg-indigo-50/50 p-4 space-y-4" aria-labelledby="additional-academic-title">
+                    <div className="border-b border-indigo-200 pb-3">
+                      <h4 id="additional-academic-title" className="text-sm font-black text-indigo-950">المعلومات الأكاديمية</h4>
+                      <p className="mt-1 text-[10px] font-bold text-indigo-700">بيانات المسار السابق والتحصيل الدراسي كما تُثبت في ملف الطالب.</p>
+                    </div>
+                    <div className="overflow-x-auto rounded-xl border border-indigo-200 bg-white">
+                      <table className="w-full min-w-[620px] text-right" aria-label="نموذج المعلومات الأكاديمية">
+                        <thead className="bg-indigo-100 text-indigo-950 font-black">
+                          <tr>
+                            <th className="p-3 border-b border-indigo-200">المهارة</th>
+                            <th className="p-3 border-b border-indigo-200">ممتاز</th>
+                            <th className="p-3 border-b border-indigo-200">جيد</th>
+                            <th className="p-3 border-b border-indigo-200">متوسط</th>
+                            <th className="p-3 border-b border-indigo-200">ضعيف</th>
+                          </tr>
+                        </thead>
+                        <tbody className="font-bold text-slate-800">
+                          {([
+                            ['الكتابة', 'academicWritingLevel'],
+                            ['القراءة', 'academicReadingLevel'],
+                            ['الإملاء', 'academicSpellingLevel']
+                          ] as const).map(([label, field]) => (
+                            <tr key={field} className="border-b border-slate-100 last:border-b-0">
+                              <th scope="row" className="p-3">{label}</th>
+                              {['ممتاز', 'جيد', 'متوسط', 'ضعيف'].map(level => (
+                                <td key={level} className="p-3 text-center">
+                                  <input type="radio" name={field} value={level} checked={formData[field] === level} onChange={e => setFormData(current => ({ ...current, [field]: e.target.value }))} aria-label={`${label}: ${level}`} className="h-4 w-4 accent-indigo-700" />
+                                </td>
+                              ))}
+                            </tr>
+                          ))}
+                        </tbody>
+                      </table>
+                    </div>
+                    <div className="grid grid-cols-1 sm:grid-cols-3 gap-3">
+                      <div className="sm:col-span-2">
+                        <label className="block text-slate-800 font-extrabold mb-1">المدرسة السابقة</label>
+                        <input type="text" value={formData.academicPreviousSchool} onChange={e => setFormData(current => ({ ...current, academicPreviousSchool: e.target.value }))} placeholder="اسم المدرسة السابقة" className="w-full bg-white border border-slate-300 rounded-xl p-2.5 font-bold text-slate-900 outline-none" />
+                      </div>
+                      <div>
+                        <label className="block text-slate-800 font-extrabold mb-1">المعدل الدراسي</label>
+                        <input type="text" inputMode="decimal" value={formData.academicAverage} onChange={e => setFormData(current => ({ ...current, academicAverage: e.target.value }))} placeholder="مثال: 85%" className="w-full bg-white border border-slate-300 rounded-xl p-2.5 font-bold text-slate-900 outline-none" />
+                      </div>
+                      <div className="sm:col-span-2">
+                        <label className="block text-slate-800 font-extrabold mb-1">الصف الدراسي السابق</label>
+                        <input type="text" value={formData.academicPreviousGrade} onChange={e => setFormData(current => ({ ...current, academicPreviousGrade: e.target.value }))} placeholder="مثال: الصف السادس" className="w-full bg-white border border-slate-300 rounded-xl p-2.5 font-bold text-slate-900 outline-none" />
+                      </div>
+                      <div>
+                        <label className="block text-slate-800 font-extrabold mb-1">ملاحظات أكاديمية</label>
+                        <input type="text" value={formData.academicNotes} onChange={e => setFormData(current => ({ ...current, academicNotes: e.target.value }))} placeholder="اختياري" className="w-full bg-white border border-slate-300 rounded-xl p-2.5 font-bold text-slate-900 outline-none" />
+                      </div>
+                    </div>
+                  </section>
+
+                  <section className="rounded-2xl border border-rose-200 bg-rose-50/50 p-4 space-y-4" aria-labelledby="additional-health-title">
+                    <div className="border-b border-rose-200 pb-3">
+                      <h4 id="additional-health-title" className="text-sm font-black text-rose-950">المعلومات الصحية</h4>
+                      <p className="mt-1 text-[10px] font-bold text-rose-700">تُحفظ ضمن ملف الطالب وتظهر للمخولين فقط داخل نطاق المدرسة.</p>
+                    </div>
+                    <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
+                      <div>
+                        <label className="block text-slate-800 font-extrabold mb-1">الأمراض المزمنة</label>
+                        <textarea value={formData.healthChronicDiseases} onChange={e => setFormData(current => ({ ...current, healthChronicDiseases: e.target.value }))} rows={2} placeholder="اكتب لا يوجد إن لم توجد" className="w-full resize-y bg-white border border-slate-300 rounded-xl p-2.5 font-bold text-slate-900 outline-none" />
+                      </div>
+                      <div>
+                        <label className="block text-slate-800 font-extrabold mb-1">الأدوية التي يتناولها</label>
+                        <textarea value={formData.healthMedications} onChange={e => setFormData(current => ({ ...current, healthMedications: e.target.value }))} rows={2} placeholder="اسم الدواء والجرعة إن لزم" className="w-full resize-y bg-white border border-slate-300 rounded-xl p-2.5 font-bold text-slate-900 outline-none" />
+                      </div>
+                      <div>
+                        <label className="block text-slate-800 font-extrabold mb-1">الأطعمة التي تسبب التحسس</label>
+                        <textarea value={formData.healthAllergies} onChange={e => setFormData(current => ({ ...current, healthAllergies: e.target.value }))} rows={2} placeholder="الأطعمة أو المواد المسببة للتحسس" className="w-full resize-y bg-white border border-slate-300 rounded-xl p-2.5 font-bold text-slate-900 outline-none" />
+                      </div>
+                      <div>
+                        <label className="block text-slate-800 font-extrabold mb-1">ملاحظات طبية مهمة</label>
+                        <textarea value={formData.healthNotes} onChange={e => setFormData(current => ({ ...current, healthNotes: e.target.value }))} rows={2} placeholder="أي تنبيه طبي أو إسعافي مهم" className="w-full resize-y bg-white border border-slate-300 rounded-xl p-2.5 font-bold text-slate-900 outline-none" />
+                      </div>
+                    </div>
+                  </section>
+
+                  <section className="rounded-2xl border border-emerald-200 bg-emerald-50/50 p-4 space-y-4" aria-labelledby="additional-social-title">
+                    <div className="border-b border-emerald-200 pb-3">
+                      <h4 id="additional-social-title" className="text-sm font-black text-emerald-950">المعلومات الاجتماعية</h4>
+                      <p className="mt-1 text-[10px] font-bold text-emerald-700">حقول الأسرة والتفاعل الاجتماعي وفق نموذج المتابعة المرفق.</p>
+                    </div>
+                    <div className="grid grid-cols-1 sm:grid-cols-3 gap-3">
+                      <div>
+                        <label className="block text-slate-800 font-extrabold mb-1">مع من يسكن الطالب؟</label>
+                        <select value={formData.socialLivingWith} onChange={e => setFormData(current => ({ ...current, socialLivingWith: e.target.value }))} className="w-full bg-white border border-slate-300 rounded-xl p-2.5 font-bold text-slate-900 outline-none">
+                          <option value="">غير محدد</option>
+                          <option value="الأم">الأم</option>
+                          <option value="الأب">الأب</option>
+                          <option value="الأم والأب">الأم والأب</option>
+                          <option value="غير ذلك">غير ذلك</option>
+                        </select>
+                      </div>
+                      <div>
+                        <label className="block text-slate-800 font-extrabold mb-1">ترتيب الطالب في الأسرة</label>
+                        <input type="text" inputMode="numeric" value={formData.socialBirthOrder} onChange={e => setFormData(current => ({ ...current, socialBirthOrder: e.target.value }))} placeholder="مثال: 2 من 4" className="w-full bg-white border border-slate-300 rounded-xl p-2.5 font-bold text-slate-900 outline-none" />
+                      </div>
+                      <div>
+                        <label className="block text-slate-800 font-extrabold mb-1">اجتماعي في نظر الأسرة</label>
+                        <select value={formData.socialFamilyView} onChange={e => setFormData(current => ({ ...current, socialFamilyView: e.target.value }))} className="w-full bg-white border border-slate-300 rounded-xl p-2.5 font-bold text-slate-900 outline-none">
+                          <option value="">غير محدد</option>
+                          <option value="نعم">نعم</option>
+                          <option value="لا">لا</option>
+                        </select>
+                      </div>
+                    </div>
+                    <fieldset>
+                      <legend className="block text-slate-800 font-extrabold mb-2">اجتماعيات الطالب خارج الأسرة (يمكن اختيار أكثر من صفة)</legend>
+                      <div className="grid grid-cols-2 sm:grid-cols-3 gap-2 rounded-xl bg-white border border-slate-200 p-3">
+                        {['هادئ', 'اجتماعي', 'مشارك', 'متعاون', 'غير اجتماعي', 'غير مشارك'].map(trait => {
+                          const selectedTraits = formData.socialOutsideTraits.split('،').map(value => value.trim()).filter(Boolean);
+                          const checked = selectedTraits.includes(trait);
+                          return (
+                            <label key={trait} className="flex items-center gap-2 rounded-lg px-2 py-2 hover:bg-emerald-50 cursor-pointer font-bold text-slate-800">
+                              <input type="checkbox" checked={checked} onChange={e => {
+                                const next = new Set(selectedTraits);
+                                if (e.target.checked) next.add(trait); else next.delete(trait);
+                                setFormData(current => ({ ...current, socialOutsideTraits: Array.from(next).join('، ') }));
+                              }} className="h-4 w-4 accent-emerald-700" />
+                              <span>{trait}</span>
+                            </label>
+                          );
+                        })}
+                      </div>
+                    </fieldset>
+                  </section>
+
+                  <div className="rounded-xl border border-amber-200 bg-amber-50 px-3 py-2 text-[10px] font-bold text-amber-900">
+                    تُحفظ المعلومات الأكاديمية والصحية والاجتماعية في السجل الكانوني للطالب داخل نطاق المدرسة، مع زيادة الإصدار وسجل التدقيق عند كل تعديل.
+                  </div>
+                </div>
+              )}
+
+              {modalTab === 'docs' ? (
+                <div className="space-y-4 text-xs" dir="rtl">
+                  <div className="rounded-2xl border border-sky-200 bg-sky-50 p-4">
+                    <h4 className="text-sm font-black text-sky-950">مستندات الطالب</h4>
+                    <p className="mt-1 text-[10px] font-bold text-sky-800">جميع المستندات اختيارية. يمكن حفظ سجل الطالب واعتماده دون رفع أي ملف.</p>
+                  </div>
+                  <div className="overflow-hidden rounded-2xl border border-slate-200 bg-white shadow-sm">
+                    <table className="w-full text-right" aria-label="جدول مستندات الطالب">
+                      <thead className="bg-slate-100 text-slate-800 font-black">
+                        <tr>
+                          <th className="p-3 border-b border-slate-200">اسم المستند</th>
+                          <th className="p-3 border-b border-slate-200 text-center">الإرفاق</th>
+                          <th className="p-3 border-b border-slate-200">الحالة</th>
+                        </tr>
+                      </thead>
+                      <tbody>
+                        {STUDENT_DOCUMENT_DEFINITIONS.map(definition => {
+                          const status = documentStatuses[definition.id] || 'idle';
+                          const file = selectedDocumentFiles[definition.id];
+                          const statusLabel = status === 'uploaded'
+                            ? 'مرفوع ومحفوظ'
+                            : status === 'uploading'
+                              ? 'جارٍ الرفع...'
+                              : status === 'selected'
+                                ? (isEditMode ? 'جاهز للحفظ' : 'سيُرفع بعد حفظ الطالب')
+                                : status === 'error'
+                                  ? 'تعذر الرفع — أعد المحاولة'
+                                  : 'غير مرفق (اختياري)';
+                          return (
+                            <tr key={definition.id} className="border-b border-slate-100 last:border-b-0">
+                              <td className="p-3 font-black text-slate-900">{definition.label}</td>
+                              <td className="p-3 text-center">
+                                <input
+                                  ref={element => { documentFileInputsRef.current[definition.id] = element; }}
+                                  type="file"
+                                  accept={definition.accept}
+                                  className="hidden"
+                                  onChange={event => void handleStudentDocumentSelected(definition, event)}
+                                />
+                                <button
+                                  type="button"
+                                  onClick={() => documentFileInputsRef.current[definition.id]?.click()}
+                                  disabled={status === 'uploading'}
+                                  title={`إرفاق ${definition.label}`}
+                                  className="inline-flex items-center gap-1.5 rounded-xl border border-sky-300 bg-sky-50 px-3 py-2 font-black text-sky-900 transition hover:bg-sky-100 disabled:cursor-wait disabled:opacity-60"
+                                >
+                                  <Paperclip className="h-4 w-4" />
+                                  <span>{file?.name ? 'تغيير الملف' : 'إرفاق'}</span>
+                                </button>
+                              </td>
+                              <td className={`p-3 font-bold ${status === 'uploaded' ? 'text-emerald-700' : status === 'error' ? 'text-rose-700' : 'text-slate-500'}`}>
+                                <span>{statusLabel}</span>
+                                {file?.name ? <span className="block mt-1 truncate max-w-[15rem] text-[10px] text-slate-500" title={file.name}>{file.name}</span> : null}
+                              </td>
+                            </tr>
+                          );
+                        })}
+                      </tbody>
+                    </table>
+                  </div>
+                  <p className="rounded-xl border border-amber-200 bg-amber-50 px-3 py-2 text-[10px] font-bold text-amber-900">الصيغ المدعومة: PDF وJPG وPNG — الحد الأقصى 10 ميجابايت لكل ملف. تُخزّن الملفات في مساحة خاصة مرتبطة بالطالب وسياق المدرسة.</p>
+                </div>
+              ) : modalTab === 'notes' ? (
                 <div className="p-8 text-center text-slate-500 font-bold text-xs bg-slate-50 rounded-2xl border border-dashed border-slate-300">
                   لم يتم حفظ هذه البيانات بعد. احفظ السجل أولاً لتأكيدها.
                 </div>
-              )}
+              ) : null}
             </div>
 
             {/* Modal Footer */}
@@ -2279,20 +2903,22 @@ export default function StudentAffairsPortal({
                   <button 
                     type="button"
                     onClick={() => handleSaveStudent(true)}
-                    className="flex-1 sm:flex-none px-6 py-2.5 rounded-xl border-2 border-[#9a6a1d] text-amber-900 bg-amber-50 hover:bg-amber-100 text-xs font-black transition-all cursor-pointer"
+                    disabled={isSavingStudent || !canWriteStudents}
+                    aria-disabled={isSavingStudent || !canWriteStudents}
+                    className="flex-1 sm:flex-none px-6 py-2.5 rounded-xl border-2 border-[#9a6a1d] text-amber-900 bg-amber-50 hover:bg-amber-100 text-xs font-black transition-all cursor-pointer disabled:cursor-wait disabled:opacity-60"
                   >
-                    حفظ وإضافة جديد
+                    {isSavingStudent ? 'جارٍ الحفظ...' : 'حفظ وإضافة جديد'}
                   </button>
                 )}
 
                 <button 
                   type="button"
                   onClick={() => handleSaveStudent(false)}
-                  disabled={!canWriteStudents}
-                  aria-disabled={!canWriteStudents}
-                  className="flex-1 sm:flex-none px-8 py-2.5 rounded-xl bg-gradient-to-r from-[#9a6a1d] via-[#f7d174] to-[#c58a22] text-slate-950 font-black text-xs shadow-lg hover:scale-105 transition-all cursor-pointer"
+                  disabled={isSavingStudent || !canWriteStudents}
+                  aria-disabled={isSavingStudent || !canWriteStudents}
+                  className="flex-1 sm:flex-none px-8 py-2.5 rounded-xl bg-gradient-to-r from-[#9a6a1d] via-[#f7d174] to-[#c58a22] text-slate-950 font-black text-xs shadow-lg hover:scale-105 transition-all cursor-pointer disabled:cursor-wait disabled:opacity-60"
                 >
-                  حفظ الحركات
+                  {isSavingStudent ? 'جارٍ الحفظ...' : isEditMode ? 'حفظ التعديل' : 'حفظ البيانات'}
                 </button>
               </div>
             </div>
