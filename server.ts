@@ -2127,6 +2127,18 @@ async function startServer() {
     const templateManifest = normalizeTemplateManifest(template.manifest);
     const templateFeatures = normalizeFeatureOverrides(templateManifest.features);
     const releaseTitle = `تحديث تلقائي من ${template.name} — الإصدار ${template.version}`;
+    const canonicalStructureResult = await client.query(
+      `SELECT ss.setting_value AS structure
+         FROM public.school_settings ss
+         JOIN public.schools s ON s.id = ss.school_id
+        WHERE s.school_code = 'CENTRAL-SCHOOL'
+          AND s.status = 'active' AND s.deleted_at IS NULL
+          AND ss.setting_key = 'academic_structure'
+          AND ss.status = 'active' AND ss.deleted_at IS NULL
+        ORDER BY ss.effective_from DESC, ss.version DESC
+        LIMIT 1`,
+    );
+    const canonicalStructure = canonicalStructureResult.rows[0]?.structure || null;
     for (const target of targets.rows) {
       const versionResult = await client.query(
         `SELECT COALESCE(MAX(release_version), 0) + 1 AS next_version
@@ -2184,6 +2196,32 @@ async function startServer() {
         RETURNING id, tenant_id, display_name, school_code, status, central_metadata`,
         [target.id, JSON.stringify(nextMetadata)],
       );
+      if (canonicalStructure) {
+        const structureUpdate = await client.query(
+          `UPDATE public.school_settings
+              SET setting_value = $2::jsonb,
+                  status = 'active',
+                  deleted_at = NULL,
+                  deleted_by = NULL,
+                  updated_at = now(),
+                  version = version + 1
+            WHERE school_id = $1::uuid
+              AND setting_key = 'academic_structure'
+              AND status = 'active'
+              AND deleted_at IS NULL
+          RETURNING id`,
+          [target.id, JSON.stringify(canonicalStructure)],
+        );
+        if (structureUpdate.rowCount === 0) {
+          const targetSchool = school.rows[0];
+          await client.query(
+            `INSERT INTO public.school_settings
+              (tenant_id, school_id, setting_key, setting_value, effective_from, status, version)
+             VALUES ($1::uuid, $2::uuid, 'academic_structure', $3::jsonb, now(), 'active', 1)`,
+            [targetSchool.tenant_id, target.id, JSON.stringify(canonicalStructure)],
+          );
+        }
+      }
       releases.push(release.rows[0]);
       schools.push(school.rows[0]);
     }

@@ -2541,7 +2541,7 @@ export default function StudentAffairsPortal({
                     {/* Row 3: Stage, Grade, Section */}
                     <div className="grid grid-cols-1 sm:grid-cols-3 gap-4">
                       <div>
-                        <label className="block text-slate-800 font-extrabold mb-1">المرحلة الدراسية <span className="text-emerald-700">(يُدار عبر الالتحاق)</span></label>
+                        <label className="block text-slate-800 font-extrabold mb-1">المرحلة الدراسية</label>
                         <select 
                           value={formData.stage}
                           onChange={e => {
@@ -2557,7 +2557,7 @@ export default function StudentAffairsPortal({
                       </div>
 
                       <div>
-                        <label className="block text-slate-800 font-extrabold mb-1">الصف الدراسي <span className="text-emerald-700">(يُدار عبر الالتحاق)</span></label>
+                        <label className="block text-slate-800 font-extrabold mb-1">الصف الدراسي</label>
                         <select 
                           value={formData.grade}
                           onChange={e => setFormData(current => ({ ...current, grade: e.target.value, classSection: canonicalSections[0] || '' }))}
@@ -2569,7 +2569,7 @@ export default function StudentAffairsPortal({
                       </div>
 
                       <div>
-                        <label className="block text-slate-800 font-extrabold mb-1">الشعبة / الفصل <span className="text-emerald-700">(يُدار عبر الالتحاق)</span></label>
+                        <label className="block text-slate-800 font-extrabold mb-1">الشعبة / الفصل</label>
                         <select 
                           value={formData.classSection}
                           onChange={e => setFormData(current => ({ ...current, classSection: e.target.value }))}
@@ -2580,10 +2580,6 @@ export default function StudentAffairsPortal({
                         </select>
                       </div>
                     </div>
-                    <p className="rounded-xl border border-emerald-200 bg-emerald-50 px-3 py-2 text-[10px] font-bold text-emerald-800 sm:col-span-3">
-                      كانت الحقول غير نشطة لأن النظام كان يمنع التعديل النصي عليها حتى لا ينفصل ملف الطالب عن سجل الالتحاق. الآن تُختار من الهيكل الأكاديمي الموثوق وتُعتمد مباشرة كسجل التحاق قابل للتدقيق.
-                    </p>
-
                   </div>
                 </div>
               )}
@@ -2694,9 +2690,6 @@ export default function StudentAffairsPortal({
                     </div>
                   </div>
 
-                  <div className="rounded-xl border border-emerald-200 bg-emerald-50 p-3 text-[11px] font-bold text-emerald-800 sm:col-span-2">
-                    تُحفظ هذه البيانات في السجل الكانوني لولي الأمر داخل نطاق المدرسة، مع سجل تدقيق وإصدارات التعديل.
-                  </div>
                 </div>
               )}
 
@@ -2705,7 +2698,6 @@ export default function StudentAffairsPortal({
                   <section className="rounded-2xl border border-indigo-200 bg-indigo-50/50 p-4 space-y-4" aria-labelledby="additional-academic-title">
                     <div className="border-b border-indigo-200 pb-3">
                       <h4 id="additional-academic-title" className="text-sm font-black text-indigo-950">المعلومات الأكاديمية</h4>
-                      <p className="mt-1 text-[10px] font-bold text-indigo-700">بيانات المسار السابق والتحصيل الدراسي كما تُثبت في ملف الطالب.</p>
                     </div>
                     <div className="overflow-x-auto rounded-xl border border-indigo-200 bg-white">
                       <table className="w-full min-w-[620px] text-right" aria-label="نموذج المعلومات الأكاديمية">
@@ -2759,24 +2751,23 @@ export default function StudentAffairsPortal({
                   <section className="rounded-2xl border border-rose-200 bg-rose-50/50 p-4 space-y-4" aria-labelledby="additional-health-title">
                     <div className="border-b border-rose-200 pb-3">
                       <h4 id="additional-health-title" className="text-sm font-black text-rose-950">المعلومات الصحية</h4>
-                      <p className="mt-1 text-[10px] font-bold text-rose-700">تُحفظ ضمن ملف الطالب وتظهر للمخولين فقط داخل نطاق المدرسة.</p>
                     </div>
                     <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
                       <div>
                         <label className="block text-slate-800 font-extrabold mb-1">الأمراض المزمنة</label>
-                        <textarea value={formData.healthChronicDiseases} onChange={e => setFormData(current => ({ ...current, healthChronicDiseases: e.target.value }))} rows={2} placeholder="اكتب لا يوجد إن لم توجد" className="w-full resize-y bg-white border border-slate-300 rounded-xl p-2.5 font-bold text-slate-900 outline-none" />
+                        <textarea value={formData.healthChronicDiseases} onChange={e => setFormData(current => ({ ...current, healthChronicDiseases: e.target.value }))} rows={2} className="w-full resize-y bg-white border border-slate-300 rounded-xl p-2.5 font-bold text-slate-900 outline-none" />
                       </div>
                       <div>
                         <label className="block text-slate-800 font-extrabold mb-1">الأدوية التي يتناولها</label>
-                        <textarea value={formData.healthMedications} onChange={e => setFormData(current => ({ ...current, healthMedications: e.target.value }))} rows={2} placeholder="اسم الدواء والجرعة إن لزم" className="w-full resize-y bg-white border border-slate-300 rounded-xl p-2.5 font-bold text-slate-900 outline-none" />
+                        <textarea value={formData.healthMedications} onChange={e => setFormData(current => ({ ...current, healthMedications: e.target.value }))} rows={2} className="w-full resize-y bg-white border border-slate-300 rounded-xl p-2.5 font-bold text-slate-900 outline-none" />
                       </div>
                       <div>
                         <label className="block text-slate-800 font-extrabold mb-1">الأطعمة التي تسبب التحسس</label>
-                        <textarea value={formData.healthAllergies} onChange={e => setFormData(current => ({ ...current, healthAllergies: e.target.value }))} rows={2} placeholder="الأطعمة أو المواد المسببة للتحسس" className="w-full resize-y bg-white border border-slate-300 rounded-xl p-2.5 font-bold text-slate-900 outline-none" />
+                        <textarea value={formData.healthAllergies} onChange={e => setFormData(current => ({ ...current, healthAllergies: e.target.value }))} rows={2} className="w-full resize-y bg-white border border-slate-300 rounded-xl p-2.5 font-bold text-slate-900 outline-none" />
                       </div>
                       <div>
                         <label className="block text-slate-800 font-extrabold mb-1">ملاحظات طبية مهمة</label>
-                        <textarea value={formData.healthNotes} onChange={e => setFormData(current => ({ ...current, healthNotes: e.target.value }))} rows={2} placeholder="أي تنبيه طبي أو إسعافي مهم" className="w-full resize-y bg-white border border-slate-300 rounded-xl p-2.5 font-bold text-slate-900 outline-none" />
+                        <textarea value={formData.healthNotes} onChange={e => setFormData(current => ({ ...current, healthNotes: e.target.value }))} rows={2} className="w-full resize-y bg-white border border-slate-300 rounded-xl p-2.5 font-bold text-slate-900 outline-none" />
                       </div>
                     </div>
                   </section>
@@ -2784,7 +2775,6 @@ export default function StudentAffairsPortal({
                   <section className="rounded-2xl border border-emerald-200 bg-emerald-50/50 p-4 space-y-4" aria-labelledby="additional-social-title">
                     <div className="border-b border-emerald-200 pb-3">
                       <h4 id="additional-social-title" className="text-sm font-black text-emerald-950">المعلومات الاجتماعية</h4>
-                      <p className="mt-1 text-[10px] font-bold text-emerald-700">حقول الأسرة والتفاعل الاجتماعي وفق نموذج المتابعة المرفق.</p>
                     </div>
                     <div className="grid grid-cols-1 sm:grid-cols-3 gap-3">
                       <div>
@@ -2811,7 +2801,7 @@ export default function StudentAffairsPortal({
                       </div>
                     </div>
                     <fieldset>
-                      <legend className="block text-slate-800 font-extrabold mb-2">اجتماعيات الطالب خارج الأسرة (يمكن اختيار أكثر من صفة)</legend>
+                      <legend className="block text-slate-800 font-extrabold mb-2">اجتماعيات الطالب خارج الأسرة</legend>
                       <div className="grid grid-cols-2 sm:grid-cols-3 gap-2 rounded-xl bg-white border border-slate-200 p-3">
                         {['هادئ', 'اجتماعي', 'مشارك', 'متعاون', 'غير اجتماعي', 'غير مشارك'].map(trait => {
                           const selectedTraits = formData.socialOutsideTraits.split('،').map(value => value.trim()).filter(Boolean);
@@ -2831,9 +2821,6 @@ export default function StudentAffairsPortal({
                     </fieldset>
                   </section>
 
-                  <div className="rounded-xl border border-amber-200 bg-amber-50 px-3 py-2 text-[10px] font-bold text-amber-900">
-                    تُحفظ المعلومات الأكاديمية والصحية والاجتماعية في السجل الكانوني للطالب داخل نطاق المدرسة، مع زيادة الإصدار وسجل التدقيق عند كل تعديل.
-                  </div>
                 </div>
               )}
 
@@ -2841,7 +2828,6 @@ export default function StudentAffairsPortal({
                 <div className="space-y-4 text-xs" dir="rtl">
                   <div className="rounded-2xl border border-sky-200 bg-sky-50 p-4">
                     <h4 className="text-sm font-black text-sky-950">مستندات الطالب</h4>
-                    <p className="mt-1 text-[10px] font-bold text-sky-800">جميع المستندات اختيارية. يمكن حفظ سجل الطالب واعتماده دون رفع أي ملف.</p>
                   </div>
                   <div className="overflow-hidden rounded-2xl border border-slate-200 bg-white shadow-sm">
                     <table className="w-full text-right" aria-label="جدول مستندات الطالب">
