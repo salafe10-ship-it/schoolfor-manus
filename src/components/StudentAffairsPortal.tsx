@@ -1030,6 +1030,17 @@ export default function StudentAffairsPortal({
       if (!persistedStudent) {
         throw new Error('لم يُرجع الخادم سجل الطالب بعد الحفظ.');
       }
+      const assignedStudentNumber = String(
+        rawPersistedStudent?.studentNumber
+          || rawPersistedStudent?.studentCode
+          || formData.studentCode
+          || ''
+      ).trim();
+      if (!isEditMode && assignedStudentNumber) {
+        // The server is authoritative. Reflect its allocated number in the
+        // form only after the canonical transaction has returned successfully.
+        setFormData(current => ({ ...current, studentCode: assignedStudentNumber }));
+      }
       studentPersisted = true;
 
       // Placement is a canonical enrollment operation, not a cosmetic profile
@@ -1100,7 +1111,10 @@ export default function StudentAffairsPortal({
         // can be viewed/reopened with its persisted guardian metadata.
         setStudentRefreshToken(value => value + 1);
         logAction('CREATE_STUDENT', `تسجيل طالب جديد: ${formData.fullName}`, 'شؤون الطلاب');
-        triggerNotification(`${persistenceNotice} تم تسجيل الطالب الجديد ${formData.fullName}.`, 'success');
+        triggerNotification(
+          `${persistenceNotice} تم تسجيل الطالب الجديد ${formData.fullName}. الرقم الأكاديمي: ${assignedStudentNumber || 'سيظهر بعد تحديث القائمة'}.`,
+          'success'
+        );
 
         if (addAnother) {
           setRegistrationIdempotencyKey(`student-affairs-registration-${crypto.randomUUID()}`);
@@ -2457,13 +2471,17 @@ export default function StudentAffairsPortal({
                       </div>
 
                       <div>
-                        <label className="block text-slate-800 font-extrabold mb-1">رقم الطالب الأكاديمي</label>
+                        <label className="block text-slate-800 font-extrabold mb-1">رقم الطالب الأكاديمي <span className="text-slate-500">(تلقائي)</span></label>
                         <input 
                           type="text"
                           value={formData.studentCode}
-                          onChange={e => setFormData(current => ({ ...current, studentCode: e.target.value }))}
-                          className="w-full bg-slate-100 border border-slate-300 rounded-xl p-2.5 text-xs font-bold font-mono text-amber-900 outline-none"
+                          readOnly
+                          aria-readonly="true"
+                          placeholder={isEditMode ? 'غير متوفر' : 'يُولَّد عند الحفظ'}
+                          title="يُخصّص تلقائيًا من الخادم عند حفظ الطالب ولا يقبل الإدخال اليدوي"
+                          className="w-full bg-slate-100 border border-slate-300 rounded-xl p-2.5 text-xs font-bold font-mono text-amber-900 outline-none cursor-not-allowed"
                         />
+                        {!isEditMode && <p className="mt-1 text-[10px] font-bold text-slate-500">يبدأ من 00001 ويزيد تلقائيًا داخل المدرسة الحالية.</p>}
                       </div>
                     </div>
 

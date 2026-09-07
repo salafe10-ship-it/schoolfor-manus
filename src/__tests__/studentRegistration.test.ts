@@ -116,7 +116,7 @@ describe('SOP-001 Student Registration', () => {
 
     expect(result.idempotent).toBe(false);
     expect(result.studentId).toBeTruthy();
-    expect(result.studentNumber).toBe('STU-2026-0001');
+    expect(result.studentNumber).toBe('00001');
     expect(result.guardianId).toBeTruthy();
     expect(result.enrollmentId).toBeTruthy();
     expect(driver.session?.committed).toBe(true);

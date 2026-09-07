@@ -77,47 +77,44 @@ export async function assertStudentNumberAvailable(tenantId: string, schoolId: s
 }
 
 /**
- * Allocate the next human-facing student number for the trusted school/year.
- * The advisory transaction lock makes the max+1 calculation safe when two
- * admissions are submitted at the same time; the internal student UUID
- * remains the immutable canonical identifier.
+ * Allocate the next human-facing student number for the trusted school.
+ *
+ * The number is deliberately scoped to school_id (never globally shared and
+ * never copied between schools). The advisory transaction lock makes the
+ * max+1 calculation safe when two admissions are submitted at the same time;
+ * because the allocation and INSERT are in the same transaction, a rolled
+ * back registration does not consume a number. Existing legacy values such as
+ * STU-2026-0001 are also understood so the migration to the new five-digit
+ * display format does not create duplicates.
  */
 export async function allocateStudentNumber(
   tenantId: string,
   schoolId: string,
-  academicYearId: string
+  _academicYearId?: string
 ): Promise<string> {
-  const year = await one<{ code: string }>(
-    `SELECT code
-       FROM academic_years
-      WHERE tenant_id = $1
-        AND school_id = $2
-        AND id = $3
-        AND deleted_at IS NULL
-      LIMIT 1`,
-    [tenantId, schoolId, academicYearId]
-  );
-  const yearPrefix = String(year?.code || '').match(/\d{4}/)?.[0];
-  if (!yearPrefix) throw new ValidationError('تعذر تحديد سنة الترقيم الأكاديمي الموثوقة.');
-
   await transaction().query(
     `SELECT pg_advisory_xact_lock(hashtextextended($1::text, 0))`,
-    [`student-number:${tenantId}:${schoolId}:${academicYearId}`]
+    [`student-number:${tenantId}:${schoolId}`]
   );
 
   const next = await one<{ next_number: string }>(
-    `SELECT (COALESCE(MAX(((regexp_match(student_number, $1))[1])::integer), 0) + 1)::text AS next_number
+    `SELECT (COALESCE(MAX(
+        CASE
+          WHEN student_number ~ '^[0-9]+$' THEN student_number::numeric
+          WHEN student_number ~ '[0-9]+$' THEN ((regexp_match(student_number, '([0-9]+)$'))[1])::numeric
+          ELSE NULL
+        END
+      ), 0) + 1)::text AS next_number
       FROM students
-      WHERE tenant_id = $2
-        AND school_id = $3
-        AND student_number ~ $1`,
-    [`^STU-${yearPrefix}-([0-9]+)$`, tenantId, schoolId]
+      WHERE tenant_id = $1
+        AND school_id = $2`,
+    [tenantId, schoolId]
   );
   const sequence = Number(next?.next_number || 1);
   if (!Number.isSafeInteger(sequence) || sequence < 1) {
     throw new DatabaseError('تعذر تخصيص رقم طالب متسلسل آمن.');
   }
-  return `STU-${yearPrefix}-${String(sequence).padStart(4, '0')}`;
+  return String(sequence).padStart(5, '0');
 }
 
 function normalizedName(value: string | null | undefined): string {
