@@ -15,6 +15,8 @@ export type CanonicalStudentReadParams = {
   quickSearch?: string;
   classroom?: string;
   section?: string;
+  stageId?: string;
+  gradeId?: string;
   status?: string;
   gender?: string;
   feesOutstandingOnly?: boolean;
@@ -42,6 +44,7 @@ type CanonicalStudentRow = {
   legal_middle_name: string | null;
   legal_last_name: string;
   preferred_name: string | null;
+  national_id: string | null;
   date_of_birth: string;
   gender: string | null;
   nationality: string | null;
@@ -76,6 +79,8 @@ type CanonicalStudentRow = {
   guardian_relation: string | null;
   class_reference: string | null;
   section_reference: string | null;
+  stage_id: string | null;
+  grade_id: string | null;
   academic_year_id: string | null;
   academic_year_name: string | null;
   status: string;
@@ -122,6 +127,34 @@ function sqlSearchTerm(value: string | undefined): string | null {
   return normalized || null;
 }
 
+type AcademicClassCatalogEntry = { gradeId: string; stageId: string };
+
+function buildAcademicClassCatalog(value: unknown): Map<string, AcademicClassCatalogEntry> {
+  const structure = value && typeof value === 'object' && !Array.isArray(value)
+    ? value as Record<string, unknown>
+    : {};
+  const gradeStageById = new Map<string, string>();
+  for (const item of Array.isArray(structure.grades) ? structure.grades : []) {
+    if (!item || typeof item !== 'object' || Array.isArray(item)) continue;
+    const grade = item as Record<string, unknown>;
+    const id = String(grade.id || '').trim();
+    if (id) gradeStageById.set(id, String(grade.stageId || grade.stage_id || '').trim());
+  }
+  const catalog = new Map<string, AcademicClassCatalogEntry>();
+  for (const item of Array.isArray(structure.classes) ? structure.classes : []) {
+    if (!item || typeof item !== 'object' || Array.isArray(item)) continue;
+    const classRow = item as Record<string, unknown>;
+    const gradeId = String(classRow.gradeId || classRow.grade_id || '').trim();
+    if (!gradeId) continue;
+    const entry = { gradeId, stageId: gradeStageById.get(gradeId) || '' };
+    for (const key of [classRow.id, classRow.code, classRow.name]) {
+      const normalized = String(key || '').trim();
+      if (normalized) catalog.set(normalized, entry);
+    }
+  }
+  return catalog;
+}
+
 function mapStatus(status: string): string {
   return status === 'admitted' ? 'accepted' : status;
 }
@@ -154,7 +187,9 @@ export function mapCanonicalStudentRow(row: CanonicalStudentRow): Record<string,
     preferredName: row.preferred_name || '',
     studentNumber: row.student_number,
     studentCode: row.student_number,
-    nationalId: '',
+    nationalId: row.national_id || '',
+    stageId: row.stage_id || '',
+    gradeId: row.grade_id || '',
     classroom: row.class_reference || '',
     section: row.section_reference || '',
     parentName: row.parent_name || '',
@@ -235,6 +270,7 @@ async function queryCanonicalStudents(
       OR s.legal_middle_name ILIKE $${values.length} ESCAPE '\\'
       OR s.legal_last_name ILIKE $${values.length} ESCAPE '\\'
       OR s.preferred_name ILIKE $${values.length} ESCAPE '\\'
+      OR s.national_id ILIKE $${values.length} ESCAPE '\\'
     )`);
   }
   if (params.status) {
@@ -253,6 +289,14 @@ async function queryCanonicalStudents(
     values.push(params.section);
     predicates.push(`enrollment.section_reference = $${values.length}`);
   }
+  if (params.stageId) {
+    values.push(params.stageId);
+    predicates.push(`academic_class.stage_id = $${values.length}`);
+  }
+  if (params.gradeId) {
+    values.push(params.gradeId);
+    predicates.push(`academic_class.grade_id = $${values.length}`);
+  }
 
   values.push(limit, offset);
   const limitIndex = values.length - 1;
@@ -261,7 +305,7 @@ async function queryCanonicalStudents(
     SELECT
       s.id, s.tenant_id, s.school_id, s.branch_id, s.student_number,
       s.legal_first_name, s.legal_middle_name, s.legal_last_name,
-      s.preferred_name, s.date_of_birth::text AS date_of_birth, s.gender, s.nationality,
+      s.preferred_name, s.national_id, s.date_of_birth::text AS date_of_birth, s.gender, s.nationality,
       s.academic_previous_school, s.academic_previous_grade, s.academic_previous_year,
       s.academic_performance_level, s.academic_writing_level, s.academic_reading_level,
       s.academic_spelling_level, s.academic_average, s.academic_notes,
@@ -269,6 +313,7 @@ async function queryCanonicalStudents(
       s.social_living_with, s.social_birth_order, s.social_family_view, s.social_outside_traits,
       s.status, s.version, s.created_at, s.deleted_at,
       enrollment.class_reference, enrollment.section_reference,
+      academic_class.stage_id, academic_class.grade_id,
       enrollment.academic_year_id, enrollment.academic_year_name,
       guardian.guardian_id, guardian.guardian_version,
       guardian.guardian_relationship_id, guardian.guardian_relationship_version,
@@ -295,6 +340,31 @@ async function queryCanonicalStudents(
       ORDER BY e.starts_on DESC, e.created_at DESC
       LIMIT 1
     ) AS enrollment ON TRUE
+    LEFT JOIN LATERAL (
+      SELECT
+        class_item.item->>'gradeId' AS grade_id,
+        grade_item.item->>'stageId' AS stage_id
+      FROM public.school_settings AS structure_setting
+      CROSS JOIN LATERAL jsonb_array_elements(
+        COALESCE(structure_setting.setting_value->'classes', '[]'::jsonb)
+      ) AS class_item(item)
+      LEFT JOIN LATERAL jsonb_array_elements(
+        COALESCE(structure_setting.setting_value->'grades', '[]'::jsonb)
+      ) AS grade_item(item)
+        ON grade_item.item->>'id' = class_item.item->>'gradeId'
+      WHERE structure_setting.tenant_id = s.tenant_id
+        AND structure_setting.school_id = s.school_id
+        AND structure_setting.setting_key = 'academic_structure'
+        AND structure_setting.status = 'active'
+        AND structure_setting.deleted_at IS NULL
+        AND (
+          class_item.item->>'id' = enrollment.class_reference
+          OR class_item.item->>'code' = enrollment.class_reference
+          OR class_item.item->>'name' = enrollment.class_reference
+        )
+      ORDER BY structure_setting.effective_from DESC, structure_setting.version DESC
+      LIMIT 1
+    ) AS academic_class ON TRUE
     LEFT JOIN LATERAL (
       SELECT
         g.id AS guardian_id,
@@ -365,10 +435,26 @@ async function queryCanonicalStudentsFromSupabase(
   }
 
   let eligibleStudentIds: string[] | undefined;
-  if (params.classroom || params.section) {
+  let academicClassCatalog = new Map<string, AcademicClassCatalogEntry>();
+  if (params.stageId || params.gradeId) {
+    const { data: structureRows, error: structureError } = await supabase
+      .from('school_settings')
+      .select('setting_value')
+      .eq('tenant_id', context.tenantId)
+      .eq('school_id', context.schoolId)
+      .eq('setting_key', 'academic_structure')
+      .eq('status', 'active')
+      .is('deleted_at', null)
+      .order('effective_from', { ascending: false })
+      .order('version', { ascending: false })
+      .limit(1);
+    if (structureError) throw structureError;
+    academicClassCatalog = buildAcademicClassCatalog(structureRows?.[0]?.setting_value);
+  }
+  if (params.classroom || params.section || params.stageId || params.gradeId) {
     let enrollmentQuery = supabase
       .from('enrollments')
-      .select('student_id')
+      .select('student_id,class_reference')
       .eq('tenant_id', context.tenantId)
       .eq('school_id', context.schoolId)
       .or(`branch_id.is.null,branch_id.eq.${context.branchId}`)
@@ -378,13 +464,20 @@ async function queryCanonicalStudentsFromSupabase(
     if (params.section) enrollmentQuery = enrollmentQuery.eq('section_reference', params.section);
     const { data: enrollmentRows, error: enrollmentError } = await enrollmentQuery;
     if (enrollmentError) throw enrollmentError;
-    eligibleStudentIds = [...new Set((enrollmentRows || []).map(row => String((row as { student_id?: unknown }).student_id || '')).filter(Boolean))];
+    eligibleStudentIds = [...new Set((enrollmentRows || [])
+      .filter(row => {
+        if (!params.stageId && !params.gradeId) return true;
+        const catalog = academicClassCatalog.get(String((row as { class_reference?: unknown }).class_reference || '').trim());
+        return Boolean(catalog && (!params.stageId || catalog.stageId === params.stageId) && (!params.gradeId || catalog.gradeId === params.gradeId));
+      })
+      .map(row => String((row as { student_id?: unknown }).student_id || ''))
+      .filter(Boolean))];
     if (eligibleStudentIds.length === 0) return { rows: [], totalCount: 0 };
   }
 
   let studentQuery = supabase
     .from('students')
-    .select('id,tenant_id,school_id,branch_id,student_number,legal_first_name,legal_middle_name,legal_last_name,preferred_name,date_of_birth,gender,nationality,academic_previous_school,academic_previous_grade,academic_previous_year,academic_performance_level,academic_writing_level,academic_reading_level,academic_spelling_level,academic_average,academic_notes,health_chronic_diseases,health_medications,health_allergies,health_notes,social_living_with,social_birth_order,social_family_view,social_outside_traits,status,version,created_at,deleted_at', { count: 'exact' })
+    .select('id,tenant_id,school_id,branch_id,student_number,legal_first_name,legal_middle_name,legal_last_name,preferred_name,national_id,date_of_birth,gender,nationality,academic_previous_school,academic_previous_grade,academic_previous_year,academic_performance_level,academic_writing_level,academic_reading_level,academic_spelling_level,academic_average,academic_notes,health_chronic_diseases,health_medications,health_allergies,health_notes,social_living_with,social_birth_order,social_family_view,social_outside_traits,status,version,created_at,deleted_at', { count: 'exact' })
     .eq('tenant_id', context.tenantId)
     .eq('school_id', context.schoolId)
     .eq('branch_id', context.branchId)
@@ -402,7 +495,8 @@ async function queryCanonicalStudentsFromSupabase(
         `legal_first_name.ilike.${pattern}`,
         `legal_middle_name.ilike.${pattern}`,
         `legal_last_name.ilike.${pattern}`,
-        `preferred_name.ilike.${pattern}`
+        `preferred_name.ilike.${pattern}`,
+        `national_id.ilike.${pattern}`
       ].join(','));
     }
   }
@@ -414,6 +508,21 @@ async function queryCanonicalStudentsFromSupabase(
 
   const rows = (studentRows || []) as Array<Record<string, unknown>>;
   const studentIds = rows.map(row => String(row.id || '')).filter(Boolean);
+  if (studentIds.length && academicClassCatalog.size === 0) {
+    const { data: structureRows, error: structureError } = await supabase
+      .from('school_settings')
+      .select('setting_value')
+      .eq('tenant_id', context.tenantId)
+      .eq('school_id', context.schoolId)
+      .eq('setting_key', 'academic_structure')
+      .eq('status', 'active')
+      .is('deleted_at', null)
+      .order('effective_from', { ascending: false })
+      .order('version', { ascending: false })
+      .limit(1);
+    if (structureError) throw structureError;
+    academicClassCatalog = buildAcademicClassCatalog(structureRows?.[0]?.setting_value);
+  }
   const enrollmentByStudent = new Map<string, Record<string, unknown>>();
   const academicYearById = new Map<string, string>();
   if (studentIds.length) {
@@ -502,6 +611,8 @@ async function queryCanonicalStudentsFromSupabase(
       guardian_relation: link?.relationship_type || null,
       class_reference: enrollment?.class_reference || null,
       section_reference: enrollment?.section_reference || null,
+      stage_id: academicClassCatalog.get(String(enrollment?.class_reference || '').trim())?.stageId || null,
+      grade_id: academicClassCatalog.get(String(enrollment?.class_reference || '').trim())?.gradeId || null,
       academic_year_id: academicYearId || null,
       academic_year_name: academicYearById.get(academicYearId) || null,
       total_count: count || 0

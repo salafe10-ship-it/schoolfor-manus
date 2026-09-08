@@ -6,8 +6,8 @@ describe('student affairs form integrity', () => {
   it('keeps the required gender/status validation and uses an explicit Arabic default for gender', () => {
     const source = fs.readFileSync(path.resolve(process.cwd(), 'src/components/StudentAffairsPortal.tsx'), 'utf8');
     expect(source).toContain("gender: 'ذكر'");
-    expect(source).toContain("status: ''");
+    expect(source).toContain("status: 'applicant'");
     expect(source).toContain('الجنس والحالة الدراسية حقول مطلوبة');
-    expect(source).not.toContain("status: 'active'");
+    expect(source).toContain('تُدار الحالة عبر دورة القيد الكانونية');
   });
 });

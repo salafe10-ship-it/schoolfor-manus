@@ -336,6 +336,7 @@ export function enqueueStudent(values: {
   schoolId: string;
   branchId: string;
   studentNumber: string;
+  nationalId: string | null;
   legalFirstName: string;
   legalMiddleName: string | null;
   legalLastName: string;
@@ -370,7 +371,7 @@ export function enqueueStudent(values: {
     'students',
     values.id,
     `INSERT INTO students (
-       id, tenant_id, school_id, branch_id, student_number,
+       id, tenant_id, school_id, branch_id, student_number, national_id,
        legal_first_name, legal_middle_name, legal_last_name, preferred_name,
        date_of_birth, gender, nationality, birth_country_code,
        academic_previous_school, academic_previous_grade, academic_previous_year,
@@ -379,11 +380,11 @@ export function enqueueStudent(values: {
        health_chronic_diseases, health_medications, health_allergies, health_notes,
        social_living_with, social_birth_order, social_family_view, social_outside_traits,
        status, version, created_by, updated_by, audit_id, request_id, correlation_id
-     ) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10::date, $11, $12, $13,
-               $14, $15, $16, $17, $18, $19, $20, $21, $22, $23, $24, $25, $26, $27, $28, $29, $30,
-               'applicant', 1, $31, $31, $32, $33, $34)`,
+     ) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11::date, $12, $13, $14,
+               $15, $16, $17, $18, $19, $20, $21, $22, $23, $24, $25, $26, $27, $28, $29, $30, $31,
+               'applicant', 1, $32, $32, $33, $34, $35)`,
     [
-      values.id, values.tenantId, values.schoolId, values.branchId, values.studentNumber,
+      values.id, values.tenantId, values.schoolId, values.branchId, values.studentNumber, values.nationalId,
       values.legalFirstName, values.legalMiddleName, values.legalLastName, values.preferredName,
       values.dateOfBirth, values.gender, values.nationality, values.birthCountryCode,
       values.academicPreviousSchool, values.academicPreviousGrade, values.academicPreviousYear,

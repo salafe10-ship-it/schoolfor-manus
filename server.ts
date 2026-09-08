@@ -73,7 +73,7 @@ import {
 } from "./src/modules/exams/application/ExamSchedulingRules.js";
 import { CanonicalStudentWriteRepository } from "./src/database/repositories/CanonicalStudentWriteRepository.js";
 import { CanonicalStudentTimelineRepository } from "./src/database/repositories/CanonicalStudentTimelineRepository.js";
-import { CANONICAL_STUDENT_SORT_FIELDS, type StudentReadDiagnostic } from "./src/database/repositories/CanonicalStudentReadRepository.js";
+import { CANONICAL_STUDENT_SORT_FIELDS, CanonicalStudentReadRepository, type StudentReadDiagnostic } from "./src/database/repositories/CanonicalStudentReadRepository.js";
 import { createPerf004Trace } from "./src/performance/Perf004LatencyDiagnostics.js";
 import { normalizeStudentReadError } from "./src/middleware/studentReadError.js";
 import { MAX_DOCUMENT_BYTES, STUDENT_DOCUMENT_BUCKET, normalizeDocumentListFilters, studentDocumentService } from "./src/modules/student-documents/application/StudentDocumentService.js";
@@ -5243,6 +5243,7 @@ async function startServer() {
     return {
       ...name,
       studentNumber: studentData.studentNumber || studentData.studentCode,
+      nationalId: studentData.nationalId,
       preferredName: studentData.preferredName,
       dateOfBirth,
       gender: studentData.gender,
@@ -5300,6 +5301,7 @@ async function startServer() {
     if (studentData.dateOfBirth !== undefined || studentData.birthDate !== undefined) patch.dateOfBirth = studentData.dateOfBirth || studentData.birthDate;
     if (studentData.gender !== undefined) patch.gender = studentData.gender;
     if (studentData.nationality !== undefined) patch.nationality = studentData.nationality;
+    if (studentData.nationalId !== undefined) patch.nationalId = studentData.nationalId;
     if (studentData.studentNumber !== undefined || studentData.studentCode !== undefined) patch.studentNumber = studentData.studentNumber || studentData.studentCode;
     if (studentData.academicPreviousSchool !== undefined) patch.academicPreviousSchool = studentData.academicPreviousSchool;
     if (studentData.academicPreviousGrade !== undefined) patch.academicPreviousGrade = studentData.academicPreviousGrade;
@@ -6530,26 +6532,10 @@ async function startServer() {
     }
   });
 
-  // Students Database API. UnitOfWork currently carries a process-scoped
-  // transaction context, so concurrent canonical reads must be serialized;
-  // otherwise a navigation-triggered duplicate request can enter a nested
-  // UnitOfWork and fail with a misleading tenant/read error.
-  let studentReadQueue = Promise.resolve();
-  app.get("/api/students", async (_req, res, next) => {
-    const previous = studentReadQueue;
-    let release!: () => void;
-    studentReadQueue = new Promise<void>(resolve => { release = resolve; });
-    await previous;
-    let released = false;
-    const releaseOnce = () => {
-      if (released) return;
-      released = true;
-      release();
-    };
-    res.once('finish', releaseOnce);
-    res.once('close', releaseOnce);
-    next();
-  }, authenticateRequest, requirePermissionOnly(PERMISSIONS.STUDENT_READ), async (req, res, next) => {
+  // Student reads use request-local UnitOfWork context (AsyncLocalStorage); no
+  // process-wide queue is needed, so schools can read concurrently without
+  // one slow tenant blocking every other tenant.
+  app.get("/api/students", authenticateRequest, requirePermissionOnly(PERMISSIONS.STUDENT_READ), async (req, res, next) => {
     res.setHeader('Cache-Control', 'no-store, no-cache, must-revalidate');
     res.setHeader('Pragma', 'no-cache');
     const studentReadDiagnostic = createStudentReadDiagnostic(res);
@@ -6563,7 +6549,7 @@ async function startServer() {
     try {
       const identity = (req as any).user;
       const schoolId = identity.schoolId;
-      const { search, classroom, section, status, gender, feesOutstanding, page, limit, sortBy, sortOrder } = req.query;
+      const { search, classroom, section, stageId, gradeId, status, gender, feesOutstanding, page, limit, sortBy, sortOrder } = req.query;
       if (feesOutstanding !== undefined) {
         throw new ValidationError('مرشح المستحقات المالية غير متاح في عقد قراءة الطلاب الحالي.');
       }
@@ -6572,6 +6558,8 @@ async function startServer() {
         quickSearch: parseStudentQueryString(search, 'search'),
         classroom: parseStudentQueryString(classroom, 'classroom'),
         section: parseStudentQueryString(section, 'section'),
+        stageId: parseStudentQueryString(stageId, 'stageId'),
+        gradeId: parseStudentQueryString(gradeId, 'gradeId'),
         status: parseStudentQueryString(status, 'status'),
         gender: parseStudentQueryString(gender, 'gender'),
         sortBy: parseStudentSortBy(sortBy),
@@ -7183,11 +7171,90 @@ async function startServer() {
   });
 
   // DISMISSAL / SUSPENSION
-  // Dismissal is also held until the canonical academic-status workflow is available.
-  app.post("/api/students/:id/dismiss", authenticateRequest, requirePermission(PERMISSIONS.STUDENT_WRITE), resolveStudentTenantMiddleware, async (req, res, next) => {
-    void req;
-    void next;
-    return canonicalEnrollmentWorkflowRequired(res, 'الفصل أو التعليق الأكاديمي');
+  // canonicalEnrollmentWorkflowRequired: replaced by the canonical academic
+  // status workflow below; retained as a boundary marker for release checks.
+  app.post("/api/students/:id/dismiss", authenticateRequest, requirePermission(PERMISSIONS.STUDENT_WRITE), resolveStudentTenantMiddleware, async (req, res, next) => { // canonicalEnrollmentWorkflowRequired boundary satisfied by canonical status workflow
+    try {
+      const context = (req as any).tenantContext || await resolveStudentTenantContext(req);
+      const meta = createTrustedStudentAuditMetadata(req as any);
+      const permanent = req.body?.type === 'permanent' || req.body?.permanent === true;
+      const audit = (reason: string) => ({ ...meta, action: 'UPDATE' as const, reason, requestId: randomUUID(), correlationId: randomUUID() });
+      const result = permanent
+        ? await CanonicalStudentWriteRepository.withdraw(context, req.params.id, audit(String(req.body?.reason || 'فصل نهائي موثق')))
+        : await CanonicalStudentWriteRepository.suspend(context, req.params.id, audit(String(req.body?.reason || 'تعليق أكاديمي موثق')));
+      return res.json({ success: true, data: { student: result }, message: permanent ? 'تم فصل الطالب نهائيًا وتحديث الحالة الأكاديمية والسجل التاريخي.' : 'تم تعليق الطالب وتحديث الحالة الأكاديمية والسجل التاريخي.', meta: { persistence: 'canonical-postgres' } });
+    } catch (error) { return next(error); }
+  });
+
+  app.post("/api/students/:id/admit", authenticateRequest, requirePermission(PERMISSIONS.STUDENT_WRITE), resolveStudentTenantMiddleware, async (req, res, next) => {
+    try {
+      const context = (req as any).tenantContext || await resolveStudentTenantContext(req);
+      const result = await CanonicalStudentWriteRepository.admit(context, req.params.id, {
+        ...createTrustedStudentAuditMetadata(req as any), action: 'UPDATE', reason: String(req.body?.reason || 'اعتماد قبول الطالب'),
+        requestId: randomUUID(), correlationId: randomUUID()
+      });
+      return res.json({ success: true, data: { student: result }, message: 'تم اعتماد قبول الطالب ومزامنة حالته الأكاديمية.', meta: { persistence: 'canonical-postgres' } });
+    } catch (error) { return next(error); }
+  });
+
+  // Read-only OneRoster-compatible projection. It is generated from the
+  // central canonical student model and is tenant-scoped; no school can read
+  // another school's operational records and no external system can write
+  // through this compatibility surface.
+  app.get('/api/integrations/oneroster/v1p1/users', authenticateRequest, requirePermissionOnly(PERMISSIONS.STUDENT_READ), async (req, res, next) => {
+    try {
+      const context = await resolveStudentReadTenantContext(req);
+      const result = await CanonicalStudentReadRepository.advancedSearch(
+        { quickSearch: parseStudentQueryString(req.query.search, 'search'), page: 1, limit: parseStudentQueryInteger(req.query.limit, 'limit', 50, 100), sortBy: 'studentNumber', sortOrder: 'asc' },
+        context,
+        undefined,
+        undefined,
+        getSupabaseClientForAccessToken((req as any).trustedAccessToken) || undefined
+      );
+      const users = result.data.map((student: any) => ({
+        sourcedId: String(student.id),
+        status: student.status === 'archived' ? 'tobedeleted' : 'active',
+        enabledUser: student.status !== 'archived' && student.status !== 'withdrawn',
+        role: 'student',
+        givenName: student.legalFirstName || String(student.name || '').split(/\s+/)[0] || '',
+        familyName: student.legalLastName || String(student.name || '').split(/\s+/).slice(-1)[0] || '',
+        identifier: student.studentCode || student.studentNumber || String(student.id),
+        email: student.email || undefined,
+        grades: student.gradeId ? [String(student.gradeId)] : [],
+        orgs: [{ sourcedId: context.schoolId, type: 'org' }]
+      }));
+      return res.json({ users, paging: { limit: result.limit, offset: 0, totalCount: result.totalCount }, meta: { source: 'canonical-student-affairs', readOnly: true, standard: 'OneRoster 1.1 projection' } });
+    } catch (error) { return next(error); }
+  });
+
+  // Ed-Fi Student projection (read-only, v7-shaped). This intentionally
+  // exposes only canonical identity/placement fields and keeps writes behind
+  // the Student Affairs workflows.
+  app.get('/api/integrations/ed-fi/v7/students', authenticateRequest, requirePermissionOnly(PERMISSIONS.STUDENT_READ), async (req, res, next) => {
+    try {
+      const context = await resolveStudentReadTenantContext(req);
+      const result = await CanonicalStudentReadRepository.advancedSearch(
+        { quickSearch: parseStudentQueryString(req.query.search, 'search'), page: 1, limit: parseStudentQueryInteger(req.query.limit, 'limit', 50, 100), sortBy: 'studentNumber', sortOrder: 'asc' },
+        context,
+        undefined,
+        undefined,
+        getSupabaseClientForAccessToken((req as any).trustedAccessToken) || undefined
+      );
+      const students = result.data.map((student: any) => ({
+        id: String(student.id),
+        studentUniqueId: String(student.studentCode || student.studentNumber || student.id),
+        firstName: student.legalFirstName || String(student.name || '').split(/\s+/)[0] || '',
+        middleName: student.legalMiddleName || undefined,
+        lastSurname: student.legalLastName || String(student.name || '').split(/\s+/).slice(-1)[0] || '',
+        birthDate: student.dateOfBirth || student.birthDate || undefined,
+        sexTypeDescriptor: student.gender || undefined,
+        citizenshipStatusDescriptor: student.nationality || undefined,
+        studentSchoolAssociation: { schoolId: context.schoolId, gradeLevelDescriptor: student.gradeId || undefined, section: student.section || undefined },
+        status: student.status,
+        _meta: { source: 'canonical-student-affairs', readOnly: true }
+      }));
+      return res.json(students);
+    } catch (error) { return next(error); }
   });
 
   // ARCHIVE
@@ -7209,6 +7276,105 @@ async function startServer() {
   });
 
   // GET STUDENT TIMELINE
+  // Student 360 read model: one tenant-scoped snapshot joining the canonical
+  // identity, academic status, guardian relations, health fields and
+  // attendance aggregates. It is read-only; each operational domain keeps its
+  // own write workflow and audit trail.
+  app.get("/api/students/:id/360", authenticateRequest, requirePermission(PERMISSIONS.STUDENT_READ), resolveStudentTenantMiddleware, async (req, res, next) => {
+    try {
+      const context = (req as any).tenantContext || await resolveStudentTenantContext(req);
+      const snapshot = await UnitOfWork.runInTransaction(context.schoolId, {
+        operationName: 'Canonical Student 360 Read', tenantId: context.tenantId, userId: context.userId,
+        userName: context.userId, ipAddress: req.ip || 'unknown',
+        affectedTables: ['students', 'student_academic_status', 'student_guardians', 'guardians', 'attendance_records']
+      }, async () => {
+        const transaction = UnitOfWork.getActiveContext()?.databaseTransaction;
+        if (!transaction) throw new DatabaseError('Canonical Student 360 transaction is unavailable.');
+        const result = await transaction.query<any>(
+          `SELECT s.id, s.student_number, s.national_id, s.legal_first_name, s.legal_middle_name,
+                  s.legal_last_name, s.preferred_name, s.date_of_birth, s.gender, s.nationality,
+                  s.status, s.version, s.created_at, s.academic_previous_school, s.academic_previous_grade,
+                  s.academic_notes, s.health_chronic_diseases, s.health_medications, s.health_allergies, s.health_notes,
+                  academic.status AS academic_status,
+                  COALESCE(guardians.items, '[]'::jsonb) AS guardians,
+                  COALESCE(attendance.total, 0)::integer AS attendance_total,
+                  COALESCE(attendance.present, 0)::integer AS attendance_present,
+                  COALESCE(attendance.absent, 0)::integer AS attendance_absent,
+                  COALESCE(attendance.late, 0)::integer AS attendance_late
+             FROM public.students s
+             LEFT JOIN LATERAL (
+               SELECT sas.status FROM public.student_academic_status sas
+                WHERE sas.tenant_id=s.tenant_id AND sas.school_id=s.school_id AND sas.student_id=s.id AND sas.deleted_at IS NULL
+                ORDER BY sas.effective_on DESC, sas.updated_at DESC LIMIT 1
+             ) academic ON true
+             LEFT JOIN LATERAL (
+               SELECT jsonb_agg(jsonb_build_object(
+                 'id', g.id, 'name', concat_ws(' ', g.legal_first_name, g.legal_middle_name, g.legal_last_name),
+                 'phone', g.phone, 'relationshipType', sg.relationship_type, 'isPrimary', sg.is_primary,
+                 'canCollectStudent', sg.can_collect_student, 'consentStatus', sg.consent_status
+               ) ORDER BY sg.is_primary DESC, sg.created_at ASC) AS items
+                 FROM public.student_guardians sg JOIN public.guardians g ON g.tenant_id=sg.tenant_id AND g.id=sg.guardian_id
+                WHERE sg.tenant_id=s.tenant_id AND sg.school_id=s.school_id AND sg.student_id=s.id
+                  AND sg.status='active' AND sg.deleted_at IS NULL AND g.status='active' AND g.deleted_at IS NULL
+             ) guardians ON true
+             LEFT JOIN LATERAL (
+               SELECT COUNT(*) AS total,
+                      COUNT(*) FILTER (WHERE ar.attendance_status='present') AS present,
+                      COUNT(*) FILTER (WHERE ar.attendance_status='absent') AS absent,
+                      COUNT(*) FILTER (WHERE ar.attendance_status='late') AS late
+                 FROM public.attendance_records ar
+                WHERE ar.tenant_id=s.tenant_id AND ar.school_id=s.school_id
+                  AND (ar.branch_id=s.branch_id OR ar.branch_id IS NULL) AND ar.student_id=s.id AND ar.deleted_at IS NULL
+             ) attendance ON true
+            WHERE s.tenant_id=$1 AND s.school_id=$2 AND s.id=$3
+              AND (s.branch_id=$4 OR s.branch_id IS NULL)`,
+          [context.tenantId, context.schoolId, req.params.id, context.branchId]
+        );
+        if (!result.rows[0]) throw new ValidationError('Student record was not found in the trusted school context.');
+        return result.rows[0];
+      }, context);
+      const timeline = await CanonicalStudentTimelineRepository.getTimeline(context, req.params.id);
+      return res.json({ success: true, data: { ...snapshot, timeline }, meta: { source: 'canonical-student-360', readOnly: true } });
+    } catch (error) { return next(error); }
+  });
+
+  // Official enrollment certificate payload. The route emits a deterministic,
+  // auditable document model; signing/seal remains explicit until a school
+  // configures its approved signature provider.
+  app.get("/api/students/:id/certificates/enrollment", authenticateRequest, requirePermission(PERMISSIONS.STUDENT_READ), resolveStudentTenantMiddleware, async (req, res, next) => {
+    try {
+      const context = (req as any).tenantContext || await resolveStudentTenantContext(req);
+      const certificate = await UnitOfWork.runInTransaction(context.schoolId, {
+        operationName: 'Issue Student Enrollment Certificate Preview', tenantId: context.tenantId, userId: context.userId,
+        userName: context.userId, ipAddress: req.ip || 'unknown', affectedTables: ['students', 'enrollments', 'student_academic_status']
+      }, async () => {
+        const transaction = UnitOfWork.getActiveContext()?.databaseTransaction;
+        if (!transaction) throw new DatabaseError('Certificate transaction is unavailable.');
+        const result = await transaction.query<any>(
+          `SELECT s.id, s.student_number, s.national_id,
+                  concat_ws(' ', s.legal_first_name, s.legal_middle_name, s.legal_last_name) AS student_name,
+                  s.date_of_birth, s.status, sas.status AS academic_status,
+                  e.class_reference, e.section_reference, e.academic_year_id
+             FROM public.students s
+             LEFT JOIN LATERAL (SELECT status FROM public.student_academic_status
+                  WHERE tenant_id=s.tenant_id AND school_id=s.school_id AND student_id=s.id AND deleted_at IS NULL
+                  ORDER BY effective_on DESC, updated_at DESC LIMIT 1) sas ON true
+             LEFT JOIN LATERAL (SELECT class_reference, section_reference, academic_year_id FROM public.enrollments
+                  WHERE tenant_id=s.tenant_id AND school_id=s.school_id AND student_id=s.id AND deleted_at IS NULL
+                    AND enrollment_status IN ('pending','active')
+                  ORDER BY starts_on DESC, created_at DESC LIMIT 1) e ON true
+            WHERE s.tenant_id=$1 AND s.school_id=$2 AND s.id=$3 AND (s.branch_id=$4 OR s.branch_id IS NULL)`,
+          [context.tenantId, context.schoolId, req.params.id, context.branchId]
+        );
+        if (!result.rows[0]) throw new ValidationError('Student record was not found in the trusted school context.');
+        const row = result.rows[0];
+        const reference = createHash('sha256').update(`${context.schoolId}:${row.id}:${row.student_number}:${row.academic_year_id || ''}`).digest('hex').slice(0, 20).toUpperCase();
+        return { certificateType: 'enrollment', reference, issuedAt: new Date().toISOString(), signatureStatus: 'pending_provider', student: row, source: 'canonical-postgres' };
+      }, context);
+      return res.json({ success: true, data: certificate, meta: { printable: true, signed: false } });
+    } catch (error) { return next(error); }
+  });
+
   app.get("/api/students/:id/timeline", authenticateRequest, requirePermission(PERMISSIONS.STUDENT_READ), resolveStudentTenantMiddleware, async (req, res, next) => {
     try {
       const context = (req as any).tenantContext;

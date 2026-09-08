@@ -26,6 +26,7 @@ import {
 
 export type StudentRegistrationCommand = {
   studentNumber?: unknown;
+  nationalId?: unknown;
   legalFirstName?: unknown;
   legalMiddleName?: unknown;
   legalLastName?: unknown;
@@ -84,6 +85,7 @@ export type StudentRegistrationResult = {
 
 type NormalizedCommand = {
   studentNumber?: string;
+  nationalId: string | null;
   legalFirstName: string;
   legalMiddleName: string | null;
   legalLastName: string;
@@ -207,6 +209,7 @@ function normalizeCommand(command: StudentRegistrationCommand, requestIdempotenc
   if (!command || typeof command !== 'object') throw new ValidationError('Registration payload is required.');
   return {
     studentNumber: canonicalNumber(command.studentNumber, 'studentNumber'),
+    nationalId: stringValue(command.nationalId, 'nationalId'),
     legalFirstName: stringValue(command.legalFirstName, 'legalFirstName', true)!,
     legalMiddleName: stringValue(command.legalMiddleName, 'legalMiddleName'),
     legalLastName: stringValue(command.legalLastName, 'legalLastName', true)!,
@@ -272,6 +275,7 @@ function hashPayload(payload: Record<string, unknown>): string {
 function studentFingerprint(input: NormalizedCommand): string {
   return hashPayload({
     studentNumber: input.studentNumber || null,
+    nationalId: input.nationalId,
     legalFirstName: input.legalFirstName,
     legalMiddleName: input.legalMiddleName,
     legalLastName: input.legalLastName,
@@ -424,6 +428,7 @@ export class StudentRegistrationService {
             schoolId: context.schoolId,
             branchId: context.branchId,
             studentNumber,
+            nationalId: input.nationalId,
             legalFirstName: input.legalFirstName,
             legalMiddleName: input.legalMiddleName,
             legalLastName: input.legalLastName,

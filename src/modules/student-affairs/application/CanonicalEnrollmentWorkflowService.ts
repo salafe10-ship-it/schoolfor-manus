@@ -84,6 +84,17 @@ function normalizeReason(value: unknown, operation: EnrollmentOperation): string
   return reason;
 }
 
+/**
+ * Enrollment placement is also a lifecycle boundary.  The canonical student
+ * row and its one-current academic-status row must agree before the workflow
+ * can commit.  A transfer of a suspended student preserves the suspension;
+ * re-enrollment is the explicit operation that reactivates it.
+ */
+function resolveTargetStudentStatus(operation: EnrollmentOperation, currentStatus: string): 'active' | 'suspended' {
+  if (operation === 're_enroll') return 'active';
+  return currentStatus === 'suspended' ? 'suspended' : 'active';
+}
+
 function normalizeStructure(value: unknown): { classes: AcademicEnrollmentClass[]; sections: Set<string> } {
   const structure = value && typeof value === 'object' && !Array.isArray(value) ? value as Record<string, unknown> : {};
   const sections = new Set((Array.isArray(structure.sections) ? structure.sections : []).map(clean).filter(Boolean));
@@ -155,7 +166,11 @@ export class CanonicalEnrollmentWorkflowService {
       userId: context.userId,
       userName: context.userId,
       ipAddress: clean(request.ipAddress) || 'unknown',
-      affectedTables: ['students', 'enrollments', 'enrollment_history', 'audit_events', 'outbox_events']
+      affectedTables: [
+        'students', 'student_academic_status', 'student_status_transitions',
+        'student_status_history', 'enrollments', 'enrollment_history',
+        'audit_events', 'outbox_events'
+      ]
     }, async () => {
       const db = transaction();
       const prior = await db.query<{ payload: unknown; event_type: string }>(
@@ -196,10 +211,22 @@ export class CanonicalEnrollmentWorkflowService {
       const { classes, sections } = normalizeStructure(currentAcademic.structure);
       const target = resolveTargetEnrollmentClass(classes, sections, targetClassId, targetGradeId, targetSection);
 
-      const students = await db.query<{ id: string; status: string }>(
-        `SELECT id, status FROM public.students
-          WHERE tenant_id = $1 AND school_id = $2 AND (branch_id = $3 OR branch_id IS NULL)
-            AND id = ANY($4::uuid[]) AND deleted_at IS NULL FOR UPDATE`,
+      const students = await db.query<{ id: string; status: string; academic_status: string | null }>(
+        `SELECT s.id, s.status, academic.status AS academic_status
+           FROM public.students s
+           LEFT JOIN LATERAL (
+             SELECT sas.status
+               FROM public.student_academic_status sas
+              WHERE sas.tenant_id = s.tenant_id
+                AND sas.school_id = s.school_id
+                AND sas.student_id = s.id
+                AND sas.deleted_at IS NULL
+              ORDER BY sas.effective_on DESC, sas.updated_at DESC
+              LIMIT 1
+           ) academic ON true
+          WHERE s.tenant_id = $1 AND s.school_id = $2 AND (s.branch_id = $3 OR s.branch_id IS NULL)
+            AND s.id = ANY($4::uuid[]) AND s.deleted_at IS NULL
+          FOR UPDATE OF s`,
         [context.tenantId, context.schoolId, context.branchId, studentIds]
       );
       if (students.rows.length !== studentIds.length) throw new ValidationError('يوجد طالب غير متاح داخل نطاق المدرسة الموثوق.');
@@ -221,6 +248,9 @@ export class CanonicalEnrollmentWorkflowService {
       let updatedEnrollmentCount = 0;
       let unchangedCount = 0;
       for (const student of students.rows) {
+        const targetStudentStatus = resolveTargetStudentStatus(operation, student.status);
+        const currentAcademicStatus = clean(student.academic_status);
+        const statusSource = currentAcademicStatus || student.status;
         const currentResult = await db.query<{ id: string; enrollment_status: string; class_reference: string | null; section_reference: string | null; version: number; enrollment_number: string }>(
           `SELECT id, enrollment_status, class_reference, section_reference, version, enrollment_number
              FROM public.enrollments
@@ -239,6 +269,162 @@ export class CanonicalEnrollmentWorkflowService {
           [auditId, context.tenantId, context.schoolId, context.branchId, actorId, student.id, operation, SOURCE, reason,
             JSON.stringify({ operation, targetClassReference: target.name, targetSectionReference: targetSection, targetGradeId }), studentRequestId, studentCorrelationId]
         );
+
+        // Keep the student lifecycle row and the one-current academic status
+        // row in the same transaction as the enrollment mutation.  This is
+        // deliberately a correction transition because placement can move an
+        // applicant/admitted record directly to active and because a legacy
+        // record may already be split between the two canonical tables.
+        const studentStatusNeedsUpdate = student.status !== targetStudentStatus;
+        const academicStatusNeedsUpdate = currentAcademicStatus !== targetStudentStatus;
+        if (studentStatusNeedsUpdate || academicStatusNeedsUpdate) {
+          const statusTransitionId = randomUUID();
+          const statusIdempotencyKey = `${idempotencyKey}:${student.id}:status`;
+          if (currentAcademicStatus) {
+            const academicUpdate = await db.query(
+              `UPDATE public.student_academic_status
+                  SET status = $1,
+                      effective_on = CURRENT_DATE,
+                      reason_code = $2,
+                      reason_notes = $3,
+                      approved_at = now(),
+                      approved_by = $4,
+                      updated_at = now(),
+                      updated_by = $4,
+                      version = version + 1,
+                      audit_id = $5,
+                      request_id = $6,
+                      correlation_id = $7
+                WHERE tenant_id = $8
+                  AND school_id = $9
+                  AND student_id = $10
+                  AND deleted_at IS NULL`,
+              [
+                targetStudentStatus,
+                `student_${operation}_status_sync`,
+                reason,
+                actorId,
+                auditId,
+                studentRequestId,
+                studentCorrelationId,
+                context.tenantId,
+                context.schoolId,
+                student.id,
+              ],
+            );
+            if (academicUpdate.rowCount !== 1) throw new ConflictError('تعذر مزامنة الحالة الأكاديمية الحالية للطالب.');
+          } else {
+            await db.query(
+              `INSERT INTO public.student_academic_status (
+                 id, tenant_id, school_id, branch_id, student_id, status,
+                 effective_on, reason_code, reason_notes, approved_at, approved_by,
+                 version, created_by, updated_by, audit_id, request_id, correlation_id
+               ) VALUES ($1, $2, $3, $4, $5, $6, CURRENT_DATE, $7, $8, now(), $9,
+                         1, $9, $9, $10, $11, $12)`,
+              [
+                randomUUID(),
+                context.tenantId,
+                context.schoolId,
+                context.branchId,
+                student.id,
+                targetStudentStatus,
+                `student_${operation}_status_sync`,
+                reason,
+                actorId,
+                auditId,
+                studentRequestId,
+                studentCorrelationId,
+              ],
+            );
+          }
+
+          if (statusSource !== targetStudentStatus) {
+            await db.query(
+              `INSERT INTO public.student_status_transitions (
+                 id, tenant_id, school_id, branch_id, student_id,
+                 from_status, to_status, transition_kind, approval_status,
+                 effective_on, reason_code, reason_notes, correction_reference,
+                 requested_at, approved_at, completed_at, requested_by,
+                 approved_by, completed_by, idempotency_key, version,
+                 created_by, updated_by, audit_id, request_id, correlation_id
+               ) VALUES ($1, $2, $3, $4, $5, $6, $7, 'correction', 'completed',
+                         CURRENT_DATE, $8, $9, $10, now(), now(), now(),
+                         $11, $11, $11, $12, 1, $11, $11, $13, $14, $15)`,
+              [
+                statusTransitionId,
+                context.tenantId,
+                context.schoolId,
+                context.branchId,
+                student.id,
+                statusSource,
+                targetStudentStatus,
+                `student_${operation}_status_sync`,
+                reason,
+                `STUDENT-AFFAIRS-${operation.toUpperCase()}-STATUS`,
+                actorId,
+                statusIdempotencyKey,
+                auditId,
+                studentRequestId,
+                studentCorrelationId,
+              ],
+            );
+            await db.query(
+              `INSERT INTO public.student_status_history (
+                 id, tenant_id, school_id, branch_id, student_id, transition_id,
+                 from_status, to_status, event_type, effective_on, reason_code,
+                 reason_notes, approved_at, approved_by, recorded_by, status,
+                 version, created_by, updated_by, audit_id, request_id, correlation_id
+               ) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, 'correction', CURRENT_DATE,
+                         $9, $10, now(), $11, $11, 'active', 1, $11, $11, $12, $13, $14)`,
+              [
+                randomUUID(),
+                context.tenantId,
+                context.schoolId,
+                context.branchId,
+                student.id,
+                statusTransitionId,
+                statusSource,
+                targetStudentStatus,
+                `student_${operation}_status_sync`,
+                reason,
+                actorId,
+                auditId,
+                studentRequestId,
+                studentCorrelationId,
+              ],
+            );
+          }
+
+          if (studentStatusNeedsUpdate) {
+            const studentUpdate = await db.query(
+              `UPDATE public.students
+                  SET status = $1,
+                      version = version + 1,
+                      updated_at = now(),
+                      updated_by = $2,
+                      audit_id = $3,
+                      request_id = $4,
+                      correlation_id = $5
+                WHERE tenant_id = $6
+                  AND school_id = $7
+                  AND id = $8
+                  AND deleted_at IS NULL
+                  AND status = $9`,
+              [
+                targetStudentStatus,
+                actorId,
+                auditId,
+                studentRequestId,
+                studentCorrelationId,
+                context.tenantId,
+                context.schoolId,
+                student.id,
+                student.status,
+              ],
+            );
+            if (studentUpdate.rowCount !== 1) throw new ConflictError('تغيرت حالة الطالب أثناء عملية القيد؛ تم التراجع عن العملية كاملة.');
+          }
+        }
 
         let enrollmentId: string;
         let fromStatus = 'pending';

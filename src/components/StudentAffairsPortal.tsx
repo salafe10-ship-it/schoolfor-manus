@@ -57,9 +57,32 @@ const studentImportAliases: Record<string, string[]> = {
   preferredName: ['preferredname', 'nickname', 'الاسم المختصر', 'الاسم المفضل'],
   gender: ['gender', 'النوع', 'الجنس'],
   nationality: ['nationality', 'الجنسية'],
+  nationalId: ['nationalid', 'national_id', 'identity', 'idnumber', 'رقم الهوية', 'الهوية الوطنية', 'الرقم الوطني'],
   parentEmail: ['parentemail', 'guardianemail', 'ولي الأمر بريد', 'بريد ولي الأمر', 'بريد ولي الامر'],
   guardianRelation: ['guardianrelation', 'parentrelation', 'relationship', 'صلة القرابة', 'العلاقة']
 };
+
+const STUDENT_STATUS_LABELS: Record<string, string> = {
+  applicant: 'متقدم',
+  accepted: 'مقبول',
+  admitted: 'مقبول',
+  enrolled: 'مقيد',
+  active: 'نشط',
+  suspended: 'موقوف',
+  withdrawn: 'منسحب',
+  dismissed: 'مفصول',
+  graduated: 'متخرج',
+  archived: 'مؤرشف',
+  re_enrolled: 'معاد قيده',
+  frozen: 'مجمد',
+  inactive: 'غير نشط',
+  on_leave: 'في إجازة'
+};
+
+function studentStatusLabel(value: unknown): string {
+  const status = String(value || '').trim();
+  return STUDENT_STATUS_LABELS[status] || status || 'غير محددة';
+}
 
 const STUDENT_DOCUMENT_DEFINITIONS = [
   { id: 'national_id', categoryCode: 'STUDENT_NATIONAL_ID', label: 'الرقم الوطني', accept: '.pdf,.jpg,.jpeg,.png' },
@@ -191,6 +214,8 @@ export default function StudentAffairsPortal({
   const [timelineEvents, setTimelineEvents] = useState<StudentTimelineEvent[]>([]);
   const [timelineStatus, setTimelineStatus] = useState<'idle' | 'loading' | 'success' | 'empty' | 'error'>('idle');
   const [timelineError, setTimelineError] = useState<string>('');
+  const [student360Data, setStudent360Data] = useState<any | null>(null);
+  const [student360Status, setStudent360Status] = useState<'idle' | 'loading' | 'success' | 'error'>('idle');
 
   // Transfer / Promotion Modal State
   const [isTransferModalOpen, setIsTransferModalOpen] = useState<boolean>(false);
@@ -304,7 +329,7 @@ export default function StudentAffairsPortal({
     classSection: '',
     nationality: '',
     religion: '',
-    status: '',
+    status: 'applicant',
     phone: '',
     email: '',
     address: '',
@@ -490,8 +515,8 @@ export default function StudentAffairsPortal({
 
   // Student Affairs renders one server-authoritative page. The server derives
   // school/tenant scope from the trusted session; schoolId is only a
-  // compatibility hint. Stage/grade remain disabled until their canonical
-  // source is approved; section maps to the canonical enrollment reference.
+  // compatibility hint. All academic filters are resolved by the canonical
+  // enrollment/structure read model; the browser never filters a partial page.
   useEffect(() => {
     let cancelled = false;
     const controller = new AbortController();
@@ -512,6 +537,8 @@ export default function StudentAffairsPortal({
       sortOrder: sortDirection,
       ...(searchKeyword.trim() ? { search: searchKeyword.trim() } : {}),
       ...(searchStatus !== 'all' ? { status: searchStatus } : {}),
+      ...(searchStage !== 'all' ? { stageId: searchStage } : {}),
+      ...(searchGrade !== 'all' ? { gradeId: searchGrade } : {}),
       ...(searchClass !== 'all' ? { section: searchClass } : {})
     };
     const loadTimer = window.setTimeout(() => StudentRepository.list(query, controller.signal)
@@ -560,14 +587,14 @@ export default function StudentAffairsPortal({
     // triggerNotification is intentionally excluded: App supplies an inline
     // callback, and including it would refetch on every parent render.
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [selectedSchool.id, searchKeyword, searchStatus, searchClass, currentPage, rowsPerPage, sortColumn, sortDirection, studentRefreshToken, setStudents]);
+  }, [selectedSchool.id, searchKeyword, searchStatus, searchStage, searchGrade, searchClass, currentPage, rowsPerPage, sortColumn, sortDirection, studentRefreshToken, setStudents]);
 
   // A server page change invalidates row selections from the previous page.
   // Keeping those IDs would let a later batch action target records that are
   // no longer visible in the current canonical result set.
   useEffect(() => {
     setSelectedStudentIds([]);
-  }, [selectedSchool.id, searchKeyword, searchStatus, searchClass, currentPage, rowsPerPage, sortColumn, sortDirection]);
+  }, [selectedSchool.id, searchKeyword, searchStatus, searchStage, searchGrade, searchClass, currentPage, rowsPerPage, sortColumn, sortDirection]);
 
   // Dashboard metrics come from the server-side canonical scope, not the
   // currently loaded page. Never manufacture counts when the request fails.
@@ -705,10 +732,26 @@ export default function StudentAffairsPortal({
 
   const handleOpenViewStudent = (student: Student) => {
     setViewStudent(student);
+    setStudent360Data(null);
+    setStudent360Status('idle');
     setTimelineStudent(null);
     setTimelineEvents([]);
     setTimelineStatus('idle');
     setTimelineError('');
+  };
+
+  const loadStudent360 = async (student: Student) => {
+    setStudent360Status('loading');
+    try {
+      const response = await authenticatedRequest(`/api/students/${encodeURIComponent(student.id)}/360`, { method: 'GET', headers: { Accept: 'application/json' } });
+      const payload = await response.json().catch(() => null) as { data?: any; message?: string; error?: string } | null;
+      if (!response.ok) throw new Error(payload?.message || payload?.error || 'تعذر تحميل ملف الطالب الشامل.');
+      setStudent360Data(payload?.data || null);
+      setStudent360Status('success');
+    } catch (error: any) {
+      setStudent360Status('error');
+      triggerNotification(error?.message || 'تعذر تحميل ملف الطالب الشامل.', 'warning');
+    }
   };
 
   const handleOpenFirstIdCard = () => {
@@ -721,6 +764,29 @@ export default function StudentAffairsPortal({
     }
     handleOpenViewStudent(student);
     setShowIdCardPrint(true);
+  };
+
+  const handleOpenEnrollmentCertificate = async () => {
+    const student = selectedStudentIds.length > 0
+      ? filteredStudents.find(candidate => selectedStudentIds.includes(candidate.id))
+      : filteredStudents[0];
+    if (!student) {
+      triggerNotification('لا يوجد طالب محمل لإصدار شهادة القيد.', 'warning');
+      return;
+    }
+    try {
+      const response = await authenticatedRequest(`/api/students/${encodeURIComponent(student.id)}/certificates/enrollment`, { method: 'GET', headers: { Accept: 'application/json' } });
+      const payload = await response.json().catch(() => null) as { data?: any; message?: string; error?: string } | null;
+      if (!response.ok) throw new Error(payload?.message || payload?.error || 'تعذر إصدار شهادة القيد.');
+      const certificate = payload?.data;
+      const printWindow = window.open('', '_blank', 'noopener,noreferrer,width=900,height=700');
+      if (!printWindow) throw new Error('يرجى السماح بالنوافذ المنبثقة لطباعة الشهادة.');
+      const escapeHtml = (value: unknown) => String(value ?? '').replace(/[&<>"']/g, char => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[char] || char));
+      printWindow.document.write(`<html dir="rtl"><head><title>شهادة قيد الطالب</title><style>body{font-family:Arial;padding:48px;color:#1c120c}h1{text-align:center;color:#8b641f}table{width:100%;border-collapse:collapse;margin-top:28px}td{border:1px solid #d8c7a0;padding:12px}small{color:#7c6b56}</style></head><body><h1>شهادة قيد طالب</h1><p>تشهد المدرسة بأن الطالب/ة <strong>${escapeHtml(certificate?.student?.student_name || student.name)}</strong> مقيد/ة بسجلاتها.</p><table><tr><td>رقم الطالب</td><td>${escapeHtml(certificate?.student?.student_number || student.studentCode || '')}</td></tr><tr><td>الصف/الشعبة</td><td>${escapeHtml(certificate?.student?.class_reference || 'غير محدد')} / ${escapeHtml(certificate?.student?.section_reference || 'غير محددة')}</td></tr><tr><td>الحالة</td><td>${escapeHtml(studentStatusLabel(certificate?.student?.academic_status || certificate?.student?.status))}</td></tr><tr><td>رقم التحقق</td><td>${escapeHtml(certificate?.reference || '')}</td></tr></table><p><small>حالة التوقيع الإلكتروني: ${escapeHtml(certificate?.signatureStatus === 'pending_provider' ? 'بانتظار مزود التوقيع المعتمد' : 'معتمد')}</small></p><script>window.print();</script></body></html>`);
+      printWindow.document.close();
+    } catch (error: any) {
+      triggerNotification(error?.message || 'تعذر إصدار شهادة القيد.', 'warning');
+    }
   };
 
   const loadStudentTimeline = async (student: Student) => {
@@ -775,7 +841,7 @@ export default function StudentAffairsPortal({
       classSection: placement.classSection,
       nationality: '',
       religion: '',
-      status: '',
+      status: 'applicant',
       phone: '',
       email: '',
       address: '',
@@ -826,8 +892,7 @@ export default function StudentAffairsPortal({
       fullName: student.name || '',
       preferredName: (student as any).preferredName || '',
       studentCode: student.studentCode || student.academicId || '',
-      // National ID is not part of the canonical Student profile contract.
-      nationalId: '',
+      nationalId: student.nationalId || '',
       gender: student.gender || '',
       birthDate: canonicalDateInput(student.birthDate),
       birthPlace: (student as any).birthPlace || '',
@@ -836,7 +901,7 @@ export default function StudentAffairsPortal({
       classSection: String((student as any).section || ''),
       nationality: student.nationality || '',
       religion: '',
-      status: (student.status as string) || '',
+      status: student.status === 'accepted' ? 'admitted' : (student.status as string) || 'applicant',
       // Do not project Guardian contact data into Student contact fields.
       phone: '',
       email: '',
@@ -909,11 +974,7 @@ export default function StudentAffairsPortal({
       return;
     }
     if (!formData.gender || !formData.status) {
-      rejectSave('الجنس والحالة الدراسية حقول مطلوبة ولا تُملأ تلقائيًا.');
-      return;
-    }
-    if (!isEditMode && (!formData.stage || !formData.grade || !formData.classSection)) {
-      rejectSave('اختر المرحلة والصف والشعبة قبل تسجيل الطالب؛ هذه البيانات تُعتمد عبر مسار الالتحاق الموثوق.');
+      rejectSave('الجنس والحالة الدراسية حقول مطلوبة؛ تُدار الحالة عبر دورة القيد الكانونية.');
       return;
     }
 
@@ -931,12 +992,10 @@ export default function StudentAffairsPortal({
       preferredName: formData.preferredName,
       studentCode: formData.studentCode,
       academicId: formData.studentCode,
+      nationalId: formData.nationalId,
       gender: formData.gender,
       birthDate: formData.birthDate,
       nationality: formData.nationality,
-      status: formData.status,
-      stageId: formData.stage,
-      gradeId: formData.grade,
       academicPreviousSchool: formData.academicPreviousSchool,
       academicPreviousGrade: formData.academicPreviousGrade,
       academicPreviousYear: formData.academicPreviousYear,
@@ -1129,7 +1188,7 @@ export default function StudentAffairsPortal({
             ...defaultPlacement(),
             nationality: '',
             religion: '',
-            status: '',
+            status: 'applicant',
             phone: '',
             email: '',
             address: '',
@@ -1224,7 +1283,13 @@ export default function StudentAffairsPortal({
     try {
       const response = isSuspended
         ? await StudentRepository.reinstateStudent(student.id)
-        : await StudentRepository.saveStudent({ id: student.id, status: newStatus });
+        : await StudentRepository.dismissStudent(student.id, {
+          type: 'temporary',
+          reason: 'تعليق قيد الطالب من وحدة شؤون الطلاب.',
+          decisionNumber: `STU-SUSPEND-${student.id}`,
+          authority: 'وحدة شؤون الطلاب',
+          date: new Date().toISOString().slice(0, 10)
+        });
       const persistedStudent = response?.data?.student || response?.student;
       if (!persistedStudent) {
         throw new Error('لم يُرجع الخادم سجل الطالب بعد تغيير الحالة.');
@@ -1856,7 +1921,7 @@ export default function StudentAffairsPortal({
                   <option value="all">جميع الحالات</option>
                   <option value="active">نشط ومنتظم</option>
                   <option value="suspended">موقوف القيد</option>
-                  <option value="inactive">منسحب / منقول</option>
+                  <option value="withdrawn">منسحب / منقول</option>
                 </select>
               </div>
 
@@ -2045,7 +2110,9 @@ export default function StudentAffairsPortal({
                     paginatedStudents.map((st, idx) => {
                       const isSelected = selectedStudentIds.includes(st.id);
                       const codeDisplay = st.studentCode || st.academicId || 'غير متوفر';
+                      const statusLabel = studentStatusLabel(st.status);
                       const isSuspended = st.status === 'suspended';
+                      const isSuspendable = isSuspended || st.status === 'active';
 
                       return (
                         <tr 
@@ -2083,17 +2150,10 @@ export default function StudentAffairsPortal({
                             <div className="font-bold text-slate-800">{st.parentName || 'غير مرتبط'}</div>
                           </td>
                           <td className="p-3">
-                            {isSuspended ? (
-                              <span className="inline-flex items-center gap-1 px-2.5 py-0.5 rounded-full text-[10px] font-black bg-rose-100 text-rose-800 border border-rose-300">
-                                <span className="w-1.5 h-1.5 rounded-full bg-rose-600" />
-                                موقوف
-                              </span>
-                            ) : (
-                              <span className="inline-flex items-center gap-1 px-2.5 py-0.5 rounded-full text-[10px] font-black bg-emerald-100 text-emerald-800 border border-emerald-300">
-                                <span className="w-1.5 h-1.5 rounded-full bg-emerald-600" />
-                                نشط
-                              </span>
-                            )}
+                            <span className={`inline-flex items-center gap-1 px-2.5 py-0.5 rounded-full text-[10px] font-black border ${isSuspended ? 'bg-rose-100 text-rose-800 border-rose-300' : st.status === 'active' ? 'bg-emerald-100 text-emerald-800 border-emerald-300' : 'bg-slate-100 text-slate-700 border-slate-300'}`}>
+                              <span className={`w-1.5 h-1.5 rounded-full ${isSuspended ? 'bg-rose-600' : st.status === 'active' ? 'bg-emerald-600' : 'bg-slate-500'}`} />
+                              {statusLabel}
+                            </span>
                           </td>
                           <td className="p-3">
                             <div className="flex items-center justify-center gap-1.5">
@@ -2118,8 +2178,8 @@ export default function StudentAffairsPortal({
                               <button 
                                 onClick={() => handleToggleSuspendStudent(st)}
                                 title={isSuspended ? 'إعادة القيد' : 'إيقاف القيد'}
-                                disabled={!canWriteStudents}
-                                aria-disabled={!canWriteStudents}
+                                disabled={!canWriteStudents || !isSuspendable}
+                                aria-disabled={!canWriteStudents || !isSuspendable}
                                 className={`p-1.5 rounded-lg border transition-all ${isSuspended ? 'bg-slate-100 text-slate-400 border-slate-200 cursor-not-allowed' : 'bg-rose-50 text-rose-800 border-rose-300 cursor-pointer'}`}
                               >
                                 {isSuspended ? <UserCheck className="w-3.5 h-3.5" /> : <UserX className="w-3.5 h-3.5" />}
@@ -2219,7 +2279,7 @@ export default function StudentAffairsPortal({
           </div>
 
           <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
-            {students.filter(st => Boolean(st.parentName || st.parentPhone)).slice(0, 6).map((st) => (
+            {students.filter(st => Boolean(st.parentName || st.parentPhone)).map((st) => (
               <div key={st.id} className="bg-white border border-amber-200/80 rounded-2xl p-4 shadow-xs hover:border-[#d4af37] transition-all space-y-3">
                 <div className="flex items-center gap-3">
                   <div className="w-10 h-10 rounded-full bg-amber-100 text-amber-900 font-black flex items-center justify-center text-sm">
@@ -2322,12 +2382,12 @@ export default function StudentAffairsPortal({
               <p className="text-[10px] text-slate-500 font-bold">فتح بطاقة الطالب الرسمية من السجل الكانوني ثم إرسالها للطباعة.</p>
             </div>
 
-            <div className="bg-white border border-slate-200 rounded-2xl p-4 shadow-xs space-y-3 opacity-75">
+            <div className="bg-white border border-amber-200 rounded-2xl p-4 shadow-xs space-y-3 cursor-pointer hover:border-[#d4af37] transition-all" onClick={() => void handleOpenEnrollmentCertificate()}>
               <div className="w-10 h-10 rounded-xl bg-[#2a1a0e] text-amber-300 flex items-center justify-center">
                 <FileText className="w-5 h-5" />
               </div>
-              <h4 className="text-xs font-black text-slate-700">شهادات القيد (قريبًا)</h4>
-              <p className="text-[10px] text-slate-500 font-bold">تحتاج خدمة إصدار وتوقيع إلكتروني معتمد قبل الإتاحة.</p>
+              <h4 className="text-xs font-black text-slate-900">شهادة القيد</h4>
+              <p className="text-[10px] text-slate-500 font-bold">إصدار نموذج شهادة قيد موثق من المصدر الكانوني وقابل للطباعة.</p>
             </div>
           </div>
         </div>
@@ -2483,6 +2543,18 @@ export default function StudentAffairsPortal({
                         />
                         {!isEditMode && <p className="mt-1 text-[10px] font-bold text-slate-500">يبدأ من 00001 ويزيد تلقائيًا داخل المدرسة الحالية.</p>}
                       </div>
+
+                      <div>
+                        <label className="block text-slate-800 font-extrabold mb-1">رقم الهوية الوطنية</label>
+                        <input
+                          type="text"
+                          inputMode="numeric"
+                          value={formData.nationalId}
+                          onChange={e => setFormData(current => ({ ...current, nationalId: e.target.value }))}
+                          placeholder="اختياري"
+                          className="w-full bg-white border border-slate-300 rounded-xl p-2.5 text-xs font-bold text-slate-900 focus:border-[#9a6a1d] outline-none shadow-xs"
+                        />
+                      </div>
                     </div>
 
                     <div>
@@ -2527,13 +2599,16 @@ export default function StudentAffairsPortal({
                         <label className="block text-slate-800 font-extrabold mb-1">حالة القيد <span className="text-rose-600">*</span></label>
                         <select
                           value={formData.status}
-                          onChange={e => setFormData(current => ({ ...current, status: e.target.value }))}
+                          disabled
                           className="w-full bg-white border border-slate-300 rounded-xl p-2.5 text-xs font-bold text-slate-900 focus:border-[#9a6a1d] outline-none shadow-xs"
                         >
-                          <option value="">اختر الحالة</option>
+                          <option value="applicant">طلب تسجيل</option>
+                          <option value="admitted">مقبول</option>
                           <option value="active">نشط ومنتظم</option>
                           <option value="suspended">موقوف القيد</option>
-                          <option value="inactive">منسحب / منقول</option>
+                          <option value="withdrawn">منسحب / منقول</option>
+                          <option value="graduated">متخرج</option>
+                          <option value="archived">مؤرشف</option>
                         </select>
                       </div>
                     </div>
@@ -2541,15 +2616,13 @@ export default function StudentAffairsPortal({
                     {/* Row 3: Stage, Grade, Section */}
                     <div className="grid grid-cols-1 sm:grid-cols-3 gap-4">
                       <div>
-                        <label className="block text-slate-800 font-extrabold mb-1">المرحلة الدراسية</label>
+                        <label className="block text-slate-800 font-extrabold mb-1">المرحلة الدراسية <span className="text-emerald-700">(يُدار عبر الالتحاق)</span></label>
                         <select 
                           value={formData.stage}
-                          onChange={e => {
-                            const nextStage = e.target.value;
-                            const nextGrade = grades.find(grade => grade?.isActive !== false && String(grade?.stageId || '') === nextStage);
-                            setFormData(current => ({ ...current, stage: nextStage, grade: String(nextGrade?.id || ''), classSection: canonicalSections[0] || '' }));
-                          }}
-                          className="w-full bg-white border border-emerald-300 rounded-xl p-2.5 text-xs font-bold text-slate-900 focus:border-[#9a6a1d] outline-none shadow-xs"
+                          disabled
+                          aria-disabled="true"
+                          title="تُدار المرحلة من خلال مسار القيد والهيكل الأكاديمي الموثوق"
+                          className="w-full bg-slate-100 border border-slate-300 rounded-xl p-2.5 text-xs font-bold text-slate-700 outline-none cursor-not-allowed"
                         >
                           <option value="">اختر المرحلة</option>
                           {activeStageOptions.map(stage => <option key={stage.id} value={stage.id}>{stage.name || stage.label}</option>)}
@@ -2557,11 +2630,13 @@ export default function StudentAffairsPortal({
                       </div>
 
                       <div>
-                        <label className="block text-slate-800 font-extrabold mb-1">الصف الدراسي</label>
+                        <label className="block text-slate-800 font-extrabold mb-1">الصف الدراسي <span className="text-emerald-700">(يُدار عبر الالتحاق)</span></label>
                         <select 
                           value={formData.grade}
-                          onChange={e => setFormData(current => ({ ...current, grade: e.target.value, classSection: canonicalSections[0] || '' }))}
-                          className="w-full bg-white border border-emerald-300 rounded-xl p-2.5 text-xs font-bold text-slate-900 focus:border-[#9a6a1d] outline-none shadow-xs"
+                          disabled
+                          aria-disabled="true"
+                          title="يُدار الصف من خلال مسار القيد والهيكل الأكاديمي الموثوق"
+                          className="w-full bg-slate-100 border border-slate-300 rounded-xl p-2.5 text-xs font-bold text-slate-700 outline-none cursor-not-allowed"
                         >
                           <option value="">اختر الصف</option>
                           {formGradeOptions.map(grade => <option key={grade.id} value={grade.id}>{grade.name || grade.label}</option>)}
@@ -2569,11 +2644,13 @@ export default function StudentAffairsPortal({
                       </div>
 
                       <div>
-                        <label className="block text-slate-800 font-extrabold mb-1">الشعبة / الفصل</label>
+                        <label className="block text-slate-800 font-extrabold mb-1">الشعبة / الفصل <span className="text-emerald-700">(يُدار عبر الالتحاق)</span></label>
                         <select 
                           value={formData.classSection}
-                          onChange={e => setFormData(current => ({ ...current, classSection: e.target.value }))}
-                          className="w-full bg-white border border-emerald-300 rounded-xl p-2.5 text-xs font-bold text-slate-900 focus:border-[#9a6a1d] outline-none shadow-xs"
+                          disabled
+                          aria-disabled="true"
+                          title="تُدار الشعبة من خلال مسار القيد والهيكل الأكاديمي الموثوق"
+                          className="w-full bg-slate-100 border border-slate-300 rounded-xl p-2.5 text-xs font-bold text-slate-700 outline-none cursor-not-allowed"
                         >
                           <option value="">اختر الشعبة</option>
                           {canonicalSections.map(section => <option key={section} value={section}>شعبة {section}</option>)}
@@ -3007,6 +3084,31 @@ export default function StudentAffairsPortal({
                   </div>
                 </div>
 
+                <div className="rounded-2xl border border-sky-200 bg-sky-50/70 p-4 space-y-3" aria-label="ملف الطالب الشامل 360 درجة">
+                  <div className="flex items-center justify-between gap-3">
+                    <div>
+                      <h4 className="text-sm font-black text-sky-950">ملف الطالب الشامل 360°</h4>
+                      <p className="text-[10px] font-bold text-sky-800">الحالة الأكاديمية، أولياء الأمور، الصحة والحضور من المصدر الكانوني</p>
+                    </div>
+                    <button type="button" onClick={() => void loadStudent360(viewStudent)} disabled={student360Status === 'loading'} className="rounded-xl border border-sky-300 bg-white px-3 py-2 text-xs font-black text-sky-900 disabled:opacity-50">
+                      {student360Status === 'loading' ? 'جاري التحميل...' : student360Status === 'success' ? 'تحديث 360°' : 'تحميل 360°'}
+                    </button>
+                  </div>
+                  {student360Status === 'success' && student360Data ? (
+                    <div className="grid grid-cols-2 sm:grid-cols-4 gap-2 text-[11px] font-bold text-slate-700">
+                      <span className="rounded-lg bg-white border border-slate-200 p-2">الحالة: <strong>{studentStatusLabel(student360Data.academic_status || student360Data.status)}</strong></span>
+                      <span className="rounded-lg bg-white border border-slate-200 p-2">أولياء الأمور: <strong>{Array.isArray(student360Data.guardians) ? student360Data.guardians.length : 0}</strong></span>
+                      <span className="rounded-lg bg-white border border-slate-200 p-2">الحضور: <strong>{student360Data.attendance_present || 0}</strong></span>
+                      <span className="rounded-lg bg-white border border-slate-200 p-2">الغياب: <strong>{student360Data.attendance_absent || 0}</strong></span>
+                    </div>
+                  ) : null}
+                  {student360Status === 'success' && Array.isArray(student360Data?.guardians) && student360Data.guardians.length > 0 ? (
+                    <div className="flex flex-wrap gap-2 text-[10px] font-bold text-sky-950">
+                      {student360Data.guardians.map((guardian: any) => <span key={String(guardian.id)} className="rounded-full border border-sky-200 bg-white px-2.5 py-1">{String(guardian.name || 'ولي أمر')} — {String(guardian.relationshipType || 'صلة غير محددة')}</span>)}
+                    </div>
+                  ) : null}
+                </div>
+
                <div className="rounded-2xl border border-amber-200 bg-amber-50/50 p-4 space-y-3" aria-labelledby="student-timeline-title">
                  <div className="flex items-center justify-between gap-3">
                    <div>
@@ -3278,11 +3380,7 @@ export default function StudentAffairsPortal({
                   </thead>
                   <tbody>
                     {printPreviewStudents.map((student, index) => {
-                      const statusLabel = student.status === 'suspended'
-                        ? 'موقوف'
-                        : student.status === 'inactive' || student.status === 'withdrawn'
-                          ? 'منسحب / منقول'
-                          : 'نشط';
+                      const statusLabel = studentStatusLabel(student.status);
                       return (
                         <tr key={student.id} className="odd:bg-amber-50/40">
                           <td className="p-3 border border-slate-200 text-center">{index + 1}</td>

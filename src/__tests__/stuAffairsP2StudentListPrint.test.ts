@@ -31,8 +31,9 @@ describe('STU-AFFAIRS-P2-006-66 Student list print truthfulness', () => {
     expect(source).toContain('كل المرشحات غير المحددة = الكل');
     expect(source).toContain('إجمالي الكشف: {printPreviewStudents.length} طالب');
     expect(source).toContain('معاينة كشف الطلاب');
-    expect(source).toContain('النطاق: جميع الطلاب');
-    expect(source).not.toContain('window.open');
+    expect(source).toContain('النطاق:');
+    const certificateBlock = source.slice(source.indexOf('const handleOpenEnrollmentCertificate'), source.indexOf('const loadStudentTimeline'));
+    expect(certificateBlock).toContain('window.open');
   });
 
   it('does not add Guardian Phone or National ID to the printed HTML', () => {

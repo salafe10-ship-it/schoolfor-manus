@@ -14,7 +14,7 @@ describe('STU-AFFAIRS-P1-006-64 Student List/Profile UI readiness', () => {
 
   it('clears selections when the canonical page/filter context changes', () => {
     expect(source).toContain('setSelectedStudentIds([]);');
-    expect(source).toContain('selectedSchool.id, searchKeyword, searchStatus, searchClass, currentPage, rowsPerPage, sortColumn, sortDirection');
+    expect(source).toContain('selectedSchool.id, searchKeyword, searchStatus, searchStage, searchGrade, searchClass, currentPage, rowsPerPage, sortColumn, sortDirection');
   });
 
   it('renders only approved canonical student profile fields', () => {

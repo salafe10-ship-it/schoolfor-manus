@@ -13,6 +13,7 @@ type StudentWritePatch = {
   gender?: string | null;
   nationality?: string | null;
   studentNumber?: string;
+  nationalId?: string | null;
   academicPreviousSchool?: string | null;
   academicPreviousGrade?: string | null;
   academicPreviousYear?: string | null;
@@ -46,6 +47,7 @@ type CanonicalStudent = {
   school_id: string;
   branch_id: string | null;
   student_number: string;
+  national_id: string | null;
   legal_first_name: string;
   legal_middle_name: string | null;
   legal_last_name: string;
@@ -180,6 +182,7 @@ function mapStudent(row: CanonicalStudent): Record<string, unknown> {
     preferredName: row.preferred_name || '',
     studentNumber: row.student_number,
     studentCode: row.student_number,
+    nationalId: row.national_id || '',
     birthDate: row.date_of_birth,
     dateOfBirth: row.date_of_birth,
     gender: row.gender || undefined,
@@ -224,7 +227,7 @@ export class CanonicalStudentWriteRepository {
     const run = async () => {
       const db = transaction();
       const existing = await db.query<CanonicalStudent>(
-        `SELECT id, tenant_id, school_id, branch_id, student_number,
+        `SELECT id, tenant_id, school_id, branch_id, student_number, national_id,
                 legal_first_name, legal_middle_name, legal_last_name,
                 preferred_name, date_of_birth, gender, nationality, status,
                 version, created_at, updated_at, deleted_at
@@ -252,6 +255,7 @@ export class CanonicalStudentWriteRepository {
       if (patch.gender !== undefined) fields.push(['gender', text(patch.gender, 'gender')]);
       if (patch.nationality !== undefined) fields.push(['nationality', text(patch.nationality, 'nationality')]);
       if (patch.studentNumber !== undefined) fields.push(['student_number', text(patch.studentNumber, 'studentNumber', true)]);
+      if (patch.nationalId !== undefined) fields.push(['national_id', text(patch.nationalId, 'nationalId')]);
       if (patch.academicPreviousSchool !== undefined) fields.push(['academic_previous_school', text(patch.academicPreviousSchool, 'academicPreviousSchool')]);
       if (patch.academicPreviousGrade !== undefined) fields.push(['academic_previous_grade', text(patch.academicPreviousGrade, 'academicPreviousGrade')]);
       if (patch.academicPreviousYear !== undefined) fields.push(['academic_previous_year', text(patch.academicPreviousYear, 'academicPreviousYear')]);
@@ -290,7 +294,7 @@ export class CanonicalStudentWriteRepository {
             AND school_id = $${versionIndex + 6}
             AND (branch_id = $${versionIndex + 7} OR branch_id IS NULL)
             AND version = $${versionIndex + 8}
-        RETURNING id, tenant_id, school_id, branch_id, student_number,
+        RETURNING id, tenant_id, school_id, branch_id, student_number, national_id,
                   legal_first_name, legal_middle_name, legal_last_name,
                   preferred_name, date_of_birth, gender, nationality,
                   academic_previous_school, academic_previous_grade, academic_previous_year,
@@ -351,7 +355,7 @@ export class CanonicalStudentWriteRepository {
       const db = transaction();
       const internalActor = await actorId(context);
       const existing = await db.query<CanonicalStudent>(
-        `SELECT id, tenant_id, school_id, branch_id, student_number,
+        `SELECT id, tenant_id, school_id, branch_id, student_number, national_id,
                 legal_first_name, legal_middle_name, legal_last_name,
                 preferred_name, date_of_birth, gender, nationality, status,
                 version, created_at, updated_at, deleted_at
@@ -385,7 +389,7 @@ export class CanonicalStudentWriteRepository {
             AND tenant_id = ${action === 'SOFT_DELETE' ? '$8' : '$7'}
             AND school_id = ${action === 'SOFT_DELETE' ? '$9' : '$8'}
             AND (branch_id = ${action === 'SOFT_DELETE' ? '$10' : '$9'} OR branch_id IS NULL)
-        RETURNING id, tenant_id, school_id, branch_id, student_number,
+        RETURNING id, tenant_id, school_id, branch_id, student_number, national_id,
                   legal_first_name, legal_middle_name, legal_last_name,
                   preferred_name, date_of_birth, gender, nationality, status,
                   version, created_at, updated_at, deleted_at`,
@@ -425,7 +429,7 @@ export class CanonicalStudentWriteRepository {
     const run = async () => {
       const db = transaction();
       const currentResult = await db.query<CanonicalStudent>(
-        `SELECT id, tenant_id, school_id, branch_id, student_number,
+        `SELECT id, tenant_id, school_id, branch_id, student_number, national_id,
                 legal_first_name, legal_middle_name, legal_last_name,
                 preferred_name, date_of_birth, gender, nationality, status,
                 version, created_at, updated_at, deleted_at
@@ -507,7 +511,7 @@ export class CanonicalStudentWriteRepository {
                 request_id = $3, correlation_id = $4
           WHERE id = $5 AND tenant_id = $6 AND school_id = $7
             AND (branch_id = $8 OR branch_id IS NULL) AND status = 'active'
-        RETURNING id, tenant_id, school_id, branch_id, student_number,
+        RETURNING id, tenant_id, school_id, branch_id, student_number, national_id,
                   legal_first_name, legal_middle_name, legal_last_name,
                   preferred_name, date_of_birth, gender, nationality, status,
                   version, created_at, updated_at, deleted_at`,
@@ -545,7 +549,7 @@ export class CanonicalStudentWriteRepository {
     const run = async () => {
       const db = transaction();
       const currentResult = await db.query<CanonicalStudent>(
-        `SELECT id, tenant_id, school_id, branch_id, student_number,
+        `SELECT id, tenant_id, school_id, branch_id, student_number, national_id,
                 legal_first_name, legal_middle_name, legal_last_name,
                 preferred_name, date_of_birth, gender, nationality, status,
                 version, created_at, updated_at, deleted_at
@@ -608,7 +612,7 @@ export class CanonicalStudentWriteRepository {
                 version = version + 1, audit_id = $2, request_id = $3, correlation_id = $4
           WHERE id = $5 AND tenant_id = $6 AND school_id = $7
             AND (branch_id = $8 OR branch_id IS NULL) AND status = 'suspended'
-          RETURNING id, tenant_id, school_id, branch_id, student_number,
+          RETURNING id, tenant_id, school_id, branch_id, student_number, national_id,
                     legal_first_name, legal_middle_name, legal_last_name,
                     preferred_name, date_of_birth, gender, nationality, status,
                     version, created_at, updated_at, deleted_at`,
@@ -633,5 +637,138 @@ export class CanonicalStudentWriteRepository {
         run,
         context
       );
+  }
+
+  public static async withdraw(
+    context: TenantContext,
+    studentId: string,
+    audit: WriteAudit
+  ): Promise<Record<string, unknown>> {
+    requireContext(context);
+    if (!UnitOfWork.hasTransactionDriver()) throw new DatabaseError('Canonical Student writes require the configured PostgreSQL transaction driver.');
+    const run = async () => {
+      const db = transaction();
+      const currentResult = await db.query<CanonicalStudent>(
+        `SELECT id, tenant_id, school_id, branch_id, student_number, national_id,
+                legal_first_name, legal_middle_name, legal_last_name,
+                preferred_name, date_of_birth, gender, nationality, status,
+                version, created_at, updated_at, deleted_at
+           FROM public.students
+          WHERE id = $1 AND tenant_id = $2 AND school_id = $3
+            AND (branch_id = $4 OR branch_id IS NULL) AND deleted_at IS NULL
+          FOR UPDATE`,
+        [studentId, context.tenantId, context.schoolId, context.branchId]
+      );
+      const current = currentResult.rows[0];
+      if (!current) throw new NotFoundError('Student record was not found in the trusted school context.');
+      if (!['active', 'suspended'].includes(current.status)) throw new ValidationError('Only active or suspended students can be withdrawn.');
+      const internalActor = await actorId(context);
+      const auditId = await writeAudit(context, studentId, audit, internalActor);
+      const requestId = uuidOrGenerate(audit.requestId);
+      const correlationId = uuidOrGenerate(audit.correlationId);
+      const transitionId = randomUUID();
+      await db.query(
+        `INSERT INTO public.student_status_transitions (
+           id, tenant_id, school_id, branch_id, student_id, from_status, to_status,
+           transition_kind, approval_status, effective_on, reason_code, reason_notes,
+           requested_at, approved_at, completed_at, requested_by, approved_by, completed_by,
+           idempotency_key, version, created_by, updated_by, audit_id, request_id, correlation_id
+         ) VALUES ($1,$2,$3,$4,$5,$6,'withdrawn','ordinary','completed',CURRENT_DATE,
+                   'administrative_withdrawal',$7,now(),now(),now(),$8,$8,$8,$9,1,$8,$8,$10,$11,$12)`,
+        [transitionId, context.tenantId, context.schoolId, context.branchId, studentId, current.status, audit.reason, internalActor,
+          `student-withdraw:${studentId}:${requestId}`, auditId, requestId, correlationId]
+      );
+      await db.query(
+        `INSERT INTO public.student_status_history (
+           id, tenant_id, school_id, branch_id, student_id, transition_id, from_status, to_status,
+           event_type, effective_on, reason_code, reason_notes, approved_at, approved_by, recorded_by,
+           status, version, created_by, updated_by, audit_id, request_id, correlation_id
+         ) VALUES ($1,$2,$3,$4,$5,$6,$7,'withdrawn','ordinary',CURRENT_DATE,'administrative_withdrawal',
+                   $8,now(),$9,$9,'active',1,$9,$9,$10,$11,$12)`,
+        [randomUUID(), context.tenantId, context.schoolId, context.branchId, studentId, transitionId, current.status, audit.reason,
+          internalActor, auditId, requestId, correlationId]
+      );
+      const academic = await db.query(
+        `UPDATE public.student_academic_status
+            SET status='withdrawn', effective_on=CURRENT_DATE, reason_code='administrative_withdrawal',
+                reason_notes=$1, approved_at=now(), approved_by=$2, updated_at=now(), updated_by=$2,
+                version=version+1, audit_id=$3, request_id=$4, correlation_id=$5
+          WHERE tenant_id=$6 AND school_id=$7 AND student_id=$8 AND deleted_at IS NULL`,
+        [audit.reason, internalActor, auditId, requestId, correlationId, context.tenantId, context.schoolId, studentId]
+      );
+      if (academic.rowCount !== 1) throw new ValidationError('The current academic status record is missing; withdrawal was rolled back.');
+      const updated = await db.query<CanonicalStudent>(
+        `UPDATE public.students SET status='withdrawn', updated_at=now(), updated_by=$1,
+                version=version+1, audit_id=$2, request_id=$3, correlation_id=$4
+          WHERE id=$5 AND tenant_id=$6 AND school_id=$7 AND (branch_id=$8 OR branch_id IS NULL)
+            AND status=$9
+        RETURNING id, tenant_id, school_id, branch_id, student_number, national_id,
+                  legal_first_name, legal_middle_name, legal_last_name, preferred_name,
+                  date_of_birth, gender, nationality, status, version, created_at, updated_at, deleted_at`,
+        [internalActor, auditId, requestId, correlationId, studentId, context.tenantId, context.schoolId, context.branchId, current.status]
+      );
+      if (!updated.rows[0]) throw new ConflictError('Student status changed concurrently; no withdrawal was committed.');
+      return mapStudent(updated.rows[0]);
+    };
+    return UnitOfWork.isTransactionActive() ? run() : UnitOfWork.runInTransaction(
+      context.schoolId,
+      { operationName: 'Canonical Student Withdrawal', tenantId: context.tenantId, userId: context.userId, userName: context.userId,
+        ipAddress: audit.ipAddress, affectedTables: ['students', 'student_academic_status', 'student_status_transitions', 'student_status_history', 'audit_events'] },
+      run,
+      context
+    );
+  }
+
+  public static async admit(
+    context: TenantContext,
+    studentId: string,
+    audit: WriteAudit
+  ): Promise<Record<string, unknown>> {
+    requireContext(context);
+    if (!UnitOfWork.hasTransactionDriver()) throw new DatabaseError('Canonical Student writes require the configured PostgreSQL transaction driver.');
+    const run = async () => {
+      const db = transaction();
+      const currentResult = await db.query<CanonicalStudent>(
+        `SELECT id, tenant_id, school_id, branch_id, student_number, national_id, legal_first_name, legal_middle_name,
+                legal_last_name, preferred_name, date_of_birth, gender, nationality, status, version, created_at, updated_at, deleted_at
+           FROM public.students WHERE id=$1 AND tenant_id=$2 AND school_id=$3 AND (branch_id=$4 OR branch_id IS NULL)
+             AND deleted_at IS NULL FOR UPDATE`,
+        [studentId, context.tenantId, context.schoolId, context.branchId]
+      );
+      const current = currentResult.rows[0];
+      if (!current) throw new NotFoundError('Student record was not found in the trusted school context.');
+      if (current.status !== 'applicant') throw new ValidationError('Only an applicant can be admitted.');
+      const internalActor = await actorId(context);
+      const auditId = await writeAudit(context, studentId, audit, internalActor);
+      const requestId = uuidOrGenerate(audit.requestId);
+      const correlationId = uuidOrGenerate(audit.correlationId);
+      const transitionId = randomUUID();
+      const idempotencyKey = `student-admit:${studentId}:${requestId}`;
+      await db.query(
+        `INSERT INTO public.student_status_transitions (id,tenant_id,school_id,branch_id,student_id,from_status,to_status,transition_kind,approval_status,effective_on,reason_code,reason_notes,requested_at,approved_at,completed_at,requested_by,approved_by,completed_by,idempotency_key,version,created_by,updated_by,audit_id,request_id,correlation_id)
+         VALUES ($1,$2,$3,$4,$5,$6,'admitted','ordinary','completed',CURRENT_DATE,'admission_approved',$7,now(),now(),now(),$8,$8,$8,$9,1,$8,$8,$10,$11,$12)`,
+        [transitionId, context.tenantId, context.schoolId, context.branchId, studentId, current.status, audit.reason, internalActor, idempotencyKey, auditId, requestId, correlationId]
+      );
+      await db.query(
+        `INSERT INTO public.student_status_history (id,tenant_id,school_id,branch_id,student_id,transition_id,from_status,to_status,event_type,effective_on,reason_code,reason_notes,approved_at,approved_by,recorded_by,status,version,created_by,updated_by,audit_id,request_id,correlation_id)
+         VALUES ($1,$2,$3,$4,$5,$6,$7,'admitted','ordinary',CURRENT_DATE,'admission_approved',$8,now(),$9,$9,'active',1,$9,$9,$10,$11,$12)`,
+        [randomUUID(), context.tenantId, context.schoolId, context.branchId, studentId, transitionId, current.status, audit.reason, internalActor, auditId, requestId, correlationId]
+      );
+      const academic = await db.query(
+        `UPDATE public.student_academic_status SET status='admitted',effective_on=CURRENT_DATE,reason_code='admission_approved',reason_notes=$1,approved_at=now(),approved_by=$2,updated_at=now(),updated_by=$2,version=version+1,audit_id=$3,request_id=$4,correlation_id=$5 WHERE tenant_id=$6 AND school_id=$7 AND student_id=$8 AND deleted_at IS NULL`,
+        [audit.reason, internalActor, auditId, requestId, correlationId, context.tenantId, context.schoolId, studentId]
+      );
+      if (academic.rowCount !== 1) throw new ValidationError('The current academic status record is missing; admission was rolled back.');
+      const updated = await db.query<CanonicalStudent>(
+        `UPDATE public.students SET status='admitted',updated_at=now(),updated_by=$1,version=version+1,audit_id=$2,request_id=$3,correlation_id=$4 WHERE id=$5 AND tenant_id=$6 AND school_id=$7 AND (branch_id=$8 OR branch_id IS NULL) AND status=$9
+         RETURNING id,tenant_id,school_id,branch_id,student_number,national_id,legal_first_name,legal_middle_name,legal_last_name,preferred_name,date_of_birth,gender,nationality,status,version,created_at,updated_at,deleted_at`,
+        [internalActor, auditId, requestId, correlationId, studentId, context.tenantId, context.schoolId, context.branchId, current.status]
+      );
+      if (!updated.rows[0]) throw new ConflictError('Student status changed concurrently; no admission was committed.');
+      return mapStudent(updated.rows[0]);
+    };
+    return UnitOfWork.isTransactionActive() ? run() : UnitOfWork.runInTransaction(context.schoolId,
+      { operationName: 'Canonical Student Admission', tenantId: context.tenantId, userId: context.userId, userName: context.userId, ipAddress: audit.ipAddress,
+        affectedTables: ['students', 'student_academic_status', 'student_status_transitions', 'student_status_history', 'audit_events'] }, run, context);
   }
 }

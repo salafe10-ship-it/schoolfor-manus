@@ -23,7 +23,8 @@ describe('STU-AFFAIRS-P1-DRIFT-002 student edit contract boundary', () => {
     expect(portalSource).not.toContain('section: formData.classSection');
     expect(portalSource).toContain('الصف الدراسي <span className="text-emerald-700">(يُدار عبر الالتحاق)</span>');
     expect(portalSource).toContain('الشعبة / الفصل <span className="text-emerald-700">(يُدار عبر الالتحاق)</span>');
-    expect(portalSource).toContain('status: formData.status');
+    expect(portalSource).not.toContain('status: formData.status');
+    expect(portalSource).toContain('حالة القيد');
   });
 
   it('keeps unsupported class and section fields outside the Student aggregate', () => {

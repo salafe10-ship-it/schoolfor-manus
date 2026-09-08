@@ -19,18 +19,16 @@ describe('STU-AFFAIRS-P1-006-28 Student Profile UI truthfulness', () => {
     expect(source).not.toContain('phone: student.parentPhone ||');
   });
 
-  it('does not send unsupported Student email, address, religion, or national ID fields to canonical save', () => {
+  it('sends only canonical Student fields and persists the supported national ID', () => {
     const block = saveBlock();
-    expect(block).not.toContain('nationalId: formData.nationalId');
+    expect(block).toContain('nationalId: formData.nationalId');
     expect(block).not.toContain('religion: formData.religion');
     expect(block).not.toContain('address: formData.address');
     expect(block).not.toContain('email: formData.email');
   });
 
   it('makes unsupported identity and Enrollment-owned placement controls visibly non-editable', () => {
-    // National ID is intentionally removed from the basic-data UI; it must
-    // not reappear as a disabled field after the handoff decision.
-    expect(source).not.toContain('رقم الهوية الوطنية / الإقامة');
+    expect(source).toContain('رقم الهوية الوطنية');
     expect(source).toContain('المرحلة الدراسية <span className="text-emerald-700">(يُدار عبر الالتحاق)</span>');
     expect(source).toContain('الصف الدراسي <span className="text-emerald-700">(يُدار عبر الالتحاق)</span>');
     expect(source).toContain('الشعبة / الفصل <span className="text-emerald-700">(يُدار عبر الالتحاق)</span>');
