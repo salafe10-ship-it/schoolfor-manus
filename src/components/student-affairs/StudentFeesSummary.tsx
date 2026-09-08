@@ -45,19 +45,19 @@ export default function StudentFeesSummary({
       <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
         <div className="p-4 text-right">
           <p className="text-[10px] text-slate-400 font-bold">إجمالي قيمة الفواتير السنوية</p>
-          <p className="text-lg font-black text-slate-700 mt-1">{hasCanonicalData ? money(totalInvoices) : 'غير متحقق'}</p>
+          <p className="text-lg font-black text-slate-700 mt-1">{hasCanonicalData ? money(totalInvoices) : 'غير متوفر'}</p>
           <span className="bg-gradient-to-r from-[#2a1d13] via-[#3a2719] to-[#2a1d13] text-amber-200 font-extrabold">{hasCanonicalData ? `${invoices.length} فاتورة موثقة` : 'بانتظار تفاصيل الفواتير المركزية'}</span>
         </div>
 
         <div className="p-4 text-right">
           <p className="text-[10px] text-slate-400 font-bold">إجمالي المبالغ المسددة</p>
-          <p className="text-lg font-black text-slate-700 mt-1">{hasCanonicalData ? money(totalPaid) : 'غير متحقق'}</p>
+          <p className="text-lg font-black text-slate-700 mt-1">{hasCanonicalData ? money(totalPaid) : 'غير متوفر'}</p>
           <span className="inline-block bg-slate-50 text-slate-600 text-[8.5px] px-1.5 py-0.2 rounded font-black mt-2">{hasCanonicalData ? 'مدفوعات مرتبطة بفواتير' : 'لا توجد مدفوعات موثقة'}</span>
         </div>
 
         <div className="p-4 text-right">
           <p className="text-[10px] text-slate-400 font-bold">الذمم والرسوم المتبقية</p>
-          <p className="text-lg font-black text-rose-600 mt-1">{hasCanonicalData ? money(totalRemaining) : 'غير متحقق'}</p>
+          <p className="text-lg font-black text-rose-600 mt-1">{hasCanonicalData ? money(totalRemaining) : 'غير متوفر'}</p>
           <span className="inline-block bg-rose-50 text-rose-700 text-[8.5px] px-1.5 py-0.2 rounded font-black mt-2">{hasCanonicalData ? 'الرصيد المتبقي حسب الفواتير' : 'لا يوجد استحقاق مؤكد'}</span>
         </div>
       </div>

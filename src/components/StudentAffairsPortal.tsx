@@ -381,14 +381,47 @@ export default function StudentAffairsPortal({
     () => academicClasses.filter(item => item?.isActive !== false && item?.id && (!formData.grade || String(item?.gradeId || '') === String(formData.grade))),
     [academicClasses, formData.grade]
   );
+  const formSectionOptions = useMemo(() => {
+    const sections = new Set<string>();
+    const sectionFromClassCode = (value: unknown): string => {
+      const code = String(value || '').trim();
+      const suffix = code.match(/[-_]([A-Za-zأ-ي])$/)?.[1] || '';
+      const aliases: Record<string, string> = { A: 'أ', B: 'ب', C: 'ج', D: 'د' };
+      return aliases[suffix.toUpperCase()] || suffix;
+    };
+    formClassOptions.forEach(item => {
+      const explicit = String(item?.section || item?.sectionName || item?.sectionLabel || '').trim();
+      const inferred = sectionFromClassCode(item?.code);
+      if (explicit) sections.add(explicit);
+      else if (inferred) sections.add(inferred);
+    });
+    if (!sections.size) canonicalSections.forEach(section => sections.add(section));
+    return Array.from(sections);
+  }, [canonicalSections, formClassOptions]);
+
+  useEffect(() => {
+    if (!isModalOpen || isEditMode || formData.stage || activeStageOptions.length === 0) return;
+    const stage = activeStageOptions[0];
+    const grade = grades.find(item => item?.isActive !== false && String(item?.stageId || '') === String(stage.id));
+    const gradeId = String(grade?.id || '');
+    const firstSection = formSectionOptions[0] || canonicalSections[0] || '';
+    setFormData(current => current.stage
+      ? current
+      : { ...current, stage: String(stage.id), grade: gradeId, classSection: firstSection });
+  }, [activeStageOptions, canonicalSections, formData.stage, formSectionOptions, grades, isEditMode, isModalOpen]);
 
   const defaultPlacement = () => {
     const stage = activeStageOptions[0];
     const grade = formGradeOptions[0] || grades.find(item => item?.isActive !== false && String(item?.stageId || '') === String(stage?.id));
+    const gradeId = String(grade?.id || '');
+    const classesForGrade = academicClasses.filter(item => item?.isActive !== false && String(item?.gradeId || '') === gradeId);
+    const firstClassCode = String(classesForGrade[0]?.code || '');
+    const firstClassSuffix = firstClassCode.match(/[-_]([A-Za-zأ-ي])$/)?.[1] || '';
+    const firstSection = ({ A: 'أ', B: 'ب', C: 'ج', D: 'د' } as Record<string, string>)[firstClassSuffix.toUpperCase()] || firstClassSuffix;
     return {
       stage: String(stage?.id || ''),
-      grade: String(grade?.id || ''),
-      classSection: canonicalSections[0] || ''
+      grade: gradeId,
+      classSection: firstSection || canonicalSections[0] || ''
     };
   };
 
@@ -2619,10 +2652,19 @@ export default function StudentAffairsPortal({
                         <label className="block text-slate-800 font-extrabold mb-1">المرحلة الدراسية <span className="text-emerald-700">(يُدار عبر الالتحاق)</span></label>
                         <select 
                           value={formData.stage}
-                          disabled
-                          aria-disabled="true"
-                          title="تُدار المرحلة من خلال مسار القيد والهيكل الأكاديمي الموثوق"
-                          className="w-full bg-slate-100 border border-slate-300 rounded-xl p-2.5 text-xs font-bold text-slate-700 outline-none cursor-not-allowed"
+                          onChange={event => {
+                            const stageId = event.target.value;
+                            const nextGrade = grades.find(grade => grade?.isActive !== false && String(grade?.stageId || '') === stageId);
+                            const nextGradeId = String(nextGrade?.id || '');
+                            const nextClass = academicClasses.find(item => item?.isActive !== false && String(item?.gradeId || '') === nextGradeId);
+                            const classCode = String(nextClass?.code || '');
+                            const suffix = classCode.match(/[-_]([A-Za-zأ-ي])$/)?.[1] || '';
+                            const section = ({ A: 'أ', B: 'ب', C: 'ج', D: 'د' } as Record<string, string>)[suffix.toUpperCase()] || suffix || canonicalSections[0] || '';
+                            setFormData(current => ({ ...current, stage: stageId, grade: nextGradeId, classSection: section }));
+                          }}
+                          disabled={activeStageOptions.length === 0}
+                          title={academicContextError || 'اختر المرحلة من الهيكل الأكاديمي الموثوق'}
+                          className="w-full bg-white border border-slate-300 rounded-xl p-2.5 text-xs font-bold text-slate-900 focus:border-[#9a6a1d] outline-none shadow-xs disabled:bg-slate-100 disabled:text-slate-500 disabled:cursor-not-allowed"
                         >
                           <option value="">اختر المرحلة</option>
                           {activeStageOptions.map(stage => <option key={stage.id} value={stage.id}>{stage.name || stage.label}</option>)}
@@ -2633,10 +2675,17 @@ export default function StudentAffairsPortal({
                         <label className="block text-slate-800 font-extrabold mb-1">الصف الدراسي <span className="text-emerald-700">(يُدار عبر الالتحاق)</span></label>
                         <select 
                           value={formData.grade}
-                          disabled
-                          aria-disabled="true"
-                          title="يُدار الصف من خلال مسار القيد والهيكل الأكاديمي الموثوق"
-                          className="w-full bg-slate-100 border border-slate-300 rounded-xl p-2.5 text-xs font-bold text-slate-700 outline-none cursor-not-allowed"
+                          onChange={event => {
+                            const gradeId = event.target.value;
+                            const nextClass = academicClasses.find(item => item?.isActive !== false && String(item?.gradeId || '') === gradeId);
+                            const classCode = String(nextClass?.code || '');
+                            const suffix = classCode.match(/[-_]([A-Za-zأ-ي])$/)?.[1] || '';
+                            const section = ({ A: 'أ', B: 'ب', C: 'ج', D: 'د' } as Record<string, string>)[suffix.toUpperCase()] || suffix || canonicalSections[0] || '';
+                            setFormData(current => ({ ...current, grade: gradeId, classSection: section }));
+                          }}
+                          disabled={formGradeOptions.length === 0}
+                          title={academicContextError || 'اختر الصف من المرحلة المحددة'}
+                          className="w-full bg-white border border-slate-300 rounded-xl p-2.5 text-xs font-bold text-slate-900 focus:border-[#9a6a1d] outline-none shadow-xs disabled:bg-slate-100 disabled:text-slate-500 disabled:cursor-not-allowed"
                         >
                           <option value="">اختر الصف</option>
                           {formGradeOptions.map(grade => <option key={grade.id} value={grade.id}>{grade.name || grade.label}</option>)}
@@ -2647,13 +2696,13 @@ export default function StudentAffairsPortal({
                         <label className="block text-slate-800 font-extrabold mb-1">الشعبة / الفصل <span className="text-emerald-700">(يُدار عبر الالتحاق)</span></label>
                         <select 
                           value={formData.classSection}
-                          disabled
-                          aria-disabled="true"
-                          title="تُدار الشعبة من خلال مسار القيد والهيكل الأكاديمي الموثوق"
-                          className="w-full bg-slate-100 border border-slate-300 rounded-xl p-2.5 text-xs font-bold text-slate-700 outline-none cursor-not-allowed"
+                          onChange={event => setFormData(current => ({ ...current, classSection: event.target.value }))}
+                          disabled={formSectionOptions.length === 0}
+                          title={academicContextError || 'اختر الشعبة من الفصول النشطة للصف المحدد'}
+                          className="w-full bg-white border border-slate-300 rounded-xl p-2.5 text-xs font-bold text-slate-900 focus:border-[#9a6a1d] outline-none shadow-xs disabled:bg-slate-100 disabled:text-slate-500 disabled:cursor-not-allowed"
                         >
                           <option value="">اختر الشعبة</option>
-                          {canonicalSections.map(section => <option key={section} value={section}>شعبة {section}</option>)}
+                          {formSectionOptions.map(section => <option key={section} value={section}>شعبة {section}</option>)}
                         </select>
                       </div>
                     </div>

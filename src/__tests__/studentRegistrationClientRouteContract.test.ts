@@ -39,4 +39,15 @@ describe('STU-SOL-015 canonical registration route boundary', () => {
     expect(route).toContain('canonicalStudentImportService.execute');
     expect(route).toContain('toCanonicalRegistrationCommand(tenantContext, row as Record<string, any>, termId)');
   });
+
+  it('keeps stage, grade, and section selectors interactive and cascaded from the trusted structure', () => {
+    expect(portalSource).toContain('disabled={activeStageOptions.length === 0}');
+    expect(portalSource).toContain('disabled={formGradeOptions.length === 0}');
+    expect(portalSource).toContain('disabled={formSectionOptions.length === 0}');
+    expect(portalSource).toContain('const formSectionOptions = useMemo');
+    expect(portalSource).toContain('setFormData(current => ({ ...current, stage: stageId, grade: nextGradeId, classSection: section }))');
+    expect(portalSource).toContain('setFormData(current => ({ ...current, grade: gradeId, classSection: section }))');
+    expect(portalSource).toContain('student-affairs-placement-${persistedStudent.id}-${crypto.randomUUID()}');
+    expect(portalSource).not.toMatch(/value=\{formData\.stage\}[\s\S]{0,80}disabled\s+aria-disabled="true"/);
+  });
 });
