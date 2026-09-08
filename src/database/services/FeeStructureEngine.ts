@@ -326,6 +326,20 @@ export class FeeStructureEngine {
   private static async initEngine() {
     if (this.initialized) return;
 
+    // Production-like servers must never seed or persist authoritative fee
+    // structures in JSON files. The canonical command API owns fee templates
+    // and assignments; this legacy engine is read-only/empty until a caller
+    // explicitly supplies a canonical projection.
+    const canonicalServer = isServer && ['staging', 'production'].includes(String(process.env.EDUPRO_ENVIRONMENT || '').trim().toLowerCase());
+    if (canonicalServer) {
+      this.categories = [];
+      this.templates = [];
+      this.assignments = [];
+      this.rules = [];
+      this.initialized = true;
+      return;
+    }
+
     if (isServer) {
       try {
         const fsName = 'fs';
@@ -425,6 +439,9 @@ export class FeeStructureEngine {
 
   private static async persistData() {
     if (isServer) {
+      if (['staging', 'production'].includes(String(process.env.EDUPRO_ENVIRONMENT || '').trim().toLowerCase())) {
+        throw new Error('Canonical fee persistence is required on production-like servers.');
+      }
       try {
         const fsName = 'fs';
         const pathName = 'path';
@@ -1121,12 +1138,12 @@ export class FeeStructureEngine {
           unitPrice: this.roundWithPolicy(i.amount - (fee.discountAmount / fee.items.length), precision, mode),
           amount: this.roundWithPolicy(i.amount - (fee.discountAmount / fee.items.length), precision, mode)
         })),
-        financialPeriod: '2026-07',
+        financialPeriod: fee.recognitionStartDate?.slice(0, 7) || new Date().toISOString().slice(0, 7),
         user: userName,
         schoolId,
-        branchId: 'branch_main',
-        academicYearId: '2026',
-        fiscalYearId: '2026',
+        branchId: structure.student.branchId,
+        academicYearId: fee.recognitionStartDate?.slice(0, 4) || new Date().getUTCFullYear().toString(),
+        fiscalYearId: fee.recognitionStartDate?.slice(0, 4) || new Date().getUTCFullYear().toString(),
 
         // Map IFRS Revenue Recognition properties
         recognitionPolicy: fee.recognitionPolicy,

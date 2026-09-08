@@ -2390,7 +2390,6 @@ export default function StudentFinancialPortal({
       return;
     }
 
-    const tenantId = auditTenantId;
     const invoiceDate = new Date().toISOString().split('T')[0];
     const selectedFeeConfig = feeConfigs.find(config => config.type === massFeeType);
     const revenueAccount = String(selectedFeeConfig?.account || '').trim();
@@ -2404,102 +2403,92 @@ export default function StudentFinancialPortal({
       return;
     }
     const dueDate = massDueDate;
-    const newInvoicesList: Invoice[] = studentsToUpdate.map((st, sIdx) => ({
-      id: createFinancialReference(`INV-MASS-${sIdx}`),
-      studentId: st.id,
-      studentName: st.name,
-      amount: massFeeAmount,
-      totalAmount: massFeeAmount,
-      remainingAmount: massFeeAmount,
-      dueDate,
-      status: 'unpaid',
-      item: `قيد مالي جماعي: ${massFeeType} بقيمة ${massFeeAmount} د.ل`,
-      revenueAccount,
-      taxAmount: 0,
-      invoiceDate
-    }));
-    const updatedInvoices = [...newInvoicesList, ...financialInvoices];
-
-    // Execute real secure multi-row atomic PostgreSQL transaction simulation
-    const transactionResult = await SQLTransactionEngine.run({
-      operationName: `MASS_FEE_DISTRIBUTION (توسيع وترحيل رسوم جماعية: ${massFeeType})`,
-      tenantId,
-      userId: auditActor,
-      userName: auditActor,
-      ipAddress: auditIpAddress,
-      affectedTables: ['invoices', 'students', 'billing_ledger'],
-      validationBlock: () => {
-        if (massFeeAmount <= 0) return { valid: false, error: 'مبلغ الرسم المراد توزيعه يجب أن يكون موجباً' };
-        return { valid: true };
-      },
-      authorizationBlock: () => {
-        try {
-          StudentAffairsValidationFramework.validateActionPermission(currentRole, 'save', 'financial');
-          return { authorized: true };
-        } catch (err: any) {
-          return { authorized: false, error: err.message };
-        }
-      },
-      executionBlock: async () => {
-        // Persist the complete resulting snapshot before exposing the new state
-        // in the UI. A failed canonical write therefore cannot look successful.
-        await saveToServerDb(undefined, undefined, undefined, undefined, updatedInvoices);
-
-        // State updates
-        setStudents(prev => prev.map(s => {
-          if (studentsToUpdate.some(target => target.id === s.id)) {
-            return {
-              ...s,
-              feesRemaining: s.feesRemaining + massFeeAmount
-            };
-          }
-          return s;
-        }));
-
-        setFinancialInvoices(updatedInvoices);
-        setInvoices(updatedInvoices);
-        return true;
-      },
-      nestedSqlQueries: [
-        SQLCommandBuilder.create({
-          sqlText: `-- Batch insertion of claims into invoices table`,
-          parameters: []
-        }),
-        ...studentsToUpdate.map(st => 
-          SQLCommandBuilder.create({
-            sqlText: `INSERT INTO invoices (id, tenant_id, student_id, amount, tax, status, details, due_date) VALUES ($1, $2, $3, $4, $5, 'unpaid', $6, CURRENT_DATE + INTERVAL '30 days');`,
-            parameters: [newInvoicesList.find(invoice => invoice.studentId === st.id)?.id || createFinancialReference(`INV-MASS-${st.id}`), tenantId, st.id, massFeeAmount, 0, `قيد مالي جماعي: ${massFeeType}`],
-            executionContext: 'Batch invoice insertion'
-          })
-        ),
-        SQLCommandBuilder.create({
-          sqlText: `-- Synchronizing student total debit balance`,
-          parameters: []
-        }),
-        ...studentsToUpdate.map(st => 
-          SQLCommandBuilder.create({
-            sqlText: `UPDATE students SET fees_remaining = fees_remaining + $1, updated_at = NOW() WHERE id = $2 AND school_id = $3;`,
-            parameters: [massFeeAmount, st.id, tenantId],
-            executionContext: 'Batch student balance sync'
-          })
-        )
-      ]
-    });
-
-    if (!transactionResult.success) {
-      triggerNotification(`تعذر ترحيل الرسوم الجماعية: ${transactionResult.error || 'تم التراجع عن العملية'}`, 'warning');
-      return;
+    const currentAcademicYear = String(selectedSchool?.academicYearId || selectedSchool?.academicYear || new Date().getUTCFullYear());
+    const currentAcademicPeriod = String(selectedSchool?.academicPeriodId || new Date().toISOString().slice(0, 7));
+    let canonicalTemplateId = String(selectedFeeConfig?.id || '').trim();
+    const templateHeaders = {
+      'Authorization': `Bearer ${getTrustedAccessToken()}`,
+      'Content-Type': 'application/json'
+    };
+    const templateListResponse = await fetch('/api/financial/fee-templates', { headers: templateHeaders });
+    const templateList = await templateListResponse.json().catch(() => ({}));
+    const existingTemplate = Array.isArray(templateList.data)
+      ? templateList.data.find((template: any) => String(template.id) === canonicalTemplateId || String(template.code) === massFeeType)
+      : null;
+    if (existingTemplate) {
+      canonicalTemplateId = String(existingTemplate.id);
+    } else {
+      canonicalTemplateId = canonicalTemplateId || `tpl_${massFeeType.replace(/[^a-zA-Z0-9_-]+/g, '-').slice(0, 32)}`;
+      const templateResponse = await fetch('/api/financial/fee-templates', {
+        method: 'POST', headers: templateHeaders,
+        body: JSON.stringify({
+          id: canonicalTemplateId,
+          code: massFeeType,
+          name: massFeeType,
+          category: 'school_fee',
+          amount: massFeeAmount,
+          currency: currencyConfig?.code || 'SAR',
+          revenueAccount,
+          academicYearId: currentAcademicYear,
+          financialPeriod: currentAcademicPeriod,
+          status: 'active',
+          effectiveFrom: invoiceDate,
+          installmentPolicy: { allowInstallments: true }
+        })
+      });
+      const templateResult = await templateResponse.json().catch(() => ({}));
+      if (!templateResponse.ok || !templateResult.success) throw new Error(templateResult.message || 'تعذر تهيئة قالب الرسم الكانوني.');
+      canonicalTemplateId = String(templateResult.data?.id || canonicalTemplateId);
     }
+    const response = await fetch('/api/financial/fee-assignments/bulk', {
+      method: 'POST',
+      headers: {
+        'Authorization': `Bearer ${getTrustedAccessToken()}`,
+        'Content-Type': 'application/json'
+      },
+      body: JSON.stringify({
+        templateId: canonicalTemplateId,
+        studentIds: studentsToUpdate.map(student => student.id),
+        academicYearId: currentAcademicYear,
+        academicPeriodId: currentAcademicPeriod,
+        dueDate,
+        amount: massFeeAmount,
+        description: `رسوم ${massFeeType}`,
+        source: 'portal_bulk_distribution',
+        issueInvoices: true,
+        idempotencyPrefix: `bulk:${canonicalTemplateId}:${invoiceDate}:${dueDate}`
+      })
+    });
+    const result = await response.json().catch(() => ({}));
+    if (!response.ok || !result.success) {
+      throw new Error(result.message || 'تعذر تنفيذ التوزيع الجماعي الكانوني.');
+    }
+    const canonicalInvoices: Invoice[] = (Array.isArray(result.data) ? result.data : [])
+      .map((row: any) => row.invoice)
+      .filter(Boolean)
+      .map((row: any) => ({
+        id: String(row.id), studentId: String(row.studentId), studentName: String(row.studentName || ''),
+        amount: Number(row.amount || 0), totalAmount: Number(row.amount || 0), remainingAmount: Number(row.remainingAmount || row.amount || 0),
+        dueDate: String(row.dueDate || dueDate), status: row.status || 'unpaid', item: `رسوم ${massFeeType}`,
+        taxAmount: 0, invoiceDate, role: 'Accountant', timestamp: new Date().toISOString(), ipAddress: auditIpAddress,
+        schoolId: selectedSchool?.id, branchId: selectedBranch?.id, academicYearId: currentAcademicYear,
+        academicPeriodId: currentAcademicPeriod, revenueAccount
+      } as Invoice));
+    const updatedInvoices = [...canonicalInvoices, ...financialInvoices.filter(existing => !canonicalInvoices.some(next => next.id === existing.id))];
+    setFinancialInvoices(updatedInvoices);
+    setInvoices(updatedInvoices);
 
     logAction('MASS_FEE_DISTRIBUTION', `تم ترحيل وتوطين رسوم جماعية (${massFeeType}) بقيمة ${massFeeAmount} د.ل على طلاب ${massClassroom} وعددهم ${studentsToUpdate.length} طالباً.`, 'حسابات الطلاب');
-    triggerNotification(`تم بنجاح تطبيق وتوزيع الرسوم على ${studentsToUpdate.length} من طلاب ${massClassroom}`, 'success');
+    triggerNotification(`تم بنجاح تطبيق وتوزيع الرسوم الكانونية على ${studentsToUpdate.length} من طلاب ${massClassroom}`, 'success');
   };
 
   // Generate installment table
   const generateInstallments = (totalAmount: number, type: 'monthly' | 'quarterly' | 'yearly') => {
     const installments = [];
     let count = type === 'monthly' ? 10 : type === 'quarterly' ? 4 : 1;
-    const amountPerInstallment = totalAmount / count;
+    const totalCents = Math.round(Number(totalAmount || 0) * 100);
+    const baseCents = count > 0 ? Math.floor(totalCents / count) : 0;
+    const remainderCents = totalCents - baseCents * count;
     const startDate = new Date();
     
     for (let i = 0; i < count; i++) {
@@ -2510,7 +2499,7 @@ export default function StudentFinancialPortal({
         
         installments.push({
             date: date.toISOString().split('T')[0],
-            amount: amountPerInstallment,
+            amount: (baseCents + (i === count - 1 ? remainderCents : 0)) / 100,
             status: 'unpaid' as const
         });
     }
@@ -2745,7 +2734,7 @@ export default function StudentFinancialPortal({
         title="الرسوم والأقساط المدرسية"
         stats={
           <div className="flex flex-wrap items-center gap-x-2.5 gap-y-1 text-[10px] sm:text-xs">
-            <span className="text-slate-300 font-bold">إجمالي السجلات المالية للطلاب: <span className="text-amber-400 font-mono">{students.length}</span> سجلاً مالياً نشطاً</span>
+            <span className="text-slate-300 font-bold">إجمالي سجلات المطالبات المركزية: <span className="text-amber-400 font-mono">{financialInvoices.length}</span> مطالبة موثقة</span>
           </div>
         }
         onNew={portalOnNew}
@@ -2836,7 +2825,7 @@ export default function StudentFinancialPortal({
                 </div>
                 <div className="flex items-center gap-1.5 mt-2 text-[10px] text-emerald-500 font-bold">
                   <span className="w-1.5 h-1.5 rounded-full bg-emerald-500 animate-pulse" />
-                  <span>✓ تم استلامها بالصناديق السحابية</span>
+                  <span>{financialPersistence === 'ready' && financialInvoices.length > 0 ? '✓ مصدر مركزي موثق' : 'غير متاح — لا يوجد تحصيل موثق'}</span>
                 </div>
               </div>
 

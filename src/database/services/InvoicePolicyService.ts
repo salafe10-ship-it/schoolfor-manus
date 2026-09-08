@@ -45,13 +45,22 @@ export class InvoicePolicyService {
    * Checks for duplicate invoices within the same tenant.
    * Prevents issuing duplicate bills for the same student, item category, and academic period.
    */
-  public static async isDuplicate(schoolId: string, studentId: string, description: string): Promise<boolean> {
+  public static async isDuplicate(
+    schoolId: string,
+    studentId: string,
+    description: string,
+    context?: { templateId?: string; academicYearId?: string; academicPeriodId?: string; idempotencyKey?: string }
+  ): Promise<boolean> {
     const { data: currentInvoices } = await InvoiceRepository.getAll(schoolId, { studentId });
     return currentInvoices.some(inv => 
       inv.item.trim() === description.trim() && 
       inv.status !== 'Cancelled' && 
       inv.status !== 'Void' &&
-      inv.status !== 'written_off'
+      inv.status !== 'written_off' &&
+      (!context?.templateId || String((inv as any).templateId || '') === context.templateId) &&
+      (!context?.academicYearId || String((inv as any).academicYearId || '') === context.academicYearId) &&
+      (!context?.academicPeriodId || String((inv as any).academicPeriodId || '') === context.academicPeriodId) &&
+      (!context?.idempotencyKey || String((inv as any).idempotencyKey || '') === context.idempotencyKey)
     );
   }
 

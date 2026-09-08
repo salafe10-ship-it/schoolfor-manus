@@ -18,7 +18,9 @@ export class StudentFeeService {
     const uniformAccount = {
       id: uniformId,
       studentId,
-      uniformSize: 'M',
+      // Do not fabricate a garment size or a charge before the family selects
+      // a real size and the canonical fee catalogue supplies the price.
+      uniformSize: '',
       piecesReceivedCount: 0,
       // No financial obligation is created until a configured uniform order is selected.
       totalFees: 0.00,

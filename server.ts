@@ -98,6 +98,16 @@ import {
 } from './src/modules/exams/application/ExamAuthorizationPolicy.js';
 import { calculatePayrollRun } from './src/modules/hr/domain/PayrollCalculation.js';
 import { validateInventoryProcurementSnapshot } from './src/modules/inventory/domain/InventoryProcurementValidation.js';
+import {
+  assertMoney,
+  buildInstallmentSchedule,
+  makeDeterministicIdempotencyKey,
+  makeInvoiceId,
+  makePaymentAttemptId,
+  makeReceiptId,
+  normalizeIdempotencyKey,
+  type InstallmentFrequency,
+} from './src/modules/financial/application/CanonicalStudentFeeOperations.js';
 
 type FinancialWriteMode = 'snapshot_read_only' | 'snapshot_write' | 'erp_integrated';
 
@@ -8483,6 +8493,562 @@ async function startServer() {
     }
   });
 
+  // -----------------------------------------------------------------------
+  // Canonical student-fee command API
+  // -----------------------------------------------------------------------
+  // New financial operations are intentionally separate from the legacy
+  // snapshot endpoint. Each command is tenant-scoped, idempotent and writes
+  // only normalized records in one database transaction.
+  const canonicalFeeUuid = (value: unknown): value is string =>
+    /^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i.test(String(value || '').trim());
+
+  const canonicalFeeContext = (req: express.Request) => {
+    const identity = (req as any).user;
+    const tenantId = String(identity?.tenantId || '').trim();
+    const schoolId = String(identity?.schoolId || '').trim();
+    const actorId = String(identity?.id || '').trim();
+    const tenantContext = (req as any).tenantContext;
+    if (!tenantId || !schoolId || !actorId || !tenantContext || tenantContext.tenantId !== tenantId || tenantContext.schoolId !== schoolId) {
+      throw new AuthenticationError('السياق الموثوق للوحدة المالية غير مكتمل.');
+    }
+    if (!transactionDriver) throw new DatabaseError('تحتاج العمليات المالية الكانونية إلى اتصال PostgreSQL مهيأ.');
+    return { tenantId, schoolId, actorId, tenantContext, identity };
+  };
+
+  const resolveCanonicalFeeActor = async (transaction: any, tenantId: string, schoolId: string, actorId: string): Promise<string> => {
+    const result = await transaction.query(
+      `SELECT id FROM public.users
+        WHERE tenant_id = $1 AND school_id = $2 AND status = 'active' AND deleted_at IS NULL
+          AND (id = $3 OR auth_user_id = $3)
+        LIMIT 1`,
+      [tenantId, schoolId, actorId]
+    );
+    const databaseActorId = String(result.rows[0]?.id || '').trim();
+    if (!databaseActorId) throw new AuthenticationError('المستخدم المالي غير موجود في نطاق المدرسة الحالي.');
+    return databaseActorId;
+  };
+
+  app.get("/api/financial/fee-templates", authenticateRequest, requirePermission(PERMISSIONS.FINANCIAL_READ), async (req, res, next) => {
+    try {
+      const { tenantId, schoolId, tenantContext } = canonicalFeeContext(req);
+      let rows: any[] = [];
+      await UnitOfWork.runInTransaction(schoolId, {
+        operationName: 'Read canonical student fee templates', tenantId,
+        userId: String((req as any).user.id), userName: String((req as any).user.name || 'المستخدم المالي'),
+        ipAddress: req.ip || 'unknown', affectedTables: ['student_fee_templates']
+      }, async () => {
+        const transaction = UnitOfWork.getActiveContext()?.databaseTransaction;
+        if (!transaction) throw new DatabaseError('تعذر فتح المعاملة المالية.');
+        const result = await transaction.query(
+          `SELECT id, code, name, category, amount, currency, revenue_account AS "revenueAccount",
+                  receivable_account AS "receivableAccount", academic_year_id AS "academicYearId",
+                  financial_period AS "financialPeriod", version, status, effective_from AS "effectiveFrom",
+                  effective_to AS "effectiveTo", eligibility_rules AS "eligibilityRules",
+                  installment_policy AS "installmentPolicy", created_at AS "createdAt", updated_at AS "updatedAt"
+             FROM public.student_fee_templates
+            WHERE tenant_id = $1 AND school_id = $2
+            ORDER BY status = 'active' DESC, updated_at DESC`, [tenantId, schoolId]);
+        rows = result.rows;
+      }, tenantContext);
+      res.json({ success: true, data: rows, meta: { source: 'canonical_postgres' } });
+    } catch (err: any) {
+      next(err instanceof AuthenticationError || err instanceof DatabaseError ? err : new DatabaseError('تعذر قراءة هيكل الرسوم.', err?.message));
+    }
+  });
+
+  app.post("/api/financial/fee-templates", authenticateRequest, requirePermission(PERMISSIONS.FINANCIAL_WRITE), async (req, res, next) => {
+    try {
+      const { tenantId, schoolId, actorId, tenantContext } = canonicalFeeContext(req);
+      const body = req.body && typeof req.body === 'object' ? req.body as Record<string, any> : {};
+      const code = String(body.code || '').trim();
+      const name = String(body.name || '').trim();
+      const category = String(body.category || 'tuition').trim();
+      const academicYearId = String(body.academicYearId || '').trim();
+      const financialPeriod = String(body.financialPeriod || '').trim();
+      const revenueAccount = String(body.revenueAccount || '').trim();
+      if (!code || !name || !academicYearId || !financialPeriod || !revenueAccount) throw new ValidationError('رمز الرسم واسم الرسم والسنة والفترة والحساب الإيرادي حقول مطلوبة.');
+      const amount = assertMoney(body.amount, 'الرسم');
+      const effectiveFrom = String(body.effectiveFrom || new Date().toISOString().slice(0, 10)).slice(0, 10);
+      const effectiveTo = body.effectiveTo ? String(body.effectiveTo).slice(0, 10) : null;
+      const templateId = String(body.id || randomUUID()).trim();
+      if (!canonicalFeeUuid(templateId)) throw new ValidationError('معرف هيكل الرسم يجب أن يكون UUID صالحًا.');
+      let created: any = null;
+      await UnitOfWork.runInTransaction(schoolId, {
+        operationName: 'Create canonical student fee template', tenantId, userId: actorId,
+        userName: String((req as any).user.name || 'مدير الرسوم'), ipAddress: req.ip || 'unknown', affectedTables: ['student_fee_templates', 'audit_events']
+      }, async () => {
+        const transaction = UnitOfWork.getActiveContext()?.databaseTransaction;
+        if (!transaction) throw new DatabaseError('تعذر فتح المعاملة المالية.');
+        const databaseActorId = await resolveCanonicalFeeActor(transaction, tenantId, schoolId, actorId);
+        const result = await transaction.query(
+          `INSERT INTO public.student_fee_templates
+            (tenant_id, school_id, id, code, name, category, amount, currency, revenue_account,
+             receivable_account, academic_year_id, financial_period, version, status, effective_from,
+             effective_to, eligibility_rules, installment_policy, created_by, updated_by)
+           VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,1,$13,$14,$15,$16::jsonb,$17::jsonb,$18,$18)
+           RETURNING id, code, name, category, amount, currency, revenue_account AS "revenueAccount",
+                     receivable_account AS "receivableAccount", academic_year_id AS "academicYearId",
+                     financial_period AS "financialPeriod", version, status, effective_from AS "effectiveFrom",
+                     effective_to AS "effectiveTo"`,
+          [tenantId, schoolId, templateId, code, name, category, amount, String(body.currency || 'SAR'), revenueAccount,
+            String(body.receivableAccount || '1201'), academicYearId, financialPeriod, String(body.status || 'draft'), effectiveFrom,
+            effectiveTo, JSON.stringify(body.eligibilityRules || {}), JSON.stringify(body.installmentPolicy || {}), databaseActorId]);
+        created = result.rows[0];
+        await transaction.query(
+          `INSERT INTO public.audit_events
+            (id, tenant_id, school_id, actor_user_id, entity_type, entity_id, action, source, result, metadata)
+           VALUES ($1,$2,$3,$4,'student_fee_template',$5,'create','CanonicalStudentFeeRoute','success',$6::jsonb)`,
+          [randomUUID(), tenantId, schoolId, databaseActorId, templateId, JSON.stringify({ code, amount, academicYearId, financialPeriod })]);
+      }, tenantContext);
+      res.status(201).json({ success: true, data: created, meta: { source: 'canonical_postgres' } });
+    } catch (err: any) {
+      next(err instanceof AuthenticationError || err instanceof ValidationError || err instanceof DatabaseError ? err : new DatabaseError('تعذر إنشاء هيكل الرسم.', err?.message));
+    }
+  });
+
+  app.post("/api/financial/invoices/issue", authenticateRequest, requirePermission(PERMISSIONS.FINANCIAL_WRITE), async (req, res, next) => {
+    try {
+      const { tenantId, schoolId, actorId, tenantContext } = canonicalFeeContext(req);
+      const body = req.body && typeof req.body === 'object' ? req.body as Record<string, any> : {};
+      const studentId = String(body.studentId || '').trim();
+      if (!canonicalFeeUuid(studentId)) throw new ValidationError('معرف الطالب غير صالح.');
+      const academicYearId = String(body.academicYearId || '').trim();
+      const academicPeriodId = String(body.academicPeriodId || '').trim();
+      const financialPeriod = String(body.financialPeriod || '').trim();
+      const description = String(body.description || body.item || '').trim();
+      const revenueAccount = String(body.revenueAccount || '').trim();
+      if (!academicYearId || !academicPeriodId || !financialPeriod || !description || !revenueAccount) throw new ValidationError('السنة والفترة والوصف والحساب الإيرادي حقول مطلوبة لإصدار المطالبة.');
+      const amount = assertMoney(body.amount, 'قيمة المطالبة');
+      const taxAmount = assertMoney(body.taxAmount || 0, 'الضريبة', true);
+      const totalAmount = Number((amount + taxAmount).toFixed(2));
+      const invoiceDate = String(body.invoiceDate || new Date().toISOString().slice(0, 10)).slice(0, 10);
+      const dueDate = String(body.dueDate || '').slice(0, 10);
+      if (!/^\d{4}-\d{2}-\d{2}$/.test(dueDate)) throw new ValidationError('تاريخ الاستحقاق غير صالح.');
+      const idempotencyKey = normalizeIdempotencyKey(body.idempotencyKey || makeDeterministicIdempotencyKey([studentId, body.templateId, academicYearId, academicPeriodId, description]), 'إصدار المطالبة');
+      const invoiceId = String(body.id || makeInvoiceId());
+      if (!canonicalFeeUuid(invoiceId)) throw new ValidationError('معرف المطالبة يجب أن يكون UUID صالحًا.');
+      let invoice: any = null;
+      let schedules: any[] = [];
+      let idempotentReplay = false;
+      await UnitOfWork.runInTransaction(schoolId, {
+        operationName: 'Issue canonical student fee invoice', tenantId, userId: actorId,
+        userName: String((req as any).user.name || 'مدير الرسوم'), ipAddress: req.ip || 'unknown', affectedTables: ['student_fee_invoices', 'student_fee_installment_plans', 'student_fee_installment_schedules', 'audit_events']
+      }, async () => {
+        const transaction = UnitOfWork.getActiveContext()?.databaseTransaction;
+        if (!transaction) throw new DatabaseError('تعذر فتح المعاملة المالية.');
+        const databaseActorId = await resolveCanonicalFeeActor(transaction, tenantId, schoolId, actorId);
+        const existing = await transaction.query(`SELECT * FROM public.student_fee_invoices WHERE tenant_id = $1 AND school_id = $2 AND idempotency_key = $3 FOR UPDATE`, [tenantId, schoolId, idempotencyKey]);
+        if (existing.rows[0]) {
+          invoice = existing.rows[0];
+          idempotentReplay = true;
+          const existingPlan = await transaction.query(`SELECT id, installment_number AS "installmentNumber", due_date AS "dueDate", amount, paid_amount AS "paidAmount", status FROM public.student_fee_installment_schedules WHERE school_id = $1 AND plan_id IN (SELECT id FROM public.student_fee_installment_plans WHERE school_id = $1 AND invoice_id = $2) ORDER BY installment_number`, [schoolId, String(existing.rows[0].id)]);
+          schedules = existingPlan.rows;
+          return;
+        }
+        const student = await transaction.query(`SELECT id, preferred_name, legal_first_name, legal_middle_name, legal_last_name, branch_id FROM public.students WHERE tenant_id = $1 AND school_id = $2 AND id = $3 AND deleted_at IS NULL AND status IN ('active','admitted','applicant') FOR SHARE`, [tenantId, schoolId, studentId]);
+        if (!student.rows[0]) throw new ValidationError('الطالب غير موجود أو غير نشط في المدرسة الحالية.');
+        const studentName = [student.rows[0].preferred_name, student.rows[0].legal_first_name, student.rows[0].legal_middle_name, student.rows[0].legal_last_name].filter(Boolean).join(' ');
+        const result = await transaction.query(
+          `INSERT INTO public.student_fee_invoices
+            (tenant_id, school_id, id, branch_id, student_id, student_name, item, amount, tax_amount, paid_amount,
+             remaining_amount, invoice_date, due_date, status, source_payload, updated_by, template_id,
+             academic_year_id, academic_period_id, currency, idempotency_key, version)
+           VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,0,$10,$11,$12,'issued',$13::jsonb,$14,$15,$16,$17,$18,$19,1)
+           RETURNING *`,
+          [tenantId, schoolId, invoiceId, body.branchId || student.rows[0].branch_id || null, studentId, studentName, description,
+            amount, taxAmount, totalAmount, invoiceDate, dueDate,
+            JSON.stringify({ command: 'issue', idempotencyKey, revenueAccount, receivableAccount: String(body.receivableAccount || '1201'), financialPeriod }), databaseActorId,
+            String(body.templateId || ''), academicYearId, academicPeriodId, String(body.currency || 'SAR'), idempotencyKey]);
+        invoice = result.rows[0];
+        if (body.installmentPlan && typeof body.installmentPlan === 'object') {
+          const plan = body.installmentPlan as Record<string, any>;
+          const frequency = String(plan.frequency || 'monthly').toLowerCase() as InstallmentFrequency;
+          if (!['monthly', 'quarterly', 'yearly'].includes(frequency)) throw new ValidationError('تواتر الأقساط غير مدعوم.');
+          const generated = buildInstallmentSchedule({ totalAmount, count: Number(plan.count || 1), startDueDate: String(plan.startDueDate || dueDate), frequency, gracePeriodDays: Number(plan.gracePeriodDays || 0) });
+          const planResult = await transaction.query(
+            `INSERT INTO public.student_fee_installment_plans
+              (tenant_id, school_id, invoice_id, student_id, template_id, total_amount, frequency, method, installment_count, currency, status, policy, created_by)
+             VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,'approved',$11::jsonb,$12)
+             RETURNING id`,
+            [tenantId, schoolId, invoiceId, studentId, String(body.templateId || '') || null, totalAmount, frequency, String(plan.method || 'equal'), generated.length, String(body.currency || 'SAR'), JSON.stringify({ gracePeriodDays: Number(plan.gracePeriodDays || 0), penaltyRatePercent: Number(plan.penaltyRatePercent || 0), allowPenaltyWaiver: Boolean(plan.allowPenaltyWaiver) }), databaseActorId]);
+          const planId = planResult.rows[0].id;
+          for (const item of generated) {
+            const row = await transaction.query(
+              `INSERT INTO public.student_fee_installment_schedules
+                (tenant_id, school_id, plan_id, installment_number, due_date, amount, paid_amount, penalty_amount, waived_penalty_amount, status)
+               VALUES ($1,$2,$3,$4,$5,$6,0,0,0,$7) RETURNING id, installment_number AS "installmentNumber", due_date AS "dueDate", amount, paid_amount AS "paidAmount", status`,
+              [tenantId, schoolId, planId, item.installmentNumber, item.dueDate, item.amount, item.dueDate <= invoiceDate ? 'due' : 'scheduled']);
+            schedules.push(row.rows[0]);
+          }
+        }
+        await transaction.query(
+          `INSERT INTO public.audit_events
+            (id, tenant_id, school_id, actor_user_id, entity_type, entity_id, action, source, result, metadata)
+           VALUES ($1,$2,$3,$4,'student_fee_invoice',$5,'issue','CanonicalStudentFeeRoute','success',$6::jsonb)`,
+          [randomUUID(), tenantId, schoolId, databaseActorId, invoiceId, JSON.stringify({ idempotencyKey, amount: totalAmount, scheduleCount: schedules.length })]);
+      }, tenantContext);
+      res.status(201).json({ success: true, data: { invoice, schedules }, meta: { source: 'canonical_postgres', idempotentReplay } });
+    } catch (err: any) {
+      next(err instanceof AuthenticationError || err instanceof ValidationError || err instanceof DatabaseError ? err : new DatabaseError('تعذر إصدار المطالبة المالية.', err?.message));
+    }
+  });
+
+  app.post("/api/financial/fee-assignments/bulk", authenticateRequest, requirePermission(PERMISSIONS.FINANCIAL_WRITE), async (req, res, next) => {
+    try {
+      const { tenantId, schoolId, actorId, tenantContext } = canonicalFeeContext(req);
+      const body = req.body && typeof req.body === 'object' ? req.body as Record<string, any> : {};
+      const templateId = String(body.templateId || '').trim();
+      const academicYearId = String(body.academicYearId || '').trim();
+      const academicPeriodId = String(body.academicPeriodId || '').trim();
+      const dueDate = String(body.dueDate || '').slice(0, 10);
+      const studentIds = Array.isArray(body.studentIds) ? [...new Set(body.studentIds.map((id: unknown) => String(id).trim()).filter(canonicalFeeUuid))] : [];
+      if (!templateId || !academicYearId || !academicPeriodId || !/^\d{4}-\d{2}-\d{2}$/.test(dueDate) || studentIds.length === 0) throw new ValidationError('القالب والفترة وتاريخ الاستحقاق وقائمة الطلاب حقول مطلوبة للتوزيع الجماعي.');
+      const grossAmount = assertMoney(body.amount, 'قيمة التوزيع الجماعي');
+      const discountAmount = assertMoney(body.discountAmount || 0, 'الخصم', true);
+      if (discountAmount > grossAmount) throw new ValidationError('الخصم لا يمكن أن يتجاوز قيمة الرسم.');
+      const results: any[] = [];
+      await UnitOfWork.runInTransaction(schoolId, {
+        operationName: 'Bulk assign canonical student fee', tenantId, userId: actorId,
+        userName: String((req as any).user.name || 'مدير الرسوم'), ipAddress: req.ip || 'unknown', affectedTables: ['student_fee_assignments', 'audit_events']
+      }, async () => {
+        const transaction = UnitOfWork.getActiveContext()?.databaseTransaction;
+        if (!transaction) throw new DatabaseError('تعذر فتح المعاملة المالية.');
+        const databaseActorId = await resolveCanonicalFeeActor(transaction, tenantId, schoolId, actorId);
+        const students = await transaction.query(`SELECT id, preferred_name, legal_first_name, legal_middle_name, legal_last_name FROM public.students WHERE tenant_id = $1 AND school_id = $2 AND id = ANY($3::uuid[]) AND deleted_at IS NULL AND status IN ('active','admitted','applicant')`, [tenantId, schoolId, studentIds]);
+        const valid = new Map(students.rows.map((row: any) => [String(row.id), row]));
+        const source = String(body.source || 'bulk_distribution');
+        for (const studentId of studentIds) {
+          const student = valid.get(studentId);
+          if (!student) continue;
+          const key = normalizeIdempotencyKey(body.idempotencyPrefix ? `${String(body.idempotencyPrefix)}:${studentId}` : makeDeterministicIdempotencyKey([studentId, templateId, academicYearId, academicPeriodId]), 'التوزيع الجماعي');
+          const row = await transaction.query(
+            `INSERT INTO public.student_fee_assignments
+              (tenant_id, school_id, student_id, template_id, academic_year_id, academic_period_id, gross_amount, discount_amount, net_amount, due_date, status, idempotency_key, source, created_by)
+             VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,'assigned',$11,$12,$13)
+             ON CONFLICT (school_id, idempotency_key) DO UPDATE SET idempotency_key = EXCLUDED.idempotency_key
+             RETURNING id, student_id AS "studentId", template_id AS "templateId", gross_amount AS "grossAmount", discount_amount AS "discountAmount", net_amount AS "netAmount", due_date AS "dueDate", status, idempotency_key AS "idempotencyKey"`,
+            [tenantId, schoolId, studentId, templateId, academicYearId, academicPeriodId, grossAmount, discountAmount, Number((grossAmount - discountAmount).toFixed(2)), dueDate, key, source, databaseActorId]);
+          results.push(row.rows[0]);
+          if (body.issueInvoices === true) {
+            const invoiceId = makeInvoiceId();
+            const invoiceKey = `${key}:invoice`;
+            const studentName = [student.preferred_name, student.legal_first_name, student.legal_middle_name, student.legal_last_name].filter(Boolean).join(' ');
+            const invoice = await transaction.query(
+              `INSERT INTO public.student_fee_invoices
+                (tenant_id, school_id, id, student_id, student_name, item, amount, tax_amount, paid_amount, remaining_amount,
+                 invoice_date, due_date, status, source_payload, updated_by, template_id, academic_year_id, academic_period_id,
+                 currency, idempotency_key, version)
+               VALUES ($1,$2,$3,$4,$5,$6,$7,0,0,$7,CURRENT_DATE,$8,'issued',$9::jsonb,$10,$11,$12,$13,$14,$15,1)
+               ON CONFLICT (school_id, idempotency_key) DO UPDATE SET idempotency_key = EXCLUDED.idempotency_key
+               RETURNING id, student_id AS "studentId", student_name AS "studentName", amount, remaining_amount AS "remainingAmount", due_date AS "dueDate", status`,
+              [tenantId, schoolId, invoiceId, studentId, studentName, String(body.description || body.item || `رسوم ${templateId}`), Number((grossAmount - discountAmount).toFixed(2)), dueDate, JSON.stringify({ source, assignmentId: row.rows[0].id, idempotencyKey: invoiceKey }), databaseActorId, templateId, academicYearId, academicPeriodId, String(body.currency || 'SAR'), invoiceKey]);
+            results[results.length - 1] = { ...results[results.length - 1], invoice: invoice.rows[0] };
+          }
+        }
+      }, tenantContext);
+      res.status(201).json({ success: true, data: results, meta: { source: 'canonical_postgres', count: results.length, duplicateSafe: true } });
+    } catch (err: any) {
+      next(err instanceof AuthenticationError || err instanceof ValidationError || err instanceof DatabaseError ? err : new DatabaseError('تعذر تنفيذ التوزيع الجماعي.', err?.message));
+    }
+  });
+
+  app.post("/api/financial/invoices/:invoiceId/installment-plan", authenticateRequest, requirePermission(PERMISSIONS.FINANCIAL_WRITE), async (req, res, next) => {
+    try {
+      const { tenantId, schoolId, actorId, tenantContext } = canonicalFeeContext(req);
+      const invoiceId = String(req.params.invoiceId || '').trim();
+      const body = req.body && typeof req.body === 'object' ? req.body as Record<string, any> : {};
+      const frequency = String(body.frequency || 'monthly').toLowerCase() as InstallmentFrequency;
+      if (!['monthly', 'quarterly', 'yearly'].includes(frequency)) throw new ValidationError('تواتر الأقساط غير مدعوم.');
+      let plan: any = null;
+      let schedules: any[] = [];
+      await UnitOfWork.runInTransaction(schoolId, {
+        operationName: 'Create canonical installment plan', tenantId, userId: actorId,
+        userName: String((req as any).user.name || 'مدير الرسوم'), ipAddress: req.ip || 'unknown', affectedTables: ['student_fee_installment_plans', 'student_fee_installment_schedules', 'audit_events']
+      }, async () => {
+        const transaction = UnitOfWork.getActiveContext()?.databaseTransaction;
+        if (!transaction) throw new DatabaseError('تعذر فتح المعاملة المالية.');
+        const databaseActorId = await resolveCanonicalFeeActor(transaction, tenantId, schoolId, actorId);
+        const invoiceResult = await transaction.query(`SELECT id, student_id, template_id, amount, tax_amount, remaining_amount, due_date, currency FROM public.student_fee_invoices WHERE tenant_id = $1 AND school_id = $2 AND id = $3 FOR UPDATE`, [tenantId, schoolId, invoiceId]);
+        const invoice = invoiceResult.rows[0];
+        if (!invoice) throw new ValidationError('الفاتورة غير موجودة في المصدر الكانوني.');
+        const existing = await transaction.query(`SELECT id FROM public.student_fee_installment_plans WHERE school_id = $1 AND invoice_id = $2 AND status <> 'cancelled' LIMIT 1`, [schoolId, invoiceId]);
+        if (existing.rows[0]) throw new ConflictError('الفاتورة مرتبطة مسبقًا بخطة تقسيط نشطة.');
+        const totalAmount = Number(invoice.remaining_amount || Number(invoice.amount) + Number(invoice.tax_amount || 0));
+        const generated = buildInstallmentSchedule({ totalAmount, count: Number(body.count || 1), startDueDate: String(body.startDueDate || invoice.due_date), frequency, gracePeriodDays: Number(body.gracePeriodDays || 0) });
+        const insertedPlan = await transaction.query(
+          `INSERT INTO public.student_fee_installment_plans
+            (tenant_id, school_id, invoice_id, student_id, template_id, total_amount, frequency, method, installment_count, currency, status, policy, created_by)
+           VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,'approved',$11::jsonb,$12)
+           RETURNING id, invoice_id AS "invoiceId", student_id AS "studentId", total_amount AS "totalAmount", frequency, method, installment_count AS "installmentCount", currency, status`,
+          [tenantId, schoolId, invoiceId, invoice.student_id, invoice.template_id || null, totalAmount, frequency, String(body.method || 'equal'), generated.length, invoice.currency || 'SAR', JSON.stringify({ gracePeriodDays: Number(body.gracePeriodDays || 0), penaltyRatePercent: Number(body.penaltyRatePercent || 0), flatLateFee: Number(body.flatLateFee || 0), allowPenaltyWaiver: Boolean(body.allowPenaltyWaiver) }), databaseActorId]);
+        plan = insertedPlan.rows[0];
+        for (const item of generated) {
+          const row = await transaction.query(
+            `INSERT INTO public.student_fee_installment_schedules
+              (tenant_id, school_id, plan_id, installment_number, due_date, amount, paid_amount, penalty_amount, waived_penalty_amount, status)
+             VALUES ($1,$2,$3,$4,$5,$6,0,0,0,'scheduled')
+             RETURNING id, installment_number AS "installmentNumber", due_date AS "dueDate", amount, paid_amount AS "paidAmount", penalty_amount AS "penaltyAmount", waived_penalty_amount AS "waivedPenaltyAmount", status`,
+            [tenantId, schoolId, plan.id, item.installmentNumber, item.dueDate, item.amount]);
+          schedules.push(row.rows[0]);
+        }
+        await transaction.query(`INSERT INTO public.audit_events (id, tenant_id, school_id, actor_user_id, entity_type, entity_id, action, source, result, metadata) VALUES ($1,$2,$3,$4,'student_fee_installment_plan',$5,'create','CanonicalStudentFeeRoute','success',$6::jsonb)`, [randomUUID(), tenantId, schoolId, databaseActorId, plan.id, JSON.stringify({ invoiceId, scheduleCount: schedules.length })]);
+      }, tenantContext);
+      res.status(201).json({ success: true, data: { plan, schedules }, meta: { source: 'canonical_postgres' } });
+    } catch (err: any) {
+      next(err instanceof AuthenticationError || err instanceof ValidationError || err instanceof DatabaseError || err instanceof ConflictError ? err : new DatabaseError('تعذر إنشاء خطة التقسيط.', err?.message));
+    }
+  });
+
+  app.post("/api/financial/concessions", authenticateRequest, requirePermission(PERMISSIONS.FINANCIAL_WRITE), async (req, res, next) => {
+    try {
+      const { tenantId, schoolId, actorId, tenantContext } = canonicalFeeContext(req);
+      const body = req.body && typeof req.body === 'object' ? req.body as Record<string, any> : {};
+      const studentId = String(body.studentId || '').trim();
+      const type = String(body.type || '').trim();
+      const reason = String(body.reason || '').trim();
+      if (!canonicalFeeUuid(studentId) || !['scholarship', 'sibling', 'exemption', 'staff', 'manual_adjustment'].includes(type) || !reason) throw new ValidationError('الطالب ونوع الاستحقاق وسببه حقول مطلوبة.');
+      const percentage = Number(body.percentage || 0);
+      const fixedAmount = Number(body.fixedAmount || 0);
+      if (!Number.isFinite(percentage) || percentage < 0 || percentage > 100 || !Number.isFinite(fixedAmount) || fixedAmount < 0) throw new ValidationError('قيمة المنحة أو الإعفاء غير صالحة.');
+      let concession: any = null;
+      await UnitOfWork.runInTransaction(schoolId, {
+        operationName: 'Create student fee concession request', tenantId, userId: actorId,
+        userName: String((req as any).user.name || 'مدير الرسوم'), ipAddress: req.ip || 'unknown', affectedTables: ['student_fee_concessions', 'audit_events']
+      }, async () => {
+        const transaction = UnitOfWork.getActiveContext()?.databaseTransaction;
+        if (!transaction) throw new DatabaseError('تعذر فتح المعاملة المالية.');
+        const databaseActorId = await resolveCanonicalFeeActor(transaction, tenantId, schoolId, actorId);
+        const student = await transaction.query(`SELECT id FROM public.students WHERE tenant_id = $1 AND school_id = $2 AND id = $3 AND deleted_at IS NULL`, [tenantId, schoolId, studentId]);
+        if (!student.rows[0]) throw new ValidationError('الطالب غير موجود في المدرسة الحالية.');
+        const result = await transaction.query(
+          `INSERT INTO public.student_fee_concessions (tenant_id, school_id, student_id, guardian_id, type, reason, percentage, fixed_amount, valid_from, valid_to, status, evidence, created_by)
+           VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,'pending',$11::jsonb,$12)
+           RETURNING id, student_id AS "studentId", guardian_id AS "guardianId", type, reason, percentage, fixed_amount AS "fixedAmount", valid_from AS "validFrom", valid_to AS "validTo", status`,
+          [tenantId, schoolId, studentId, body.guardianId || null, type, reason, percentage, fixedAmount, String(body.validFrom || new Date().toISOString().slice(0, 10)).slice(0, 10), body.validTo ? String(body.validTo).slice(0, 10) : null, JSON.stringify(Array.isArray(body.evidence) ? body.evidence : []), databaseActorId]);
+        concession = result.rows[0];
+        await transaction.query(`INSERT INTO public.audit_events (id, tenant_id, school_id, actor_user_id, entity_type, entity_id, action, source, result, metadata) VALUES ($1,$2,$3,$4,'student_fee_concession',$5,'request','CanonicalStudentFeeRoute','success',$6::jsonb)`, [randomUUID(), tenantId, schoolId, databaseActorId, concession.id, JSON.stringify({ type, studentId, percentage, fixedAmount })]);
+      }, tenantContext);
+      res.status(201).json({ success: true, data: concession, meta: { source: 'canonical_postgres', approvalRequired: true } });
+    } catch (err: any) {
+      next(err instanceof AuthenticationError || err instanceof ValidationError || err instanceof DatabaseError ? err : new DatabaseError('تعذر إنشاء طلب المنحة أو الإعفاء.', err?.message));
+    }
+  });
+
+  app.post("/api/financial/concessions/:concessionId/approve", authenticateRequest, requirePermission(PERMISSIONS.FINANCIAL_WRITE), async (req, res, next) => {
+    try {
+      const { tenantId, schoolId, actorId, tenantContext } = canonicalFeeContext(req);
+      const concessionId = String(req.params.concessionId || '').trim();
+      let concession: any = null;
+      await UnitOfWork.runInTransaction(schoolId, {
+        operationName: 'Approve student fee concession', tenantId, userId: actorId,
+        userName: String((req as any).user.name || 'مدير الرسوم'), ipAddress: req.ip || 'unknown', affectedTables: ['student_fee_concessions', 'audit_events']
+      }, async () => {
+        const transaction = UnitOfWork.getActiveContext()?.databaseTransaction;
+        if (!transaction) throw new DatabaseError('تعذر فتح المعاملة المالية.');
+        const databaseActorId = await resolveCanonicalFeeActor(transaction, tenantId, schoolId, actorId);
+        const result = await transaction.query(`UPDATE public.student_fee_concessions SET status = 'approved', approved_by = $4, approved_at = now() WHERE tenant_id = $1 AND school_id = $2 AND id = $3 AND status = 'pending' RETURNING id, student_id AS "studentId", type, percentage, fixed_amount AS "fixedAmount", status, approved_at AS "approvedAt"`, [tenantId, schoolId, concessionId, databaseActorId]);
+        if (!result.rows[0]) throw new ConflictError('طلب المنحة أو الإعفاء غير موجود أو سبق اتخاذ قرار بشأنه.');
+        concession = result.rows[0];
+        await transaction.query(`INSERT INTO public.audit_events (id, tenant_id, school_id, actor_user_id, entity_type, entity_id, action, source, result, metadata) VALUES ($1,$2,$3,$4,'student_fee_concession',$5,'approve','CanonicalStudentFeeRoute','success',$6::jsonb)`, [randomUUID(), tenantId, schoolId, databaseActorId, concessionId, JSON.stringify({ concession })]);
+      }, tenantContext);
+      res.json({ success: true, data: concession, meta: { source: 'canonical_postgres' } });
+    } catch (err: any) {
+      next(err instanceof AuthenticationError || err instanceof ConflictError || err instanceof DatabaseError ? err : new DatabaseError('تعذر اعتماد المنحة أو الإعفاء.', err?.message));
+    }
+  });
+
+  app.post("/api/financial/payment-intents", authenticateRequest, requirePermission(PERMISSIONS.FINANCIAL_WRITE), async (req, res, next) => {
+    try {
+      const { tenantId, schoolId, actorId, tenantContext } = canonicalFeeContext(req);
+      const body = req.body && typeof req.body === 'object' ? req.body as Record<string, any> : {};
+      const studentId = String(body.studentId || '').trim();
+      const provider = String(body.provider || '').trim().toLowerCase();
+      const idempotencyKey = normalizeIdempotencyKey(body.idempotencyKey, 'إنشاء محاولة الدفع');
+      const amount = assertMoney(body.amount, 'مبلغ الدفع');
+      if (!canonicalFeeUuid(studentId) || !provider) throw new ValidationError('الطالب ومزود الدفع حقول مطلوبة.');
+      let attempt: any = null;
+      await UnitOfWork.runInTransaction(schoolId, {
+        operationName: 'Create student fee payment intent', tenantId, userId: actorId,
+        userName: String((req as any).user.name || 'ولي الأمر/المحاسب'), ipAddress: req.ip || 'unknown', affectedTables: ['student_fee_payment_attempts', 'audit_events']
+      }, async () => {
+        const transaction = UnitOfWork.getActiveContext()?.databaseTransaction;
+        if (!transaction) throw new DatabaseError('تعذر فتح معاملة الدفع.');
+        const result = await transaction.query(
+          `INSERT INTO public.student_fee_payment_attempts (tenant_id, school_id, student_id, amount, currency, provider, provider_reference, idempotency_key, status, metadata)
+           VALUES ($1,$2,$3,$4,$5,$6,$7,$8,'created',$9::jsonb)
+           ON CONFLICT (school_id, idempotency_key) DO UPDATE SET idempotency_key = EXCLUDED.idempotency_key
+           RETURNING id, student_id AS "studentId", amount, currency, provider, provider_reference AS "providerReference", idempotency_key AS "idempotencyKey", status, metadata`,
+          [tenantId, schoolId, studentId, amount, String(body.currency || 'SAR'), provider, String(body.providerReference || makePaymentAttemptId()), idempotencyKey, JSON.stringify(body.metadata || {})]);
+        attempt = result.rows[0];
+      }, tenantContext);
+      res.status(201).json({ success: true, data: attempt, meta: { source: 'canonical_postgres', providerAdapterRequired: true } });
+    } catch (err: any) {
+      next(err instanceof AuthenticationError || err instanceof ValidationError || err instanceof DatabaseError ? err : new DatabaseError('تعذر إنشاء محاولة الدفع.', err?.message));
+    }
+  });
+
+  app.post("/api/financial/payment-attempts/:attemptId/settle", authenticateRequest, requirePermission(PERMISSIONS.FINANCIAL_WRITE), async (req, res, next) => {
+    try {
+      const { tenantId, schoolId, actorId, tenantContext } = canonicalFeeContext(req);
+      const attemptId = String(req.params.attemptId || '').trim();
+      if (!canonicalFeeUuid(attemptId)) throw new ValidationError('معرف محاولة الدفع غير صالح.');
+      let receipt: any = null;
+      await UnitOfWork.runInTransaction(schoolId, {
+        operationName: 'Settle successful student fee payment', tenantId, userId: actorId,
+        userName: String((req as any).user.name || 'المحاسب'), ipAddress: req.ip || 'unknown', affectedTables: ['student_fee_payment_attempts', 'student_fee_receipts', 'audit_events']
+      }, async () => {
+        const transaction = UnitOfWork.getActiveContext()?.databaseTransaction;
+        if (!transaction) throw new DatabaseError('تعذر فتح معاملة تسوية الدفع.');
+        const databaseActorId = await resolveCanonicalFeeActor(transaction, tenantId, schoolId, actorId);
+        const attempt = await transaction.query(`SELECT id, student_id, amount, currency, provider, status, receipt_id FROM public.student_fee_payment_attempts WHERE tenant_id = $1 AND school_id = $2 AND id = $3 FOR UPDATE`, [tenantId, schoolId, attemptId]);
+        if (!attempt.rows[0] || attempt.rows[0].status !== 'succeeded') throw new ConflictError('لا يمكن تسوية محاولة دفع غير ناجحة أو غير مؤكدة.');
+        if (attempt.rows[0].receipt_id) {
+          const existing = await transaction.query(`SELECT id, student_id AS "studentId", amount, status FROM public.student_fee_receipts WHERE tenant_id = $1 AND school_id = $2 AND id = $3`, [tenantId, schoolId, attempt.rows[0].receipt_id]);
+          receipt = existing.rows[0];
+          return;
+        }
+        const receiptId = String(req.body?.receiptId || makeReceiptId());
+        const result = await transaction.query(
+          `INSERT INTO public.student_fee_receipts
+            (tenant_id, school_id, id, student_id, student_name, receipt_date, amount, payment_method,
+             receiving_account, operational_type, against_text, status, source_payload, updated_by)
+           VALUES ($1,$2,$3,$4,'',CURRENT_DATE,$5,$6,$7,'student_fee','بوابة الدفع','approved',$8::jsonb,$9)
+           RETURNING id, student_id AS "studentId", amount, payment_method AS "paymentMethod", status`,
+          [tenantId, schoolId, receiptId, attempt.rows[0].student_id, attempt.rows[0].amount, attempt.rows[0].provider, String(req.body?.receivingAccount || 'gateway'), JSON.stringify({ paymentAttemptId: attemptId, provider: attempt.rows[0].provider }), databaseActorId]);
+        receipt = result.rows[0];
+        await transaction.query(`UPDATE public.student_fee_payment_attempts SET receipt_id = $4, updated_at = now() WHERE tenant_id = $1 AND school_id = $2 AND id = $3`, [tenantId, schoolId, attemptId, receiptId]);
+        await transaction.query(`INSERT INTO public.audit_events (id, tenant_id, school_id, actor_user_id, entity_type, entity_id, action, source, result, metadata) VALUES ($1,$2,$3,$4,'student_fee_payment_attempt',$5,'settle','CanonicalStudentFeeRoute','success',$6::jsonb)`, [randomUUID(), tenantId, schoolId, databaseActorId, attemptId, JSON.stringify({ receiptId, amount: attempt.rows[0].amount })]);
+      }, tenantContext);
+      res.status(201).json({ success: true, data: receipt, meta: { source: 'canonical_postgres', allocationRequired: true } });
+    } catch (err: any) {
+      next(err instanceof AuthenticationError || err instanceof ValidationError || err instanceof ConflictError || err instanceof DatabaseError ? err : new DatabaseError('تعذر تسوية محاولة الدفع.', err?.message));
+    }
+  });
+
+  app.post("/api/financial/payment-webhooks/:provider", async (req, res, next) => {
+    try {
+      const provider = String(req.params.provider || '').trim().toLowerCase();
+      const body = req.body && typeof req.body === 'object' ? req.body as Record<string, any> : {};
+      const eventId = String(body.eventId || body.id || '').trim();
+      const eventType = String(body.eventType || body.type || '').trim();
+      const tenantId = String(body.tenantId || '').trim();
+      const schoolId = String(body.schoolId || '').trim();
+      const signature = String(req.header('x-payment-signature') || body.signature || '').trim();
+      const secret = String(process.env.PAYMENT_WEBHOOK_SECRET || '').trim();
+      if (!provider || !eventId || !eventType || !canonicalFeeUuid(tenantId) || !canonicalFeeUuid(schoolId)) throw new ValidationError('بيانات Webhook الدفع غير مكتملة.');
+      if (!secret && productionLikeEnvironment) throw new DatabaseError('لم يتم إعداد سر Webhook الدفع في البيئة الإنتاجية.');
+      const expectedSignature = createHash('sha256').update(`${secret}.${JSON.stringify(body.payload || body)}`).digest('hex');
+      if (secret && signature !== expectedSignature) throw new AuthenticationError('توقيع Webhook الدفع غير صالح.');
+      if (!transactionDriver) throw new DatabaseError('تحتاج معالجة Webhook إلى اتصال PostgreSQL.');
+      let status = 'received';
+      await UnitOfWork.runInTransaction(schoolId, {
+        operationName: 'Process student fee payment webhook', tenantId, userId: '00000000-0000-0000-0000-000000000000',
+        userName: 'payment-webhook', ipAddress: req.ip || 'unknown', affectedTables: ['student_fee_payment_webhooks', 'student_fee_payment_attempts', 'student_fee_receipts']
+      }, async () => {
+        const transaction = UnitOfWork.getActiveContext()?.databaseTransaction;
+        if (!transaction) throw new DatabaseError('تعذر فتح معاملة Webhook.');
+        const inserted = await transaction.query(
+          `INSERT INTO public.student_fee_payment_webhooks (tenant_id, school_id, provider, event_id, event_type, signature_hash, payload)
+           VALUES ($1,$2,$3,$4,$5,$6,$7::jsonb)
+           ON CONFLICT (school_id, provider, event_id) DO NOTHING
+           RETURNING id`, [tenantId, schoolId, provider, eventId, eventType, expectedSignature, JSON.stringify(body.payload || body)]);
+        if (!inserted.rows[0]) { status = 'ignored'; return; }
+        const providerReference = String(body.providerReference || body.paymentId || body.data?.providerReference || '').trim();
+        const eventStatus = String(body.status || body.data?.status || '').toLowerCase();
+        const mappedStatus = ['succeeded', 'paid', 'success', 'completed'].includes(eventStatus) ? 'succeeded' : ['failed', 'declined'].includes(eventStatus) ? 'failed' : 'pending';
+        const attempt = providerReference ? await transaction.query(`UPDATE public.student_fee_payment_attempts SET status = $4, provider_reference = COALESCE(provider_reference, $3), updated_at = now(), failure_code = $5, failure_message = $6 WHERE tenant_id = $1 AND school_id = $2 AND provider_reference = $3 RETURNING id, student_id, amount, currency`, [tenantId, schoolId, providerReference, mappedStatus, body.failureCode || null, body.failureMessage || null]) : { rows: [] };
+        // A webhook is deliberately limited to marking the provider attempt.
+        // Receipt creation and ledger posting require an authenticated school
+        // actor and are performed by the settlement command, so a provider
+        // callback can never fabricate an accounting entry.
+        await transaction.query(`UPDATE public.student_fee_payment_webhooks SET status = 'processed', processed_at = now() WHERE tenant_id = $1 AND school_id = $2 AND provider = $3 AND event_id = $4`, [tenantId, schoolId, provider, eventId]);
+        status = 'processed';
+      }, {
+        tenantId,
+        schoolId,
+        branchId: String(body.branchId || ''),
+        academicYear: String(body.academicYear || ''),
+        userId: String(body.userId || ''),
+        role: 'payment-webhook',
+      });
+      res.json({ success: true, status, provider, eventId });
+    } catch (err: any) {
+      next(err instanceof AuthenticationError || err instanceof ValidationError || err instanceof DatabaseError ? err : new DatabaseError('تعذر معالجة Webhook الدفع.', err?.message));
+    }
+  });
+
+  app.post("/api/financial/receipts/:receiptId/allocate", authenticateRequest, requirePermission(PERMISSIONS.FINANCIAL_WRITE), async (req, res, next) => {
+    try {
+      const { tenantId, schoolId, actorId, tenantContext } = canonicalFeeContext(req);
+      const receiptId = String(req.params.receiptId || '').trim();
+      const invoiceId = String(req.body?.invoiceId || '').trim();
+      const scheduleId = req.body?.installmentScheduleId ? String(req.body.installmentScheduleId).trim() : null;
+      const amount = assertMoney(req.body?.amount, 'قيمة التخصيص');
+      let allocation: any = null;
+      await UnitOfWork.runInTransaction(schoolId, {
+        operationName: 'Allocate student fee receipt', tenantId, userId: actorId,
+        userName: String((req as any).user.name || 'المحاسب'), ipAddress: req.ip || 'unknown', affectedTables: ['student_fee_receipts', 'student_fee_invoices', 'student_fee_allocations', 'audit_events']
+      }, async () => {
+        const transaction = UnitOfWork.getActiveContext()?.databaseTransaction;
+        if (!transaction) throw new DatabaseError('تعذر فتح المعاملة المالية.');
+        const databaseActorId = await resolveCanonicalFeeActor(transaction, tenantId, schoolId, actorId);
+        const receipt = await transaction.query(`SELECT id, amount, status FROM public.student_fee_receipts WHERE tenant_id = $1 AND school_id = $2 AND id = $3 FOR UPDATE`, [tenantId, schoolId, receiptId]);
+        if (!receipt.rows[0] || !['approved', 'posted'].includes(String(receipt.rows[0].status).toLowerCase())) throw new ValidationError('السند غير موجود أو غير معتمد للتخصيص.');
+        const invoice = await transaction.query(`SELECT id, amount, tax_amount, paid_amount, remaining_amount, status FROM public.student_fee_invoices WHERE tenant_id = $1 AND school_id = $2 AND id = $3 FOR UPDATE`, [tenantId, schoolId, invoiceId]);
+        if (!invoice.rows[0]) throw new ValidationError('الفاتورة غير موجودة.');
+        const allocated = await transaction.query(`SELECT COALESCE(SUM(amount),0) AS total FROM public.student_fee_allocations WHERE tenant_id = $1 AND school_id = $2 AND receipt_id = $3`, [tenantId, schoolId, receiptId]);
+        const receiptRemaining = Number(receipt.rows[0].amount) - Number(allocated.rows[0].total || 0);
+        const invoiceRemaining = Number(invoice.rows[0].remaining_amount || 0);
+        if (amount > receiptRemaining + 0.001 || amount > invoiceRemaining + 0.001) throw new ConflictError('قيمة التخصيص تتجاوز الرصيد المتبقي للسند أو الفاتورة.');
+        const result = await transaction.query(`INSERT INTO public.student_fee_allocations (tenant_id, school_id, receipt_id, invoice_id, installment_schedule_id, amount, created_by) VALUES ($1,$2,$3,$4,$5,$6,$7) RETURNING id, receipt_id AS "receiptId", invoice_id AS "invoiceId", installment_schedule_id AS "installmentScheduleId", amount`, [tenantId, schoolId, receiptId, invoiceId, scheduleId, amount, databaseActorId]);
+        allocation = result.rows[0];
+        const newPaid = Number((Number(invoice.rows[0].paid_amount || 0) + amount).toFixed(2));
+        const newRemaining = Number((invoiceRemaining - amount).toFixed(2));
+        const newStatus = newRemaining <= 0.001 ? 'paid' : 'partial';
+        await transaction.query(`UPDATE public.student_fee_invoices SET paid_amount = $4, remaining_amount = $5, status = $6, version = version + 1, updated_at = now(), updated_by = $1 WHERE tenant_id = $2 AND school_id = $3 AND id = $7`, [databaseActorId, tenantId, schoolId, newPaid, Math.max(0, newRemaining), newStatus, invoiceId]);
+        if (scheduleId) await transaction.query(`UPDATE public.student_fee_installment_schedules SET paid_amount = LEAST(amount, paid_amount + $4), status = CASE WHEN paid_amount + $4 >= amount THEN 'paid' WHEN paid_amount + $4 > 0 THEN 'partially_paid' ELSE status END, version = version + 1 WHERE tenant_id = $1 AND school_id = $2 AND id = $3`, [tenantId, schoolId, scheduleId, amount]);
+        await transaction.query(`INSERT INTO public.audit_events (id, tenant_id, school_id, actor_user_id, entity_type, entity_id, action, source, result, metadata) VALUES ($1,$2,$3,$4,'student_fee_allocation',$5,'allocate','CanonicalStudentFeeRoute','success',$6::jsonb)`, [randomUUID(), tenantId, schoolId, databaseActorId, allocation.id, JSON.stringify({ receiptId, invoiceId, amount })]);
+      }, tenantContext);
+      res.status(201).json({ success: true, data: allocation, meta: { source: 'canonical_postgres', invoiceUpdated: true } });
+    } catch (err: any) {
+      next(err instanceof AuthenticationError || err instanceof ValidationError || err instanceof ConflictError || err instanceof DatabaseError ? err : new DatabaseError('تعذر تخصيص الدفعة على الفاتورة.', err?.message));
+    }
+  });
+
+  app.get("/api/financial/students/:studentId/account", authenticateRequest, requirePermission(PERMISSIONS.FINANCIAL_READ), async (req, res, next) => {
+    try {
+      const { tenantId, schoolId, tenantContext } = canonicalFeeContext(req);
+      const studentId = String(req.params.studentId || '').trim();
+      if (!canonicalFeeUuid(studentId)) throw new ValidationError('معرف الطالب غير صالح.');
+      let account: any = null;
+      await UnitOfWork.runInTransaction(schoolId, {
+        operationName: 'Read canonical student fee account', tenantId,
+        userId: String((req as any).user.id), userName: String((req as any).user.name || 'المستخدم المالي'),
+        ipAddress: req.ip || 'unknown', affectedTables: ['student_fee_invoices', 'student_fee_receipts', 'student_fee_allocations']
+      }, async () => {
+        const transaction = UnitOfWork.getActiveContext()?.databaseTransaction;
+        if (!transaction) throw new DatabaseError('تعذر فتح المعاملة المالية.');
+        const student = await transaction.query(`SELECT id, preferred_name, legal_first_name, legal_middle_name, legal_last_name FROM public.students WHERE tenant_id = $1 AND school_id = $2 AND id = $3 AND deleted_at IS NULL`, [tenantId, schoolId, studentId]);
+        if (!student.rows[0]) throw new ValidationError('الطالب غير موجود في المدرسة الحالية.');
+        const invoices = await transaction.query(`SELECT id, student_id AS "studentId", student_name AS "studentName", item, amount, tax_amount AS "taxAmount", paid_amount AS "paidAmount", remaining_amount AS "remainingAmount", invoice_date AS "invoiceDate", due_date AS "dueDate", status, currency FROM public.student_fee_invoices WHERE tenant_id = $1 AND school_id = $2 AND student_id = $3 ORDER BY due_date DESC NULLS LAST, invoice_date DESC NULLS LAST`, [tenantId, schoolId, studentId]);
+        const receipts = await transaction.query(`SELECT id, student_id AS "studentId", receipt_date AS "receiptDate", amount, payment_method AS "paymentMethod", status FROM public.student_fee_receipts WHERE tenant_id = $1 AND school_id = $2 AND student_id = $3 ORDER BY receipt_date DESC NULLS LAST`, [tenantId, schoolId, studentId]);
+        account = {
+          student: student.rows[0],
+          invoices: invoices.rows,
+          receipts: receipts.rows,
+          totals: {
+            invoiceAmount: invoices.rows.reduce((sum: number, row: any) => sum + Number(row.amount || 0) + Number(row.taxAmount || 0), 0),
+            paidAmount: invoices.rows.reduce((sum: number, row: any) => sum + Number(row.paidAmount || 0), 0),
+            remainingAmount: invoices.rows.reduce((sum: number, row: any) => sum + Number(row.remainingAmount || 0), 0),
+          },
+        };
+      }, tenantContext);
+      res.json({ success: true, data: account, meta: { source: 'canonical_postgres' } });
+    } catch (err: any) {
+      next(err instanceof AuthenticationError || err instanceof ValidationError || err instanceof DatabaseError ? err : new DatabaseError('تعذر قراءة كشف حساب الطالب.', err?.message));
+    }
+  });
+
   app.get("/api/financial/database", authenticateRequest, requirePermission(PERMISSIONS.FINANCIAL_READ), async (req, res, next) => {
     try {
       const schoolId = String((req as any).user.schoolId || '').trim();
@@ -8502,6 +9068,8 @@ async function startServer() {
       let snapshot: { data: Record<string, unknown>; version: number; updated_at: string } | null = null;
       let canonicalErpReady = false;
       let canonicalErpModel: Awaited<ReturnType<typeof CanonicalErpPostingService.readModel>> | null = null;
+      let canonicalFeeInvoices: any[] = [];
+      let canonicalFeeReceipts: any[] = [];
       await UnitOfWork.runInTransaction(
         schoolId,
         {
@@ -8523,6 +9091,29 @@ async function startServer() {
             [tenantId, schoolId]
           );
           snapshot = result.rows[0] || null;
+          try {
+            const canonicalInvoices = await transaction.query(
+              `SELECT id, student_id AS "studentId", student_name AS "studentName", item, amount, tax_amount AS "taxAmount",
+                      paid_amount AS "paidAmount", remaining_amount AS "remainingAmount", invoice_date AS "invoiceDate",
+                      due_date AS "dueDate", status, journal_entry_id AS "journalEntryId", template_id AS "templateId",
+                      academic_year_id AS "academicYearId", academic_period_id AS "academicPeriodId", currency,
+                      idempotency_key AS "idempotencyKey", version
+                 FROM public.student_fee_invoices
+                WHERE tenant_id = $1 AND school_id = $2
+                ORDER BY invoice_date DESC NULLS LAST, created_at DESC`, [tenantId, schoolId]);
+            canonicalFeeInvoices = canonicalInvoices.rows;
+            const canonicalReceipts = await transaction.query(
+              `SELECT id, student_id AS "studentId", student_name AS "studentName", receipt_date AS "receiptDate", amount,
+                      payment_method AS "paymentMethod", receiving_account AS "receivingAccount", operational_type AS "operationalType",
+                      against_text AS against, status, journal_entry_id AS "journalEntryId", receipt_voucher_id AS "receiptVoucherId"
+                 FROM public.student_fee_receipts
+                WHERE tenant_id = $1 AND school_id = $2
+                ORDER BY receipt_date DESC NULLS LAST, created_at DESC`, [tenantId, schoolId]);
+            canonicalFeeReceipts = canonicalReceipts.rows;
+          } catch (canonicalError: any) {
+            if (String(canonicalError?.code || '') !== '42P01') throw canonicalError;
+            EnterpriseLogger.warn('Canonical student-fee tables are not migrated; retaining snapshot read model.', 'FinancialSnapshotRoute', { tenantId, schoolId });
+          }
           canonicalErpReady = await CanonicalErpPostingService.isProvisioned(transaction);
           if (canonicalErpReady) {
             canonicalErpModel = await CanonicalErpPostingService.readModel(transaction, schoolId, true);
@@ -8532,7 +9123,14 @@ async function startServer() {
       );
       (req as any).financialErpReady = canonicalErpReady;
       const snapshotData = snapshot?.data || {};
-      let responseData = snapshotData;
+      let responseData: Record<string, any> = {
+        ...snapshotData,
+        // Canonical fee rows supersede the legacy snapshot projection. This
+        // keeps existing screens compatible while new commands never write a
+        // second authoritative copy.
+        ...(canonicalFeeInvoices.length > 0 ? { invoices: canonicalFeeInvoices } : {}),
+        ...(canonicalFeeReceipts.length > 0 ? { studentReceiptVouchers: canonicalFeeReceipts, receiptVouchers: canonicalFeeReceipts } : {}),
+      };
       if (canonicalErpReady && canonicalErpModel) {
         const sourceLinks = new Map(
           canonicalErpModel.sourceLinks.map(link => [`${link.sourceType}:${link.sourceId}`, link.journalEntryId])
@@ -8552,10 +9150,10 @@ async function startServer() {
             : row;
         });
         responseData = {
-          ...snapshotData,
-          invoices: linkRows(snapshotData.invoices, 'student_fee_invoice'),
-          studentReceiptVouchers: linkRows(snapshotData.studentReceiptVouchers, 'student_receipt'),
-          receiptVouchers: linkRows(snapshotData.receiptVouchers, 'student_receipt'),
+          ...responseData,
+          invoices: linkRows(responseData.invoices, 'student_fee_invoice'),
+          studentReceiptVouchers: linkRows(responseData.studentReceiptVouchers, 'student_receipt'),
+          receiptVouchers: linkRows(responseData.receiptVouchers, 'student_receipt'),
           paymentVouchers: linkedPaymentRows,
           journalEntries: canonicalErpModel.journalEntries.length > 0
             ? canonicalErpModel.journalEntries

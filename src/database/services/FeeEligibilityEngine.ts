@@ -5,7 +5,6 @@
 
 import { Student } from '../../types';
 import { FeeTemplate } from './FeeStructureEngine';
-import { FallbackStorage } from '../repositories/FallbackStorage';
 
 // --- ENTERPRISE ELIGIBILITY SCHEMAS ---
 
@@ -26,6 +25,12 @@ export interface EligibilityRules {
   requiresScholarship?: boolean;
   requiresExemption?: boolean;
   requiresSiblings?: boolean;
+  /** Canonical family graph context. Never inferred from a display name. */
+  siblingCount?: number;
+  /** Approved concession values are supplied by the canonical finance service. */
+  siblingDiscountPercent?: number;
+  scholarshipEligible?: boolean;
+  scholarshipDiscountPercent?: number;
   minAge?: number;
   maxAge?: number;
   customRules?: CustomRule[];
@@ -46,6 +51,8 @@ export interface EligibilityResult {
 }
 
 export class FeeEligibilityEngine {
+  // fee eligibility sibling lookup is supplied by the canonical family graph;
+  // this engine intentionally does not read the legacy fallback store.
   /**
    * Evaluates if a student is eligible for a given fee template.
    * Completely decoupled from any UI and cleanly handles rule evaluation.
@@ -55,7 +62,6 @@ export class FeeEligibilityEngine {
     template: FeeTemplate,
     customRulesOverload?: EligibilityRules
   ): EligibilityResult {
-    FallbackStorage.assertCanonicalPersistence('fee eligibility sibling lookup');
     // 1. Resolve active eligibility rules from the template mapping or custom overrides
     const rules: EligibilityRules = customRulesOverload || (template as any).eligibilityRules || {};
 
@@ -163,7 +169,7 @@ export class FeeEligibilityEngine {
     }
 
     // H) Nationality Verification
-    if (rules.nationality && student.nationality && student.nationality.toLowerCase() !== rules.nationality.toLowerCase()) {
+    if (rules.nationality && (!student.nationality || student.nationality.toLowerCase() !== rules.nationality.toLowerCase())) {
       return {
         status: 'Not Eligible',
         reasonCode: 'NOT_ELIG_NATIONALITY_MISMATCH',
@@ -198,10 +204,17 @@ export class FeeEligibilityEngine {
     }
 
     // J) Sibling Discount Policy Evaluation (خصم الإخوة)
-    const studentsList = FallbackStorage.getStudents();
-    const siblingCount = student.parentName
-      ? studentsList.filter(s => s.schoolId === student.schoolId && s.id !== student.id && s.parentName && s.parentName.trim() === student.parentName.trim()).length
-      : 0;
+    const siblingCount = Number.isFinite(Number(rules.siblingCount)) ? Math.max(0, Number(rules.siblingCount)) : undefined;
+
+    if (rules.requiresSiblings && siblingCount === undefined) {
+      return {
+        status: 'Not Eligible',
+        reasonCode: 'NOT_ELIG_SIBLING_CONTEXT_REQUIRED',
+        description: 'لا يمكن تقييم خصم الإخوة دون سياق عائلي موثق من سجل ولي الأمر المركزي.',
+        eligibleAmountPercent: 0,
+        discountAppliedPercent: 0
+      };
+    }
 
     if (rules.requiresSiblings && siblingCount === 0) {
       return {
@@ -213,13 +226,14 @@ export class FeeEligibilityEngine {
       };
     }
 
-    // If sibling detected and template specifies tuition, apply a 10% standard discount automatically
-    if (siblingCount > 0 && template.category === 'Tuition') {
+    // Sibling discounts are never inferred automatically. The canonical
+    // concession workflow must pass an approved percentage explicitly.
+    if ((siblingCount || 0) > 0 && template.category === 'Tuition' && Number(rules.siblingDiscountPercent || 0) > 0) {
       status = 'Partial Eligibility';
       reasonCode = 'ELIG_SIBLING_DISCOUNT';
-      description = `تم تفعيل خصم الإخوة بنسبة 10% لوجود عدد ${siblingCount} إخوة مسجلين بنفس العائلة.`;
-      discountAppliedPercent = 10;
-      eligibleAmountPercent = 90;
+      discountAppliedPercent = Math.min(100, Number(rules.siblingDiscountPercent));
+      description = `تم تطبيق خصم إخوة معتمد بنسبة ${discountAppliedPercent}% بناءً على سجل الأسرة المركزي.`;
+      eligibleAmountPercent = 100 - discountAppliedPercent;
     }
 
     // K) Age Range Verification (الفئة العمرية)
@@ -250,12 +264,13 @@ export class FeeEligibilityEngine {
     }
 
     // L) Scholarship & Exemption (المنح والإعفاءات الدراسية)
-    // Check if the student has high behavior points (e.g. merit scholarship threshold)
-    if (student.behaviorPoints && student.behaviorPoints >= 90) {
+    // Behavior or achievement alone never grants money. An approved
+    // concession must explicitly provide eligibility and percentage.
+    if (rules.scholarshipEligible === true && Number(rules.scholarshipDiscountPercent || 0) > 0) {
       status = 'Partial Eligibility';
       reasonCode = 'ELIG_MERIT_SCHOLARSHIP';
-      description = 'تم منح الطالب خصم منحة التفوق والتميز السلوكي بنسبة 15%.';
-      discountAppliedPercent = Math.max(discountAppliedPercent, 15);
+      discountAppliedPercent = Math.max(discountAppliedPercent, Math.min(100, Number(rules.scholarshipDiscountPercent)));
+      description = `تم تطبيق منحة معتمدة بنسبة ${discountAppliedPercent}%.`;
       eligibleAmountPercent = 100 - discountAppliedPercent;
     }
 
