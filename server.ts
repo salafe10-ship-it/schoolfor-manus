@@ -2318,6 +2318,29 @@ async function startServer() {
         );
         permissionCount += 1;
       }
+      // Existing customer workspaces may still have a school/branch-scoped
+      // `schooladmin` role from the original provisioning wave.  Keep the
+      // new identity-management capabilities synchronized with the mother
+      // template for those assignments as well; otherwise a manager could
+      // receive the updated central role while their active scoped role stays
+      // blind to the school directory.
+      if (roleKey === 'schooladmin') {
+        const identityPermissionKeys = permissionKeys.filter((permissionKey) => permissionKey.startsWith('Identity.Users.'));
+        if (identityPermissionKeys.length) {
+          await client.query(
+            `INSERT INTO public.role_permissions (tenant_id, role_id, permission_id, status, created_by, updated_by)
+             SELECT r.tenant_id, r.id, p.id, 'active', NULL, NULL
+               FROM public.roles r
+               JOIN public.permissions p ON p.permission_key = ANY($3::text[])
+              WHERE r.tenant_id = $1::uuid AND r.role_key = $2
+                AND r.school_id IS NOT NULL AND r.status = 'active' AND r.deleted_at IS NULL
+                AND p.status = 'active' AND p.deleted_at IS NULL
+             ON CONFLICT (role_id, permission_id) DO UPDATE
+               SET status = 'active', deleted_at = NULL, deleted_by = NULL, updated_at = now()`,
+            [targetTenantId, roleKey, identityPermissionKeys],
+          );
+        }
+      }
     }
     return { roleCount, permissionCount, actorAuthUserId };
   };
@@ -4731,11 +4754,13 @@ async function startServer() {
     const identity = (req as any).user as { id?: string; tenantId?: string; schoolId?: string; branchId?: string; name?: string } | undefined;
     const tenantId = String(identity?.tenantId || '').trim();
     const schoolId = String(identity?.schoolId || '').trim();
+    const branchId = String(identity?.branchId || '').trim();
     const actorAuthUserId = String(identity?.id || '').trim();
     if (!/^[0-9a-f-]{36}$/i.test(tenantId) || !/^[0-9a-f-]{36}$/i.test(schoolId) || !/^[0-9a-f-]{36}$/i.test(actorAuthUserId)) {
       throw new AuthenticationError('السياق الموثوق للمدرسة أو هوية المدير غير مكتمل.');
     }
-    return { identity, tenantId, schoolId, actorAuthUserId };
+    if (branchId && !/^[0-9a-f-]{36}$/i.test(branchId)) throw new AuthenticationError('الفرع الموثوق غير صالح.');
+    return { identity, tenantId, schoolId, branchId, actorAuthUserId };
   };
 
   const recordSchoolIdentityMutation = async (
@@ -4777,7 +4802,7 @@ async function startServer() {
   app.get('/api/school/identity-roles', authenticateRequest, requirePermissionOnly(PERMISSIONS.IDENTITY_USERS_READ), async (req, res, next) => {
     if (!platformAdminPool) return next(new DatabaseError('مصدر الهوية المركزي غير متاح.'));
     try {
-      const { tenantId } = schoolIdentityScope(req);
+      const { tenantId, schoolId, branchId } = schoolIdentityScope(req);
       const result = await platformAdminPool.query(
         `SELECT r.id, r.role_key AS "roleKey", r.name, r.description, r.version,
                 COALESCE(jsonb_agg(DISTINCT jsonb_build_object(
@@ -4788,12 +4813,14 @@ async function startServer() {
                 AND rp.status = 'active' AND rp.deleted_at IS NULL
            LEFT JOIN public.permissions p ON p.id = rp.permission_id
                 AND p.status = 'active' AND p.deleted_at IS NULL
-          WHERE r.tenant_id = $1::uuid AND r.school_id IS NULL AND r.branch_id IS NULL
+          WHERE r.tenant_id = $1::uuid
+            AND (r.school_id IS NULL OR r.school_id = $2::uuid)
+            AND (r.branch_id IS NULL OR r.branch_id = $3::uuid)
             AND r.status = 'active' AND r.deleted_at IS NULL
-            AND r.role_key = ANY($2::text[])
+            AND r.role_key = ANY($4::text[])
           GROUP BY r.id
           ORDER BY r.name ASC`,
-        [tenantId, Object.keys(CENTRAL_IDENTITY_ROLE_CATALOG)],
+        [tenantId, schoolId, branchId || null, Object.keys(CENTRAL_IDENTITY_ROLE_CATALOG)],
       );
       return res.json({ success: true, roles: result.rows });
     } catch (error) {
@@ -4820,7 +4847,9 @@ async function startServer() {
            LEFT JOIN public.user_roles ur ON ur.tenant_id = u.tenant_id AND ur.user_id = u.id
                 AND ur.deleted_at IS NULL AND ur.status = 'active'
            LEFT JOIN public.roles r ON r.tenant_id = ur.tenant_id AND r.id = ur.role_id
-                AND r.school_id IS NULL AND r.branch_id IS NULL AND r.status = 'active' AND r.deleted_at IS NULL
+                AND (r.school_id IS NULL OR r.school_id = u.school_id)
+                AND (r.branch_id IS NULL OR r.branch_id = u.branch_id)
+                AND r.status = 'active' AND r.deleted_at IS NULL
           WHERE u.tenant_id = $1::uuid AND u.school_id = $2::uuid AND u.deleted_at IS NULL
           GROUP BY u.id, au.email, au.last_sign_in_at, b.name
           ORDER BY u.created_at DESC`,
@@ -4932,7 +4961,7 @@ async function startServer() {
           const roleKey = String(req.body?.roleKey || '').trim().toLowerCase().replace(/[^a-z0-9._-]/g, '');
           const roleSpec = CENTRAL_IDENTITY_ROLE_CATALOG[roleKey];
           if (!roleSpec || roleKey === 'platformadmin') throw new ValidationError('الدور المطلوب غير متاح في نطاق المدرسة.');
-          const roleResult = await client.query(`SELECT id, name FROM public.roles WHERE tenant_id = $1::uuid AND role_key = $2 AND school_id IS NULL AND branch_id IS NULL AND status = 'active' AND deleted_at IS NULL LIMIT 1`, [tenantId, roleKey]);
+          const roleResult = await client.query(`SELECT id, name FROM public.roles WHERE tenant_id = $1::uuid AND role_key = $2 AND (school_id IS NULL OR school_id = $3::uuid) AND (branch_id IS NULL OR branch_id = $4::uuid) AND status = 'active' AND deleted_at IS NULL ORDER BY CASE WHEN school_id = $3::uuid AND branch_id = $4::uuid THEN 0 WHEN school_id = $3::uuid THEN 1 ELSE 2 END LIMIT 1`, [tenantId, roleKey, schoolId, row.branch_id || null]);
           if (roleResult.rowCount !== 1) throw new ConflictError('قالب الدور غير منشور من الإدارة المركزية.');
           await client.query(`UPDATE public.user_roles SET status = 'revoked', deleted_at = now(), deleted_by = $4::uuid, updated_at = now(), updated_by = $4::uuid, version = version + 1 WHERE tenant_id = $1::uuid AND user_id = $2::uuid AND school_id = $3::uuid AND status = 'active' AND deleted_at IS NULL`, [tenantId, userId, schoolId, actorAuthUserId]);
           await client.query(`INSERT INTO public.user_roles (tenant_id, user_id, role_id, school_id, branch_id, status, created_by, updated_by) VALUES ($1::uuid, $2::uuid, $3::uuid, $4::uuid, $5::uuid, 'active', $6::uuid, $6::uuid)`, [tenantId, userId, roleResult.rows[0].id, schoolId, row.branch_id || null, actorAuthUserId]);

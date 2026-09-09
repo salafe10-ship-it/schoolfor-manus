@@ -24,11 +24,9 @@ ON CONFLICT (permission_key) DO UPDATE
 INSERT INTO public.role_permissions
   (tenant_id, role_id, permission_id, status, deleted_at, deleted_by)
 SELECT r.tenant_id, r.id, p.id, 'active', NULL, NULL
-  FROM public.roles r
+ FROM public.roles r
   CROSS JOIN public.permissions p
  WHERE r.role_key = 'schooladmin'
-   AND r.school_id IS NULL
-   AND r.branch_id IS NULL
    AND r.status = 'active'
    AND r.deleted_at IS NULL
    AND p.permission_key IN ('Identity.Users.Read', 'Identity.Users.Write', 'Identity.Users.Assign', 'Identity.Users.Audit')
