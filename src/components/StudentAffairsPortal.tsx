@@ -12,6 +12,7 @@ import {
 import { Student, School, UserRole } from '../types';
 import { PERMISSIONS } from '../authorization/PermissionRegistry';
 import { StudentRepository } from './student-affairs/repository/StudentRepository';
+import { MODERN_FAMILY_SCHOOL_ID, sectionPresentationOptions, sectionTermForSchool } from './student-affairs/sectionPresentation';
 import { authenticatedRequest } from '../utils/authenticatedRequest';
 import StudentDocumentsPortal from '../modules/student-documents/presentation/StudentDocumentsPortal';
 
@@ -198,6 +199,10 @@ export default function StudentAffairsPortal({
   const canWriteStudents = canUseTrustedPermission(PERMISSIONS.STUDENT_WRITE);
   const canDeleteStudents = canUseTrustedPermission(PERMISSIONS.STUDENT_DELETE);
   const canExportStudents = canUseTrustedPermission(PERMISSIONS.STUDENT_EXPORT);
+  const isModernFamilySchool = selectedSchool.id === MODERN_FAMILY_SCHOOL_ID;
+  const sectionTerm = sectionTermForSchool(selectedSchool.id);
+  const sectionFieldLabel = isModernFamilySchool ? 'الفصل' : 'الشعبة / الفصل';
+  const sectionPluralTerm = isModernFamilySchool ? 'الفصول' : 'الشعب';
   // Primary Navigation Sub-tabs state
   const [activeTab, setActiveTab] = useState<'student_data' | 'guardians' | 'documents' | 'reports' | 'settings'>('student_data');
   
@@ -398,6 +403,12 @@ export default function StudentAffairsPortal({
     if (!sections.size) canonicalSections.forEach(section => sections.add(section));
     return Array.from(sections);
   }, [canonicalSections, formClassOptions]);
+  const formSectionPresentationOptions = useMemo(() => {
+    if (!isModernFamilySchool) return sectionPresentationOptions(formSectionOptions, false);
+    const values = sectionPresentationOptions(canonicalSections.length ? canonicalSections : formSectionOptions, true);
+    const available = new Set(formSectionOptions);
+    return values.map(option => ({ ...option, disabled: formSectionOptions.length > 0 && !available.has(option.value) }));
+  }, [canonicalSections, formSectionOptions, isModernFamilySchool]);
 
   useEffect(() => {
     if (!isModalOpen || isEditMode || formData.stage || activeStageOptions.length === 0) return;
@@ -745,6 +756,20 @@ export default function StudentAffairsPortal({
     });
     return Array.from(sections);
   }, [canonicalSections, currentSchoolStudents]);
+  const sectionFilterPresentationOptions = useMemo(
+    () => sectionPresentationOptions(printSectionOptions, isModernFamilySchool),
+    [isModernFamilySchool, printSectionOptions]
+  );
+  const displaySectionValue = (value: unknown): string => {
+    const raw = String(value || '').trim();
+    if (!isModernFamilySchool) return raw;
+    const index = sectionFilterPresentationOptions.findIndex(option => option.value === raw);
+    return index >= 0 ? String(index + 1) : raw;
+  };
+  const displaySectionReference = (value: unknown): string => {
+    const raw = String(value || '').trim() || (isModernFamilySchool ? 'غير محددة' : 'غير محددة');
+    return isModernFamilySchool ? `${sectionTerm} ${displaySectionValue(raw)}` : `شعبة ${raw}`;
+  };
 
   const resolveStudentAcademicContext = (student: Student) => {
     const rawStudent = student as Student & Record<string, unknown>;
@@ -815,7 +840,7 @@ export default function StudentAffairsPortal({
       const printWindow = window.open('', '_blank', 'noopener,noreferrer,width=900,height=700');
       if (!printWindow) throw new Error('يرجى السماح بالنوافذ المنبثقة لطباعة الشهادة.');
       const escapeHtml = (value: unknown) => String(value ?? '').replace(/[&<>"']/g, char => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[char] || char));
-      printWindow.document.write(`<html dir="rtl"><head><title>شهادة قيد الطالب</title><style>body{font-family:Arial;padding:48px;color:#1c120c}h1{text-align:center;color:#8b641f}table{width:100%;border-collapse:collapse;margin-top:28px}td{border:1px solid #d8c7a0;padding:12px}small{color:#7c6b56}</style></head><body><h1>شهادة قيد طالب</h1><p>تشهد المدرسة بأن الطالب/ة <strong>${escapeHtml(certificate?.student?.student_name || student.name)}</strong> مقيد/ة بسجلاتها.</p><table><tr><td>رقم الطالب</td><td>${escapeHtml(certificate?.student?.student_number || student.studentCode || '')}</td></tr><tr><td>الصف/الشعبة</td><td>${escapeHtml(certificate?.student?.class_reference || 'غير محدد')} / ${escapeHtml(certificate?.student?.section_reference || 'غير محددة')}</td></tr><tr><td>الحالة</td><td>${escapeHtml(studentStatusLabel(certificate?.student?.academic_status || certificate?.student?.status))}</td></tr><tr><td>رقم التحقق</td><td>${escapeHtml(certificate?.reference || '')}</td></tr></table><p><small>حالة التوقيع الإلكتروني: ${escapeHtml(certificate?.signatureStatus === 'pending_provider' ? 'بانتظار مزود التوقيع المعتمد' : 'معتمد')}</small></p><script>window.print();</script></body></html>`);
+      printWindow.document.write(`<html dir="rtl"><head><title>شهادة قيد الطالب</title><style>body{font-family:Arial;padding:48px;color:#1c120c}h1{text-align:center;color:#8b641f}table{width:100%;border-collapse:collapse;margin-top:28px}td{border:1px solid #d8c7a0;padding:12px}small{color:#7c6b56}</style></head><body><h1>شهادة قيد طالب</h1><p>تشهد المدرسة بأن الطالب/ة <strong>${escapeHtml(certificate?.student?.student_name || student.name)}</strong> مقيد/ة بسجلاتها.</p><table><tr><td>رقم الطالب</td><td>${escapeHtml(certificate?.student?.student_number || student.studentCode || '')}</td></tr><tr><td>الصف/${sectionTerm}</td><td>${escapeHtml(certificate?.student?.class_reference || 'غير محدد')} / ${escapeHtml(displaySectionValue(certificate?.student?.section_reference || 'غير محددة'))}</td></tr><tr><td>الحالة</td><td>${escapeHtml(studentStatusLabel(certificate?.student?.academic_status || certificate?.student?.status))}</td></tr><tr><td>رقم التحقق</td><td>${escapeHtml(certificate?.reference || '')}</td></tr></table><p><small>حالة التوقيع الإلكتروني: ${escapeHtml(certificate?.signatureStatus === 'pending_provider' ? 'بانتظار مزود التوقيع المعتمد' : 'معتمد')}</small></p><script>window.print();</script></body></html>`);
       printWindow.document.close();
     } catch (error: any) {
       triggerNotification(error?.message || 'تعذر إصدار شهادة القيد.', 'warning');
@@ -1362,10 +1387,10 @@ export default function StudentAffairsPortal({
       return;
     }
     if (!transferTargetGrade || !transferTargetSection) {
-      triggerNotification('اختر الصف والشعبة من الهيكل الأكاديمي الموثوق قبل التنفيذ.', 'warning');
+      triggerNotification(`اختر الصف و${sectionTerm} من الهيكل الأكاديمي الموثوق قبل التنفيذ.`, 'warning');
       return;
     }
-    if (!window.confirm(`سيتم نقل/ترقية ${selectedStudentIds.length} طالب إلى الصف والشعبة المحددين داخل نفس المدرسة. هل تريد المتابعة؟`)) return;
+    if (!window.confirm(`سيتم نقل/ترقية ${selectedStudentIds.length} طالب إلى الصف و${sectionTerm} المحددين داخل نفس المدرسة. هل تريد المتابعة؟`)) return;
     if (isRunningEnrollmentWorkflow) return;
     setIsRunningEnrollmentWorkflow(true);
     try {
@@ -1615,9 +1640,10 @@ export default function StudentAffairsPortal({
     }
     const rows = printPreviewStudents.map((student, index) => {
       const context = resolveStudentAcademicContext(student);
-      return `<tr><td>${index + 1}</td><td>${printableText(student.studentCode || student.academicId || '—')}</td><td>${printableText(student.name)}</td><td>${printableText(context.className || context.classroom || 'غير محدد')} (${printableText(context.section || 'غير محددة')})</td><td>${printableText(student.guardianName || 'غير مرتبط')}</td><td>${printableText(student.status || 'نشط')}</td></tr>`;
+      return `<tr><td>${index + 1}</td><td>${printableText(student.studentCode || student.academicId || '—')}</td><td>${printableText(student.name)}</td><td>${printableText(context.className || context.classroom || 'غير محدد')} (${printableText(displaySectionValue(context.section || 'غير محددة'))})</td><td>${printableText(student.guardianName || 'غير مرتبط')}</td><td>${printableText(student.status || 'نشط')}</td></tr>`;
     }).join('');
-    const html = `<!doctype html><html lang="ar" dir="rtl"><head><meta charset="utf-8"><title>كشف الطلاب - ${printableText(selectedSchool.name || 'SchoolForManus')}</title><style>body{font-family:Arial,sans-serif;color:#111;margin:24px}h1{font-size:20px;margin:0 0 6px}p{font-size:12px;margin:4px 0 16px}table{width:100%;border-collapse:collapse;font-size:12px}th,td{border:1px solid #9aa7b8;padding:7px;text-align:right}th{background:#e5ebf3;font-weight:700}@media print{@page{size:A4 landscape;margin:12mm}body{margin:0}th{background:#e5ebf3!important;-webkit-print-color-adjust:exact;print-color-adjust:exact}}</style></head><body><h1>${printableText(selectedSchool.name || 'SchoolForManus')}</h1><p>إدارة شؤون الطلاب والنتائج الأكاديمية — ${printableText(printScopeSummary)}</p><table><thead><tr><th>#</th><th>رقم الطالب</th><th>اسم الطالب رباعي</th><th>الصف / الشعبة</th><th>ولي الأمر</th><th>الحالة</th></tr></thead><tbody>${rows}</tbody></table></body></html>`;
+    const htmlSectionLabel = isModernFamilySchool ? sectionTerm : 'الشعبة';
+    const html = `<!doctype html><html lang="ar" dir="rtl"><head><meta charset="utf-8"><title>كشف الطلاب - ${printableText(selectedSchool.name || 'SchoolForManus')}</title><style>body{font-family:Arial,sans-serif;color:#111;margin:24px}h1{font-size:20px;margin:0 0 6px}p{font-size:12px;margin:4px 0 16px}table{width:100%;border-collapse:collapse;font-size:12px}th,td{border:1px solid #9aa7b8;padding:7px;text-align:right}th{background:#e5ebf3;font-weight:700}@media print{@page{size:A4 landscape;margin:12mm}body{margin:0}th{background:#e5ebf3!important;-webkit-print-color-adjust:exact;print-color-adjust:exact}}</style></head><body><h1>${printableText(selectedSchool.name || 'SchoolForManus')}</h1><p>إدارة شؤون الطلاب والنتائج الأكاديمية — ${printableText(printScopeSummary)}</p><table><thead><tr><th>#</th><th>رقم الطالب</th><th>اسم الطالب رباعي</th><th>الصف / ${htmlSectionLabel}</th><th>ولي الأمر</th><th>الحالة</th></tr></thead><tbody>${rows}</tbody></table></body></html>`;
     const downloadUrl = URL.createObjectURL(new Blob([html], { type: 'text/html;charset=utf-8' }));
     const link = document.createElement('a');
     link.href = downloadUrl;
@@ -1634,11 +1660,15 @@ export default function StudentAffairsPortal({
     const stageLabel = printStageOptions.find(option => option.value === printFilterStage)?.label || printFilterStage;
     const gradeLabel = printGradeOptions.find(option => option.value === printFilterGrade)?.label || printFilterGrade;
     const classLabel = printClassOptions.find(option => option.value === printFilterClass)?.label || printFilterClass;
-    const sectionLabel = printFilterSection === 'all' ? 'الكل' : `شعبة ${printFilterSection}`;
+    const sectionLabel = printFilterSection === 'all'
+      ? 'الكل'
+      : isModernFamilySchool
+        ? `${sectionTerm} ${displaySectionValue(printFilterSection)}`
+        : `شعبة ${printFilterSection}`;
     return printFilterStage === 'all' && printFilterGrade === 'all' && printFilterClass === 'all' && printFilterSection === 'all'
       ? 'النطاق: جميع الطلاب'
       : `المرحلة: ${printFilterStage === 'all' ? 'الكل' : stageLabel} • الصف: ${printFilterGrade === 'all' ? 'الكل' : gradeLabel} • الفصل: ${printFilterClass === 'all' ? 'الكل' : classLabel} • ${sectionLabel}`;
-  }, [printStageOptions, printGradeOptions, printClassOptions, printFilterStage, printFilterGrade, printFilterClass, printFilterSection]);
+  }, [displaySectionValue, isModernFamilySchool, printStageOptions, printGradeOptions, printClassOptions, printFilterStage, printFilterGrade, printFilterClass, printFilterSection, sectionTerm]);
 
   return (
     <div 
@@ -1926,7 +1956,7 @@ export default function StudentAffairsPortal({
 
               {/* Section Select */}
               <div>
-                <label className="block text-slate-700 font-extrabold mb-1">الشعبة / الفصل</label>
+                <label className="block text-slate-700 font-extrabold mb-1">{sectionFieldLabel}</label>
                 <select 
                   value={searchClass}
                   onChange={e => {
@@ -1935,8 +1965,8 @@ export default function StudentAffairsPortal({
                   }}
                   className="w-full bg-white border border-slate-300 rounded-xl p-2 text-xs font-bold text-slate-900 focus:border-[#9a6a1d] outline-none shadow-xs"
                 >
-                  <option value="all">جميع الشعب والصفوف</option>
-                  {canonicalSections.map(section => <option key={section} value={section}>شعبة {section}</option>)}
+                  <option value="all">جميع {sectionPluralTerm} والصفوف</option>
+                  {sectionFilterPresentationOptions.map(option => <option key={option.value} value={option.value}>{option.label}</option>)}
                 </select>
               </div>
 
@@ -2107,7 +2137,7 @@ export default function StudentAffairsPortal({
                     </th>
                     <th className="p-3">رقم الطالب</th>
                     <th className="p-3">اسم الطالب رباعي</th>
-                    <th className="p-3">الصف / الشعبة</th>
+                    <th className="p-3">الصف / {sectionTerm}</th>
                     <th className="p-3">ولي الأمر والتواصل</th>
                     <th className="p-3">الحالة الدراسية</th>
                     <th className="p-3 text-center">الإجراءات</th>
@@ -2177,7 +2207,7 @@ export default function StudentAffairsPortal({
                           </td>
                           <td className="p-3 font-bold text-slate-700">
                             <div>{st.classroom || 'غير محدد'}</div>
-                            <div className="text-[10px] text-amber-800 font-extrabold">شعبة {st.section || 'غير محددة'}</div>
+                            <div className="text-[10px] text-amber-800 font-extrabold">{displaySectionReference(st.section)}</div>
                           </td>
                           <td className="p-3">
                             <div className="font-bold text-slate-800">{st.parentName || 'غير مرتبط'}</div>
@@ -2693,16 +2723,16 @@ export default function StudentAffairsPortal({
                       </div>
 
                       <div>
-                        <label className="block text-slate-800 font-extrabold mb-1">الشعبة / الفصل <span className="text-emerald-700">(يُدار عبر الالتحاق)</span></label>
+                        <label className="block text-slate-800 font-extrabold mb-1">{sectionFieldLabel} <span className="text-emerald-700">(يُدار عبر الالتحاق)</span></label>
                         <select 
                           value={formData.classSection}
                           onChange={event => setFormData(current => ({ ...current, classSection: event.target.value }))}
                           disabled={formSectionOptions.length === 0}
-                          title={academicContextError || 'اختر الشعبة من الفصول النشطة للصف المحدد'}
+                          title={academicContextError || (isModernFamilySchool ? `اختر ${sectionTerm} من الفصول النشطة للصف المحدد` : 'اختر الشعبة من الفصول النشطة للصف المحدد')}
                           className="w-full bg-white border border-slate-300 rounded-xl p-2.5 text-xs font-bold text-slate-900 focus:border-[#9a6a1d] outline-none shadow-xs disabled:bg-slate-100 disabled:text-slate-500 disabled:cursor-not-allowed"
                         >
-                          <option value="">اختر الشعبة</option>
-                          {formSectionOptions.map(section => <option key={section} value={section}>شعبة {section}</option>)}
+                          <option value="">{isModernFamilySchool ? `اختر ${sectionTerm}` : 'اختر الشعبة'}</option>
+                          {formSectionPresentationOptions.map(option => <option key={option.value} value={option.value} disabled={option.disabled}>{option.label}</option>)}
                         </select>
                       </div>
                     </div>
@@ -3320,15 +3350,15 @@ export default function StudentAffairsPortal({
               </label>
 
               <label className="text-xs font-black text-slate-700">
-                الشعبة
+                {isModernFamilySchool ? sectionTerm : 'الشعبة'}
                 <select
-                  aria-label="شعبة الطباعة"
+                  aria-label={isModernFamilySchool ? `${sectionTerm} الطباعة` : 'شعبة الطباعة'}
                   value={printFilterSection}
                   onChange={event => setPrintFilterSection(event.target.value)}
                   className="mt-1 w-full rounded-xl border border-slate-300 bg-white p-2.5 text-xs font-bold outline-none focus:border-[#9a6a1d]"
                 >
                   <option value="all">الكل</option>
-                  {printSectionOptions.map(section => <option key={section} value={section}>شعبة {section}</option>)}
+                  {sectionFilterPresentationOptions.map(option => <option key={option.value} value={option.value}>{option.label}</option>)}
                 </select>
               </label>
             </div>
@@ -3422,7 +3452,7 @@ export default function StudentAffairsPortal({
                       <th className="p-3 border border-slate-500">#</th>
                       <th className="p-3 border border-slate-500">رقم الطالب</th>
                       <th className="p-3 border border-slate-500">اسم الطالب رباعي</th>
-                      <th className="p-3 border border-slate-500">الصف / الشعبة</th>
+                      <th className="p-3 border border-slate-500">الصف / {sectionTerm}</th>
                       <th className="p-3 border border-slate-500">ولي الأمر</th>
                       <th className="p-3 border border-slate-500">الحالة</th>
                     </tr>
@@ -3435,7 +3465,7 @@ export default function StudentAffairsPortal({
                           <td className="p-3 border border-slate-200 text-center">{index + 1}</td>
                           <td className="p-3 border border-slate-200 text-center font-mono font-black">{student.studentCode || student.academicId || 'غير متوفر'}</td>
                           <td className="p-3 border border-slate-200 font-black">{student.name}</td>
-                          <td className="p-3 border border-slate-200 text-center">{student.classroom || 'غير محدد'} ({student.section || 'غير محددة'})</td>
+                          <td className="p-3 border border-slate-200 text-center">{student.classroom || 'غير محدد'} ({isModernFamilySchool ? displaySectionValue(student.section || 'غير محددة') : (student.section || 'غير محددة')})</td>
                           <td className="p-3 border border-slate-200">{student.parentName || 'غير مرتبط'}</td>
                           <td className="p-3 border border-slate-200 text-center">{statusLabel}</td>
                         </tr>
@@ -3499,13 +3529,13 @@ export default function StudentAffairsPortal({
               </div>
 
               <div>
-                <label className="block text-slate-700 mb-1">الشعبة المستهدفة</label>
+                <label className="block text-slate-700 mb-1">{sectionTerm} المستهدف</label>
                 <select 
                   value={transferTargetSection}
                   onChange={e => setTransferTargetSection(e.target.value)}
                   className="w-full bg-slate-50 border border-slate-300 p-2.5 rounded-xl"
                 >
-                  {canonicalSections.map(section => <option key={section} value={section}>شعبة {section}</option>)}
+                  {sectionFilterPresentationOptions.map(option => <option key={option.value} value={option.value}>{option.label}</option>)}
                 </select>
               </div>
             </div>
@@ -3514,7 +3544,7 @@ export default function StudentAffairsPortal({
               <button onClick={() => setIsTransferModalOpen(false)} className="px-4 py-2 bg-slate-100 rounded-xl text-xs font-bold">إلغاء</button>
               <div className="space-y-2 text-right">
                 <p role="alert" className="text-[10px] leading-5 text-amber-900 bg-amber-50 border border-amber-200 rounded-xl px-3 py-2">
-                  العملية خادمية ذرية داخل نطاق المدرسة: يتحقق الخادم من الصف والشعبة والسعة، ويثبت كل التغييرات وسجل التدقيق في معاملة واحدة.
+                  العملية خادمية ذرية داخل نطاق المدرسة: يتحقق الخادم من الصف و{sectionTerm} والسعة، ويثبت كل التغييرات وسجل التدقيق في معاملة واحدة.
                 </p>
                 <button
                   onClick={handleBatchTransfer}

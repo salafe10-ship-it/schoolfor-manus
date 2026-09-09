@@ -31,7 +31,8 @@ describe('STU-AFFAIRS-P1-006-28 Student Profile UI truthfulness', () => {
     expect(source).toContain('رقم الهوية الوطنية');
     expect(source).toContain('المرحلة الدراسية <span className="text-emerald-700">(يُدار عبر الالتحاق)</span>');
     expect(source).toContain('الصف الدراسي <span className="text-emerald-700">(يُدار عبر الالتحاق)</span>');
-    expect(source).toContain('الشعبة / الفصل <span className="text-emerald-700">(يُدار عبر الالتحاق)</span>');
+    expect(source).toContain('{sectionFieldLabel} <span className="text-emerald-700">(يُدار عبر الالتحاق)</span>');
+    expect(source).toContain('sectionTermForSchool(selectedSchool.id)');
     expect(source.match(/\bdisabled\b/g)?.length ?? 0).toBeGreaterThanOrEqual(3);
   });
 
