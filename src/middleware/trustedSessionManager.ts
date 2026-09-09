@@ -15,6 +15,7 @@ export type TrustedSessionUser = {
   academicYear?: string;
   permissions?: string[];
   platformPermissions?: string[];
+  forcePasswordChange?: boolean;
 };
 
 export type SessionResponse = {
@@ -59,6 +60,7 @@ function normalizeUser(value: unknown): TrustedSessionUser {
       .filter((permission: unknown): permission is string => typeof permission === 'string' && Boolean(permission.trim()))
       .map((permission: string) => permission.trim())
     : undefined;
+  const forcePasswordChange = Boolean(value.forcePasswordChange || value.force_password_change);
   const name = String(value.name || email).trim();
   const isPlatformAdmin = Array.isArray(platformPermissions) && platformPermissions.includes('Platform.Admin');
   if (!id || !email || !role || (!schoolId && !isPlatformAdmin)) throw new TrustedSessionError('INVALID_SESSION');
@@ -81,7 +83,8 @@ function normalizeUser(value: unknown): TrustedSessionUser {
     ...(branch ? { branch } : {}),
     ...(academicYear ? { academicYear } : {}),
     ...(permissions ? { permissions } : {}),
-    ...(platformPermissions ? { platformPermissions } : {})
+    ...(platformPermissions ? { platformPermissions } : {}),
+    forcePasswordChange
   };
 }
 

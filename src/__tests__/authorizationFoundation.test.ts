@@ -33,6 +33,7 @@ describe('Wave 1C authorization foundation', () => {
     expect(permissionRegistry.normalize('library:borrow')).toBe('Library.Borrow');
     expect(permissionRegistry.normalize('permissions:audit_logs')).toBe('Permissions.Audit_logs');
     expect(permissionRegistry.normalize('uniform_management:sales')).toBe('Uniform_management.Sales');
+    expect(permissionRegistry.normalize('library:borrow:view')).toBe('Library.Borrow.View');
   });
 
   it('keeps platform authorization separate from school-admin wildcard access', () => {

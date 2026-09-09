@@ -16,6 +16,7 @@ export default function SuperAdminUsers({
 }: SuperAdminUsersProps) {
 
   const [employees, setEmployees] = useState<any[]>([]);
+  const [roleCatalog, setRoleCatalog] = useState<any[]>([]);
   const [isDirectoryLoading, setIsDirectoryLoading] = useState(true);
 
   // State for filters
@@ -40,20 +41,29 @@ export default function SuperAdminUsers({
     schoolId: schools[0]?.id || '',
     branchId: '',
     password: '',
-    initialRole: 'SchoolAdmin'
+    initialRole: 'schooladmin'
   });
 
   // Filter branches based on selected school in "Add User"
   const newUserBranches = branches.filter(b => b.schoolId === newUser.schoolId);
+  const catalogSchoolRoles = roleCatalog.filter(role => role.roleKey !== 'platformadmin');
+  const effectiveRoleCatalog = catalogSchoolRoles.length
+    ? catalogSchoolRoles
+    : [{ roleKey: 'schooladmin', name: 'مدير المدرسة', description: 'الدور الافتراضي الآمن للمدرسة' }];
 
   useEffect(() => {
     let mounted = true;
     const loadUsers = async () => {
       setIsDirectoryLoading(true);
       try {
-        const response = await authenticatedRequest('/api/admin/central/users');
-        const payload = await response.json().catch(() => ({}));
-        if (!response.ok || !payload?.success || !Array.isArray(payload.users)) throw new Error(payload?.message || 'تعذر تحميل دليل الهوية المركزي.');
+        const [usersResponse, rolesResponse] = await Promise.all([
+          authenticatedRequest('/api/admin/central/users'),
+          authenticatedRequest('/api/admin/central/identity-roles'),
+        ]);
+        const payload = await usersResponse.json().catch(() => ({}));
+        const rolesPayload = await rolesResponse.json().catch(() => ({}));
+        if (!usersResponse.ok || !payload?.success || !Array.isArray(payload.users)) throw new Error(payload?.message || 'تعذر تحميل دليل الهوية المركزي.');
+        if (!rolesResponse.ok || !rolesPayload?.success || !Array.isArray(rolesPayload.roles)) throw new Error(rolesPayload?.message || 'تعذر تحميل كتالوج أدوار الهوية المركزي.');
         if (mounted) setEmployees(payload.users.map((user: any) => ({
           ...user,
           name: user.display_name,
@@ -62,12 +72,13 @@ export default function SuperAdminUsers({
           branchId: user.branch_id,
           // A platform identity intentionally has no school scope.  Do not
           // present it as a school staff member in the central directory.
-          jobTitle: user.school_id ? (user.roles?.[0]?.name || 'موظف نظام') : 'مدير المنصة المركزي',
-          department: user.school_id ? (user.school_name || 'المدرسة') : 'الإدارة المركزية',
-          forcePasswordChange: false,
-          loginCount: 0,
-          lastLogin: 'غير متاح من الدليل الحالي',
+          jobTitle: user.job_title || (user.school_id ? (user.roles?.[0]?.name || 'موظف نظام') : 'مدير المنصة المركزي'),
+          department: user.department || (user.school_id ? (user.school_name || 'المدرسة') : 'الإدارة المركزية'),
+          forcePasswordChange: Boolean(user.forcePasswordChange || user.force_password_change),
+          loginCount: user.login_count ?? null,
+          lastLogin: user.last_sign_in_at || 'غير متاح من الدليل الحالي',
         })));
+        if (mounted) setRoleCatalog(rolesPayload.roles);
       } catch (error) {
         if (mounted) triggerNotification(error instanceof Error ? error.message : 'تعذر تحميل دليل الهوية المركزي.', 'danger');
       } finally {
@@ -84,8 +95,11 @@ export default function SuperAdminUsers({
     email: user.email || '',
     schoolId: user.school_id,
     branchId: user.branch_id,
-    jobTitle: user.school_id ? (user.roles?.[0]?.name || user.jobTitle || 'موظف نظام') : 'مدير المنصة المركزي',
-    department: user.school_id ? (user.school_name || 'المدرسة') : 'الإدارة المركزية',
+    jobTitle: user.job_title || user.jobTitle || (user.school_id ? (user.roles?.[0]?.name || 'موظف نظام') : 'مدير المنصة المركزي'),
+    department: user.department || (user.school_id ? (user.school_name || 'المدرسة') : 'الإدارة المركزية'),
+    forcePasswordChange: Boolean(user.forcePasswordChange || user.force_password_change),
+    loginCount: user.login_count ?? null,
+    lastLogin: user.last_sign_in_at || 'غير متاح من الدليل الحالي',
   });
 
   const mutateCentralUser = async (userId: string, body: Record<string, unknown>) => {
@@ -113,7 +127,16 @@ export default function SuperAdminUsers({
     try {
       const response = await authenticatedRequest(`/api/admin/central/schools/${encodeURIComponent(newUser.schoolId)}/users`, {
         method: 'POST', headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ name: newUser.name, email: newUser.email, password: newUser.password, branchId: newUser.branchId || undefined, initialRole: newUser.initialRole }),
+        body: JSON.stringify({
+          name: newUser.name,
+          jobTitle: newUser.jobTitle,
+          department: newUser.department,
+          email: newUser.email,
+          password: newUser.password,
+          branchId: newUser.branchId || undefined,
+          targetTenantId: schools.find(school => school.id === newUser.schoolId)?.tenant_id || schools.find(school => school.id === newUser.schoolId)?.tenantId,
+          initialRole: newUser.initialRole,
+        }),
       });
       const payload = await response.json().catch(() => ({}));
       if (!response.ok || !payload?.success || !payload?.user) throw new Error(payload?.message || 'تعذر إنشاء هوية الموظف مركزيًا.');
@@ -126,7 +149,7 @@ export default function SuperAdminUsers({
         setShowPasswordResetModal(true);
       }
       setShowAddModal(false);
-      setNewUser({ name: '', jobTitle: '', department: 'شئون الطلاب', email: '', schoolId: schools[0]?.id || '', branchId: '', password: '', initialRole: 'SchoolAdmin' });
+      setNewUser({ name: '', jobTitle: '', department: 'شئون الطلاب', email: '', schoolId: schools[0]?.id || '', branchId: '', password: '', initialRole: 'schooladmin' });
     } catch (error) {
       triggerNotification(error instanceof Error ? error.message : 'تعذر إنشاء هوية الموظف؛ لم يتم تعديل البيانات.', 'danger');
     }
@@ -137,7 +160,15 @@ export default function SuperAdminUsers({
     e.preventDefault();
     if (!currentUser) return;
     try {
-      const payload = await mutateCentralUser(currentUser.id, { operation: 'update', displayName: currentUser.name });
+      const payload = await mutateCentralUser(currentUser.id, {
+        operation: 'update',
+        expectedVersion: currentUser.version,
+        targetTenantId: currentUser.tenantId || currentUser.tenant_id,
+        displayName: currentUser.name,
+        jobTitle: currentUser.jobTitle,
+        department: currentUser.department,
+        email: currentUser.email,
+      });
       setEmployees(prev => prev.map(user => user.id === currentUser.id ? { ...user, ...mapCanonicalUser(payload.user) } : user));
       triggerNotification('تم حفظ بيانات الموظف في الهوية المركزية ✅', 'success');
       setShowEditModal(false);
@@ -147,40 +178,58 @@ export default function SuperAdminUsers({
   // Toggle user state (Suspend / Resume)
   const handleToggleFreezeUser = async (user: any) => {
     const status = user.status === 'suspended' ? 'active' : 'suspended';
-    try { const payload = await mutateCentralUser(user.id, { operation: 'status', status }); setEmployees(prev => prev.map(item => item.id === user.id ? { ...item, ...mapCanonicalUser(payload.user) } : item)); triggerNotification(status === 'active' ? 'تم تفعيل الهوية مركزيًا ✅' : 'تم تعليق الهوية مركزيًا', status === 'active' ? 'success' : 'warning'); }
+    try { const payload = await mutateCentralUser(user.id, { operation: 'status', expectedVersion: user.version, status }); setEmployees(prev => prev.map(item => item.id === user.id ? { ...item, ...mapCanonicalUser(payload.user) } : item)); triggerNotification(status === 'active' ? 'تم تفعيل الهوية مركزيًا ✅' : 'تم تعليق الهوية مركزيًا', status === 'active' ? 'success' : 'warning'); }
     catch (error) { triggerNotification(error instanceof Error ? error.message : 'تعذر تغيير حالة الهوية مركزيًا.', 'danger'); }
   };
 
   // Lock / Unlock user account
   const handleToggleLockUser = async (user: any) => {
-    const status = user.status === 'locked' ? 'active' : 'disabled';
-    try { const payload = await mutateCentralUser(user.id, { operation: 'status', status }); setEmployees(prev => prev.map(item => item.id === user.id ? { ...item, ...mapCanonicalUser(payload.user), status: status === 'disabled' ? 'locked' : status } : item)); triggerNotification(status === 'active' ? 'تم إلغاء قفل الهوية مركزيًا ✅' : 'تم قفل الهوية مركزيًا', status === 'active' ? 'success' : 'danger'); }
+    const status = user.status === 'locked' || user.status === 'disabled' ? 'active' : 'disabled';
+    try { const payload = await mutateCentralUser(user.id, { operation: 'status', expectedVersion: user.version, status }); setEmployees(prev => prev.map(item => item.id === user.id ? { ...item, ...mapCanonicalUser(payload.user), status: status === 'disabled' ? 'locked' : status } : item)); triggerNotification(status === 'active' ? 'تم إلغاء قفل الهوية مركزيًا ✅' : 'تم قفل الهوية مركزيًا', status === 'active' ? 'success' : 'danger'); }
     catch (error) { triggerNotification(error instanceof Error ? error.message : 'تعذر قفل الهوية مركزيًا.', 'danger'); }
   };
 
   // Terminate/Delete User accounts
   const handleTerminateUser = async (user: any) => {
     if (confirm(`⚠️ تحذير: هل أنت متأكد من أرشفة هوية الموظف [${user.name}]؟`)) {
-      try { await mutateCentralUser(user.id, { operation: 'archive' }); setEmployees(prev => prev.filter(item => item.id !== user.id)); triggerNotification('تمت أرشفة الهوية مركزيًا ✅', 'warning'); }
+      try { await mutateCentralUser(user.id, { operation: 'archive', expectedVersion: user.version }); setEmployees(prev => prev.filter(item => item.id !== user.id)); triggerNotification('تمت أرشفة الهوية مركزيًا ✅', 'warning'); }
       catch (error) { triggerNotification(error instanceof Error ? error.message : 'تعذر أرشفة الهوية مركزيًا.', 'danger'); }
     }
   };
 
   // Reset password wizard
   const handleResetPassword = async (user: any) => {
-    try { const payload = await mutateCentralUser(user.id, { operation: 'reset_password' }); setResetDetails({ name: user.name, password: payload.temporaryPassword }); setShowPasswordResetModal(true); triggerNotification('تم إصدار كلمة مرور مؤقتة من Supabase Auth المركزي ✅', 'success'); }
+    try { const payload = await mutateCentralUser(user.id, { operation: 'reset_password', expectedVersion: user.version }); setResetDetails({ name: user.name, password: payload.temporaryPassword }); setShowPasswordResetModal(true); triggerNotification('تم إصدار كلمة مرور مؤقتة من Supabase Auth المركزي ✅', 'success'); }
     catch (error) { triggerNotification(error instanceof Error ? error.message : 'تعذر إعادة كلمة المرور مركزيًا.', 'danger'); }
   };
 
   // Toggle Force Password Change next login
   const handleToggleForcePassword = async (user: any) => {
-    try { const payload = await mutateCentralUser(user.id, { operation: 'force_password', forcePasswordChange: !user.forcePasswordChange }); setEmployees(prev => prev.map(item => item.id === user.id ? { ...item, ...mapCanonicalUser(payload.user), forcePasswordChange: payload.user.forcePasswordChange } : item)); triggerNotification('تم تحديث سياسة كلمة المرور مركزيًا ✅', 'info'); }
+    try { const payload = await mutateCentralUser(user.id, { operation: 'force_password', expectedVersion: user.version, forcePasswordChange: !user.forcePasswordChange }); setEmployees(prev => prev.map(item => item.id === user.id ? { ...item, ...mapCanonicalUser(payload.user), forcePasswordChange: payload.user.forcePasswordChange } : item)); triggerNotification('تم تحديث سياسة كلمة المرور مركزيًا ✅', 'info'); }
     catch (error) { triggerNotification(error instanceof Error ? error.message : 'تعذر تحديث سياسة كلمة المرور.', 'danger'); }
   };
 
-  // Forcefully terminate/end all user's active sessions (Token Eviction)
-  const handleEvictSessions = (user: any) => {
-    triggerNotification(`إنهاء الجلسات النشطة لـ ${user.name} يحتاج موصل جلسات مركزي؛ لم يتم تسجيل نجاح وهمي.`, 'warning');
+  // Forcefully terminate/end all user's active sessions through the
+  // server-side revocation cutoff; no browser token or connector is trusted.
+  const handleEvictSessions = async (user: any) => {
+    try {
+      const payload = await mutateCentralUser(user.id, { operation: 'evict_sessions', expectedVersion: user.version });
+      setEmployees(prev => prev.map(item => item.id === user.id ? { ...item, ...mapCanonicalUser(payload.user) } : item));
+      triggerNotification(`تم إنهاء جلسات ${user.name} مركزيًا وإبطال الرموز السابقة ✅`, 'success');
+    } catch (error) {
+      triggerNotification(error instanceof Error ? error.message : 'تعذر إنهاء الجلسات؛ لم يتم تسجيل نجاح وهمي.', 'danger');
+    }
+  };
+
+  const copyTemporaryPassword = async () => {
+    if (!resetDetails.password) return;
+    try {
+      if (!navigator.clipboard?.writeText) throw new Error('clipboard_unavailable');
+      await navigator.clipboard.writeText(resetDetails.password);
+      triggerNotification('تم نسخ الرمز المؤقت إلى الحافظة؛ لا تحفظه في ملفات غير آمنة.', 'info');
+    } catch {
+      triggerNotification('تعذر النسخ التلقائي؛ استخدم التحديد اليدوي للرمز المؤقت.', 'warning');
+    }
   };
 
   // -------------------------------------------------------------
@@ -268,7 +317,14 @@ export default function SuperAdminUsers({
               </tr>
             </thead>
             <tbody className="divide-y divide-amber-900/10 text-slate-700">
-              {filteredUsers.length === 0 ? (
+              {isDirectoryLoading ? (
+                <tr>
+                  <td colSpan={8} className="p-12 text-center text-slate-500">
+                    <RefreshCw className="w-8 h-8 text-amber-500 mx-auto mb-3 animate-spin" />
+                    <p className="font-bold text-slate-600">جاري تحميل دليل الهوية من المصدر المركزي...</p>
+                  </td>
+                </tr>
+              ) : filteredUsers.length === 0 ? (
                 <tr>
                   <td colSpan={8} className="p-12 text-center text-slate-500">
                     <Laptop className="w-12 h-12 text-slate-700 mx-auto mb-3 animate-pulse" />
@@ -278,7 +334,7 @@ export default function SuperAdminUsers({
                 </tr>
               ) : (
                 filteredUsers.map((user, idx) => {
-                  const schoolLabel = schools.find(s => s.id === user.schoolId)?.schoolShortName || '';
+                  const schoolLabel = user.school_name || schools.find(s => s.id === user.schoolId)?.schoolShortName || schools.find(s => s.id === user.schoolId)?.name || (user.schoolId ? 'مدرسة غير مسماة' : 'الإدارة المركزية');
                   const branchLabel = branches.find(b => b.id === user.branchId)?.name || 'الفرع العام';
                   
                   return (
@@ -302,6 +358,7 @@ export default function SuperAdminUsers({
                         <div>
                           <span className="text-slate-800 block">{user.jobTitle}</span>
                           <span className="text-[10px] text-amber-400 mt-0.5 block">{user.department}</span>
+                          <span className="text-[9px] text-slate-500 mt-1 block">الأدوار: {Array.isArray(user.roles) && user.roles.length ? user.roles.map((role: any) => role.name || role.roleKey).join('، ') : 'لا يوجد دور فعّال'}</span>
                         </div>
                       </td>
 
@@ -317,14 +374,14 @@ export default function SuperAdminUsers({
 
                       {/* Login Count */}
                       <td className="p-4 text-center font-mono font-extrabold text-slate-900">
-                        {user.loginCount || 0}
+                        {user.loginCount === null || user.loginCount === undefined ? '—' : user.loginCount}
                       </td>
 
                       {/* IP and Device */}
                       <td className="p-4">
                         <div className="font-mono text-[10px] space-y-0.5">
-                          <div className="text-slate-400 text-left" dir="ltr">{user.ip || '0.0.0.0'}</div>
-                          <div className="text-slate-600 text-[9px] text-left" dir="ltr">{user.device || 'أجهزة متعددة'}</div>
+                          <div className="text-slate-400 text-left" dir="ltr">{user.ip || 'غير متاح'}</div>
+                          <div className="text-slate-600 text-[9px] text-left" dir="ltr">{user.device || 'غير متاح من المصدر الحالي'}</div>
                         </div>
                       </td>
 
@@ -337,8 +394,9 @@ export default function SuperAdminUsers({
                             ? 'bg-amber-950 text-amber-400 border border-amber-900/40'
                             : 'bg-rose-950 text-rose-400 border border-rose-900/40'
                         }`}>
-                          {user.status === 'active' ? 'نشط' : 
-                           user.status === 'suspended' ? 'مجمد' : 'مقفل أمنياً'}
+                           {user.status === 'active' ? 'نشط' :
+                            user.status === 'suspended' ? 'مجمد' :
+                            user.status === 'archived' ? 'مؤرشف' : 'مقفل أمنياً'}
                         </span>
                       </td>
 
@@ -535,11 +593,26 @@ export default function SuperAdminUsers({
                   </select>
                 </div>
 
+                {/* Initial role */}
+                <div className="space-y-1">
+                  <label className="text-xs font-bold text-slate-400 block">الدور الابتدائي:</label>
+                  <select
+                    value={newUser.initialRole}
+                    onChange={(e) => setNewUser({ ...newUser, initialRole: e.target.value })}
+                    className="w-full bg-slate-950 border border-slate-800 rounded-lg px-3 py-2 text-xs text-white"
+                  >
+                    {effectiveRoleCatalog.map(role => (
+                      <option key={role.roleKey} value={role.roleKey}>{role.name}</option>
+                    ))}
+                  </select>
+                  <span className="text-[9px] text-slate-500 block">يُسند الدور داخل المدرسة المستهدفة فقط.</span>
+                </div>
+
                 {/* Password input */}
                 <div className="space-y-1">
                   <label className="text-xs font-bold text-slate-400 block">رمز المرور المبدئي (تتركه فارغاً لتوليد آمن):</label>
                   <input
-                    type="text"
+                    type="password"
                     placeholder="توليد عشوائي آمن..."
                     value={newUser.password}
                     onChange={(e) => setNewUser({...newUser, password: e.target.value})}
@@ -630,8 +703,8 @@ export default function SuperAdminUsers({
           <div className="bg-slate-900 border-2 border-emerald-500 rounded-3xl shadow-2xl max-w-md w-full overflow-hidden text-right animate-in fade-in zoom-in-95 duration-200">
             <div className="bg-emerald-600 p-5 text-white text-center space-y-2">
               <div className="w-12 h-12 rounded-full bg-white/20 mx-auto flex items-center justify-center text-2xl">🔑</div>
-              <h3 className="text-sm font-black">تم توليد وحفظ كلمة المرور بأمان</h3>
-              <p className="text-[10px] text-white/80">تم تفعيل مفتاح الدخول وتأمين الاتصال بنجاح</p>
+              <h3 className="text-sm font-black">تم توليد رمز مؤقت من المصدر المركزي</h3>
+              <p className="text-[10px] text-white/80">سيُطلب من المستخدم تغييره عند أول دخول</p>
             </div>
 
             <div className="p-6 space-y-4">
@@ -649,10 +722,10 @@ export default function SuperAdminUsers({
               <div className="pt-4 border-t border-slate-850 flex justify-end text-xs">
                 <button
                   type="button"
-                  onClick={() => setShowPasswordResetModal(false)}
+                  onClick={() => { void copyTemporaryPassword(); setShowPasswordResetModal(false); }}
                   className="bg-slate-950 hover:bg-slate-800 text-white border border-slate-800 px-5 py-2 font-bold cursor-pointer transition-colors w-full"
                 >
-                  تم نسخ وتوثيق الرمز السري 👍
+                  نسخ الرمز المؤقت وإغلاق النافذة
                 </button>
               </div>
             </div>

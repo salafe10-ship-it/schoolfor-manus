@@ -3,6 +3,12 @@ import { Pool } from 'pg';
 
 const requiredTables = ['tenants', 'subscriptions', 'schools', 'branches', 'users', 'platform_users'];
 const requiredIndexes = ['uq_schools_live_central_subdomain', 'uq_schools_live_central_domain'];
+const requiredColumns = [
+  ['users', 'job_title'],
+  ['users', 'department'],
+  ['users', 'session_revoked_at'],
+  ['users', 'force_password_change'],
+] as const;
 const requiredLifecycleFunctions = [
   'dbsec004_current_tenant_id',
   'dbsec004_current_school_id',
@@ -51,6 +57,14 @@ try {
          AND indexname = ANY($1::text[])
        ORDER BY indexname
     `, [requiredIndexes]);
+
+    const columns = await client.query<{ table_name: string; column_name: string }>(`
+      SELECT table_name, column_name
+        FROM information_schema.columns
+       WHERE table_schema = 'public'
+         AND (table_name, column_name) IN (('users', 'job_title'), ('users', 'department'),
+                                           ('users', 'session_revoked_at'), ('users', 'force_password_change'))
+    `);
 
     const duplicateRoutes = await client.query<{ route_type: string; duplicate_groups: number }>(`
       WITH routes AS (
@@ -117,6 +131,7 @@ try {
 
     const presentTables = tables.rows.map((row) => row.table_name);
     const presentIndexes = indexes.rows.map((row) => row.indexname);
+    const presentColumns = new Set(columns.rows.map((row) => `${row.table_name}.${row.column_name}`));
     const guardedFunctions = functions.rows
       .filter((row) => row.definition.includes('public.tenants') && row.definition.includes('public.platform_users'))
       .map((row) => row.proname);
@@ -129,6 +144,9 @@ try {
     const missing = [
       ...requiredTables.filter((name) => !presentTables.includes(name)).map((name) => `table:${name}`),
       ...requiredIndexes.filter((name) => !presentIndexes.includes(name)).map((name) => `index:${name}`),
+      ...requiredColumns
+        .filter(([table, column]) => !presentColumns.has(`${table}.${column}`))
+        .map(([table, column]) => `column:${table}.${column}`),
       ...requiredLifecycleFunctions.filter((name) => !guardedFunctions.includes(name)).map((name) => `lifecycle_function:${name}`),
       ...duplicateGroupNames.map((name) => `route_conflict:${name}`),
       ...rlsMissing,
@@ -148,6 +166,7 @@ try {
       objects: {
         tables: presentTables,
         indexes: presentIndexes,
+        columns: [...presentColumns].sort(),
         lifecycleFunctions: guardedFunctions,
         duplicateRoutes: duplicateRoutes.rows,
         scopedRls: scopedSecurity.rows,

@@ -74,6 +74,16 @@ describe('owner workspace and targeted release contract', () => {
     expect(component).toContain('توزيعها تلقائياً');
   });
 
+  it('carries the mother-school RBAC snapshot into automatic releases', () => {
+    const server = read('server.ts');
+    expect(server).toContain('captureCanonicalRbacManifest');
+    expect(server).toContain('applyCanonicalRbacManifest');
+    expect(server).toContain("rbac: await captureCanonicalRbacManifest");
+    expect(server).toContain("rbacPropagation = await applyCanonicalRbacManifest");
+    expect(server).toContain("rbacTemplateVersion");
+    expect(server).toContain('automaticPropagation: true');
+  });
+
   it('requires an explicit release scope and writes versioned target records', () => {
     const server = read('server.ts');
     expect(server).toContain("app.post('/api/admin/central/releases', authenticateRequest, requirePermissionOnly(PERMISSIONS.PLATFORM_ADMIN)");

@@ -1,5 +1,5 @@
-import { Check, Copy, HelpCircle, Lock as LockIcon, Save, ShieldCheck, Sliders, Users, X } from 'lucide-react';
-import React, { useEffect, useState } from 'react';
+import { Check, Copy, HelpCircle, Lock as LockIcon, RefreshCw, Save, Send, ShieldCheck, Sliders, Users, X } from 'lucide-react';
+import React, { useEffect, useMemo, useState } from 'react';
 import { authenticatedRequest } from '../../utils/authenticatedRequest';
 interface SuperAdminRbacProps {
   schools: any[];
@@ -7,64 +7,72 @@ interface SuperAdminRbacProps {
   triggerNotification: (msg: string, type: 'success' | 'danger' | 'warning' | 'info') => void;
 }
 
+type PermissionCatalogEntry = {
+  permissionKey: string;
+  resource: string;
+  action: string;
+  description?: string;
+};
+
 export default function SuperAdminRbac({
   schools = [],
   logAction,
   triggerNotification
 }: SuperAdminRbacProps) {
 
-  // Roles and permissions come from the canonical tenant-scoped RBAC API.
+  // Roles and permissions come from the canonical mother-school RBAC API.
   const [roles, setRoles] = useState<any[]>([]);
   const [selectedRoleId, setSelectedRoleId] = useState('');
   const [isLoading, setIsLoading] = useState(true);
   const [isSaving, setIsSaving] = useState(false);
-
-  // Permissions categorized by system modules
-  const permissionModules = [
-    {
-      id: 'mod_students',
-      name: 'منظومة شؤون الطلاب والقبول',
-      permissions: [
-        { key: 'Student.View', label: 'عرض سجلات الطلاب' },
-        { key: 'Student.Write', label: 'إضافة وتعديل سجلات الطلاب' },
-        { key: 'Student.Delete', label: 'أرشفة ملفات الطلاب' },
-        { key: 'Student.Export', label: 'تصدير بيانات الطلاب' }
-      ]
-    },
-    {
-      id: 'mod_finance',
-      name: 'منظومة الشؤون المالية والحسابات',
-      permissions: [
-        { key: 'Financial.Read', label: 'عرض الحسابات والقيود' },
-        { key: 'Financial.Write', label: 'إدخال العمليات المالية' },
-        { key: 'Financial.Approve', label: 'اعتماد العمليات المالية' },
-        { key: 'Financial.Export', label: 'تصدير التقارير المالية' }
-      ]
-    },
-    {
-      id: 'mod_hr',
-      name: 'منظومة الموارد البشرية والرواتب (HR & Payroll)',
-      permissions: [
-        { key: 'Hr.View', label: 'عرض ملفات الموارد البشرية' },
-        { key: 'Hr.Edit', label: 'إضافة وتعديل بيانات الموارد البشرية' },
-        { key: 'Hr.Approve', label: 'اعتماد الرواتب والإجراءات' }
-      ]
-    }
-  ];
+  const [isPublishing, setIsPublishing] = useState(false);
+  const [canonicalTemplate, setCanonicalTemplate] = useState<any | null>(null);
+  const [lastPropagation, setLastPropagation] = useState<any | null>(null);
 
   // Permissions state per role
   const [rolePermissions, setRolePermissions] = useState<Record<string, string[]>>({});
+  const [permissionCatalog, setPermissionCatalog] = useState<PermissionCatalogEntry[]>([]);
+
+  const permissionModules = useMemo(() => {
+    const grouped = new Map<string, PermissionCatalogEntry[]>();
+    for (const permission of permissionCatalog) {
+      const current = grouped.get(permission.resource) || [];
+      current.push(permission);
+      grouped.set(permission.resource, current);
+    }
+    return [...grouped.entries()]
+      .sort(([left], [right]) => left.localeCompare(right))
+      .map(([resource, permissions]) => ({
+        id: `resource-${resource}`,
+        name: resource,
+        permissions: permissions
+          .sort((left, right) => left.permissionKey.localeCompare(right.permissionKey))
+          .map(permission => ({
+            key: permission.permissionKey,
+            label: permission.description && permission.description !== permission.permissionKey
+              ? permission.description
+              : `${permission.resource} — ${permission.action}`,
+          })),
+      }));
+  }, [permissionCatalog]);
 
   useEffect(() => {
     let mounted = true;
     const loadRbac = async () => {
       setIsLoading(true);
       try {
-        const response = await authenticatedRequest('/api/admin/central/rbac');
+        const [response, templatesResponse] = await Promise.all([
+          authenticatedRequest('/api/admin/central/rbac'),
+          authenticatedRequest('/api/admin/central/templates'),
+        ]);
         const payload = await response.json().catch(() => ({}));
+        const templatesPayload = await templatesResponse.json().catch(() => ({}));
         if (!response.ok || !payload?.success || !Array.isArray(payload.roles)) throw new Error(payload?.message || 'تعذر تحميل مصفوفة الصلاحيات المركزية.');
+        if (!templatesResponse.ok || !templatesPayload?.success || !Array.isArray(templatesPayload.templates)) throw new Error(templatesPayload?.message || 'تعذر تحميل قالب المدرسة الأم.');
         if (!mounted) return;
         setRoles(payload.roles);
+        setPermissionCatalog(Array.isArray(payload.permissionCatalog) ? payload.permissionCatalog : []);
+        setCanonicalTemplate(templatesPayload.templates.find((template: any) => template.template_key === 'central-schools-default') || null);
         const permissions = Object.fromEntries(payload.roles.map((role: any) => [role.id, (role.permissions || []).map((permission: any) => permission.permissionKey)]));
         setRolePermissions(permissions);
         setSelectedRoleId((current) => payload.roles.some((role: any) => role.id === current) ? current : (payload.roles[0]?.id || ''));
@@ -111,11 +119,23 @@ export default function SuperAdminRbac({
     try {
       const response = await authenticatedRequest(`/api/admin/central/rbac/roles/${encodeURIComponent(activeRole.id)}`, {
         method: 'PATCH', headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ permissionKeys: rolePermissions[activeRole.id] || [] }),
+        body: JSON.stringify({
+          permissionKeys: rolePermissions[activeRole.id] || [],
+          expectedVersion: activeRole.version,
+          name: activeRole.name,
+          description: activeRole.description,
+        }),
       });
       const payload = await response.json().catch(() => ({}));
       if (!response.ok || !payload?.success) throw new Error(payload?.message || 'تعذر حفظ الصلاحيات المركزية.');
-      triggerNotification(`تم اعتماد صلاحيات دور ${activeRole.name} مركزيًا وتسجيلها في قاعدة البيانات ✅`, 'success');
+      if (payload.role) {
+        setRoles(previous => previous.map(role => role.id === payload.role.id ? payload.role : role));
+      }
+      if (Array.isArray(payload.permissionKeys)) {
+        setRolePermissions(previous => ({ ...previous, [activeRole.id]: payload.permissionKeys }));
+      }
+      setLastPropagation(payload.propagation || null);
+      triggerNotification(`تم اعتماد صلاحيات دور ${activeRole.name} ونشرها تلقائيًا إلى ${payload.propagation?.targetCount || 0} مدرسة مرتبطة ✅`, 'success');
       logAction('UPDATE_RBAC', `اعتماد صلاحيات الدور [${activeRole.name}]`, 'المستخدمين والصلاحيات');
     } catch (error) {
       triggerNotification(error instanceof Error ? error.message : 'تعذر حفظ الصلاحيات؛ لم يتم تعديل الإنتاج.', 'danger');
@@ -148,6 +168,31 @@ export default function SuperAdminRbac({
     setCopyState({ srcRoleId: '', destRoleId: '' });
   };
 
+  const handlePublishMotherSchoolRbac = async () => {
+    if (!canonicalTemplate?.id) {
+      triggerNotification('لا يوجد قالب مركزي منشأ من المدرسة الأم؛ أنشئ القالب أولاً من مساحة التحكم المركزية.', 'warning');
+      return;
+    }
+    if (!window.confirm('سيتم التقاط أدوار المدرسة الأم ونشر إصدار RBAC تلقائياً إلى المدارس المرتبطة بالقالب. هل تريد الاعتماد والنشر؟')) return;
+    setIsPublishing(true);
+    try {
+      const response = await authenticatedRequest(`/api/admin/central/templates/${encodeURIComponent(canonicalTemplate.id)}`, {
+        method: 'PATCH', headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ operation: 'capture' }),
+      });
+      const payload = await response.json().catch(() => ({}));
+      if (!response.ok || !payload?.success) throw new Error(payload?.message || 'تعذر اعتماد ونشر قالب المدرسة الأم.');
+      setCanonicalTemplate(payload.template || canonicalTemplate);
+      setLastPropagation(payload.propagation || null);
+      triggerNotification(`تم نشر إصدار RBAC من المدرسة الأم إلى ${payload.propagation?.targetCount || 0} مدرسة مرتبطة ✅`, 'success');
+      logAction('PUBLISH_MOTHER_RBAC', `اعتماد ونشر قالب صلاحيات المدرسة الأم — الإصدار ${payload.template?.version || canonicalTemplate.version}`, 'المستخدمين والصلاحيات');
+    } catch (error) {
+      triggerNotification(error instanceof Error ? error.message : 'تعذر اعتماد قالب المدرسة الأم؛ لم يتم نشر أي مدرسة.', 'danger');
+    } finally {
+      setIsPublishing(false);
+    }
+  };
+
   const activeRoleName = roles.find(r => r.id === selectedRoleId)?.name || 'لا يوجد دور محدد';
 
   return (
@@ -161,18 +206,37 @@ export default function SuperAdminRbac({
             مركز الحوكمة المركزية ومصفوفات الصلاحيات الفيدرالية (RBAC Templates)
           </h4>
           <p className="text-[11px] text-slate-400 mt-1 leading-relaxed">
-            تحكم وصياغة قوالب مصفوفات الأدوار المعتمدة. سينعكس التحديث على جميع حسابات الموظفين المرتبطين بالدور في كافة المدارس والـ Tenants بشكل مباشر وحي.
+            تحكم وصياغة الإصدار الحالي لقالب الدور من المدرسة الأم. كل اعتماد ناجح يصدر نسخة موثقة وينشرها تلقائيًا للمدارس المرتبطة مع حملة نشر مركزية قابلة للتتبع والتراجع.
           </p>
         </div>
 
-        <button
-          onClick={() => setShowCopyModal(true)}
-          className="bg-slate-950 border border-slate-800 hover:border-slate-700 text-amber-400 hover:text-amber-300 font-extrabold text-xs px-4 py-2.5 transition-all cursor-pointer flex items-center gap-1.5 shadow"
-        >
-          <Copy className="w-4 h-4" />
-          <span>استنساخ قالب صلاحيات كامل</span>
-        </button>
+        <div className="flex flex-wrap items-center justify-center gap-2">
+          <button
+            type="button"
+            onClick={() => setShowCopyModal(true)}
+            className="bg-slate-950 border border-slate-800 hover:border-slate-700 text-amber-400 hover:text-amber-300 font-extrabold text-xs px-4 py-2.5 transition-all cursor-pointer flex items-center gap-1.5 shadow"
+          >
+            <Copy className="w-4 h-4" />
+            <span>استنساخ قالب صلاحيات كامل</span>
+          </button>
+          <button
+            type="button"
+            onClick={() => void handlePublishMotherSchoolRbac()}
+            disabled={isPublishing || !canonicalTemplate?.id}
+            title="اعتماد ونشر للمدارس"
+            className="bg-emerald-700 hover:bg-emerald-600 disabled:opacity-50 text-white font-extrabold text-xs px-4 py-2.5 transition-all cursor-pointer flex items-center gap-1.5 shadow"
+          >
+            {isPublishing ? <RefreshCw className="w-4 h-4 animate-spin" /> : <Send className="w-4 h-4" />}
+            <span>{isPublishing ? 'جاري إعادة النشر...' : 'إعادة التقاط ونشر القالب'}</span>
+          </button>
+        </div>
       </div>
+
+      {lastPropagation && (
+        <div className="rounded-2xl border border-emerald-900/40 bg-emerald-950/20 px-4 py-3 text-[10px] text-emerald-300">
+          آخر نشر: {lastPropagation.targetCount || 0} مدرسة — تم إنشاء إصدار مستقل لكل مدرسة، مع إبقاء بيانات المدرسة التشغيلية خارج القالب.
+        </div>
+      )}
 
       {/* Main split view */}
       <div className="grid grid-cols-1 lg:grid-cols-3 gap-6">
@@ -189,9 +253,11 @@ export default function SuperAdminRbac({
               const isSelected = selectedRoleId === role.id;
               const countOfPerms = rolePermissions[role.id]?.length || 0;
               return (
-                <div
+                <button
+                  type="button"
                   key={role.id}
                   onClick={() => setSelectedRoleId(role.id)}
+                  aria-pressed={isSelected}
                   className={`p-3.5 border text-right transition-all cursor-pointer space-y-1.5 ${
                     isSelected 
                       ? 'bg-amber-950/40 border-amber-500/80' 
@@ -205,7 +271,7 @@ export default function SuperAdminRbac({
                     </span>
                   </div>
                   <p className="text-[10px] text-slate-400 leading-relaxed">{role.description}</p>
-                </div>
+                </button>
               );
             })}
           </div>
@@ -238,9 +304,12 @@ export default function SuperAdminRbac({
                       {mod.permissions.map((perm) => {
                         const isGranted = currentList.includes(perm.key);
                         return (
-                          <div 
+                          <button
+                            type="button"
                             key={perm.key}
                             onClick={() => handleTogglePermission(selectedRoleId, perm.key)}
+                            role="checkbox"
+                            aria-checked={isGranted}
                             className={`p-3 border flex justify-between items-center cursor-pointer transition-all ${
                               isGranted 
                                 ? 'bg-amber-950/20 border-amber-900 text-amber-300' 
@@ -255,7 +324,7 @@ export default function SuperAdminRbac({
                             }`}>
                               {isGranted && <Check className="w-3 h-3" />}
                             </div>
-                          </div>
+                          </button>
                         );
                       })}
                     </div>
@@ -269,7 +338,7 @@ export default function SuperAdminRbac({
           {/* Action trigger footer */}
           <div className="pt-4 mt-6 border-t border-slate-800 flex justify-between items-center">
             <span className="text-[10px] text-slate-500 font-semibold leading-relaxed max-w-sm">
-              تحذير: التغييرات ستُحفظ في قالب الصلاحيات، وستُطبق فورياً على كل الموظفين المنسوبين للدور في قاعدة البيانات.
+              التغيير الحالي يُحفظ بإصدار جديد مع فحص تعارض وتدقيق مركزي، ثم يُنشر تلقائياً إلى المدارس المرتبطة مع سجل قابل للتتبع والتراجع.
             </span>
             <button
               type="button"

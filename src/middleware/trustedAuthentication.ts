@@ -28,6 +28,8 @@ export type TrustedIdentity = {
   permissions?: string[];
   /** Effective platform permissions are server-derived and never come from client claims. */
   platformPermissions?: string[];
+  /** Server-owned password lifecycle policy from public.users. */
+  forcePasswordChange?: boolean;
 };
 
 export type TrustedSession = {
@@ -217,6 +219,23 @@ async function attachTrustedEffectivePermissions(identity: TrustedIdentity): Pro
   return attachTrustedPlatformPermissions(tenantIdentity);
 }
 
+async function attachTrustedPasswordPolicy(
+  supabase: SupabaseClient,
+  identity: TrustedIdentity,
+): Promise<TrustedIdentity> {
+  const { data, error } = await supabase
+    .from('users')
+    .select('force_password_change')
+    .eq('auth_user_id', identity.id)
+    .is('deleted_at', null)
+    .limit(1)
+    .maybeSingle();
+  if (error) {
+    throw new TrustedAuthenticationError('INVALID_IDENTITY', 'سياسة كلمة مرور الهوية غير متاحة.');
+  }
+  return { ...identity, forcePasswordChange: Boolean(data?.force_password_change) };
+}
+
 function hasPlatformAdminPermission(identity: TrustedIdentity): boolean {
   return Array.isArray(identity.platformPermissions)
     && identity.platformPermissions.includes('Platform.Admin');
@@ -243,6 +262,7 @@ async function finalizeTrustedIdentity(
   supabase: SupabaseClient,
   identity: TrustedIdentity,
   tenantId?: string,
+  includePasswordPolicy = false,
 ): Promise<TrustedIdentity> {
   const scoped = await resolveTrustedScope(supabase, identity);
   // Platform administrators are intentionally schoolless and may not have a
@@ -256,7 +276,9 @@ async function finalizeTrustedIdentity(
   if (!trustedIdentity.schoolId && !hasPlatformAdminPermission(trustedIdentity)) {
     throw new TrustedAuthenticationError('INVALID_SCHOOL');
   }
-  return trustedIdentity;
+  return includePasswordPolicy
+    ? attachTrustedPasswordPolicy(supabase, trustedIdentity)
+    : trustedIdentity;
 }
 
 export async function authenticateTrustedUser(
@@ -292,7 +314,7 @@ export async function authenticateTrustedUser(
   if (requestedSchoolId && identity.schoolId !== requestedSchoolId) {
     throw new TrustedAuthenticationError('INVALID_SCHOOL');
   }
-  const trustedIdentity = await finalizeTrustedIdentity(authenticatedSupabase, identity, tenantId);
+  const trustedIdentity = await finalizeTrustedIdentity(authenticatedSupabase, identity, tenantId, true);
   return { identity: trustedIdentity, session: data.session };
 }
 
@@ -327,8 +349,9 @@ export async function refreshTrustedSession(
     throw new TrustedAuthenticationError('INVALID_CREDENTIALS');
   }
   const identity = extractTrustedIdentity(data.user);
-  const tenantId = identity.schoolId ? await resolveTrustedTenantId(supabase) : undefined;
-  const trustedIdentity = await finalizeTrustedIdentity(supabase, identity, tenantId);
+  const authenticatedSupabase = getSupabaseClientForAccessToken(data.session.access_token) || supabase;
+  const tenantId = identity.schoolId ? await resolveTrustedTenantId(authenticatedSupabase) : undefined;
+  const trustedIdentity = await finalizeTrustedIdentity(authenticatedSupabase, identity, tenantId, true);
   return { identity: trustedIdentity, session: data.session };
 }
 

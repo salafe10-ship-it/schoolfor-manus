@@ -36,7 +36,10 @@ export function useStudentFees() {
     }
   }, []);
 
-  const calculateFees = () => feesRemaining;
+  const calculateFees = () => {
+    if (!Number.isFinite(feesRemaining)) return 0;
+    return feesRemaining;
+  };
 
   return {
     feesRemaining,

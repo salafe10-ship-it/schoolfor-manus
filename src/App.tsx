@@ -502,6 +502,16 @@ export default function App() {
 
     sessionManager.restore()
       .then(user => {
+        if (user.forcePasswordChange) {
+          const accessToken = sessionManager.getAccessToken();
+          const refreshToken = sessionManager.getRefreshToken();
+          if (accessToken && refreshToken) {
+            setPasswordRecovery({ accessToken, refreshToken });
+            setCurrentPortal('login');
+            setLoginPortalMode(schoolPortalContext ? 'school' : 'gateway');
+            return;
+          }
+        }
         applyTrustedSessionUser(user);
         setCurrentPortal(hasTrustedPlatformAdminAccess(user) ? 'admin' : 'school');
       })
@@ -995,6 +1005,16 @@ export default function App() {
 
     try {
       const user = await sessionManager.login(identifier, password, rememberMe, schoolPortalContext);
+      if (user.forcePasswordChange) {
+        const accessToken = sessionManager.getAccessToken();
+        const refreshToken = sessionManager.getRefreshToken();
+        if (!accessToken || !refreshToken) throw new Error('Password policy session is incomplete');
+        setPasswordRecovery({ accessToken, refreshToken });
+        setCurrentPortal('login');
+        setLoginPortalMode(schoolPortalContext ? 'school' : 'gateway');
+        triggerNotification('يجب تغيير كلمة المرور قبل متابعة استخدام النظام.', 'warning');
+        return true;
+      }
       const targetSchool = applyTrustedSessionUser(user);
       // A school URL is a hard portal boundary.  A central identity must not
       // silently escape to the central console just because it has a platform
@@ -1054,6 +1074,7 @@ export default function App() {
 
     // Terminate Session, clear Tokens and Auth cache
     sessionManager.logout();
+    setPasswordRecovery(null);
     setTrustedSessionUser(null);
     localStorage.removeItem('impersonation_active');
     localStorage.removeItem('impersonated_school_id');
@@ -1626,7 +1647,7 @@ export default function App() {
         <PasswordRecoveryScreen
           accessToken={passwordRecovery.accessToken}
           refreshToken={passwordRecovery.refreshToken}
-          onCompleted={() => setPasswordRecovery(null)}
+          onCompleted={() => { void handleLogout(); }}
         />
       );
     }
@@ -2651,11 +2672,13 @@ export default function App() {
           {/* ========================================================== */}
           {activeSection === 'permissions_admin' && (
             <div className="space-y-6" dir="rtl">
-              <div className="bg-white border border-slate-200 rounded-xl shadow-sm p-6">
-                <div className="flex flex-col md:flex-row justify-between items-start md:items-center gap-4 border-b border-slate-100 pb-4 mb-6">
+              <div className="bg-white border border-amber-200 rounded-xl shadow-sm p-6">
+                <div className="flex flex-col md:flex-row justify-between items-start md:items-center gap-4">
                   <div>
-                    <h2 className="text-xl font-bold text-slate-800">مركز المستخدمين والصلاحيات</h2>
-                    <p className="text-xs text-slate-500 mt-1">إدارة واضحة وشاملة للمستخدمين والأدوار والوحدات والشاشات وأزرار العمليات وفق سياسات RBAC الموثوقة</p>
+                    <h2 className="text-xl font-bold text-slate-800">تم إيقاف المسار القديم</h2>
+                    <p className="text-sm text-slate-600 mt-2">
+                      إدارة المستخدمين والصلاحيات أصبحت مركزية فقط. لم يتم عرض أو حفظ أي مصفوفة محلية أو بيانات تجريبية من هذا المسار.
+                    </p>
                   </div>
                   <button
                     onClick={() => setActiveSection('dashboard')}
@@ -2665,18 +2688,6 @@ export default function App() {
                     <span className="text-lg">←</span>
                   </button>
                 </div>
-
-                <PermissionsManagementModule
-                  users={simulatedUsers}
-                  setUsers={setSimulatedUsers}
-                  roles={roles}
-                  setRoles={setRoles}
-                  permissionsAuditLog={permissionsAuditLog}
-                  setPermissionsAuditLog={setPermissionsAuditLog}
-                  currentDrillDownUser={drillDownUser}
-                  setDrillDownUser={setDrillDownUser}
-                  triggerNotification={(text, type) => triggerNotification(text, type)}
-                />
               </div>
             </div>
           )}

@@ -1,5 +1,11 @@
 export type PermissionCode = string;
 
+export interface PermissionDescriptor {
+  permissionKey: string;
+  resource: string;
+  action: string;
+}
+
 export const PERMISSIONS = {
   PLATFORM_ADMIN: 'Platform.Admin',
   DASHBOARD_VIEW: 'Dashboard.View',
@@ -69,8 +75,20 @@ const LEGACY_PERMISSION_NAMES = [
 
 const titleCase = (value: string) => value.length ? value[0].toUpperCase() + value.slice(1).toLowerCase() : value;
 const legacyToCanonical = (value: string) => {
-  const [resource, action] = value.split(':');
-  return `${titleCase(resource)}.${titleCase(action)}`;
+  const [resource, ...actionParts] = value.split(':');
+  return [resource, ...actionParts]
+    .filter(Boolean)
+    .map(titleCase)
+    .join('.');
+};
+
+export const describePermission = (permissionKey: string): PermissionDescriptor => {
+  const [resource, ...actionParts] = permissionKey.split('.');
+  return {
+    permissionKey,
+    resource: resource || permissionKey,
+    action: actionParts.join('.') || permissionKey,
+  };
 };
 
 const LEGACY_ALIASES: Record<string, string> = Object.fromEntries(
@@ -106,6 +124,11 @@ export class PermissionRegistry {
 
   list(): string[] {
     return [...REGISTERED_PERMISSIONS];
+  }
+
+  describe(permission: unknown): PermissionDescriptor | null {
+    const normalized = this.normalize(permission);
+    return normalized ? describePermission(normalized) : null;
   }
 }
 

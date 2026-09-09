@@ -53,6 +53,8 @@ describe('central administration review contracts', () => {
     expect(server).toContain("database: 'reachable'");
     expect(server).toContain("schemaStatus: missingSchemaObjects.length ? 'migration_pending' : 'ready'");
     expect(server).toContain("uq_schools_live_central_subdomain");
+    expect(server).toContain("('column', 'users.session_revoked_at')");
+    expect(server).toContain("('column', 'users.force_password_change')");
     expect(health).toContain("authenticatedRequest('/api/admin/central/health')");
     expect(health).toContain('زمن استجابة PostgreSQL المركزي');
     expect(health).toContain('ترحيلات الإدارة المركزية غير مكتملة');
@@ -68,6 +70,52 @@ describe('central administration review contracts', () => {
     expect(rbac).toContain('تم اعتماد صلاحيات دور');
     expect(notifications).toContain('/api/admin/central/notifications');
     expect(notifications).not.toContain('localStorage');
+  });
+
+  it('requires optimistic concurrency and records central RBAC publication evidence', () => {
+    const rbac = read('src/components/super-admin/SuperAdminRbac.tsx');
+    const rbacRoute = server.slice(server.indexOf("app.patch('/api/admin/central/rbac/roles/:roleId'"), server.indexOf('// Central incident command'));
+    expect(rbac).toContain('expectedVersion: activeRole.version');
+    expect(rbac).toContain('permissionCatalog');
+    expect(rbac).toContain('حملة نشر مركزية قابلة للتتبع والتراجع');
+    expect(rbacRoute).toContain('expectedVersion');
+    expect(rbacRoute).toContain('version = $6');
+    expect(rbacRoute).toContain("INSERT INTO public.audit_events");
+    expect(rbacRoute).toContain("'rbac.role.updated'");
+    expect(rbacRoute).toContain('ON CONFLICT (tenant_id, idempotency_key) DO NOTHING');
+    expect(rbacRoute).toContain('propagateCanonicalTemplate');
+    expect(rbacRoute).toContain('capturedRbac');
+    expect(server).toContain('resolveCanonicalOwnerScope');
+    expect(server).toContain("mode: 'mother_school'");
+    expect(rbac).toContain("authenticatedRequest('/api/admin/central/templates')");
+    expect(rbac).toContain("operation: 'capture'");
+    expect(rbac).toContain('اعتماد ونشر للمدارس');
+  });
+
+  it('keeps central identity profile fields and role selection canonical', () => {
+    const users = read('src/components/super-admin/SuperAdminUsers.tsx');
+    const migration = read('supabase/migrations/202609091100_identity_profile_fields.sql');
+    expect(server).toContain("app.get('/api/admin/central/identity-roles'");
+    expect(server).toContain('job_title');
+    expect(server).toContain('department');
+    expect(server).toContain('forcePasswordChange');
+    expect(server).toContain("operation === 'evict_sessions'");
+    expect(server).toContain('session_revoked_at');
+    expect(server).toContain('تم إنهاء جلسة الهوية مركزيًا');
+    expect(server).toContain('يجب تغيير كلمة المرور قبل متابعة استخدام النظام');
+    expect(users).toContain("authenticatedRequest('/api/admin/central/identity-roles'");
+    expect(users).toContain('targetTenantId');
+    expect(users).toContain('jobTitle: newUser.jobTitle');
+    expect(users).toContain('department: newUser.department');
+    expect(users).toContain('value={newUser.initialRole}');
+    expect(users).toContain('type="password"');
+    expect(migration).toContain('ADD COLUMN IF NOT EXISTS job_title text');
+    expect(migration).toContain('ADD COLUMN IF NOT EXISTS department text');
+    const sessionMigration = read('supabase/migrations/202609091200_identity_session_revocation.sql');
+    expect(sessionMigration).toContain('ADD COLUMN IF NOT EXISTS session_revoked_at timestamptz');
+    const passwordPolicyMigration = read('supabase/migrations/202609091300_identity_password_policy.sql');
+    expect(passwordPolicyMigration).toContain('ADD COLUMN IF NOT EXISTS force_password_change boolean NOT NULL DEFAULT false');
+    expect(server).toContain('force_password_change = false');
   });
 
   it('hydrates school licensing views from the tenant subscription source', () => {

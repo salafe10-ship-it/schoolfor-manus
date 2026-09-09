@@ -17,7 +17,7 @@ describe('central school provisioning contract', () => {
     expect(route).toContain("app.post('/api/admin/central/schools'");
     expect(server).toContain('requirePermissionOnly(PERMISSIONS.PLATFORM_ADMIN)');
     expect(route).toContain("const tenantId = String(req.body?.targetTenantId || req.body?.tenantId || identity?.tenantId || '').trim();");
-    expect(route).toContain("if (platformControl)");
+    expect(route).toContain("if (platformControl && !platformAdminPool)");
     expect(route).toContain("insertPlatformRow('schools'");
     expect(route).toContain("insertPlatformRow('branches'");
     expect(route).toContain("await deletePlatformRow('schools', schoolId);");

@@ -4438,17 +4438,12 @@ export default function GeneralLedgerPortal({
         {/* VIEW 13: USERS & PERMISSIONS */}
         {/* ========================================================== */}
         {activeTab === 'users_admin' && (
-          <PermissionsManagementModule
-            users={SIMULATED_USERS}
-            setUsers={setUsers}
-            roles={roles}
-            setRoles={setRoles}
-            permissionsAuditLog={permissionsAuditLog}
-            setPermissionsAuditLog={setPermissionsAuditLog}
-            currentDrillDownUser={drillDownUser}
-            setDrillDownUser={setDrillDownUser}
-            triggerNotification={triggerNotification}
-          />
+          <div className="rounded-xl border border-amber-200 bg-amber-50 p-6 text-right" dir="rtl">
+            <h2 className="text-lg font-bold text-amber-900">تم إيقاف المسار القديم</h2>
+            <p className="mt-2 text-sm text-amber-800">
+              إدارة المستخدمين والصلاحيات لا تعمل من بوابة الحسابات أو من مصفوفة محلية قديمة. استخدم مركز الإدارة المركزية المعتمد فقط.
+            </p>
+          </div>
         )}
 
         {/* ========================================================== */}
