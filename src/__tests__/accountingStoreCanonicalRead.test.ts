@@ -7,6 +7,9 @@ describe('accounting store canonical read contract', () => {
     const file = fs.readFileSync(path.resolve(process.cwd(), 'src/modules/accounting/store/accountingStore.ts'), 'utf8');
     expect(file).toContain('FallbackStorage.isCanonicalPersistenceRequired()');
     expect((file.match(/localStorage\.getItem\(/g) || []).length).toBe(1);
-    expect((file.match(/readCanonicalLocal\(/g) || []).length).toBeGreaterThanOrEqual(11);
+    expect((file.match(/readCanonicalLocal\(/g) || []).length).toBeGreaterThanOrEqual(8);
+    expect(file).not.toContain('erp_roles_list_v1');
+    expect(file).not.toContain('erp_users_list_v1');
+    expect(file).not.toContain('erp_permissions_audit_log_v1');
   });
 });

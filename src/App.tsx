@@ -37,7 +37,6 @@ const FixedAssetsPortal = React.lazy(() => import('./components/assets/FixedAsse
 import EnterpriseProcurementQualityAudit from './certification/EnterpriseProcurementQualityAudit';
 import ModernSchoolDashboard from './components/ModernSchoolDashboard';
 const AuditLogsPortal = React.lazy(() => import('./modules/audit/presentation/AuditLogsPortal'));
-import { PermissionsManagementModule, DEFAULT_ROLES, INITIAL_USERS } from './components/PermissionsManagementModule';
 import EnterpriseCoreCertificationDashboard from './certification/EnterpriseCoreCertificationDashboard';
 import EnterpriseBusinessLogicAudit from './certification/EnterpriseBusinessLogicAudit';
 import AccountingIntegrityCertification from './certification/AccountingIntegrityCertification';
@@ -554,34 +553,6 @@ export default function App() {
     }
   }, [trustedSessionUser, activeSection, isCustomerProductionPortal]);
 
-  // Shared Central Permissions and Users states (Single Source of Truth)
-  const [simulatedUsers, setSimulatedUsers] = useState<any[]>(() => {
-    if (FallbackStorage.isCanonicalPersistenceRequired()) return [];
-    const saved = localStorage.getItem('erp_users_list_v1');
-    return saved ? JSON.parse(saved) : INITIAL_USERS;
-  });
-
-  const [roles, setRoles] = useState<any[]>(() => {
-    if (FallbackStorage.isCanonicalPersistenceRequired()) return [];
-    const saved = localStorage.getItem('erp_roles_list_v1');
-    return saved ? JSON.parse(saved) : DEFAULT_ROLES;
-  });
-
-  const [permissionsAuditLog, setPermissionsAuditLog] = useState<any[]>(() => {
-    if (FallbackStorage.isCanonicalPersistenceRequired()) return [];
-    const saved = localStorage.getItem('erp_permissions_audit_log_v1');
-    return saved ? JSON.parse(saved) : [
-      { id: 'audit_0', modifier: 'سليمان غازي', targetUser: 'منصور خلف', date: '2026-06-30 08:30:12', action: 'إنشاء حساب وتخصيص صلاحيات ترحيل الحسابات العامة' },
-      { id: 'audit_1', modifier: 'سليمان غازي', targetUser: 'سالم الوحيشي', date: '2026-06-30 09:15:44', action: 'منح صلاحيات التدقيق المالي وعرض ميزان المراجعة' }
-    ];
-  });
-
-  const [drillDownUser, setDrillDownUser] = useState<any>(() => {
-    if (FallbackStorage.isCanonicalPersistenceRequired()) return undefined;
-    const saved = localStorage.getItem('erp_users_list_v1');
-    const initial = saved ? JSON.parse(saved) : INITIAL_USERS;
-    return initial[0];
-  });
   const [gatewaySearchQuery, setGatewaySearchQuery] = useState<string>('');
   const [gatewayCategory, setGatewayCategory] = useState<string>('all');
   const [sidebarCollapsed, setSidebarCollapsed] = useState<boolean>(false);
@@ -634,10 +605,6 @@ export default function App() {
     setGrades([]);
     setAcademicClasses([]);
     setCostCenters([]);
-    setSimulatedUsers([]);
-    setRoles([]);
-    setPermissionsAuditLog([]);
-    setDrillDownUser(null);
     setShowConfigModal(false);
   }, [isCustomerProductionPortal, selectedBranch, canonicalPersistenceRequired]);
 
@@ -2075,15 +2042,8 @@ export default function App() {
                     costCenters={costCenters}
                     setCostCenters={setCostCenters}
                     currentRole={currentRole}
+                    trustedSessionUser={trustedSessionUser}
                     initialTab={activeSection === 'financial_reports' ? 'financial_reports' : activeSection === 'treasury' ? 'treasury' : 'dashboard'}
-                    users={simulatedUsers}
-                    setUsers={setSimulatedUsers}
-                    roles={roles}
-                    setRoles={setRoles}
-                    permissionsAuditLog={permissionsAuditLog}
-                    setPermissionsAuditLog={setPermissionsAuditLog}
-                    currentDrillDownUser={drillDownUser}
-                    setDrillDownUser={setDrillDownUser}
                   />
                 </AccountingErrorBoundary>
               </React.Suspense>

@@ -63,7 +63,8 @@ export const FinancialReportsTab = () => {
   handleImportExcelSimulate, handleDownloadTemplate, handlePrintAssetCard, handlePrintDepreciationSchedule,
   findOriginalDocument, isAccountOrDescendant, getProcessedAccounts,
   formatCurrency, triggerNotification, logAction, addJvAuditEvent, costCenters: liveCostCenters,
-  refreshCanonicalFinancialData, canonicalFinancialStatus, canonicalFinancialWriteMode
+  refreshCanonicalFinancialData, canonicalFinancialStatus, canonicalFinancialWriteMode,
+  currentUserIdentity
 } = React.useContext(AccountingContext);
 
 const activeCostCenters = (Array.isArray(liveCostCenters) ? liveCostCenters : [])
@@ -76,7 +77,7 @@ const activeCostCenters = (Array.isArray(liveCostCenters) ? liveCostCenters : []
 
 // Reports must fail closed when the authenticated profile has not loaded yet,
 // instead of crashing while dereferencing a null drill-down user.
-const activeDrillDownUser = drillDownUser || {
+const activeDrillDownUser = currentUserIdentity || {
   id: 'unresolved-user',
   name: 'المستخدم الحالي غير محدد',
   role: 'غير محدد',
@@ -153,7 +154,7 @@ const handleDrillDownBreadcrumbClick = (idx: number) => {
   };
 
 const handleDrillDownToAccount = (accountCode: string) => {
-    if (!activeDrillDownUser.permissions.includes('view_account_statement')) {
+    if (!hasUserPermission('view_account_statement')) {
       triggerNotification(`❌ عذراً ${activeDrillDownUser.name}! تم رفض الوصول لعدم وجود صلاحية استعراض كشوفات الحسابات التفصيلية (RBAC).`, 'warning');
       return;
     }
@@ -183,7 +184,7 @@ const handleDrillDownToAccount = (accountCode: string) => {
   };
 
 const handleDrillDownToOriginalDocument = (jv: any) => {
-    if (!activeDrillDownUser.permissions.includes('view_original_docs')) {
+    if (!hasUserPermission('view_original_docs')) {
       triggerNotification(`❌ عذراً ${activeDrillDownUser.name}! تم رفض الوصول لعدم وجود صلاحية استعراض المستندات والوثائق الملحقة (RBAC).`, 'warning');
       return;
     }
@@ -532,25 +533,7 @@ const handleDrillDownToOriginalDocument = (jv: any) => {
                     <span className="text-slate-900 font-black">{activeDrillDownUser.name} ({activeDrillDownUser.role})</span>
                   </div>
                   
-                  {/* Quick toggle user role to demonstrate security */}
-                  <div className="flex items-center gap-1.5">
-                    <span className="text-[10px] text-slate-500">تغيير الصلاحية (للتجربة):</span>
-                    <select
-                      value={activeDrillDownUser.id}
-                      onChange={(e) => {
-                        const newUser = SIMULATED_USERS.find(u => u.id === e.target.value);
-                        if (newUser) {
-                          setDrillDownUser(newUser);
-                          triggerNotification(`✓ تم تغيير الصلاحية للمستخدم: ${newUser.name} (${newUser.role})`, 'info');
-                        }
-                      }}
-                      className="bg-white border border-slate-200 rounded px-2 py-1 text-[10px] font-bold text-slate-700 cursor-pointer focus:ring-1 focus:ring-blue-500 focus:outline-none"
-                    >
-                      {SIMULATED_USERS.map(u => (
-                        <option key={u.id} value={u.id}>{u.role}</option>
-                      ))}
-                    </select>
-                  </div>
+                  <span className="text-[10px] font-bold text-slate-500">الصلاحية موثقة من جلسة الخادم المركزية</span>
                 </div>
               </div>
 

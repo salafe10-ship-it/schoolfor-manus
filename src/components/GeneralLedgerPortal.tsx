@@ -5,9 +5,9 @@ import { PostingEngine } from '../database/services/PostingEngine';
 import { FallbackStorage } from '../database/repositories/FallbackStorage';
 import { useCurrency } from '../utils/currency';
 import EnterpriseActionToolbar from './shared/EnterpriseActionToolbar';
-import { PermissionsManagementModule, MODULES_SCHEMA } from './PermissionsManagementModule';
 import { AccountingContext, type AccountNode } from '../modules/accounting/presentation/AccountingContext';
 import { authenticatedRequest } from '../utils/authenticatedRequest';
+import { PERMISSIONS, permissionRegistry } from '../authorization/PermissionRegistry';
 export { AccountingContext };
 export type { AccountNode };
 
@@ -44,14 +44,13 @@ interface GeneralLedgerPortalProps {
   costCenters?: CostCenter[];
   setCostCenters?: React.Dispatch<React.SetStateAction<CostCenter[]>>;
   initialTab?: string;
-  users?: any[];
-  setUsers?: React.Dispatch<React.SetStateAction<any[]>>;
-  roles?: any[];
-  setRoles?: React.Dispatch<React.SetStateAction<any[]>>;
-  permissionsAuditLog?: any[];
-  setPermissionsAuditLog?: React.Dispatch<React.SetStateAction<any[]>>;
-  currentDrillDownUser?: any;
-  setDrillDownUser?: React.Dispatch<React.SetStateAction<any>>;
+  trustedSessionUser?: {
+    id: string;
+    name: string;
+    role: string;
+    permissions?: string[];
+    platformPermissions?: string[];
+  } | null;
 }
 
 // Chart of accounts mock seed
@@ -74,14 +73,7 @@ export default function GeneralLedgerPortal({
   costCenters,
   setCostCenters,
   initialTab,
-  users: usersProp,
-  setUsers: setUsersProp,
-  roles: rolesProp,
-  setRoles: setRolesProp,
-  permissionsAuditLog: permissionsAuditLogProp,
-  setPermissionsAuditLog: setPermissionsAuditLogProp,
-  currentDrillDownUser: currentDrillDownUserProp,
-  setDrillDownUser: setDrillDownUserProp
+  trustedSessionUser
 }: GeneralLedgerPortalProps) {
   const { currencyConfig, format: formatCurrency } = useCurrency();
   const canonicalPersistenceRequired = FallbackStorage.isCanonicalPersistenceRequired();
@@ -1614,7 +1606,7 @@ export default function GeneralLedgerPortal({
   
   // Step 2 -> Step 3 Drilldown
   const handleDrillDownToJournalEntry = (jvId: string) => {
-    if (!drillDownUser?.permissions?.includes('view_jv')) {
+    if (!hasUserPermission(PERMISSIONS.FINANCIAL_READ)) {
       triggerNotification(`❌ عذراً ${drillDownUser?.name || 'المستخدم الحالي'}! تم رفض الوصول لعدم وجود صلاحية استعراض تفاصيل قيود اليومية العامة (RBAC).`, 'warning');
       return;
     }
@@ -1649,264 +1641,52 @@ export default function GeneralLedgerPortal({
     '1000': true, '1100': true, '2000': true, '3000': true, '4000': true, '4100': true, '5000': true, '5100': true, '5200': true
   });
 
-  // --- Year 2026 ERP-level Master Roles ---
-  const DEFAULT_ROLES = [
-    { id: 'admin', name: 'مدير النظام (كامل الصلاحيات)', permissions: ['*'] },
-    { 
-      id: 'financial_manager', 
-      name: 'المدير المالي (كامل الصلاحيات المالية)', 
-      permissions: [
-        'dashboard:view', 'dashboard:refresh',
-        'ledger:view', 'ledger:create_jv', 'ledger:post_jv', 'ledger:close_year',
-        'fees:view', 'fees:create_receipt', 'fees:approve_receipt', 'fees:print',
-        'assets:view', 'assets:depreciate', 'assets:create',
-        'reports:view', 'reports:export',
-        'settings:view', 'settings:edit',
-        'permissions:view', 'permissions:edit', 'permissions:audit_logs',
-        'view_reports', 'view_account_statement', 'view_jv', 'view_original_docs'
-      ] 
-    },
-    { 
-      id: 'accountant', 
-      name: 'كبير المحاسبين (ترحيل مالي)', 
-      permissions: [
-        'dashboard:view',
-        'ledger:view', 'ledger:create_jv', 'ledger:post_jv',
-        'fees:view', 'fees:create_receipt', 'fees:print',
-        'assets:view',
-        'reports:view', 'reports:export',
-        'view_reports', 'view_account_statement', 'view_jv', 'view_original_docs'
-      ] 
-    },
-    { 
-      id: 'cashier', 
-      name: 'أمين الصندوق (القبض والتحصيل)', 
-      permissions: [
-        'dashboard:view',
-        'fees:view', 'fees:create_receipt', 'fees:print',
-        'view_reports'
-      ] 
-    },
-    { 
-      id: 'student_affairs', 
-      name: 'مسئول شئون الطلاب والقبول', 
-      permissions: [
-        'dashboard:view',
-        'students:view', 'students:create', 'students:edit', 'students:import',
-        'attendance:view', 'attendance:edit'
-      ] 
-    },
-    { 
-      id: 'hr_manager', 
-      name: 'مسئول شئون العاملين والرواتب', 
-      permissions: [
-        'dashboard:view',
-        'hr:view', 'hr:create', 'hr:edit', 'hr:attendance',
-        'attendance:view', 'attendance:edit'
-      ] 
-    },
-    { 
-      id: 'control', 
-      name: 'مسئول الكنترول والنتائج', 
-      permissions: [
-        'dashboard:view',
-        'exams:view', 'exams:edit', 'exams:recalculate', 'exams:publish'
-      ] 
-    },
-    { 
-      id: 'warehouse_keeper', 
-      name: 'أمين المخزن والمستودع', 
-      permissions: [
-        'dashboard:view',
-        'warehouse:view', 'warehouse:create', 'warehouse:audit'
-      ] 
-    },
-    { 
-      id: 'assets_manager', 
-      name: 'مسئول الأصول والتجهيزات', 
-      permissions: [
-        'dashboard:view',
-        'assets:view', 'assets:create', 'assets:depreciate'
-      ] 
-    },
-    { 
-      id: 'auditor', 
-      name: 'مدقق مالي مساعد (رقابة فقط)', 
-      permissions: [
-        'dashboard:view',
-        'ledger:view', 'fees:view', 'students:view', 'hr:view', 'reports:view',
-        'view_reports', 'view_account_statement', 'view_jv'
-      ] 
-    }
-  ];
-
-  // Master Users list with full details for ERP
-  const INITIAL_USERS = [
-    { 
-      id: 'user_001', 
-      name: 'سليمان غازي', 
-      roleId: 'financial_manager', 
-      role: 'المدير المالي (كامل الصلاحيات)', 
-      department: 'الإدارة المالية', 
-      jobTitle: 'المدير المالي العام',
-      permissions: [
-        'dashboard:view', 'dashboard:refresh',
-        'ledger:view', 'ledger:create_jv', 'ledger:post_jv', 'ledger:close_year',
-        'fees:view', 'fees:create_receipt', 'fees:approve_receipt', 'fees:print',
-        'assets:view', 'assets:depreciate', 'assets:create',
-        'reports:view', 'reports:export',
-        'settings:view', 'settings:edit',
-        'permissions:view', 'permissions:edit', 'permissions:audit_logs',
-        'view_reports', 'view_account_statement', 'view_jv', 'view_original_docs'
-      ], 
-      maxLimit: 100000 
-    },
-    { 
-      id: 'user_002', 
-      name: 'منصور خلف', 
-      roleId: 'accountant', 
-      role: 'كبير المحاسبين (ترحيل مالي)', 
-      department: 'الحسابات العامة', 
-      jobTitle: 'رئيس قسم الأستاذ العام',
-      permissions: [
-        'dashboard:view',
-        'ledger:view', 'ledger:create_jv', 'ledger:post_jv',
-        'fees:view', 'fees:create_receipt', 'fees:print',
-        'assets:view',
-        'reports:view', 'reports:export',
-        'view_reports', 'view_account_statement', 'view_jv', 'view_original_docs'
-      ], 
-      maxLimit: 50000 
-    },
-    { 
-      id: 'user_003', 
-      name: 'رنا جودت', 
-      roleId: 'student_affairs', 
-      role: 'مسئول شئون الطلاب والقبول', 
-      department: 'القبول والتسجيل', 
-      jobTitle: 'مشرف شئون الطلاب والقبول',
-      permissions: [
-        'dashboard:view',
-        'students:view', 'students:create', 'students:edit', 'students:import',
-        'attendance:view', 'attendance:edit'
-      ], 
-      maxLimit: 5000 
-    },
-    { 
-      id: 'user_004', 
-      name: 'عمر الخطيب', 
-      roleId: 'hr_manager', 
-      role: 'مسئول شئون العاملين والرواتب', 
-      department: 'الموارد البشرية', 
-      jobTitle: 'رئيس وحدة الموظفين ورواتب الكادر',
-      permissions: [
-        'dashboard:view',
-        'hr:view', 'hr:create', 'hr:edit', 'hr:attendance',
-        'attendance:view', 'attendance:edit'
-      ], 
-      maxLimit: 5000 
-    },
-    { 
-      id: 'user_005', 
-      name: 'سالم الوحيشي', 
-      roleId: 'auditor', 
-      role: 'مدقق مالي مساعد (رقابة فقط)', 
-      department: 'التفتيش الداخلي', 
-      jobTitle: 'مفتش تدقيق حسابات مساعد',
-      permissions: [
-        'dashboard:view',
-        'ledger:view', 'fees:view', 'students:view', 'hr:view', 'reports:view',
-        'view_reports', 'view_account_statement', 'view_jv'
-      ], 
-      maxLimit: 10000 
-    },
-    { 
-      id: 'user_006', 
-      name: 'عبد المطلب الزاوي', 
-      roleId: 'warehouse_keeper', 
-      role: 'أمين المخزن والمستودع', 
-      department: 'التموين والمستودعات', 
-      jobTitle: 'أمين مخزن الكتب والزي المدرسي',
-      permissions: [
-        'dashboard:view',
-        'warehouse:view', 'warehouse:create', 'warehouse:audit'
-      ], 
-      maxLimit: 2000 
-    },
-    { 
-      id: 'user_007', 
-      name: 'فدوى البوسيفي', 
-      roleId: 'control', 
-      role: 'مسئول الكنترول والنتائج', 
-      department: 'الامتحانات وشئون الطلاب', 
-      jobTitle: 'مسئول كنترول الفروع الموحد',
-      permissions: [
-        'dashboard:view',
-        'exams:view', 'exams:edit', 'exams:recalculate', 'exams:publish'
-      ], 
-      maxLimit: 0 
-    },
-    { 
-      id: 'user_guest', 
-      name: 'زائر / ضيف (عرض تقارير فقط)', 
-      roleId: 'auditor', 
-      role: 'زائر / ضيف (عرض تقارير فقط)', 
-      department: 'التفتيش الخارجي', 
-      jobTitle: 'مدقق زائر خارجي',
-      permissions: [
-        'dashboard:view',
-        'reports:view',
-        'view_reports'
-      ], 
-      maxLimit: 0 
-    }
-  ];
-
-  const [localRoles, setLocalRoles] = useState<any[]>(() => {
-    if (canonicalPersistenceRequired) return [];
-    const saved = localStorage.getItem('erp_roles_list_v1');
-    return saved ? JSON.parse(saved) : DEFAULT_ROLES;
-  });
-  const roles = rolesProp !== undefined ? rolesProp : localRoles;
-  const setRoles = setRolesProp !== undefined ? setRolesProp : setLocalRoles;
-
-  const [localUsers, setLocalUsers] = useState<any[]>(() => {
-    if (canonicalPersistenceRequired) return [];
-    const saved = localStorage.getItem('erp_users_list_v1');
-    return saved ? JSON.parse(saved) : [];
-  });
-  const SIMULATED_USERS = usersProp !== undefined ? usersProp : localUsers;
-  const setUsers = setUsersProp !== undefined ? setUsersProp : setLocalUsers;
-
-  const [localPermissionsAuditLog, setLocalPermissionsAuditLog] = useState<any[]>(() => {
-    if (canonicalPersistenceRequired) return [];
-    const saved = localStorage.getItem('erp_permissions_audit_log_v1');
-    return saved ? JSON.parse(saved) : [];
-  });
-  const permissionsAuditLog = permissionsAuditLogProp !== undefined ? permissionsAuditLogProp : localPermissionsAuditLog;
-  const setPermissionsAuditLog = setPermissionsAuditLogProp !== undefined ? setPermissionsAuditLogProp : setLocalPermissionsAuditLog;
-
   // --- YEAR CLOSING SYSTEM STATES ---
                                   const [showPostClosingTrialBalance, setShowPostClosingTrialBalance] = useState<boolean>(false);
   
-  const [localDrillDownUser, setLocalDrillDownUser] = useState<any>(() => {
-    if (canonicalPersistenceRequired) return null;
-    const saved = localStorage.getItem('erp_users_list_v1');
-    const initial = saved ? JSON.parse(saved) : [];
-    return initial[0];
-  });
-  const drillDownUser = currentDrillDownUserProp !== undefined ? currentDrillDownUserProp : localDrillDownUser;
-  const setDrillDownUser = setDrillDownUserProp !== undefined ? setDrillDownUserProp : setLocalDrillDownUser;
+  const drillDownUser = trustedSessionUser
+    ? {
+        id: trustedSessionUser.id,
+        name: trustedSessionUser.name,
+        role: trustedSessionUser.role,
+        permissions: Array.isArray(trustedSessionUser.permissions) ? trustedSessionUser.permissions : [],
+        platformPermissions: Array.isArray(trustedSessionUser.platformPermissions) ? trustedSessionUser.platformPermissions : [],
+      }
+    : null;
   const [drillDownHistory, setDrillDownHistory] = useState<any[]>([]);
   const [drillDownJvId, setDrillDownJvId] = useState<string | null>(null);
   const [drillDownDoc, setDrillDownDoc] = useState<{ id: string; type: string; data: any } | null>(null);
 
+  const legacyAccountingPermissionAliases: Record<string, string> = {
+    'view_reports': PERMISSIONS.FINANCIAL_READ,
+    'view_account_statement': PERMISSIONS.FINANCIAL_READ,
+    'view_jv': PERMISSIONS.FINANCIAL_READ,
+    'view_original_docs': PERMISSIONS.FINANCIAL_READ,
+    'reports:view': PERMISSIONS.FINANCIAL_READ,
+    'ledger:view': PERMISSIONS.FINANCIAL_READ,
+    'fees:view': PERMISSIONS.FINANCIAL_READ,
+    'assets:view': PERMISSIONS.FINANCIAL_READ,
+    'ledger:create_jv': PERMISSIONS.FINANCIAL_WRITE,
+    'ledger:insert': PERMISSIONS.FINANCIAL_WRITE,
+    'ledger:edit': PERMISSIONS.FINANCIAL_WRITE,
+    'ledger:post_jv': PERMISSIONS.FINANCIAL_WRITE,
+    'ledger:post': PERMISSIONS.FINANCIAL_WRITE,
+    'ledger:approve': PERMISSIONS.FINANCIAL_APPROVE,
+    'ledger:close_year': PERMISSIONS.FINANCIAL_APPROVE,
+    'ledger:export': PERMISSIONS.FINANCIAL_EXPORT,
+    'dashboard:view': PERMISSIONS.DASHBOARD_VIEW,
+    'dashboard:refresh': PERMISSIONS.DASHBOARD_VIEW,
+  };
+
   const hasUserPermission = (permissionId: string) => {
     if (!drillDownUser) return false;
-    if (drillDownUser?.permissions?.includes('*') || drillDownUser?.role?.includes('كامل الصلاحيات')) {
-      return true;
-    }
-    return Boolean(drillDownUser?.permissions?.includes(permissionId));
+    const granted = new Set(
+      (Array.isArray(drillDownUser.permissions) ? drillDownUser.permissions : [])
+        .map((permission) => permissionRegistry.normalize(permission) || permission.trim().toLowerCase()),
+    );
+    if (granted.has('*') || drillDownUser.platformPermissions?.includes(PERMISSIONS.PLATFORM_ADMIN)) return true;
+    const requested = legacyAccountingPermissionAliases[permissionId] || permissionRegistry.normalize(permissionId) || permissionId;
+    return granted.has(requested) || granted.has(String(requested).toLowerCase());
   };
 
   const isItemPermitted = (itemId: string) => {
@@ -1915,41 +1695,30 @@ export default function GeneralLedgerPortal({
       return true;
     }
 
-    // Map each item to its respective visibility requirements (Requirement 4 & 5)
+    // The accounting shell is driven only by canonical server permissions.
+    // Legacy show_module/show_screen flags are intentionally not consulted;
+    // they were browser-local hints and could otherwise revive an old matrix.
     switch (itemId) {
-      case 'dashboard': 
-        return hasUserPermission('dashboard:view') && hasUserPermission('show_screen:dashboard:main');
-      case 'trial_balance': 
-        return hasUserPermission('ledger:view') && hasUserPermission('show_module:ledger') && hasUserPermission('show_screen:ledger:chart');
-      case 'cost_centers': 
-        return hasUserPermission('ledger:view') && hasUserPermission('show_module:ledger') && hasUserPermission('show_screen:ledger:chart');
-      case 'journal_entries': 
-        return hasUserPermission('ledger:view') && hasUserPermission('show_module:ledger') && hasUserPermission('show_screen:ledger:jv');
+      case 'dashboard':
+        return hasUserPermission(PERMISSIONS.DASHBOARD_VIEW);
+      case 'trial_balance':
+      case 'cost_centers':
+      case 'journal_entries':
       case 'receipt_voucher': 
       case 'payment_voucher': 
       case 'bank_transfer':
-        return hasUserPermission('fees:view') && hasUserPermission('show_module:ledger') && hasUserPermission('show_screen:ledger:vouchers');
       case 'treasury':
-        return (
-          (hasUserPermission('treasury:treasury_vault:view') || hasUserPermission('treasury:bank_transfers:view') || hasUserPermission('ledger:view')) &&
-          hasUserPermission('show_module:ledger')
-        );
-      case 'customers': 
-        return hasUserPermission('students:view') && hasUserPermission('show_module:students') && hasUserPermission('show_screen:students:directory');
-      case 'suppliers': 
-        return hasUserPermission('warehouse:view') && hasUserPermission('show_module:warehouse') && hasUserPermission('show_screen:warehouse:inventory');
-      case 'fixed_assets': 
-        return hasUserPermission('assets:view') && hasUserPermission('show_module:assets') && hasUserPermission('show_screen:assets:register');
-      case 'financial_reports': 
-        return hasUserPermission('reports:view') && hasUserPermission('show_module:settings');
-      case 'governance': 
-        return hasUserPermission('settings:view') && hasUserPermission('show_module:settings') && hasUserPermission('show_screen:settings:policies');
-      case 'closing': 
-        return hasUserPermission('ledger:close_year') && hasUserPermission('show_module:ledger') && hasUserPermission('show_screen:ledger:closing');
-      case 'users_admin': 
-        return hasUserPermission('permissions:view') && hasUserPermission('show_module:settings') && hasUserPermission('show_screen:settings:rbac_management');
-      case 'calc_tools': 
-        return true;
+      case 'customers':
+      case 'suppliers':
+      case 'fixed_assets':
+      case 'financial_reports':
+      case 'governance':
+      case 'calc_tools':
+        return hasUserPermission(PERMISSIONS.FINANCIAL_READ);
+      case 'closing':
+        return hasUserPermission(PERMISSIONS.FINANCIAL_APPROVE);
+      case 'users_admin':
+        return false;
       default: 
         return true;
     }
@@ -3647,6 +3416,7 @@ export default function GeneralLedgerPortal({
 
   const accountingContextValue = {
     students, invoices, selectedSchool, costCenters,
+    currentUserIdentity: drillDownUser,
   canonicalFinancialStatus, canonicalFinancialMessage, canonicalFinancialVersion, canonicalFinancialWriteMode,
   requireCanonicalFinancialWrite,
   persistCanonicalFinancialSnapshot, refreshCanonicalFinancialData,
@@ -3670,8 +3440,7 @@ export default function GeneralLedgerPortal({
     filterAccount, setFilterAccount, filterActiveOnly, setFilterActiveOnly,
     filterBalanceOnly, setFilterBalanceOnly, filterSortBy, setFilterSortBy,
     trialBalanceLevel, setTrialBalanceLevel, trialBalanceMode, setTrialBalanceMode,
-    expandedReportNodes, setExpandedReportNodes, localRoles, setLocalRoles,
-    localUsers, setLocalUsers, localPermissionsAuditLog, setLocalPermissionsAuditLog,
+    expandedReportNodes, setExpandedReportNodes,
     closingStep, setClosingStep, isCheckingReady, setIsCheckingReady,
     checkedReady, setCheckedReady, closingProgress, setClosingProgress,
     closingProgressMessage, setClosingProgressMessage, closingAuditLog, setClosingAuditLog,
@@ -3681,7 +3450,7 @@ export default function GeneralLedgerPortal({
     newYearStartDateInput, setNewYearStartDateInput, newYearEndDateInput, setNewYearEndDateInput,
     newYearNumberInput, setNewYearNumberInput, closingDescriptionInput, setClosingDescriptionInput,
     showPostClosingTrialBalance, setShowPostClosingTrialBalance,
-    unapprovedAdjustmentsCount, setUnapprovedAdjustmentsCount, localDrillDownUser, setLocalDrillDownUser,
+    unapprovedAdjustmentsCount, setUnapprovedAdjustmentsCount,
     drillDownHistory, setDrillDownHistory, drillDownJvId, setDrillDownJvId,
     drillDownDoc, setDrillDownDoc, expandedNodes, setExpandedNodes, coaForm, setCoaForm,
     showCoaImportModal, setShowCoaImportModal, coaImportText, setCoaImportText,

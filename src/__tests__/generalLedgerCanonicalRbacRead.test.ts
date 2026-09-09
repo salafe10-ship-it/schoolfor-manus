@@ -3,10 +3,13 @@ import fs from 'node:fs';
 import path from 'node:path';
 
 describe('general ledger canonical RBAC read contract', () => {
-  it('does not seed local roles, users, audit history, or drill-down identity in canonical mode', () => {
+  it('uses only the trusted session identity for drill-down authorization', () => {
     const file = fs.readFileSync(path.resolve(process.cwd(), 'src/components/GeneralLedgerPortal.tsx'), 'utf8');
-    expect(file).toContain('if (canonicalPersistenceRequired) return [];');
-    expect(file).toContain('if (canonicalPersistenceRequired) return null;');
-    expect((file.match(/canonicalPersistenceRequired\) return/g) || []).length).toBeGreaterThanOrEqual(6);
+    expect(file).toContain('trustedSessionUser');
+    expect(file).toContain('currentUserIdentity: drillDownUser');
+    expect(file).not.toContain("erp_roles_list_v1");
+    expect(file).not.toContain("erp_users_list_v1");
+    expect(file).not.toContain("erp_permissions_audit_log_v1");
+    expect(file).not.toContain('const [localDrillDownUser');
   });
 });

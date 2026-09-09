@@ -100,12 +100,6 @@ export const useAccountingStore = create<any>((set, get) => ({
   setTrialBalanceLevel: (val) => set({ trialBalanceLevel: typeof val === 'function' ? val(get().trialBalanceLevel) : val }),
   trialBalanceMode: 'nested',
   setTrialBalanceMode: (val) => set({ trialBalanceMode: typeof val === 'function' ? val(get().trialBalanceMode) : val }),
-  localRoles: (() => { const saved = readCanonicalLocal('erp_roles_list_v1'); return saved ? JSON.parse(saved) : []; })(),
-  setLocalRoles: (val) => set({ localRoles: typeof val === 'function' ? val(get().localRoles) : val }),
-  localUsers: (() => { const saved = readCanonicalLocal('erp_users_list_v1'); return saved ? JSON.parse(saved) : []; })(),
-  setLocalUsers: (val) => set({ localUsers: typeof val === 'function' ? val(get().localUsers) : val }),
-  localPermissionsAuditLog: (() => { const saved = readCanonicalLocal('erp_permissions_audit_log_v1'); return saved ? JSON.parse(saved) : []; })(),
-  setLocalPermissionsAuditLog: (val) => set({ localPermissionsAuditLog: typeof val === 'function' ? val(get().localPermissionsAuditLog) : val }),
   closingStep: 'check',
   setClosingStep: (val) => set({ closingStep: typeof val === 'function' ? val(get().closingStep) : val }),
   isCheckingReady: false,
@@ -148,8 +142,6 @@ export const useAccountingStore = create<any>((set, get) => ({
   setShowPostClosingTrialBalance: (val) => set({ showPostClosingTrialBalance: typeof val === 'function' ? val(get().showPostClosingTrialBalance) : val }),
   unapprovedAdjustmentsCount: 1,
   setUnapprovedAdjustmentsCount: (val) => set({ unapprovedAdjustmentsCount: typeof val === 'function' ? val(get().unapprovedAdjustmentsCount) : val }),
-  localDrillDownUser: (() => { const saved = readCanonicalLocal('erp_users_list_v1'); if (saved) { try { return JSON.parse(saved)[0]; } catch(e){} } return null; })(),
-  setLocalDrillDownUser: (val) => set({ localDrillDownUser: typeof val === 'function' ? val(get().localDrillDownUser) : val }),
   drillDownHistory: [
     { level: 'reports', title: 'التقارير المالية' }
   ],

@@ -71,7 +71,8 @@ export const ClosingTab = () => {
   findOriginalDocument, handleReportAccountClick, handleJournalEntryClick,
   isAccountOrDescendant, getProcessedAccounts,
   formatCurrency, triggerNotification, logAction, handlePostAllPendingJvs,
-  persistCanonicalFinancialSnapshot, canonicalFinancialStatus, canonicalFinancialWriteMode
+  persistCanonicalFinancialSnapshot, canonicalFinancialStatus, canonicalFinancialWriteMode,
+  currentUserIdentity
 } = React.useContext(AccountingContext);
   const canonicalLedgerReady = canonicalFinancialWriteMode === 'ledger_ready' || canonicalFinancialWriteMode === 'erp_integrated';
   const closingProofReady = canonicalFinancialStatus === 'ready' && canonicalLedgerReady;
@@ -129,7 +130,12 @@ export const ClosingTab = () => {
             );
           };
 
-          const drillDownUser = localDrillDownUser || { name: 'سليمان غازي', permissions: ['view_account_statement'] };
+          const drillDownUser = currentUserIdentity || {
+            id: 'unresolved-user',
+            name: 'المستخدم الحالي غير محدد',
+            role: 'غير محدد',
+            permissions: [] as string[]
+          };
 
           const reportAccounts = getProcessedAccounts();
           const subRevenues = reportAccounts.filter(a => a.classification === 'إيرادات' && a.type === 'فرعي');

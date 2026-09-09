@@ -10,13 +10,35 @@ const dashboardSource = readFileSync(
   resolve(process.cwd(), 'src/components/ModernSchoolDashboard.tsx'),
   'utf8',
 );
+const sidebarSource = readFileSync(
+  resolve(process.cwd(), 'src/components/Sidebar.tsx'),
+  'utf8',
+);
+const accountingSource = readFileSync(
+  resolve(process.cwd(), 'src/components/GeneralLedgerPortal.tsx'),
+  'utf8',
+);
+const reportsSource = readFileSync(
+  resolve(process.cwd(), 'src/modules/accounting/presentation/FinancialReportsTab.tsx'),
+  'utf8',
+);
 const appSource = readFileSync(resolve(process.cwd(), 'src/App.tsx'), 'utf8');
 
 describe('Users and Permissions center UX contract', () => {
   it('uses the canonical Arabic unit name throughout the entry points', () => {
-    expect(dashboardSource).toContain("{ section: 'permissions_admin', label: 'المستخدمون والصلاحيات'");
+    expect(dashboardSource).not.toContain("{ section: 'permissions_admin', label: 'المستخدمون والصلاحيات'");
+    expect(sidebarSource).toContain("'golden_release_exec', 'ddd_reconstruction', 'permissions_admin'");
     expect(appSource).toContain("activeSection === 'permissions_admin' ? 'المستخدمون والصلاحيات'");
+    expect(appSource).toContain('تم إيقاف المسار القديم');
     expect(permissionsSource).toContain('مركز المستخدمين والصلاحيات');
+  });
+
+  it('does not expose a local role switcher or local accounting identity', () => {
+    expect(accountingSource).not.toContain("localStorage.getItem('erp_users_list_v1')");
+    expect(accountingSource).not.toContain("localStorage.getItem('erp_roles_list_v1')");
+    expect(reportsSource).not.toContain('تغيير الصلاحية (للتجربة)');
+    expect(reportsSource).toContain("hasUserPermission('view_account_statement')");
+    expect(reportsSource).toContain("hasUserPermission('view_original_docs')");
   });
 
   it('exposes module, screen, action, data-scope, and report controls', () => {
