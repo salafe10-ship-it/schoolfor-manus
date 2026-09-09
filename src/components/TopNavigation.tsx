@@ -66,6 +66,7 @@ export default function TopNavigation({
       title: 'الرقابة والسحابة',
       items: [
         { id: 'audit_logs', label: 'سجلات الرقابة والعمليات', icon: Workflow },
+        { id: 'school_users_admin', label: 'مستخدمو المدرسة والصلاحيات', icon: ShieldCheck },
         { id: 'general_review', label: 'المراجعة العامة — قيد التجهيز', icon: ShieldCheck },
         { id: 'settings', label: 'إعدادات النظام العامة', icon: Settings2 },
         { id: 'db_schema', label: 'مخطط Supabase SQL', icon: DatabaseZap },
@@ -116,7 +117,7 @@ export default function TopNavigation({
             }
             // For non-SuperAdmins, filter out system configurations from "الرقابة والسحابة"
             if (currentRole !== 'SuperAdmin' && group.title === 'الرقابة والسحابة') {
-              return item.id === 'audit_logs' || item.id === 'general_review';
+              return item.id === 'audit_logs' || item.id === 'general_review' || item.id === 'school_users_admin';
             }
             return true;
           })

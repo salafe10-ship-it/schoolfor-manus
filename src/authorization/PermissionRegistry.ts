@@ -43,7 +43,14 @@ export const PERMISSIONS = {
   ADMISSION_READ: 'Admission.Read',
   ADMISSION_WRITE: 'Admission.Write',
   AI_FORECAST: 'Ai.Forecast',
-  AI_CHAT: 'Ai.Chat'
+  AI_CHAT: 'Ai.Chat',
+  // Tenant-scoped identity administration.  Platform.Admin remains a
+  // separate control-plane permission and is intentionally never included in
+  // this school workspace catalog.
+  IDENTITY_USERS_READ: 'Identity.Users.Read',
+  IDENTITY_USERS_WRITE: 'Identity.Users.Write',
+  IDENTITY_USERS_ASSIGN: 'Identity.Users.Assign',
+  IDENTITY_USERS_AUDIT: 'Identity.Users.Audit'
 } as const;
 
 // Legacy codes remain registered for compatibility, but all checks are normalized

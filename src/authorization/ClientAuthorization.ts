@@ -26,6 +26,7 @@ const SECTION_PERMISSIONS: Record<string, string> = {
   uniform_management: 'Uniform_management.View',
   school_uniform: 'Uniform_management.View',
   permissions_admin: 'Permissions.View',
+  school_users_admin: PERMISSIONS.IDENTITY_USERS_READ,
   settings: 'Settings.View',
   audit_logs: PERMISSIONS.AUDIT_READ,
   general_review: PERMISSIONS.AUDIT_READ

@@ -34,6 +34,7 @@ const SchoolTransportManagement = React.lazy(() => import('./components/SchoolTr
 const LibraryPortal = React.lazy(() => import('./components/LibraryPortal'));
 const InventoryManagementPortal = React.lazy(() => import('./components/inventory/InventoryManagementPortal'));
 const FixedAssetsPortal = React.lazy(() => import('./components/assets/FixedAssetsPortal'));
+const SchoolUsersPermissionsModule = React.lazy(() => import('./components/school/SchoolUsersPermissionsModule'));
 import EnterpriseProcurementQualityAudit from './certification/EnterpriseProcurementQualityAudit';
 import ModernSchoolDashboard from './components/ModernSchoolDashboard';
 const AuditLogsPortal = React.lazy(() => import('./modules/audit/presentation/AuditLogsPortal'));
@@ -344,6 +345,7 @@ export default function App() {
       'audit_logs': 'سجلات الرقابة والعمليات',
       'general_review': 'المراجعة العامة — قيد التجهيز',
       'permissions_admin': 'المستخدمون والصلاحيات',
+      'school_users_admin': 'مستخدمو المدرسة والصلاحيات',
       'system_health': 'مركز مراقبة أداء النظام',
       'db_schema': 'مخطط Supabase SQL'
     };
@@ -1672,6 +1674,7 @@ export default function App() {
             userName={trustedSessionUser?.name || 'مستخدم المدرسة'}
             onLogout={handleLogout}
             onSettingsClick={() => setActiveSection('settings')}
+            onUsersPermissionsClick={checkSectionPermission('school_users_admin') ? () => setActiveSection('school_users_admin') : undefined}
             theme={theme}
             onThemeToggle={toggleTheme}
             isClientMode={isClientMode}
@@ -1804,6 +1807,7 @@ export default function App() {
                          (activeSection === 'uniform_management' || activeSection === 'school_uniform') ? 'إدارة الزي المدرسي' :
                          activeSection === 'general_review' ? 'المراجعة العامة — قيد التجهيز' :
                          activeSection === 'permissions_admin' ? 'المستخدمون والصلاحيات' :
+                         activeSection === 'school_users_admin' ? 'مستخدمو المدرسة والصلاحيات' :
                          activeSection === 'db_schema' ? 'إدارة النسخ الاحتياطي' :
                          activeSection === 'security_permissions_cert' ? 'اعتماد الأمان والرقابة والصلاحيات' :
                          activeSection === 'uiux_golden_standard_cert' ? 'اعتماد المعايير الذهبية وتوحيد الواجهات (UI/UX)' :
@@ -2650,6 +2654,19 @@ export default function App() {
                 </div>
               </div>
             </div>
+          )}
+
+          {/* ========================================================== */}
+          {/* VIEW: SCHOOL USER DIRECTORY & TENANT-SCOPED RBAC */}
+          {/* ========================================================== */}
+          {activeSection === 'school_users_admin' && (
+            <React.Suspense fallback={<div className="flex h-[400px] items-center justify-center text-slate-500 font-bold">جارٍ تحميل دليل مستخدمي المدرسة...</div>}>
+              <SchoolUsersPermissionsModule
+                selectedSchool={selectedSchool}
+                selectedBranch={selectedBranch}
+                triggerNotification={triggerNotification}
+              />
+            </React.Suspense>
           )}
 
           {/* ========================================================== */}

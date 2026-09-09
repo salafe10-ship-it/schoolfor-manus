@@ -32,6 +32,7 @@ import {
 import {
   requirePermission,
   requirePermissionOnly,
+  requireAnyPermission,
 } from "./src/middleware/auth.js";
 import { requestTarget } from "./src/middleware/tenantValidation.js";
 import { createMemoryRateLimiter } from "./src/middleware/memoryRateLimit.js";
@@ -432,7 +433,7 @@ function extractVerifiedJwtIssuedAt(token: string): number | null {
 const CENTRAL_IDENTITY_ROLE_CATALOG: Record<string, { name: string; description: string; permissions: string[] }> = {
   schooladmin: {
     name: 'مدير المدرسة', description: 'إدارة التشغيل اليومي للمدرسة ضمن نطاقها الموثوق.',
-    permissions: [PERMISSIONS.DASHBOARD_VIEW, PERMISSIONS.STUDENT_READ, PERMISSIONS.STUDENT_WRITE, PERMISSIONS.HR_READ, PERMISSIONS.HR_WRITE, PERMISSIONS.FINANCIAL_READ, PERMISSIONS.INVENTORY_READ, PERMISSIONS.INVENTORY_WRITE],
+    permissions: [PERMISSIONS.DASHBOARD_VIEW, PERMISSIONS.STUDENT_READ, PERMISSIONS.STUDENT_WRITE, PERMISSIONS.HR_READ, PERMISSIONS.HR_WRITE, PERMISSIONS.FINANCIAL_READ, PERMISSIONS.INVENTORY_READ, PERMISSIONS.INVENTORY_WRITE, PERMISSIONS.IDENTITY_USERS_READ, PERMISSIONS.IDENTITY_USERS_WRITE, PERMISSIONS.IDENTITY_USERS_ASSIGN, PERMISSIONS.IDENTITY_USERS_AUDIT],
   },
   accountant: {
     name: 'المحاسب المالي', description: 'قراءة الحسابات وإدخال العمليات المالية المعتمدة.',
@@ -4721,6 +4722,267 @@ async function startServer() {
     } catch (error) {
       return next(error instanceof Error ? error : new DatabaseError('تعذر تحديث مستخدم الإدارة المركزية.'));
     }
+  });
+
+  // School identity directory.  This is deliberately separate from the
+  // central directory: the trusted session supplies tenant/school scope and
+  // the browser can never choose a different school or platform role.
+  const schoolIdentityScope = (req: express.Request) => {
+    const identity = (req as any).user as { id?: string; tenantId?: string; schoolId?: string; branchId?: string; name?: string } | undefined;
+    const tenantId = String(identity?.tenantId || '').trim();
+    const schoolId = String(identity?.schoolId || '').trim();
+    const actorAuthUserId = String(identity?.id || '').trim();
+    if (!/^[0-9a-f-]{36}$/i.test(tenantId) || !/^[0-9a-f-]{36}$/i.test(schoolId) || !/^[0-9a-f-]{36}$/i.test(actorAuthUserId)) {
+      throw new AuthenticationError('السياق الموثوق للمدرسة أو هوية المدير غير مكتمل.');
+    }
+    return { identity, tenantId, schoolId, actorAuthUserId };
+  };
+
+  const recordSchoolIdentityMutation = async (
+    client: any,
+    row: { id: string; tenant_id: string; school_id: string; branch_id?: string | null },
+    actorAuthUserId: string,
+    mutation: string,
+    metadata: Record<string, unknown>,
+    requestId: string,
+    correlationId: string,
+    version: number,
+  ) => {
+    const actor = await client.query(
+      `SELECT id FROM public.users
+        WHERE tenant_id = $1::uuid AND auth_user_id = $2::uuid AND deleted_at IS NULL
+        LIMIT 1`,
+      [row.tenant_id, actorAuthUserId],
+    );
+    if (actor.rowCount !== 1) throw new AuthenticationError('تعذر تحديد المدير المنفذ داخل السجل القانوني.');
+    const auditId = randomUUID();
+    const payload = JSON.stringify({ operation: mutation, userId: row.id, ...metadata, requestId, correlationId });
+    await client.query(
+      `INSERT INTO public.audit_events
+        (id, tenant_id, school_id, branch_id, actor_user_id, entity_type, entity_id, action, source, reason, result, metadata, request_id, correlation_id)
+       VALUES ($1::uuid, $2::uuid, $3::uuid, $4::uuid, $5::uuid, 'user', $6::uuid, $7, 'SchoolIdentityRoute', $8, 'success', $9::jsonb, $10::uuid, $11::uuid)`,
+      [auditId, row.tenant_id, row.school_id, row.branch_id || null, actor.rows[0].id, row.id, mutation, `إدارة مستخدم المدرسة: ${mutation}`, payload, requestId, correlationId],
+    );
+    const outboxPayload = JSON.stringify({ event: `identity.school_user.${mutation}`, userId: row.id, tenantId: row.tenant_id, schoolId: row.school_id, ...metadata, requestId, correlationId });
+    await client.query(
+      `INSERT INTO public.outbox_events
+        (id, tenant_id, event_type, aggregate_type, aggregate_id, event_version, payload, payload_hash, idempotency_key, status, request_id, correlation_id, created_by, updated_by, audit_id)
+       VALUES ($1::uuid, $2::uuid, $3, 'user', $4::uuid, $5, $6::jsonb, $7, $8, 'pending', $9::uuid, $10::uuid, $11::uuid, $11::uuid, $12::uuid)
+       ON CONFLICT (tenant_id, idempotency_key) DO NOTHING`,
+      [randomUUID(), row.tenant_id, `identity.school_user.${mutation}`, row.id, Math.max(1, version), outboxPayload, createHash('sha256').update(outboxPayload).digest('hex'), `identity-school-user:${row.id}:${mutation}:${requestId}`, requestId, correlationId, actor.rows[0].id, auditId],
+    );
+    return auditId;
+  };
+
+  app.get('/api/school/identity-roles', authenticateRequest, requirePermissionOnly(PERMISSIONS.IDENTITY_USERS_READ), async (req, res, next) => {
+    if (!platformAdminPool) return next(new DatabaseError('مصدر الهوية المركزي غير متاح.'));
+    try {
+      const { tenantId } = schoolIdentityScope(req);
+      const result = await platformAdminPool.query(
+        `SELECT r.id, r.role_key AS "roleKey", r.name, r.description, r.version,
+                COALESCE(jsonb_agg(DISTINCT jsonb_build_object(
+                  'permissionKey', p.permission_key, 'resource', p.resource, 'action', p.action
+                )) FILTER (WHERE p.id IS NOT NULL), '[]'::jsonb) AS permissions
+           FROM public.roles r
+           LEFT JOIN public.role_permissions rp ON rp.tenant_id = r.tenant_id AND rp.role_id = r.id
+                AND rp.status = 'active' AND rp.deleted_at IS NULL
+           LEFT JOIN public.permissions p ON p.id = rp.permission_id
+                AND p.status = 'active' AND p.deleted_at IS NULL
+          WHERE r.tenant_id = $1::uuid AND r.school_id IS NULL AND r.branch_id IS NULL
+            AND r.status = 'active' AND r.deleted_at IS NULL
+            AND r.role_key = ANY($2::text[])
+          GROUP BY r.id
+          ORDER BY r.name ASC`,
+        [tenantId, Object.keys(CENTRAL_IDENTITY_ROLE_CATALOG)],
+      );
+      return res.json({ success: true, roles: result.rows });
+    } catch (error) {
+      return next(error instanceof Error ? error : new DatabaseError('تعذر تحميل أدوار المدرسة المعتمدة.'));
+    }
+  });
+
+  app.get('/api/school/users', authenticateRequest, requirePermissionOnly(PERMISSIONS.IDENTITY_USERS_READ), async (req, res, next) => {
+    if (!platformAdminPool) return next(new DatabaseError('مصدر الهوية المركزي غير متاح.'));
+    try {
+      const { tenantId, schoolId } = schoolIdentityScope(req);
+      const result = await platformAdminPool.query(
+        `SELECT u.id, u.auth_user_id, u.tenant_id, u.school_id, u.branch_id,
+                u.display_name, u.job_title, u.department, u.status, u.version,
+                u.session_revoked_at, u.force_password_change, u.created_at,
+                au.email, au.last_sign_in_at, b.name AS branch_name,
+                COALESCE(jsonb_agg(DISTINCT jsonb_build_object(
+                  'id', r.id, 'roleKey', r.role_key, 'name', r.name,
+                  'assignmentBranchId', ur.branch_id
+                )) FILTER (WHERE r.id IS NOT NULL), '[]'::jsonb) AS roles
+           FROM public.users u
+           JOIN auth.users au ON au.id = u.auth_user_id
+           LEFT JOIN public.branches b ON b.tenant_id = u.tenant_id AND b.school_id = u.school_id AND b.id = u.branch_id
+           LEFT JOIN public.user_roles ur ON ur.tenant_id = u.tenant_id AND ur.user_id = u.id
+                AND ur.deleted_at IS NULL AND ur.status = 'active'
+           LEFT JOIN public.roles r ON r.tenant_id = ur.tenant_id AND r.id = ur.role_id
+                AND r.school_id IS NULL AND r.branch_id IS NULL AND r.status = 'active' AND r.deleted_at IS NULL
+          WHERE u.tenant_id = $1::uuid AND u.school_id = $2::uuid AND u.deleted_at IS NULL
+          GROUP BY u.id, au.email, au.last_sign_in_at, b.name
+          ORDER BY u.created_at DESC`,
+        [tenantId, schoolId],
+      );
+      return res.json({ success: true, scope: { tenantId, schoolId }, users: result.rows });
+    } catch (error) {
+      return next(error instanceof Error ? error : new DatabaseError('تعذر تحميل مستخدمي المدرسة.'));
+    }
+  });
+
+  app.post('/api/school/users', authenticateRequest, requireAnyPermission([PERMISSIONS.IDENTITY_USERS_WRITE, PERMISSIONS.IDENTITY_USERS_ASSIGN]), async (req, res, next) => {
+    if (!platformAdminPool || !platformAdminAuth) return next(new ExternalServiceError('خدمة هوية المدرسة غير مهيأة.'));
+    const requestId = String(req.body?.requestId || req.get('X-Request-Id') || randomUUID()).trim();
+    const correlationId = String(req.body?.correlationId || req.get('X-Correlation-Id') || randomUUID()).trim();
+    let authUserId = '';
+    try {
+      const { tenantId, schoolId, actorAuthUserId } = schoolIdentityScope(req);
+      const displayName = String(req.body?.name || req.body?.displayName || '').trim();
+      const jobTitle = String(req.body?.jobTitle || '').trim();
+      const department = String(req.body?.department || '').trim();
+      const email = String(req.body?.email || '').trim().toLowerCase();
+      const requestedPassword = String(req.body?.password || '').trim();
+      const roleKey = String(req.body?.initialRole || '').trim().toLowerCase().replace(/[^a-z0-9._-]/g, '');
+      let branchId = String(req.body?.branchId || '').trim();
+      const roleSpec = CENTRAL_IDENTITY_ROLE_CATALOG[roleKey];
+      if (!/^[0-9a-f-]{36}$/i.test(requestId) || !/^[0-9a-f-]{36}$/i.test(correlationId)) return next(new ValidationError('معرف الطلب أو الارتباط غير صالح.'));
+      if (displayName.length < 2 || displayName.length > 160) return next(new ValidationError('اسم المستخدم يجب أن يكون بين حرفين و160 حرفاً.'));
+      if (jobTitle.length > 160 || department.length > 160) return next(new ValidationError('المسمى الوظيفي أو القسم يتجاوز الحد المسموح.'));
+      if (!/^\S+@\S+\.\S+$/.test(email)) return next(new ValidationError('البريد الإلكتروني غير صالح.'));
+      if (requestedPassword && requestedPassword.length < 8) return next(new ValidationError('كلمة المرور يجب ألا تقل عن 8 رموز.'));
+      if (!roleSpec || roleKey === 'platformadmin') return next(new ValidationError('الدور المطلوب غير متاح في نطاق المدرسة.'));
+      if (branchId && !/^[0-9a-f-]{36}$/i.test(branchId)) return next(new ValidationError('معرف الفرع غير صالح.'));
+      const password = requestedPassword || randomBytes(12).toString('base64url');
+      const client = await platformAdminPool.connect();
+      try {
+        const scope = await client.query(`SELECT s.id, s.tenant_id FROM public.schools s WHERE s.id = $1::uuid AND s.tenant_id = $2::uuid AND s.deleted_at IS NULL`, [schoolId, tenantId]);
+        if (scope.rowCount !== 1) return next(new ConflictError('المدرسة غير موجودة في نطاق الجلسة الموثوق.'));
+        if (!branchId) {
+          const mainBranch = await client.query(`SELECT id FROM public.branches WHERE tenant_id = $1::uuid AND school_id = $2::uuid AND status = 'active' AND deleted_at IS NULL ORDER BY created_at ASC LIMIT 1`, [tenantId, schoolId]);
+          branchId = mainBranch.rows[0]?.id || '';
+        }
+        if (!branchId) return next(new ConflictError('لا يوجد فرع نشط داخل المدرسة.'));
+        const branch = await client.query(`SELECT id FROM public.branches WHERE tenant_id = $1::uuid AND school_id = $2::uuid AND id = $3::uuid AND status = 'active' AND deleted_at IS NULL`, [tenantId, schoolId, branchId]);
+        if (branch.rowCount !== 1) return next(new ConflictError('الفرع المختار لا ينتمي إلى المدرسة الحالية.'));
+        const authResult = await platformAdminAuth.auth.admin.createUser({
+          email, password, email_confirm: true,
+          user_metadata: { display_name: displayName },
+          app_metadata: { tenant_id: tenantId, school_id: schoolId, branch_id: branchId, role: roleKey, status: 'active' },
+        });
+        if (authResult.error || !authResult.data.user) throw new ExternalServiceError(authResult.error?.message || 'تعذر إنشاء هوية Supabase Auth.');
+        authUserId = authResult.data.user.id;
+        await client.query('BEGIN');
+        const userResult = await client.query(`INSERT INTO public.users (auth_user_id, tenant_id, school_id, branch_id, display_name, job_title, department, status, force_password_change, created_by, updated_by) VALUES ($1::uuid, $2::uuid, $3::uuid, $4::uuid, $5, $6, $7, 'active', $8, $9::uuid, $9::uuid) RETURNING id, auth_user_id, tenant_id, school_id, branch_id, display_name, job_title, department, status, force_password_change, version, created_at`, [authUserId, tenantId, schoolId, branchId, displayName, jobTitle || null, department || null, !requestedPassword, actorAuthUserId]);
+        const roleResult = await client.query(`INSERT INTO public.roles (tenant_id, school_id, branch_id, role_key, name, description, is_system, status, created_by, updated_by) VALUES ($1::uuid, NULL, NULL, $2, $3, $4, true, 'active', $5::uuid, $5::uuid) ON CONFLICT (tenant_id, role_key) DO UPDATE SET name = EXCLUDED.name, description = EXCLUDED.description, is_system = true, status = 'active', deleted_at = NULL, deleted_by = NULL, updated_at = now() RETURNING id`, [tenantId, roleKey, roleSpec.name, roleSpec.description, actorAuthUserId]);
+        const roleId = roleResult.rows[0].id;
+        for (const permissionKey of roleSpec.permissions) {
+          const { resource, action } = describePermission(permissionKey);
+          const permissionResult = await client.query(`INSERT INTO public.permissions (tenant_id, permission_key, resource, action, description, status, created_by, updated_by) VALUES (NULL, $1, $2, $3, $1, 'active', $4::uuid, $4::uuid) ON CONFLICT (permission_key) DO UPDATE SET status = 'active', deleted_at = NULL, deleted_by = NULL, updated_at = now() RETURNING id`, [permissionKey, resource, action, actorAuthUserId]);
+          await client.query(`INSERT INTO public.role_permissions (tenant_id, role_id, permission_id, status, created_by, updated_by) VALUES ($1::uuid, $2::uuid, $3::uuid, 'active', $4::uuid, $4::uuid) ON CONFLICT (role_id, permission_id) DO UPDATE SET status = 'active', deleted_at = NULL, deleted_by = NULL, updated_at = now()`, [tenantId, roleId, permissionResult.rows[0].id, actorAuthUserId]);
+        }
+        const assignment = await client.query(`INSERT INTO public.user_roles (tenant_id, user_id, role_id, school_id, branch_id, status, created_by, updated_by) VALUES ($1::uuid, $2::uuid, $3::uuid, $4::uuid, $5::uuid, 'active', $6::uuid, $6::uuid) RETURNING id`, [tenantId, userResult.rows[0].id, roleId, schoolId, branchId, actorAuthUserId]);
+        const auditId = await recordSchoolIdentityMutation(client, { id: userResult.rows[0].id, tenant_id: tenantId, school_id: schoolId, branch_id: branchId }, actorAuthUserId, 'create', { displayName, email, roleKey, branchId, forcePasswordChange: !requestedPassword }, requestId, correlationId, Number(userResult.rows[0].version || 1));
+        await client.query('COMMIT');
+        return res.status(201).json({ success: true, requestId, correlationId, auditId, user: { ...userResult.rows[0], email, forcePasswordChange: !requestedPassword, roles: [{ roleKey, name: roleSpec.name }], roleAssignmentId: assignment.rows[0].id }, temporaryPassword: requestedPassword ? null : password });
+      } catch (error) {
+        await client.query('ROLLBACK').catch(() => undefined);
+        if (authUserId) await platformAdminAuth.auth.admin.deleteUser(authUserId).catch(() => undefined);
+        return next(error instanceof Error ? error : new DatabaseError('تعذر إنشاء مستخدم المدرسة.'));
+      } finally { client.release(); }
+    } catch (error) { return next(error); }
+  });
+
+  app.patch('/api/school/users/:userId', authenticateRequest, requireAnyPermission([PERMISSIONS.IDENTITY_USERS_WRITE, PERMISSIONS.IDENTITY_USERS_ASSIGN]), async (req, res, next) => {
+    if (!platformAdminPool || !platformAdminAuth) return next(new ExternalServiceError('خدمة هوية المدرسة غير مهيأة.'));
+    try {
+      const { tenantId, schoolId, actorAuthUserId } = schoolIdentityScope(req);
+      const userId = String(req.params.userId || '').trim();
+      const operation = String(req.body?.operation || '').trim();
+      const expectedVersion = Number(req.body?.expectedVersion);
+      const requestId = String(req.body?.requestId || req.get('X-Request-Id') || randomUUID()).trim();
+      const correlationId = String(req.body?.correlationId || req.get('X-Correlation-Id') || randomUUID()).trim();
+      if (!/^[0-9a-f-]{36}$/i.test(userId)) return next(new ValidationError('معرف المستخدم غير صالح.'));
+      if (!Number.isSafeInteger(expectedVersion) || expectedVersion < 1) return next(new ValidationError('إصدار المستخدم المتوقع مطلوب لمنع الكتابة فوق تحديث آخر.'));
+      if (!/^[0-9a-f-]{36}$/i.test(requestId) || !/^[0-9a-f-]{36}$/i.test(correlationId)) return next(new ValidationError('معرف الطلب أو الارتباط غير صالح.'));
+      const client = await platformAdminPool.connect();
+      try {
+        const target = await client.query(`SELECT u.id, u.auth_user_id, u.tenant_id, u.school_id, u.branch_id, u.display_name, u.job_title, u.department, u.status, u.force_password_change, u.version, u.session_revoked_at, au.email, COALESCE((SELECT r.role_key FROM public.user_roles ur JOIN public.roles r ON r.tenant_id = ur.tenant_id AND r.id = ur.role_id WHERE ur.tenant_id = u.tenant_id AND ur.user_id = u.id AND ur.status = 'active' AND ur.deleted_at IS NULL AND r.status = 'active' AND r.deleted_at IS NULL ORDER BY ur.created_at ASC LIMIT 1), 'schooladmin') AS role_key FROM public.users u JOIN auth.users au ON au.id = u.auth_user_id WHERE u.id = $1::uuid AND u.tenant_id = $2::uuid AND u.school_id = $3::uuid AND u.deleted_at IS NULL`, [userId, tenantId, schoolId]);
+        if (target.rowCount !== 1) return next(new ConflictError('المستخدم غير موجود داخل مدرسة الجلسة الحالية.'));
+        const row = target.rows[0];
+        if (Number(row.version) !== expectedVersion) return next(new ConflictError('تم تعديل المستخدم بواسطة مسؤول آخر. أعد تحميل القائمة.'));
+        if (row.auth_user_id === actorAuthUserId && ['archive', 'status'].includes(operation)) return next(new ConflictError('لا يمكن لمدير المدرسة تعطيل أو أرشفة حسابه الحالي.'));
+        await client.query('BEGIN');
+        let updated: any;
+        let metadata: Record<string, unknown> = {};
+        if (operation === 'update') {
+          const displayName = String(req.body?.displayName || '').trim();
+          const jobTitle = String(req.body?.jobTitle || '').trim();
+          const department = String(req.body?.department || '').trim();
+          const email = String(req.body?.email || '').trim().toLowerCase();
+          if (displayName.length < 2 || displayName.length > 160) throw new ValidationError('اسم المستخدم يجب أن يكون بين حرفين و160 حرفاً.');
+          if (jobTitle.length > 160 || department.length > 160 || (email && !/^\S+@\S+\.\S+$/.test(email))) throw new ValidationError('بيانات المستخدم غير صالحة.');
+          const authResult = await platformAdminAuth.auth.admin.updateUserById(row.auth_user_id, { user_metadata: { display_name: displayName }, ...(email && email !== String(row.email || '').toLowerCase() ? { email, email_confirm: true } : {}) });
+          if (authResult.error) throw new ExternalServiceError('تعذر تحديث هوية المستخدم عبر Supabase Auth.');
+          const result = await client.query(`UPDATE public.users SET display_name = $4, job_title = $5, department = $6, updated_at = now(), updated_by = $7::uuid, version = version + 1 WHERE id = $1::uuid AND tenant_id = $2::uuid AND school_id = $3::uuid AND deleted_at IS NULL AND version = $8 RETURNING id, auth_user_id, tenant_id, school_id, branch_id, display_name, job_title, department, status, force_password_change, version, created_at`, [userId, tenantId, schoolId, displayName, jobTitle || null, department || null, actorAuthUserId, expectedVersion]);
+          if (result.rowCount !== 1) throw new ConflictError('تعذر تحديث المستخدم؛ تغيرت النسخة الحالية.');
+          updated = result.rows[0]; metadata = { before: { displayName: row.display_name, jobTitle: row.job_title, department: row.department, email: row.email }, after: { displayName, jobTitle: jobTitle || null, department: department || null, email: authResult.data.user?.email || email || row.email || '' } };
+        } else if (operation === 'assign_role') {
+          const roleKey = String(req.body?.roleKey || '').trim().toLowerCase().replace(/[^a-z0-9._-]/g, '');
+          const roleSpec = CENTRAL_IDENTITY_ROLE_CATALOG[roleKey];
+          if (!roleSpec || roleKey === 'platformadmin') throw new ValidationError('الدور المطلوب غير متاح في نطاق المدرسة.');
+          const roleResult = await client.query(`SELECT id, name FROM public.roles WHERE tenant_id = $1::uuid AND role_key = $2 AND school_id IS NULL AND branch_id IS NULL AND status = 'active' AND deleted_at IS NULL LIMIT 1`, [tenantId, roleKey]);
+          if (roleResult.rowCount !== 1) throw new ConflictError('قالب الدور غير منشور من الإدارة المركزية.');
+          await client.query(`UPDATE public.user_roles SET status = 'revoked', deleted_at = now(), deleted_by = $4::uuid, updated_at = now(), updated_by = $4::uuid, version = version + 1 WHERE tenant_id = $1::uuid AND user_id = $2::uuid AND school_id = $3::uuid AND status = 'active' AND deleted_at IS NULL`, [tenantId, userId, schoolId, actorAuthUserId]);
+          await client.query(`INSERT INTO public.user_roles (tenant_id, user_id, role_id, school_id, branch_id, status, created_by, updated_by) VALUES ($1::uuid, $2::uuid, $3::uuid, $4::uuid, $5::uuid, 'active', $6::uuid, $6::uuid)`, [tenantId, userId, roleResult.rows[0].id, schoolId, row.branch_id || null, actorAuthUserId]);
+          const result = await client.query(`UPDATE public.users SET updated_at = now(), updated_by = $4::uuid, version = version + 1 WHERE id = $1::uuid AND tenant_id = $2::uuid AND school_id = $3::uuid AND deleted_at IS NULL AND version = $5 RETURNING id, auth_user_id, tenant_id, school_id, branch_id, display_name, status, force_password_change, version, created_at`, [userId, tenantId, schoolId, actorAuthUserId, expectedVersion]);
+          if (result.rowCount !== 1) throw new ConflictError('تعذر إسناد الدور؛ تغير المستخدم بواسطة مسؤول آخر.');
+          updated = result.rows[0]; metadata = { beforeRole: row.role_key, roleKey };
+        } else if (operation === 'reset_password') {
+          const password = randomBytes(12).toString('base64url');
+          const authResult = await platformAdminAuth.auth.admin.updateUserById(row.auth_user_id, { password, user_metadata: { display_name: row.display_name, forcePasswordChange: true } });
+          if (authResult.error) throw new ExternalServiceError('تعذر إعادة تعيين كلمة مرور المستخدم.');
+          const result = await client.query(`UPDATE public.users SET force_password_change = true, session_revoked_at = now(), updated_at = now(), updated_by = $4::uuid, version = version + 1 WHERE id = $1::uuid AND tenant_id = $2::uuid AND school_id = $3::uuid AND deleted_at IS NULL AND version = $5 RETURNING id, auth_user_id, tenant_id, school_id, branch_id, display_name, status, force_password_change, version, session_revoked_at, created_at`, [userId, tenantId, schoolId, actorAuthUserId, expectedVersion]);
+          if (result.rowCount !== 1) throw new ConflictError('تعذر إعادة الضبط؛ تغير المستخدم بواسطة مسؤول آخر.');
+          updated = result.rows[0]; metadata = { forcePasswordChange: true, temporaryPasswordIssued: true };
+          const auditId = await recordSchoolIdentityMutation(client, row, actorAuthUserId, operation, metadata, requestId, correlationId, Number(updated.version || 1));
+          await client.query('COMMIT');
+          return res.json({ success: true, requestId, correlationId, auditId, user: { ...updated, forcePasswordChange: true }, temporaryPassword: password });
+        } else if (operation === 'force_password') {
+          const forced = Boolean(req.body?.forcePasswordChange);
+          const authResult = await platformAdminAuth.auth.admin.updateUserById(row.auth_user_id, { user_metadata: { display_name: row.display_name, forcePasswordChange: forced }, app_metadata: { tenant_id: tenantId, school_id: schoolId, ...(row.branch_id ? { branch_id: row.branch_id } : {}), role: row.role_key, status: row.status } });
+          if (authResult.error) throw new ExternalServiceError('تعذر تحديث سياسة كلمة المرور.');
+          const result = await client.query(`UPDATE public.users SET force_password_change = $4, session_revoked_at = CASE WHEN $4 THEN now() ELSE session_revoked_at END, updated_at = now(), updated_by = $5::uuid, version = version + 1 WHERE id = $1::uuid AND tenant_id = $2::uuid AND school_id = $3::uuid AND deleted_at IS NULL AND version = $6 RETURNING id, auth_user_id, tenant_id, school_id, branch_id, display_name, status, force_password_change, version, session_revoked_at, created_at`, [userId, tenantId, schoolId, forced, actorAuthUserId, expectedVersion]);
+          if (result.rowCount !== 1) throw new ConflictError('تعذر تحديث سياسة كلمة المرور.');
+          updated = result.rows[0]; metadata = { forcePasswordChange: forced };
+        } else if (operation === 'evict_sessions') {
+          const result = await client.query(`UPDATE public.users SET session_revoked_at = now(), updated_at = now(), updated_by = $4::uuid, version = version + 1 WHERE id = $1::uuid AND tenant_id = $2::uuid AND school_id = $3::uuid AND deleted_at IS NULL AND version = $5 RETURNING id, auth_user_id, tenant_id, school_id, branch_id, display_name, status, force_password_change, version, session_revoked_at, created_at`, [userId, tenantId, schoolId, actorAuthUserId, expectedVersion]);
+          if (result.rowCount !== 1) throw new ConflictError('تعذر إنهاء الجلسات؛ تغير المستخدم.');
+          updated = result.rows[0]; metadata = { sessionRevokedAt: updated.session_revoked_at };
+        } else if (operation === 'status') {
+          const status = String(req.body?.status || '').trim();
+          if (!['active', 'suspended', 'disabled'].includes(status)) throw new ValidationError('حالة المستخدم غير مسموح بها.');
+          const authResult = await platformAdminAuth.auth.admin.updateUserById(row.auth_user_id, { ban_duration: status === 'active' ? 'none' : '876000h' });
+          if (authResult.error) throw new ExternalServiceError('تعذر تغيير حالة الهوية.');
+          const result = await client.query(`UPDATE public.users SET status = $4, session_revoked_at = CASE WHEN $4 <> 'active' THEN now() ELSE session_revoked_at END, updated_at = now(), updated_by = $5::uuid, version = version + 1 WHERE id = $1::uuid AND tenant_id = $2::uuid AND school_id = $3::uuid AND deleted_at IS NULL AND version = $6 RETURNING id, auth_user_id, tenant_id, school_id, branch_id, display_name, status, force_password_change, version, session_revoked_at, created_at`, [userId, tenantId, schoolId, status, actorAuthUserId, expectedVersion]);
+          if (result.rowCount !== 1) throw new ConflictError('تعذر تغيير حالة المستخدم.');
+          updated = result.rows[0]; metadata = { beforeStatus: row.status, status };
+        } else if (operation === 'archive') {
+          const authResult = await platformAdminAuth.auth.admin.updateUserById(row.auth_user_id, { ban_duration: '876000h' });
+          if (authResult.error) throw new ExternalServiceError('تعذر تعطيل الهوية قبل أرشفتها.');
+          const result = await client.query(`UPDATE public.users SET status = 'archived', session_revoked_at = now(), deleted_at = now(), deleted_by = $4::uuid, updated_at = now(), updated_by = $4::uuid, version = version + 1 WHERE id = $1::uuid AND tenant_id = $2::uuid AND school_id = $3::uuid AND deleted_at IS NULL AND version = $5 RETURNING id, auth_user_id, tenant_id, school_id, branch_id, display_name, status, version, session_revoked_at, created_at`, [userId, tenantId, schoolId, actorAuthUserId, expectedVersion]);
+          if (result.rowCount !== 1) throw new ConflictError('تعذر أرشفة المستخدم.');
+          updated = result.rows[0]; metadata = { beforeStatus: row.status, status: 'archived' };
+        } else throw new ValidationError('عملية إدارة المستخدم غير معتمدة.');
+        const auditId = await recordSchoolIdentityMutation(client, row, actorAuthUserId, operation, metadata, requestId, correlationId, Number(updated.version || 1));
+        await client.query('COMMIT');
+        return res.json({ success: true, requestId, correlationId, auditId, user: updated });
+      } catch (error) {
+        await client.query('ROLLBACK').catch(() => undefined);
+        return next(error instanceof Error ? error : new DatabaseError('تعذر تحديث مستخدم المدرسة.'));
+      } finally { client.release(); }
+    } catch (error) { return next(error); }
   });
 
   // Central RBAC is mother-school scoped and versioned through the canonical identity

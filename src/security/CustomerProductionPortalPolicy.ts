@@ -33,6 +33,8 @@ export const CUSTOMER_PRODUCTION_HIDDEN_SECTION_IDS = new Set([
   'audit_logs',
   'general_review',
   'permissions_admin',
+  // School managers need the tenant-scoped identity directory.  The API still
+  // enforces the same-school boundary and never exposes platform RBAC.
   'settings',
 ]);
 

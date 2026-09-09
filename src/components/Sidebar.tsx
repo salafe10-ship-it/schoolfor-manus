@@ -126,6 +126,7 @@ export default function Sidebar({
       items: [
         { id: 'audit_logs', label: 'سجلات الرقابة والعمليات', icon: Workflow },
         { id: 'general_review', label: 'المراجعة العامة — قيد التجهيز', icon: ShieldCheck },
+        { id: 'school_users_admin', label: 'مستخدمو المدرسة والصلاحيات', icon: ShieldCheck },
         { id: 'permissions_admin', label: 'المستخدمون والصلاحيات', icon: ShieldCheck },
         { id: 'system_health', label: 'مركز مراقبة أداء النظام', icon: Settings2 },
         { id: 'db_schema', label: 'مخطط Supabase SQL', icon: DatabaseZap },
@@ -219,6 +220,7 @@ export default function Sidebar({
       'school_uniform': 'uniform_management',
       'db_schema': 'db_schema',
       'permissions_admin': 'permissions_admin',
+      'school_users_admin': 'school_users_admin',
     };
 
     const featureKey = map[itemId];
