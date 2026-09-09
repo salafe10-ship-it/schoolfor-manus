@@ -245,7 +245,7 @@ export default function Sidebar({
               'production_readiness_gate', 'docs_hardening', 'wave1_certification', 
               'core_system_cert', 'operational_excellence_cert', 'user_trust_cert', 
               'commercial_release', 'commercial_competitiveness', 'product_maturity', 
-              'golden_release_exec', 'ddd_reconstruction'
+              'golden_release_exec', 'ddd_reconstruction', 'permissions_admin'
             ];
             if (!isSuperAdminPortalActive && technicalOrCertIds.includes(item.id)) {
               return false;

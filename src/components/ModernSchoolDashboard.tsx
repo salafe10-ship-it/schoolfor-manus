@@ -193,7 +193,6 @@ export default function ModernSchoolDashboard({
     { section: 'academic', label: 'الجداول الدراسية', icon: Calendar },
     { section: 'school_transport', label: 'النقل والترحيل', icon: Bus },
     { section: 'school_uniform', label: 'الزي المدرسي', icon: Shirt },
-    { section: 'permissions_admin', label: 'المستخدمون والصلاحيات', icon: ShieldCheck },
   ];
 
   return (

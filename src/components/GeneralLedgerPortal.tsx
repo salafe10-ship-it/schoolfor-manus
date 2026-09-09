@@ -3515,7 +3515,6 @@ export default function GeneralLedgerPortal({
       items: [
         { id: 'governance', label: 'السياسات المالية', targetTab: 'governance', icon: CheckCircle2, badge: 'نشط' },
         { id: 'closing', label: 'إقفال السنة', targetTab: 'closing', icon: LockIcon },
-        { id: 'users_admin', label: 'المستخدمون والصلاحيات', targetTab: 'users_admin', icon: UserCheck },
         { id: 'calc_tools', label: 'أدوات الحسبة', targetTab: 'calc_tools', icon: Calculator },
       ]
     }
