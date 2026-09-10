@@ -9,6 +9,7 @@ describe('school-scoped identity directory contracts', () => {
     const server = read('server.ts');
     expect(server).toContain("app.get('/api/school/users'");
     expect(server).toContain("app.post('/api/school/users'");
+    expect(server).toContain("app.get('/api/school/job-catalog'");
     expect(server).toContain("app.patch('/api/school/users/:userId'");
     expect(server).toContain("requirePermissionOnly(PERMISSIONS.IDENTITY_USERS_READ)");
     expect(server).toContain("app.patch('/api/school/users/:userId', authenticateRequest, requirePermissionOnly(PERMISSIONS.IDENTITY_USERS_WRITE)");
@@ -26,6 +27,8 @@ describe('school-scoped identity directory contracts', () => {
     expect(server).toContain('username, email');
     expect(server).toContain('roleLookup');
     expect(server).toContain('الدور غير منشور من المدرسة الأم');
+    expect(server).toContain('job_id');
+    expect(server).toContain('jsonb_array_elements(COALESCE(h.data->\'jobs\'' );
   });
 
   it('registers the identity capability catalog without Platform.Admin', () => {
@@ -45,6 +48,7 @@ describe('school-scoped identity directory contracts', () => {
     const topbar = read('src/components/Topbar.tsx');
     expect(module).toContain("authenticatedRequest('/api/school/users'");
     expect(module).toContain("authenticatedRequest('/api/school/identity-roles'");
+    expect(module).toContain("authenticatedRequest('/api/school/job-catalog'");
     expect(module).toContain("operation, expectedVersion: user.version");
     expect(module).toContain('إدارة الصلاحيات');
     expect(module).toContain("'set_permissions'");
@@ -69,10 +73,13 @@ describe('school-scoped identity directory contracts', () => {
   it('accepts centrally-created custom roles without weakening database authorization', () => {
     const resolver = read('src/authorization/RoleResolver.ts');
     const rbac = read('src/components/super-admin/SuperAdminRbac.tsx');
+    const schoolModule = read('src/components/school/SchoolUsersPermissionsModule.tsx');
     expect(resolver).toContain('Database-backed roles are the source of truth');
     expect(resolver).not.toContain('roleKeys.some(role => !ROLE_PERMISSIONS[role])');
     expect(rbac).toContain('toggleNewRolePermission');
     expect(rbac).toContain('حفظ الدور واعتماده');
     expect(rbac).toContain('المسمى الوظيفي');
+    expect(schoolModule).toContain('ربط الوظيفة من دليل شؤون الموظفين');
+    expect(read('supabase/migrations/202609101200_identity_job_reference.sql')).toContain('ADD COLUMN IF NOT EXISTS job_id');
   });
 });
