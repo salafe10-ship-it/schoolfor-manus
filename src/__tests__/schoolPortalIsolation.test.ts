@@ -15,6 +15,8 @@ describe('school portal isolation', () => {
     expect(source).toContain('const schoolPortalContext = useMemo');
     expect(source).toContain('currentPortal === \'school\' || Boolean(schoolPortalContext)');
     expect(source).toContain('setCurrentPortal(schoolPortalContext ? \'school\'');
+    expect(source).toContain('canRestoreSchoolPortalSession(schoolPortalContext, user.schoolId)');
+    expect(source).not.toContain('if (schoolPortalContext) {\n      sessionManager.logout();');
   });
 
   it('binds login credentials to the requested school on the server', () => {

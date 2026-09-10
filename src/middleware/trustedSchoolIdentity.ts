@@ -49,6 +49,11 @@ export function toTrustedSchoolPresentation(record: SchoolRecord): TrustedSchool
   const features = rawFeatures && typeof rawFeatures === 'object' && !Array.isArray(rawFeatures)
     ? Object.fromEntries(Object.entries(rawFeatures).filter(([, value]) => typeof value === 'boolean')) as Record<string, boolean>
     : {};
+  if (Object.prototype.hasOwnProperty.call(features, 'permissions_admin')
+    && !Object.prototype.hasOwnProperty.call(features, 'school_users_admin')) {
+    features.school_users_admin = features.permissions_admin;
+  }
+  delete features.permissions_admin;
 
   return {
     id,

@@ -127,7 +127,6 @@ export default function Sidebar({
         { id: 'audit_logs', label: 'سجلات الرقابة والعمليات', icon: Workflow },
         { id: 'general_review', label: 'المراجعة العامة — قيد التجهيز', icon: ShieldCheck },
         { id: 'school_users_admin', label: 'مستخدمو المدرسة والصلاحيات', icon: ShieldCheck },
-        { id: 'permissions_admin', label: 'المستخدمون والصلاحيات', icon: ShieldCheck },
         { id: 'system_health', label: 'مركز مراقبة أداء النظام', icon: Settings2 },
         { id: 'db_schema', label: 'مخطط Supabase SQL', icon: DatabaseZap },
       ]
@@ -219,7 +218,6 @@ export default function Sidebar({
       'uniform_management': 'uniform_management',
       'school_uniform': 'uniform_management',
       'db_schema': 'db_schema',
-      'permissions_admin': 'permissions_admin',
       'school_users_admin': 'school_users_admin',
     };
 
@@ -247,7 +245,7 @@ export default function Sidebar({
               'production_readiness_gate', 'docs_hardening', 'wave1_certification', 
               'core_system_cert', 'operational_excellence_cert', 'user_trust_cert', 
               'commercial_release', 'commercial_competitiveness', 'product_maturity', 
-              'golden_release_exec', 'ddd_reconstruction', 'permissions_admin'
+              'golden_release_exec', 'ddd_reconstruction'
             ];
             if (!isSuperAdminPortalActive && technicalOrCertIds.includes(item.id)) {
               return false;
@@ -294,7 +292,6 @@ export default function Sidebar({
                 'uniform_management': { catId: 'uniform_management', scrId: 'uniform_sales' },
                 'school_uniform': { catId: 'uniform_management', scrId: 'uniform_sales' },
                 'audit_logs': { catId: 'audit_logs', scrId: 'audit_logs' },
-                'permissions_admin': { catId: 'permissions_admin', scrId: 'permissions_matrix' },
                 'system_health': { catId: 'system_health', scrId: 'system_monitoring' },
                 'db_schema': { catId: 'db_schema', scrId: 'database_editor' },
               };

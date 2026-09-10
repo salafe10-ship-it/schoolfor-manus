@@ -3291,8 +3291,8 @@ export default function GeneralLedgerPortal({
 
   const handleSidebarItemClick = (item: any) => {
     if (item.id === 'users_admin') {
-      setActiveSection('permissions_admin');
-      triggerNotification('🛡️ جاري الانتقال إلى الإدارة المركزية الموحدة للمستخدمين والصلاحيات...', 'success');
+      setActiveSection('school_users_admin');
+      triggerNotification('🛡️ جاري الانتقال إلى مستخدمي المدرسة والصلاحيات...', 'success');
       return;
     }
     if (!isItemPermitted(item.id)) {

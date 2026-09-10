@@ -32,7 +32,7 @@ export default function SuperAdminFeatures({
     { key: 'buses', name: 'إدارة النقل والترحيل المدرسي', desc: 'إدارة الأسطول والمسارات والسائقين واشتراكات الطلاب وقوائم الركاب' },
     { key: 'uniform_management', name: 'إدارة الزي المدرسي', desc: 'الأصناف والمقاسات والقياسات والتوريد والمخزون وصرف الزي للطلاب' },
     { key: 'db_schema', name: 'لوحة مطور قاعدة البيانات ومولد الـ SQL', desc: 'مخططات الربط مع Supabase وتحميل السكيما الهيكلية للنظام' },
-    { key: 'permissions_admin', name: 'إدارة المستخدمين وصلاحيات الـ RBAC المتطورة', desc: 'مصفوفة التعديل، تخصيص أدوار الكوادر وتدقيق امتثال السجلات' }
+    { key: 'school_users_admin', name: 'مستخدمو المدرسة والصلاحيات', desc: 'دليل الهوية الموثوق، إسناد أدوار الكوادر وتدقيق تغييرات الوصول' }
   ];
 
   // Get active school object
@@ -41,7 +41,13 @@ export default function SuperAdminFeatures({
   // Initialize or get features
   const getSchoolFeatures = () => {
     if (!activeSchool) return {};
-    return activeSchool.features || {};
+    const features = { ...(activeSchool.features || {}) };
+    if (Object.prototype.hasOwnProperty.call(features, 'permissions_admin')
+      && !Object.prototype.hasOwnProperty.call(features, 'school_users_admin')) {
+      features.school_users_admin = features.permissions_admin;
+    }
+    delete features.permissions_admin;
+    return features;
   };
 
   const persistFeatures = async (features: Record<string, boolean>) => {
@@ -120,7 +126,7 @@ export default function SuperAdminFeatures({
       buses: true,
       uniform_management: true,
       db_schema: true,
-      permissions_admin: true
+      school_users_admin: true
     };
 
     try {

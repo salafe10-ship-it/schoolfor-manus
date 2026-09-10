@@ -100,6 +100,7 @@ import { TransactionService } from './database/transactions/TransactionService';
 import { useCurrency, saveCurrencyConfig, formatAmount } from './utils/currency';
 import { TrustedSessionManager, TrustedSessionUser } from './middleware/trustedSessionManager';
 import { canAccessSection } from './authorization/ClientAuthorization';
+import { canonicalSectionRoute } from './navigation/CanonicalSectionRoute';
 import { PERMISSIONS } from './authorization/PermissionRegistry';
 import { authenticatedRequest } from './utils/authenticatedRequest';
 import {
@@ -108,6 +109,8 @@ import {
   hasExplicitPlatformAdminPermission,
   isCustomerProductionPortal as isCustomerProductionPortalSession,
 } from './security/CustomerProductionPortalPolicy';
+import { canRestoreSchoolPortalSession } from './security/SchoolPortalSessionBoundary';
+import { isSectionFeatureEnabled } from './security/SectionFeaturePolicy';
 
 const UNRESOLVED_SCHOOL: School = {
   id: '',
@@ -235,6 +238,7 @@ export default function App() {
 
   const checkSectionPermission = (sectionId: string): boolean => (
     (!isCustomerProductionPortal || canAccessCustomerProductionSection(sectionId))
+    && isSectionFeatureEnabled(sectionId, selectedSchool.features)
     && canAccessSection(trustedSessionUser, sectionId, { currentPortal })
   );
 
@@ -339,13 +343,10 @@ export default function App() {
       'financial_reports': 'التقارير المالية',
       'student_accounts': 'الرسوم والأقساط',
       'inventory': 'إدارة المخزون والعهد',
-      'buses': 'باصات النقل والمواصلات',
       'school_transport': 'إدارة النقل والترحيل المدرسي',
-      'uniform_management': 'إدارة الزي والملابس المدرسية',
       'school_uniform': 'إدارة الزي المدرسي',
       'audit_logs': 'سجلات الرقابة والعمليات',
       'general_review': 'المراجعة العامة — قيد التجهيز',
-      'permissions_admin': 'المستخدمون والصلاحيات',
       'school_users_admin': 'مستخدمو المدرسة والصلاحيات',
       'system_health': 'مركز مراقبة أداء النظام',
       'db_schema': 'مخطط Supabase SQL'
@@ -489,21 +490,13 @@ export default function App() {
   useEffect(() => {
     if (!sessionManager.getAccessToken()) return;
 
-    // Never reuse a session from another portal. A school URL always starts
-    // at the school login boundary; the server will validate the submitted
-    // identity against that exact school before issuing a new session.
-    if (schoolPortalContext) {
-      sessionManager.logout();
-      setTrustedSessionUser(null);
-      setCurrentPortal('login');
-      setLoginPortalMode('school');
-      setIsSuperAdminPortalActive(false);
-      setActiveSection('login');
-      return;
-    }
-
     sessionManager.restore()
       .then(user => {
+        // Reload a school URL without discarding a valid session for that
+        // exact school. A session from any other school still fails closed.
+        if (schoolPortalContext && !canRestoreSchoolPortalSession(schoolPortalContext, user.schoolId)) {
+          throw new Error('Stored session belongs to another school portal.');
+        }
         if (user.forcePasswordChange) {
           const accessToken = sessionManager.getAccessToken();
           const refreshToken = sessionManager.getRefreshToken();
@@ -515,7 +508,7 @@ export default function App() {
           }
         }
         applyTrustedSessionUser(user);
-        setCurrentPortal(hasTrustedPlatformAdminAccess(user) ? 'admin' : 'school');
+        setCurrentPortal(schoolPortalContext ? 'school' : (hasTrustedPlatformAdminAccess(user) ? 'admin' : 'school'));
       })
       .catch(() => {
         sessionManager.logout();
@@ -528,7 +521,10 @@ export default function App() {
 
   // App General Navigation
   const [isSuperAdminPortalActive, setIsSuperAdminPortalActive] = useState<boolean>(false);
-  const [activeSection, setActiveSection] = useState<string>('super_dashboard');
+  const [activeSection, setActiveSectionState] = useState<string>('super_dashboard');
+  const setActiveSection = useCallback((sectionId: string) => {
+    setActiveSectionState(canonicalSectionRoute(sectionId, currentPortal));
+  }, [currentPortal]);
 
   // Student Affairs owns its canonical paginated read. Do not hydrate the
   // shared collection here as well: doing so duplicates GET /api/students
@@ -1668,7 +1664,7 @@ export default function App() {
             selectedBranch={selectedBranch}
             onBranchChange={handleBranchChange}
             students={filteredStudents}
-            onStudentSelect={() => setActiveSection('student_affairs')}
+            onStudentSelect={() => setActiveSection('students')}
             currentRole={currentRole}
             notifications={notifications}
             clearNotifications={() => setNotifications([])}
@@ -1800,13 +1796,11 @@ export default function App() {
                          activeSection === 'student_accounts' ? 'حسابات الطلاب المالية' :
                          activeSection === 'financial_reports' ? 'التقارير المالية والختامية' :
                          activeSection === 'exams' ? 'الامتحانات والكنترول والنتائج' :
-                         activeSection === 'hr' ? 'شؤون الموظفين والرواتب' :
                          activeSection === 'library' ? 'المكتبة المدرسية المركزية' :
                          activeSection === 'inventory' ? 'إدارة المستودعات والعهدة' :
-                         (activeSection === 'buses' || activeSection === 'school_transport') ? 'إدارة النقل والترحيل المدرسي' :
-                         (activeSection === 'uniform_management' || activeSection === 'school_uniform') ? 'إدارة الزي المدرسي' :
+                         activeSection === 'school_transport' ? 'إدارة النقل والترحيل المدرسي' :
+                         activeSection === 'school_uniform' ? 'إدارة الزي المدرسي' :
                          activeSection === 'general_review' ? 'المراجعة العامة — قيد التجهيز' :
-                         activeSection === 'permissions_admin' ? 'المستخدمون والصلاحيات' :
                          activeSection === 'school_users_admin' ? 'مستخدمو المدرسة والصلاحيات' :
                          activeSection === 'db_schema' ? 'إدارة النسخ الاحتياطي' :
                          activeSection === 'security_permissions_cert' ? 'اعتماد الأمان والرقابة والصلاحيات' :
@@ -2056,7 +2050,7 @@ export default function App() {
             {/* ========================================================== */}
             {/* VIEW: TEACHERS & EMPLOYEES SECTION (المعلمون والموظفون) */}
             {/* ========================================================== */}
-            {(activeSection === 'teachers' || activeSection === 'hr') && (
+            {activeSection === 'teachers' && (
               <HumanResourcesPortal setActiveSection={setActiveSection} selectedSchool={selectedSchool} />
             )}
 
@@ -2091,7 +2085,7 @@ export default function App() {
             {/* ========================================================== */}
             {/* VIEW: SCHOOL UNIFORM MANAGEMENT (إدارة الزي المدرسي) */}
             {/* ========================================================== */}
-            {(activeSection === 'uniform_management' || activeSection === 'school_uniform') && (
+            {activeSection === 'school_uniform' && (
               <SchoolUniformManagement
                 students={students}
                 setStudents={setStudents}
@@ -2120,7 +2114,7 @@ export default function App() {
           {/* ========================================================== */}
           {/* VIEW: SCHOOL TRANSPORTATION MANAGEMENT (إدارة النقل والترحيل المدرسي) */}
           {/* ========================================================== */}
-          {(activeSection === 'buses' || activeSection === 'school_transport') && (
+          {activeSection === 'school_transport' && (
             <SchoolTransportManagement
               students={students}
               selectedSchoolId={selectedSchool?.id}
@@ -2632,31 +2626,6 @@ export default function App() {
           )}
 
           {/* ========================================================== */}
-          {/* VIEW: CENTRAL USER AND PERMISSIONS MODULE (إدارة المستخدمين والصلاحيات) */}
-          {/* ========================================================== */}
-          {activeSection === 'permissions_admin' && (
-            <div className="space-y-6" dir="rtl">
-              <div className="bg-white border border-amber-200 rounded-xl shadow-sm p-6">
-                <div className="flex flex-col md:flex-row justify-between items-start md:items-center gap-4">
-                  <div>
-                    <h2 className="text-xl font-bold text-slate-800">تم إيقاف المسار القديم</h2>
-                    <p className="text-sm text-slate-600 mt-2">
-                      إدارة المستخدمين والصلاحيات أصبحت مركزية فقط. لم يتم عرض أو حفظ أي مصفوفة محلية أو بيانات تجريبية من هذا المسار.
-                    </p>
-                  </div>
-                  <button
-                    onClick={() => setActiveSection('dashboard')}
-                    className="flex items-center gap-2 px-4 py-2 border border-slate-200 rounded-lg text-xs font-bold text-[#0284c7] hover:bg-sky-50 hover:text-[#0369a1] transition-all duration-200 shadow-sm"
-                  >
-                    <span>العودة إلى لوحة المدرسة</span>
-                    <span className="text-lg">←</span>
-                  </button>
-                </div>
-              </div>
-            </div>
-          )}
-
-          {/* ========================================================== */}
           {/* VIEW: SCHOOL USER DIRECTORY & TENANT-SCOPED RBAC */}
           {/* ========================================================== */}
           {activeSection === 'school_users_admin' && (
@@ -2667,6 +2636,7 @@ export default function App() {
                 triggerNotification={triggerNotification}
                 onBackToMainMenu={() => setActiveSection('dashboard')}
                 canManage={canUseTrustedPermission(PERMISSIONS.IDENTITY_USERS_WRITE)}
+                canAssign={canUseTrustedPermission(PERMISSIONS.IDENTITY_USERS_ASSIGN)}
               />
             </React.Suspense>
           )}

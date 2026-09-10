@@ -193,9 +193,13 @@ async function attachTrustedTenantPermissions(identity: TrustedIdentity): Promis
   try {
     const permissions = await roleResolver.resolveTenantPermissions(identity);
     return { ...identity, permissions: [...permissions] };
-  } catch {
+  } catch (error: any) {
     // The server remains the authorization authority. An unavailable or
     // incomplete assignment must fail closed in the client visibility hint.
+    EnterpriseLogger.warn('Tenant permission resolution failed closed.', 'TrustedAuthentication', {
+      error: error?.message || String(error),
+      schoolId: identity.schoolId || null,
+    });
     return { ...identity, permissions: [] };
   }
 }

@@ -49,7 +49,8 @@ describe('central administration control-surface contract', () => {
 
   it('defaults school features to denied until the canonical directory enables them', () => {
     const source = read('src/components/super-admin/SuperAdminFeatures.tsx');
-    expect(source).toContain('return activeSchool.features || {};');
+    expect(source).toContain('const features = { ...(activeSchool.features || {}) };');
+    expect(source).toContain('return features;');
     expect(source).toContain('getSchoolFeatures()[feat.key] === true');
     expect(source).not.toContain('activeSchool.features || {\n      students: true');
   });

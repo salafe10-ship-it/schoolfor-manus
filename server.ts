@@ -32,7 +32,6 @@ import {
 import {
   requirePermission,
   requirePermissionOnly,
-  requireAnyPermission,
 } from "./src/middleware/auth.js";
 import { requestTarget } from "./src/middleware/tenantValidation.js";
 import { createMemoryRateLimiter } from "./src/middleware/memoryRateLimit.js";
@@ -2190,6 +2189,13 @@ async function startServer() {
       if (typeof rawValue !== 'boolean') throw new ValidationError('كل قيمة في ميزات الإصدار يجب أن تكون true أو false.');
       normalized[key] = rawValue;
     }
+    // Keep old release snapshots readable, but never publish the retired key
+    // into a new customer workspace or template.
+    if (Object.prototype.hasOwnProperty.call(normalized, 'permissions_admin')
+      && !Object.prototype.hasOwnProperty.call(normalized, 'school_users_admin')) {
+      normalized.school_users_admin = normalized.permissions_admin;
+    }
+    delete normalized.permissions_admin;
     return normalized;
   };
   const normalizeTemplateManifest = (value: unknown): Record<string, unknown> => {
@@ -2933,7 +2939,7 @@ async function startServer() {
         const ownerWorkspace = isOwnerWorkspaceMetadata(metadata);
         const templateFeatures = template ? normalizeFeatureOverrides(template.manifest.features) : {};
         const nextFeatures = {
-          ...(template ? templateFeatures : readObject(metadata.features)),
+          ...(template ? templateFeatures : normalizeFeatureOverrides(metadata.features)),
           ...featureOverrides,
         };
         const nextMetadata: Record<string, unknown> = {
@@ -3034,8 +3040,8 @@ async function startServer() {
       const metadata = readObject(row.central_metadata);
       const currentWorkspace = readObject(metadata.ownerWorkspace);
       const fallbackFeatures = previousRow?.payload?.features && typeof previousRow.payload.features === 'object'
-        ? previousRow.payload.features
-        : readObject(metadata.features);
+        ? normalizeFeatureOverrides(previousRow.payload.features)
+        : normalizeFeatureOverrides(metadata.features);
       const nextMetadata = {
         ...metadata,
         features: fallbackFeatures,
@@ -4111,10 +4117,12 @@ async function startServer() {
           [schoolId, tenantId || null, status, actorId],
         );
       } else if (operation === 'features') {
-        const features = req.body?.features;
-        if (!features || typeof features !== 'object' || Array.isArray(features)) return next(new ValidationError('مصفوفة ميزات المدرسة غير صالحة.'));
-        const invalidFeature = Object.values(features).find((value) => typeof value !== 'boolean');
-        if (invalidFeature !== undefined) return next(new ValidationError('كل قيمة في مصفوفة الميزات يجب أن تكون true أو false.'));
+        let features: Record<string, boolean>;
+        try {
+          features = normalizeFeatureOverrides(req.body?.features);
+        } catch (error) {
+          return next(error);
+        }
         result = await platformAdminPool.query(
           `UPDATE public.schools
               SET central_metadata = COALESCE(central_metadata, '{}'::jsonb) || jsonb_build_object('features', $3::jsonb),
@@ -5046,7 +5054,7 @@ async function startServer() {
       const result = await platformAdminPool.query(
         `SELECT u.id, u.auth_user_id, u.tenant_id, u.school_id, u.branch_id,
                 u.username, u.job_id,
-                CASE WHEN au.email LIKE '%@no-email.edupro.invalid' THEN NULL ELSE COALESCE(u.email, au.email) END AS email,
+                u.email AS email,
                 u.display_name, u.job_title, u.department, u.status, u.version,
                 u.session_revoked_at, u.force_password_change, u.created_at,
                 NULL::timestamptz AS last_sign_in_at, b.name AS branch_name,
@@ -5093,7 +5101,7 @@ async function startServer() {
     }
   });
 
-  app.post('/api/school/users', authenticateRequest, requireAnyPermission([PERMISSIONS.IDENTITY_USERS_WRITE, PERMISSIONS.IDENTITY_USERS_ASSIGN]), async (req, res, next) => {
+  app.post('/api/school/users', authenticateRequest, requirePermissionOnly(PERMISSIONS.IDENTITY_USERS_WRITE), requirePermissionOnly(PERMISSIONS.IDENTITY_USERS_ASSIGN), async (req, res, next) => {
     if (!platformAdminPool || !platformAdminAuth) return next(new ExternalServiceError('خدمة هوية المدرسة غير مهيأة.'));
     const requestId = String(req.body?.requestId || req.get('X-Request-Id') || randomUUID()).trim();
     const correlationId = String(req.body?.correlationId || req.get('X-Correlation-Id') || randomUUID()).trim();
@@ -5200,9 +5208,18 @@ async function startServer() {
   });
 
   // Every mutation of a school identity (including role assignment and
-  // direct grants) is an administrative write. Assignment-only operators
-  // must not gain profile, password, or account-state mutation via this route.
-  app.patch('/api/school/users/:userId', authenticateRequest, requirePermissionOnly(PERMISSIONS.IDENTITY_USERS_WRITE), async (req, res, next) => {
+  // direct grants) is authorized against its specific capability. Profile,
+  // password and status changes require Write; role/direct grants require
+  // Assign. This prevents either capability from silently implying the other.
+  const schoolIdentityAssignmentOperations = new Set(['assign_role', 'set_permissions']);
+  const requireSchoolIdentityMutationPermission = (req: express.Request, res: express.Response, next: express.NextFunction) => {
+    const operation = String(req.body?.operation || '').trim();
+    const requiredPermission = schoolIdentityAssignmentOperations.has(operation)
+      ? PERMISSIONS.IDENTITY_USERS_ASSIGN
+      : PERMISSIONS.IDENTITY_USERS_WRITE;
+    return requirePermissionOnly(requiredPermission)(req, res, next);
+  };
+  app.patch('/api/school/users/:userId', authenticateRequest, requireSchoolIdentityMutationPermission, async (req, res, next) => {
     if (!platformAdminPool || !platformAdminAuth) return next(new ExternalServiceError('خدمة هوية المدرسة غير مهيأة.'));
     try {
       const { tenantId, schoolId, actorAuthUserId } = schoolIdentityScope(req);

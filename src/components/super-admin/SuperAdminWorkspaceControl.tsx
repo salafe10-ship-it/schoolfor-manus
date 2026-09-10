@@ -35,7 +35,7 @@ const FEATURE_DEFINITIONS = [
   { key: 'inventory', label: 'المخزون والعهد' },
   { key: 'buses', label: 'النقل المدرسي' },
   { key: 'uniform_management', label: 'الزي المدرسي' },
-  { key: 'permissions_admin', label: 'المستخدمون والصلاحيات' },
+  { key: 'school_users_admin', label: 'مستخدمو المدرسة والصلاحيات' },
 ];
 
 const WORKFLOW_STEPS = [
@@ -49,7 +49,13 @@ type Scope = 'school' | 'selected' | 'global';
 
 function normalizeFeatures(value: unknown): Record<string, boolean> {
   if (!value || typeof value !== 'object' || Array.isArray(value)) return {};
-  return Object.fromEntries(Object.entries(value).filter(([, enabled]) => typeof enabled === 'boolean')) as Record<string, boolean>;
+  const normalized = Object.fromEntries(Object.entries(value).filter(([, enabled]) => typeof enabled === 'boolean')) as Record<string, boolean>;
+  if (Object.prototype.hasOwnProperty.call(normalized, 'permissions_admin')
+    && !Object.prototype.hasOwnProperty.call(normalized, 'school_users_admin')) {
+    normalized.school_users_admin = normalized.permissions_admin;
+  }
+  delete normalized.permissions_admin;
+  return normalized;
 }
 
 function diffFeatures(current: Record<string, boolean>, base: Record<string, boolean>): Record<string, boolean> {

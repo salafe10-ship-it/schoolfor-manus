@@ -14,7 +14,8 @@ describe('school-scoped identity directory contracts', () => {
     expect(server).toContain("await client.query('BEGIN');");
     expect(server).toContain("app.patch('/api/school/users/:userId'");
     expect(server).toContain("requirePermissionOnly(PERMISSIONS.IDENTITY_USERS_READ)");
-    expect(server).toContain("app.patch('/api/school/users/:userId', authenticateRequest, requirePermissionOnly(PERMISSIONS.IDENTITY_USERS_WRITE)");
+    expect(server).toContain("app.patch('/api/school/users/:userId', authenticateRequest, requireSchoolIdentityMutationPermission");
+    expect(server).toContain('requirePermissionOnly(PERMISSIONS.IDENTITY_USERS_WRITE), requirePermissionOnly(PERMISSIONS.IDENTITY_USERS_ASSIGN)');
     expect(server).toContain('u.tenant_id = $1::uuid AND u.school_id = $2::uuid');
     expect(server).toContain('platformAdminAuth.auth.admin.createUser');
     expect(server).toContain("roleKey === 'platformadmin'");
@@ -58,14 +59,15 @@ describe('school-scoped identity directory contracts', () => {
     expect(module).toContain('إدارة الصلاحيات');
     expect(module).toContain("'set_permissions'");
     expect(module).toContain('canManage');
-    expect(module).toContain('وضع القراءة فقط');
+    expect(module).toContain('canAssign');
+    expect(module).toContain('صلاحيات الإدارة مفصولة');
     expect(module).toContain('البريد الإلكتروني <span className="font-normal text-slate-500">(اختياري)</span>');
     expect(module).toContain('تم الحفظ بنجاح وتأكيد الربط بقاعدة البيانات.');
     expect(module).toContain('لا توجد أدوار معتمدة منشورة');
     expect(module).toContain('const openNewUser = () =>');
     expect(module).toContain('aria-label="إغلاق نافذة المستخدم"');
     expect(module).toContain('حفظ التعديل');
-    expect(module).toContain('type="submit" disabled={saving || (!editing && roles.length === 0)}');
+    expect(module).toContain('type="submit" disabled={saving || (!editing && (!canCreate || roles.length === 0))}');
     expect(module).toContain("const [statusFilter, setStatusFilter] = useState<StatusFilter>('all');");
     expect(module).toContain('تصفية حسب الحالة');
     expect(module).toContain('تصفية حسب الدور');

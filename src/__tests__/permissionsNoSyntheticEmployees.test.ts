@@ -1,16 +1,13 @@
 import { describe, expect, it } from 'vitest';
-import fs from 'node:fs';
-import path from 'node:path';
+import { readFileSync } from 'node:fs';
 
-const source = fs.readFileSync(
-  path.resolve(process.cwd(), 'src/components/PermissionsManagementModule.tsx'),
-  'utf8',
-);
+const source = readFileSync('src/components/school/SchoolUsersPermissionsModule.tsx', 'utf8');
 
-describe('permissions employee evidence safety', () => {
-  it('does not seed the employee directory when canonical data is absent', () => {
-    expect(source).toContain('return [];');
-    expect(source).toContain("useState<string>('')");
-    expect(source).not.toContain('return INITIAL_EMPLOYEES_LIST;');
+describe('school identity evidence safety', () => {
+  it('starts empty and hydrates only from the canonical school API', () => {
+    expect(source).toContain('const [users, setUsers] = useState<SchoolUser[]>([])');
+    expect(source).toContain("authenticatedRequest('/api/school/users'");
+    expect(source).not.toContain('INITIAL_EMPLOYEES_LIST');
+    expect(source).not.toContain('perm_test_');
   });
 });
