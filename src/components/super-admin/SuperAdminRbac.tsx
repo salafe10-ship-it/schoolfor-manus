@@ -1,4 +1,4 @@
-import { Check, Copy, HelpCircle, Lock as LockIcon, RefreshCw, Save, Send, ShieldCheck, Sliders, Users, X } from 'lucide-react';
+import { Check, Copy, HelpCircle, Lock as LockIcon, RefreshCw, Save, Search, Send, ShieldCheck, Sliders, Users, X } from 'lucide-react';
 import React, { useEffect, useMemo, useState } from 'react';
 import { authenticatedRequest } from '../../utils/authenticatedRequest';
 interface SuperAdminRbacProps {
@@ -32,10 +32,13 @@ export default function SuperAdminRbac({
   // Permissions state per role
   const [rolePermissions, setRolePermissions] = useState<Record<string, string[]>>({});
   const [permissionCatalog, setPermissionCatalog] = useState<PermissionCatalogEntry[]>([]);
+  const [permissionQuery, setPermissionQuery] = useState('');
 
   const permissionModules = useMemo(() => {
+    const normalizedQuery = permissionQuery.trim().toLowerCase();
     const grouped = new Map<string, PermissionCatalogEntry[]>();
     for (const permission of permissionCatalog) {
+      if (normalizedQuery && !`${permission.permissionKey} ${permission.resource} ${permission.action} ${permission.description || ''}`.toLowerCase().includes(normalizedQuery)) continue;
       const current = grouped.get(permission.resource) || [];
       current.push(permission);
       grouped.set(permission.resource, current);
@@ -54,7 +57,7 @@ export default function SuperAdminRbac({
               : `${permission.resource} — ${permission.action}`,
           })),
       }));
-  }, [permissionCatalog]);
+  }, [permissionCatalog, permissionQuery]);
 
   useEffect(() => {
     let mounted = true;
@@ -109,6 +112,16 @@ export default function SuperAdminRbac({
       ...prev,
       [roleId]: newList
     }));
+  };
+
+  const setModulePermissions = (resource: string, grant: boolean) => {
+    if (!selectedRoleId) return;
+    const moduleKeys = permissionCatalog.filter((permission) => permission.resource === resource).map((permission) => permission.permissionKey);
+    setRolePermissions((previous) => {
+      const next = new Set(previous[selectedRoleId] || []);
+      for (const key of moduleKeys) grant ? next.add(key) : next.delete(key);
+      return { ...previous, [selectedRoleId]: [...next].sort() };
+    });
   };
 
   // Saving requires a central RBAC transaction with audit/version checks.
@@ -193,20 +206,29 @@ export default function SuperAdminRbac({
     }
   };
 
-  const activeRoleName = roles.find(r => r.id === selectedRoleId)?.name || 'لا يوجد دور محدد';
+  const activeRole = roles.find(r => r.id === selectedRoleId);
+  const activeRoleName = activeRole?.name || 'لا يوجد دور محدد';
+  const activePermissions = rolePermissions[selectedRoleId] || [];
+  const activeRoleSavedPermissions = (activeRole?.permissions || []).map((permission: any) => permission.permissionKey).sort();
+  const hasUnsavedChanges = activePermissions.slice().sort().join('|') !== activeRoleSavedPermissions.join('|');
+  const linkedSchools = lastPropagation?.targetCount ?? schools.filter((school: any) => school?.status === 'active').length;
 
   return (
     <div className="space-y-6 text-right animate-in fade-in duration-200" dir="rtl">
       
-      {/* Top control description and quick utilities */}
-      <div className="bg-slate-900 border border-slate-800 p-5 rounded-3xl flex flex-col md:flex-row justify-between items-center gap-4">
+      {/* Mother-school command center */}
+      <div className="relative overflow-hidden rounded-3xl border border-amber-500/20 bg-gradient-to-l from-slate-950 via-slate-900 to-amber-950/30 p-6 shadow-2xl">
+        <div className="pointer-events-none absolute -left-14 -top-16 h-48 w-48 rounded-full bg-amber-400/10 blur-3xl" />
+        <div className="relative flex flex-col items-start justify-between gap-5 xl:flex-row xl:items-center">
         <div>
-          <h4 className="text-sm font-black text-white flex items-center gap-1.5">
-            <Sliders className="w-4 h-4 text-amber-400" />
-            مركز الحوكمة المركزية ومصفوفات الصلاحيات الفيدرالية (RBAC Templates)
+          <div className="mb-2 flex items-center gap-2 text-amber-300">
+            <ShieldCheck className="h-5 w-5" /><span className="text-[11px] font-black tracking-widest">المدرسة الأم • مصدر القالب المعتمد</span>
+          </div>
+          <h4 className="text-lg font-black text-white flex items-center gap-2">
+            مركز الحوكمة والصلاحيات المركزي
           </h4>
-          <p className="text-[11px] text-slate-400 mt-1 leading-relaxed">
-            تحكم وصياغة الإصدار الحالي لقالب الدور من المدرسة الأم. كل اعتماد ناجح يصدر نسخة موثقة وينشرها تلقائيًا للمدارس المرتبطة مع حملة نشر مركزية قابلة للتتبع والتراجع.
+          <p className="max-w-3xl text-xs leading-6 text-slate-300 mt-2">
+            عدّل القالب مرة واحدة هنا. كل اعتماد يصنع إصداراً موثقاً، يراجع التعارض، ثم ينشر إعدادات الأدوار فقط تلقائياً للمدارس المرتبطة — دون لمس بياناتها التشغيلية.
           </p>
         </div>
 
@@ -230,6 +252,13 @@ export default function SuperAdminRbac({
             <span>{isPublishing ? 'جاري إعادة النشر...' : 'إعادة التقاط ونشر القالب'}</span>
           </button>
         </div>
+        </div>
+        <div className="relative mt-6 grid gap-3 sm:grid-cols-2 xl:grid-cols-4">
+          <div className="rounded-2xl border border-white/10 bg-white/5 p-3"><div className="text-2xl font-black text-white">{roles.length}</div><div className="mt-1 text-[10px] font-bold text-slate-400">قوالب أدوار مركزية</div></div>
+          <div className="rounded-2xl border border-white/10 bg-white/5 p-3"><div className="text-2xl font-black text-amber-300">{permissionCatalog.length}</div><div className="mt-1 text-[10px] font-bold text-slate-400">صلاحيات دقيقة مسجلة</div></div>
+          <div className="rounded-2xl border border-white/10 bg-white/5 p-3"><div className="text-2xl font-black text-emerald-300">{linkedSchools}</div><div className="mt-1 text-[10px] font-bold text-slate-400">مدارس تستقبل التحديث</div></div>
+          <div className="rounded-2xl border border-white/10 bg-white/5 p-3"><div className="text-2xl font-black text-violet-300">{canonicalTemplate?.version || '—'}</div><div className="mt-1 text-[10px] font-bold text-slate-400">إصدار القالب المنشور</div></div>
+        </div>
       </div>
 
       {lastPropagation && (
@@ -245,7 +274,7 @@ export default function SuperAdminRbac({
         <div className="bg-slate-900 border border-slate-800 rounded-3xl p-5 shadow-lg space-y-4">
           <div className="border-b border-slate-800 pb-3">
             <h5 className="text-xs font-black text-white">الأدوار المعتمدة بالنظام</h5>
-            <p className="text-[9px] text-slate-500 mt-0.5">اختر دوراً لتعديل امتيازاته العامة</p>
+            <p className="text-[9px] text-slate-500 mt-0.5">اختر دوراً لتعديل امتيازاته العامة. لا توجد صلاحية منصة هنا.</p>
           </div>
 
           <div className="space-y-2">
@@ -281,14 +310,14 @@ export default function SuperAdminRbac({
         <div className="bg-slate-900 border border-slate-800 rounded-3xl p-6 shadow-lg space-y-6 lg:col-span-2 flex flex-col justify-between">
           <div className="space-y-5">
             
-            <div className="border-b border-slate-800 pb-4 flex justify-between items-center">
+            <div className="border-b border-slate-800 pb-4 flex flex-col gap-4 xl:flex-row xl:items-center xl:justify-between">
               <div>
                 <h5 className="text-xs font-black text-white">صلاحيات وامتيازات دور: <span className="text-amber-400">{activeRoleName}</span></h5>
-                <p className="text-[10px] text-slate-500 mt-0.5">تحكم بامتيازات هذا الدور عبر التفعيل المباشر للحقائب المنطقية</p>
+                <p className="text-[10px] text-slate-500 mt-0.5">{activePermissions.length} من {permissionCatalog.length} صلاحية مفعّلة {hasUnsavedChanges && <span className="mr-2 text-amber-400">• توجد مسودة غير محفوظة</span>}</p>
               </div>
-
-              <div className="bg-amber-950 text-amber-400 border border-amber-900 text-[10px] font-black px-2.5 py-1 rounded-lg">
-                قالب حوكمة معزول RLS
+              <div className="flex flex-wrap items-center gap-2">
+                <div className="relative min-w-[220px]"><Search className="pointer-events-none absolute right-3 top-2.5 h-4 w-4 text-slate-500" /><input value={permissionQuery} onChange={(event) => setPermissionQuery(event.target.value)} placeholder="ابحث في وحدة أو إجراء..." className="w-full rounded-xl border border-slate-700 bg-slate-950 py-2 pl-3 pr-9 text-xs text-white outline-none placeholder:text-slate-600 focus:border-amber-500" /></div>
+                <div className="bg-amber-950 text-amber-400 border border-amber-900 text-[10px] font-black px-2.5 py-2 rounded-lg">قالب RLS محكوم</div>
               </div>
             </div>
 
@@ -297,8 +326,8 @@ export default function SuperAdminRbac({
               {permissionModules.map((mod) => {
                 const currentList = rolePermissions[selectedRoleId] || [];
                 return (
-                  <div key={mod.id} className="space-y-3">
-                    <h6 className="text-[11px] font-black text-slate-400 bg-slate-950 border border-slate-850 px-3 py-1.5 rounded-lg w-fit">{mod.name}</h6>
+                  <div key={mod.id} className="space-y-3 rounded-2xl border border-slate-800/80 bg-slate-950/30 p-4">
+                    <div className="flex flex-wrap items-center justify-between gap-2"><h6 className="text-[11px] font-black text-slate-300">{mod.name} <span className="mr-1 text-slate-600">({mod.permissions.filter((permission) => currentList.includes(permission.key)).length}/{mod.permissions.length})</span></h6><div className="flex gap-2"><button type="button" onClick={() => setModulePermissions(mod.name, true)} className="rounded-lg border border-emerald-900 bg-emerald-950/30 px-2 py-1 text-[9px] font-black text-emerald-300 hover:bg-emerald-950">تفعيل الكل</button><button type="button" onClick={() => setModulePermissions(mod.name, false)} className="rounded-lg border border-slate-700 bg-slate-900 px-2 py-1 text-[9px] font-black text-slate-400 hover:bg-slate-800">إزالة الكل</button></div></div>
                     
                     <div className="grid grid-cols-1 md:grid-cols-2 gap-3.5">
                       {mod.permissions.map((perm) => {
@@ -336,18 +365,16 @@ export default function SuperAdminRbac({
           </div>
 
           {/* Action trigger footer */}
-          <div className="pt-4 mt-6 border-t border-slate-800 flex justify-between items-center">
-            <span className="text-[10px] text-slate-500 font-semibold leading-relaxed max-w-sm">
-              التغيير الحالي يُحفظ بإصدار جديد مع فحص تعارض وتدقيق مركزي، ثم يُنشر تلقائياً إلى المدارس المرتبطة مع سجل قابل للتتبع والتراجع.
-            </span>
+          <div className="sticky bottom-0 -mx-6 -mb-6 mt-6 flex flex-col gap-3 border-t border-slate-800 bg-slate-900/95 p-5 backdrop-blur sm:flex-row sm:items-center sm:justify-between">
+            <span className="text-[10px] text-slate-400 font-semibold leading-relaxed max-w-xl">عند الحفظ: فحص إصدار الدور، سجل تدقيق، وحملة نشر مركزية قابلة للتتبع والتراجع، ثم إصدار مستقل لكل مدرسة مرتبطة. لا يتم نشر المسودة قبل اعتمادك.</span>
             <button
               type="button"
               onClick={() => void handleSaveRbacTemplate()}
-              disabled={isSaving || !selectedRoleId}
+              disabled={isSaving || !selectedRoleId || !hasUnsavedChanges}
               className="bg-amber-600 hover:bg-amber-500 text-white font-extrabold text-xs px-6 py-2.5 shadow-md cursor-pointer transition-colors flex items-center gap-1.5"
             >
               <Save className="w-4 h-4" />
-              <span>{isSaving ? 'جاري الاعتماد المركزي...' : 'تطبيق وحفظ التعديلات الحالية'}</span>
+              <span>{isSaving ? 'جاري الاعتماد والنشر...' : hasUnsavedChanges ? 'اعتماد ونشر التعديلات' : 'لا توجد تعديلات للحفظ'}</span>
             </button>
           </div>
 
