@@ -4499,7 +4499,6 @@ async function startServer() {
     const email = loginIdentity.profileEmail;
     const requestedPassword = String(req.body?.password || '').trim();
     const roleKey = String(req.body?.initialRole || 'schooladmin').trim().toLowerCase().replace(/[^a-z]/g, '');
-    const roleSpec = CENTRAL_IDENTITY_ROLE_CATALOG[roleKey];
     if (!actorId || !schoolId) return next(new AuthenticationError('هوية الإدارة المركزية أو المدرسة غير مكتملة.'));
     if (tenantId && !/^[0-9a-f-]{36}$/i.test(tenantId)) return next(new ValidationError('معرف المستأجر غير صالح.'));
     if (!/^[0-9a-f-]{36}$/i.test(schoolId) || (branchId && !/^[0-9a-f-]{36}$/i.test(branchId))) return next(new ValidationError('معرف المدرسة أو الفرع غير صالح.'));
@@ -4507,7 +4506,7 @@ async function startServer() {
     if (jobTitle.length > 160 || department.length > 160) return next(new ValidationError('المسمى الوظيفي أو القسم يتجاوز الحد المسموح.'));
     if (email && !/^\S+@\S+\.\S+$/.test(email)) return next(new ValidationError('البريد الإلكتروني غير صالح.'));
     if (requestedPassword && requestedPassword.length < 8) return next(new ValidationError('كلمة المرور يجب ألا تقل عن 8 رموز.'));
-    if (!roleSpec) return next(new ValidationError('الدور المطلوب غير موجود في الكتالوج المركزي.'));
+    if (!roleKey || roleKey === 'platformadmin') return next(new ValidationError('الدور المطلوب غير موجود في الكتالوج المركزي.'));
     const password = requestedPassword || randomBytes(12).toString('base64url');
     let authUserId = '';
     const client = await platformAdminPool.connect();
@@ -4553,6 +4552,25 @@ async function startServer() {
       );
       if (scope.rowCount !== 1 || (branchId && !scope.rows[0].branch_id)) throw new ConflictError('المدرسة أو الفرع غير موجود في نطاق الإدارة المركزية.');
       const targetTenantId = scope.rows[0].tenant_id;
+      const roleLookup = await client.query(
+        `SELECT r.id, r.name, r.description,
+                COALESCE(array_agg(p.permission_key ORDER BY p.permission_key) FILTER (WHERE p.permission_key IS NOT NULL), ARRAY[]::text[]) AS permission_keys
+           FROM public.roles r
+           LEFT JOIN public.role_permissions rp ON rp.tenant_id = r.tenant_id AND rp.role_id = r.id
+                AND rp.status = 'active' AND rp.deleted_at IS NULL
+           LEFT JOIN public.permissions p ON p.id = rp.permission_id AND p.status = 'active' AND p.deleted_at IS NULL
+          WHERE r.tenant_id = $1::uuid AND r.role_key = $2
+            AND (r.school_id IS NULL OR r.school_id = $3::uuid)
+            AND (r.branch_id IS NULL OR r.branch_id = $4::uuid)
+            AND r.status = 'active' AND r.deleted_at IS NULL
+          GROUP BY r.id, r.name, r.description
+          ORDER BY CASE WHEN r.school_id = $3::uuid AND r.branch_id = $4::uuid THEN 0 WHEN r.school_id = $3::uuid THEN 1 ELSE 2 END
+          LIMIT 1`,
+        [targetTenantId, roleKey, schoolId, branchId || null],
+      );
+      if (roleLookup.rowCount !== 1 || !roleLookup.rows[0].permission_keys?.length) throw new ConflictError('الدور غير منشور من المدرسة الأم أو لا يحتوي صلاحيات فعالة.');
+      const roleSpec = { name: roleLookup.rows[0].name, description: roleLookup.rows[0].description, permissions: roleLookup.rows[0].permission_keys as string[] };
+      const roleId = roleLookup.rows[0].id;
       const userResult = await client.query(
          `INSERT INTO public.users (auth_user_id, tenant_id, school_id, branch_id, username, email, display_name, job_title, department, status, force_password_change, created_by, updated_by)
           VALUES ($1::uuid, $2::uuid, $3::uuid, $4::uuid, $5, $6, $7, $8, $9, 'active', $10, $11::uuid, $11::uuid)
@@ -4560,14 +4578,6 @@ async function startServer() {
          [authUserId, targetTenantId, schoolId, branchId || null, loginIdentity.username, email, displayName, jobTitle || null, department || null, !requestedPassword, actorId],
       );
       const userId = userResult.rows[0].id;
-      const roleResult = await client.query(
-        `INSERT INTO public.roles (tenant_id, school_id, role_key, name, description, is_system, status, created_by, updated_by)
-         VALUES ($1::uuid, NULL, $2, $3, $4, true, 'active', $5::uuid, $5::uuid)
-         ON CONFLICT (tenant_id, role_key) DO UPDATE SET updated_at = now()
-         RETURNING id`,
-        [targetTenantId, roleKey, roleSpec.name, roleSpec.description, actorId],
-      );
-      const roleId = roleResult.rows[0].id;
       for (const permissionKey of roleSpec.permissions) {
         const { resource, action } = describePermission(permissionKey);
         const permissionResult = await client.query(
@@ -4962,13 +4972,12 @@ async function startServer() {
           .filter((value): value is string => Boolean(value)),
       )];
       let branchId = String(req.body?.branchId || '').trim();
-      const roleSpec = CENTRAL_IDENTITY_ROLE_CATALOG[roleKey];
       if (!/^[0-9a-f-]{36}$/i.test(requestId) || !/^[0-9a-f-]{36}$/i.test(correlationId)) return next(new ValidationError('معرف الطلب أو الارتباط غير صالح.'));
       if (displayName.length < 2 || displayName.length > 160) return next(new ValidationError('اسم المستخدم يجب أن يكون بين حرفين و160 حرفاً.'));
       if (jobTitle.length > 160 || department.length > 160) return next(new ValidationError('المسمى الوظيفي أو القسم يتجاوز الحد المسموح.'));
       if (email && !/^\S+@\S+\.\S+$/.test(email)) return next(new ValidationError('البريد الإلكتروني غير صالح.'));
       if (requestedPassword && requestedPassword.length < 8) return next(new ValidationError('كلمة المرور يجب ألا تقل عن 8 رموز.'));
-      if (!roleSpec || roleKey === 'platformadmin') return next(new ValidationError('الدور المطلوب غير متاح في نطاق المدرسة.'));
+      if (!roleKey || roleKey === 'platformadmin') return next(new ValidationError('الدور المطلوب غير متاح في نطاق المدرسة.'));
       if (requestedDirectPermissions.length !== rawDirectPermissions.length || requestedDirectPermissions.includes(PERMISSIONS.PLATFORM_ADMIN) || requestedDirectPermissions.length > 200) return next(new ValidationError('قائمة الصلاحيات المباشرة تحتوي مفتاحاً غير مسجلاً أو غير صالح.'));
       if (branchId && !/^[0-9a-f-]{36}$/i.test(branchId)) return next(new ValidationError('معرف الفرع غير صالح.'));
       const password = requestedPassword || randomBytes(12).toString('base64url');
@@ -4983,6 +4992,25 @@ async function startServer() {
         if (!branchId) return next(new ConflictError('لا يوجد فرع نشط داخل المدرسة.'));
         const branch = await client.query(`SELECT id FROM public.branches WHERE tenant_id = $1::uuid AND school_id = $2::uuid AND id = $3::uuid AND status = 'active' AND deleted_at IS NULL`, [tenantId, schoolId, branchId]);
         if (branch.rowCount !== 1) return next(new ConflictError('الفرع المختار لا ينتمي إلى المدرسة الحالية.'));
+        const roleLookup = await client.query(
+          `SELECT r.id, r.name, r.description,
+                  COALESCE(array_agg(p.permission_key ORDER BY p.permission_key) FILTER (WHERE p.permission_key IS NOT NULL), ARRAY[]::text[]) AS permission_keys
+             FROM public.roles r
+             LEFT JOIN public.role_permissions rp ON rp.tenant_id = r.tenant_id AND rp.role_id = r.id
+                  AND rp.status = 'active' AND rp.deleted_at IS NULL
+             LEFT JOIN public.permissions p ON p.id = rp.permission_id AND p.status = 'active' AND p.deleted_at IS NULL
+            WHERE r.tenant_id = $1::uuid AND r.role_key = $2
+              AND (r.school_id IS NULL OR r.school_id = $3::uuid)
+              AND (r.branch_id IS NULL OR r.branch_id = $4::uuid)
+              AND r.status = 'active' AND r.deleted_at IS NULL
+            GROUP BY r.id, r.name, r.description
+            ORDER BY CASE WHEN r.school_id = $3::uuid AND r.branch_id = $4::uuid THEN 0 WHEN r.school_id = $3::uuid THEN 1 ELSE 2 END
+            LIMIT 1`,
+          [tenantId, roleKey, schoolId, branchId],
+        );
+        if (roleLookup.rowCount !== 1 || !roleLookup.rows[0].permission_keys?.length) return next(new ConflictError('الدور غير منشور من المدرسة الأم أو لا يحتوي صلاحيات فعالة.'));
+        const roleSpec = { name: roleLookup.rows[0].name, description: roleLookup.rows[0].description, permissions: roleLookup.rows[0].permission_keys as string[] };
+        const roleId = roleLookup.rows[0].id;
         const authResult = await platformAdminAuth.auth.admin.createUser({
         email: loginIdentity.authEmail, password, email_confirm: true,
         user_metadata: { display_name: displayName, login_username: loginIdentity.username },
@@ -4992,8 +5020,6 @@ async function startServer() {
         authUserId = authResult.data.user.id;
         await client.query('BEGIN');
         const userResult = await client.query(`INSERT INTO public.users (auth_user_id, tenant_id, school_id, branch_id, username, email, display_name, job_title, department, status, force_password_change, created_by, updated_by) VALUES ($1::uuid, $2::uuid, $3::uuid, $4::uuid, $5, $6, $7, $8, $9, 'active', $10, $11::uuid, $11::uuid) RETURNING id, auth_user_id, tenant_id, school_id, branch_id, username, email, display_name, job_title, department, status, force_password_change, version, created_at`, [authUserId, tenantId, schoolId, branchId, loginIdentity.username, email, displayName, jobTitle || null, department || null, !requestedPassword, actorAuthUserId]);
-        const roleResult = await client.query(`INSERT INTO public.roles (tenant_id, school_id, branch_id, role_key, name, description, is_system, status, created_by, updated_by) VALUES ($1::uuid, NULL, NULL, $2, $3, $4, true, 'active', $5::uuid, $5::uuid) ON CONFLICT (tenant_id, role_key) DO UPDATE SET name = EXCLUDED.name, description = EXCLUDED.description, is_system = true, status = 'active', deleted_at = NULL, deleted_by = NULL, updated_at = now() RETURNING id`, [tenantId, roleKey, roleSpec.name, roleSpec.description, actorAuthUserId]);
-        const roleId = roleResult.rows[0].id;
         for (const permissionKey of roleSpec.permissions) {
           const { resource, action } = describePermission(permissionKey);
           const permissionResult = await client.query(`INSERT INTO public.permissions (tenant_id, permission_key, resource, action, description, status, created_by, updated_by) VALUES (NULL, $1, $2, $3, $1, 'active', $4::uuid, $4::uuid) ON CONFLICT (permission_key) DO UPDATE SET status = 'active', deleted_at = NULL, deleted_by = NULL, updated_at = now() RETURNING id`, [permissionKey, resource, action, actorAuthUserId]);
@@ -5214,6 +5240,109 @@ async function startServer() {
       }
     } catch (error) {
       return next(new DatabaseError('تعذر تحميل مصفوفة الصلاحيات المركزية.', error instanceof Error ? error.message : String(error)));
+    }
+  });
+
+  // Create a custom school role in the mother-school catalogue.  A role is a
+  // security object (not an HR job title); it is versioned, audited, and then
+  // published through the same canonical template pipeline as role edits.
+  app.post('/api/admin/central/rbac/roles', authenticateRequest, requirePermissionOnly(PERMISSIONS.PLATFORM_ADMIN), async (req, res, next) => {
+    if (!platformAdminPool) return next(new DatabaseError('مصدر قاعدة البيانات المركزية غير متاح.'));
+    const actorId = String((req as any).user?.id || '').trim();
+    const roleKey = String(req.body?.roleKey || '').trim().toLowerCase();
+    const name = String(req.body?.name || '').trim();
+    const description = String(req.body?.description || '').trim();
+    const requestedKeys = Array.isArray(req.body?.permissionKeys) ? req.body.permissionKeys as unknown[] : [];
+    const requestId = String(req.body?.requestId || req.get('X-Request-Id') || randomUUID()).trim();
+    const correlationId = String(req.body?.correlationId || req.get('X-Correlation-Id') || randomUUID()).trim();
+    if (!/^[0-9a-f-]{36}$/i.test(actorId)) return next(new AuthenticationError('هوية الإدارة المركزية غير مكتملة.'));
+    if (!/^[a-z0-9](?:[a-z0-9._-]{1,62})$/.test(roleKey) || roleKey === 'platformadmin') return next(new ValidationError('مفتاح الدور غير صالح أو محجوز.'));
+    if (name.length < 2 || name.length > 160) return next(new ValidationError('اسم الدور يجب أن يكون بين حرفين و160 حرفاً.'));
+    if (description.length > 500) return next(new ValidationError('وصف الدور يتجاوز الحد المسموح.'));
+    if (!/^[0-9a-f-]{36}$/i.test(requestId) || !/^[0-9a-f-]{36}$/i.test(correlationId)) return next(new ValidationError('معرف الطلب أو الارتباط غير صالح.'));
+    const permissionKeys = [...new Set(requestedKeys.map((key) => permissionRegistry.normalize(key)).filter((key): key is string => Boolean(key)))];
+    if (!permissionKeys.length || permissionKeys.length !== requestedKeys.length || permissionKeys.includes(PERMISSIONS.PLATFORM_ADMIN)) return next(new ValidationError('اختر صلاحية واحدة على الأقل، ولا يمكن منح صلاحية إدارة المنصة لدور مدرسة.'));
+    const client = await platformAdminPool.connect();
+    try {
+      const ownerScope = await resolveCanonicalOwnerScope(client);
+      const tenantId = ownerScope.tenant_id;
+      await client.query('BEGIN');
+      await ensureCanonicalRbacDefaults(client, tenantId);
+      const duplicate = await client.query(
+        `SELECT id FROM public.roles WHERE tenant_id = $1::uuid AND role_key = $2 AND school_id IS NULL AND branch_id IS NULL LIMIT 1`,
+        [tenantId, roleKey],
+      );
+      if (duplicate.rowCount) throw new ConflictError('مفتاح الدور مستخدم مسبقاً في المدرسة الأم.');
+      const role = await client.query(
+        `INSERT INTO public.roles (tenant_id, school_id, branch_id, role_key, name, description, is_system, status, created_by, updated_by)
+         VALUES ($1::uuid, NULL, NULL, $2, $3, $4, true, 'active', $5::uuid, $5::uuid)
+         RETURNING id, tenant_id, role_key, name, description, is_system, status, version`,
+        [tenantId, roleKey, name, description || null, actorId],
+      );
+      const roleId = role.rows[0].id;
+      for (const permissionKey of permissionKeys) {
+        const { resource, action } = describePermission(permissionKey);
+        const permission = await client.query(
+          `INSERT INTO public.permissions (tenant_id, permission_key, resource, action, description, status, created_by, updated_by)
+           VALUES (NULL, $1, $2, $3, $1, 'active', $4::uuid, $4::uuid)
+           ON CONFLICT (permission_key) DO UPDATE SET status = 'active', deleted_at = NULL, deleted_by = NULL, updated_at = now(), updated_by = $4::uuid
+           RETURNING id`,
+          [permissionKey, resource, action, actorId],
+        );
+        await client.query(
+          `INSERT INTO public.role_permissions (tenant_id, role_id, permission_id, status, created_by, updated_by)
+           VALUES ($1::uuid, $2::uuid, $3::uuid, 'active', $4::uuid, $4::uuid)`,
+          [tenantId, roleId, permission.rows[0].id, actorId],
+        );
+      }
+      const actorUser = await client.query(`SELECT id FROM public.users WHERE tenant_id = $1::uuid AND auth_user_id = $2::uuid AND deleted_at IS NULL LIMIT 1`, [tenantId, actorId]);
+      const actorUserId = actorUser.rows[0]?.id || null;
+      const auditPayload = { roleId, roleKey, name, description, permissionKeys, action: 'create_role' };
+      await client.query(
+        `INSERT INTO public.audit_events (id, tenant_id, school_id, branch_id, actor_user_id, entity_type, entity_id, action, source, reason, result, metadata, request_id, correlation_id)
+         VALUES ($1::uuid, $2::uuid, NULL, NULL, $3::uuid, 'role', $4::uuid, 'create', 'CentralRbacRoute', $5, 'success', $6::jsonb, $7::uuid, $8::uuid)`,
+        [randomUUID(), tenantId, actorUserId, roleId, 'إنشاء دور مركزي جديد', JSON.stringify(auditPayload), requestId, correlationId],
+      );
+      const outboxPayload = JSON.stringify({ event: 'rbac.role.created', ...auditPayload });
+      await client.query(
+        `INSERT INTO public.outbox_events (id, tenant_id, event_type, aggregate_type, aggregate_id, event_version, payload, payload_hash, idempotency_key, status, request_id, correlation_id, created_by, updated_by)
+         VALUES ($1::uuid, $2::uuid, 'rbac.role.created', 'role', $3::uuid, $4, $5::jsonb, $6, $7, 'pending', $8::uuid, $9::uuid, $10::uuid, $10::uuid)
+         ON CONFLICT (tenant_id, idempotency_key) DO NOTHING`,
+        [randomUUID(), tenantId, roleId, Number(role.rows[0].version || 1), outboxPayload, createHash('sha256').update(outboxPayload).digest('hex'), `rbac-role-created:${roleId}`, requestId, correlationId, actorId],
+      );
+      const canonicalTemplate = await client.query(
+        `SELECT id, template_key, name, description, version, status, manifest, created_at, updated_at
+           FROM public.platform_templates WHERE template_key = $1 AND status <> 'archived'
+          ORDER BY version DESC, updated_at DESC LIMIT 1`,
+        [CANONICAL_SCHOOL_TEMPLATE_KEY],
+      );
+      const capturedManifest = { rbac: await captureCanonicalRbacManifest(client, ownerScope.school_id), sourceSchoolId: ownerScope.school_id, capturedAt: new Date().toISOString() };
+      let templateForPropagation: any;
+      if (canonicalTemplate.rowCount === 1) {
+        const updated = await client.query(
+          `UPDATE public.platform_templates SET manifest = manifest || $2::jsonb, version = version + 1, status = 'published', updated_at = now(), updated_by_auth_user_id = $3::uuid
+             WHERE id = $1::uuid AND status <> 'archived'
+           RETURNING id, template_key, name, description, version, status, manifest, created_at, updated_at`,
+          [canonicalTemplate.rows[0].id, JSON.stringify(capturedManifest), actorId],
+        );
+        templateForPropagation = updated.rows[0];
+      } else {
+        const inserted = await client.query(
+          `INSERT INTO public.platform_templates (template_key, name, description, version, status, manifest, created_by_auth_user_id, updated_by_auth_user_id)
+           VALUES ($1, 'قالب المدارس المركزي', 'قالب RBAC المدرسة الأم المنشور تلقائيًا', 1, 'published', $2::jsonb, $3::uuid)
+           RETURNING id, template_key, name, description, version, status, manifest, created_at, updated_at`,
+          [CANONICAL_SCHOOL_TEMPLATE_KEY, JSON.stringify(capturedManifest), actorId],
+        );
+        templateForPropagation = inserted.rows[0];
+      }
+      const propagation = await propagateCanonicalTemplate(client, templateForPropagation, actorId);
+      await client.query('COMMIT');
+      return res.status(201).json({ success: true, role: role.rows[0], permissionKeys, propagation });
+    } catch (error) {
+      await client.query('ROLLBACK').catch(() => undefined);
+      return next(error instanceof Error ? error : new DatabaseError('تعذر إنشاء الدور المركزي.'));
+    } finally {
+      client.release();
     }
   });
 

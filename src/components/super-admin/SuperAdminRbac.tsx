@@ -1,4 +1,4 @@
-import { Check, Copy, HelpCircle, Lock as LockIcon, RefreshCw, Save, Search, Send, ShieldCheck, Sliders, Users, X } from 'lucide-react';
+import { Check, Copy, HelpCircle, Lock as LockIcon, Plus, RefreshCw, Save, Search, Send, ShieldCheck, Sliders, Users, X } from 'lucide-react';
 import React, { useEffect, useMemo, useState } from 'react';
 import { authenticatedRequest } from '../../utils/authenticatedRequest';
 interface SuperAdminRbacProps {
@@ -33,6 +33,8 @@ export default function SuperAdminRbac({
   const [rolePermissions, setRolePermissions] = useState<Record<string, string[]>>({});
   const [permissionCatalog, setPermissionCatalog] = useState<PermissionCatalogEntry[]>([]);
   const [permissionQuery, setPermissionQuery] = useState('');
+  const [showCreateRole, setShowCreateRole] = useState(false);
+  const [newRole, setNewRole] = useState({ roleKey: '', name: '', description: '', permissionKeys: [] as string[] });
 
   const permissionModules = useMemo(() => {
     const normalizedQuery = permissionQuery.trim().toLowerCase();
@@ -155,6 +157,51 @@ export default function SuperAdminRbac({
     } finally { setIsSaving(false); }
   };
 
+  const toggleNewRolePermission = (permissionKey: string) => {
+    setNewRole((current) => ({
+      ...current,
+      permissionKeys: current.permissionKeys.includes(permissionKey)
+        ? current.permissionKeys.filter((key) => key !== permissionKey)
+        : [...current.permissionKeys, permissionKey],
+    }));
+  };
+
+  const handleCreateRole = async (event: React.FormEvent) => {
+    event.preventDefault();
+    if (!newRole.name.trim() || !/^[a-z0-9](?:[a-z0-9._-]{1,62})$/.test(newRole.roleKey.trim().toLowerCase())) {
+      triggerNotification('أدخل اسم الدور ومفتاحاً إنجليزياً صالحاً مثل student_affairs.', 'warning');
+      return;
+    }
+    if (!newRole.permissionKeys.length) {
+      triggerNotification('يجب اختيار صلاحية واحدة على الأقل للدور الجديد.', 'warning');
+      return;
+    }
+    setIsSaving(true);
+    try {
+      const response = await authenticatedRequest('/api/admin/central/rbac/roles', {
+        method: 'POST', headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ ...newRole, roleKey: newRole.roleKey.trim().toLowerCase() }),
+      });
+      const payload = await response.json().catch(() => ({}));
+      if (!response.ok || !payload?.success) throw new Error(payload?.message || 'تعذر إنشاء الدور الجديد.');
+      triggerNotification(`تم إنشاء الدور «${payload.role?.name || newRole.name}» ونشره للمدارس المرتبطة ✅`, 'success');
+      logAction('CREATE_RBAC_ROLE', `إنشاء الدور [${payload.role?.name || newRole.name}]`, 'المستخدمين والصلاحيات');
+      setShowCreateRole(false);
+      setNewRole({ roleKey: '', name: '', description: '', permissionKeys: [] });
+      const refresh = await authenticatedRequest('/api/admin/central/rbac');
+      const refreshed = await refresh.json().catch(() => ({}));
+      if (refresh.ok && refreshed?.success && Array.isArray(refreshed.roles)) {
+        setRoles(refreshed.roles);
+        setPermissionCatalog(Array.isArray(refreshed.permissionCatalog) ? refreshed.permissionCatalog : permissionCatalog);
+        setRolePermissions(Object.fromEntries(refreshed.roles.map((role: any) => [role.id, (role.permissions || []).map((permission: any) => permission.permissionKey)])));
+        setSelectedRoleId(payload.role?.id || refreshed.roles[refreshed.roles.length - 1]?.id || '');
+      }
+      setLastPropagation(payload.propagation || null);
+    } catch (error) {
+      triggerNotification(error instanceof Error ? error.message : 'تعذر إنشاء الدور الجديد.', 'danger');
+    } finally { setIsSaving(false); }
+  };
+
   // Run Copy Permissions Wizard
   const handleCopyPermissions = (e: React.FormEvent) => {
     e.preventDefault();
@@ -235,6 +282,14 @@ export default function SuperAdminRbac({
         <div className="flex flex-wrap items-center justify-center gap-2">
           <button
             type="button"
+            onClick={() => setShowCreateRole(true)}
+            className="bg-amber-600 hover:bg-amber-500 text-white font-extrabold text-xs px-4 py-2.5 transition-all cursor-pointer flex items-center gap-1.5 shadow"
+          >
+            <Plus className="w-4 h-4" />
+            <span>إضافة دور جديد</span>
+          </button>
+          <button
+            type="button"
             onClick={() => setShowCopyModal(true)}
             className="bg-slate-950 border border-slate-800 hover:border-slate-700 text-amber-400 hover:text-amber-300 font-extrabold text-xs px-4 py-2.5 transition-all cursor-pointer flex items-center gap-1.5 shadow"
           >
@@ -260,6 +315,27 @@ export default function SuperAdminRbac({
           <div className="rounded-2xl border border-white/10 bg-white/5 p-3"><div className="text-2xl font-black text-violet-300">{canonicalTemplate?.version || '—'}</div><div className="mt-1 text-[10px] font-bold text-slate-400">إصدار القالب المنشور</div></div>
         </div>
       </div>
+
+      {showCreateRole && (
+        <div className="fixed inset-0 z-50 flex items-center justify-center bg-slate-950/80 p-4" dir="rtl">
+          <form onSubmit={handleCreateRole} className="flex max-h-[92vh] w-full max-w-4xl flex-col overflow-hidden rounded-3xl border border-amber-200 bg-white shadow-2xl">
+            <div className="flex items-start justify-between gap-4 bg-gradient-to-l from-slate-950 to-amber-950 p-6 text-white">
+              <div><div className="mb-1 flex items-center gap-2 text-amber-300"><ShieldCheck className="h-5 w-5" /><span className="text-xs font-black">تعريف دور أمني مركزي</span></div><h3 className="text-xl font-black">إضافة دور جديد للمدارس</h3><p className="mt-2 text-xs leading-5 text-slate-300">الدور يحدد ما يستطيع المستخدم رؤيته وتنفيذه. أما المسمى الوظيفي مثل «معلم» أو «موظف» فيُدار من شؤون الموظفين.</p></div>
+              <button type="button" onClick={() => setShowCreateRole(false)} className="rounded-xl bg-white/10 p-2 hover:bg-white/20"><X className="h-5 w-5" /></button>
+            </div>
+            <div className="grid gap-4 overflow-y-auto p-6 lg:grid-cols-[320px_1fr]">
+              <div className="space-y-3">
+                <label className="block text-xs font-black text-slate-700">اسم الدور بالعربية<input required minLength={2} maxLength={160} value={newRole.name} onChange={(event) => setNewRole((current) => ({ ...current, name: event.target.value }))} placeholder="مسؤول شؤون الطلاب" className="mt-1 w-full rounded-xl border border-slate-200 p-3 text-sm" /></label>
+                <label className="block text-xs font-black text-slate-700">مفتاح الدور (إنجليزي)<input required pattern="[a-z0-9](?:[a-z0-9._-]{1,62})" value={newRole.roleKey} onChange={(event) => setNewRole((current) => ({ ...current, roleKey: event.target.value.toLowerCase().replace(/[^a-z0-9._-]/g, '') }))} placeholder="student_affairs" className="mt-1 w-full rounded-xl border border-slate-200 p-3 font-mono text-sm" /></label>
+                <label className="block text-xs font-black text-slate-700">وصف الدور<textarea maxLength={500} value={newRole.description} onChange={(event) => setNewRole((current) => ({ ...current, description: event.target.value }))} placeholder="وصف مسؤوليات الدور وحدوده" className="mt-1 min-h-24 w-full rounded-xl border border-slate-200 p-3 text-sm" /></label>
+                <div className="rounded-2xl border border-indigo-100 bg-indigo-50 p-3 text-[11px] leading-5 text-indigo-900">بعد الحفظ يُسجل الدور في سجل التدقيق، ويُلتقط داخل قالب المدرسة الأم، ثم يُنشر تلقائياً للمدارس الحالية والمستقبلية.</div>
+              </div>
+              <div className="space-y-3"><div className="flex items-center justify-between"><div><h4 className="text-sm font-black text-slate-800">صلاحيات الدور</h4><p className="text-[11px] text-slate-500">حدد الوحدات والأزرار التي تظهر وتعمل لهذا الدور.</p></div><span className="rounded-full bg-amber-100 px-3 py-1 text-xs font-black text-amber-800">{newRole.permissionKeys.length} محددة</span></div><div className="grid max-h-[48vh] gap-2 overflow-y-auto rounded-2xl border border-slate-200 bg-slate-50 p-3 sm:grid-cols-2">{permissionCatalog.map((permission) => { const selected = newRole.permissionKeys.includes(permission.permissionKey); return <button type="button" key={permission.permissionKey} onClick={() => toggleNewRolePermission(permission.permissionKey)} className={`flex items-start gap-2 rounded-xl border p-3 text-right ${selected ? 'border-amber-400 bg-amber-50' : 'border-slate-200 bg-white'}`}><span className={`mt-0.5 flex h-5 w-5 shrink-0 items-center justify-center rounded border ${selected ? 'border-amber-600 bg-amber-600 text-white' : 'border-slate-300 text-transparent'}`}><Check className="h-3 w-3" /></span><span><span className="block text-xs font-black text-slate-800">{permission.description || `${permission.resource} — ${permission.action}`}</span><span className="font-mono text-[9px] text-slate-400">{permission.permissionKey}</span></span></button>; })}</div></div>
+            </div>
+            <div className="flex flex-col-reverse gap-2 border-t border-slate-100 bg-white p-4 sm:flex-row sm:justify-end"><button type="button" onClick={() => setShowCreateRole(false)} className="rounded-xl border border-slate-200 px-5 py-2.5 text-xs font-black">إلغاء</button><button type="submit" disabled={isSaving} className="rounded-xl bg-amber-600 px-6 py-2.5 text-xs font-black text-white shadow-lg disabled:opacity-50">{isSaving ? 'جارٍ إنشاء الدور ونشره...' : 'حفظ الدور واعتماده'}</button></div>
+          </form>
+        </div>
+      )}
 
       {lastPropagation && (
         <div className="rounded-2xl border border-emerald-900/40 bg-emerald-950/20 px-4 py-3 text-[10px] text-emerald-300">

@@ -36,6 +36,7 @@ describe('central administration review contracts', () => {
     expect(server).toContain("app.post('/api/admin/central/schools/:schoolId/users'");
     expect(server).toContain("app.patch('/api/admin/central/users/:userId'");
     expect(server).toContain("app.get('/api/admin/central/rbac'");
+    expect(server).toContain("app.post('/api/admin/central/rbac/roles'");
     expect(server).toContain("app.patch('/api/admin/central/rbac/roles/:roleId'");
     expect(server).toContain("app.get('/api/admin/central/notifications'");
     expect(server).toContain("app.post('/api/admin/central/notifications'");
@@ -90,6 +91,10 @@ describe('central administration review contracts', () => {
     expect(rbac).toContain("authenticatedRequest('/api/admin/central/templates')");
     expect(rbac).toContain("operation: 'capture'");
     expect(rbac).toContain('اعتماد ونشر للمدارس');
+    expect(rbac).toContain("authenticatedRequest('/api/admin/central/rbac/roles'");
+    expect(rbac).toContain('إضافة دور جديد');
+    expect(server).toContain('rbac.role.created');
+    expect(server).toContain('captureCanonicalRbacManifest');
   });
 
   it('keeps central identity profile fields and role selection canonical', () => {

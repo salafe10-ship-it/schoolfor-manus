@@ -24,6 +24,8 @@ describe('school-scoped identity directory contracts', () => {
     expect(server).toContain('const loginIdentity = provisionLoginIdentity(req.body?.email);');
     expect(server).toContain('loginIdentifier: loginIdentity.loginIdentifier');
     expect(server).toContain('username, email');
+    expect(server).toContain('roleLookup');
+    expect(server).toContain('الدور غير منشور من المدرسة الأم');
   });
 
   it('registers the identity capability catalog without Platform.Admin', () => {
@@ -62,5 +64,15 @@ describe('school-scoped identity directory contracts', () => {
     expect(migration).toContain('JOIN auth.users AS au ON au.id = u.auth_user_id');
     expect(migration).toContain('au.email IS NOT NULL');
     expect(migration).toContain('GRANT EXECUTE ON FUNCTION public.dbsec004_resolve_login_username(text)');
+  });
+
+  it('accepts centrally-created custom roles without weakening database authorization', () => {
+    const resolver = read('src/authorization/RoleResolver.ts');
+    const rbac = read('src/components/super-admin/SuperAdminRbac.tsx');
+    expect(resolver).toContain('Database-backed roles are the source of truth');
+    expect(resolver).not.toContain('roleKeys.some(role => !ROLE_PERMISSIONS[role])');
+    expect(rbac).toContain('toggleNewRolePermission');
+    expect(rbac).toContain('حفظ الدور واعتماده');
+    expect(rbac).toContain('المسمى الوظيفي');
   });
 });

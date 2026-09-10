@@ -120,7 +120,11 @@ export class RoleResolver {
     if (assignments === null) return;
     if (!assignments.length) throw new InvalidRoleError('No active database role assignment.');
     const roleKeys = [...new Set(assignments.map(assignment => String(assignment.roleKey || '').trim().toLowerCase()).filter(Boolean))].sort();
-    if (!roleKeys.length || roleKeys.some(role => !ROLE_PERMISSIONS[role])) throw new InvalidRoleError('Database role assignment is not recognized.');
+    // Database-backed roles are the source of truth for school tenants.  The
+    // static catalogue remains a compatibility fallback for local sessions,
+    // but a centrally-created custom role is valid as long as its permissions
+    // were resolved from the trusted database assignment above.
+    if (!roleKeys.length) throw new InvalidRoleError('Database role assignment is not recognized.');
     const permissions = new Set<string>();
     for (const assignment of assignments) {
       const permission = permissionRegistry.normalize(assignment.permissionKey);
