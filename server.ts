@@ -2225,45 +2225,87 @@ async function startServer() {
   const CANONICAL_SCHOOL_TEMPLATE_KEY = 'central-schools-default';
 
   const ensureCanonicalRbacDefaults = async (client: any, tenantId: string) => {
-    let seeded = false;
-    // The first central read must produce a usable catalog. A role that has
-    // already been versioned by an administrator (including an explicit empty
-    // role) remains authoritative and is never silently reseeded.
-    for (const [roleKey, roleSpec] of Object.entries(CENTRAL_IDENTITY_ROLE_CATALOG)) {
-      const role = await client.query(
-        `INSERT INTO public.roles (tenant_id, school_id, branch_id, role_key, name, description, is_system, status, created_by, updated_by)
-         VALUES ($1::uuid, NULL, NULL, $2, $3, $4, true, 'active', NULL, NULL)
-         ON CONFLICT (tenant_id, role_key) DO UPDATE SET name = EXCLUDED.name, description = EXCLUDED.description,
-           is_system = true, status = 'active', deleted_at = NULL, deleted_by = NULL, updated_at = now()
-         RETURNING id, version`,
-        [tenantId, roleKey, roleSpec.name, roleSpec.description],
-      );
-      const activeRolePermissions = await client.query(
-        `SELECT COUNT(*)::text AS count
-           FROM public.role_permissions
-          WHERE tenant_id = $1::uuid AND role_id = $2::uuid AND status = 'active' AND deleted_at IS NULL`,
-        [tenantId, role.rows[0].id],
-      );
-      if (Number(activeRolePermissions.rows[0]?.count || 0) > 0 || Number(role.rows[0]?.version || 1) > 1) continue;
+    // This helper runs on the school read path. Keep it idempotent and set
+    // based: the previous per-role/per-permission loop could take long enough
+    // on a cold Supabase connection for the production request to time out,
+    // leaving the UI with an apparently empty role catalogue.
+    const roleEntries = Object.entries(CENTRAL_IDENTITY_ROLE_CATALOG);
+    const roleValues: unknown[] = [];
+    const rolePlaceholders = roleEntries.map(([roleKey, roleSpec], index) => {
+      const offset = index * 3;
+      roleValues.push(roleKey, roleSpec.name, roleSpec.description);
+      return `($1::uuid, NULL, NULL, $${offset + 2}, $${offset + 3}, $${offset + 4}, true, 'active', NULL, NULL)`;
+    }).join(', ');
+    await client.query(
+      `INSERT INTO public.roles
+        (tenant_id, school_id, branch_id, role_key, name, description, is_system, status, created_by, updated_by)
+       VALUES ${rolePlaceholders}
+       ON CONFLICT (tenant_id, role_key) DO UPDATE SET
+         name = EXCLUDED.name, description = EXCLUDED.description, is_system = true,
+         status = 'active', deleted_at = NULL, deleted_by = NULL, updated_at = now()
+       WHERE roles.name IS DISTINCT FROM EXCLUDED.name
+          OR roles.description IS DISTINCT FROM EXCLUDED.description
+          OR roles.status IS DISTINCT FROM 'active'
+          OR roles.deleted_at IS NOT NULL`,
+      [tenantId, ...roleValues],
+    );
+
+    const permissionByKey = new Map<string, { resource: string; action: string }>();
+    for (const roleSpec of Object.values(CENTRAL_IDENTITY_ROLE_CATALOG)) {
       for (const permissionKey of roleSpec.permissions) {
-        const { resource, action } = describePermission(permissionKey);
-        const permission = await client.query(
-          `INSERT INTO public.permissions (tenant_id, permission_key, resource, action, description, status, created_by, updated_by)
-           VALUES (NULL, $1, $2, $3, $1, 'active', NULL, NULL)
-           ON CONFLICT (permission_key) DO UPDATE SET status = 'active', deleted_at = NULL, deleted_by = NULL, updated_at = now()
-           RETURNING id`,
-          [permissionKey, resource, action],
-        );
-        await client.query(
-          `INSERT INTO public.role_permissions (tenant_id, role_id, permission_id, status, created_by, updated_by)
-           VALUES ($1::uuid, $2::uuid, $3::uuid, 'active', NULL, NULL)
-           ON CONFLICT (role_id, permission_id) DO UPDATE SET status = 'active', deleted_at = NULL, deleted_by = NULL, updated_at = now()`,
-          [tenantId, role.rows[0].id, permission.rows[0].id],
-        );
+        if (!permissionByKey.has(permissionKey)) {
+          const { resource, action } = describePermission(permissionKey);
+          permissionByKey.set(permissionKey, { resource, action });
+        }
       }
-      seeded = true;
     }
-    return seeded;
+    const permissionEntries = [...permissionByKey.entries()];
+    const permissionValues: unknown[] = [];
+    const permissionPlaceholders = permissionEntries.map(([permissionKey, descriptor], index) => {
+      const offset = index * 3 + 1;
+      permissionValues.push(permissionKey, descriptor.resource, descriptor.action);
+      return `(NULL, $${offset}, $${offset + 1}, $${offset + 2}, $${offset}, 'active', NULL, NULL)`;
+    }).join(', ');
+    await client.query(
+      `INSERT INTO public.permissions
+        (tenant_id, permission_key, resource, action, description, status, created_by, updated_by)
+       VALUES ${permissionPlaceholders}
+       ON CONFLICT (permission_key) DO UPDATE SET
+         resource = EXCLUDED.resource, action = EXCLUDED.action, description = EXCLUDED.description,
+         status = 'active', deleted_at = NULL, deleted_by = NULL, updated_at = now()
+       WHERE permissions.resource IS DISTINCT FROM EXCLUDED.resource
+          OR permissions.action IS DISTINCT FROM EXCLUDED.action
+          OR permissions.status IS DISTINCT FROM 'active'
+          OR permissions.deleted_at IS NOT NULL`,
+      permissionValues,
+    );
+
+    const rolePermissionPairs = roleEntries.flatMap(([roleKey, roleSpec]) => roleSpec.permissions.map((permissionKey) => [roleKey, permissionKey]));
+    const roleKeys = rolePermissionPairs.map(([roleKey]) => roleKey);
+    const permissionKeys = rolePermissionPairs.map(([, permissionKey]) => permissionKey);
+    await client.query(
+      `WITH desired(role_key, permission_key) AS (
+        SELECT * FROM unnest($2::text[], $3::text[])
+      ), eligible_roles AS (
+        SELECT r.id, r.tenant_id, r.role_key
+          FROM public.roles r
+         WHERE r.tenant_id = $1::uuid AND r.school_id IS NULL AND r.branch_id IS NULL
+           AND r.status = 'active' AND r.deleted_at IS NULL AND r.version = 1
+           AND NOT EXISTS (
+             SELECT 1 FROM public.role_permissions existing
+              WHERE existing.tenant_id = r.tenant_id AND existing.role_id = r.id
+                AND existing.status = 'active' AND existing.deleted_at IS NULL
+           )
+      )
+      INSERT INTO public.role_permissions (tenant_id, role_id, permission_id, status, created_by, updated_by)
+      SELECT er.tenant_id, er.id, p.id, 'active', NULL, NULL
+        FROM desired d
+        JOIN eligible_roles er ON er.role_key = d.role_key
+        JOIN public.permissions p ON p.permission_key = d.permission_key AND p.status = 'active' AND p.deleted_at IS NULL
+      ON CONFLICT (role_id, permission_id) DO UPDATE SET status = 'active', deleted_at = NULL, deleted_by = NULL, updated_at = now()`,
+      [tenantId, roleKeys, permissionKeys],
+    );
+    return roleEntries.length > 0;
   };
 
   const captureCanonicalRbacManifest = async (client: any, sourceSchoolId: string) => {

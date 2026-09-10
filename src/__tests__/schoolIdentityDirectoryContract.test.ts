@@ -51,6 +51,9 @@ describe('school-scoped identity directory contracts', () => {
     expect(module).toContain("authenticatedRequest('/api/school/users'");
     expect(module).toContain("authenticatedRequest('/api/school/identity-roles'");
     expect(module).toContain("authenticatedRequest('/api/school/job-catalog'");
+    expect(module).toContain('Promise.allSettled');
+    expect(module).toContain('تم تحميل الأجزاء المتاحة دون إخفاء البيانات السليمة');
+    expect(module).toContain('لا توجد وظائف منشورة من شؤون الموظفين');
     expect(module).toContain("operation, expectedVersion: user.version");
     expect(module).toContain('إدارة الصلاحيات');
     expect(module).toContain("'set_permissions'");
