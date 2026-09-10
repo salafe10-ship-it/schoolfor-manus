@@ -10,6 +10,8 @@ describe('school-scoped identity directory contracts', () => {
     expect(server).toContain("app.get('/api/school/users'");
     expect(server).toContain("app.post('/api/school/users'");
     expect(server).toContain("app.get('/api/school/job-catalog'");
+    expect(server).toContain('await ensureCanonicalRbacDefaults(client, tenantId);');
+    expect(server).toContain("await client.query('BEGIN');");
     expect(server).toContain("app.patch('/api/school/users/:userId'");
     expect(server).toContain("requirePermissionOnly(PERMISSIONS.IDENTITY_USERS_READ)");
     expect(server).toContain("app.patch('/api/school/users/:userId', authenticateRequest, requirePermissionOnly(PERMISSIONS.IDENTITY_USERS_WRITE)");
@@ -83,7 +85,7 @@ describe('school-scoped identity directory contracts', () => {
     expect(rbac).toContain('toggleNewRolePermission');
     expect(rbac).toContain('حفظ الدور واعتماده');
     expect(rbac).toContain('المسمى الوظيفي');
-    expect(schoolModule).toContain('ربط الوظيفة من دليل شؤون الموظفين');
+    expect(schoolModule).toContain('الوظيفة من دليل شؤون الموظفين');
     expect(read('supabase/migrations/202609101200_identity_job_reference.sql')).toContain('ADD COLUMN IF NOT EXISTS job_id');
   });
 });

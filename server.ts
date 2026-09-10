@@ -4868,7 +4868,16 @@ async function startServer() {
     if (!platformAdminPool) return next(new DatabaseError('مصدر الهوية المركزي غير متاح.'));
     try {
       const { tenantId, schoolId, branchId } = schoolIdentityScope(req);
-      const result = await platformAdminPool.query(
+      // A school may be provisioned before its first identity-directory read.
+      // Hydrate only the canonical default role catalogue for this tenant,
+      // atomically and idempotently, so the create-user selector never opens
+      // with an empty role list because of provisioning order.
+      const client = await platformAdminPool.connect();
+      let result: any;
+      try {
+        await client.query('BEGIN');
+        await ensureCanonicalRbacDefaults(client, tenantId);
+        result = await client.query(
         `SELECT r.id, r.role_key AS "roleKey", r.name, r.description, r.version,
                 COALESCE(jsonb_agg(DISTINCT jsonb_build_object(
                   'permissionKey', p.permission_key, 'resource', p.resource, 'action', p.action
@@ -4885,7 +4894,14 @@ async function startServer() {
           GROUP BY r.id
           ORDER BY r.name ASC`,
         [tenantId, schoolId, branchId || null],
-      );
+        );
+        await client.query('COMMIT');
+      } catch (error) {
+        await client.query('ROLLBACK').catch(() => undefined);
+        throw error;
+      } finally {
+        client.release();
+      }
       const permissionCatalog = [...new Set(permissionRegistry.list())]
         .filter((permissionKey) => permissionKey !== PERMISSIONS.PLATFORM_ADMIN)
         .map((permissionKey) => {
