@@ -10,7 +10,7 @@ services:
     branch: master
     # Refuse a deployment build until the production/staging configuration is
     # complete and secure; the gate never prints secret values.
-    buildCommand: npm ci --include=dev && npm run production:gate && npm run build
+    buildCommand: npm ci --include=dev && npm run production:gate && npm run route-integrity && npm run build && npm run verify:artifact
     startCommand: npm start
     healthCheckPath: /api/ready
     envVars:

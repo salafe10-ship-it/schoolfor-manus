@@ -1866,6 +1866,16 @@ export default function App() {
               />
             )}
 
+            {activeSection === 'ai_assistant' && (
+              <section className="mx-auto flex min-h-[420px] w-full max-w-4xl flex-col items-center justify-center rounded-3xl border border-[#d4af37]/40 bg-[#1c120c] p-8 text-center shadow-2xl">
+                <Sparkles className="mb-4 h-12 w-12 text-amber-300" aria-hidden="true" />
+                <h2 className="text-2xl font-black text-amber-100">المساعد الذكي</h2>
+                <p className="mt-3 max-w-xl text-sm leading-7 text-amber-100/75">
+                  افتح زر المساعد العائم أسفل الشاشة لبدء محادثة موثوقة داخل النظام.
+                </p>
+              </section>
+            )}
+
             {activeSection === 'core_certification' && (
               <EnterpriseCoreCertificationDashboard />
             )}

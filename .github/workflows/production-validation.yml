@@ -1,0 +1,38 @@
+name: Production validation
+
+on:
+  push:
+    branches: [master]
+  pull_request:
+    branches: [master]
+
+permissions:
+  contents: read
+
+concurrency:
+  group: production-validation-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  validate:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+      - name: Setup Node
+        uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+      - name: Install dependencies
+        run: npm ci
+      - name: Validate route contract
+        run: npm run route-integrity
+      - name: Typecheck
+        run: npm run lint
+      - name: Run tests
+        run: npm test -- --run
+      - name: Build release artifact
+        run: npm run build
+      - name: Verify release artifact
+        run: npm run verify:artifact

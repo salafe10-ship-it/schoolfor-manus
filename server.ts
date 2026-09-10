@@ -81,6 +81,7 @@ import type { StudentDocumentRequestContext } from "./src/modules/student-docume
 import { tenantScopedDatabaseFilePath } from "./src/security/tenantScopedFilePath.js";
 import { generateStudentExport, STUDENT_EXPORT_CONTENT_TYPE } from "./src/modules/student-export/application/StudentExportService.js";
 import { createStartupReadiness } from "./server/infrastructure/StartupReadiness.js";
+import { getBuildIdentity } from "./server/infrastructure/BuildIdentity.js";
 import { FallbackStorage } from "./src/database/repositories/FallbackStorage.js";
 import { AdmissionInquiry, AdmissionStatus } from './src/modules/student-admission/domain/AdmissionInquiry.js';
 import { SupabaseAdmissionInquiryRepository } from './src/modules/student-admission/repository/SupabaseAdmissionInquiryRepository.js';
@@ -1600,6 +1601,7 @@ async function startServer() {
   const app = express();
   const PORT = process.env.PORT || 3000;
   const startupReadiness = createStartupReadiness();
+  const buildIdentity = getBuildIdentity();
 
   // Trust the proxy (Express/Vite reverse proxy setup)
   app.set('trust proxy', 1);
@@ -7598,10 +7600,12 @@ async function startServer() {
 
   // Health Status
   app.get("/api/health", (_req, res) => {
+    res.setHeader("Cache-Control", "no-store, no-cache, must-revalidate, private");
     res.json({
       success: true,
       data: {
-        status: "available"
+        status: "available",
+        build: buildIdentity,
       },
       message: "الخدمة متاحة.",
       meta: null
@@ -7610,9 +7614,10 @@ async function startServer() {
 
   app.get("/api/ready", (_req, res) => {
     const readiness = startupReadiness.snapshot();
+    res.setHeader("Cache-Control", "no-store, no-cache, must-revalidate, private");
     res.status(readiness.ready ? 200 : 503).json({
       success: readiness.ready,
-      data: { ready: readiness.ready, status: readiness.ready ? 'ready' : 'unavailable' },
+      data: { ready: readiness.ready, status: readiness.ready ? 'ready' : 'unavailable', build: buildIdentity },
       message: readiness.ready ? "الخدمة جاهزة." : "الخدمة غير جاهزة مؤقتاً.",
       meta: null,
     });
@@ -11199,6 +11204,15 @@ ${JSON.stringify(snapshot)}
     process.env.npm_lifecycle_event === "start" ||
     path.basename(process.argv[1] ?? "") === "server.cjs";
 
+  // Keep unknown API paths as API errors; never let the SPA fallback disguise
+  // a missing endpoint as a successful HTML response.
+  app.use((req, res, next) => {
+    if (req.path === "/api" || req.path.startsWith("/api/")) {
+      return res.status(404).json({ success: false, errorCode: "API_NOT_FOUND", message: "المسار البرمجي غير موجود." });
+    }
+    return next();
+  });
+
   // Serve Frontend with Vite Dev Server in Development or static files in Production
   if (!isProduction) {
     const vite = await createViteServer({
@@ -11211,7 +11225,18 @@ ${JSON.stringify(snapshot)}
     // Keep the HTML entry point fresh after each deployment.  Its JavaScript
     // chunks are content-addressed and may be replaced between releases; a
     // cached index.html can otherwise reference a chunk that no longer exists.
-    app.use(express.static(distPath, { index: false }));
+    const hashedAssetPattern = /[-.]([A-Za-z0-9_-]{8,})\.(?:js|css|woff2?|png|svg|webp|jpg|jpeg|gif)$/i;
+    app.use(express.static(distPath, {
+      index: false,
+      setHeaders: (res, filePath) => {
+        const relativePath = path.relative(distPath, filePath).replaceAll(path.sep, "/");
+        if (relativePath.startsWith("assets/") && hashedAssetPattern.test(path.basename(filePath))) {
+          res.setHeader("Cache-Control", "public, max-age=31536000, immutable");
+        } else {
+          res.setHeader("Cache-Control", "no-cache");
+        }
+      },
+    }));
     app.get("*", (req, res) => {
       res.setHeader("Cache-Control", "no-store, no-cache, must-revalidate, private");
       res.sendFile(path.join(distPath, "index.html"));
