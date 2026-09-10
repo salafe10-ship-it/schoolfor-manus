@@ -479,6 +479,27 @@ const CENTRAL_IDENTITY_ROLE_CATALOG: Record<string, { name: string; description:
   },
 };
 
+type ProvisionedLoginIdentity = {
+  /** The real email supplied by the administrator, or null when omitted. */
+  profileEmail: string | null;
+  /** A stable username is generated only for email-less accounts. */
+  username: string | null;
+  /** Supabase Auth still needs a unique email-shaped identifier. */
+  authEmail: string;
+  /** The identifier that must be shown to the administrator after creation. */
+  loginIdentifier: string;
+};
+
+const provisionLoginIdentity = (rawEmail: unknown): ProvisionedLoginIdentity => {
+  const profileEmail = String(rawEmail || '').trim().toLowerCase();
+  if (profileEmail) {
+    return { profileEmail, username: null, authEmail: profileEmail, loginIdentifier: profileEmail };
+  }
+  const username = `school-user-${randomUUID().replaceAll('-', '').slice(0, 16)}`;
+  const authEmail = `${username}@no-email.edupro.invalid`;
+  return { profileEmail: null, username, authEmail, loginIdentifier: username };
+};
+
 function stableJsonStringify(value: unknown): string {
   if (value === null || typeof value !== 'object') return JSON.stringify(value) ?? 'null';
   if (Array.isArray(value)) return `[${value.map(stableJsonStringify).join(',')}]`;
@@ -4387,7 +4408,8 @@ async function startServer() {
       const displayName = String(req.body?.name || '').trim();
       const jobTitle = String(req.body?.jobTitle || '').trim();
       const department = String(req.body?.department || '').trim();
-      const email = String(req.body?.email || '').trim().toLowerCase();
+      const loginIdentity = provisionLoginIdentity(req.body?.email);
+      const email = loginIdentity.profileEmail;
       const requestedPassword = String(req.body?.password || '').trim();
       const roleKey = String(req.body?.initialRole || 'schooladmin').trim().toLowerCase().replace(/[^a-z]/g, '');
       const roleSpec = CENTRAL_IDENTITY_ROLE_CATALOG[roleKey];
@@ -4396,7 +4418,7 @@ async function startServer() {
       if (!/^[0-9a-f-]{36}$/i.test(schoolId) || (branchId && !/^[0-9a-f-]{36}$/i.test(branchId))) return next(new ValidationError('معرف المدرسة أو الفرع غير صالح.'));
       if (displayName.length < 2 || displayName.length > 160) return next(new ValidationError('اسم الموظف يجب أن يكون بين حرفين و160 حرفاً.'));
       if (jobTitle.length > 160 || department.length > 160) return next(new ValidationError('المسمى الوظيفي أو القسم يتجاوز الحد المسموح.'));
-      if (!/^\S+@\S+\.\S+$/.test(email)) return next(new ValidationError('البريد الإلكتروني غير صالح.'));
+      if (email && !/^\S+@\S+\.\S+$/.test(email)) return next(new ValidationError('البريد الإلكتروني غير صالح.'));
       if (requestedPassword && requestedPassword.length < 8) return next(new ValidationError('كلمة المرور يجب ألا تقل عن 8 رموز.'));
       if (!roleSpec) return next(new ValidationError('الدور المطلوب غير موجود في الكتالوج المركزي.'));
       const password = requestedPassword || randomBytes(12).toString('base64url');
@@ -4426,12 +4448,12 @@ async function startServer() {
           if (!branch) throw new ConflictError('الفرع غير موجود داخل المدرسة.');
         }
         const authResult = await platformAdminAuth!.auth.admin.createUser({
-          email, password, email_confirm: true, user_metadata: { display_name: displayName },
-          app_metadata: { tenant_id: targetTenantId, school_id: schoolId, ...(branchId ? { branch_id: branchId } : {}), role: roleKey, status: 'active' },
+          email: loginIdentity.authEmail, password, email_confirm: true, user_metadata: { display_name: displayName, login_username: loginIdentity.username },
+          app_metadata: { tenant_id: targetTenantId, school_id: schoolId, ...(branchId ? { branch_id: branchId } : {}), role: roleKey, status: 'active', ...(loginIdentity.username ? { login_username: loginIdentity.username } : {}) },
         });
         if (authResult.error || !authResult.data.user) throw new ExternalServiceError(authResult.error?.message || 'تعذر إنشاء هوية Supabase Auth.');
         authUserId = authResult.data.user.id;
-        const user = await insertPlatformRow('users', { auth_user_id: authUserId, tenant_id: targetTenantId, school_id: schoolId, branch_id: branchId || null, display_name: displayName, job_title: jobTitle || null, department: department || null, status: 'active', force_password_change: !requestedPassword, created_by: null, updated_by: null }, 'id, auth_user_id, tenant_id, school_id, branch_id, display_name, job_title, department, status, force_password_change, version, created_at');
+        const user = await insertPlatformRow('users', { auth_user_id: authUserId, tenant_id: targetTenantId, school_id: schoolId, branch_id: branchId || null, username: loginIdentity.username, email, display_name: displayName, job_title: jobTitle || null, department: department || null, status: 'active', force_password_change: !requestedPassword, created_by: null, updated_by: null }, 'id, auth_user_id, tenant_id, school_id, branch_id, username, email, display_name, job_title, department, status, force_password_change, version, created_at');
         const role = await upsertPlatformRow('roles', { tenant_id: targetTenantId, school_id: null, role_key: roleKey, name: roleSpec.name, description: roleSpec.description, is_system: true, status: 'active', created_by: null, updated_by: null }, 'tenant_id,role_key', 'id, role_key, name');
         for (const permissionKey of roleSpec.permissions) {
           const { resource, action } = describePermission(permissionKey);
@@ -4455,7 +4477,7 @@ async function startServer() {
           .eq('id', targetTenantId)
           .eq('status', 'provisioning');
         if (tenantActivation.error) throw tenantActivation.error;
-        return res.status(201).json({ success: true, user: { ...user, email, forcePasswordChange: !requestedPassword, roles: [{ roleKey, name: roleSpec.name }], roleAssignmentId: assignment.id }, temporaryPassword: requestedPassword ? null : password });
+        return res.status(201).json({ success: true, loginIdentifier: loginIdentity.loginIdentifier, user: { ...user, email, username: loginIdentity.username, forcePasswordChange: !requestedPassword, roles: [{ roleKey, name: roleSpec.name }], roleAssignmentId: assignment.id }, temporaryPassword: requestedPassword ? null : password });
       } catch (error) {
         if (authUserId) await platformAdminAuth!.auth.admin.deleteUser(authUserId).catch(() => undefined);
         return next(error instanceof Error && /duplicate|unique/i.test(error.message) ? new ConflictError('البريد الإلكتروني أو الهوية مستخدمة مسبقاً.') : error instanceof ConflictError || error instanceof ExternalServiceError ? error : new DatabaseError('تعذر إنشاء مستخدم المدرسة في المصدر المركزي.', error instanceof Error ? error.message : String(error)));
@@ -4473,7 +4495,8 @@ async function startServer() {
     const displayName = String(req.body?.name || '').trim();
     const jobTitle = String(req.body?.jobTitle || '').trim();
     const department = String(req.body?.department || '').trim();
-    const email = String(req.body?.email || '').trim().toLowerCase();
+    const loginIdentity = provisionLoginIdentity(req.body?.email);
+    const email = loginIdentity.profileEmail;
     const requestedPassword = String(req.body?.password || '').trim();
     const roleKey = String(req.body?.initialRole || 'schooladmin').trim().toLowerCase().replace(/[^a-z]/g, '');
     const roleSpec = CENTRAL_IDENTITY_ROLE_CATALOG[roleKey];
@@ -4482,7 +4505,7 @@ async function startServer() {
     if (!/^[0-9a-f-]{36}$/i.test(schoolId) || (branchId && !/^[0-9a-f-]{36}$/i.test(branchId))) return next(new ValidationError('معرف المدرسة أو الفرع غير صالح.'));
     if (displayName.length < 2 || displayName.length > 160) return next(new ValidationError('اسم الموظف يجب أن يكون بين حرفين و160 حرفاً.'));
     if (jobTitle.length > 160 || department.length > 160) return next(new ValidationError('المسمى الوظيفي أو القسم يتجاوز الحد المسموح.'));
-    if (!/^\S+@\S+\.\S+$/.test(email)) return next(new ValidationError('البريد الإلكتروني غير صالح.'));
+    if (email && !/^\S+@\S+\.\S+$/.test(email)) return next(new ValidationError('البريد الإلكتروني غير صالح.'));
     if (requestedPassword && requestedPassword.length < 8) return next(new ValidationError('كلمة المرور يجب ألا تقل عن 8 رموز.'));
     if (!roleSpec) return next(new ValidationError('الدور المطلوب غير موجود في الكتالوج المركزي.'));
     const password = requestedPassword || randomBytes(12).toString('base64url');
@@ -4503,10 +4526,10 @@ async function startServer() {
         branchId = mainBranch.rows[0].id;
       }
       const authResult = await platformAdminAuth.auth.admin.createUser({
-        email,
+        email: loginIdentity.authEmail,
         password,
         email_confirm: true,
-        user_metadata: { display_name: displayName },
+        user_metadata: { display_name: displayName, login_username: loginIdentity.username },
         // These claims are server-owned and are the source used by the
         // trusted identity/RLS boundary for every school user.
         app_metadata: {
@@ -4515,6 +4538,7 @@ async function startServer() {
           ...(branchId ? { branch_id: branchId } : {}),
           role: roleKey,
           status: 'active',
+          ...(loginIdentity.username ? { login_username: loginIdentity.username } : {}),
         },
       });
       if (authResult.error || !authResult.data.user) throw new ExternalServiceError(authResult.error?.message || 'تعذر إنشاء هوية Supabase Auth.');
@@ -4530,10 +4554,10 @@ async function startServer() {
       if (scope.rowCount !== 1 || (branchId && !scope.rows[0].branch_id)) throw new ConflictError('المدرسة أو الفرع غير موجود في نطاق الإدارة المركزية.');
       const targetTenantId = scope.rows[0].tenant_id;
       const userResult = await client.query(
-        `INSERT INTO public.users (auth_user_id, tenant_id, school_id, branch_id, display_name, job_title, department, status, force_password_change, created_by, updated_by)
-         VALUES ($1::uuid, $2::uuid, $3::uuid, $4::uuid, $5, $6, $7, 'active', $8, $9::uuid, $9::uuid)
-         RETURNING id, auth_user_id, tenant_id, school_id, branch_id, display_name, job_title, department, status, force_password_change, version, created_at`,
-        [authUserId, targetTenantId, schoolId, branchId || null, displayName, jobTitle || null, department || null, !requestedPassword, actorId],
+         `INSERT INTO public.users (auth_user_id, tenant_id, school_id, branch_id, username, email, display_name, job_title, department, status, force_password_change, created_by, updated_by)
+          VALUES ($1::uuid, $2::uuid, $3::uuid, $4::uuid, $5, $6, $7, $8, $9, 'active', $10, $11::uuid, $11::uuid)
+          RETURNING id, auth_user_id, tenant_id, school_id, branch_id, username, email, display_name, job_title, department, status, force_password_change, version, created_at`,
+         [authUserId, targetTenantId, schoolId, branchId || null, loginIdentity.username, email, displayName, jobTitle || null, department || null, !requestedPassword, actorId],
       );
       const userId = userResult.rows[0].id;
       const roleResult = await client.query(
@@ -4577,7 +4601,8 @@ async function startServer() {
       );
       const auditPayload = JSON.stringify({
         operation: 'create',
-        email,
+         email,
+         username: loginIdentity.username,
         displayName,
         jobTitle: jobTitle || null,
         department: department || null,
@@ -4602,7 +4627,7 @@ async function startServer() {
         [randomUUID(), targetTenantId, userId, outboxPayload, createHash('sha256').update(outboxPayload).digest('hex'), `identity-user-create:${userId}:${requestId}`, requestId, correlationId, actorUser.rows[0]?.id || null, auditId],
       );
       await client.query('COMMIT');
-      return res.status(201).json({ success: true, requestId, correlationId, user: { ...userResult.rows[0], email, forcePasswordChange: !requestedPassword, roles: [{ roleKey, name: roleSpec.name }], roleAssignmentId: assignment.rows[0].id }, temporaryPassword: requestedPassword ? null : password });
+       return res.status(201).json({ success: true, requestId, correlationId, loginIdentifier: loginIdentity.loginIdentifier, user: { ...userResult.rows[0], email, username: loginIdentity.username, forcePasswordChange: !requestedPassword, roles: [{ roleKey, name: roleSpec.name }], roleAssignmentId: assignment.rows[0].id }, temporaryPassword: requestedPassword ? null : password });
     } catch (error) {
       await client.query('ROLLBACK').catch(() => undefined);
       if (authUserId) await platformAdminAuth.auth.admin.deleteUser(authUserId).catch(() => undefined);
@@ -4871,9 +4896,11 @@ async function startServer() {
       const { tenantId, schoolId } = schoolIdentityScope(req);
       const result = await platformAdminPool.query(
         `SELECT u.id, u.auth_user_id, u.tenant_id, u.school_id, u.branch_id,
+                u.username,
+                CASE WHEN au.email LIKE '%@no-email.edupro.invalid' THEN NULL ELSE COALESCE(u.email, au.email) END AS email,
                 u.display_name, u.job_title, u.department, u.status, u.version,
                 u.session_revoked_at, u.force_password_change, u.created_at,
-                au.email, au.last_sign_in_at, b.name AS branch_name,
+                au.last_sign_in_at, b.name AS branch_name,
                 COALESCE(jsonb_agg(DISTINCT jsonb_build_object(
                   'id', r.id, 'roleKey', r.role_key, 'name', r.name,
                   'assignmentBranchId', ur.branch_id
@@ -4924,7 +4951,8 @@ async function startServer() {
       const displayName = String(req.body?.name || req.body?.displayName || '').trim();
       const jobTitle = String(req.body?.jobTitle || '').trim();
       const department = String(req.body?.department || '').trim();
-      const email = String(req.body?.email || '').trim().toLowerCase();
+      const loginIdentity = provisionLoginIdentity(req.body?.email);
+      const email = loginIdentity.profileEmail;
       const requestedPassword = String(req.body?.password || '').trim();
       const roleKey = String(req.body?.initialRole || '').trim().toLowerCase().replace(/[^a-z0-9._-]/g, '');
       const rawDirectPermissions = Array.isArray(req.body?.permissionKeys) ? req.body.permissionKeys as unknown[] : [];
@@ -4938,7 +4966,7 @@ async function startServer() {
       if (!/^[0-9a-f-]{36}$/i.test(requestId) || !/^[0-9a-f-]{36}$/i.test(correlationId)) return next(new ValidationError('معرف الطلب أو الارتباط غير صالح.'));
       if (displayName.length < 2 || displayName.length > 160) return next(new ValidationError('اسم المستخدم يجب أن يكون بين حرفين و160 حرفاً.'));
       if (jobTitle.length > 160 || department.length > 160) return next(new ValidationError('المسمى الوظيفي أو القسم يتجاوز الحد المسموح.'));
-      if (!/^\S+@\S+\.\S+$/.test(email)) return next(new ValidationError('البريد الإلكتروني غير صالح.'));
+      if (email && !/^\S+@\S+\.\S+$/.test(email)) return next(new ValidationError('البريد الإلكتروني غير صالح.'));
       if (requestedPassword && requestedPassword.length < 8) return next(new ValidationError('كلمة المرور يجب ألا تقل عن 8 رموز.'));
       if (!roleSpec || roleKey === 'platformadmin') return next(new ValidationError('الدور المطلوب غير متاح في نطاق المدرسة.'));
       if (requestedDirectPermissions.length !== rawDirectPermissions.length || requestedDirectPermissions.includes(PERMISSIONS.PLATFORM_ADMIN) || requestedDirectPermissions.length > 200) return next(new ValidationError('قائمة الصلاحيات المباشرة تحتوي مفتاحاً غير مسجلاً أو غير صالح.'));
@@ -4956,14 +4984,14 @@ async function startServer() {
         const branch = await client.query(`SELECT id FROM public.branches WHERE tenant_id = $1::uuid AND school_id = $2::uuid AND id = $3::uuid AND status = 'active' AND deleted_at IS NULL`, [tenantId, schoolId, branchId]);
         if (branch.rowCount !== 1) return next(new ConflictError('الفرع المختار لا ينتمي إلى المدرسة الحالية.'));
         const authResult = await platformAdminAuth.auth.admin.createUser({
-          email, password, email_confirm: true,
-          user_metadata: { display_name: displayName },
-          app_metadata: { tenant_id: tenantId, school_id: schoolId, branch_id: branchId, role: roleKey, status: 'active' },
+        email: loginIdentity.authEmail, password, email_confirm: true,
+        user_metadata: { display_name: displayName, login_username: loginIdentity.username },
+        app_metadata: { tenant_id: tenantId, school_id: schoolId, branch_id: branchId, role: roleKey, status: 'active', ...(loginIdentity.username ? { login_username: loginIdentity.username } : {}) },
         });
         if (authResult.error || !authResult.data.user) throw new ExternalServiceError(authResult.error?.message || 'تعذر إنشاء هوية Supabase Auth.');
         authUserId = authResult.data.user.id;
         await client.query('BEGIN');
-        const userResult = await client.query(`INSERT INTO public.users (auth_user_id, tenant_id, school_id, branch_id, display_name, job_title, department, status, force_password_change, created_by, updated_by) VALUES ($1::uuid, $2::uuid, $3::uuid, $4::uuid, $5, $6, $7, 'active', $8, $9::uuid, $9::uuid) RETURNING id, auth_user_id, tenant_id, school_id, branch_id, display_name, job_title, department, status, force_password_change, version, created_at`, [authUserId, tenantId, schoolId, branchId, displayName, jobTitle || null, department || null, !requestedPassword, actorAuthUserId]);
+        const userResult = await client.query(`INSERT INTO public.users (auth_user_id, tenant_id, school_id, branch_id, username, email, display_name, job_title, department, status, force_password_change, created_by, updated_by) VALUES ($1::uuid, $2::uuid, $3::uuid, $4::uuid, $5, $6, $7, $8, $9, 'active', $10, $11::uuid, $11::uuid) RETURNING id, auth_user_id, tenant_id, school_id, branch_id, username, email, display_name, job_title, department, status, force_password_change, version, created_at`, [authUserId, tenantId, schoolId, branchId, loginIdentity.username, email, displayName, jobTitle || null, department || null, !requestedPassword, actorAuthUserId]);
         const roleResult = await client.query(`INSERT INTO public.roles (tenant_id, school_id, branch_id, role_key, name, description, is_system, status, created_by, updated_by) VALUES ($1::uuid, NULL, NULL, $2, $3, $4, true, 'active', $5::uuid, $5::uuid) ON CONFLICT (tenant_id, role_key) DO UPDATE SET name = EXCLUDED.name, description = EXCLUDED.description, is_system = true, status = 'active', deleted_at = NULL, deleted_by = NULL, updated_at = now() RETURNING id`, [tenantId, roleKey, roleSpec.name, roleSpec.description, actorAuthUserId]);
         const roleId = roleResult.rows[0].id;
         for (const permissionKey of roleSpec.permissions) {
@@ -4977,9 +5005,9 @@ async function startServer() {
           await client.query(`INSERT INTO public.user_permission_grants (tenant_id, user_id, permission_id, school_id, branch_id, status, created_by, updated_by) VALUES ($1::uuid, $2::uuid, $3::uuid, $4::uuid, $5::uuid, 'active', $6::uuid, $6::uuid) ON CONFLICT (user_id, permission_id) DO UPDATE SET school_id = EXCLUDED.school_id, branch_id = EXCLUDED.branch_id, status = 'active', deleted_at = NULL, deleted_by = NULL, updated_at = now(), updated_by = EXCLUDED.updated_by`, [tenantId, userResult.rows[0].id, permissionResult.rows[0].id, schoolId, branchId, actorAuthUserId]);
         }
         const assignment = await client.query(`INSERT INTO public.user_roles (tenant_id, user_id, role_id, school_id, branch_id, status, created_by, updated_by) VALUES ($1::uuid, $2::uuid, $3::uuid, $4::uuid, $5::uuid, 'active', $6::uuid, $6::uuid) RETURNING id`, [tenantId, userResult.rows[0].id, roleId, schoolId, branchId, actorAuthUserId]);
-        const auditId = await recordSchoolIdentityMutation(client, { id: userResult.rows[0].id, tenant_id: tenantId, school_id: schoolId, branch_id: branchId }, actorAuthUserId, 'create', { displayName, email, roleKey, branchId, forcePasswordChange: !requestedPassword }, requestId, correlationId, Number(userResult.rows[0].version || 1));
+        const auditId = await recordSchoolIdentityMutation(client, { id: userResult.rows[0].id, tenant_id: tenantId, school_id: schoolId, branch_id: branchId }, actorAuthUserId, 'create', { displayName, email, username: loginIdentity.username, roleKey, branchId, forcePasswordChange: !requestedPassword }, requestId, correlationId, Number(userResult.rows[0].version || 1));
         await client.query('COMMIT');
-        return res.status(201).json({ success: true, requestId, correlationId, auditId, user: { ...userResult.rows[0], email, forcePasswordChange: !requestedPassword, roles: [{ roleKey, name: roleSpec.name }], directPermissions: requestedDirectPermissions.map((permissionKey) => ({ permissionKey, branchId })), roleAssignmentId: assignment.rows[0].id }, temporaryPassword: requestedPassword ? null : password });
+        return res.status(201).json({ success: true, requestId, correlationId, auditId, loginIdentifier: loginIdentity.loginIdentifier, user: { ...userResult.rows[0], email, username: loginIdentity.username, forcePasswordChange: !requestedPassword, roles: [{ roleKey, name: roleSpec.name }], directPermissions: requestedDirectPermissions.map((permissionKey) => ({ permissionKey, branchId })), roleAssignmentId: assignment.rows[0].id }, temporaryPassword: requestedPassword ? null : password });
       } catch (error) {
         await client.query('ROLLBACK').catch(() => undefined);
         if (authUserId) await platformAdminAuth.auth.admin.deleteUser(authUserId).catch(() => undefined);
@@ -5005,7 +5033,7 @@ async function startServer() {
       if (!/^[0-9a-f-]{36}$/i.test(requestId) || !/^[0-9a-f-]{36}$/i.test(correlationId)) return next(new ValidationError('معرف الطلب أو الارتباط غير صالح.'));
       const client = await platformAdminPool.connect();
       try {
-        const target = await client.query(`SELECT u.id, u.auth_user_id, u.tenant_id, u.school_id, u.branch_id, u.display_name, u.job_title, u.department, u.status, u.force_password_change, u.version, u.session_revoked_at, au.email, COALESCE((SELECT r.role_key FROM public.user_roles ur JOIN public.roles r ON r.tenant_id = ur.tenant_id AND r.id = ur.role_id WHERE ur.tenant_id = u.tenant_id AND ur.user_id = u.id AND ur.status = 'active' AND ur.deleted_at IS NULL AND r.status = 'active' AND r.deleted_at IS NULL ORDER BY ur.created_at ASC LIMIT 1), 'schooladmin') AS role_key FROM public.users u JOIN auth.users au ON au.id = u.auth_user_id WHERE u.id = $1::uuid AND u.tenant_id = $2::uuid AND u.school_id = $3::uuid AND u.deleted_at IS NULL`, [userId, tenantId, schoolId]);
+        const target = await client.query(`SELECT u.id, u.auth_user_id, u.tenant_id, u.school_id, u.branch_id, u.username, u.email AS profile_email, u.display_name, u.job_title, u.department, u.status, u.force_password_change, u.version, u.session_revoked_at, au.email AS auth_email, COALESCE((SELECT r.role_key FROM public.user_roles ur JOIN public.roles r ON r.tenant_id = ur.tenant_id AND r.id = ur.role_id WHERE ur.tenant_id = u.tenant_id AND ur.user_id = u.id AND ur.status = 'active' AND ur.deleted_at IS NULL AND r.status = 'active' AND r.deleted_at IS NULL ORDER BY ur.created_at ASC LIMIT 1), 'schooladmin') AS role_key FROM public.users u JOIN auth.users au ON au.id = u.auth_user_id WHERE u.id = $1::uuid AND u.tenant_id = $2::uuid AND u.school_id = $3::uuid AND u.deleted_at IS NULL`, [userId, tenantId, schoolId]);
         if (target.rowCount !== 1) return next(new ConflictError('المستخدم غير موجود داخل مدرسة الجلسة الحالية.'));
         const row = target.rows[0];
         if (Number(row.version) !== expectedVersion) return next(new ConflictError('تم تعديل المستخدم بواسطة مسؤول آخر. أعد تحميل القائمة.'));
@@ -5020,11 +5048,11 @@ async function startServer() {
           const email = String(req.body?.email || '').trim().toLowerCase();
           if (displayName.length < 2 || displayName.length > 160) throw new ValidationError('اسم المستخدم يجب أن يكون بين حرفين و160 حرفاً.');
           if (jobTitle.length > 160 || department.length > 160 || (email && !/^\S+@\S+\.\S+$/.test(email))) throw new ValidationError('بيانات المستخدم غير صالحة.');
-          const authResult = await platformAdminAuth.auth.admin.updateUserById(row.auth_user_id, { user_metadata: { display_name: displayName }, ...(email && email !== String(row.email || '').toLowerCase() ? { email, email_confirm: true } : {}) });
+          const authResult = await platformAdminAuth.auth.admin.updateUserById(row.auth_user_id, { user_metadata: { display_name: displayName }, ...(email && email !== String(row.profile_email || '').toLowerCase() ? { email, email_confirm: true } : {}) });
           if (authResult.error) throw new ExternalServiceError('تعذر تحديث هوية المستخدم عبر Supabase Auth.');
-          const result = await client.query(`UPDATE public.users SET display_name = $4, job_title = $5, department = $6, updated_at = now(), updated_by = $7::uuid, version = version + 1 WHERE id = $1::uuid AND tenant_id = $2::uuid AND school_id = $3::uuid AND deleted_at IS NULL AND version = $8 RETURNING id, auth_user_id, tenant_id, school_id, branch_id, display_name, job_title, department, status, force_password_change, version, created_at`, [userId, tenantId, schoolId, displayName, jobTitle || null, department || null, actorAuthUserId, expectedVersion]);
+          const result = await client.query(`UPDATE public.users SET display_name = $4, job_title = $5, department = $6, email = $7, updated_at = now(), updated_by = $8::uuid, version = version + 1 WHERE id = $1::uuid AND tenant_id = $2::uuid AND school_id = $3::uuid AND deleted_at IS NULL AND version = $9 RETURNING id, auth_user_id, tenant_id, school_id, branch_id, username, email, display_name, job_title, department, status, force_password_change, version, created_at`, [userId, tenantId, schoolId, displayName, jobTitle || null, department || null, email || null, actorAuthUserId, expectedVersion]);
           if (result.rowCount !== 1) throw new ConflictError('تعذر تحديث المستخدم؛ تغيرت النسخة الحالية.');
-          updated = result.rows[0]; metadata = { before: { displayName: row.display_name, jobTitle: row.job_title, department: row.department, email: row.email }, after: { displayName, jobTitle: jobTitle || null, department: department || null, email: authResult.data.user?.email || email || row.email || '' } };
+          updated = result.rows[0]; metadata = { before: { displayName: row.display_name, jobTitle: row.job_title, department: row.department, email: row.profile_email }, after: { displayName, jobTitle: jobTitle || null, department: department || null, email: email || null } };
         } else if (operation === 'assign_role') {
           const roleKey = String(req.body?.roleKey || '').trim().toLowerCase().replace(/[^a-z0-9._-]/g, '');
           const roleSpec = CENTRAL_IDENTITY_ROLE_CATALOG[roleKey];

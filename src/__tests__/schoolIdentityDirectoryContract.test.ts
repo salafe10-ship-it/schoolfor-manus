@@ -21,6 +21,9 @@ describe('school-scoped identity directory contracts', () => {
     expect(server).toContain("operation === 'set_permissions'");
     expect(server).toContain('permissionKeys.length !== requested.length');
     expect(server).toContain('permissionCatalog');
+    expect(server).toContain('const loginIdentity = provisionLoginIdentity(req.body?.email);');
+    expect(server).toContain('loginIdentifier: loginIdentity.loginIdentifier');
+    expect(server).toContain('username, email');
   });
 
   it('registers the identity capability catalog without Platform.Admin', () => {
@@ -45,9 +48,19 @@ describe('school-scoped identity directory contracts', () => {
     expect(module).toContain("'set_permissions'");
     expect(module).toContain('canManage');
     expect(module).toContain('وضع القراءة فقط');
+    expect(module).toContain('البريد الإلكتروني <span className="font-normal text-slate-500">(اختياري)</span>');
+    expect(module).toContain('تم الحفظ بنجاح وتأكيد الربط بقاعدة البيانات.');
+    expect(module).toContain('لا توجد أدوار معتمدة منشورة');
     expect(module).not.toContain('localStorage');
     expect(app).toContain("activeSection === 'school_users_admin'");
     expect(read('src/components/ModernSchoolDashboard.tsx')).toContain("section: 'school_users_admin'");
     expect(topbar).toContain('school-users-permissions-header-btn');
+  });
+
+  it('supports username login for email-less school accounts without fabricating a public email', () => {
+    const migration = read('supabase/migrations/202609101000_optional_school_user_email.sql');
+    expect(migration).toContain('JOIN auth.users AS au ON au.id = u.auth_user_id');
+    expect(migration).toContain('au.email IS NOT NULL');
+    expect(migration).toContain('GRANT EXECUTE ON FUNCTION public.dbsec004_resolve_login_username(text)');
   });
 });
