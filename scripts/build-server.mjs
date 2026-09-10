@@ -1,4 +1,5 @@
 import { spawnSync } from 'node:child_process';
+import fs from 'node:fs';
 import { fileURLToPath } from 'node:url';
 import path from 'node:path';
 
@@ -12,6 +13,26 @@ const workspaceRoot = path.resolve(projectRoot, '..');
 const esbuildCli = path.join(workspaceRoot, 'node_modules', 'esbuild', 'bin', 'esbuild');
 const serverEntry = path.join(workspaceRoot, 'server.ts');
 const serverOutput = path.join(workspaceRoot, 'dist', 'server.cjs');
+const buildIdentityPath = path.join(workspaceRoot, 'dist', 'build-identity.json');
+const packageJson = JSON.parse(fs.readFileSync(path.join(workspaceRoot, 'package.json'), 'utf8'));
+const commitFromEnvironment = [
+  'RENDER_GIT_COMMIT',
+  'RENDER_GIT_COMMIT_SHA',
+  'GIT_COMMIT_SHA',
+  'BUILD_COMMIT_SHA',
+].map((key) => process.env[key]?.trim()).find(Boolean);
+const commitFromGit = spawnSync('git', ['rev-parse', 'HEAD'], {
+  cwd: workspaceRoot,
+  encoding: 'utf8',
+  windowsHide: true,
+}).stdout?.trim();
+const buildIdentity = {
+  version: String(process.env.APP_VERSION || packageJson.version || 'unknown').trim(),
+  commit: commitFromEnvironment || commitFromGit || 'unknown',
+  builtAt: new Date().toISOString(),
+};
+fs.mkdirSync(path.dirname(buildIdentityPath), { recursive: true });
+fs.writeFileSync(buildIdentityPath, `${JSON.stringify(buildIdentity, null, 2)}\n`, 'utf8');
 const cliArgs = [
   esbuildCli,
   serverEntry,

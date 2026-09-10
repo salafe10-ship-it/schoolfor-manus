@@ -15,6 +15,10 @@ if (!baseUrl) {
   const build = health?.data?.build;
   if (!build || typeof build.commit !== 'string' || typeof build.version !== 'string' || typeof build.builtAt !== 'string') {
     failures.push('BUILD_IDENTITY_MISSING');
+  } else {
+    if (build.version === 'unknown') failures.push('BUILD_VERSION_UNKNOWN');
+    if (build.commit === 'unknown' || !/^[0-9a-f]{40}$/i.test(build.commit)) failures.push('BUILD_COMMIT_INVALID');
+    if (build.builtAt === 'unknown' || Number.isNaN(Date.parse(build.builtAt))) failures.push('BUILD_TIMESTAMP_INVALID');
   }
   if (expectedCommit && build?.commit !== expectedCommit) failures.push('BUILD_COMMIT_MISMATCH');
 

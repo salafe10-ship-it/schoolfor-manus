@@ -5,6 +5,7 @@ import process from 'node:process';
 const root = process.cwd();
 const dist = path.join(root, 'dist');
 const indexPath = path.join(dist, 'index.html');
+const identityPath = path.join(dist, 'build-identity.json');
 const failures = [];
 
 if (!fs.existsSync(indexPath)) failures.push('DIST_INDEX_MISSING');
@@ -25,6 +26,22 @@ const assets = fs.existsSync(assetDirectory)
   : [];
 if (!assets.some((entry) => entry.endsWith('.js'))) failures.push('DIST_JS_ASSET_MISSING');
 if (!assets.some((entry) => entry.endsWith('.css'))) failures.push('DIST_CSS_ASSET_MISSING');
+if (!fs.existsSync(identityPath)) {
+  failures.push('BUILD_IDENTITY_MISSING');
+} else {
+  try {
+    const identity = JSON.parse(fs.readFileSync(identityPath, 'utf8'));
+    for (const field of ['version', 'commit', 'builtAt']) {
+      if (typeof identity[field] !== 'string' || !identity[field].trim() || identity[field] === 'unknown') {
+        failures.push(`BUILD_IDENTITY_${field.toUpperCase()}_MISSING`);
+      }
+    }
+    if (identity.commit && !/^[0-9a-f]{40}$/i.test(identity.commit)) failures.push('BUILD_IDENTITY_COMMIT_INVALID');
+    if (identity.builtAt && Number.isNaN(Date.parse(identity.builtAt))) failures.push('BUILD_IDENTITY_TIMESTAMP_INVALID');
+  } catch {
+    failures.push('BUILD_IDENTITY_INVALID_JSON');
+  }
+}
 
 const result = { success: failures.length === 0, index: fs.existsSync(indexPath), assetCount: assets.length, failures };
 console.log(JSON.stringify(result, null, 2));
