@@ -100,6 +100,7 @@ import { TransactionService } from './database/transactions/TransactionService';
 import { useCurrency, saveCurrencyConfig, formatAmount } from './utils/currency';
 import { TrustedSessionManager, TrustedSessionUser } from './middleware/trustedSessionManager';
 import { canAccessSection } from './authorization/ClientAuthorization';
+import { PERMISSIONS } from './authorization/PermissionRegistry';
 import { authenticatedRequest } from './utils/authenticatedRequest';
 import {
   canAccessCustomerProductionSection,
@@ -2665,6 +2666,7 @@ export default function App() {
                 selectedSchool={selectedSchool}
                 selectedBranch={selectedBranch}
                 triggerNotification={triggerNotification}
+                canManage={canUseTrustedPermission(PERMISSIONS.IDENTITY_USERS_WRITE)}
               />
             </React.Suspense>
           )}

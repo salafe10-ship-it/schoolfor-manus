@@ -11,7 +11,7 @@ describe('school-scoped identity directory contracts', () => {
     expect(server).toContain("app.post('/api/school/users'");
     expect(server).toContain("app.patch('/api/school/users/:userId'");
     expect(server).toContain("requirePermissionOnly(PERMISSIONS.IDENTITY_USERS_READ)");
-    expect(server).toContain('requireAnyPermission([PERMISSIONS.IDENTITY_USERS_WRITE, PERMISSIONS.IDENTITY_USERS_ASSIGN])');
+    expect(server).toContain("app.patch('/api/school/users/:userId', authenticateRequest, requirePermissionOnly(PERMISSIONS.IDENTITY_USERS_WRITE)");
     expect(server).toContain('u.tenant_id = $1::uuid AND u.school_id = $2::uuid');
     expect(server).toContain('platformAdminAuth.auth.admin.createUser');
     expect(server).toContain("roleKey === 'platformadmin'");
@@ -19,6 +19,7 @@ describe('school-scoped identity directory contracts', () => {
     expect(server).toContain('identity.school_user.');
     expect(server).toContain('user_permission_grants');
     expect(server).toContain("operation === 'set_permissions'");
+    expect(server).toContain('permissionKeys.length !== requested.length');
     expect(server).toContain('permissionCatalog');
   });
 
@@ -42,6 +43,8 @@ describe('school-scoped identity directory contracts', () => {
     expect(module).toContain("operation, expectedVersion: user.version");
     expect(module).toContain('إدارة الصلاحيات');
     expect(module).toContain("'set_permissions'");
+    expect(module).toContain('canManage');
+    expect(module).toContain('وضع القراءة فقط');
     expect(module).not.toContain('localStorage');
     expect(app).toContain("activeSection === 'school_users_admin'");
     expect(read('src/components/ModernSchoolDashboard.tsx')).toContain("section: 'school_users_admin'");

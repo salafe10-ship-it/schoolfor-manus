@@ -4941,7 +4941,7 @@ async function startServer() {
       if (!/^\S+@\S+\.\S+$/.test(email)) return next(new ValidationError('البريد الإلكتروني غير صالح.'));
       if (requestedPassword && requestedPassword.length < 8) return next(new ValidationError('كلمة المرور يجب ألا تقل عن 8 رموز.'));
       if (!roleSpec || roleKey === 'platformadmin') return next(new ValidationError('الدور المطلوب غير متاح في نطاق المدرسة.'));
-      if (requestedDirectPermissions.includes(PERMISSIONS.PLATFORM_ADMIN) || requestedDirectPermissions.length > 200) return next(new ValidationError('قائمة الصلاحيات المباشرة غير صالحة.'));
+      if (requestedDirectPermissions.length !== rawDirectPermissions.length || requestedDirectPermissions.includes(PERMISSIONS.PLATFORM_ADMIN) || requestedDirectPermissions.length > 200) return next(new ValidationError('قائمة الصلاحيات المباشرة تحتوي مفتاحاً غير مسجلاً أو غير صالح.'));
       if (branchId && !/^[0-9a-f-]{36}$/i.test(branchId)) return next(new ValidationError('معرف الفرع غير صالح.'));
       const password = requestedPassword || randomBytes(12).toString('base64url');
       const client = await platformAdminPool.connect();
@@ -4988,7 +4988,10 @@ async function startServer() {
     } catch (error) { return next(error); }
   });
 
-  app.patch('/api/school/users/:userId', authenticateRequest, requireAnyPermission([PERMISSIONS.IDENTITY_USERS_WRITE, PERMISSIONS.IDENTITY_USERS_ASSIGN]), async (req, res, next) => {
+  // Every mutation of a school identity (including role assignment and
+  // direct grants) is an administrative write. Assignment-only operators
+  // must not gain profile, password, or account-state mutation via this route.
+  app.patch('/api/school/users/:userId', authenticateRequest, requirePermissionOnly(PERMISSIONS.IDENTITY_USERS_WRITE), async (req, res, next) => {
     if (!platformAdminPool || !platformAdminAuth) return next(new ExternalServiceError('خدمة هوية المدرسة غير مهيأة.'));
     try {
       const { tenantId, schoolId, actorAuthUserId } = schoolIdentityScope(req);
@@ -5039,7 +5042,7 @@ async function startServer() {
           const permissionKeys = [...new Set(requested
             .map((value: unknown) => permissionRegistry.normalize(value))
             .filter((value: string | null): value is string => Boolean(value)))];
-          if (permissionKeys.includes(PERMISSIONS.PLATFORM_ADMIN)) throw new ValidationError('لا يمكن منح صلاحية إدارة المنصة داخل المدرسة.');
+          if (permissionKeys.length !== requested.length || permissionKeys.includes(PERMISSIONS.PLATFORM_ADMIN)) throw new ValidationError('قائمة الصلاحيات تحتوي مفتاحاً غير مسجلاً أو صلاحية إدارة المنصة.');
           await client.query(
             `UPDATE public.user_permission_grants
                 SET status = 'revoked', deleted_at = now(), deleted_by = $4::uuid,
