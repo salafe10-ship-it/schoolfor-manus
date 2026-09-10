@@ -17,6 +17,9 @@ describe('school-scoped identity directory contracts', () => {
     expect(server).toContain("roleKey === 'platformadmin'");
     expect(server).toContain("'SchoolIdentityRoute'");
     expect(server).toContain('identity.school_user.');
+    expect(server).toContain('user_permission_grants');
+    expect(server).toContain("operation === 'set_permissions'");
+    expect(server).toContain('permissionCatalog');
   });
 
   it('registers the identity capability catalog without Platform.Admin', () => {
@@ -37,8 +40,11 @@ describe('school-scoped identity directory contracts', () => {
     expect(module).toContain("authenticatedRequest('/api/school/users'");
     expect(module).toContain("authenticatedRequest('/api/school/identity-roles'");
     expect(module).toContain("operation, expectedVersion: user.version");
+    expect(module).toContain('إدارة الصلاحيات');
+    expect(module).toContain("'set_permissions'");
     expect(module).not.toContain('localStorage');
     expect(app).toContain("activeSection === 'school_users_admin'");
+    expect(read('src/components/ModernSchoolDashboard.tsx')).toContain("section: 'school_users_admin'");
     expect(topbar).toContain('school-users-permissions-header-btn');
   });
 });

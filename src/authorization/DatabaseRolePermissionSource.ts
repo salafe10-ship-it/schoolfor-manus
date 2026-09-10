@@ -64,7 +64,39 @@ export function createDatabaseRolePermissionLoader() {
               AND p.deleted_at IS NULL
               AND p.status = 'active'
               AND (p.tenant_id IS NULL OR p.tenant_id = $1::uuid)
-            ORDER BY r.role_key, p.permission_key`,
+            UNION
+            SELECT COALESCE((
+                     SELECT r2.role_key
+                       FROM user_roles ur2
+                       JOIN roles r2
+                         ON r2.tenant_id = ur2.tenant_id AND r2.id = ur2.role_id
+                      WHERE ur2.tenant_id = u.tenant_id
+                        AND ur2.user_id = u.id
+                        AND ur2.deleted_at IS NULL AND ur2.status = 'active'
+                        AND ur2.starts_at <= now() AND (ur2.ends_at IS NULL OR ur2.ends_at > now())
+                        AND (ur2.school_id IS NULL OR ur2.school_id = $3::uuid)
+                        AND (ur2.branch_id IS NULL OR ur2.branch_id = $4::uuid)
+                        AND r2.deleted_at IS NULL AND r2.status = 'active'
+                      ORDER BY ur2.created_at ASC
+                      LIMIT 1
+                   ), 'employee') AS "roleKey",
+                   p.permission_key AS "permissionKey"
+              FROM users u
+              JOIN user_permission_grants upg
+                ON upg.tenant_id = u.tenant_id AND upg.user_id = u.id
+               AND upg.school_id = $3::uuid
+               AND (upg.branch_id IS NULL OR upg.branch_id = $4::uuid)
+               AND upg.status = 'active' AND upg.deleted_at IS NULL
+              JOIN permissions p ON p.id = upg.permission_id
+             WHERE u.tenant_id = $1::uuid
+               AND u.auth_user_id = $2::uuid
+               AND u.school_id = $3::uuid
+               AND u.deleted_at IS NULL
+               AND u.status IN ('invited', 'active')
+               AND p.deleted_at IS NULL
+               AND p.status = 'active'
+               AND (p.tenant_id IS NULL OR p.tenant_id = $1::uuid)
+            ORDER BY "roleKey", "permissionKey"`,
           [tenantId, userId, schoolId, identity.branchId || null]
         );
         return result.rows;
