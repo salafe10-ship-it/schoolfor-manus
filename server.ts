@@ -4973,6 +4973,10 @@ async function startServer() {
         .sort((left, right) => left.permissionKey.localeCompare(right.permissionKey));
       return res.json({ success: true, roles: result.rows, permissionCatalog });
     } catch (error) {
+      EnterpriseLogger.error('School identity role catalogue failed.', 'SchoolIdentityRoute', {
+        route: '/api/school/identity-roles',
+        error: error instanceof Error ? error.message : String(error),
+      });
       return next(error instanceof Error ? error : new DatabaseError('تعذر تحميل أدوار المدرسة المعتمدة.'));
     }
   });
@@ -5010,6 +5014,10 @@ async function startServer() {
         .filter((job: any) => job.id && (job.titleAr || job.titleEn));
       return res.json({ success: true, departments, jobs });
     } catch (error) {
+      EnterpriseLogger.error('School identity job catalogue failed.', 'SchoolIdentityRoute', {
+        route: '/api/school/job-catalog',
+        error: error instanceof Error ? error.message : String(error),
+      });
       return next(error instanceof Error ? error : new DatabaseError('تعذر تحميل دليل الوظائف من شؤون الموظفين.'));
     }
   });
@@ -5061,6 +5069,10 @@ async function startServer() {
       );
       return res.json({ success: true, scope: { tenantId, schoolId }, users: result.rows });
     } catch (error) {
+      EnterpriseLogger.error('School identity directory failed.', 'SchoolIdentityRoute', {
+        route: '/api/school/users',
+        error: error instanceof Error ? error.message : String(error),
+      });
       return next(error instanceof Error ? error : new DatabaseError('تعذر تحميل مستخدمي المدرسة.'));
     }
   });
