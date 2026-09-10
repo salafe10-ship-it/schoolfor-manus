@@ -63,6 +63,14 @@ describe('school-scoped identity directory contracts', () => {
     expect(module).toContain('aria-label="إغلاق نافذة المستخدم"');
     expect(module).toContain('حفظ التعديل');
     expect(module).toContain('type="submit" disabled={saving || (!editing && roles.length === 0)}');
+    expect(module).toContain("const [statusFilter, setStatusFilter] = useState<StatusFilter>('all');");
+    expect(module).toContain('تصفية حسب الحالة');
+    expect(module).toContain('تصفية حسب الدور');
+    expect(module).toContain("mutate(user, 'evict_sessions')");
+    expect(module).toContain("mutate(user, 'force_password'");
+    expect(module).toContain('window.confirm');
+    expect(module).toContain('branchId: selectedBranch?.id ||');
+    expect(module).toContain('autoComplete="new-password"');
     expect(module).not.toContain('localStorage');
     expect(app).toContain("activeSection === 'school_users_admin'");
     expect(read('src/components/ModernSchoolDashboard.tsx')).toContain("section: 'school_users_admin'");

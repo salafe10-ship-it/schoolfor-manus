@@ -60,14 +60,16 @@ describe('AUTH-004 database role-permission resolution', () => {
     expect(resolver.getPermissions(identity).has(PERMISSIONS.STUDENT_DOCUMENT_VERSION_CREATE)).toBe(false);
   });
 
-  it('fails closed for no assignment, an unknown role, and an unknown or wildcard permission', async () => {
+  it('fails closed for no assignment and unsafe permissions while accepting trusted custom roles', async () => {
     const noAssignment = new RoleResolver();
     noAssignment.configureDatabaseLoader(async () => []);
     await expect(noAssignment.ensureDatabasePermissions(identity)).rejects.toBeInstanceOf(InvalidRoleError);
 
-    const unknownRole = new RoleResolver();
-    unknownRole.configureDatabaseLoader(async () => [{ roleKey: 'not_registered', permissionKey: PERMISSIONS.STUDENT_DOCUMENT_VIEW }]);
-    await expect(unknownRole.ensureDatabasePermissions(identity)).rejects.toBeInstanceOf(InvalidRoleError);
+    const customRole = new RoleResolver();
+    customRole.configureDatabaseLoader(async () => [{ roleKey: 'not_registered', permissionKey: PERMISSIONS.STUDENT_DOCUMENT_VIEW }]);
+    await expect(customRole.ensureDatabasePermissions(identity)).resolves.toBeUndefined();
+    expect(customRole.resolveRole(identity)).toBe('not_registered');
+    expect(customRole.getPermissions(identity)).toEqual(new Set([PERMISSIONS.STUDENT_DOCUMENT_VIEW]));
 
     const unknownPermission = new RoleResolver();
     unknownPermission.configureDatabaseLoader(async () => [{ roleKey: 'student_affairs', permissionKey: 'StudentDocument.Delete' }]);
