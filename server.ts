@@ -2732,16 +2732,36 @@ async function startServer() {
                   description = COALESCE($3, description),
                   manifest = CASE WHEN $4::jsonb = '{}'::jsonb THEN manifest ELSE $4::jsonb END,
                   version = version + 1,
-                  status = $5,
+                  -- The canonical owner template is the published source of truth:
+                  -- every update to it must be distributable immediately. Other
+                  -- templates keep their existing draft/publish workflow.
+                  status = CASE
+                    WHEN $5 = 'published'
+                      OR (template_key = $7 AND $8 = 'update')
+                    THEN 'published'
+                    ELSE 'draft'
+                  END,
                   updated_at = now(), updated_by_auth_user_id = $6::uuid
             WHERE id = $1::uuid AND status <> 'archived'
           RETURNING id, template_key, name, description, version, status, manifest, created_at, updated_at`,
-          [templateId, name, String(req.body?.description || '').trim() || null, JSON.stringify(manifest), operation === 'publish' ? 'published' : 'draft', actorAuthUserId],
+          [
+            templateId,
+            name,
+            String(req.body?.description || '').trim() || null,
+            JSON.stringify(manifest),
+            operation === 'publish' ? 'published' : 'draft',
+            actorAuthUserId,
+            CANONICAL_SCHOOL_TEMPLATE_KEY,
+            operation,
+          ],
         );
       }
       if (result.rowCount !== 1) throw new ConflictError('القالب غير موجود أو مؤرشف.');
       const template = result.rows[0];
-      const propagation = (operation === 'capture' || operation === 'publish')
+      // Capture, publish, and update are all release-producing operations for
+      // the canonical template. The propagation helper still guards against
+      // non-canonical or unpublished templates, so this is safe for all IDs.
+      const propagation = (operation === 'capture' || operation === 'publish' || operation === 'update')
         ? await propagateCanonicalTemplate(client, template, actorAuthUserId)
         : { targetCount: 0, releases: [], schools: [] };
       await client.query('COMMIT');

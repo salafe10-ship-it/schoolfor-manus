@@ -67,7 +67,8 @@ describe('owner workspace and targeted release contract', () => {
     expect(server).toContain("CANONICAL_SCHOOL_TEMPLATE_KEY = 'central-schools-default'");
     expect(server).toContain('propagateCanonicalTemplate');
     expect(server).toContain('automaticPropagation: true');
-    expect(server).toContain("status = CASE WHEN template_key = $3 THEN 'published' ELSE 'draft' END");
+    expect(server).toContain("(template_key = $7 AND $8 = 'update')");
+    expect(server).toContain("operation === 'capture' || operation === 'publish' || operation === 'update'");
     expect(server).toContain('manifest = manifest || $2::jsonb');
     expect(component).toContain("body: JSON.stringify({ operation: 'capture' })");
     expect(component).toContain('حفظ وتوزيع تحديث القالب');
