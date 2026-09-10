@@ -691,10 +691,16 @@ export class CanonicalStudentReadRepository {
   }> {
     const context = trustedContext;
     if (!context) throw new DatabaseError('Trusted tenant context is required before Student repository access.');
-    if (!UnitOfWork.hasTransactionDriver()) {
-      if (!supabase) throw new DatabaseError('Canonical Student reads require a trusted Supabase client or PostgreSQL transaction driver.');
+    // The server passes a request-scoped Supabase client for production reads.
+    // Prefer it even when a legacy PostgreSQL pool is configured: the pool may
+    // point at an older schema while Supabase contains the canonical student
+    // rows and current guardian fields. Writes remain PostgreSQL-only.
+    if (supabase) {
       const result = await queryCanonicalStudentsFromSupabase(supabase, context, params, 100);
       return { data: result.rows, totalCount: result.totalCount, page: normalizePage(params.page), limit: normalizeLimit(params.limit) };
+    }
+    if (!UnitOfWork.hasTransactionDriver()) {
+      throw new DatabaseError('Canonical Student reads require a trusted Supabase client or PostgreSQL transaction driver.');
     }
     studentReadDiagnostic?.log('canonical_repository', 'REACHED');
 
@@ -738,10 +744,12 @@ export class CanonicalStudentReadRepository {
   ): Promise<{ data: Record<string, unknown>[]; totalCount: number }> {
     const context = trustedContext;
     if (!context) throw new DatabaseError('Trusted tenant context is required before Student export access.');
-    if (!UnitOfWork.hasTransactionDriver()) {
-      if (!supabase) throw new DatabaseError('Canonical Student exports require a trusted Supabase client or PostgreSQL transaction driver.');
+    if (supabase) {
       const result = await queryCanonicalStudentsFromSupabase(supabase, context, { ...params, page: 1, limit: 5001 }, 5001);
       return { data: result.rows, totalCount: result.totalCount };
+    }
+    if (!UnitOfWork.hasTransactionDriver()) {
+      throw new DatabaseError('Canonical Student exports require a trusted Supabase client or PostgreSQL transaction driver.');
     }
 
     const exportParams: CanonicalStudentReadParams = { ...params, page: 1, limit: 5001 };
