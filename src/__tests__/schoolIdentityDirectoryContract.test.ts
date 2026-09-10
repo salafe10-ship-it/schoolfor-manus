@@ -57,6 +57,10 @@ describe('school-scoped identity directory contracts', () => {
     expect(module).toContain('البريد الإلكتروني <span className="font-normal text-slate-500">(اختياري)</span>');
     expect(module).toContain('تم الحفظ بنجاح وتأكيد الربط بقاعدة البيانات.');
     expect(module).toContain('لا توجد أدوار معتمدة منشورة');
+    expect(module).toContain('const openNewUser = () =>');
+    expect(module).toContain('aria-label="إغلاق نافذة المستخدم"');
+    expect(module).toContain('حفظ التعديل');
+    expect(module).toContain('type="submit" disabled={saving || (!editing && roles.length === 0)}');
     expect(module).not.toContain('localStorage');
     expect(app).toContain("activeSection === 'school_users_admin'");
     expect(read('src/components/ModernSchoolDashboard.tsx')).toContain("section: 'school_users_admin'");
