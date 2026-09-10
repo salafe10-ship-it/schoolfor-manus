@@ -1,6 +1,6 @@
 import type { TrustedIdentity } from '../middleware/trustedAuthentication';
 import { FallbackStorage } from '../database/repositories/FallbackStorage';
-import { getSupabaseClient, getSupabaseClientForAccessToken, getSupabaseClientReady } from '../database/client';
+import { getSupabaseAdminClient, getSupabaseClient, getSupabaseClientForAccessToken } from '../database/client';
 import { branchesSeed, schoolsSeed } from '../database/seed/mockData';
 import { UnitOfWork } from '../database/UnitOfWork';
 import type { TenantContext } from './TenantContext';
@@ -147,7 +147,11 @@ class DefaultTenantDataProvider implements TenantDataProvider {
         && (!branchId || postgresSnapshot.branchIds.includes(branchId));
       if (postgresContextLooksValid) return postgresSnapshot;
 
-      const supabase = await getSupabaseClientReady();
+      // This is a server-side lookup only. The anon client is intentionally
+      // not used here because production RLS can hide a valid school row;
+      // service-role access is still restricted by the verified identity
+      // values in the predicates below and never leaves the server.
+      const supabase = getSupabaseAdminClient();
       if (!supabase) return postgresSnapshot;
       try {
         const [schoolResult, branchResult, academicYearResult] = await Promise.all([

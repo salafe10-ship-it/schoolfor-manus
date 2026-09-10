@@ -264,3 +264,26 @@ export function getSupabaseClientForAccessToken(accessToken: string | undefined)
     }
   });
 }
+
+// Server-only control-plane client. This is intentionally separate from the
+// browser-facing anon client and is imported only by server modules that need
+// a trusted, tenant-scoped lookup when the data-plane pool is unavailable or
+// pointed at an older database. The service-role key is read at runtime and
+// is never serialized into client bundles or responses.
+let supabaseAdminClient: SupabaseClient | null | undefined;
+
+export function getSupabaseAdminClient(): SupabaseClient | null {
+  if (supabaseAdminClient !== undefined) return supabaseAdminClient;
+  const supabaseUrl = process.env.SUPABASE_URL?.trim();
+  const serviceRoleKey = process.env.SUPABASE_SERVICE_ROLE_KEY?.trim();
+  if (!supabaseUrl || !serviceRoleKey || supabaseUrl.includes('your-project')) {
+    supabaseAdminClient = null;
+    return supabaseAdminClient;
+  }
+
+  supabaseAdminClient = createClient(supabaseUrl, serviceRoleKey, {
+    auth: { persistSession: false, autoRefreshToken: false },
+    global: { fetch: createSupabaseTimeoutFetch(getSupabaseRequestTimeoutMs()) }
+  });
+  return supabaseAdminClient;
+}
