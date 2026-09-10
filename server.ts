@@ -160,8 +160,9 @@ if (platformAdminPool) {
     const schoolId = String(identity?.schoolId || '').trim();
     const authUserId = String(identity?.id || '').trim();
     if (!tenantId || !schoolId || !authUserId) throw new Error('Trusted tenant identity is incomplete for role resolution.');
-    const result = await platformAdminPool.query<{ roleKey: string; permissionKey: string }>(
-      `SELECT r.role_key AS "roleKey", p.permission_key AS "permissionKey"
+    try {
+      const result = await platformAdminPool.query<{ roleKey: string; permissionKey: string }>(
+        `SELECT r.role_key AS "roleKey", p.permission_key AS "permissionKey"
          FROM public.users u
          JOIN public.user_roles ur
            ON ur.tenant_id = u.tenant_id AND ur.user_id = u.id
@@ -214,9 +215,21 @@ if (platformAdminPool) {
            AND p.deleted_at IS NULL AND p.status = 'active'
            AND (p.tenant_id IS NULL OR p.tenant_id = $1::uuid)
          ORDER BY "roleKey", "permissionKey"`,
-      [tenantId, authUserId, schoolId, identity?.branchId || null],
-    );
-    return result.rows;
+        [tenantId, authUserId, schoolId, identity?.branchId || null],
+      );
+      return result.rows;
+    } catch (error) {
+      // Render environments can expose a pooler certificate chain that the
+      // node runtime cannot validate even though the server-only Supabase
+      // control-plane channel is healthy. Fall back to that channel rather
+      // than hiding every tenant module behind an empty permission set.
+      if (!platformControl) throw error;
+      EnterpriseLogger.warn('Tenant role pool resolution failed; using Supabase control-plane fallback.', 'TrustedAuthentication', {
+        error: error instanceof Error ? error.message : String(error),
+        schoolId,
+      });
+      return loadTenantPermissionsFromPlatformControl(identity);
+    }
   });
   roleResolver.configurePlatformDatabaseLoader(async (identity) => {
     const authUserId = String(identity?.id || '').trim();
@@ -382,6 +395,73 @@ const readPlatformAuthUsers = async () => {
   return users;
 };
 
+/**
+ * Resolve a school user's effective permissions through the server-only
+ * Supabase control-plane channel. This is used when the direct PostgreSQL
+ * control connection is unavailable (for example, a pooler TLS chain issue).
+ * Every lookup remains constrained by the verified Auth id, tenant, school,
+ * and branch supplied by the trusted server identity.
+ */
+async function loadTenantPermissionsFromPlatformControl(identity: any) {
+  const authUserId = String(identity?.id || '').trim();
+  const tenantId = String(identity?.tenantId || '').trim();
+  const schoolId = String(identity?.schoolId || '').trim();
+  const branchId = String(identity?.branchId || '').trim();
+  if (!authUserId || !tenantId || !schoolId) throw new Error('Trusted tenant identity is incomplete for role resolution.');
+  if (!platformControl) throw new Error('Supabase control-plane channel is unavailable.');
+
+  const users = await readPlatformRows('users', 'id, tenant_id, school_id, branch_id, auth_user_id, status, deleted_at', (query) => query
+    .eq('auth_user_id', authUserId)
+    .eq('tenant_id', tenantId)
+    .eq('school_id', schoolId)
+    .is('deleted_at', null));
+  const user = users.find((row: any) => ['invited', 'active'].includes(row.status) && (!branchId || !row.branch_id || row.branch_id === branchId));
+  if (!user) return [];
+
+  const assignments = await readPlatformRows('user_roles', 'role_id, school_id, branch_id, starts_at, ends_at, status, deleted_at', (query) => query
+    .eq('user_id', user.id)
+    .eq('tenant_id', tenantId)
+    .eq('status', 'active')
+    .is('deleted_at', null));
+  const now = new Date().toISOString();
+  const activeAssignments = assignments.filter((assignment: any) =>
+    (!assignment.school_id || assignment.school_id === schoolId)
+    && (!assignment.branch_id || !branchId || assignment.branch_id === branchId)
+    && (!assignment.starts_at || assignment.starts_at <= now)
+    && (!assignment.ends_at || assignment.ends_at > now)
+  );
+  const roleIds = [...new Set(activeAssignments.map((assignment: any) => assignment.role_id).filter(Boolean))];
+  if (!roleIds.length) return [];
+
+  const roles = await readPlatformRows('roles', 'id, role_key, tenant_id, school_id, status, deleted_at', (query) => query
+    .in('id', roleIds)
+    .eq('tenant_id', tenantId)
+    .eq('status', 'active')
+    .is('deleted_at', null));
+  const roleById = new Map(roles.map((role: any) => [role.id, role]));
+  const activeRoleIds = roles.map((role: any) => role.id);
+  if (!activeRoleIds.length) return [];
+
+  const rolePermissions = await readPlatformRows('role_permissions', 'role_id, permission_id, tenant_id, status, deleted_at', (query) => query
+    .in('role_id', activeRoleIds)
+    .eq('tenant_id', tenantId)
+    .eq('status', 'active')
+    .is('deleted_at', null));
+  const permissionIds = [...new Set(rolePermissions.map((entry: any) => entry.permission_id).filter(Boolean))];
+  if (!permissionIds.length) return [];
+
+  const permissions = await readPlatformRows('permissions', 'id, permission_key, tenant_id, status, deleted_at', (query) => query
+    .in('id', permissionIds)
+    .eq('status', 'active')
+    .is('deleted_at', null));
+  const permissionById = new Map(permissions
+    .filter((permission: any) => !permission.tenant_id || permission.tenant_id === tenantId)
+    .map((permission: any) => [permission.id, permission.permission_key]));
+  return rolePermissions
+    .map((entry: any) => ({ roleKey: roleById.get(entry.role_id)?.role_key || '', permissionKey: permissionById.get(entry.permission_id) || '' }))
+    .filter((entry: { roleKey: string; permissionKey: string }) => Boolean(entry.roleKey && entry.permissionKey));
+}
+
 // School identities use the same secure control-plane channel for RBAC
 // hydration. This is still strictly scoped by the verified Auth id, tenant,
 // school and branch; no scope is accepted from the browser.
@@ -391,36 +471,7 @@ const readPlatformAuthUsers = async () => {
 // loaders lets a stale/mismatched service key make a valid school assignment
 // appear empty while the directory itself is queried through PostgreSQL.
 if (platformControl && !platformAdminPool) {
-  roleResolver.configureDatabaseLoader(async (identity) => {
-    const authUserId = String(identity?.id || '').trim();
-    const tenantId = String(identity?.tenantId || '').trim();
-    const schoolId = String(identity?.schoolId || '').trim();
-    const branchId = String(identity?.branchId || '').trim();
-    if (!authUserId || !tenantId || !schoolId) throw new Error('Trusted tenant identity is incomplete for role resolution.');
-    const users = await readPlatformRows('users', 'id, tenant_id, school_id, branch_id, auth_user_id, status, deleted_at', (query) => query.eq('auth_user_id', authUserId).eq('tenant_id', tenantId).eq('school_id', schoolId).is('deleted_at', null));
-    const user = users.find((row: any) => ['invited', 'active'].includes(row.status) && (!branchId || !row.branch_id || row.branch_id === branchId));
-    if (!user) return [];
-    const assignments = await readPlatformRows('user_roles', 'role_id, school_id, branch_id, starts_at, ends_at, status, deleted_at', (query) => query.eq('user_id', user.id).eq('tenant_id', tenantId).eq('status', 'active').is('deleted_at', null));
-    const now = new Date().toISOString();
-    const activeAssignments = assignments.filter((assignment: any) =>
-      (!assignment.school_id || assignment.school_id === schoolId)
-      && (!assignment.branch_id || !branchId || assignment.branch_id === branchId)
-      && (!assignment.starts_at || assignment.starts_at <= now)
-      && (!assignment.ends_at || assignment.ends_at > now)
-    );
-    const roleIds = [...new Set(activeAssignments.map((assignment: any) => assignment.role_id).filter(Boolean))];
-    if (!roleIds.length) return [];
-    const roles = await readPlatformRows('roles', 'id, role_key, tenant_id, school_id, status, deleted_at', (query) => query.in('id', roleIds).eq('tenant_id', tenantId).eq('status', 'active').is('deleted_at', null));
-    const roleById = new Map(roles.map((role: any) => [role.id, role]));
-    const activeRoleIds = roles.map((role: any) => role.id);
-    if (!activeRoleIds.length) return [];
-    const rolePermissions = await readPlatformRows('role_permissions', 'role_id, permission_id, tenant_id, status, deleted_at', (query) => query.in('role_id', activeRoleIds).eq('tenant_id', tenantId).eq('status', 'active').is('deleted_at', null));
-    const permissionIds = [...new Set(rolePermissions.map((entry: any) => entry.permission_id).filter(Boolean))];
-    if (!permissionIds.length) return [];
-    const permissions = await readPlatformRows('permissions', 'id, permission_key, tenant_id, status, deleted_at', (query) => query.in('id', permissionIds).eq('status', 'active').is('deleted_at', null));
-    const permissionById = new Map(permissions.filter((permission: any) => !permission.tenant_id || permission.tenant_id === tenantId).map((permission: any) => [permission.id, permission.permission_key]));
-    return rolePermissions.map((entry: any) => ({ roleKey: roleById.get(entry.role_id)?.role_key || '', permissionKey: permissionById.get(entry.permission_id) || '' })).filter((entry: { roleKey: string; permissionKey: string }) => Boolean(entry.roleKey && entry.permissionKey));
-  });
+  roleResolver.configureDatabaseLoader(loadTenantPermissionsFromPlatformControl);
 }
 
 const STUDENT_DOCUMENT_MEDIA_TYPES = ['application/pdf', 'image/png', 'image/jpeg'] as const;
