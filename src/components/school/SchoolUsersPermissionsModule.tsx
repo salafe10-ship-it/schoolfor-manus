@@ -94,11 +94,28 @@ export default function SchoolUsersPermissionsModule({ selectedSchool, selectedB
     setError('');
     setLoadWarnings([]);
     try {
-      const [usersResult, rolesResult, jobsResult] = await Promise.allSettled([
-        authenticatedRequest('/api/school/users', { cache: 'no-store' }),
-        authenticatedRequest('/api/school/identity-roles', { cache: 'no-store' }),
-        authenticatedRequest('/api/school/job-catalog', { cache: 'no-store' }),
+      // Keep the three control-plane reads in one authenticated sequence.
+      // Firing them concurrently can make a cold Render instance refresh the
+      // same session three times and contend for the small platform pool,
+      // leaving an otherwise valid directory looking empty.
+      const requestSequentially = async (request: () => Promise<Response>): Promise<PromiseSettledResult<Response>> => {
+        try { return { status: 'fulfilled', value: await request() }; }
+        catch (reason) { return { status: 'rejected', reason }; }
+      };
+      const usersResult = await requestSequentially(() => authenticatedRequest('/api/school/users', { cache: 'no-store' }));
+      const rolesResult = await requestSequentially(() => authenticatedRequest('/api/school/identity-roles', { cache: 'no-store' }));
+      const jobsResult = await requestSequentially(() => authenticatedRequest('/api/school/job-catalog', { cache: 'no-store' }));
+      // Normalize the already-completed results through allSettled so one
+      // malformed payload cannot discard the other two successful reads.
+      const [settledUsers, settledRoles, settledJobs] = await Promise.allSettled([
+        Promise.resolve(usersResult), Promise.resolve(rolesResult), Promise.resolve(jobsResult),
       ]);
+      const settledResult = (result: PromiseSettledResult<PromiseSettledResult<Response>>): PromiseSettledResult<Response> => (
+        result.status === 'fulfilled' ? result.value : { status: 'rejected', reason: result.reason }
+      );
+      const safeUsersResult = settledResult(settledUsers);
+      const safeRolesResult = settledResult(settledRoles);
+      const safeJobsResult = settledResult(settledJobs);
       const parseResult = async (result: PromiseSettledResult<Response>, label: string) => {
         if (result.status === 'rejected') return { ok: false, payload: {}, message: `${label}: تعذر الاتصال بالخدمة.` };
         const payload = await result.value.json().catch(() => ({}));
@@ -106,9 +123,9 @@ export default function SchoolUsersPermissionsModule({ selectedSchool, selectedB
         return { ok: true, payload, message: '' };
       };
       const [users, roles, jobs] = await Promise.all([
-        parseResult(usersResult, 'مستخدمو المدرسة'),
-        parseResult(rolesResult, 'الأدوار المعتمدة'),
-        parseResult(jobsResult, 'دليل الوظائف'),
+        parseResult(safeUsersResult, 'مستخدمو المدرسة'),
+        parseResult(safeRolesResult, 'الأدوار المعتمدة'),
+        parseResult(safeJobsResult, 'دليل الوظائف'),
       ]);
       const warnings = [users, roles, jobs].filter((item) => !item.ok).map((item) => item.message);
       if (users.ok) {
@@ -265,7 +282,7 @@ export default function SchoolUsersPermissionsModule({ selectedSchool, selectedB
             <div className="flex flex-wrap gap-2">
               {onBackToMainMenu && <button type="button" onClick={onBackToMainMenu} className="rounded-xl border border-white/20 bg-white/10 px-4 py-2.5 text-xs font-black shadow-lg transition hover:bg-white/20"><Home className="ml-1 inline h-4 w-4" /> العودة للقائمة الرئيسية</button>}
               <button type="button" onClick={() => void load()} className="rounded-xl border border-white/15 bg-white/10 px-3 py-2 text-xs font-black hover:bg-white/15" title="تحديث"><RefreshCw className="inline h-4 w-4" /></button>
-              {canManage && <button type="button" onClick={openNewUser} className="rounded-xl bg-amber-600 px-4 py-2.5 text-xs font-black shadow-lg hover:bg-amber-500"><Plus className="ml-1 inline h-4 w-4" /> مستخدم جديد</button>}
+              <button type="button" onClick={openNewUser} disabled={!canManage} title={canManage ? 'إضافة مستخدم داخل المدرسة الحالية' : 'تحتاج صلاحية Identity.Users.Write'} className="rounded-xl bg-amber-600 px-4 py-2.5 text-xs font-black shadow-lg hover:bg-amber-500 disabled:cursor-not-allowed disabled:opacity-50"><Plus className="ml-1 inline h-4 w-4" /> مستخدم جديد</button>
             </div>
           </div>
         </div>
