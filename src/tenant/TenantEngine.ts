@@ -1,6 +1,6 @@
 import type { TrustedIdentity } from '../middleware/trustedAuthentication';
 import { FallbackStorage } from '../database/repositories/FallbackStorage';
-import { getSupabaseClient, getSupabaseClientForAccessToken } from '../database/client';
+import { getSupabaseClient, getSupabaseClientForAccessToken, getSupabaseClientReady } from '../database/client';
 import { branchesSeed, schoolsSeed } from '../database/seed/mockData';
 import { UnitOfWork } from '../database/UnitOfWork';
 import type { TenantContext } from './TenantContext';
@@ -120,7 +120,7 @@ class DefaultTenantDataProvider implements TenantDataProvider {
 
       diagnosticTrace?.mark('tenant_postgres_query_completed');
       const row = result.rows[0];
-      return {
+      const postgresSnapshot: TenantLookupSnapshot = {
         schoolExists: Boolean(row?.school_exists),
         branchIds: Array.isArray(row?.branch_ids) ? row.branch_ids.map(String).filter(Boolean) : [],
         academicYears: Array.isArray(row?.academic_years)
@@ -134,6 +134,63 @@ class DefaultTenantDataProvider implements TenantDataProvider {
           }))
           : []
       };
+
+      // Render's tenant pool can be pointed at a database that is healthy but
+      // does not contain the control-plane school rows. The authenticated
+      // Supabase channel remains the canonical read source for this project,
+      // so retry the strictly scoped lookup there before rejecting a valid
+      // tenant. This keeps the PostgreSQL transaction path authoritative when
+      // it has the rows, while preventing a stale/mismatched pool from
+      // blocking the school dashboard and Student Affairs entry point.
+      const branchId = clean(identity.branchId);
+      const postgresContextLooksValid = postgresSnapshot.schoolExists
+        && (!branchId || postgresSnapshot.branchIds.includes(branchId));
+      if (postgresContextLooksValid) return postgresSnapshot;
+
+      const supabase = await getSupabaseClientReady();
+      if (!supabase) return postgresSnapshot;
+      try {
+        const [schoolResult, branchResult, academicYearResult] = await Promise.all([
+          supabase
+            .from('schools')
+            .select('id')
+            .eq('tenant_id', tenantId)
+            .eq('id', schoolId)
+            .is('deleted_at', null)
+            .maybeSingle(),
+          supabase
+            .from('branches')
+            .select('id')
+            .eq('tenant_id', tenantId)
+            .eq('school_id', schoolId)
+            .is('deleted_at', null)
+            .in('status', ['provisioning', 'active']),
+          supabase
+            .from('academic_years')
+            .select('id,name,status,tenant_id,school_id,branch_id')
+            .eq('tenant_id', tenantId)
+            .eq('school_id', schoolId)
+            .is('deleted_at', null)
+            .in('status', ['planned', 'active'])
+        ]);
+        if (schoolResult.error || branchResult.error || academicYearResult.error || !schoolResult.data) {
+          return postgresSnapshot;
+        }
+        return {
+          schoolExists: true,
+          branchIds: (branchResult.data || []).map((branch: any) => String(branch.id)).filter(Boolean),
+          academicYears: (academicYearResult.data || []).map((year: any) => ({
+            id: String(year.id),
+            name: year.name ? String(year.name) : undefined,
+            isActive: year.status === 'active' || year.status === 'planned',
+            tenantId: year.tenant_id ? String(year.tenant_id) : undefined,
+            schoolId: year.school_id ? String(year.school_id) : undefined,
+            branchId: year.branch_id ? String(year.branch_id) : null
+          }))
+        };
+      } catch {
+        return postgresSnapshot;
+      }
     };
 
     if (UnitOfWork.isTransactionActive()) {
