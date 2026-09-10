@@ -386,7 +386,12 @@ const readPlatformAuthUsers = async () => {
 // School identities use the same secure control-plane channel for RBAC
 // hydration. This is still strictly scoped by the verified Auth id, tenant,
 // school and branch; no scope is accepted from the browser.
-if (platformControl) {
+// The dedicated PostgreSQL control-plane pool is the single source of truth
+// for school-scoped RBAC.  Keep the REST service-role implementation as a
+// compatibility fallback only when that pool is unavailable; mixing the two
+// loaders lets a stale/mismatched service key make a valid school assignment
+// appear empty while the directory itself is queried through PostgreSQL.
+if (platformControl && !platformAdminPool) {
   roleResolver.configureDatabaseLoader(async (identity) => {
     const authUserId = String(identity?.id || '').trim();
     const tenantId = String(identity?.tenantId || '').trim();
@@ -4938,7 +4943,19 @@ async function startServer() {
       let result: any;
       try {
         await client.query('BEGIN');
-        await ensureCanonicalRbacDefaults(client, tenantId);
+        // Bootstrapping is intentionally not part of every read. Existing
+        // customer tenants can be read safely even when the control-plane
+        // connection is temporarily read-only; provisioning/release flows
+        // remain responsible for publishing the full canonical catalogue.
+        const existingRole = await client.query(
+          `SELECT 1
+             FROM public.roles
+            WHERE tenant_id = $1::uuid AND (school_id IS NULL OR school_id = $2::uuid)
+              AND status = 'active' AND deleted_at IS NULL
+            LIMIT 1`,
+          [tenantId, schoolId],
+        );
+        if (existingRole.rowCount === 0) await ensureCanonicalRbacDefaults(client, tenantId);
         result = await client.query(
         `SELECT r.id, r.role_key AS "roleKey", r.name, r.description, r.version,
                 COALESCE(jsonb_agg(DISTINCT jsonb_build_object(
@@ -5032,7 +5049,7 @@ async function startServer() {
                 CASE WHEN au.email LIKE '%@no-email.edupro.invalid' THEN NULL ELSE COALESCE(u.email, au.email) END AS email,
                 u.display_name, u.job_title, u.department, u.status, u.version,
                 u.session_revoked_at, u.force_password_change, u.created_at,
-                au.last_sign_in_at, b.name AS branch_name,
+                NULL::timestamptz AS last_sign_in_at, b.name AS branch_name,
                 COALESCE(jsonb_agg(DISTINCT jsonb_build_object(
                   'id', r.id, 'roleKey', r.role_key, 'name', r.name,
                   'assignmentBranchId', ur.branch_id
@@ -5054,7 +5071,6 @@ async function startServer() {
                      AND gp.status = 'active' AND gp.deleted_at IS NULL
                 ), '[]'::jsonb) AS "directPermissions"
            FROM public.users u
-           JOIN auth.users au ON au.id = u.auth_user_id
            LEFT JOIN public.branches b ON b.tenant_id = u.tenant_id AND b.school_id = u.school_id AND b.id = u.branch_id
            LEFT JOIN public.user_roles ur ON ur.tenant_id = u.tenant_id AND ur.user_id = u.id
                 AND ur.deleted_at IS NULL AND ur.status = 'active'
@@ -5063,7 +5079,7 @@ async function startServer() {
                 AND (r.branch_id IS NULL OR r.branch_id = u.branch_id)
                 AND r.status = 'active' AND r.deleted_at IS NULL
           WHERE u.tenant_id = $1::uuid AND u.school_id = $2::uuid AND u.deleted_at IS NULL
-          GROUP BY u.id, au.email, au.last_sign_in_at, b.name
+          GROUP BY u.id, b.name
           ORDER BY u.created_at DESC`,
         [tenantId, schoolId],
       );
