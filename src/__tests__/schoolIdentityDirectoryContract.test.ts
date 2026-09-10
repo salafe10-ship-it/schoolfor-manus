@@ -74,7 +74,8 @@ describe('school-scoped identity directory contracts', () => {
     expect(module).not.toContain('localStorage');
     expect(app).toContain("activeSection === 'school_users_admin'");
     expect(read('src/components/ModernSchoolDashboard.tsx')).toContain("section: 'school_users_admin'");
-    expect(topbar).toContain('school-users-permissions-header-btn');
+    expect(topbar).not.toContain('school-users-permissions-header-btn');
+    expect(module).toContain('العودة للقائمة الرئيسية');
   });
 
   it('supports username login for email-less school accounts without fabricating a public email', () => {

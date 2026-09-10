@@ -1675,7 +1675,6 @@ export default function App() {
             userName={trustedSessionUser?.name || 'مستخدم المدرسة'}
             onLogout={handleLogout}
             onSettingsClick={() => setActiveSection('settings')}
-            onUsersPermissionsClick={checkSectionPermission('school_users_admin') ? () => setActiveSection('school_users_admin') : undefined}
             theme={theme}
             onThemeToggle={toggleTheme}
             isClientMode={isClientMode}
@@ -2666,6 +2665,7 @@ export default function App() {
                 selectedSchool={selectedSchool}
                 selectedBranch={selectedBranch}
                 triggerNotification={triggerNotification}
+                onBackToMainMenu={() => setActiveSection('dashboard')}
                 canManage={canUseTrustedPermission(PERMISSIONS.IDENTITY_USERS_WRITE)}
               />
             </React.Suspense>

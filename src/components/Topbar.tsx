@@ -1,4 +1,4 @@
-import { Award, Bell, BookOpen, Building, Calendar, ChevronDown, Command, DatabaseZap, Layers, LogOut, Moon, Search, Settings, ShieldAlert, Sparkles, Sun, Trophy, UserCircle2 } from 'lucide-react';
+import { Award, Bell, BookOpen, Building, Calendar, ChevronDown, Command, DatabaseZap, Layers, LogOut, Moon, Search, Settings, ShieldAlert, Sparkles, Sun, Trophy } from 'lucide-react';
 /**
  * @license
  * SPDX-License-Identifier: Apache-2.0
@@ -27,7 +27,6 @@ interface TopbarProps {
   isClientMode?: boolean;
   isCustomerProductionPortal?: boolean;
   onOpenSuperAdminPortal?: () => void;
-  onUsersPermissionsClick?: () => void;
 }
 
 export default function Topbar({
@@ -49,8 +48,7 @@ export default function Topbar({
   onThemeToggle,
   isClientMode = false,
   isCustomerProductionPortal = false,
-  onOpenSuperAdminPortal,
-  onUsersPermissionsClick
+  onOpenSuperAdminPortal
 }: TopbarProps) {
   const [showNotifications, setShowNotifications] = useState(false);
   const [showRoleMenu, setShowRoleMenu] = useState(false);
@@ -452,19 +450,6 @@ export default function Topbar({
             title="الإعدادات العامة والربط البرمجي"
           >
             <Settings className="w-4 h-4" />
-          </button>
-        )}
-
-        {onUsersPermissionsClick && isClientMode && (
-          <button
-            type="button"
-            id="school-users-permissions-header-btn"
-            onClick={onUsersPermissionsClick}
-            className="flex items-center gap-1.5 rounded-lg border border-indigo-200/50 bg-indigo-50/80 px-2.5 py-1.5 text-[10px] font-black text-indigo-700 transition-colors hover:bg-indigo-100 dark:border-indigo-900/50 dark:bg-indigo-950/30 dark:text-indigo-300"
-            title="مستخدمو المدرسة والصلاحيات"
-          >
-            <UserCircle2 className="h-4 w-4" />
-            <span className="hidden sm:inline">المستخدمون والصلاحيات</span>
           </button>
         )}
 

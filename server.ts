@@ -4929,7 +4929,13 @@ async function startServer() {
         [tenantId, schoolId],
       );
       const data = result.rows[0] || {};
-      const departments = Array.isArray(data.departments) ? data.departments : [];
+      const departments = (Array.isArray(data.departments) ? data.departments : [])
+        .map((department: any) => ({
+          id: String(department?.id || '').trim(),
+          nameAr: String(department?.nameAr || department?.name || '').trim(),
+          nameEn: String(department?.nameEn || '').trim(),
+        }))
+        .filter((department: any) => department.id && (department.nameAr || department.nameEn));
       const departmentNames = new Map(departments.map((department: any) => [String(department?.id || ''), String(department?.nameAr || department?.nameEn || '')]));
       const jobs = (Array.isArray(data.jobs) ? data.jobs : [])
         .map((job: any) => ({
@@ -4940,7 +4946,7 @@ async function startServer() {
           departmentName: departmentNames.get(String(job?.departmentId || '').trim()) || '',
         }))
         .filter((job: any) => job.id && (job.titleAr || job.titleEn));
-      return res.json({ success: true, jobs });
+      return res.json({ success: true, departments, jobs });
     } catch (error) {
       return next(error instanceof Error ? error : new DatabaseError('تعذر تحميل دليل الوظائف من شؤون الموظفين.'));
     }
