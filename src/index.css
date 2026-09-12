@@ -1498,6 +1498,16 @@ html:not(.dark) #super-admin-portal button:not(.bg-indigo-600):not(.bg-rose-600)
   pointer-events: none;
 }
 
+.identity-control-surface .from-slate-950.to-amber-950,
+.identity-control-surface .from-slate-950.via-slate-900.to-amber-950,
+.identity-decision-surface .from-slate-900.to-slate-800 {
+  background-image: linear-gradient(110deg, #1c120c 0%, #2d1e12 58%, #1a100a 100%) !important;
+}
+
+.identity-decision-surface .bg-slate-50\/70 {
+  background-color: rgba(248, 245, 238, 0.72) !important;
+}
+
 .identity-control-surface .identity-metric-grid > .identity-metric-card {
   position: relative;
   display: flex;
