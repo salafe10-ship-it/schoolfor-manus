@@ -103,6 +103,13 @@ describe('school-scoped identity directory contracts', () => {
     expect(module).toContain('الحالة الفعالة ${permission.permissionKey}');
     expect(module).toContain("'مفعّل'");
     expect(module).toContain("'غير مفعّل'");
+    expect(module).toContain('expandedPermissionModules');
+    expect(module).toContain('فتح الكل');
+    expect(module).toContain('طي الكل');
+    const presentation = read('src/components/identity/permissionPresentation.ts');
+    expect(presentation).toContain("Assets: { label: 'إدارة الأصول'");
+    expect(presentation).toContain("Fixed_assets: { label: 'سجل الأصول'");
+    expect(presentation).toContain('comparePermissionResources');
   });
 
   it('supports username login for email-less school accounts without fabricating a public email', () => {
@@ -125,5 +132,6 @@ describe('school-scoped identity directory contracts', () => {
     expect(read('supabase/migrations/202609101200_identity_job_reference.sql')).toContain('ADD COLUMN IF NOT EXISTS job_id');
     expect(read('server.ts')).toContain('propagateCanonicalTemplate(client, templateForPropagation, actorId)');
     expect(rbac).toContain('ثم تُنشر للمدارس التابعة');
+    expect(rbac).toContain("from '../identity/permissionPresentation'");
   });
 });

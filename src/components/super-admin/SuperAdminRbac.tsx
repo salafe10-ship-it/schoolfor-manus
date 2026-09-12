@@ -25,6 +25,7 @@ import {
   type PermissionOverride,
 } from '../../authorization/PermissionMatrixPolicy';
 import { authenticatedRequest } from '../../utils/authenticatedRequest';
+import { comparePermissionResources, permissionActionLabel, permissionModuleLabel } from '../identity/permissionPresentation';
 
 interface SuperAdminRbacProps {
   schools: any[];
@@ -71,38 +72,6 @@ type PermissionModule = {
   permissions: Array<PermissionCatalogEntry & { label: string }>;
 };
 
-const RESOURCE_LABELS: Record<string, string> = {
-  Dashboard: 'لوحة التحكم',
-  Student: 'شؤون الطلاب',
-  StudentDocument: 'مستندات الطلاب',
-  Admission: 'القبول والتسجيل',
-  Attendance: 'الحضور والغياب',
-  Exam: 'الامتحانات والنتائج',
-  Hr: 'الموارد البشرية',
-  Financial: 'الحسابات والمالية',
-  Ledger: 'دفتر الأستاذ',
-  Invoice: 'الفواتير والتحصيل',
-  Inventory: 'المخزون والمشتريات',
-  Warehouse: 'المستودعات',
-  Assets: 'الأصول',
-  Library: 'المكتبة',
-  Buses: 'النقل المدرسي',
-  Ai: 'المساعد الذكي',
-  Identity: 'المستخدمون والصلاحيات',
-  Audit: 'سجل الرقابة',
-  Database: 'إدارة قاعدة البيانات',
-  Settings: 'الإعدادات',
-};
-
-const ACTION_LABELS: Record<string, string> = {
-  View: 'عرض', Read: 'قراءة', Write: 'إضافة وتعديل', Insert: 'إضافة', Edit: 'تعديل',
-  Delete: 'حذف', Export: 'تصدير', Print: 'طباعة', Import: 'استيراد', Create: 'إنشاء',
-  Verify: 'تحقق', Archive: 'أرشفة', Approve: 'اعتماد', Cancel: 'إلغاء', Post: 'ترحيل',
-  Reverse: 'عكس', Forecast: 'تنبؤ', Chat: 'محادثة', Assign: 'إسناد', Audit: 'تدقيق',
-  Link: 'ربط', Override: 'تجاوز مضبوط', Monitor: 'مراقبة', Settings: 'إعدادات',
-  Simulate: 'محاكاة', Optimize: 'تحسين', Backup: 'نسخ احتياطي', Refresh: 'تحديث',
-};
-
 const roleKeyOf = (role: CentralRole | undefined): string => String(role?.role_key || role?.roleKey || '').trim();
 const userRoleKey = (user: CentralUser): string => String(user.roles?.[0]?.roleKey || '').trim();
 const sortedKeys = (values: readonly string[] | undefined): string[] => [...new Set(values || [])].sort();
@@ -110,11 +79,6 @@ const overrideSignature = (overrides: readonly PermissionOverride[] | undefined)
   .map((entry) => `${entry.permissionKey}:${entry.effect}`)
   .sort()
   .join('|');
-
-function permissionActionLabel(permission: PermissionCatalogEntry): string {
-  const actionParts = String(permission.action || '').split('.').filter(Boolean);
-  return actionParts.map((part) => ACTION_LABELS[part] || part).join(' — ') || permission.permissionKey;
-}
 
 export default function SuperAdminRbac({ schools = [], logAction, triggerNotification }: SuperAdminRbacProps) {
   const [roles, setRoles] = useState<CentralRole[]>([]);
@@ -146,8 +110,8 @@ export default function SuperAdminRbac({ schools = [], logAction, triggerNotific
     const normalizedQuery = permissionQuery.trim().toLowerCase();
     const grouped = new Map<string, PermissionCatalogEntry[]>();
     for (const permission of permissionCatalog) {
-      const resourceLabel = RESOURCE_LABELS[permission.resource] || permission.resource;
-      const actionLabel = permissionActionLabel(permission);
+      const resourceLabel = permissionModuleLabel(permission.resource);
+      const actionLabel = permissionActionLabel(permission.action);
       if (normalizedQuery && !`${permission.permissionKey} ${permission.resource} ${resourceLabel} ${actionLabel}`.toLowerCase().includes(normalizedQuery)) continue;
       const current = grouped.get(permission.resource) || [];
       current.push(permission);
@@ -156,13 +120,13 @@ export default function SuperAdminRbac({ schools = [], logAction, triggerNotific
     return [...grouped.entries()]
       .map(([resource, permissions]) => ({
         resource,
-        label: RESOURCE_LABELS[resource] || resource,
+        label: permissionModuleLabel(resource),
         permissions: permissions
           .slice()
           .sort((left, right) => left.permissionKey.localeCompare(right.permissionKey))
-          .map((permission) => ({ ...permission, label: permissionActionLabel(permission) })),
+          .map((permission) => ({ ...permission, label: permissionActionLabel(permission.action) })),
       }))
-      .sort((left, right) => left.label.localeCompare(right.label, 'ar'));
+      .sort((left, right) => comparePermissionResources(left.resource, right.resource));
   }, [permissionCatalog, permissionQuery]);
 
   useEffect(() => {
@@ -551,7 +515,7 @@ export default function SuperAdminRbac({ schools = [], logAction, triggerNotific
         {showAdvancedTools && <div className="flex flex-wrap gap-2 border-t border-slate-100 p-4"><button type="button" onClick={() => setShowCreateRole(true)} className="flex items-center gap-2 rounded-xl bg-amber-600 px-4 py-2.5 text-xs font-black text-white"><Plus className="h-4 w-4" />إضافة وظيفة صلاحيات</button><button type="button" onClick={() => setShowCopyModal(true)} className="flex items-center gap-2 rounded-xl border border-slate-200 bg-white px-4 py-2.5 text-xs font-black text-slate-700"><Copy className="h-4 w-4" />نسخ من وظيفة أخرى</button></div>}
       </section>
 
-      {showCreateRole && <div className="fixed inset-0 z-50 flex items-center justify-center bg-slate-950/80 p-4"><form onSubmit={handleCreateRole} className="flex max-h-[92vh] w-full max-w-4xl flex-col overflow-hidden rounded-3xl bg-white shadow-2xl"><div className="flex items-start justify-between bg-slate-900 p-5 text-white"><div><h3 className="text-lg font-black">إضافة وظيفة صلاحيات</h3><p className="mt-1 text-xs text-slate-300">أنشئ الوظيفة مرة واحدة في المدرسة الأم، ثم تُنشر للمدارس التابعة.</p></div><button type="button" aria-label="إغلاق" onClick={() => setShowCreateRole(false)} className="rounded-lg bg-white/10 p-2"><X className="h-4 w-4" /></button></div><div className="grid gap-4 overflow-y-auto p-5 lg:grid-cols-[300px_1fr]"><div className="space-y-3"><label className="block text-xs font-black text-slate-700">اسم الوظيفة بالعربية<input required minLength={2} maxLength={160} value={newRole.name} onChange={(event) => setNewRole((current) => ({ ...current, name: event.target.value }))} placeholder="مسؤول شؤون الطلاب" className="mt-1 w-full rounded-xl border border-slate-200 p-3" /></label><label className="block text-xs font-black text-slate-700">رمز الوظيفة<input required pattern="[a-z0-9](?:[a-z0-9._-]{1,62})" value={newRole.roleKey} onChange={(event) => setNewRole((current) => ({ ...current, roleKey: event.target.value.toLowerCase().replace(/[^a-z0-9._-]/g, '') }))} placeholder="student_affairs" className="mt-1 w-full rounded-xl border border-slate-200 p-3 font-mono" /></label><label className="block text-xs font-black text-slate-700">وصف مختصر<textarea maxLength={500} value={newRole.description} onChange={(event) => setNewRole((current) => ({ ...current, description: event.target.value }))} className="mt-1 min-h-24 w-full rounded-xl border border-slate-200 p-3" /></label></div><div><div className="mb-3 flex items-center justify-between"><div><h4 className="text-sm font-black">صلاحيات البداية</h4><p className="text-[10px] text-slate-500">يمكن تعديلها لاحقًا من الجدول.</p></div><span className="rounded-full bg-amber-100 px-3 py-1 text-xs font-black text-amber-800">{newRole.permissionKeys.length} محددة</span></div><div className="grid max-h-[50vh] gap-2 overflow-y-auto rounded-2xl border border-slate-200 bg-slate-50 p-3 sm:grid-cols-2">{permissionCatalog.map((permission) => { const selected = newRole.permissionKeys.includes(permission.permissionKey); return <button type="button" key={permission.permissionKey} onClick={() => toggleNewRolePermission(permission.permissionKey)} className={`flex items-center gap-2 rounded-xl border p-3 text-right ${selected ? 'border-amber-400 bg-amber-50' : 'border-slate-200 bg-white'}`}><span className={`flex h-5 w-5 shrink-0 items-center justify-center rounded border ${selected ? 'border-amber-600 bg-amber-600 text-white' : 'border-slate-300 text-transparent'}`}><Check className="h-3 w-3" /></span><span><span className="block text-xs font-black">{RESOURCE_LABELS[permission.resource] || permission.resource} — {permissionActionLabel(permission)}</span><span className="font-mono text-[8px] text-slate-400">{permission.permissionKey}</span></span></button>; })}</div></div></div><div className="flex justify-end gap-2 border-t border-slate-100 p-4"><button type="button" onClick={() => setShowCreateRole(false)} className="rounded-xl border px-4 py-2 text-xs font-black">إلغاء</button><button type="submit" disabled={isSaving} className="rounded-xl bg-amber-600 px-5 py-2 text-xs font-black text-white disabled:opacity-50">{isSaving ? 'جارٍ الحفظ والنشر...' : 'حفظ الوظيفة واعتمادها'}</button></div></form></div>}
+      {showCreateRole && <div className="fixed inset-0 z-50 flex items-center justify-center bg-slate-950/80 p-4"><form onSubmit={handleCreateRole} className="flex max-h-[92vh] w-full max-w-4xl flex-col overflow-hidden rounded-3xl bg-white shadow-2xl"><div className="flex items-start justify-between bg-slate-900 p-5 text-white"><div><h3 className="text-lg font-black">إضافة وظيفة صلاحيات</h3><p className="mt-1 text-xs text-slate-300">أنشئ الوظيفة مرة واحدة في المدرسة الأم، ثم تُنشر للمدارس التابعة.</p></div><button type="button" aria-label="إغلاق" onClick={() => setShowCreateRole(false)} className="rounded-lg bg-white/10 p-2"><X className="h-4 w-4" /></button></div><div className="grid gap-4 overflow-y-auto p-5 lg:grid-cols-[300px_1fr]"><div className="space-y-3"><label className="block text-xs font-black text-slate-700">اسم الوظيفة بالعربية<input required minLength={2} maxLength={160} value={newRole.name} onChange={(event) => setNewRole((current) => ({ ...current, name: event.target.value }))} placeholder="مسؤول شؤون الطلاب" className="mt-1 w-full rounded-xl border border-slate-200 p-3" /></label><label className="block text-xs font-black text-slate-700">رمز الوظيفة<input required pattern="[a-z0-9](?:[a-z0-9._-]{1,62})" value={newRole.roleKey} onChange={(event) => setNewRole((current) => ({ ...current, roleKey: event.target.value.toLowerCase().replace(/[^a-z0-9._-]/g, '') }))} placeholder="student_affairs" className="mt-1 w-full rounded-xl border border-slate-200 p-3 font-mono" /></label><label className="block text-xs font-black text-slate-700">وصف مختصر<textarea maxLength={500} value={newRole.description} onChange={(event) => setNewRole((current) => ({ ...current, description: event.target.value }))} className="mt-1 min-h-24 w-full rounded-xl border border-slate-200 p-3" /></label></div><div><div className="mb-3 flex items-center justify-between"><div><h4 className="text-sm font-black">صلاحيات البداية</h4><p className="text-[10px] text-slate-500">يمكن تعديلها لاحقًا من الجدول.</p></div><span className="rounded-full bg-amber-100 px-3 py-1 text-xs font-black text-amber-800">{newRole.permissionKeys.length} محددة</span></div><div className="grid max-h-[50vh] gap-2 overflow-y-auto rounded-2xl border border-slate-200 bg-slate-50 p-3 sm:grid-cols-2">{permissionCatalog.map((permission) => { const selected = newRole.permissionKeys.includes(permission.permissionKey); return <button type="button" key={permission.permissionKey} onClick={() => toggleNewRolePermission(permission.permissionKey)} className={`flex items-center gap-2 rounded-xl border p-3 text-right ${selected ? 'border-amber-400 bg-amber-50' : 'border-slate-200 bg-white'}`}><span className={`flex h-5 w-5 shrink-0 items-center justify-center rounded border ${selected ? 'border-amber-600 bg-amber-600 text-white' : 'border-slate-300 text-transparent'}`}><Check className="h-3 w-3" /></span><span><span className="block text-xs font-black">{permissionModuleLabel(permission.resource)} — {permissionActionLabel(permission.action)}</span><span className="font-mono text-[8px] text-slate-400">{permission.permissionKey}</span></span></button>; })}</div></div></div><div className="flex justify-end gap-2 border-t border-slate-100 p-4"><button type="button" onClick={() => setShowCreateRole(false)} className="rounded-xl border px-4 py-2 text-xs font-black">إلغاء</button><button type="submit" disabled={isSaving} className="rounded-xl bg-amber-600 px-5 py-2 text-xs font-black text-white disabled:opacity-50">{isSaving ? 'جارٍ الحفظ والنشر...' : 'حفظ الوظيفة واعتمادها'}</button></div></form></div>}
 
       {showCopyModal && <div className="fixed inset-0 z-50 flex items-center justify-center bg-slate-950/80 p-4"><div className="w-full max-w-md overflow-hidden rounded-3xl bg-white shadow-2xl"><div className="flex items-center justify-between bg-slate-900 p-5 text-white"><h3 className="text-sm font-black">نسخ صلاحيات وظيفة</h3><button type="button" onClick={() => setShowCopyModal(false)}><X className="h-4 w-4" /></button></div><form onSubmit={handleCopyPermissions} className="space-y-4 p-5"><label className="block text-xs font-black">الوظيفة المصدر<select value={copyState.srcRoleId} onChange={(event) => setCopyState((current) => ({ ...current, srcRoleId: event.target.value }))} className="mt-1 w-full rounded-xl border p-3"><option value="">اختر...</option>{roles.map((role) => <option key={role.id} value={role.id}>{role.name}</option>)}</select></label><label className="block text-xs font-black">الوظيفة الهدف<select value={copyState.destRoleId} onChange={(event) => setCopyState((current) => ({ ...current, destRoleId: event.target.value }))} className="mt-1 w-full rounded-xl border p-3"><option value="">اختر...</option>{roles.map((role) => <option key={role.id} value={role.id}>{role.name}</option>)}</select></label><div className="rounded-xl bg-amber-50 p-3 text-[10px] font-bold text-amber-900">النسخ ينشئ مسودة في الجدول، ولن يوزعها حتى تضغط «حفظ ونشر» أمام الوظيفة الهدف.</div><div className="flex justify-end gap-2"><button type="button" onClick={() => setShowCopyModal(false)} className="rounded-xl border px-4 py-2 text-xs font-black">إلغاء</button><button type="submit" className="rounded-xl bg-slate-900 px-5 py-2 text-xs font-black text-white">نسخ كمسودة</button></div></form></div></div>}
 

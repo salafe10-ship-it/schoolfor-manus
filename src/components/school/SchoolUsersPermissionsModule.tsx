@@ -1,6 +1,7 @@
 import React, { useCallback, useEffect, useMemo, useState } from 'react';
-import { Check, Home, KeyRound, Lock, LogOut, Plus, RefreshCw, Search, ShieldCheck, UserCheck, UserMinus, Users, X } from 'lucide-react';
+import { Check, ChevronDown, Home, KeyRound, Lock, LogOut, Plus, RefreshCw, Search, ShieldCheck, UserCheck, UserMinus, Users, X } from 'lucide-react';
 import { authenticatedRequest } from '../../utils/authenticatedRequest';
+import { comparePermissionResources, permissionActionLabel, permissionDisplayLabel, permissionModuleLabel } from '../identity/permissionPresentation';
 
 type SchoolUser = {
   id: string;
@@ -88,6 +89,7 @@ export default function SchoolUsersPermissionsModule({ selectedSchool, selectedB
   const [permissionEditing, setPermissionEditing] = useState<SchoolUser | null>(null);
   const [permissionQuery, setPermissionQuery] = useState('');
   const [permissionStateFilter, setPermissionStateFilter] = useState<PermissionStateFilter>('all');
+  const [expandedPermissionModules, setExpandedPermissionModules] = useState<Record<string, boolean>>({});
   const [statusFilter, setStatusFilter] = useState<StatusFilter>('all');
   const [roleFilter, setRoleFilter] = useState('all');
   const [activeView, setActiveView] = useState<ManagementView>('users');
@@ -234,6 +236,9 @@ export default function SchoolUsersPermissionsModule({ selectedSchool, selectedB
     setPermissionEditing(user);
     setPermissionQuery('');
     setPermissionStateFilter('all');
+    const roleKeys = new Set((user.roles || []).map((role) => role.roleKey));
+    const inheritedKeys = new Set(roles.filter((role) => roleKeys.has(role.roleKey)).flatMap((role) => (role.permissions || []).map((permission) => permission.permissionKey)));
+    setExpandedPermissionModules(Object.fromEntries([...new Set(permissionCatalog.map((permission) => permission.resource))].map((resource) => [resource, permissionCatalog.some((permission) => permission.resource === resource && inheritedKeys.has(permission.permissionKey))])));
     setPermissionDrafts((drafts) => ({ ...drafts, [user.id]: [...(user.directPermissions || []).filter((permission) => permission.effect !== 'deny').map((permission) => permission.permissionKey)] }));
   };
 
@@ -257,28 +262,7 @@ export default function SchoolUsersPermissionsModule({ selectedSchool, selectedB
     if (saved) setPermissionEditing(null);
   };
 
-  const permissionLabel = (permission: PermissionDescriptor) => {
-    const resourceLabels: Record<string, string> = {
-      Dashboard: 'لوحة التحكم', Student: 'شؤون الطلاب', StudentDocument: 'مستندات الطلاب',
-      Exam: 'الامتحانات والنتائج', Hr: 'الموارد البشرية', Financial: 'الحسابات والمالية',
-      Inventory: 'المخزون والمشتريات', Admission: 'القبول والتسجيل', Ai: 'المساعد الذكي',
-      Identity: 'المستخدمون والصلاحيات', Audit: 'سجل الرقابة', Database: 'إدارة قاعدة البيانات',
-      Assets: 'الأصول الثابتة', Attendance: 'الحضور والانصراف', Branches: 'الفروع', Buses: 'النقل المدرسي',
-      Fixed_assets: 'الأصول الثابتة', Invoice: 'الفواتير', Ledger: 'دفتر الأستاذ', Library: 'المكتبة',
-      Permissions: 'إدارة الصلاحيات', Procurement: 'المشتريات', Settings: 'الإعدادات',
-      Uniform_management: 'الزي المدرسي', Warehouse: 'المستودعات',
-    };
-    const actionLabels: Record<string, string> = {
-      View: 'عرض', Read: 'قراءة', Write: 'إضافة وتعديل', Edit: 'تعديل', Delete: 'حذف',
-      Export: 'تصدير', Create: 'إنشاء', Verify: 'تحقق', Archive: 'أرشفة', Approve: 'اعتماد',
-      Forecast: 'تنبؤ', Chat: 'محادثة', Assign: 'إسناد', Audit: 'تدقيق', Insert: 'إضافة',
-      Print: 'طباعة', Post: 'ترحيل', Cancel: 'إلغاء', Refresh: 'تحديث', Backup: 'نسخة احتياطية',
-      Monitor: 'مراقبة', Optimize: 'تحسين', Simulate: 'محاكاة', Borrow: 'إعارة', Reverse: 'عكس القيد',
-      Link: 'ربط', Import: 'استيراد', Override: 'تجاوز', Sales: 'مبيعات', Stock: 'مخزون',
-    };
-    const action = permission.action.split('.').map((part) => actionLabels[part] || part.replaceAll('_', ' ')).join(' — ');
-    return `${resourceLabels[permission.resource] || permission.resource.replaceAll('_', ' ')} — ${action}`;
-  };
+  const permissionLabel = (permission: PermissionDescriptor) => permissionDisplayLabel(permission);
 
   const permissionOperationalDescription = (permission: PermissionDescriptor) => {
     const [resourceLabel, ...actionParts] = permissionLabel(permission).split(' — ');
@@ -355,10 +339,10 @@ export default function SchoolUsersPermissionsModule({ selectedSchool, selectedB
     return [...groups.entries()]
       .map(([resource, permissions]) => ({
         resource,
-        label: permissionLabel(permissions[0]).split(' — ')[0],
+        label: permissionModuleLabel(resource),
         permissions: [...permissions].sort((left, right) => permissionLabel(left).localeCompare(permissionLabel(right), 'ar')),
       }))
-      .sort((left, right) => left.label.localeCompare(right.label, 'ar'));
+      .sort((left, right) => comparePermissionResources(left.resource, right.resource));
   }, [visiblePermissionCatalog]);
 
   const setModuleDirectPermissions = (resource: string, grant: boolean) => {
@@ -442,7 +426,7 @@ export default function SchoolUsersPermissionsModule({ selectedSchool, selectedB
             </div>
 
             <div className="bg-slate-50/70 p-3 sm:p-5">
-              <div className="mb-3 flex flex-col gap-1 sm:flex-row sm:items-center sm:justify-between"><div><span className="text-xs font-black text-slate-700">الوحدات والصلاحيات التفصيلية</span><p className="mt-1 text-[10px] text-slate-500">كل وحدة مكتملة تظهر أولاً، وتأتي وظائفها وأزرارها تحتها مباشرة.</p></div><span className="text-xs font-bold text-slate-500">عرض {visiblePermissionCatalog.length} من {permissionCatalog.length} عبر {visiblePermissionGroups.length} وحدات</span></div>
+              <div className="mb-3 flex flex-col gap-2 sm:flex-row sm:items-center sm:justify-between"><div><span className="text-xs font-black text-slate-700">الوحدات والصلاحيات التفصيلية</span><p className="mt-1 text-[10px] text-slate-500">تُفتح أولًا الوحدات التي يملك فيها الموظف صلاحيات موروثة؛ افتح أي وحدة لمراجعة وظائفها وأزرارها.</p></div><div className="flex items-center gap-2"><span className="text-xs font-bold text-slate-500">عرض {visiblePermissionCatalog.length} من {permissionCatalog.length} عبر {visiblePermissionGroups.length} وحدات</span><button type="button" onClick={() => setExpandedPermissionModules(Object.fromEntries(visiblePermissionGroups.map((group) => [group.resource, true])))} className="rounded-lg border border-slate-200 bg-white px-2.5 py-1.5 text-[10px] font-black text-slate-600 hover:border-amber-300">فتح الكل</button><button type="button" onClick={() => setExpandedPermissionModules(Object.fromEntries(visiblePermissionGroups.map((group) => [group.resource, false])))} className="rounded-lg border border-slate-200 bg-white px-2.5 py-1.5 text-[10px] font-black text-slate-600 hover:border-amber-300">طي الكل</button></div></div>
               <div className="space-y-4">{visiblePermissionGroups.map((group) => {
                 const allModulePermissions = permissionCatalog.filter((permission) => permission.resource === group.resource);
                 const eligiblePermissions = allModulePermissions.filter((permission) => { const state = getPermissionState(permission); return !state.centrallyDenied && !state.inherited; });
@@ -450,21 +434,22 @@ export default function SchoolUsersPermissionsModule({ selectedSchool, selectedB
                 const directInModule = allModulePermissions.filter((permission) => getPermissionState(permission).direct && !getPermissionState(permission).inherited).length;
                 const inheritedInModule = allModulePermissions.filter((permission) => getPermissionState(permission).inherited && !getPermissionState(permission).centrallyDenied).length;
                 const effectiveInModule = allModulePermissions.filter((permission) => getPermissionState(permission).effective).length;
-                return <section key={group.resource} className="overflow-hidden rounded-2xl border border-slate-200 bg-white shadow-sm">
+                const isExpanded = expandedPermissionModules[group.resource] === true;
+                return <section key={group.resource} className={`overflow-hidden rounded-2xl border bg-white shadow-sm transition ${isExpanded ? 'border-amber-300 ring-1 ring-amber-100' : 'border-slate-200'}`}>
                   <div className="flex flex-col gap-3 border-b border-slate-200 bg-gradient-to-l from-slate-900 to-slate-800 p-4 text-white lg:flex-row lg:items-center lg:justify-between">
-                    <div><div className="flex items-center gap-2"><span className="flex h-7 w-7 items-center justify-center rounded-lg bg-amber-400 text-xs font-black text-slate-950">{group.permissions.length}</span><h3 className="font-black">وحدة {group.label}</h3></div><p className="mt-1 text-[10px] text-slate-300">{effectiveInModule} فعّالة • {inheritedInModule} موروثة • {directInModule} تفويض مباشر • {allModulePermissions.length} صلاحية في الوحدة</p></div>
+                    <button type="button" onClick={() => setExpandedPermissionModules((current) => ({ ...current, [group.resource]: !isExpanded }))} aria-expanded={isExpanded} className="text-right"><div className="flex items-center gap-2"><span className="flex h-7 w-7 items-center justify-center rounded-lg bg-amber-400 text-xs font-black text-slate-950">{group.permissions.length}</span><h3 className="font-black">وحدة {group.label}</h3><ChevronDown className={`h-4 w-4 text-amber-300 transition ${isExpanded ? 'rotate-180' : ''}`} /></div><p className="mt-1 text-[10px] text-slate-300">{effectiveInModule} فعّالة • {inheritedInModule} موروثة • {directInModule} تفويض مباشر • {allModulePermissions.length} صلاحية في الوحدة</p></button>
                     <div className="flex flex-wrap items-center gap-2">{eligiblePermissions.length > 0 ? <><button type="button" disabled={!canAssign || everyEligibleDirect} onClick={() => setModuleDirectPermissions(group.resource, true)} className="rounded-xl bg-amber-400 px-3 py-2 text-[10px] font-black text-slate-950 hover:bg-amber-300 disabled:cursor-not-allowed disabled:opacity-45">{everyEligibleDirect ? 'تفويض الوحدة مكتمل' : `منح تفويضات وحدة ${group.label}`}</button><button type="button" disabled={!canAssign || directInModule === 0} onClick={() => setModuleDirectPermissions(group.resource, false)} className="rounded-xl border border-white/20 bg-white/10 px-3 py-2 text-[10px] font-black text-white hover:bg-white/20 disabled:cursor-not-allowed disabled:opacity-45">سحب التفويض المباشر</button></> : <span className="rounded-xl border border-white/15 bg-white/10 px-3 py-2 text-[10px] font-bold text-slate-200">تدار من القالب المركزي أو المنع المركزي</span>}</div>
                   </div>
-                  <div className="overflow-x-auto"><table className="w-full min-w-[900px] text-right text-xs"><thead className="bg-slate-50 text-[10px] font-black text-slate-600"><tr><th className="p-3">الوظيفة أو الزر</th><th className="p-3">الوصف التشغيلي</th><th className="p-3">مفتاح الصلاحية</th><th className="p-3 text-center">مصدر المنح</th><th className="p-3 text-center">تفويض مباشر</th><th className="p-3 text-center">الحالة الفعالة</th></tr></thead><tbody className="divide-y divide-slate-100">{group.permissions.map((permission) => {
+                  {isExpanded && <div className="overflow-x-auto"><table className="w-full min-w-[900px] text-right text-xs"><thead className="bg-slate-50 text-[10px] font-black text-slate-600"><tr><th className="p-3">الوظيفة أو الزر</th><th className="p-3">الوصف التشغيلي</th><th className="p-3">مفتاح الصلاحية</th><th className="p-3 text-center">مصدر المنح</th><th className="p-3 text-center">تفويض مباشر</th><th className="p-3 text-center">الحالة الفعالة</th></tr></thead><tbody className="divide-y divide-slate-100">{group.permissions.map((permission) => {
                     const state = getPermissionState(permission);
-                    const actionLabel = permissionLabel(permission).split(' — ').slice(1).join(' — ');
+                    const actionLabel = permissionActionLabel(permission.action);
                     const source = state.centrallyDenied ? <span className="rounded-full bg-rose-100 px-2 py-1 text-[9px] font-black text-rose-700">منع مركزي</span>
                       : state.inherited && state.direct ? <span className="rounded-full bg-violet-100 px-2 py-1 text-[9px] font-black text-violet-700">دور + مباشر</span>
                         : state.inherited ? <span className="rounded-full bg-sky-100 px-2 py-1 text-[9px] font-black text-sky-700">قالب الدور</span>
                           : state.direct ? <span className="rounded-full bg-amber-100 px-2 py-1 text-[9px] font-black text-amber-800">تفويض مباشر</span>
                             : <span className="text-slate-400">غير ممنوحة</span>;
-                    return <tr key={permission.permissionKey} className={state.centrallyDenied ? 'bg-rose-50/70' : state.effective ? 'bg-emerald-50/40 hover:bg-emerald-50/70' : 'bg-white hover:bg-slate-50'}><td className="p-3"><div className="font-bold text-slate-800">{actionLabel || permission.action}</div><div className="mt-1 text-[10px] text-slate-500">{permission.action}</div></td><td className="max-w-72 p-3 text-[10px] leading-5 text-slate-600">{permissionOperationalDescription(permission)}</td><td className="p-3"><code className="rounded bg-slate-100 px-2 py-1 font-mono text-[10px] text-slate-600">{permission.permissionKey}</code></td><td className="p-3 text-center">{source}</td><td className="p-3 text-center">{state.centrallyDenied ? <span title="ممنوعة مركزيًا"><Lock className="mx-auto h-4 w-4 text-rose-600" aria-label="ممنوعة مركزيًا" /></span> : <input type="checkbox" aria-label={`تفويض مباشر ${permission.permissionKey}`} checked={state.direct} disabled={state.inherited || !canAssign} onChange={() => togglePermission(permission.permissionKey)} className="h-5 w-5 cursor-pointer accent-amber-600 disabled:cursor-not-allowed disabled:opacity-45" />}</td><td className="p-3 text-center"><label className={`inline-flex min-w-24 items-center justify-center gap-2 rounded-xl border px-2.5 py-1.5 text-[10px] font-black ${state.effective ? 'border-emerald-200 bg-emerald-50 text-emerald-800' : state.centrallyDenied ? 'border-rose-200 bg-rose-50 text-rose-800' : 'border-slate-200 bg-slate-50 text-slate-500'}`}><input type="checkbox" aria-label={`الحالة الفعالة ${permission.permissionKey}`} checked={state.effective} disabled aria-readonly="true" className="h-4 w-4 accent-emerald-600 disabled:cursor-default disabled:opacity-100" /><span>{state.effective ? 'مفعّل' : state.centrallyDenied ? 'محظور مركزيًا' : 'غير مفعّل'}</span></label></td></tr>;
-                  })}</tbody></table></div>
+                    return <tr key={permission.permissionKey} className={state.centrallyDenied ? 'bg-rose-50/70' : state.effective ? 'bg-emerald-50/40 hover:bg-emerald-50/70' : 'bg-white hover:bg-slate-50'}><td className="p-3"><div className="font-bold text-slate-800">{actionLabel}</div><div className="mt-1 text-[10px] text-slate-500">تشغيل ضمن {group.label}</div></td><td className="max-w-72 p-3 text-[10px] leading-5 text-slate-600">{permissionOperationalDescription(permission)}</td><td className="p-3"><code className="rounded bg-slate-100 px-2 py-1 font-mono text-[10px] text-slate-600">{permission.permissionKey}</code></td><td className="p-3 text-center">{source}</td><td className="p-3 text-center">{state.centrallyDenied ? <span title="ممنوعة مركزيًا"><Lock className="mx-auto h-4 w-4 text-rose-600" aria-label="ممنوعة مركزيًا" /></span> : <input type="checkbox" aria-label={`تفويض مباشر ${permission.permissionKey}`} checked={state.direct} disabled={state.inherited || !canAssign} onChange={() => togglePermission(permission.permissionKey)} className="h-5 w-5 cursor-pointer accent-amber-600 disabled:cursor-not-allowed disabled:opacity-45" />}</td><td className="p-3 text-center"><label className={`inline-flex min-w-24 items-center justify-center gap-2 rounded-xl border px-2.5 py-1.5 text-[10px] font-black ${state.effective ? 'border-emerald-200 bg-emerald-50 text-emerald-800' : state.centrallyDenied ? 'border-rose-200 bg-rose-50 text-rose-800' : 'border-slate-200 bg-slate-50 text-slate-500'}`}><input type="checkbox" aria-label={`الحالة الفعالة ${permission.permissionKey}`} checked={state.effective} disabled aria-readonly="true" className="h-4 w-4 accent-emerald-600 disabled:cursor-default disabled:opacity-100" /><span>{state.effective ? 'مفعّل' : state.centrallyDenied ? 'محظور مركزيًا' : 'غير مفعّل'}</span></label></td></tr>;
+                  })}</tbody></table></div>}
                 </section>;
               })}</div>
               {visiblePermissionGroups.length === 0 && <div className="rounded-2xl border border-slate-200 bg-white p-14 text-center"><p className="text-sm font-black text-slate-600">لا توجد صلاحيات مطابقة للتصفية الحالية.</p><button type="button" onClick={() => { setPermissionQuery(''); setPermissionStateFilter('all'); }} className="mt-3 text-xs font-black text-amber-700 underline">إظهار كامل الوحدات</button></div>}
