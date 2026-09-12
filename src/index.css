@@ -1471,17 +1471,19 @@ html:not(.dark) #super-admin-portal button:not(.bg-indigo-600):not(.bg-rose-600)
    school policy to an individual school or employee decision.
    -------------------------------------------------------------------------- */
 .identity-control-surface {
-  --identity-navy: #07152d;
-  --identity-navy-soft: #12284a;
-  --identity-amber: #f59e0b;
-  --identity-surface: #ffffff;
-  --identity-border: #d8e1ed;
-  background-image: radial-gradient(circle at 8% 0%, rgba(245, 158, 11, 0.08), transparent 24rem);
+  --identity-brown: #1c120c;
+  --identity-brown-soft: #2d1e12;
+  --identity-gold: #d4af37;
+  --identity-cream: #fffefb;
+  --identity-border: rgba(212, 175, 55, 0.36);
+  background-color: #f8f5ee;
+  background-image: radial-gradient(circle at 8% 0%, rgba(212, 175, 55, 0.14), transparent 24rem), linear-gradient(135deg, #f8f5ee 0%, #efe9dc 58%, #e8e0d0 100%);
 }
 
 .identity-control-surface .identity-hero {
   isolation: isolate;
-  background-image: linear-gradient(110deg, #07152d 0%, #0b1d3b 58%, #3c2b20 100%);
+  background-image: linear-gradient(110deg, #1c120c 0%, #2d1e12 58%, #1a100a 100%);
+  border-color: rgba(212, 175, 55, 0.42) !important;
 }
 
 .identity-control-surface .identity-hero::after {
@@ -1491,7 +1493,7 @@ html:not(.dark) #super-admin-portal button:not(.bg-indigo-600):not(.bg-rose-600)
   width: 19rem;
   height: 19rem;
   border-radius: 9999px;
-  background: radial-gradient(circle, rgba(245, 158, 11, 0.19), rgba(245, 158, 11, 0));
+  background: radial-gradient(circle, rgba(212, 175, 55, 0.24), rgba(212, 175, 55, 0));
   content: '';
   pointer-events: none;
 }
@@ -1503,8 +1505,9 @@ html:not(.dark) #super-admin-portal button:not(.bg-indigo-600):not(.bg-rose-600)
   flex-direction: column;
   justify-content: space-between;
   overflow: hidden;
-  border-color: var(--identity-border);
-  box-shadow: 0 8px 22px rgba(15, 23, 42, 0.06);
+  border-color: var(--identity-border) !important;
+  background: linear-gradient(180deg, #fffefb 0%, #f5eeea 100%) !important;
+  box-shadow: 0 8px 22px rgba(73, 45, 19, 0.10);
   transition: transform 160ms ease, box-shadow 160ms ease, border-color 160ms ease;
 }
 
@@ -1514,24 +1517,31 @@ html:not(.dark) #super-admin-portal button:not(.bg-indigo-600):not(.bg-rose-600)
   right: 0;
   width: 0.28rem;
   height: 100%;
-  background: linear-gradient(180deg, var(--identity-amber), #facc15);
+  background: linear-gradient(180deg, #f7d174, var(--identity-gold));
   content: '';
 }
 
 .identity-control-surface .identity-metric-grid > .identity-metric-card:hover {
   transform: translateY(-2px);
-  border-color: rgba(245, 158, 11, 0.55);
-  box-shadow: 0 14px 28px rgba(15, 23, 42, 0.10);
+  border-color: rgba(212, 175, 55, 0.80) !important;
+  box-shadow: 0 14px 28px rgba(73, 45, 19, 0.16);
+}
+
+.identity-control-surface .identity-hero .identity-metric-card {
+  background: rgba(255, 255, 255, 0.07) !important;
+  border-color: rgba(247, 209, 116, 0.24) !important;
+  box-shadow: none;
 }
 
 .identity-control-surface .identity-panel {
   border-color: var(--identity-border);
-  box-shadow: 0 12px 26px rgba(15, 23, 42, 0.06);
+  background: linear-gradient(180deg, #fffefb 0%, #f8f3ea 100%);
+  box-shadow: 0 12px 26px rgba(73, 45, 19, 0.10);
 }
 
 .identity-control-surface .identity-view-tabs {
   border-color: var(--identity-border);
-  background: linear-gradient(180deg, #ffffff, #f8fafc);
+  background: linear-gradient(180deg, #fffefb, #f5eeea);
 }
 
 .identity-control-surface .identity-view-tabs button {
@@ -1548,7 +1558,29 @@ html:not(.dark) #super-admin-portal button:not(.bg-indigo-600):not(.bg-rose-600)
 }
 
 .identity-decision-surface .identity-hero {
-  border-bottom: 3px solid rgba(245, 158, 11, 0.82);
+  border-bottom: 3px solid rgba(212, 175, 55, 0.82);
+}
+
+.identity-control-surface table {
+  border-color: rgba(212, 175, 55, 0.30);
+}
+
+.identity-control-surface thead tr,
+.identity-control-surface thead th {
+  background: linear-gradient(110deg, #2a1d13 0%, #3a2719 62%, #2a1d13 100%) !important;
+  color: #f7d174 !important;
+}
+
+.identity-control-surface button.bg-amber-600,
+.identity-control-surface button.bg-amber-700 {
+  background-image: linear-gradient(110deg, #d4af37 0%, #f7d174 48%, #9a6a1d 100%) !important;
+  color: #1a100a !important;
+  border: 1px solid rgba(252, 231, 154, 0.72);
+}
+
+.identity-control-surface button.bg-amber-600:hover,
+.identity-control-surface button.bg-amber-700:hover {
+  filter: brightness(1.08);
 }
 
 @media (max-width: 640px) {
