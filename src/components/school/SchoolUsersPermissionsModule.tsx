@@ -263,13 +263,26 @@ export default function SchoolUsersPermissionsModule({ selectedSchool, selectedB
       Exam: 'الامتحانات والنتائج', Hr: 'الموارد البشرية', Financial: 'الحسابات والمالية',
       Inventory: 'المخزون والمشتريات', Admission: 'القبول والتسجيل', Ai: 'المساعد الذكي',
       Identity: 'المستخدمون والصلاحيات', Audit: 'سجل الرقابة', Database: 'إدارة قاعدة البيانات',
+      Assets: 'الأصول الثابتة', Attendance: 'الحضور والانصراف', Branches: 'الفروع', Buses: 'النقل المدرسي',
+      Fixed_assets: 'الأصول الثابتة', Invoice: 'الفواتير', Ledger: 'دفتر الأستاذ', Library: 'المكتبة',
+      Permissions: 'إدارة الصلاحيات', Procurement: 'المشتريات', Settings: 'الإعدادات',
+      Uniform_management: 'الزي المدرسي', Warehouse: 'المستودعات',
     };
     const actionLabels: Record<string, string> = {
       View: 'عرض', Read: 'قراءة', Write: 'إضافة وتعديل', Edit: 'تعديل', Delete: 'حذف',
       Export: 'تصدير', Create: 'إنشاء', Verify: 'تحقق', Archive: 'أرشفة', Approve: 'اعتماد',
-      Forecast: 'تنبؤ', Chat: 'محادثة', Assign: 'إسناد', Audit: 'تدقيق',
+      Forecast: 'تنبؤ', Chat: 'محادثة', Assign: 'إسناد', Audit: 'تدقيق', Insert: 'إضافة',
+      Print: 'طباعة', Post: 'ترحيل', Cancel: 'إلغاء', Refresh: 'تحديث', Backup: 'نسخة احتياطية',
+      Monitor: 'مراقبة', Optimize: 'تحسين', Simulate: 'محاكاة', Borrow: 'إعارة', Reverse: 'عكس القيد',
+      Link: 'ربط', Import: 'استيراد', Override: 'تجاوز', Sales: 'مبيعات', Stock: 'مخزون',
     };
-    return `${resourceLabels[permission.resource] || permission.resource} — ${actionLabels[permission.action] || permission.action}`;
+    const action = permission.action.split('.').map((part) => actionLabels[part] || part.replaceAll('_', ' ')).join(' — ');
+    return `${resourceLabels[permission.resource] || permission.resource.replaceAll('_', ' ')} — ${action}`;
+  };
+
+  const permissionOperationalDescription = (permission: PermissionDescriptor) => {
+    const [resourceLabel, ...actionParts] = permissionLabel(permission).split(' — ');
+    return `يسمح بـ${actionParts.join(' — ') || permission.action} ضمن ${resourceLabel} في نطاق المدرسة.`;
   };
 
   const centrallyDeniedPermissionKeys = useMemo(() => new Set(
@@ -417,7 +430,7 @@ export default function SchoolUsersPermissionsModule({ selectedSchool, selectedB
                     return <tr key={permission.permissionKey} className={state.centrallyDenied ? 'bg-rose-50/70' : state.effective ? 'bg-emerald-50/40 hover:bg-emerald-50/70' : 'bg-white hover:bg-slate-50'}>
                       <td className="p-3"><div className="font-black text-slate-800">{moduleLabel}</div><div className="mt-1 font-mono text-[9px] text-slate-400">{permission.resource}</div></td>
                       <td className="p-3"><div className="font-bold text-slate-800">{actionLabel || permission.action}</div><div className="mt-1 text-[10px] text-slate-500">{permission.action}</div></td>
-                      <td className="max-w-60 p-3 text-[10px] leading-5 text-slate-600">{permission.description || 'يسمح بتنفيذ هذه الوظيفة ضمن نطاق المدرسة.'}</td>
+                      <td className="max-w-60 p-3 text-[10px] leading-5 text-slate-600">{permissionOperationalDescription(permission)}</td>
                       <td className="p-3"><code className="rounded bg-slate-100 px-2 py-1 font-mono text-[10px] text-slate-600">{permission.permissionKey}</code></td>
                       <td className="p-3 text-center">{source}</td>
                       <td className="p-3 text-center">{state.centrallyDenied ? <span title="ممنوعة مركزيًا"><Lock className="mx-auto h-4 w-4 text-rose-600" aria-label="ممنوعة مركزيًا" /></span> : <input type="checkbox" aria-label={`تفويض مباشر ${permission.permissionKey}`} checked={state.direct} disabled={state.inherited || !canAssign} onChange={() => togglePermission(permission.permissionKey)} className="h-5 w-5 cursor-pointer accent-amber-600 disabled:cursor-not-allowed disabled:opacity-45" />}</td>
