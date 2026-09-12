@@ -3513,6 +3513,7 @@ async function startServer() {
               ('table', 'platform_school_releases'),
               ('column', 'users.job_title'),
               ('column', 'users.department'),
+              ('column', 'users.job_id'),
               ('column', 'users.session_revoked_at'),
               ('column', 'users.force_password_change'),
               ('column', 'user_permission_grants.effect'),
