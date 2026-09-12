@@ -123,6 +123,45 @@ const supabaseOrigin = (() => {
   }
 })();
 
+// Supabase's managed pooler currently chains to this public root. Render's
+// Node runtime does not include it in its system trust store, so strict TLS
+// verification otherwise fails with SELF_SIGNED_CERT_IN_CHAIN. An explicit
+// PGSSL_CA override remains supported for environments using another CA.
+const SUPABASE_ROOT_2021_CA = `-----BEGIN CERTIFICATE-----
+MIIDxDCCAqygAwIBAgIUbLxMod62P2ktCiAkxnKJwtE9VPYwDQYJKoZIhvcNAQEL
+BQAwazELMAkGA1UEBhMCVVMxEDAOBgNVBAgMB0RlbHdhcmUxEzARBgNVBAcMCk5l
+dyBDYXN0bGUxFTATBgNVBAoMDFN1cGFiYXNlIEluYzEeMBwGA1UEAwwVU3VwYWJh
+c2UgUm9vdCAyMDIxIENBMB4XDTIxMDQyODEwNTY1M1oXDTMxMDQyNjEwNTY1M1ow
+azELMAkGA1UEBhMCVVMxEDAOBgNVBAgMB0RlbHdhcmUxEzARBgNVBAcMCk5ldyBD
+YXN0bGUxFTATBgNVBAoMDFN1cGFiYXNlIEluYzEeMBwGA1UEAwwVU3VwYWJhc2Ug
+Um9vdCAyMDIxIENBMIIBIjANBgkqhkiG9w0BAQEFAAOCAQ8AMIIBCgKCAQEAqQXW
+QyHOB+qR2GJobCq/CBmQ40G0oDmCC3mzVnn8sv4XNeWtE5XcEL0uVih7Jo4Dkx1Q
+DmGHBH1zDfgs2qXiLb6xpw/CKQPypZW1JssOTMIfQppNQ87K75Ya0p25Y3ePS2t2
+GtvHxNjUV6kjOZjEn2yWEcBdpOVCUYBVFBNMB4YBHkNRDa/+S4uywAoaTWnCJLUi
+cvTlHmMw6xSQQn1UfRQHk50DMCEJ7Cy1RxrZJrkXXRP3LqQL2ijJ6F4yMfh+Gyb4
+O4XajoVj/+R4GwywKYrrS8PrSNtwxr5StlQO8zIQUSMiq26wM8mgELFlS/32Uclt
+NaQ1xBRizkzpZct9DwIDAQABo2AwXjALBgNVHQ8EBAMCAQYwHQYDVR0OBBYEFKjX
+uXY32CztkhImng4yJNUtaUYsMB8GA1UdIwQYMBaAFKjXuXY32CztkhImng4yJNUt
+aUYsMA8GA1UdEwEB/wQFMAMBAf8wDQYJKoZIhvcNAQELBQADggEBAB8spzNn+4VU
+tVxbdMaX+39Z50sc7uATmus16jmmHjhIHz+l/9GlJ5KqAMOx26mPZgfzG7oneL2b
+VW+WgYUkTT3XEPFWnTp2RJwQao8/tYPXWEJDc0WVQHrpmnWOFKU/d3MqBgBm5y+6
+jB81TU/RG2rVerPDWP+1MMcNNy0491CTL5XQZ7JfDJJ9CCmXSdtTl4uUQnSuv/Qx
+Cea13BX2ZgJc7Au30vihLhub52De4P/4gonKsNHYdbWjg7OWKwNv/zitGDVDB9Y2
+CMTyZKG3XEu5Ghl1LEnI3QmEKsqaCLv12BnVjbkSeZsMnevJPs1Ye6TjjJwdik5P
+o/bKiIz+Fq8=
+-----END CERTIFICATE-----`;
+
+const postgresSslConfig = process.env.PGSSLMODE === 'disable'
+  ? undefined
+  : {
+      rejectUnauthorized: process.env.PGSSL_REJECT_UNAUTHORIZED === 'true',
+      ...(process.env.PGSSL_CA
+        ? { ca: process.env.PGSSL_CA.replaceAll('\\n', '\n') }
+        : supabaseOrigin?.endsWith('.supabase.co') || supabaseOrigin?.includes('.supabase.com')
+          ? { ca: SUPABASE_ROOT_2021_CA }
+          : {}),
+    };
+
 // Central administration deliberately uses a separate privileged connection.
 // Normal tenant traffic must use DATABASE_URL, which is configured with a
 // non-bypass RLS role in production. A fallback is retained only for explicit
@@ -139,9 +178,7 @@ const platformAdminPool = platformAdminConnectionString
       connectionString: platformAdminConnectionString,
       max: Number(process.env.PG_PLATFORM_POOL_MAX || 5),
       connectionTimeoutMillis: Number(process.env.PG_CONNECTION_TIMEOUT_MS || 5_000),
-      ssl: process.env.PGSSLMODE === 'disable'
-        ? undefined
-        : { rejectUnauthorized: process.env.PGSSL_REJECT_UNAUTHORIZED === 'true' },
+      ssl: postgresSslConfig,
     })
   : null;
 
