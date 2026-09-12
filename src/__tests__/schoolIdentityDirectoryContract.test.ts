@@ -94,6 +94,15 @@ describe('school-scoped identity directory contracts', () => {
     expect(module).toContain('الصلاحية الفعالة');
     expect(module).toContain('تحديد المباشر الظاهر');
     expect(module).toContain('حفظ الصلاحيات وتسجيلها');
+    expect(module).toContain('visiblePermissionGroups');
+    expect(module).toContain('setModuleDirectPermissions');
+    expect(module).toContain('وحدة {group.label}');
+    expect(module).toContain('منح تفويضات وحدة');
+    expect(module).toContain('سحب التفويض المباشر');
+    expect(module).toContain('منح أو سحب التفويض يتم من رأس كل وحدة');
+    expect(module).toContain('الحالة الفعالة ${permission.permissionKey}');
+    expect(module).toContain("'مفعّل'");
+    expect(module).toContain("'غير مفعّل'");
   });
 
   it('supports username login for email-less school accounts without fabricating a public email', () => {
