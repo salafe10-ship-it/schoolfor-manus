@@ -415,8 +415,8 @@ export default function SuperAdminRbac({ schools = [], logAction, triggerNotific
   const totalDirtyEmployees = openEmployees.filter((employee) => hasPermissionMatrixChanges(savedEmployeePermissions[employee.id], employeePermissionDrafts[employee.id])).length;
 
   return (
-    <div className="space-y-5 text-right" dir="rtl">
-      <section className="relative overflow-hidden rounded-3xl border border-amber-500/20 bg-gradient-to-l from-slate-950 via-slate-900 to-amber-950/40 p-6 text-white shadow-2xl">
+    <div data-identity-module="central-permissions" className="identity-control-surface space-y-5 text-right" dir="rtl">
+      <section className="identity-hero relative overflow-hidden rounded-3xl border border-amber-500/20 bg-gradient-to-l from-slate-950 via-slate-900 to-amber-950/40 p-6 text-white shadow-2xl">
         <div className="absolute -left-16 -top-20 h-52 w-52 rounded-full bg-amber-400/10 blur-3xl" />
         <div className="relative flex flex-col gap-5 xl:flex-row xl:items-center xl:justify-between">
           <div className="max-w-3xl">
@@ -429,16 +429,16 @@ export default function SuperAdminRbac({ schools = [], logAction, triggerNotific
             <button type="button" onClick={() => void handlePublishMotherSchoolRbac()} disabled={isPublishing || !canonicalTemplate?.id || totalDirtyRoles > 0} className="flex items-center gap-2 rounded-xl bg-emerald-600 px-4 py-2.5 text-xs font-black shadow-lg hover:bg-emerald-500 disabled:cursor-not-allowed disabled:opacity-50">{isPublishing ? <RefreshCw className="h-4 w-4 animate-spin" /> : <Send className="h-4 w-4" />}{isPublishing ? 'جارٍ التوزيع...' : 'توزيع على المدارس'}</button>
           </div>
         </div>
-        <div className="relative mt-6 grid gap-3 sm:grid-cols-2 xl:grid-cols-5">
-          <div className="rounded-2xl border border-white/10 bg-white/5 p-3"><div className="text-2xl font-black">{roles.length}</div><div className="mt-1 text-[10px] font-bold text-slate-400">وظائف صلاحيات</div></div>
-          <div className="rounded-2xl border border-white/10 bg-white/5 p-3"><div className="text-2xl font-black text-sky-300">{openEmployees.length}</div><div className="mt-1 text-[10px] font-bold text-slate-400">موظفو المدارس المفتوحة</div></div>
-          <div className="rounded-2xl border border-white/10 bg-white/5 p-3"><div className="text-2xl font-black text-amber-300">{permissionCatalog.length}</div><div className="mt-1 text-[10px] font-bold text-slate-400">صلاحيات البرنامج</div></div>
-          <div className="rounded-2xl border border-white/10 bg-white/5 p-3"><div className="text-2xl font-black text-emerald-300">{linkedSchools}</div><div className="mt-1 text-[10px] font-bold text-slate-400">مدارس تستقبل القالب</div></div>
-          <div className="rounded-2xl border border-white/10 bg-white/5 p-3"><div className="text-2xl font-black text-violet-300">{canonicalTemplate?.version || '—'}</div><div className="mt-1 text-[10px] font-bold text-slate-400">إصدار المدرسة الأم</div></div>
+        <div className="identity-metric-grid relative mt-6 grid gap-3 sm:grid-cols-2 xl:grid-cols-5">
+          <div className="identity-metric-card rounded-2xl border border-white/10 bg-white/5 p-3"><div className="text-2xl font-black">{roles.length}</div><div className="mt-1 text-[10px] font-bold text-slate-400">وظائف صلاحيات</div></div>
+          <div className="identity-metric-card rounded-2xl border border-white/10 bg-white/5 p-3"><div className="text-2xl font-black text-sky-300">{openEmployees.length}</div><div className="mt-1 text-[10px] font-bold text-slate-400">موظفو المدارس المفتوحة</div></div>
+          <div className="identity-metric-card rounded-2xl border border-white/10 bg-white/5 p-3"><div className="text-2xl font-black text-amber-300">{permissionCatalog.length}</div><div className="mt-1 text-[10px] font-bold text-slate-400">صلاحيات البرنامج</div></div>
+          <div className="identity-metric-card rounded-2xl border border-white/10 bg-white/5 p-3"><div className="text-2xl font-black text-emerald-300">{linkedSchools}</div><div className="mt-1 text-[10px] font-bold text-slate-400">مدارس تستقبل القالب</div></div>
+          <div className="identity-metric-card rounded-2xl border border-white/10 bg-white/5 p-3"><div className="text-2xl font-black text-violet-300">{canonicalTemplate?.version || '—'}</div><div className="mt-1 text-[10px] font-bold text-slate-400">إصدار المدرسة الأم</div></div>
         </div>
       </section>
 
-      <section className="grid gap-3 rounded-2xl border border-slate-200 bg-white p-4 shadow-sm lg:grid-cols-4">
+      <section className="identity-panel grid gap-3 rounded-2xl border border-slate-200 bg-white p-4 shadow-sm lg:grid-cols-4">
         {[
           ['١', 'اختر وحدة البرنامج', 'مثل الطلاب أو الحسابات'],
           ['٢', 'حدد صلاحية الوظيفة', 'علامة واحدة لكل الموظفين'],
@@ -450,13 +450,13 @@ export default function SuperAdminRbac({ schools = [], logAction, triggerNotific
       {(totalDirtyRoles > 0 || totalDirtyEmployees > 0) && <div className="flex items-center gap-3 rounded-2xl border border-amber-300 bg-amber-50 px-4 py-3 text-xs font-bold text-amber-900"><AlertTriangle className="h-5 w-5 shrink-0" />لديك {totalDirtyRoles} تعديل وظيفة و{totalDirtyEmployees} تعديل موظف غير محفوظ. احفظ كل صف يحمل علامة «غير محفوظ».</div>}
       {lastPropagation && <div className="flex items-center gap-2 rounded-2xl border border-emerald-200 bg-emerald-50 px-4 py-3 text-xs font-bold text-emerald-800"><Check className="h-4 w-4" />آخر توزيع ناجح: {lastPropagation.targetCount || 0} مدرسة، مع إصدار مستقل وآمن لكل مدرسة.</div>}
 
-      <section className="overflow-hidden rounded-3xl border border-slate-200 bg-white shadow-xl">
+      <section className="identity-panel overflow-hidden rounded-3xl border border-slate-200 bg-white shadow-xl">
         <div className="border-b border-slate-200 bg-slate-50 p-4">
           <div className="flex flex-col gap-3 xl:flex-row xl:items-center xl:justify-between">
             <div><h2 className="flex items-center gap-2 text-sm font-black text-slate-900"><SlidersHorizontal className="h-4 w-4 text-amber-600" />اختر وحدة البرنامج</h2><p className="mt-1 text-[11px] text-slate-500">جميع وحدات البرنامج موجودة هنا، واعرض وحدة واحدة فقط لتبقى الشاشة بسيطة.</p></div>
             <div className="relative w-full xl:w-80"><Search className="pointer-events-none absolute right-3 top-2.5 h-4 w-4 text-slate-400" /><input value={permissionQuery} onChange={(event) => setPermissionQuery(event.target.value)} placeholder="بحث عن وحدة أو صلاحية..." className="w-full rounded-xl border border-slate-200 bg-white py-2 pl-3 pr-9 text-xs outline-none focus:border-amber-400" /></div>
           </div>
-          <div className="mt-4 flex gap-2 overflow-x-auto pb-1">
+          <div className="identity-view-tabs mt-4 flex gap-2 overflow-x-auto pb-1">
             {permissionModules.map((module) => <button key={module.resource} type="button" onClick={() => setSelectedResource(module.resource)} className={`shrink-0 rounded-xl border px-3 py-2 text-[11px] font-black transition ${selectedResource === module.resource ? 'border-amber-500 bg-amber-500 text-white shadow' : 'border-slate-200 bg-white text-slate-600 hover:border-amber-300'}`}>{module.label}<span className={`mr-1.5 rounded-full px-1.5 py-0.5 text-[9px] ${selectedResource === module.resource ? 'bg-white/20' : 'bg-slate-100'}`}>{module.permissions.length}</span></button>)}
             {!permissionModules.length && <span className="px-3 py-2 text-xs font-bold text-slate-500">لا توجد صلاحيات مطابقة للبحث.</span>}
           </div>

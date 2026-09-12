@@ -1465,6 +1465,99 @@ html:not(.dark) #super-admin-portal button:not(.bg-indigo-600):not(.bg-rose-600)
 }
 
 /* --------------------------------------------------------------------------
+   Identity & permissions: shared control-room identity
+   The central template and school views deliberately use this same visual
+   grammar. It keeps an administrator oriented while moving from the mother
+   school policy to an individual school or employee decision.
+   -------------------------------------------------------------------------- */
+.identity-control-surface {
+  --identity-navy: #07152d;
+  --identity-navy-soft: #12284a;
+  --identity-amber: #f59e0b;
+  --identity-surface: #ffffff;
+  --identity-border: #d8e1ed;
+  background-image: radial-gradient(circle at 8% 0%, rgba(245, 158, 11, 0.08), transparent 24rem);
+}
+
+.identity-control-surface .identity-hero {
+  isolation: isolate;
+  background-image: linear-gradient(110deg, #07152d 0%, #0b1d3b 58%, #3c2b20 100%);
+}
+
+.identity-control-surface .identity-hero::after {
+  position: absolute;
+  inset: auto -5rem -7rem auto;
+  z-index: -1;
+  width: 19rem;
+  height: 19rem;
+  border-radius: 9999px;
+  background: radial-gradient(circle, rgba(245, 158, 11, 0.19), rgba(245, 158, 11, 0));
+  content: '';
+  pointer-events: none;
+}
+
+.identity-control-surface .identity-metric-grid > .identity-metric-card {
+  position: relative;
+  display: flex;
+  min-height: 7.5rem;
+  flex-direction: column;
+  justify-content: space-between;
+  overflow: hidden;
+  border-color: var(--identity-border);
+  box-shadow: 0 8px 22px rgba(15, 23, 42, 0.06);
+  transition: transform 160ms ease, box-shadow 160ms ease, border-color 160ms ease;
+}
+
+.identity-control-surface .identity-metric-grid > .identity-metric-card::before {
+  position: absolute;
+  top: 0;
+  right: 0;
+  width: 0.28rem;
+  height: 100%;
+  background: linear-gradient(180deg, var(--identity-amber), #facc15);
+  content: '';
+}
+
+.identity-control-surface .identity-metric-grid > .identity-metric-card:hover {
+  transform: translateY(-2px);
+  border-color: rgba(245, 158, 11, 0.55);
+  box-shadow: 0 14px 28px rgba(15, 23, 42, 0.10);
+}
+
+.identity-control-surface .identity-panel {
+  border-color: var(--identity-border);
+  box-shadow: 0 12px 26px rgba(15, 23, 42, 0.06);
+}
+
+.identity-control-surface .identity-view-tabs {
+  border-color: var(--identity-border);
+  background: linear-gradient(180deg, #ffffff, #f8fafc);
+}
+
+.identity-control-surface .identity-view-tabs button {
+  position: relative;
+  min-height: 2.75rem;
+}
+
+.identity-control-surface .identity-view-tabs button:focus-visible,
+.identity-control-surface button:focus-visible,
+.identity-control-surface input:focus-visible,
+.identity-control-surface select:focus-visible {
+  outline: 3px solid rgba(245, 158, 11, 0.44);
+  outline-offset: 2px;
+}
+
+.identity-decision-surface .identity-hero {
+  border-bottom: 3px solid rgba(245, 158, 11, 0.82);
+}
+
+@media (max-width: 640px) {
+  .identity-control-surface .identity-metric-grid > .identity-metric-card {
+    min-height: 6.5rem;
+  }
+}
+
+/* --------------------------------------------------------------------------
    Fees management reference screen
    This screen follows the supplied light reference: warm paper canvas,
    restrained gold frame, blue/green/rose KPI cards and compact form controls.
