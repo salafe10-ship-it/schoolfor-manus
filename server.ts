@@ -272,7 +272,18 @@ if (platformAdminPool) {
          ORDER BY "roleKey", "permissionKey"`,
         [tenantId, authUserId, schoolId, identity?.branchId || null],
       );
-      return result.rows;
+      // A healthy legacy control connection can still be pointed at a
+      // different identity database. In that case it returns an empty set
+      // rather than throwing, which would incorrectly hide every shortcut
+      // for a valid Supabase school identity. Treat an empty result like the
+      // documented compatibility failure and resolve from the canonical
+      // Supabase control-plane channel.
+      if (result.rows.length > 0 || !platformControl) return result.rows;
+      EnterpriseLogger.warn('Tenant role pool returned no assignments; using Supabase control-plane fallback.', 'TrustedAuthentication', {
+        schoolId,
+        authUserId,
+      });
+      return loadTenantPermissionsFromPlatformControl(identity);
     } catch (error) {
       // Render environments can expose a pooler certificate chain that the
       // node runtime cannot validate even though the server-only Supabase
