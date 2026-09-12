@@ -31,6 +31,9 @@ describe('school-scoped identity directory contracts', () => {
     expect(server).toContain('roleLookup');
     expect(server).toContain('الدور غير منشور من المدرسة الأم');
     expect(server).toContain('job_id');
+    expect(server).toContain('const ensureIdentityJobSchema = async');
+    expect(server).toContain('ALTER TABLE public.users ADD COLUMN IF NOT EXISTS job_id text');
+    expect(server).toContain('await ensureIdentityJobSchema();');
     expect(server).toContain('jsonb_array_elements(COALESCE(h.data->\'jobs\'' );
   });
 

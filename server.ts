@@ -198,6 +198,34 @@ const platformAdminPool = platformAdminConnectionString
     })
   : null;
 
+// The identity screens depend on the canonical HR job reference.  Production
+// deployments may boot against a database whose migration ledger is behind
+// the application artifact, so make this additive schema prerequisite
+// idempotent and wait for it before serving identity reads/writes.  This is
+// deliberately limited to the non-destructive column addition; all data
+// changes still go through the authenticated screen APIs below.
+let identityJobSchemaPromise: Promise<void> | null = null;
+const ensureIdentityJobSchema = async (): Promise<void> => {
+  if (!platformAdminPool) return;
+  if (!identityJobSchemaPromise) {
+    identityJobSchemaPromise = platformAdminPool.query(
+      `ALTER TABLE public.users ADD COLUMN IF NOT EXISTS job_id text`,
+    ).then(() => undefined).catch((error) => {
+      identityJobSchemaPromise = null;
+      throw error;
+    });
+  }
+  await identityJobSchemaPromise;
+};
+
+if (platformAdminPool) {
+  void ensureIdentityJobSchema().catch((error) => {
+    EnterpriseLogger.error('Identity job reference schema bootstrap failed.', 'ServerBootstrap', {
+      error: error instanceof Error ? error.message : String(error),
+    });
+  });
+}
+
 // Platform permissions are a control-plane concern.  They must never be
 // resolved through the tenant data-plane transaction, because that channel is
 // intentionally RLS-restricted to a school context.  The query still accepts
@@ -5508,6 +5536,7 @@ async function startServer() {
   app.get('/api/school/job-catalog', authenticateRequest, requirePermissionOnly(PERMISSIONS.IDENTITY_USERS_READ), async (req, res, next) => {
     if (!platformAdminPool) return next(new DatabaseError('مصدر الهوية المركزي غير متاح.'));
     try {
+      await ensureIdentityJobSchema();
       const { tenantId, schoolId } = schoolIdentityScope(req);
       const result = await platformAdminPool.query(
         `SELECT data->'jobs' AS jobs, data->'departments' AS departments
@@ -5547,6 +5576,7 @@ async function startServer() {
   app.get('/api/school/users', authenticateRequest, requirePermissionOnly(PERMISSIONS.IDENTITY_USERS_READ), async (req, res, next) => {
     if (!platformAdminPool) return next(new DatabaseError('مصدر الهوية المركزي غير متاح.'));
     try {
+      await ensureIdentityJobSchema();
       const { tenantId, schoolId } = schoolIdentityScope(req);
       const result = await platformAdminPool.query(
         `SELECT u.id, u.auth_user_id, u.tenant_id, u.school_id, u.branch_id,
@@ -5605,6 +5635,7 @@ async function startServer() {
     const correlationId = String(req.body?.correlationId || req.get('X-Correlation-Id') || randomUUID()).trim();
     let authUserId = '';
     try {
+      await ensureIdentityJobSchema();
       const { tenantId, schoolId, actorAuthUserId } = schoolIdentityScope(req);
       const displayName = String(req.body?.name || req.body?.displayName || '').trim();
       const jobId = String(req.body?.jobId || '').trim();
@@ -5720,6 +5751,7 @@ async function startServer() {
   app.patch('/api/school/users/:userId', authenticateRequest, requireSchoolIdentityMutationPermission, async (req, res, next) => {
     if (!platformAdminPool || !platformAdminAuth) return next(new ExternalServiceError('خدمة هوية المدرسة غير مهيأة.'));
     try {
+      await ensureIdentityJobSchema();
       const { tenantId, schoolId, actorAuthUserId } = schoolIdentityScope(req);
       const userId = String(req.params.userId || '').trim();
       const operation = String(req.body?.operation || '').trim();
