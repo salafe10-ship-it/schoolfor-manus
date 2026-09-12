@@ -4839,7 +4839,11 @@ async function startServer() {
   });
 
   app.post('/api/admin/central/schools/:schoolId/users', authenticateRequest, requirePermissionOnly(PERMISSIONS.PLATFORM_ADMIN), async (req, res, next) => {
-    if (platformControl && !platformAdminPool) {
+    // Supabase Auth and the control-plane tables must share the same database
+    // connection.  A separate platform-admin pool cannot satisfy the FK from
+    // public.users.auth_user_id to auth.users.id, so central provisioning must
+    // always use the canonical Supabase control-plane path when available.
+    if (platformControl) {
       const identity = (req as any).user as { id?: string };
       const tenantId = String(req.body?.targetTenantId || '').trim();
       const actorAuthUserId = String(identity?.id || '').trim();
