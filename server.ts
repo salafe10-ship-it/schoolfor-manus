@@ -2351,6 +2351,144 @@ async function startServer() {
   const workspaceSelectColumns = workspaceColumns.split(',').map((column) => `r.${column.trim()}`).join(', ');
   const CANONICAL_SCHOOL_TEMPLATE_KEY = 'central-schools-default';
 
+  // Production keeps the tenant data plane and the privileged platform
+  // control plane on separate connections.  A school created or restored in
+  // the data plane must still be visible to the central directory before a
+  // template release can target it.  Reconcile only the directory shell
+  // (tenant/school/branch identity and metadata); operational rows are never
+  // copied across planes.  The operation is idempotent, UUID-preserving, and
+  // guarded against cross-tenant identity collisions.
+  let centralDirectorySyncAt = 0;
+  let centralDirectorySyncInFlight: Promise<{ syncedSchools: number; syncedBranches: number; schools: string[] }> | null = null;
+  const reconcileCustomerSchoolDirectory = async (force = false) => {
+    if (!platformAdminPool || !platformAdminAuth) {
+      return { syncedSchools: 0, syncedBranches: 0, schools: [] as string[] };
+    }
+    const now = Date.now();
+    if (!force && now - centralDirectorySyncAt < 60_000) {
+      return { syncedSchools: 0, syncedBranches: 0, schools: [] as string[] };
+    }
+    if (centralDirectorySyncInFlight) return centralDirectorySyncInFlight;
+    centralDirectorySyncInFlight = (async () => {
+      const { data: sourceSchools, error: sourceSchoolError } = await platformAdminAuth
+        .from('schools')
+        .select('id, tenant_id, school_code, legal_name, display_name, timezone, locale, status, central_metadata')
+        .eq('status', 'active')
+        .is('deleted_at', null);
+      if (sourceSchoolError) throw sourceSchoolError;
+      const customerSchools = (sourceSchools || []).filter((school: any) => {
+        const metadata = readObject(school.central_metadata);
+        return school.school_code !== 'CENTRAL-SCHOOL'
+          && metadata.portal_profile === 'customer_production';
+      });
+      if (!customerSchools.length) {
+        centralDirectorySyncAt = Date.now();
+        return { syncedSchools: 0, syncedBranches: 0, schools: [] };
+      }
+      const tenantIds = [...new Set(customerSchools.map((school: any) => String(school.tenant_id || '').trim()).filter(isUuid))];
+      const schoolIds = customerSchools.map((school: any) => String(school.id || '').trim()).filter(isUuid);
+      const [{ data: sourceTenants, error: sourceTenantError }, { data: sourceBranches, error: sourceBranchError }] = await Promise.all([
+        platformAdminAuth.from('tenants').select('id, legal_name, slug, plan_code, status').in('id', tenantIds).is('deleted_at', null),
+        platformAdminAuth.from('branches').select('id, tenant_id, school_id, branch_code, name, address, status').in('school_id', schoolIds).is('deleted_at', null),
+      ]);
+      if (sourceTenantError) throw sourceTenantError;
+      if (sourceBranchError) throw sourceBranchError;
+      const tenantsById = new Map((sourceTenants || []).map((tenant: any) => [String(tenant.id), tenant]));
+      const client = await platformAdminPool.connect();
+      let syncedSchools = 0;
+      let syncedBranches = 0;
+      try {
+        await client.query('BEGIN');
+        for (const sourceSchool of customerSchools) {
+          const schoolId = String(sourceSchool.id || '').trim();
+          const tenantId = String(sourceSchool.tenant_id || '').trim();
+          if (!isUuid(schoolId) || !isUuid(tenantId)) throw new ConflictError('هوية مدرسة أو مستأجر غير صالحة أثناء مزامنة الدليل المركزي.');
+          const sourceTenant = tenantsById.get(tenantId);
+          if (!sourceTenant) throw new ConflictError(`المستأجر ${tenantId} غير موجود في مصدر التشغيل؛ أُوقفت مزامنة الدليل.`);
+          await client.query(
+            `INSERT INTO public.tenants (id, legal_name, slug, plan_code, status, created_by, updated_by)
+             VALUES ($1::uuid, $2, $3, $4, $5, NULL, NULL)
+             ON CONFLICT (id) DO UPDATE SET
+               legal_name = EXCLUDED.legal_name,
+               plan_code = EXCLUDED.plan_code,
+               status = EXCLUDED.status,
+               deleted_at = NULL,
+               deleted_by = NULL,
+               updated_at = now(),
+               version = tenants.version + 1`,
+            [tenantId, String(sourceTenant.legal_name || sourceSchool.display_name || 'مستأجر مدرسي').trim(), String(sourceTenant.slug || `tenant-${tenantId.slice(0, 8)}`).trim().toLowerCase(), String(sourceTenant.plan_code || 'standard').trim(), ['provisioning', 'active', 'suspended', 'archived'].includes(String(sourceTenant.status)) ? sourceTenant.status : 'active'],
+          );
+          const existingSchool = await client.query<{ tenant_id: string }>(
+            `SELECT tenant_id FROM public.schools WHERE id = $1::uuid FOR UPDATE`,
+            [schoolId],
+          );
+          if (existingSchool.rowCount === 1 && existingSchool.rows[0].tenant_id !== tenantId) {
+            throw new ConflictError(`تعارض UUID للمدرسة ${schoolId} بين مستأجرين مختلفين؛ أُوقفت المزامنة.`);
+          }
+          await client.query(
+            `INSERT INTO public.schools
+               (id, tenant_id, school_code, legal_name, display_name, timezone, locale, status, central_metadata, created_by, updated_by)
+             VALUES ($1::uuid, $2::uuid, $3, $4, $5, $6, $7, 'active', $8::jsonb, NULL, NULL)
+             ON CONFLICT (id) DO UPDATE SET
+               school_code = EXCLUDED.school_code,
+               legal_name = EXCLUDED.legal_name,
+               display_name = EXCLUDED.display_name,
+               timezone = EXCLUDED.timezone,
+               locale = EXCLUDED.locale,
+               status = 'active',
+               central_metadata = EXCLUDED.central_metadata,
+               deleted_at = NULL,
+               deleted_by = NULL,
+               updated_at = now(),
+               version = schools.version + 1`,
+            [schoolId, tenantId, String(sourceSchool.school_code || `SCH-${schoolId.slice(0, 8).toUpperCase()}`).trim(), String(sourceSchool.legal_name || sourceSchool.display_name || '').trim(), String(sourceSchool.display_name || sourceSchool.legal_name || '').trim(), String(sourceSchool.timezone || 'Africa/Khartoum').trim(), String(sourceSchool.locale || 'ar').trim(), JSON.stringify(readObject(sourceSchool.central_metadata))],
+          );
+          syncedSchools += 1;
+        }
+        for (const sourceBranch of sourceBranches || []) {
+          const branchId = String(sourceBranch.id || '').trim();
+          const schoolId = String(sourceBranch.school_id || '').trim();
+          const tenantId = String(sourceBranch.tenant_id || '').trim();
+          if (!isUuid(branchId) || !isUuid(schoolId) || !isUuid(tenantId)) continue;
+          const existingBranch = await client.query<{ tenant_id: string; school_id: string }>(
+            `SELECT tenant_id, school_id FROM public.branches WHERE id = $1::uuid FOR UPDATE`,
+            [branchId],
+          );
+          if (existingBranch.rowCount === 1 && (existingBranch.rows[0].tenant_id !== tenantId || existingBranch.rows[0].school_id !== schoolId)) {
+            throw new ConflictError(`تعارض UUID للفرع ${branchId}؛ أُوقفت مزامنة الدليل.`);
+          }
+          await client.query(
+            `INSERT INTO public.branches
+               (id, tenant_id, school_id, branch_code, name, address, status, created_by, updated_by)
+             VALUES ($1::uuid, $2::uuid, $3::uuid, $4, $5, $6::jsonb, $7, NULL, NULL)
+             ON CONFLICT (id) DO UPDATE SET
+               branch_code = EXCLUDED.branch_code,
+               name = EXCLUDED.name,
+               address = EXCLUDED.address,
+               status = EXCLUDED.status,
+               deleted_at = NULL,
+               deleted_by = NULL,
+               updated_at = now(),
+               version = branches.version + 1`,
+            [branchId, tenantId, schoolId, String(sourceBranch.branch_code || `BR-${branchId.slice(0, 8).toUpperCase()}`).trim(), String(sourceBranch.name || 'الفرع الرئيسي').trim(), JSON.stringify(sourceBranch.address && typeof sourceBranch.address === 'object' ? sourceBranch.address : {}), ['provisioning', 'active', 'closed', 'archived'].includes(String(sourceBranch.status)) ? sourceBranch.status : 'active'],
+          );
+          syncedBranches += 1;
+        }
+        await client.query('COMMIT');
+        centralDirectorySyncAt = Date.now();
+        return { syncedSchools, syncedBranches, schools: customerSchools.map((school: any) => String(school.display_name || school.legal_name || '').trim()).filter(Boolean) };
+      } catch (error) {
+        try { await client.query('ROLLBACK'); } catch { /* preserve original error */ }
+        throw error;
+      } finally {
+        client.release();
+      }
+    })().finally(() => {
+      centralDirectorySyncInFlight = null;
+    });
+    return centralDirectorySyncInFlight;
+  };
+
   const ensureCanonicalRbacDefaults = async (client: any, tenantId: string) => {
     // This helper runs on the school read path. Keep it idempotent and set
     // based: the previous per-role/per-permission loop could take long enough
@@ -2708,6 +2846,7 @@ async function startServer() {
   app.get('/api/admin/central/workspaces', authenticateRequest, requirePermissionOnly(PERMISSIONS.PLATFORM_ADMIN), async (_req, res, next) => {
     if (!platformAdminPool) return next(new DatabaseError('مصدر مساحة المالك المركزية غير متاح.'));
     try {
+      await reconcileCustomerSchoolDirectory();
       const result = await platformAdminPool.query(`
         SELECT s.id AS school_id, s.tenant_id, s.display_name, s.school_code, s.status,
                s.central_metadata,
@@ -3353,6 +3492,11 @@ async function startServer() {
   });
 
   app.get('/api/admin/central/tenants', authenticateRequest, requirePermissionOnly(PERMISSIONS.PLATFORM_ADMIN), async (req, res, next) => {
+    try {
+      await reconcileCustomerSchoolDirectory();
+    } catch (error) {
+      return next(new DatabaseError('تعذر مزامنة المدارس المفتوحة مع الدليل المركزي.', error instanceof Error ? error.message : String(error)));
+    }
     if (platformControl && !platformAdminPool) {
       const includeArchived = String(req.query?.includeArchived || '').toLowerCase() === 'true';
       try {
@@ -3804,6 +3948,11 @@ async function startServer() {
   // creation entry point: scope is derived from the verified platform
   // identity and the two records are committed atomically in PostgreSQL.
   app.get('/api/admin/central/schools', authenticateRequest, requirePermissionOnly(PERMISSIONS.PLATFORM_ADMIN), async (req, res, next) => {
+    try {
+      await reconcileCustomerSchoolDirectory();
+    } catch (error) {
+      return next(new DatabaseError('تعذر مزامنة المدارس المفتوحة مع الدليل المركزي.', error instanceof Error ? error.message : String(error)));
+    }
     if (platformControl && !platformAdminPool) {
       const requestedTenantId = String(req.query?.tenantId || '').trim();
       if (requestedTenantId && !/^[0-9a-f-]{36}$/i.test(requestedTenantId)) return next(new ValidationError('معرف المستأجر غير صالح.'));
@@ -4325,6 +4474,11 @@ async function startServer() {
   // Central branch directory. Branches are managed through the same verified
   // platform identity as schools; the browser never supplies tenant scope.
   app.get('/api/admin/central/branches', authenticateRequest, requirePermissionOnly(PERMISSIONS.PLATFORM_ADMIN), async (req, res, next) => {
+    try {
+      await reconcileCustomerSchoolDirectory();
+    } catch (error) {
+      return next(new DatabaseError('تعذر مزامنة فروع المدارس المفتوحة مع الدليل المركزي.', error instanceof Error ? error.message : String(error)));
+    }
     if (platformControl && !platformAdminPool) {
       const tenantId = String(req.query?.tenantId || '').trim();
       const schoolId = String(req.query?.schoolId || '').trim();

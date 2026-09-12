@@ -82,6 +82,14 @@ describe('owner workspace and targeted release contract', () => {
     expect(server).toContain('automaticPropagation: true');
   });
 
+  it('reconciles open customer schools into the central directory without copying operations', () => {
+    const server = read('server.ts');
+    expect(server).toContain('reconcileCustomerSchoolDirectory');
+    expect(server).toContain(".from('schools')");
+    expect(server).toContain('operational rows are never');
+    expect(server).toContain('cross-tenant identity collisions');
+  });
+
   it('carries the mother-school RBAC snapshot into automatic releases', () => {
     const server = read('server.ts');
     expect(server).toContain('captureCanonicalRbacManifest');
