@@ -95,6 +95,10 @@ export default function SchoolUsersPermissionsModule({ selectedSchool, selectedB
   const [activeView, setActiveView] = useState<ManagementView>('users');
   const [form, setForm] = useState({ name: '', email: '', jobId: '', jobTitle: '', department: '', initialRole: '', password: '', branchId: '' });
   const canCreate = canManage && canAssign;
+  // The school screen is deliberately read-only for granular permissions.
+  // Central administrators own exceptions, review, and publication; schools
+  // only assign approved central roles to their own employees.
+  const centralOnlyPermissionGovernance = true;
 
   const notify = (message: string, type: 'info' | 'warning' | 'success' = 'info') => triggerNotification?.(message, type);
 
@@ -244,6 +248,10 @@ export default function SchoolUsersPermissionsModule({ selectedSchool, selectedB
 
   const togglePermission = (permissionKey: string) => {
     if (!permissionEditing) return;
+    if (centralOnlyPermissionGovernance) {
+      notify('التفويض الدقيق يُدار من المدرسة الأم المركزية؛ هذه الشاشة تعرض القرار الفعّال للموظف.', 'warning');
+      return;
+    }
     if ((permissionEditing.directPermissions || []).some((permission) => permission.permissionKey === permissionKey && permission.effect === 'deny')) {
       notify('هذه الصلاحية ممنوعة مركزيًا لهذا الموظف ولا يمكن منحها من داخل المدرسة.', 'warning');
       return;
@@ -257,6 +265,10 @@ export default function SchoolUsersPermissionsModule({ selectedSchool, selectedB
 
   const savePermissions = async () => {
     if (!permissionEditing) return;
+    if (centralOnlyPermissionGovernance) {
+      notify('لا توجد تعديلات محلية للحفظ؛ راجع الدور أو الاستثناء من المدرسة الأم المركزية.', 'warning');
+      return;
+    }
     if (!confirmAction('سيتم استبدال التفويضات المباشرة الحالية بالقائمة المحددة. هل تريد المتابعة؟')) return;
     const saved = await mutate(permissionEditing, 'set_permissions', { permissionKeys: permissionDrafts[permissionEditing.id] || [] });
     if (saved) setPermissionEditing(null);
@@ -346,7 +358,7 @@ export default function SchoolUsersPermissionsModule({ selectedSchool, selectedB
   }, [visiblePermissionCatalog]);
 
   const setModuleDirectPermissions = (resource: string, grant: boolean) => {
-    if (!permissionEditing || !canAssign) return;
+    if (!permissionEditing || !canAssign || centralOnlyPermissionGovernance) return;
     const eligibleKeys = permissionCatalog
       .filter((permission) => permission.resource === resource)
       .filter((permission) => !centrallyDeniedPermissionKeys.has(permission.permissionKey) && !inheritedPermissionKeys.has(permission.permissionKey))
@@ -406,7 +418,7 @@ export default function SchoolUsersPermissionsModule({ selectedSchool, selectedB
               <div className="rounded-2xl border border-slate-200 bg-white p-3"><p className="text-[10px] font-black text-slate-500">إجمالي الصلاحيات</p><p className="mt-1 text-2xl font-black">{permissionCatalog.length}</p><p className="text-[10px] text-slate-500">ضمن {permissionSummary.modules} وحدات</p></div>
               <div className="rounded-2xl border border-emerald-200 bg-emerald-50 p-3"><p className="text-[10px] font-black text-emerald-700">فعّالة الآن</p><p className="mt-1 text-2xl font-black text-emerald-900">{permissionSummary.effective}</p><p className="text-[10px] text-emerald-700">تغطية {coverage}%</p></div>
               <div className="rounded-2xl border border-sky-200 bg-sky-50 p-3"><p className="text-[10px] font-black text-sky-700">موروثة من الدور</p><p className="mt-1 text-2xl font-black text-sky-900">{permissionSummary.inherited}</p><p className="text-[10px] text-sky-700">من قالب المدرسة الأم</p></div>
-              <div className="rounded-2xl border border-amber-200 bg-amber-50 p-3"><p className="text-[10px] font-black text-amber-700">تفويض مباشر</p><p className="mt-1 text-2xl font-black text-amber-900">{permissionSummary.direct}</p><p className="text-[10px] text-amber-700">قابل للتعديل محليًا</p></div>
+              <div className="rounded-2xl border border-amber-200 bg-amber-50 p-3"><p className="text-[10px] font-black text-amber-700">استثناء مركزي</p><p className="mt-1 text-2xl font-black text-amber-900">{permissionSummary.direct}</p><p className="text-[10px] text-amber-700">يُدار من المدرسة الأم</p></div>
               <div className="rounded-2xl border border-slate-200 bg-white p-3"><p className="text-[10px] font-black text-slate-500">غير ممنوحة</p><p className="mt-1 text-2xl font-black">{permissionSummary.unassigned}</p><p className="text-[10px] text-slate-500">لا تمنح الوصول</p></div>
               <div className="rounded-2xl border border-rose-200 bg-rose-50 p-3"><p className="text-[10px] font-black text-rose-700">منع مركزي</p><p className="mt-1 text-2xl font-black text-rose-900">{permissionSummary.denied}</p><p className="text-[10px] text-rose-700">محمي من التجاوز</p></div>
             </div>
@@ -415,13 +427,13 @@ export default function SchoolUsersPermissionsModule({ selectedSchool, selectedB
               <div className="flex flex-wrap items-center gap-2 text-[10px] font-bold">
                 <span className="rounded-full bg-emerald-100 px-3 py-1.5 text-emerald-800">✓ فعّالة</span>
                 <span className="rounded-full bg-sky-100 px-3 py-1.5 text-sky-800">موروثة من الدور</span>
-                <span className="rounded-full bg-amber-100 px-3 py-1.5 text-amber-800">مباشرة من المدرسة</span>
+                <span className="rounded-full bg-amber-100 px-3 py-1.5 text-amber-800">استثناء مركزي موثّق</span>
                 <span className="rounded-full bg-rose-100 px-3 py-1.5 text-rose-800">ممنوعة مركزيًا</span>
               </div>
               <div className="flex flex-col gap-2 sm:flex-row sm:items-center">
                 <div className="relative min-w-64 flex-1"><Search className="absolute right-3 top-2.5 h-4 w-4 text-slate-400" /><input aria-label="بحث في الصلاحيات" value={permissionQuery} onChange={(event) => setPermissionQuery(event.target.value)} placeholder="ابحث باسم الشاشة أو الوظيفة أو المفتاح" className="w-full rounded-xl border border-slate-200 bg-slate-50 py-2.5 pl-3 pr-9 text-xs outline-none focus:border-amber-400 focus:bg-white" /></div>
                 <select aria-label="تصفية حالة الصلاحيات" value={permissionStateFilter} onChange={(event) => setPermissionStateFilter(event.target.value as PermissionStateFilter)} className="rounded-xl border border-slate-200 bg-white px-3 py-2.5 text-xs font-bold outline-none focus:border-amber-400"><option value="all">كل الحالات</option><option value="effective">الفعالة فقط</option><option value="inherited">الموروثة من الدور</option><option value="direct">التفويض المباشر</option><option value="unassigned">غير الممنوحة</option><option value="denied">المنع المركزي</option></select>
-                <span className="rounded-xl border border-slate-200 bg-slate-50 px-3 py-2.5 text-[10px] font-bold text-slate-600">منح أو سحب التفويض يتم من رأس كل وحدة.</span>
+                <span className="rounded-xl border border-slate-200 bg-slate-50 px-3 py-2.5 text-[10px] font-bold text-slate-600">التفويضات والاستثناءات تعتمد من المدرسة الأم.</span>
               </div>
             </div>
 
@@ -438,7 +450,7 @@ export default function SchoolUsersPermissionsModule({ selectedSchool, selectedB
                 return <section key={group.resource} className={`overflow-hidden rounded-2xl border bg-white shadow-sm transition ${isExpanded ? 'border-amber-300 ring-1 ring-amber-100' : 'border-slate-200'}`}>
                   <div className="flex flex-col gap-3 border-b border-slate-200 bg-gradient-to-l from-slate-900 to-slate-800 p-4 text-white lg:flex-row lg:items-center lg:justify-between">
                     <button type="button" onClick={() => setExpandedPermissionModules((current) => ({ ...current, [group.resource]: !isExpanded }))} aria-expanded={isExpanded} className="text-right"><div className="flex items-center gap-2"><span className="flex h-7 w-7 items-center justify-center rounded-lg bg-amber-400 text-xs font-black text-slate-950">{group.permissions.length}</span><h3 className="font-black">وحدة {group.label}</h3><ChevronDown className={`h-4 w-4 text-amber-300 transition ${isExpanded ? 'rotate-180' : ''}`} /></div><p className="mt-1 text-[10px] text-slate-300">{effectiveInModule} فعّالة • {inheritedInModule} موروثة • {directInModule} تفويض مباشر • {allModulePermissions.length} صلاحية في الوحدة</p></button>
-                    <div className="flex flex-wrap items-center gap-2">{eligiblePermissions.length > 0 ? <><button type="button" disabled={!canAssign || everyEligibleDirect} onClick={() => setModuleDirectPermissions(group.resource, true)} className="rounded-xl bg-amber-400 px-3 py-2 text-[10px] font-black text-slate-950 hover:bg-amber-300 disabled:cursor-not-allowed disabled:opacity-45">{everyEligibleDirect ? 'تفويض الوحدة مكتمل' : `منح تفويضات وحدة ${group.label}`}</button><button type="button" disabled={!canAssign || directInModule === 0} onClick={() => setModuleDirectPermissions(group.resource, false)} className="rounded-xl border border-white/20 bg-white/10 px-3 py-2 text-[10px] font-black text-white hover:bg-white/20 disabled:cursor-not-allowed disabled:opacity-45">سحب التفويض المباشر</button></> : <span className="rounded-xl border border-white/15 bg-white/10 px-3 py-2 text-[10px] font-bold text-slate-200">تدار من القالب المركزي أو المنع المركزي</span>}</div>
+                    <div className="flex flex-wrap items-center gap-2"><span className="rounded-xl border border-white/15 bg-white/10 px-3 py-2 text-[10px] font-bold text-slate-200">القالب والاستثناءات يُداران مركزيًا</span></div>
                   </div>
                   {isExpanded && <div className="overflow-x-auto"><table className="w-full min-w-[900px] text-right text-xs"><thead className="bg-slate-50 text-[10px] font-black text-slate-600"><tr><th className="p-3">الوظيفة أو الزر</th><th className="p-3">الوصف التشغيلي</th><th className="p-3">مفتاح الصلاحية</th><th className="p-3 text-center">مصدر المنح</th><th className="p-3 text-center">تفويض مباشر</th><th className="p-3 text-center">الحالة الفعالة</th></tr></thead><tbody className="divide-y divide-slate-100">{group.permissions.map((permission) => {
                     const state = getPermissionState(permission);
@@ -448,14 +460,14 @@ export default function SchoolUsersPermissionsModule({ selectedSchool, selectedB
                         : state.inherited ? <span className="rounded-full bg-sky-100 px-2 py-1 text-[9px] font-black text-sky-700">قالب الدور</span>
                           : state.direct ? <span className="rounded-full bg-amber-100 px-2 py-1 text-[9px] font-black text-amber-800">تفويض مباشر</span>
                             : <span className="text-slate-400">غير ممنوحة</span>;
-                    return <tr key={permission.permissionKey} className={state.centrallyDenied ? 'bg-rose-50/70' : state.effective ? 'bg-emerald-50/40 hover:bg-emerald-50/70' : 'bg-white hover:bg-slate-50'}><td className="p-3"><div className="font-bold text-slate-800">{actionLabel}</div><div className="mt-1 text-[10px] text-slate-500">تشغيل ضمن {group.label}</div></td><td className="max-w-72 p-3 text-[10px] leading-5 text-slate-600">{permissionOperationalDescription(permission)}</td><td className="p-3"><code className="rounded bg-slate-100 px-2 py-1 font-mono text-[10px] text-slate-600">{permission.permissionKey}</code></td><td className="p-3 text-center">{source}</td><td className="p-3 text-center">{state.centrallyDenied ? <span title="ممنوعة مركزيًا"><Lock className="mx-auto h-4 w-4 text-rose-600" aria-label="ممنوعة مركزيًا" /></span> : <input type="checkbox" aria-label={`تفويض مباشر ${permission.permissionKey}`} checked={state.direct} disabled={state.inherited || !canAssign} onChange={() => togglePermission(permission.permissionKey)} className="h-5 w-5 cursor-pointer accent-amber-600 disabled:cursor-not-allowed disabled:opacity-45" />}</td><td className="p-3 text-center"><label className={`inline-flex min-w-24 items-center justify-center gap-2 rounded-xl border px-2.5 py-1.5 text-[10px] font-black ${state.effective ? 'border-emerald-200 bg-emerald-50 text-emerald-800' : state.centrallyDenied ? 'border-rose-200 bg-rose-50 text-rose-800' : 'border-slate-200 bg-slate-50 text-slate-500'}`}><input type="checkbox" aria-label={`الحالة الفعالة ${permission.permissionKey}`} checked={state.effective} disabled aria-readonly="true" className="h-4 w-4 accent-emerald-600 disabled:cursor-default disabled:opacity-100" /><span>{state.effective ? 'مفعّل' : state.centrallyDenied ? 'محظور مركزيًا' : 'غير مفعّل'}</span></label></td></tr>;
+                    return <tr key={permission.permissionKey} className={state.centrallyDenied ? 'bg-rose-50/70' : state.effective ? 'bg-emerald-50/40 hover:bg-emerald-50/70' : 'bg-white hover:bg-slate-50'}><td className="p-3"><div className="font-bold text-slate-800">{actionLabel}</div><div className="mt-1 text-[10px] text-slate-500">تشغيل ضمن {group.label}</div></td><td className="max-w-72 p-3 text-[10px] leading-5 text-slate-600">{permissionOperationalDescription(permission)}</td><td className="p-3"><code className="rounded bg-slate-100 px-2 py-1 font-mono text-[10px] text-slate-600">{permission.permissionKey}</code></td><td className="p-3 text-center">{source}</td><td className="p-3 text-center">{state.centrallyDenied ? <span title="ممنوعة مركزيًا"><Lock className="mx-auto h-4 w-4 text-rose-600" aria-label="ممنوعة مركزيًا" /></span> : <input type="checkbox" aria-label={`استثناء مركزي ${permission.permissionKey}`} checked={state.direct} disabled className="h-5 w-5 accent-amber-600 disabled:cursor-not-allowed disabled:opacity-55" />}</td><td className="p-3 text-center"><label className={`inline-flex min-w-24 items-center justify-center gap-2 rounded-xl border px-2.5 py-1.5 text-[10px] font-black ${state.effective ? 'border-emerald-200 bg-emerald-50 text-emerald-800' : state.centrallyDenied ? 'border-rose-200 bg-rose-50 text-rose-800' : 'border-slate-200 bg-slate-50 text-slate-500'}`}><input type="checkbox" aria-label={`الحالة الفعالة ${permission.permissionKey}`} checked={state.effective} disabled aria-readonly="true" className="h-4 w-4 accent-emerald-600 disabled:cursor-default disabled:opacity-100" /><span>{state.effective ? 'مفعّل' : state.centrallyDenied ? 'محظور مركزيًا' : 'غير مفعّل'}</span></label></td></tr>;
                   })}</tbody></table></div>}
                 </section>;
               })}</div>
               {visiblePermissionGroups.length === 0 && <div className="rounded-2xl border border-slate-200 bg-white p-14 text-center"><p className="text-sm font-black text-slate-600">لا توجد صلاحيات مطابقة للتصفية الحالية.</p><button type="button" onClick={() => { setPermissionQuery(''); setPermissionStateFilter('all'); }} className="mt-3 text-xs font-black text-amber-700 underline">إظهار كامل الوحدات</button></div>}
             </div>
 
-            <footer className="flex flex-col-reverse gap-2 border-t border-slate-100 bg-white p-4 sm:flex-row sm:items-center sm:justify-between"><p className="text-[10px] leading-5 text-slate-500">الحفظ يحدّث التفويضات المباشرة فقط، ويسجل العملية في الرقابة. صلاحيات الدور تُدار وتنشر من المدرسة الأم.</p><div className="flex gap-2"><button type="button" onClick={() => setPermissionEditing(null)} className="rounded-xl border border-slate-200 px-5 py-2.5 text-xs font-black">إلغاء</button><button type="button" disabled={saving || !canAssign} onClick={() => void savePermissions()} className="rounded-xl bg-amber-600 px-6 py-2.5 text-xs font-black text-white shadow-lg hover:bg-amber-500 disabled:opacity-50">{saving ? 'جارٍ تطبيق الصلاحيات...' : 'حفظ التغييرات وتسجيلها'}</button></div></footer>
+            <footer className="flex flex-col-reverse gap-2 border-t border-slate-100 bg-white p-4 sm:flex-row sm:items-center sm:justify-between"><p className="text-[10px] leading-5 text-slate-500">هذه شاشة قرار فعّال للمدرسة. الأدوار والاستثناءات تُراجع وتعتمد وتنشر من المدرسة الأم المركزية.</p><button type="button" onClick={() => setPermissionEditing(null)} className="rounded-xl border border-slate-200 px-5 py-2.5 text-xs font-black">إغلاق</button></footer>
           </div>
         </div>
       </section>

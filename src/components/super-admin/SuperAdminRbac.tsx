@@ -80,6 +80,17 @@ const overrideSignature = (overrides: readonly PermissionOverride[] | undefined)
   .sort()
   .join('|');
 
+const SEPARATION_OF_DUTIES_RULES = [
+  { keys: ['Financial.Write', 'Financial.Approve'], label: 'إدخال واعتماد العمليات المالية' },
+  { keys: ['Invoice.Write', 'Invoice.Approve'], label: 'إعداد واعتماد الفواتير' },
+  { keys: ['Ledger.Write', 'Ledger.Approve'], label: 'إعداد واعتماد قيود دفتر الأستاذ' },
+] as const;
+
+const separationOfDutiesConflict = (permissionKeys: readonly string[]) => {
+  const keys = new Set(permissionKeys);
+  return SEPARATION_OF_DUTIES_RULES.find((rule) => rule.keys.every((key) => keys.has(key))) || null;
+};
+
 export default function SuperAdminRbac({ schools = [], logAction, triggerNotification }: SuperAdminRbacProps) {
   const [roles, setRoles] = useState<CentralRole[]>([]);
   const [employees, setEmployees] = useState<CentralUser[]>([]);
@@ -217,6 +228,11 @@ export default function SuperAdminRbac({ schools = [], logAction, triggerNotific
   const saveRolePermissions = async (roleId: string) => {
     const role = roles.find((entry) => entry.id === roleId);
     if (!role || !roleHasChanges(role)) return;
+    const conflict = separationOfDutiesConflict(rolePermissions[roleId] || []);
+    if (conflict) {
+      triggerNotification(`تم منع الحفظ: لا يجوز الجمع بين ${conflict.label} في الوظيفة نفسها.`, 'warning');
+      return;
+    }
     setSelectedRoleId(roleId);
     setIsSaving(true);
     try {
@@ -304,6 +320,11 @@ export default function SuperAdminRbac({ schools = [], logAction, triggerNotific
     }
     if (!newRole.permissionKeys.length) {
       triggerNotification('اختر صلاحية واحدة على الأقل للوظيفة الجديدة.', 'warning');
+      return;
+    }
+    const conflict = separationOfDutiesConflict(newRole.permissionKeys);
+    if (conflict) {
+      triggerNotification(`تم منع الإنشاء: لا يجوز الجمع بين ${conflict.label} في الوظيفة نفسها.`, 'warning');
       return;
     }
     setIsSaving(true);
@@ -470,19 +491,20 @@ export default function SuperAdminRbac({ schools = [], logAction, triggerNotific
                 const expanded = expandedRoles[role.id] !== false;
                 const roleDraft = new Set(rolePermissions[role.id] || []);
                 const dirtyRole = roleHasChanges(role);
+                const roleConflict = separationOfDutiesConflict(rolePermissions[role.id] || []);
                 return <tbody key={role.id} className="border-b border-slate-200">
                   <tr className="bg-amber-50/80">
                     <th className="sticky right-0 z-10 border-b border-l border-amber-200 bg-amber-50 p-3">
                       <button type="button" onClick={() => setExpandedRoles((current) => ({ ...current, [role.id]: !expanded }))} className="flex w-full items-center gap-3 text-right">
                         <span className="flex h-9 w-9 shrink-0 items-center justify-center rounded-xl bg-amber-500 text-white">{expanded ? <ChevronDown className="h-4 w-4" /> : <ChevronLeft className="h-4 w-4" />}</span>
-                        <span className="min-w-0"><span className="flex items-center gap-2 text-sm font-black text-slate-900"><BriefcaseBusiness className="h-4 w-4 text-amber-700" />{role.name}{dirtyRole && <span className="rounded-full bg-amber-200 px-2 py-0.5 text-[9px] text-amber-900">غير محفوظ</span>}</span><span className="mt-1 block text-[10px] font-bold text-slate-500">{members.length} موظف • صلاحيات الوظيفة تطبق على الجميع</span></span>
+                        <span className="min-w-0"><span className="flex items-center gap-2 text-sm font-black text-slate-900"><BriefcaseBusiness className="h-4 w-4 text-amber-700" />{role.name}{dirtyRole && <span className="rounded-full bg-amber-200 px-2 py-0.5 text-[9px] text-amber-900">غير محفوظ</span>}{roleConflict && <span className="rounded-full bg-rose-100 px-2 py-0.5 text-[9px] text-rose-800">تعارض فصل واجبات</span>}</span><span className={`mt-1 block text-[10px] font-bold ${roleConflict ? 'text-rose-700' : 'text-slate-500'}`}>{roleConflict ? `يجب فصل ${roleConflict.label} قبل النشر` : `${members.length} موظف • صلاحيات الوظيفة تطبق على الجميع`}</span></span>
                       </button>
                     </th>
                     {activeModule.permissions.map((permission) => {
                       const checked = roleDraft.has(permission.permissionKey);
                       return <td key={permission.permissionKey} className={`border-b border-l border-amber-200 p-3 text-center ${checked ? 'bg-amber-100/80' : ''}`}><label className="inline-flex cursor-pointer flex-col items-center gap-1"><input type="checkbox" checked={checked} onChange={() => handleTogglePermission(role.id, permission.permissionKey)} className="h-5 w-5 rounded border-slate-300 accent-amber-600" /><span className={`text-[9px] font-black ${checked ? 'text-amber-800' : 'text-slate-400'}`}>{checked ? 'مسموح' : 'ممنوع'}</span></label></td>;
                     })}
-                    <td className="sticky left-0 z-10 border-b border-amber-200 bg-amber-50 p-3 text-center"><div className="flex flex-col gap-1.5"><button type="button" onClick={() => void saveRolePermissions(role.id)} disabled={isSaving || !dirtyRole} className="flex items-center justify-center gap-1 rounded-lg bg-amber-600 px-3 py-2 text-[10px] font-black text-white shadow disabled:cursor-not-allowed disabled:bg-slate-300"><Save className="h-3.5 w-3.5" />{isSaving && selectedRoleId === role.id ? 'جارٍ النشر...' : 'حفظ ونشر'}</button><div className="flex gap-1"><button type="button" onClick={() => setModulePermissions(role.id, activeModule.resource, true)} className="flex-1 rounded-md border border-emerald-200 bg-white px-1 py-1 text-[8px] font-black text-emerald-700">السماح بالكل</button><button type="button" onClick={() => setModulePermissions(role.id, activeModule.resource, false)} className="flex-1 rounded-md border border-rose-200 bg-white px-1 py-1 text-[8px] font-black text-rose-700">منع الكل</button></div></div></td>
+                    <td className="sticky left-0 z-10 border-b border-amber-200 bg-amber-50 p-3 text-center"><div className="flex flex-col gap-1.5"><button type="button" onClick={() => void saveRolePermissions(role.id)} disabled={isSaving || !dirtyRole || Boolean(roleConflict)} className="flex items-center justify-center gap-1 rounded-lg bg-amber-600 px-3 py-2 text-[10px] font-black text-white shadow disabled:cursor-not-allowed disabled:bg-slate-300"><Save className="h-3.5 w-3.5" />{roleConflict ? 'أزل التعارض' : isSaving && selectedRoleId === role.id ? 'جارٍ النشر...' : 'حفظ ونشر'}</button><div className="flex gap-1"><button type="button" onClick={() => setModulePermissions(role.id, activeModule.resource, true)} className="flex-1 rounded-md border border-emerald-200 bg-white px-1 py-1 text-[8px] font-black text-emerald-700">السماح بالكل</button><button type="button" onClick={() => setModulePermissions(role.id, activeModule.resource, false)} className="flex-1 rounded-md border border-rose-200 bg-white px-1 py-1 text-[8px] font-black text-rose-700">منع الكل</button></div></div></td>
                   </tr>
                   {expanded && members.map((employee) => {
                     const effectiveDraft = new Set(employeePermissionDrafts[employee.id] || []);

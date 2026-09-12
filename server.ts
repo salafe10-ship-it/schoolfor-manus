@@ -705,6 +705,23 @@ const CENTRAL_IDENTITY_ROLE_CATALOG: Record<string, { name: string; description:
   },
 };
 
+/**
+ * Separation of duties for high-impact financial operations. A single school
+ * role must not both prepare and approve the same financial record. This is
+ * enforced server-side so no browser, import, or stale screen can bypass it.
+ */
+const SENSITIVE_PERMISSION_CONFLICTS: ReadonlyArray<{ keys: readonly string[]; label: string }> = [
+  { keys: [PERMISSIONS.FINANCIAL_WRITE, 'Financial.Approve'], label: 'إدخال واعتماد العمليات المالية' },
+  { keys: ['Invoice.Write', 'Invoice.Approve'], label: 'إعداد واعتماد الفواتير' },
+  { keys: ['Ledger.Write', 'Ledger.Approve'], label: 'إعداد واعتماد قيود دفتر الأستاذ' },
+];
+
+function assertNoSegregationOfDutiesConflict(permissionKeys: readonly string[]): void {
+  const granted = new Set(permissionKeys);
+  const conflict = SENSITIVE_PERMISSION_CONFLICTS.find((rule) => rule.keys.every((key) => granted.has(key)));
+  if (conflict) throw new ValidationError(`فصل الواجبات يمنع الجمع بين صلاحيات ${conflict.label} في دور واحد.`);
+}
+
 type ProvisionedLoginIdentity = {
   /** The real email supplied by the administrator, or null when omitted. */
   profileEmail: string | null;
@@ -5895,61 +5912,7 @@ async function startServer() {
           if (result.rowCount !== 1) throw new ConflictError('تعذر إسناد الدور؛ تغير المستخدم بواسطة مسؤول آخر.');
           updated = result.rows[0]; metadata = { beforeRole: row.role_key, roleKey };
         } else if (operation === 'set_permissions') {
-          const requested = req.body?.permissionKeys;
-          if (!Array.isArray(requested) || requested.length > 200) throw new ValidationError('قائمة صلاحيات المستخدم غير صالحة.');
-          const permissionKeys = [...new Set(requested
-            .map((value: unknown) => permissionRegistry.normalize(value))
-            .filter((value: string | null): value is string => Boolean(value)))];
-          if (permissionKeys.length !== requested.length || permissionKeys.includes(PERMISSIONS.PLATFORM_ADMIN)) throw new ValidationError('قائمة الصلاحيات تحتوي مفتاحاً غير مسجلاً أو صلاحية إدارة المنصة.');
-          const centralDenials = await client.query(
-            `SELECT p.permission_key
-               FROM public.user_permission_grants upg
-               JOIN public.permissions p ON p.id = upg.permission_id
-              WHERE upg.tenant_id = $1::uuid AND upg.user_id = $2::uuid AND upg.school_id = $3::uuid
-                AND upg.effect = 'deny' AND upg.status = 'active' AND upg.deleted_at IS NULL`,
-            [tenantId, userId, schoolId],
-          );
-          const deniedKeys = new Set(centralDenials.rows.map((entry: any) => entry.permission_key));
-          if (permissionKeys.some((permissionKey) => deniedKeys.has(permissionKey))) throw new ConflictError('توجد صلاحية ممنوعة مركزيًا لهذا الموظف ولا يمكن لمدير المدرسة منحها.');
-          await client.query(
-            `UPDATE public.user_permission_grants
-                SET status = 'revoked', deleted_at = now(), deleted_by = $4::uuid,
-                    updated_at = now(), updated_by = $4::uuid, version = version + 1
-              WHERE tenant_id = $1::uuid AND user_id = $2::uuid AND school_id = $3::uuid
-                AND effect = 'allow' AND status = 'active' AND deleted_at IS NULL`,
-            [tenantId, userId, schoolId, actorAuthUserId],
-          );
-          for (const permissionKey of permissionKeys) {
-            const { resource, action } = describePermission(permissionKey);
-            const permissionResult = await client.query(
-              `INSERT INTO public.permissions (tenant_id, permission_key, resource, action, description, status, created_by, updated_by)
-               VALUES (NULL, $1, $2, $3, $1, 'active', $4::uuid, $4::uuid)
-               ON CONFLICT (permission_key) DO UPDATE SET status = 'active', deleted_at = NULL, deleted_by = NULL, updated_at = now()
-               RETURNING id`,
-              [permissionKey, resource, action, actorAuthUserId],
-            );
-            await client.query(
-              `INSERT INTO public.user_permission_grants
-                 (tenant_id, user_id, permission_id, school_id, branch_id, effect, status, created_by, updated_by)
-               VALUES ($1::uuid, $2::uuid, $3::uuid, $4::uuid, $5::uuid, 'allow', 'active', $6::uuid, $6::uuid)
-               ON CONFLICT (user_id, permission_id) DO UPDATE SET
-                 school_id = EXCLUDED.school_id, branch_id = EXCLUDED.branch_id,
-                 effect = 'allow', status = 'active', deleted_at = NULL, deleted_by = NULL,
-                 updated_at = now(), updated_by = EXCLUDED.updated_by`,
-              [tenantId, userId, permissionResult.rows[0].id, schoolId, row.branch_id || null, actorAuthUserId],
-            );
-          }
-          const result = await client.query(
-            `UPDATE public.users
-                SET updated_at = now(), updated_by = $4::uuid, version = version + 1
-              WHERE id = $1::uuid AND tenant_id = $2::uuid AND school_id = $3::uuid
-                AND deleted_at IS NULL AND version = $5
-            RETURNING id, auth_user_id, tenant_id, school_id, branch_id, display_name, status, force_password_change, version, created_at`,
-            [userId, tenantId, schoolId, actorAuthUserId, expectedVersion],
-          );
-          if (result.rowCount !== 1) throw new ConflictError('تعذر حفظ صلاحيات المستخدم؛ تغير المستخدم بواسطة مسؤول آخر.');
-          updated = result.rows[0];
-          metadata = { beforePermissions: 'redacted', permissionKeys, permissionCount: permissionKeys.length };
+          throw new AuthorizationError('التفويضات الفردية الحساسة تُدار من المدرسة الأم المركزية فقط؛ أَسنِد دورًا مركزيًا للموظف أو اطلب استثناءً مركزيًا موثقًا.');
         } else if (operation === 'reset_password') {
           const password = randomBytes(12).toString('base64url');
           const authResult = await platformAdminAuth.auth.admin.updateUserById(row.auth_user_id, { password, user_metadata: { display_name: row.display_name, forcePasswordChange: true } });
@@ -6078,6 +6041,7 @@ async function startServer() {
     if (!/^[0-9a-f-]{36}$/i.test(requestId) || !/^[0-9a-f-]{36}$/i.test(correlationId)) return next(new ValidationError('معرف الطلب أو الارتباط غير صالح.'));
     const permissionKeys = [...new Set(requestedKeys.map((key) => permissionRegistry.normalize(key)).filter((key): key is string => Boolean(key)))];
     if (!permissionKeys.length || permissionKeys.length !== requestedKeys.length || permissionKeys.includes(PERMISSIONS.PLATFORM_ADMIN)) return next(new ValidationError('اختر صلاحية واحدة على الأقل، ولا يمكن منح صلاحية إدارة المنصة لدور مدرسة.'));
+    assertNoSegregationOfDutiesConflict(permissionKeys);
     const client = await platformAdminPool.connect();
     try {
       const ownerScope = await resolveCanonicalOwnerScope(client);
@@ -6182,6 +6146,7 @@ async function startServer() {
     const permissionKeys = [...new Set(requestedKeys.map((key) => permissionRegistry.normalize(key)).filter((key): key is string => Boolean(key)))];
     if (permissionKeys.length !== requestedKeys.length) return next(new ValidationError('توجد صلاحية غير مسجلة في الكتالوج المركزي.'));
     if (permissionKeys.includes(PERMISSIONS.PLATFORM_ADMIN)) return next(new AuthorizationError('صلاحية إدارة المنصة لا يمكن إسنادها إلى دور مدرسة.'));
+    assertNoSegregationOfDutiesConflict(permissionKeys);
     const name = req.body?.name === undefined ? undefined : String(req.body.name || '').trim();
     const description = req.body?.description === undefined ? undefined : String(req.body.description || '').trim();
     if (name !== undefined && (name.length < 2 || name.length > 160)) return next(new ValidationError('اسم الدور يجب أن يكون بين حرفين و160 حرفاً.'));
