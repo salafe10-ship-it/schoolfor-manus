@@ -18,6 +18,8 @@ export type AuthorizationIdentity = {
 export type DatabaseRolePermission = {
   roleKey: string;
   permissionKey: string;
+  /** Direct user overrides may explicitly deny an inherited role permission. */
+  effect?: 'allow' | 'deny';
 };
 
 export type DatabaseRolePermissionLoader = (identity: AuthorizationIdentity) => Promise<DatabaseRolePermission[] | null>;
@@ -126,13 +128,16 @@ export class RoleResolver {
     // were resolved from the trusted database assignment above.
     if (!roleKeys.length) throw new InvalidRoleError('Database role assignment is not recognized.');
     const permissions = new Set<string>();
+    const deniedPermissions = new Set<string>();
     for (const assignment of assignments) {
       const permission = permissionRegistry.normalize(assignment.permissionKey);
       if (!permission || permission === '*' || permission === PERMISSIONS.PLATFORM_ADMIN) {
         throw new InvalidRoleError('Tenant role assignment contains an unknown, wildcard, or platform permission.');
       }
-      permissions.add(permission);
+      if (assignment.effect === 'deny') deniedPermissions.add(permission);
+      else permissions.add(permission);
     }
+    for (const deniedPermission of deniedPermissions) permissions.delete(deniedPermission);
     this.databaseAssignments.set(this.identityKey(identity), {
       roleKey: roleKeys[0],
       permissions,

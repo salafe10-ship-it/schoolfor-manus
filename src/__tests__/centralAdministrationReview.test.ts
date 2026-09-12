@@ -56,6 +56,7 @@ describe('central administration review contracts', () => {
     expect(server).toContain("uq_schools_live_central_subdomain");
     expect(server).toContain("('column', 'users.session_revoked_at')");
     expect(server).toContain("('column', 'users.force_password_change')");
+    expect(server).toContain("('column', 'user_permission_grants.effect')");
     expect(health).toContain("authenticatedRequest('/api/admin/central/health')");
     expect(health).toContain('زمن استجابة PostgreSQL المركزي');
     expect(health).toContain('ترحيلات الإدارة المركزية غير مكتملة');
@@ -68,7 +69,7 @@ describe('central administration review contracts', () => {
     const notifications = read('src/components/super-admin/SuperAdminCentralNotifications.tsx');
     expect(users).toContain('/api/admin/central/users');
     expect(rbac).toContain('/api/admin/central/rbac');
-    expect(rbac).toContain('تم اعتماد صلاحيات دور');
+    expect(rbac).toContain('تم اعتماد صلاحيات دور الوظيفة');
     expect(notifications).toContain('/api/admin/central/notifications');
     expect(notifications).not.toContain('localStorage');
   });
@@ -76,9 +77,12 @@ describe('central administration review contracts', () => {
   it('requires optimistic concurrency and records central RBAC publication evidence', () => {
     const rbac = read('src/components/super-admin/SuperAdminRbac.tsx');
     const rbacRoute = server.slice(server.indexOf("app.patch('/api/admin/central/rbac/roles/:roleId'"), server.indexOf('// Central incident command'));
-    expect(rbac).toContain('expectedVersion: activeRole.version');
+    expect(rbac).toContain('expectedVersion: role.version');
     expect(rbac).toContain('permissionCatalog');
-    expect(rbac).toContain('حملة نشر مركزية قابلة للتتبع والتراجع');
+    expect(rbac).toContain('permission-overrides');
+    expect(rbac).toContain('سماح خاص');
+    expect(rbac).toContain('منع خاص');
+    expect(rbac).toContain('الوظيفة وتحتها الموظفون');
     expect(rbacRoute).toContain('expectedVersion');
     expect(rbacRoute).toContain('version = $6');
     expect(rbacRoute).toContain("INSERT INTO public.audit_events");
@@ -88,11 +92,11 @@ describe('central administration review contracts', () => {
     expect(rbacRoute).toContain('capturedRbac');
     expect(server).toContain('resolveCanonicalOwnerScope');
     expect(server).toContain("mode: 'mother_school'");
-    expect(rbac).toContain("authenticatedRequest('/api/admin/central/templates')");
+    expect(rbac).toContain("authenticatedRequest('/api/admin/central/templates'");
     expect(rbac).toContain("operation: 'capture'");
-    expect(rbac).toContain('اعتماد ونشر للمدارس');
+    expect(rbac).toContain('توزيع على المدارس');
     expect(rbac).toContain("authenticatedRequest('/api/admin/central/rbac/roles'");
-    expect(rbac).toContain('إضافة دور جديد');
+    expect(rbac).toContain('إضافة وظيفة صلاحيات');
     expect(server).toContain('rbac.role.created');
     expect(server).toContain('captureCanonicalRbacManifest');
   });

@@ -97,7 +97,7 @@ describe('school-scoped identity directory contracts', () => {
     expect(resolver).toContain('Database-backed roles are the source of truth');
     expect(resolver).not.toContain('roleKeys.some(role => !ROLE_PERMISSIONS[role])');
     expect(rbac).toContain('toggleNewRolePermission');
-    expect(rbac).toContain('حفظ الدور واعتماده');
+    expect(rbac).toContain('حفظ الوظيفة واعتمادها');
     expect(rbac).toContain('المسمى الوظيفي');
     expect(schoolModule).toContain('الوظيفة من دليل شؤون الموظفين');
     expect(read('supabase/migrations/202609101200_identity_job_reference.sql')).toContain('ADD COLUMN IF NOT EXISTS job_id');

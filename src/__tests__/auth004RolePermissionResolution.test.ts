@@ -60,6 +60,20 @@ describe('AUTH-004 database role-permission resolution', () => {
     expect(resolver.getPermissions(identity).has(PERMISSIONS.STUDENT_DOCUMENT_VERSION_CREATE)).toBe(false);
   });
 
+  it('applies an explicit employee denial after inherited role permissions', async () => {
+    const resolver = new RoleResolver();
+    resolver.configureDatabaseLoader(async () => [
+      { roleKey: 'student_affairs', permissionKey: PERMISSIONS.STUDENT_DOCUMENT_VIEW, effect: 'allow' },
+      { roleKey: 'student_affairs', permissionKey: PERMISSIONS.STUDENT_DOCUMENT_VERIFY, effect: 'allow' },
+      { roleKey: 'student_affairs', permissionKey: PERMISSIONS.STUDENT_DOCUMENT_VERIFY, effect: 'deny' },
+    ]);
+
+    await resolver.ensureDatabasePermissions(identity);
+
+    expect(resolver.getPermissions(identity).has(PERMISSIONS.STUDENT_DOCUMENT_VIEW)).toBe(true);
+    expect(resolver.getPermissions(identity).has(PERMISSIONS.STUDENT_DOCUMENT_VERIFY)).toBe(false);
+  });
+
   it('fails closed for no assignment and unsafe permissions while accepting trusted custom roles', async () => {
     const noAssignment = new RoleResolver();
     noAssignment.configureDatabaseLoader(async () => []);

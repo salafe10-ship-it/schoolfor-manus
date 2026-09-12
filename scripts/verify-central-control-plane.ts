@@ -1,13 +1,14 @@
 import 'dotenv/config';
 import { Pool } from 'pg';
 
-const requiredTables = ['tenants', 'subscriptions', 'schools', 'branches', 'users', 'platform_users'];
+const requiredTables = ['tenants', 'subscriptions', 'schools', 'branches', 'users', 'platform_users', 'user_permission_grants'];
 const requiredIndexes = ['uq_schools_live_central_subdomain', 'uq_schools_live_central_domain'];
 const requiredColumns = [
   ['users', 'job_title'],
   ['users', 'department'],
   ['users', 'session_revoked_at'],
   ['users', 'force_password_change'],
+  ['user_permission_grants', 'effect'],
 ] as const;
 const requiredLifecycleFunctions = [
   'dbsec004_current_tenant_id',
@@ -63,7 +64,8 @@ try {
         FROM information_schema.columns
        WHERE table_schema = 'public'
          AND (table_name, column_name) IN (('users', 'job_title'), ('users', 'department'),
-                                           ('users', 'session_revoked_at'), ('users', 'force_password_change'))
+                                           ('users', 'session_revoked_at'), ('users', 'force_password_change'),
+                                           ('user_permission_grants', 'effect'))
     `);
 
     const duplicateRoutes = await client.query<{ route_type: string; duplicate_groups: number }>(`

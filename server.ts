@@ -162,8 +162,8 @@ if (platformAdminPool) {
     const authUserId = String(identity?.id || '').trim();
     if (!tenantId || !schoolId || !authUserId) throw new Error('Trusted tenant identity is incomplete for role resolution.');
     try {
-      const result = await platformAdminPool.query<{ roleKey: string; permissionKey: string }>(
-        `SELECT r.role_key AS "roleKey", p.permission_key AS "permissionKey"
+      const result = await platformAdminPool.query<{ roleKey: string; permissionKey: string; effect: 'allow' | 'deny' }>(
+        `SELECT r.role_key AS "roleKey", p.permission_key AS "permissionKey", 'allow'::text AS effect
          FROM public.users u
          JOIN public.user_roles ur
            ON ur.tenant_id = u.tenant_id AND ur.user_id = u.id
@@ -201,7 +201,8 @@ if (platformAdminPool) {
                   ORDER BY ur2.created_at ASC
                   LIMIT 1
                ), 'employee') AS "roleKey",
-               p.permission_key AS "permissionKey"
+               p.permission_key AS "permissionKey",
+               upg.effect AS effect
           FROM public.users u
           JOIN public.user_permission_grants upg
             ON upg.tenant_id = u.tenant_id AND upg.user_id = u.id
@@ -432,23 +433,30 @@ async function loadTenantPermissionsFromPlatformControl(identity: any) {
     && (!assignment.ends_at || assignment.ends_at > now)
   );
   const roleIds = [...new Set(activeAssignments.map((assignment: any) => assignment.role_id).filter(Boolean))];
-  if (!roleIds.length) return [];
-
-  const roles = await readPlatformRows('roles', 'id, role_key, tenant_id, school_id, status, deleted_at', (query) => query
-    .in('id', roleIds)
-    .eq('tenant_id', tenantId)
-    .eq('status', 'active')
-    .is('deleted_at', null));
+  const roles = roleIds.length
+    ? await readPlatformRows('roles', 'id, role_key, tenant_id, school_id, status, deleted_at', (query) => query
+      .in('id', roleIds)
+      .eq('tenant_id', tenantId)
+      .eq('status', 'active')
+      .is('deleted_at', null))
+    : [];
   const roleById = new Map(roles.map((role: any) => [role.id, role]));
   const activeRoleIds = roles.map((role: any) => role.id);
-  if (!activeRoleIds.length) return [];
-
-  const rolePermissions = await readPlatformRows('role_permissions', 'role_id, permission_id, tenant_id, status, deleted_at', (query) => query
-    .in('role_id', activeRoleIds)
+  const rolePermissions = activeRoleIds.length
+    ? await readPlatformRows('role_permissions', 'role_id, permission_id, tenant_id, status, deleted_at', (query) => query
+      .in('role_id', activeRoleIds)
+      .eq('tenant_id', tenantId)
+      .eq('status', 'active')
+      .is('deleted_at', null))
+    : [];
+  const directOverrides = await readPlatformRows('user_permission_grants', 'permission_id, effect, tenant_id, school_id, branch_id, status, deleted_at', (query) => query
+    .eq('user_id', user.id)
     .eq('tenant_id', tenantId)
+    .eq('school_id', schoolId)
     .eq('status', 'active')
     .is('deleted_at', null));
-  const permissionIds = [...new Set(rolePermissions.map((entry: any) => entry.permission_id).filter(Boolean))];
+  const scopedDirectOverrides = directOverrides.filter((entry: any) => !entry.branch_id || !branchId || entry.branch_id === branchId);
+  const permissionIds = [...new Set([...rolePermissions, ...scopedDirectOverrides].map((entry: any) => entry.permission_id).filter(Boolean))];
   if (!permissionIds.length) return [];
 
   const permissions = await readPlatformRows('permissions', 'id, permission_key, tenant_id, status, deleted_at', (query) => query
@@ -458,9 +466,11 @@ async function loadTenantPermissionsFromPlatformControl(identity: any) {
   const permissionById = new Map(permissions
     .filter((permission: any) => !permission.tenant_id || permission.tenant_id === tenantId)
     .map((permission: any) => [permission.id, permission.permission_key]));
-  return rolePermissions
-    .map((entry: any) => ({ roleKey: roleById.get(entry.role_id)?.role_key || '', permissionKey: permissionById.get(entry.permission_id) || '' }))
-    .filter((entry: { roleKey: string; permissionKey: string }) => Boolean(entry.roleKey && entry.permissionKey));
+  const primaryRoleKey = roles.find((role: any) => roleById.has(role.id))?.role_key || 'employee';
+  return [
+    ...rolePermissions.map((entry: any) => ({ roleKey: roleById.get(entry.role_id)?.role_key || '', permissionKey: permissionById.get(entry.permission_id) || '', effect: 'allow' as const })),
+    ...scopedDirectOverrides.map((entry: any) => ({ roleKey: primaryRoleKey, permissionKey: permissionById.get(entry.permission_id) || '', effect: entry.effect === 'deny' ? 'deny' as const : 'allow' as const })),
+  ].filter((entry: { roleKey: string; permissionKey: string }) => Boolean(entry.roleKey && entry.permissionKey));
 }
 
 // School identities use the same secure control-plane channel for RBAC
@@ -3229,6 +3239,7 @@ async function startServer() {
               ('table', 'permissions'),
               ('table', 'role_permissions'),
               ('table', 'user_roles'),
+              ('table', 'user_permission_grants'),
               ('table', 'audit_events'),
               ('table', 'outbox_events'),
               ('table', 'platform_templates'),
@@ -3237,6 +3248,7 @@ async function startServer() {
               ('column', 'users.department'),
               ('column', 'users.session_revoked_at'),
               ('column', 'users.force_password_change'),
+              ('column', 'user_permission_grants.effect'),
               ('function', 'dbsec004_current_tenant_id'),
               ('function', 'dbsec004_current_school_id'),
               ('function', 'dbsec004_current_branch_id'),
@@ -4464,19 +4476,23 @@ async function startServer() {
       const tenantId = String(req.query?.tenantId || '').trim();
       if (tenantId && !/^[0-9a-f-]{36}$/i.test(tenantId)) return next(new ValidationError('معرف المستأجر غير صالح.'));
       try {
-        const [userRows, authUsers, schoolRows, branchRows, roleRows, assignmentRows] = await Promise.all([
+        const [userRows, authUsers, schoolRows, branchRows, roleRows, assignmentRows, grantRows, permissionRows] = await Promise.all([
           readPlatformRows('users', 'id, auth_user_id, tenant_id, school_id, branch_id, display_name, job_title, department, status, version, session_revoked_at, force_password_change, created_at, deleted_at', (query) => query.order('created_at', { ascending: false })),
           readPlatformAuthUsers(),
           readPlatformRows('schools', 'id, tenant_id, display_name'),
           readPlatformRows('branches', 'id, tenant_id, school_id, name'),
           readPlatformRows('roles', 'id, tenant_id, role_key, name'),
           readPlatformRows('user_roles', 'id, tenant_id, user_id, role_id, status, deleted_at'),
+          readPlatformRows('user_permission_grants', 'id, tenant_id, user_id, permission_id, school_id, branch_id, effect, status, deleted_at'),
+          readPlatformRows('permissions', 'id, permission_key, resource, action, status, deleted_at'),
         ]);
         const authById = new Map(authUsers.map((user: any) => [user.id, user]));
         const schoolById = new Map(schoolRows.map((school: any) => [school.id, school]));
         const branchById = new Map(branchRows.map((branch: any) => [branch.id, branch]));
         const roleById = new Map(roleRows.map((role: any) => [role.id, role]));
+        const permissionById = new Map(permissionRows.map((permission: any) => [permission.id, permission]));
         const rolesByUser = new Map<string, any[]>();
+        const overridesByUser = new Map<string, any[]>();
         for (const assignment of assignmentRows) {
           if (assignment.deleted_at || assignment.status !== 'active') continue;
           const role = roleById.get(assignment.role_id);
@@ -4485,13 +4501,21 @@ async function startServer() {
           list.push({ id: role.id, roleKey: role.role_key, name: role.name });
           rolesByUser.set(assignment.user_id, list);
         }
+        for (const grant of grantRows) {
+          if (grant.deleted_at || grant.status !== 'active') continue;
+          const permission = permissionById.get(grant.permission_id);
+          if (!permission || permission.deleted_at || permission.status !== 'active') continue;
+          const list = overridesByUser.get(grant.user_id) || [];
+          list.push({ permissionKey: permission.permission_key, resource: permission.resource, action: permission.action, effect: grant.effect === 'deny' ? 'deny' : 'allow', branchId: grant.branch_id || null });
+          overridesByUser.set(grant.user_id, list);
+        }
         return res.json({ success: true, users: userRows.filter((user: any) => !user.deleted_at && (!tenantId || user.tenant_id === tenantId)).map((user: any) => ({
           id: user.id, auth_user_id: user.auth_user_id, tenant_id: user.tenant_id, school_id: user.school_id,
           branch_id: user.branch_id, display_name: user.display_name, job_title: user.job_title || '', department: user.department || '', status: user.status, version: user.version, session_revoked_at: user.session_revoked_at || null, created_at: user.created_at,
           email: authById.get(user.auth_user_id)?.email || '', forcePasswordChange: Boolean(user.force_password_change),
           last_sign_in_at: authById.get(user.auth_user_id)?.last_sign_in_at || null,
           school_name: schoolById.get(user.school_id)?.display_name || '',
-          branch_name: branchById.get(user.branch_id)?.name || '', roles: rolesByUser.get(user.id) || [],
+          branch_name: branchById.get(user.branch_id)?.name || '', roles: rolesByUser.get(user.id) || [], directPermissions: overridesByUser.get(user.id) || [],
         })) });
       } catch (error) {
         return next(new DatabaseError('تعذر تحميل دليل الهوية المركزي.', error instanceof Error ? error.message : String(error)));
@@ -4507,7 +4531,24 @@ async function startServer() {
                 au.last_sign_in_at,
                 s.display_name AS school_name, b.name AS branch_name,
                 COALESCE(jsonb_agg(DISTINCT jsonb_build_object('id', r.id, 'roleKey', r.role_key, 'name', r.name))
-                  FILTER (WHERE r.id IS NOT NULL), '[]'::jsonb) AS roles
+                  FILTER (WHERE r.id IS NOT NULL), '[]'::jsonb) AS roles,
+                COALESCE((
+                  SELECT jsonb_agg(jsonb_build_object(
+                    'permissionKey', gp.permission_key,
+                    'resource', gp.resource,
+                    'action', gp.action,
+                    'effect', upg.effect,
+                    'branchId', upg.branch_id
+                  ) ORDER BY gp.permission_key)
+                    FROM public.user_permission_grants upg
+                    JOIN public.permissions gp ON gp.id = upg.permission_id
+                   WHERE upg.tenant_id = u.tenant_id
+                     AND upg.user_id = u.id
+                     AND upg.school_id = u.school_id
+                     AND (upg.branch_id IS NULL OR upg.branch_id = u.branch_id)
+                     AND upg.status = 'active' AND upg.deleted_at IS NULL
+                     AND gp.status = 'active' AND gp.deleted_at IS NULL
+                ), '[]'::jsonb) AS "directPermissions"
            FROM public.users u
            JOIN auth.users au ON au.id = u.auth_user_id
            LEFT JOIN public.schools s ON s.tenant_id = u.tenant_id AND s.id = u.school_id
@@ -4940,6 +4981,119 @@ async function startServer() {
     }
   });
 
+  // A central administrator may define a narrow employee exception without
+  // mutating the shared job/role baseline. The browser sends only differences:
+  // allow adds a permission and deny removes an inherited one. The replacement
+  // is transactional, versioned and audited so a stale matrix can never win.
+  app.patch('/api/admin/central/users/:userId/permission-overrides', authenticateRequest, requirePermissionOnly(PERMISSIONS.PLATFORM_ADMIN), async (req, res, next) => {
+    if (!platformAdminPool) return next(new DatabaseError('مصدر قاعدة البيانات المركزية غير متاح.'));
+    const actorId = String((req as any).user?.id || '').trim();
+    const userId = String(req.params.userId || '').trim();
+    const expectedVersion = Number(req.body?.expectedVersion);
+    const requestedOverrides = req.body?.overrides;
+    const requestId = String(req.body?.requestId || req.get('X-Request-Id') || randomUUID()).trim();
+    const correlationId = String(req.body?.correlationId || req.get('X-Correlation-Id') || randomUUID()).trim();
+    if (!actorId || !/^[0-9a-f-]{36}$/i.test(userId)) return next(new AuthenticationError('هوية المستخدم أو الإدارة غير مكتملة.'));
+    if (!Number.isSafeInteger(expectedVersion) || expectedVersion < 1) return next(new ValidationError('إصدار المستخدم المتوقع مطلوب لمنع استبدال تحديث مسؤول آخر.'));
+    if (!Array.isArray(requestedOverrides) || requestedOverrides.length > 200) return next(new ValidationError('قائمة استثناءات الموظف غير صالحة.'));
+    if (!/^[0-9a-f-]{36}$/i.test(requestId) || !/^[0-9a-f-]{36}$/i.test(correlationId)) return next(new ValidationError('معرف الطلب أو الارتباط غير صالح.'));
+
+    const overrides = requestedOverrides.map((entry: any) => ({
+      permissionKey: permissionRegistry.normalize(entry?.permissionKey),
+      effect: entry?.effect === 'deny' ? 'deny' as const : entry?.effect === 'allow' ? 'allow' as const : null,
+    }));
+    const uniqueKeys = new Set(overrides.map((entry) => entry.permissionKey));
+    if (overrides.some((entry) => !entry.permissionKey || !entry.effect || entry.permissionKey === PERMISSIONS.PLATFORM_ADMIN) || uniqueKeys.size !== overrides.length) {
+      return next(new ValidationError('استثناءات الموظف تحتوي صلاحية مكررة أو غير مسجلة أو صلاحية إدارة المنصة.'));
+    }
+
+    const client = await platformAdminPool.connect();
+    try {
+      await client.query('BEGIN');
+      const target = await client.query(
+        `SELECT u.id, u.tenant_id, u.school_id, u.branch_id, u.display_name, u.version
+           FROM public.users u
+           JOIN public.schools s ON s.tenant_id = u.tenant_id AND s.id = u.school_id
+           JOIN public.tenants t ON t.id = u.tenant_id
+          WHERE u.id = $1::uuid AND u.deleted_at IS NULL
+            AND s.deleted_at IS NULL AND s.status IN ('active', 'provisioning')
+            AND t.deleted_at IS NULL AND t.status IN ('active', 'provisioning')
+          FOR UPDATE`,
+        [userId],
+      );
+      if (target.rowCount !== 1 || !target.rows[0].school_id) throw new ConflictError('الموظف غير موجود داخل مدرسة مفتوحة.');
+      const row = target.rows[0];
+      if (Number(row.version) !== expectedVersion) throw new ConflictError('تم تعديل الموظف بواسطة مسؤول آخر. أعد تحميل المصفوفة قبل الحفظ.');
+
+      await client.query(
+        `UPDATE public.user_permission_grants
+            SET status = 'revoked', deleted_at = now(), deleted_by = $3::uuid,
+                updated_at = now(), updated_by = $3::uuid, version = version + 1
+          WHERE tenant_id = $1::uuid AND user_id = $2::uuid
+            AND status = 'active' AND deleted_at IS NULL`,
+        [row.tenant_id, userId, actorId],
+      );
+
+      for (const override of overrides) {
+        const permissionKey = override.permissionKey!;
+        const { resource, action } = describePermission(permissionKey);
+        const permission = await client.query(
+          `INSERT INTO public.permissions (tenant_id, permission_key, resource, action, description, status, created_by, updated_by)
+           VALUES (NULL, $1, $2, $3, $1, 'active', $4::uuid, $4::uuid)
+           ON CONFLICT (permission_key) DO UPDATE SET status = 'active', deleted_at = NULL, deleted_by = NULL, updated_at = now()
+           RETURNING id`,
+          [permissionKey, resource, action, actorId],
+        );
+        await client.query(
+          `INSERT INTO public.user_permission_grants
+             (tenant_id, user_id, permission_id, school_id, branch_id, effect, status, created_by, updated_by)
+           VALUES ($1::uuid, $2::uuid, $3::uuid, $4::uuid, $5::uuid, $6, 'active', $7::uuid, $7::uuid)
+           ON CONFLICT (user_id, permission_id) DO UPDATE SET
+             school_id = EXCLUDED.school_id, branch_id = EXCLUDED.branch_id, effect = EXCLUDED.effect,
+             status = 'active', deleted_at = NULL, deleted_by = NULL,
+             updated_at = now(), updated_by = EXCLUDED.updated_by, version = user_permission_grants.version + 1`,
+          [row.tenant_id, userId, permission.rows[0].id, row.school_id, row.branch_id || null, override.effect, actorId],
+        );
+      }
+
+      const updated = await client.query(
+        `UPDATE public.users
+            SET updated_at = now(), updated_by = $3::uuid, version = version + 1
+          WHERE id = $1::uuid AND tenant_id = $2::uuid AND version = $4
+          RETURNING id, tenant_id, school_id, branch_id, display_name, status, version`,
+        [userId, row.tenant_id, actorId, expectedVersion],
+      );
+      if (updated.rowCount !== 1) throw new ConflictError('تعذر حفظ استثناءات الموظف؛ تغيرت النسخة الحالية.');
+
+      const actorUser = await client.query(`SELECT id FROM public.users WHERE tenant_id = $1::uuid AND auth_user_id = $2::uuid AND deleted_at IS NULL LIMIT 1`, [row.tenant_id, actorId]);
+      const auditId = randomUUID();
+      const auditPayload = JSON.stringify({ operation: 'set_permission_overrides', userId, overrideCount: overrides.length, overrides, requestId, correlationId });
+      await client.query(
+        `INSERT INTO public.audit_events
+           (id, tenant_id, school_id, branch_id, actor_user_id, entity_type, entity_id, action, source, reason, result, metadata, request_id, correlation_id)
+         VALUES ($1::uuid, $2::uuid, $3::uuid, $4::uuid, $5::uuid, 'user', $6::uuid, 'set_permission_overrides', 'CentralPermissionMatrix', 'ضبط استثناءات صلاحيات موظف', 'success', $7::jsonb, $8::uuid, $9::uuid)`,
+        [auditId, row.tenant_id, row.school_id, row.branch_id || null, actorUser.rows[0]?.id || null, userId, auditPayload, requestId, correlationId],
+      );
+      const outboxPayload = JSON.stringify({ event: 'identity.user.permission_overrides_updated', userId, tenantId: row.tenant_id, schoolId: row.school_id, overrideCount: overrides.length, requestId, correlationId });
+      await client.query(
+        `INSERT INTO public.outbox_events
+           (id, tenant_id, event_type, aggregate_type, aggregate_id, event_version, payload, payload_hash, idempotency_key, status, request_id, correlation_id, created_by, updated_by, audit_id)
+         VALUES ($1::uuid, $2::uuid, 'identity.user.permission_overrides_updated', 'user', $3::uuid, $4, $5::jsonb, $6, $7, 'pending', $8::uuid, $9::uuid, $10::uuid, $10::uuid, $11::uuid)
+         ON CONFLICT (tenant_id, idempotency_key) DO NOTHING`,
+        [randomUUID(), row.tenant_id, userId, Number(updated.rows[0].version), outboxPayload, createHash('sha256').update(outboxPayload).digest('hex'), `identity-user-permission-overrides:${userId}:${updated.rows[0].version}`, requestId, correlationId, actorId, auditId],
+      );
+      await client.query('COMMIT');
+      roleResolver.clearDatabaseAssignments();
+      authorizationEngine.clearCache();
+      return res.json({ success: true, requestId, correlationId, auditId, user: updated.rows[0], overrides });
+    } catch (error) {
+      await client.query('ROLLBACK').catch(() => undefined);
+      return next(error instanceof Error ? error : new DatabaseError('تعذر حفظ استثناءات صلاحيات الموظف.'));
+    } finally {
+      client.release();
+    }
+  });
+
   // School identity directory.  This is deliberately separate from the
   // central directory: the trusted session supplies tenant/school scope and
   // the browser can never choose a different school or platform role.
@@ -5120,6 +5274,7 @@ async function startServer() {
                     'permissionKey', gp.permission_key,
                     'resource', gp.resource,
                     'action', gp.action,
+                    'effect', upg.effect,
                     'branchId', upg.branch_id
                   ) ORDER BY gp.permission_key)
                     FROM public.user_permission_grants upg
@@ -5246,7 +5401,7 @@ async function startServer() {
         for (const permissionKey of requestedDirectPermissions) {
           const { resource, action } = describePermission(permissionKey);
           const permissionResult = await client.query(`INSERT INTO public.permissions (tenant_id, permission_key, resource, action, description, status, created_by, updated_by) VALUES (NULL, $1, $2, $3, $1, 'active', $4::uuid, $4::uuid) ON CONFLICT (permission_key) DO UPDATE SET status = 'active', deleted_at = NULL, deleted_by = NULL, updated_at = now() RETURNING id`, [permissionKey, resource, action, actorAuthUserId]);
-          await client.query(`INSERT INTO public.user_permission_grants (tenant_id, user_id, permission_id, school_id, branch_id, status, created_by, updated_by) VALUES ($1::uuid, $2::uuid, $3::uuid, $4::uuid, $5::uuid, 'active', $6::uuid, $6::uuid) ON CONFLICT (user_id, permission_id) DO UPDATE SET school_id = EXCLUDED.school_id, branch_id = EXCLUDED.branch_id, status = 'active', deleted_at = NULL, deleted_by = NULL, updated_at = now(), updated_by = EXCLUDED.updated_by`, [tenantId, userResult.rows[0].id, permissionResult.rows[0].id, schoolId, branchId, actorAuthUserId]);
+          await client.query(`INSERT INTO public.user_permission_grants (tenant_id, user_id, permission_id, school_id, branch_id, effect, status, created_by, updated_by) VALUES ($1::uuid, $2::uuid, $3::uuid, $4::uuid, $5::uuid, 'allow', 'active', $6::uuid, $6::uuid) ON CONFLICT (user_id, permission_id) DO UPDATE SET school_id = EXCLUDED.school_id, branch_id = EXCLUDED.branch_id, effect = 'allow', status = 'active', deleted_at = NULL, deleted_by = NULL, updated_at = now(), updated_by = EXCLUDED.updated_by`, [tenantId, userResult.rows[0].id, permissionResult.rows[0].id, schoolId, branchId, actorAuthUserId]);
         }
         const assignment = await client.query(`INSERT INTO public.user_roles (tenant_id, user_id, role_id, school_id, branch_id, status, created_by, updated_by) VALUES ($1::uuid, $2::uuid, $3::uuid, $4::uuid, $5::uuid, 'active', $6::uuid, $6::uuid) RETURNING id`, [tenantId, userResult.rows[0].id, roleId, schoolId, branchId, actorAuthUserId]);
         const auditId = await recordSchoolIdentityMutation(client, { id: userResult.rows[0].id, tenant_id: tenantId, school_id: schoolId, branch_id: branchId }, actorAuthUserId, 'create', { displayName, email, username: loginIdentity.username, roleKey, branchId, forcePasswordChange: !requestedPassword }, requestId, correlationId, Number(userResult.rows[0].version || 1));
@@ -5330,12 +5485,22 @@ async function startServer() {
             .map((value: unknown) => permissionRegistry.normalize(value))
             .filter((value: string | null): value is string => Boolean(value)))];
           if (permissionKeys.length !== requested.length || permissionKeys.includes(PERMISSIONS.PLATFORM_ADMIN)) throw new ValidationError('قائمة الصلاحيات تحتوي مفتاحاً غير مسجلاً أو صلاحية إدارة المنصة.');
+          const centralDenials = await client.query(
+            `SELECT p.permission_key
+               FROM public.user_permission_grants upg
+               JOIN public.permissions p ON p.id = upg.permission_id
+              WHERE upg.tenant_id = $1::uuid AND upg.user_id = $2::uuid AND upg.school_id = $3::uuid
+                AND upg.effect = 'deny' AND upg.status = 'active' AND upg.deleted_at IS NULL`,
+            [tenantId, userId, schoolId],
+          );
+          const deniedKeys = new Set(centralDenials.rows.map((entry: any) => entry.permission_key));
+          if (permissionKeys.some((permissionKey) => deniedKeys.has(permissionKey))) throw new ConflictError('توجد صلاحية ممنوعة مركزيًا لهذا الموظف ولا يمكن لمدير المدرسة منحها.');
           await client.query(
             `UPDATE public.user_permission_grants
                 SET status = 'revoked', deleted_at = now(), deleted_by = $4::uuid,
                     updated_at = now(), updated_by = $4::uuid, version = version + 1
               WHERE tenant_id = $1::uuid AND user_id = $2::uuid AND school_id = $3::uuid
-                AND status = 'active' AND deleted_at IS NULL`,
+                AND effect = 'allow' AND status = 'active' AND deleted_at IS NULL`,
             [tenantId, userId, schoolId, actorAuthUserId],
           );
           for (const permissionKey of permissionKeys) {
@@ -5349,11 +5514,11 @@ async function startServer() {
             );
             await client.query(
               `INSERT INTO public.user_permission_grants
-                 (tenant_id, user_id, permission_id, school_id, branch_id, status, created_by, updated_by)
-               VALUES ($1::uuid, $2::uuid, $3::uuid, $4::uuid, $5::uuid, 'active', $6::uuid, $6::uuid)
+                 (tenant_id, user_id, permission_id, school_id, branch_id, effect, status, created_by, updated_by)
+               VALUES ($1::uuid, $2::uuid, $3::uuid, $4::uuid, $5::uuid, 'allow', 'active', $6::uuid, $6::uuid)
                ON CONFLICT (user_id, permission_id) DO UPDATE SET
                  school_id = EXCLUDED.school_id, branch_id = EXCLUDED.branch_id,
-                 status = 'active', deleted_at = NULL, deleted_by = NULL,
+                 effect = 'allow', status = 'active', deleted_at = NULL, deleted_by = NULL,
                  updated_at = now(), updated_by = EXCLUDED.updated_by`,
               [tenantId, userId, permissionResult.rows[0].id, schoolId, row.branch_id || null, actorAuthUserId],
             );
@@ -5407,6 +5572,8 @@ async function startServer() {
         } else throw new ValidationError('عملية إدارة المستخدم غير معتمدة.');
         const auditId = await recordSchoolIdentityMutation(client, row, actorAuthUserId, operation, metadata, requestId, correlationId, Number(updated.version || 1));
         await client.query('COMMIT');
+        roleResolver.clearDatabaseAssignments();
+        authorizationEngine.clearCache();
         return res.json({ success: true, requestId, correlationId, auditId, user: updated });
       } catch (error) {
         await client.query('ROLLBACK').catch(() => undefined);
@@ -5570,6 +5737,8 @@ async function startServer() {
       }
       const propagation = await propagateCanonicalTemplate(client, templateForPropagation, actorId);
       await client.query('COMMIT');
+      roleResolver.clearDatabaseAssignments();
+      authorizationEngine.clearCache();
       return res.status(201).json({ success: true, role: role.rows[0], permissionKeys, propagation });
     } catch (error) {
       await client.query('ROLLBACK').catch(() => undefined);
@@ -5732,6 +5901,8 @@ async function startServer() {
       }
       propagation = await propagateCanonicalTemplate(client, templateForPropagation, actorId);
       await client.query('COMMIT');
+      roleResolver.clearDatabaseAssignments();
+      authorizationEngine.clearCache();
       return res.json({ success: true, role: role.rows[0], permissionKeys, version: nextVersion, requestId, correlationId, propagation });
     } catch (error) {
       await client.query('ROLLBACK').catch(() => undefined);

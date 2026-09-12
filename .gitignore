@@ -6,6 +6,7 @@ coverage/
 .vite/
 .turbo/
 .cache/
+backups/
 *.tsbuildinfo
 .DS_Store
 *.log

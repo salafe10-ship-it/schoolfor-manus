@@ -34,7 +34,7 @@ export function createDatabaseRolePermissionLoader() {
       },
       async () => {
         const result = await transaction().query<DatabaseRolePermission>(
-          `SELECT r.role_key AS "roleKey", p.permission_key AS "permissionKey"
+          `SELECT r.role_key AS "roleKey", p.permission_key AS "permissionKey", 'allow'::text AS effect
              FROM users u
              JOIN user_roles ur
                ON ur.tenant_id = u.tenant_id
@@ -80,7 +80,8 @@ export function createDatabaseRolePermissionLoader() {
                       ORDER BY ur2.created_at ASC
                       LIMIT 1
                    ), 'employee') AS "roleKey",
-                   p.permission_key AS "permissionKey"
+                   p.permission_key AS "permissionKey",
+                   upg.effect AS effect
               FROM users u
               JOIN user_permission_grants upg
                 ON upg.tenant_id = u.tenant_id AND upg.user_id = u.id
