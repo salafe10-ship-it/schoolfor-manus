@@ -472,6 +472,74 @@ const upsertPlatformRow = async (table: string, values: Record<string, unknown>,
   return data;
 };
 
+// The Render pool and the Supabase control-plane channel can briefly drift
+// during a migration rollout.  Identity reads must still come from the same
+// canonical source as the central roles, so compose the school directory from
+// the server-only Supabase channel when it is available.  Every query remains
+// constrained by the trusted tenant/school scope; this is not a cross-school
+// fallback.
+const readSchoolIdentityDirectoryFromControl = async (tenantId: string, schoolId: string) => {
+  if (!platformControl) return null;
+  const columnsWithJob = 'id,auth_user_id,tenant_id,school_id,branch_id,username,email,display_name,job_id,job_title,department,status,version,session_revoked_at,force_password_change,created_at';
+  const columnsWithoutJob = 'id,auth_user_id,tenant_id,school_id,branch_id,username,email,display_name,job_title,department,status,version,session_revoked_at,force_password_change,created_at';
+  let usersResult = await platformControl.from('users').select(columnsWithJob)
+    .eq('tenant_id', tenantId).eq('school_id', schoolId).is('deleted_at', null);
+  if (usersResult.error && /job_id/i.test(String(usersResult.error.message || ''))) {
+    usersResult = await platformControl.from('users').select(columnsWithoutJob)
+      .eq('tenant_id', tenantId).eq('school_id', schoolId).is('deleted_at', null);
+  }
+  if (usersResult.error) throw usersResult.error;
+  const users = Array.isArray(usersResult.data) ? usersResult.data : [];
+  if (!users.length) return [];
+  const userIds = users.map((user: any) => user.id).filter(Boolean);
+  const [branchesResult, assignmentsResult, grantsResult] = await Promise.all([
+    platformControl.from('branches').select('id,name').eq('tenant_id', tenantId).eq('school_id', schoolId).is('deleted_at', null),
+    platformControl.from('user_roles').select('user_id,role_id,branch_id').eq('tenant_id', tenantId).in('user_id', userIds).eq('school_id', schoolId).eq('status', 'active').is('deleted_at', null),
+    platformControl.from('user_permission_grants').select('user_id,permission_id,school_id,branch_id,effect').eq('tenant_id', tenantId).in('user_id', userIds).eq('school_id', schoolId).eq('status', 'active').is('deleted_at', null),
+  ]);
+  if (branchesResult.error) throw branchesResult.error;
+  if (assignmentsResult.error) throw assignmentsResult.error;
+  if (grantsResult.error) throw grantsResult.error;
+  const roleIds = [...new Set((assignmentsResult.data || []).map((row: any) => row.role_id).filter(Boolean))];
+  const permissionIds = [...new Set((grantsResult.data || []).map((row: any) => row.permission_id).filter(Boolean))];
+  const [rolesResult, permissionsResult] = await Promise.all([
+    roleIds.length
+      ? platformControl.from('roles').select('id,role_key,name').eq('tenant_id', tenantId).in('id', roleIds).eq('status', 'active').is('deleted_at', null)
+      : Promise.resolve({ data: [], error: null }),
+    permissionIds.length
+      ? platformControl.from('permissions').select('id,permission_key,resource,action').in('id', permissionIds).eq('status', 'active').is('deleted_at', null)
+      : Promise.resolve({ data: [], error: null }),
+  ]);
+  if (rolesResult.error) throw rolesResult.error;
+  if (permissionsResult.error) throw permissionsResult.error;
+  const rolesById = new Map<any, any>((rolesResult.data || [] as any[]).map((role: any) => [role.id, role]));
+  const permissionsById = new Map<any, any>((permissionsResult.data || [] as any[]).map((permission: any) => [permission.id, permission]));
+  const branchesById = new Map<any, any>((branchesResult.data || [] as any[]).map((branch: any) => [branch.id, branch.name]));
+  const rolesByUser = new Map<string, any[]>();
+  for (const assignment of assignmentsResult.data || []) {
+    const role = rolesById.get(assignment.role_id);
+    if (!role) continue;
+    const list = rolesByUser.get(assignment.user_id) || [];
+    list.push({ id: role.id, roleKey: role.role_key, name: role.name, assignmentBranchId: assignment.branch_id || null });
+    rolesByUser.set(assignment.user_id, list);
+  }
+  const grantsByUser = new Map<string, any[]>();
+  for (const grant of grantsResult.data || []) {
+    const permission = permissionsById.get(grant.permission_id);
+    if (!permission) continue;
+    const list = grantsByUser.get(grant.user_id) || [];
+    list.push({ permissionKey: permission.permission_key, resource: permission.resource, action: permission.action, effect: grant.effect, branchId: grant.branch_id || null });
+    grantsByUser.set(grant.user_id, list);
+  }
+  return users.map((user: any) => ({
+    ...user,
+    last_sign_in_at: null,
+    branch_name: branchesById.get(user.branch_id) || null,
+    roles: rolesByUser.get(user.id) || [],
+    directPermissions: grantsByUser.get(user.id) || [],
+  }));
+};
+
 const deletePlatformRow = async (table: string, id: string) => {
   if (!platformControl) return;
   await platformControl.from(table).delete().eq('id', id);
@@ -5538,6 +5606,21 @@ async function startServer() {
     try {
       await ensureIdentityJobSchema();
       const { tenantId, schoolId } = schoolIdentityScope(req);
+      if (platformControl) {
+        const controlResult = await platformControl.from('hr_database').select('data')
+          .eq('tenant_id', tenantId).eq('school_id', schoolId).limit(1);
+        if (!controlResult.error && controlResult.data?.[0]?.data) {
+          const controlData = controlResult.data[0].data as Record<string, unknown>;
+          const departments = (Array.isArray(controlData.departments) ? controlData.departments : [])
+            .map((department: any) => ({ id: String(department?.id || '').trim(), nameAr: String(department?.nameAr || department?.name || '').trim(), nameEn: String(department?.nameEn || '').trim() }))
+            .filter((department: any) => department.id && (department.nameAr || department.nameEn));
+          const departmentNames = new Map(departments.map((department: any) => [department.id, department.nameAr || department.nameEn]));
+          const jobs = (Array.isArray(controlData.jobs) ? controlData.jobs : [])
+            .map((job: any) => ({ id: String(job?.id || '').trim(), titleAr: String(job?.titleAr || '').trim(), titleEn: String(job?.titleEn || '').trim(), departmentId: String(job?.departmentId || '').trim(), departmentName: departmentNames.get(String(job?.departmentId || '').trim()) || '' }))
+            .filter((job: any) => job.id && (job.titleAr || job.titleEn));
+          if (jobs.length || departments.length) return res.json({ success: true, departments, jobs });
+        }
+      }
       const result = await platformAdminPool.query(
         `SELECT data->'jobs' AS jobs, data->'departments' AS departments
            FROM public.hr_database
@@ -5578,6 +5661,17 @@ async function startServer() {
     try {
       await ensureIdentityJobSchema();
       const { tenantId, schoolId } = schoolIdentityScope(req);
+      if (platformControl) {
+        try {
+          const controlUsers = await readSchoolIdentityDirectoryFromControl(tenantId, schoolId);
+          if (controlUsers && controlUsers.length) return res.json({ success: true, scope: { tenantId, schoolId }, users: controlUsers });
+        } catch (controlError) {
+          EnterpriseLogger.warn('Supabase control-plane identity read failed; using PostgreSQL pool.', 'SchoolIdentityRoute', {
+            error: controlError instanceof Error ? controlError.message : String(controlError),
+            schoolId,
+          });
+        }
+      }
       const result = await platformAdminPool.query(
         `SELECT u.id, u.auth_user_id, u.tenant_id, u.school_id, u.branch_id,
                 u.username, u.job_id,
