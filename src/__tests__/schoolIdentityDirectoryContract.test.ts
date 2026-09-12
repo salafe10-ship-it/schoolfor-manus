@@ -87,6 +87,13 @@ describe('school-scoped identity directory contracts', () => {
     expect(read('src/components/ModernSchoolDashboard.tsx')).toContain("section: 'school_users_admin'");
     expect(topbar).not.toContain('school-users-permissions-header-btn');
     expect(module).toContain('العودة للقائمة الرئيسية');
+    expect(module).toContain('effectivePermissionKeys');
+    expect(module).toContain('inheritedPermissionKeys');
+    expect(module).toContain('الوحدة / الشاشة');
+    expect(module).toContain('الوظيفة / الزر');
+    expect(module).toContain('الصلاحية الفعالة');
+    expect(module).toContain('تحديد المباشر الظاهر');
+    expect(module).toContain('حفظ الصلاحيات وتسجيلها');
   });
 
   it('supports username login for email-less school accounts without fabricating a public email', () => {
@@ -107,5 +114,7 @@ describe('school-scoped identity directory contracts', () => {
     expect(rbac).toContain('المسمى الوظيفي');
     expect(schoolModule).toContain('الوظيفة من دليل شؤون الموظفين');
     expect(read('supabase/migrations/202609101200_identity_job_reference.sql')).toContain('ADD COLUMN IF NOT EXISTS job_id');
+    expect(read('server.ts')).toContain('propagateCanonicalTemplate(client, templateForPropagation, actorId)');
+    expect(rbac).toContain('ثم تُنشر للمدارس التابعة');
   });
 });
