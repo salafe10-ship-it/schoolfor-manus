@@ -90,6 +90,14 @@ describe('owner workspace and targeted release contract', () => {
     expect(server).toContain('cross-tenant identity collisions');
   });
 
+  it('aligns legacy control identity schema before creating school users', () => {
+    const server = read('server.ts');
+    expect(server).toContain('ensureControlIdentitySchema');
+    expect(server).toContain('ADD COLUMN IF NOT EXISTS job_title text');
+    expect(server).toContain('CREATE TABLE IF NOT EXISTS public.user_permission_grants');
+    expect(server).toContain('await ensureCanonicalRbacDefaults(client, targetTenantId)');
+  });
+
   it('carries the mother-school RBAC snapshot into automatic releases', () => {
     const server = read('server.ts');
     expect(server).toContain('captureCanonicalRbacManifest');
