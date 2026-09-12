@@ -2057,7 +2057,7 @@ export default function StudentAffairsPortal({
           </div>
 
           {/* MAIN DATA GRID TABLE (9/12) */}
-          <div className="lg:col-span-9 bg-gradient-to-b from-[#fffefc] to-[#f8f3ea] border-2 border-[#d4af37]/30 rounded-3xl p-5 shadow-lg flex flex-col justify-between space-y-4">
+          <div className="lg:col-span-9 bg-gradient-to-b from-[#fffefc] to-[#f8f3ea] border-2 border-[#d4af37]/30 rounded-3xl p-5 shadow-lg flex flex-col space-y-4">
             
             {/* Table Header Controls & Batch Actions */}
             <div className="flex flex-wrap items-center justify-between gap-3 pb-3 border-b border-amber-900/10">
