@@ -495,7 +495,7 @@ const readSchoolIdentityDirectoryFromControl = async (tenantId: string, schoolId
   const [branchesResult, assignmentsResult, grantsResult] = await Promise.all([
     platformControl.from('branches').select('id,name').eq('tenant_id', tenantId).eq('school_id', schoolId).is('deleted_at', null),
     platformControl.from('user_roles').select('user_id,role_id,branch_id').eq('tenant_id', tenantId).in('user_id', userIds).eq('school_id', schoolId).eq('status', 'active').is('deleted_at', null),
-    platformControl.from('user_permission_grants').select('user_id,permission_id,school_id,branch_id,effect').eq('tenant_id', tenantId).in('user_id', userIds).eq('school_id', schoolId).eq('status', 'active').is('deleted_at', null),
+    platformControl.from('user_permission_grants').select('user_id,permission_id,school_id,branch_id,source,effect').eq('tenant_id', tenantId).in('user_id', userIds).eq('school_id', schoolId).eq('status', 'active').is('deleted_at', null),
   ]);
   if (branchesResult.error) throw branchesResult.error;
   if (assignmentsResult.error) throw assignmentsResult.error;
@@ -528,7 +528,7 @@ const readSchoolIdentityDirectoryFromControl = async (tenantId: string, schoolId
     const permission = permissionsById.get(grant.permission_id);
     if (!permission) continue;
     const list = grantsByUser.get(grant.user_id) || [];
-    list.push({ permissionKey: permission.permission_key, resource: permission.resource, action: permission.action, effect: grant.effect, branchId: grant.branch_id || null });
+    list.push({ permissionKey: permission.permission_key, resource: permission.resource, action: permission.action, effect: grant.effect, source: grant.source === 'school' ? 'school' : 'central', branchId: grant.branch_id || null });
     grantsByUser.set(grant.user_id, list);
   }
   return users.map((user: any) => ({
@@ -609,7 +609,7 @@ async function loadTenantPermissionsFromPlatformControl(identity: any) {
       .eq('status', 'active')
       .is('deleted_at', null))
     : [];
-  const directOverrides = await readPlatformRows('user_permission_grants', 'permission_id, effect, tenant_id, school_id, branch_id, status, deleted_at', (query) => query
+  const directOverrides = await readPlatformRows('user_permission_grants', 'permission_id, effect, source, tenant_id, school_id, branch_id, status, deleted_at', (query) => query
     .eq('user_id', user.id)
     .eq('tenant_id', tenantId)
     .eq('school_id', schoolId)
@@ -2508,6 +2508,7 @@ async function startServer() {
           permission_id uuid NOT NULL,
           school_id uuid NOT NULL,
           branch_id uuid,
+          source text NOT NULL DEFAULT 'central',
           effect text NOT NULL DEFAULT 'allow',
           status text NOT NULL DEFAULT 'active',
           created_at timestamptz NOT NULL DEFAULT now(),
@@ -2531,10 +2532,17 @@ async function startServer() {
           CONSTRAINT ck_user_permission_grants_soft_delete_pair CHECK ((deleted_at IS NULL AND deleted_by IS NULL) OR (deleted_at IS NOT NULL AND deleted_by IS NOT NULL))
         )`);
       await client.query(`ALTER TABLE public.user_permission_grants ADD COLUMN IF NOT EXISTS effect text NOT NULL DEFAULT 'allow'`);
+      await client.query(`ALTER TABLE public.user_permission_grants ADD COLUMN IF NOT EXISTS source text NOT NULL DEFAULT 'central'`);
+      await client.query(`ALTER TABLE public.user_permission_grants DROP CONSTRAINT IF EXISTS ck_user_permission_grants_source`);
+      await client.query(`ALTER TABLE public.user_permission_grants ADD CONSTRAINT ck_user_permission_grants_source CHECK (source IN ('central', 'school'))`);
+      await client.query(`ALTER TABLE public.user_permission_grants DROP CONSTRAINT IF EXISTS uq_user_permission_grants_user_permission`);
+      await client.query(`ALTER TABLE public.user_permission_grants DROP CONSTRAINT IF EXISTS uq_user_permission_grants_user_permission_source`);
+      await client.query(`ALTER TABLE public.user_permission_grants ADD CONSTRAINT uq_user_permission_grants_user_permission_source UNIQUE (user_id, permission_id, source)`);
       await client.query(`ALTER TABLE public.user_permission_grants DROP CONSTRAINT IF EXISTS ck_user_permission_grants_effect`);
       await client.query(`ALTER TABLE public.user_permission_grants ADD CONSTRAINT ck_user_permission_grants_effect CHECK (effect IN ('allow', 'deny'))`);
       await client.query(`CREATE INDEX IF NOT EXISTS idx_user_permission_grants_scope ON public.user_permission_grants (tenant_id, school_id, branch_id, status)`);
       await client.query(`CREATE INDEX IF NOT EXISTS idx_user_permission_grants_user ON public.user_permission_grants (tenant_id, user_id, status)`);
+      await client.query(`CREATE INDEX IF NOT EXISTS idx_user_permission_grants_source ON public.user_permission_grants (tenant_id, school_id, source, status)`);
       await client.query('COMMIT');
     } catch (error) {
       await client.query('ROLLBACK').catch(() => undefined);
@@ -4879,7 +4887,7 @@ async function startServer() {
           readPlatformRows('branches', 'id, tenant_id, school_id, name'),
           readPlatformRows('roles', 'id, tenant_id, role_key, name'),
           readPlatformRows('user_roles', 'id, tenant_id, user_id, role_id, status, deleted_at'),
-          readPlatformRows('user_permission_grants', 'id, tenant_id, user_id, permission_id, school_id, branch_id, effect, status, deleted_at'),
+          readPlatformRows('user_permission_grants', 'id, tenant_id, user_id, permission_id, school_id, branch_id, source, effect, status, deleted_at'),
           readPlatformRows('permissions', 'id, permission_key, resource, action, status, deleted_at'),
         ]);
         const authById = new Map(authUsers.map((user: any) => [user.id, user]));
@@ -4902,7 +4910,7 @@ async function startServer() {
           const permission = permissionById.get(grant.permission_id);
           if (!permission || permission.deleted_at || permission.status !== 'active') continue;
           const list = overridesByUser.get(grant.user_id) || [];
-          list.push({ permissionKey: permission.permission_key, resource: permission.resource, action: permission.action, effect: grant.effect === 'deny' ? 'deny' : 'allow', branchId: grant.branch_id || null });
+          list.push({ permissionKey: permission.permission_key, resource: permission.resource, action: permission.action, effect: grant.effect === 'deny' ? 'deny' : 'allow', source: grant.source === 'school' ? 'school' : 'central', branchId: grant.branch_id || null });
           overridesByUser.set(grant.user_id, list);
         }
         return res.json({ success: true, users: userRows.filter((user: any) => !user.deleted_at && (!tenantId || user.tenant_id === tenantId)).map((user: any) => ({
@@ -4934,6 +4942,7 @@ async function startServer() {
                     'resource', gp.resource,
                     'action', gp.action,
                     'effect', upg.effect,
+                    'source', upg.source,
                     'branchId', upg.branch_id
                   ) ORDER BY gp.permission_key)
                     FROM public.user_permission_grants upg
@@ -5433,6 +5442,7 @@ async function startServer() {
             SET status = 'revoked', deleted_at = now(), deleted_by = $3::uuid,
                 updated_at = now(), updated_by = $3::uuid, version = version + 1
           WHERE tenant_id = $1::uuid AND user_id = $2::uuid
+            AND source = 'central'
             AND status = 'active' AND deleted_at IS NULL`,
         [row.tenant_id, userId, actorId],
       );
@@ -5449,9 +5459,9 @@ async function startServer() {
         );
         await client.query(
           `INSERT INTO public.user_permission_grants
-             (tenant_id, user_id, permission_id, school_id, branch_id, effect, status, created_by, updated_by)
-           VALUES ($1::uuid, $2::uuid, $3::uuid, $4::uuid, $5::uuid, $6, 'active', $7::uuid, $7::uuid)
-           ON CONFLICT (user_id, permission_id) DO UPDATE SET
+             (tenant_id, user_id, permission_id, school_id, branch_id, source, effect, status, created_by, updated_by)
+           VALUES ($1::uuid, $2::uuid, $3::uuid, $4::uuid, $5::uuid, 'central', $6, 'active', $7::uuid, $7::uuid)
+           ON CONFLICT (user_id, permission_id, source) DO UPDATE SET
              school_id = EXCLUDED.school_id, branch_id = EXCLUDED.branch_id, effect = EXCLUDED.effect,
              status = 'active', deleted_at = NULL, deleted_by = NULL,
              updated_at = now(), updated_by = EXCLUDED.updated_by, version = user_permission_grants.version + 1`,
@@ -5706,6 +5716,7 @@ async function startServer() {
                     'resource', gp.resource,
                     'action', gp.action,
                     'effect', upg.effect,
+                    'source', upg.source,
                     'branchId', upg.branch_id
                   ) ORDER BY gp.permission_key)
                     FROM public.user_permission_grants upg
@@ -5833,7 +5844,7 @@ async function startServer() {
         for (const permissionKey of requestedDirectPermissions) {
           const { resource, action } = describePermission(permissionKey);
           const permissionResult = await client.query(`INSERT INTO public.permissions (tenant_id, permission_key, resource, action, description, status, created_by, updated_by) VALUES (NULL, $1, $2, $3, $1, 'active', $4::uuid, $4::uuid) ON CONFLICT (permission_key) DO UPDATE SET status = 'active', deleted_at = NULL, deleted_by = NULL, updated_at = now() RETURNING id`, [permissionKey, resource, action, actorAuthUserId]);
-          await client.query(`INSERT INTO public.user_permission_grants (tenant_id, user_id, permission_id, school_id, branch_id, effect, status, created_by, updated_by) VALUES ($1::uuid, $2::uuid, $3::uuid, $4::uuid, $5::uuid, 'allow', 'active', $6::uuid, $6::uuid) ON CONFLICT (user_id, permission_id) DO UPDATE SET school_id = EXCLUDED.school_id, branch_id = EXCLUDED.branch_id, effect = 'allow', status = 'active', deleted_at = NULL, deleted_by = NULL, updated_at = now(), updated_by = EXCLUDED.updated_by`, [tenantId, userResult.rows[0].id, permissionResult.rows[0].id, schoolId, branchId, actorAuthUserId]);
+          await client.query(`INSERT INTO public.user_permission_grants (tenant_id, user_id, permission_id, school_id, branch_id, source, effect, status, created_by, updated_by) VALUES ($1::uuid, $2::uuid, $3::uuid, $4::uuid, $5::uuid, 'school', 'allow', 'active', $6::uuid, $6::uuid) ON CONFLICT (user_id, permission_id, source) DO UPDATE SET school_id = EXCLUDED.school_id, branch_id = EXCLUDED.branch_id, effect = 'allow', status = 'active', deleted_at = NULL, deleted_by = NULL, updated_at = now(), updated_by = EXCLUDED.updated_by`, [tenantId, userResult.rows[0].id, permissionResult.rows[0].id, schoolId, branchId, actorAuthUserId]);
         }
         const assignment = await client.query(`INSERT INTO public.user_roles (tenant_id, user_id, role_id, school_id, branch_id, status, created_by, updated_by) VALUES ($1::uuid, $2::uuid, $3::uuid, $4::uuid, $5::uuid, 'active', $6::uuid, $6::uuid) RETURNING id`, [tenantId, userResult.rows[0].id, roleId, schoolId, branchId, actorAuthUserId]);
         const auditId = await recordSchoolIdentityMutation(client, { id: userResult.rows[0].id, tenant_id: tenantId, school_id: schoolId, branch_id: branchId }, actorAuthUserId, 'create', { displayName, email, username: loginIdentity.username, roleKey, branchId, forcePasswordChange: !requestedPassword }, requestId, correlationId, Number(userResult.rows[0].version || 1));
@@ -5912,7 +5923,74 @@ async function startServer() {
           if (result.rowCount !== 1) throw new ConflictError('تعذر إسناد الدور؛ تغير المستخدم بواسطة مسؤول آخر.');
           updated = result.rows[0]; metadata = { beforeRole: row.role_key, roleKey };
         } else if (operation === 'set_permissions') {
-          throw new AuthorizationError('التفويضات الفردية الحساسة تُدار من المدرسة الأم المركزية فقط؛ أَسنِد دورًا مركزيًا للموظف أو اطلب استثناءً مركزيًا موثقًا.');
+          const rawPermissionKeys = Array.isArray(req.body?.permissionKeys) ? req.body.permissionKeys as unknown[] : [];
+          const requestedPermissionKeys = [...new Set(
+            rawPermissionKeys
+              .map((value: unknown) => permissionRegistry.normalize(value))
+              .filter((value): value is string => Boolean(value)),
+          )];
+          if (requestedPermissionKeys.length !== rawPermissionKeys.length || requestedPermissionKeys.length > 200 || requestedPermissionKeys.includes(PERMISSIONS.PLATFORM_ADMIN)) {
+            throw new ValidationError('قائمة الصلاحيات المحلية تحتوي مفتاحاً غير مسجل أو غير صالح.');
+          }
+          const canonicalPermissionKeys = permissionRegistry.list()
+            .map((permissionKey) => permissionRegistry.normalize(permissionKey))
+            .filter((permissionKey): permissionKey is string => Boolean(permissionKey))
+            .filter((permissionKey) => permissionKey !== PERMISSIONS.PLATFORM_ADMIN);
+          const requestedPermissionSet = new Set(requestedPermissionKeys);
+          const centralDenyResult = await client.query(
+            `SELECT p.permission_key
+               FROM public.user_permission_grants upg
+               JOIN public.permissions p ON p.id = upg.permission_id
+              WHERE upg.tenant_id = $1::uuid AND upg.user_id = $2::uuid
+                AND upg.school_id = $3::uuid AND upg.source = 'central'
+                AND upg.effect = 'deny' AND upg.status = 'active' AND upg.deleted_at IS NULL
+                AND p.status = 'active' AND p.deleted_at IS NULL`,
+            [tenantId, userId, schoolId],
+          );
+          const centrallyDenied = new Set(centralDenyResult.rows.map((entry: any) => String(entry.permission_key || '')));
+          if (requestedPermissionKeys.some((permissionKey) => centrallyDenied.has(permissionKey))) {
+            throw new AuthorizationError('لا يمكن للمدرسة منح صلاحية محمية بمنع مركزي.');
+          }
+          await client.query(
+            `UPDATE public.user_permission_grants
+                SET status = 'revoked', deleted_at = now(), deleted_by = $4::uuid,
+                    updated_at = now(), updated_by = $4::uuid, version = version + 1
+              WHERE tenant_id = $1::uuid AND user_id = $2::uuid AND school_id = $3::uuid
+                AND source = 'school' AND status = 'active' AND deleted_at IS NULL`,
+            [tenantId, userId, schoolId, actorAuthUserId],
+          );
+          for (const permissionKey of canonicalPermissionKeys) {
+            const { resource, action } = describePermission(permissionKey);
+            const effect = requestedPermissionSet.has(permissionKey) ? 'allow' : 'deny';
+            const permissionResult = await client.query(
+              `INSERT INTO public.permissions (tenant_id, permission_key, resource, action, description, status, created_by, updated_by)
+               VALUES (NULL, $1, $2, $3, $1, 'active', $4::uuid, $4::uuid)
+               ON CONFLICT (permission_key) DO UPDATE SET status = 'active', deleted_at = NULL, deleted_by = NULL, updated_at = now()
+               RETURNING id`,
+              [permissionKey, resource, action, actorAuthUserId],
+            );
+            await client.query(
+              `INSERT INTO public.user_permission_grants
+                 (tenant_id, user_id, permission_id, school_id, branch_id, source, effect, status, created_by, updated_by)
+               VALUES ($1::uuid, $2::uuid, $3::uuid, $4::uuid, $5::uuid, 'school', $7, 'active', $6::uuid, $6::uuid)
+               ON CONFLICT (user_id, permission_id, source) DO UPDATE SET
+                 school_id = EXCLUDED.school_id, branch_id = EXCLUDED.branch_id, effect = EXCLUDED.effect,
+                 status = 'active', deleted_at = NULL, deleted_by = NULL,
+                 updated_at = now(), updated_by = EXCLUDED.updated_by, version = user_permission_grants.version + 1`,
+              [tenantId, userId, permissionResult.rows[0].id, schoolId, row.branch_id || null, actorAuthUserId, effect],
+            );
+          }
+          const result = await client.query(
+            `UPDATE public.users
+                SET updated_at = now(), updated_by = $4::uuid, version = version + 1
+              WHERE id = $1::uuid AND tenant_id = $2::uuid AND school_id = $3::uuid
+                AND deleted_at IS NULL AND version = $5
+              RETURNING id, auth_user_id, tenant_id, school_id, branch_id, display_name, status, force_password_change, version, created_at`,
+            [userId, tenantId, schoolId, actorAuthUserId, expectedVersion],
+          );
+          if (result.rowCount !== 1) throw new ConflictError('تعذر حفظ صلاحيات المدرسة؛ تغير المستخدم بواسطة مسؤول آخر.');
+          updated = result.rows[0];
+          metadata = { source: 'school', permissionKeys: requestedPermissionKeys, count: requestedPermissionKeys.length, decisionCount: canonicalPermissionKeys.length };
         } else if (operation === 'reset_password') {
           const password = randomBytes(12).toString('base64url');
           const authResult = await platformAdminAuth.auth.admin.updateUserById(row.auth_user_id, { password, user_metadata: { display_name: row.display_name, forcePasswordChange: true } });
