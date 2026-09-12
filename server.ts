@@ -162,16 +162,32 @@ const postgresSslConfig = process.env.PGSSLMODE === 'disable'
           : {}),
     };
 
+const normalizePostgresConnectionString = (value: string): string => {
+  try {
+    const url = new URL(value);
+    // node-postgres lets connection-string sslmode options override the
+    // explicit ssl object. Remove only those transport options so the strict
+    // rejectUnauthorized/CA policy above is authoritative.
+    for (const key of ['sslmode', 'sslrootcert', 'sslcert', 'sslkey', 'uselibpqcompat']) url.searchParams.delete(key);
+    return url.toString();
+  } catch {
+    return value;
+  }
+};
+
 // Central administration deliberately uses a separate privileged connection.
 // Normal tenant traffic must use DATABASE_URL, which is configured with a
 // non-bypass RLS role in production. A fallback is retained only for explicit
 // non-production use; production-like deployments require a dedicated
 // PLATFORM_ADMIN_DATABASE_URL so control-plane access cannot reuse the tenant
 // connection accidentally.
-const platformAdminConnectionString = process.env.PLATFORM_ADMIN_DATABASE_URL
+const platformAdminConnectionStringRaw = process.env.PLATFORM_ADMIN_DATABASE_URL
   || (unsafeLocalDatabaseRoleOptIn && !productionLikeEnvironment
     ? (process.env.DIRECT_URL || process.env.DATABASE_URL)
     : undefined);
+const platformAdminConnectionString = platformAdminConnectionStringRaw
+  ? normalizePostgresConnectionString(platformAdminConnectionStringRaw)
+  : undefined;
 
 const platformAdminPool = platformAdminConnectionString
   ? new Pool({
