@@ -75,6 +75,13 @@ describe('owner workspace and targeted release contract', () => {
     expect(component).toContain('توزيعها تلقائياً');
   });
 
+  it('enrolls active customer schools that predate an ownerWorkspace template link', () => {
+    const server = read('server.ts');
+    expect(server).toContain("COALESCE(central_metadata->>'portal_profile', '') = 'customer_production'");
+    expect(server).toContain('Older/open customer schools may predate ownerWorkspace linkage');
+    expect(server).toContain('automaticPropagation: true');
+  });
+
   it('carries the mother-school RBAC snapshot into automatic releases', () => {
     const server = read('server.ts');
     expect(server).toContain('captureCanonicalRbacManifest');

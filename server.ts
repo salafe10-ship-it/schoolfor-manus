@@ -2582,8 +2582,13 @@ async function startServer() {
           AND COALESCE(central_metadata->>'portal_profile', '') <> 'owner_controlled'
           AND COALESCE(central_metadata->'ownerWorkspace'->>'mode', '') <> 'owner'
           AND (
+            -- A school explicitly linked to this template remains eligible.
             central_metadata->'ownerWorkspace'->>'templateId' = $1::text
             OR central_metadata->'ownerWorkspace'->>'templateKey' = $2
+            -- Older/open customer schools may predate ownerWorkspace linkage.
+            -- They are still part of the central rollout boundary and must be
+            -- enrolled automatically on the next published central update.
+            OR COALESCE(central_metadata->>'portal_profile', '') = 'customer_production'
           )
         ORDER BY created_at ASC
         FOR UPDATE`,
