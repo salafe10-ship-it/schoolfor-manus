@@ -118,6 +118,8 @@ describe('central administration review contracts', () => {
     expect(users).toContain('department: newUser.department');
     expect(users).toContain('value={newUser.initialRole}');
     expect(users).toContain('type="password"');
+    expect(users).toContain('البريد الإلكتروني للولوج <span className="font-normal text-slate-500">(اختياري)</span>');
+    expect(users).not.toContain('البريد الإلكتروني للولوج:</label>');
     expect(migration).toContain('ADD COLUMN IF NOT EXISTS job_title text');
     expect(migration).toContain('ADD COLUMN IF NOT EXISTS department text');
     const sessionMigration = read('supabase/migrations/202609091200_identity_session_revocation.sql');
@@ -125,6 +127,15 @@ describe('central administration review contracts', () => {
     const passwordPolicyMigration = read('supabase/migrations/202609091300_identity_password_policy.sql');
     expect(passwordPolicyMigration).toContain('ADD COLUMN IF NOT EXISTS force_password_change boolean NOT NULL DEFAULT false');
     expect(server).toContain('force_password_change = false');
+  });
+
+  it('keeps email optional in staff-facing identity forms', () => {
+    const app = read('src/App.tsx');
+    const hr = read('src/components/hr/EmployeesTab.tsx');
+    expect(app).toContain('teacher-email');
+    expect(app).toContain('البريد الإلكتروني المهني <span className="font-normal text-slate-500">(اختياري)</span>:');
+    expect(hr).toContain('البريد الإلكتروني المهني <span className="text-slate-500 font-normal">(اختياري)</span>');
+    expect(hr).not.toContain('البريد الإلكتروني المهني <span className="text-rose-500">*</span>');
   });
 
   it('hydrates school licensing views from the tenant subscription source', () => {

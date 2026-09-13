@@ -173,6 +173,8 @@ export default function ModernSchoolDashboard({
   };
   const studentCount = formatMetric(metrics?.students);
   const studentDetail = describeMetric(metrics?.students);
+  const revenueMetric = metrics?.revenue || metrics?.finance;
+  const expenseMetric = metrics?.expenses || metrics?.finance;
   const handleNav = (section: string) => {
     if (!canAccessSection(section)) {
       triggerNotification('لا تملك الصلاحية الموثقة لفتح هذه الوحدة.', 'warning');
@@ -253,8 +255,8 @@ export default function ModernSchoolDashboard({
 
       <section aria-label="مؤشرات لوحة المدرسة" className="grid grid-cols-2 gap-3 sm:grid-cols-3 sm:gap-4 md:grid-cols-4 lg:grid-cols-7">
         <MetricCard label="نسبة الحضور اليوم" value={formatMetric(metrics?.attendance)} detail={describeMetric(metrics?.attendance)} icon={UserCheck} onClick={() => handleNav('attendance')} />
-        <MetricCard label="إجمالي المصروفات" value={formatMetric(metrics?.finance)} detail={describeMetric(metrics?.finance)} icon={Wallet} onClick={() => handleNav('accounts')} />
-        <MetricCard label="إجمالي الإيرادات" value={formatMetric(metrics?.finance)} detail={describeMetric(metrics?.finance)} icon={Coins} onClick={() => handleNav('student_accounts')} />
+        <MetricCard label="إجمالي المصروفات" value={formatMetric(expenseMetric)} detail={describeMetric(expenseMetric)} icon={Wallet} onClick={() => handleNav('accounts')} />
+        <MetricCard label="إجمالي الإيرادات" value={formatMetric(revenueMetric)} detail={describeMetric(revenueMetric)} icon={Coins} onClick={() => handleNav('student_accounts')} />
         <MetricCard label="الفصول الدراسية" value={formatMetric(metrics?.enrollments)} detail={describeMetric(metrics?.enrollments)} icon={GraduationCap} onClick={() => handleNav('academic')} />
         <MetricCard label="الموظفون" value={formatMetric(metrics?.teachers)} detail={describeMetric(metrics?.teachers)} icon={Users} onClick={() => handleNav('teachers')} />
         <MetricCard label="المعلمون" value={formatMetric(metrics?.teachers)} detail={describeMetric(metrics?.teachers)} icon={UserCheck} onClick={() => handleNav('teachers')} />
@@ -292,7 +294,7 @@ export default function ModernSchoolDashboard({
       </section>
 
       <section aria-label="تحليلات Dashboard" className="grid grid-cols-1 gap-4 md:grid-cols-2 lg:grid-cols-4">
-        <div className="rounded-3xl border-2 border-[#d4af37]/30 bg-gradient-to-b from-[#fffefc] to-[#f8f3ea] p-4 shadow-lg"><h4 className="mb-3 border-b border-amber-900/10 pb-2 text-xs font-black text-slate-900">الإيرادات والمصروفات</h4><EmptyPanel title="الرسم غير متاح" description={describeMetric(metrics?.finance)} /></div>
+        <div className="rounded-3xl border-2 border-[#d4af37]/30 bg-gradient-to-b from-[#fffefc] to-[#f8f3ea] p-4 shadow-lg"><h4 className="mb-3 border-b border-amber-900/10 pb-2 text-xs font-black text-slate-900">الإيرادات والمصروفات</h4><EmptyPanel title="الرسم غير متاح" description={describeMetric(revenueMetric)} /></div>
         <div className="rounded-3xl border-2 border-[#d4af37]/30 bg-gradient-to-b from-[#fffefc] to-[#f8f3ea] p-4 shadow-lg"><h4 className="mb-3 border-b border-amber-900/10 pb-2 text-xs font-black text-slate-900">توزيع الطلاب حسب المرحلة</h4><EmptyPanel title="الرسم غير متاح" description={isCustomerProductionPortal ? 'سيظهر هذا التحليل عند توفر بياناته.' : 'لا يوجد Query حي لتوزيع المراحل والصفوف في عقد Dashboard الحالي.'} /></div>
         <div className="rounded-3xl border-2 border-[#d4af37]/30 bg-gradient-to-b from-[#fffefc] to-[#f8f3ea] p-4 shadow-lg"><h4 className="mb-3 border-b border-amber-900/10 pb-2 text-xs font-black text-slate-900">نسبة التحصيل الكلية</h4><EmptyPanel title="المؤشر غير متاح" description={isCustomerProductionPortal ? 'سيظهر المؤشر عند اكتمال بيانات الرسوم.' : 'لا تُعرض نسبة ثابتة دون إثبات Query وRLS ومصدرها في قاعدة البيانات.'} /></div>
         <div className="rounded-3xl border-2 border-[#d4af37]/30 bg-gradient-to-b from-[#fffefc] to-[#f8f3ea] p-4 shadow-lg"><h4 className="mb-3 border-b border-amber-900/10 pb-2 text-xs font-black text-slate-900">تحصيل الرسوم خلال الأشهر</h4><EmptyPanel title="الرسم غير متاح" description={isCustomerProductionPortal ? 'سيظهر التحليل المالي عند توفر بياناته.' : 'لا يوجد مصدر مالي حي مربوط بهذه الشاشة حاليًا.'} /></div>

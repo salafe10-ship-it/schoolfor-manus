@@ -14,6 +14,7 @@ export type TenantDataProvider = {
     id: string;
     name?: string;
     isActive?: boolean;
+    isCurrent?: boolean;
     tenantId?: string;
     schoolId?: string;
     branchId?: string | null;
@@ -27,6 +28,7 @@ export type TenantLookupSnapshot = {
     id: string;
     name?: string;
     isActive?: boolean;
+    isCurrent?: boolean;
     tenantId?: string;
     schoolId?: string;
     branchId?: string | null;
@@ -45,6 +47,47 @@ export class TenantIsolationError extends Error {
 
 function clean(value: unknown): string {
   return typeof value === 'string' ? value.trim() : '';
+}
+
+type AcademicYearCandidate = {
+  id: string;
+  name?: string;
+  isActive?: boolean;
+  isCurrent?: boolean;
+  tenantId?: string;
+  schoolId?: string;
+  branchId?: string | null;
+};
+
+function normalizeAcademicYearLabel(value: unknown): string {
+  return clean(value).replace(/[\u2013\u2014/]/g, '-').replace(/\s+/g, '');
+}
+
+function resolveAcademicYearRecord(
+  years: AcademicYearCandidate[],
+  requestedAcademicYear: string,
+): AcademicYearCandidate | undefined {
+  const activeYears = years.filter(year => year.isActive !== false);
+  if (!requestedAcademicYear) {
+    const currentYears = activeYears.filter(year => year.isCurrent === true);
+    return currentYears.length === 1 ? currentYears[0] : activeYears.length === 1 ? activeYears[0] : undefined;
+  }
+
+  const requestedLabel = normalizeAcademicYearLabel(requestedAcademicYear);
+  const directMatch = years.find(year => year.id === requestedAcademicYear || normalizeAcademicYearLabel(year.name) === requestedLabel);
+  if (directMatch) return directMatch;
+
+  // Older sessions stored the display label (for example 2026-2027) while
+  // the canonical database row uses a UUID or a slash-separated label. When
+  // the claim is unmistakably a year label, bind it to the current scoped
+  // row; the query is already restricted to the trusted tenant/school/branch.
+  // Arbitrary invalid identifiers still fail closed below.
+  if (/^\d{4}-\d{4}$/.test(requestedLabel)) {
+    const currentYears = activeYears.filter(year => year.isCurrent === true);
+    if (currentYears.length === 1) return currentYears[0];
+    if (activeYears.length === 1) return activeYears[0];
+  }
+  return undefined;
 }
 
 function databaseProviderConfigured(): boolean {
@@ -85,6 +128,7 @@ class DefaultTenantDataProvider implements TenantDataProvider {
           id: string;
           name?: string;
           status?: string;
+          is_current?: boolean;
           tenant_id?: string;
           school_id?: string;
           branch_id?: string | null;
@@ -106,6 +150,7 @@ class DefaultTenantDataProvider implements TenantDataProvider {
                  'id', id::text,
                  'name', name,
                  'status', status,
+                 'is_current', is_current,
                  'tenant_id', tenant_id::text,
                  'school_id', school_id::text,
                  'branch_id', branch_id::text
@@ -131,6 +176,7 @@ class DefaultTenantDataProvider implements TenantDataProvider {
             // administration, but it must never compete with the operational
             // year when resolving a trusted transaction context.
             isActive: year.status === 'active',
+            isCurrent: Boolean(year.is_current),
             tenantId: year.tenant_id ? String(year.tenant_id) : undefined,
             schoolId: year.school_id ? String(year.school_id) : undefined,
             branchId: year.branch_id ? String(year.branch_id) : null
@@ -157,6 +203,14 @@ class DefaultTenantDataProvider implements TenantDataProvider {
       const supabase = getSupabaseAdminClient();
       if (!supabase) return postgresSnapshot;
       try {
+        let academicYearQuery = supabase
+          .from('academic_years')
+          .select('id,name,status,is_current,tenant_id,school_id,branch_id')
+          .eq('tenant_id', tenantId)
+          .eq('school_id', schoolId)
+          .is('deleted_at', null)
+          .in('status', ['planned', 'active']);
+        if (branchId) academicYearQuery = academicYearQuery.or(`branch_id.is.null,branch_id.eq.${branchId}`);
         const [schoolResult, branchResult, academicYearResult] = await Promise.all([
           supabase
             .from('schools')
@@ -172,13 +226,7 @@ class DefaultTenantDataProvider implements TenantDataProvider {
             .eq('school_id', schoolId)
             .is('deleted_at', null)
             .in('status', ['provisioning', 'active']),
-          supabase
-            .from('academic_years')
-            .select('id,name,status,tenant_id,school_id,branch_id')
-            .eq('tenant_id', tenantId)
-            .eq('school_id', schoolId)
-            .is('deleted_at', null)
-            .in('status', ['planned', 'active'])
+          academicYearQuery
         ]);
         if (schoolResult.error || branchResult.error || academicYearResult.error || !schoolResult.data) {
           return postgresSnapshot;
@@ -190,6 +238,7 @@ class DefaultTenantDataProvider implements TenantDataProvider {
             id: String(year.id),
             name: year.name ? String(year.name) : undefined,
             isActive: year.status === 'active',
+            isCurrent: Boolean(year.is_current),
             tenantId: year.tenant_id ? String(year.tenant_id) : undefined,
             schoolId: year.school_id ? String(year.school_id) : undefined,
             branchId: year.branch_id ? String(year.branch_id) : null
@@ -264,6 +313,7 @@ class DefaultTenantDataProvider implements TenantDataProvider {
     id: string;
     name?: string;
     isActive?: boolean;
+    isCurrent?: boolean;
     tenantId?: string;
     schoolId?: string;
     branchId?: string | null;
@@ -273,7 +323,7 @@ class DefaultTenantDataProvider implements TenantDataProvider {
       try {
         let query = supabase
           .from('academic_years')
-          .select('id,name,status,tenant_id,school_id,branch_id')
+          .select('id,name,status,is_current,tenant_id,school_id,branch_id')
           .eq('tenant_id', tenantId)
           .eq('school_id', schoolId)
           .is('deleted_at', null)
@@ -285,6 +335,7 @@ class DefaultTenantDataProvider implements TenantDataProvider {
             id: String(row.id),
             name: row.name ? String(row.name) : undefined,
             isActive: row.status === 'active',
+            isCurrent: Boolean((row as any).is_current),
             tenantId: row.tenant_id ? String(row.tenant_id) : undefined,
             schoolId: row.school_id ? String(row.school_id) : undefined,
             branchId: row.branch_id ? String(row.branch_id) : null
@@ -340,7 +391,7 @@ export class TenantContextResolver {
         : accessToken
           ? await this.provider.listAcademicYears(tenantId, schoolId, branchId, accessToken)
           : await this.provider.listAcademicYears(tenantId, schoolId, branchId);
-      const academicYearRecord = academicYears.find(year => year.id === requestedAcademicYear || year.name === requestedAcademicYear);
+      const academicYearRecord = resolveAcademicYearRecord(academicYears, requestedAcademicYear);
       if (!academicYearRecord || academicYearRecord.isActive === false) {
         throw new TenantIsolationError('INVALID_ACADEMIC_YEAR', 'السنة الدراسية الموثوقة غير صالحة.');
       }
@@ -396,10 +447,7 @@ export class TenantContextResolver {
           ? await this.provider.listAcademicYears(tenantId, schoolId, branchId, accessToken)
           : await this.provider.listAcademicYears(tenantId, schoolId, branchId);
     const requestedAcademicYear = clean(identity?.academicYear);
-    const activeYears = academicYears.filter(year => year.isActive !== false);
-    const academicYearRecord = requestedAcademicYear
-      ? academicYears.find(year => year.id === requestedAcademicYear || year.name === requestedAcademicYear)
-      : activeYears.length === 1 ? activeYears[0] : undefined;
+    const academicYearRecord = resolveAcademicYearRecord(academicYears, requestedAcademicYear);
     if (!academicYearRecord) {
       throw new TenantIsolationError(
         requestedAcademicYear ? 'INVALID_ACADEMIC_YEAR' : 'MISSING_ACADEMIC_YEAR',

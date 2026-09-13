@@ -2646,7 +2646,7 @@ export default function StudentAffairsPortal({
                       </div>
 
                       <div>
-                        <label className="block text-slate-800 font-extrabold mb-1">تاريخ الميلاد</label>
+                        <label className="block text-slate-800 font-extrabold mb-1">تاريخ الميلاد <span className="text-rose-600">*</span></label>
                         <input 
                           type="date"
                           max={new Date().toISOString().slice(0, 10)}
@@ -2743,7 +2743,7 @@ export default function StudentAffairsPortal({
               {modalTab === 'guardian' && (
                 <div className="grid grid-cols-1 sm:grid-cols-2 gap-4 text-xs">
                   <div>
-                    <label className="block text-slate-800 font-extrabold mb-1">اسم ولي الأمر رباعي</label>
+                    <label className="block text-slate-800 font-extrabold mb-1">اسم ولي الأمر رباعي <span className="text-rose-600">*</span></label>
                     <input 
                       type="text"
                       value={formData.parentName}
@@ -2754,7 +2754,7 @@ export default function StudentAffairsPortal({
                   </div>
 
                   <div>
-                    <label className="block text-slate-800 font-extrabold mb-1">رقم جوال ولي الأمر</label>
+                    <label className="block text-slate-800 font-extrabold mb-1">رقم جوال ولي الأمر <span className="text-rose-600">*</span></label>
                     <input 
                       type="text"
                       value={formData.parentPhone}

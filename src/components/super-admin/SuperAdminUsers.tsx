@@ -118,7 +118,7 @@ export default function SuperAdminUsers({
   // Handle Add User
   const handleAddUser = async (e: React.FormEvent) => {
     e.preventDefault();
-    if (!newUser.name || !newUser.email) {
+    if (!newUser.name) {
       triggerNotification('يرجى تعبئة الحقول الأساسية لإنشاء الموظف', 'warning');
       return;
     }
@@ -554,10 +554,9 @@ export default function SuperAdminUsers({
 
                 {/* Email */}
                 <div className="space-y-1">
-                  <label className="text-xs font-bold text-slate-400 block">البريد الإلكتروني للولوج:</label>
+                  <label className="text-xs font-bold text-slate-400 block">البريد الإلكتروني للولوج <span className="font-normal text-slate-500">(اختياري)</span>:</label>
                   <input
                     type="email"
-                    required
                     placeholder="example@cloudschool.edu.sa"
                     value={newUser.email}
                     onChange={(e) => setNewUser({...newUser, email: e.target.value})}
@@ -676,10 +675,9 @@ export default function SuperAdminUsers({
                   </select>
                 </div>
                 <div>
-                  <label className="text-xs font-bold text-slate-400 block mb-1">البريد الإلكتروني للاتصال والدخول:</label>
+                  <label className="text-xs font-bold text-slate-400 block mb-1">البريد الإلكتروني للاتصال والدخول <span className="font-normal text-slate-500">(اختياري)</span>:</label>
                   <input
                     type="email"
-                    required
                     value={currentUser.email}
                     onChange={(e) => setCurrentUser({...currentUser, email: e.target.value})}
                     className="w-full bg-slate-950 border border-slate-800 rounded-lg px-3 py-2 text-xs text-white font-mono"

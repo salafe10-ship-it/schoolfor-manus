@@ -5,6 +5,7 @@ import { HREmployee, HRDepartment, HRJob, HRContract, HRLeave, HRBonus, HRPenalt
 interface EmployeesTabProps {
   employees: HREmployee[];
   setEmployees: React.Dispatch<React.SetStateAction<HREmployee[]>>;
+  canManage?: boolean;
   departments: HRDepartment[];
   jobs: HRJob[];
   contracts?: HRContract[];
@@ -21,6 +22,7 @@ interface EmployeesTabProps {
 export default function EmployeesTab({
   employees,
   setEmployees,
+  canManage = false,
   departments,
   jobs,
   contracts = [],
@@ -72,6 +74,14 @@ export default function EmployeesTab({
 
   // Handle open Form Modal for Create
   const handleOpenCreate = () => {
+    if (!canManage) {
+      triggerNotification('حسابك للعرض فقط؛ لا تملك صلاحية تعديل ملفات الموظفين.', 'warning');
+      return;
+    }
+    if (!departments.length || !jobs.length) {
+      triggerNotification('لا يمكن تعيين موظف قبل تعريف قسم ووظيفة في دليل شؤون العاملين.', 'warning');
+      return;
+    }
     setEditingEmp(null);
     setFormName('');
     setFormNationalId('');
@@ -98,6 +108,10 @@ export default function EmployeesTab({
 
   // Handle open Form Modal for Edit
   const handleOpenEdit = (emp: HREmployee) => {
+    if (!canManage) {
+      triggerNotification('حسابك للعرض فقط؛ لا تملك صلاحية تعديل ملفات الموظفين.', 'warning');
+      return;
+    }
     setEditingEmp(emp);
     setFormName(emp.name);
     setFormNationalId(emp.nationalId);
@@ -124,8 +138,28 @@ export default function EmployeesTab({
 
   const handleSave = (e: React.FormEvent) => {
     e.preventDefault();
-    if (!formName || !formNationalId || !formPhone || !formEmail) {
+    if (!canManage) {
+      triggerNotification('حسابك للعرض فقط؛ لا تملك صلاحية تعديل ملفات الموظفين.', 'warning');
+      return;
+    }
+    if (!formName || !formNationalId || !formPhone) {
       triggerNotification('الرجاء تعبئة البيانات الأساسية المطلوبة', 'warning');
+      return;
+    }
+    if (!/^\d{12}$/.test(formNationalId.trim())) {
+      triggerNotification('الرقم الوطني يجب أن يتكون من 12 رقماً بالضبط.', 'warning');
+      return;
+    }
+    if (!formDepartmentId || !formJobId) {
+      triggerNotification('يجب ربط الموظف بقسم ووظيفة معتمدين من الدليل.', 'warning');
+      return;
+    }
+    if (!formHiringDate) {
+      triggerNotification('تاريخ مباشرة العمل مطلوب لإكمال الملف الوظيفي.', 'warning');
+      return;
+    }
+    if (!Number.isFinite(Number(formBasicSalary)) || Number(formBasicSalary) < 0) {
+      triggerNotification('الراتب الأساسي يجب أن يكون رقماً صفرياً أو موجباً.', 'warning');
       return;
     }
 
@@ -225,6 +259,10 @@ export default function EmployeesTab({
   };
 
   const handleDelete = (id: string) => {
+    if (!canManage) {
+      triggerNotification('حسابك للعرض فقط؛ لا تملك صلاحية حذف ملفات الموظفين.', 'warning');
+      return;
+    }
     if (confirm('هل أنت متأكد من رغبتك في حذف ملف هذا الموظف نهائياً؟')) {
       setEmployees(prev => prev.filter(emp => emp.id !== id));
       triggerNotification('تم حذف ملف الموظف بنجاح', 'success');
@@ -501,7 +539,9 @@ export default function EmployeesTab({
 
           <button 
             onClick={handleOpenCreate}
-            className="bg-gradient-to-r from-[#dfb55a] to-[#c99e4c] hover:opacity-90 text-slate-950 font-bold px-4 py-2 rounded-lg text-xs flex items-center gap-1.5 shadow-md transition-all"
+            disabled={!canManage || !departments.length || !jobs.length}
+            title={!canManage ? 'يتطلب صلاحية تعديل HR' : !departments.length || !jobs.length ? 'عرّف قسمًا ووظيفة أولاً' : 'تعيين موظف جديد'}
+            className="bg-gradient-to-r from-[#dfb55a] to-[#c99e4c] hover:opacity-90 disabled:cursor-not-allowed disabled:opacity-40 text-slate-950 font-bold px-4 py-2 rounded-lg text-xs flex items-center gap-1.5 shadow-md transition-all"
           >
             <Plus className="w-4 h-4" />
             <span>تعيين موظف جديد</span>
@@ -1287,10 +1327,9 @@ export default function EmployeesTab({
                   </div>
 
                   <div className="space-y-1">
-                    <label className="text-[10px] font-bold text-slate-400 block">البريد الإلكتروني المهني <span className="text-rose-500">*</span></label>
+                    <label className="text-[10px] font-bold text-slate-400 block">البريد الإلكتروني المهني <span className="text-slate-500 font-normal">(اختياري)</span></label>
                     <input 
                       type="email" 
-                      required
                       value={formEmail}
                       onChange={(e) => setFormEmail(e.target.value)}
                       placeholder="name@alnoor.edu"
@@ -1320,8 +1359,9 @@ export default function EmployeesTab({
 
                 <div className="grid grid-cols-1 md:grid-cols-4 gap-4">
                   <div className="space-y-1">
-                    <label className="text-[10px] font-bold text-slate-400 block">القسم المعتمد</label>
+                    <label className="text-[10px] font-bold text-slate-400 block">القسم المعتمد <span className="text-rose-500">*</span></label>
                     <select 
+                      required
                       value={formDepartmentId}
                       onChange={(e) => setFormDepartmentId(e.target.value)}
                       className="w-full bg-slate-800 border border-slate-700 rounded px-3 py-2 text-white"
@@ -1333,8 +1373,9 @@ export default function EmployeesTab({
                   </div>
 
                   <div className="space-y-1">
-                    <label className="text-[10px] font-bold text-slate-400 block">المسمى الوظيفي</label>
+                    <label className="text-[10px] font-bold text-slate-400 block">المسمى الوظيفي <span className="text-rose-500">*</span></label>
                     <select 
+                      required
                       value={formJobId}
                       onChange={(e) => setFormJobId(e.target.value)}
                       className="w-full bg-slate-800 border border-slate-700 rounded px-3 py-2 text-white"

@@ -15,6 +15,8 @@ interface PayrollTabProps {
   formatCurrency: (amount: number, showSymbol?: boolean) => string;
   triggerNotification: (msg: string, type: 'success' | 'warning' | 'error') => void;
   costCenterLabels: Record<string, string>;
+  canApprove?: boolean;
+  canFinancialWrite?: boolean;
   onApprovePayroll: (period: string) => Promise<boolean>;
   onPayPayroll: (period: string) => Promise<boolean>;
 }
@@ -43,6 +45,8 @@ export default function PayrollTab({
   formatCurrency,
   triggerNotification,
   costCenterLabels,
+  canApprove = false,
+  canFinancialWrite = false,
   onApprovePayroll,
   onPayPayroll
 }: PayrollTabProps) {
@@ -220,7 +224,9 @@ export default function PayrollTab({
           ) : (
             <button 
               onClick={handlePostPayroll}
-              className="bg-gradient-to-r from-emerald-600 to-teal-500 hover:opacity-90 text-white font-bold px-4 py-1.5 rounded-lg text-xs flex items-center gap-1.5 shadow-md transition-all"
+              disabled={isApproved ? !canFinancialWrite : !canApprove}
+              title={isApproved ? 'يتطلب تنفيذ الصرف صلاحية الكتابة المالية' : 'يتطلب اعتماد المسير صلاحية اعتماد الموارد البشرية'}
+              className="bg-gradient-to-r from-emerald-600 to-teal-500 hover:opacity-90 disabled:opacity-40 disabled:cursor-not-allowed text-white font-bold px-4 py-1.5 rounded-lg text-xs flex items-center gap-1.5 shadow-md transition-all"
             >
               <Play className="w-4 h-4" />
               <span>{isApproved ? 'تنفيذ الصرف وترحيل القيد' : 'اعتماد مسير الرواتب'}</span>

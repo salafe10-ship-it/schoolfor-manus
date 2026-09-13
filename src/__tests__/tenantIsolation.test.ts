@@ -30,6 +30,25 @@ describe('Wave 1D tenant isolation foundation', () => {
     expect(resolved).toEqual(context);
   });
 
+  it('maps a legacy display year label to the one trusted current row', async () => {
+    const resolver = new TenantContextResolver({
+      schoolExists: vi.fn(async () => true),
+      listBranches: vi.fn(async () => ['branch-1']),
+      listAcademicYears: vi.fn(async () => [{
+        id: 'year-canonical-id',
+        name: '2026/2027',
+        isActive: true,
+        isCurrent: true,
+        tenantId: 'tenant-1',
+        schoolId: 'school-1',
+        branchId: 'branch-1',
+      }]),
+    });
+
+    await expect(resolver.resolve({ ...identity, academicYear: '2026-2027' }))
+      .resolves.toMatchObject({ academicYear: 'year-canonical-id' });
+  });
+
   it('forwards only the verified access token to authenticated tenant lookups', async () => {
     const authenticatedProvider: TenantDataProvider = {
       schoolExists: vi.fn(async (_tenantId, _schoolId, accessToken) => accessToken === 'verified-token'),

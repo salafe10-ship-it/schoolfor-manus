@@ -10,6 +10,7 @@ interface OtherHRTabsProps {
   activeTab: string;
   employees: HREmployee[];
   setEmployees: React.Dispatch<React.SetStateAction<HREmployee[]>>;
+  canManage?: boolean;
   departments: HRDepartment[];
   setDepartments: React.Dispatch<React.SetStateAction<HRDepartment[]>>;
   jobs: HRJob[];
@@ -41,6 +42,7 @@ export default function OtherHRTabs({
   activeTab,
   employees,
   setEmployees,
+  canManage = false,
   departments,
   setDepartments,
   jobs,
@@ -67,6 +69,12 @@ export default function OtherHRTabs({
   onPayAdvance,
   onSignContract
 }: OtherHRTabsProps) {
+
+  const requireWrite = () => {
+    if (canManage) return true;
+    triggerNotification('حسابك للعرض فقط؛ لا تملك صلاحية تعديل سجلات شؤون العاملين.', 'warning');
+    return false;
+  };
 
   // Global modals state
   const [showAddModal, setShowAddModal] = useState(false);
@@ -149,6 +157,7 @@ export default function OtherHRTabs({
   if (activeTab === 'depts') {
     const handleSaveDept = (e: React.FormEvent) => {
       e.preventDefault();
+      if (!requireWrite()) return;
       if (editingItem) {
         setDepartments(prev => prev.map(d => d.id === editingItem.id ? { ...d, ...deptForm } : d));
         triggerNotification('تم تعديل القسم الإداري بنجاح', 'success');
@@ -165,6 +174,7 @@ export default function OtherHRTabs({
     };
 
     const handleOpenEdit = (dept: HRDepartment) => {
+      if (!requireWrite()) return;
       setEditingItem(dept);
       setDeptForm({ code: dept.code, nameAr: dept.nameAr, nameEn: dept.nameEn, managerId: dept.managerId, costCenter: dept.costCenter });
       setShowAddModal(true);
@@ -209,7 +219,7 @@ export default function OtherHRTabs({
                   <td className="p-4 text-center">
                     <div className="flex items-center justify-center gap-2">
                       <button onClick={() => handleOpenEdit(d)} className="p-1 bg-slate-800 hover:bg-slate-700 text-amber-400 rounded"><Edit className="w-3.5 h-3.5" /></button>
-                      <button onClick={() => { if(confirm('حذف القسم؟')) setDepartments(prev => prev.filter(x => x.id !== d.id)); }} className="p-1 bg-slate-800 hover:bg-rose-950 text-rose-400 rounded"><Trash2 className="w-3.5 h-3.5" /></button>
+                      <button onClick={() => { if (!requireWrite()) return; if(confirm('حذف القسم؟')) setDepartments(prev => prev.filter(x => x.id !== d.id)); }} disabled={!canManage} className="p-1 bg-slate-800 hover:bg-rose-950 disabled:cursor-not-allowed disabled:opacity-40 text-rose-400 rounded"><Trash2 className="w-3.5 h-3.5" /></button>
                     </div>
                   </td>
                 </tr>
@@ -270,6 +280,7 @@ export default function OtherHRTabs({
   if (activeTab === 'jobs') {
     const handleSaveJob = (e: React.FormEvent) => {
       e.preventDefault();
+      if (!requireWrite()) return;
       if (editingItem) {
         setJobs(prev => prev.map(j => j.id === editingItem.id ? { ...j, ...jobForm } : j));
         triggerNotification('تم تحديث المسمى الوظيفي بنجاح', 'success');
@@ -326,7 +337,7 @@ export default function OtherHRTabs({
                   <td className="p-4 text-center">
                     <div className="flex items-center justify-center gap-2">
                       <button onClick={() => { setEditingItem(j); setJobForm({ ...j }); setShowAddModal(true); }} className="p-1 bg-slate-800 hover:bg-slate-700 text-amber-400 rounded"><Edit className="w-3.5 h-3.5" /></button>
-                      <button onClick={() => { if(confirm('حذف المسمى الوظيفي؟')) setJobs(prev => prev.filter(x => x.id !== j.id)); }} className="p-1 bg-slate-800 hover:bg-rose-950 text-rose-400 rounded"><Trash2 className="w-3.5 h-3.5" /></button>
+                      <button onClick={() => { if (!requireWrite()) return; if(confirm('حذف المسمى الوظيفي؟')) setJobs(prev => prev.filter(x => x.id !== j.id)); }} disabled={!canManage} className="p-1 bg-slate-800 hover:bg-rose-950 disabled:cursor-not-allowed disabled:opacity-40 text-rose-400 rounded"><Trash2 className="w-3.5 h-3.5" /></button>
                     </div>
                   </td>
                 </tr>
@@ -384,6 +395,7 @@ export default function OtherHRTabs({
   if (activeTab === 'contracts') {
     const handleSaveContract = (e: React.FormEvent) => {
       e.preventDefault();
+      if (!requireWrite()) return;
       if (editingItem?.signatureHash) {
         triggerNotification('العقد الموقّع محمي؛ أنشئ إصداراً جديداً بدلاً من تعديل النسخة المعتمدة.', 'warning');
         return;
@@ -463,7 +475,7 @@ export default function OtherHRTabs({
                       <div className="flex items-center justify-center gap-2">
                         <button onClick={() => { setEditingItem(c); setContractForm({ ...c }); setShowAddModal(true); }} className="p-1 bg-slate-800 hover:bg-slate-700 text-amber-400 rounded"><Edit className="w-3.5 h-3.5" /></button>
                         {c.status === 'draft' && <button onClick={() => handleSignContract(c.id)} className="p-1 bg-emerald-900/60 hover:bg-emerald-800 text-emerald-300 rounded" title="توقيع واعتماد">توقيع</button>}
-                        <button onClick={() => { if(confirm('إلغاء أو إنهاء هذا العقد؟')) setContracts(prev => prev.map(x => x.id === c.id ? {...x, status: 'terminated'} : x)); }} className="p-1 bg-slate-800 hover:bg-rose-950 text-rose-400 rounded"><X className="w-3.5 h-3.5" /></button>
+                        <button onClick={() => { if (!requireWrite()) return; if(confirm('إلغاء أو إنهاء هذا العقد؟')) setContracts(prev => prev.map(x => x.id === c.id ? {...x, status: 'terminated'} : x)); }} disabled={!canManage} className="p-1 bg-slate-800 hover:bg-rose-950 disabled:cursor-not-allowed disabled:opacity-40 text-rose-400 rounded"><X className="w-3.5 h-3.5" /></button>
                       </div>
                     </td>
                   </tr>
@@ -528,6 +540,7 @@ export default function OtherHRTabs({
   if (activeTab === 'leaves') {
     const handleSaveLeave = (e: React.FormEvent) => {
       e.preventDefault();
+      if (!requireWrite()) return;
       const newLeave: HRLeave = {
         id: `LV-${Date.now().toString().slice(-4)}`,
         ...leaveForm,
@@ -540,6 +553,7 @@ export default function OtherHRTabs({
     };
 
     const updateLeaveStatus = (leaveId: string, status: HRLeave['status']) => {
+      if (!requireWrite()) return;
       const leave = leaves.find(item => item.id === leaveId);
       if (!leave) return;
       setLeaves(prev => prev.map(item => item.id === leaveId ? { ...item, status } : item));
@@ -664,6 +678,7 @@ export default function OtherHRTabs({
   if (activeTab === 'penalties') {
     const handleSavePenalty = (e: React.FormEvent) => {
       e.preventDefault();
+      if (!requireWrite()) return;
       const newPenalty: HRPenalty = {
         id: `PEN-${Date.now().toString().slice(-4)}`,
         ...penaltyForm,
@@ -691,6 +706,7 @@ export default function OtherHRTabs({
     };
 
     const updatePenaltyStatus = (penaltyId: string, status: HRPenalty['status']) => {
+      if (!requireWrite()) return;
       setPenalties(prev => prev.map(item => item.id === penaltyId ? { ...item, status } : item));
       triggerNotification(status === 'applied' ? 'تم تطبيق الجزاء؛ سيظهر في المسير القادم.' : 'تم إلغاء أثر الجزاء.', status === 'applied' ? 'success' : 'warning');
     };
@@ -803,6 +819,7 @@ export default function OtherHRTabs({
   if (activeTab === 'advances') {
     const handleSaveAdvance = (e: React.FormEvent) => {
       e.preventDefault();
+      if (!requireWrite()) return;
       const newAdvance: HRAdvance = {
         id: `ADV-${Date.now().toString().slice(-4)}`,
         ...advanceForm,
@@ -815,6 +832,7 @@ export default function OtherHRTabs({
     };
 
     const updateAdvanceStatus = (advanceId: string, status: HRAdvance['status']) => {
+      if (!requireWrite()) return;
       setAdvances(prev => prev.map(item => item.id === advanceId ? { ...item, status } : item));
       triggerNotification(status === 'approved' ? 'تم اعتماد السلفة؛ الصرف يتم من المسار المالي المركزي.' : 'تم رفض طلب السلفة.', status === 'approved' ? 'success' : 'warning');
     };
@@ -940,6 +958,7 @@ export default function OtherHRTabs({
   if (activeTab === 'rewards') {
     const handleSaveReward = (e: React.FormEvent) => {
       e.preventDefault();
+      if (!requireWrite()) return;
       const newBonus: HRBonus = {
         id: `REW-${Date.now().toString().slice(-4)}`,
         ...rewardForm,
@@ -966,6 +985,7 @@ export default function OtherHRTabs({
     };
 
     const updateRewardStatus = (rewardId: string, status: HRBonus['status']) => {
+      if (!requireWrite()) return;
       setRewards(prev => prev.map(item => item.id === rewardId ? { ...item, status } : item));
       triggerNotification(status === 'applied' ? 'تم اعتماد المكافأة وستدخل في المسير القادم.' : 'تم إرجاع المكافأة للمراجعة.', status === 'applied' ? 'success' : 'warning');
     };
@@ -1066,6 +1086,7 @@ export default function OtherHRTabs({
   if (activeTab === 'performance') {
     const handleSavePerf = (e: React.FormEvent) => {
       e.preventDefault();
+      if (!requireWrite()) return;
       const newPerf: HRPerformance = {
         id: `EV-${Date.now().toString().slice(-4)}`,
         ...perfForm
@@ -1185,6 +1206,7 @@ export default function OtherHRTabs({
   if (activeTab === 'documents') {
     const handleSaveDoc = (e: React.FormEvent) => {
       e.preventDefault();
+      if (!requireWrite()) return;
       const newDoc: HRDocument = {
         id: `DOC-${Date.now().toString().slice(-4)}`,
         ...docForm,
@@ -1301,6 +1323,7 @@ export default function OtherHRTabs({
   if (activeTab === 'settings') {
     const handleSaveSettings = async (e: React.FormEvent) => {
       e.preventDefault();
+      if (!requireWrite()) return;
       try {
         const response = await fetch('/api/hr/accounting-mappings', {
           method: 'POST',

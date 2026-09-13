@@ -2061,7 +2061,13 @@ export default function App() {
             {/* VIEW: TEACHERS & EMPLOYEES SECTION (المعلمون والموظفون) */}
             {/* ========================================================== */}
             {activeSection === 'teachers' && (
-              <HumanResourcesPortal setActiveSection={setActiveSection} selectedSchool={selectedSchool} />
+              <HumanResourcesPortal
+                setActiveSection={setActiveSection}
+                selectedSchool={selectedSchool}
+                canManage={canUseTrustedPermission(PERMISSIONS.HR_WRITE)}
+                canApprove={canUseTrustedPermission(PERMISSIONS.HR_APPROVE) || canUseTrustedPermission(PERMISSIONS.HR_WRITE)}
+                canFinancialWrite={canUseTrustedPermission(PERMISSIONS.FINANCIAL_WRITE)}
+              />
             )}
 
             {/* ========================================================== */}
@@ -3115,11 +3121,10 @@ export default function App() {
 
               <div className="grid grid-cols-2 gap-4">
                 <div>
-                  <label className="block text-slate-700 font-bold mb-1" htmlFor="teacher-email">البريد الإلكتروني المهني:</label>
+                  <label className="block text-slate-700 font-bold mb-1" htmlFor="teacher-email">البريد الإلكتروني المهني <span className="font-normal text-slate-500">(اختياري)</span>:</label>
                   <input
                     id="teacher-email"
                     type="email"
-                    required
                     value={teacherForm.email}
                     onChange={(e) => setTeacherForm({ ...teacherForm, email: e.target.value })}
                     className="w-full bg-slate-50 border border-slate-200 text-slate-800 rounded-lg p-2 focus:ring-1 focus:ring-sky-500 focus:outline-none"

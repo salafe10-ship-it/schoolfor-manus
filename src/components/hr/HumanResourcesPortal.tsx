@@ -30,13 +30,18 @@ const costCenterLabels: Record<string, string> = {
 interface HumanResourcesPortalProps {
   setActiveSection?: (section: string) => void;
   selectedSchool?: any;
+  /** Server-derived capability; HR read access must not imply write access. */
+  canManage?: boolean;
+  canApprove?: boolean;
+  canFinancialWrite?: boolean;
 }
 
-export default function HumanResourcesPortal({ setActiveSection, selectedSchool }: HumanResourcesPortalProps) {
+export default function HumanResourcesPortal({ setActiveSection, selectedSchool, canManage = false, canApprove = false, canFinancialWrite = false }: HumanResourcesPortalProps) {
   const canonicalPersistenceRequired = FallbackStorage.isCanonicalPersistenceRequired();
   const [activeGroup, setActiveGroup] = useState<'employees_group' | 'attendance_group' | 'advances_group' | 'payroll_group' | 'reports_group'>('employees_group');
   const [activeTab, setActiveTab] = useState('employees');
   const [notification, setNotification] = useState<{ message: string; type: 'success' | 'warning' | 'error' } | null>(null);
+  const [canonicalSaveError, setCanonicalSaveError] = useState('');
 
   // Core database states (loaded from localStorage or initialized with professional seed data)
   const [employees, setEmployees] = useState<HREmployee[]>([]);
@@ -75,8 +80,19 @@ export default function HumanResourcesPortal({ setActiveSection, selectedSchool 
     setTimeout(() => setNotification(null), 5000);
   };
 
+  const requireHrWrite = () => {
+    if (canManage) return true;
+    triggerNotification('حسابك للعرض فقط؛ لا تملك صلاحية تعديل سجلات شؤون العاملين.', 'warning');
+    return false;
+  };
+
   const runPayrollWorkflow = async (period: string, action: 'approve' | 'pay'): Promise<boolean> => {
     try {
+      if (action === 'approve' && !canApprove && !canManage) return requireHrWrite();
+      if (action === 'pay' && !canFinancialWrite) {
+        triggerNotification('صرف المسير يتطلب صلاحية الكتابة المالية.', 'warning');
+        return false;
+      }
       const token = getTrustedAccessToken();
       if (!token) throw new Error('انتهت جلسة الدخول الموثوقة.');
       const response = await fetch(`/api/hr/payroll-runs/${period}/${action}`, {
@@ -124,6 +140,10 @@ export default function HumanResourcesPortal({ setActiveSection, selectedSchool 
 
   const runAdvanceWorkflow = async (advanceId: string) => {
     try {
+      if (!canFinancialWrite) {
+        triggerNotification('صرف السلفة يتطلب صلاحية الكتابة المالية.', 'warning');
+        return;
+      }
       const token = getTrustedAccessToken();
       if (!token) throw new Error('انتهت جلسة الدخول الموثوقة.');
       const response = await fetch(`/api/hr/advances/${encodeURIComponent(advanceId)}/pay`, {
@@ -145,6 +165,10 @@ export default function HumanResourcesPortal({ setActiveSection, selectedSchool 
 
   const runContractSigning = async (contractId: string) => {
     try {
+      if (!canApprove && !canManage) {
+        triggerNotification('توقيع العقد يتطلب صلاحية اعتماد الموارد البشرية.', 'warning');
+        return;
+      }
       const token = getTrustedAccessToken();
       if (!token) throw new Error('انتهت جلسة الدخول الموثوقة.');
       const response = await fetch(`/api/hr/contracts/${encodeURIComponent(contractId)}/sign`, {
@@ -459,9 +483,36 @@ export default function HumanResourcesPortal({ setActiveSection, selectedSchool 
         if (!response.ok || !payload?.success) throw new Error(payload?.message || 'تعذر حفظ سجل الموارد البشرية.');
         canonicalVersionRef.current = Number(payload?.meta?.version || canonicalVersionRef.current + 1);
         canonicalBaselineRef.current = serialized;
+        setCanonicalSaveError('');
         triggerNotification('تم حفظ سجل الموارد البشرية المركزي.', 'success');
       } catch (error: any) {
-        triggerNotification(error?.message || 'تعذر حفظ سجل الموارد البشرية المركزي.', 'error');
+        const message = error?.message || 'تعذر حفظ سجل الموارد البشرية المركزي.';
+        setCanonicalSaveError(message);
+        // Never leave optimistic HR data on screen after a rejected or
+        // conflicting canonical write. Restore the last confirmed snapshot so
+        // the UI cannot suggest that unsaved records are authoritative.
+        try {
+          const baseline = canonicalBaselineRef.current ? JSON.parse(canonicalBaselineRef.current) : null;
+          if (baseline) {
+            setEmployees(Array.isArray(baseline.employees) ? baseline.employees : []);
+            setDepartments(Array.isArray(baseline.departments) ? baseline.departments : []);
+            setJobs(Array.isArray(baseline.jobs) ? baseline.jobs : []);
+            setContracts(Array.isArray(baseline.contracts) ? baseline.contracts : []);
+            setAttendance(Array.isArray(baseline.attendance) ? baseline.attendance : []);
+            setLeaves(Array.isArray(baseline.leaves) ? baseline.leaves : []);
+            setPenalties(Array.isArray(baseline.penalties) ? baseline.penalties : []);
+            setAdvances(Array.isArray(baseline.advances) ? baseline.advances : []);
+            setRewards(Array.isArray(baseline.rewards) ? baseline.rewards : []);
+            setPerformance(Array.isArray(baseline.performance) ? baseline.performance : []);
+            setDocuments(Array.isArray(baseline.documents) ? baseline.documents : []);
+            setPayrollRuns(Array.isArray(baseline.payrollRuns) ? baseline.payrollRuns : []);
+            if (baseline.settings && typeof baseline.settings === 'object') setSettings(baseline.settings);
+          }
+        } catch {
+          // Keep the visible error if an old snapshot is malformed; the next
+          // full page load will obtain a fresh canonical snapshot.
+        }
+        triggerNotification(`${message} تمت استعادة آخر نسخة محفوظة.`, 'error');
       } finally {
         canonicalSaveInFlightRef.current = false;
       }
@@ -559,6 +610,20 @@ export default function HumanResourcesPortal({ setActiveSection, selectedSchool 
             {notification.type === 'success' ? <CheckCircle className="w-5 h-5" /> : <AlertTriangle className="w-5 h-5" />}
           </div>
           <p className="text-xs font-bold leading-relaxed">{notification.message}</p>
+        </div>
+      )}
+
+      {!canManage && (
+        <div className="mb-4 flex items-center gap-2 border border-amber-500/30 bg-amber-950/30 px-4 py-3 text-xs font-bold text-amber-300" role="status">
+          <Info className="h-4 w-4 shrink-0" />
+          <span>وضع العرض فقط: يمكنك استعراض سجلات العاملين، بينما تتطلب أي إضافة أو تعديل أو اعتماد صلاحية مناسبة.</span>
+        </div>
+      )}
+
+      {canonicalSaveError && canonicalPersistenceRequired && (
+        <div className="mb-4 flex flex-wrap items-center justify-between gap-3 border border-rose-500/30 bg-rose-950/30 px-4 py-3 text-xs text-rose-200" role="alert">
+          <span><b>تعذر مزامنة سجل HR:</b> تمت استعادة آخر نسخة محفوظة. أعد التحميل بعد التحقق من اتصالك.</span>
+          <button type="button" onClick={() => window.location.reload()} className="rounded border border-rose-300/40 px-3 py-1.5 font-bold hover:bg-rose-900/50">إعادة المزامنة</button>
         </div>
       )}
 
@@ -978,6 +1043,7 @@ export default function HumanResourcesPortal({ setActiveSection, selectedSchool 
             <EmployeesTab 
               employees={employees} 
               setEmployees={setEmployees}
+              canManage={canManage}
               departments={departments}
               jobs={jobs}
               contracts={contracts}
@@ -1000,6 +1066,7 @@ export default function HumanResourcesPortal({ setActiveSection, selectedSchool 
               setAttendance={setAttendance}
               departments={departments}
               settings={settings}
+              canManage={canManage}
               triggerNotification={triggerNotification}
               costCenterLabels={costCenterLabels}
             />
@@ -1019,6 +1086,8 @@ export default function HumanResourcesPortal({ setActiveSection, selectedSchool 
               formatCurrency={formatCurrency}
               triggerNotification={triggerNotification}
               costCenterLabels={costCenterLabels}
+              canApprove={canApprove || canManage}
+              canFinancialWrite={canFinancialWrite}
               onApprovePayroll={(period) => runPayrollWorkflow(period, 'approve')}
               onPayPayroll={(period) => runPayrollWorkflow(period, 'pay')}
             />
@@ -1071,6 +1140,7 @@ export default function HumanResourcesPortal({ setActiveSection, selectedSchool 
               formatCurrency={formatCurrency}
               triggerNotification={triggerNotification}
               costCenterLabels={costCenterLabels}
+              canManage={canManage}
               onPayAdvance={runAdvanceWorkflow}
               onSignContract={runContractSigning}
             />

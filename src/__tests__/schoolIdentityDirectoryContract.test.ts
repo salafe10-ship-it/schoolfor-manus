@@ -34,10 +34,18 @@ describe('school-scoped identity directory contracts', () => {
     expect(server).toContain('const ensureIdentityJobSchema = async');
     expect(server).toContain('ALTER TABLE public.users ADD COLUMN IF NOT EXISTS job_id text');
     expect(server).toContain('await ensureIdentityJobSchema();');
-    expect(server).toContain('readSchoolIdentityDirectoryFromControl');
-    expect(server).toContain("from('users').select(columnsWithJob)");
+    expect(server).toContain('same canonical PostgreSQL source used by every school');
+    expect(server).not.toContain('readSchoolIdentityDirectoryFromControl');
+    expect(server).not.toContain("from('users').select(columnsWithJob)");
     expect(server).toContain("from('hr_database').select('data')");
     expect(server).toContain('jsonb_array_elements(COALESCE(h.data->\'jobs\'' );
+
+    const jobCatalogStart = server.indexOf("app.get('/api/school/job-catalog'");
+    const usersRouteStart = server.indexOf("app.get('/api/school/users'", jobCatalogStart);
+    const jobCatalogRoute = server.slice(jobCatalogStart, usersRouteStart);
+    expect(jobCatalogRoute).toContain('platformAdminPool.query');
+    expect(jobCatalogRoute).toContain("data->'employees'");
+    expect(jobCatalogRoute).not.toContain("platformControl.from('hr_database')");
   });
 
   it('registers the identity capability catalog without Platform.Admin', () => {

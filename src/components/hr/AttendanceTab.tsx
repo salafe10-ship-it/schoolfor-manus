@@ -6,6 +6,7 @@ interface AttendanceTabProps {
   employees: HREmployee[];
   attendance: HRAttendance[];
   setAttendance: React.Dispatch<React.SetStateAction<HRAttendance[]>>;
+  canManage?: boolean;
   departments: HRDepartment[];
   settings: HRSettings;
   triggerNotification: (msg: string, type: 'success' | 'warning' | 'error') => void;
@@ -16,6 +17,7 @@ export default function AttendanceTab({
   employees,
   attendance,
   setAttendance,
+  canManage = false,
   departments,
   settings,
   triggerNotification,
@@ -92,6 +94,10 @@ export default function AttendanceTab({
 
   // Update a single attendance attribute
   const updateAttendance = (empId: string, status: 'present' | 'absent' | 'late' | 'excused', fields: Partial<HRAttendance>) => {
+    if (!canManage) {
+      triggerNotification('حسابك للعرض فقط؛ لا تملك صلاحية تعديل الحضور والانصراف.', 'warning');
+      return;
+    }
     const recordId = `ATT-${empId}-${selectedDate}`;
     const existingIdx = attendance.findIndex(a => a.employeeId === empId && a.date === selectedDate);
     
@@ -139,6 +145,10 @@ export default function AttendanceTab({
 
   // Batch mark all filtered employees as Present
   const handleBatchPresent = () => {
+    if (!canManage) {
+      triggerNotification('حسابك للعرض فقط؛ لا تملك صلاحية تعديل الحضور والانصراف.', 'warning');
+      return;
+    }
     let count = 0;
     const nowStr = settings.workingHoursStart;
     const checkOutStr = settings.workingHoursEnd;
