@@ -1267,11 +1267,22 @@ async function replaceStudentFinanceProjection(
     });
     return;
   }
-  for (const table of projectionTables) {
+  const canonicalFeeCheck = await transaction.query(
+    `SELECT to_regclass('public.student_fee_allocations') IS NOT NULL
+            AND to_regclass('public.student_fee_templates') IS NOT NULL AS ready`
+  );
+  const canonicalFeeOperationsReady = Boolean((canonicalFeeCheck as any)?.rows?.[0]?.ready);
+  // Once the normalized fee command model is present, the legacy snapshot is
+  // a compatibility read model only. Never delete or overwrite canonical
+  // invoices/receipts from a browser-supplied aggregate payload.
+  const replaceableProjectionTables = canonicalFeeOperationsReady
+    ? projectionTables.filter(table => !['student_fee_invoices', 'student_fee_receipts'].includes(table))
+    : projectionTables;
+  for (const table of replaceableProjectionTables) {
     await transaction.query(`DELETE FROM public.${table} WHERE tenant_id = $1 AND school_id = $2`, [tenantId, schoolId]);
   }
 
-  for (const [index, row] of financialRecordRows(payload.invoices).entries()) {
+  for (const [index, row] of (canonicalFeeOperationsReady ? [] : financialRecordRows(payload.invoices)).entries()) {
     const id = financialText(row.id, `invoice_${index + 1}`);
     await transaction.query(
       `INSERT INTO public.student_fee_invoices
@@ -1316,7 +1327,7 @@ async function replaceStudentFinanceProjection(
     );
   }
 
-  for (const [index, row] of financialRecordRows(payload.studentReceiptVouchers).entries()) {
+  for (const [index, row] of (canonicalFeeOperationsReady ? [] : financialRecordRows(payload.studentReceiptVouchers)).entries()) {
     const id = financialText(row.id, `receipt_${index + 1}`);
     await transaction.query(
       `INSERT INTO public.student_fee_receipts
@@ -10426,6 +10437,59 @@ async function startServer() {
     return { tenantId, schoolId, actorId, tenantContext, identity };
   };
 
+  app.get("/api/financial/operational-context", authenticateRequest, requirePermission(PERMISSIONS.FINANCIAL_READ), async (req, res, next) => {
+    try {
+      const { tenantId, schoolId, actorId, tenantContext } = canonicalFeeContext(req);
+      let operationalContext: Record<string, unknown> | null = null;
+      await UnitOfWork.runInTransaction(schoolId, {
+        operationName: 'Read canonical financial operational context',
+        tenantId,
+        userId: actorId,
+        userName: String((req as any).user.name || 'مستخدم الرسوم'),
+        ipAddress: req.ip || 'unknown',
+        affectedTables: ['academic_years', 'terms']
+      }, async () => {
+        const transaction = UnitOfWork.getActiveContext()?.databaseTransaction;
+        if (!transaction) throw new DatabaseError('تعذر فتح معاملة قراءة السياق المالي.');
+        const yearResult = await transaction.query(
+          `SELECT id, name, starts_on, ends_on
+             FROM public.academic_years
+            WHERE tenant_id = $1 AND school_id = $2 AND id = $3
+              AND status = 'active' AND deleted_at IS NULL
+            LIMIT 1`,
+          [tenantId, schoolId, tenantContext.academicYear]
+        );
+        const year = yearResult.rows[0];
+        if (!year) throw new ValidationError('السنة الدراسية النشطة لا تطابق السياق المالي الموثوق.');
+        const termResult = await transaction.query(
+          `SELECT id, name, starts_on, ends_on
+             FROM public.terms
+            WHERE tenant_id = $1 AND school_id = $2 AND academic_year_id = $3
+              AND (branch_id = $4 OR branch_id IS NULL)
+              AND status = 'active' AND deleted_at IS NULL
+            ORDER BY starts_on DESC, sequence DESC, id ASC
+            LIMIT 1`,
+          [tenantId, schoolId, tenantContext.academicYear, tenantContext.branchId]
+        );
+        const term = termResult.rows[0];
+        if (!term) throw new ValidationError('لا توجد فترة دراسية نشطة مرتبطة بالسنة والفرع الموثوقين.');
+        operationalContext = {
+          academicYearId: String(year.id),
+          academicYearName: String(year.name || ''),
+          academicPeriodId: String(term.id),
+          academicPeriodName: String(term.name || ''),
+          branchId: tenantContext.branchId,
+          financialPeriod: String(year.name || year.id)
+        };
+      }, tenantContext);
+      res.json({ success: true, data: operationalContext, meta: { source: 'canonical_postgres' } });
+    } catch (err: any) {
+      next(err instanceof AuthenticationError || err instanceof ValidationError || err instanceof DatabaseError
+        ? err
+        : new DatabaseError('تعذر قراءة السياق التشغيلي للرسوم.', err?.message));
+    }
+  });
+
   const resolveCanonicalFeeActor = async (transaction: any, tenantId: string, schoolId: string, actorId: string): Promise<string> => {
     const result = await transaction.query(
       `SELECT id FROM public.users
@@ -10885,6 +10949,196 @@ async function startServer() {
       res.json({ success: true, status, provider, eventId });
     } catch (err: any) {
       next(err instanceof AuthenticationError || err instanceof ValidationError || err instanceof DatabaseError ? err : new DatabaseError('تعذر معالجة Webhook الدفع.', err?.message));
+    }
+  });
+
+  app.post("/api/financial/receipts/manual-settle", authenticateRequest, requirePermission(PERMISSIONS.FINANCIAL_WRITE), async (req, res, next) => {
+    try {
+      const { tenantId, schoolId, actorId, tenantContext } = canonicalFeeContext(req);
+      const body = req.body && typeof req.body === 'object' ? req.body as Record<string, any> : {};
+      const receiptId = String(body.receiptId || '').trim();
+      const studentId = String(body.studentId || '').trim();
+      const receiptDate = String(body.receiptDate || '').slice(0, 10);
+      const paymentMethod = String(body.paymentMethod || '').trim();
+      const receivingAccount = String(body.receivingAccount || '').trim();
+      const operationalType = String(body.operationalType || 'رسوم دراسية').trim();
+      const against = String(body.against || '').trim();
+      const costCenter = String(body.costCenter || '').trim();
+      const amount = assertMoney(body.amount, 'مبلغ سند القبض');
+      const permittedPaymentMethods = new Set(['نقدي', 'شيك', 'تحويل', 'بطاقة مدى البنكية (Mada)', 'فيزا / ماستركارد']);
+      if (!/^[A-Za-z0-9][A-Za-z0-9._:-]{7,179}$/.test(receiptId)) throw new ValidationError('معرف سند القبض غير صالح.');
+      if (!canonicalFeeUuid(studentId)) throw new ValidationError('معرف الطالب غير صالح.');
+      if (!/^\d{4}-\d{2}-\d{2}$/.test(receiptDate)) throw new ValidationError('تاريخ سند القبض غير صالح.');
+      if (!permittedPaymentMethods.has(paymentMethod)) throw new ValidationError('طريقة السداد غير مدعومة.');
+      if (!receivingAccount || !against) throw new ValidationError('حساب الاستلام وبيان السداد حقول مطلوبة.');
+
+      let settlement: Record<string, any> | null = null;
+      let idempotentReplay = false;
+      await UnitOfWork.runInTransaction(schoolId, {
+        operationName: `Settle manual student receipt ${receiptId}`,
+        tenantId,
+        userId: actorId,
+        userName: String((req as any).user.name || 'محاسب المدرسة'),
+        ipAddress: req.ip || 'unknown',
+        affectedTables: ['student_fee_receipts', 'student_fee_invoices', 'student_fee_allocations', 'erp_journal_entries', 'erp_journal_lines', 'erp_general_ledger', 'audit_events']
+      }, async () => {
+        const transaction = UnitOfWork.getActiveContext()?.databaseTransaction;
+        if (!transaction) throw new DatabaseError('تعذر فتح معاملة تسوية سند القبض.');
+        const databaseActorId = await resolveCanonicalFeeActor(transaction, tenantId, schoolId, actorId);
+        const studentResult = await transaction.query(
+          `SELECT id, preferred_name, legal_first_name, legal_middle_name, legal_last_name
+             FROM public.students
+            WHERE tenant_id = $1 AND school_id = $2 AND id = $3
+              AND deleted_at IS NULL AND status IN ('active','admitted','applicant')
+            FOR SHARE`,
+          [tenantId, schoolId, studentId]
+        );
+        const student = studentResult.rows[0];
+        if (!student) throw new ValidationError('الطالب غير موجود أو غير نشط في المدرسة الحالية.');
+        const studentName = [student.preferred_name, student.legal_first_name, student.legal_middle_name, student.legal_last_name].filter(Boolean).join(' ');
+
+        const existingResult = await transaction.query(
+          `SELECT id, student_id, amount, status, journal_entry_id
+             FROM public.student_fee_receipts
+            WHERE tenant_id = $1 AND school_id = $2 AND id = $3
+            FOR UPDATE`,
+          [tenantId, schoolId, receiptId]
+        );
+        const existing = existingResult.rows[0];
+        if (existing && (String(existing.student_id) !== studentId || Math.abs(Number(existing.amount) - amount) > 0.001)) {
+          throw new ConflictError('معرف السند مستخدم في حركة مختلفة؛ حدّث الشاشة قبل إعادة المحاولة.');
+        }
+        if (existing && String(existing.status).toLowerCase() === 'posted') {
+          const previousAllocations = await transaction.query(
+            `SELECT receipt_id AS "receiptId", invoice_id AS "invoiceId", amount
+               FROM public.student_fee_allocations
+              WHERE tenant_id = $1 AND school_id = $2 AND receipt_id = $3
+              ORDER BY created_at, id`,
+            [tenantId, schoolId, receiptId]
+          );
+          const allocatedTotal = previousAllocations.rows.reduce((sum: number, row: any) => sum + Number(row.amount || 0), 0);
+          if (Math.abs(allocatedTotal - amount) > 0.001 || !existing.journal_entry_id) {
+            throw new ConflictError('السند مرحل لكن تخصيصه أو رابطه المحاسبي غير مكتمل؛ يلزم فحص رقابي قبل أي إعادة.');
+          }
+          idempotentReplay = true;
+          settlement = {
+            receipt: { id: receiptId, studentId, studentName, amount, receiptDate, paymentMethod, receivingAccount, operationalType, against, status: 'posted', journalEntryId: existing.journal_entry_id },
+            allocations: previousAllocations.rows,
+            journalId: existing.journal_entry_id
+          };
+          return;
+        }
+
+        const openInvoices = await transaction.query(
+          `SELECT id, paid_amount, remaining_amount, status, due_date, invoice_date
+             FROM public.student_fee_invoices
+            WHERE tenant_id = $1 AND school_id = $2 AND student_id = $3
+              AND remaining_amount > 0
+              AND lower(status) NOT IN ('paid','cancelled','void','written_off','refunded')
+            ORDER BY due_date ASC NULLS LAST, invoice_date ASC NULLS LAST, created_at ASC
+            FOR UPDATE`,
+          [tenantId, schoolId, studentId]
+        );
+        const outstanding = openInvoices.rows.reduce((sum: number, row: any) => sum + Number(row.remaining_amount || 0), 0);
+        if (openInvoices.rows.length === 0 || outstanding <= 0) throw new ConflictError('لا توجد مطالبة مفتوحة موثقة لهذا الطالب.');
+        if (amount > outstanding + 0.001) throw new ConflictError(`مبلغ السداد يتجاوز الرصيد المستحق (${outstanding.toFixed(2)}).`);
+
+        if (existing) {
+          await transaction.query(
+            `UPDATE public.student_fee_receipts
+                SET student_name = $4, receipt_date = $5, payment_method = $6,
+                    receiving_account = $7, operational_type = $8, against_text = $9,
+                    status = 'posted', source_payload = $10::jsonb, updated_at = now(), updated_by = $11
+              WHERE tenant_id = $1 AND school_id = $2 AND id = $3`,
+            [tenantId, schoolId, receiptId, studentName, receiptDate, paymentMethod, receivingAccount, operationalType, against,
+              JSON.stringify({ command: 'manual_settle', costCenter, idempotencyKey: receiptId }), databaseActorId]
+          );
+        } else {
+          await transaction.query(
+            `INSERT INTO public.student_fee_receipts
+              (tenant_id, school_id, id, student_id, student_name, receipt_date, amount, payment_method,
+               receiving_account, operational_type, against_text, status, source_payload, updated_by)
+             VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,'posted',$12::jsonb,$13)`,
+            [tenantId, schoolId, receiptId, studentId, studentName, receiptDate, amount, paymentMethod,
+              receivingAccount, operationalType, against, JSON.stringify({ command: 'manual_settle', costCenter, idempotencyKey: receiptId }), databaseActorId]
+          );
+        }
+
+        let unallocated = amount;
+        const allocations: any[] = [];
+        for (const invoice of openInvoices.rows) {
+          if (unallocated <= 0.001) break;
+          const invoiceRemaining = Number(invoice.remaining_amount || 0);
+          const allocatedAmount = Number(Math.min(unallocated, invoiceRemaining).toFixed(2));
+          if (allocatedAmount <= 0) continue;
+          const allocationResult = await transaction.query(
+            `INSERT INTO public.student_fee_allocations
+              (tenant_id, school_id, receipt_id, invoice_id, amount, created_by)
+             VALUES ($1,$2,$3,$4,$5,$6)
+             RETURNING id, receipt_id AS "receiptId", invoice_id AS "invoiceId", amount`,
+            [tenantId, schoolId, receiptId, invoice.id, allocatedAmount, databaseActorId]
+          );
+          allocations.push(allocationResult.rows[0]);
+          const nextPaid = Number((Number(invoice.paid_amount || 0) + allocatedAmount).toFixed(2));
+          const nextRemaining = Number(Math.max(0, invoiceRemaining - allocatedAmount).toFixed(2));
+          await transaction.query(
+            `UPDATE public.student_fee_invoices
+                SET paid_amount = $4, remaining_amount = $5,
+                    status = $6, version = version + 1, updated_at = now(), updated_by = $7
+              WHERE tenant_id = $1 AND school_id = $2 AND id = $3`,
+            [tenantId, schoolId, invoice.id, nextPaid, nextRemaining, nextRemaining <= 0.001 ? 'paid' : 'partial', databaseActorId]
+          );
+          unallocated = Number((unallocated - allocatedAmount).toFixed(2));
+        }
+        if (unallocated > 0.001) throw new ConflictError('تعذر تخصيص كامل مبلغ السند؛ تم التراجع عن المعاملة.');
+
+        const erpSync = await CanonicalErpPostingService.syncSnapshot(transaction, tenantId, schoolId, databaseActorId, {
+          studentReceiptVouchers: [{
+            id: receiptId,
+            studentId,
+            studentName,
+            date: receiptDate,
+            amount,
+            paymentMethod,
+            receivingAccount,
+            receivableAccount: '1201',
+            operationalType,
+            against,
+            costCenter,
+            status: 'posted'
+          }]
+        });
+        const journalId = erpSync.sourceLinks.find(link => link.sourceType === 'student_receipt' && link.sourceId === receiptId)?.journalEntryId || '';
+        if (!journalId) throw new DatabaseError('تعذر إثبات رابط القيد المحاسبي لسند القبض.');
+        await transaction.query(
+          `UPDATE public.student_fee_receipts
+              SET journal_entry_id = $4, receipt_voucher_id = $3, updated_at = now(), updated_by = $5
+            WHERE tenant_id = $1 AND school_id = $2 AND id = $3`,
+          [tenantId, schoolId, receiptId, journalId, databaseActorId]
+        );
+        await transaction.query(
+          `INSERT INTO public.audit_events
+            (id, tenant_id, school_id, branch_id, actor_user_id, entity_type, entity_id, action, source, reason, result, metadata)
+           VALUES ($1,$2,$3,$4,$5,'student_fee_receipt',$6,'manual_settle','CanonicalStudentFeeRoute','تحصيل وتخصيص وترحيل سند طالب','success',$7::jsonb)`,
+          [randomUUID(), tenantId, schoolId, tenantContext.branchId || null, databaseActorId, receiptId,
+            JSON.stringify({ studentId, amount, paymentMethod, allocationCount: allocations.length, journalId })]
+        );
+        settlement = {
+          receipt: { id: receiptId, studentId, studentName, amount, receiptDate, paymentMethod, receivingAccount, operationalType, against, status: 'posted', journalEntryId: journalId, receiptVoucherId: receiptId },
+          allocations,
+          journalId
+        };
+      }, tenantContext);
+
+      res.status(idempotentReplay ? 200 : 201).json({
+        success: true,
+        data: settlement,
+        meta: { source: 'canonical_postgres', idempotentReplay, allocationPolicy: 'oldest_due_first' }
+      });
+    } catch (err: any) {
+      next(err instanceof AuthenticationError || err instanceof ValidationError || err instanceof ConflictError || err instanceof DatabaseError
+        ? err
+        : new DatabaseError('تعذر تسوية سند القبض اليدوي.', err?.message));
     }
   });
 

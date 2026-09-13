@@ -1,4 +1,4 @@
-import { AlertTriangle, ArrowLeft, BarChart3, CalendarRange, CheckCircle2, ChevronLeft, ClipboardCheck, Coins, DollarSign, Download, FileSpreadsheet, FileText, GraduationCap, Home, Pencil, Percent, PiggyBank, Plus, Printer, QrCode, RefreshCw, Save, Search, Settings, Settings2, ShieldCheck, Trash2, TrendingUp, Undo2, UserCheck, Users } from 'lucide-react';
+import { AlertTriangle, ArrowLeft, BarChart3, CalendarRange, CheckCircle2, ChevronLeft, ClipboardCheck, Coins, DollarSign, Download, FileSpreadsheet, FileText, GraduationCap, Home, Pencil, Percent, PiggyBank, Plus, Printer, QrCode, RefreshCw, Save, Search, Settings, Settings2, Trash2, TrendingUp, Undo2, UserCheck, Users } from 'lucide-react';
 /**
  * @license
  * SPDX-License-Identifier: Apache-2.0
@@ -11,8 +11,8 @@ import { SQLTransactionEngine } from '../database/transactions/transactionManage
 import { SQLCommandBuilder } from '../database/transactions/SQLCommand';
 import { useCurrency } from '../utils/currency';
 import EnterpriseActionToolbar from './shared/EnterpriseActionToolbar';
+import StudentSearchPicker from './shared/StudentSearchPicker';
 import { EnterpriseAuditLogger } from '../utils/EnterpriseAuditLogger';
-import AccountingIntegrityDemo from '../certification/AccountingIntegrityDemo';
 import { StudentAffairsValidationFramework } from '../validation/StudentAffairsValidationFramework';
 import { getTrustedAccessToken } from '../utils/auth';
 import { authenticatedRequest } from '../utils/authenticatedRequest';
@@ -79,7 +79,6 @@ export default function StudentFinancialPortal({
   // Sub-navigation state inside Student Financial Portal (Rethought according to the image)
   const [activeSubSec, setActiveSubSec] = useState<string>('analytics');
   const [refreshing, setRefreshing] = useState<boolean>(false);
-  const [studentSearch, setStudentSearch] = useState<string>('');
   const [selectedStudent, setSelectedStudent] = useState<Student | null>(null);
   const [reportSearch, setReportSearch] = useState<string>('');
   const [reportStatusFilter, setReportStatusFilter] = useState<string>('all');
@@ -134,6 +133,13 @@ export default function StudentFinancialPortal({
     [students, massClassroom]
   );
 
+  const selectableStudents = useMemo(
+    () => students
+      .filter(student => !student.isDeleted && (!selectedSchool?.id || student.schoolId === selectedSchool.id))
+      .sort((a, b) => a.name.localeCompare(b.name, 'ar')),
+    [selectedSchool?.id, students]
+  );
+
   // States for Installment Planning
   const [installmentPlanType, setInstallmentPlanType] = useState<'monthly' | 'quarterly' | 'yearly'>('quarterly');
   const [generatedInstallments, setGeneratedInstallments] = useState<Array<{ date: string; amount: number; status: 'paid' | 'unpaid' }>>([]);
@@ -150,6 +156,14 @@ export default function StudentFinancialPortal({
   const [financialPersistence, setFinancialPersistence] = useState<'loading' | 'ready' | 'blocked'>('loading');
   const [financialPersistenceMessage, setFinancialPersistenceMessage] = useState('جارٍ التحقق من مصدر البيانات المالية...');
   const [financialPersistenceVersion, setFinancialPersistenceVersion] = useState(0);
+  const [financialOperationalContext, setFinancialOperationalContext] = useState<{
+    academicYearId: string;
+    academicYearName: string;
+    academicPeriodId: string;
+    academicPeriodName: string;
+    branchId: string;
+    financialPeriod: string;
+  } | null>(null);
   const feeImportInputRef = React.useRef<HTMLInputElement | null>(null);
 
   const runWithLock = async (opName: string, asyncFn: () => Promise<any> | any) => {
@@ -180,7 +194,7 @@ export default function StudentFinancialPortal({
     { value: 'كتب ومقررات', label: 'كتب ومقررات وطنية مطورة' },
     { value: 'باص نقل ومواصلات', label: 'باص نقل ومواصلات (المسار الأول)' },
     { value: 'زي معملي للأنشطة والرياضة', label: 'زي معملي للأنشطة والرياضة' },
-    { value: 'أنشطة رحلات وتقافية', label: 'أنشطة رحلات وتقافية مميزة' }
+    { value: 'أنشطة رحلات وثقافية', label: 'أنشطة ورحلات ثقافية مميزة' }
   ];
   const feeTypeOptions = useMemo(() => {
     const configured = feeConfigs
@@ -264,10 +278,9 @@ export default function StudentFinancialPortal({
       expenseAccruals,
       expectedVersion: financialPersistenceVersion
     };
-    const response = await fetch('/api/financial/database', {
+    const response = await authenticatedRequest('/api/financial/database', {
       method: 'POST',
       headers: {
-        'Authorization': `Bearer ${getTrustedAccessToken()}`,
         'Content-Type': 'application/json'
       },
       body: JSON.stringify(payload)
@@ -316,15 +329,19 @@ export default function StudentFinancialPortal({
   React.useEffect(() => {
     const loadFinancialDb = async () => {
       try {
-        const response = await fetch('/api/financial/database', {
-          headers: {
-        'Authorization': `Bearer ${getTrustedAccessToken()}`
-          }
-        });
+        const [response, contextResponse] = await Promise.all([
+          authenticatedRequest('/api/financial/database', { headers: { 'Accept': 'application/json' } }),
+          authenticatedRequest('/api/financial/operational-context', { headers: { 'Accept': 'application/json' } })
+        ]);
         const res = await response.json();
+        const contextResult = await contextResponse.json().catch(() => ({}));
         if (!response.ok || !res.success) {
           throw new Error(res.message || `فشل تحميل المصدر المالي (${response.status})`);
         }
+        if (!contextResponse.ok || !contextResult.success || !contextResult.data?.academicYearId || !contextResult.data?.academicPeriodId) {
+          throw new Error(contextResult.message || 'السنة أو الفترة الدراسية الموثوقة غير جاهزة للعمليات المالية.');
+        }
+        setFinancialOperationalContext(contextResult.data);
         if (res.data && Object.keys(res.data).length > 0) {
            setFinancialInvoices(res.data.invoices || []);
            setInvoices(res.data.invoices || []);
@@ -490,7 +507,18 @@ export default function StudentFinancialPortal({
   // Handle student selection to automatically populate stage, costCenter, and description
   const handleStudentSelectInForm = (studentId: string) => {
     const student = students.find(s => s.id === studentId);
-    if (!student) return;
+    if (!student) {
+      setStudRvForm(prev => ({
+        ...prev,
+        studentId: '',
+        studentName: '',
+        amount: 0,
+        against: '',
+        stage: '',
+        costCenter: ''
+      }));
+      return;
+    }
 
     const classroom = student.classroom || '';
     const costCenter = classroom.includes('روضة') || classroom.includes('تمهيدي') ? 'kindergarten' :
@@ -518,7 +546,7 @@ export default function StudentFinancialPortal({
 
   // 1. Toolbar - NEW
   const handleNewStudRv = () => {
-    const draftId = createFinancialReference('DRAFT-2026');
+    const draftId = createFinancialReference('DRAFT');
     setStudRvMode('create');
     setStudRvForm({
       id: draftId,
@@ -530,8 +558,8 @@ export default function StudentFinancialPortal({
       receivingAccount: '1101',
       operationalType: 'رسوم دراسية',
       against: '',
-      stage: 'الابتدائي',
-      costCenter: 'primary',
+      stage: '',
+      costCenter: '',
       status: 'draft',
       notes: '',
       attachmentName: ''
@@ -560,7 +588,16 @@ export default function StudentFinancialPortal({
       const student = students.find(s => s.id === studRvForm.studentId);
       const financialStudent = financialStudentRows.find(s => s.id === studRvForm.studentId) || student;
       const remainingBalance = Number(financialStudent?.feesRemaining || 0);
-      if (financialInvoices.length > 0 && studRvForm.amount > remainingBalance && studRvForm.status === 'draft') {
+      const openStudentInvoices = financialInvoices.filter(invoice =>
+        invoice.studentId === studRvForm.studentId
+        && !['paid', 'cancelled', 'void', 'written_off', 'refunded'].includes(String(invoice.status || '').toLowerCase())
+        && Number(invoice.remainingAmount ?? invoice.amount ?? 0) > 0
+      );
+      if (openStudentInvoices.length === 0) {
+        triggerNotification('⚠️ لا يمكن إنشاء سند قبض قبل إصدار مطالبة مالية مفتوحة وموثقة لهذا الطالب.', 'warning');
+        return;
+      }
+      if (studRvForm.amount > remainingBalance && studRvForm.status === 'draft') {
         triggerNotification(`⚠️ تم رفض السند: المبلغ المدخل (${studRvForm.amount}) يتجاوز الرسوم المتبقية الموثقة (${remainingBalance})`, 'warning');
         return;
       }
@@ -568,7 +605,7 @@ export default function StudentFinancialPortal({
       let finalVoucher;
       let updatedStudentVouchers: any[];
       if (studRvMode === 'create') {
-        const permanentId = createFinancialReference('RV-STUD-2026');
+        const permanentId = createFinancialReference('RV-STUD');
         finalVoucher = {
           ...studRvForm,
           id: permanentId,
@@ -653,227 +690,89 @@ export default function StudentFinancialPortal({
       return;
     }
 
-    // Determine safe sequences from GL
-    const receiptVoucherId = createFinancialReference('RCV-2026');
-    const journalEntryId = createFinancialReference('JV-2026');
-    const studentPaymentId = createFinancialReference('STP-2026');
-
-    const debitAccountCode = selectedStudRv.receivingAccount;
-    const debitAccountName = debitAccountCode === '1101' ? 'صندوق الخزينة الرئيسي (كاش)' : 'حساب مصرف الوحدة الجاري';
-    const stageLabel = selectedStudRv.stage;
-    const costCenter = selectedStudRv.costCenter;
-    const amount = selectedStudRv.amount;
-
-    // Secure database transaction simulation
-    const transactionResult = await SQLTransactionEngine.run({
-      operationName: `POST_STUDENT_RECEIPT_VOUCHER_TO_GL (ترحيل سند القبض ${selectedStudRv.id} للحسابات العامة)`,
-      tenantId: auditTenantId,
-      userId: auditActor,
-      userName: auditActor,
-      ipAddress: auditIpAddress,
-      affectedTables: ['student_receipt_vouchers', 'receipt_vouchers', 'journal_entries', 'chart_of_accounts', 'students', 'audit_logs'],
-      validationBlock: () => {
-        if (selectedStudRv.status === 'posted') return { valid: false, error: 'السند مرحل بالفعل' };
-        if (amount <= 0) return { valid: false, error: 'مبلغ السند غير صحيح' };
-        const financialStudent = financialStudentRows.find(s => s.id === student.id);
-        if (financialInvoices.length > 0 && financialStudent && amount > Number(financialStudent.feesRemaining || 0)) {
-          return { valid: false, error: `المبلغ يتجاوز الرصيد المتبقي للطالب (${financialStudent.feesRemaining})` };
-        }
-        return { valid: true };
-      },
-      authorizationBlock: () => {
-        try {
-          StudentAffairsValidationFramework.validateActionPermission(currentRole, 'save', 'financial');
-          return { authorized: true };
-        } catch (err: any) {
-          return { authorized: false, error: err.message };
-        }
-      },
-      executionBlock: async () => {
-        // B) Create general ledger Receipt Voucher
-        const glRv = {
-          id: receiptVoucherId,
-          date: selectedStudRv.date,
-          school: selectedSchool?.name || 'المدرسة الحالية',
-          stage: stageLabel,
-          costCenter: costCenter,
-          receivedFrom: student.name,
-          operationType: selectedStudRv.operationalType === 'رسوم حافلة' ? 'رسوم حافلة' : 'رسوم دراسية',
-          paymentMethod: selectedStudRv.paymentMethod,
-          receivingAccount: debitAccountCode,
-          receivableAccount: STUDENT_RECEIVABLE_ACCOUNT,
-          amount: amount,
-          against: selectedStudRv.against,
-          attachmentName: selectedStudRv.attachmentName || null,
-          user: auditActor,
-          status: 'معتمد',
-          notes: selectedStudRv.notes || `مرحل تلقائياً من سند قبض الطلاب رقم ${selectedStudRv.id}`,
-          studentPaymentId,
-          studentId: student.id,
-          studentName: student.name,
-          receiptVoucherId,
-          journalEntryId,
-          financialPeriod: 'السنة المالية 2026',
-          createdAt: new Date().toLocaleString('ar-LY')
-        };
-
-        const updatedRvs = [glRv, ...glRvs];
-
-        // C) Create Journal Entry (JV)
-        const glJv = {
-          id: journalEntryId,
-          date: selectedStudRv.date,
-          description: `قيد ترحيل تلقائي: ${selectedStudRv.against} - سند قبض رقم ${selectedStudRv.id}`,
-          debitTotal: amount,
-          creditTotal: amount,
-          status: 'مرحل',
-          type: 'بسيط',
-          createdByUser: auditActor,
-          createdAt: new Date().toLocaleTimeString('ar-LY') + ' ' + new Date().toLocaleDateString('ar-LY'),
-          updatedAt: new Date().toLocaleTimeString('ar-LY') + ' ' + new Date().toLocaleDateString('ar-LY'),
-          documentType: 'سند قبض',
-          receiptVoucherId,
-          studentPaymentId,
-          studentName: student.name,
-          stage: stageLabel,
-          costCenter: costCenter,
-          lines: [
-            {
-              id: createFinancialReference('line'),
-              accountCode: debitAccountCode,
-              accountName: debitAccountName,
-              description: `الجانب المدين - استلام قيمة السند بـ ${debitAccountName}`,
-              debit: amount,
-              credit: 0,
-              costCenter
-            },
-            {
-              id: createFinancialReference('line'),
-              accountCode: STUDENT_RECEIVABLE_ACCOUNT,
-              accountName: 'ذمم الطلاب المدينة',
-              description: `الجانب الدائن - تسوية ذمم الطالب مقابل سند الرسوم للمرحلة التعليمية: ${stageLabel}`,
-              debit: 0,
-              credit: amount,
-              costCenter
-            }
-          ],
-          attachments: selectedStudRv.attachmentName ? [selectedStudRv.attachmentName] : []
-        };
-
-        const updatedJvs = [glJv, ...glJvs];
-
-        // D) Update Chart of Accounts
-        const updatedAccounts = chartOfAccounts.map((acc: any) => {
-          if (acc.code === debitAccountCode) {
-            return { ...acc, balance: (acc.balance || 0) + amount };
-          }
-          if (acc.code === STUDENT_RECEIVABLE_ACCOUNT) {
-            return { ...acc, balance: Math.max(0, (acc.balance || 0) - amount) };
-          }
-          return acc;
-        });
-
-        // E) Update our local voucher status and link it
-        const postedVoucher = {
-          ...selectedStudRv,
-          status: 'posted',
-          postedBy: auditActor,
-          postedAt: new Date().toLocaleString('ar-LY'),
-          journalEntryId,
-          receiptVoucherId,
-          studentPaymentId
-        };
-
-        const updatedStudRvs = studentReceiptVouchers.map(v => v.id === postedVoucher.id ? postedVoucher : v);
-        await saveToServerDb(updatedStudRvs, updatedRvs, updatedJvs, updatedAccounts);
-
-        // A) Update student balances in the UI after the canonical write succeeds.
-        setStudents(prev => prev.map(s => {
-          if (s.id === student.id) {
-            return {
-              ...s,
-              feesPaid: s.feesPaid + amount,
-              feesRemaining: Math.max(0, s.feesRemaining - amount)
-            };
-          }
-          return s;
-        }));
-        setGlRvs(updatedRvs);
-        setGlJvs(updatedJvs);
-        setChartOfAccounts(updatedAccounts);
-        setStudentReceiptVouchers(updatedStudRvs);
-        setSelectedStudRv(postedVoucher);
-        return true;
-      },
-      nestedSqlQueries: [
-        SQLCommandBuilder.create({
-          sqlText: `-- 1. Begin SQL Transaction for atomic double-entry posting`,
-          parameters: []
-        }),
-        SQLCommandBuilder.create({
-          sqlText: `SELECT id, fees_remaining FROM students WHERE id = $1 FOR UPDATE;`,
-          parameters: [student.id],
-          executionContext: 'Student fees inquiry'
-        }),
-        SQLCommandBuilder.create({
-          sqlText: `-- 2. Debit cash/bank account on GL ledger`,
-          parameters: []
-        }),
-        SQLCommandBuilder.create({
-          sqlText: `UPDATE chart_of_accounts SET balance = balance + $1 WHERE code = $2;`,
-          parameters: [amount, debitAccountCode],
-          executionContext: 'Debit Asset account'
-        }),
-        SQLCommandBuilder.create({
-          sqlText: `-- 3. Credit student receivable on GL ledger`,
-          parameters: []
-        }),
-        SQLCommandBuilder.create({
-          sqlText: `UPDATE chart_of_accounts SET balance = balance - $1 WHERE code = $2;`,
-          parameters: [amount, STUDENT_RECEIVABLE_ACCOUNT],
-          executionContext: 'Settle Student Receivable account'
-        }),
-        SQLCommandBuilder.create({
-          sqlText: `-- 4. Deduct student remaining fees`,
-          parameters: []
-        }),
-        SQLCommandBuilder.create({
-          sqlText: `UPDATE students SET fees_paid = fees_paid + $1, fees_remaining = fees_remaining - $1 WHERE id = $2;`,
-          parameters: [amount, student.id],
-          executionContext: 'Deduct Remaining Fees'
-        }),
-        SQLCommandBuilder.create({
-          sqlText: `-- 5. Insert double-entry journal entry rows into journal_entries`,
-          parameters: []
-        }),
-        SQLCommandBuilder.create({
-          sqlText: `INSERT INTO journal_entries (id, date, debit_sum, credit_sum, ref_doc) VALUES ($1, $2, $3, $4, $5);`,
-          parameters: [journalEntryId, selectedStudRv.date, amount, amount, receiptVoucherId],
-          executionContext: 'Create Journal Entry'
-        }),
-        SQLCommandBuilder.create({
-          sqlText: `-- 6. Insert receipt voucher entity under GL module`,
-          parameters: []
-        }),
-        SQLCommandBuilder.create({
-          sqlText: `INSERT INTO receipt_vouchers (id, amount, source_student_id, ledger_ref) VALUES ($1, $2, $3, $4);`,
-          parameters: [receiptVoucherId, amount, student.id, journalEntryId],
-          executionContext: 'Create Receipt Voucher'
-        }),
-        SQLCommandBuilder.create({
-          sqlText: `-- 7. Commit database transaction fully`,
-          parameters: []
-        })
-      ]
-    });
-
-    if (!transactionResult.success) {
-      triggerNotification(`تعذر ترحيل السند: ${transactionResult.error || 'تم التراجع عن العملية'}`, 'warning');
+    const openStudentInvoices = financialInvoices.filter(invoice =>
+      invoice.studentId === student.id
+      && !['paid', 'cancelled', 'void', 'written_off', 'refunded'].includes(String(invoice.status || '').toLowerCase())
+      && Number(invoice.remainingAmount ?? invoice.amount ?? 0) > 0
+    );
+    const verifiedOutstanding = openStudentInvoices.reduce(
+      (sum, invoice) => sum + Number(invoice.remainingAmount ?? invoice.amount ?? 0),
+      0
+    );
+    if (openStudentInvoices.length === 0 || verifiedOutstanding <= 0) {
+      triggerNotification('❌ لا توجد مطالبة مالية مفتوحة وموثقة يمكن تخصيص هذا السداد عليها.', 'warning');
+      return;
+    }
+    if (Number(selectedStudRv.amount || 0) > verifiedOutstanding + 0.001) {
+      triggerNotification(`❌ مبلغ السند يتجاوز الرصيد المستحق الموثق (${verifiedOutstanding.toFixed(2)}).`, 'warning');
       return;
     }
 
-    triggerNotification(`✓ تم ترحيل السند ${selectedStudRv.id} تلقائياً. تم إنشاء القيد المزدوج ${journalEntryId} وسند القبض بالحسابات العامة ${receiptVoucherId}.`, 'success');
-    logAction('POST_STUDENT_RECEIPT', `تم ترحيل سند القبض ${selectedStudRv.id} للطالب ${student.name} بقيمة ${amount} د.ل وإنشاء قيد اليومية ${journalEntryId}`, 'حسابات الطلاب');
+    try {
+      const response = await authenticatedRequest('/api/financial/receipts/manual-settle', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          receiptId: selectedStudRv.id,
+          studentId: student.id,
+          receiptDate: selectedStudRv.date,
+          amount: Number(selectedStudRv.amount),
+          paymentMethod: selectedStudRv.paymentMethod,
+          receivingAccount: selectedStudRv.receivingAccount,
+          operationalType: selectedStudRv.operationalType,
+          against: selectedStudRv.against,
+          costCenter: selectedStudRv.costCenter
+        })
+      });
+      const result = await response.json().catch(() => ({}));
+      if (!response.ok || !result.success) throw new Error(result.message || 'تعذر تنفيذ التسوية الخادمية للسند.');
+
+      const canonicalReceipt = result.data?.receipt || {};
+      const postedVoucher = {
+        ...selectedStudRv,
+        ...canonicalReceipt,
+        date: canonicalReceipt.receiptDate || selectedStudRv.date,
+        status: 'posted',
+        postedBy: auditActor,
+        postedAt: new Date().toLocaleString('ar-LY'),
+        journalEntryId: result.data?.journalId || canonicalReceipt.journalEntryId,
+        receiptVoucherId: canonicalReceipt.receiptVoucherId || selectedStudRv.id
+      };
+      const allocatedByInvoice = new Map<string, number>();
+      (Array.isArray(result.data?.allocations) ? result.data.allocations : []).forEach((allocation: any) => {
+        const invoiceId = String(allocation.invoiceId || allocation.invoice_id || '');
+        allocatedByInvoice.set(invoiceId, (allocatedByInvoice.get(invoiceId) || 0) + Number(allocation.amount || 0));
+      });
+      const reconciledInvoices = financialInvoices.map(invoice => {
+        const allocated = allocatedByInvoice.get(invoice.id) || 0;
+        if (allocated <= 0) return invoice;
+        const previousRemaining = Number(invoice.remainingAmount ?? invoice.amount ?? 0);
+        const previousPaid = Number(invoice.paidAmount || 0);
+        const remainingAmount = Number(Math.max(0, previousRemaining - allocated).toFixed(2));
+        return {
+          ...invoice,
+          paidAmount: Number((previousPaid + allocated).toFixed(2)),
+          remainingAmount,
+          status: remainingAmount <= 0.001 ? 'paid' : 'partial'
+        } as Invoice;
+      });
+      setFinancialInvoices(reconciledInvoices);
+      setInvoices(reconciledInvoices);
+      setStudentReceiptVouchers(current => current.map(voucher => voucher.id === postedVoucher.id ? postedVoucher : voucher));
+      setSelectedStudRv(postedVoucher);
+      setStudents(current => current.map(item => item.id === student.id ? {
+        ...item,
+        feesPaid: Number(item.feesPaid || 0) + Number(selectedStudRv.amount || 0),
+        feesRemaining: Math.max(0, verifiedOutstanding - Number(selectedStudRv.amount || 0))
+      } : item));
+      triggerNotification(`✓ تم تخصيص السداد وترحيله خادميًا. رقم القيد: ${postedVoucher.journalEntryId}`, 'success');
+      logAction('POST_STUDENT_RECEIPT', `تسوية سند ${postedVoucher.id} للطالب ${student.name} بقيمة ${postedVoucher.amount} وربطه بالقيد ${postedVoucher.journalEntryId}`, 'حسابات الطلاب');
+      return;
+    } catch (error: any) {
+      triggerNotification(error?.message || 'تعذر ترحيل سند القبض خادميًا.', 'warning');
+      return;
+    }
+
   };
 
   // 5. Toolbar - CANCEL / REVERSE (إجراء إلغاء محاسبي نظامي وعكس القيود)
@@ -882,6 +781,10 @@ export default function StudentFinancialPortal({
     if (!selectedStudRv) return;
     if (selectedStudRv.status === 'cancelled') {
       triggerNotification('⚠️ هذا السند ملغي بالفعل.', 'warning');
+      return;
+    }
+    if (selectedStudRv.status === 'posted') {
+      triggerNotification('السند المرحل لا يُعكس من الواجهة القديمة؛ يلزم مسار تسوية خادمي يعيد التخصيص والرصيد والقيد معًا.', 'warning');
       return;
     }
 
@@ -912,7 +815,7 @@ export default function StudentFinancialPortal({
       const amount = selectedStudRv.amount;
 
       // Determine new JV sequence
-      const reversalJvId = createFinancialReference('JV-REVERSE-2026');
+      const reversalJvId = createFinancialReference('JV-REVERSE');
 
       // Run the reversal transaction and wait for the canonical write.
       const reversalResult = await SQLTransactionEngine.run({
@@ -2339,12 +2242,17 @@ export default function StudentFinancialPortal({
   const handleRefreshData = async () => {
     setRefreshing(true);
     try {
-      const response = await fetch('/api/financial/database', {
-        headers: { 'Authorization': `Bearer ${getTrustedAccessToken()}` },
-        cache: 'no-store'
-      });
+      const [response, contextResponse] = await Promise.all([
+        authenticatedRequest('/api/financial/database', { headers: { 'Accept': 'application/json' }, cache: 'no-store' }),
+        authenticatedRequest('/api/financial/operational-context', { headers: { 'Accept': 'application/json' }, cache: 'no-store' })
+      ]);
       const res = await response.json();
+      const contextResult = await contextResponse.json().catch(() => ({}));
       if (!response.ok || !res.success) throw new Error(res.message || 'تعذر تحميل البيانات المالية');
+      if (!contextResponse.ok || !contextResult.success || !contextResult.data?.academicYearId || !contextResult.data?.academicPeriodId) {
+        throw new Error(contextResult.message || 'تعذر التحقق من السنة والفترة الدراسية النشطتين.');
+      }
+      setFinancialOperationalContext(contextResult.data);
       const data = res.data || {};
        setFinancialInvoices(data.invoices || []);
        setInvoices(data.invoices || []);
@@ -2383,6 +2291,10 @@ export default function StudentFinancialPortal({
       triggerNotification('الرجاء إدخال مبلغ صحيح للتوزيع جماعياً', 'warning');
       return;
     }
+    if (!financialOperationalContext?.academicYearId || !financialOperationalContext?.academicPeriodId) {
+      triggerNotification('تعذر التوزيع: السنة والفترة الدراسية النشطتان غير موثقتين.', 'warning');
+      return;
+    }
 
     const studentsToUpdate = massTargetStudents.filter(s => selectedStudentIds[s.id] !== false);
     if (studentsToUpdate.length === 0) {
@@ -2403,14 +2315,13 @@ export default function StudentFinancialPortal({
       return;
     }
     const dueDate = massDueDate;
-    const currentAcademicYear = String(selectedSchool?.academicYearId || selectedSchool?.academicYear || new Date().getUTCFullYear());
-    const currentAcademicPeriod = String(selectedSchool?.academicPeriodId || new Date().toISOString().slice(0, 7));
+    const currentAcademicYear = financialOperationalContext.academicYearId;
+    const currentAcademicPeriod = financialOperationalContext.academicPeriodId;
     let canonicalTemplateId = String(selectedFeeConfig?.id || '').trim();
     const templateHeaders = {
-      'Authorization': `Bearer ${getTrustedAccessToken()}`,
       'Content-Type': 'application/json'
     };
-    const templateListResponse = await fetch('/api/financial/fee-templates', { headers: templateHeaders });
+    const templateListResponse = await authenticatedRequest('/api/financial/fee-templates', { headers: templateHeaders });
     const templateList = await templateListResponse.json().catch(() => ({}));
     const existingTemplate = Array.isArray(templateList.data)
       ? templateList.data.find((template: any) => String(template.id) === canonicalTemplateId || String(template.code) === massFeeType)
@@ -2418,19 +2329,17 @@ export default function StudentFinancialPortal({
     if (existingTemplate) {
       canonicalTemplateId = String(existingTemplate.id);
     } else {
-      canonicalTemplateId = canonicalTemplateId || `tpl_${massFeeType.replace(/[^a-zA-Z0-9_-]+/g, '-').slice(0, 32)}`;
-      const templateResponse = await fetch('/api/financial/fee-templates', {
+      const templateResponse = await authenticatedRequest('/api/financial/fee-templates', {
         method: 'POST', headers: templateHeaders,
         body: JSON.stringify({
-          id: canonicalTemplateId,
           code: massFeeType,
           name: massFeeType,
           category: 'school_fee',
           amount: massFeeAmount,
-          currency: currencyConfig?.code || 'SAR',
+          currency: selectedSchool?.currencyCode || 'LYD',
           revenueAccount,
           academicYearId: currentAcademicYear,
-          financialPeriod: currentAcademicPeriod,
+          financialPeriod: financialOperationalContext.financialPeriod,
           status: 'active',
           effectiveFrom: invoiceDate,
           installmentPolicy: { allowInstallments: true }
@@ -2438,12 +2347,12 @@ export default function StudentFinancialPortal({
       });
       const templateResult = await templateResponse.json().catch(() => ({}));
       if (!templateResponse.ok || !templateResult.success) throw new Error(templateResult.message || 'تعذر تهيئة قالب الرسم الكانوني.');
-      canonicalTemplateId = String(templateResult.data?.id || canonicalTemplateId);
+      canonicalTemplateId = String(templateResult.data?.id || '');
+      if (!canonicalTemplateId) throw new Error('لم يعُد الخادم بمعرف قالب رسوم موثق.');
     }
-    const response = await fetch('/api/financial/fee-assignments/bulk', {
+    const response = await authenticatedRequest('/api/financial/fee-assignments/bulk', {
       method: 'POST',
       headers: {
-        'Authorization': `Bearer ${getTrustedAccessToken()}`,
         'Content-Type': 'application/json'
       },
       body: JSON.stringify({
@@ -2456,6 +2365,7 @@ export default function StudentFinancialPortal({
         description: `رسوم ${massFeeType}`,
         source: 'portal_bulk_distribution',
         issueInvoices: true,
+        currency: selectedSchool?.currencyCode || 'LYD',
         idempotencyPrefix: `bulk:${canonicalTemplateId}:${invoiceDate}:${dueDate}`
       })
     });
@@ -2480,6 +2390,129 @@ export default function StudentFinancialPortal({
 
     logAction('MASS_FEE_DISTRIBUTION', `تم ترحيل وتوطين رسوم جماعية (${massFeeType}) بقيمة ${massFeeAmount} د.ل على طلاب ${massClassroom} وعددهم ${studentsToUpdate.length} طالباً.`, 'حسابات الطلاب');
     triggerNotification(`تم بنجاح تطبيق وتوزيع الرسوم الكانونية على ${studentsToUpdate.length} من طلاب ${massClassroom}`, 'success');
+  };
+
+  const handleIssueStudentFeeDemand = async () => {
+    if (!ensureFinancialWriteReady()) return;
+    if (!selectedStudent) {
+      triggerNotification('الرجاء اختيار طالب موثق أولاً.', 'warning');
+      return;
+    }
+    if (!financialOperationalContext?.academicYearId || !financialOperationalContext?.academicPeriodId) {
+      triggerNotification('لا يمكن إصدار المطالبة قبل حسم السنة والفترة الدراسية النشطتين.', 'warning');
+      return;
+    }
+    const positiveRows = feeRows.filter(row => Number.isFinite(Number(row.amount)) && Number(row.amount) > 0);
+    if (positiveRows.length === 0) {
+      triggerNotification('أضف بند رسوم موجبًا قبل إصدار المطالبة.', 'warning');
+      return;
+    }
+    const siblingRate = Math.max(0, Math.min(100, Number(siblingDiscountPercent || 0)));
+    const grossTotal = positiveRows.reduce((sum, row) => sum + Number(row.amount), 0);
+    const totalDiscount = Math.min(grossTotal, (grossTotal * siblingRate) / 100 + Math.max(0, Number(manualDiscountAmount || 0)));
+    let remainingDiscount = Number(totalDiscount.toFixed(2));
+    const issuedInvoices: Invoice[] = [];
+
+    try {
+      for (const [index, row] of positiveRows.entries()) {
+        const config = feeConfigs.find(item => item.type === row.type);
+        const revenueAccount = String(config?.account || '').trim();
+        const accountError = validateFeeRevenueAccount(revenueAccount);
+        if (accountError) throw new Error(`بند «${row.type}»: ${accountError}`);
+        const rowDiscount = index === positiveRows.length - 1
+          ? remainingDiscount
+          : Number(Math.min(remainingDiscount, (Number(row.amount) / grossTotal) * totalDiscount).toFixed(2));
+        remainingDiscount = Number(Math.max(0, remainingDiscount - rowDiscount).toFixed(2));
+        const netAmount = Number((Number(row.amount) - rowDiscount).toFixed(2));
+        if (netAmount <= 0) continue;
+        const templateId = String(config?.id || '').trim();
+        const response = await authenticatedRequest('/api/financial/invoices/issue', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({
+            studentId: selectedStudent.id,
+            ...(/^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i.test(templateId) ? { templateId } : {}),
+            description: row.remarks.trim() ? `${row.type} — ${row.remarks.trim()}` : row.type,
+            amount: netAmount,
+            taxAmount: 0,
+            currency: selectedSchool?.currencyCode || 'LYD',
+            dueDate: massDueDate,
+            invoiceDate: voucherDate,
+            academicYearId: financialOperationalContext.academicYearId,
+            academicPeriodId: financialOperationalContext.academicPeriodId,
+            financialPeriod: financialOperationalContext.financialPeriod,
+            revenueAccount,
+            receivableAccount: STUDENT_RECEIVABLE_ACCOUNT,
+            branchId: financialOperationalContext.branchId,
+            idempotencyKey: `manual:${selectedStudent.id}:${row.id}:${financialOperationalContext.academicYearId}`
+          })
+        });
+        const result = await response.json().catch(() => ({}));
+        if (!response.ok || !result.success || !result.data?.invoice) {
+          throw new Error(result.message || `تعذر إصدار مطالبة البند «${row.type}».`);
+        }
+        const invoice = result.data.invoice;
+        issuedInvoices.push({
+          id: String(invoice.id),
+          studentId: String(invoice.student_id || invoice.studentId || selectedStudent.id),
+          studentName: String(invoice.student_name || invoice.studentName || selectedStudent.name),
+          item: String(invoice.item || row.type),
+          amount: Number(invoice.amount || netAmount),
+          taxAmount: Number(invoice.tax_amount || invoice.taxAmount || 0),
+          totalAmount: Number(invoice.amount || netAmount) + Number(invoice.tax_amount || invoice.taxAmount || 0),
+          paidAmount: Number(invoice.paid_amount || invoice.paidAmount || 0),
+          remainingAmount: Number(invoice.remaining_amount || invoice.remainingAmount || netAmount),
+          invoiceDate: String(invoice.invoice_date || invoice.invoiceDate || voucherDate),
+          dueDate: String(invoice.due_date || invoice.dueDate || massDueDate),
+          status: String(invoice.status || 'issued') as any,
+          currency: String(invoice.currency || selectedSchool?.currencyCode || 'LYD')
+        } as Invoice);
+      }
+      if (issuedInvoices.length === 0) throw new Error('أصبحت قيمة المطالبة صفرًا بعد الخصومات؛ راجع القيم.');
+      const merged = new Map(financialInvoices.map(invoice => [invoice.id, invoice]));
+      issuedInvoices.forEach(invoice => merged.set(invoice.id, invoice));
+      const nextInvoices = [...merged.values()];
+      setFinancialInvoices(nextInvoices);
+      setInvoices(nextInvoices);
+      setFeeRows([]);
+      setManualDiscountAmount(0);
+      setCustomDiscountText('0.00');
+      triggerNotification(`✓ تم إصدار ${issuedInvoices.length} مطالبة مالية موثقة للطالب ${selectedStudent.name}.`, 'success');
+      logAction('ISSUE_STUDENT_FEE_INVOICE', `إصدار ${issuedInvoices.length} مطالبة للطالب ${selectedStudent.name} بإجمالي صافٍ ${issuedInvoices.reduce((sum, invoice) => sum + Number(invoice.totalAmount || invoice.amount || 0), 0)}`, 'حسابات الطلاب');
+    } catch (error: any) {
+      triggerNotification(error?.message || 'تعذر إصدار المطالبة المالية.', 'warning');
+    }
+  };
+
+  const handlePrepareCollectionDraft = () => {
+    if (!ensureFinancialWriteReady()) return;
+    if (!selectedStudent) {
+      triggerNotification('الرجاء اختيار طالب موثق أولاً.', 'warning');
+      return;
+    }
+    const outstanding = financialInvoices
+      .filter(invoice => invoice.studentId === selectedStudent.id
+        && !['paid', 'cancelled', 'void', 'written_off', 'refunded'].includes(String(invoice.status || '').toLowerCase()))
+      .reduce((sum, invoice) => sum + Number(invoice.remainingAmount ?? invoice.amount ?? 0), 0);
+    if (outstanding <= 0) {
+      triggerNotification('لا توجد مطالبة مفتوحة لهذا الطالب. أصدر المطالبة أولاً.', 'warning');
+      return;
+    }
+    const draftId = createFinancialReference('DRAFT');
+    setStudRvMode('create');
+    setStudRvForm(prev => ({
+      ...prev,
+      id: draftId,
+      date: voucherDate,
+      studentId: selectedStudent.id,
+      studentName: selectedStudent.name,
+      amount: Number(outstanding.toFixed(2)),
+      against: `سداد المطالبات المالية المفتوحة للطالب ${selectedStudent.name}`,
+      status: 'draft'
+    }));
+    handleStudentSelectInForm(selectedStudent.id);
+    setActiveSubSec('receipts');
+    triggerNotification('تم تجهيز مسودة تحصيل من الرصيد الموثق؛ راجع المبلغ وطريقة السداد قبل الحفظ.', 'info');
   };
 
   // Generate installment table
@@ -2519,7 +2552,6 @@ export default function StudentFinancialPortal({
     { id: 'management', label: 'إدارة الرسوم والدفعات الذكية', icon: ClipboardCheck, badge: 'مطوّر' },
     { id: 'receipts', label: 'سندات القبض الملكية', icon: Coins },
     { id: 'reports', label: 'تقارير الحسابات الشاملة', icon: FileSpreadsheet },
-    { id: 'accounting_integrity_demo', label: 'دورة الرقابة والترحيل الموحد', icon: ShieldCheck, badge: 'جديد' },
   ];
 
   // Define dynamic action variables based on active sub-section for full enterprise toolbar synchronization
@@ -2752,6 +2784,7 @@ export default function StudentFinancialPortal({
         onDownloadTemplate={portalOnDownloadTemplate}
         isSaving={false}
         isLoading={false}
+        disabled={financialPersistence !== 'ready'}
         selectedId={portalSelectedId}
         isEditing={portalIsEditing}
         userRole={currentRole || 'SuperAdmin'}
@@ -3499,7 +3532,8 @@ export default function StudentFinancialPortal({
               
               <button
                 onClick={() => handleMassDistribution()}
-                className="financial-fee-module-action financial-fee-module-navy text-sm font-bold px-8 py-4 rounded shadow-md flex items-center gap-2 transition-colors cursor-pointer"
+                disabled={financialPersistence !== 'ready' || massTargetStudents.filter(student => selectedStudentIds[student.id] !== false).length === 0 || massFeeAmount <= 0}
+                className="financial-fee-module-action financial-fee-module-navy text-sm font-bold px-8 py-4 rounded shadow-md flex items-center gap-2 transition-colors cursor-pointer disabled:cursor-not-allowed disabled:opacity-50"
               >
                 <CheckCircle2 className="w-5 h-5" />
                 <span>بدء الترحيل الجماعي والمحاسبي للمطالبات</span>
@@ -3528,19 +3562,10 @@ export default function StudentFinancialPortal({
                   <span className="text-xl">📊</span>
                   <span>إدارة الرسوم والدفعات الذكية - شاشة الإدارة المتكاملة</span>
                 </h3>
-                <p className="text-xs text-slate-500 font-semibold mt-1">كشف ذمم الطلاب، وجدولة ميزت السداد الرقمي واحتساب الخصومات آلياً</p>
+                <p className="text-xs text-slate-500 font-semibold mt-1">كشف ذمم الطلاب، وجدولة ميزة السداد الرقمي واحتساب الخصومات آليًا</p>
               </div>
-              <div className="flex gap-2 w-full sm:w-auto relative">
-                <span className="absolute inset-y-0 right-3 flex items-center pointer-events-none text-slate-400">
-                  <Search className="w-4 h-4" />
-                </span>
-                <input
-                  type="text"
-                  placeholder="ابحث باسم الطالب (مثال: عبدالسلام)..."
-                  value={studentSearch}
-                  onChange={(e) => setStudentSearch(e.target.value)}
-                  className="pr-9 pl-4 py-1.5 text-xs focus:ring-1 focus:ring-[#9a6a1d] focus:border-[#9a6a1d] focus:outline-none font-bold text-slate-800 w-full sm:w-64"
-                />
+              <div className="rounded-xl border border-slate-200 bg-slate-50 px-3 py-2 text-xs font-bold text-slate-600">
+                {selectableStudents.length.toLocaleString('ar')} طالبًا متاحًا للبحث
               </div>
             </div>
 
@@ -3583,7 +3608,7 @@ export default function StudentFinancialPortal({
                     <span className="p-1.5 bg-orange-50 text-orange-600 rounded-lg">⏱️</span>
                     <div>
                       <h4 className="text-sm font-black text-slate-800">إنشاء مطالبة مالية واحتساب الأقساط</h4>
-                      <p className="text-[10px] text-slate-400 font-bold">تسجيل الرسوم والخدمات لعام 2026 مع كود الخصم المرن للأشقاء</p>
+                      <p className="text-[10px] text-slate-400 font-bold">تسجيل الرسوم والخدمات للعام {financialOperationalContext?.academicYearName || selectedSchool?.academicYear || 'الدراسي النشط'} مع الخصومات المعتمدة</p>
                     </div>
                   </div>
                   
@@ -3631,21 +3656,21 @@ export default function StudentFinancialPortal({
                     <label className="block text-slate-700 font-extrabold text-[11px] mb-1.5 flex items-center gap-1">
                       <span>🔍</span> <span>بحث عن طالب:</span>
                     </label>
-                    <select
+                    <StudentSearchPicker
+                      students={selectableStudents}
                       value={selectedStudent?.id || ''}
-                      onChange={(e) => {
-                        const s = students.find(x => x.id === e.target.value);
-                        setSelectedStudent(s || null);
-                        if (!s) setVoucherNumber('');
-                        else if (!voucherNumber) setVoucherNumber('');
+                      onChange={(student) => {
+                        setSelectedStudent(student);
+                        if (!student) setVoucherNumber('');
                       }}
-                      className="w-full bg-transparent p-2 text-xs font-bold focus:ring-1 focus:ring-[#9a6a1d] focus:border-[#9a6a1d] focus:outline-none"
-                    >
-                      <option value="">اختر طالباً موثقاً للبدء</option>
-                      {students.map((st) => (
-                        <option key={st.id} value={st.id}>{st.name} ({st.classroom || 'الفصل غير محدد'})</option>
-                      ))}
-                    </select>
+                      placeholder="ابحث بالاسم أو الرقم الأكاديمي..."
+                      helperText="تظهر النتائج المطابقة فورًا، ويمكن الاختيار بالأسهم ثم Enter."
+                      getMeta={(student) => [
+                        student.academicId || student.studentCode || student.nationalId,
+                        student.classroom || 'الفصل غير محدد',
+                        student.section ? `الشعبة ${student.section}` : ''
+                      ].filter(Boolean).join(' • ')}
+                    />
                   </div>
 
                   {/* Voucher Date */}
@@ -3683,7 +3708,8 @@ export default function StudentFinancialPortal({
                       const newId = `row_${Date.now()}`;
                       setFeeRows([...feeRows, { id: newId, type: feeTypeOptions[0]?.value || 'زي مدرسي', amount: 0, remarks: '' }]);
                     }}
-                    className="fee-management-add-action text-[11px] font-black px-3.5 py-1.5 flex items-center gap-1 transition-all transform active:scale-95 cursor-pointer shadow-sm"
+                    disabled={financialPersistence !== 'ready' || !selectedStudent}
+                    className="fee-management-add-action text-[11px] font-black px-3.5 py-1.5 flex items-center gap-1 transition-all transform active:scale-95 cursor-pointer shadow-sm disabled:cursor-not-allowed disabled:opacity-50"
                   >
                     <span>+</span>
                     <span>إضافة بند رسوم جديد</span>
@@ -3821,66 +3847,19 @@ export default function StudentFinancialPortal({
                   {/* Button 1: حفظ (Save) - Unified Navy */}
                   <button
                     type="button"
-                    onClick={() => {
-                      if (!selectedStudent) {
-                        triggerNotification('الرجاء اختيار طالب موثق أولاً.', 'warning');
-                        return;
-                      }
-                      const sub = feeRows.reduce((acc, curr) => acc + curr.amount, 0);
-                      const finalAmount = Math.max(0, sub - (sub * siblingDiscountPercent) / 100 - manualDiscountAmount);
-                      if (finalAmount <= 0) {
-                        triggerNotification('أضف بند رسوم موجباً قبل تجهيز المعاملة.', 'warning');
-                        return;
-                      }
-                      setStudRvMode('create');
-                      setStudRvForm(prev => ({
-                        ...prev,
-                        id: '',
-                        date: voucherDate,
-                        studentId: selectedStudent.id,
-                        studentName: selectedStudent.name,
-                        amount: finalAmount,
-                        against: feeRows.map(row => row.type).join('، '),
-                        status: 'draft'
-                      }));
-                      setActiveSubSec('receipts');
-                      triggerNotification('تم تجهيز مسودة السند؛ راجعها واعتمد حفظها من شاشة سندات القبض.', 'info');
-                    }}
-                    className="fee-management-action fee-management-primary-action text-xs font-black py-3 px-1 transition-transform active:scale-95 text-center cursor-pointer"
+                    onClick={() => { void handleIssueStudentFeeDemand(); }}
+                    disabled={financialPersistence !== 'ready' || !selectedStudent || feeRows.length === 0}
+                    className="fee-management-action fee-management-primary-action text-xs font-black py-3 px-1 transition-transform active:scale-95 text-center cursor-pointer disabled:cursor-not-allowed disabled:opacity-50"
                   >
-                    📝 تجهيز مسودة سند
+                    🧾 إصدار المطالبة
                   </button>
 
                   {/* Button 2: قبض (Collect) - Unified Gold */}
                   <button
                     type="button"
-                    onClick={() => {
-                      if (!selectedStudent) {
-                        triggerNotification('الرجاء اختيار طالب موثق أولاً.', 'warning');
-                        return;
-                      }
-                      const sub = feeRows.reduce((acc, curr) => acc + curr.amount, 0);
-                      const siblingDeduct = (sub * siblingDiscountPercent) / 100;
-                      const finalAmount = Math.max(0, sub - siblingDeduct - manualDiscountAmount);
-                      if (finalAmount <= 0) {
-                        triggerNotification('أضف بند رسوم موجباً قبل تجهيز التحصيل.', 'warning');
-                        return;
-                      }
-                      setStudRvMode('create');
-                      setStudRvForm(prev => ({
-                        ...prev,
-                        id: '',
-                        date: voucherDate,
-                        studentId: selectedStudent.id,
-                        studentName: selectedStudent.name,
-                        amount: finalAmount,
-                        against: feeRows.map(row => row.type).join('، '),
-                        status: 'draft'
-                      }));
-                      setActiveSubSec('receipts');
-                      triggerNotification('تم تجهيز مسودة التحصيل؛ لا يتم القيد الفعلي إلا بعد المراجعة والحفظ ثم الاعتماد والترحيل.', 'info');
-                    }}
-                    className="fee-management-action fee-management-collect-action text-xs font-black py-3 px-1 transition-transform active:scale-95 text-center cursor-pointer"
+                    onClick={handlePrepareCollectionDraft}
+                    disabled={financialPersistence !== 'ready' || !selectedStudent || !financialInvoices.some(invoice => invoice.studentId === selectedStudent.id && Number(invoice.remainingAmount ?? invoice.amount ?? 0) > 0 && !['paid', 'cancelled', 'void', 'written_off', 'refunded'].includes(String(invoice.status || '').toLowerCase()))}
+                    className="fee-management-action fee-management-collect-action text-xs font-black py-3 px-1 transition-transform active:scale-95 text-center cursor-pointer disabled:cursor-not-allowed disabled:opacity-50"
                   >
                     💵 قبض وتحصيل
                   </button>
@@ -4142,9 +4121,9 @@ export default function StudentFinancialPortal({
                 <p className="text-xs text-slate-500 font-semibold mt-1">توليد وإدارة وطباعة إيصالات الدفع والتحصيل، مع ترحيل فوري للحسابات العامة وقيد اليومية المزدوج وعزل كامل للبيانات</p>
               </div>
               <div className="flex items-center gap-2">
-                <span className="text-[11px] font-black bg-slate-100 text-slate-700 px-3 py-1.5 flex items-center gap-1">
-                  <span className="w-2 h-2 rounded-full bg-emerald-500 animate-pulse" />
-                  حالة الاتصال بالسحابة: متصل ومؤمن بالكامل
+                <span className={`text-[11px] font-black px-3 py-1.5 flex items-center gap-1 ${financialPersistence === 'ready' ? 'bg-emerald-50 text-emerald-800' : financialPersistence === 'loading' ? 'bg-amber-50 text-amber-800' : 'bg-rose-50 text-rose-800'}`}>
+                  <span className={`w-2 h-2 rounded-full ${financialPersistence === 'ready' ? 'bg-emerald-500' : financialPersistence === 'loading' ? 'bg-amber-500 animate-pulse' : 'bg-rose-500'}`} />
+                  {financialPersistence === 'ready' ? 'المصدر المالي الموثق متصل' : financialPersistence === 'loading' ? 'جارٍ التحقق من المصدر المالي' : 'المصدر المالي غير متاح — الحفظ متوقف'}
                 </span>
               </div>
             </div>
@@ -4156,7 +4135,8 @@ export default function StudentFinancialPortal({
               <button
                 type="button"
                 onClick={handleNewStudRv}
-                className="financial-receipts-action financial-receipts-gold text-xs font-bold px-3 py-2 flex items-center gap-1.5 transition-colors cursor-pointer"
+                disabled={financialPersistence !== 'ready'}
+                className="financial-receipts-action financial-receipts-gold text-xs font-bold px-3 py-2 flex items-center gap-1.5 transition-colors cursor-pointer disabled:cursor-not-allowed disabled:opacity-50"
                 title="إصدار سند مالي جديد"
               >
                 <Plus className="w-4 h-4" />
@@ -4167,7 +4147,7 @@ export default function StudentFinancialPortal({
               <button
                 type="button"
                 onClick={handleSaveStudRv}
-                disabled={studRvMode === 'view'}
+                disabled={financialPersistence !== 'ready' || studRvMode === 'view'}
                 className={`financial-receipts-action financial-receipts-navy text-xs font-bold px-3 py-2 flex items-center gap-1.5 transition-colors cursor-pointer ${
                   studRvMode !== 'view'
                     ? 'bg-emerald-600 hover:bg-emerald-500 text-white'
@@ -4202,7 +4182,7 @@ export default function StudentFinancialPortal({
                   setStudRvMode('edit');
                   triggerNotification('📝 تم فتح وضع التحرير للسند الحالي.', 'info');
                 }}
-                disabled={studRvMode !== 'view' || !selectedStudRv || selectedStudRv.status !== 'saved'}
+                disabled={financialPersistence !== 'ready' || studRvMode !== 'view' || !selectedStudRv || selectedStudRv.status !== 'saved'}
                 className={`financial-receipts-action financial-receipts-paper text-xs font-bold px-3 py-2 flex items-center gap-1.5 transition-colors cursor-pointer ${
                   studRvMode === 'view' && selectedStudRv && selectedStudRv.status === 'saved'
                     ? 'bg-amber-600 hover:bg-amber-500 text-white'
@@ -4218,7 +4198,7 @@ export default function StudentFinancialPortal({
               <button
                 type="button"
                 onClick={handleApproveStudRv}
-                disabled={studRvMode !== 'view' || !selectedStudRv || selectedStudRv.status === 'approved' || selectedStudRv.status === 'posted' || selectedStudRv.status === 'cancelled'}
+                disabled={financialPersistence !== 'ready' || studRvMode !== 'view' || !selectedStudRv || selectedStudRv.status === 'approved' || selectedStudRv.status === 'posted' || selectedStudRv.status === 'cancelled'}
                 className={`financial-receipts-action financial-receipts-gold text-xs font-bold px-3 py-2 flex items-center gap-1.5 transition-colors cursor-pointer ${
                   studRvMode === 'view' && selectedStudRv && selectedStudRv.status === 'saved'
                     ? 'bg-amber-600 hover:bg-amber-500 text-white'
@@ -4234,7 +4214,7 @@ export default function StudentFinancialPortal({
               <button
                 type="button"
                 onClick={handlePostStudRv}
-                disabled={studRvMode !== 'view' || !selectedStudRv || selectedStudRv.status !== 'approved'}
+                disabled={financialPersistence !== 'ready' || studRvMode !== 'view' || !selectedStudRv || selectedStudRv.status !== 'approved'}
                 className={`financial-receipts-action financial-receipts-navy text-xs font-bold px-3 py-2 flex items-center gap-1.5 transition-colors cursor-pointer ${
                   studRvMode === 'view' && selectedStudRv && selectedStudRv.status === 'approved'
                     ? 'bg-purple-600 hover:bg-purple-500 text-white shadow-md shadow-purple-900/30 font-extrabold'
@@ -4250,7 +4230,7 @@ export default function StudentFinancialPortal({
               <button
                 type="button"
                 onClick={handleCancelStudRv}
-                disabled={studRvMode !== 'view' || !selectedStudRv || selectedStudRv.status === 'cancelled'}
+                disabled={financialPersistence !== 'ready' || studRvMode !== 'view' || !selectedStudRv || selectedStudRv.status === 'cancelled' || selectedStudRv.status === 'posted'}
                 className={`financial-receipts-action financial-receipts-danger text-xs font-bold px-3 py-2 flex items-center gap-1.5 transition-colors cursor-pointer ${
                   studRvMode === 'view' && selectedStudRv && selectedStudRv.status !== 'cancelled'
                     ? 'bg-rose-600 hover:bg-rose-500 text-white'
@@ -4266,7 +4246,7 @@ export default function StudentFinancialPortal({
               <button
                 type="button"
                 onClick={handleDeleteStudRv}
-                disabled={studRvMode !== 'view' || !selectedStudRv || selectedStudRv.status === 'posted'}
+                disabled={financialPersistence !== 'ready' || studRvMode !== 'view' || !selectedStudRv || selectedStudRv.status === 'posted'}
                 className={`financial-receipts-action financial-receipts-danger text-xs font-bold px-3 py-2 flex items-center gap-1.5 transition-colors cursor-pointer ${
                   studRvMode === 'view' && selectedStudRv && selectedStudRv.status !== 'posted'
                     ? 'bg-red-700 hover:bg-red-600 text-white'
@@ -4453,24 +4433,19 @@ export default function StudentFinancialPortal({
                       {/* Select Student */}
                       <div className="space-y-1">
                         <label className="font-extrabold text-slate-700 block">الطالب المستهدف بالسداد: *</label>
-                        <select
+                        <StudentSearchPicker
+                          students={selectableStudents}
                           value={studRvForm.studentId}
-                          onChange={(e) => handleStudentSelectInForm(e.target.value)}
+                          onChange={(student) => handleStudentSelectInForm(student?.id || '')}
                           disabled={studRvMode === 'edit'}
-                          className="block w-full border border-slate-300 p-2.5 focus:ring-1 focus:ring-[#9a6a1d] focus:border-[#9a6a1d] focus:outline-none font-bold bg-slate-50"
-                        >
-                          <option value="">-- اختر طالب من قاعدة بيانات الفروع والمدارس --</option>
-                          {students.map(s => {
-                            const financialStudent = financialStudentRows.find(row => row.id === s.id);
-                            const remainingBalance = financialStudent ? Number(financialStudent.feesRemaining || 0) : Number(s.feesRemaining || 0);
-                            return (
-                              <option key={s.id} value={s.id}>
-                                {s.name} ({s.classroom || 'الفصل غير محدد'}) - متبقي عليه: {remainingBalance.toLocaleString()} د.ل
-                              </option>
-                            );
-                          })}
-                        </select>
-                        <p className="text-[10px] text-slate-400">يتم جلب الطالب والصف الدراسي والمركز المالي تلقائياً</p>
+                          placeholder="ابحث باسم الطالب أو رقمه قبل السداد..."
+                          helperText="يتم جلب الصف والمركز المالي والرصيد الموثق تلقائيًا."
+                          getMeta={(student) => {
+                            const financialStudent = financialStudentRows.find(row => row.id === student.id);
+                            const remainingBalance = financialStudent ? Number(financialStudent.feesRemaining || 0) : Number(student.feesRemaining || 0);
+                            return `${student.academicId || student.studentCode || 'دون رقم أكاديمي'} • ${student.classroom || 'الفصل غير محدد'} • المتبقي ${formatLD(remainingBalance)}`;
+                          }}
+                        />
                       </div>
 
                       {/* Date */}
@@ -4640,7 +4615,7 @@ export default function StudentFinancialPortal({
                                  <span>•</span>
                                  <span>الفرع التشغيلي: {selectedBranch?.name || 'الفرع العام'}</span>
                                  <span>•</span>
-                                 <span>العام الدراسي: {selectedSchool?.academicYear || selectedSchool?.currentAcademicYear || '2026/2027'}</span>
+                                 <span>العام الدراسي: {financialOperationalContext?.academicYearName || selectedSchool?.academicYear || 'غير محدد'}</span>
                               </div>
                             </div>
 
@@ -5112,20 +5087,6 @@ export default function StudentFinancialPortal({
                 <p className="text-[10px] text-slate-500 font-bold">يُعرض أول 200 سجل؛ استخدم الفلاتر لتضييق النطاق قبل التصدير.</p>
               )}
             </div>
-          </div>
-        )}
-
-        {/* VIEW 8: دورة الرقابة والترحيل الموحد */}
-        {activeSubSec === 'accounting_integrity_demo' && (
-          <div className="space-y-6 animate-fadeIn">
-            <AccountingIntegrityDemo
-              students={students}
-              setStudents={setStudents}
-              invoices={financialInvoices}
-              setInvoices={setInvoices}
-              triggerNotification={triggerNotification}
-              logAction={logAction}
-            />
           </div>
         )}
 

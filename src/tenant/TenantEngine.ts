@@ -127,7 +127,10 @@ class DefaultTenantDataProvider implements TenantDataProvider {
           ? row.academic_years.map(year => ({
             id: String(year.id),
             name: year.name ? String(year.name) : undefined,
-            isActive: year.status === 'active' || year.status === 'planned',
+            // A planned academic year may be prepared and displayed by the
+            // administration, but it must never compete with the operational
+            // year when resolving a trusted transaction context.
+            isActive: year.status === 'active',
             tenantId: year.tenant_id ? String(year.tenant_id) : undefined,
             schoolId: year.school_id ? String(year.school_id) : undefined,
             branchId: year.branch_id ? String(year.branch_id) : null
@@ -186,7 +189,7 @@ class DefaultTenantDataProvider implements TenantDataProvider {
           academicYears: (academicYearResult.data || []).map((year: any) => ({
             id: String(year.id),
             name: year.name ? String(year.name) : undefined,
-            isActive: year.status === 'active' || year.status === 'planned',
+            isActive: year.status === 'active',
             tenantId: year.tenant_id ? String(year.tenant_id) : undefined,
             schoolId: year.school_id ? String(year.school_id) : undefined,
             branchId: year.branch_id ? String(year.branch_id) : null
@@ -281,7 +284,7 @@ class DefaultTenantDataProvider implements TenantDataProvider {
           return data.map(row => ({
             id: String(row.id),
             name: row.name ? String(row.name) : undefined,
-            isActive: row.status === 'active' || row.status === 'planned',
+            isActive: row.status === 'active',
             tenantId: row.tenant_id ? String(row.tenant_id) : undefined,
             schoolId: row.school_id ? String(row.school_id) : undefined,
             branchId: row.branch_id ? String(row.branch_id) : null

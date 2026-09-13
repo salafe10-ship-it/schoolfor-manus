@@ -105,6 +105,34 @@ describe('Wave 1D tenant isolation foundation', () => {
       .rejects.toMatchObject({ reason: 'MISSING_ACADEMIC_YEAR' });
   });
 
+  it('selects the sole active year when a future planned year also exists', async () => {
+    const resolver = new TenantContextResolver({
+      schoolExists: vi.fn(async () => true),
+      listBranches: vi.fn(async () => ['branch-1']),
+      listAcademicYears: vi.fn(async () => [
+        { id: 'year-2026', name: '2026-2027', isActive: true, tenantId: 'tenant-1', schoolId: 'school-1' },
+        { id: 'year-2027', name: '2027-2028', isActive: false, tenantId: 'tenant-1', schoolId: 'school-1' }
+      ])
+    });
+
+    await expect(resolver.resolve({ ...identity, academicYear: '' }))
+      .resolves.toMatchObject({ academicYear: 'year-2026' });
+  });
+
+  it('rejects a planned year when it is explicitly requested for a financial context', async () => {
+    const resolver = new TenantContextResolver({
+      schoolExists: vi.fn(async () => true),
+      listBranches: vi.fn(async () => ['branch-1']),
+      listAcademicYears: vi.fn(async () => [
+        { id: 'year-2026', isActive: true, tenantId: 'tenant-1', schoolId: 'school-1' },
+        { id: 'year-2027', isActive: false, tenantId: 'tenant-1', schoolId: 'school-1' }
+      ])
+    });
+
+    await expect(resolver.resolve({ ...identity, academicYear: 'year-2027' }))
+      .rejects.toMatchObject({ reason: 'INVALID_ACADEMIC_YEAR' });
+  });
+
   it('requires repository access to run inside a validated tenant context', async () => {
     expect(() => assertRepositoryScope()).toThrow(/Tenant context is required/);
     runWithTenantContext(context, () => {
