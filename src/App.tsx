@@ -2064,6 +2064,7 @@ export default function App() {
               <HumanResourcesPortal
                 setActiveSection={setActiveSection}
                 selectedSchool={selectedSchool}
+                canUseTrustedPermission={canUseTrustedPermission}
                 canManage={canUseTrustedPermission(PERMISSIONS.HR_WRITE)}
                 canApprove={canUseTrustedPermission(PERMISSIONS.HR_APPROVE) || canUseTrustedPermission(PERMISSIONS.HR_WRITE)}
                 canFinancialWrite={canUseTrustedPermission(PERMISSIONS.FINANCIAL_WRITE)}

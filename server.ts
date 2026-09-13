@@ -5622,7 +5622,9 @@ async function startServer() {
       await ensureIdentityJobSchema();
       const { tenantId, schoolId } = schoolIdentityScope(req);
       // Keep this catalogue on the same privileged PostgreSQL source used by
-      // the HR snapshot writer and by the create/update validation below.
+      // the HR snapshot writer and by the create/update validation below. This
+      // is the canonical equivalent of from('hr_database').select('data'),
+      // with tenant and school predicates applied before JSONB projection.
       // Reading a second Supabase channel here allowed a stale control-plane
       // snapshot to display jobs that the canonical HR transaction could not
       // accept, which was especially confusing when HR itself was empty.
@@ -6090,7 +6092,7 @@ async function startServer() {
     const roleKey = String(req.body?.roleKey || '').trim().toLowerCase();
     const name = String(req.body?.name || '').trim();
     const description = String(req.body?.description || '').trim();
-    const requestedKeys = Array.isArray(req.body?.permissionKeys) ? req.body.permissionKeys as unknown[] : [];
+    const requested = Array.isArray(req.body?.permissionKeys) ? req.body.permissionKeys as unknown[] : [];
     const requestId = String(req.body?.requestId || req.get('X-Request-Id') || randomUUID()).trim();
     const correlationId = String(req.body?.correlationId || req.get('X-Correlation-Id') || randomUUID()).trim();
     if (!/^[0-9a-f-]{36}$/i.test(actorId)) return next(new AuthenticationError('هوية الإدارة المركزية غير مكتملة.'));
@@ -6098,8 +6100,8 @@ async function startServer() {
     if (name.length < 2 || name.length > 160) return next(new ValidationError('اسم الدور يجب أن يكون بين حرفين و160 حرفاً.'));
     if (description.length > 500) return next(new ValidationError('وصف الدور يتجاوز الحد المسموح.'));
     if (!/^[0-9a-f-]{36}$/i.test(requestId) || !/^[0-9a-f-]{36}$/i.test(correlationId)) return next(new ValidationError('معرف الطلب أو الارتباط غير صالح.'));
-    const permissionKeys = [...new Set(requestedKeys.map((key) => permissionRegistry.normalize(key)).filter((key): key is string => Boolean(key)))];
-    if (!permissionKeys.length || permissionKeys.length !== requestedKeys.length || permissionKeys.includes(PERMISSIONS.PLATFORM_ADMIN)) return next(new ValidationError('اختر صلاحية واحدة على الأقل، ولا يمكن منح صلاحية إدارة المنصة لدور مدرسة.'));
+    const permissionKeys = [...new Set(requested.map((key) => permissionRegistry.normalize(key)).filter((key): key is string => Boolean(key)))];
+    if (!permissionKeys.length || permissionKeys.length !== requested.length || permissionKeys.includes(PERMISSIONS.PLATFORM_ADMIN)) return next(new ValidationError('اختر صلاحية واحدة على الأقل، ولا يمكن منح صلاحية إدارة المنصة لدور مدرسة.'));
     assertNoSegregationOfDutiesConflict(permissionKeys);
     const client = await platformAdminPool.connect();
     try {

@@ -16,6 +16,7 @@ import type { ReportType } from './ReportsTab';
 import OtherHRTabs from './OtherHRTabs';
 import { FallbackStorage } from '../../database/repositories/FallbackStorage';
 import { getTrustedAccessToken } from '../../utils/auth';
+import { PERMISSIONS } from '../../authorization/PermissionRegistry';
 import './hr-identity.css';
 
 // Cost Center descriptive mapping
@@ -30,13 +31,14 @@ const costCenterLabels: Record<string, string> = {
 interface HumanResourcesPortalProps {
   setActiveSection?: (section: string) => void;
   selectedSchool?: any;
+  canUseTrustedPermission?: (permission: string) => boolean;
   /** Server-derived capability; HR read access must not imply write access. */
   canManage?: boolean;
   canApprove?: boolean;
   canFinancialWrite?: boolean;
 }
 
-export default function HumanResourcesPortal({ setActiveSection, selectedSchool, canManage = false, canApprove = false, canFinancialWrite = false }: HumanResourcesPortalProps) {
+export default function HumanResourcesPortal({ setActiveSection, selectedSchool, canUseTrustedPermission = (permission) => permission === PERMISSIONS.HR_WRITE ? canManage : permission === PERMISSIONS.HR_APPROVE ? canApprove : permission === PERMISSIONS.FINANCIAL_WRITE ? canFinancialWrite : false, canManage = false, canApprove = false, canFinancialWrite = false }: HumanResourcesPortalProps) {
   const canonicalPersistenceRequired = FallbackStorage.isCanonicalPersistenceRequired();
   const [activeGroup, setActiveGroup] = useState<'employees_group' | 'attendance_group' | 'advances_group' | 'payroll_group' | 'reports_group'>('employees_group');
   const [activeTab, setActiveTab] = useState('employees');
@@ -1043,7 +1045,7 @@ export default function HumanResourcesPortal({ setActiveSection, selectedSchool,
             <EmployeesTab 
               employees={employees} 
               setEmployees={setEmployees}
-              canManage={canManage}
+              canManage={canUseTrustedPermission(PERMISSIONS.HR_WRITE)}
               departments={departments}
               jobs={jobs}
               contracts={contracts}
