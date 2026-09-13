@@ -228,8 +228,44 @@ export async function resolveInternalActorUserId(tenantId: string, authUserId: s
       LIMIT 1`,
     [tenantId, authUserId]
   );
-  if (!row) throw new ValidationError('The authenticated user is not provisioned as an active tenant user.');
-  return row.id;
+  if (row) return row.id;
+
+  const context = UnitOfWork.getActiveContext();
+  const tenantContext = context?.metadata?.tenantContext;
+  if (!tenantContext || tenantContext.tenantId !== tenantId || tenantContext.userId !== authUserId) {
+    throw new ValidationError('The authenticated user is not provisioned as an active tenant user.');
+  }
+
+  // Keep the data-plane actor bridge idempotent. Central authentication and
+  // authorization remain the source of authority; this row only supplies
+  // the local foreign key required by registration audit records.
+  await transaction().query(
+    `INSERT INTO users (
+       auth_user_id, tenant_id, school_id, branch_id, display_name, status
+     )
+     SELECT $2, $1, $3, $4, 'مستخدم المدرسة', 'active'
+      WHERE NOT EXISTS (
+        SELECT 1
+          FROM users
+         WHERE tenant_id = $1
+           AND auth_user_id = $2
+           AND deleted_at IS NULL
+      )
+     ON CONFLICT DO NOTHING`,
+    [tenantId, authUserId, tenantContext.schoolId, tenantContext.branchId]
+  );
+  const provisioned = await one<{ id: string }>(
+    `SELECT id
+       FROM users
+      WHERE tenant_id = $1
+        AND auth_user_id = $2
+        AND deleted_at IS NULL
+        AND status = 'active'
+      LIMIT 1`,
+    [tenantId, authUserId]
+  );
+  if (!provisioned) throw new ValidationError('The authenticated user is not provisioned as an active tenant user.');
+  return provisioned.id;
 }
 
 export type GuardianInput = {

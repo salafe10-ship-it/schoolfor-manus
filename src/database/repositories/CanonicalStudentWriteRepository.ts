@@ -125,7 +125,8 @@ function uuidOrGenerate(value: string | undefined): string {
 }
 
 async function actorId(context: TenantContext): Promise<string> {
-  const row = await transaction().query<{ id: string }>(
+  const db = transaction();
+  const row = await db.query<{ id: string }>(
     `SELECT id
        FROM public.users
       WHERE tenant_id = $1
@@ -135,8 +136,40 @@ async function actorId(context: TenantContext): Promise<string> {
       LIMIT 1`,
     [context.tenantId, context.userId]
   );
-  if (!row.rows[0]) throw new ValidationError('The authenticated user is not provisioned as an active tenant user.');
-  return row.rows[0].id;
+  if (row.rows[0]) return row.rows[0].id;
+
+  // Render keeps the tenant data-plane connection separate from the central
+  // identity connection. A user can therefore be fully verified and
+  // authorized centrally while the local audit actor row is still missing.
+  // Provision only the already-authenticated identity, inside this trusted
+  // transaction, and never infer a role or grant a permission here.
+  await db.query(
+    `INSERT INTO public.users (
+       auth_user_id, tenant_id, school_id, branch_id, display_name, status
+     )
+     SELECT $2, $1, $3, $4, 'مستخدم المدرسة', 'active'
+      WHERE NOT EXISTS (
+        SELECT 1
+          FROM public.users
+         WHERE tenant_id = $1
+           AND auth_user_id = $2
+           AND deleted_at IS NULL
+      )
+     ON CONFLICT DO NOTHING`,
+    [context.tenantId, context.userId, context.schoolId, context.branchId]
+  );
+  const provisioned = await db.query<{ id: string }>(
+    `SELECT id
+       FROM public.users
+      WHERE tenant_id = $1
+        AND auth_user_id = $2
+        AND deleted_at IS NULL
+        AND status = 'active'
+      LIMIT 1`,
+    [context.tenantId, context.userId]
+  );
+  if (!provisioned.rows[0]) throw new ValidationError('The authenticated user is not provisioned as an active tenant user.');
+  return provisioned.rows[0].id;
 }
 
 async function writeAudit(
