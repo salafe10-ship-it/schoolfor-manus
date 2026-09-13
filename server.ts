@@ -6845,6 +6845,88 @@ async function startServer() {
       || undefined;
   }
 
+  function normalizeAcademicSetupPayload(raw: any) {
+    const year = raw?.year && typeof raw.year === 'object' ? raw.year : {};
+    const code = String(year.code || '').trim();
+    const name = String(year.name || '').trim();
+    const startsOn = String(year.startsOn || year.starts_on || '').trim();
+    const endsOn = String(year.endsOn || year.ends_on || '').trim();
+    if (!/^[A-Za-z0-9_-]{2,50}$/.test(code)) throw new ValidationError('رمز السنة الدراسية غير صالح. استخدم أحرفًا وأرقامًا وشرطة فقط.');
+    if (!name || name.length > 100) throw new ValidationError('اسم السنة الدراسية مطلوب وبحد أقصى 100 حرف.');
+    if (!/^\d{4}-\d{2}-\d{2}$/.test(startsOn) || !/^\d{4}-\d{2}-\d{2}$/.test(endsOn) || startsOn >= endsOn) {
+      throw new ValidationError('تواريخ السنة الدراسية غير صالحة.');
+    }
+
+    const normalizeCode = (value: unknown, label: string) => {
+      const normalized = String(value || '').trim();
+      if (!/^[A-Za-z0-9_-]{2,50}$/.test(normalized)) throw new ValidationError(`رمز ${label} غير صالح.`);
+      return normalized;
+    };
+    const normalizeName = (value: unknown, label: string) => {
+      const normalized = String(value || '').trim();
+      if (!normalized || normalized.length > 120) throw new ValidationError(`اسم ${label} مطلوب وبحد أقصى 120 حرف.`);
+      return normalized;
+    };
+    const terms = Array.isArray(raw?.terms) ? raw.terms.slice(0, 12).map((term: any, index: number) => ({
+      code: normalizeCode(term?.code, `الفترة رقم ${index + 1}`),
+      name: normalizeName(term?.name, `الفترة رقم ${index + 1}`),
+      sequence: Number.isInteger(Number(term?.sequence)) ? Number(term.sequence) : index + 1,
+      startsOn: String(term?.startsOn || term?.starts_on || '').trim(),
+      endsOn: String(term?.endsOn || term?.ends_on || '').trim(),
+      status: term?.status === 'planned' ? 'planned' : 'active'
+    })) : [];
+    if (terms.length === 0) throw new ValidationError('يجب تعريف فترة دراسية واحدة على الأقل.');
+    for (const term of terms) {
+      if (!/^\d{4}-\d{2}-\d{2}$/.test(term.startsOn) || !/^\d{4}-\d{2}-\d{2}$/.test(term.endsOn) || term.startsOn >= term.endsOn) {
+        throw new ValidationError(`تواريخ الفترة ${term.name} غير صالحة.`);
+      }
+      if (term.startsOn < startsOn || term.endsOn > endsOn) throw new ValidationError(`الفترة ${term.name} خارج نطاق السنة الدراسية.`);
+    }
+    if (!terms.some(term => term.status === 'active')) throw new ValidationError('يجب أن تكون هناك فترة دراسية نشطة واحدة على الأقل.');
+
+    const structure = raw?.structure && typeof raw.structure === 'object' ? raw.structure : {};
+    const stages = Array.isArray(structure.stages) ? structure.stages.slice(0, 50).map((stage: any, index: number) => ({
+      id: String(stage?.id || `stage_${index + 1}`).trim(),
+      code: normalizeCode(stage?.code || `STAGE_${index + 1}`, `المرحلة رقم ${index + 1}`),
+      name: normalizeName(stage?.name, `المرحلة رقم ${index + 1}`),
+      order: Number(stage?.order || index + 1),
+      isActive: stage?.isActive !== false
+    })) : [];
+    const grades = Array.isArray(structure.grades) ? structure.grades.slice(0, 200).map((grade: any, index: number) => ({
+      id: String(grade?.id || `grade_${index + 1}`).trim(),
+      stageId: String(grade?.stageId || '').trim(),
+      code: normalizeCode(grade?.code || `GRADE_${index + 1}`, `الصف رقم ${index + 1}`),
+      name: normalizeName(grade?.name, `الصف رقم ${index + 1}`),
+      order: Number(grade?.order || index + 1),
+      isActive: grade?.isActive !== false
+    })) : [];
+    const classes = Array.isArray(structure.classes) ? structure.classes.slice(0, 500).map((item: any, index: number) => ({
+      id: String(item?.id || `class_${index + 1}`).trim(),
+      gradeId: String(item?.gradeId || '').trim(),
+      code: normalizeCode(item?.code || `CLASS_${index + 1}`, `الشعبة رقم ${index + 1}`),
+      name: normalizeName(item?.name, `الشعبة رقم ${index + 1}`),
+      capacity: Math.max(1, Math.min(500, Number(item?.capacity || 30))),
+      isActive: item?.isActive !== false
+    })) : [];
+    const sections = Array.isArray(structure.sections)
+      ? [...new Set(structure.sections.map((section: unknown) => String(section || '').trim()).filter(Boolean))].slice(0, 50)
+      : [];
+    if (!stages.length || !grades.length || !classes.length || !sections.length) {
+      throw new ValidationError('يجب تعريف مرحلة وصف وشعبة وفصل واحد على الأقل قبل اعتماد الهيكل الأكاديمي.');
+    }
+    if (grades.some((grade: any) => !stages.some((stage: any) => stage.id === grade.stageId))) {
+      throw new ValidationError('يوجد صف مرتبط بمرحلة غير موجودة.');
+    }
+    if (classes.some((item: any) => !grades.some((grade: any) => grade.id === item.gradeId))) {
+      throw new ValidationError('يوجد فصل/شعبة مرتبط بصف غير موجود.');
+    }
+    return {
+      year: { code, name, startsOn, endsOn, isCurrent: year.isCurrent !== false },
+      terms,
+      structure: { stages, grades, classes, sections }
+    };
+  }
+
   async function resolveStudentTenantMiddleware(req: express.Request, _res: express.Response, next: express.NextFunction) {
     try {
       await resolveStudentTenantContext(req);
@@ -7059,10 +7141,62 @@ async function startServer() {
           LIMIT 1`,
         [context.tenantId, context.schoolId, context.academicYear, context.branchId]
       );
-      if (!result.rows[0]) {
+      if (result.rows[0]) return result.rows[0].id;
+
+      // Existing customer databases may have received the active academic
+      // year before the canonical terms foundation migration was applied. If
+      // the year has no term at all, repair only that missing foundation in
+      // the same transaction. Never reopen an existing planned/closed term.
+      const yearResult = await transaction.query<{ starts_on: string; ends_on: string }>(
+        `SELECT starts_on, ends_on
+           FROM public.academic_years
+          WHERE tenant_id = $1
+            AND school_id = $2
+            AND id = $3
+            AND status = 'active'
+            AND deleted_at IS NULL
+          LIMIT 1`,
+        [context.tenantId, context.schoolId, context.academicYear]
+      );
+      if (!yearResult.rows[0]) {
+        throw new ValidationError("السنة الدراسية النشطة غير موجودة في مصدر التسجيل الكانوني.");
+      }
+
+      const anyTermResult = await transaction.query<{ id: string }>(
+        `SELECT id
+           FROM public.terms
+          WHERE tenant_id = $1
+            AND school_id = $2
+            AND academic_year_id = $3
+            AND deleted_at IS NULL
+          LIMIT 1`,
+        [context.tenantId, context.schoolId, context.academicYear]
+      );
+      if (anyTermResult.rows[0]) {
         throw new ValidationError("لا يمكن تسجيل طالب قبل إعداد فصل دراسي نشط للسنة الموثوقة.");
       }
-      return result.rows[0].id;
+
+      const repairedTerm = await transaction.query<{ id: string }>(
+        `INSERT INTO public.terms (
+           tenant_id, school_id, branch_id, academic_year_id, code, name,
+           sequence, starts_on, ends_on, status, created_by, updated_by
+         ) VALUES (
+           $1, $2, $3, $4, 'TERM-1', 'الفصل الدراسي الأول', 1,
+           $5::date, LEAST($6::date, ($5::date + INTERVAL '120 days')::date),
+           'active', NULL, NULL
+         )
+         RETURNING id`,
+        [
+          context.tenantId,
+          context.schoolId,
+          context.branchId,
+          context.academicYear,
+          yearResult.rows[0].starts_on,
+          yearResult.rows[0].ends_on
+        ]
+      );
+      if (repairedTerm.rows[0]) return repairedTerm.rows[0].id;
+      throw new ValidationError("تعذر تهيئة الفصل الدراسي الأول للسنة الموثوقة.");
     };
 
     if (UnitOfWork.isTransactionActive()) return work();
@@ -7210,6 +7344,94 @@ async function startServer() {
 
   // School-scoped academic catalogue. Configuration is stored in the
   // canonical school_settings table and cannot be selected by the browser.
+  app.get('/api/academic/setup', authenticateRequest, requirePermissionOnly(PERMISSIONS.STUDENT_READ), async (req, res, next) => {
+    try {
+      const identity = (req as any).user as { tenantId?: string; schoolId?: string; branchId?: string };
+      if (!identity?.tenantId || !identity?.schoolId) throw new AuthenticationError('هوية المدرسة الموثوقة غير مكتملة.');
+      const supabase = canonicalTenantReadClient(req);
+      if (!supabase) throw new DatabaseError('مصدر التهيئة الأكاديمية غير متاح.');
+      const { data: years, error: yearsError } = await supabase
+        .from('academic_years')
+        .select('id,code,name,starts_on,ends_on,status,is_current,branch_id')
+        .eq('tenant_id', identity.tenantId)
+        .eq('school_id', identity.schoolId)
+        .is('deleted_at', null)
+        .in('status', ['planned', 'active'])
+        .order('is_current', { ascending: false })
+        .order('starts_on', { ascending: false });
+      if (yearsError) throw yearsError;
+      const year = (years || [])[0] || null;
+      const [termsResult, structureResult] = await Promise.all([
+        year
+          ? supabase.from('terms').select('id,code,name,sequence,starts_on,ends_on,status,branch_id').eq('tenant_id', identity.tenantId).eq('school_id', identity.schoolId).eq('academic_year_id', year.id).is('deleted_at', null).order('sequence', { ascending: true })
+          : Promise.resolve({ data: [], error: null } as any),
+        supabase.from('school_settings').select('setting_value').eq('tenant_id', identity.tenantId).eq('school_id', identity.schoolId).eq('setting_key', 'academic_structure').eq('status', 'active').is('deleted_at', null).order('effective_from', { ascending: false }).limit(1).maybeSingle()
+      ]);
+      if (termsResult.error) throw termsResult.error;
+      if (structureResult.error) throw structureResult.error;
+      const structure = structureResult.data?.setting_value && typeof structureResult.data.setting_value === 'object'
+        ? structureResult.data.setting_value
+        : { stages: [], grades: [], classes: [], sections: [] };
+      res.setHeader('Cache-Control', 'no-store');
+      return res.json({ success: true, data: { years: years || [], year, terms: termsResult.data || [], structure } });
+    } catch (error) {
+      return next(error instanceof ValidationError || error instanceof AuthenticationError || error instanceof DatabaseError ? error : new DatabaseError('تعذر قراءة التهيئة الأكاديمية المرجعية.', error));
+    }
+  });
+
+  app.put('/api/academic/setup', authenticateRequest, requirePermission(PERMISSIONS.STUDENT_WRITE), async (req, res, next) => {
+    try {
+      const identity = (req as any).user as { id?: string; name?: string; role?: string; tenantId?: string; schoolId?: string; branchId?: string };
+      if (!identity?.id || !identity?.tenantId || !identity?.schoolId || !identity?.branchId) throw new AuthenticationError('السياق الموثوق للتهيئة الأكاديمية غير مكتمل.');
+      const setup = normalizeAcademicSetupPayload(req.body);
+      const context = { tenantId: identity.tenantId, schoolId: identity.schoolId, branchId: identity.branchId, academicYear: '', userId: identity.id, role: identity.role || 'SchoolAdmin' };
+      let savedYearId = '';
+      await UnitOfWork.runInTransaction(identity.schoolId, {
+        operationName: 'Save canonical academic foundation',
+        tenantId: identity.tenantId,
+        userId: identity.id,
+        userName: identity.name || identity.id,
+        ipAddress: req.ip || 'unknown',
+        affectedTables: ['academic_years', 'terms', 'school_settings']
+      }, async () => {
+        const transaction = UnitOfWork.getActiveContext()?.databaseTransaction;
+        if (!transaction) throw new DatabaseError('تعذر فتح معاملة حفظ التهيئة الأكاديمية.');
+        const schoolCheck = await transaction.query(`SELECT id FROM public.schools WHERE tenant_id = $1 AND id = $2 AND deleted_at IS NULL LIMIT 1`, [identity.tenantId, identity.schoolId]);
+        if (!schoolCheck.rows[0]) throw new AuthorizationError('المدرسة الموثوقة غير موجودة في مصدر البيانات الكانوني.');
+        const branchCheck = await transaction.query(`SELECT id FROM public.branches WHERE tenant_id = $1 AND school_id = $2 AND id = $3 AND deleted_at IS NULL AND status IN ('provisioning','active') LIMIT 1`, [identity.tenantId, identity.schoolId, identity.branchId]);
+        if (!branchCheck.rows[0]) throw new AuthorizationError('الفرع الموثوق غير موجود أو غير نشط.');
+        const yearResult = await transaction.query<{ id: string }>(
+          `INSERT INTO public.academic_years (id, tenant_id, school_id, branch_id, code, name, starts_on, ends_on, is_current, status, created_by, updated_by)
+           VALUES ($1, $2, $3, $4, $5, $6, $7::date, $8::date, $9, $10, NULL, NULL)
+           ON CONFLICT (school_id, code) DO UPDATE SET branch_id = EXCLUDED.branch_id, name = EXCLUDED.name, starts_on = EXCLUDED.starts_on, ends_on = EXCLUDED.ends_on, is_current = EXCLUDED.is_current, status = EXCLUDED.status, updated_at = now(), version = public.academic_years.version + 1
+           RETURNING id`,
+          [randomUUID(), identity.tenantId, identity.schoolId, identity.branchId, setup.year.code, setup.year.name, setup.year.startsOn, setup.year.endsOn, setup.year.isCurrent, setup.year.isCurrent ? 'active' : 'planned']
+        );
+        savedYearId = yearResult.rows[0]?.id || '';
+        if (!savedYearId) throw new DatabaseError('تعذر حفظ السنة الدراسية المرجعية.');
+        if (setup.year.isCurrent) {
+          await transaction.query(`UPDATE public.academic_years SET is_current = false, updated_at = now(), version = version + 1 WHERE tenant_id = $1 AND school_id = $2 AND id <> $3 AND deleted_at IS NULL`, [identity.tenantId, identity.schoolId, savedYearId]);
+        }
+        for (const term of setup.terms) {
+          await transaction.query(
+            `INSERT INTO public.terms (id, tenant_id, school_id, branch_id, academic_year_id, code, name, sequence, starts_on, ends_on, status, created_by, updated_by)
+             VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9::date, $10::date, $11, NULL, NULL)
+             ON CONFLICT (academic_year_id, code) DO UPDATE SET branch_id = EXCLUDED.branch_id, name = EXCLUDED.name, sequence = EXCLUDED.sequence, starts_on = EXCLUDED.starts_on, ends_on = EXCLUDED.ends_on, status = EXCLUDED.status, updated_at = now(), version = public.terms.version + 1`,
+            [randomUUID(), identity.tenantId, identity.schoolId, identity.branchId, savedYearId, term.code, term.name, term.sequence, term.startsOn, term.endsOn, term.status]
+          );
+        }
+        const structureValue = JSON.stringify(setup.structure);
+        const structureUpdate = await transaction.query(`UPDATE public.school_settings SET tenant_id = $1, setting_value = $3::jsonb, status = 'active', deleted_at = NULL, deleted_by = NULL, updated_at = now(), version = version + 1 WHERE school_id = $2 AND setting_key = 'academic_structure' AND status = 'active' AND deleted_at IS NULL`, [identity.tenantId, identity.schoolId, structureValue]);
+        if (!structureUpdate.rowCount) {
+          await transaction.query(`INSERT INTO public.school_settings (id, tenant_id, school_id, setting_key, setting_value, effective_from, status, created_by, updated_by, version) VALUES ($1, $2, $3, 'academic_structure', $4::jsonb, now(), 'active', NULL, NULL, 1)`, [randomUUID(), identity.tenantId, identity.schoolId, structureValue]);
+        }
+      }, context);
+      return res.json({ success: true, data: { academicYearId: savedYearId }, message: 'تم اعتماد التهيئة الأكاديمية وربطها بالمصدر الكانوني.' });
+    } catch (error) {
+      return next(error instanceof ValidationError || error instanceof AuthenticationError || error instanceof AuthorizationError || error instanceof DatabaseError ? error : new DatabaseError('تعذر حفظ التهيئة الأكاديمية المرجعية.', error));
+    }
+  });
+
   app.get('/api/academic/context', authenticateRequest, requirePermissionOnly(PERMISSIONS.STUDENT_READ), async (req, res, next) => {
     try {
       const identity = (req as any).user as { tenantId?: string; schoolId?: string; branchId?: string };

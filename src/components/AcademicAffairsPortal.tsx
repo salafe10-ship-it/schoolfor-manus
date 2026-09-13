@@ -55,6 +55,24 @@ interface SchedulePeriod {
   roomName: string;
 }
 
+type AcademicSetupDraft = {
+  year: { code: string; name: string; startsOn: string; endsOn: string; isCurrent: boolean };
+  terms: Array<{ code: string; name: string; sequence: number; startsOn: string; endsOn: string; status: 'active' | 'planned' }>;
+  stages: Array<{ id: string; code: string; name: string; order: number; isActive: boolean }>;
+  grades: Array<{ id: string; stageId: string; code: string; name: string; order: number; isActive: boolean }>;
+  classes: Array<{ id: string; gradeId: string; code: string; name: string; capacity: number; isActive: boolean }>;
+  sections: string[];
+};
+
+const emptyAcademicSetup = (): AcademicSetupDraft => ({
+  year: { code: '', name: '', startsOn: '', endsOn: '', isCurrent: true },
+  terms: [],
+  stages: [],
+  grades: [],
+  classes: [],
+  sections: []
+});
+
 const escapeHtml = (value: unknown): string => String(value ?? '')
   .replace(/&/g, '&amp;')
   .replace(/</g, '&lt;')
@@ -79,11 +97,14 @@ export default function AcademicAffairsPortal({
 }: AcademicAffairsPortalProps) {
 
   // Active Sub-Tab State
-  const [activeTab, setActiveTab] = useState<'structure' | 'subjects' | 'classes' | 'timetable' | 'analytics' | 'settings'>('structure');
+  const [activeTab, setActiveTab] = useState<'setup' | 'structure' | 'subjects' | 'classes' | 'timetable' | 'analytics' | 'settings'>('setup');
 
   // Year & Term Selection State
   const [selectedAcademicYear, setSelectedAcademicYear] = useState<string>('1447 - 1448 هـ (2026/2027)');
   const [selectedSemester, setSelectedSemester] = useState<string>('الفصل الدراسي الأول');
+  const [academicSetup, setAcademicSetup] = useState<AcademicSetupDraft>(() => emptyAcademicSetup());
+  const [academicSetupLoading, setAcademicSetupLoading] = useState(true);
+  const [academicSetupSaving, setAcademicSetupSaving] = useState(false);
 
   // تُحمّل المقررات من الهيكل الأكاديمي المركزي؛ لا تُزرع بيانات تجريبية عند الفتح.
   const [subjects, setSubjects] = useState<SubjectItem[]>([]);
@@ -120,6 +141,74 @@ export default function AcademicAffairsPortal({
     void loadCanonicalContext();
     return () => { cancelled = true; };
   }, [selectedSchool.id, setStages, setGrades, setAcademicClasses]);
+
+  useEffect(() => {
+    if (!FallbackStorage.isCanonicalPersistenceRequired()) {
+      setAcademicSetupLoading(false);
+      return;
+    }
+    let cancelled = false;
+    const loadAcademicSetup = async () => {
+      try {
+        const response = await authenticatedRequest('/api/academic/setup');
+        const payload = await response.json().catch(() => ({}));
+        if (!response.ok || !payload?.success) throw new Error(payload?.message || 'تعذر تحميل التهيئة الأكاديمية المرجعية.');
+        if (cancelled) return;
+        const data = payload.data || {};
+        const year = data.year || data.years?.[0];
+        const structure = data.structure || {};
+        setAcademicSetup({
+          year: year ? {
+            code: String(year.code || ''), name: String(year.name || ''), startsOn: String(year.starts_on || year.startsOn || ''),
+            endsOn: String(year.ends_on || year.endsOn || ''), isCurrent: Boolean(year.is_current ?? year.isCurrent ?? true)
+          } : emptyAcademicSetup().year,
+          terms: Array.isArray(data.terms) ? data.terms.map((term: any, index: number) => ({
+            code: String(term.code || `TERM-${index + 1}`), name: String(term.name || ''), sequence: Number(term.sequence || index + 1),
+            startsOn: String(term.starts_on || term.startsOn || ''), endsOn: String(term.ends_on || term.endsOn || ''), status: term.status === 'planned' ? 'planned' : 'active'
+          })) : [],
+          stages: Array.isArray(structure.stages) ? structure.stages : [],
+          grades: Array.isArray(structure.grades) ? structure.grades : [],
+          classes: Array.isArray(structure.classes) ? structure.classes : [],
+          sections: Array.isArray(structure.sections) ? structure.sections.map(String) : []
+        });
+      } catch (error) {
+        if (!cancelled) triggerNotification(error instanceof Error ? error.message : 'تعذر تحميل التهيئة الأكاديمية المرجعية.', 'warning');
+      } finally {
+        if (!cancelled) setAcademicSetupLoading(false);
+      }
+    };
+    void loadAcademicSetup();
+    return () => { cancelled = true; };
+  }, [selectedSchool.id, triggerNotification]);
+
+  const updateAcademicSetup = <K extends keyof AcademicSetupDraft>(key: K, value: AcademicSetupDraft[K]) => {
+    setAcademicSetup(previous => ({ ...previous, [key]: value }));
+  };
+
+  const saveAcademicSetup = async () => {
+    if (!FallbackStorage.isCanonicalPersistenceRequired()) {
+      triggerNotification('هذه الشاشة تعمل مع المصدر الكانوني فقط.', 'warning');
+      return;
+    }
+    setAcademicSetupSaving(true);
+    try {
+      const response = await authenticatedRequest('/api/academic/setup', {
+        method: 'PUT',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ year: academicSetup.year, terms: academicSetup.terms, structure: { stages: academicSetup.stages, grades: academicSetup.grades, classes: academicSetup.classes, sections: academicSetup.sections } })
+      });
+      const payload = await response.json().catch(() => ({}));
+      if (!response.ok || !payload?.success) throw new Error(payload?.message || 'تعذر حفظ التهيئة الأكاديمية.');
+      triggerNotification('تم حفظ السنة والفترات والمراحل والصفوف والشعب في قاعدة البيانات الكانونية.', 'success');
+      if (setStages) setStages(academicSetup.stages as any);
+      if (setGrades) setGrades(academicSetup.grades as any);
+      if (setAcademicClasses) setAcademicClasses(academicSetup.classes as any);
+    } catch (error) {
+      triggerNotification(error instanceof Error ? error.message : 'تعذر حفظ التهيئة الأكاديمية.', 'warning');
+    } finally {
+      setAcademicSetupSaving(false);
+    }
+  };
 
   // Search & Filters State
   const [searchKeyword, setSearchKeyword] = useState<string>('');
@@ -467,6 +556,18 @@ export default function AcademicAffairsPortal({
 
         {/* Sub-Navigation Tabs */}
         <div className="flex items-center gap-1.5 bg-[#2a1d13]/90 border border-[#d4af37]/40 p-1.5 shadow-inner relative z-10 overflow-x-auto">
+          <button
+            onClick={() => setActiveTab('setup')}
+            className={`px-3.5 py-2 text-xs font-black transition-all flex items-center gap-1.5 ${
+              activeTab === 'setup'
+                ? 'bg-gradient-to-r from-[#9a6a1d] via-[#d4af37] to-[#c58a22] text-slate-950 shadow-md'
+                : 'text-amber-200/80 hover:text-white hover:bg-white/5'
+            }`}
+          >
+            <ShieldCheck className="w-3.5 h-3.5" />
+            <span>التهيئة المرجعية</span>
+          </button>
+
           <button 
             onClick={() => setActiveTab('structure')}
             className={`px-3.5 py-2 text-xs font-black transition-all flex items-center gap-1.5 ${
@@ -658,6 +759,89 @@ export default function AcademicAffairsPortal({
         </div>
 
       </div>
+
+      {/* ==========================================
+          TAB CONTENT 0: CANONICAL ACADEMIC SETUP
+         ========================================== */}
+      {activeTab === 'setup' && (
+        <div className="space-y-5">
+          <div className="bg-gradient-to-b from-[#fffefc] to-[#f8f3ea] border-2 border-emerald-700/30 rounded-3xl p-5 shadow-lg">
+            <div className="flex flex-wrap items-center justify-between gap-3 pb-4 border-b border-amber-900/10">
+              <div>
+                <div className="flex items-center gap-2">
+                  <ShieldCheck className="w-5 h-5 text-emerald-700" />
+                  <h2 className="text-base font-black text-slate-900">التهيئة الأكاديمية المرجعية</h2>
+                </div>
+                <p className="text-xs font-bold text-slate-600 mt-1">مصدر واحد للسنة الدراسية والفترات والمراحل والصفوف والشعب؛ تقرأ منه شؤون الطلاب والرسوم والتقارير.</p>
+              </div>
+              <div className={`px-3 py-1.5 rounded-full text-xs font-black ${academicSetupLoading ? 'bg-amber-100 text-amber-800' : academicSetup.year.code && academicSetup.terms.length && academicSetup.stages.length && academicSetup.grades.length && academicSetup.classes.length ? 'bg-emerald-100 text-emerald-800' : 'bg-rose-100 text-rose-800'}`}>
+                {academicSetupLoading ? 'جارٍ التحقق من المصدر...' : academicSetup.year.code && academicSetup.terms.length && academicSetup.stages.length && academicSetup.grades.length && academicSetup.classes.length ? 'مرجع مكتمل قابل للاستخدام' : 'تهيئة ناقصة تحتاج اعتماداً'}
+              </div>
+            </div>
+
+            <div className="grid grid-cols-1 md:grid-cols-4 gap-3 mt-4 text-xs">
+              <label className="font-black text-slate-700">رمز السنة
+                <input value={academicSetup.year.code} onChange={event => updateAcademicSetup('year', { ...academicSetup.year, code: event.target.value })} placeholder="2026-2027" className="mt-1 w-full border border-slate-300 p-2.5 text-slate-900" />
+              </label>
+              <label className="font-black text-slate-700 md:col-span-2">اسم السنة
+                <input value={academicSetup.year.name} onChange={event => updateAcademicSetup('year', { ...academicSetup.year, name: event.target.value })} placeholder="العام الدراسي 2026-2027" className="mt-1 w-full border border-slate-300 p-2.5 text-slate-900" />
+              </label>
+              <label className="font-black text-slate-700 flex items-end gap-2 pb-2"><input type="checkbox" checked={academicSetup.year.isCurrent} onChange={event => updateAcademicSetup('year', { ...academicSetup.year, isCurrent: event.target.checked })} /> السنة التشغيلية الحالية</label>
+              <label className="font-black text-slate-700">بداية السنة
+                <input type="date" value={academicSetup.year.startsOn} onChange={event => updateAcademicSetup('year', { ...academicSetup.year, startsOn: event.target.value })} className="mt-1 w-full border border-slate-300 p-2.5 text-slate-900" />
+              </label>
+              <label className="font-black text-slate-700">نهاية السنة
+                <input type="date" value={academicSetup.year.endsOn} onChange={event => updateAcademicSetup('year', { ...academicSetup.year, endsOn: event.target.value })} className="mt-1 w-full border border-slate-300 p-2.5 text-slate-900" />
+              </label>
+            </div>
+          </div>
+
+          <div className="grid grid-cols-1 xl:grid-cols-2 gap-5">
+            <div className="bg-white border-2 border-amber-200 rounded-3xl p-5 shadow-lg space-y-3">
+              <div className="flex items-center justify-between"><h3 className="font-black text-slate-900">الفترات الدراسية</h3><button onClick={() => updateAcademicSetup('terms', [...academicSetup.terms, { code: `TERM-${academicSetup.terms.length + 1}`, name: `الفصل الدراسي ${academicSetup.terms.length + 1}`, sequence: academicSetup.terms.length + 1, startsOn: academicSetup.year.startsOn, endsOn: academicSetup.year.endsOn, status: academicSetup.terms.length === 0 ? 'active' : 'planned' }])} className="px-3 py-1.5 bg-slate-900 text-amber-200 text-xs font-black">إضافة فترة</button></div>
+              {academicSetup.terms.length === 0 && <p className="text-xs text-rose-700 font-bold bg-rose-50 p-3">لا توجد فترة دراسية مرتبطة بالسنة. أضف فترة أولى على الأقل.</p>}
+              {academicSetup.terms.map((term, index) => <div key={`${term.code}-${index}`} className="grid grid-cols-2 gap-2 border border-slate-200 p-3 text-xs">
+                <input value={term.code} onChange={event => updateAcademicSetup('terms', academicSetup.terms.map((item, itemIndex) => itemIndex === index ? { ...item, code: event.target.value } : item))} className="border p-2 text-slate-900" placeholder="TERM-1" />
+                <input value={term.name} onChange={event => updateAcademicSetup('terms', academicSetup.terms.map((item, itemIndex) => itemIndex === index ? { ...item, name: event.target.value } : item))} className="border p-2 text-slate-900" placeholder="الفصل الدراسي الأول" />
+                <input type="date" value={term.startsOn} onChange={event => updateAcademicSetup('terms', academicSetup.terms.map((item, itemIndex) => itemIndex === index ? { ...item, startsOn: event.target.value } : item))} className="border p-2 text-slate-900" />
+                <input type="date" value={term.endsOn} onChange={event => updateAcademicSetup('terms', academicSetup.terms.map((item, itemIndex) => itemIndex === index ? { ...item, endsOn: event.target.value } : item))} className="border p-2 text-slate-900" />
+                <select value={term.status} onChange={event => updateAcademicSetup('terms', academicSetup.terms.map((item, itemIndex) => itemIndex === index ? { ...item, status: event.target.value as 'active' | 'planned' } : item))} className="border p-2 text-slate-900"><option value="active">نشطة</option><option value="planned">مخططة</option></select>
+                <button onClick={() => updateAcademicSetup('terms', academicSetup.terms.filter((_, itemIndex) => itemIndex !== index))} className="text-rose-700 font-black text-right">حذف الفترة</button>
+              </div>)}
+            </div>
+
+            <div className="bg-white border-2 border-amber-200 rounded-3xl p-5 shadow-lg space-y-3">
+              <div className="flex items-center justify-between"><h3 className="font-black text-slate-900">الفصول/الشعب والسعة</h3><button onClick={() => updateAcademicSetup('classes', [...academicSetup.classes, { id: `class_${academicSetup.classes.length + 1}`, gradeId: academicSetup.grades[0]?.id || '', code: `CLASS-${academicSetup.classes.length + 1}`, name: '', capacity: 30, isActive: true }])} className="px-3 py-1.5 bg-slate-900 text-amber-200 text-xs font-black">إضافة شعبة</button></div>
+              {academicSetup.classes.length === 0 && <p className="text-xs text-rose-700 font-bold bg-rose-50 p-3">لا توجد شعب نشطة؛ لن يقبل النظام تسجيل الطلاب حتى يتم تعريفها.</p>}
+              {academicSetup.classes.map((item, index) => <div key={`${item.id}-${index}`} className="grid grid-cols-2 gap-2 border border-slate-200 p-3 text-xs">
+                <select value={item.gradeId} onChange={event => updateAcademicSetup('classes', academicSetup.classes.map((current, itemIndex) => itemIndex === index ? { ...current, gradeId: event.target.value } : current))} className="border p-2 text-slate-900"><option value="">اختر الصف</option>{academicSetup.grades.map(grade => <option key={grade.id} value={grade.id}>{grade.name}</option>)}</select>
+                <input value={item.code} onChange={event => updateAcademicSetup('classes', academicSetup.classes.map((current, itemIndex) => itemIndex === index ? { ...current, code: event.target.value } : current))} className="border p-2 text-slate-900" placeholder="PRI1-A" />
+                <input value={item.name} onChange={event => updateAcademicSetup('classes', academicSetup.classes.map((current, itemIndex) => itemIndex === index ? { ...current, name: event.target.value } : current))} className="border p-2 text-slate-900" placeholder="أولى ابتدائي أ" />
+                <input type="number" min={1} max={500} value={item.capacity} onChange={event => updateAcademicSetup('classes', academicSetup.classes.map((current, itemIndex) => itemIndex === index ? { ...current, capacity: Number(event.target.value) } : current))} className="border p-2 text-slate-900" placeholder="السعة" />
+                <button onClick={() => updateAcademicSetup('classes', academicSetup.classes.filter((_, itemIndex) => itemIndex !== index))} className="text-rose-700 font-black text-right">حذف الشعبة</button>
+              </div>)}
+            </div>
+          </div>
+
+          <div className="grid grid-cols-1 xl:grid-cols-2 gap-5">
+            <div className="bg-white border-2 border-amber-200 rounded-3xl p-5 shadow-lg space-y-3">
+              <div className="flex items-center justify-between"><h3 className="font-black text-slate-900">المراحل والصفوف</h3><button onClick={() => updateAcademicSetup('stages', [...academicSetup.stages, { id: `stage_${academicSetup.stages.length + 1}`, code: `STAGE_${academicSetup.stages.length + 1}`, name: '', order: academicSetup.stages.length + 1, isActive: true }])} className="px-3 py-1.5 bg-slate-900 text-amber-200 text-xs font-black">إضافة مرحلة</button></div>
+              {academicSetup.stages.map((stage, index) => <div key={`${stage.id}-${index}`} className="grid grid-cols-2 gap-2 border border-slate-200 p-3 text-xs"><input value={stage.code} onChange={event => updateAcademicSetup('stages', academicSetup.stages.map((item, itemIndex) => itemIndex === index ? { ...item, code: event.target.value } : item))} className="border p-2 text-slate-900" placeholder="ST-PRI" /><input value={stage.name} onChange={event => updateAcademicSetup('stages', academicSetup.stages.map((item, itemIndex) => itemIndex === index ? { ...item, name: event.target.value } : item))} className="border p-2 text-slate-900" placeholder="المرحلة الابتدائية" /><button onClick={() => updateAcademicSetup('stages', academicSetup.stages.filter((_, itemIndex) => itemIndex !== index))} className="text-rose-700 font-black text-right">حذف المرحلة</button></div>)}
+              <div className="flex items-center justify-between"><span className="font-black text-slate-700">الصفوف التابعة للمراحل</span><button onClick={() => updateAcademicSetup('grades', [...academicSetup.grades, { id: `grade_${academicSetup.grades.length + 1}`, stageId: academicSetup.stages[0]?.id || '', code: `GRADE_${academicSetup.grades.length + 1}`, name: '', order: academicSetup.grades.length + 1, isActive: true }])} className="px-3 py-1.5 border border-slate-400 text-slate-800 text-xs font-black">إضافة صف</button></div>
+              {academicSetup.grades.map((grade, index) => <div key={`${grade.id}-${index}`} className="grid grid-cols-2 gap-2 border border-slate-200 p-3 text-xs"><select value={grade.stageId} onChange={event => updateAcademicSetup('grades', academicSetup.grades.map((item, itemIndex) => itemIndex === index ? { ...item, stageId: event.target.value } : item))} className="border p-2 text-slate-900"><option value="">اختر المرحلة</option>{academicSetup.stages.map(stage => <option key={stage.id} value={stage.id}>{stage.name}</option>)}</select><input value={grade.code} onChange={event => updateAcademicSetup('grades', academicSetup.grades.map((item, itemIndex) => itemIndex === index ? { ...item, code: event.target.value } : item))} className="border p-2 text-slate-900" placeholder="PRI1" /><input value={grade.name} onChange={event => updateAcademicSetup('grades', academicSetup.grades.map((item, itemIndex) => itemIndex === index ? { ...item, name: event.target.value } : item))} className="border p-2 text-slate-900" placeholder="الصف الأول" /><button onClick={() => updateAcademicSetup('grades', academicSetup.grades.filter((_, itemIndex) => itemIndex !== index))} className="text-rose-700 font-black text-right">حذف الصف</button></div>)}
+            </div>
+
+            <div className="bg-white border-2 border-amber-200 rounded-3xl p-5 shadow-lg space-y-3">
+              <div className="flex items-center justify-between"><h3 className="font-black text-slate-900">الشعب التشغيلية</h3><button onClick={() => updateAcademicSetup('sections', [...academicSetup.sections, ''])} className="px-3 py-1.5 bg-slate-900 text-amber-200 text-xs font-black">إضافة شعبة</button></div>
+              <p className="text-xs text-slate-600 font-bold">هذه القائمة هي الشعب/الفصول التشغيلية التي تظهر في التسجيل والتصفية والترحيل.</p>
+              {academicSetup.sections.map((section, index) => <div key={`${section}-${index}`} className="flex gap-2"><input value={section} onChange={event => updateAcademicSetup('sections', academicSetup.sections.map((item, itemIndex) => itemIndex === index ? event.target.value : item))} className="flex-1 border p-2 text-slate-900" placeholder="1" /><button onClick={() => updateAcademicSetup('sections', academicSetup.sections.filter((_, itemIndex) => itemIndex !== index))} className="text-rose-700 font-black">حذف</button></div>)}
+              {!academicSetup.sections.length && <p className="text-xs text-rose-700 font-bold bg-rose-50 p-3">أضف شعبة واحدة على الأقل.</p>}
+            </div>
+          </div>
+
+          <div className="flex justify-end"><button onClick={saveAcademicSetup} disabled={academicSetupSaving || academicSetupLoading} className="px-6 py-3 bg-gradient-to-r from-emerald-700 to-emerald-500 text-white font-black shadow-lg disabled:opacity-50">{academicSetupSaving ? 'جارٍ الحفظ الذري...' : 'اعتماد التهيئة وربطها بقاعدة البيانات'}</button></div>
+        </div>
+      )}
 
       {/* ==========================================
           TAB CONTENT 1: ACADEMIC STRUCTURE & YEARS
