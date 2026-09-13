@@ -125,6 +125,7 @@ function uuidOrGenerate(value: string | undefined): string {
 }
 
 async function actorId(context: TenantContext): Promise<string> {
+  if (context.actorUserId) return context.actorUserId;
   const db = transaction();
   const row = await db.query<{ id: string }>(
     `SELECT id

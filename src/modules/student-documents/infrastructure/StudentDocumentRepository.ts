@@ -134,7 +134,16 @@ export type AccessLogRow = {
   correlation_id: string | null;
 };
 
-export async function resolveInternalActorUserId(tenantId: string, trustedUserId: string, schoolId: string, branchId: string): Promise<string> {
+export async function resolveInternalActorUserId(
+  tenantId: string,
+  trustedUserId: string,
+  schoolId: string,
+  branchId: string,
+  trustedActorUserId?: string
+): Promise<string> {
+  if (trustedActorUserId && /^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i.test(trustedActorUserId)) {
+    return trustedActorUserId;
+  }
   const row = await one<{ id: string }>(
     `SELECT id
        FROM users

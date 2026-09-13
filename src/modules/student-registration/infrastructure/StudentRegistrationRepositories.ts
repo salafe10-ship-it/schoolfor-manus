@@ -217,7 +217,18 @@ export async function assertAcademicContext(
   if (!term) throw new ValidationError('The selected term does not belong to the trusted academic year.');
 }
 
-export async function resolveInternalActorUserId(tenantId: string, authUserId: string): Promise<string> {
+export async function resolveInternalActorUserId(
+  tenantId: string,
+  authUserId: string,
+  trustedActorUserId?: string
+): Promise<string> {
+  // The server resolves this id from the privileged canonical identity
+  // directory before opening the tenant transaction. Prefer it here because
+  // the application data-plane role may intentionally be unable to read the
+  // control-plane users table even though the FK must reference its row.
+  if (trustedActorUserId && /^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i.test(trustedActorUserId)) {
+    return trustedActorUserId;
+  }
   const row = await one<{ id: string }>(
     `SELECT id
        FROM users

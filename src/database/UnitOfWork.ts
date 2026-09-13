@@ -108,6 +108,7 @@ export interface TransactionContext {
       branchId: string;
       academicYear: string;
       userId: string;
+      actorUserId?: string;
       role: string;
     };
     diagnosticTrace?: {

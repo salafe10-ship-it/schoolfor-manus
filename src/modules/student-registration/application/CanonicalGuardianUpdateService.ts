@@ -11,7 +11,7 @@ import {
 } from '../infrastructure/StudentRegistrationRepositories.js';
 import { SQLCommandBuilder } from '../../../database/transactions/SQLCommand.js';
 
-type GuardianUpdateContext = Pick<TenantContext, 'tenantId' | 'schoolId' | 'branchId' | 'userId' | 'role' | 'academicYear'>;
+type GuardianUpdateContext = Pick<TenantContext, 'tenantId' | 'schoolId' | 'branchId' | 'userId' | 'role' | 'academicYear' | 'actorUserId'>;
 
 type GuardianUpdateCommand = {
   guardianId?: unknown;
@@ -225,7 +225,7 @@ export class CanonicalGuardianUpdateService {
           affectedTables: ['students', 'guardians', 'student_guardians', 'audit_events', 'outbox_events']
         },
         async () => {
-          const actorUserId = await resolveInternalActorUserId(context.tenantId, context.userId);
+          const actorUserId = await resolveInternalActorUserId(context.tenantId, context.userId, context.actorUserId);
           const row = await transaction().query<GuardianRow>(
             `SELECT s.id AS student_id,
                     g.id AS guardian_id,

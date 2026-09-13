@@ -372,7 +372,7 @@ export class StudentRegistrationService {
             return { ...(priorResult as StudentRegistrationResult), idempotent: true };
           }
 
-          const actorUserId = await resolveInternalActorUserId(context.tenantId, context.userId);
+          const actorUserId = await resolveInternalActorUserId(context.tenantId, context.userId, context.actorUserId);
 
           await assertAcademicContext(context.tenantId, context.schoolId, context.academicYear, input.termId);
           const studentNumber = input.studentNumber || await allocateStudentNumber(

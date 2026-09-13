@@ -6,6 +6,8 @@ export type TenantContext = {
   branchId: string;
   academicYear: string;
   userId: string;
+  /** Canonical public.users id resolved from the trusted control plane. */
+  actorUserId?: string;
   role: string;
 };
 

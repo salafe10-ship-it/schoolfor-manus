@@ -214,7 +214,7 @@ export class StudentDocumentService {
     return this.transaction(context, 'DOC-001R create category', ['student_document_categories', 'audit_events', 'outbox_events'], async () => {
       const existing = await findIdempotentResult(context.tenantId, key);
       if (existing?.payload?.result) return { ...(existing.payload.result as Record<string, unknown>), idempotent: true };
-      const actorUserId = await resolveInternalActorUserId(context.tenantId, context.userId, context.schoolId, context.branchId);
+      const actorUserId = await resolveInternalActorUserId(context.tenantId, context.userId, context.schoolId, context.branchId, context.actorUserId);
       const categoryId = randomUUID();
       const auditId = randomUUID();
       const outboxId = randomUUID();
@@ -242,7 +242,7 @@ export class StudentDocumentService {
       if (!current || current.deleted_at) throw new NotFoundError('Document category was not found in the trusted tenant.');
       const expectedVersion = positiveVersion(input.expectedVersion ?? current.version);
       if (expectedVersion !== current.version) throw new ConflictError('Category version is stale.');
-      const actorUserId = await resolveInternalActorUserId(context.tenantId, context.userId, context.schoolId, context.branchId);
+      const actorUserId = await resolveInternalActorUserId(context.tenantId, context.userId, context.schoolId, context.branchId, context.actorUserId);
       const auditId = randomUUID();
       const outboxId = randomUUID();
       const result = { categoryId: id, version: current.version + 1, requestId: context.requestId, correlationId: context.correlationId, idempotent: false };
@@ -258,7 +258,7 @@ export class StudentDocumentService {
     return this.transaction(context, 'DOC-001R list student documents', ['student_documents', 'student_document_access_log', 'audit_events'], async () => {
       if (filters.studentId) await assertStudentInScope(context, filters.studentId);
       const result = await listDocuments(context, filters);
-      const actorUserId = await resolveInternalActorUserId(context.tenantId, context.userId, context.schoolId, context.branchId);
+      const actorUserId = await resolveInternalActorUserId(context.tenantId, context.userId, context.schoolId, context.branchId, context.actorUserId);
       for (const document of result.rows) await this.recordAccess(context, actorUserId, document, 'view', 'list');
       return result;
     });
@@ -269,7 +269,7 @@ export class StudentDocumentService {
     return this.transaction(context, 'DOC-001R open student document', ['student_documents', 'student_document_versions', 'student_document_access_log', 'audit_events'], async () => {
       const document = requireDocument(await getDocument(context, id));
       const versions = await listVersions(context, id);
-      const actorUserId = await resolveInternalActorUserId(context.tenantId, context.userId, context.schoolId, context.branchId);
+      const actorUserId = await resolveInternalActorUserId(context.tenantId, context.userId, context.schoolId, context.branchId, context.actorUserId);
       await this.recordAccess(context, actorUserId, document, 'view', 'open', versions.find(version => version.is_current)?.id || null);
       return { document, versions };
     });
@@ -299,7 +299,7 @@ export class StudentDocumentService {
       await assertStudentInScope(context, studentId);
       if (!await getActiveCategory(context.tenantId, categoryId)) throw new ValidationError('Category is not active in the trusted tenant.');
       await assertDocumentReferenceAvailable(context.tenantId, reference);
-      const actorUserId = await resolveInternalActorUserId(context.tenantId, context.userId, context.schoolId, context.branchId);
+      const actorUserId = await resolveInternalActorUserId(context.tenantId, context.userId, context.schoolId, context.branchId, context.actorUserId);
       const documentId = randomUUID();
       const versionId = randomUUID();
       const storageId = storage ? randomUUID() : null;
@@ -333,7 +333,7 @@ export class StudentDocumentService {
       if (existing?.payload?.result) return { ...(existing.payload.result as DocumentOperationResult), idempotent: true };
       const document = requireDocument(await getDocumentForUpdate(context, documentId));
       if (document.lifecycle_status === 'archived') throw new ConflictError('Archived documents cannot receive a new version.');
-      const actorUserId = await resolveInternalActorUserId(context.tenantId, context.userId, context.schoolId, context.branchId);
+      const actorUserId = await resolveInternalActorUserId(context.tenantId, context.userId, context.schoolId, context.branchId, context.actorUserId);
       const versionNumber = await nextVersionNumber(context, documentId);
       const versions = await listVersions(context, documentId);
       const currentVersion = versions.find(version => version.is_current);
@@ -364,7 +364,7 @@ export class StudentDocumentService {
       const document = requireDocument(await getDocument(context, documentId));
       const storage = await getCurrentStorageObject(context, documentId);
       if (!storage) throw new NotFoundError('Binary content is not available for the current document version.');
-      const actorUserId = await resolveInternalActorUserId(context.tenantId, context.userId, context.schoolId, context.branchId);
+      const actorUserId = await resolveInternalActorUserId(context.tenantId, context.userId, context.schoolId, context.branchId, context.actorUserId);
       await this.recordAccess(context, actorUserId, document, 'download', 'signed-url', storage.document_version_id);
       return storage;
     });
@@ -389,7 +389,7 @@ export class StudentDocumentService {
       if (!versions.some(version => version.is_current)) throw new ConflictError('A current document version is required.');
       const today = new Date().toISOString().slice(0, 10);
       if (decision === 'expire' && (document.legal_hold || !document.retention_until || document.retention_until > today)) throw new ConflictError('Document is not eligible for expiry.');
-      const actorUserId = await resolveInternalActorUserId(context.tenantId, context.userId, context.schoolId, context.branchId);
+      const actorUserId = await resolveInternalActorUserId(context.tenantId, context.userId, context.schoolId, context.branchId, context.actorUserId);
       const auditId = randomUUID();
       const outboxId = randomUUID();
       const accessLogId = randomUUID();
@@ -420,7 +420,7 @@ export class StudentDocumentService {
         const today = new Date().toISOString().slice(0, 10);
         if (!document.archive_eligible_on || document.archive_eligible_on > today) throw new ConflictError('Document is not archive eligible.');
       }
-      const actorUserId = await resolveInternalActorUserId(context.tenantId, context.userId, context.schoolId, context.branchId);
+      const actorUserId = await resolveInternalActorUserId(context.tenantId, context.userId, context.schoolId, context.branchId, context.actorUserId);
       const auditId = randomUUID();
       const outboxId = randomUUID();
       const accessLogId = randomUUID();
@@ -439,7 +439,7 @@ export class StudentDocumentService {
     const limit = boundedPage(limitValue, 50, 100);
     return this.transaction(context, 'DOC-001R list document access history', ['student_documents', 'student_document_access_log', 'audit_events'], async () => {
       const document = requireDocument(await getDocument(context, documentId, true));
-      const actorUserId = await resolveInternalActorUserId(context.tenantId, context.userId, context.schoolId, context.branchId);
+      const actorUserId = await resolveInternalActorUserId(context.tenantId, context.userId, context.schoolId, context.branchId, context.actorUserId);
       await this.recordAccess(context, actorUserId, document, 'view', 'access-log');
       return listAccessLogs(context, documentId, limit);
     });

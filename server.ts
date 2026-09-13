@@ -37,6 +37,7 @@ import {
 import { requestTarget } from "./src/middleware/tenantValidation.js";
 import { createMemoryRateLimiter } from "./src/middleware/memoryRateLimit.js";
 import { tenantEngine } from "./src/tenant/TenantEngine.js";
+import type { TenantContext } from "./src/tenant/TenantContext.js";
 import { PERMISSIONS, describePermission, permissionRegistry } from "./src/authorization/PermissionRegistry.js";
 import { roleResolver } from "./src/authorization/RoleResolver.js";
 import { authorizationEngine } from "./src/authorization/AuthorizationEngine.js";
@@ -444,6 +445,49 @@ if (platformAdminAuth) {
 // intentionally small and paginates so large directories are not truncated
 // by PostgREST's default row limit.
 const platformControl = platformAdminAuth as any;
+
+/**
+ * Resolve the database actor id once from the trusted identity directory.
+ * Tenant transactions intentionally use a restricted data-plane connection;
+ * they must not be forced to discover a control-plane identity through an
+ * RLS-filtered users query. The returned id is still scoped by the verified
+ * tenant, school, branch, auth identity, active state, and non-deleted state.
+ */
+const resolveCanonicalTenantActor = async (context: TenantContext): Promise<string> => {
+  if (platformAdminPool) {
+    const result = await platformAdminPool.query<{ id: string }>(
+      `SELECT id
+         FROM public.users
+        WHERE tenant_id = $1::uuid
+          AND auth_user_id = $2::uuid
+          AND school_id = $3::uuid
+          AND (branch_id = $4::uuid OR branch_id IS NULL)
+          AND status = 'active'
+          AND deleted_at IS NULL
+        ORDER BY branch_id NULLS LAST, created_at ASC
+        LIMIT 1`,
+      [context.tenantId, context.userId, context.schoolId, context.branchId]
+    );
+    if (result.rows[0]?.id) return result.rows[0].id;
+  }
+
+  if (platformControl) {
+    const { data, error } = await platformControl
+      .from('users')
+      .select('id')
+      .eq('tenant_id', context.tenantId)
+      .eq('auth_user_id', context.userId)
+      .eq('school_id', context.schoolId)
+      .eq('status', 'active')
+      .is('deleted_at', null)
+      .limit(1)
+      .maybeSingle();
+    if (!error && data?.id) return String(data.id);
+  }
+
+  throw new AuthenticationError('تعذر ربط هوية المستخدم بسجل المدرسة الموثوق.');
+};
+
 const readPlatformRows = async (table: string, columns: string, configure?: (query: any) => any) => {
   if (!platformControl) throw new DatabaseError('مصدر قاعدة البيانات المركزية غير متاح.');
   const rows: any[] = [];
@@ -6811,8 +6855,10 @@ async function startServer() {
     const identity = (req as any).user;
     const context = tenantEngine.validate(await tenantEngine.resolve(identity, (req as any).trustedAccessToken, (req as any).perf004Trace));
     tenantEngine.assertRequestTarget(context, requestTarget(req));
-    (req as any).tenantContext = context;
-    return context;
+    const actorUserId = await resolveCanonicalTenantActor(context);
+    const trustedContext = { ...context, actorUserId };
+    (req as any).tenantContext = trustedContext;
+    return trustedContext;
   }
 
   async function resolveStudentReadTenantContext(req: express.Request) {
