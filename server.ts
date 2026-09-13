@@ -18,6 +18,7 @@ import {
   getSupabaseClient,
   getSupabaseClientReady,
   getSupabaseClientForAccessToken,
+  getSupabaseAdminClient,
   revokeSupabaseSession
 } from "./src/database/client.js";
 import { EnterpriseLogger } from "./src/database/services/EnterpriseLogger.js";
@@ -6832,6 +6833,18 @@ async function startServer() {
     return context;
   }
 
+  // Server-side canonical reads are already protected by the verified
+  // identity, tenant resolver, and permission middleware above. Prefer the
+  // service-role client here so a restrictive/legacy RLS policy cannot turn a
+  // valid school screen into a misleading 502; all repository predicates
+  // still use the resolved tenant, school, branch, and academic year.
+  function canonicalTenantReadClient(req: express.Request) {
+    return getSupabaseAdminClient()
+      || getSupabaseClientForAccessToken((req as any).trustedAccessToken)
+      || getSupabaseClient()
+      || undefined;
+  }
+
   async function resolveStudentTenantMiddleware(req: express.Request, _res: express.Response, next: express.NextFunction) {
     try {
       await resolveStudentTenantContext(req);
@@ -7201,7 +7214,7 @@ async function startServer() {
     try {
       const identity = (req as any).user as { tenantId?: string; schoolId?: string; branchId?: string };
       if (!identity?.tenantId || !identity?.schoolId) throw new AuthenticationError('هوية المدرسة الموثوقة غير مكتملة.');
-      const supabase = getSupabaseClientForAccessToken((req as any).trustedAccessToken) || getSupabaseClient();
+      const supabase = canonicalTenantReadClient(req);
       if (!supabase) throw new DatabaseError('مصدر الهيكل الأكاديمي غير متاح.');
 
       let yearQuery = supabase
@@ -8486,7 +8499,7 @@ async function startServer() {
       // browser bearer token is still required by the route middleware, but a
       // stale/expired token must not turn a valid database read into a blank
       // Student Affairs screen.
-      const trustedSupabase = getSupabaseClientForAccessToken((req as any).trustedAccessToken) || getSupabaseClient() || undefined;
+      const trustedSupabase = canonicalTenantReadClient(req);
       const readOperation = async () => {
         try {
           studentReadDiagnostic.log('student_service', 'REACHED');
