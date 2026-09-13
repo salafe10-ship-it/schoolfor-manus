@@ -7,7 +7,7 @@ import type { TenantContext } from './TenantContext';
 import type { Perf004TraceLike } from '../performance/Perf004LatencyDiagnostics';
 
 export type TenantDataProvider = {
-  resolveSnapshot?(identity: TrustedIdentity, diagnosticTrace?: Perf004TraceLike): Promise<TenantLookupSnapshot | null>;
+  resolveSnapshot?(identity: TrustedIdentity, diagnosticTrace?: Perf004TraceLike, accessToken?: string): Promise<TenantLookupSnapshot | null>;
   schoolExists(tenantId: string, schoolId: string, accessToken?: string): Promise<boolean>;
   listBranches(tenantId: string, schoolId: string, accessToken?: string): Promise<string[]>;
   listAcademicYears(tenantId: string, schoolId: string, branchId?: string, accessToken?: string): Promise<Array<{
@@ -97,7 +97,7 @@ function databaseProviderConfigured(): boolean {
 }
 
 class DefaultTenantDataProvider implements TenantDataProvider {
-  async resolveSnapshot(identity: TrustedIdentity, diagnosticTrace?: Perf004TraceLike): Promise<TenantLookupSnapshot | null> {
+  async resolveSnapshot(identity: TrustedIdentity, diagnosticTrace?: Perf004TraceLike, accessToken?: string): Promise<TenantLookupSnapshot | null> {
     if (!UnitOfWork.hasTransactionDriver()) return null;
 
     const userId = clean(identity.id);
@@ -193,16 +193,24 @@ class DefaultTenantDataProvider implements TenantDataProvider {
       // blocking the school dashboard and Student Affairs entry point.
       const branchId = clean(identity.branchId);
       const postgresContextLooksValid = postgresSnapshot.schoolExists
-        && (!branchId || postgresSnapshot.branchIds.includes(branchId));
+        && (!branchId || postgresSnapshot.branchIds.includes(branchId))
+        // A school/branch row without a resolvable operational year is not a
+        // complete tenant context. Continue to the canonical Supabase source
+        // instead of returning an empty snapshot that later fails closed with
+        // the misleading "academic year is invalid" message.
+        && Boolean(resolveAcademicYearRecord(postgresSnapshot.academicYears, clean(identity.academicYear)));
       if (postgresContextLooksValid) return postgresSnapshot;
 
-      // This is a server-side lookup only. The anon client is intentionally
-      // not used here because production RLS can hide a valid school row;
-      // service-role access is still restricted by the verified identity
-      // values in the predicates below and never leaves the server.
-      const supabase = getSupabaseAdminClient();
-      if (!supabase) return postgresSnapshot;
-      try {
+      // This is a server-side lookup only. Prefer the request-scoped client
+      // carrying the already verified token so RLS evaluates the real user;
+      // then fall back to the service-role client when configured. Both paths
+      // remain restricted by the verified identity values below, and no
+      // service-role credential ever leaves the server.
+      const supabaseClients = [getSupabaseClientForAccessToken(accessToken), getSupabaseAdminClient()]
+        .filter((client): client is NonNullable<typeof client> => Boolean(client));
+      if (supabaseClients.length === 0) return postgresSnapshot;
+      for (const supabase of supabaseClients) {
+        try {
         let academicYearQuery = supabase
           .from('academic_years')
           .select('id,name,status,is_current,tenant_id,school_id,branch_id')
@@ -228,25 +236,30 @@ class DefaultTenantDataProvider implements TenantDataProvider {
             .in('status', ['provisioning', 'active']),
           academicYearQuery
         ]);
-        if (schoolResult.error || branchResult.error || academicYearResult.error || !schoolResult.data) {
-          return postgresSnapshot;
+          if (schoolResult.error || branchResult.error || academicYearResult.error || !schoolResult.data) {
+            continue;
+          }
+          const supabaseSnapshot: TenantLookupSnapshot = {
+            schoolExists: true,
+            branchIds: (branchResult.data || []).map((branch: any) => String(branch.id)).filter(Boolean),
+            academicYears: (academicYearResult.data || []).map((year: any) => ({
+              id: String(year.id),
+              name: year.name ? String(year.name) : undefined,
+              isActive: year.status === 'active',
+              isCurrent: Boolean(year.is_current),
+              tenantId: year.tenant_id ? String(year.tenant_id) : undefined,
+              schoolId: year.school_id ? String(year.school_id) : undefined,
+              branchId: year.branch_id ? String(year.branch_id) : null
+            }))
+          };
+          if (resolveAcademicYearRecord(supabaseSnapshot.academicYears, clean(identity.academicYear))) {
+            return supabaseSnapshot;
+          }
+        } catch {
+          // Try the next canonical server-side source, if configured.
         }
-        return {
-          schoolExists: true,
-          branchIds: (branchResult.data || []).map((branch: any) => String(branch.id)).filter(Boolean),
-          academicYears: (academicYearResult.data || []).map((year: any) => ({
-            id: String(year.id),
-            name: year.name ? String(year.name) : undefined,
-            isActive: year.status === 'active',
-            isCurrent: Boolean(year.is_current),
-            tenantId: year.tenant_id ? String(year.tenant_id) : undefined,
-            schoolId: year.school_id ? String(year.school_id) : undefined,
-            branchId: year.branch_id ? String(year.branch_id) : null
-          }))
-        };
-      } catch {
-        return postgresSnapshot;
       }
+      return postgresSnapshot;
     };
 
     if (UnitOfWork.isTransactionActive()) {
@@ -366,7 +379,7 @@ export class TenantContextResolver {
 
     const snapshotProvider = this.provider as TenantDataProvider;
     const snapshot = snapshotProvider.resolveSnapshot
-      ? await snapshotProvider.resolveSnapshot(identity as TrustedIdentity, diagnosticTrace)
+      ? await snapshotProvider.resolveSnapshot(identity as TrustedIdentity, diagnosticTrace, accessToken)
       : null;
     const schoolValid = snapshot
       ? snapshot.schoolExists
@@ -420,7 +433,7 @@ export class TenantContextResolver {
     const snapshotProvider = this.provider as TenantDataProvider;
     diagnosticTrace?.mark('tenant_engine_started');
     const snapshot = snapshotProvider.resolveSnapshot
-      ? await snapshotProvider.resolveSnapshot(identity as TrustedIdentity, diagnosticTrace)
+      ? await snapshotProvider.resolveSnapshot(identity as TrustedIdentity, diagnosticTrace, accessToken)
       : null;
     const schoolValid = snapshot
       ? snapshot.schoolExists
