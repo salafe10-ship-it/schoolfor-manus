@@ -220,6 +220,46 @@ const ensureIdentityJobSchema = async (): Promise<void> => {
   await identityJobSchemaPromise;
 };
 
+// Some production workspaces were provisioned before the owner-release
+// migration reached the database used by the Render service.  Keep the
+// tenant workspace read path truthful and self-healing with an additive,
+// idempotent prerequisite; the full migration remains the authoritative
+// definition when it is available.
+let ownerWorkspaceReleaseSchemaPromise: Promise<void> | null = null;
+const ensureOwnerWorkspaceReleaseSchema = async (): Promise<void> => {
+  if (!platformAdminPool) return;
+  if (!ownerWorkspaceReleaseSchemaPromise) {
+    ownerWorkspaceReleaseSchemaPromise = platformAdminPool.query(`
+      CREATE TABLE IF NOT EXISTS public.platform_school_releases (
+        id uuid NOT NULL DEFAULT gen_random_uuid(),
+        school_id uuid NOT NULL,
+        template_id uuid,
+        release_version integer NOT NULL DEFAULT 1,
+        release_kind text NOT NULL DEFAULT 'features',
+        scope text NOT NULL DEFAULT 'school',
+        channel text NOT NULL DEFAULT 'stable',
+        status text NOT NULL DEFAULT 'active',
+        title text NOT NULL,
+        notes text,
+        feature_overrides jsonb NOT NULL DEFAULT '{}'::jsonb,
+        payload jsonb NOT NULL DEFAULT '{}'::jsonb,
+        created_by_auth_user_id uuid NOT NULL,
+        created_at timestamptz NOT NULL DEFAULT now(),
+        activated_at timestamptz NOT NULL DEFAULT now(),
+        rolled_back_at timestamptz,
+        CONSTRAINT pk_platform_school_releases PRIMARY KEY (id),
+        CONSTRAINT uq_platform_school_releases_version UNIQUE (school_id, release_version)
+      );
+      CREATE INDEX IF NOT EXISTS idx_platform_school_releases_school_created
+        ON public.platform_school_releases (school_id, created_at DESC);
+    `).then(() => undefined).catch((error) => {
+      ownerWorkspaceReleaseSchemaPromise = null;
+      throw error;
+    });
+  }
+  await ownerWorkspaceReleaseSchemaPromise;
+};
+
 if (platformAdminPool) {
   void ensureIdentityJobSchema().catch((error) => {
     EnterpriseLogger.error('Identity job reference schema bootstrap failed.', 'ServerBootstrap', {
@@ -461,10 +501,12 @@ const resolveCanonicalTenantActor = async (context: TenantContext): Promise<stri
         WHERE tenant_id = $1::uuid
           AND auth_user_id = $2::uuid
           AND school_id = $3::uuid
-          AND (branch_id = $4::uuid OR branch_id IS NULL)
           AND status = 'active'
           AND deleted_at IS NULL
-        ORDER BY branch_id NULLS LAST, created_at ASC
+        -- The identity row is school-scoped; branch is a placement scope.
+        -- Requiring an exact branch here could miss an existing canonical
+        -- actor and incorrectly attempt a second users insert.
+        ORDER BY (branch_id = $4::uuid) DESC NULLS LAST, branch_id NULLS LAST, created_at ASC
         LIMIT 1`,
       [context.tenantId, context.userId, context.schoolId, context.branchId]
     );
@@ -487,7 +529,6 @@ const resolveCanonicalTenantActor = async (context: TenantContext): Promise<stri
            WHERE tenant_id = $1::uuid
              AND auth_user_id = $2::uuid
              AND school_id = $3::uuid
-             AND (branch_id = $4::uuid OR branch_id IS NULL)
              AND deleted_at IS NULL
         )
        ON CONFLICT DO NOTHING`,
@@ -499,10 +540,9 @@ const resolveCanonicalTenantActor = async (context: TenantContext): Promise<stri
         WHERE tenant_id = $1::uuid
           AND auth_user_id = $2::uuid
           AND school_id = $3::uuid
-          AND (branch_id = $4::uuid OR branch_id IS NULL)
           AND status = 'active'
           AND deleted_at IS NULL
-        ORDER BY branch_id NULLS LAST, created_at ASC
+        ORDER BY (branch_id = $4::uuid) DESC NULLS LAST, branch_id NULLS LAST, created_at ASC
         LIMIT 1`,
       [context.tenantId, context.userId, context.schoolId, context.branchId],
     );
@@ -3562,6 +3602,7 @@ async function startServer() {
     if (!isUuid(schoolId)) return next(new AuthorizationError('هذه النقطة متاحة فقط داخل جلسة مدرسة موثقة.'));
     disableAuthCaching(res);
     try {
+      await ensureOwnerWorkspaceReleaseSchema();
       const result = await platformAdminPool.query<any>(
         `SELECT s.id, s.display_name, s.status, s.central_metadata,
                 r.id AS release_id, r.release_version, r.release_kind, r.channel,
