@@ -314,6 +314,7 @@ const ensureStudentAuditRlsSchema = async (): Promise<void> => {
       $$;
       REVOKE ALL ON FUNCTION public.dbsec010_audit_actor_allowed(uuid, uuid, uuid, uuid) FROM PUBLIC;
       DROP POLICY IF EXISTS p_dbsec009_audit_insert_app ON public.audit_events;
+      DROP POLICY IF EXISTS p_dbsec009_audit_insert_staging_app ON public.audit_events;
       DROP POLICY IF EXISTS p_dbsec010_audit_insert_authenticated ON public.audit_events;
       DO $$
       BEGIN
