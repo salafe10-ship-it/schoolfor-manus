@@ -61,24 +61,60 @@ END;
 $$;
 
 REVOKE ALL ON FUNCTION public.dbsec010_audit_actor_allowed(uuid, uuid, uuid, uuid) FROM PUBLIC;
-GRANT EXECUTE ON FUNCTION public.dbsec010_audit_actor_allowed(uuid, uuid, uuid, uuid)
-  TO authenticated, edupro_app, edupro_staging_app;
+DO $$
+DECLARE
+  role_name text;
+BEGIN
+  FOR role_name IN
+    SELECT rolname
+      FROM pg_roles
+     WHERE rolname = ANY (ARRAY['authenticated', 'edupro_app', 'edupro_staging_app'])
+  LOOP
+    EXECUTE format(
+      'GRANT EXECUTE ON FUNCTION public.dbsec010_audit_actor_allowed(uuid, uuid, uuid, uuid) TO %I',
+      role_name
+    );
+  END LOOP;
+END;
+$$;
 
 DROP POLICY IF EXISTS p_dbsec009_audit_insert_app ON public.audit_events;
-CREATE POLICY p_dbsec009_audit_insert_app ON public.audit_events
-  FOR INSERT TO edupro_app, edupro_staging_app
-  WITH CHECK (
-    public.dbsec010_audit_actor_allowed(tenant_id, school_id, branch_id, actor_user_id)
-  );
+DO $$
+DECLARE
+  role_list text;
+BEGIN
+  SELECT string_agg(quote_ident(rolname), ', ' ORDER BY rolname)
+    INTO role_list
+    FROM pg_roles
+   WHERE rolname = ANY (ARRAY['edupro_app', 'edupro_staging_app']);
+
+  IF role_list IS NOT NULL THEN
+    EXECUTE format(
+      'CREATE POLICY p_dbsec009_audit_insert_app ON public.audit_events
+         FOR INSERT TO %s
+         WITH CHECK (
+           public.dbsec010_audit_actor_allowed(tenant_id, school_id, branch_id, actor_user_id)
+         )',
+      role_list
+    );
+  END IF;
+END;
+$$;
 
 -- Some pooler paths expose the Supabase authenticated role instead of the
 -- application role for the transaction. Keep that path equally narrow: the
 -- trusted server settings and canonical actor validation remain mandatory.
 DROP POLICY IF EXISTS p_dbsec010_audit_insert_authenticated ON public.audit_events;
-CREATE POLICY p_dbsec010_audit_insert_authenticated ON public.audit_events
-  FOR INSERT TO authenticated
-  WITH CHECK (
-    public.dbsec010_audit_actor_allowed(tenant_id, school_id, branch_id, actor_user_id)
-  );
+DO $$
+BEGIN
+  IF EXISTS (SELECT 1 FROM pg_roles WHERE rolname = 'authenticated') THEN
+    CREATE POLICY p_dbsec010_audit_insert_authenticated ON public.audit_events
+      FOR INSERT TO authenticated
+      WITH CHECK (
+        public.dbsec010_audit_actor_allowed(tenant_id, school_id, branch_id, actor_user_id)
+      );
+  END IF;
+END;
+$$;
 
 COMMIT;

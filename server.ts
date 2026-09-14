@@ -84,6 +84,7 @@ import { tenantScopedDatabaseFilePath } from "./src/security/tenantScopedFilePat
 import { generateStudentExport, STUDENT_EXPORT_CONTENT_TYPE } from "./src/modules/student-export/application/StudentExportService.js";
 import { createStartupReadiness } from "./server/infrastructure/StartupReadiness.js";
 import { getBuildIdentity } from "./server/infrastructure/BuildIdentity.js";
+import { inspectSupabaseDatabaseTargetAlignment } from "./server/security/SupabaseDatabaseTargetAlignment.js";
 import { FallbackStorage } from "./src/database/repositories/FallbackStorage.js";
 import { AdmissionInquiry, AdmissionStatus } from './src/modules/student-admission/domain/AdmissionInquiry.js';
 import { SupabaseAdmissionInquiryRepository } from './src/modules/student-admission/repository/SupabaseAdmissionInquiryRepository.js';
@@ -117,6 +118,17 @@ type FinancialWriteMode = 'snapshot_read_only' | 'snapshot_write' | 'erp_integra
 const deploymentEnvironment = String(process.env.EDUPRO_ENVIRONMENT || '').trim().toLowerCase();
 const productionLikeEnvironment = deploymentEnvironment === 'staging' || deploymentEnvironment === 'production';
 const unsafeLocalDatabaseRoleOptIn = process.env.ALLOW_UNSAFE_LOCAL_DATABASE_ROLE === 'true';
+const databaseTargetAlignment = inspectSupabaseDatabaseTargetAlignment({
+  supabaseUrl: process.env.SUPABASE_URL || process.env.NEXT_PUBLIC_SUPABASE_URL,
+  databaseUrl: process.env.DATABASE_URL || process.env.DIRECT_URL,
+  platformAdminDatabaseUrl: process.env.PLATFORM_ADMIN_DATABASE_URL,
+});
+if (productionLikeEnvironment && !databaseTargetAlignment.aligned) {
+  // Never connect a trusted Supabase Auth identity to a different PostgreSQL
+  // project. Besides corrupting tenant boundaries, that mismatch makes the
+  // users.auth_user_id -> auth.users foreign key impossible to satisfy.
+  throw new Error(`Supabase database target alignment failed: ${databaseTargetAlignment.issues.join(' ')}`);
+}
 const supabaseOrigin = (() => {
   try {
     return process.env.SUPABASE_URL ? new URL(process.env.SUPABASE_URL).origin : null;
