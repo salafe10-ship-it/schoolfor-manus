@@ -277,16 +277,30 @@ const ensureStudentAuditRlsSchema = async (): Promise<void> => {
       END;
       $$;
       REVOKE ALL ON FUNCTION public.dbsec010_audit_actor_allowed(uuid, uuid, uuid, uuid) FROM PUBLIC;
-      GRANT EXECUTE ON FUNCTION public.dbsec010_audit_actor_allowed(uuid, uuid, uuid, uuid)
-        TO authenticated, edupro_app, edupro_staging_app;
       DROP POLICY IF EXISTS p_dbsec009_audit_insert_app ON public.audit_events;
-      CREATE POLICY p_dbsec009_audit_insert_app ON public.audit_events
-        FOR INSERT TO edupro_app, edupro_staging_app
-        WITH CHECK (public.dbsec010_audit_actor_allowed(tenant_id, school_id, branch_id, actor_user_id));
       DROP POLICY IF EXISTS p_dbsec010_audit_insert_authenticated ON public.audit_events;
-      CREATE POLICY p_dbsec010_audit_insert_authenticated ON public.audit_events
-        FOR INSERT TO authenticated
-        WITH CHECK (public.dbsec010_audit_actor_allowed(tenant_id, school_id, branch_id, actor_user_id));
+      DO $$
+      BEGIN
+        IF EXISTS (SELECT 1 FROM pg_roles WHERE rolname = 'authenticated') THEN
+          EXECUTE 'GRANT EXECUTE ON FUNCTION public.dbsec010_audit_actor_allowed(uuid, uuid, uuid, uuid) TO authenticated';
+          EXECUTE 'CREATE POLICY p_dbsec010_audit_insert_authenticated ON public.audit_events
+            FOR INSERT TO authenticated
+            WITH CHECK (public.dbsec010_audit_actor_allowed(tenant_id, school_id, branch_id, actor_user_id))';
+        END IF;
+        IF EXISTS (SELECT 1 FROM pg_roles WHERE rolname = 'edupro_app') THEN
+          EXECUTE 'GRANT EXECUTE ON FUNCTION public.dbsec010_audit_actor_allowed(uuid, uuid, uuid, uuid) TO edupro_app';
+          EXECUTE 'CREATE POLICY p_dbsec009_audit_insert_app ON public.audit_events
+            FOR INSERT TO edupro_app
+            WITH CHECK (public.dbsec010_audit_actor_allowed(tenant_id, school_id, branch_id, actor_user_id))';
+        END IF;
+        IF EXISTS (SELECT 1 FROM pg_roles WHERE rolname = 'edupro_staging_app') THEN
+          EXECUTE 'GRANT EXECUTE ON FUNCTION public.dbsec010_audit_actor_allowed(uuid, uuid, uuid, uuid) TO edupro_staging_app';
+          EXECUTE 'CREATE POLICY p_dbsec009_audit_insert_staging_app ON public.audit_events
+            FOR INSERT TO edupro_staging_app
+            WITH CHECK (public.dbsec010_audit_actor_allowed(tenant_id, school_id, branch_id, actor_user_id))';
+        END IF;
+      END;
+      $$;
     `).then(() => undefined).catch((error) => {
       studentAuditRlsSchemaPromise = null;
       throw error;
