@@ -2713,10 +2713,22 @@ export default function StudentFinancialPortal({
               <span className="text-amber-100">الحسابات والرسوم</span>
             </div>
             <h1 className="text-xl sm:text-2xl font-black bg-gradient-to-r from-[#ffe5a3] via-[#fce79a] to-[#d4af37] bg-clip-text text-transparent">
-              منظومة حسابات الطلاب والرسوم الدراسية
+              {activeSubSec === 'analytics' ? 'لوحة القيادة والتحليل المالي السحابية' : 'منظومة حسابات الطلاب والرسوم الدراسية'}
             </h1>
           </div>
         </div>
+
+        {activeSubSec === 'analytics' && (
+          <button
+            type="button"
+            onClick={handleRefreshData}
+            disabled={refreshing}
+            className="financial-header-refresh relative z-10 inline-flex items-center gap-2 rounded-xl border border-amber-300/80 bg-amber-400 px-4 py-2 text-xs font-black text-[#24150d] shadow-lg transition-all hover:bg-amber-300 disabled:cursor-not-allowed disabled:opacity-60"
+          >
+            <RefreshCw className={`w-4 h-4 ${refreshing ? 'animate-spin' : ''}`} />
+            <span>تحديث البيانات الحالية</span>
+          </button>
+        )}
 
         {/* Center Sub-Navigation Tabs */}
         <div className="flex items-center gap-1.5 bg-[#2a1d13]/90 border border-[#d4af37]/40 p-1.5 rounded-2xl shadow-inner relative z-10 overflow-x-auto">
@@ -2829,14 +2841,6 @@ export default function StudentFinancialPortal({
                   <h2 className="text-xl font-extrabold pb-1">لوحة القيادة والتحليل المالي السحابية</h2>
                   <p className="text-xs text-orange-100 font-semibold opacity-90">رؤية استباقية للتدفقات النقدية وكفاءة التحصيل الميداني والتسجيل</p>
                 </div>
-                <button 
-                  onClick={handleRefreshData}
-                  disabled={refreshing}
-                  className="bg-amber-400 hover:bg-amber-500 text-slate-950 text-xs font-black px-4 py-2 flex items-center gap-2 border border-amber-300 shadow transition-all cursor-pointer"
-                >
-                  <RefreshCw className={`w-4 h-4 ${refreshing ? 'animate-spin' : ''}`} />
-                  <span>تحديث البيانات الحالية</span>
-                </button>
               </div>
             </div>
 
@@ -5090,17 +5094,35 @@ export default function StudentFinancialPortal({
       {/* RIGHT SIDEBAR: Category Menu (matches design & color from uploaded image) */}
       <div 
         id="financial-sidebar-menu" 
-        className="w-full lg:w-80 bg-gradient-to-b from-[#0a1128] via-[#020817] to-[#010409] text-white border border-slate-800 p-5 shadow-25 flex flex-col justify-between shrink-0"
+        className="financial-sidebar-menu w-full lg:w-80 text-white p-4 sm:p-5 flex flex-col justify-between shrink-0"
       >
         <div className="space-y-6">
-          {/* Menu Title Header */}
-          <div className="text-center py-4 border-b border-slate-800/80">
-            <h3 className="text-lg font-extrabold text-white tracking-widest uppercase">حسابات الطلاب</h3>
-            <div className="w-16 h-1 mx-auto bg-gradient-to-r from-yellow-400 via-amber-400 to-amber-500 rounded mt-2" />
+          {/* School identity card: the same compact control-room identity used by the main shell. */}
+          <div className="financial-sidebar-brand">
+            <div className="financial-sidebar-logo-row">
+              <span className="financial-sidebar-logo-mark">EXAM</span>
+              <span className="financial-sidebar-logo-name">SchoolForManus</span>
+              <span className="financial-sidebar-logo-shield">◈</span>
+            </div>
+            <div className="financial-sidebar-brand-caption">EXAM CONTROL CENTER</div>
+            <div className="financial-sidebar-school-status"><span /> سياق المدرسة الحالية</div>
+            <div className="financial-sidebar-school-name">{selectedSchool?.name || 'مدارس الأسرة الحديثة'}</div>
+            <div className="financial-sidebar-school-meta">
+              <span>المدرسة: <b>{selectedSchool?.name || 'مدارس الأسرة الحديثة'}</b></span>
+              <span>الفرع: <b>{selectedBranch?.name || 'الفرع الرئيسي'}</b></span>
+              <span>العام الدراسي: <b>{selectedSchool?.academicYear || '2026-2027'}</b></span>
+            </div>
+            <span className="financial-sidebar-edit-state">🔒 مفتوح للتحرير</span>
+          </div>
+
+          {/* Menu title */}
+          <div className="financial-sidebar-heading">
+            <span>الرسوم والأقساط</span>
+            <small>حسابات الطلاب</small>
           </div>
 
           {/* List of Navigation Buttons as in the image */}
-          <div className="space-y-3">
+          <div className="financial-sidebar-nav">
             {menuItems.map((item) => {
               const Icon = item.icon;
               const isActive = activeSubSec === item.id;
@@ -5109,10 +5131,10 @@ export default function StudentFinancialPortal({
                 <button
                   key={item.id}
                   onClick={() => setActiveSubSec(item.id)}
-                  className={`w-full flex items-center justify-between px-4 h-[52px] text-xs font-bold text-right transition-all duration-200 border select-none cursor-pointer ${
+                    className={`financial-sidebar-button w-full flex items-center justify-between px-4 h-[52px] text-xs font-bold text-right transition-all duration-200 select-none cursor-pointer ${
                     isActive 
-                      ? 'bg-gradient-to-r from-teal-700 via-teal-600 to-emerald-600 border-teal-500/80 text-white shadow-[0_4px_12px_rgba(13,148,136,0.3)]' 
-                      : 'bg-[#151f32] hover:bg-[#1c2840] border-[#222f46] hover:border-slate-600 text-slate-300 hover:text-white shadow-[0_2px_4px_rgba(0,0,0,0.15)]'
+                      ? 'financial-sidebar-button-active text-white' 
+                      : 'text-[#e8d7ad] hover:text-white'
                   }`}
                 >
                   <div className="flex items-center gap-3">

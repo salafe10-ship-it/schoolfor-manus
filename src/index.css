@@ -2226,3 +2226,210 @@ html:not(.dark) #super-admin-portal button:not(.bg-indigo-600):not(.bg-rose-600)
     border-radius: 1.15rem !important;
   }
 }
+
+/* --------------------------------------------------------------------------
+   Fees control-room identity
+   Mirrors the approved dashboard reference: mahogany shell, gold controls,
+   compact school context card, and outlined vertical navigation.
+   -------------------------------------------------------------------------- */
+#student-financial-portal .financial-sidebar-menu {
+  min-height: 100%;
+  background:
+    linear-gradient(180deg, rgba(39, 24, 15, 0.98), rgba(20, 13, 9, 0.99)),
+    radial-gradient(circle at 50% 0%, rgba(212, 175, 55, 0.12), transparent 36%);
+  border: 1px solid rgba(212, 175, 55, 0.58);
+  box-shadow: inset 0 0 0 1px rgba(255, 226, 143, 0.06), 0 22px 46px rgba(2, 8, 20, 0.3);
+}
+
+#student-financial-portal .financial-sidebar-brand {
+  padding: 0.85rem 0.9rem 0.8rem;
+  border: 1px solid rgba(212, 175, 55, 0.48);
+  background: rgba(18, 11, 7, 0.72);
+  box-shadow: inset 0 1px 0 rgba(255, 235, 166, 0.08);
+}
+
+#student-financial-portal .financial-sidebar-logo-row {
+  display: flex;
+  align-items: center;
+  gap: 0.35rem;
+  direction: ltr;
+  color: #f7d174;
+  font-weight: 900;
+}
+
+#student-financial-portal .financial-sidebar-logo-mark {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  min-width: 2.4rem;
+  height: 1.2rem;
+  padding: 0 0.3rem;
+  border: 1px solid rgba(247, 209, 116, 0.75);
+  border-radius: 0.18rem;
+  background: #7a5d16;
+  color: #fff0b5;
+  font-size: 0.48rem;
+  letter-spacing: 0.08em;
+}
+
+#student-financial-portal .financial-sidebar-logo-name {
+  font-size: 0.78rem;
+  letter-spacing: -0.03em;
+  color: #fff0b5;
+}
+
+#student-financial-portal .financial-sidebar-logo-shield {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 2rem;
+  height: 2rem;
+  margin-inline-start: auto;
+  border-radius: 0.55rem;
+  background: linear-gradient(135deg, #f7d174, #a87314);
+  color: #24150d;
+  font-size: 1.1rem;
+}
+
+#student-financial-portal .financial-sidebar-brand-caption {
+  margin-top: 0.05rem;
+  color: rgba(247, 209, 116, 0.5);
+  direction: ltr;
+  font-size: 0.4rem;
+  letter-spacing: 0.12em;
+  text-align: center;
+}
+
+#student-financial-portal .financial-sidebar-school-status {
+  margin-top: 0.9rem;
+  color: #f7d174;
+  font-size: 0.65rem;
+  font-weight: 900;
+}
+
+#student-financial-portal .financial-sidebar-school-status span {
+  display: inline-block;
+  width: 0.42rem;
+  height: 0.42rem;
+  margin-inline-end: 0.25rem;
+  border-radius: 999px;
+  background: #22c55e;
+  box-shadow: 0 0 0 3px rgba(34, 197, 94, 0.08);
+}
+
+#student-financial-portal .financial-sidebar-school-name {
+  margin-top: 0.6rem;
+  color: #fff6d2;
+  font-size: 0.76rem;
+  font-weight: 900;
+}
+
+#student-financial-portal .financial-sidebar-school-meta {
+  display: grid;
+  gap: 0.22rem;
+  margin-top: 0.55rem;
+  padding-top: 0.55rem;
+  border-top: 1px solid rgba(212, 175, 55, 0.24);
+  color: rgba(247, 209, 116, 0.72);
+  font-size: 0.58rem;
+  line-height: 1.55;
+}
+
+#student-financial-portal .financial-sidebar-school-meta b {
+  color: #fff1b8;
+  font-weight: 800;
+}
+
+#student-financial-portal .financial-sidebar-edit-state {
+  display: inline-flex;
+  margin-top: 0.65rem;
+  padding: 0.18rem 0.42rem;
+  border: 1px solid rgba(247, 209, 116, 0.44);
+  border-radius: 0.2rem;
+  color: #f7d174;
+  font-size: 0.55rem;
+  font-weight: 900;
+}
+
+#student-financial-portal .financial-sidebar-heading {
+  display: flex;
+  align-items: end;
+  justify-content: space-between;
+  gap: 0.5rem;
+  padding: 0.35rem 0.15rem 0.55rem;
+  border-bottom: 1px solid rgba(212, 175, 55, 0.32);
+  color: #f7d174;
+  font-size: 0.72rem;
+  font-weight: 900;
+}
+
+#student-financial-portal .financial-sidebar-heading small {
+  color: rgba(255, 246, 210, 0.52);
+  font-size: 0.55rem;
+  font-weight: 700;
+}
+
+#student-financial-portal .financial-sidebar-nav {
+  display: grid;
+  gap: 0.45rem;
+}
+
+#student-financial-portal .financial-sidebar-button {
+  position: relative;
+  border: 1px solid rgba(212, 175, 55, 0.34) !important;
+  border-radius: 0.08rem !important;
+  background: rgba(25, 16, 10, 0.58) !important;
+  box-shadow: none !important;
+  color: #ead9b1 !important;
+}
+
+#student-financial-portal .financial-sidebar-button:hover {
+  background: rgba(91, 64, 21, 0.52) !important;
+  border-color: rgba(247, 209, 116, 0.82) !important;
+  color: #fff3c4 !important;
+  transform: translateX(-2px);
+}
+
+#student-financial-portal .financial-sidebar-button-active {
+  background: linear-gradient(90deg, #9b6c17, #d4af37 58%, #9b6c17) !important;
+  border-color: #f7d174 !important;
+  color: #24150d !important;
+  box-shadow: 0 0 0 1px rgba(247, 209, 116, 0.18), 0 8px 18px rgba(0, 0, 0, 0.22) !important;
+}
+
+#student-financial-portal .financial-sidebar-button-active::before {
+  content: "";
+  position: absolute;
+  inset-inline-start: 0.35rem;
+  width: 0.18rem;
+  height: 1.3rem;
+  border-radius: 999px;
+  background: #fff8d4;
+}
+
+#student-financial-portal .financial-sidebar-button .text-slate-400,
+#student-financial-portal .financial-sidebar-button .text-white {
+  color: currentColor !important;
+}
+
+#student-financial-portal .financial-sidebar-button .bg-emerald-950\/40,
+#student-financial-portal .financial-sidebar-button .bg-\[\#0f1624\] {
+  border-color: rgba(247, 209, 116, 0.48) !important;
+  background: rgba(36, 21, 13, 0.48) !important;
+  color: #f7d174 !important;
+}
+
+#student-financial-portal .financial-header-refresh {
+  order: 3;
+}
+
+@media (max-width: 1023px) {
+  #student-financial-portal .financial-sidebar-menu {
+    min-height: auto;
+  }
+
+  #student-financial-portal .financial-sidebar-brand {
+    max-width: 34rem;
+    margin-inline: auto;
+  }
+}
