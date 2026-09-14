@@ -3142,8 +3142,11 @@ async function startServer() {
       // receive the updated central role while their active scoped role stays
       // blind to the school directory.
       if (roleKey === 'schooladmin') {
-        const identityPermissionKeys = permissionKeys.filter((permissionKey) => permissionKey.startsWith('Identity.Users.'));
-        if (identityPermissionKeys.length) {
+        const schoolScopedPermissionKeys = permissionKeys.filter((permissionKey) => (
+          permissionKey.startsWith('Identity.Users.')
+          || permissionKey === PERMISSIONS.SCHOOL_BRANDING_WRITE
+        ));
+        if (schoolScopedPermissionKeys.length) {
           await client.query(
             `INSERT INTO public.role_permissions (tenant_id, role_id, permission_id, status, created_by, updated_by)
              SELECT r.tenant_id, r.id, p.id, 'active', NULL, NULL
@@ -3154,7 +3157,7 @@ async function startServer() {
                 AND p.status = 'active' AND p.deleted_at IS NULL
              ON CONFLICT (role_id, permission_id) DO UPDATE
                SET status = 'active', deleted_at = NULL, deleted_by = NULL, updated_at = now()`,
-            [targetTenantId, roleKey, identityPermissionKeys],
+            [targetTenantId, roleKey, schoolScopedPermissionKeys],
           );
         }
       }

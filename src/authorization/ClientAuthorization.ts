@@ -50,6 +50,14 @@ export function canAccessSection(
   }
   const permission = SECTION_PERMISSIONS[sectionId];
   if (!permission) return false;
+  // School branding is a school-admin capability with a server-side
+  // compatibility bridge for legacy schooladmin role rows. Keep the entry
+  // point visible for that trusted role even when its older permission list
+  // has not yet been hydrated with School.Branding.Write; the mutation API
+  // still enforces the verified school-admin identity.
+  if (sectionId === 'school_branding' && identity.schoolId && String(identity.role || '').trim().toLowerCase() === 'schooladmin') {
+    return true;
+  }
   // A session without the server-derived permission hint is not allowed to
   // fall back to the legacy role map for tenant modules. The dashboard is a
   // safe landing surface after authentication; every protected module must
