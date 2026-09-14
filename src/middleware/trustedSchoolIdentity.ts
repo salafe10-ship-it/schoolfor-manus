@@ -55,10 +55,18 @@ export function toTrustedSchoolPresentation(record: SchoolRecord): TrustedSchool
   }
   delete features.permissions_admin;
 
+  const branding = record.central_metadata?.branding && typeof record.central_metadata.branding === 'object' && !Array.isArray(record.central_metadata.branding)
+    ? record.central_metadata.branding as Record<string, unknown>
+    : {};
+  const configuredLogo = String(branding.logoDataUrl || branding.logoUrl || '').trim();
+  const logo = /^(https:\/\/|data:image\/(?:png|jpeg|webp);base64,)/i.test(configuredLogo)
+    ? configuredLogo
+    : '🏫';
+
   return {
     id,
     name,
-    logo: '🏫',
+    logo,
     type: 'private',
     licenseNumber: String(record.school_code || '').trim(),
     address: '',

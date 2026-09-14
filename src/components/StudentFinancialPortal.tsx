@@ -1881,6 +1881,11 @@ export default function StudentFinancialPortal({
     const titleText = "سـنـد قـبـض مـالـي (طـلاب)";
     const receiptNumber = v.receiptVoucherId || v.id;
     const journalNumber = v.journalEntryId || 'غير مرحل';
+    const escapePrintHtml = (value: unknown) => String(value ?? '').replace(/[&<>"']/g, char => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[char] || char));
+    const configuredLogo = String(selectedSchool?.logo || '').trim();
+    const logoMarkup = /^(https:\/\/|data:image\/)/i.test(configuredLogo)
+      ? `<img class="school-logo" src="${escapePrintHtml(configuredLogo)}" alt="شعار المدرسة" onerror="this.style.display='none'" />`
+      : `<div class="school-logo school-logo-fallback" aria-label="شعار المدرسة">${escapePrintHtml(configuredLogo || '🏫')}</div>`;
     
     printWindow.document.write(`
       <html dir="rtl">
@@ -1922,6 +1927,27 @@ export default function StudentFinancialPortal({
               font-size: 8px;
               font-weight: bold;
               line-height: 1.5;
+            }
+            .school-brand {
+              display: flex;
+              align-items: center;
+              gap: 8px;
+              min-width: 185px;
+            }
+            .school-logo {
+              width: 22mm;
+              height: 22mm;
+              object-fit: contain;
+              border: 1px solid #cbd5e1;
+              border-radius: 8px;
+              background: #ffffff;
+              flex: 0 0 auto;
+            }
+            .school-logo-fallback {
+              display: flex;
+              align-items: center;
+              justify-content: center;
+              font-size: 22px;
             }
             .doc-title {
               text-align: center;
@@ -2013,11 +2039,14 @@ export default function StudentFinancialPortal({
         <body>
           <section class="receipt-copy">
           <div class="header">
-            <div class="school-info">
-              <p>المملكة العربية السعودية</p>
-              <p>وزارة التعليم</p>
-              <p style="color: #4f46e5; font-weight: 900;">${schoolName}</p>
-              <p>قسم الإدارة والتحصيل المالي الموحد</p>
+            <div class="school-brand">
+              ${logoMarkup}
+              <div class="school-info">
+                <p>المملكة العربية السعودية</p>
+                <p>وزارة التعليم</p>
+                <p style="color: #4f46e5; font-weight: 900;">${escapePrintHtml(schoolName)}</p>
+                <p>قسم الإدارة والتحصيل المالي الموحد</p>
+              </div>
             </div>
             <div class="doc-title">
               <h1>${titleText}</h1>

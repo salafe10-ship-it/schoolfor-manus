@@ -2407,6 +2407,8 @@ export default function App() {
                   triggerNotification={triggerNotification}
                   logAction={logAction}
                   currentRole={currentRole}
+                  selectedSchool={selectedSchool}
+                  onSchoolLogoUpdated={(logo) => setSelectedSchool((current) => ({ ...current, logo }))}
                 />
               ) : settingsTab === 'rbac' ? (
                 <>

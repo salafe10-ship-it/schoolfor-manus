@@ -30,7 +30,7 @@ interface GeneralLedgerPortalProps {
   students: Student[];
   invoices: Invoice[];
   setInvoices: React.Dispatch<React.SetStateAction<Invoice[]>>;
-  selectedSchool: { id: string; name: string; licenseNumber?: string };
+  selectedSchool: { id: string; name: string; logo?: string; licenseNumber?: string };
   setActiveSection: (sec: string) => void;
   logAction: (action: string, details: string, module: string) => void;
   triggerNotification: (text: string, type: 'info' | 'warning' | 'success') => void;
@@ -226,7 +226,11 @@ export default function GeneralLedgerPortal({
       return;
     }
     const safe = (value: unknown) => String(value ?? '—').replace(/[&<>"']/g, char => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[char] || char));
-    printWindow.document.write(`<!doctype html><html dir="rtl"><head><meta charset="utf-8"><title>${safe(title)} ${safe(voucher.id)}</title><style>body{font-family:Arial,sans-serif;padding:32px;color:#172033}h1{border-bottom:2px solid #d4af37;padding-bottom:12px}table{width:100%;border-collapse:collapse;margin-top:24px}td{border:1px solid #ccd3df;padding:10px}td:first-child{font-weight:bold;background:#f8f5ee;width:35%}@media print{button{display:none}}</style></head><body><h1>${safe(title)}</h1><table><tr><td>رقم السند</td><td>${safe(voucher.id)}</td></tr><tr><td>التاريخ</td><td>${safe(voucher.date)}</td></tr><tr><td>المبلغ</td><td>${safe(voucher.amount)} ${safe(currency)}</td></tr><tr><td>البيان</td><td>${safe(voucher.against)}</td></tr><tr><td>الحساب</td><td>${safe(voucher.receivingAccount || voucher.paidFromAccount || voucher.paidToAccount)}</td></tr><tr><td>الحالة</td><td>${safe(voucher.status)}</td></tr></table><script>window.onload=()=>window.print();</script></body></html>`);
+    const configuredLogo = String(selectedSchool?.logo || '').trim();
+    const logoMarkup = /^(https:\/\/|data:image\/)/i.test(configuredLogo)
+      ? `<img class="school-logo" src="${safe(configuredLogo)}" alt="شعار المدرسة" onerror="this.style.display='none'" />`
+      : `<div class="school-logo school-logo-fallback">${safe(configuredLogo || '🏫')}</div>`;
+    printWindow.document.write(`<!doctype html><html dir="rtl"><head><meta charset="utf-8"><title>${safe(title)} ${safe(voucher.id)}</title><style>body{font-family:Arial,sans-serif;padding:32px;color:#172033}.print-header{display:flex;align-items:center;gap:12px;border-bottom:2px solid #d4af37;padding-bottom:12px}.school-logo{width:62px;height:62px;object-fit:contain;border:1px solid #ccd3df;border-radius:10px;background:#fff}.school-logo-fallback{display:flex;align-items:center;justify-content:center;font-size:28px}.school-name{font-size:18px;font-weight:900}h1{border-bottom:2px solid #d4af37;padding-bottom:12px}table{width:100%;border-collapse:collapse;margin-top:24px}td{border:1px solid #ccd3df;padding:10px}td:first-child{font-weight:bold;background:#f8f5ee;width:35%}@media print{button{display:none}}</style></head><body><div class="print-header">${logoMarkup}<div class="school-name">${safe(selectedSchool?.name || 'المدرسة')}</div></div><h1>${safe(title)}</h1><table><tr><td>رقم السند</td><td>${safe(voucher.id)}</td></tr><tr><td>التاريخ</td><td>${safe(voucher.date)}</td></tr><tr><td>المبلغ</td><td>${safe(voucher.amount)} ${safe(currency)}</td></tr><tr><td>البيان</td><td>${safe(voucher.against)}</td></tr><tr><td>الحساب</td><td>${safe(voucher.receivingAccount || voucher.paidFromAccount || voucher.paidToAccount)}</td></tr><tr><td>الحالة</td><td>${safe(voucher.status)}</td></tr></table><script>window.onload=()=>window.print();</script></body></html>`);
     printWindow.document.close();
   };
   const handlePrintReceiptDirect = (voucher: any) => printVoucherDirect(voucher, 'سند قبض موثق');
@@ -2056,6 +2060,11 @@ export default function GeneralLedgerPortal({
     const titleText = template === 'no_price' 
       ? 'سند حركة مستندي (سرية وحجب المبالغ)' 
       : 'سند قيد تسوية وقيد يومية مركّب ومعدل';
+    const safePrintValue = (value: unknown) => String(value ?? '—').replace(/[&<>"']/g, char => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[char] || char));
+    const configuredLogo = String(selectedSchool?.logo || '').trim();
+    const logoMarkup = /^(https:\/\/|data:image\/)/i.test(configuredLogo)
+      ? `<img class="school-logo" src="${safePrintValue(configuredLogo)}" alt="شعار المدرسة" onerror="this.style.display='none'" />`
+      : `<div class="school-logo school-logo-fallback" aria-label="شعار المدرسة">${safePrintValue(configuredLogo || '🏫')}</div>`;
 
     const renderRows = () => {
       if (template === 'no_price') {
@@ -2126,6 +2135,27 @@ export default function GeneralLedgerPortal({
             }
             .school-info {
               flex-grow: 1;
+            }
+            .school-brand {
+              display: flex;
+              align-items: center;
+              gap: 12px;
+              flex-grow: 1;
+            }
+            .school-logo {
+              width: 24mm;
+              height: 24mm;
+              object-fit: contain;
+              border: 1px solid #cbd5e1;
+              border-radius: 8px;
+              background: #ffffff;
+              flex: 0 0 auto;
+            }
+            .school-logo-fallback {
+              display: flex;
+              align-items: center;
+              justify-content: center;
+              font-size: 28px;
             }
             .school-title {
               font-size: 15px;
@@ -2239,10 +2269,13 @@ export default function GeneralLedgerPortal({
         </head>
         <body>
           <div class="header-container">
-            <div class="school-info">
-              <h2 class="school-title">مجمع مدارس الأسرة الحديثة للتعليم المتميز والدمج</h2>
-              <p class="school-subtitle">المكتب المحاسبي المركزي - الحسابات المركزية الموحدة</p>
-              <p class="school-meta">سجل تجاري رقم: 91102-طرابلس | هاتف: 021-360-1444 | طرابلس، ليبيا</p>
+            <div class="school-brand">
+              ${logoMarkup}
+              <div class="school-info">
+                <h2 class="school-title">${safePrintValue(selectedSchool?.name || 'المدرسة')}</h2>
+                <p class="school-subtitle">المكتب المحاسبي المركزي - الحسابات المركزية الموحدة</p>
+                <p class="school-meta">سجل المدرسة: ${safePrintValue(selectedSchool?.licenseNumber || 'غير محدد')} | مستند محاسبي موثق</p>
+              </div>
             </div>
             <div class="barcode-container">
               <div class="barcode-box"></div>

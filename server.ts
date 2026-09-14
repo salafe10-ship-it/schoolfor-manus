@@ -946,7 +946,7 @@ function extractVerifiedJwtIssuedAt(token: string): number | null {
 const CENTRAL_IDENTITY_ROLE_CATALOG: Record<string, { name: string; description: string; permissions: string[] }> = {
   schooladmin: {
     name: 'مدير المدرسة', description: 'إدارة التشغيل اليومي للمدرسة ضمن نطاقها الموثوق.',
-    permissions: [PERMISSIONS.DASHBOARD_VIEW, PERMISSIONS.STUDENT_READ, PERMISSIONS.STUDENT_WRITE, PERMISSIONS.HR_READ, PERMISSIONS.HR_WRITE, PERMISSIONS.FINANCIAL_READ, PERMISSIONS.INVENTORY_READ, PERMISSIONS.INVENTORY_WRITE, PERMISSIONS.IDENTITY_USERS_READ, PERMISSIONS.IDENTITY_USERS_WRITE, PERMISSIONS.IDENTITY_USERS_ASSIGN, PERMISSIONS.IDENTITY_USERS_AUDIT],
+    permissions: [PERMISSIONS.DASHBOARD_VIEW, PERMISSIONS.STUDENT_READ, PERMISSIONS.STUDENT_WRITE, PERMISSIONS.HR_READ, PERMISSIONS.HR_WRITE, PERMISSIONS.FINANCIAL_READ, PERMISSIONS.INVENTORY_READ, PERMISSIONS.INVENTORY_WRITE, PERMISSIONS.IDENTITY_USERS_READ, PERMISSIONS.IDENTITY_USERS_WRITE, PERMISSIONS.IDENTITY_USERS_ASSIGN, PERMISSIONS.IDENTITY_USERS_AUDIT, PERMISSIONS.SCHOOL_BRANDING_WRITE],
   },
   accountant: {
     name: 'المحاسب المالي', description: 'قراءة الحسابات وإدخال العمليات المالية المعتمدة.',
@@ -7678,6 +7678,63 @@ async function startServer() {
     const user = (req as any).user;
     disableAuthCaching(res);
     res.json({ success: true, data: { user }, message: "الجلسة الموثوقة فعالة." });
+  });
+
+  // School branding is tenant-scoped presentation data.  Keep a small
+  // compatibility bridge for older school-admin role rows that predate the
+  // dedicated permission; the trusted session still supplies the school
+  // identity and no client-selected school id is accepted here.
+  const requireSchoolBrandingMutationPermission = (req: express.Request, res: express.Response, next: express.NextFunction) => {
+    const role = String((req as any).user?.role || '').trim().toLowerCase();
+    if (role === 'schooladmin' || role === 'superadmin') return next();
+    return requirePermissionOnly(PERMISSIONS.SCHOOL_BRANDING_WRITE)(req, res, next);
+  };
+
+  app.put('/api/school/branding', authenticateRequest, requireSchoolBrandingMutationPermission, async (req, res, next) => {
+    try {
+      const identity = (req as any).user as { tenantId?: string; schoolId?: string };
+      const tenantId = String(identity?.tenantId || '').trim();
+      const schoolId = String(identity?.schoolId || '').trim();
+      if (!tenantId || !schoolId) throw new AuthenticationError('هوية المدرسة الموثوقة غير مكتملة.');
+      const logoDataUrl = String(req.body?.logoDataUrl || '').trim();
+      if (logoDataUrl && logoDataUrl.length > 700_000) throw new ValidationError('ملف الشعار المضغوط يتجاوز الحد الآمن المسموح به.');
+      if (logoDataUrl && !/^data:image\/(?:png|jpeg|webp);base64,[a-z0-9+/=\s]+$/i.test(logoDataUrl)) {
+        throw new ValidationError('صيغة الشعار غير مدعومة. استخدم PNG أو JPEG أو WebP.');
+      }
+      if (!platformControl) throw new DatabaseError('مصدر إعدادات المدرسة غير متاح.');
+      const current = await platformControl.from('schools')
+        .select('id, tenant_id, central_metadata')
+        .eq('id', schoolId)
+        .eq('tenant_id', tenantId)
+        .is('deleted_at', null)
+        .maybeSingle();
+      if (!current?.data) throw new AuthorizationError('المدرسة غير موجودة داخل نطاق الجلسة الموثوق.');
+      const metadata = readObject(current.data.central_metadata);
+      const currentBranding = readObject(metadata.branding);
+      const nextMetadata = {
+        ...metadata,
+        branding: {
+          ...currentBranding,
+          logoDataUrl: logoDataUrl || null,
+          updatedAt: new Date().toISOString(),
+        },
+      };
+      const updated = await platformControl.from('schools')
+        .update({ central_metadata: nextMetadata, updated_at: new Date().toISOString() })
+        .eq('id', schoolId)
+        .eq('tenant_id', tenantId)
+        .is('deleted_at', null)
+        .select('id, central_metadata')
+        .single();
+      if (updated.error) throw updated.error;
+      return res.json({
+        success: true,
+        data: { logo: logoDataUrl || '🏫', updatedAt: nextMetadata.branding.updatedAt },
+        message: logoDataUrl ? 'تم حفظ شعار المدرسة في المصدر المركزي.' : 'تمت إزالة شعار المدرسة والعودة إلى الشعار الافتراضي.',
+      });
+    } catch (error) {
+      return next(error instanceof ValidationError || error instanceof AuthenticationError || error instanceof AuthorizationError || error instanceof DatabaseError ? error : new DatabaseError('تعذر حفظ هوية المدرسة البصرية.', error));
+    }
   });
 
   // School-scoped academic catalogue. Configuration is stored in the

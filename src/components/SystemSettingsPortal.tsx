@@ -1,27 +1,114 @@
-import React, { useState } from 'react';
+import React, { useEffect, useState } from 'react';
 import { 
   Settings, Building2, School, DollarSign, Award, Users, 
   Shield, Database, HardDrive, RefreshCw, CheckCircle, AlertTriangle, 
   Search, Plus, Edit, Trash2, Save, Download, Upload, History, 
   FileText, Globe, Clock, Lock, Server, Key, Sliders, Check
 } from 'lucide-react';
+import { authenticatedRequest } from '../utils/authenticatedRequest';
 
 interface SystemSettingsPortalProps {
   formatCurrency: (amount: number, showSymbol?: boolean) => string;
   triggerNotification: (msg: string, type: 'success' | 'warning' | 'error' | 'info') => void;
   logAction: (action: string, details: string, module: string) => void;
   currentRole: string;
+  selectedSchool?: { id?: string; name?: string; logo?: string };
+  onSchoolLogoUpdated?: (logo: string) => void;
 }
 
 export default function SystemSettingsPortal({
   formatCurrency,
   triggerNotification,
   logAction,
-  currentRole
+  currentRole,
+  selectedSchool,
+  onSchoolLogoUpdated
 }: SystemSettingsPortalProps) {
   const [activeTab, setActiveTab] = useState<
-    'dashboard' | 'organization' | 'school' | 'financial' | 'exams' | 'fees' | 'hr' | 'system' | 'master_data' | 'audit' | 'backup'
+    'dashboard' | 'branding' | 'organization' | 'school' | 'financial' | 'exams' | 'fees' | 'hr' | 'system' | 'master_data' | 'audit' | 'backup'
   >('dashboard');
+
+  const [brandingLogo, setBrandingLogo] = useState<string>(() => (
+    selectedSchool?.logo && /^(https:\/\/|data:image\/)/i.test(selectedSchool.logo) ? selectedSchool.logo : ''
+  ));
+  const [brandingSaving, setBrandingSaving] = useState(false);
+
+  useEffect(() => {
+    const logo = selectedSchool?.logo || '';
+    setBrandingLogo(/^(https:\/\/|data:image\/)/i.test(logo) ? logo : '');
+  }, [selectedSchool?.id, selectedSchool?.logo]);
+
+  const handleBrandingFile = async (file: File | undefined) => {
+    if (!file) return;
+    if (!['image/png', 'image/jpeg', 'image/webp'].includes(file.type)) {
+      triggerNotification('اختر صورة PNG أو JPEG أو WebP للشعار.', 'warning');
+      return;
+    }
+    if (file.size > 5 * 1024 * 1024) {
+      triggerNotification('حجم ملف الشعار الأصلي كبير. الحد الأقصى 5 ميجابايت قبل الضغط.', 'warning');
+      return;
+    }
+    try {
+      const source = await new Promise<string>((resolve, reject) => {
+        const reader = new FileReader();
+        reader.onload = () => resolve(String(reader.result || ''));
+        reader.onerror = () => reject(new Error('تعذر قراءة ملف الشعار.'));
+        reader.readAsDataURL(file);
+      });
+      const image = await new Promise<HTMLImageElement>((resolve, reject) => {
+        const candidate = new Image();
+        candidate.onload = () => resolve(candidate);
+        candidate.onerror = () => reject(new Error('تعذر تجهيز صورة الشعار.'));
+        candidate.src = source;
+      });
+      const maxSide = 720;
+      const scale = Math.min(1, maxSide / Math.max(image.naturalWidth || image.width, image.naturalHeight || image.height));
+      const canvas = document.createElement('canvas');
+      canvas.width = Math.max(1, Math.round((image.naturalWidth || image.width) * scale));
+      canvas.height = Math.max(1, Math.round((image.naturalHeight || image.height) * scale));
+      const context = canvas.getContext('2d');
+      if (!context) throw new Error('تعذر تجهيز مساحة معاينة الشعار.');
+      context.clearRect(0, 0, canvas.width, canvas.height);
+      context.drawImage(image, 0, 0, canvas.width, canvas.height);
+      const preferredType = file.type === 'image/png' ? 'image/png' : 'image/jpeg';
+      const compressed = canvas.toDataURL(preferredType, preferredType === 'image/jpeg' ? 0.86 : undefined);
+      if (compressed.length > 700_000) {
+        const smaller = canvas.toDataURL('image/jpeg', 0.72);
+        if (smaller.length > 700_000) throw new Error('تعذر ضغط الشعار إلى الحجم الآمن. اختر صورة أبسط.');
+        setBrandingLogo(smaller);
+      } else {
+        setBrandingLogo(compressed);
+      }
+      triggerNotification('تم تجهيز الشعار ومعاينته. اضغط حفظ الهوية لاعتماده في المستندات.', 'info');
+    } catch (error) {
+      triggerNotification(error instanceof Error ? error.message : 'تعذر تجهيز الشعار.', 'warning');
+    }
+  };
+
+  const handleSaveBranding = async () => {
+    if (!selectedSchool?.id) {
+      triggerNotification('لا توجد مدرسة موثوقة لحفظ الشعار.', 'warning');
+      return;
+    }
+    setBrandingSaving(true);
+    try {
+      const response = await authenticatedRequest('/api/school/branding', {
+        method: 'PUT',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ logoDataUrl: brandingLogo || '' })
+      });
+      const payload = await response.json().catch(() => ({}));
+      if (!response.ok || !payload?.success) throw new Error(payload?.message || 'تعذر حفظ شعار المدرسة.');
+      const savedLogo = String(payload?.data?.logo || brandingLogo || '🏫');
+      onSchoolLogoUpdated?.(savedLogo);
+      logAction('SCHOOL_BRANDING_UPDATED', brandingLogo ? 'تم رفع شعار المدرسة واعتماده للمستندات والتقارير.' : 'تمت إزالة شعار المدرسة والعودة إلى الافتراضي.', 'هوية المدرسة');
+      triggerNotification('تم حفظ الشعار مركزيًا وسيظهر في سندات القبض والقيود والتقارير بعد إعادة تحميل الشاشة.', 'success');
+    } catch (error) {
+      triggerNotification(error instanceof Error ? error.message : 'تعذر حفظ الشعار.', 'error');
+    } finally {
+      setBrandingSaving(false);
+    }
+  };
 
   // Organization Settings State
   const [orgSettings, setOrgSettings] = useState({
@@ -142,6 +229,7 @@ export default function SystemSettingsPortal({
       <div className="flex overflow-x-auto bg-slate-900 p-2 border border-slate-800 gap-1.5 scrollbar-thin">
         {[
           { id: 'dashboard', label: 'لوحة مؤشرات الإعدادات', icon: Sliders },
+          { id: 'branding', label: 'هوية المدرسة والشعار', icon: Award },
           { id: 'organization', label: 'إعدادات المؤسسة', icon: Building2 },
           { id: 'school', label: 'إعدادات المدرسة', icon: School },
           { id: 'financial', label: 'الإعدادات المالية', icon: DollarSign },
@@ -247,6 +335,54 @@ export default function SystemSettingsPortal({
       )}
 
       {/* TAB 2: ORGANIZATION SETTINGS */}
+      {activeTab === 'branding' && (
+        <div className="bg-slate-900 border border-slate-800 p-6 space-y-6">
+          <div className="border-b border-slate-800 pb-4">
+            <div className="flex items-center gap-3">
+              <div className="h-12 w-12 rounded-2xl bg-[#dfb55a]/15 border border-[#dfb55a]/50 flex items-center justify-center overflow-hidden">
+                {brandingLogo ? <img src={brandingLogo} alt="معاينة شعار المدرسة" className="h-full w-full object-contain" /> : <span className="text-2xl">🏫</span>}
+              </div>
+              <div>
+                <h3 className="text-base font-black text-white">هوية المدرسة والشعار الرسمي</h3>
+                <p className="text-xs text-slate-400 mt-1">المكان المركزي لرفع شعار {selectedSchool?.name || 'المدرسة'} واعتماده في المستندات المطبوعة.</p>
+              </div>
+            </div>
+          </div>
+
+          <div className="grid grid-cols-1 lg:grid-cols-[1fr_280px] gap-6 items-start">
+            <div className="space-y-4">
+              <label className="block rounded-2xl border border-dashed border-[#dfb55a]/60 bg-slate-950 p-6 text-center cursor-pointer hover:bg-slate-800 transition-colors">
+                <Upload className="w-8 h-8 text-[#dfb55a] mx-auto mb-3" />
+                <span className="block text-white font-black text-sm">إرفاق شعار المدرسة</span>
+                <span className="block text-slate-400 text-xs mt-2">PNG أو JPEG أو WebP • سيتم ضغط الصورة تلقائيًا مع الحفاظ على وضوحها</span>
+                <input type="file" accept="image/png,image/jpeg,image/webp" className="sr-only" onChange={(event) => { void handleBrandingFile(event.target.files?.[0]); event.currentTarget.value = ''; }} />
+              </label>
+              <div className="flex flex-wrap gap-3 justify-end">
+                <button type="button" onClick={() => setBrandingLogo('')} className="border border-slate-700 text-slate-300 hover:bg-slate-800 rounded-xl px-4 py-2.5 text-xs font-bold">إزالة الشعار</button>
+                <button type="button" onClick={() => void handleSaveBranding()} disabled={brandingSaving} className="bg-[#dfb55a] hover:bg-[#c99f48] disabled:opacity-60 text-slate-950 rounded-xl px-5 py-2.5 text-xs font-black flex items-center gap-2">
+                  {brandingSaving ? <RefreshCw className="w-4 h-4 animate-spin" /> : <Save className="w-4 h-4" />}
+                  {brandingSaving ? 'جارٍ الحفظ...' : 'حفظ الهوية واعتمادها'}
+                </button>
+              </div>
+            </div>
+            <div className="rounded-2xl border border-slate-700 bg-slate-950 p-5 min-h-[220px] flex flex-col items-center justify-center text-center">
+              <span className="text-[10px] uppercase tracking-widest text-slate-500 font-black mb-3">معاينة رأس المستند</span>
+              <div className="w-full border-b-2 border-[#dfb55a] pb-3 flex items-center gap-3 text-right" dir="rtl">
+                <div className="h-16 w-16 rounded-xl border border-[#dfb55a]/60 bg-white flex items-center justify-center overflow-hidden shrink-0">
+                  {brandingLogo ? <img src={brandingLogo} alt="شعار المدرسة" className="h-full w-full object-contain" /> : <span className="text-3xl">🏫</span>}
+                </div>
+                <div className="min-w-0">
+                  <p className="text-white font-black text-sm truncate">{selectedSchool?.name || 'اسم المدرسة'}</p>
+                  <p className="text-slate-400 text-[10px] mt-1">سند قبض • قيد يومية • تقرير رسمي</p>
+                </div>
+              </div>
+              <p className="text-[10px] text-emerald-400 mt-4">مصدر مركزي واحد للهوية — عزل كامل بين المدارس</p>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* TAB 3: ORGANIZATION SETTINGS */}
       {activeTab === 'organization' && (
         <div className="bg-slate-900 border border-slate-800 p-6 space-y-6">
           <div className="border-b border-slate-800 pb-4">

@@ -14,6 +14,7 @@ export const PERMISSIONS = {
   DATABASE_SIMULATE: 'Database.Simulate',
   DATABASE_OPTIMIZE: 'Database.Optimize',
   DATABASE_BACKUP: 'Database.Backup',
+  SCHOOL_BRANDING_WRITE: 'School.Branding.Write',
   AUDIT_READ: 'Audit.Read',
   STUDENT_READ: 'Student.View',
   STUDENT_EXPORT: 'Student.Export',
