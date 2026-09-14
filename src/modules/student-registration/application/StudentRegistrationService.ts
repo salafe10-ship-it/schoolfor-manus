@@ -374,6 +374,18 @@ export class StudentRegistrationService {
 
           const actorUserId = await resolveInternalActorUserId(context.tenantId, context.userId, context.actorUserId);
 
+          const auditPolicyProbe = await UnitOfWork.getActiveContext()?.databaseTransaction?.query<{ allowed: boolean }>(
+            `SELECT public.dbsec010_audit_actor_allowed($1::uuid, $2::uuid, $3::uuid, $4::uuid) AS allowed`,
+            [context.tenantId, context.schoolId, context.branchId, actorUserId]
+          );
+          console.info('[StudentRegistrationAuditPolicy]', {
+            allowed: auditPolicyProbe?.rows[0]?.allowed === true,
+            actorIdPresent: Boolean(actorUserId),
+            tenantId: context.tenantId,
+            schoolId: context.schoolId,
+            branchId: context.branchId,
+          });
+
           await assertAcademicContext(context.tenantId, context.schoolId, context.academicYear, input.termId);
           const studentNumber = input.studentNumber || await allocateStudentNumber(
             context.tenantId,
