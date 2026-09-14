@@ -2686,12 +2686,12 @@ export default function StudentFinancialPortal({
   }
 
   return (
-    <div id="student-financial-portal" className={`financial-luxury-shell w-full min-h-screen text-right font-sans dir-rtl select-none transition-all duration-300 p-2 sm:p-4 md:p-6 space-y-6 ${activeSubSec === 'management' ? 'financial-reference-management' : ''}`} dir="rtl">
+    <div id="student-financial-portal" className="financial-luxury-shell w-full min-h-screen text-right font-sans dir-rtl select-none transition-all duration-300 p-2 sm:p-4 md:p-6 space-y-6" dir="rtl">
 
       {/* ==========================================
           LUXURY GOLD METALLIC TOP HEADER
          ========================================== */}
-      {activeSubSec !== 'management' && <div className="financial-module-header bg-gradient-to-r from-[#1c120c] via-[#2d1e12] to-[#1a100a] text-white rounded-3xl p-4 sm:p-5 border-2 border-[#d4af37]/40 shadow-2xl flex flex-wrap items-center justify-between gap-4 relative overflow-hidden">
+      <div className="financial-module-header bg-gradient-to-r from-[#1c120c] via-[#2d1e12] to-[#1a100a] text-white rounded-3xl p-4 sm:p-5 border-2 border-[#d4af37]/40 shadow-2xl flex flex-wrap items-center justify-between gap-4 relative overflow-hidden">
         <div className="absolute top-0 right-1/4 w-96 h-20 bg-[#d4af37]/10 blur-3xl pointer-events-none" />
         
         {/* Module Title & Breadcrumbs */}
@@ -2760,9 +2760,9 @@ export default function StudentFinancialPortal({
             <span>التقارير المالية</span>
           </button>
         </div>
-      </div>}
+      </div>
 
-      {activeSubSec !== 'management' && <EnterpriseActionToolbar minimal={true}
+      <EnterpriseActionToolbar minimal={true}
         title="الرسوم والأقساط المدرسية"
         stats={
           <div className="flex flex-wrap items-center gap-x-2.5 gap-y-1 text-[10px] sm:text-xs">
@@ -2789,7 +2789,7 @@ export default function StudentFinancialPortal({
         isEditing={portalIsEditing}
         userRole={currentRole || 'SuperAdmin'}
         onExit={setActiveSection ? () => setActiveSection('dashboard') : undefined}
-      />}
+      />
       <input
         ref={feeImportInputRef}
         type="file"
@@ -3545,16 +3545,6 @@ export default function StudentFinancialPortal({
         {/* VIEW 4: إدارة الرسوم والدفعات الذكية */}
         {activeSubSec === 'management' && (
           <div className="management-reference-screen space-y-6 animate-fadeIn">
-            <details className="reference-screen-nav">
-              <summary aria-label="التنقل بين شاشات وحدة الرسوم">☰</summary>
-              <div className="reference-screen-nav-menu">
-                <button type="button" onClick={() => setActiveSubSec('analytics')}>لوحة التحليلات</button>
-                <button type="button" onClick={() => setActiveSubSec('management')}>إدارة الرسوم</button>
-                <button type="button" onClick={() => setActiveSubSec('receipts')}>سندات القبض</button>
-                <button type="button" onClick={() => setActiveSubSec('reports')}>التقارير المالية</button>
-                <button type="button" onClick={() => setActiveSection('dashboard')}>العودة للرئيسية</button>
-              </div>
-            </details>
             {/* Header with Title and Search */}
             <div className="pb-4 border-b border-slate-200 flex flex-col sm:flex-row justify-between items-start sm:items-center gap-2">
               <div>
