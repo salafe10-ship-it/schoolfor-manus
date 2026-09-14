@@ -15,6 +15,7 @@ import {
   GraduationCap,
   Mail,
   Search,
+  Settings,
   ShieldCheck,
   Shirt,
   Sparkles,
@@ -196,6 +197,7 @@ export default function ModernSchoolDashboard({
     { section: 'school_transport', label: 'النقل والترحيل', icon: Bus },
     { section: 'school_uniform', label: 'الزي المدرسي', icon: Shirt },
     { section: 'school_users_admin', label: 'المستخدمون والصلاحيات', icon: ShieldCheck },
+    { section: 'settings', label: 'هوية المدرسة والشعار', icon: Settings },
   ];
 
   return (
