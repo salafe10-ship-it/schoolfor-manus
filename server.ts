@@ -116,7 +116,14 @@ import {
 type FinancialWriteMode = 'snapshot_read_only' | 'snapshot_write' | 'erp_integrated';
 
 const deploymentEnvironment = String(process.env.EDUPRO_ENVIRONMENT || '').trim().toLowerCase();
-const productionLikeEnvironment = deploymentEnvironment === 'staging' || deploymentEnvironment === 'production';
+// Render does not guarantee that EDUPRO_ENVIRONMENT is present on every
+// service. Treat its managed runtime as production-like as well, otherwise a
+// missing PLATFORM_ADMIN_DATABASE_URL could silently activate the local
+// DIRECT_URL fallback and force an IPv6-only Supabase connection.
+const productionLikeEnvironment = deploymentEnvironment === 'staging'
+  || deploymentEnvironment === 'production'
+  || process.env.NODE_ENV === 'production'
+  || Boolean(process.env.RENDER_SERVICE_ID);
 const unsafeLocalDatabaseRoleOptIn = process.env.ALLOW_UNSAFE_LOCAL_DATABASE_ROLE === 'true';
 const databaseTargetAlignment = inspectSupabaseDatabaseTargetAlignment({
   supabaseUrl: process.env.SUPABASE_URL || process.env.NEXT_PUBLIC_SUPABASE_URL,
@@ -211,6 +218,23 @@ const platformAdminPool = platformAdminConnectionString
       ssl: postgresSslConfig,
     })
   : null;
+
+const describePostgresTarget = (value: string | undefined): string => {
+  if (!value) return 'not-configured';
+  try {
+    const target = new URL(value);
+    return `${target.hostname}:${target.port || '5432'}`;
+  } catch {
+    return 'invalid-connection-string';
+  }
+};
+
+EnterpriseLogger.info('PostgreSQL connection policy resolved.', 'ServerBootstrap', {
+  productionLikeEnvironment,
+  platformAdminConfigured: Boolean(process.env.PLATFORM_ADMIN_DATABASE_URL),
+  dataPlaneTarget: describePostgresTarget(process.env.DATABASE_URL || process.env.DIRECT_URL),
+  platformAdminTarget: describePostgresTarget(platformAdminConnectionStringRaw),
+});
 
 // The identity screens depend on the canonical HR job reference.  Production
 // deployments may boot against a database whose migration ledger is behind
