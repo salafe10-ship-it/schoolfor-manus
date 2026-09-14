@@ -12344,6 +12344,22 @@ ${JSON.stringify(snapshot)}
           ? 'REQUEST_LIMITED'
           : 'REQUEST_FAILED';
 
+    // Keep the public response safe for non-platform users, but preserve the
+    // real server-side cause for Render diagnostics. Without this entry a
+    // database failure is reduced to the generic Arabic toast and the actual
+    // constraint/foreign-key problem cannot be repaired from production logs.
+    if (statusCode >= 500) {
+      EnterpriseLogger.error('API request failed.', 'HttpError', {
+        method: req.method,
+        path: req.originalUrl,
+        statusCode,
+        errorCode,
+        message,
+        details,
+        traceId,
+      });
+    }
+
     // Log critical or database errors to enterprise Audit Log system
     if (statusCode >= 500 || errorCode === "DATABASE_ERROR") {
       const user = (req as any).user as { id?: string; name?: string; role?: string; schoolId?: string } | undefined;

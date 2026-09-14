@@ -1062,7 +1062,10 @@ export default function StudentAffairsPortal({
       academicReadingLevel: formData.academicReadingLevel,
       academicSpellingLevel: formData.academicSpellingLevel,
       academicAverage: formData.academicAverage,
-      academicNotes: formData.academicNotes,
+      // The canonical students table exposes academic_notes as the durable
+      // notes/recommendations field. Keep the dedicated tab usable while
+      // preserving the existing academic-notes contract.
+      academicNotes: [formData.academicNotes, formData.notes].filter(Boolean).join('\n\n') || '',
       healthChronicDiseases: formData.healthChronicDiseases,
       healthMedications: formData.healthMedications,
       healthAllergies: formData.healthAllergies,
@@ -3042,8 +3045,25 @@ export default function StudentAffairsPortal({
                   <p className="rounded-xl border border-amber-200 bg-amber-50 px-3 py-2 text-[10px] font-bold text-amber-900">الصيغ المدعومة: PDF وJPG وPNG — الحد الأقصى 10 ميجابايت لكل ملف. تُخزّن الملفات في مساحة خاصة مرتبطة بالطالب وسياق المدرسة.</p>
                 </div>
               ) : modalTab === 'notes' ? (
-                <div className="p-8 text-center text-slate-500 font-bold text-xs bg-slate-50 rounded-2xl border border-dashed border-slate-300">
-                  لم يتم حفظ هذه البيانات بعد. احفظ السجل أولاً لتأكيدها.
+                <div className="space-y-4 rounded-2xl border border-amber-200 bg-amber-50/60 p-5">
+                  <div>
+                    <h4 className="text-sm font-black text-amber-950">ملاحظات وتوصيات الطالب</h4>
+                    <p className="mt-1 text-[11px] font-bold text-amber-800">
+                      اكتب الملاحظات الإدارية أو التوصيات التعليمية. تُحفظ ضمن الحقل الكانوني للملاحظات الأكاديمية مع بقية بيانات الطالب.
+                    </p>
+                  </div>
+                  <label className="block text-xs font-black text-slate-800">
+                    الملاحظات والتوصيات
+                    <textarea
+                      value={formData.notes}
+                      onChange={event => setFormData(current => ({ ...current, notes: event.target.value }))}
+                      rows={7}
+                      maxLength={4000}
+                      placeholder="اكتب الملاحظات والتوصيات هنا..."
+                      className="mt-2 w-full rounded-xl border border-amber-300 bg-white p-3 text-sm font-bold text-slate-900 outline-none transition focus:border-amber-600 focus:ring-2 focus:ring-amber-200"
+                    />
+                  </label>
+                  <div className="text-left text-[10px] font-bold text-slate-500">{formData.notes.length}/4000</div>
                 </div>
               ) : null}
             </div>
