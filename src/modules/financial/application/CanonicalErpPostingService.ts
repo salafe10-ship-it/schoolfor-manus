@@ -182,10 +182,31 @@ export function buildCanonicalPosting(
   if (sourceType === 'student_receipt') {
     if (normalizedStatus(rowValue(input, 'status')) !== 'posted') return null;
     const amount = positiveAmount(rowValue(input, 'amount'), 'receipt.amount');
-    const cash = mappingValue(mappings, 'treasury.cash', input, ['receivingAccount', 'accountId', 'debitAccount'], '1101');
+    const rawReceivingAccounts = rowValue(input, 'receivingAccounts', 'receivingAccountLines');
+    const receivingAccounts = Array.isArray(rawReceivingAccounts) && rawReceivingAccounts.length > 0
+      ? rawReceivingAccounts.map((item: any, index: number) => {
+          const accountCode = textValue(item?.accountCode || item?.account || item?.code);
+          const lineAmount = positiveAmount(item?.amount, `receipt.receivingAccounts[${index}].amount`);
+          if (!accountCode) throw new Error(`سطر القبض ${index + 1} يفتقد حساب استلام.`);
+          return { accountCode, amount: lineAmount };
+        })
+      : [{
+          accountCode: mappingValue(mappings, 'treasury.cash', input, ['receivingAccount', 'accountId', 'debitAccount'], '1101'),
+          amount
+        }];
+    const receivingTotal = Number(receivingAccounts.reduce((sum, item) => sum + item.amount, 0).toFixed(2));
+    if (receivingTotal !== amount) {
+      throw new Error(`توزيع حسابات القبض غير متوازن: الإجمالي ${receivingTotal} والمبلغ ${amount}.`);
+    }
     const receivable = mappingValue(mappings, 'student_fees.receivable', input, ['receivableAccount', 'creditAccount'], '1201');
     const lines = [
-      { id: `${sourceId}-D`, accountCode: cash, debit: amount, credit: 0, costCenter: textValue(rowValue(input, 'costCenter', 'costCenterId')) || undefined },
+      ...receivingAccounts.map((item, index) => ({
+        id: `${sourceId}-D${index + 1}`,
+        accountCode: item.accountCode,
+        debit: item.amount,
+        credit: 0,
+        costCenter: textValue(rowValue(input, 'costCenter', 'costCenterId')) || undefined
+      })),
       { id: `${sourceId}-C`, accountCode: receivable, debit: 0, credit: amount, costCenter: textValue(rowValue(input, 'costCenter', 'costCenterId')) || undefined }
     ];
     balanced(lines);

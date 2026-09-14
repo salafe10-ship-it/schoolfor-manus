@@ -11779,11 +11779,34 @@ async function startServer() {
       const amount = assertMoney(body.amount, 'مبلغ سند القبض');
       const permittedPaymentMethods = new Set(['نقدي', 'شيك', 'تحويل', 'بطاقة مدى البنكية (Mada)', 'فيزا / ماستركارد']);
       const permittedCostCenters = new Set(['kindergarten', 'primary', 'middle', 'secondary']);
+      const rawReceivingAccounts = Array.isArray(body.receivingAccounts) && body.receivingAccounts.length > 0
+        ? body.receivingAccounts
+        : [{ accountCode: receivingAccount, amount, paymentMethod }];
+      if (rawReceivingAccounts.length < 1 || rawReceivingAccounts.length > 3) {
+        throw new ValidationError('يجب توزيع السند على حساب قبض واحد إلى ثلاثة حسابات فرعية كحد أقصى.');
+      }
+      const receivingAccounts = rawReceivingAccounts.map((item: any, index: number) => {
+        const accountCode = String(item?.accountCode || item?.account || item?.code || '').trim();
+        const lineAmount = assertMoney(item?.amount, `قيمة حساب القبض رقم ${index + 1}`);
+        const linePaymentMethod = String(item?.paymentMethod || paymentMethod || 'نقدي').trim();
+        if (!accountCode) throw new ValidationError(`حساب القبض رقم ${index + 1} مطلوب.`);
+        if (!permittedPaymentMethods.has(linePaymentMethod)) throw new ValidationError(`طريقة السداد في السطر ${index + 1} غير مدعومة.`);
+        return { accountCode, amount: lineAmount, paymentMethod: linePaymentMethod };
+      });
+      if (new Set(receivingAccounts.map(item => item.accountCode)).size !== receivingAccounts.length) {
+        throw new ValidationError('لا يمكن تكرار حساب القبض داخل السند؛ اجمع المبلغ في سطر واحد للحساب نفسه.');
+      }
+      const receivingTotal = Number(receivingAccounts.reduce((sum, item) => sum + item.amount, 0).toFixed(2));
+      if (receivingTotal !== amount) {
+        throw new ValidationError(`مجموع توزيع القبض (${receivingTotal.toFixed(2)}) يجب أن يساوي مبلغ السند (${amount.toFixed(2)}).`);
+      }
+      const primaryReceivingAccount = receivingAccounts[0].accountCode;
+      const effectivePaymentMethod = paymentMethod || receivingAccounts[0].paymentMethod;
       if (!/^[A-Za-z0-9][A-Za-z0-9._:-]{7,179}$/.test(receiptId)) throw new ValidationError('معرف سند القبض غير صالح.');
       if (!canonicalFeeUuid(studentId)) throw new ValidationError('معرف الطالب غير صالح.');
       if (!/^\d{4}-\d{2}-\d{2}$/.test(receiptDate)) throw new ValidationError('تاريخ سند القبض غير صالح.');
-      if (!permittedPaymentMethods.has(paymentMethod)) throw new ValidationError('طريقة السداد غير مدعومة.');
-      if (!receivingAccount || !against) throw new ValidationError('حساب الاستلام وبيان السداد حقول مطلوبة.');
+      if (!permittedPaymentMethods.has(effectivePaymentMethod)) throw new ValidationError('طريقة السداد غير مدعومة.');
+      if (!primaryReceivingAccount || !against) throw new ValidationError('حساب الاستلام وبيان السداد حقول مطلوبة.');
       if (!permittedCostCenters.has(costCenter)) throw new ValidationError('مركز التكلفة غير صالح؛ يجب أن يكون الروضة أو الابتدائي أو المتوسط أو الثانوي.');
 
       let settlement: Record<string, any> | null = null;
@@ -11799,6 +11822,22 @@ async function startServer() {
         const transaction = UnitOfWork.getActiveContext()?.databaseTransaction;
         if (!transaction) throw new DatabaseError('تعذر فتح معاملة تسوية سند القبض.');
         const databaseActorId = await resolveCanonicalFeeActor(transaction, tenantId, schoolId, actorId);
+        const accountResult = await transaction.query(
+          `SELECT account_code, account_name, account_nature, is_active, is_leaf
+             FROM public.erp_chart_of_accounts
+            WHERE school_id = $1 AND account_code = ANY($2::text[])
+            FOR SHARE`,
+          [schoolId, receivingAccounts.map(item => item.accountCode)]
+        );
+        const accountsByCode = new Map(accountResult.rows.map((row: any) => [String(row.account_code), row]));
+        for (const item of receivingAccounts) {
+          const account = accountsByCode.get(item.accountCode);
+          if (!account) throw new ValidationError(`حساب القبض ${item.accountCode} غير موجود في دليل الحسابات.`);
+          if (!account.is_active) throw new ValidationError(`حساب القبض ${item.accountCode} غير نشط.`);
+          if (!account.is_leaf) throw new ValidationError(`حساب القبض ${item.accountCode} تجميعي ولا يقبل حركة مباشرة.`);
+          if (account.account_nature !== 'asset') throw new ValidationError(`حساب القبض ${item.accountCode} ليس حساب أصل نقدي أو مصرفي.`);
+          if (!/^(1101|1102|1110|1120)/.test(item.accountCode)) throw new ValidationError(`حساب القبض ${item.accountCode} ليس ضمن حسابات الصندوق أو البنوك.`);
+        }
         const studentResult = await transaction.query(
           `SELECT id, preferred_name, legal_first_name, legal_middle_name, legal_last_name
              FROM public.students
@@ -11836,7 +11875,7 @@ async function startServer() {
           }
           idempotentReplay = true;
           settlement = {
-            receipt: { id: receiptId, studentId, studentName, amount, receiptDate, paymentMethod, receivingAccount, operationalType, against, status: 'posted', journalEntryId: existing.journal_entry_id, receiptVoucherId: existing.receipt_voucher_id },
+            receipt: { id: receiptId, studentId, studentName, amount, receiptDate, paymentMethod: effectivePaymentMethod, receivingAccount: primaryReceivingAccount, receivingAccounts, operationalType, against, status: 'posted', journalEntryId: existing.journal_entry_id, receiptVoucherId: existing.receipt_voucher_id },
             allocations: previousAllocations.rows,
             journalId: existing.journal_entry_id
           };
@@ -11876,8 +11915,8 @@ async function startServer() {
                     receiving_account = $7, operational_type = $8, against_text = $9,
                     status = 'posted', receipt_voucher_id = $10, source_payload = $11::jsonb, updated_at = now(), updated_by = $12
               WHERE tenant_id = $1 AND school_id = $2 AND id = $3`,
-            [tenantId, schoolId, receiptId, studentName, receiptDate, paymentMethod, receivingAccount, operationalType, against,
-              receiptVoucherId, JSON.stringify({ command: 'manual_settle', costCenter, installmentScheduleId: requestedInstallmentScheduleId, receiptVoucherId, idempotencyKey: receiptId }), databaseActorId]
+            [tenantId, schoolId, receiptId, studentName, receiptDate, effectivePaymentMethod, primaryReceivingAccount, operationalType, against,
+              receiptVoucherId, JSON.stringify({ command: 'manual_settle', costCenter, receivingAccounts, installmentScheduleId: requestedInstallmentScheduleId, receiptVoucherId, idempotencyKey: receiptId }), databaseActorId]
           );
         } else {
           await transaction.query(
@@ -11885,8 +11924,8 @@ async function startServer() {
               (tenant_id, school_id, id, student_id, student_name, receipt_date, amount, payment_method,
                receiving_account, operational_type, against_text, status, receipt_voucher_id, source_payload, updated_by)
              VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,'posted',$12,$13::jsonb,$14)`,
-            [tenantId, schoolId, receiptId, studentId, studentName, receiptDate, amount, paymentMethod,
-              receivingAccount, operationalType, against, receiptVoucherId, JSON.stringify({ command: 'manual_settle', costCenter, installmentScheduleId: requestedInstallmentScheduleId, receiptVoucherId, idempotencyKey: receiptId }), databaseActorId]
+            [tenantId, schoolId, receiptId, studentId, studentName, receiptDate, amount, effectivePaymentMethod,
+              primaryReceivingAccount, operationalType, against, receiptVoucherId, JSON.stringify({ command: 'manual_settle', costCenter, receivingAccounts, installmentScheduleId: requestedInstallmentScheduleId, receiptVoucherId, idempotencyKey: receiptId }), databaseActorId]
           );
         }
 
@@ -11975,8 +12014,9 @@ async function startServer() {
             studentName,
             date: receiptDate,
             amount,
-            paymentMethod,
-            receivingAccount,
+            paymentMethod: effectivePaymentMethod,
+            receivingAccount: primaryReceivingAccount,
+            receivingAccounts,
             receivableAccount: '1201',
             operationalType,
             against,
@@ -11997,10 +12037,10 @@ async function startServer() {
             (id, tenant_id, school_id, branch_id, actor_user_id, entity_type, entity_id, action, source, reason, result, metadata)
            VALUES ($1,$2,$3,$4,$5,'student_fee_receipt',$6,'manual_settle','CanonicalStudentFeeRoute','تحصيل وتخصيص وترحيل سند طالب','success',$7::jsonb)`,
           [randomUUID(), tenantId, schoolId, tenantContext.branchId || null, databaseActorId, receiptId,
-            JSON.stringify({ studentId, amount, paymentMethod, installmentScheduleId: requestedInstallmentScheduleId, allocationCount: allocations.length, journalId })]
+            JSON.stringify({ studentId, amount, paymentMethod: effectivePaymentMethod, receivingAccounts, installmentScheduleId: requestedInstallmentScheduleId, allocationCount: allocations.length, journalId })]
         );
         settlement = {
-          receipt: { id: receiptId, studentId, studentName, amount, receiptDate, paymentMethod, receivingAccount, operationalType, against, status: 'posted', journalEntryId: journalId, receiptVoucherId },
+          receipt: { id: receiptId, studentId, studentName, amount, receiptDate, paymentMethod: effectivePaymentMethod, receivingAccount: primaryReceivingAccount, receivingAccounts, operationalType, against, status: 'posted', journalEntryId: journalId, receiptVoucherId },
           allocations,
           journalId
         };
@@ -12146,7 +12186,8 @@ async function startServer() {
             const canonicalReceipts = await transaction.query(
               `SELECT id, student_id AS "studentId", student_name AS "studentName", receipt_date AS "receiptDate", amount,
                       payment_method AS "paymentMethod", receiving_account AS "receivingAccount", operational_type AS "operationalType",
-                      against_text AS against, status, journal_entry_id AS "journalEntryId", receipt_voucher_id AS "receiptVoucherId"
+                      against_text AS against, status, journal_entry_id AS "journalEntryId", receipt_voucher_id AS "receiptVoucherId",
+                      source_payload AS "sourcePayload"
                  FROM public.student_fee_receipts
                 WHERE tenant_id = $1 AND school_id = $2
                 ORDER BY receipt_date DESC NULLS LAST, created_at DESC`, [tenantId, schoolId]);

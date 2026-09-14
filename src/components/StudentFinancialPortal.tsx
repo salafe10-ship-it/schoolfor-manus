@@ -75,6 +75,37 @@ const STUDENT_COST_CENTER_LABELS: Record<string, string> = {
   middle: 'المتوسط',
   secondary: 'الثانوي'
 };
+type ReceiptTender = {
+  accountCode: string;
+  amount: number;
+  paymentMethod: string;
+};
+const RECEIPT_TENDER_MAX = 3;
+const RECEIPT_PAYMENT_METHODS = [
+  { value: 'نقدي', label: 'نقدي (كاش)' },
+  { value: 'شيك', label: 'شيك مصرفي' },
+  { value: 'تحويل', label: 'تحويل مصرفي' },
+  { value: 'بطاقة مدى البنكية (Mada)', label: 'بطاقة مدى / نقاط بيع' },
+  { value: 'فيزا / ماستركارد', label: 'فيزا / ماستركارد' }
+];
+function normalizeReceiptTenders(voucher: any, fallbackAmount = 0): ReceiptTender[] {
+  let raw = voucher?.receivingAccounts || voucher?.receivingAccountLines || voucher?.sourcePayload?.receivingAccounts;
+  if (typeof raw === 'string') {
+    try { raw = JSON.parse(raw)?.receivingAccounts; } catch { raw = null; }
+  }
+  if (Array.isArray(raw) && raw.length > 0) {
+    return raw.map((item: any) => ({
+      accountCode: String(item?.accountCode || item?.account || item?.code || '').trim(),
+      amount: Number(item?.amount || 0),
+      paymentMethod: String(item?.paymentMethod || voucher?.paymentMethod || 'نقدي').trim()
+    })).filter((item: ReceiptTender) => item.accountCode && item.amount > 0).slice(0, RECEIPT_TENDER_MAX);
+  }
+  return [{
+    accountCode: String(voucher?.receivingAccount || '1101').trim(),
+    amount: Number(fallbackAmount || voucher?.amount || 0),
+    paymentMethod: String(voucher?.paymentMethod || 'نقدي').trim()
+  }];
+}
 const MAX_FEE_CONFIG_IMPORT_FILE_BYTES = 10 * 1024 * 1024;
 const FEE_CONFIG_IMPORT_EXTENSIONS = ['.xlsx', '.csv'];
 const MAX_FEE_CONFIG_IMPORT_ROWS = 500;
@@ -286,6 +317,21 @@ export default function StudentFinancialPortal({
   const [glJvs, setGlJvs] = useState<any[]>([]);
   const [chartOfAccounts, setChartOfAccounts] = useState<any[]>([]);
   const [expenseAccruals, setExpenseAccruals] = useState<any[]>([]);
+
+  const receiptAccountOptions = useMemo(() => chartOfAccounts
+    .filter(account => account?.isActive !== false && account?.is_active !== false)
+    .filter(account => account?.isLeaf !== false && account?.is_leaf !== false && account?.type !== 'رئيسي')
+    .map(account => {
+      const code = String(account?.code || account?.accountCode || account?.id || '').trim();
+      return {
+        code,
+        name: String(account?.nameAr || account?.name || account?.account_name || '').trim(),
+        isCash: /^(1101|1110|1120)/.test(code),
+        isBank: /^1102/.test(code)
+      };
+    })
+    .filter(account => account.code && (account.isCash || account.isBank))
+    .sort((a, b) => a.code.localeCompare(b.code)), [chartOfAccounts]);
 
   const feeRevenueAccountOptions = useMemo(() => {
     const accounts = chartOfAccounts
@@ -556,6 +602,7 @@ export default function StudentFinancialPortal({
     amount: 0,
     paymentMethod: 'نقدي',
     receivingAccount: '1101',
+    receivingAccounts: [{ accountCode: '1101', amount: 0, paymentMethod: 'نقدي' }] as ReceiptTender[],
     operationalType: 'رسوم دراسية',
     against: '',
     stage: 'الابتدائي',
@@ -629,6 +676,7 @@ export default function StudentFinancialPortal({
         amount: selectedStudRv.amount,
         paymentMethod: selectedStudRv.paymentMethod,
         receivingAccount: selectedStudRv.receivingAccount,
+        receivingAccounts: normalizeReceiptTenders(selectedStudRv, Number(selectedStudRv.amount || 0)),
         operationalType: selectedStudRv.operationalType,
         against: selectedStudRv.against,
         stage: selectedStudRv.stage,
@@ -672,6 +720,7 @@ export default function StudentFinancialPortal({
         against: '',
         stage: '',
         costCenter: '',
+        receivingAccounts: [{ accountCode: '1101', amount: 0, paymentMethod: 'نقدي' }],
         installmentScheduleId: ''
       }));
       setReceiptInstallmentScheduleId('');
@@ -698,6 +747,7 @@ export default function StudentFinancialPortal({
       stage: stageLabel,
       costCenter: costCenter,
       amount: remainingBalance > 0 ? remainingBalance : 0,
+      receivingAccounts: [{ accountCode: '1101', amount: remainingBalance > 0 ? remainingBalance : 0, paymentMethod: prev.paymentMethod || 'نقدي' }],
       against: `سداد قيمة الرسوم الدراسية للطالب: ${student.name} - المرحلة التعليمية: ${stageLabel}`,
       installmentScheduleId: ''
     }));
@@ -716,6 +766,7 @@ export default function StudentFinancialPortal({
       amount: 0,
       paymentMethod: 'نقدي',
       receivingAccount: '1101',
+      receivingAccounts: [{ accountCode: '1101', amount: 0, paymentMethod: 'نقدي' }],
       operationalType: 'رسوم دراسية',
       against: '',
       stage: '',
@@ -746,6 +797,48 @@ export default function StudentFinancialPortal({
         triggerNotification('⚠️ الرجاء تحديد البيان والشرح التفصيلي لأسباب الدفع', 'warning');
         return;
       }
+      const receivingAccounts = (Array.isArray(studRvForm.receivingAccounts) ? studRvForm.receivingAccounts : [])
+        .map(item => ({
+          accountCode: String(item.accountCode || '').trim(),
+          amount: Number(Number(item.amount || 0).toFixed(2)),
+          paymentMethod: String(item.paymentMethod || '').trim()
+        }));
+      if (receivingAccounts.length < 1 || receivingAccounts.length > RECEIPT_TENDER_MAX) {
+        triggerNotification(`⚠️ يجب إضافة حساب قبض واحد إلى ${RECEIPT_TENDER_MAX} حسابات كحد أقصى.`, 'warning');
+        return;
+      }
+      if (receivingAccounts.some(item => !item.accountCode || !Number.isFinite(item.amount) || item.amount <= 0)) {
+        triggerNotification('⚠️ كل سطر قبض يجب أن يحتوي حسابًا فرعيًا ومبلغًا أكبر من صفر.', 'warning');
+        return;
+      }
+      if (new Set(receivingAccounts.map(item => item.accountCode)).size !== receivingAccounts.length) {
+        triggerNotification('⚠️ لا يمكن تكرار حساب القبض؛ اجمع المبلغ في سطر واحد للحساب نفسه.', 'warning');
+        return;
+      }
+      const receivingTotal = Number(receivingAccounts.reduce((sum, item) => sum + item.amount, 0).toFixed(2));
+      if (receivingTotal !== Number(Number(studRvForm.amount).toFixed(2))) {
+        triggerNotification(`⚠️ مجموع توزيع القبض (${receivingTotal.toFixed(2)}) لا يساوي مبلغ السند (${Number(studRvForm.amount).toFixed(2)}).`, 'warning');
+        return;
+      }
+      for (const tender of receivingAccounts) {
+        if (!RECEIPT_PAYMENT_METHODS.some(method => method.value === tender.paymentMethod)) {
+          triggerNotification('⚠️ توجد طريقة قبض غير معتمدة في توزيع السند.', 'warning');
+          return;
+        }
+        const account = receiptAccountOptions.find(item => item.code === tender.accountCode);
+        if (chartOfAccounts.length > 0 && !account) {
+          triggerNotification(`⚠️ الحساب ${tender.accountCode} غير موجود أو تجميعي أو غير نشط. اختر حساب صندوق/بنك فرعيًا.`, 'warning');
+          return;
+        }
+        if (account && tender.paymentMethod === 'نقدي' && !account.isCash) {
+          triggerNotification(`⚠️ طريقة «نقدي» تتطلب حساب خزينة، وليس ${account.name || tender.accountCode}.`, 'warning');
+          return;
+        }
+        if (account && tender.paymentMethod !== 'نقدي' && !account.isBank) {
+          triggerNotification(`⚠️ طريقة «${tender.paymentMethod}» تتطلب حساب بنك، وليس حساب خزينة.`, 'warning');
+          return;
+        }
+      }
 
       const student = students.find(s => s.id === studRvForm.studentId);
       const financialStudent = financialStudentRows.find(s => s.id === studRvForm.studentId) || student;
@@ -770,6 +863,9 @@ export default function StudentFinancialPortal({
         const permanentId = createFinancialReference('RV-STUD');
         finalVoucher = {
           ...studRvForm,
+          paymentMethod: receivingAccounts[0].paymentMethod,
+          receivingAccount: receivingAccounts[0].accountCode,
+          receivingAccounts,
           id: permanentId,
           status: 'saved',
           createdBy: auditActor,
@@ -780,6 +876,9 @@ export default function StudentFinancialPortal({
         finalVoucher = {
           ...selectedStudRv,
           ...studRvForm,
+          paymentMethod: receivingAccounts[0].paymentMethod,
+          receivingAccount: receivingAccounts[0].accountCode,
+          receivingAccounts,
           status: 'saved',
           updatedBy: auditActor,
           updatedAt: new Date().toLocaleString('ar-LY')
@@ -881,6 +980,7 @@ export default function StudentFinancialPortal({
           amount: Number(selectedStudRv.amount),
           paymentMethod: selectedStudRv.paymentMethod,
           receivingAccount: selectedStudRv.receivingAccount,
+          receivingAccounts: normalizeReceiptTenders(selectedStudRv, Number(selectedStudRv.amount || 0)),
           operationalType: selectedStudRv.operationalType,
           against: selectedStudRv.against,
           costCenter: selectedStudRv.costCenter,
@@ -4964,7 +5064,13 @@ export default function StudentFinancialPortal({
                         <input
                           type="number"
                           value={studRvForm.amount}
-                          onChange={(e) => setStudRvForm(prev => ({ ...prev, amount: Number(e.target.value) }))}
+                          onChange={(e) => setStudRvForm(prev => {
+                            const amount = Number(e.target.value);
+                            const receivingAccounts = prev.receivingAccounts.length === 1
+                              ? [{ ...prev.receivingAccounts[0], amount }]
+                              : prev.receivingAccounts;
+                            return { ...prev, amount, receivingAccounts };
+                          })}
                           className="block w-full border border-slate-300 p-2.5 focus:ring-1 focus:ring-[#9a6a1d] focus:border-[#9a6a1d] focus:outline-none font-bold font-mono text-emerald-600 text-sm"
                         />
                         {(() => {
@@ -5008,33 +5114,98 @@ export default function StudentFinancialPortal({
                         </p>
                       </div>
 
-                      {/* Payment Method */}
-                      <div className="space-y-1">
-                        <label className="font-extrabold text-slate-700 block">طريقة القبض / السداد: *</label>
-                        <select
-                          value={studRvForm.paymentMethod}
-                          onChange={(e) => setStudRvForm(prev => ({ ...prev, paymentMethod: e.target.value }))}
-                          className="block w-full border border-slate-300 p-2.5 focus:ring-1 focus:ring-[#9a6a1d] focus:border-[#9a6a1d] focus:outline-none font-bold bg-slate-50"
-                        >
-                          <option value="نقدي">نقدي (كاش بالصندوق)</option>
-                          <option value="بطاقة مدى البنكية (Mada)">بطاقة مدى البنكية (Mada)</option>
-                          <option value="شيك">شيك مصدق مقبول الدفع</option>
-                          <option value="تحويل">تحويل مصرفي فوري لجاري المدرسة</option>
-                          <option value="فيزا / ماستركارد">فيزا / ماستركارد (دفع إلكتروني)</option>
-                        </select>
-                      </div>
+                      {/* Multi-tender receipt distribution */}
+                      <div className="md:col-span-2 space-y-3 rounded-2xl border-2 border-emerald-200 bg-emerald-50/50 p-4">
+                        <div className="flex flex-wrap items-center justify-between gap-2">
+                          <div>
+                            <label className="font-extrabold text-slate-800 block">توزيع وسيلة القبض على الحسابات *</label>
+                            <p className="text-[10px] font-bold text-slate-500 mt-1">يمكن اختيار كاش فقط، بنك واحد، أو حتى ثلاثة حسابات معًا. الحسابات التجميعية لا تظهر ولا تقبل الترحيل.</p>
+                          </div>
+                          <button
+                            type="button"
+                            disabled={studRvForm.receivingAccounts.length >= RECEIPT_TENDER_MAX}
+                            onClick={() => setStudRvForm(prev => ({
+                              ...prev,
+                              receivingAccounts: [...prev.receivingAccounts, { accountCode: '', amount: 0, paymentMethod: 'نقدي' }]
+                            }))}
+                            className="rounded-lg bg-slate-900 px-3 py-2 text-[10px] font-black text-white disabled:cursor-not-allowed disabled:opacity-40"
+                          >
+                            + إضافة حساب ({studRvForm.receivingAccounts.length}/{RECEIPT_TENDER_MAX})
+                          </button>
+                        </div>
 
-                      {/* Receiving Account */}
-                      <div className="space-y-1">
-                        <label className="font-extrabold text-slate-700 block">الحساب المالي الفريد للاستلام: *</label>
-                        <select
-                          value={studRvForm.receivingAccount}
-                          onChange={(e) => setStudRvForm(prev => ({ ...prev, receivingAccount: e.target.value }))}
-                          className="block w-full border border-slate-300 p-2.5 focus:ring-1 focus:ring-[#9a6a1d] focus:border-[#9a6a1d] focus:outline-none font-bold bg-slate-50"
-                        >
-                          <option value="1101">1101 - صندوق الخزينة الرئيسي (كاش)</option>
-                          <option value="1102">1102 - حساب مصرف الوحدة الجاري</option>
-                        </select>
+                        <div className="space-y-2">
+                          {studRvForm.receivingAccounts.map((tender, index) => (
+                            <div key={`${index}-${tender.accountCode}`} className="grid grid-cols-1 gap-2 rounded-xl border border-emerald-100 bg-white p-3 md:grid-cols-[1.2fr_1.5fr_0.8fr_auto] md:items-end">
+                              <div className="space-y-1">
+                                <label className="text-[10px] font-black text-slate-600">طريقة القبض {index + 1}</label>
+                                <select
+                                  value={tender.paymentMethod}
+                                  onChange={(event) => setStudRvForm(prev => {
+                                    const receivingAccounts = prev.receivingAccounts.map((item, itemIndex) => itemIndex === index ? { ...item, paymentMethod: event.target.value } : item);
+                                    return { ...prev, paymentMethod: receivingAccounts[0]?.paymentMethod || prev.paymentMethod, receivingAccounts };
+                                  })}
+                                  className="block w-full border border-slate-300 bg-slate-50 p-2.5 text-xs font-bold focus:border-[#9a6a1d] focus:outline-none"
+                                >
+                                  {RECEIPT_PAYMENT_METHODS.map(method => <option key={method.value} value={method.value}>{method.label}</option>)}
+                                </select>
+                              </div>
+                              <div className="space-y-1">
+                                <label className="text-[10px] font-black text-slate-600">الحساب الفرعي المستلم {index + 1}</label>
+                                <select
+                                  value={tender.accountCode}
+                                  onChange={(event) => setStudRvForm(prev => {
+                                    const receivingAccounts = prev.receivingAccounts.map((item, itemIndex) => itemIndex === index ? { ...item, accountCode: event.target.value } : item);
+                                    return { ...prev, receivingAccount: receivingAccounts[0]?.accountCode || prev.receivingAccount, receivingAccounts };
+                                  })}
+                                  className="block w-full border border-slate-300 bg-slate-50 p-2.5 text-xs font-bold focus:border-[#9a6a1d] focus:outline-none"
+                                >
+                                  <option value="">اختر حساب الصندوق أو البنك</option>
+                                  {receiptAccountOptions.map(account => (
+                                    <option key={account.code} value={account.code}>{account.code} — {account.name || 'حساب قبض'} ({account.isCash ? 'كاش' : 'بنك'})</option>
+                                  ))}
+                                  {receiptAccountOptions.length === 0 && <option value="1101">1101 — صندوق النقدية والخزينة</option>}
+                                </select>
+                              </div>
+                              <div className="space-y-1">
+                                <label className="text-[10px] font-black text-slate-600">المبلغ</label>
+                                <input
+                                  type="number"
+                                  min="0"
+                                  step="0.01"
+                                  value={tender.amount}
+                                  onChange={(event) => setStudRvForm(prev => ({
+                                    ...prev,
+                                    receivingAccounts: prev.receivingAccounts.map((item, itemIndex) => itemIndex === index ? { ...item, amount: Number(event.target.value) } : item)
+                                  }))}
+                                  className="block w-full border border-slate-300 p-2.5 text-xs font-black text-emerald-700 focus:border-[#9a6a1d] focus:outline-none"
+                                />
+                              </div>
+                              <button
+                                type="button"
+                                disabled={studRvForm.receivingAccounts.length <= 1}
+                                onClick={() => setStudRvForm(prev => {
+                                  const receivingAccounts = prev.receivingAccounts.filter((_, itemIndex) => itemIndex !== index);
+                                  return { ...prev, paymentMethod: receivingAccounts[0]?.paymentMethod || 'نقدي', receivingAccount: receivingAccounts[0]?.accountCode || '1101', receivingAccounts };
+                                })}
+                                className="rounded-lg border border-rose-200 px-3 py-2 text-xs font-black text-rose-700 disabled:cursor-not-allowed disabled:opacity-30"
+                              >
+                                حذف
+                              </button>
+                            </div>
+                          ))}
+                        </div>
+                        {(() => {
+                          const distributed = Number(studRvForm.receivingAccounts.reduce((sum, item) => sum + Number(item.amount || 0), 0).toFixed(2));
+                          const remaining = Number((Number(studRvForm.amount || 0) - distributed).toFixed(2));
+                          return (
+                            <div className={`flex flex-wrap justify-between gap-2 border-t pt-2 text-xs font-black ${remaining === 0 ? 'border-emerald-200 text-emerald-700' : 'border-amber-200 text-amber-700'}`}>
+                              <span>إجمالي السند: {formatLD(Number(studRvForm.amount || 0))}</span>
+                              <span>الموزع: {formatLD(distributed)}</span>
+                              <span>{remaining === 0 ? '✓ التوزيع متوازن وجاهز للحفظ' : `المتبقي للتوزيع: ${formatLD(Math.abs(remaining))}`}</span>
+                            </div>
+                          );
+                        })()}
                       </div>
 
                       {/* Operational Type */}

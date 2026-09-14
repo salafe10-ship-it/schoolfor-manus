@@ -112,11 +112,16 @@ export const ReceiptVoucherTab = () => {
       || code.startsWith('110')
       || code.startsWith('111')
       || code.startsWith('112');
+    // A cash/bank group (for example 1102 = البنوك) must never be
+    // selectable as the debit side of a receipt. Only canonical leaf
+    // accounts can receive a posted movement.
+    const accountIsLeaf = account.isLeaf !== false && account.is_leaf !== false;
     const isAssetSubaccount = ['أصول', 'asset', 'assets'].includes(classification)
       && ['فرعي', 'sub', 'subaccount', 'detail'].includes(type);
-    const isLeafAccount = Number(account.level || 0) >= 3
-      || ['1101', '1102', '1110', '1120'].includes(code);
-    return isCashOrBankCode && (isAssetSubaccount || isLeafAccount || (!classification && !type));
+    const isLeafAccount = accountIsLeaf && (Number(account.level || 0) >= 3
+      || ['1101', '1110', '1120'].includes(code));
+    return isCashOrBankCode && accountIsLeaf
+      && (isAssetSubaccount || isLeafAccount || (!classification && !type));
   });
 
   const handleAddReceiptVoucher = async () => {
