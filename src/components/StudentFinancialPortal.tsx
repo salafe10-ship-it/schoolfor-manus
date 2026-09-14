@@ -201,7 +201,12 @@ export default function StudentFinancialPortal({
       .map(config => ({ value: config.type.trim(), label: config.type.trim() }))
       .filter(option => option.value);
     const merged = [...configured, ...defaultFeeTypeOptions];
-    return merged.filter((option, index, all) => all.findIndex(item => item.value === option.value) === index);
+    // Configured items take precedence over defaults. Deduplicate by both
+    // value and visible label so a configured label cannot appear twice in
+    // the user-facing select when its legacy default value differs.
+    return merged.filter((option, index, all) => all.findIndex(item => (
+      item.value === option.value || item.label === option.label
+    )) === index);
   }, [feeConfigs]);
 
   // Keep a portal-local copy of the canonical invoice stream. The parent shell
