@@ -603,6 +603,7 @@ const platformControl = platformAdminAuth as any;
  * tenant, school, branch, auth identity, active state, and non-deleted state.
  */
 const resolveCanonicalTenantActor = async (context: TenantContext): Promise<string> => {
+  let controlPlaneActorId: string | null = null;
   // Prefer the canonical Supabase control-plane directory before attempting
   // any repair through a Render PostgreSQL connection.  Some deployments
   // temporarily expose a stale/partial PLATFORM_ADMIN_DATABASE_URL; writing
@@ -620,7 +621,7 @@ const resolveCanonicalTenantActor = async (context: TenantContext): Promise<stri
       .order('created_at', { ascending: true })
       .limit(1)
       .maybeSingle();
-    if (!error && data?.id) return String(data.id);
+    if (!error && data?.id) controlPlaneActorId = String(data.id);
   }
 
   if (platformAdminPool) {
@@ -677,6 +678,13 @@ const resolveCanonicalTenantActor = async (context: TenantContext): Promise<stri
     );
     if (healed.rows[0]?.id) return healed.rows[0].id;
   }
+
+  // The Render tenant connection and the Supabase control-plane channel may
+  // point at different connection paths.  If the control-plane directory had
+  // an actor but the tenant database did not, the audit foreign key/RLS check
+  // would still reject the transaction.  Only use the control-plane id after
+  // the local privileged pool has had an opportunity to heal its exact scope.
+  if (controlPlaneActorId) return controlPlaneActorId;
 
   if (platformControl) {
     const { data, error } = await platformControl
