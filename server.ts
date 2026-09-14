@@ -11494,7 +11494,7 @@ async function startServer() {
             WHERE s.tenant_id = $1 AND s.school_id = $2
               AND p.status = 'approved' AND s.status NOT IN ('paid','cancelled','written_off')
               AND s.due_date < CURRENT_DATE AND s.paid_amount < s.amount
-            ORDER BY s.due_date ASC, studentName ASC, s.installment_number ASC`,
+            ORDER BY s.due_date ASC, "studentName" ASC, s.installment_number ASC`,
           [tenantId, schoolId]
         );
         summary = {
