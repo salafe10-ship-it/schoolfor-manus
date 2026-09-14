@@ -2745,6 +2745,9 @@ export default function StudentAffairsPortal({
 
               {modalTab === 'guardian' && (
                 <div className="grid grid-cols-1 sm:grid-cols-2 gap-4 text-xs">
+                  <div className="sm:col-span-2 rounded-xl border border-amber-300 bg-amber-50 px-4 py-3 text-[11px] font-black text-amber-900" role="status">
+                    لم يتم حفظ هذه البيانات بعد. احفظ السجل أولاً لتأكيدها.
+                  </div>
                   <div>
                     <label className="block text-slate-800 font-extrabold mb-1">اسم ولي الأمر رباعي <span className="text-rose-600">*</span></label>
                     <input 
