@@ -208,36 +208,6 @@ export class PostgresTransactionDriver implements TransactionDriver {
       // semantics. The value is verified by the PERF-009 Staging baseline.
       if (options.trustedContext) {
         await this.applyTrustedContext(client, options.trustedContext, options.diagnosticTrace, diagnosticPrefix);
-        // Keep tenant-write failures diagnosable without logging any secrets or
-        // raw credentials.  The role and presence of request-local settings
-        // are the only values needed to distinguish an RLS policy mismatch
-        // from a malformed trusted context.
-        const contextProbe = await client.query<{
-          current_user: string;
-          session_user: string;
-          configured_role: string;
-          has_tenant: boolean;
-          has_school: boolean;
-          has_branch: boolean;
-          has_actor: boolean;
-        }>(`SELECT current_user::text AS current_user,
-                    session_user::text AS session_user,
-                    current_setting('role', true)::text AS configured_role,
-                    NULLIF(current_setting('app.tenant_id', true), '') IS NOT NULL AS has_tenant,
-                    NULLIF(current_setting('app.school_id', true), '') IS NOT NULL AS has_school,
-                    NULLIF(current_setting('app.branch_id', true), '') IS NOT NULL AS has_branch,
-                    NULLIF(current_setting('app.actor_user_id', true), '') IS NOT NULL AS has_actor`);
-        const probe = contextProbe.rows[0];
-        console.info('[TenantTransactionContext]', {
-          operation: options.operationName,
-          currentUser: probe?.current_user || 'unknown',
-          sessionUser: probe?.session_user || 'unknown',
-          configuredRole: probe?.configured_role || 'unknown',
-          hasTenant: probe?.has_tenant === true,
-          hasSchool: probe?.has_school === true,
-          hasBranch: probe?.has_branch === true,
-          hasActor: probe?.has_actor === true,
-        });
       }
       options.diagnosticTrace?.mark(`${diagnosticPrefix}transaction_begin_configured`);
       if (options.timeoutMs && options.timeoutMs > 0) {
