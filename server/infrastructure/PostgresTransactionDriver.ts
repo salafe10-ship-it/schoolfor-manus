@@ -188,6 +188,14 @@ export class PostgresTransactionDriver implements TransactionDriver {
     const transactionId = options.transactionId || randomUUID();
     try {
       await client.query("BEGIN");
+      // Tenant RLS policies are intentionally granted to Supabase's
+      // authenticated role. The Render application connection may be a
+      // restricted role (for example edupro_staging_app) and must enter that
+      // role locally for the transaction; platform transactions remain on
+      // their privileged control-plane role and never inherit tenant scope.
+      if (options.scope !== 'platform') {
+        await client.query('SET LOCAL ROLE authenticated');
+      }
       options.diagnosticTrace?.count?.('transactions');
       // PostgreSQL's default_transaction_isolation is READ COMMITTED in the
       // Staging/production contract. Omitting the redundant SET avoids one
