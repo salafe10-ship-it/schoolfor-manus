@@ -30,8 +30,8 @@ ALTER TABLE public.student_fee_installment_plan_history ENABLE ROW LEVEL SECURIT
 DROP POLICY IF EXISTS student_fee_plan_history_school_scope ON public.student_fee_installment_plan_history;
 CREATE POLICY student_fee_plan_history_school_scope
     ON public.student_fee_installment_plan_history
-    USING (school_id = public.current_school_id())
-    WITH CHECK (school_id = public.current_school_id());
+    USING (school_id = public.dbsec004_current_school_id())
+    WITH CHECK (school_id = public.dbsec004_current_school_id());
 
 -- School-scoped numbering keeps the human-facing receipt number sequential
 -- without exposing internal UUIDs or allowing two concurrent postings to
@@ -52,5 +52,5 @@ ALTER TABLE public.student_fee_receipt_sequences ENABLE ROW LEVEL SECURITY;
 DROP POLICY IF EXISTS student_fee_receipt_sequences_school_scope ON public.student_fee_receipt_sequences;
 CREATE POLICY student_fee_receipt_sequences_school_scope
     ON public.student_fee_receipt_sequences
-    USING (school_id = public.current_school_id())
-    WITH CHECK (school_id = public.current_school_id());
+    USING (school_id = public.dbsec004_current_school_id())
+    WITH CHECK (school_id = public.dbsec004_current_school_id());

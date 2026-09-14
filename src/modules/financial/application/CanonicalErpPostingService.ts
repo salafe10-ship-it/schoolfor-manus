@@ -104,7 +104,11 @@ function positiveAmount(value: unknown, field: string): number {
 }
 
 function dateValue(value: unknown): string {
-  const date = textValue(value, new Date().toISOString().slice(0, 10));
+  const rawDate = textValue(value, new Date().toISOString().slice(0, 10));
+  // PostgreSQL date columns can be returned by the driver as midnight ISO
+  // timestamps. The accounting contract stores a calendar date, so normalize
+  // that trusted representation before enforcing the date-only invariant.
+  const date = /^\d{4}-\d{2}-\d{2}T/.test(rawDate) ? rawDate.slice(0, 10) : rawDate;
   if (!/^\d{4}-\d{2}-\d{2}$/.test(date)) throw new Error(`التاريخ المالي غير صالح: ${date}`);
   return date;
 }

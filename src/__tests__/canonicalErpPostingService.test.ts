@@ -64,6 +64,20 @@ describe('canonical ERP accounting mappings', () => {
     expect(receipt?.lines.map(line => line.accountCode)).toEqual(['1110', '1290']);
   });
 
+  it('normalizes PostgreSQL midnight timestamps to the accounting calendar date', () => {
+    const invoice = buildCanonicalPosting('student_fee_invoice', {
+      id: 'INV-PG-DATE', amount: 300, invoiceDate: '2026-09-14T00:00:00.000Z', status: 'issued'
+    });
+    const receipt = buildCanonicalPosting('student_receipt', {
+      id: 'RV-PG-DATE', amount: 255, receiptDate: '2026-09-14T00:00:00.000Z', status: 'posted'
+    });
+
+    expect(invoice?.date).toBe('2026-09-14');
+    expect(receipt?.date).toBe('2026-09-14');
+    expect(invoice?.fiscalPeriod).toBe('2026-09');
+    expect(receipt?.fiscalPeriod).toBe('2026-09');
+  });
+
   it('maps balanced manual journal entries to the canonical ledger contract', () => {
     const posting = buildCanonicalPosting('journal_entry', {
       id: 'JV-MANUAL-1', date: '2026-08-24', status: 'posted', description: 'قيد تسوية يدوي',
