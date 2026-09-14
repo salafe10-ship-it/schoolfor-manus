@@ -220,6 +220,81 @@ const ensureIdentityJobSchema = async (): Promise<void> => {
   await identityJobSchemaPromise;
 };
 
+// The tenant transaction uses a restricted RLS role.  Some production
+// workspaces were created before the audit actor policy migration reached the
+// database used by the Render service, so the first valid registration could
+// be rolled back even though the actor and scope were correct.  Bootstrap only
+// this additive, narrowly scoped policy through the already privileged control
+// plane; no business data is changed and RLS remains enabled.
+let studentAuditRlsSchemaPromise: Promise<void> | null = null;
+const ensureStudentAuditRlsSchema = async (): Promise<void> => {
+  if (!platformAdminPool) return;
+  if (!studentAuditRlsSchemaPromise) {
+    studentAuditRlsSchemaPromise = platformAdminPool.query(`
+      CREATE OR REPLACE FUNCTION public.dbsec010_audit_actor_allowed(
+        p_tenant_id uuid,
+        p_school_id uuid,
+        p_branch_id uuid,
+        p_actor_user_id uuid
+      )
+      RETURNS boolean
+      LANGUAGE plpgsql
+      STABLE
+      SECURITY DEFINER
+      SET search_path = public, auth
+      AS $$
+      DECLARE
+        configured_tenant text := NULLIF(current_setting('app.tenant_id', true), '');
+        configured_school text := NULLIF(current_setting('app.school_id', true), '');
+        configured_branch text := NULLIF(current_setting('app.branch_id', true), '');
+        configured_actor text := NULLIF(current_setting('app.actor_user_id', true), '');
+        configured_auth_user text := NULLIF(current_setting('app.user_id', true), '');
+      BEGIN
+        IF p_tenant_id IS NULL OR p_school_id IS NULL OR p_actor_user_id IS NULL
+           OR configured_tenant IS NULL OR configured_school IS NULL THEN
+          RETURN false;
+        END IF;
+        IF p_tenant_id::text <> configured_tenant OR p_school_id::text <> configured_school THEN
+          RETURN false;
+        END IF;
+        IF p_branch_id IS NOT NULL
+           AND (configured_branch IS NULL OR p_branch_id::text <> configured_branch) THEN
+          RETURN false;
+        END IF;
+        RETURN EXISTS (
+          SELECT 1
+            FROM public.users AS actor
+           WHERE actor.id = p_actor_user_id
+             AND actor.tenant_id = p_tenant_id
+             AND actor.school_id = p_school_id
+             AND actor.status = 'active'
+             AND actor.deleted_at IS NULL
+             AND (
+               (configured_actor IS NOT NULL AND actor.id::text = configured_actor)
+               OR (configured_auth_user IS NOT NULL AND actor.auth_user_id::text = configured_auth_user)
+             )
+        );
+      END;
+      $$;
+      REVOKE ALL ON FUNCTION public.dbsec010_audit_actor_allowed(uuid, uuid, uuid, uuid) FROM PUBLIC;
+      GRANT EXECUTE ON FUNCTION public.dbsec010_audit_actor_allowed(uuid, uuid, uuid, uuid)
+        TO authenticated, edupro_app, edupro_staging_app;
+      DROP POLICY IF EXISTS p_dbsec009_audit_insert_app ON public.audit_events;
+      CREATE POLICY p_dbsec009_audit_insert_app ON public.audit_events
+        FOR INSERT TO edupro_app, edupro_staging_app
+        WITH CHECK (public.dbsec010_audit_actor_allowed(tenant_id, school_id, branch_id, actor_user_id));
+      DROP POLICY IF EXISTS p_dbsec010_audit_insert_authenticated ON public.audit_events;
+      CREATE POLICY p_dbsec010_audit_insert_authenticated ON public.audit_events
+        FOR INSERT TO authenticated
+        WITH CHECK (public.dbsec010_audit_actor_allowed(tenant_id, school_id, branch_id, actor_user_id));
+    `).then(() => undefined).catch((error) => {
+      studentAuditRlsSchemaPromise = null;
+      throw error;
+    });
+  }
+  await studentAuditRlsSchemaPromise;
+};
+
 // Some production workspaces were provisioned before the owner-release
 // migration reached the database used by the Render service.  Keep the
 // tenant workspace read path truthful and self-healing with an additive,
@@ -278,6 +353,11 @@ const ensureOwnerWorkspaceReleaseSchema = async (): Promise<void> => {
 if (platformAdminPool) {
   void ensureIdentityJobSchema().catch((error) => {
     EnterpriseLogger.error('Identity job reference schema bootstrap failed.', 'ServerBootstrap', {
+      error: error instanceof Error ? error.message : String(error),
+    });
+  });
+  void ensureStudentAuditRlsSchema().catch((error) => {
+    EnterpriseLogger.error('Student audit RLS schema bootstrap failed.', 'ServerBootstrap', {
       error: error instanceof Error ? error.message : String(error),
     });
   });
@@ -6977,6 +7057,7 @@ async function startServer() {
 
   async function resolveStudentTenantContext(req: express.Request) {
     const identity = (req as any).user;
+    await ensureStudentAuditRlsSchema();
     const context = tenantEngine.validate(await tenantEngine.resolve(identity, (req as any).trustedAccessToken, (req as any).perf004Trace));
     tenantEngine.assertRequestTarget(context, requestTarget(req));
     const actorUserId = await resolveCanonicalTenantActor(context);
