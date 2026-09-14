@@ -230,6 +230,21 @@ const ensureOwnerWorkspaceReleaseSchema = async (): Promise<void> => {
   if (!platformAdminPool) return;
   if (!ownerWorkspaceReleaseSchemaPromise) {
     ownerWorkspaceReleaseSchemaPromise = platformAdminPool.query(`
+      CREATE TABLE IF NOT EXISTS public.platform_templates (
+        id uuid NOT NULL DEFAULT gen_random_uuid(),
+        template_key text NOT NULL,
+        name text NOT NULL,
+        description text,
+        version integer NOT NULL DEFAULT 1,
+        status text NOT NULL DEFAULT 'draft',
+        manifest jsonb NOT NULL DEFAULT '{}'::jsonb,
+        created_by_auth_user_id uuid,
+        updated_by_auth_user_id uuid,
+        created_at timestamptz NOT NULL DEFAULT now(),
+        updated_at timestamptz NOT NULL DEFAULT now(),
+        CONSTRAINT pk_platform_templates PRIMARY KEY (id),
+        CONSTRAINT uq_platform_templates_key UNIQUE (template_key)
+      );
       CREATE TABLE IF NOT EXISTS public.platform_school_releases (
         id uuid NOT NULL DEFAULT gen_random_uuid(),
         school_id uuid NOT NULL,
@@ -494,6 +509,26 @@ const platformControl = platformAdminAuth as any;
  * tenant, school, branch, auth identity, active state, and non-deleted state.
  */
 const resolveCanonicalTenantActor = async (context: TenantContext): Promise<string> => {
+  // Prefer the canonical Supabase control-plane directory before attempting
+  // any repair through a Render PostgreSQL connection.  Some deployments
+  // temporarily expose a stale/partial PLATFORM_ADMIN_DATABASE_URL; writing
+  // the trusted Auth UUID there can then trip fk_users_auth_user even though
+  // the authoritative public.users bridge already exists in Supabase.
+  if (platformControl) {
+    const { data, error } = await platformControl
+      .from('users')
+      .select('id')
+      .eq('tenant_id', context.tenantId)
+      .eq('auth_user_id', context.userId)
+      .eq('school_id', context.schoolId)
+      .eq('status', 'active')
+      .is('deleted_at', null)
+      .order('created_at', { ascending: true })
+      .limit(1)
+      .maybeSingle();
+    if (!error && data?.id) return String(data.id);
+  }
+
   if (platformAdminPool) {
     const result = await platformAdminPool.query<{ id: string }>(
       `SELECT id
