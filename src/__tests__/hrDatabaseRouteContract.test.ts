@@ -34,6 +34,7 @@ describe('HR canonical database route contract', () => {
     expect(source).toContain('INSERT INTO public.users');
     expect(source).toContain('ON CONFLICT DO NOTHING');
     expect(source).toContain('context.tenantId, context.userId, context.schoolId, context.branchId');
+    expect(source).toContain("await resolveCanonicalTenantActor({\n        tenantId,\n        schoolId,");
   });
 
   it('keeps HR audit entity identifiers compatible with the canonical UUID column', () => {

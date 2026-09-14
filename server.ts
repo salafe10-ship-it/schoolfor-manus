@@ -5815,6 +5815,14 @@ async function startServer() {
         if (!branchId) return next(new ConflictError('لا يوجد فرع نشط داخل المدرسة.'));
         const branch = await client.query(`SELECT id FROM public.branches WHERE tenant_id = $1::uuid AND school_id = $2::uuid AND id = $3::uuid AND status = 'active' AND deleted_at IS NULL`, [tenantId, schoolId, branchId]);
         if (branch.rowCount !== 1) return next(new ConflictError('الفرع المختار لا ينتمي إلى المدرسة الحالية.'));
+        await resolveCanonicalTenantActor({
+          tenantId,
+          schoolId,
+          branchId,
+          academicYear: String((req as any).user?.academicYear || '').trim(),
+          userId: actorAuthUserId,
+          role: String((req as any).user?.role || '').trim(),
+        });
         const roleLookup = await client.query(
           `SELECT r.id, r.name, r.description,
                   COALESCE(array_agg(p.permission_key ORDER BY p.permission_key) FILTER (WHERE p.permission_key IS NOT NULL), ARRAY[]::text[]) AS permission_keys
@@ -9664,6 +9672,18 @@ async function startServer() {
         || !Number.isInteger(expectedVersion) || expectedVersion < 0) {
         throw new ValidationError('حفظ الموارد البشرية يتطلب نطاق مدرسة موثوقاً ورقم إصدار متوقعاً صالحاً.');
       }
+      // HR writes emit audit/outbox rows with the canonical public.users id.
+      // Heal the local actor bridge before entering the data-plane unit of
+      // work, otherwise valid school identities fail as opaque 500 responses
+      // on older provisioned schools.
+      await resolveCanonicalTenantActor({
+        tenantId,
+        schoolId,
+        branchId: String(tenantContext.branchId || identity.branchId || '').trim(),
+        academicYear: String(tenantContext.academicYear || '').trim(),
+        userId: String(identity.id || '').trim(),
+        role: String(identity.role || '').trim(),
+      });
       if (!requestedData || typeof requestedData !== 'object' || Array.isArray(requestedData)
         || !requestedLegalConfiguration || typeof requestedLegalConfiguration !== 'object' || Array.isArray(requestedLegalConfiguration)) {
         throw new ValidationError('بيانات وإعدادات الموارد البشرية يجب أن تكون كائنات صالحة.');
