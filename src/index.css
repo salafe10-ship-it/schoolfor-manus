@@ -1816,6 +1816,66 @@ html:not(.dark) #super-admin-portal button:not(.bg-indigo-600):not(.bg-rose-600)
   --fee-border: #d8bd80;
 }
 
+#student-financial-portal.financial-reference-management .fee-management-kpi-grid {
+  gap: 0.85rem !important;
+}
+
+#student-financial-portal.financial-reference-management .fee-management-kpi-card {
+  position: relative;
+  min-height: 7.6rem;
+  overflow: hidden;
+  border: 1px solid var(--fee-border) !important;
+  border-radius: 1rem !important;
+  background: linear-gradient(180deg, #fffefa 0%, #f6efe2 100%) !important;
+  box-shadow: 0 10px 22px rgba(11, 23, 51, 0.09) !important;
+  transition: transform 160ms ease, box-shadow 160ms ease, border-color 160ms ease;
+}
+
+#student-financial-portal.financial-reference-management .fee-management-kpi-card::before {
+  position: absolute;
+  inset: 0 0 auto;
+  height: 0.28rem;
+  content: '';
+  background: linear-gradient(90deg, var(--fee-navy), var(--fee-gold-light), var(--fee-navy));
+}
+
+#student-financial-portal.financial-reference-management .fee-management-kpi-card:hover {
+  transform: translateY(-2px);
+  border-color: var(--fee-gold) !important;
+  box-shadow: 0 15px 28px rgba(11, 23, 51, 0.14) !important;
+}
+
+#student-financial-portal.financial-reference-management .fee-management-kpi-card span {
+  color: var(--fee-navy) !important;
+}
+
+#student-financial-portal.financial-reference-management .fee-management-kpi-card > div {
+  color: var(--fee-navy) !important;
+}
+
+#student-financial-portal.financial-reference-management .fee-management-kpi-card-paid::before {
+  background: linear-gradient(90deg, #176b4b, #8bc9a8, #176b4b);
+}
+
+#student-financial-portal.financial-reference-management .fee-management-kpi-card-paid > div {
+  color: #176b4b !important;
+}
+
+#student-financial-portal.financial-reference-management .fee-management-kpi-card-remaining::before {
+  background: linear-gradient(90deg, #9a6a1d, #f3d681, #9a6a1d);
+}
+
+#student-financial-portal.financial-reference-management .fee-management-kpi-card-remaining > div {
+  color: #8a5b16 !important;
+}
+
+#student-financial-portal.financial-reference-management .fee-management-form-panel {
+  border: 1px solid rgba(216, 189, 128, 0.52);
+  border-radius: 1rem;
+  background: rgba(255, 253, 248, 0.72);
+  box-shadow: 0 8px 20px rgba(11, 23, 51, 0.05);
+}
+
 #student-financial-portal.financial-reference-management .fee-management-action-grid {
   gap: 0.65rem !important;
   padding-top: 0.85rem !important;

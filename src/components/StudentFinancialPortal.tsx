@@ -3017,7 +3017,7 @@ export default function StudentFinancialPortal({
   }
 
   return (
-    <div id="student-financial-portal" className="financial-luxury-shell w-full min-h-screen text-right font-sans dir-rtl select-none transition-all duration-300 p-2 sm:p-4 md:p-6 space-y-6" dir="rtl">
+    <div id="student-financial-portal" className={`financial-luxury-shell w-full min-h-screen text-right font-sans dir-rtl select-none transition-all duration-300 p-2 sm:p-4 md:p-6 space-y-6 ${activeSubSec === 'management' ? 'financial-reference-management' : ''}`} dir="rtl">
 
       {/* ==========================================
           LUXURY GOLD METALLIC TOP HEADER
@@ -4069,9 +4069,9 @@ export default function StudentFinancialPortal({
             </div>
 
             {/* Top Three Metric Cards (Stats row) styled exactly as requested and shown in the image */}
-            <div className="grid grid-cols-1 md:grid-cols-3 gap-5">
+            <div className="fee-management-kpi-grid grid grid-cols-1 md:grid-cols-3 gap-5">
               {/* Card 1: إجمالي المطالبات - Light Blue Background, Dark Blue Text */}
-              <div className="bg-[#e0f1fe] border border-orange-200 p-5 text-center relative overflow-hidden transition-all hover:scale-[1.01]">
+              <div className="fee-management-kpi-card fee-management-kpi-card-total bg-[#e0f1fe] border border-orange-200 p-5 text-center relative overflow-hidden transition-all hover:scale-[1.01]">
                 <span className="text-[13px] font-bold text-[#1e3a8a] block mb-1">إجمالي المطالبات</span>
                 <div className="text-2xl md:text-3xl font-black text-[#1e3a8a] font-mono tracking-tight" dir="ltr">
                   {selectedStudentFinancialView ? formatLD(Number(selectedStudentFinancialView.feesPaid || 0) + Number(selectedStudentFinancialView.feesRemaining || 0)) : 'غير متاح'}
@@ -4079,7 +4079,7 @@ export default function StudentFinancialPortal({
               </div>
 
               {/* Card 2: إجمالي المسدد - Light Green Background, Dark Green Text */}
-              <div className="bg-[#dcfce7] border border-green-200 p-5 text-center relative overflow-hidden transition-all hover:scale-[1.01]">
+              <div className="fee-management-kpi-card fee-management-kpi-card-paid bg-[#dcfce7] border border-green-200 p-5 text-center relative overflow-hidden transition-all hover:scale-[1.01]">
                 <span className="text-[13px] font-bold text-[#166534] block mb-1">إجمالي المسدد</span>
                 <div className="text-2xl md:text-3xl font-black text-[#166534] font-mono tracking-tight" dir="ltr">
                   {selectedStudentFinancialView ? formatLD(Number(selectedStudentFinancialView.feesPaid || 0)) : 'غير متاح'}
@@ -4087,7 +4087,7 @@ export default function StudentFinancialPortal({
               </div>
 
               {/* Card 3: الرصيد المتبقي - Light Red/Pink Background, Dark Red Text */}
-              <div className="bg-[#fee2e2] border border-rose-200 p-5 text-center relative overflow-hidden transition-all hover:scale-[1.01]">
+              <div className="fee-management-kpi-card fee-management-kpi-card-remaining bg-[#fee2e2] border border-rose-200 p-5 text-center relative overflow-hidden transition-all hover:scale-[1.01]">
                 <span className="text-[13px] font-bold text-[#991b1b] block mb-1">الرصيد المتبقي</span>
                 <div className="text-2xl md:text-3xl font-black text-[#991b1b] font-mono tracking-tight" dir="ltr">
                   {selectedStudentFinancialView ? formatLD(Number(selectedStudentFinancialView.feesRemaining || 0)) : 'غير متاح'}
@@ -4099,7 +4099,7 @@ export default function StudentFinancialPortal({
             <div className="grid grid-cols-1 xl:grid-cols-12 gap-6 items-start">
               
               {/* Right Side: Primary interactive form (8-cols duration) */}
-              <div className="xl:col-span-8 p-5 space-y-5">
+              <div className="fee-management-form-panel xl:col-span-8 p-5 space-y-5">
                 
                 {/* Form Header with mascot/avatar */}
                 <div className="flex justify-between items-center pb-3 border-b border-slate-100">
