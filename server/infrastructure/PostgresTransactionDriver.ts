@@ -188,13 +188,17 @@ export class PostgresTransactionDriver implements TransactionDriver {
     const transactionId = options.transactionId || randomUUID();
     try {
       await client.query("BEGIN");
-      // Tenant RLS policies are intentionally granted to Supabase's
-      // authenticated role. The Render application connection may be a
-      // restricted role (for example edupro_staging_app) and must enter that
-      // role locally for the transaction; platform transactions remain on
-      // their privileged control-plane role and never inherit tenant scope.
+      // Tenant RLS policies are intentionally granted to the explicitly
+      // provisioned application role (for example edupro_staging_app). A
+      // pooler connection may authenticate as a transport role, so enter the
+      // policy-matched role locally for tenant transactions. Platform
+      // transactions remain on their privileged control-plane role.
       if (options.scope !== 'platform') {
-        await client.query('SET LOCAL ROLE authenticated');
+        const tenantRole = String(process.env.DATABASE_ROLE_EXPECTED || '').trim();
+        if (tenantRole && !/^[A-Za-z_][A-Za-z0-9_]*$/.test(tenantRole)) {
+          throw new Error('DATABASE_ROLE_EXPECTED contains an invalid PostgreSQL role name.');
+        }
+        if (tenantRole) await client.query(`SET LOCAL ROLE "${tenantRole}"`);
       }
       options.diagnosticTrace?.count?.('transactions');
       // PostgreSQL's default_transaction_isolation is READ COMMITTED in the
