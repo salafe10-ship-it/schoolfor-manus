@@ -220,8 +220,17 @@ export async function assertAcademicContext(
 export async function resolveInternalActorUserId(
   tenantId: string,
   authUserId: string,
-  _trustedActorUserId?: string
+  trustedActorUserId?: string
 ): Promise<string> {
+  // The request boundary resolves this id through the privileged canonical
+  // identity directory before entering the restricted tenant transaction.
+  // Reusing that verified id is intentional: tenant RLS must not discover or
+  // provision rows in public.users, which caused the opaque users INSERT
+  // violation during otherwise valid student registration.
+  if (trustedActorUserId && /^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i.test(trustedActorUserId)) {
+    return trustedActorUserId;
+  }
+
   // The control-plane and tenant data-plane can legitimately have different
   // users primary keys. Resolve the actor id from the same data-plane
   // transaction that will enforce the audit_events RLS policy; never reuse a
@@ -244,36 +253,9 @@ export async function resolveInternalActorUserId(
     throw new ValidationError('The authenticated user is not provisioned as an active tenant user.');
   }
 
-  // Keep the data-plane actor bridge idempotent. Central authentication and
-  // authorization remain the source of authority; this row only supplies
-  // the local foreign key required by registration audit records.
-  await transaction().query(
-    `INSERT INTO users (
-       auth_user_id, tenant_id, school_id, branch_id, display_name, status
-     )
-     SELECT $2, $1, $3, $4, 'مستخدم المدرسة', 'active'
-      WHERE NOT EXISTS (
-        SELECT 1
-          FROM users
-         WHERE tenant_id = $1
-           AND auth_user_id = $2
-           AND deleted_at IS NULL
-      )
-     ON CONFLICT DO NOTHING`,
-    [tenantId, authUserId, tenantContext.schoolId, tenantContext.branchId]
-  );
-  const provisioned = await one<{ id: string }>(
-    `SELECT id
-       FROM users
-      WHERE tenant_id = $1
-        AND auth_user_id = $2
-        AND deleted_at IS NULL
-        AND status = 'active'
-      LIMIT 1`,
-    [tenantId, authUserId]
-  );
-  if (!provisioned) throw new ValidationError('The authenticated user is not provisioned as an active tenant user.');
-  return provisioned.id;
+  // Identity provisioning belongs to the canonical platform boundary. Do not
+  // attempt a tenant-side users write when that trusted bridge is unavailable.
+  throw new ValidationError('The authenticated user is not provisioned as an active tenant user.');
 }
 
 export type GuardianInput = {
