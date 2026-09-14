@@ -469,6 +469,44 @@ const resolveCanonicalTenantActor = async (context: TenantContext): Promise<stri
       [context.tenantId, context.userId, context.schoolId, context.branchId]
     );
     if (result.rows[0]?.id) return result.rows[0].id;
+
+    // Authentication and authorization remain the source of authority, but
+    // canonical tenant transactions also need a local users row for foreign
+    // keys and audit records. Older/provisioned schools can legitimately be
+    // missing this bridge row even though the trusted identity is valid. Heal
+    // only the exact verified tenant/school/branch scope and keep the insert
+    // idempotent so retries cannot manufacture duplicate actors.
+    await platformAdminPool.query(
+      `INSERT INTO public.users (
+         auth_user_id, tenant_id, school_id, branch_id, display_name, status
+       )
+       SELECT $2::uuid, $1::uuid, $3::uuid, $4::uuid, 'مستخدم المدرسة', 'active'
+        WHERE NOT EXISTS (
+          SELECT 1
+            FROM public.users
+           WHERE tenant_id = $1::uuid
+             AND auth_user_id = $2::uuid
+             AND school_id = $3::uuid
+             AND (branch_id = $4::uuid OR branch_id IS NULL)
+             AND deleted_at IS NULL
+        )
+       ON CONFLICT DO NOTHING`,
+      [context.tenantId, context.userId, context.schoolId, context.branchId],
+    );
+    const healed = await platformAdminPool.query<{ id: string }>(
+      `SELECT id
+         FROM public.users
+        WHERE tenant_id = $1::uuid
+          AND auth_user_id = $2::uuid
+          AND school_id = $3::uuid
+          AND (branch_id = $4::uuid OR branch_id IS NULL)
+          AND status = 'active'
+          AND deleted_at IS NULL
+        ORDER BY branch_id NULLS LAST, created_at ASC
+        LIMIT 1`,
+      [context.tenantId, context.userId, context.schoolId, context.branchId],
+    );
+    if (healed.rows[0]?.id) return healed.rows[0].id;
   }
 
   if (platformControl) {

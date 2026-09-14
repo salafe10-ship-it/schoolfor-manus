@@ -29,6 +29,13 @@ describe('HR canonical database route contract', () => {
     expect(source).toContain('hr-advance-${advanceId}');
   });
 
+  it('self-heals the scoped tenant actor bridge before canonical writes', () => {
+    expect(source).toContain('Authentication and authorization remain the source of authority');
+    expect(source).toContain('INSERT INTO public.users');
+    expect(source).toContain('ON CONFLICT DO NOTHING');
+    expect(source).toContain('context.tenantId, context.userId, context.schoolId, context.branchId');
+  });
+
   it('keeps HR audit entity identifiers compatible with the canonical UUID column', () => {
     expect(source).toContain("actor.rows[0].id, schoolId, `export_${format}`");
     expect(source).toContain('actorId, schoolId, JSON.stringify({ contractId, version, signedAt, signatureHash })');
