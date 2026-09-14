@@ -11315,6 +11315,12 @@ async function startServer() {
             [tenantId, schoolId, plan.id, item.installmentNumber, item.dueDate, item.amount]);
           schedules.push(row.rows[0]);
         }
+        await transaction.query(
+          `INSERT INTO public.student_fee_installment_plan_history
+             (tenant_id, school_id, plan_id, action, reason, snapshot, created_by)
+           VALUES ($1,$2,$3,'created',$4,$5::jsonb,$6)`,
+          [tenantId, schoolId, plan.id, 'إنشاء واعتماد خطة الأقساط', JSON.stringify({ plan, schedules }), databaseActorId]
+        );
         await transaction.query(`INSERT INTO public.audit_events (id, tenant_id, school_id, actor_user_id, entity_type, entity_id, action, source, result, metadata) VALUES ($1,$2,$3,$4,'student_fee_installment_plan',$5,'create','CanonicalStudentFeeRoute','success',$6::jsonb)`, [randomUUID(), tenantId, schoolId, databaseActorId, plan.id, JSON.stringify({ invoiceId, scheduleCount: schedules.length })]);
       }, tenantContext);
       res.status(201).json({ success: true, data: { plan, schedules }, meta: { source: 'canonical_postgres' } });
@@ -11400,6 +11406,122 @@ async function startServer() {
       next(err instanceof AuthenticationError || err instanceof ValidationError || err instanceof DatabaseError
         ? err
         : new DatabaseError('تعذر قراءة خطط أقساط الطالب.', err?.message));
+    }
+  });
+
+  app.get("/api/financial/installment-plans/overdue-summary", authenticateRequest, requirePermission(PERMISSIONS.FINANCIAL_READ), async (req, res, next) => {
+    try {
+      const { tenantId, schoolId, tenantContext } = canonicalFeeContext(req);
+      let summary: any = { asOf: new Date().toISOString().slice(0, 10), count: 0, overdueAmount: 0, rows: [] };
+      await UnitOfWork.runInTransaction(schoolId, {
+        operationName: 'Read overdue student installment summary', tenantId,
+        userId: String((req as any).user.id), userName: String((req as any).user.name || 'المستخدم المالي'),
+        ipAddress: req.ip || 'unknown', affectedTables: ['student_fee_installment_plans', 'student_fee_installment_schedules', 'students']
+      }, async () => {
+        const transaction = UnitOfWork.getActiveContext()?.databaseTransaction;
+        if (!transaction) throw new DatabaseError('تعذر فتح المعاملة المالية.');
+        const result = await transaction.query(
+          `SELECT s.id AS "scheduleId", s.plan_id AS "planId", p.invoice_id AS "invoiceId",
+                  p.student_id AS "studentId", COALESCE(st.preferred_name, st.legal_first_name, st.id::text) AS "studentName",
+                  s.installment_number AS "installmentNumber", s.due_date AS "dueDate", s.amount,
+                  s.paid_amount AS "paidAmount", s.penalty_amount AS "penaltyAmount", p.policy,
+                  GREATEST(0, CURRENT_DATE - s.due_date) AS "daysLate"
+             FROM public.student_fee_installment_schedules s
+             JOIN public.student_fee_installment_plans p
+               ON p.school_id = s.school_id AND p.id = s.plan_id
+             JOIN public.students st
+               ON st.tenant_id = p.tenant_id AND st.school_id = p.school_id AND st.id = p.student_id
+            WHERE s.tenant_id = $1 AND s.school_id = $2
+              AND p.status = 'approved' AND s.status NOT IN ('paid','cancelled','written_off')
+              AND s.due_date < CURRENT_DATE AND s.paid_amount < s.amount
+            ORDER BY s.due_date ASC, studentName ASC, s.installment_number ASC`,
+          [tenantId, schoolId]
+        );
+        summary = {
+          asOf: new Date().toISOString().slice(0, 10),
+          count: result.rows.length,
+          overdueAmount: Number(result.rows.reduce((sum: number, row: any) => sum + Math.max(0, Number(row.amount || 0) - Number(row.paidAmount || 0)), 0).toFixed(2)),
+          rows: result.rows.map((row: any) => ({
+            scheduleId: String(row.scheduleId), planId: String(row.planId), invoiceId: String(row.invoiceId),
+            studentId: String(row.studentId), studentName: row.studentName, installmentNumber: Number(row.installmentNumber),
+            dueDate: row.dueDate, amount: Number(row.amount || 0), paidAmount: Number(row.paidAmount || 0),
+            remainingAmount: Number(Math.max(0, Number(row.amount || 0) - Number(row.paidAmount || 0)).toFixed(2)),
+            penaltyAmount: Number(row.penaltyAmount || 0), daysLate: Number(row.daysLate || 0), policy: row.policy || {}
+          }))
+        };
+      }, tenantContext);
+      res.json({ success: true, data: summary, meta: { source: 'canonical_postgres', statusPolicy: 'derived_from_due_date' } });
+    } catch (err: any) {
+      next(err instanceof AuthenticationError || err instanceof ValidationError || err instanceof DatabaseError
+        ? err
+        : new DatabaseError('تعذر قراءة المتأخرات المالية.', err?.message));
+    }
+  });
+
+  app.get("/api/financial/installment-plans/:planId/history", authenticateRequest, requirePermission(PERMISSIONS.FINANCIAL_READ), async (req, res, next) => {
+    try {
+      const { tenantId, schoolId, tenantContext } = canonicalFeeContext(req);
+      const planId = String(req.params.planId || '').trim();
+      if (!canonicalFeeUuid(planId)) throw new ValidationError('معرف خطة الأقساط غير صالح.');
+      let history: any[] = [];
+      await UnitOfWork.runInTransaction(schoolId, {
+        operationName: 'Read installment plan history', tenantId,
+        userId: String((req as any).user.id), userName: String((req as any).user.name || 'المستخدم المالي'),
+        ipAddress: req.ip || 'unknown', affectedTables: ['student_fee_installment_plan_history']
+      }, async () => {
+        const transaction = UnitOfWork.getActiveContext()?.databaseTransaction;
+        if (!transaction) throw new DatabaseError('تعذر فتح المعاملة المالية.');
+        const result = await transaction.query(
+          `SELECT id, plan_id AS "planId", action, reason, snapshot, created_at AS "createdAt", created_by AS "createdBy"
+             FROM public.student_fee_installment_plan_history
+            WHERE tenant_id = $1 AND school_id = $2 AND plan_id = $3
+            ORDER BY created_at DESC, id DESC`,
+          [tenantId, schoolId, planId]
+        );
+        history = result.rows;
+      }, tenantContext);
+      res.json({ success: true, data: history, meta: { source: 'canonical_postgres' } });
+    } catch (err: any) {
+      next(err instanceof AuthenticationError || err instanceof ValidationError || err instanceof DatabaseError
+        ? err
+        : new DatabaseError('تعذر قراءة سجل خطة الأقساط.', err?.message));
+    }
+  });
+
+  app.post("/api/financial/installment-plans/:planId/cancel", authenticateRequest, requirePermission(PERMISSIONS.FINANCIAL_WRITE), async (req, res, next) => {
+    try {
+      const { tenantId, schoolId, actorId, tenantContext } = canonicalFeeContext(req);
+      const planId = String(req.params.planId || '').trim();
+      const reason = String(req.body?.reason || '').trim();
+      if (!canonicalFeeUuid(planId)) throw new ValidationError('معرف خطة الأقساط غير صالح.');
+      if (reason.length < 3 || reason.length > 500) throw new ValidationError('سبب إلغاء الخطة مطلوب ويجب أن يكون بين 3 و500 حرف.');
+      let cancelledPlan: any = null;
+      await UnitOfWork.runInTransaction(schoolId, {
+        operationName: 'Cancel student installment plan', tenantId, userId: actorId,
+        userName: String((req as any).user.name || 'مدير الرسوم'), ipAddress: req.ip || 'unknown',
+        affectedTables: ['student_fee_installment_plans', 'student_fee_installment_schedules', 'student_fee_installment_plan_history', 'audit_events']
+      }, async () => {
+        const transaction = UnitOfWork.getActiveContext()?.databaseTransaction;
+        if (!transaction) throw new DatabaseError('تعذر فتح المعاملة المالية.');
+        const databaseActorId = await resolveCanonicalFeeActor(transaction, tenantId, schoolId, actorId);
+        const planResult = await transaction.query(`SELECT * FROM public.student_fee_installment_plans WHERE tenant_id = $1 AND school_id = $2 AND id = $3 FOR UPDATE`, [tenantId, schoolId, planId]);
+        const current = planResult.rows[0];
+        if (!current) throw new ValidationError('خطة الأقساط غير موجودة.');
+        if (String(current.status) === 'cancelled') throw new ConflictError('خطة الأقساط ملغاة بالفعل.');
+        if (String(current.status) === 'completed') throw new ConflictError('لا يمكن إلغاء خطة مكتملة.');
+        const schedules = await transaction.query(`SELECT id, installment_number AS "installmentNumber", due_date AS "dueDate", amount, paid_amount AS "paidAmount", status FROM public.student_fee_installment_schedules WHERE tenant_id = $1 AND school_id = $2 AND plan_id = $3 ORDER BY installment_number FOR UPDATE`, [tenantId, schoolId, planId]);
+        if (schedules.rows.some((row: any) => Number(row.paidAmount || 0) > 0)) throw new ConflictError('لا يمكن إلغاء خطة بها أقساط مدفوعة أو جزئية؛ استخدم تسوية عكسية معتمدة.');
+        cancelledPlan = { ...current, status: 'cancelled', schedules: schedules.rows };
+        await transaction.query(`UPDATE public.student_fee_installment_plans SET status = 'cancelled', version = version + 1 WHERE tenant_id = $1 AND school_id = $2 AND id = $3`, [tenantId, schoolId, planId]);
+        await transaction.query(`UPDATE public.student_fee_installment_schedules SET status = 'cancelled', version = version + 1 WHERE tenant_id = $1 AND school_id = $2 AND id = ANY($3::uuid[])`, [tenantId, schoolId, schedules.rows.map((row: any) => row.id)]);
+        await transaction.query(`INSERT INTO public.student_fee_installment_plan_history (tenant_id, school_id, plan_id, action, reason, snapshot, created_by) VALUES ($1,$2,$3,'cancelled',$4,$5::jsonb,$6)`, [tenantId, schoolId, planId, reason, JSON.stringify(cancelledPlan), databaseActorId]);
+        await transaction.query(`INSERT INTO public.audit_events (id, tenant_id, school_id, actor_user_id, entity_type, entity_id, action, source, reason, result, metadata) VALUES ($1,$2,$3,$4,'student_fee_installment_plan',$5,'cancel','CanonicalStudentFeeRoute',$6,'success',$7::jsonb)`, [randomUUID(), tenantId, schoolId, databaseActorId, planId, reason, JSON.stringify({ scheduleCount: schedules.rows.length })]);
+      }, tenantContext);
+      res.json({ success: true, data: { planId, status: 'cancelled' }, meta: { source: 'canonical_postgres' } });
+    } catch (err: any) {
+      next(err instanceof AuthenticationError || err instanceof ValidationError || err instanceof ConflictError || err instanceof DatabaseError
+        ? err
+        : new DatabaseError('تعذر إلغاء خطة الأقساط.', err?.message));
     }
   });
 
@@ -11593,13 +11715,16 @@ async function startServer() {
       const operationalType = String(body.operationalType || 'رسوم دراسية').trim();
       const against = String(body.against || '').trim();
       const costCenter = String(body.costCenter || '').trim();
+      const requestedInstallmentScheduleId = body.installmentScheduleId ? String(body.installmentScheduleId).trim() : null;
       const amount = assertMoney(body.amount, 'مبلغ سند القبض');
       const permittedPaymentMethods = new Set(['نقدي', 'شيك', 'تحويل', 'بطاقة مدى البنكية (Mada)', 'فيزا / ماستركارد']);
+      const permittedCostCenters = new Set(['kindergarten', 'primary', 'middle', 'secondary']);
       if (!/^[A-Za-z0-9][A-Za-z0-9._:-]{7,179}$/.test(receiptId)) throw new ValidationError('معرف سند القبض غير صالح.');
       if (!canonicalFeeUuid(studentId)) throw new ValidationError('معرف الطالب غير صالح.');
       if (!/^\d{4}-\d{2}-\d{2}$/.test(receiptDate)) throw new ValidationError('تاريخ سند القبض غير صالح.');
       if (!permittedPaymentMethods.has(paymentMethod)) throw new ValidationError('طريقة السداد غير مدعومة.');
       if (!receivingAccount || !against) throw new ValidationError('حساب الاستلام وبيان السداد حقول مطلوبة.');
+      if (!permittedCostCenters.has(costCenter)) throw new ValidationError('مركز التكلفة غير صالح؛ يجب أن يكون الروضة أو الابتدائي أو المتوسط أو الثانوي.');
 
       let settlement: Record<string, any> | null = null;
       let idempotentReplay = false;
@@ -11627,7 +11752,7 @@ async function startServer() {
         const studentName = [student.preferred_name, student.legal_first_name, student.legal_middle_name, student.legal_last_name].filter(Boolean).join(' ');
 
         const existingResult = await transaction.query(
-          `SELECT id, student_id, amount, status, journal_entry_id
+          `SELECT id, student_id, amount, status, journal_entry_id, receipt_voucher_id
              FROM public.student_fee_receipts
             WHERE tenant_id = $1 AND school_id = $2 AND id = $3
             FOR UPDATE`,
@@ -11651,7 +11776,7 @@ async function startServer() {
           }
           idempotentReplay = true;
           settlement = {
-            receipt: { id: receiptId, studentId, studentName, amount, receiptDate, paymentMethod, receivingAccount, operationalType, against, status: 'posted', journalEntryId: existing.journal_entry_id },
+            receipt: { id: receiptId, studentId, studentName, amount, receiptDate, paymentMethod, receivingAccount, operationalType, against, status: 'posted', journalEntryId: existing.journal_entry_id, receiptVoucherId: existing.receipt_voucher_id },
             allocations: previousAllocations.rows,
             journalId: existing.journal_entry_id
           };
@@ -11672,24 +11797,36 @@ async function startServer() {
         if (openInvoices.rows.length === 0 || outstanding <= 0) throw new ConflictError('لا توجد مطالبة مفتوحة موثقة لهذا الطالب.');
         if (amount > outstanding + 0.001) throw new ConflictError(`مبلغ السداد يتجاوز الرصيد المستحق (${outstanding.toFixed(2)}).`);
 
+        let receiptVoucherId = existing?.receipt_voucher_id ? String(existing.receipt_voucher_id) : '';
+        if (!receiptVoucherId) {
+          const sequence = await transaction.query(
+            `INSERT INTO public.student_fee_receipt_sequences (tenant_id, school_id, next_number)
+             VALUES ($1,$2,2)
+             ON CONFLICT (school_id) DO UPDATE SET next_number = public.student_fee_receipt_sequences.next_number + 1, updated_at = now()
+             RETURNING next_number - 1 AS "receiptNumber"`,
+            [tenantId, schoolId]
+          );
+          receiptVoucherId = `RCV-${String(receiptDate).slice(0, 4)}-${String(sequence.rows[0]?.receiptNumber || 1).padStart(8, '0')}`;
+        }
+
         if (existing) {
           await transaction.query(
             `UPDATE public.student_fee_receipts
                 SET student_name = $4, receipt_date = $5, payment_method = $6,
                     receiving_account = $7, operational_type = $8, against_text = $9,
-                    status = 'posted', source_payload = $10::jsonb, updated_at = now(), updated_by = $11
+                    status = 'posted', receipt_voucher_id = $10, source_payload = $11::jsonb, updated_at = now(), updated_by = $12
               WHERE tenant_id = $1 AND school_id = $2 AND id = $3`,
             [tenantId, schoolId, receiptId, studentName, receiptDate, paymentMethod, receivingAccount, operationalType, against,
-              JSON.stringify({ command: 'manual_settle', costCenter, idempotencyKey: receiptId }), databaseActorId]
+              receiptVoucherId, JSON.stringify({ command: 'manual_settle', costCenter, installmentScheduleId: requestedInstallmentScheduleId, receiptVoucherId, idempotencyKey: receiptId }), databaseActorId]
           );
         } else {
           await transaction.query(
             `INSERT INTO public.student_fee_receipts
               (tenant_id, school_id, id, student_id, student_name, receipt_date, amount, payment_method,
-               receiving_account, operational_type, against_text, status, source_payload, updated_by)
-             VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,'posted',$12::jsonb,$13)`,
+               receiving_account, operational_type, against_text, status, receipt_voucher_id, source_payload, updated_by)
+             VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,'posted',$12,$13::jsonb,$14)`,
             [tenantId, schoolId, receiptId, studentId, studentName, receiptDate, amount, paymentMethod,
-              receivingAccount, operationalType, against, JSON.stringify({ command: 'manual_settle', costCenter, idempotencyKey: receiptId }), databaseActorId]
+              receivingAccount, operationalType, against, receiptVoucherId, JSON.stringify({ command: 'manual_settle', costCenter, installmentScheduleId: requestedInstallmentScheduleId, receiptVoucherId, idempotencyKey: receiptId }), databaseActorId]
           );
         }
 
@@ -11706,6 +11843,9 @@ async function startServer() {
             FOR UPDATE` ,
           [tenantId, schoolId, invoiceIds]
         );
+        if (requestedInstallmentScheduleId && !scheduleResult.rows.some((row: any) => String(row.id) === requestedInstallmentScheduleId)) {
+          throw new ConflictError('القسط المحدد غير متاح للسداد؛ ربما تم سداده أو إلغاء خطته أو لا ينتمي إلى الطالب الحالي.');
+        }
         const schedulesByInvoice = new Map<string, any[]>();
         for (const schedule of scheduleResult.rows) {
           const key = String(schedule.invoiceId);
@@ -11722,7 +11862,11 @@ async function startServer() {
           const allocatedAmount = Number(Math.min(unallocated, invoiceRemaining).toFixed(2));
           if (allocatedAmount <= 0) continue;
           let invoiceUnallocated = allocatedAmount;
-          const schedules = schedulesByInvoice.get(String(invoice.id)) || [];
+          const schedules = [...(schedulesByInvoice.get(String(invoice.id)) || [])].sort((a: any, b: any) => {
+            if (requestedInstallmentScheduleId && String(a.id) === requestedInstallmentScheduleId) return -1;
+            if (requestedInstallmentScheduleId && String(b.id) === requestedInstallmentScheduleId) return 1;
+            return new Date(String(a.dueDate)).getTime() - new Date(String(b.dueDate)).getTime() || Number(a.installmentNumber) - Number(b.installmentNumber);
+          });
           const allocationParts = schedules.length > 0 ? schedules : [null];
           for (const schedule of allocationParts) {
             if (invoiceUnallocated <= 0.001) break;
@@ -11784,19 +11928,19 @@ async function startServer() {
         if (!journalId) throw new DatabaseError('تعذر إثبات رابط القيد المحاسبي لسند القبض.');
         await transaction.query(
           `UPDATE public.student_fee_receipts
-              SET journal_entry_id = $4, receipt_voucher_id = $3, updated_at = now(), updated_by = $5
+              SET journal_entry_id = $4, receipt_voucher_id = $5, updated_at = now(), updated_by = $6
             WHERE tenant_id = $1 AND school_id = $2 AND id = $3`,
-          [tenantId, schoolId, receiptId, journalId, databaseActorId]
+          [tenantId, schoolId, receiptId, journalId, receiptVoucherId, databaseActorId]
         );
         await transaction.query(
           `INSERT INTO public.audit_events
             (id, tenant_id, school_id, branch_id, actor_user_id, entity_type, entity_id, action, source, reason, result, metadata)
            VALUES ($1,$2,$3,$4,$5,'student_fee_receipt',$6,'manual_settle','CanonicalStudentFeeRoute','تحصيل وتخصيص وترحيل سند طالب','success',$7::jsonb)`,
           [randomUUID(), tenantId, schoolId, tenantContext.branchId || null, databaseActorId, receiptId,
-            JSON.stringify({ studentId, amount, paymentMethod, allocationCount: allocations.length, journalId })]
+            JSON.stringify({ studentId, amount, paymentMethod, installmentScheduleId: requestedInstallmentScheduleId, allocationCount: allocations.length, journalId })]
         );
         settlement = {
-          receipt: { id: receiptId, studentId, studentName, amount, receiptDate, paymentMethod, receivingAccount, operationalType, against, status: 'posted', journalEntryId: journalId, receiptVoucherId: receiptId },
+          receipt: { id: receiptId, studentId, studentName, amount, receiptDate, paymentMethod, receivingAccount, operationalType, against, status: 'posted', journalEntryId: journalId, receiptVoucherId },
           allocations,
           journalId
         };
@@ -11805,7 +11949,7 @@ async function startServer() {
       res.status(idempotentReplay ? 200 : 201).json({
         success: true,
         data: settlement,
-        meta: { source: 'canonical_postgres', idempotentReplay, allocationPolicy: 'oldest_due_first' }
+        meta: { source: 'canonical_postgres', idempotentReplay, allocationPolicy: requestedInstallmentScheduleId ? 'requested_schedule_then_oldest_due' : 'oldest_due_first', requestedInstallmentScheduleId }
       });
     } catch (err: any) {
       next(err instanceof AuthenticationError || err instanceof ValidationError || err instanceof ConflictError || err instanceof DatabaseError

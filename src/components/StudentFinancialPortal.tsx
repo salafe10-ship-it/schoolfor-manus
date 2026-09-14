@@ -69,6 +69,12 @@ interface InstallmentPlanView {
 }
 
 const STUDENT_RECEIVABLE_ACCOUNT = '1201';
+const STUDENT_COST_CENTER_LABELS: Record<string, string> = {
+  kindergarten: 'الروضة',
+  primary: 'الابتدائي',
+  middle: 'المتوسط',
+  secondary: 'الثانوي'
+};
 const MAX_FEE_CONFIG_IMPORT_FILE_BYTES = 10 * 1024 * 1024;
 const FEE_CONFIG_IMPORT_EXTENSIONS = ['.xlsx', '.csv'];
 const MAX_FEE_CONFIG_IMPORT_ROWS = 500;
@@ -179,6 +185,8 @@ export default function StudentFinancialPortal({
   const [selectedPlanInvoiceId, setSelectedPlanInvoiceId] = useState<string>('');
   const [installmentPlansLoading, setInstallmentPlansLoading] = useState<boolean>(false);
   const [installmentPlansRefreshToken, setInstallmentPlansRefreshToken] = useState(0);
+  const [overdueInstallmentSummary, setOverdueInstallmentSummary] = useState<{ asOf: string; count: number; overdueAmount: number; rows: Array<any> }>({ asOf: '', count: 0, overdueAmount: 0, rows: [] });
+  const [installmentPlanHistory, setInstallmentPlanHistory] = useState<Record<string, any[]>>({});
 
   // Redesigned Management Tab States (matching the uploaded image)
   const [siblingDiscountPercent, setSiblingDiscountPercent] = useState<number>(0);
@@ -479,6 +487,23 @@ export default function StudentFinancialPortal({
     return () => { cancelled = true; };
   }, [selectedStudent?.id, studentPlanInvoices, installmentPlansRefreshToken, triggerNotification]);
 
+  React.useEffect(() => {
+    let cancelled = false;
+    if (activeSubSec !== 'installments') return () => { cancelled = true; };
+    const loadOverdueSummary = async () => {
+      try {
+        const response = await authenticatedRequest('/api/financial/installment-plans/overdue-summary', { headers: { Accept: 'application/json' }, cache: 'no-store' });
+        const result = await response.json().catch(() => ({}));
+        if (!response.ok || !result.success) throw new Error(result.message || 'تعذر تحميل المتأخرات.');
+        if (!cancelled) setOverdueInstallmentSummary(result.data || { asOf: '', count: 0, overdueAmount: 0, rows: [] });
+      } catch (error: any) {
+        if (!cancelled) triggerNotification(error?.message || 'تعذر تحميل تقرير الأقساط المتأخرة.', 'warning');
+      }
+    };
+    void loadOverdueSummary();
+    return () => { cancelled = true; };
+  }, [activeSubSec, installmentPlansRefreshToken, triggerNotification]);
+
   // The financial portal can be opened directly from the dashboard, before
   // Student Affairs has mounted its own paged loader. Hydrate the same
   // canonical student contract here so invoice balances can be reconciled to
@@ -537,17 +562,54 @@ export default function StudentFinancialPortal({
     costCenter: 'primary',
     status: 'draft',
     notes: '',
-    attachmentName: ''
+    attachmentName: '',
+    installmentScheduleId: ''
   });
 
   // Mode of form: 'view' | 'edit' | 'create'
   const [studRvMode, setStudRvMode] = useState<'view' | 'edit' | 'create'>('view');
+  const [receiptInstallmentPlans, setReceiptInstallmentPlans] = useState<InstallmentPlanView[]>([]);
+  const [receiptInstallmentPlansLoading, setReceiptInstallmentPlansLoading] = useState(false);
+  const [receiptInstallmentScheduleId, setReceiptInstallmentScheduleId] = useState('');
 
   // Search filter for receipt list
   const [rvSearch, setRvSearch] = useState('');
 
   // Status quick filter
   const [rvStatusFilter, setRvStatusFilter] = useState('all');
+
+  React.useEffect(() => {
+    let cancelled = false;
+    const studentId = studRvForm.studentId;
+    if (!studentId || studRvMode === 'view') {
+      setReceiptInstallmentPlans([]);
+      setReceiptInstallmentPlansLoading(false);
+      return () => { cancelled = true; };
+    }
+    const loadReceiptInstallmentPlans = async () => {
+      setReceiptInstallmentPlansLoading(true);
+      try {
+        const response = await authenticatedRequest(`/api/financial/students/${encodeURIComponent(studentId)}/installment-plans`, { headers: { Accept: 'application/json' }, cache: 'no-store' });
+        const result = await response.json().catch(() => ({}));
+        if (!response.ok || !result.success) throw new Error(result.message || 'تعذر تحميل جدول أقساط الطالب.');
+        if (!cancelled) setReceiptInstallmentPlans(Array.isArray(result.data) ? result.data : []);
+      } catch (error: any) {
+        if (!cancelled) {
+          setReceiptInstallmentPlans([]);
+          triggerNotification(error?.message || 'تعذر تحميل جدول أقساط الطالب.', 'warning');
+        }
+      } finally {
+        if (!cancelled) setReceiptInstallmentPlansLoading(false);
+      }
+    };
+    void loadReceiptInstallmentPlans();
+    return () => { cancelled = true; };
+  }, [studRvForm.studentId, studRvMode, triggerNotification]);
+
+  const receiptInstallmentSchedules = useMemo(() => receiptInstallmentPlans
+    .flatMap(plan => plan.schedules.map(schedule => ({ ...schedule, planId: plan.planId, invoiceId: plan.invoiceId, item: plan.item })))
+    .filter(schedule => !['paid', 'cancelled', 'written_off'].includes(String(schedule.status).toLowerCase()) && Number(schedule.amount) - Number(schedule.paidAmount) > 0.001)
+    .sort((a, b) => String(a.dueDate).localeCompare(String(b.dueDate)) || a.installmentNumber - b.installmentNumber), [receiptInstallmentPlans]);
 
   // Select first item on mount or tab focus
   React.useEffect(() => {
@@ -573,7 +635,8 @@ export default function StudentFinancialPortal({
         costCenter: selectedStudRv.costCenter,
         status: selectedStudRv.status,
         notes: selectedStudRv.notes || '',
-        attachmentName: selectedStudRv.attachmentName || ''
+        attachmentName: selectedStudRv.attachmentName || '',
+        installmentScheduleId: selectedStudRv.installmentScheduleId || ''
       });
     }
   }, [selectedStudRv, studRvMode]);
@@ -608,8 +671,10 @@ export default function StudentFinancialPortal({
         amount: 0,
         against: '',
         stage: '',
-        costCenter: ''
+        costCenter: '',
+        installmentScheduleId: ''
       }));
+      setReceiptInstallmentScheduleId('');
       return;
     }
 
@@ -633,8 +698,10 @@ export default function StudentFinancialPortal({
       stage: stageLabel,
       costCenter: costCenter,
       amount: remainingBalance > 0 ? remainingBalance : 0,
-      against: `سداد قيمة الرسوم الدراسية للطالب: ${student.name} - المرحلة التعليمية: ${stageLabel}`
+      against: `سداد قيمة الرسوم الدراسية للطالب: ${student.name} - المرحلة التعليمية: ${stageLabel}`,
+      installmentScheduleId: ''
     }));
+    setReceiptInstallmentScheduleId('');
   };
 
   // 1. Toolbar - NEW
@@ -655,8 +722,10 @@ export default function StudentFinancialPortal({
       costCenter: '',
       status: 'draft',
       notes: '',
-      attachmentName: ''
+      attachmentName: '',
+      installmentScheduleId: ''
     });
+    setReceiptInstallmentScheduleId('');
     setSelectedStudRv(null);
     triggerNotification('📋 تم فتح نموذج سند قبض جديد (مسودة جاهزة للتعبئة)', 'info');
   };
@@ -814,7 +883,8 @@ export default function StudentFinancialPortal({
           receivingAccount: selectedStudRv.receivingAccount,
           operationalType: selectedStudRv.operationalType,
           against: selectedStudRv.against,
-          costCenter: selectedStudRv.costCenter
+          costCenter: selectedStudRv.costCenter,
+          installmentScheduleId: selectedStudRv.installmentScheduleId || null
         })
       });
       const result = await response.json().catch(() => ({}));
@@ -1807,8 +1877,10 @@ export default function StudentFinancialPortal({
       return;
     }
 
-    const schoolName = "مدارس الأسرة الحديثة الموحد الرياضية";
+    const schoolName = selectedSchool?.name || "مدارس الأسرة الحديثة الموحد الرياضية";
     const titleText = "سـنـد قـبـض مـالـي (طـلاب)";
+    const receiptNumber = v.receiptVoucherId || v.id;
+    const journalNumber = v.journalEntryId || 'غير مرحل';
     
     printWindow.document.write(`
       <html dir="rtl">
@@ -1816,24 +1888,38 @@ export default function StudentFinancialPortal({
           <title>سند قبض رقم ${v.id}</title>
           <style>
             @import url('https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700;800&display=swap');
+            @page { size: A4 portrait; margin: 0; }
+            * { box-sizing: border-box; }
             body {
               font-family: 'Inter', system-ui, -apple-system, sans-serif;
-              padding: 40px;
+              width: 210mm;
+              min-height: 297mm;
+              margin: 0;
+              padding: 0;
               color: #0f172a;
               background-color: #ffffff;
-              font-size: 13px;
-              line-height: 1.6;
+              font-size: 10px;
+              line-height: 1.35;
+            }
+            .receipt-copy {
+              width: 190mm;
+              height: 132mm;
+              margin: 7mm auto 0;
+              padding: 7mm 8mm 6mm;
+              border: 1px solid #0f172a;
+              position: relative;
+              overflow: hidden;
             }
             .header {
               display: flex;
               justify-content: space-between;
               align-items: center;
               border-bottom: 3px double #0f172a;
-              padding-bottom: 15px;
-              margin-bottom: 30px;
+              padding-bottom: 7px;
+              margin-bottom: 10px;
             }
             .school-info {
-              font-size: 11px;
+              font-size: 8px;
               font-weight: bold;
               line-height: 1.5;
             }
@@ -1841,36 +1927,36 @@ export default function StudentFinancialPortal({
               text-align: center;
             }
             .doc-title h1 {
-              font-size: 18px;
+              font-size: 13px;
               font-weight: 900;
               border: 2px solid #0f172a;
-              padding: 6px 20px;
+              padding: 4px 12px;
               border-radius: 8px;
               margin: 0;
               background-color: #f8fafc;
             }
             .doc-serial {
               font-family: monospace;
-              font-size: 13px;
+              font-size: 9px;
               font-weight: bold;
               margin-top: 5px;
             }
             .meta-info {
-              font-size: 11px;
+              font-size: 8px;
               text-align: left;
               line-height: 1.5;
             }
             .voucher-body {
               border: 1px solid #0f172a;
               border-radius: 8px;
-              padding: 20px;
-              margin-bottom: 30px;
+              padding: 7px 10px;
+              margin-bottom: 9px;
               background-color: #fafafa;
             }
             .field-row {
               display: flex;
               border-bottom: 1px dashed #cbd5e1;
-              padding: 10px 0;
+              padding: 4px 0;
               align-items: center;
             }
             .field-row:last-child {
@@ -1878,20 +1964,20 @@ export default function StudentFinancialPortal({
             }
             .field-label {
               font-weight: bold;
-              width: 150px;
+              width: 105px;
               color: #334155;
             }
             .field-value {
               flex: 1;
-              font-size: 14px;
+              font-size: 10px;
               font-weight: 700;
             }
             .amount-box {
               display: inline-block;
               border: 2px solid #0f172a;
-              padding: 8px 15px;
+              padding: 4px 9px;
               font-family: monospace;
-              font-size: 16px;
+              font-size: 12px;
               font-weight: 900;
               background-color: #f1f5f9;
               border-radius: 6px;
@@ -1899,31 +1985,33 @@ export default function StudentFinancialPortal({
             .footer-signatures {
               display: grid;
               grid-template-columns: repeat(3, 1fr);
-              gap: 20px;
+              gap: 10px;
               text-align: center;
-              margin-top: 60px;
-              font-size: 12px;
+              margin-top: 12px;
+              font-size: 8px;
               font-weight: bold;
             }
             .sig-space {
-              height: 50px;
+              height: 22px;
             }
             .system-tag {
               text-align: center;
               font-size: 9px;
               color: #94a3b8;
-              margin-top: 80px;
+              margin-top: 8px;
               border-top: 1px solid #e2e8f0;
               padding-top: 10px;
             }
             @media print {
-              body { padding: 15px; }
+              body { width: 210mm; min-height: 297mm; }
+              .receipt-copy { break-inside: avoid; page-break-inside: avoid; }
               .voucher-body { background-color: transparent; }
               .amount-box { background-color: #f1f5f9 !important; -webkit-print-color-adjust: exact; print-color-adjust: exact; }
             }
           </style>
         </head>
         <body>
+          <section class="receipt-copy">
           <div class="header">
             <div class="school-info">
               <p>المملكة العربية السعودية</p>
@@ -1933,7 +2021,7 @@ export default function StudentFinancialPortal({
             </div>
             <div class="doc-title">
               <h1>${titleText}</h1>
-              <div class="doc-serial">الرقم التسلسلي: ${v.id}</div>
+              <div class="doc-serial">رقم سند القبض: ${receiptNumber}</div>
             </div>
             <div class="meta-info">
               <p>تاريخ السند: <strong>${v.date}</strong></p>
@@ -1965,6 +2053,10 @@ export default function StudentFinancialPortal({
               <div class="field-label">الحساب المدين:</div>
               <div class="field-value">${v.receivingAccount === '1101' ? 'صندوق الخزينة الرئيسي (كاش)' : 'حساب مصرف الوحدة الجاري'} (رمز الحساب: ${v.receivingAccount})</div>
             </div>
+            <div class="field-row">
+              <div class="field-label">رقم قيد اليومية:</div>
+              <div class="field-value">${journalNumber}</div>
+            </div>
           </div>
 
           <div class="footer-signatures">
@@ -1989,9 +2081,8 @@ export default function StudentFinancialPortal({
             </div>
           </div>
 
-          <div class="system-tag">
-            تم التصدير والطباعة إلكترونياً من نظام المدير المالي ERP - المستخدم النشط: ${auditActor} - تاريخ الطباعة: ${new Date().toLocaleString('ar-SA')} - صفحة 1 من 1
-          </div>
+          <div class="system-tag">صورة العميل • تم الترحيل عبر نظام ERP • المستخدم: ${auditActor} • ${new Date().toLocaleString('ar-LY')}</div>
+          </section>
 
           <script>
             window.onload = function() {
@@ -2602,8 +2693,10 @@ export default function StudentFinancialPortal({
       studentName: selectedStudent.name,
       amount: Number(outstanding.toFixed(2)),
       against: `سداد المطالبات المالية المفتوحة للطالب ${selectedStudent.name}`,
+      installmentScheduleId: '',
       status: 'draft'
     }));
+    setReceiptInstallmentScheduleId('');
     handleStudentSelectInForm(selectedStudent.id);
     setActiveSubSec('receipts');
     triggerNotification('تم تجهيز مسودة تحصيل من الرصيد الموثق؛ راجع المبلغ وطريقة السداد قبل الحفظ.', 'info');
@@ -2705,6 +2798,45 @@ export default function StudentFinancialPortal({
       logAction('CREATE_STUDENT_INSTALLMENT_PLAN', `حفظ خطة تقسيط للطالب ${selectedStudent.name} بعدد ${savedPlan.installmentCount} أقساط بإجمالي ${savedPlan.totalAmount}`, 'حسابات الطلاب');
     } catch (error: any) {
       triggerNotification(error?.message || 'تعذر حفظ خطة الأقساط.', 'warning');
+    }
+  };
+
+  const handleCancelInstallmentPlan = async (plan: InstallmentPlanView) => {
+    if (!ensureFinancialWriteReady()) return;
+    if (plan.schedules.some(schedule => Number(schedule.paidAmount || 0) > 0)) {
+      triggerNotification('لا يمكن إلغاء خطة بها قسط مدفوع أو جزئي؛ يجب استخدام عكس محاسبي معتمد.', 'warning');
+      return;
+    }
+    const reason = window.prompt('اكتب سبب إلغاء خطة الأقساط لتوثيقه في سجل المراجعة:');
+    if (!reason || reason.trim().length < 3) {
+      triggerNotification('سبب الإلغاء مطلوب ولا يقل عن 3 أحرف.', 'warning');
+      return;
+    }
+    try {
+      const response = await authenticatedRequest(`/api/financial/installment-plans/${encodeURIComponent(plan.planId)}/cancel`, {
+        method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ reason: reason.trim() })
+      });
+      const result = await response.json().catch(() => ({}));
+      if (!response.ok || !result.success) throw new Error(result.message || 'تعذر إلغاء خطة الأقساط.');
+      setInstallmentPlans(current => current.filter(item => item.planId !== plan.planId));
+      setInstallmentPlanHistory(current => ({ ...current, [plan.planId]: [{ action: 'cancelled', reason: reason.trim(), createdAt: new Date().toISOString() }, ...(current[plan.planId] || [])] }));
+      setInstallmentPlansRefreshToken(current => current + 1);
+      triggerNotification('✓ أُلغيت الخطة مع حفظ سبب الإلغاء وسجلها الرقابي؛ يمكنك الآن إنشاء خطة بديلة.', 'success');
+      logAction('CANCEL_STUDENT_INSTALLMENT_PLAN', `إلغاء خطة الأقساط ${plan.planId}: ${reason.trim()}`, 'حسابات الطلاب');
+    } catch (error: any) {
+      triggerNotification(error?.message || 'تعذر إلغاء خطة الأقساط.', 'warning');
+    }
+  };
+
+  const handleLoadInstallmentPlanHistory = async (planId: string) => {
+    try {
+      const response = await authenticatedRequest(`/api/financial/installment-plans/${encodeURIComponent(planId)}/history`, { headers: { Accept: 'application/json' }, cache: 'no-store' });
+      const result = await response.json().catch(() => ({}));
+      if (!response.ok || !result.success) throw new Error(result.message || 'تعذر تحميل سجل الخطة.');
+      setInstallmentPlanHistory(current => ({ ...current, [planId]: Array.isArray(result.data) ? result.data : [] }));
+      triggerNotification(`تم تحميل سجل الخطة: ${Array.isArray(result.data) ? result.data.length : 0} حدثًا موثقًا.`, 'info');
+    } catch (error: any) {
+      triggerNotification(error?.message || 'تعذر تحميل سجل الخطة.', 'warning');
     }
   };
 
@@ -3820,12 +3952,35 @@ export default function StudentFinancialPortal({
                 <button
                   type="button"
                   onClick={() => { void handleSaveInstallmentPlan(); }}
-                  disabled={financialPersistence !== 'ready' || !selectedPlanInvoice || installmentPlans.some(plan => plan.invoiceId === selectedPlanInvoice?.id) || generatedInstallments.length === 0}
+                  disabled={financialPersistence !== 'ready' || !selectedPlanInvoice || installmentPlans.some(plan => plan.invoiceId === selectedPlanInvoice?.id && plan.status !== 'cancelled') || generatedInstallments.length === 0}
                   className="w-full rounded-xl border border-amber-300 bg-gradient-to-r from-[#9b6c17] via-[#d4af37] to-[#9b6c17] px-4 py-3 text-sm font-black text-[#24150d] shadow-md disabled:cursor-not-allowed disabled:opacity-50"
                 >
-                  {installmentPlans.some(plan => plan.invoiceId === selectedPlanInvoice?.id) ? '✓ خطة محفوظة لهذه المطالبة' : 'حفظ واعتماد خطة الأقساط'}
+                  {installmentPlans.some(plan => plan.invoiceId === selectedPlanInvoice?.id && plan.status !== 'cancelled') ? '✓ خطة محفوظة لهذه المطالبة' : 'حفظ واعتماد خطة الأقساط'}
                 </button>
               </div>
+            </div>
+
+            <div className="rounded-2xl border border-rose-200 bg-rose-50/50 p-5 shadow-sm">
+              <div className="flex flex-wrap items-center justify-between gap-3 border-b border-rose-100 pb-3">
+                <div>
+                  <h3 className="text-sm font-black text-slate-900 flex items-center gap-2"><AlertTriangle className="h-4 w-4 text-rose-600" /> متابعة الأقساط المتأخرة</h3>
+                  <p className="mt-1 text-[10px] font-bold text-slate-500">تقرير مشتق من تاريخ الاستحقاق الحالي دون تعديل صامت على الأرصدة أو القيود</p>
+                </div>
+                <span className="text-[10px] font-black text-rose-700">حتى {overdueInstallmentSummary.asOf || '—'}</span>
+              </div>
+              <div className="mt-4 grid grid-cols-1 sm:grid-cols-3 gap-3">
+                <div className="rounded-xl border border-rose-100 bg-white p-3"><span className="block text-[10px] font-bold text-slate-500">عدد الأقساط</span><strong className="mt-1 block text-xl font-black text-rose-700">{Number(overdueInstallmentSummary.count || 0).toLocaleString('ar')}</strong></div>
+                <div className="rounded-xl border border-rose-100 bg-white p-3"><span className="block text-[10px] font-bold text-slate-500">إجمالي المتأخر</span><strong className="mt-1 block font-mono text-xl font-black text-rose-700">{formatLD(Number(overdueInstallmentSummary.overdueAmount || 0))}</strong></div>
+                <div className="rounded-xl border border-rose-100 bg-white p-3"><span className="block text-[10px] font-bold text-slate-500">سياسة الإشعار</span><strong className="mt-1 block text-xs font-black text-slate-700">جاهز للمراجعة والاتصال</strong></div>
+              </div>
+              {overdueInstallmentSummary.rows.length > 0 && (
+                <div className="mt-4 overflow-x-auto rounded-xl border border-rose-100 bg-white">
+                  <table className="w-full min-w-[720px] text-right text-[10px]"><thead><tr className="bg-rose-50"><th className="px-2 py-2">الطالب</th><th className="px-2 py-2">القسط</th><th className="px-2 py-2">الاستحقاق</th><th className="px-2 py-2">المتأخر</th><th className="px-2 py-2">أيام التأخر</th><th className="px-2 py-2">إجراء</th></tr></thead><tbody>
+                    {overdueInstallmentSummary.rows.slice(0, 20).map((row: any) => <tr key={row.scheduleId} className="border-t border-rose-100"><td className="px-2 py-2 font-black">{row.studentName}</td><td className="px-2 py-2 font-black">{row.installmentNumber}</td><td className="px-2 py-2 font-mono">{row.dueDate}</td><td className="px-2 py-2 font-mono font-black text-rose-700">{formatLD(row.remainingAmount)}</td><td className="px-2 py-2 font-black">{row.daysLate}</td><td className="px-2 py-2"><button type="button" onClick={() => { const student = selectableStudents.find(item => item.id === row.studentId); if (student) { setSelectedStudent(student); setActiveSubSec('installments'); } }} className="rounded-md border border-amber-200 bg-amber-50 px-2 py-1 font-black text-amber-800">فتح الخطة</button></td></tr>)}
+                  </tbody></table>
+                </div>
+              )}
+              {overdueInstallmentSummary.rows.length === 0 && <p className="mt-4 rounded-xl border border-emerald-100 bg-emerald-50 p-4 text-center text-xs font-black text-emerald-700">لا توجد أقساط متأخرة حتى تاريخ التقرير.</p>}
             </div>
 
             <div className="rounded-2xl border border-slate-200 bg-white/80 p-5 shadow-sm">
@@ -3841,7 +3996,11 @@ export default function StudentFinancialPortal({
                     <div key={plan.planId} className="rounded-xl border border-amber-200 bg-amber-50/40 p-4">
                       <div className="flex items-center justify-between gap-3">
                         <strong className="text-xs font-black text-slate-900">{plan.item || 'خطة رسوم دراسية'}</strong>
-                        <span className="rounded-md bg-emerald-100 px-2 py-1 text-[10px] font-black text-emerald-700">{plan.status === 'approved' ? 'معتمدة' : plan.status}</span>
+                        <div className="flex items-center gap-2">
+                          <span className="rounded-md bg-emerald-100 px-2 py-1 text-[10px] font-black text-emerald-700">{plan.status === 'approved' ? 'معتمدة' : plan.status}</span>
+                          <button type="button" onClick={() => { void handleLoadInstallmentPlanHistory(plan.planId); }} className="rounded-md border border-slate-200 bg-white px-2 py-1 text-[10px] font-black text-slate-600 hover:bg-slate-50">سجل الخطة</button>
+                          <button type="button" onClick={() => { void handleCancelInstallmentPlan(plan); }} disabled={plan.schedules.some(schedule => Number(schedule.paidAmount || 0) > 0)} className="rounded-md border border-rose-200 bg-rose-50 px-2 py-1 text-[10px] font-black text-rose-700 disabled:cursor-not-allowed disabled:opacity-40">إلغاء الخطة</button>
+                        </div>
                       </div>
                       <p className="mt-1 text-[10px] font-bold text-slate-500">{plan.installmentCount} أقساط • {plan.frequency === 'monthly' ? 'شهري' : plan.frequency === 'quarterly' ? 'فصلي' : 'سنوي'} • الإجمالي {formatLD(plan.totalAmount)}</p>
                       <div className="mt-3 overflow-x-auto rounded-lg border border-amber-100 bg-white">
@@ -3849,6 +4008,12 @@ export default function StudentFinancialPortal({
                           {plan.schedules.map(schedule => <tr key={schedule.scheduleId} className="border-t border-slate-100"><td className="px-2 py-1.5 font-black">{schedule.installmentNumber}</td><td className="px-2 py-1.5 font-mono">{schedule.dueDate}</td><td className="px-2 py-1.5 font-mono">{formatLD(schedule.amount)}</td><td className="px-2 py-1.5 font-mono text-emerald-700">{formatLD(schedule.paidAmount)}</td><td className="px-2 py-1.5 font-bold">{schedule.status === 'paid' ? 'مدفوع' : schedule.status === 'partially_paid' ? 'جزئي' : 'مجدول'}</td></tr>)}
                         </tbody></table>
                       </div>
+                      {installmentPlanHistory[plan.planId]?.length > 0 && (
+                        <div className="mt-3 rounded-lg border border-slate-200 bg-slate-50 p-2 text-[10px] font-bold text-slate-600">
+                          <div className="mb-1 font-black text-slate-800">سجل المراجعة والإصدارات</div>
+                          {installmentPlanHistory[plan.planId].slice(0, 5).map((entry: any, index: number) => <div key={`${entry.id || entry.createdAt}-${index}`} className="flex justify-between gap-2 border-t border-slate-200 py-1"><span>{entry.action === 'created' ? 'إنشاء' : entry.action === 'cancelled' ? 'إلغاء' : entry.action}</span><span>{entry.reason || '—'}</span><span className="font-mono">{entry.createdAt ? String(entry.createdAt).slice(0, 10) : '—'}</span></div>)}
+                        </div>
+                      )}
                     </div>
                   ))}
                 </div>
@@ -4789,6 +4954,31 @@ export default function StudentFinancialPortal({
                         })()}
                       </div>
 
+                      {/* Optional explicit installment allocation. The server still validates ownership, balance and school scope. */}
+                      <div className="space-y-1 md:col-span-2 rounded-xl border border-amber-200 bg-amber-50/60 p-3">
+                        <label className="font-extrabold text-slate-700 block">تخصيص السداد لقسط محدد (اختياري)</label>
+                        <select
+                          value={receiptInstallmentScheduleId}
+                          onChange={(event) => {
+                            const value = event.target.value;
+                            setReceiptInstallmentScheduleId(value);
+                            setStudRvForm(prev => ({ ...prev, installmentScheduleId: value }));
+                          }}
+                          disabled={!studRvForm.studentId || receiptInstallmentPlansLoading || receiptInstallmentSchedules.length === 0}
+                          className="mt-1 block w-full border border-amber-300 bg-white p-2.5 focus:ring-1 focus:ring-[#9a6a1d] focus:border-[#9a6a1d] focus:outline-none font-bold"
+                        >
+                          <option value="">تلقائي: أقدم قسط مستحق أولًا</option>
+                          {receiptInstallmentSchedules.map(schedule => (
+                            <option key={schedule.scheduleId} value={schedule.scheduleId}>
+                              القسط {schedule.installmentNumber} — استحقاق {schedule.dueDate} — المتبقي {formatLD(Number(schedule.amount) - Number(schedule.paidAmount))}
+                            </option>
+                          ))}
+                        </select>
+                        <p className="mt-1 text-[10px] font-bold text-amber-800">
+                          {receiptInstallmentPlansLoading ? 'جارٍ تحميل خطة الطالب...' : receiptInstallmentSchedules.length > 0 ? 'سيعطي النظام أولوية للقسط المختار ثم يوزع أي فرق متبقٍ بأقدمية الاستحقاق.' : 'لا توجد خطة أقساط نشطة لهذا الطالب؛ سيُخصّص السداد على المطالبات المفتوحة.'}
+                        </p>
+                      </div>
+
                       {/* Payment Method */}
                       <div className="space-y-1">
                         <label className="font-extrabold text-slate-700 block">طريقة القبض / السداد: *</label>
@@ -4999,7 +5189,7 @@ export default function StudentFinancialPortal({
                               <div className="flex items-center gap-1 font-bold">
                                 <span className="text-slate-900">مرحلة {selectedStudRv.stage}</span>
                                 <span className="text-slate-300">•</span>
-                                <span className="font-mono text-amber-650 font-black">{selectedStudRv.costCenter}</span>
+                                <span className="font-mono text-amber-650 font-black">{STUDENT_COST_CENTER_LABELS[selectedStudRv.costCenter] || selectedStudRv.costCenter}</span>
                               </div>
                             </div>
 
