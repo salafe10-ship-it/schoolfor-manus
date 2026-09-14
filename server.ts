@@ -11323,6 +11323,86 @@ async function startServer() {
     }
   });
 
+  app.get("/api/financial/students/:studentId/installment-plans", authenticateRequest, requirePermission(PERMISSIONS.FINANCIAL_READ), async (req, res, next) => {
+    try {
+      const { tenantId, schoolId, tenantContext } = canonicalFeeContext(req);
+      const studentId = String(req.params.studentId || '').trim();
+      if (!canonicalFeeUuid(studentId)) throw new ValidationError('معرف الطالب غير صالح.');
+      let plans: any[] = [];
+      await UnitOfWork.runInTransaction(schoolId, {
+        operationName: 'Read canonical student installment plans', tenantId,
+        userId: String((req as any).user.id), userName: String((req as any).user.name || 'المستخدم المالي'),
+        ipAddress: req.ip || 'unknown', affectedTables: ['student_fee_installment_plans', 'student_fee_installment_schedules', 'student_fee_invoices']
+      }, async () => {
+        const transaction = UnitOfWork.getActiveContext()?.databaseTransaction;
+        if (!transaction) throw new DatabaseError('تعذر فتح المعاملة المالية.');
+        const result = await transaction.query(
+          `SELECT p.id AS "planId", p.invoice_id AS "invoiceId", p.student_id AS "studentId",
+                  p.template_id AS "templateId", p.total_amount AS "totalAmount", p.frequency,
+                  p.method, p.installment_count AS "installmentCount", p.currency, p.status,
+                  p.policy, p.created_at AS "createdAt", i.item, i.amount AS "invoiceAmount",
+                  i.remaining_amount AS "invoiceRemainingAmount", i.status AS "invoiceStatus",
+                  s.id AS "scheduleId", s.installment_number AS "installmentNumber",
+                  s.due_date AS "dueDate", s.amount, s.paid_amount AS "paidAmount",
+                  s.penalty_amount AS "penaltyAmount", s.waived_penalty_amount AS "waivedPenaltyAmount",
+                  s.status AS "scheduleStatus"
+             FROM public.student_fee_installment_plans p
+             JOIN public.student_fee_invoices i
+               ON i.school_id = p.school_id AND i.id = p.invoice_id
+             LEFT JOIN public.student_fee_installment_schedules s
+               ON s.school_id = p.school_id AND s.plan_id = p.id
+            WHERE p.tenant_id = $1 AND p.school_id = $2 AND p.student_id = $3
+              AND p.status <> 'cancelled'
+            ORDER BY i.due_date DESC NULLS LAST, p.created_at DESC, s.installment_number ASC`,
+          [tenantId, schoolId, studentId]
+        );
+        const byPlan = new Map<string, any>();
+        for (const row of result.rows) {
+          const planId = String(row.planId);
+          if (!byPlan.has(planId)) {
+            byPlan.set(planId, {
+              planId,
+              invoiceId: String(row.invoiceId),
+              studentId: String(row.studentId),
+              templateId: row.templateId,
+              totalAmount: Number(row.totalAmount || 0),
+              frequency: row.frequency,
+              method: row.method,
+              installmentCount: Number(row.installmentCount || 0),
+              currency: row.currency,
+              status: row.status,
+              policy: row.policy || {},
+              createdAt: row.createdAt,
+              item: row.item,
+              invoiceAmount: Number(row.invoiceAmount || 0),
+              invoiceRemainingAmount: Number(row.invoiceRemainingAmount || 0),
+              invoiceStatus: row.invoiceStatus,
+              schedules: []
+            });
+          }
+          if (row.scheduleId) {
+            byPlan.get(planId).schedules.push({
+              scheduleId: String(row.scheduleId),
+              installmentNumber: Number(row.installmentNumber || 0),
+              dueDate: row.dueDate,
+              amount: Number(row.amount || 0),
+              paidAmount: Number(row.paidAmount || 0),
+              penaltyAmount: Number(row.penaltyAmount || 0),
+              waivedPenaltyAmount: Number(row.waivedPenaltyAmount || 0),
+              status: row.scheduleStatus
+            });
+          }
+        }
+        plans = [...byPlan.values()];
+      }, tenantContext);
+      res.json({ success: true, data: plans, meta: { source: 'canonical_postgres' } });
+    } catch (err: any) {
+      next(err instanceof AuthenticationError || err instanceof ValidationError || err instanceof DatabaseError
+        ? err
+        : new DatabaseError('تعذر قراءة خطط أقساط الطالب.', err?.message));
+    }
+  });
+
   app.post("/api/financial/concessions", authenticateRequest, requirePermission(PERMISSIONS.FINANCIAL_WRITE), async (req, res, next) => {
     try {
       const { tenantId, schoolId, actorId, tenantContext } = canonicalFeeContext(req);
@@ -11559,7 +11639,7 @@ async function startServer() {
         }
         if (existing && String(existing.status).toLowerCase() === 'posted') {
           const previousAllocations = await transaction.query(
-            `SELECT receipt_id AS "receiptId", invoice_id AS "invoiceId", amount
+            `SELECT receipt_id AS "receiptId", invoice_id AS "invoiceId", installment_schedule_id AS "installmentScheduleId", amount
                FROM public.student_fee_allocations
               WHERE tenant_id = $1 AND school_id = $2 AND receipt_id = $3
               ORDER BY created_at, id`,
@@ -11613,6 +11693,27 @@ async function startServer() {
           );
         }
 
+        const invoiceIds = openInvoices.rows.map((row: any) => String(row.id));
+        const scheduleResult = await transaction.query(
+          `SELECT s.id, s.plan_id AS "planId", p.invoice_id AS "invoiceId", s.installment_number AS "installmentNumber",
+                  s.amount, s.paid_amount AS "paidAmount", s.status, s.due_date AS "dueDate"
+             FROM public.student_fee_installment_schedules s
+             JOIN public.student_fee_installment_plans p
+               ON p.school_id = s.school_id AND p.id = s.plan_id
+            WHERE s.tenant_id = $1 AND s.school_id = $2 AND p.invoice_id = ANY($3::text[])
+              AND p.status <> 'cancelled' AND s.status NOT IN ('paid','cancelled','written_off')
+            ORDER BY p.invoice_id, s.due_date, s.installment_number, s.id
+            FOR UPDATE` ,
+          [tenantId, schoolId, invoiceIds]
+        );
+        const schedulesByInvoice = new Map<string, any[]>();
+        for (const schedule of scheduleResult.rows) {
+          const key = String(schedule.invoiceId);
+          const list = schedulesByInvoice.get(key) || [];
+          list.push(schedule);
+          schedulesByInvoice.set(key, list);
+        }
+
         let unallocated = amount;
         const allocations: any[] = [];
         for (const invoice of openInvoices.rows) {
@@ -11620,14 +11721,36 @@ async function startServer() {
           const invoiceRemaining = Number(invoice.remaining_amount || 0);
           const allocatedAmount = Number(Math.min(unallocated, invoiceRemaining).toFixed(2));
           if (allocatedAmount <= 0) continue;
-          const allocationResult = await transaction.query(
-            `INSERT INTO public.student_fee_allocations
-              (tenant_id, school_id, receipt_id, invoice_id, amount, created_by)
-             VALUES ($1,$2,$3,$4,$5,$6)
-             RETURNING id, receipt_id AS "receiptId", invoice_id AS "invoiceId", amount`,
-            [tenantId, schoolId, receiptId, invoice.id, allocatedAmount, databaseActorId]
-          );
-          allocations.push(allocationResult.rows[0]);
+          let invoiceUnallocated = allocatedAmount;
+          const schedules = schedulesByInvoice.get(String(invoice.id)) || [];
+          const allocationParts = schedules.length > 0 ? schedules : [null];
+          for (const schedule of allocationParts) {
+            if (invoiceUnallocated <= 0.001) break;
+            const scheduleRemaining = schedule ? Number(schedule.amount || 0) - Number(schedule.paidAmount || 0) : invoiceUnallocated;
+            const partAmount = Number(Math.min(invoiceUnallocated, scheduleRemaining).toFixed(2));
+            if (partAmount <= 0) continue;
+            const allocationResult = await transaction.query(
+              `INSERT INTO public.student_fee_allocations
+                (tenant_id, school_id, receipt_id, invoice_id, installment_schedule_id, amount, created_by)
+               VALUES ($1,$2,$3,$4,$5,$6,$7)
+               RETURNING id, receipt_id AS "receiptId", invoice_id AS "invoiceId", installment_schedule_id AS "installmentScheduleId", amount`,
+              [tenantId, schoolId, receiptId, invoice.id, schedule?.id || null, partAmount, databaseActorId]
+            );
+            allocations.push(allocationResult.rows[0]);
+            if (schedule) {
+              const schedulePaid = Number((Number(schedule.paidAmount || 0) + partAmount).toFixed(2));
+              await transaction.query(
+                `UPDATE public.student_fee_installment_schedules
+                    SET paid_amount = $4,
+                        status = CASE WHEN $4 >= amount THEN 'paid' WHEN $4 > 0 THEN 'partially_paid' ELSE status END,
+                        version = version + 1
+                  WHERE tenant_id = $1 AND school_id = $2 AND id = $3`,
+                [tenantId, schoolId, schedule.id, schedulePaid]
+              );
+            }
+            invoiceUnallocated = Number((invoiceUnallocated - partAmount).toFixed(2));
+          }
+          if (invoiceUnallocated > 0.001) throw new ConflictError('تعذر ربط كامل مبلغ السداد بأقساط الفاتورة؛ تم التراجع عن المعاملة.');
           const nextPaid = Number((Number(invoice.paid_amount || 0) + allocatedAmount).toFixed(2));
           const nextRemaining = Number(Math.max(0, invoiceRemaining - allocatedAmount).toFixed(2));
           await transaction.query(

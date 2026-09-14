@@ -40,6 +40,34 @@ interface StudentFinancialPortalProps {
   selectedBranch?: { id?: string; name?: string } | null;
 }
 
+interface InstallmentScheduleView {
+  scheduleId: string;
+  installmentNumber: number;
+  dueDate: string;
+  amount: number;
+  paidAmount: number;
+  penaltyAmount?: number;
+  waivedPenaltyAmount?: number;
+  status: string;
+}
+
+interface InstallmentPlanView {
+  planId: string;
+  invoiceId: string;
+  studentId: string;
+  totalAmount: number;
+  frequency: 'monthly' | 'quarterly' | 'yearly';
+  method: string;
+  installmentCount: number;
+  currency: string;
+  status: string;
+  policy?: { gracePeriodDays?: number; penaltyRatePercent?: number; flatLateFee?: number; allowPenaltyWaiver?: boolean };
+  item?: string;
+  invoiceRemainingAmount?: number;
+  invoiceStatus?: string;
+  schedules: InstallmentScheduleView[];
+}
+
 const STUDENT_RECEIVABLE_ACCOUNT = '1201';
 const MAX_FEE_CONFIG_IMPORT_FILE_BYTES = 10 * 1024 * 1024;
 const FEE_CONFIG_IMPORT_EXTENSIONS = ['.xlsx', '.csv'];
@@ -143,6 +171,14 @@ export default function StudentFinancialPortal({
   // States for Installment Planning
   const [installmentPlanType, setInstallmentPlanType] = useState<'monthly' | 'quarterly' | 'yearly'>('quarterly');
   const [generatedInstallments, setGeneratedInstallments] = useState<Array<{ date: string; amount: number; status: 'paid' | 'unpaid' }>>([]);
+  const [installmentCount, setInstallmentCount] = useState<number>(4);
+  const [installmentStartDate, setInstallmentStartDate] = useState<string>(() => new Date().toISOString().split('T')[0]);
+  const [installmentGracePeriodDays, setInstallmentGracePeriodDays] = useState<number>(0);
+  const [installmentMethod, setInstallmentMethod] = useState<'equal'>('equal');
+  const [installmentPlans, setInstallmentPlans] = useState<InstallmentPlanView[]>([]);
+  const [selectedPlanInvoiceId, setSelectedPlanInvoiceId] = useState<string>('');
+  const [installmentPlansLoading, setInstallmentPlansLoading] = useState<boolean>(false);
+  const [installmentPlansRefreshToken, setInstallmentPlansRefreshToken] = useState(0);
 
   // Redesigned Management Tab States (matching the uploaded image)
   const [siblingDiscountPercent, setSiblingDiscountPercent] = useState<number>(0);
@@ -214,6 +250,22 @@ export default function StudentFinancialPortal({
   // prevents the financial dashboard from falling back to an empty collection
   // after receipts have already loaded.
   const [financialInvoices, setFinancialInvoices] = useState<Invoice[]>([]);
+
+  const studentPlanInvoices = useMemo(() => {
+    if (!selectedStudent) return [];
+    return financialInvoices
+      .filter(invoice => invoice.studentId === selectedStudent.id)
+      .filter(invoice => !['paid', 'cancelled', 'void', 'written_off', 'refunded'].includes(String(invoice.status || '').toLowerCase()))
+      .filter(invoice => Number(invoice.remainingAmount ?? invoice.amount ?? 0) > 0)
+      .sort((a, b) => String(a.dueDate || a.invoiceDate || '').localeCompare(String(b.dueDate || b.invoiceDate || '')));
+  }, [financialInvoices, selectedStudent]);
+
+  const selectedPlanInvoice = useMemo(
+    () => studentPlanInvoices.find(invoice => invoice.id === selectedPlanInvoiceId) || studentPlanInvoices[0] || null,
+    [selectedPlanInvoiceId, studentPlanInvoices]
+  );
+
+  const installmentPlanTotal = Number(selectedPlanInvoice?.remainingAmount ?? selectedPlanInvoice?.amount ?? 0);
 
   const [viewingVoucher, setViewingVoucher] = useState<Invoice | null>(financialInvoices[0] || null);
 
@@ -390,6 +442,42 @@ export default function StudentFinancialPortal({
     };
     loadFinancialDb();
   }, []);
+
+  React.useEffect(() => {
+    let cancelled = false;
+    setSelectedPlanInvoiceId(current => (
+      current && studentPlanInvoices.some(invoice => invoice.id === current)
+        ? current
+        : studentPlanInvoices[0]?.id || ''
+    ));
+    if (!selectedStudent?.id) {
+      setInstallmentPlans([]);
+      setInstallmentPlansLoading(false);
+      return () => { cancelled = true; };
+    }
+
+    const loadInstallmentPlans = async () => {
+      setInstallmentPlansLoading(true);
+      try {
+        const response = await authenticatedRequest(`/api/financial/students/${encodeURIComponent(selectedStudent.id)}/installment-plans`, {
+          headers: { 'Accept': 'application/json' },
+          cache: 'no-store'
+        });
+        const result = await response.json().catch(() => ({}));
+        if (!response.ok || !result.success) throw new Error(result.message || 'تعذر تحميل خطط الأقساط.');
+        if (!cancelled) setInstallmentPlans(Array.isArray(result.data) ? result.data : []);
+      } catch (error: any) {
+        if (!cancelled) {
+          setInstallmentPlans([]);
+          triggerNotification(error?.message || 'تعذر تحميل خطط الأقساط للطالب.', 'warning');
+        }
+      } finally {
+        if (!cancelled) setInstallmentPlansLoading(false);
+      }
+    };
+    void loadInstallmentPlans();
+    return () => { cancelled = true; };
+  }, [selectedStudent?.id, studentPlanInvoices, installmentPlansRefreshToken, triggerNotification]);
 
   // The financial portal can be opened directly from the dashboard, before
   // Student Affairs has mounted its own paged loader. Hydrate the same
@@ -770,6 +858,7 @@ export default function StudentFinancialPortal({
         feesPaid: Number(item.feesPaid || 0) + Number(selectedStudRv.amount || 0),
         feesRemaining: Math.max(0, verifiedOutstanding - Number(selectedStudRv.amount || 0))
       } : item));
+      setInstallmentPlansRefreshToken(current => current + 1);
       triggerNotification(`✓ تم تخصيص السداد وترحيله خادميًا. رقم القيد: ${postedVoucher.journalEntryId}`, 'success');
       logAction('POST_STUDENT_RECEIPT', `تسوية سند ${postedVoucher.id} للطالب ${student.name} بقيمة ${postedVoucher.amount} وربطه بالقيد ${postedVoucher.journalEntryId}`, 'حسابات الطلاب');
       return;
@@ -2520,28 +2609,103 @@ export default function StudentFinancialPortal({
     triggerNotification('تم تجهيز مسودة تحصيل من الرصيد الموثق؛ راجع المبلغ وطريقة السداد قبل الحفظ.', 'info');
   };
 
-  // Generate installment table
-  const generateInstallments = (totalAmount: number, type: 'monthly' | 'quarterly' | 'yearly') => {
+  // Generate a client preview using the same rounding and calendar rules as
+  // the canonical server operation. The server remains authoritative on save.
+  const generateInstallments = (
+    totalAmount: number,
+    type: 'monthly' | 'quarterly' | 'yearly',
+    requestedCount = installmentCount,
+    requestedStartDate = installmentStartDate,
+    gracePeriodDays = installmentGracePeriodDays
+  ) => {
     const installments = [];
-    let count = type === 'monthly' ? 10 : type === 'quarterly' ? 4 : 1;
+    const count = Math.max(1, Math.min(60, Math.floor(Number(requestedCount) || 1)));
     const totalCents = Math.round(Number(totalAmount || 0) * 100);
     const baseCents = count > 0 ? Math.floor(totalCents / count) : 0;
     const remainderCents = totalCents - baseCents * count;
-    const startDate = new Date();
+    const startDate = new Date(`${requestedStartDate}T00:00:00.000Z`);
+    if (Number.isNaN(startDate.getTime())) return setGeneratedInstallments([]);
+    const interval = type === 'monthly' ? 1 : type === 'quarterly' ? 3 : 12;
+    const grace = Math.max(0, Math.min(90, Number(gracePeriodDays) || 0));
     
     for (let i = 0; i < count; i++) {
-        const date = new Date(startDate);
-        if (type === 'monthly') date.setMonth(date.getMonth() + i);
-        else if (type === 'quarterly') date.setMonth(date.getMonth() + i * 3);
-        else date.setFullYear(date.getFullYear() + i);
+        const date = new Date(Date.UTC(startDate.getUTCFullYear(), startDate.getUTCMonth(), 1));
+        const targetMonth = startDate.getUTCMonth() + (i * interval);
+        date.setUTCMonth(targetMonth);
+        const lastDay = new Date(Date.UTC(date.getUTCFullYear(), date.getUTCMonth() + 1, 0)).getUTCDate();
+        date.setUTCDate(Math.min(startDate.getUTCDate(), lastDay) + grace);
         
         installments.push({
-            date: date.toISOString().split('T')[0],
+            date: date.toISOString().slice(0, 10),
             amount: (baseCents + (i === count - 1 ? remainderCents : 0)) / 100,
             status: 'unpaid' as const
         });
     }
     setGeneratedInstallments(installments);
+  };
+
+  React.useEffect(() => {
+    if (activeSubSec === 'installments' && selectedPlanInvoice && installmentPlanTotal > 0) {
+      generateInstallments(installmentPlanTotal, installmentPlanType, installmentCount, installmentStartDate, installmentGracePeriodDays);
+    } else if (activeSubSec === 'installments') {
+      setGeneratedInstallments([]);
+    }
+  }, [activeSubSec, selectedPlanInvoice?.id, installmentPlanTotal, installmentPlanType, installmentCount, installmentStartDate, installmentGracePeriodDays]);
+
+  const handleSaveInstallmentPlan = async () => {
+    if (!ensureFinancialWriteReady()) return;
+    if (!selectedStudent || !selectedPlanInvoice) {
+      triggerNotification('اختر الطالب والفاتورة المفتوحة قبل حفظ خطة الأقساط.', 'warning');
+      return;
+    }
+    if (!financialOperationalContext?.academicYearId || !financialOperationalContext?.academicPeriodId) {
+      triggerNotification('لا يمكن حفظ الخطة قبل توثيق السنة والفترة الدراسية النشطتين.', 'warning');
+      return;
+    }
+    const count = Math.floor(Number(installmentCount));
+    if (!Number.isInteger(count) || count < 1 || count > 60) {
+      triggerNotification('عدد الأقساط يجب أن يكون رقمًا صحيحًا بين 1 و60.', 'warning');
+      return;
+    }
+    if (!/^\d{4}-\d{2}-\d{2}$/.test(installmentStartDate)) {
+      triggerNotification('تاريخ أول قسط غير صالح.', 'warning');
+      return;
+    }
+
+    try {
+      const response = await authenticatedRequest(`/api/financial/invoices/${encodeURIComponent(selectedPlanInvoice.id)}/installment-plan`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          frequency: installmentPlanType,
+          count,
+          startDueDate: installmentStartDate,
+          gracePeriodDays: Math.max(0, Math.min(90, Number(installmentGracePeriodDays) || 0)),
+          method: installmentMethod,
+          penaltyRatePercent: 0,
+          flatLateFee: 0,
+          allowPenaltyWaiver: true
+        })
+      });
+      const result = await response.json().catch(() => ({}));
+      if (!response.ok || !result.success || !result.data?.plan) {
+        throw new Error(result.message || 'تعذر حفظ خطة الأقساط في المصدر المالي.');
+      }
+      const savedPlan = {
+        ...result.data.plan,
+        planId: String(result.data.plan.planId || result.data.plan.id || ''),
+        invoiceId: String(result.data.plan.invoiceId || selectedPlanInvoice.id),
+        studentId: String(result.data.plan.studentId || selectedStudent.id),
+        totalAmount: Number(result.data.plan.totalAmount || installmentPlanTotal),
+        installmentCount: Number(result.data.plan.installmentCount || count),
+        schedules: Array.isArray(result.data.schedules) ? result.data.schedules : []
+      } as InstallmentPlanView;
+      setInstallmentPlans(current => [savedPlan, ...current.filter(plan => plan.planId !== savedPlan.planId)]);
+      triggerNotification(`✓ تم حفظ خطة تقسيط من ${savedPlan.installmentCount} قسطًا وربطها بالمطالبة ${selectedPlanInvoice.id}.`, 'success');
+      logAction('CREATE_STUDENT_INSTALLMENT_PLAN', `حفظ خطة تقسيط للطالب ${selectedStudent.name} بعدد ${savedPlan.installmentCount} أقساط بإجمالي ${savedPlan.totalAmount}`, 'حسابات الطلاب');
+    } catch (error: any) {
+      triggerNotification(error?.message || 'تعذر حفظ خطة الأقساط.', 'warning');
+    }
   };
 
   // Format Libyan Dinar
@@ -2555,6 +2719,7 @@ export default function StudentFinancialPortal({
     { id: 'settings', label: 'إعدادات مبالغ الرسوم', icon: Settings2 },
     { id: 'distribution', label: 'التوزيع الجماعي للرسوم', icon: Users },
     { id: 'management', label: 'إدارة الرسوم والدفعات الذكية', icon: ClipboardCheck, badge: 'مطوّر' },
+    { id: 'installments', label: 'خطط الأقساط والجدولة', icon: CalendarRange },
     { id: 'receipts', label: 'سندات القبض الملكية', icon: Coins },
     { id: 'reports', label: 'تقارير الحسابات الشاملة', icon: FileSpreadsheet },
   ];
@@ -3547,6 +3712,147 @@ export default function StudentFinancialPortal({
                 <CheckCircle2 className="w-5 h-5" />
                 <span>بدء الترحيل الجماعي والمحاسبي للمطالبات</span>
               </button>
+            </div>
+          </div>
+        )}
+
+        {/* VIEW 3.5: خطط الأقساط والجدولة */}
+        {activeSubSec === 'installments' && (
+          <div className="space-y-6 animate-fadeIn" dir="rtl">
+            <div className="financial-fee-module-header bg-[#21140d] text-white p-6 shadow-md rounded-2xl border border-amber-300/40">
+              <div className="flex flex-wrap items-center justify-between gap-3">
+                <div>
+                  <h2 className="text-xl font-black text-amber-100 flex items-center gap-2"><CalendarRange className="w-5 h-5 text-amber-300" /> إنشاء خطة أقساط وجدول استحقاق</h2>
+                  <p className="text-xs text-amber-100/70 mt-1 font-bold">تحديد عدد الأقساط ومبلغ كل قسط وتاريخ الاستحقاق وربط التحصيل بالسند تلقائيًا</p>
+                </div>
+                <span className="rounded-lg border border-emerald-300/40 bg-emerald-950/30 px-3 py-2 text-[11px] font-black text-emerald-200">المصدر المالي الكانوني</span>
+              </div>
+            </div>
+
+            <div className="grid grid-cols-1 xl:grid-cols-12 gap-5">
+              <div className="xl:col-span-5 rounded-2xl border border-amber-200 bg-white/80 p-5 shadow-sm space-y-4">
+                <h3 className="text-sm font-black text-slate-900 border-b border-amber-100 pb-3">1. تحديد الطالب والمطالبة</h3>
+                <div>
+                  <label className="block text-xs font-black text-slate-700 mb-1.5">الطالب</label>
+                  <StudentSearchPicker
+                    students={selectableStudents}
+                    value={selectedStudent?.id || ''}
+                    onChange={(student) => {
+                      setSelectedStudent(student);
+                      setSelectedPlanInvoiceId('');
+                    }}
+                    placeholder="ابحث بالاسم أو الرقم الأكاديمي..."
+                    helperText="اختر طالبًا موثقًا لعرض المطالبات المفتوحة."
+                    getMeta={(student) => [student.academicId || student.studentCode || student.nationalId, student.classroom || 'الفصل غير محدد', student.section ? `الشعبة ${student.section}` : ''].filter(Boolean).join(' • ')}
+                  />
+                </div>
+                <div>
+                  <label className="block text-xs font-black text-slate-700 mb-1.5">المطالبة المفتوحة المراد تقسيطها</label>
+                  <select
+                    value={selectedPlanInvoiceId || studentPlanInvoices[0]?.id || ''}
+                    onChange={(event) => setSelectedPlanInvoiceId(event.target.value)}
+                    disabled={!selectedStudent || studentPlanInvoices.length === 0}
+                    className="w-full rounded-xl border border-amber-200 bg-white px-3 py-2 text-xs font-bold text-slate-800"
+                  >
+                    <option value="">{selectedStudent ? 'لا توجد مطالبات مفتوحة' : 'اختر الطالب أولاً'}</option>
+                    {studentPlanInvoices.map(invoice => (
+                      <option key={invoice.id} value={invoice.id}>{invoice.item || 'مطالبة رسوم'} — المتبقي {formatLD(Number(invoice.remainingAmount ?? invoice.amount ?? 0))}</option>
+                    ))}
+                  </select>
+                </div>
+                <div className="grid grid-cols-2 gap-3">
+                  <div className="rounded-xl border border-slate-200 bg-slate-50 p-3">
+                    <span className="block text-[10px] font-bold text-slate-500">إجمالي الخطة</span>
+                    <strong className="mt-1 block font-mono text-lg text-slate-900">{formatLD(installmentPlanTotal)}</strong>
+                  </div>
+                  <div className="rounded-xl border border-slate-200 bg-slate-50 p-3">
+                    <span className="block text-[10px] font-bold text-slate-500">الحالة</span>
+                    <strong className="mt-1 block text-sm text-emerald-700">{selectedPlanInvoice ? 'مطالبة مفتوحة' : 'بانتظار الاختيار'}</strong>
+                  </div>
+                </div>
+                {installmentPlansLoading && <p className="text-[11px] font-bold text-amber-700">جارٍ تحميل الخطط السابقة من قاعدة البيانات...</p>}
+              </div>
+
+              <div className="xl:col-span-7 rounded-2xl border border-amber-200 bg-white/80 p-5 shadow-sm space-y-4">
+                <h3 className="text-sm font-black text-slate-900 border-b border-amber-100 pb-3">2. إعداد الخطة</h3>
+                <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-3">
+                  <label className="text-xs font-black text-slate-700">التواتر
+                    <select value={installmentPlanType} onChange={(event) => setInstallmentPlanType(event.target.value as 'monthly' | 'quarterly' | 'yearly')} className="mt-1 w-full rounded-xl border border-amber-200 bg-white px-3 py-2 text-xs font-bold">
+                      <option value="monthly">شهري</option>
+                      <option value="quarterly">فصلي</option>
+                      <option value="yearly">سنوي</option>
+                    </select>
+                  </label>
+                  <label className="text-xs font-black text-slate-700">عدد الأقساط
+                    <input type="number" min={1} max={60} value={installmentCount} onChange={(event) => setInstallmentCount(Math.max(1, Math.min(60, Number(event.target.value) || 1)))} className="mt-1 w-full rounded-xl border border-amber-200 bg-white px-3 py-2 text-xs font-bold" />
+                  </label>
+                  <label className="text-xs font-black text-slate-700">تاريخ أول قسط
+                    <input type="date" value={installmentStartDate} onChange={(event) => setInstallmentStartDate(event.target.value)} className="mt-1 w-full rounded-xl border border-amber-200 bg-white px-3 py-2 text-xs font-bold" />
+                  </label>
+                  <label className="text-xs font-black text-slate-700">مهلة إضافية (يوم)
+                    <input type="number" min={0} max={90} value={installmentGracePeriodDays} onChange={(event) => setInstallmentGracePeriodDays(Math.max(0, Math.min(90, Number(event.target.value) || 0)))} className="mt-1 w-full rounded-xl border border-amber-200 bg-white px-3 py-2 text-xs font-bold" />
+                  </label>
+                </div>
+
+                <div className="flex flex-wrap items-center justify-between gap-3 rounded-xl border border-amber-100 bg-amber-50/70 px-3 py-2">
+                  <span className="text-[11px] font-bold text-slate-700">طريقة التوزيع: أقساط متساوية مع معالجة فرق الكسور في القسط الأخير</span>
+                  <span className="rounded-lg bg-amber-200/70 px-2 py-1 text-[10px] font-black text-amber-900">{installmentMethod === 'equal' ? 'متساوية' : installmentMethod}</span>
+                </div>
+
+                <div className="overflow-x-auto rounded-xl border border-amber-200">
+                  <table className="w-full min-w-[560px] text-right text-xs">
+                    <thead><tr><th className="px-3 py-2">#</th><th className="px-3 py-2">تاريخ الاستحقاق</th><th className="px-3 py-2">مبلغ القسط</th><th className="px-3 py-2">الحالة عند الإنشاء</th></tr></thead>
+                    <tbody>
+                      {generatedInstallments.map((installment, index) => (
+                        <tr key={`${installment.date}-${index}`} className="border-t border-amber-100">
+                          <td className="px-3 py-2 font-black">{index + 1}</td>
+                          <td className="px-3 py-2 font-mono">{installment.date}</td>
+                          <td className="px-3 py-2 font-mono font-black text-amber-800">{formatLD(installment.amount)}</td>
+                          <td className="px-3 py-2 text-slate-600">مجدول</td>
+                        </tr>
+                      ))}
+                      {generatedInstallments.length === 0 && <tr><td colSpan={4} className="px-3 py-8 text-center font-bold text-slate-400">اختر مطالبة مفتوحة لإنشاء المعاينة.</td></tr>}
+                    </tbody>
+                    {generatedInstallments.length > 0 && <tfoot><tr className="border-t-2 border-amber-200 bg-amber-50"><td colSpan={2} className="px-3 py-2 font-black">الإجمالي</td><td className="px-3 py-2 font-mono font-black text-amber-900">{formatLD(generatedInstallments.reduce((sum, item) => sum + item.amount, 0))}</td><td className="px-3 py-2 text-[10px] font-bold text-emerald-700">يطابق المتبقي</td></tr></tfoot>}
+                  </table>
+                </div>
+
+                <button
+                  type="button"
+                  onClick={() => { void handleSaveInstallmentPlan(); }}
+                  disabled={financialPersistence !== 'ready' || !selectedPlanInvoice || installmentPlans.some(plan => plan.invoiceId === selectedPlanInvoice?.id) || generatedInstallments.length === 0}
+                  className="w-full rounded-xl border border-amber-300 bg-gradient-to-r from-[#9b6c17] via-[#d4af37] to-[#9b6c17] px-4 py-3 text-sm font-black text-[#24150d] shadow-md disabled:cursor-not-allowed disabled:opacity-50"
+                >
+                  {installmentPlans.some(plan => plan.invoiceId === selectedPlanInvoice?.id) ? '✓ خطة محفوظة لهذه المطالبة' : 'حفظ واعتماد خطة الأقساط'}
+                </button>
+              </div>
+            </div>
+
+            <div className="rounded-2xl border border-slate-200 bg-white/80 p-5 shadow-sm">
+              <div className="flex flex-wrap items-center justify-between gap-3 border-b border-slate-100 pb-3">
+                <h3 className="text-sm font-black text-slate-900">الخطط المحفوظة والمرتبطة بالمطالبات</h3>
+                <span className="text-[11px] font-bold text-slate-500">السداد المرحّل يحدّث القسط المرتبط وسنده في نفس المعاملة</span>
+              </div>
+              {installmentPlans.length === 0 ? (
+                <p className="py-8 text-center text-xs font-bold text-slate-400">لا توجد خطة محفوظة لهذا الطالب.</p>
+              ) : (
+                <div className="mt-4 grid grid-cols-1 lg:grid-cols-2 gap-4">
+                  {installmentPlans.map(plan => (
+                    <div key={plan.planId} className="rounded-xl border border-amber-200 bg-amber-50/40 p-4">
+                      <div className="flex items-center justify-between gap-3">
+                        <strong className="text-xs font-black text-slate-900">{plan.item || 'خطة رسوم دراسية'}</strong>
+                        <span className="rounded-md bg-emerald-100 px-2 py-1 text-[10px] font-black text-emerald-700">{plan.status === 'approved' ? 'معتمدة' : plan.status}</span>
+                      </div>
+                      <p className="mt-1 text-[10px] font-bold text-slate-500">{plan.installmentCount} أقساط • {plan.frequency === 'monthly' ? 'شهري' : plan.frequency === 'quarterly' ? 'فصلي' : 'سنوي'} • الإجمالي {formatLD(plan.totalAmount)}</p>
+                      <div className="mt-3 overflow-x-auto rounded-lg border border-amber-100 bg-white">
+                        <table className="w-full text-right text-[10px]"><thead><tr><th className="px-2 py-1.5">القسط</th><th className="px-2 py-1.5">الاستحقاق</th><th className="px-2 py-1.5">المبلغ</th><th className="px-2 py-1.5">المسدد</th><th className="px-2 py-1.5">الحالة</th></tr></thead><tbody>
+                          {plan.schedules.map(schedule => <tr key={schedule.scheduleId} className="border-t border-slate-100"><td className="px-2 py-1.5 font-black">{schedule.installmentNumber}</td><td className="px-2 py-1.5 font-mono">{schedule.dueDate}</td><td className="px-2 py-1.5 font-mono">{formatLD(schedule.amount)}</td><td className="px-2 py-1.5 font-mono text-emerald-700">{formatLD(schedule.paidAmount)}</td><td className="px-2 py-1.5 font-bold">{schedule.status === 'paid' ? 'مدفوع' : schedule.status === 'partially_paid' ? 'جزئي' : 'مجدول'}</td></tr>)}
+                        </tbody></table>
+                      </div>
+                    </div>
+                  ))}
+                </div>
+              )}
             </div>
           </div>
         )}
