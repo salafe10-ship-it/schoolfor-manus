@@ -146,6 +146,7 @@ export class PostgresTransactionDriver implements TransactionDriver {
       ['app.branch_id', context.branchId],
       ['app.academic_year', context.academicYear],
       ['app.user_id', context.userId],
+      ['app.actor_user_id', context.actorUserId],
       ['app.role', context.role]
     ];
 

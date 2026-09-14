@@ -143,4 +143,18 @@ CREATE POLICY p_dbsec009_users_insert_self ON public.users
     AND deleted_at IS NULL
   );
 
+-- Audit rows use the canonical actor id resolved by the platform boundary.
+-- Referencing public.users from an RLS policy can hide the actor again under a
+-- restricted server role, so validate the trusted transaction-local actor id
+-- directly while keeping tenant/school/branch scope mandatory.
+DROP POLICY IF EXISTS p_dbsec009_audit_insert_app ON public.audit_events;
+CREATE POLICY p_dbsec009_audit_insert_app ON public.audit_events
+  FOR INSERT TO edupro_app, edupro_staging_app
+  WITH CHECK (
+    tenant_id::text = NULLIF(current_setting('app.tenant_id', true), '')
+    AND (school_id IS NULL OR school_id::text = NULLIF(current_setting('app.school_id', true), ''))
+    AND (branch_id IS NULL OR branch_id::text = NULLIF(current_setting('app.branch_id', true), ''))
+    AND actor_user_id::text = NULLIF(current_setting('app.actor_user_id', true), '')
+  );
+
 COMMIT;

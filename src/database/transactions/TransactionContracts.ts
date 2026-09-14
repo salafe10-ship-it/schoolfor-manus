@@ -39,6 +39,7 @@ export interface TransactionBeginOptions {
     branchId?: string;
     academicYear?: string;
     userId?: string;
+    actorUserId?: string;
     role?: string;
   };
   diagnosticTrace?: {
