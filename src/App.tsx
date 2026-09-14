@@ -1802,6 +1802,7 @@ export default function App() {
                          activeSection === 'school_uniform' ? 'إدارة الزي المدرسي' :
                          activeSection === 'general_review' ? 'المراجعة العامة — قيد التجهيز' :
                          activeSection === 'school_users_admin' ? 'مستخدمو المدرسة والصلاحيات' :
+                         activeSection === 'school_branding' ? 'هوية المدرسة والشعار' :
                          activeSection === 'db_schema' ? 'إدارة النسخ الاحتياطي' :
                          activeSection === 'security_permissions_cert' ? 'اعتماد الأمان والرقابة والصلاحيات' :
                          activeSection === 'uiux_golden_standard_cert' ? 'اعتماد المعايير الذهبية وتوحيد الواجهات (UI/UX)' :
@@ -1863,6 +1864,19 @@ export default function App() {
                 canAccessSection={checkSectionPermission}
                 isClientMode={isClientMode}
                 isCustomerProductionPortal={isCustomerProductionPortal}
+              />
+            )}
+
+            {activeSection === 'school_branding' && (
+              <SystemSettingsPortal
+                formatCurrency={formatCurrency}
+                triggerNotification={triggerNotification}
+                logAction={logAction}
+                currentRole={currentRole}
+                selectedSchool={selectedSchool}
+                onSchoolLogoUpdated={(logo) => setSelectedSchool((current) => ({ ...current, logo }))}
+                initialTab="branding"
+                brandingOnly
               />
             )}
 

@@ -14,6 +14,8 @@ interface SystemSettingsPortalProps {
   currentRole: string;
   selectedSchool?: { id?: string; name?: string; logo?: string };
   onSchoolLogoUpdated?: (logo: string) => void;
+  initialTab?: 'dashboard' | 'branding' | 'organization' | 'school' | 'financial' | 'exams' | 'fees' | 'hr' | 'system' | 'master_data' | 'audit' | 'backup';
+  brandingOnly?: boolean;
 }
 
 export default function SystemSettingsPortal({
@@ -22,11 +24,13 @@ export default function SystemSettingsPortal({
   logAction,
   currentRole,
   selectedSchool,
-  onSchoolLogoUpdated
+  onSchoolLogoUpdated,
+  initialTab = 'dashboard',
+  brandingOnly = false
 }: SystemSettingsPortalProps) {
   const [activeTab, setActiveTab] = useState<
     'dashboard' | 'branding' | 'organization' | 'school' | 'financial' | 'exams' | 'fees' | 'hr' | 'system' | 'master_data' | 'audit' | 'backup'
-  >('dashboard');
+  >(initialTab);
 
   const [brandingLogo, setBrandingLogo] = useState<string>(() => (
     selectedSchool?.logo && /^(https:\/\/|data:image\/)/i.test(selectedSchool.logo) ? selectedSchool.logo : ''
@@ -194,13 +198,13 @@ export default function SystemSettingsPortal({
               </span>
               <span className="text-slate-400 text-xs font-mono">EduPro Enterprise Core Config Engine v5.4</span>
             </div>
-            <h2 className="text-xl md:text-2xl font-black text-white">إدارة الإعدادات العامة ونظام البيانات المرجعية (Master Data & Settings)</h2>
+            <h2 className="text-xl md:text-2xl font-black text-white">{brandingOnly ? 'هوية المدرسة والشعار الرسمي' : 'إدارة الإعدادات العامة ونظام البيانات المرجعية (Master Data & Settings)'}</h2>
             <p className="text-xs text-slate-300 mt-1 max-w-3xl bg-gradient-to-b from-[#fffefc] via-[#fbf8f0] to-[#f5eeea] border-2 border-[#d4af37]/30 hover:border-[#d4af37] rounded-3xl p-4 sm:p-5 shadow-md transition-all duration-300">
-              العقل الإداري والتشغيلي للمنصة. كافة التغييرات هنا تنعكس فوراً وآلياً وبشكل متزامن عبر كافة أقسام النظام المالي، الأكاديمي، شؤون الطلاب، الموارد البشرية، والامتحانات.
+              {brandingOnly ? 'مصدر واحد آمن لشعار المدرسة، يُستخدم تلقائيًا في سندات القبض والقيود اليومية والتقارير والمستندات المطبوعة داخل المدرسة الحالية.' : 'العقل الإداري والتشغيلي للمنصة. كافة التغييرات هنا تنعكس فوراً وآلياً وبشكل متزامن عبر كافة أقسام النظام المالي، الأكاديمي، شؤون الطلاب، الموارد البشرية، والامتحانات.'}
             </p>
           </div>
           
-          <div className="flex items-center gap-3">
+          {!brandingOnly && <div className="flex items-center gap-3">
             <button
               onClick={() => {
                 logAction('EXPORT_CONFIG_BACKUP', 'تم تصدير نسخة احتياطية كاملة لإعدادات النظام بصيغة JSON الآمنة', 'الإعدادات العامة');
@@ -221,13 +225,15 @@ export default function SystemSettingsPortal({
               <CheckCircle className="w-4 h-4" />
               <span>فحص توافق المنظومة</span>
             </button>
-          </div>
+          </div>}
         </div>
       </div>
 
       {/* Navigation Sub-Tabs Bar */}
       <div className="flex overflow-x-auto bg-slate-900 p-2 border border-slate-800 gap-1.5 scrollbar-thin">
-        {[
+        {(brandingOnly ? [
+          { id: 'branding', label: 'هوية المدرسة والشعار', icon: Award }
+        ] : [
           { id: 'dashboard', label: 'لوحة مؤشرات الإعدادات', icon: Sliders },
           { id: 'branding', label: 'هوية المدرسة والشعار', icon: Award },
           { id: 'organization', label: 'إعدادات المؤسسة', icon: Building2 },
@@ -240,7 +246,7 @@ export default function SystemSettingsPortal({
           { id: 'master_data', label: 'البيانات المرجعية (Master Data)', icon: Database },
           { id: 'audit', label: 'سجل التدقيق والتعديلات (Audit Trail)', icon: History },
           { id: 'backup', label: 'النسخ الاحتياطي والاستعادة', icon: HardDrive }
-        ].map((tab) => {
+        ]).map((tab) => {
           const IconComponent = tab.icon;
           return (
             <button
