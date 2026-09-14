@@ -220,15 +220,12 @@ export async function assertAcademicContext(
 export async function resolveInternalActorUserId(
   tenantId: string,
   authUserId: string,
-  trustedActorUserId?: string
+  _trustedActorUserId?: string
 ): Promise<string> {
-  // The server resolves this id from the privileged canonical identity
-  // directory before opening the tenant transaction. Prefer it here because
-  // the application data-plane role may intentionally be unable to read the
-  // control-plane users table even though the FK must reference its row.
-  if (trustedActorUserId && /^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i.test(trustedActorUserId)) {
-    return trustedActorUserId;
-  }
+  // The control-plane and tenant data-plane can legitimately have different
+  // users primary keys. Resolve the actor id from the same data-plane
+  // transaction that will enforce the audit_events RLS policy; never reuse a
+  // control-plane public.users id as a tenant foreign key.
   const row = await one<{ id: string }>(
     `SELECT id
        FROM users
