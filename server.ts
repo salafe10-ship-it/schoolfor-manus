@@ -1,5 +1,6 @@
 import express from "express";
 import path from "path";
+import fs from "node:fs";
 import { createServer as createViteServer } from "vite";
 import dotenv from "dotenv";
 import helmet from "helmet";
@@ -13145,7 +13146,21 @@ ${JSON.stringify(snapshot)}
     });
     app.use(vite.middlewares);
   } else {
-    const distPath = path.join(process.cwd(), "dist");
+    // Resolve the frontend beside the bundled server first. Render can start
+    // the service with a working directory different from the repository
+    // root; using cwd alone then makes every /assets request fall through to
+    // index.html and breaks dynamic imports.
+    const entryPath = process.argv[1] ? path.resolve(process.argv[1]) : '';
+    const entryDirectory = entryPath ? path.dirname(entryPath) : '';
+    const colocatedDistPath = path.basename(entryDirectory).toLowerCase() === 'dist' ? entryDirectory : '';
+    const cwdDistPath = path.resolve(process.cwd(), 'dist');
+    const distPath = colocatedDistPath && fs.existsSync(path.join(colocatedDistPath, 'index.html'))
+      ? colocatedDistPath
+      : cwdDistPath;
+    const indexPath = path.join(distPath, 'index.html');
+    if (!fs.existsSync(indexPath)) {
+      throw new Error(`Production frontend artifact is missing: ${indexPath}`);
+    }
     // Keep the HTML entry point fresh after each deployment.  Its JavaScript
     // chunks are content-addressed and may be replaced between releases; a
     // cached index.html can otherwise reference a chunk that no longer exists.
@@ -13161,9 +13176,18 @@ ${JSON.stringify(snapshot)}
         }
       },
     }));
+    // Never disguise a missing JavaScript/CSS asset as the SPA document. A
+    // stale tab must receive a real 404 so the accounting chunk recovery can
+    // refresh it, and the deployment is diagnosable instead of failing later.
+    app.use((req, res, next) => {
+      if (req.path === '/favicon.svg' || req.path.startsWith('/assets/')) {
+        return res.status(404).type('text/plain').send('Frontend asset not found');
+      }
+      return next();
+    });
     app.get("*", (req, res) => {
       res.setHeader("Cache-Control", "no-store, no-cache, must-revalidate, private");
-      res.sendFile(path.join(distPath, "index.html"));
+      res.sendFile(indexPath);
     });
   }
 

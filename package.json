@@ -13,7 +13,7 @@
   },
   "scripts": {
     "dev": "tsx server.ts",
-    "build": "vite build --configLoader runner && node scripts/build-server.mjs",
+    "build": "vite build --configLoader runner && node scripts/build-server.mjs && node scripts/verify-build-artifact.mjs",
     "build:spa": "vite build --configLoader runner",
     "production:gate": "node scripts/production-release-gate.mjs",
     "route-integrity": "node scripts/route-integrity.mjs",

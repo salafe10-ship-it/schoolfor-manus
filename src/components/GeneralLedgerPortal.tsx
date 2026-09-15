@@ -25,7 +25,7 @@ const EstimatedBudgetTab = lazyWithChunkRecovery(() => import('../modules/accoun
 const ClosingTab = lazyWithChunkRecovery(() => import('../modules/accounting/presentation/ClosingTab').then(m => ({ default: m.ClosingTab })));
 const FinancialReportsTab = lazyWithChunkRecovery(() => import('../modules/accounting/presentation/FinancialReportsTab').then(m => ({ default: m.FinancialReportsTab })));
 const CalcToolsTab = lazyWithChunkRecovery(() => import('../modules/accounting/presentation/CalcToolsTab').then(m => ({ default: m.CalcToolsTab })));
-const TreasuryPlatformPortal = lazyWithChunkRecovery(() => import('./TreasuryPlatformPortal'));
+const TreasuryPlatformPortal = React.lazy(() => import('./TreasuryPlatformPortal'));
 
 interface GeneralLedgerPortalProps {
   students: Student[];

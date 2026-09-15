@@ -26,6 +26,18 @@ const assets = fs.existsSync(assetDirectory)
   : [];
 if (!assets.some((entry) => entry.endsWith('.js'))) failures.push('DIST_JS_ASSET_MISSING');
 if (!assets.some((entry) => entry.endsWith('.css'))) failures.push('DIST_CSS_ASSET_MISSING');
+
+// Vite emits relative dynamic-import URLs inside JavaScript chunks. Verify
+// those references too; checking index.html alone misses the exact class of
+// stale/missing accounting chunk that otherwise appears only after a click.
+for (const asset of assets.filter((entry) => entry.endsWith('.js'))) {
+  const sourcePath = path.join(assetDirectory, asset);
+  const source = fs.readFileSync(sourcePath, 'utf8');
+  for (const match of source.matchAll(/import\(\s*["'](\.?\/[^"']+\.js)["']\s*\)/g)) {
+    const target = path.resolve(path.dirname(sourcePath), match[1]);
+    if (!fs.existsSync(target)) failures.push(`BROKEN_DYNAMIC_ASSET_REFERENCE:${asset}:${match[1]}`);
+  }
+}
 if (!fs.existsSync(identityPath)) {
   failures.push('BUILD_IDENTITY_MISSING');
 } else {
