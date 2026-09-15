@@ -33,6 +33,7 @@ import {
 import {
   requirePermission,
   requirePermissionOnly,
+  requireAnyPermission,
 } from "./src/middleware/auth.js";
 import { requestTarget } from "./src/middleware/tenantValidation.js";
 import { createMemoryRateLimiter } from "./src/middleware/memoryRateLimit.js";
@@ -7830,7 +7831,7 @@ async function startServer() {
     }
   });
 
-  app.get('/api/academic/context', authenticateRequest, requirePermissionOnly(PERMISSIONS.STUDENT_READ), async (req, res, next) => {
+  app.get('/api/academic/context', authenticateRequest, requireAnyPermission([PERMISSIONS.STUDENT_READ, PERMISSIONS.FINANCIAL_READ]), async (req, res, next) => {
     try {
       const identity = (req as any).user as { tenantId?: string; schoolId?: string; branchId?: string };
       if (!identity?.tenantId || !identity?.schoolId) throw new AuthenticationError('هوية المدرسة الموثوقة غير مكتملة.');

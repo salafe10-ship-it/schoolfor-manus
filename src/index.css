@@ -1477,16 +1477,20 @@ html:not(.dark) #super-admin-portal button:not(.bg-indigo-600):not(.bg-rose-600)
 }
 
 #student-financial-portal thead tr,
-#student-financial-portal table thead tr {
-  background: linear-gradient(110deg, #0b1324 0%, #172642 56%, #21140d 100%) !important;
-  color: #f7d174 !important;
+#student-financial-portal table thead tr,
+#general-ledger-portal thead tr,
+#general-ledger-portal table thead tr {
+  background: #e5ebf2 !important;
+  color: #0b0b0b !important;
 }
 
 #student-financial-portal thead th,
-#student-financial-portal table thead th {
-  border-color: rgba(247, 209, 116, 0.2) !important;
-  color: #f7d174 !important;
-  font-weight: 900;
+#student-financial-portal table thead th,
+#general-ledger-portal thead th,
+#general-ledger-portal table thead th {
+  border-color: #cbd5e1 !important;
+  color: #0b0b0b !important;
+  font-weight: 900 !important;
 }
 
 #student-financial-portal tbody tr {
@@ -1773,6 +1777,24 @@ html:not(.dark) #super-admin-portal button:not(.bg-indigo-600):not(.bg-rose-600)
 #student-financial-portal.financial-reference-management .management-reference-screen {
   position: relative;
   color: #0f172a;
+  font-size: 0.86rem;
+}
+
+#student-financial-portal.financial-reference-management .management-reference-screen .text-xs {
+  font-size: 0.82rem !important;
+  line-height: 1.5;
+}
+
+#student-financial-portal.financial-reference-management .management-reference-screen .text-\[10px\] {
+  font-size: 0.7rem !important;
+}
+
+#student-financial-portal.financial-reference-management .management-reference-screen .text-\[9px\] {
+  font-size: 0.64rem !important;
+}
+
+#student-financial-portal.financial-reference-management .management-reference-screen .text-\[8px\] {
+  font-size: 0.58rem !important;
 }
 
 #student-financial-portal.financial-reference-management .reference-screen-nav {

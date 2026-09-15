@@ -5,6 +5,7 @@ export const JournalEntriesTab = () => {
   const {
   activeTab, setActiveTab, activeSidebarItem, setActiveSidebarItem,
   refreshing, setRefreshing, currency, setCurrency, activeSaving, setActiveSaving,
+  stages, costCenters,
   simAmount, setSimAmount, simCostCenter, setSimCostCenter, isStrictEnforcement, setIsStrictEnforcement,
   accounts, setAccounts, suppliers, setSuppliers, journalEntries, setJournalEntries,
   showAddAccountModal, setShowAddAccountModal, newAccount, setNewAccount,
@@ -79,7 +80,21 @@ export const JournalEntriesTab = () => {
   formatCurrency,
   triggerNotification, validateJvIntegrity, handlePostJv, handleUnpostJv, handleDeleteJv, handleSaveJv,
   canonicalFinancialWriteMode
-} = React.useContext(AccountingContext);
+ } = React.useContext(AccountingContext);
+
+  const activeAccountingStages = (Array.isArray(stages) ? stages : [])
+    .filter((stage: any) => stage?.isActive !== false)
+    .sort((a: any, b: any) => Number(a.order || 0) - Number(b.order || 0));
+  const activeAccountingCostCenters = (Array.isArray(costCenters) ? costCenters : [])
+    .filter((center: any) => center?.isActive !== false);
+  const costCenterLabel = (value: string) => {
+    const normalized = String(value || '').toLowerCase().replace(/^cc[_-]/, '').replace(/^stage[_-]/, '');
+    const center = activeAccountingCostCenters.find((item: any) => {
+      const candidates = [item.id, item.code, item.costCenterId].map((entry: any) => String(entry || '').toLowerCase().replace(/^cc[_-]/, '').replace(/^stage[_-]/, ''));
+      return candidates.includes(normalized);
+    });
+    return center?.name || center?.nameAr || value;
+  };
 
   const [jvPage, setJvPage] = React.useState(1);
   const JV_PAGE_SIZE = 15;
@@ -116,6 +131,7 @@ const handlePrepareNewJv = () => {
       createdByUser: 'سليمان غازي',
       createdAt: new Date().toLocaleString('ar-LY'),
       updatedAt: new Date().toLocaleString('ar-LY'),
+      stage: activeAccountingStages.find((stage: any) => String(stage.type || '').toLowerCase() === 'primary')?.name || 'الابتدائي',
       lines: [
         { id: 'l-1', accountCode: '1101', accountName: 'صندوق النقدية والخزينة الموحدة', description: '', debit: 0, credit: 0, costCenter: 'primary' },
         { id: 'l-2', accountCode: '4101', accountName: 'إيرادات الرسوم الدراسية الموحدة', description: '', debit: 0, credit: 0, costCenter: 'primary' }
@@ -914,27 +930,66 @@ const handleImportJvLinesFromCSV = (csvText: string) => {
                           </div>
                         </div>
 
-                        {/* Cost Center / File Drag Card */}
+                        {/* Academic Stage + Cost Center / File Drag Card */}
                         <div className="grid grid-cols-1 md:grid-cols-2 gap-4 pt-1">
                           <div className="bg-slate-50 border border-slate-200 rounded-xl p-4 flex flex-col justify-center space-y-2">
-                            <label className="block text-[11px] text-slate-600 font-extrabold">فرع مركز التكلفة الأساسي (الفصل المالي)</label>
+                            <label className="block text-[11px] text-slate-600 font-extrabold">المرحلة الدراسية المرتبطة بالقيد</label>
+                            <select
+                              value={activeJvState.stage || ''}
+                              disabled={jvEditMode === 'view' || activeJvState.status === 'معتمد'}
+                              onChange={(e) => {
+                                const selectedStage = activeAccountingStages.find((stage: any) => String(stage.name || stage.type || stage.id) === e.target.value);
+                                const rawCostCenter = selectedStage?.type || selectedStage?.costCenterId || selectedStage?.id || 'primary';
+                                const cc = String(rawCostCenter).toLowerCase().replace(/^cc[_-]/, '').replace(/^stage[_-]/, '');
+                                setActiveJvState((prev: any) => ({
+                                  ...prev,
+                                  stage: e.target.value,
+                                  lines: (prev.lines || []).map((line: any) => ({ ...line, costCenter: cc }))
+                                }));
+                              }}
+                              className="w-full bg-white border border-slate-200 rounded-lg px-3 py-2 text-slate-800 text-xs font-bold focus:outline-none focus:ring-2 focus:ring-indigo-500/20 focus:border-indigo-500 transition-all"
+                            >
+                              {activeAccountingStages.length > 0 ? activeAccountingStages.map((stage: any) => (
+                                <option key={stage.id || stage.code} value={stage.name || stage.type || stage.id}>{stage.name || stage.type || stage.id}</option>
+                              )) : (
+                                <>
+                                  <option value="الروضة">مرحلة الروضة والتمهيدي</option>
+                                  <option value="الابتدائي">مرحلة التعليم الابتدائي</option>
+                                  <option value="المتوسط">مرحلة التعليم المتوسط</option>
+                                  <option value="الثانوي">مرحلة التعليم الثانوي</option>
+                                </>
+                              )}
+                            </select>
+                            <label className="mt-2 block text-[11px] text-slate-600 font-extrabold">مركز التكلفة الأساسي</label>
                             <select
                               value={activeJvState.lines[0]?.costCenter || 'primary'}
                               disabled={jvEditMode === 'view' || activeJvState.status === 'معتمد'}
                               onChange={(e) => {
                                 const cc = e.target.value;
-                                handleJvLineChange('l-1', 'costCenter', cc);
-                                handleJvLineChange('l-2', 'costCenter', cc);
+                                const linkedStage = activeAccountingStages.find((stage: any) => String(stage.type || stage.costCenterId || stage.id || '').toLowerCase().replace(/^cc[_-]/, '').replace(/^stage[_-]/, '') === cc);
+                                setActiveJvState((prev: any) => ({
+                                  ...prev,
+                                  stage: linkedStage?.name || prev.stage,
+                                  lines: (prev.lines || []).map((line: any) => ({ ...line, costCenter: cc }))
+                                }));
                               }}
                               className="w-full bg-white border border-slate-200 rounded-lg px-3 py-2 text-slate-800 text-xs font-bold focus:outline-none focus:ring-2 focus:ring-indigo-500/20 focus:border-indigo-500 transition-all"
                             >
-                              <option value="kindergarten">مراكز الروضة والتمهيدي 🎨</option>
-                              <option value="primary">مراكز التعليم الأساسي والابتدائي 🎒</option>
-                              <option value="middle">مراكز التعليم الإعدادي والمتوسط 📚</option>
-                              <option value="secondary">مراكز التعليم الثانوي والتخصصي 🎓</option>
+                              {activeAccountingCostCenters.length > 0 ? activeAccountingCostCenters.map((center: any) => {
+                                const value = String(center.id || center.code || '').toLowerCase().replace(/^cc[_-]/, '').replace(/^stage[_-]/, '');
+                                return <option key={center.id || center.code} value={value}>{center.name || center.nameAr || value}</option>;
+                              }) : (
+                                <>
+                                  <option value="kindergarten">مراكز الروضة والتمهيدي 🎨</option>
+                                  <option value="primary">مراكز التعليم الأساسي والابتدائي 🎒</option>
+                                  <option value="middle">مراكز التعليم الإعدادي والمتوسط 📚</option>
+                                  <option value="secondary">مراكز التعليم الثانوي والتخصصي 🎓</option>
+                                </>
+                              )}
                             </select>
+                            <p className="text-[10px] font-black text-indigo-700">{costCenterLabel(activeJvState.lines[0]?.costCenter || 'primary')}</p>
                             <p className="text-[10px] text-slate-400 mt-1 leading-relaxed">
-                              * سيتم ربط ميزان المراجعة والأستاذ المساعد للفرع بمركز التكلفة المختار لغايات التحليل الفصلي.
+                              * سيتم ربط كل سطر في القيد بالمرحلة ومركز التكلفة المختارين لغايات ميزان المراجعة والتحليل المالي.
                             </p>
                           </div>
 

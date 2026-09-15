@@ -23,6 +23,7 @@ export const ReceiptVoucherTab = () => {
   const {
   activeTab, setActiveTab, activeSidebarItem, setActiveSidebarItem,
   refreshing, setRefreshing, currency, setCurrency, activeSaving, setActiveSaving,
+  stages, costCenters,
   simAmount, setSimAmount, simCostCenter, setSimCostCenter, isStrictEnforcement, setIsStrictEnforcement,
   accounts, setAccounts, suppliers, setSuppliers, journalEntries, setJournalEntries,
   showAddAccountModal, setShowAddAccountModal, newAccount, setNewAccount,
@@ -89,7 +90,29 @@ export const ReceiptVoucherTab = () => {
   findOriginalDocument, handleReportAccountClick, handleJournalEntryClick,
   isAccountOrDescendant, getProcessedAccounts,
   formatCurrency, triggerNotification, persistCanonicalFinancialSnapshot, canonicalFinancialStatus, canonicalFinancialWriteMode
-} = React.useContext(AccountingContext);
+ } = React.useContext(AccountingContext);
+  const activeAccountingStages = (Array.isArray(stages) ? stages : [])
+    .filter((stage: any) => stage?.isActive !== false)
+    .sort((a: any, b: any) => Number(a.order || 0) - Number(b.order || 0));
+  const normalizeAccountingDimension = (value: unknown) => String(value || '').trim().toLowerCase().replace(/^cc[_-]/, '').replace(/^stage[_-]/, '');
+  const stageCostCenterKey = (stage: any) => normalizeAccountingDimension(stage?.type || stage?.costCenterId || stage?.id || 'primary');
+  const accountingCostCenterLabel = (value: string) => {
+    const normalized = normalizeAccountingDimension(value);
+    const center = (Array.isArray(costCenters) ? costCenters : []).find((item: any) => [item.id, item.code, item.costCenterId].some((entry: any) => normalizeAccountingDimension(entry) === normalized));
+    return center?.name || center?.nameAr || normalized;
+  };
+  React.useEffect(() => {
+    if (activeAccountingStages.length === 0) return;
+    if (activeAccountingStages.some((stage: any) => String(stage.name || stage.type || stage.id) === String(receiptVoucherForm.stage || ''))) return;
+    const linkedStage = activeAccountingStages.find((stage: any) => stageCostCenterKey(stage) === normalizeAccountingDimension(receiptVoucherForm.costCenter)) || activeAccountingStages[0];
+    if (linkedStage) {
+      setReceiptVoucherForm((prev: any) => ({
+        ...prev,
+        stage: linkedStage.name || linkedStage.type || linkedStage.id,
+        costCenter: stageCostCenterKey(linkedStage)
+      }));
+    }
+  }, [activeAccountingStages, receiptVoucherForm.costCenter, receiptVoucherForm.stage, setReceiptVoucherForm]);
   const ledgerPostingReady = canonicalFinancialWriteMode === 'ledger_ready' || canonicalFinancialWriteMode === 'erp_integrated';
   const snapshotWriteReady = canonicalFinancialWriteMode === 'snapshot_write';
   const canonicalWriteReady = canonicalFinancialStatus === 'ready'
@@ -668,19 +691,28 @@ const handlePrintRV = (rv: any) => {
                       <select 
                         value={receiptVoucherForm.stage}
                         onChange={(e) => {
-                          const val = e.target.value;
-                          let cc = 'primary';
-                          if (val === 'الروضة') cc = 'kindergarten';
-                          if (val === 'المتوسط') cc = 'middle';
-                          if (val === 'الثانوي') cc = 'secondary';
-                          setReceiptVoucherForm(prev => ({ ...prev, stage: val, costCenter: cc }));
-                        }}
+                           const val = e.target.value;
+                           const selectedStage = activeAccountingStages.find((stage: any) => String(stage.name || stage.type || stage.id) === val);
+                           let cc = selectedStage ? stageCostCenterKey(selectedStage) : 'primary';
+                           if (!selectedStage) {
+                             if (val === 'الروضة') cc = 'kindergarten';
+                             if (val === 'المتوسط') cc = 'middle';
+                             if (val === 'الثانوي') cc = 'secondary';
+                           }
+                           setReceiptVoucherForm(prev => ({ ...prev, stage: val, costCenter: cc }));
+                         }}
                         className="w-full bg-slate-50 border border-slate-200 rounded-lg p-2.5 font-bold focus:outline-none"
                       >
-                        <option value="الروضة">مرحلة الروضة والتمهيدي</option>
-                        <option value="الابتدائي">مرحلة التعليم الابتدائي</option>
-                        <option value="المتوسط">مرحلة التعليم المتوسط</option>
-                        <option value="الثانوي">مرحلة التعليم الثانوي</option>
+                         {activeAccountingStages.length > 0 ? activeAccountingStages.map((stage: any) => (
+                           <option key={stage.id || stage.code} value={stage.name || stage.type || stage.id}>{stage.name || stage.type || stage.id}</option>
+                         )) : (
+                           <>
+                             <option value="الروضة">مرحلة الروضة والتمهيدي</option>
+                             <option value="الابتدائي">مرحلة التعليم الابتدائي</option>
+                             <option value="المتوسط">مرحلة التعليم المتوسط</option>
+                             <option value="الثانوي">مرحلة التعليم الثانوي</option>
+                           </>
+                         )}
                       </select>
                     </div>
 
@@ -688,9 +720,7 @@ const handlePrintRV = (rv: any) => {
                       <label className="block text-slate-700 font-bold mb-1">مركز التكلفة المرتبط (تلقائي):</label>
                       <div className="w-full bg-slate-100 text-slate-700 font-extrabold border border-slate-200 rounded-lg p-2.5 flex items-center justify-between">
                         <span>
-                          {receiptVoucherForm.costCenter === 'kindergarten' ? 'الروضة' :
-                           receiptVoucherForm.costCenter === 'primary' ? 'الابتدائي' :
-                           receiptVoucherForm.costCenter === 'middle' ? 'المتوسط' : 'الثانوي'}
+                           {accountingCostCenterLabel(receiptVoucherForm.costCenter)}
                         </span>
                         <span className="font-mono text-[9px] bg-emerald-100 text-emerald-800 p-0.5 px-2 rounded border border-emerald-200">
                           CC_{receiptVoucherForm.costCenter ? receiptVoucherForm.costCenter.toUpperCase() : ''}

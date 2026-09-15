@@ -1,4 +1,4 @@
-import { AlertTriangle, ArrowLeft, BarChart3, CalendarRange, CheckCircle2, ChevronLeft, ClipboardCheck, Coins, DollarSign, Download, FileSpreadsheet, FileText, GraduationCap, Home, Maximize2, Minimize2, Pencil, Percent, PiggyBank, Plus, Printer, QrCode, RefreshCw, Save, Search, Settings, Settings2, Trash2, TrendingUp, Undo2, UserCheck, Users } from 'lucide-react';
+import { AlertTriangle, ArrowLeft, BarChart3, CalendarRange, CheckCircle2, ChevronLeft, ClipboardCheck, Coins, DollarSign, Download, FileSpreadsheet, FileText, GraduationCap, Home, Maximize2, Minimize2, Pencil, Percent, PiggyBank, Plus, Printer, QrCode, RefreshCw, Save, Search, Settings, Settings2, Trash2, TrendingUp, Undo2, Upload, UserCheck, Users, X } from 'lucide-react';
 /**
  * @license
  * SPDX-License-Identifier: Apache-2.0
@@ -109,6 +109,8 @@ function normalizeReceiptTenders(voucher: any, fallbackAmount = 0): ReceiptTende
 const MAX_FEE_CONFIG_IMPORT_FILE_BYTES = 10 * 1024 * 1024;
 const FEE_CONFIG_IMPORT_EXTENSIONS = ['.xlsx', '.csv'];
 const MAX_FEE_CONFIG_IMPORT_ROWS = 500;
+const MAX_STUDENT_RECEIPT_ATTACHMENT_BYTES = 5 * 1024 * 1024;
+const STUDENT_RECEIPT_ATTACHMENT_EXTENSIONS = ['.pdf', '.png', '.jpg', '.jpeg'];
 
 export default function StudentFinancialPortal({
   students,
@@ -348,6 +350,7 @@ export default function StudentFinancialPortal({
     financialPeriod: string;
   } | null>(null);
   const feeImportInputRef = React.useRef<HTMLInputElement | null>(null);
+  const receiptAttachmentInputRef = React.useRef<HTMLInputElement | null>(null);
 
   const runWithLock = async (opName: string, asyncFn: () => Promise<any> | any) => {
     if (activeSaving) {
@@ -718,8 +721,35 @@ export default function StudentFinancialPortal({
     status: 'draft',
     notes: '',
     attachmentName: '',
+    attachmentMimeType: '',
+    attachmentSize: 0,
     installmentScheduleId: ''
   });
+
+  const handleStudentReceiptAttachment = (file?: File | null) => {
+    if (!file) return;
+    const extension = `.${String(file.name.split('.').pop() || '').toLowerCase()}`;
+    if (!STUDENT_RECEIPT_ATTACHMENT_EXTENSIONS.includes(extension)) {
+      triggerNotification('⚠️ صيغة المرفق غير مدعومة. استخدم PDF أو PNG أو JPG.', 'warning');
+      return;
+    }
+    if (file.size > MAX_STUDENT_RECEIPT_ATTACHMENT_BYTES) {
+      triggerNotification('⚠️ حجم إشعار البنك يتجاوز 5 ميجابايت.', 'warning');
+      return;
+    }
+    setStudRvForm(prev => ({
+      ...prev,
+      attachmentName: file.name,
+      attachmentMimeType: file.type || 'application/octet-stream',
+      attachmentSize: file.size
+    }));
+    triggerNotification(`✓ تم إرفاق إشعار البنك: ${file.name}`, 'success');
+  };
+
+  const clearStudentReceiptAttachment = () => {
+    setStudRvForm(prev => ({ ...prev, attachmentName: '', attachmentMimeType: '', attachmentSize: 0 }));
+    if (receiptAttachmentInputRef.current) receiptAttachmentInputRef.current.value = '';
+  };
 
   // Mode of form: 'view' | 'edit' | 'create'
   const [studRvMode, setStudRvMode] = useState<'view' | 'edit' | 'create'>('view');
@@ -792,6 +822,8 @@ export default function StudentFinancialPortal({
         status: selectedStudRv.status,
         notes: selectedStudRv.notes || '',
         attachmentName: selectedStudRv.attachmentName || '',
+        attachmentMimeType: selectedStudRv.attachmentMimeType || '',
+        attachmentSize: Number(selectedStudRv.attachmentSize || 0),
         installmentScheduleId: selectedStudRv.installmentScheduleId || ''
       });
     }
@@ -882,6 +914,8 @@ export default function StudentFinancialPortal({
       status: 'draft',
       notes: '',
       attachmentName: '',
+      attachmentMimeType: '',
+      attachmentSize: 0,
       installmentScheduleId: ''
     });
     setReceiptInstallmentScheduleId('');
@@ -5431,6 +5465,50 @@ export default function StudentFinancialPortal({
                       />
                     </div>
 
+                    {/* Optional bank payment notice attachment */}
+                    <div className="md:col-span-2 space-y-2 rounded-2xl border-2 border-dashed border-sky-200 bg-sky-50/60 p-4">
+                      <div className="flex flex-wrap items-center justify-between gap-3">
+                        <div>
+                          <label className="font-extrabold text-slate-800 block">إرفاق إشعار البنك المدفوع (بنك الخرطوم أو أي بنك آخر) <span className="text-slate-500">(اختياري)</span></label>
+                          <p className="mt-1 text-[10px] font-bold text-slate-500">الصيغ المدعومة: PDF وPNG وJPG — بحد أقصى 5 ميجابايت.</p>
+                        </div>
+                        <input
+                          ref={receiptAttachmentInputRef}
+                          id="student-receipt-bank-attachment"
+                          type="file"
+                          accept=".pdf,.png,.jpg,.jpeg,application/pdf,image/png,image/jpeg"
+                          className="hidden"
+                          onChange={(event) => handleStudentReceiptAttachment(event.target.files?.[0])}
+                        />
+                        <button
+                          type="button"
+                          onClick={() => receiptAttachmentInputRef.current?.click()}
+                          className="inline-flex items-center gap-2 rounded-lg border border-sky-300 bg-white px-4 py-2.5 text-xs font-black text-sky-800 hover:bg-sky-100"
+                        >
+                          <Upload className="h-4 w-4" />
+                          <span>إرفاق إشعار البنك</span>
+                        </button>
+                      </div>
+                      {studRvForm.attachmentName && (
+                        <div className="flex items-center justify-between gap-3 rounded-xl border border-sky-200 bg-white px-3 py-2.5 text-xs font-bold text-slate-700">
+                          <span className="flex min-w-0 items-center gap-2 text-sky-800">
+                            <FileText className="h-4 w-4 shrink-0" />
+                            <span className="truncate">{studRvForm.attachmentName}</span>
+                            {studRvForm.attachmentSize > 0 && <span className="shrink-0 text-[10px] text-slate-400">({(studRvForm.attachmentSize / 1024 / 1024).toFixed(2)} MB)</span>}
+                          </span>
+                          <button
+                            type="button"
+                            onClick={clearStudentReceiptAttachment}
+                            className="rounded-md p-1 text-rose-500 hover:bg-rose-50 hover:text-rose-700"
+                            aria-label="إزالة إشعار البنك المرفق"
+                            title="إزالة المرفق"
+                          >
+                            <X className="h-4 w-4" />
+                          </button>
+                        </div>
+                      )}
+                    </div>
+
                     {/* Form actions */}
                     <div className="flex gap-3 justify-end pt-3 border-t border-slate-100 text-xs">
                       <button
@@ -5595,6 +5673,18 @@ export default function StudentFinancialPortal({
                               {selectedStudRv.against}
                             </div>
                           </div>
+
+                          {selectedStudRv.attachmentName && (
+                            <div className="no-print flex items-center justify-between gap-3 border border-sky-200 bg-sky-50/70 p-3 text-xs">
+                              <span className="flex min-w-0 items-center gap-2 font-bold text-sky-900">
+                                <FileText className="h-4 w-4 shrink-0" />
+                                <span>إشعار البنك المرفق: <b className="font-black">{selectedStudRv.attachmentName}</b></span>
+                              </span>
+                              {Number(selectedStudRv.attachmentSize || 0) > 0 && (
+                                <span className="shrink-0 text-[10px] font-bold text-slate-500">{(Number(selectedStudRv.attachmentSize) / 1024 / 1024).toFixed(2)} MB</span>
+                              )}
+                            </div>
+                          )}
 
                           {/* double entry general ledger integration results */}
                           {selectedStudRv.status === 'posted' && (

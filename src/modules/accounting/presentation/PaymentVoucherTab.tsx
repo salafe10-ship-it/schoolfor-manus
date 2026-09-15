@@ -26,6 +26,7 @@ export const PaymentVoucherTab = () => {
   const {
   activeTab, setActiveTab, activeSidebarItem, setActiveSidebarItem,
   refreshing, setRefreshing, currency, setCurrency, activeSaving, setActiveSaving,
+  stages, costCenters,
   simAmount, setSimAmount, simCostCenter, setSimCostCenter, isStrictEnforcement, setIsStrictEnforcement,
   accounts, setAccounts, suppliers, setSuppliers, journalEntries, setJournalEntries,
   showAddAccountModal, setShowAddAccountModal, newAccount, setNewAccount,
@@ -96,7 +97,23 @@ export const PaymentVoucherTab = () => {
   findOriginalDocument, handleReportAccountClick, handleJournalEntryClick,
   isAccountOrDescendant, getProcessedAccounts,
   formatCurrency, triggerNotification, persistCanonicalFinancialSnapshot, canonicalFinancialStatus, canonicalFinancialWriteMode
-} = React.useContext(AccountingContext);
+ } = React.useContext(AccountingContext);
+  const activeAccountingStages = (Array.isArray(stages) ? stages : [])
+    .filter((stage: any) => stage?.isActive !== false)
+    .sort((a: any, b: any) => Number(a.order || 0) - Number(b.order || 0));
+  const normalizeAccountingDimension = (value: unknown) => String(value || '').trim().toLowerCase().replace(/^cc[_-]/, '').replace(/^stage[_-]/, '');
+  const stageCostCenterKey = (stage: any) => normalizeAccountingDimension(stage?.type || stage?.costCenterId || stage?.id || 'primary');
+  React.useEffect(() => {
+    if (activeAccountingStages.length === 0) return;
+    const hasStage = activeAccountingStages.some((stage: any) => String(stage.name || stage.type || stage.id) === String(paymentVoucherForm.stage || ''));
+    if (hasStage) return;
+    const linkedStage = activeAccountingStages.find((stage: any) => stageCostCenterKey(stage) === normalizeAccountingDimension(paymentVoucherForm.costCenter)) || activeAccountingStages[0];
+    setPaymentVoucherForm((prev: any) => ({
+      ...prev,
+      stage: linkedStage.name || linkedStage.type || linkedStage.id,
+      costCenter: stageCostCenterKey(linkedStage)
+    }));
+  }, [activeAccountingStages, paymentVoucherForm.costCenter, paymentVoucherForm.stage, setPaymentVoucherForm]);
   const ledgerPostingReady = canonicalFinancialWriteMode === 'ledger_ready' || canonicalFinancialWriteMode === 'erp_integrated';
   const snapshotWriteReady = canonicalFinancialWriteMode === 'snapshot_write';
   const canonicalWriteReady = canonicalFinancialStatus === 'ready'
@@ -137,6 +154,7 @@ export const PaymentVoucherTab = () => {
       id: pvId,
       date: paymentVoucherForm.date || new Date().toISOString().split('T')[0],
       beneficiary: paymentVoucherForm.beneficiary,
+      stage: paymentVoucherForm.stage,
       costCenter: paymentVoucherForm.costCenter || 'primary',
       paidFromAccount: paymentVoucherForm.paidFromAccount,
       paidToAccount: paymentVoucherForm.paidToAccount,
@@ -163,6 +181,7 @@ export const PaymentVoucherTab = () => {
       creditTotal: amt,
       status: 'مرحل',
       isSystemGenerated: true,
+      stage: paymentVoucherForm.stage,
       paymentVoucherId: pvId,
       lines: [
         {
@@ -220,6 +239,7 @@ export const PaymentVoucherTab = () => {
     setPaymentVoucherForm({
       date: new Date().toISOString().split('T')[0],
       beneficiary: 'شركة البيان للمطبوعات والكتب',
+      stage: 'الابتدائي',
       costCenter: 'primary',
       paidFromAccount: '1101',
       paidToAccount: '5270',
@@ -568,16 +588,50 @@ const handlePrintPV = (pv: any) => {
 
                   <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
                     <div>
+                      <label className="block text-slate-700 font-bold mb-1">المرحلة الدراسية المرتبطة بالمصروف:</label>
+                      <select
+                        value={paymentVoucherForm.stage || ''}
+                        onChange={(e) => {
+                          const selectedStage = activeAccountingStages.find((stage: any) => String(stage.name || stage.type || stage.id) === e.target.value);
+                          setPaymentVoucherForm((prev: any) => ({
+                            ...prev,
+                            stage: e.target.value,
+                            costCenter: selectedStage ? stageCostCenterKey(selectedStage) : prev.costCenter
+                          }));
+                        }}
+                        className="w-full bg-slate-50 border border-slate-200 rounded-lg p-2.5 font-bold focus:outline-none"
+                      >
+                        {activeAccountingStages.length > 0 ? activeAccountingStages.map((stage: any) => (
+                          <option key={stage.id || stage.code} value={stage.name || stage.type || stage.id}>{stage.name || stage.type || stage.id}</option>
+                        )) : (
+                          <>
+                            <option value="الروضة">مرحلة الروضة والتمهيدي</option>
+                            <option value="الابتدائي">مرحلة التعليم الابتدائي</option>
+                            <option value="المتوسط">مرحلة التعليم المتوسط</option>
+                            <option value="الثانوي">مرحلة التعليم الثانوي</option>
+                          </>
+                        )}
+                      </select>
+                    </div>
+
+                    <div>
                       <label className="block text-slate-700 font-bold mb-1">مركز التكلفة المسؤول عن المصروف:</label>
                       <select 
                         value={paymentVoucherForm.costCenter}
                         onChange={(e) => setPaymentVoucherForm(prev => ({ ...prev, costCenter: e.target.value }))}
                         className="w-full bg-slate-50 border border-slate-200 rounded-lg p-2.5 font-bold focus:outline-none"
                       >
-                        <option value="kindergarten">مرحلة الروضة والتمهيدي</option>
-                        <option value="primary">مرحلة التعليم الابتدائي</option>
-                        <option value="middle">مرحلة التعليم المتوسط</option>
-                        <option value="secondary">مرحلة التعليم الثانوي</option>
+                        {activeAccountingStages.length > 0 ? activeAccountingStages.map((stage: any) => {
+                          const value = stageCostCenterKey(stage);
+                          return <option key={stage.id || stage.code} value={value}>مركز تكلفة — {stage.name || stage.type || stage.id}</option>;
+                        }) : (
+                          <>
+                            <option value="kindergarten">مرحلة الروضة والتمهيدي</option>
+                            <option value="primary">مرحلة التعليم الابتدائي</option>
+                            <option value="middle">مرحلة التعليم المتوسط</option>
+                            <option value="secondary">مرحلة التعليم الثانوي</option>
+                          </>
+                        )}
                       </select>
                     </div>
 

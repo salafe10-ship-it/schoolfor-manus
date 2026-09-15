@@ -115,6 +115,7 @@ export default function GeneralLedgerPortal({
   }));
   const [paymentVoucherForm, setPaymentVoucherForm] = useState<any>(() => ({
     date: new Date().toISOString().split('T')[0],
+    stage: 'الابتدائي',
     costCenter: 'primary',
     beneficiary: '',
     paidFromAccount: '1101',
@@ -1253,6 +1254,60 @@ export default function GeneralLedgerPortal({
       active = false;
     };
   }, [selectedSchool?.id, canonicalFinancialRefreshNonce]);
+
+  // The accounting workspace needs the same trusted academic dimensions as
+  // Student Affairs. Financial-only users do not necessarily have the
+  // Student.View permission, so the server exposes this read model to either
+  // domain and we hydrate the shared stage/cost-center state here.
+  useEffect(() => {
+    if (!selectedSchool?.id || !setStages) return;
+    if (Array.isArray(stages) && stages.length > 0 && Array.isArray(costCenters) && costCenters.length > 0) return;
+    let active = true;
+
+    const normalizeCostCenterKey = (value: unknown) => String(value || '')
+      .trim()
+      .toLowerCase()
+      .replace(/^cc[_-]/, '')
+      .replace(/^stage[_-]/, '');
+
+    const loadAccountingAcademicContext = async () => {
+      try {
+        const response = await authenticatedRequest('/api/academic/context', {
+          headers: { Accept: 'application/json' },
+          cache: 'no-store'
+        });
+        const payload = await response.json().catch(() => ({}));
+        if (!response.ok || !payload?.success || !payload?.data) {
+          throw new Error(payload?.message || 'تعذر تحميل مراحل ومراكز التكلفة للحسابات العامة.');
+        }
+        const data = payload.data as any;
+        const nextStages = Array.isArray(data.stages) ? data.stages : [];
+        if (nextStages.length === 0) throw new Error('لا توجد مراحل دراسية موثقة في التهيئة الأكاديمية الحالية.');
+        const nextCostCenters = Array.isArray(data.costCenters) && data.costCenters.length > 0
+          ? data.costCenters
+          : nextStages.map((stage: any) => {
+              const key = normalizeCostCenterKey(stage.type || stage.costCenterId || stage.id);
+              return {
+                id: key,
+                code: String(stage.costCenterId || stage.code || key).trim(),
+                name: `مركز تكلفة ${stage.name || key}`,
+                stageId: stage.id,
+                isActive: stage.isActive !== false
+              };
+            });
+        if (!active) return;
+        if (!stages?.length) setStages(nextStages);
+        setGrades?.(Array.isArray(data.grades) ? data.grades : []);
+        setAcademicClasses?.(Array.isArray(data.classes) ? data.classes : []);
+        if (!costCenters?.length) setCostCenters?.(nextCostCenters);
+      } catch (error: any) {
+        if (active) triggerNotification(error?.message || 'تعذر تحميل مراحل ومراكز التكلفة للحسابات العامة.', 'warning');
+      }
+    };
+
+    void loadAccountingAcademicContext();
+    return () => { active = false; };
+  }, [costCenters, selectedSchool?.id, setAcademicClasses, setCostCenters, setGrades, setStages, stages, triggerNotification]);
 
   const refreshCanonicalFinancialData = () => {
     setCanonicalFinancialStatus('loading');
@@ -3230,12 +3285,28 @@ export default function GeneralLedgerPortal({
       }
     }
 
-    // 3. Check Cost Center (Cost Center غير موجود)
-    const validCostCenters = ['cc_kg', 'cc_primary', 'cc_middle', 'cc_high', 'kindergarten', 'primary', 'middle', 'secondary', 'all', 'stage_kg', 'stage_primary', 'stage_middle', 'stage_high'];
+    // 3. Check Cost Center against the trusted academic structure. Keep the
+    // historical aliases so existing journals remain readable while new
+    // postings can use the configured stage/cost-center identifiers.
+    const normalizeCostCenterKey = (value: unknown) => String(value || '')
+      .trim()
+      .toLowerCase()
+      .replace(/^cc[_-]/, '')
+      .replace(/^stage[_-]/, '');
+    const configuredCostCenters = (Array.isArray(costCenters) ? costCenters : [])
+      .filter((center: any) => center?.isActive !== false)
+      .flatMap((center: any) => [center.id, center.code, center.costCenterId, normalizeCostCenterKey(center.id), normalizeCostCenterKey(center.code)]);
+    const configuredStages = (Array.isArray(stages) ? stages : [])
+      .filter((stage: any) => stage?.isActive !== false)
+      .flatMap((stage: any) => [stage.id, stage.code, stage.type, stage.costCenterId, normalizeCostCenterKey(stage.id), normalizeCostCenterKey(stage.costCenterId)]);
+    const validCostCenters = new Set([
+      'cc_kg', 'cc_primary', 'cc_middle', 'cc_high', 'kindergarten', 'primary', 'middle', 'secondary', 'all',
+      'stage_kg', 'stage_primary', 'stage_middle', 'stage_high', 'general', ...configuredCostCenters, ...configuredStages
+    ].filter(Boolean).map(value => String(value).trim().toLowerCase()));
     for (const line of lines) {
-      const cc = line.costCenter;
+      const cc = String(line.costCenter || '').trim().toLowerCase();
       if (cc) {
-        if (!validCostCenters.includes(cc)) {
+        if (!validCostCenters.has(cc)) {
           return { isValid: false, error: `مركز التكلفة (${cc}) المحدد في أسطر القيد غير معرّف أو غير موجود بالنظام` };
         }
       }
@@ -3448,7 +3519,7 @@ export default function GeneralLedgerPortal({
   };
 
   const accountingContextValue = {
-    students, invoices, selectedSchool, costCenters,
+    students, invoices, selectedSchool, stages, grades, academicClasses, costCenters,
     currentUserIdentity: drillDownUser,
   canonicalFinancialStatus, canonicalFinancialMessage, canonicalFinancialVersion, canonicalFinancialWriteMode,
   requireCanonicalFinancialWrite,
