@@ -160,15 +160,8 @@ export function formatAmount(amount: number | string, isOfficialDocument: boolea
     maximumFractionDigits: config.decimalPlaces,
   });
 
-  // In official documents (reports, invoices, receipts, prints)
-  if (isOfficialDocument && config.showSymbolInReports) {
-    if (config.symbolPosition === 'before') {
-      return `${config.symbol} ${formattedNumber}`;
-    } else {
-      return `${formattedNumber} ${config.symbol}`;
-    }
-  }
-
+  // Financial values are intentionally displayed as numbers only.
+  // Currency remains stored in the financial records, but no symbol is rendered.
   return formattedNumber;
 }
 
@@ -194,14 +187,7 @@ export function useCurrency() {
       maximumFractionDigits: currencyConfig.decimalPlaces,
     });
 
-    if (isOfficialDocument && currencyConfig.showSymbolInReports) {
-      if (currencyConfig.symbolPosition === 'before') {
-        return `${currencyConfig.symbol} ${formattedNumber}`;
-      } else {
-        return `${formattedNumber} ${currencyConfig.symbol}`;
-      }
-    }
-
+    // Keep the currency metadata for accounting, while rendering amounts as numbers only.
     return formattedNumber;
   };
 

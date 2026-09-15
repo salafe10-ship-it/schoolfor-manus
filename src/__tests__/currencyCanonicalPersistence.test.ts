@@ -9,4 +9,11 @@ describe('currency canonical persistence contract', () => {
     expect((file.match(/assertAuthoritativePersistence\(/g) || []).length).toBeGreaterThanOrEqual(7);
     expect(file).toContain('لا يوجد سعر صرف مركزي معتمد');
   });
+
+  it('renders financial amounts as numbers without a currency symbol', () => {
+    const file = fs.readFileSync(path.resolve(process.cwd(), 'src/utils/currency.ts'), 'utf8');
+    expect(file).toContain('Financial values are intentionally displayed as numbers only.');
+    expect(file).not.toContain('return `${formattedNumber} ${config.symbol}`');
+    expect(file).not.toContain('return `${currencyConfig.symbol} ${formattedNumber}`');
+  });
 });

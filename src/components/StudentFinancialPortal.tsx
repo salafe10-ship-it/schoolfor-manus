@@ -999,7 +999,7 @@ export default function StudentFinancialPortal({
 
       setStudRvMode('view');
       triggerNotification(`✓ تم حفظ سند القبض ${finalVoucher.id} بنجاح كمسودة مالية غير مرحلة.`, 'success');
-      logAction('SAVE_STUDENT_RECEIPT', `تم حفظ سند القبض ${finalVoucher.id} للطالب ${finalVoucher.studentName} بقيمة ${finalVoucher.amount} د.ل`, 'حسابات الطلاب');
+      logAction('SAVE_STUDENT_RECEIPT', `تم حفظ سند القبض ${finalVoucher.id} للطالب ${finalVoucher.studentName} بقيمة ${finalVoucher.amount}`, 'حسابات الطلاب');
     });
   };
 
@@ -1032,7 +1032,7 @@ export default function StudentFinancialPortal({
     setStudentReceiptVouchers(updatedStudentVouchers);
     setSelectedStudRv(approvedVoucher);
     triggerNotification(`✓ تم اعتماد سند القبض ${approvedVoucher.id} بنجاح من قبل المدير المالي. جاهز للترحيل.`, 'success');
-    logAction('APPROVE_STUDENT_RECEIPT', `تم اعتماد سند القبض ${approvedVoucher.id} للطالب ${approvedVoucher.studentName} بقيمة ${approvedVoucher.amount} د.ل`, 'حسابات الطلاب');
+    logAction('APPROVE_STUDENT_RECEIPT', `تم اعتماد سند القبض ${approvedVoucher.id} للطالب ${approvedVoucher.studentName} بقيمة ${approvedVoucher.amount}`, 'حسابات الطلاب');
   };
 
   // 4. Toolbar - POST (ترحيل) - The Core Accounting Integration Step
@@ -1347,7 +1347,7 @@ export default function StudentFinancialPortal({
         return;
       }
       triggerNotification(`✓ تم إلغاء السند وعكس القيود التلقائية بالكامل بنجاح. رقم القيد العكسي: ${reversalJvId}`, 'success');
-      logAction('CANCEL_STUDENT_RECEIPT', `تم إجراء إلغاء وتسوية عكسية لسند القبض ${selectedStudRv.id} بقيمة ${amount} د.ل وعكس قيد اليومية. سبب الإلغاء: ${cancelReason}`, 'حسابات الطلاب');
+      logAction('CANCEL_STUDENT_RECEIPT', `تم إجراء إلغاء وتسوية عكسية لسند القبض ${selectedStudRv.id} بقيمة ${amount} وعكس قيد اليومية. سبب الإلغاء: ${cancelReason}`, 'حسابات الطلاب');
     } else {
       // Not posted yet, just cancel
       const cancelledVoucher = {
@@ -1501,7 +1501,7 @@ export default function StudentFinancialPortal({
     });
 
     triggerNotification(`✓ تم إلغاء الفاتورة ${inv.id} وعكس أثرها المالي بالكامل بنجاح.`, 'success');
-    logAction('VOID_STUDENT_INVOICE', `تم إلغاء الفاتورة ${inv.id} للطالب ${inv.studentName} بقيمة ${inv.amount} د.ل. سبب الإلغاء: ${cancelReason}`, 'حسابات الطلاب');
+    logAction('VOID_STUDENT_INVOICE', `تم إلغاء الفاتورة ${inv.id} للطالب ${inv.studentName} بقيمة ${inv.amount}. سبب الإلغاء: ${cancelReason}`, 'حسابات الطلاب');
   };
 
   // 7. Toolbar - REFRESH
@@ -2015,9 +2015,9 @@ export default function StudentFinancialPortal({
               <tr>
                 <th style="width: 15%">التاريخ</th>
                 <th style="width: 45%">البيان المالي للمعاملة</th>
-                <th style="width: 13%; text-align: center;">مدين (د.ل)</th>
-                <th style="width: 13%; text-align: center;">دائن (د.ل)</th>
-                <th style="width: 14%; text-align: center;">الرصيد الجاري (د.ل)</th>
+                <th style="width: 13%; text-align: center;">مدين</th>
+                <th style="width: 13%; text-align: center;">دائن</th>
+                <th style="width: 14%; text-align: center;">الرصيد الجاري</th>
               </tr>
             </thead>
             <tbody>
@@ -2028,15 +2028,15 @@ export default function StudentFinancialPortal({
           <div class="summary-box">
             <div class="summary-card">
               <div class="summary-card-title">إجمالي المفوتر</div>
-              <div class="summary-card-val">${totalInvoiced.toLocaleString(undefined, {minimumFractionDigits: 2})} د.ل</div>
+              <div class="summary-card-val">${totalInvoiced.toLocaleString(undefined, {minimumFractionDigits: 2})}</div>
             </div>
             <div class="summary-card green">
               <div class="summary-card-title">إجمالي المدفوع</div>
-              <div class="summary-card-val">${totalPaid.toLocaleString(undefined, {minimumFractionDigits: 2})} د.ل</div>
+              <div class="summary-card-val">${totalPaid.toLocaleString(undefined, {minimumFractionDigits: 2})}</div>
             </div>
             <div class="summary-card red">
               <div class="summary-card-title">الرصيد المتبقي مستحق السداد</div>
-              <div class="summary-card-val">${remainingVal.toLocaleString(undefined, {minimumFractionDigits: 2})} د.ل</div>
+              <div class="summary-card-val">${remainingVal.toLocaleString(undefined, {minimumFractionDigits: 2})}</div>
             </div>
           </div>
 
@@ -2068,7 +2068,7 @@ export default function StudentFinancialPortal({
     EnterpriseAuditLogger.log({
       action: 'طباعة',
       oldValue: `معاينة كشف الحساب المالي الرقمي للطالب ${selectedStudent.name} على الشاشة`,
-      newValue: `طباعة كشف حساب مالي ورقي رسمي للطالب ${selectedStudent.name} (المتبقي: ${selectedStudent.feesRemaining} د.ل)`,
+      newValue: `طباعة كشف حساب مالي ورقي رسمي للطالب ${selectedStudent.name} (المتبقي: ${selectedStudent.feesRemaining})`,
       userName: auditActor,
       userRole: 'المدير المالي والمشرف العام',
       module: 'بوابة الشؤون المالية (StudentFinancialPortal)',
@@ -2814,7 +2814,7 @@ export default function StudentFinancialPortal({
     setInvoices(updatedInvoices);
 
     const selectedStageName = activeMassStages.find(stage => String(stage.id) === massStageId)?.name || 'المرحلة غير محددة';
-    logAction('MASS_FEE_DISTRIBUTION', `تم ترحيل وتوطين رسوم جماعية (${massFeeType}) بقيمة ${massFeeAmount} د.ل على ${selectedStageName} / ${massClassroom} وعددهم ${studentsToUpdate.length} طالباً.`, 'حسابات الطلاب');
+    logAction('MASS_FEE_DISTRIBUTION', `تم ترحيل وتوطين رسوم جماعية (${massFeeType}) بقيمة ${massFeeAmount} على ${selectedStageName} / ${massClassroom} وعددهم ${studentsToUpdate.length} طالباً.`, 'حسابات الطلاب');
     triggerNotification(`تم بنجاح تطبيق وتوزيع الرسوم الكانونية على ${studentsToUpdate.length} طالبًا — ${selectedStageName} / ${massClassroom}`, 'success');
   };
 
@@ -3083,7 +3083,7 @@ export default function StudentFinancialPortal({
 
   // Format Libyan Dinar
   const formatLD = (val: number) => {
-    return val.toLocaleString(undefined, { minimumFractionDigits: 2, maximumFractionDigits: 2 }) + ' د.ل';
+    return val.toLocaleString(undefined, { minimumFractionDigits: 2, maximumFractionDigits: 2 });
   };
 
   // Nav side panel menu matching the uploaded image exactly
@@ -3919,7 +3919,7 @@ export default function StudentFinancialPortal({
                           <thead>
                             <tr>
                               <th class="special">نوع الرسوم</th>
-                              <th>المبلغ (د.ل)</th>
+                              <th>المبلغ</th>
                               <th>حساب الإيراد</th>
                               <th>رقم الإيراد</th>
                               <th>الأنشطة المطلوبة</th>
@@ -3929,7 +3929,7 @@ export default function StudentFinancialPortal({
                             ${feeConfigs.map(item => `
                               <tr>
                                 <td style="font-weight: bold; color: #0284c7;">${item.type}</td>
-                                <td style="font-weight: bold; color: #1e293b;">${item.amount.toLocaleString(undefined, { minimumFractionDigits: 1 })} د.ل</td>
+                                <td style="font-weight: bold; color: #1e293b;">${item.amount.toLocaleString(undefined, { minimumFractionDigits: 1 })}</td>
                                 <td>${item.account}</td>
                                 <td>${item.orderNumber}</td>
                                 <td>${item.activities || '—'}</td>
@@ -4557,13 +4557,13 @@ export default function StudentFinancialPortal({
                     <div className="text-slate-700 font-bold flex items-center gap-2">
                       <span>إجمالي الفاتورة:</span>
                       <span className="font-mono text-slate-900 font-extrabold">
-                        {feeRows.reduce((acc, curr) => acc + curr.amount, 0).toLocaleString(undefined, {minimumFractionDigits: 2})} د.ل
+                        {feeRows.reduce((acc, curr) => acc + curr.amount, 0).toLocaleString(undefined, {minimumFractionDigits: 2})}
                       </span>
                     </div>
                     <div className="text-slate-500 font-bold flex items-center gap-2">
                       <span>خصم الإخوة (%{siblingDiscountPercent.toFixed(2)}):</span>
                       <span className="font-mono text-rose-650">
-                        {((feeRows.reduce((acc, curr) => acc + curr.amount, 0) * siblingDiscountPercent) / 100).toLocaleString(undefined, {minimumFractionDigits: 2})} د.ل
+                        {((feeRows.reduce((acc, curr) => acc + curr.amount, 0) * siblingDiscountPercent) / 100).toLocaleString(undefined, {minimumFractionDigits: 2})}
                       </span>
                     </div>
                     <div className="flex items-center gap-2 font-bold">
@@ -4590,7 +4590,7 @@ export default function StudentFinancialPortal({
                         const siblingDeduct = (sub * siblingDiscountPercent) / 100;
                         const netVal = Math.max(0, sub - siblingDeduct - manualDiscountAmount);
                         return netVal.toLocaleString(undefined, {minimumFractionDigits: 2});
-                      })()} د.ل
+                      })()}
                     </h5>
                   </div>
                 </div>
@@ -5139,7 +5139,7 @@ export default function StudentFinancialPortal({
                       >
                         <div className="flex justify-between font-bold text-slate-900 mb-1">
                           <span className="truncate max-w-[150px]">{voucher.studentName}</span>
-                          <span className="font-mono text-emerald-600" dir="ltr">+{voucher.amount.toLocaleString()} د.ل</span>
+                          <span className="font-mono text-emerald-600" dir="ltr">+{voucher.amount.toLocaleString()}</span>
                         </div>
                         <div className="flex justify-between items-center text-[10px] text-slate-500">
                           <span className="font-mono font-bold text-slate-700">{voucher.id}</span>
@@ -5214,7 +5214,7 @@ export default function StudentFinancialPortal({
 
                       {/* Amount */}
                       <div className="space-y-1">
-                        <label className="font-extrabold text-slate-700 block">مبلغ السند المقبوض (د.ل): *</label>
+                        <label className="font-extrabold text-slate-700 block">مبلغ السند المقبوض: *</label>
                         <input
                           type="number"
                           value={studRvForm.amount}
@@ -5564,7 +5564,7 @@ export default function StudentFinancialPortal({
                             </div>
                             <div className="bg-emerald-50 border border-emerald-200 text-emerald-800 px-6 py-2.5 text-center shrink-0">
                               <span className="text-[10px] font-black uppercase block text-emerald-600">المبلغ الإجمالي</span>
-                              <span className="font-mono font-black text-lg">{selectedStudRv.amount.toLocaleString(undefined, { minimumFractionDigits: 2 })} د.ل</span>
+                              <span className="font-mono font-black text-lg">{selectedStudRv.amount.toLocaleString(undefined, { minimumFractionDigits: 2 })}</span>
                             </div>
                           </div>
 
@@ -5595,8 +5595,8 @@ export default function StudentFinancialPortal({
                                     <tr className="bg-gradient-to-r from-[#2a1d13] via-[#3a2719] to-[#2a1d13] text-amber-200 font-extrabold">
                                       <th className="p-1 border border-purple-200 text-right">الحساب الدفتري للترحيل</th>
                                       <th className="p-1 border border-purple-200 text-right">رقم الحساب</th>
-                                      <th className="p-1 border border-purple-200">مدين (د.ل)</th>
-                                      <th className="p-1 border border-purple-200">دائن (د.ل)</th>
+                                      <th className="p-1 border border-purple-200">مدين</th>
+                                      <th className="p-1 border border-purple-200">دائن</th>
                                     </tr>
                                   </thead>
                                   <tbody>
