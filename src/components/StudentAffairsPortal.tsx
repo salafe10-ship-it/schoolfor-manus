@@ -7,7 +7,7 @@ import {
   Printer, ArrowRightLeft, ShieldAlert, CheckCircle2, AlertTriangle, 
   Phone, Mail as MailIcon, MapPin, Calendar, FileSpreadsheet, 
   Layers, ChevronDown, UserCheck, UserX, HelpCircle, FileCheck, 
-  Paperclip, ExternalLink, RefreshCw
+  Paperclip, ExternalLink, RefreshCw, Maximize2, Minimize2
 } from 'lucide-react';
 import { Student, School, UserRole } from '../types';
 import { PERMISSIONS } from '../authorization/PermissionRegistry';
@@ -205,6 +205,7 @@ export default function StudentAffairsPortal({
   const sectionPluralTerm = isModernFamilySchool ? 'الفصول' : 'الشعب';
   // Primary Navigation Sub-tabs state
   const [activeTab, setActiveTab] = useState<'student_data' | 'guardians' | 'documents' | 'reports' | 'settings'>('student_data');
+  const [isFocusMode, setIsFocusMode] = useState(false);
   
   // Add/Edit Student Modal State
   const [isModalOpen, setIsModalOpen] = useState<boolean>(false);
@@ -280,6 +281,12 @@ export default function StudentAffairsPortal({
   const [academicContextError, setAcademicContextError] = useState<string | null>(null);
   const [canonicalSections, setCanonicalSections] = useState<string[]>([]);
   const academicYearLabel = String(selectedSchool.academicYear || '').trim() || 'غير محددة';
+  const maximumAcademicClassCapacity = useMemo(() => {
+    const capacities = academicClasses
+      .map(item => Number(item?.capacity))
+      .filter(value => Number.isFinite(value) && value > 0);
+    return capacities.length ? Math.max(...capacities) : null;
+  }, [academicClasses]);
   const transferGradeOptions = useMemo(
     () => grades.filter(grade => grade?.isActive !== false && String(grade?.stageId || '') === transferTargetStage),
     [grades, transferTargetStage]
@@ -1676,7 +1683,7 @@ export default function StudentAffairsPortal({
   return (
     <div 
       id="student-affairs-master-command-center"
-      className="w-full min-h-screen text-right font-sans dir-rtl select-none transition-all duration-300 bg-[radial-gradient(circle_at_top_right,_rgba(212,175,55,0.14),_transparent_32%),linear-gradient(135deg,#f8f5ee_0%,#efe9dc_52%,#e5dccd_100%)] text-slate-900 p-2 sm:p-4 md:p-6 space-y-6"
+      className={`student-affairs-command-center w-full min-h-screen text-right font-sans dir-rtl select-none transition-all duration-300 bg-[radial-gradient(circle_at_top_right,_rgba(212,175,55,0.14),_transparent_32%),linear-gradient(135deg,#f8f5ee_0%,#efe9dc_52%,#e5dccd_100%)] text-slate-900 p-2 sm:p-4 md:p-6 space-y-6 ${isFocusMode ? 'portal-focus-mode' : ''}`}
       dir="rtl"
     >
 
@@ -1807,6 +1814,17 @@ export default function StudentAffairsPortal({
           >
             <UserPlus className="w-4 h-4" />
             <span>إضافة طالب جديد</span>
+          </button>
+
+          <button
+            type="button"
+            onClick={() => setIsFocusMode(current => !current)}
+            aria-pressed={isFocusMode}
+            title={isFocusMode ? 'الرجوع إلى العرض الحالي' : 'عرض الوحدة كاملة'}
+            className="bg-[#2a1d13] border border-[#d4af37]/40 hover:border-[#f7d174] text-amber-200 px-3 py-2 rounded-xl text-xs font-bold flex items-center gap-1.5 transition-all shadow cursor-pointer"
+          >
+            {isFocusMode ? <Minimize2 className="w-4 h-4" /> : <Maximize2 className="w-4 h-4" />}
+            <span className="hidden sm:inline">{isFocusMode ? 'العرض الحالي' : 'عرض كامل'}</span>
           </button>
         </div>
       </div>
@@ -2432,29 +2450,29 @@ export default function StudentAffairsPortal({
           </div>
 
           <div className="grid grid-cols-1 sm:grid-cols-3 gap-4">
-            <div className="bg-white border border-amber-200 rounded-2xl p-4 shadow-xs hover:border-[#d4af37] transition-all space-y-3 cursor-pointer" onClick={() => handlePrintList(false)}>
+            <button type="button" className="w-full text-right bg-white border border-amber-200 rounded-2xl p-4 shadow-xs hover:border-[#d4af37] transition-all space-y-3 cursor-pointer" onClick={() => handlePrintList(false)}>
               <div className="w-10 h-10 rounded-xl bg-[#2a1a0e] text-amber-300 flex items-center justify-center">
                 <Printer className="w-5 h-5" />
               </div>
               <h4 className="text-xs font-black text-slate-900">كشوفات أسماء الطلاب بالصفوف</h4>
               <p className="text-[10px] text-slate-500 font-bold">طباعة وتصدير القوائم الرسمية للمدرسين والإدارة</p>
-            </div>
+            </button>
 
-            <div className="bg-white border border-amber-200 rounded-2xl p-4 shadow-xs space-y-3 cursor-pointer hover:border-[#d4af37] transition-all" onClick={handleOpenFirstIdCard}>
+            <button type="button" className="w-full text-right bg-white border border-amber-200 rounded-2xl p-4 shadow-xs space-y-3 cursor-pointer hover:border-[#d4af37] transition-all" onClick={handleOpenFirstIdCard}>
               <div className="w-10 h-10 rounded-xl bg-[#2a1a0e] text-amber-300 flex items-center justify-center">
                 <Award className="w-5 h-5" />
               </div>
               <h4 className="text-xs font-black text-slate-900">بطاقات الهوية المدرسية</h4>
               <p className="text-[10px] text-slate-500 font-bold">فتح بطاقة الطالب الرسمية من السجل الكانوني ثم إرسالها للطباعة.</p>
-            </div>
+            </button>
 
-            <div className="bg-white border border-amber-200 rounded-2xl p-4 shadow-xs space-y-3 cursor-pointer hover:border-[#d4af37] transition-all" onClick={() => void handleOpenEnrollmentCertificate()}>
+            <button type="button" className="w-full text-right bg-white border border-amber-200 rounded-2xl p-4 shadow-xs space-y-3 cursor-pointer hover:border-[#d4af37] transition-all" onClick={() => void handleOpenEnrollmentCertificate()}>
               <div className="w-10 h-10 rounded-xl bg-[#2a1a0e] text-amber-300 flex items-center justify-center">
                 <FileText className="w-5 h-5" />
               </div>
               <h4 className="text-xs font-black text-slate-900">شهادة القيد</h4>
               <p className="text-[10px] text-slate-500 font-bold">إصدار نموذج شهادة قيد موثق من المصدر الكانوني وقابل للطباعة.</p>
-            </div>
+            </button>
           </div>
         </div>
       )}
@@ -2472,16 +2490,28 @@ export default function StudentAffairsPortal({
 
           <div className="grid grid-cols-1 md:grid-cols-2 gap-4 text-xs font-bold">
             <div className="bg-white p-4 rounded-2xl border border-slate-200 space-y-3">
-              <label className="block text-slate-800 font-black">نموذج الترقيم التلقائي للطالب</label>
-              <input type="text" value="يُدار من الخادم" readOnly className="w-full bg-slate-100 border border-slate-300 p-2.5 rounded-xl text-xs font-mono text-slate-500" />
-              <p className="text-[10px] text-slate-500">يتكون الترقيم من السنة والمسلسل التلقائي</p>
+              <span className="block text-slate-800 font-black">مصدر الترقيم التلقائي للطالب</span>
+              <div className="w-full bg-slate-100 border border-slate-300 p-2.5 rounded-xl text-xs font-mono text-slate-500" role="status">يُدار مركزيًا عبر مسار التسجيل</div>
+              <p className="text-[10px] text-slate-500">يُنشأ الرقم من السنة والمسلسل المعتمد، ولا يُعدّل يدويًا من هذه الوحدة.</p>
             </div>
 
             <div className="bg-white p-4 rounded-2xl border border-slate-200 space-y-3">
-              <label className="block text-slate-800 font-black">حد الأقصى للطلاب بالفصل الواحد</label>
-              <input type="text" value="غير معتمد" readOnly className="w-full bg-slate-100 border border-slate-300 p-2.5 rounded-xl text-xs text-slate-500" />
-              <p className="text-[10px] text-slate-500">تنبيه عند التجاوز أثناء التوزيع في الفصول</p>
+              <span className="block text-slate-800 font-black">أعلى سعة معتمدة للفصل</span>
+              <div className="w-full bg-slate-100 border border-slate-300 p-2.5 rounded-xl text-xs font-mono text-slate-500" role="status">{maximumAcademicClassCapacity ?? 'غير متاح'}</div>
+              <p className="text-[10px] text-slate-500">القيمة مقروءة من الفصول الأكاديمية المرجعية ولا تُحفظ من هذه الشاشة.</p>
             </div>
+          </div>
+
+          <div className="flex flex-wrap items-center justify-between gap-3 rounded-2xl border border-indigo-200 bg-indigo-50 p-4">
+            <p className="text-xs font-bold text-indigo-900">لتعديل السنة أو المراحل أو الصفوف أو السعة، استخدم شاشة التهيئة الأكاديمية المرجعية.</p>
+            <button
+              type="button"
+              onClick={() => setActiveSection?.('academic')}
+              disabled={!setActiveSection}
+              className="rounded-xl bg-indigo-900 px-4 py-2 text-xs font-black text-white shadow disabled:cursor-not-allowed disabled:opacity-50"
+            >
+              فتح التهيئة الأكاديمية
+            </button>
           </div>
         </div>
       )}

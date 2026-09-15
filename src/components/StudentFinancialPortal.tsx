@@ -1,4 +1,4 @@
-import { AlertTriangle, ArrowLeft, BarChart3, CalendarRange, CheckCircle2, ChevronLeft, ClipboardCheck, Coins, DollarSign, Download, FileSpreadsheet, FileText, GraduationCap, Home, Pencil, Percent, PiggyBank, Plus, Printer, QrCode, RefreshCw, Save, Search, Settings, Settings2, Trash2, TrendingUp, Undo2, UserCheck, Users } from 'lucide-react';
+import { AlertTriangle, ArrowLeft, BarChart3, CalendarRange, CheckCircle2, ChevronLeft, ClipboardCheck, Coins, DollarSign, Download, FileSpreadsheet, FileText, GraduationCap, Home, Maximize2, Minimize2, Pencil, Percent, PiggyBank, Plus, Printer, QrCode, RefreshCw, Save, Search, Settings, Settings2, Trash2, TrendingUp, Undo2, UserCheck, Users } from 'lucide-react';
 /**
  * @license
  * SPDX-License-Identifier: Apache-2.0
@@ -133,6 +133,7 @@ export default function StudentFinancialPortal({
   selectedBranch
 }: StudentFinancialPortalProps) {
   const { currencyConfig, format: formatCurrency } = useCurrency();
+  const [isFocusMode, setIsFocusMode] = useState(false);
   const auditActor = selectedSchool?.currentUserName || selectedSchool?.userName || 'المستخدم الحالي';
   const auditTenantId = selectedSchool?.id || students[0]?.schoolId || '';
   const auditIpAddress = 'غير متاح';
@@ -1509,6 +1510,14 @@ export default function StudentFinancialPortal({
     void handleRefreshData();
   };
 
+  const normalizeFinancialRecordStatus = (status: unknown, remainingAmount: number, recordType: 'invoice' | 'receipt') => {
+    const normalized = String(status || '').trim().toLowerCase();
+    if (recordType === 'invoice' && (!normalized || ['active', 'open', 'issued', 'pending'].includes(normalized))) {
+      return remainingAmount > 0 ? 'unpaid' : 'paid';
+    }
+    return normalized || 'draft';
+  };
+
   const financialReportRows = useMemo(() => {
     const rows = [
       ...financialInvoices.map(invoice => ({
@@ -1518,7 +1527,7 @@ export default function StudentFinancialPortal({
         studentId: invoice.studentId,
         student: invoice.studentName,
         description: invoice.item,
-        status: String(invoice.status || ''),
+        status: normalizeFinancialRecordStatus(invoice.status, Number(invoice.remainingAmount ?? invoice.amount ?? invoice.totalAmount ?? 0), 'invoice'),
         amount: Number(invoice.amount || invoice.totalAmount || 0)
       })),
       ...studentReceiptVouchers.map(voucher => ({
@@ -1528,7 +1537,7 @@ export default function StudentFinancialPortal({
         studentId: voucher.studentId,
         student: voucher.studentName,
         description: voucher.against || '',
-        status: String(voucher.status || ''),
+        status: normalizeFinancialRecordStatus(voucher.status, 0, 'receipt'),
         amount: Number(voucher.amount || 0)
       }))
     ];
@@ -3242,7 +3251,7 @@ export default function StudentFinancialPortal({
   }
 
   return (
-    <div id="student-financial-portal" className={`financial-luxury-shell w-full min-h-screen text-right font-sans dir-rtl select-none transition-all duration-300 p-2 sm:p-4 md:p-6 space-y-6 ${activeSubSec === 'management' ? 'financial-reference-management' : ''}`} dir="rtl">
+    <div id="student-financial-portal" className={`financial-luxury-shell w-full min-h-screen text-right font-sans dir-rtl select-none transition-all duration-300 p-2 sm:p-4 md:p-6 space-y-6 ${activeSubSec === 'management' ? 'financial-reference-management' : ''} ${isFocusMode ? 'portal-focus-mode' : ''}`} dir="rtl">
 
       {/* ==========================================
           LUXURY GOLD METALLIC TOP HEADER
@@ -3280,6 +3289,17 @@ export default function StudentFinancialPortal({
             <span>تحديث البيانات الحالية</span>
           </button>
         )}
+
+        <button
+          type="button"
+          onClick={() => setIsFocusMode(current => !current)}
+          aria-pressed={isFocusMode}
+          title={isFocusMode ? 'الرجوع إلى العرض الحالي' : 'عرض الوحدة كاملة'}
+          className="relative z-10 inline-flex items-center gap-2 rounded-xl border border-amber-300/70 bg-[#2a1d13] px-3 py-2 text-xs font-black text-amber-200 shadow-lg transition-all hover:bg-[#3b2718]"
+        >
+          {isFocusMode ? <Minimize2 className="w-4 h-4" /> : <Maximize2 className="w-4 h-4" />}
+          <span className="hidden sm:inline">{isFocusMode ? 'العرض الحالي' : 'عرض كامل'}</span>
+        </button>
 
         {/* Center Sub-Navigation Tabs */}
         <div className="flex items-center gap-1.5 bg-[#2a1d13]/90 border border-[#d4af37]/40 p-1.5 rounded-2xl shadow-inner relative z-10 overflow-x-auto">

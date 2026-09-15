@@ -38,4 +38,10 @@ describe('student fees integrity contract', () => {
     expect(financialPortalSource).toContain("student.schoolId === selectedSchool.id");
     expect(financialPortalSource).toContain('اختر المرحلة الدراسية قبل تنفيذ التوزيع الجماعي');
   });
+
+  it('keeps financial report statuses truthful and gives the portal a reversible focus view', () => {
+    expect(financialPortalSource).toContain('normalizeFinancialRecordStatus');
+    expect(financialPortalSource).toContain('isFocusMode');
+    expect(financialPortalSource).toContain('الرجوع إلى العرض الحالي');
+  });
 });

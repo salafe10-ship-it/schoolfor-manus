@@ -569,18 +569,6 @@ export default function AcademicAffairsPortal({
           </button>
 
           <button 
-            onClick={() => setActiveTab('structure')}
-            className={`px-3.5 py-2 text-xs font-black transition-all flex items-center gap-1.5 ${
-              activeTab === 'structure' 
-                ? 'bg-gradient-to-r from-[#9a6a1d] via-[#d4af37] to-[#c58a22] text-slate-950 shadow-md' 
-                : 'text-amber-200/80 hover:text-white hover:bg-white/5'
-            }`}
-          >
-            <Layers className="w-3.5 h-3.5" />
-            <span>الهيكل والأعوام</span>
-          </button>
-
-          <button 
             onClick={() => setActiveTab('subjects')}
             className={`px-3.5 py-2 text-xs font-black transition-all flex items-center gap-1.5 ${
               activeTab === 'subjects' 

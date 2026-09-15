@@ -42,4 +42,12 @@ describe('STU-AFFAIRS-P2-006-66 Student list print truthfulness', () => {
     expect(previewBlock).not.toContain('nationalId');
     expect(previewBlock).toContain('student.parentName');
   });
+
+  it('exposes accessible report actions and a reversible full-screen view', () => {
+    expect(source).toContain('بطاقات الهوية المدرسية');
+    expect(source).toContain('type="button" className="w-full text-right bg-white');
+    expect(source).toContain('مصدر الترقيم التلقائي للطالب');
+    expect(source).toContain('فتح التهيئة الأكاديمية');
+    expect(source).toContain('الرجوع إلى العرض الحالي');
+  });
 });
