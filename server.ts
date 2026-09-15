@@ -13154,12 +13154,23 @@ ${JSON.stringify(snapshot)}
     const entryDirectory = entryPath ? path.dirname(entryPath) : '';
     const colocatedDistPath = path.basename(entryDirectory).toLowerCase() === 'dist' ? entryDirectory : '';
     const cwdDistPath = path.resolve(process.cwd(), 'dist');
-    const distPath = colocatedDistPath && fs.existsSync(path.join(colocatedDistPath, 'index.html'))
-      ? colocatedDistPath
-      : cwdDistPath;
+    const candidateDistPaths = [...new Set([colocatedDistPath, cwdDistPath].filter(Boolean))];
+    const hasCompleteFrontendArtifact = (candidatePath: string) => {
+      const candidateIndexPath = path.join(candidatePath, 'index.html');
+      if (!fs.existsSync(candidateIndexPath)) return false;
+      const candidateIndex = fs.readFileSync(candidateIndexPath, 'utf8');
+      const references = [
+        ...[...candidateIndex.matchAll(/<script[^>]+src="([^"]+)"/g)].map(match => match[1]),
+        ...[...candidateIndex.matchAll(/<link[^>]+href="([^"]+)"/g)].map(match => match[1]),
+      ];
+      return references
+        .filter(reference => reference.startsWith('/'))
+        .every(reference => fs.existsSync(path.join(candidatePath, reference.slice(1))));
+    };
+    const distPath = candidateDistPaths.find(hasCompleteFrontendArtifact) || '';
     const indexPath = path.join(distPath, 'index.html');
-    if (!fs.existsSync(indexPath)) {
-      throw new Error(`Production frontend artifact is missing: ${indexPath}`);
+    if (!distPath || !fs.existsSync(indexPath)) {
+      throw new Error(`Production frontend artifact is incomplete. Checked: ${candidateDistPaths.join(', ')}`);
     }
     // Keep the HTML entry point fresh after each deployment.  Its JavaScript
     // chunks are content-addressed and may be replaced between releases; a
