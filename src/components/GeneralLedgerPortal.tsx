@@ -8,23 +8,24 @@ import EnterpriseActionToolbar from './shared/EnterpriseActionToolbar';
 import { AccountingContext, type AccountNode } from '../modules/accounting/presentation/AccountingContext';
 import { authenticatedRequest } from '../utils/authenticatedRequest';
 import { PERMISSIONS, permissionRegistry } from '../authorization/PermissionRegistry';
+import { lazyWithChunkRecovery } from '../utils/lazyWithChunkRecovery';
 export { AccountingContext };
 export type { AccountNode };
 
-const LedgerDashboardTab = React.lazy(() => import('../modules/accounting/presentation/LedgerDashboardTab').then(m => ({ default: m.LedgerDashboardTab })));
-const ChartOfAccountsTab = React.lazy(() => import('../modules/accounting/presentation/ChartOfAccountsTab').then(m => ({ default: m.ChartOfAccountsTab })));
-const CustomersLedgerTab = React.lazy(() => import('../modules/accounting/presentation/CustomersLedgerTab').then(m => ({ default: m.CustomersLedgerTab })));
-const SuppliersLedgerTab = React.lazy(() => import('../modules/accounting/presentation/SuppliersLedgerTab').then(m => ({ default: m.SuppliersLedgerTab })));
-const JournalEntriesTab = React.lazy(() => import('../modules/accounting/presentation/JournalEntriesTab').then(m => ({ default: m.JournalEntriesTab })));
-const ReceiptVoucherTab = React.lazy(() => import('../modules/accounting/presentation/ReceiptVoucherTab').then(m => ({ default: m.ReceiptVoucherTab })));
-const PaymentVoucherTab = React.lazy(() => import('../modules/accounting/presentation/PaymentVoucherTab').then(m => ({ default: m.PaymentVoucherTab })));
-const BankTransfersTab = React.lazy(() => import('../modules/accounting/presentation/BankTransfersTab').then(m => ({ default: m.BankTransfersTab })));
-const FixedAssetsTab = React.lazy(() => import('../modules/accounting/presentation/FixedAssetsTab').then(m => ({ default: m.FixedAssetsTab })));
-const EstimatedBudgetTab = React.lazy(() => import('../modules/accounting/presentation/EstimatedBudgetTab').then(m => ({ default: m.EstimatedBudgetTab })));
-const ClosingTab = React.lazy(() => import('../modules/accounting/presentation/ClosingTab').then(m => ({ default: m.ClosingTab })));
-const FinancialReportsTab = React.lazy(() => import('../modules/accounting/presentation/FinancialReportsTab').then(m => ({ default: m.FinancialReportsTab })));
-const CalcToolsTab = React.lazy(() => import('../modules/accounting/presentation/CalcToolsTab').then(m => ({ default: m.CalcToolsTab })));
-const TreasuryPlatformPortal = React.lazy(() => import('./TreasuryPlatformPortal'));
+const LedgerDashboardTab = lazyWithChunkRecovery(() => import('../modules/accounting/presentation/LedgerDashboardTab').then(m => ({ default: m.LedgerDashboardTab })));
+const ChartOfAccountsTab = lazyWithChunkRecovery(() => import('../modules/accounting/presentation/ChartOfAccountsTab').then(m => ({ default: m.ChartOfAccountsTab })));
+const CustomersLedgerTab = lazyWithChunkRecovery(() => import('../modules/accounting/presentation/CustomersLedgerTab').then(m => ({ default: m.CustomersLedgerTab })));
+const SuppliersLedgerTab = lazyWithChunkRecovery(() => import('../modules/accounting/presentation/SuppliersLedgerTab').then(m => ({ default: m.SuppliersLedgerTab })));
+const JournalEntriesTab = lazyWithChunkRecovery(() => import('../modules/accounting/presentation/JournalEntriesTab').then(m => ({ default: m.JournalEntriesTab })));
+const ReceiptVoucherTab = lazyWithChunkRecovery(() => import('../modules/accounting/presentation/ReceiptVoucherTab').then(m => ({ default: m.ReceiptVoucherTab })));
+const PaymentVoucherTab = lazyWithChunkRecovery(() => import('../modules/accounting/presentation/PaymentVoucherTab').then(m => ({ default: m.PaymentVoucherTab })));
+const BankTransfersTab = lazyWithChunkRecovery(() => import('../modules/accounting/presentation/BankTransfersTab').then(m => ({ default: m.BankTransfersTab })));
+const FixedAssetsTab = lazyWithChunkRecovery(() => import('../modules/accounting/presentation/FixedAssetsTab').then(m => ({ default: m.FixedAssetsTab })));
+const EstimatedBudgetTab = lazyWithChunkRecovery(() => import('../modules/accounting/presentation/EstimatedBudgetTab').then(m => ({ default: m.EstimatedBudgetTab })));
+const ClosingTab = lazyWithChunkRecovery(() => import('../modules/accounting/presentation/ClosingTab').then(m => ({ default: m.ClosingTab })));
+const FinancialReportsTab = lazyWithChunkRecovery(() => import('../modules/accounting/presentation/FinancialReportsTab').then(m => ({ default: m.FinancialReportsTab })));
+const CalcToolsTab = lazyWithChunkRecovery(() => import('../modules/accounting/presentation/CalcToolsTab').then(m => ({ default: m.CalcToolsTab })));
+const TreasuryPlatformPortal = lazyWithChunkRecovery(() => import('./TreasuryPlatformPortal'));
 
 interface GeneralLedgerPortalProps {
   students: Student[];
