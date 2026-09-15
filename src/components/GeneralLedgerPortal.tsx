@@ -8,23 +8,22 @@ import EnterpriseActionToolbar from './shared/EnterpriseActionToolbar';
 import { AccountingContext, type AccountNode } from '../modules/accounting/presentation/AccountingContext';
 import { authenticatedRequest } from '../utils/authenticatedRequest';
 import { PERMISSIONS, permissionRegistry } from '../authorization/PermissionRegistry';
-import { lazyWithChunkRecovery } from '../utils/lazyWithChunkRecovery';
+import { LedgerDashboardTab } from '../modules/accounting/presentation/LedgerDashboardTab';
+import { ChartOfAccountsTab } from '../modules/accounting/presentation/ChartOfAccountsTab';
+import { CustomersLedgerTab } from '../modules/accounting/presentation/CustomersLedgerTab';
+import { SuppliersLedgerTab } from '../modules/accounting/presentation/SuppliersLedgerTab';
+import { JournalEntriesTab } from '../modules/accounting/presentation/JournalEntriesTab';
+import { ReceiptVoucherTab } from '../modules/accounting/presentation/ReceiptVoucherTab';
+import { PaymentVoucherTab } from '../modules/accounting/presentation/PaymentVoucherTab';
+import { BankTransfersTab } from '../modules/accounting/presentation/BankTransfersTab';
+import { FixedAssetsTab } from '../modules/accounting/presentation/FixedAssetsTab';
+import { EstimatedBudgetTab } from '../modules/accounting/presentation/EstimatedBudgetTab';
+import { ClosingTab } from '../modules/accounting/presentation/ClosingTab';
+import { FinancialReportsTab } from '../modules/accounting/presentation/FinancialReportsTab';
+import { CalcToolsTab } from '../modules/accounting/presentation/CalcToolsTab';
 export { AccountingContext };
 export type { AccountNode };
 
-const LedgerDashboardTab = lazyWithChunkRecovery(() => import('../modules/accounting/presentation/LedgerDashboardTab').then(m => ({ default: m.LedgerDashboardTab })));
-const ChartOfAccountsTab = lazyWithChunkRecovery(() => import('../modules/accounting/presentation/ChartOfAccountsTab').then(m => ({ default: m.ChartOfAccountsTab })));
-const CustomersLedgerTab = lazyWithChunkRecovery(() => import('../modules/accounting/presentation/CustomersLedgerTab').then(m => ({ default: m.CustomersLedgerTab })));
-const SuppliersLedgerTab = lazyWithChunkRecovery(() => import('../modules/accounting/presentation/SuppliersLedgerTab').then(m => ({ default: m.SuppliersLedgerTab })));
-const JournalEntriesTab = lazyWithChunkRecovery(() => import('../modules/accounting/presentation/JournalEntriesTab').then(m => ({ default: m.JournalEntriesTab })));
-const ReceiptVoucherTab = lazyWithChunkRecovery(() => import('../modules/accounting/presentation/ReceiptVoucherTab').then(m => ({ default: m.ReceiptVoucherTab })));
-const PaymentVoucherTab = lazyWithChunkRecovery(() => import('../modules/accounting/presentation/PaymentVoucherTab').then(m => ({ default: m.PaymentVoucherTab })));
-const BankTransfersTab = lazyWithChunkRecovery(() => import('../modules/accounting/presentation/BankTransfersTab').then(m => ({ default: m.BankTransfersTab })));
-const FixedAssetsTab = lazyWithChunkRecovery(() => import('../modules/accounting/presentation/FixedAssetsTab').then(m => ({ default: m.FixedAssetsTab })));
-const EstimatedBudgetTab = lazyWithChunkRecovery(() => import('../modules/accounting/presentation/EstimatedBudgetTab').then(m => ({ default: m.EstimatedBudgetTab })));
-const ClosingTab = lazyWithChunkRecovery(() => import('../modules/accounting/presentation/ClosingTab').then(m => ({ default: m.ClosingTab })));
-const FinancialReportsTab = lazyWithChunkRecovery(() => import('../modules/accounting/presentation/FinancialReportsTab').then(m => ({ default: m.FinancialReportsTab })));
-const CalcToolsTab = lazyWithChunkRecovery(() => import('../modules/accounting/presentation/CalcToolsTab').then(m => ({ default: m.CalcToolsTab })));
 const TreasuryPlatformPortal = React.lazy(() => import('./TreasuryPlatformPortal'));
 
 interface GeneralLedgerPortalProps {
