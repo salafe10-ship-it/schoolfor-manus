@@ -25,4 +25,10 @@ describe('student receipt multi-tender contract', () => {
     expect(postingSource).toContain('توزيع حسابات القبض غير متوازن');
     expect(postingSource).toContain('...receivingAccounts.map');
   });
+
+  it('keeps the human receipt reference in audit metadata without casting it to UUID', () => {
+    expect(serverSource).toContain('const receiptAuditEntityId = randomUUID();');
+    expect(serverSource).toContain('databaseActorId, receiptAuditEntityId');
+    expect(serverSource).toContain('JSON.stringify({ receiptId, studentId, amount');
+  });
 });

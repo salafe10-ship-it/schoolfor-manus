@@ -11140,6 +11140,111 @@ async function startServer() {
     }
   });
 
+  app.delete("/api/financial/fee-configurations/:configId", authenticateRequest, requirePermission(PERMISSIONS.FINANCIAL_WRITE), async (req, res, next) => {
+    try {
+      const { tenantId, schoolId, actorId, tenantContext } = canonicalFeeContext(req);
+      const configId = String(req.params.configId || '').trim();
+      if (!configId) throw new ValidationError('معرف بند الرسوم مطلوب للحذف.');
+
+      let deletedConfig: Record<string, unknown> | null = null;
+      let nextVersion = 0;
+      await UnitOfWork.runInTransaction(schoolId, {
+        operationName: 'Delete student fee configuration',
+        tenantId,
+        userId: actorId,
+        userName: String((req as any).user.name || 'مدير الرسوم'),
+        ipAddress: req.ip || 'unknown',
+        affectedTables: ['student_fee_configurations', 'financial_portal_snapshots', 'audit_events']
+      }, async () => {
+        const transaction = UnitOfWork.getActiveContext()?.databaseTransaction;
+        if (!transaction) throw new DatabaseError('تعذر فتح المعاملة المالية.');
+        const databaseActorId = await resolveCanonicalFeeActor(transaction, tenantId, schoolId, actorId);
+        const snapshotResult = await transaction.query<{ data: Record<string, unknown>; version: number }>(
+          `SELECT data, version
+             FROM public.financial_portal_snapshots
+            WHERE tenant_id = $1 AND school_id = $2
+            FOR UPDATE`,
+          [tenantId, schoolId]
+        );
+        if (!snapshotResult.rows[0]) throw new DatabaseError('مصدر إعدادات الرسوم غير مهيأ في قاعدة البيانات.');
+
+        const currentData = snapshotResult.rows[0].data || {};
+        const currentFeeConfigs = Array.isArray((currentData as any).feeConfigs)
+          ? (currentData as any).feeConfigs as Array<Record<string, unknown>>
+          : [];
+        const snapshotConfig = currentFeeConfigs.find(item => String(item?.id || '').trim() === configId);
+        const configResult = await transaction.query(
+          `SELECT id, fee_type AS "type", amount, revenue_account AS "account", order_number AS "orderNumber", activities
+             FROM public.student_fee_configurations
+            WHERE tenant_id = $1 AND school_id = $2 AND id = $3
+            FOR UPDATE`,
+          [tenantId, schoolId, configId]
+        );
+        const persistedConfig = configResult.rows[0];
+        if (!snapshotConfig && !persistedConfig) throw new ValidationError('بند الرسوم المطلوب حذفه غير موجود في المصدر المالي.');
+
+        const usageResult = await transaction.query<{ assignment_count: string; invoice_count: string }>(
+          `SELECT
+             (SELECT COUNT(*)::text
+                FROM public.student_fee_assignments
+               WHERE tenant_id = $1 AND school_id = $2 AND template_id = $3 AND status <> 'cancelled') AS assignment_count,
+             (SELECT COUNT(*)::text
+                FROM public.student_fee_invoices
+               WHERE tenant_id = $1 AND school_id = $2
+                 AND (template_id = $3 OR source_payload->>'feeConfigId' = $3)) AS invoice_count`,
+          [tenantId, schoolId, configId]
+        );
+        const assignmentCount = Number(usageResult.rows[0]?.assignment_count || 0);
+        const invoiceCount = Number(usageResult.rows[0]?.invoice_count || 0);
+        if (assignmentCount > 0 || invoiceCount > 0) {
+          throw new ConflictError('لا يمكن حذف بند رسوم مستخدم في تخصيصات أو مطالبات مالية. أوقفه أو أنشئ إصدارًا جديدًا للحفاظ على السجل المالي.');
+        }
+
+        const nextData = {
+          ...currentData,
+          feeConfigs: currentFeeConfigs.filter(item => String(item?.id || '').trim() !== configId)
+        };
+        const currentVersion = Number(snapshotResult.rows[0].version || 0);
+        nextVersion = currentVersion + 1;
+        await transaction.query(
+          `UPDATE public.financial_portal_snapshots
+              SET data = $3::jsonb, version = $4, updated_at = now(), updated_by = $5
+            WHERE tenant_id = $1 AND school_id = $2 AND version = $6`,
+          [tenantId, schoolId, JSON.stringify(nextData), nextVersion, databaseActorId, currentVersion]
+        );
+        await transaction.query(
+          `DELETE FROM public.student_fee_configurations
+            WHERE tenant_id = $1 AND school_id = $2 AND id = $3`,
+          [tenantId, schoolId, configId]
+        );
+        deletedConfig = (snapshotConfig || persistedConfig) as Record<string, unknown>;
+        await transaction.query(
+          `INSERT INTO public.audit_events
+            (id, tenant_id, school_id, actor_user_id, entity_type, entity_id, action, source, reason, result, metadata)
+           VALUES ($1,$2,$3,$4,'student_fee_configuration',$5,'delete','StudentFeeConfigurationRoute','حذف بند رسوم غير مستخدم','success',$6::jsonb)`,
+          [randomUUID(), tenantId, schoolId, databaseActorId, configId, JSON.stringify({
+            configId,
+            previousVersion: currentVersion,
+            nextVersion,
+            assignmentCount,
+            invoiceCount,
+            deletedConfig
+          })]
+        );
+      }, tenantContext);
+
+      res.json({
+        success: true,
+        data: { id: configId, deleted: true },
+        meta: { source: 'canonical_postgres', version: nextVersion }
+      });
+    } catch (err: any) {
+      next(err instanceof AuthenticationError || err instanceof AuthorizationError || err instanceof ConflictError || err instanceof ValidationError || err instanceof DatabaseError
+        ? err
+        : new DatabaseError('تعذر حذف بند الرسوم من المصدر المالي.', err?.message));
+    }
+  });
+
   app.post("/api/financial/fee-templates", authenticateRequest, requirePermission(PERMISSIONS.FINANCIAL_WRITE), async (req, res, next) => {
     try {
       const { tenantId, schoolId, actorId, tenantContext } = canonicalFeeContext(req);
@@ -12032,12 +12137,13 @@ async function startServer() {
             WHERE tenant_id = $1 AND school_id = $2 AND id = $3`,
           [tenantId, schoolId, receiptId, journalId, receiptVoucherId, databaseActorId]
         );
+        const receiptAuditEntityId = randomUUID();
         await transaction.query(
           `INSERT INTO public.audit_events
             (id, tenant_id, school_id, branch_id, actor_user_id, entity_type, entity_id, action, source, reason, result, metadata)
            VALUES ($1,$2,$3,$4,$5,'student_fee_receipt',$6,'manual_settle','CanonicalStudentFeeRoute','تحصيل وتخصيص وترحيل سند طالب','success',$7::jsonb)`,
-          [randomUUID(), tenantId, schoolId, tenantContext.branchId || null, databaseActorId, receiptId,
-            JSON.stringify({ studentId, amount, paymentMethod: effectivePaymentMethod, receivingAccounts, installmentScheduleId: requestedInstallmentScheduleId, allocationCount: allocations.length, journalId })]
+          [randomUUID(), tenantId, schoolId, tenantContext.branchId || null, databaseActorId, receiptAuditEntityId,
+            JSON.stringify({ receiptId, studentId, amount, paymentMethod: effectivePaymentMethod, receivingAccounts, installmentScheduleId: requestedInstallmentScheduleId, allocationCount: allocations.length, journalId })]
         );
         settlement = {
           receipt: { id: receiptId, studentId, studentName, amount, receiptDate, paymentMethod: effectivePaymentMethod, receivingAccount: primaryReceivingAccount, receivingAccounts, operationalType, against, status: 'posted', journalEntryId: journalId, receiptVoucherId },

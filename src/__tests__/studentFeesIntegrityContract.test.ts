@@ -2,6 +2,7 @@ import { describe, expect, it } from 'vitest';
 import { readFileSync } from 'node:fs';
 
 const serverSource = readFileSync('server.ts', 'utf8');
+const financialPortalSource = readFileSync('src/components/StudentFinancialPortal.tsx', 'utf8');
 
 describe('student fees integrity contract', () => {
   it('validates stable identifiers and rejects duplicate financial rows', () => {
@@ -18,5 +19,23 @@ describe('student fees integrity contract', () => {
   it('requires balanced posted journal entries', () => {
     expect(serverSource).toContain("['posted', 'مرحّل', 'مُرحّل']");
     expect(serverSource).toContain('غير متوازن محاسبياً');
+  });
+
+  it('exposes a protected database-backed fee configuration delete contract', () => {
+    expect(serverSource).toContain('app.delete("/api/financial/fee-configurations/:configId"');
+    expect(serverSource).toContain('FROM public.student_fee_configurations');
+    expect(serverSource).toContain('لا يمكن حذف بند رسوم مستخدم في تخصيصات أو مطالبات مالية');
+    expect(financialPortalSource).toContain("method: 'DELETE'");
+    expect(financialPortalSource).toContain('window.confirm(`هل أنت متأكد من حذف بند الرسوم');
+    expect(financialPortalSource).toContain('<span>حذف</span>');
+  });
+
+  it('keeps mass fee distribution stage-first and school-scoped', () => {
+    expect(financialPortalSource).toContain('const [massStageId, setMassStageId]');
+    expect(financialPortalSource).toContain('المرحلة الدراسية');
+    expect(financialPortalSource).toContain('const activeMassStages = useMemo');
+    expect(financialPortalSource).toContain('massStudentMatchesStage(student, massStageId)');
+    expect(financialPortalSource).toContain("student.schoolId === selectedSchool.id");
+    expect(financialPortalSource).toContain('اختر المرحلة الدراسية قبل تنفيذ التوزيع الجماعي');
   });
 });

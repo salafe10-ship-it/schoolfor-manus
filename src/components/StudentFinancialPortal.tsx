@@ -185,17 +185,124 @@ export default function StudentFinancialPortal({
   const [currFeeActivities, setCurrFeeActivities] = useState<string>('');
 
   // States for Mass Distribution
+  const [massStageId, setMassStageId] = useState<string>('');
   const [massClassroom, setMassClassroom] = useState<string>('الصف الأول ابتدائي');
   const [massFeeType, setMassFeeType] = useState<string>('التسجيل العام والتمدرس السنوي');
   const [massFeeAmount, setMassFeeAmount] = useState<number>(0);
   const [massDueDate, setMassDueDate] = useState<string>(() => new Date(Date.now() + 30 * 24 * 60 * 60 * 1000).toISOString().split('T')[0]);
   const [selectedStudentIds, setSelectedStudentIds] = useState<Record<string, boolean>>({});
 
+  const activeMassStages = useMemo(
+    () => [...(stages || [])]
+      .filter(stage => stage?.isActive !== false && (!selectedSchool?.id || !stage.schoolId || stage.schoolId === selectedSchool.id))
+      .sort((a, b) => Number(a.order || 0) - Number(b.order || 0) || String(a.name || '').localeCompare(String(b.name || ''), 'ar')),
+    [selectedSchool?.id, stages]
+  );
+
+  React.useEffect(() => {
+    if ((stages || []).length > 0 || !selectedSchool?.id || !setStages) return;
+    const controller = new AbortController();
+    authenticatedRequest('/api/academic/context', {
+      method: 'GET',
+      headers: { Accept: 'application/json' },
+      cache: 'no-store',
+      signal: controller.signal
+    })
+      .then(async response => {
+        const payload = await response.json().catch(() => ({}));
+        if (!response.ok || !payload?.success || !payload?.data) {
+          throw new Error(payload?.message || 'تعذر تحميل الهيكل الأكاديمي الموثوق.');
+        }
+        const data = payload.data as any;
+        setStages(Array.isArray(data.stages) ? data.stages : []);
+        setGrades?.(Array.isArray(data.grades) ? data.grades : []);
+        setAcademicClasses?.(Array.isArray(data.classes) ? data.classes : []);
+      })
+      .catch(error => {
+        if (error?.name !== 'AbortError') {
+          triggerNotification(error?.message || 'تعذر تحميل الهيكل الأكاديمي الموثوق.', 'warning');
+        }
+      });
+    return () => controller.abort();
+  }, [selectedSchool?.id, setAcademicClasses, setGrades, setStages, stages, triggerNotification]);
+
+  const normalizeMassAcademicLabel = (value: unknown) => String(value || '')
+    .trim()
+    .toLowerCase()
+    .replace(/الابتدائي/g, 'ابتدائي')
+    .replace(/المتوسط/g, 'متوسط')
+    .replace(/الثانوي/g, 'ثانوي')
+    .replace(/\s+/g, ' ');
+
+  const massStudentMatchesStage = (student: Student, stageId: string) => {
+    if (!stageId) return true;
+    if (String(student.stageId || '').trim() === stageId) return true;
+    const classroom = String(student.classroom || '').trim();
+    const grade = (grades || []).find(item => item?.isActive !== false
+      && (String(item.id) === String(student.gradeId || '') || String(item.name || '').trim() === classroom));
+    if (String(grade?.stageId || '') === stageId) return true;
+    const stage = activeMassStages.find(item => String(item.id) === stageId);
+    const stageText = `${stage?.name || ''} ${stage?.type || ''}`.toLowerCase();
+    const classroomText = classroom.toLowerCase();
+    if (stageText.includes('kindergarten') || stageText.includes('روضة') || stageText.includes('تمهيد')) {
+      return /روضة|تمهيد|kg|kindergarten/.test(classroomText);
+    }
+    if (stageText.includes('primary') || stageText.includes('ابتد')) return classroomText.includes('ابتد');
+    if (stageText.includes('middle') || stageText.includes('متوسط')) return classroomText.includes('متوسط');
+    if (stageText.includes('secondary') || stageText.includes('ثانوي')) return classroomText.includes('ثانوي');
+    return false;
+  };
+
+  React.useEffect(() => {
+    if (massStageId || activeMassStages.length === 0) return;
+    const normalizedCurrentClassroom = normalizeMassAcademicLabel(massClassroom);
+    const currentGrade = (grades || []).find(item => item?.isActive !== false && normalizeMassAcademicLabel(item.name) === normalizedCurrentClassroom);
+    const matchingStage = activeMassStages.find(stage => {
+      const stageText = `${stage.name || ''} ${stage.type || ''}`.toLowerCase();
+      return (stageText.includes('kindergarten') || stageText.includes('روضة') || stageText.includes('تمهيد'))
+          ? /روضة|تمهيد|kg|kindergarten/.test(normalizedCurrentClassroom)
+          : (stageText.includes('primary') || stageText.includes('ابتد'))
+          ? normalizedCurrentClassroom.includes('ابتدائي')
+          : (stageText.includes('middle') || stageText.includes('متوسط'))
+            ? normalizedCurrentClassroom.includes('متوسط')
+            : (stageText.includes('secondary') || stageText.includes('ثانوي'))
+              ? normalizedCurrentClassroom.includes('ثانوي')
+              : false;
+    });
+    const inferredStage = currentGrade?.stageId || matchingStage?.id || activeMassStages[0]?.id || '';
+    if (inferredStage) setMassStageId(String(inferredStage));
+  }, [activeMassStages, grades, massClassroom, massStageId]);
+
+  const massClassroomOptions = useMemo(() => {
+    const stageGrades = [...(grades || [])]
+      .filter(grade => grade?.isActive !== false && (!massStageId || String(grade.stageId || '') === massStageId))
+      .sort((a, b) => Number(a.order || 0) - Number(b.order || 0))
+      .map(grade => String(grade.name || '').trim())
+      .filter(Boolean);
+    const studentClassrooms = students
+      .filter(student => !student.isDeleted && (!selectedSchool?.id || student.schoolId === selectedSchool.id))
+      .filter(student => massStudentMatchesStage(student, massStageId))
+      .map(student => String(student.classroom || '').trim())
+      .filter(Boolean);
+    const fallback = ['الصف الأول ابتدائي', 'الصف الثاني ابتدائي', 'الروضة'];
+    return [...new Set([...stageGrades, ...studentClassrooms, ...(stageGrades.length || studentClassrooms.length ? [] : fallback), 'الفصل غير محدد'])];
+  }, [activeMassStages, grades, massStageId, selectedSchool?.id, students]);
+
+  React.useEffect(() => {
+    if (massClassroomOptions.includes(massClassroom)) return;
+    const nextClassroom = massClassroomOptions.find(value => value !== 'الفصل غير محدد') || 'الفصل غير محدد';
+    setMassClassroom(nextClassroom);
+    setSelectedStudentIds({});
+  }, [massClassroom, massClassroomOptions]);
+
   const massTargetStudents = useMemo(
-    () => students.filter(student => massClassroom === 'الفصل غير محدد'
-      ? !String(student.classroom || '').trim()
-      : student.classroom === massClassroom),
-    [students, massClassroom]
+    () => students
+      .filter(student => !student.isDeleted && (!selectedSchool?.id || student.schoolId === selectedSchool.id))
+      .filter(student => massStudentMatchesStage(student, massStageId))
+      .filter(student => massClassroom === 'الفصل غير محدد'
+        ? !String(student.classroom || '').trim()
+        : student.classroom === massClassroom),
+    [activeMassStages, grades, massClassroom, massStageId, selectedSchool?.id, students]
   );
 
   const selectableStudents = useMemo(
@@ -2609,10 +2716,14 @@ export default function StudentFinancialPortal({
       triggerNotification('تعذر التوزيع: السنة والفترة الدراسية النشطتان غير موثقتين.', 'warning');
       return;
     }
+    if (activeMassStages.length > 0 && !massStageId) {
+      triggerNotification('اختر المرحلة الدراسية قبل تنفيذ التوزيع الجماعي.', 'warning');
+      return;
+    }
 
     const studentsToUpdate = massTargetStudents.filter(s => selectedStudentIds[s.id] !== false);
     if (studentsToUpdate.length === 0) {
-      triggerNotification(`الرجاء تحديد طالب واحد على الأقل من الفصل ${massClassroom}`, 'warning');
+      triggerNotification(`الرجاء تحديد طالب واحد على الأقل من المرحلة والفصل المحددين (${massClassroom})`, 'warning');
       return;
     }
 
@@ -2702,8 +2813,9 @@ export default function StudentFinancialPortal({
     setFinancialInvoices(updatedInvoices);
     setInvoices(updatedInvoices);
 
-    logAction('MASS_FEE_DISTRIBUTION', `تم ترحيل وتوطين رسوم جماعية (${massFeeType}) بقيمة ${massFeeAmount} د.ل على طلاب ${massClassroom} وعددهم ${studentsToUpdate.length} طالباً.`, 'حسابات الطلاب');
-    triggerNotification(`تم بنجاح تطبيق وتوزيع الرسوم الكانونية على ${studentsToUpdate.length} من طلاب ${massClassroom}`, 'success');
+    const selectedStageName = activeMassStages.find(stage => String(stage.id) === massStageId)?.name || 'المرحلة غير محددة';
+    logAction('MASS_FEE_DISTRIBUTION', `تم ترحيل وتوطين رسوم جماعية (${massFeeType}) بقيمة ${massFeeAmount} د.ل على ${selectedStageName} / ${massClassroom} وعددهم ${studentsToUpdate.length} طالباً.`, 'حسابات الطلاب');
+    triggerNotification(`تم بنجاح تطبيق وتوزيع الرسوم الكانونية على ${studentsToUpdate.length} طالبًا — ${selectedStageName} / ${massClassroom}`, 'success');
   };
 
   const handleIssueStudentFeeDemand = async () => {
@@ -3090,15 +3202,28 @@ export default function StudentFinancialPortal({
     portalOnDelete = currFeeId ? () => {
       void (async () => {
         if (!ensureFinancialWriteReady()) return;
-        const updatedFeeConfigs = feeConfigs.filter(item => item.id !== currFeeId);
+        const selectedConfig = feeConfigs.find(item => item.id === currFeeId);
+        if (!selectedConfig) {
+          triggerNotification('البند المحدد لم يعد موجودًا؛ حدّث البيانات قبل الحذف.', 'warning');
+          return;
+        }
+        if (!window.confirm(`هل أنت متأكد من حذف بند الرسوم «${selectedConfig.type}»؟\nسيُمنع الحذف تلقائيًا إذا كان البند مستخدمًا في مطالبات أو تخصيصات مالية.`)) return;
         try {
-          await saveToServerDb(undefined, undefined, undefined, undefined, undefined, updatedFeeConfigs);
+          const response = await authenticatedRequest(`/api/financial/fee-configurations/${encodeURIComponent(currFeeId)}`, { method: 'DELETE' });
+          const result = await response.json().catch(() => ({}));
+          if (!response.ok || !result.success) throw new Error(result.message || 'تعذر حذف بند الرسوم من المصدر المالي.');
+          const updatedFeeConfigs = feeConfigs.filter(item => item.id !== currFeeId);
           setFeeConfigs(updatedFeeConfigs);
+          if (Number.isSafeInteger(Number(result.meta?.version))) setFinancialPersistenceVersion(Number(result.meta.version));
           setCurrFeeId('');
-          logAction('DELETE_FEE_CONFIG', `حذف بند الرسوم: ${currFeeType}`, 'الإعدادات المالية');
-          triggerNotification('تم حذف بند الرسوم وحفظ الحذف في المصدر المالي', 'success');
+          setCurrFeeType('');
+          setCurrFeeAmount(0);
+          setCurrFeeAccount('');
+          setCurrFeeActivities('');
+          logAction('DELETE_FEE_CONFIG', `حذف بند الرسوم: ${selectedConfig.type}`, 'الإعدادات المالية');
+          triggerNotification('تم حذف بند الرسوم وتسجيل العملية في قاعدة البيانات بنجاح.', 'success');
         } catch (error: any) {
-          triggerNotification(error?.message || 'تعذر حفظ حذف بند الرسوم في المصدر المالي', 'warning');
+          triggerNotification(error?.message || 'تعذر حذف بند الرسوم من المصدر المالي.', 'warning');
         }
       })();
     } : undefined;
@@ -3696,6 +3821,18 @@ export default function StudentFinancialPortal({
                 <span>تعديل</span>
               </button>
 
+              {/* حذف (Red) */}
+              <button
+                type="button"
+                onClick={() => { void portalOnDelete?.(); }}
+                disabled={!currFeeId}
+                title={currFeeId ? 'حذف بند الرسوم المحدد من قاعدة البيانات' : 'اختر بند رسوم أولاً'}
+                className="financial-fee-module-action bg-rose-700 text-white text-xs font-bold px-5 py-2.5 rounded flex items-center gap-1.5 transition-colors cursor-pointer hover:bg-rose-800 disabled:cursor-not-allowed disabled:opacity-50"
+              >
+                <Trash2 className="w-4 h-4" />
+                <span>حذف</span>
+              </button>
+
               {/* طباعة (Charcoal / Slategray) */}
               <button
                 type="button"
@@ -3839,19 +3976,36 @@ export default function StudentFinancialPortal({
             </div>
 
             {/* Top Control Bar */}
-            <div className="p-5 grid grid-cols-1 md:grid-cols-2 lg:grid-cols-5 gap-4 items-end">
+            <div className="p-5 grid grid-cols-1 md:grid-cols-2 lg:grid-cols-6 gap-4 items-end">
+              {/* Stage Dropdown — the canonical parent filter */}
+              <div>
+                <label className="block text-xs font-bold text-slate-800 mb-1">المرحلة الدراسية</label>
+                <select
+                  value={massStageId}
+                  onChange={(e) => {
+                    setMassStageId(e.target.value);
+                    setSelectedStudentIds({});
+                  }}
+                  disabled={activeMassStages.length === 0}
+                  className="w-full bg-transparent rounded p-2 text-xs font-bold focus:ring-1 focus:ring-orange-500 focus:outline-none disabled:cursor-not-allowed disabled:opacity-50"
+                >
+                  {activeMassStages.length === 0 && <option value="">المراحل غير متاحة من المصدر</option>}
+                  {activeMassStages.map(stage => <option key={stage.id} value={stage.id}>{stage.name}</option>)}
+                </select>
+              </div>
+
               {/* Classroom Dropdown */}
               <div>
-                <label className="block text-xs font-bold text-slate-800 mb-1">الفصل الدراسي</label>
+                <label className="block text-xs font-bold text-slate-800 mb-1">الصف / الفصل المستهدف</label>
                 <select
                   value={massClassroom}
-                  onChange={(e) => setMassClassroom(e.target.value)}
+                  onChange={(e) => {
+                    setMassClassroom(e.target.value);
+                    setSelectedStudentIds({});
+                  }}
                   className="w-full bg-transparent rounded p-2 text-xs font-bold focus:ring-1 focus:ring-orange-500 focus:outline-none"
-                  >
-                    <option value="الصف الأول ابتدائي">الصف الأول ابتدائي</option>
-                    <option value="الصف الثاني ابتدائي">الصف الثاني ابتدائي</option>
-                    <option value="الروضة">الروضة</option>
-                    <option value="الفصل غير محدد">الفصل غير محدد</option>
+                >
+                  {massClassroomOptions.map(classroom => <option key={classroom} value={classroom}>{classroom}</option>)}
                 </select>
               </div>
 
