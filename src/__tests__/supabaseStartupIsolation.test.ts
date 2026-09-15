@@ -21,7 +21,7 @@ describe('Supabase startup readiness isolation', () => {
   });
 
   it('uses a finite default timeout and accepts a positive override', () => {
-    expect(DEFAULT_SUPABASE_REQUEST_TIMEOUT_MS).toBe(3_000);
+    expect(DEFAULT_SUPABASE_REQUEST_TIMEOUT_MS).toBe(10_000);
     expect(getSupabaseRequestTimeoutMs()).toBe(DEFAULT_SUPABASE_REQUEST_TIMEOUT_MS);
 
     vi.stubEnv('SUPABASE_REQUEST_TIMEOUT_MS', '1250');

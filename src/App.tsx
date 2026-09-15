@@ -99,7 +99,7 @@ import {
 } from './types';
 import { TransactionService } from './database/transactions/TransactionService';
 import { useCurrency, saveCurrencyConfig, formatAmount } from './utils/currency';
-import { TrustedSessionManager, TrustedSessionUser } from './middleware/trustedSessionManager';
+import { TrustedSessionError, TrustedSessionManager, TrustedSessionUser } from './middleware/trustedSessionManager';
 import { canAccessSection } from './authorization/ClientAuthorization';
 import { canonicalSectionRoute } from './navigation/CanonicalSectionRoute';
 import { PERMISSIONS } from './authorization/PermissionRegistry';
@@ -128,6 +128,22 @@ const UNRESOLVED_SCHOOL: School = {
 
 function hasTrustedPlatformAdminAccess(user: TrustedSessionUser | null | undefined): boolean {
   return hasExplicitPlatformAdminPermission(user);
+}
+
+const SESSION_RESTORE_RETRY_DELAYS_MS = [250, 750, 1_500] as const;
+
+async function restoreTrustedSessionWithRetry(sessionManager: TrustedSessionManager): Promise<TrustedSessionUser> {
+  for (let attempt = 0; attempt < SESSION_RESTORE_RETRY_DELAYS_MS.length; attempt += 1) {
+    try {
+      return await sessionManager.restore();
+    } catch (error) {
+      const isTransientFailure = error instanceof TrustedSessionError && error.code === 'REQUEST_FAILED';
+      if (!isTransientFailure || attempt === SESSION_RESTORE_RETRY_DELAYS_MS.length - 1) throw error;
+      await new Promise(resolve => setTimeout(resolve, SESSION_RESTORE_RETRY_DELAYS_MS[attempt]));
+    }
+  }
+
+  throw new TrustedSessionError('REQUEST_FAILED');
 }
 
 // Bulletproof copy-to-clipboard function supporting sandboxed frames and secure/non-secure origins
@@ -476,8 +492,12 @@ export default function App() {
         return;
       }
 
-      sessionManager.restore()
-        .catch(() => {
+      restoreTrustedSessionWithRetry(sessionManager)
+        .catch((error) => {
+          if (error instanceof TrustedSessionError && error.code === 'REQUEST_FAILED') {
+            triggerNotification('الاتصال بالخادم متعذر مؤقتًا؛ لم يتم إنهاء الجلسة. أعد المحاولة بعد لحظات.', 'warning');
+            return;
+          }
           sessionManager.logout();
           setCurrentPortal('login');
           setLoginPortalMode('school');
@@ -491,7 +511,7 @@ export default function App() {
   useEffect(() => {
     if (!sessionManager.getAccessToken()) return;
 
-    sessionManager.restore()
+    restoreTrustedSessionWithRetry(sessionManager)
       .then(user => {
         // Reload a school URL without discarding a valid session for that
         // exact school. A session from any other school still fails closed.
@@ -511,7 +531,11 @@ export default function App() {
         applyTrustedSessionUser(user);
         setCurrentPortal(schoolPortalContext ? 'school' : (hasTrustedPlatformAdminAccess(user) ? 'admin' : 'school'));
       })
-      .catch(() => {
+      .catch((error) => {
+        if (error instanceof TrustedSessionError && error.code === 'REQUEST_FAILED') {
+          triggerNotification('الاتصال بالخادم متعذر مؤقتًا؛ لم يتم إنهاء الجلسة. أعد المحاولة بعد لحظات.', 'warning');
+          return;
+        }
         sessionManager.logout();
         setCurrentPortal('login');
         setLoginPortalMode('school');
@@ -991,7 +1015,11 @@ export default function App() {
       logAction('PORTAL_LOGIN', `تم تسجيل الدخول الموثوق إلى ${targetSchool.name}`, 'المصادقة والأمان');
       triggerNotification(`تم تسجيل الدخول إلى ${targetSchool.name} بنجاح`, 'success');
       return true;
-    } catch {
+    } catch (error) {
+      if (error instanceof TrustedSessionError && error.code === 'REQUEST_FAILED') {
+        triggerNotification('تعذر الاتصال بالخادم مؤقتًا. لم يتم اعتماد تسجيل الدخول؛ أعد المحاولة.', 'warning');
+        return false;
+      }
       sessionManager.logout();
       triggerNotification('بيانات الدخول غير صحيحة أو أن الحساب غير متاح', 'warning');
       return false;
