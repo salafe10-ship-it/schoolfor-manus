@@ -3285,12 +3285,12 @@ export default function StudentFinancialPortal({
   }
 
   return (
-    <div id="student-financial-portal" className={`financial-luxury-shell w-full min-h-screen text-right font-sans dir-rtl select-none transition-all duration-300 p-2 sm:p-4 md:p-6 space-y-6 ${activeSubSec === 'management' ? 'financial-reference-management' : ''} ${isFocusMode ? 'portal-focus-mode' : ''}`} dir="rtl">
+    <div id="student-financial-portal" className={`financial-luxury-shell financial-unified-identity identity-control-surface w-full min-h-screen text-right font-sans dir-rtl select-none transition-all duration-300 p-2 sm:p-4 md:p-6 space-y-6 ${activeSubSec === 'management' ? 'financial-reference-management' : ''} ${isFocusMode ? 'portal-focus-mode' : ''}`} dir="rtl">
 
       {/* ==========================================
-          LUXURY GOLD METALLIC TOP HEADER
+          UNIFIED FINANCIAL IDENTITY HEADER
          ========================================== */}
-      <div className="financial-module-header bg-gradient-to-r from-[#1c120c] via-[#2d1e12] to-[#1a100a] text-white rounded-3xl p-4 sm:p-5 border-2 border-[#d4af37]/40 shadow-2xl flex flex-wrap items-center justify-between gap-4 relative overflow-hidden">
+      <div className="financial-module-header identity-hero bg-gradient-to-r from-[#1c120c] via-[#2d1e12] to-[#1a100a] text-white rounded-3xl p-4 sm:p-5 border-2 border-[#d4af37]/40 shadow-2xl flex flex-wrap items-center justify-between gap-4 relative overflow-hidden">
         <div className="absolute top-0 right-1/4 w-96 h-20 bg-[#d4af37]/10 blur-3xl pointer-events-none" />
         
         {/* Module Title & Breadcrumbs */}
@@ -3336,7 +3336,7 @@ export default function StudentFinancialPortal({
         </button>
 
         {/* Center Sub-Navigation Tabs */}
-        <div className="flex items-center gap-1.5 bg-[#2a1d13]/90 border border-[#d4af37]/40 p-1.5 rounded-2xl shadow-inner relative z-10 overflow-x-auto">
+        <div className="identity-view-tabs flex items-center gap-1.5 bg-[#2a1d13]/90 border border-[#d4af37]/40 p-1.5 rounded-2xl shadow-inner relative z-10 overflow-x-auto">
           <button 
             onClick={() => setActiveSubSec('analytics')}
             className={`px-4 py-2 rounded-xl text-xs font-black transition-all flex items-center gap-1.5 ${
@@ -3432,7 +3432,7 @@ export default function StudentFinancialPortal({
        <div id="student-financial-portal-layout" className="financial-workspace-layout flex flex-col lg:flex-row-reverse gap-4 w-full p-3 sm:p-4 text-right">
       
       {/* LEFT AREA: Content Window based on nested state */}
-      <div id="financial-content-viewport" className="financial-content-viewport flex-1 bg-gradient-to-b from-[#fffefc] via-[#fbf8f0] to-[#f5eeea] border-2 border-[#d4af37]/30 hover:border-[#d4af37] rounded-3xl p-4 sm:p-5 shadow-md transition-all duration-300 overflow-hidden min-h-[550px] p-6">
+      <div id="financial-content-viewport" className="financial-content-viewport identity-panel flex-1 bg-gradient-to-b from-[#fffefc] via-[#fbf8f0] to-[#f5eeea] border-2 border-[#d4af37]/30 hover:border-[#d4af37] rounded-3xl p-4 sm:p-5 shadow-md transition-all duration-300 overflow-hidden min-h-[550px] p-6">
         
         {/* VIEW 1: لوحة التحكم المالية والتحليلات */}
         {activeSubSec === 'analytics' && (

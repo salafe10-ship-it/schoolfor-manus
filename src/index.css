@@ -2580,3 +2580,97 @@ html:not(.dark) #super-admin-portal button:not(.bg-indigo-600):not(.bg-rose-600)
     margin-inline: auto;
   }
 }
+
+/* --------------------------------------------------------------------------
+   Unified financial screen identity
+   All financial sub-screens share the same outer frame. Section-specific
+   panels may keep their semantic navy/green accents inside this frame.
+   -------------------------------------------------------------------------- */
+#student-financial-portal.financial-unified-identity {
+  background: #fbfaf6 !important;
+  color: #0f172a !important;
+  border: 1px solid #eadfcd;
+  border-radius: 1.55rem;
+  box-shadow: 0 14px 35px rgba(102, 75, 25, 0.12);
+}
+
+#student-financial-portal.financial-unified-identity .financial-module-header {
+  background: #fbfaf6 !important;
+  color: #0f172a !important;
+  border: 0 !important;
+  border-bottom: 1px solid #eadfcd !important;
+  border-radius: 0 !important;
+  box-shadow: none !important;
+  padding: 0.65rem 1rem !important;
+}
+
+#student-financial-portal.financial-unified-identity .financial-module-header > .absolute {
+  display: none;
+}
+
+#student-financial-portal.financial-unified-identity .financial-module-header h1 {
+  color: #0b0b0b !important;
+  background: none !important;
+  -webkit-text-fill-color: #0b0b0b !important;
+}
+
+#student-financial-portal.financial-unified-identity .financial-module-header .text-amber-300\/80,
+#student-financial-portal.financial-unified-identity .financial-module-header .text-amber-100,
+#student-financial-portal.financial-unified-identity .financial-module-header .text-amber-200\/80 {
+  color: #334155 !important;
+}
+
+#student-financial-portal.financial-unified-identity .financial-module-header > div:first-of-type > div:first-of-type {
+  background: #fff !important;
+  border: 1px solid #d8be82 !important;
+  box-shadow: none !important;
+}
+
+#student-financial-portal.financial-unified-identity .identity-view-tabs {
+  background: transparent !important;
+  border-color: #eadfcd !important;
+  box-shadow: none !important;
+}
+
+#student-financial-portal.financial-unified-identity .identity-view-tabs button {
+  color: #0b1733 !important;
+}
+
+#student-financial-portal.financial-unified-identity .identity-view-tabs button:hover {
+  background: #f5eee2 !important;
+}
+
+#student-financial-portal.financial-unified-identity .identity-view-tabs button.bg-gradient-to-r {
+  background: #f4bd43 !important;
+  color: #172033 !important;
+  box-shadow: none !important;
+}
+
+#student-financial-portal.financial-unified-identity .enterprise-action-toolbar {
+  background: #fbfaf6 !important;
+  color: #172033 !important;
+  border: 0 !important;
+  border-bottom: 1px solid #eadfcd !important;
+  border-radius: 0 !important;
+  box-shadow: none !important;
+}
+
+#student-financial-portal.financial-unified-identity .financial-workspace-layout {
+  border: 0 !important;
+  border-radius: 0 !important;
+  background: transparent !important;
+  box-shadow: none !important;
+}
+
+#student-financial-portal.financial-unified-identity .financial-content-viewport {
+  border-color: #d8bd80 !important;
+  background: #fbfaf6 !important;
+  box-shadow: 0 8px 20px rgba(11, 23, 51, 0.06) !important;
+}
+
+@media (max-width: 640px) {
+  #student-financial-portal.financial-unified-identity {
+    border-radius: 1rem;
+    padding: 0.2rem !important;
+  }
+}
