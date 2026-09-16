@@ -11,31 +11,32 @@ import * as React from 'react';
 import { useState, useMemo, useEffect, useCallback, useRef } from 'react';
 import { lazyWithChunkRecovery } from './utils/lazyWithChunkRecovery';
 import Topbar from './components/Topbar';
+import Sidebar from './components/Sidebar';
 import SuperAdminView from './components/SuperAdminView';
-const StudentFinancialPortal = React.lazy(() => import('./components/StudentFinancialPortal'));
+const StudentFinancialPortal = lazyWithChunkRecovery(() => import('./components/StudentFinancialPortal'));
 const GeneralLedgerPortal = lazyWithChunkRecovery(() => import('./components/GeneralLedgerPortal'));
 import AccountingErrorBoundary from './components/AccountingErrorBoundary';
-const StudentAffairsPortal = React.lazy(() => import('./components/StudentAffairsPortal'));
-const AdmissionsPortal = React.lazy(() => import('./components/AdmissionsPortal'));
-const AcademicAffairsPortal = React.lazy(() => import('./components/AcademicAffairsPortal'));
+const StudentAffairsPortal = lazyWithChunkRecovery(() => import('./components/StudentAffairsPortal'));
+const AdmissionsPortal = lazyWithChunkRecovery(() => import('./components/AdmissionsPortal'));
+const AcademicAffairsPortal = lazyWithChunkRecovery(() => import('./components/AcademicAffairsPortal'));
 import SmartPortalGateway from './components/SmartPortalGateway';
 import SchoolClientLogin from './components/SchoolClientLogin';
 import PasswordRecoveryScreen from './components/PasswordRecoveryScreen';
 import { isSaveActionLabel, withSaveSuccessMessage } from './utils/saveConfirmation';
-const HumanResourcesPortal = React.lazy(() => import('./components/hr/HumanResourcesPortal'));
-const ExamsResultsModule = React.lazy(() => import('./components/ExamsResultsModule'));
-const ExamsErrorBoundary = React.lazy(() => import('./components/ExamsErrorBoundary'));
-const AIAssistantPortal = React.lazy(() => import('./components/AIAssistantPortal'));
-const SystemHealthCenter = React.lazy(() => import('./components/SystemHealthCenter'));
-const SchoolUniformManagement = React.lazy(() => import('./components/SchoolUniformManagement'));
-const SchoolTransportManagement = React.lazy(() => import('./components/SchoolTransportManagement'));
-const LibraryPortal = React.lazy(() => import('./components/LibraryPortal'));
-const InventoryManagementPortal = React.lazy(() => import('./components/inventory/InventoryManagementPortal'));
-const FixedAssetsPortal = React.lazy(() => import('./components/assets/FixedAssetsPortal'));
-const SchoolUsersPermissionsModule = React.lazy(() => import('./components/school/SchoolUsersPermissionsModule'));
+const HumanResourcesPortal = lazyWithChunkRecovery(() => import('./components/hr/HumanResourcesPortal'));
+const ExamsResultsModule = lazyWithChunkRecovery(() => import('./components/ExamsResultsModule'));
+const ExamsErrorBoundary = lazyWithChunkRecovery(() => import('./components/ExamsErrorBoundary'));
+const AIAssistantPortal = lazyWithChunkRecovery(() => import('./components/AIAssistantPortal'));
+const SystemHealthCenter = lazyWithChunkRecovery(() => import('./components/SystemHealthCenter'));
+const SchoolUniformManagement = lazyWithChunkRecovery(() => import('./components/SchoolUniformManagement'));
+const SchoolTransportManagement = lazyWithChunkRecovery(() => import('./components/SchoolTransportManagement'));
+const LibraryPortal = lazyWithChunkRecovery(() => import('./components/LibraryPortal'));
+const InventoryManagementPortal = lazyWithChunkRecovery(() => import('./components/inventory/InventoryManagementPortal'));
+const FixedAssetsPortal = lazyWithChunkRecovery(() => import('./components/assets/FixedAssetsPortal'));
+const SchoolUsersPermissionsModule = lazyWithChunkRecovery(() => import('./components/school/SchoolUsersPermissionsModule'));
 import EnterpriseProcurementQualityAudit from './certification/EnterpriseProcurementQualityAudit';
 import ModernSchoolDashboard from './components/ModernSchoolDashboard';
-const AuditLogsPortal = React.lazy(() => import('./modules/audit/presentation/AuditLogsPortal'));
+const AuditLogsPortal = lazyWithChunkRecovery(() => import('./modules/audit/presentation/AuditLogsPortal'));
 import EnterpriseCoreCertificationDashboard from './certification/EnterpriseCoreCertificationDashboard';
 import EnterpriseBusinessLogicAudit from './certification/EnterpriseBusinessLogicAudit';
 import AccountingIntegrityCertification from './certification/AccountingIntegrityCertification';
@@ -577,6 +578,8 @@ export default function App() {
 
   // Supabase Configuration State
   const [supabaseConfig, setSupabaseConfig] = useState(initialSupabaseConfig);
+  const [isSidebarCollapsed, setIsSidebarCollapsed] = useState(false);
+  const isSupabaseConnected = Boolean(supabaseConfig.url && supabaseConfig.anonKey);
   const [showConfigModal, setShowConfigModal] = useState(false);
   const [tempUrl, setTempUrl] = useState(initialSupabaseConfig.url);
   const [tempKey, setTempKey] = useState(initialSupabaseConfig.anonKey);
@@ -1495,7 +1498,17 @@ export default function App() {
     <div className="workspace-shell flex h-screen min-h-0 overflow-hidden bg-slate-50 font-sans text-slate-900 selection:bg-sky-500 selection:text-white w-full" dir="rtl">
       <GlobalNotificationToast notification={activeToast} />
       
-      {/* Sidebar removed completely as requested */}
+      <Sidebar
+        activeSection={activeSection}
+        setActiveSection={setActiveSection}
+        activeSchool={selectedSchool}
+        currentRole={currentRole}
+        isSupabaseConnected={isSupabaseConnected}
+        isSuperAdminPortalActive={isSuperAdminPortalActive}
+        setIsSuperAdminPortalActive={setIsSuperAdminPortalActive}
+        isCollapsed={isSidebarCollapsed}
+        setIsCollapsed={setIsSidebarCollapsed}
+      />
 
       {/* Main Area Wrapping Topbar and Dynamic Subview Stage */}
       <div className="flex-1 flex flex-col overflow-hidden w-full">

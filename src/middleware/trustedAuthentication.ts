@@ -364,10 +364,15 @@ export async function verifyTrustedSession(
   token: string
 ): Promise<TrustedIdentity> {
   if (!token) throw new TrustedAuthenticationError('INVALID_CREDENTIALS');
-  const { data: { user }, error } = await supabase.auth.getUser(token);
+  // The client used for the session verification must carry the presented
+  // access token on every subsequent PostgREST/RPC request.  Using the shared
+  // anonymous client here authenticates `getUser` but leaves the tenant
+  // permission queries unauthenticated, which makes a valid school session
+  // appear to have no modules after a page reload.
+  const authenticatedSupabase = getSupabaseClientForAccessToken(token) || supabase;
+  const { data: { user }, error } = await authenticatedSupabase.auth.getUser(token);
   if (error || !user) throw new TrustedAuthenticationError('INVALID_CREDENTIALS');
   const identity = extractTrustedIdentity(user);
-    const authenticatedSupabase = getSupabaseClientForAccessToken(token) || supabase;
-const tenantId = identity.schoolId ? await resolveTrustedTenantId(authenticatedSupabase) : undefined;
+  const tenantId = identity.schoolId ? await resolveTrustedTenantId(authenticatedSupabase) : undefined;
   return finalizeTrustedIdentity(authenticatedSupabase, identity, tenantId);
 }

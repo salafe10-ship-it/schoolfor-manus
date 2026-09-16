@@ -31,30 +31,6 @@ export default function Sidebar({
   setIsCollapsed
 }: SidebarProps) {
   
-  const [activeEmployeeId, setActiveEmployeeId] = React.useState(() => {
-    return localStorage.getItem('active_employee_id') || '';
-  });
-
-  const [modulesVer, setModulesVer] = React.useState(0);
-
-  React.useEffect(() => {
-    const handleStorageChange = () => {
-      setActiveEmployeeId(localStorage.getItem('active_employee_id') || '');
-      setModulesVer(v => v + 1);
-    };
-    const handleModulesChanged = () => {
-      setModulesVer(v => v + 1);
-    };
-    window.addEventListener('storage', handleStorageChange);
-    window.addEventListener('active-employee-changed', handleStorageChange);
-    window.addEventListener('erp_modules_config_changed', handleModulesChanged);
-    return () => {
-      window.removeEventListener('storage', handleStorageChange);
-      window.removeEventListener('active-employee-changed', handleStorageChange);
-      window.removeEventListener('erp_modules_config_changed', handleModulesChanged);
-    };
-  }, []);
-
   // Navigation groupings resembling a professional administrative console
   const navGroups = [
     {
@@ -160,43 +136,10 @@ export default function Sidebar({
   ];
 
   const isFeatureEnabled = (itemId: string, school: School) => {
-    // 1. Check operations center central registry first
-    try {
-      const savedModules = localStorage.getItem('erp_tenant_modules_v1');
-      if (savedModules) {
-        const schoolModules = JSON.parse(savedModules);
-        const mapToCenterKey: Record<string, string> = {
-          'students': 'students',
-          'admissions': 'students',
-          'parents': 'students',
-          'attendance': 'students',
-          'exams': 'exams',
-          'teachers': 'employees',
-          'accounts': 'accounts',
-          'treasury': 'accounts',
-          'financial_reports': 'accounts',
-          'student_accounts': 'accounts',
-          'inventory': 'inventory',
-          'buses': 'transport',
-          'school_transport': 'transport',
-        };
-        const centerKey = mapToCenterKey[itemId];
-        if (centerKey) {
-          const compositeKey = `${school.id}_${centerKey}`;
-          const config = schoolModules[compositeKey];
-          if (config) {
-            // If active is false or visible is false, it's completely hidden or inactive
-            if (config.active === false || config.visible === false) {
-              return false;
-            }
-          }
-        }
-      }
-    } catch (e) {
-      console.error('Error parsing central tenant modules:', e);
-    }
-
-    // 2. Fallback to school level feature toggles
+    // Visibility is derived from the trusted school profile only.  Browser
+    // localStorage is intentionally never allowed to hide a tenant module:
+    // it survives deployments, can belong to another school, and caused
+    // valid modules to disappear after restoring a session.
     const features = (school as any).features;
     if (!features) return true;
 
@@ -256,56 +199,12 @@ export default function Sidebar({
               return false;
             }
 
-            // SuperAdmin bypasses all restriction unless simulating normal roles
-            if (currentRole === 'SuperAdmin' && !localStorage.getItem('active_employee_id')) return true;
-
-            const savedEmployees = localStorage.getItem('edupro_employees_permissions_v1');
-            const activeEmpId = localStorage.getItem('active_employee_id') || '';
-            
-            if (!savedEmployees) return true; // Default to true if not initialized yet
-            
-            try {
-              const employeesList = JSON.parse(savedEmployees);
-              const activeEmp = employeesList.find((e: any) => e.id === activeEmpId);
-              if (!activeEmp) return true;
-              if (activeEmp.permissions.includes('*')) return true;
-
-              // Map sidebar itemId to permission matrix Category and Screen IDs
-              const mapper: Record<string, { catId: string, scrId: string }> = {
-                'dashboard': { catId: 'dashboard', scrId: 'main' },
-                'ai_assistant': { catId: 'dashboard', scrId: 'ai_assistant' },
-                'branches': { catId: 'dashboard', scrId: 'branches' },
-                'students': { catId: 'students', scrId: 'browse_students' },
-                'admissions': { catId: 'students', scrId: 'admissions_inbox' },
-                'parents': { catId: 'parent', scrId: 'parent_directory' },
-                'attendance': { catId: 'attendance', scrId: 'daily_roll' },
-                'exams': { catId: 'exams', scrId: 'exams_dashboard' },
-                'library': { catId: 'library', scrId: 'book_catalog' },
-                'teachers': { catId: 'teachers', scrId: 'teachers_directory' },
-                'accounts': { catId: 'accounts', scrId: 'chart_of_accounts' },
-                'treasury': { catId: 'treasury', scrId: 'treasury_vault' },
-                'financial_reports': { catId: 'financial_reports', scrId: 'trial_balance' },
-                'student_accounts': { catId: 'fees', scrId: 'define_fees' },
-                'inventory': { catId: 'inventory', scrId: 'inventory_stock' },
-                'buses': { catId: 'buses', scrId: 'bus_routes' },
-                'school_transport': { catId: 'buses', scrId: 'bus_routes' },
-                'uniform_management': { catId: 'uniform_management', scrId: 'uniform_sales' },
-                'school_uniform': { catId: 'uniform_management', scrId: 'uniform_sales' },
-                'audit_logs': { catId: 'audit_logs', scrId: 'audit_logs' },
-                'system_health': { catId: 'system_health', scrId: 'system_monitoring' },
-                'db_schema': { catId: 'db_schema', scrId: 'database_editor' },
-              };
-
-              const map = mapper[item.id];
-              if (!map) return true; // Allow system defaults if unmapped
-
-              const visibilityKey = `${map.catId}:${map.scrId}:visibility`;
-              const viewKey = `${map.catId}:${map.scrId}:view`;
-
-              return activeEmp.permissions.includes(visibilityKey) || activeEmp.permissions.includes(viewKey);
-            } catch (e) {
-              return true;
-            }
+            // The server remains the authorization authority.  Do not use
+            // legacy employee permissions cached in localStorage to hide
+            // routes: those records can be stale or belong to another school
+            // after a deployment.  Protected content still checks the trusted
+            // session in App.tsx and the API enforces the same permission.
+            return true;
           })
         };
       }).filter(group => group.items.length > 0);
