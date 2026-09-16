@@ -2106,50 +2106,47 @@ export async function createApp(options: { cloudflare?: boolean } = {}): Promise
   // Versioned operational snapshots, including the exams workflow and audit
   // history, can legitimately exceed Express's 100kb default. Keep a bounded
   // parser limit so canonical writes fail safely without truncating UAT cycles.
-  // Workers' node compatibility runtime cannot execute body-parser's lazy
-  // iconv-lite stream loader, so use a small native-stream parser there while
-  // preserving Express's parser for the regular Node deployment.
-  if (cloudflareMode) {
-    app.use((req, res, next) => {
-      const contentType = String(req.headers['content-type'] || '').toLowerCase();
-      const expectsJson = ['POST', 'PUT', 'PATCH'].includes(req.method || '')
-        && contentType.includes('application/json');
-      if (!expectsJson) return next();
+  // This parser intentionally avoids express.json/body-parser entirely: the
+  // Workers Node compatibility runtime cannot execute body-parser's lazy
+  // iconv-lite stream loader. Using the same small native-stream parser in
+  // both runtimes also keeps the local and Cloudflare request contracts equal.
+  app.use((req, res, next) => {
+    const contentType = String(req.headers['content-type'] || '').toLowerCase();
+    const expectsJson = ['POST', 'PUT', 'PATCH'].includes(req.method || '')
+      && contentType.includes('application/json');
+    if (!expectsJson) return next();
 
-      let rawBody = '';
-      let settled = false;
-      const fail = (error: unknown) => {
-        if (settled) return;
-        settled = true;
-        next(error instanceof Error ? error : new Error('Invalid JSON request body.'));
-      };
+    let rawBody = '';
+    let settled = false;
+    const fail = (error: unknown) => {
+      if (settled) return;
+      settled = true;
+      next(error instanceof Error ? error : new Error('Invalid JSON request body.'));
+    };
 
-      req.setEncoding('utf8');
-      req.on('data', (chunk: string) => {
-        rawBody += chunk;
-        if (Buffer.byteLength(rawBody, 'utf8') > 2 * 1024 * 1024) {
-          fail(new Error('Request body exceeds the 2mb limit.'));
-        }
-      });
-      req.on('error', fail);
-      req.on('end', () => {
-        if (settled) return;
-        settled = true;
-        if (!rawBody.trim()) {
-          (req as express.Request & { body?: unknown }).body = {};
-          return next();
-        }
-        try {
-          (req as express.Request & { body?: unknown }).body = JSON.parse(rawBody);
-          return next();
-        } catch {
-          return next(new Error('Invalid JSON request body.'));
-        }
-      });
+    req.setEncoding('utf8');
+    req.on('data', (chunk: string) => {
+      rawBody += chunk;
+      if (Buffer.byteLength(rawBody, 'utf8') > 2 * 1024 * 1024) {
+        fail(new Error('Request body exceeds the 2mb limit.'));
+      }
     });
-  } else {
-    app.use(express.json({ limit: '2mb' }));
-  }
+    req.on('error', fail);
+    req.on('end', () => {
+      if (settled) return;
+      settled = true;
+      if (!rawBody.trim()) {
+        (req as express.Request & { body?: unknown }).body = {};
+        return next();
+      }
+      try {
+        (req as express.Request & { body?: unknown }).body = JSON.parse(rawBody);
+        return next();
+      } catch {
+        return next(new Error('Invalid JSON request body.'));
+      }
+    });
+  });
   app.use('/api', (req, res, next) => {
     // Health/readiness probes and authentication routes have their own
     // semantics/limits and should not consume the general application quota.
