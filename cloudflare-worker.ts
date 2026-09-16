@@ -18,6 +18,7 @@ const runtimeEnvKeys = [
   "PGSSL_REJECT_UNAUTHORIZED", "JWT_SECRET", "PUBLIC_APP_URL",
   "ALLOW_IFRAME_EMBEDDING", "EDUPRO_AI_FORECAST_ENABLED", "GEMINI_API_KEY",
   "OPENAI_API_KEY",
+  "APP_VERSION", "BUILD_COMMIT_SHA", "BUILD_TIMESTAMP",
 ] as const;
 
 function configureProcessEnvironment(bindings: CloudflareBindings): void {

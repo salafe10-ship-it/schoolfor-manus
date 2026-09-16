@@ -1,0 +1,67 @@
+name: Cloudflare production deploy
+
+on:
+  push:
+    branches: [master]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: cloudflare-production
+  cancel-in-progress: true
+
+jobs:
+  deploy:
+    name: Validate and deploy Cloudflare Worker
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    env:
+      CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
+      CLOUDFLARE_ACCOUNT_ID: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}
+      PRODUCTION_URL: ${{ vars.CLOUDFLARE_PRODUCTION_URL || 'https://schoolfor-manus.salafe10.workers.dev' }}
+      EXPECTED_BUILD_COMMIT: ${{ github.sha }}
+    steps:
+      - name: Checkout exact production commit
+        uses: actions/checkout@v4
+
+      - name: Setup Node
+        uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+
+      - name: Require Cloudflare deployment credentials
+        shell: bash
+        run: |
+          test -n "$CLOUDFLARE_API_TOKEN" || { echo 'Missing GitHub secret CLOUDFLARE_API_TOKEN'; exit 1; }
+          test -n "$CLOUDFLARE_ACCOUNT_ID" || { echo 'Missing GitHub secret CLOUDFLARE_ACCOUNT_ID'; exit 1; }
+
+      - name: Install dependencies
+        run: npm ci
+
+      - name: Validate source and tests
+        run: |
+          npm run route-integrity
+          npm run lint
+          npm test -- --run
+
+      - name: Build release artifact
+        run: npm run build
+        env:
+          BUILD_COMMIT_SHA: ${{ github.sha }}
+          APP_VERSION: ${{ github.ref_name }}-${{ github.run_number }}
+
+      - name: Verify release artifact
+        run: npm run verify:artifact
+
+      - name: Deploy exact commit to Cloudflare
+        run: |
+          npx wrangler deploy --config wrangler.jsonc \
+            --var "APP_VERSION:${GITHUB_REF_NAME}-${GITHUB_RUN_NUMBER}" \
+            --var "BUILD_COMMIT_SHA:${GITHUB_SHA}" \
+            --var "BUILD_TIMESTAMP:$(date -u +%Y-%m-%dT%H:%M:%SZ)"
+
+      - name: Verify live Cloudflare build identity and assets
+        run: npm run smoke:production

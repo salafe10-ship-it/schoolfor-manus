@@ -1,0 +1,32 @@
+name: Cloudflare production uptime
+
+on:
+  schedule:
+    - cron: '*/5 * * * *'
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: schoolfor-manus-cloudflare-uptime
+  cancel-in-progress: false
+
+jobs:
+  probe:
+    name: Probe Cloudflare Worker
+    runs-on: ubuntu-latest
+    timeout-minutes: 3
+    env:
+      PRODUCTION_URL: ${{ vars.CLOUDFLARE_PRODUCTION_URL || 'https://schoolfor-manus.salafe10.workers.dev' }}
+    steps:
+      - name: Check health, HTML, and first asset
+        shell: bash
+        run: |
+          set -euo pipefail
+          health="$(curl --fail --silent --show-error --location --max-time 20 "$PRODUCTION_URL/api/health")"
+          echo "$health" | jq -e '.success == true and (.data.build.commit | type == "string") and (.data.build.builtAt | type == "string")' >/dev/null
+          index="$(curl --fail --silent --show-error --location --max-time 20 "$PRODUCTION_URL/")"
+          asset="$(printf '%s' "$index" | grep -oE '/assets/[^" ]+\.(js|css)' | head -n 1)"
+          test -n "$asset"
+          curl --fail --silent --show-error --location --head --max-time 20 "$PRODUCTION_URL$asset" >/dev/null
