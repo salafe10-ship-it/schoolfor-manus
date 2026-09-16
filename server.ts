@@ -7225,8 +7225,15 @@ export async function createApp(options: { cloudflare?: boolean } = {}): Promise
   // valid school screen into a misleading 502; all repository predicates
   // still use the resolved tenant, school, branch, and academic year.
   function canonicalTenantReadClient(req: express.Request) {
+    // Some adapters wrap the request and may not preserve the internal token
+    // property even though the Authorization header was verified by the
+    // middleware. Re-derive it from that same verified header so canonical
+    // Supabase reads never fall back to a slow transaction path accidentally.
+    const accessToken = (req as any).trustedAccessToken
+      || extractBearerToken(req.headers.authorization)
+      || undefined;
     return getSupabaseAdminClient()
-      || getSupabaseClientForAccessToken((req as any).trustedAccessToken)
+      || getSupabaseClientForAccessToken(accessToken)
       || getSupabaseClient()
       || undefined;
   }

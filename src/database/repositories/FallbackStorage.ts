@@ -1,5 +1,11 @@
 const isServer = typeof window === 'undefined';
 
+// Cloudflare Workers do not provide a writable project filesystem. The
+// fallback store is intentionally disabled there because canonical database
+// persistence is the only authoritative source in the deployed application.
+const isCloudflareWorkerRuntime = typeof globalThis !== 'undefined'
+  && (globalThis as typeof globalThis & { __EDUPRO_CLOUDFLARE__?: boolean }).__EDUPRO_CLOUDFLARE__ === true;
+
 let fs: any = null;
 let path: any = null;
 let DATA_DIR = '';
@@ -248,6 +254,11 @@ export class FallbackStorage {
 
   public static async initialize() {
     if (this.initialized) return;
+
+    if (isCloudflareWorkerRuntime) {
+      this.initialized = true;
+      return;
+    }
 
     if (isServer) {
       try {

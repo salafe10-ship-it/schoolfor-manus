@@ -372,7 +372,8 @@ export const StudentRepository = {
     if (existing) return existing;
     const request = authenticatedRequest(`/api/students?${requestKey}`, {
       method: "GET",
-      headers: { "Content-Type": "application/json" },
+      headers: { Accept: "application/json" },
+      signal,
       cache: "no-store"
     }).then(async response => {
       if (!response.ok) {
