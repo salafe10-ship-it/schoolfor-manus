@@ -1,4 +1,4 @@
-import { DatabaseZap, FileCode, Gauge, Lock as LockIcon, MessageSquareDot, Shield, ShieldAlert, ShieldCheck, Shirt, Sparkles, X } from 'lucide-react';
+import { DatabaseZap, FileCode, Gauge, Loader2, Lock as LockIcon, MessageSquareDot, Shield, ShieldAlert, ShieldCheck, Shirt, Sparkles, X } from 'lucide-react';
 /**
  * @license
  * SPDX-License-Identifier: Apache-2.0
@@ -135,6 +135,18 @@ async function restoreTrustedSessionWithRetry(sessionManager: TrustedSessionMana
   throw new TrustedSessionError('REQUEST_FAILED');
 }
 
+function SessionRestoreScreen() {
+  return (
+    <div className="flex min-h-screen items-center justify-center bg-gradient-to-br from-[#130b04] via-[#1a1108] to-[#100903] px-6 text-right text-amber-100" dir="rtl">
+      <div className="flex w-full max-w-md flex-col items-center rounded-3xl border border-[#d4af37]/35 bg-[#1c120c]/95 p-8 text-center shadow-2xl">
+        <Loader2 className="mb-4 h-10 w-10 animate-spin text-[#f7d174]" aria-hidden="true" />
+        <h1 className="text-lg font-black text-[#fce79a]">جاري التحقق من هوية المدرسة</h1>
+        <p className="mt-2 text-xs font-bold leading-6 text-amber-100/70">يتم تجهيز الوحدات والصلاحيات قبل عرض الشاشة، يرجى الانتظار لحظات.</p>
+      </div>
+    </div>
+  );
+}
+
 // Bulletproof copy-to-clipboard function supporting sandboxed frames and secure/non-secure origins
 export const copyTextToClipboard = async (text: string): Promise<boolean> => {
   if (navigator.clipboard) {
@@ -219,6 +231,9 @@ export default function App() {
 
   // Portal & Session Separation
   const [currentPortal, setCurrentPortalState] = useState<'login' | 'school' | 'admin'>('login');
+  const [sessionRestoreState, setSessionRestoreState] = useState<'restoring' | 'ready'>(() => (
+    sessionManager.getAccessToken() ? 'restoring' : 'ready'
+  ));
   const setCurrentPortal = (val: 'login' | 'school' | 'admin') => {
     setCurrentPortalState(val);
   };
@@ -470,38 +485,23 @@ export default function App() {
     return targetSchool;
   }, []);
 
-  // MANDATORY SECURITY GATEWAY GUARD: Protect all school pages & routes against unauthorized access
+  // Restore the session exactly once at boot. The old implementation had two
+  // overlapping restore effects: one for the portal guard and another for the
+  // initial session. Their competing state updates caused the UI to alternate
+  // between the identity shell and the operational modules on refresh.
   useEffect(() => {
-    if (currentPortal === 'school' || currentPortal === 'admin') {
-      if (!sessionManager.getAccessToken()) {
-        setCurrentPortal('login');
-        setLoginPortalMode('school');
-        setIsSuperAdminPortalActive(false);
-        setActiveSection('login');
-        return;
-      }
-
-      restoreTrustedSessionWithRetry(sessionManager)
-        .catch((error) => {
-          if (error instanceof TrustedSessionError && error.code === 'REQUEST_FAILED') {
-            triggerNotification('الاتصال بالخادم متعذر مؤقتًا؛ لم يتم إنهاء الجلسة. أعد المحاولة بعد لحظات.', 'warning');
-            return;
-          }
-          sessionManager.logout();
-          setCurrentPortal('login');
-          setLoginPortalMode('school');
-          setIsSuperAdminPortalActive(false);
-          setActiveSection('login');
-        });
+    const accessToken = sessionManager.getAccessToken();
+    if (!accessToken) {
+      setSessionRestoreState('ready');
+      return;
     }
-  }, [currentPortal, selectedSchool, sessionManager]);
 
-  // Restore a session only after the backend re-verifies the Supabase token and identity.
-  useEffect(() => {
-    if (!sessionManager.getAccessToken()) return;
+    let isActive = true;
+    setSessionRestoreState('restoring');
 
     restoreTrustedSessionWithRetry(sessionManager)
       .then(user => {
+        if (!isActive) return;
         // Reload a school URL without discarding a valid session for that
         // exact school. A session from any other school still fails closed.
         if (schoolPortalContext && !canRestoreSchoolPortalSession(schoolPortalContext, user.schoolId)) {
@@ -514,15 +514,19 @@ export default function App() {
             setPasswordRecovery({ accessToken, refreshToken });
             setCurrentPortal('login');
             setLoginPortalMode(schoolPortalContext ? 'school' : 'gateway');
+            setSessionRestoreState('ready');
             return;
           }
         }
         applyTrustedSessionUser(user);
         setCurrentPortal(schoolPortalContext ? 'school' : (hasTrustedPlatformAdminAccess(user) ? 'admin' : 'school'));
+        setSessionRestoreState('ready');
       })
       .catch((error) => {
+        if (!isActive) return;
         if (error instanceof TrustedSessionError && error.code === 'REQUEST_FAILED') {
           triggerNotification('الاتصال بالخادم متعذر مؤقتًا؛ لم يتم إنهاء الجلسة. أعد المحاولة بعد لحظات.', 'warning');
+          setSessionRestoreState('ready');
           return;
         }
         sessionManager.logout();
@@ -530,8 +534,23 @@ export default function App() {
         setLoginPortalMode('school');
         setIsSuperAdminPortalActive(false);
         setActiveSection('login');
+        setSessionRestoreState('ready');
       });
-  }, [applyTrustedSessionUser, saasSchools, schoolPortalContext, sessionManager]);
+    return () => {
+      isActive = false;
+    };
+  }, [applyTrustedSessionUser, schoolPortalContext, sessionManager]);
+
+  // Any later attempt to open a protected portal without a token fails closed,
+  // but it does not start a second restore request.
+  useEffect(() => {
+    if ((currentPortal === 'school' || currentPortal === 'admin') && !sessionManager.getAccessToken()) {
+      setCurrentPortal('login');
+      setLoginPortalMode('school');
+      setIsSuperAdminPortalActive(false);
+      setActiveSection('login');
+    }
+  }, [currentPortal, sessionManager]);
 
   // App General Navigation
   const [isSuperAdminPortalActive, setIsSuperAdminPortalActive] = useState<boolean>(false);
@@ -1455,6 +1474,12 @@ export default function App() {
 
   // Dynamic filter lists for specific school elements
   const currentBranchesOfSchool = branches.filter(b => b.schoolId === selectedSchool.id);
+
+  // Never render the login/identity shell while a persisted session is still
+  // being verified. This keeps the first paint deterministic on refresh.
+  if (sessionRestoreState === 'restoring') {
+    return <SessionRestoreScreen />;
+  }
 
   if (currentPortal === 'login') {
     if (passwordRecovery) {
