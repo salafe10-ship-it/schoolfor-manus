@@ -367,6 +367,7 @@ export async function verifyTrustedSession(
   const { data: { user }, error } = await supabase.auth.getUser(token);
   if (error || !user) throw new TrustedAuthenticationError('INVALID_CREDENTIALS');
   const identity = extractTrustedIdentity(user);
-  const tenantId = identity.schoolId ? await resolveTrustedTenantId(supabase) : undefined;
-  return finalizeTrustedIdentity(supabase, identity, tenantId);
+    const authenticatedSupabase = getSupabaseClientForAccessToken(token) || supabase;
+const tenantId = identity.schoolId ? await resolveTrustedTenantId(authenticatedSupabase) : undefined;
+  return finalizeTrustedIdentity(authenticatedSupabase, identity, tenantId);
 }
