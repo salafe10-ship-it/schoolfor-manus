@@ -890,14 +890,19 @@ export default function App() {
   };
 
   // Portal Authentication Controllers
-  const authenticateAndOpenSession = async (identifier: string, password: string, rememberMe = false) => {
+  const authenticateAndOpenSession = async (
+    identifier: string,
+    password: string,
+    rememberMe = false,
+    portalContext = schoolPortalContext,
+  ) => {
     if (!identifier.trim() || !password) {
       triggerNotification('يرجى إدخال بيانات الدخول كاملة', 'warning');
       return false;
     }
 
     try {
-      const user = await sessionManager.login(identifier, password, rememberMe, schoolPortalContext);
+      const user = await sessionManager.login(identifier, password, rememberMe, portalContext);
       if (user.forcePasswordChange) {
         const accessToken = sessionManager.getAccessToken();
         const refreshToken = sessionManager.getRefreshToken();
@@ -929,7 +934,7 @@ export default function App() {
   };
 
   const handleSchoolLogin = (username: string, password: string, rememberMe = false) => {
-    return authenticateAndOpenSession(username, password, rememberMe);
+    return authenticateAndOpenSession(username, password, rememberMe, schoolPortalContext);
   };
 
   const handleForgotPassword = async (identifier: string): Promise<boolean> => {
