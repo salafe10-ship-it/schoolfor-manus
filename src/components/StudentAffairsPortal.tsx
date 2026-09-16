@@ -279,6 +279,7 @@ export default function StudentAffairsPortal({
     pendingDocsCount: 0
   });
   const [academicContextError, setAcademicContextError] = useState<string | null>(null);
+  const [isAcademicContextLoading, setIsAcademicContextLoading] = useState(false);
   const [canonicalSections, setCanonicalSections] = useState<string[]>([]);
   const academicYearLabel = String(selectedSchool.academicYear || '').trim() || 'غير محددة';
   const maximumAcademicClassCapacity = useMemo(() => {
@@ -294,6 +295,30 @@ export default function StudentAffairsPortal({
 
   useEffect(() => {
     const controller = new AbortController();
+    setIsAcademicContextLoading(true);
+
+    const applyAcademicStructure = (structure: any, nextYearLabel?: string) => {
+      const nextStages = Array.isArray(structure?.stages) ? structure.stages : [];
+      const nextGrades = Array.isArray(structure?.grades) ? structure.grades : [];
+      const nextClasses = Array.isArray(structure?.classes) ? structure.classes : [];
+      const nextSections = Array.isArray(structure?.sections)
+        ? structure.sections.map((section: unknown) => String(section || '').trim()).filter(Boolean)
+        : [];
+      if (!nextStages.length || !nextGrades.length) return false;
+
+      setStages?.(nextStages);
+      setGrades?.(nextGrades);
+      setAcademicClasses?.(nextClasses);
+      setCanonicalSections(nextSections);
+      setTransferTargetSection(current => current && nextSections.includes(current) ? current : (nextSections[0] || ''));
+      const firstStageId = String(nextStages.find((stage: any) => stage?.isActive !== false)?.id || '');
+      const firstGradeId = String(nextGrades.find((grade: any) => String(grade?.stageId || '') === firstStageId && grade?.isActive !== false)?.id || '');
+      setTransferTargetStage(current => current && nextStages.some((stage: any) => String(stage?.id) === current) ? current : firstStageId);
+      setTransferTargetGrade(current => current && nextGrades.some((grade: any) => String(grade?.id) === current) ? current : firstGradeId);
+      if (nextYearLabel) setAcademicContextError(nextYearLabel);
+      return true;
+    };
+
     authenticatedRequest('/api/academic/context', {
       method: 'GET',
       headers: { Accept: 'application/json' },
@@ -304,21 +329,37 @@ export default function StudentAffairsPortal({
         const payload = await response.json().catch(() => ({}));
         if (!response.ok) throw new Error(payload?.message || 'تعذر تحميل الهيكل الأكاديمي الموثوق.');
         const context = payload?.data || {};
-        const canonicalStages = Array.isArray(context.stages) ? context.stages : [];
-        const canonicalGrades = Array.isArray(context.grades) ? context.grades : [];
-        setStages?.(canonicalStages);
-        setGrades?.(canonicalGrades);
-        setAcademicClasses?.(Array.isArray(context.classes) ? context.classes : []);
-        const canonicalSectionValues = Array.isArray(context.sections) ? context.sections.map((section: unknown) => String(section || '').trim()).filter(Boolean) : [];
-        setCanonicalSections(canonicalSectionValues);
-        setTransferTargetSection(current => current && canonicalSectionValues.includes(current) ? current : (canonicalSectionValues[0] || ''));
-        const firstStageId = String(canonicalStages.find((stage: any) => stage?.isActive !== false)?.id || '');
-        setTransferTargetStage(current => current && canonicalStages.some((stage: any) => String(stage?.id) === current) ? current : firstStageId);
-        setTransferTargetGrade(current => current && canonicalGrades.some((grade: any) => String(grade?.id) === current) ? current : String(canonicalGrades.find((grade: any) => String(grade?.stageId) === firstStageId && grade?.isActive !== false)?.id || ''));
+        if (!applyAcademicStructure(context, '')) throw new Error('الهيكل الأكاديمي الموثوق غير مكتمل.');
         setAcademicContextError(null);
       })
-      .catch(error => {
-        if (error?.name !== 'AbortError') setAcademicContextError(error?.message || 'تعذر تحميل الهيكل الأكاديمي الموثوق.');
+      .catch(async error => {
+        if (error?.name === 'AbortError') return;
+        try {
+          // A missing active year should not make already-configured stage,
+          // grade, and section selectors unusable. The setup endpoint exposes
+          // the same trusted structure without requiring the current year.
+          const fallbackResponse = await authenticatedRequest('/api/academic/setup', {
+            method: 'GET',
+            headers: { Accept: 'application/json' },
+            cache: 'no-store',
+            signal: controller.signal
+          });
+          const fallbackPayload = await fallbackResponse.json().catch(() => ({}));
+          if (!fallbackResponse.ok || !fallbackPayload?.success) throw error;
+          const fallbackData = fallbackPayload.data || {};
+          const fallbackYear = fallbackData.year || fallbackData.years?.[0];
+          const fallbackYearLabel = fallbackYear
+            ? `تم تحميل الهيكل الأكاديمي. السنة الحالية تحتاج اعتمادًا: ${fallbackYear.name || fallbackYear.code}`
+            : 'تم تحميل الهيكل الأكاديمي، لكن لا توجد سنة دراسية فعالة بعد.';
+          if (!applyAcademicStructure(fallbackData.structure || {}, fallbackYearLabel)) throw error;
+        } catch (fallbackError: any) {
+          if (fallbackError?.name !== 'AbortError') {
+            setAcademicContextError(error?.message || 'تعذر تحميل الهيكل الأكاديمي الموثوق.');
+          }
+        }
+      })
+      .finally(() => {
+        if (!controller.signal.aborted) setIsAcademicContextLoading(false);
       });
     return () => controller.abort();
   }, [selectedSchool.id, setStages, setGrades, setAcademicClasses]);
@@ -2505,8 +2546,8 @@ export default function StudentAffairsPortal({
           MODAL 1: ADD / EDIT STUDENT WIZARD
          ========================================== */}
       {isModalOpen && (
-        <div className="fixed inset-0 z-50 bg-black/70 backdrop-blur-xs flex items-center justify-center p-4 overflow-y-auto">
-          <div className="bg-[#fffefc] text-slate-900 border-2 border-[#d4af37] rounded-3xl w-full max-w-4xl shadow-2xl overflow-hidden animate-in fade-in zoom-in-95 duration-200 my-auto">
+        <div className="fixed inset-0 z-50 bg-black/70 backdrop-blur-xs flex items-center justify-center p-3 sm:p-5 overflow-y-auto">
+          <div className="bg-[#fffefc] text-slate-900 border-2 border-[#d4af37] rounded-3xl w-full max-w-5xl max-h-[calc(100vh-1.5rem)] sm:max-h-[calc(100vh-2.5rem)] shadow-2xl overflow-hidden animate-in fade-in zoom-in-95 duration-200 my-auto flex flex-col">
             
             {/* Modal Header */}
             <div className="bg-gradient-to-r from-[#1c120c] via-[#2d1e12] to-[#1a100a] text-white px-6 py-4 flex items-center justify-between">
@@ -2550,14 +2591,24 @@ export default function StudentAffairsPortal({
             </div>
 
             {/* Modal Body Form */}
-            <div className="p-6 space-y-4">
+            <div className="p-5 sm:p-7 space-y-4 overflow-y-auto flex-1 min-h-0">
               {studentSaveError && (
                 <div role="alert" className="rounded-xl border border-rose-300 bg-rose-50 px-4 py-3 text-xs font-black text-rose-800" dir="rtl">
                   {studentSaveError}
                 </div>
               )}
+              {academicContextError && (
+                <div role="status" className="flex flex-col sm:flex-row sm:items-center justify-between gap-3 rounded-xl border border-amber-300 bg-amber-50 px-4 py-3 text-xs font-black text-amber-900" dir="rtl">
+                  <span>{academicContextError}</span>
+                  {setActiveSection && (
+                    <button type="button" onClick={() => setActiveSection('academic')} className="shrink-0 rounded-lg bg-amber-200 px-3 py-2 text-[11px] font-black text-amber-950 hover:bg-amber-300">
+                      فتح التهيئة الأكاديمية
+                    </button>
+                  )}
+                </div>
+              )}
               {modalTab === 'basic' && (
-                <div className="grid grid-cols-1 md:grid-cols-4 gap-6">
+                <div className="grid grid-cols-1 md:grid-cols-4 gap-5 lg:gap-7 items-start">
                   
                   {/* Photo Frame */}
                   <div className="md:col-span-1 flex flex-col items-center space-y-3">
@@ -2598,8 +2649,8 @@ export default function StudentAffairsPortal({
                   <div className="md:col-span-3 space-y-4 text-xs">
                     
                     {/* Row 1: Full Name & Code */}
-                    <div className="grid grid-cols-1 sm:grid-cols-4 gap-4">
-                      <div className="sm:col-span-2">
+                    <div className="grid grid-cols-1 sm:grid-cols-4 gap-4 items-start">
+                      <div className="sm:col-span-2 min-w-0">
                         <label className="block text-slate-800 font-extrabold mb-1">الاسم رباعي <span className="text-rose-600">*</span></label>
                         <input 
                           type="text"
@@ -2610,7 +2661,7 @@ export default function StudentAffairsPortal({
                         />
                       </div>
 
-                      <div>
+                      <div className="min-w-0">
                         <label className="block text-slate-800 font-extrabold mb-1">رقم الطالب الأكاديمي <span className="text-slate-500">(تلقائي)</span></label>
                         <input 
                           type="text"
@@ -2624,7 +2675,7 @@ export default function StudentAffairsPortal({
                         {!isEditMode && <p className="mt-1 text-[10px] font-bold text-slate-500">يبدأ من 00001 ويزيد تلقائيًا داخل المدرسة الحالية.</p>}
                       </div>
 
-                      <div>
+                      <div className="min-w-0">
                         <label className="block text-slate-800 font-extrabold mb-1">رقم الهوية الوطنية</label>
                         <input
                           type="text"
@@ -2649,8 +2700,8 @@ export default function StudentAffairsPortal({
                     </div>
 
                     {/* Row 2: Gender & Birth Date */}
-                    <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
-                      <div>
+                    <div className="grid grid-cols-1 sm:grid-cols-3 gap-4 items-start">
+                      <div className="min-w-0">
                         <label className="block text-slate-800 font-extrabold mb-1">الجنس</label>
                         <select 
                           value={formData.gender}
@@ -2662,7 +2713,7 @@ export default function StudentAffairsPortal({
                         </select>
                       </div>
 
-                      <div>
+                      <div className="min-w-0">
                         <label className="block text-slate-800 font-extrabold mb-1">تاريخ الميلاد <span className="text-rose-600">*</span></label>
                         <input 
                           type="date"
@@ -2675,7 +2726,7 @@ export default function StudentAffairsPortal({
                         />
                       </div>
 
-                      <div>
+                      <div className="min-w-0">
                         <label className="block text-slate-800 font-extrabold mb-1">حالة القيد <span className="text-rose-600">*</span></label>
                         <select
                           value={formData.status}
@@ -2694,9 +2745,9 @@ export default function StudentAffairsPortal({
                     </div>
 
                     {/* Row 3: Stage, Grade, Section */}
-                    <div className="grid grid-cols-1 sm:grid-cols-3 gap-4">
-                      <div>
-                        <label className="block text-slate-800 font-extrabold mb-1">المرحلة الدراسية <span className="text-emerald-700">(يُدار عبر الالتحاق)</span></label>
+                    <div className="grid grid-cols-1 sm:grid-cols-3 gap-4 items-start">
+                      <div className="min-w-0">
+                        <label className="flex min-h-[2.5rem] items-end text-slate-800 font-extrabold mb-1">المرحلة الدراسية <span className="text-emerald-700">(يُدار عبر الالتحاق)</span></label>
                         <select 
                           value={formData.stage}
                           onChange={event => {
@@ -2710,7 +2761,8 @@ export default function StudentAffairsPortal({
                             setFormData(current => ({ ...current, stage: stageId, grade: nextGradeId, classSection: section }));
                           }}
                           disabled={activeStageOptions.length === 0}
-                          title={academicContextError || 'اختر المرحلة من الهيكل الأكاديمي الموثوق'}
+                          aria-disabled={activeStageOptions.length === 0}
+                          title={academicContextError || (isAcademicContextLoading ? 'جارٍ تحميل الهيكل الأكاديمي...' : 'اختر المرحلة من الهيكل الأكاديمي الموثوق')}
                           className="w-full bg-white border border-slate-300 rounded-xl p-2.5 text-xs font-bold text-slate-900 focus:border-[#9a6a1d] outline-none shadow-xs disabled:bg-slate-100 disabled:text-slate-500 disabled:cursor-not-allowed"
                         >
                           <option value="">اختر المرحلة</option>
@@ -2718,8 +2770,8 @@ export default function StudentAffairsPortal({
                         </select>
                       </div>
 
-                      <div>
-                        <label className="block text-slate-800 font-extrabold mb-1">الصف الدراسي <span className="text-emerald-700">(يُدار عبر الالتحاق)</span></label>
+                      <div className="min-w-0">
+                        <label className="flex min-h-[2.5rem] items-end text-slate-800 font-extrabold mb-1">الصف الدراسي <span className="text-emerald-700">(يُدار عبر الالتحاق)</span></label>
                         <select 
                           value={formData.grade}
                           onChange={event => {
@@ -2731,7 +2783,8 @@ export default function StudentAffairsPortal({
                             setFormData(current => ({ ...current, grade: gradeId, classSection: section }));
                           }}
                           disabled={formGradeOptions.length === 0}
-                          title={academicContextError || 'اختر الصف من المرحلة المحددة'}
+                          aria-disabled={formGradeOptions.length === 0}
+                          title={academicContextError || (isAcademicContextLoading ? 'جارٍ تحميل الهيكل الأكاديمي...' : 'اختر الصف من المرحلة المحددة')}
                           className="w-full bg-white border border-slate-300 rounded-xl p-2.5 text-xs font-bold text-slate-900 focus:border-[#9a6a1d] outline-none shadow-xs disabled:bg-slate-100 disabled:text-slate-500 disabled:cursor-not-allowed"
                         >
                           <option value="">اختر الصف</option>
@@ -2739,13 +2792,14 @@ export default function StudentAffairsPortal({
                         </select>
                       </div>
 
-                      <div>
-                        <label className="block text-slate-800 font-extrabold mb-1">{sectionFieldLabel} <span className="text-emerald-700">(يُدار عبر الالتحاق)</span></label>
+                      <div className="min-w-0">
+                        <label className="flex min-h-[2.5rem] items-end text-slate-800 font-extrabold mb-1">{sectionFieldLabel} <span className="text-emerald-700">(يُدار عبر الالتحاق)</span></label>
                         <select 
                           value={formData.classSection}
                           onChange={event => setFormData(current => ({ ...current, classSection: event.target.value }))}
                           disabled={formSectionOptions.length === 0}
-                          title={academicContextError || (isModernFamilySchool ? `اختر ${sectionTerm} من الفصول النشطة للصف المحدد` : 'اختر الشعبة من الفصول النشطة للصف المحدد')}
+                          aria-disabled={formSectionOptions.length === 0}
+                          title={academicContextError || (isAcademicContextLoading ? 'جارٍ تحميل الفصول الأكاديمية...' : (isModernFamilySchool ? `اختر ${sectionTerm} من الفصول النشطة للصف المحدد` : 'اختر الشعبة من الفصول النشطة للصف المحدد'))}
                           className="w-full bg-white border border-slate-300 rounded-xl p-2.5 text-xs font-bold text-slate-900 focus:border-[#9a6a1d] outline-none shadow-xs disabled:bg-slate-100 disabled:text-slate-500 disabled:cursor-not-allowed"
                         >
                           <option value="">{isModernFamilySchool ? `اختر ${sectionTerm}` : 'اختر الشعبة'}</option>
@@ -3086,7 +3140,7 @@ export default function StudentAffairsPortal({
             </div>
 
             {/* Modal Footer */}
-            <div className="bg-[#f5eeea] border-t border-amber-900/10 px-6 py-4 flex flex-col sm:flex-row items-center justify-between gap-3">
+            <div className="bg-[#f5eeea] border-t border-amber-900/10 px-5 sm:px-7 py-4 flex flex-col sm:flex-row items-center justify-between gap-3 shrink-0">
               <button 
                 type="button"
                 onClick={() => setIsModalOpen(false)}
