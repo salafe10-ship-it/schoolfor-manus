@@ -9,6 +9,10 @@
     {
       "binding": "HYPERDRIVE",
       "id": "eee116c2737343ed9621cf5e841da91a"
+    },
+    {
+      "binding": "HYPERDRIVE_ADMIN",
+      "id": "96f103ef23834120ae4afa2f5df32364"
     }
   ],
   "alias": {
