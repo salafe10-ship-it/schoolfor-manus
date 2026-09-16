@@ -27,9 +27,20 @@ function configureProcessEnvironment(bindings: CloudflareBindings): void {
     if (typeof value === "string" && value.length > 0) processEnvironment[key] = value;
   }
   if (bindings.HYPERDRIVE?.connectionString) {
+    // Hyperdrive intentionally hides the upstream Supabase project ref in its
+    // proxy URL. Preserve the configured origin so the server can still run
+    // its project-alignment guard without replacing the runtime connection.
+    const configuredDatabaseUrl = typeof bindings.DATABASE_URL === 'string'
+      ? bindings.DATABASE_URL
+      : processEnvironment.DATABASE_URL;
+    if (configuredDatabaseUrl) processEnvironment.EDUPRO_CONFIGURED_DATABASE_URL = configuredDatabaseUrl;
     processEnvironment.DATABASE_URL = bindings.HYPERDRIVE.connectionString;
   }
   if (bindings.HYPERDRIVE_ADMIN?.connectionString) {
+    const configuredAdminDatabaseUrl = typeof bindings.PLATFORM_ADMIN_DATABASE_URL === 'string'
+      ? bindings.PLATFORM_ADMIN_DATABASE_URL
+      : processEnvironment.PLATFORM_ADMIN_DATABASE_URL;
+    if (configuredAdminDatabaseUrl) processEnvironment.EDUPRO_CONFIGURED_ADMIN_DATABASE_URL = configuredAdminDatabaseUrl;
     processEnvironment.PLATFORM_ADMIN_DATABASE_URL = bindings.HYPERDRIVE_ADMIN.connectionString;
   }
 }

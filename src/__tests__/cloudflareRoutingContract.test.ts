@@ -17,5 +17,7 @@ describe('Cloudflare API routing contract', () => {
     expect(wrangler).toContain('"binding": "HYPERDRIVE_ADMIN"');
     expect(worker).toContain('HYPERDRIVE_ADMIN?: { connectionString: string }');
     expect(worker).toContain('processEnvironment.PLATFORM_ADMIN_DATABASE_URL = bindings.HYPERDRIVE_ADMIN.connectionString');
+    expect(worker).toContain('processEnvironment.EDUPRO_CONFIGURED_DATABASE_URL = configuredDatabaseUrl');
+    expect(worker).toContain('processEnvironment.EDUPRO_CONFIGURED_ADMIN_DATABASE_URL = configuredAdminDatabaseUrl');
   });
 });

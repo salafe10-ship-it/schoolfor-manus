@@ -128,8 +128,11 @@ const productionLikeEnvironment = deploymentEnvironment === 'staging'
 const unsafeLocalDatabaseRoleOptIn = process.env.ALLOW_UNSAFE_LOCAL_DATABASE_ROLE === 'true';
 const databaseTargetAlignment = inspectSupabaseDatabaseTargetAlignment({
   supabaseUrl: process.env.SUPABASE_URL || process.env.NEXT_PUBLIC_SUPABASE_URL,
-  databaseUrl: process.env.DATABASE_URL || process.env.DIRECT_URL,
-  platformAdminDatabaseUrl: process.env.PLATFORM_ADMIN_DATABASE_URL,
+  // Cloudflare Hyperdrive exposes a proxy URL that cannot encode the
+  // Supabase project ref. The Worker preserves the original configured URLs
+  // solely for this guard while the pools continue using Hyperdrive.
+  databaseUrl: process.env.EDUPRO_CONFIGURED_DATABASE_URL || process.env.DATABASE_URL || process.env.DIRECT_URL,
+  platformAdminDatabaseUrl: process.env.EDUPRO_CONFIGURED_ADMIN_DATABASE_URL || process.env.PLATFORM_ADMIN_DATABASE_URL,
 });
 if (productionLikeEnvironment && !databaseTargetAlignment.aligned) {
   // Never connect a trusted Supabase Auth identity to a different PostgreSQL
