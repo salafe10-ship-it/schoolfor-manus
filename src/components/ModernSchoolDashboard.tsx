@@ -53,8 +53,8 @@ function EmptyPanel({ title, description }: { title: string; description: string
       <div className="mx-auto mb-1.5 flex h-8 w-8 items-center justify-center rounded-full bg-[#2a1a0e] text-amber-300">
         <CheckCircle2 className="h-3.5 w-3.5" aria-hidden="true" />
       </div>
-      <h4 className="text-[11px] font-black text-slate-800">{title}</h4>
-      <p className="mt-1 text-[9px] font-bold leading-relaxed text-slate-500">{description}</p>
+      <h4 className="text-xs font-black text-slate-800">{title}</h4>
+      <p className="mt-1 text-[10px] font-bold leading-relaxed text-slate-500">{description}</p>
     </div>
   );
 }
@@ -76,17 +76,17 @@ function MetricCard({
     <button
       type="button"
       onClick={onClick}
-      className="group flex min-h-[104px] flex-col justify-between rounded-2xl border-2 border-[#d4af37]/30 bg-gradient-to-b from-[#fffefc] via-[#fbf8f0] to-[#f5eeea] p-3 text-right shadow-md transition-all hover:-translate-y-0.5 hover:border-[#d4af37] hover:shadow-xl focus:outline-none focus:ring-2 focus:ring-[#8b6508]/50"
+      className="group flex min-h-[110px] flex-col justify-between rounded-2xl border-2 border-[#d4af37]/30 bg-gradient-to-b from-[#fffefc] via-[#fbf8f0] to-[#f5eeea] p-3 text-right shadow-md transition-all hover:-translate-y-0.5 hover:border-[#d4af37] hover:shadow-xl focus:outline-none focus:ring-2 focus:ring-[#8b6508]/50"
     >
       <span className="flex items-center justify-between gap-2">
-        <span className="text-[10px] font-black text-slate-700">{label}</span>
-        <span className="flex h-8 w-8 shrink-0 items-center justify-center rounded-xl bg-[#2a1a0e] text-amber-300 shadow-sm transition-transform group-hover:scale-105">
-          <Icon className="h-4 w-4" aria-hidden="true" />
+        <span className="text-[11px] font-black text-slate-700">{label}</span>
+        <span className="flex h-9 w-9 shrink-0 items-center justify-center rounded-xl bg-[#2a1a0e] text-amber-300 shadow-sm transition-transform group-hover:scale-105">
+          <Icon className="h-[18px] w-[18px]" aria-hidden="true" />
         </span>
       </span>
       <span className="mt-1 block text-right">
-        <span className="block text-xl font-black tracking-tight text-slate-900">{value}</span>
-        <span className="mt-0.5 block text-[9px] font-bold text-slate-500">{detail}</span>
+        <span className="block text-2xl font-black tracking-tight text-slate-900">{value}</span>
+        <span className="mt-0.5 block text-[10px] font-bold text-slate-500">{detail}</span>
       </span>
     </button>
   );
@@ -269,7 +269,7 @@ export default function ModernSchoolDashboard({
         <div className="rounded-3xl border-2 border-[#d4af37]/30 bg-gradient-to-b from-[#fffefc] to-[#f8f3ea] p-3 shadow-lg lg:col-span-3">
           <div className="mb-2 flex items-center gap-2 border-b border-amber-900/10 pb-2">
             <div className="flex h-7 w-7 items-center justify-center rounded-xl bg-[#2a1a0e] text-amber-400"><ShieldCheck className="h-3.5 w-3.5" aria-hidden="true" /></div>
-            <h3 className="text-xs font-black text-slate-900">تنبيهات اليوم</h3>
+            <h3 className="text-sm font-black text-slate-900">تنبيهات اليوم</h3>
           </div>
           <EmptyPanel title="لا توجد تنبيهات موثقة" description={isCustomerProductionPortal ? 'لا توجد تنبيهات تستدعي المتابعة اليوم.' : 'لم يتم تمرير مصدر Notifications حي إلى Dashboard، لذلك لا تُعرض أرقام أو تنبيهات ثابتة.'} />
         </div>
@@ -277,7 +277,7 @@ export default function ModernSchoolDashboard({
         <div className="rounded-3xl border-2 border-[#d4af37]/30 bg-gradient-to-b from-[#fffefc] to-[#f8f3ea] p-4 shadow-lg lg:col-span-9">
           <div className="mb-3 flex items-center gap-2 border-b border-amber-900/10 pb-2">
             <div className="flex h-7 w-7 items-center justify-center rounded-xl bg-[#2a1a0e] text-amber-400"><Grid2X2 className="h-3.5 w-3.5" aria-hidden="true" /></div>
-            <h3 className="text-xs font-black text-slate-900">الوحدات الرئيسية</h3>
+            <h3 className="text-sm font-black text-slate-900">الوحدات الرئيسية</h3>
           </div>
           <div className="grid grid-cols-2 gap-2 sm:grid-cols-3 md:grid-cols-4 xl:grid-cols-5">
             {quickActions.filter(({ section }) => canAccessSection(section)).map(({ section, label, icon: Icon }) => (
@@ -285,10 +285,10 @@ export default function ModernSchoolDashboard({
                 key={`${section}-${label}`}
                 type="button"
                 onClick={() => handleNav(section)}
-                className="flex h-20 flex-col items-center justify-center gap-1.5 rounded-2xl border-2 border-[#d4af37]/30 bg-gradient-to-b from-white to-[#fbf8f0] p-2.5 text-center transition-all hover:-translate-y-1 hover:border-[#d4af37] hover:shadow-lg focus:outline-none focus:ring-2 focus:ring-[#8b6508]/50"
+                className="flex h-[86px] flex-col items-center justify-center gap-1.5 rounded-2xl border-2 border-[#d4af37]/30 bg-gradient-to-b from-white to-[#fbf8f0] p-2.5 text-center transition-all hover:-translate-y-1 hover:border-[#d4af37] hover:shadow-lg focus:outline-none focus:ring-2 focus:ring-[#8b6508]/50"
               >
-                <span className="flex h-8 w-8 items-center justify-center rounded-xl bg-[#2a1a0e] text-amber-300"><Icon className="h-4 w-4" aria-hidden="true" /></span>
-                <span className="text-[10px] font-black text-slate-800">{label}</span>
+                <span className="flex h-9 w-9 items-center justify-center rounded-xl bg-[#2a1a0e] text-amber-300"><Icon className="h-[18px] w-[18px]" aria-hidden="true" /></span>
+                <span className="text-[11px] font-black text-slate-800">{label}</span>
               </button>
             ))}
           </div>
