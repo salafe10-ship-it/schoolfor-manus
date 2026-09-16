@@ -1,7 +1,6 @@
 import express from "express";
 import path from "path";
 import fs from "node:fs";
-import { createServer as createViteServer } from "vite";
 import dotenv from "dotenv";
 import helmet from "helmet";
 
@@ -13182,6 +13181,7 @@ ${JSON.stringify(snapshot)}
 
   // Serve Frontend with Vite Dev Server in Development or static files in Production
   if (!cloudflareMode && !isProduction) {
+    const { createServer: createViteServer } = await import("vite");
     const vite = await createViteServer({
       server: { middlewareMode: true },
       appType: "spa",
