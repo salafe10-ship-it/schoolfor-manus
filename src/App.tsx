@@ -1,4 +1,4 @@
-import { Activity, AlertTriangle, ArrowRightLeft, BarChart3, BookOpen, Building2, Bus, Calendar, CalendarCheck, Check, CheckCircle2, ChevronDown, ChevronUp, Container, CreditCard, Database, DatabaseZap, DollarSign, Download, Edit3, FileBadge2, FileCode, FileDown, FileSpreadsheet, FileText, Gauge, Globe2, GraduationCap, HardDriveDownload, KeyRound, Lock as LockIcon, LogOut, MessageSquareDot, Plus, Printer, RefreshCw, Search, Settings, Settings2, Shield, ShieldAlert, ShieldCheck, Shirt, Sliders, SlidersHorizontal, Sparkles, Trash2, User, UserSquare, Users, WalletCards, Workflow, X } from 'lucide-react';
+import { DatabaseZap, FileCode, Gauge, Lock as LockIcon, MessageSquareDot, Shield, ShieldAlert, ShieldCheck, Shirt, Sparkles, X } from 'lucide-react';
 /**
  * @license
  * SPDX-License-Identifier: Apache-2.0
@@ -6,13 +6,10 @@ import { Activity, AlertTriangle, ArrowRightLeft, BarChart3, BookOpen, Building2
 
 import { storageService } from './services/storage/StorageService';
 import { EnterpriseLogger } from './database/services/EnterpriseLogger';
-import { NotificationEngine, NotificationType, NotificationCategory } from './database/services/NotificationEngine';
+import { NotificationEngine, NotificationType } from './database/services/NotificationEngine';
 import * as React from 'react';
 import { useState, useMemo, useEffect, useCallback, useRef } from 'react';
 import { lazyWithChunkRecovery } from './utils/lazyWithChunkRecovery';
-import Sidebar from './components/Sidebar';
-import EnterpriseActionToolbar from './components/shared/EnterpriseActionToolbar';
-import TopNavigation from './components/TopNavigation';
 import Topbar from './components/Topbar';
 import SuperAdminView from './components/SuperAdminView';
 const StudentFinancialPortal = React.lazy(() => import('./components/StudentFinancialPortal'));
@@ -62,11 +59,8 @@ import SystemSettingsPortal from './components/SystemSettingsPortal';
 import { 
   branchesSeed, 
   teachersSeed, 
-  employeesSeed, 
-  examTemplates, 
   initialAttendance, 
   invoicesSeed, 
-  inventorySeed, 
   auditLogsSeed, 
   defaultPermissions,
   supabaseSchemaSQL,
@@ -78,27 +72,21 @@ import {
   costCentersSeed
 } from './database/seed/mockData';
 import { StudentRepository as StudentApiRepository } from './components/student-affairs/repository/StudentRepository';
-import { AuditRepository } from './database/repositories/AuditRepository';
 import { FallbackStorage } from './database/repositories/FallbackStorage';
 import { 
   School, 
   Branch, 
   Student, 
   Teacher, 
-  Employee, 
   Invoice, 
-  InventoryItem, 
   AuditLog, 
   UserRole, 
-  Permission, 
-  SchoolClass,
   Stage,
   Grade,
   AcademicClass,
   CostCenter
 } from './types';
-import { TransactionService } from './database/transactions/TransactionService';
-import { useCurrency, saveCurrencyConfig, formatAmount } from './utils/currency';
+import { useCurrency } from './utils/currency';
 import { TrustedSessionError, TrustedSessionManager, TrustedSessionUser } from './middleware/trustedSessionManager';
 import { canAccessSection } from './authorization/ClientAuthorization';
 import { canonicalSectionRoute } from './navigation/CanonicalSectionRoute';
@@ -577,9 +565,6 @@ export default function App() {
     }
   }, [trustedSessionUser, activeSection, isCustomerProductionPortal]);
 
-  const [gatewaySearchQuery, setGatewaySearchQuery] = useState<string>('');
-  const [gatewayCategory, setGatewayCategory] = useState<string>('all');
-  const [sidebarCollapsed, setSidebarCollapsed] = useState<boolean>(false);
   const [settingsTab, setSettingsTab] = useState<'rbac' | 'currency' | 'comprehensive'>('comprehensive');
   const [currencyForm, setCurrencyForm] = useState<any>(currencyConfig);
   
@@ -600,9 +585,7 @@ export default function App() {
   // hydrates this collection from the authenticated server session.
   const [students, setStudents] = useState<Student[]>([]);
   const [teachers, setTeachers] = useState<Teacher[]>(() => canonicalPersistenceRequired ? [] : teachersSeed);
-  const [employees, setEmployees] = useState<Employee[]>(() => canonicalPersistenceRequired ? [] : employeesSeed);
   const [invoices, setInvoices] = useState<Invoice[]>(() => canonicalPersistenceRequired ? [] : invoicesSeed);
-  const [inventory, setInventory] = useState<InventoryItem[]>(() => canonicalPersistenceRequired ? [] : inventorySeed);
   const [auditLogs, setAuditLogs] = useState<AuditLog[]>(() => canonicalPersistenceRequired ? [] : auditLogsSeed);
   const [attendance, setAttendance] = useState(() => canonicalPersistenceRequired ? [] : initialAttendance);
 
@@ -620,9 +603,7 @@ export default function App() {
     if (!isCustomerProductionPortal) return;
     setBranches(selectedBranch ? [selectedBranch] : []);
     setTeachers([]);
-    setEmployees([]);
     setInvoices([]);
-    setInventory([]);
     setAuditLogs([]);
     setAttendance([]);
     setStages([]);
@@ -674,26 +655,6 @@ export default function App() {
     };
   }, [isCustomerProductionPortal, trustedSessionUser?.schoolId]);
 
-  // Expanded Student Enterprise States
-  const [selectedStudentEnterpriseId, setSelectedStudentEnterpriseId] = useState<string>('');
-  const [activeStudentTab, setActiveStudentTab] = useState<string>('gap_analysis');
-  const [autosaveIndicator, setAutosaveIndicator] = useState<'idle' | 'saving' | 'saved'>('idle');
-  const [softDeletedStudentIds, setSoftDeletedStudentIds] = useState<string[]>([]);
-  const [showSoftTrashOnly, setShowSoftTrashOnly] = useState<boolean>(false);
-  const [gateBarcodeSimulatorVal, setGateBarcodeSimulatorVal] = useState<string>('');
-  const [gateScanDirection, setGateScanDirection] = useState<'check_in' | 'check_out'>('check_in');
-  const [attendanceSmsLog, setAttendanceSmsLog] = useState<{timestamp: string; phone: string; message: string}[]>([]);
-  const [isOcrProcessing, setIsOcrProcessing] = useState<boolean>(false);
-  const [newDocumentCategory, setNewDocumentCategory] = useState<'national_id' | 'passport' | 'birth_cert' | 'transcript' | 'medical'>('national_id');
-  const [newDocumentFileName, setNewDocumentFileName] = useState<string>('');
-  
-  // States corresponding to the uploaded screenshot
-  const [admissionsSubTab, setAdmissionsSubTab] = useState<'general' | 'medical' | 'attachments'>('general');
-  const [selectedInterfaceMode, setSelectedInterfaceMode] = useState<'advanced' | 'standard'>('advanced');
-  const [selectedThemeName, setSelectedThemeName] = useState<'premium' | 'classic' | 'modern'>('premium');
-  const [admissionsFormEditable, setAdmissionsFormEditable] = useState<boolean>(true);
-  const [admissionsSearchTerm, setAdmissionsSearchTerm] = useState<string>('');
-
   // Uniform & Dress Code Management States
   const [showUniformModal, setShowUniformModal] = useState<boolean>(false);
   const [uniformInventory, setUniformInventory] = useState(() => canonicalPersistenceRequired ? [] : [
@@ -713,45 +674,12 @@ export default function App() {
     { id: 'alloc_3', studentName: 'عبد الرحمن صالح التاجوري', uniformName: 'سترة شتوية فاخرة (Blazer) - ثانوي', size: 'XL', date: '2026-05-20', qty: 1, total: 120 }
   ]);
   
-  // Simulated school subjects/grades state specifically for the academcial tab
-  const [academicGrades, setAcademicGrades] = useState<{ [studentId: string]: { subject: string; score: number; maxScore: number; behaviorRating: 'ممتاز' | 'جيد جداً' | 'مقبول' | 'يحتاج توجيه'; achievements: string[] }[] }>(() => canonicalPersistenceRequired ? {} : ({
-    'stud_1': [
-      { subject: 'الرياضيات المتقدمة', score: 48, maxScore: 50, behaviorRating: 'ممتاز', achievements: ['دروع التميز الرياضي 🏆', 'أولمبياد العلوم'] },
-      { subject: 'الفيزياء الكونية', score: 92, maxScore: 100, behaviorRating: 'ممتاز', achievements: ['مبتكر الغد الأخضر 🌱'] },
-      { subject: 'اللغة العربية والإنشاء', score: 28, maxScore: 30, behaviorRating: 'ممتاز', achievements: ['مسابقة الخط العربي'] }
-    ],
-    'stud_2': [
-      { subject: 'الرياضيات المتقدمة', score: 45, maxScore: 50, behaviorRating: 'ممتاز', achievements: ['أداء مثالي فرعي'] },
-      { subject: 'الفيزياء الكونية', score: 85, maxScore: 100, behaviorRating: 'جيد جداً', achievements: [] },
-      { subject: 'اللغة العربية والإنشاء', score: 29, maxScore: 30, behaviorRating: 'ممتاز', achievements: ['حافظ القرآن الكريم'] }
-    ],
-    'stud_3': [
-      { subject: 'العلوم العامة', score: 25, maxScore: 30, behaviorRating: 'جيد جداً', achievements: ['المعرض العلمي السنوي'] },
-      { subject: 'اللغة العربية', score: 27, maxScore: 30, behaviorRating: 'ممتاز', achievements: [] }
-    ]
-  }));
-
-  // Synchronized Transactions log history state
-  const [transactions, setTransactions] = useState<any[]>([]);
-  
-  // Note: TransactionService now handles the backend/UoW orchestration. 
-  // UI history needs a new mechanism or to be connected to the audit logs.
-
-  const [permissions, setPermissions] = useState<Permission[]>(defaultPermissions);
+  const permissions = defaultPermissions;
 
   // Filtering lists by Tenant (Active School & Branch)
   const filteredStudents = useMemo(() => {
     return students.filter(s => s.schoolId === selectedSchool.id && (!selectedBranch || s.branchId === selectedBranch.id));
   }, [students, selectedSchool, selectedBranch]);
-
-  const filteredTeachers = useMemo(() => {
-    return teachers.filter(t => t.schoolId === selectedSchool.id && (!selectedBranch || t.branchId === selectedBranch.id));
-  }, [teachers, selectedSchool, selectedBranch]);
-
-  const filteredInventory = useMemo(() => {
-    return inventory.filter(i => i.schoolId === selectedSchool.id && (!selectedBranch || i.branchId === selectedBranch.id));
-  }, [inventory, selectedSchool, selectedBranch]);
-
 
   // Notifications State
   // Notifications are populated only by real actions or a canonical server
@@ -823,32 +751,6 @@ export default function App() {
   const backupLogs: string[] = [];
   const isBackingUp = false;
 
-  // Active searching terms
-  const [studentSearch, setStudentSearch] = useState('');
-  const [teacherSearch, setTeacherSearch] = useState('');
-
-  // Student Accounts Custom States
-  const [selectedStudentForPayment, setSelectedStudentForPayment] = useState<Student | null>(null);
-  const [paymentAmount, setPaymentAmount] = useState<number>(0);
-  const [paymentMethod, setPaymentMethod] = useState<string>('بطاقة مدى البنكية (Mada)');
-
-  // Top Statistics based on filtered records
-  const statsOverview = useMemo(() => {
-    const totalSCount = filteredStudents.length;
-    const totalTCount = filteredTeachers.length;
-    const totalFeesCollected = filteredStudents.reduce((sum, s) => sum + Number(s.feesPaid || 0), 0);
-    const activeStaffCount = filteredTeachers.filter(t => t.status === 'active').length;
-    const avgAttendance = 0;
-
-    return {
-      totalStudents: totalSCount,
-      totalTeachers: totalTCount,
-      totalAttendance: avgAttendance,
-      collectedFees: totalFeesCollected,
-      activeStaff: activeStaffCount
-    };
-  }, [filteredStudents, filteredTeachers]);
-
   // Handle active school change, reset specific branch filter
   const handleSchoolChange = (school: School) => {
     setSelectedSchool(school);
@@ -885,7 +787,7 @@ export default function App() {
   };
 
   // Helper to trigger automated notifications occasionally
-  const triggerNotification = async (arg1: string, arg2: string, arg3?: 'info' | 'warning' | 'success' | 'error') => {
+  const triggerNotification = useCallback(async (arg1: string, arg2: string, arg3?: 'info' | 'warning' | 'success' | 'error') => {
     let message = arg1;
     let type = arg2 as NotificationType;
     let title = undefined;
@@ -915,12 +817,12 @@ export default function App() {
       setNotifications(prev => [
         notification,
         ...prev
-      ]);
+      ].slice(0, 50));
       setActiveToast(notification);
       if (toastTimerRef.current) clearTimeout(toastTimerRef.current);
       toastTimerRef.current = setTimeout(() => setActiveToast(null), 5_000);
     });
-  };
+  }, []);
 
   // Hydrate the student attendance register from the canonical server read
   // model.  Local seed attendance is intentionally not used in canonical
@@ -1092,61 +994,6 @@ export default function App() {
     triggerNotification('تم تسجيل الخروج بنجاح وإغلاق التوكن. الجلسة منتهية ولا يمكن الرجوع بالمتصفح.', 'info');
   };
 
-  // Enterprise Student Affairs Helper Methods
-  const updateStudentField = (studentId: string, field: string, value: any) => {
-    // Implement autosave simulation
-    setAutosaveIndicator('saving');
-    
-    setStudents(prev => prev.map(s => {
-      if (s.id === studentId) {
-        return { ...s, [field]: value };
-      }
-      return s;
-    }));
-
-    // Reset indicator after a brief simulated delay
-    setTimeout(() => {
-      setAutosaveIndicator('saved');
-      setTimeout(() => setAutosaveIndicator('idle'), 1500);
-    }, 800);
-  };
-
-  const handleEnterpriseSoftDelete = async (id: string, name: string) => {
-    try {
-      await StudentApiRepository.softDeleteStudent(id);
-      setSoftDeletedStudentIds(prev => [...prev, id]);
-      setStudents(prev => prev.filter(student => student.id !== id));
-      logAction('SOFT_DELETE', `أرشفة الطالب مؤقتاً: ${name}`, 'شؤون الطلاب');
-      await triggerNotification(`تم نقل ملف الطالب ${name} إلى سلة المحذوفات المؤقتة`, 'warning');
-    } catch (error: any) {
-      await triggerNotification(error?.message || 'تعذر أرشفة الطالب من قاعدة البيانات.', 'warning');
-    }
-  };
-
-  const handleEnterpriseRestore = async (id: string, name: string) => {
-    try {
-      await StudentApiRepository.restoreStudent(id);
-      setSoftDeletedStudentIds(prev => prev.filter(item => item !== id));
-      logAction('RESTORE_STUDENT', `استعادة قيد الطالب النشط: ${name}`, 'شؤون الطلاب');
-      await triggerNotification(`تم تعافي قيد الطالب ${name} وإعادة تفعيله بنشاط`, 'success');
-    } catch (error: any) {
-      await triggerNotification(error?.message || 'تعذر استعادة الطالب من قاعدة البيانات.', 'warning');
-    }
-  };
-
-  const handleEnterpriseSave = async (student: Student) => {
-    try {
-      const response = await StudentApiRepository.saveStudent({ ...student, schoolId: undefined, tenantId: undefined });
-      const persistedStudent = response?.data?.student || response?.student;
-      if (!persistedStudent) throw new Error('لم يُرجع الخادم سجل الطالب بعد الحفظ.');
-      setStudents(prev => prev.map(current => current.id === student.id ? persistedStudent : current));
-      logAction('COMMIT_STUDENT', `حفظ المعاملات واعتماد ملف الطالب: ${student.name}`, 'شؤون الطلاب');
-      await triggerNotification(`تم ترحيل وحفظ بيانات الطالب ${student.name} بالكامل`, 'success');
-    } catch (error: any) {
-      await triggerNotification(error?.message || 'تعذر حفظ ملف الطالب في قاعدة البيانات.', 'warning');
-    }
-  };
-
   // Student Actions
   const handleStudentFormSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
@@ -1232,38 +1079,6 @@ export default function App() {
     });
     setEditingStudent(null);
     setShowStudentModal(false);
-  };
-
-  const deleteStudent = async (id: string, name: string) => {
-    if (!confirm(`هل أنت متأكد من رغبتك في حذف وحذف قيد الطالب (${name}) نهائياً؟`)) {
-      return;
-    }
-
-    try {
-      await StudentApiRepository.permanentDeleteStudent(id);
-      setStudents(prev => prev.filter(s => s.id !== id));
-      setInvoices(prev => prev.filter(inv => inv.studentId !== id));
-      logAction('DELETE_STUDENT', `حذف قيد الطالب: ${name}`, 'شؤون الطلاب');
-      await triggerNotification(`تم حذف قيد الطالب ${name}`, 'warning');
-    } catch (error: any) {
-      await triggerNotification(error?.message || 'تعذر حذف قيد الطالب من قاعدة البيانات.', 'warning');
-    }
-  };
-
-  const startEditStudent = (student: Student) => {
-    setEditingStudent(student);
-    setStudentForm({
-      name: student.name,
-      nationalId: student.nationalId,
-      classroom: student.classroom,
-      section: student.section,
-      parentName: student.parentName,
-      parentPhone: student.parentPhone,
-      feesPaid: student.feesPaid,
-      feesRemaining: student.feesRemaining,
-      status: student.status
-    });
-    setShowStudentModal(true);
   };
 
   // Invoice creation action
@@ -1386,7 +1201,6 @@ export default function App() {
       return;
     }
 
-    const tenantId = selectedSchool.id;
     const invId = `receipt_${Date.now()}`;
 
     // 1. Generate unique sequential IDs for cross-referencing
@@ -1415,8 +1229,6 @@ export default function App() {
     const debitAccountCode = (method === 'كاش' || method === 'نقدي') ? '1101' : '1102';
     const debitAccountName = debitAccountCode === '1101' ? 'صندوق الخزينة الرئيسي (كاش)' : 'حساب مصرف الوحدة الجاري';
 
-    const meta = { userId: 'mgr_sulaiman', userName: 'سليمان غازي', userRole: currentRole, ipAddress: '192.168.1.144' };
-    
     // Perform state update
     setStudents(prev => prev.map(s => {
       if (s.id === studentId) {
@@ -2079,7 +1891,6 @@ export default function App() {
                   <GeneralLedgerPortal
                     students={students}
                     invoices={invoices}
-                    setInvoices={setInvoices}
                     selectedSchool={selectedSchool}
                     setActiveSection={setActiveSection}
                     logAction={logAction}
@@ -2092,7 +1903,6 @@ export default function App() {
                     setAcademicClasses={setAcademicClasses}
                     costCenters={costCenters}
                     setCostCenters={setCostCenters}
-                    currentRole={currentRole}
                     trustedSessionUser={trustedSessionUser}
                     initialTab={activeSection === 'financial_reports' ? 'financial_reports' : activeSection === 'treasury' ? 'treasury' : 'dashboard'}
                   />

@@ -2054,7 +2054,8 @@ async function recordStudentExportAudit(
   );
 }
 
-async function startServer() {
+export async function createApp(options: { cloudflare?: boolean } = {}): Promise<express.Express | undefined> {
+  const cloudflareMode = options.cloudflare === true;
   const app = express();
   const PORT = process.env.PORT || 3000;
   const startupReadiness = createStartupReadiness();
@@ -13125,6 +13126,7 @@ ${JSON.stringify(snapshot)}
   // Do not let a missing NODE_ENV turn that entry point into a Vite dev server.
   // `tsx server.ts` remains the development entry point and keeps Vite middleware.
   const isProduction =
+    cloudflareMode ||
     process.env.NODE_ENV === "production" ||
     process.env.npm_lifecycle_event === "start" ||
     path.basename(process.argv[1] ?? "") === "server.cjs";
@@ -13139,13 +13141,13 @@ ${JSON.stringify(snapshot)}
   });
 
   // Serve Frontend with Vite Dev Server in Development or static files in Production
-  if (!isProduction) {
+  if (!cloudflareMode && !isProduction) {
     const vite = await createViteServer({
       server: { middlewareMode: true },
       appType: "spa",
     });
     app.use(vite.middlewares);
-  } else {
+  } else if (!cloudflareMode) {
     // Resolve the frontend beside the bundled server first. Render can start
     // the service with a working directory different from the repository
     // root; using cwd alone then makes every /assets request fall through to
@@ -13212,10 +13214,18 @@ ${JSON.stringify(snapshot)}
     });
   }
 
+  if (cloudflareMode) {
+    // Cloudflare's Node HTTP adapter owns the request bridge. The Worker
+    // entrypoint calls app.listen(3000) after the application is initialized.
+    return app;
+  }
+
   // Bind to the dynamic cloud environment port (or fallback to 3000)
   app.listen(Number(PORT), "0.0.0.0", () => {
     EnterpriseLogger.info(`SchoolForManus server listening on port ${PORT}`, "ServerBootstrap");
   });
 }
 
-startServer();
+if (!(globalThis as { __EDUPRO_CLOUDFLARE__?: boolean }).__EDUPRO_CLOUDFLARE__) {
+  void createApp();
+}

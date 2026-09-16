@@ -1,7 +1,6 @@
-import { Activity, AlertTriangle, ArrowRightLeft, Building2, Calculator, Calendar, CheckCircle2, Coins, FileSpreadsheet, FileText, Hash, HelpCircle, Landmark, Layers, Lock as LockIcon, Percent, Play, Plus, Printer, RefreshCw, Search, Settings2, TrendingUp, UserCheck, Users, X } from 'lucide-react';
-import React, { useEffect, useState, useMemo } from 'react';
-import { Student, Invoice, Stage, Grade, AcademicClass, CostCenter, UserRole } from '../types';
-import { PostingEngine } from '../database/services/PostingEngine';
+import { ArrowRightLeft, Building2, Calculator, CheckCircle2, Coins, FileSpreadsheet, FileText, HelpCircle, Landmark, Layers, Lock as LockIcon, Percent, Printer, RefreshCw, Search, TrendingUp, Users, X } from 'lucide-react';
+import React, { useEffect, useState } from 'react';
+import { Student, Invoice, Stage, Grade, AcademicClass, CostCenter } from '../types';
 import { FallbackStorage } from '../database/repositories/FallbackStorage';
 import { useCurrency } from '../utils/currency';
 import EnterpriseActionToolbar from './shared/EnterpriseActionToolbar';
@@ -15,7 +14,6 @@ import { SuppliersLedgerTab } from '../modules/accounting/presentation/Suppliers
 import { JournalEntriesTab } from '../modules/accounting/presentation/JournalEntriesTab';
 import { ReceiptVoucherTab } from '../modules/accounting/presentation/ReceiptVoucherTab';
 import { PaymentVoucherTab } from '../modules/accounting/presentation/PaymentVoucherTab';
-import { BankTransfersTab } from '../modules/accounting/presentation/BankTransfersTab';
 import { FixedAssetsTab } from '../modules/accounting/presentation/FixedAssetsTab';
 import { EstimatedBudgetTab } from '../modules/accounting/presentation/EstimatedBudgetTab';
 import { ClosingTab } from '../modules/accounting/presentation/ClosingTab';
@@ -29,12 +27,10 @@ const TreasuryPlatformPortal = React.lazy(() => import('./TreasuryPlatformPortal
 interface GeneralLedgerPortalProps {
   students: Student[];
   invoices: Invoice[];
-  setInvoices: React.Dispatch<React.SetStateAction<Invoice[]>>;
   selectedSchool: { id: string; name: string; logo?: string; licenseNumber?: string };
   setActiveSection: (sec: string) => void;
   logAction: (action: string, details: string, module: string) => void;
   triggerNotification: (text: string, type: 'info' | 'warning' | 'success') => void;
-  currentRole?: UserRole;
   stages?: Stage[];
   setStages?: React.Dispatch<React.SetStateAction<Stage[]>>;
   grades?: Grade[];
@@ -58,12 +54,10 @@ interface GeneralLedgerPortalProps {
 export default function GeneralLedgerPortal({
   students,
   invoices,
-  setInvoices,
   selectedSchool,
   setActiveSection,
   logAction,
   triggerNotification,
-  currentRole,
   stages,
   setStages,
   grades,
@@ -75,7 +69,7 @@ export default function GeneralLedgerPortal({
   initialTab,
   trustedSessionUser
 }: GeneralLedgerPortalProps) {
-  const { currencyConfig, format: formatCurrency } = useCurrency();
+  const { format: formatCurrency } = useCurrency();
   const canonicalPersistenceRequired = FallbackStorage.isCanonicalPersistenceRequired();
   useEffect(() => {
     if (canonicalPersistenceRequired) {
@@ -298,7 +292,9 @@ export default function GeneralLedgerPortal({
       creditMovements: 0,
       endingBalance: 0,
       allDebitMovements: 0,
-      allCreditMovements: 0
+      allCreditMovements: 0,
+      priorDebitMovements: 0,
+      priorCreditMovements: 0
     }));
     const accountByCode = new Map<string, typeof sourceAccounts[number]>(sourceAccounts.map(account => [String(account.code), account]));
     const accountById = new Map<string, typeof sourceAccounts[number]>(sourceAccounts.map(account => [String(account.id), account]));
@@ -325,10 +321,11 @@ export default function GeneralLedgerPortal({
       return true;
     });
 
-    const applyLines = (entries: any[], movementKey: 'period' | 'all', applyCostCenterFilter: boolean) => entries.forEach((entry: any) => {
+    const applyLines = (entries: any[], movementKey: 'period' | 'all' | 'prior', applyCostCenterFilter: boolean) => entries.forEach((entry: any) => {
       if (!Array.isArray(entry.lines)) return;
       entry.lines.forEach((line: any) => {
-        if (applyCostCenterFilter && options?.costCenter && options.costCenter !== 'all' && line.costCenter !== options.costCenter) return;
+        const lineCostCenter = String(line.costCenter || '').trim() || 'unclassified';
+        if (applyCostCenterFilter && options?.costCenter && options.costCenter !== 'all' && lineCostCenter !== options.costCenter) return;
         const code = String(line.accountCode || line.accountId || '').trim();
         const account = accountByCode.get(code) || accountById.get(code);
         if (!account) return;
@@ -337,6 +334,9 @@ export default function GeneralLedgerPortal({
         if (movementKey === 'all') {
           account.allDebitMovements += debit;
           account.allCreditMovements += credit;
+        } else if (movementKey === 'prior') {
+          account.priorDebitMovements += debit;
+          account.priorCreditMovements += credit;
         } else {
           account.debitMovements += debit;
           account.creditMovements += credit;
@@ -347,7 +347,12 @@ export default function GeneralLedgerPortal({
     // All movements establish the opening balance when the canonical chart
     // stores a current closing balance; period movements establish the report
     // closing balance. This keeps Q1/Q2/full-year reports consistent.
-    applyLines(normalizedEntries, 'all', false);
+    const hasCostCenterFilter = Boolean(options?.costCenter && options.costCenter !== 'all');
+    applyLines(normalizedEntries, 'all', hasCostCenterFilter);
+    const priorEntries = options?.fromDate
+      ? normalizedEntries.filter((entry: any) => String(entry.date || '') < options.fromDate!)
+      : [];
+    applyLines(priorEntries, 'prior', hasCostCenterFilter);
     applyLines(periodEntries, 'period', true);
 
     sourceAccounts.forEach(account => {
@@ -360,7 +365,14 @@ export default function GeneralLedgerPortal({
         : account.creditMovements - account.debitMovements;
       const persistedBalance = toAmount(account.balance);
 
-      account.openingBalance = hasCanonicalBalances ? persistedBalance - allSignedMovement : 0;
+      const priorSignedMovement = isDebitNature
+        ? account.priorDebitMovements - account.priorCreditMovements
+        : account.priorCreditMovements - account.priorDebitMovements;
+      account.openingBalance = hasCostCenterFilter
+        ? priorSignedMovement
+        : hasCanonicalBalances
+          ? persistedBalance - allSignedMovement
+          : 0;
       account.endingBalance = account.openingBalance + periodSignedMovement;
     });
 
@@ -925,27 +937,8 @@ export default function GeneralLedgerPortal({
     }
   }, [activeTab]);
   
-  // Simulation states for Governance Policy Dashboard
+  // Simulation state for the clearly labelled governance demonstration only.
   const [activeSaving, setActiveSaving] = useState<string | null>(null);
-
-  const runWithLock = async (opName: string, asyncFn: () => Promise<any> | any) => {
-    if (activeSaving) {
-      triggerNotification(`⚠️ لا يمكن التكرار: هناك عملية مراجعة أو حفظ قيد التنفيذ حالياً (${activeSaving}). يرجى الانتظار...`, 'warning');
-      return;
-    }
-    setActiveSaving(opName);
-    triggerNotification(`⏳ العملية جارية قيد التنفيذ... يرجى الانتظار وعدم تكرار النقر.`, 'info');
-    try {
-      await asyncFn();
-    } catch (err: any) {
-      triggerNotification(`❌ حدث خطأ أثناء الحفظ: ${err.message || String(err)}`, 'warning');
-      throw err;
-    } finally {
-      // Simulate network delay to make the lock highly visible and perfectly robust as requested by user
-      await new Promise(resolve => setTimeout(resolve, 1500));
-      setActiveSaving(null);
-    }
-  };
 
   const [simAmount, setSimAmount] = useState<string>('5000');
   const [simCostCenter, setSimCostCenter] = useState<string>('kindergarten');
@@ -1400,127 +1393,6 @@ export default function GeneralLedgerPortal({
     return result;
   };
 
-  // Helper to sync local state to FallbackStorage, run the PostingEngine action, and sync back
-  const runWithPostingEngine = async (
-    action: (schoolId: string) => Promise<any>
-  ): Promise<any> => {
-    if (canonicalPersistenceRequired || !canonicalFinancialWriteReady) {
-      throw new Error('مسار الأستاذ العام المحلي غير مسموح به مع تفعيل الحفظ المركزي.');
-    }
-    if (!selectedSchool?.id) {
-      throw new Error('لا يمكن تنفيذ حركة محاسبية دون مدرسة موثوقة.');
-    }
-    // 1. Ensure FallbackStorage is initialized
-    await FallbackStorage.initialize();
-
-    // 2. Map current UI accounts and journal entries to FallbackStorage format
-    const dbAccounts = accounts.map(node => ({
-      id: node.id,
-      code: node.code,
-      name: node.nameAr || node.name,
-      shortName: node.nameEn,
-      nature: (node.classification === 'أصول' ? 'asset' :
-               node.classification === 'خصوم' ? 'liability' :
-               node.classification === 'حقوق ملكية' ? 'equity' :
-               node.classification === 'إيرادات' ? 'revenue' : 'expense') as any,
-      level: node.level,
-      parentAccountId: node.parentAccountId,
-      isActive: node.isActive,
-      isLeaf: node.type === 'فرعي',
-      balance: node.balance,
-      debitBalance: node.natureType === 'مدين' ? node.balance : 0,
-      creditBalance: node.natureType === 'دائن' ? node.balance : 0,
-      currency: node.currency,
-      defaultCostCenter: node.costCenterId
-    }));
-
-    const dbJournalEntries = journalEntries.map(jv => ({
-      id: jv.id,
-      date: jv.date,
-      description: jv.description,
-      status: (jv.status === 'مرحل' ? 'posted' : jv.status === 'معتمد' ? 'approved' : 'draft') as any,
-      items: (jv.lines || []).map((line: any) => ({
-        accountId: line.accountCode,
-        debit: line.debit || 0,
-        credit: line.credit || 0
-      })),
-      totalDebit: jv.debitTotal,
-      totalCredit: jv.creditTotal,
-      createdAt: jv.createdAt || new Date().toISOString()
-    }));
-
-    FallbackStorage.saveAccounts(dbAccounts);
-    FallbackStorage.saveJournalEntries(dbJournalEntries);
-
-    // 3. Execute the PostingEngine action
-    const result = await action(selectedSchool.id);
-
-    // 4. Retrieve updated data from FallbackStorage
-    const updatedDbAccounts = FallbackStorage.getAccounts();
-    const updatedDbJournalEntries = FallbackStorage.getJournalEntries();
-
-    // 5. Map back to UI formats
-    const updatedAccounts = updatedDbAccounts.map(acc => {
-      const originalNode = accounts.find(n => n.id === acc.id);
-      return {
-        ...originalNode,
-        id: acc.id,
-        code: acc.code,
-        name: acc.name,
-        nameAr: acc.name,
-        nameEn: acc.shortName || acc.name,
-        parentAccountId: acc.parentAccountId,
-        type: (acc.isLeaf ? 'فرعي' : 'رئيسي') as any,
-        classification: (acc.nature === 'asset' ? 'أصول' :
-                         acc.nature === 'liability' ? 'خصوم' :
-                         acc.nature === 'equity' ? 'حقوق ملكية' :
-                         acc.nature === 'revenue' ? 'إيرادات' : 'مصروفات') as any,
-        level: acc.level,
-        natureType: (acc.nature === 'asset' || acc.nature === 'expense' ? 'مدين' : 'دائن') as any,
-        costCenterId: acc.defaultCostCenter,
-        isActive: acc.isActive,
-        balance: acc.balance,
-        currency: acc.currency
-      } as AccountNode;
-    });
-
-    const updatedJournalEntries = updatedDbJournalEntries.map(entry => {
-      const originalJv = journalEntries.find(j => j.id === entry.id);
-      return {
-        ...originalJv,
-        id: entry.id,
-        date: entry.date,
-        description: entry.description,
-        debitTotal: entry.totalDebit,
-        creditTotal: entry.totalCredit,
-        status: (entry.status === 'posted' ? 'مرحل' : entry.status === 'approved' ? 'معتمد' : 'مسودة') as any,
-        type: originalJv?.type || 'مركب',
-        createdByUser: originalJv?.createdByUser || 'سليمان غازي',
-        createdAt: entry.createdAt,
-        updatedAt: new Date().toISOString(),
-        lines: entry.items.map((item: any) => {
-          const acc = updatedAccounts.find(a => a.id === item.accountId);
-          const originalLine = originalJv?.lines?.find((l: any) => l.accountCode === item.accountId);
-          return {
-            accountCode: item.accountId,
-            accountName: acc ? acc.nameAr : '',
-            description: entry.description,
-            debit: item.debit,
-            credit: item.credit,
-            costCenter: originalLine?.costCenter || 'primary'
-          };
-        }),
-        attachments: originalJv?.attachments || []
-      };
-    });
-
-    // 6. Update local UI React States
-    setAccounts(updatedAccounts);
-    setJournalEntries(updatedJournalEntries);
-
-    return result;
-  };
-
   // For adding new accounts
   const [showAddAccountModal, setShowAddAccountModal] = useState(false);
   const [newAccount, setNewAccount] = useState({
@@ -1547,19 +1419,6 @@ export default function GeneralLedgerPortal({
   const [coaScanState, setCoaScanState] = useState<'idle' | 'scanning' | 'completed'>('idle');
   const [coaAuditFixCount, setCoaAuditFixCount] = useState<number>(0);
 
-  // Advanced Financial Reports Custom States
-  
-  // Drill-Down Types & State
-  interface DrillDownStep {
-    level: 'reports_list' | 'report_view' | 'account_statement' | 'journal_entry' | 'original_document';
-    reportId?: string | null;
-    accountCode?: string;
-    journalEntryId?: string;
-    documentId?: string;
-    documentType?: 'receipt_voucher' | 'payment_voucher' | 'invoice' | 'journal_entry';
-    title: string;
-  }
-  
   // Normalization helper for direct and voucher-based entries
   const getNormalizedJournalEntries = () => {
     const list = [...journalEntries];
@@ -1630,10 +1489,10 @@ export default function GeneralLedgerPortal({
         const debitAcc = rv?.receivingAccount;
         const creditAcc = rv?.revenueAccount || rv?.creditAccount || rv?.receivableAccount || (rv?.studentId || rv?.studentPaymentId ? '1201' : undefined);
         const amt = entry.debitTotal || rv?.amount || 0;
-        const cc = rv?.costCenter || 'primary';
+        const cc = rv?.costCenter || undefined;
         if (debitAcc && creditAcc && Number(amt) > 0) {
-          lines.push({ id: `cl-rv-1`, accountCode: debitAcc, accountName: accounts.find(a => a.code === debitAcc)?.nameAr || '', description: entry.description, debit: amt, credit: 0, costCenter: cc });
-          lines.push({ id: `cl-rv-2`, accountCode: creditAcc, accountName: accounts.find(a => a.code === creditAcc)?.nameAr || '', description: entry.description, debit: 0, credit: amt, costCenter: cc });
+          lines.push({ id: `cl-rv-1`, accountCode: debitAcc, accountName: accounts.find(a => a.code === debitAcc)?.nameAr || '', description: entry.description, debit: amt, credit: 0, ...(cc ? { costCenter: cc } : {}) });
+          lines.push({ id: `cl-rv-2`, accountCode: creditAcc, accountName: accounts.find(a => a.code === creditAcc)?.nameAr || '', description: entry.description, debit: 0, credit: amt, ...(cc ? { costCenter: cc } : {}) });
         }
       } else if (isPv || entry.paymentVoucherId) {
         const pvIdMatch = entry.description.match(/سند صرف (PV-\d+-\d+)/);
@@ -1643,10 +1502,10 @@ export default function GeneralLedgerPortal({
         const debitAcc = pv?.paidToAccount;
         const creditAcc = pv?.paidFromAccount;
         const amt = entry.debitTotal || pv?.amount || 0;
-        const cc = pv?.costCenter || 'primary';
+        const cc = pv?.costCenter || undefined;
         if (debitAcc && creditAcc && Number(amt) > 0) {
-          lines.push({ id: `cl-pv-1`, accountCode: debitAcc, accountName: accounts.find(a => a.code === debitAcc)?.nameAr || '', description: entry.description, debit: amt, credit: 0, costCenter: cc });
-          lines.push({ id: `cl-pv-2`, accountCode: creditAcc, accountName: accounts.find(a => a.code === creditAcc)?.nameAr || '', description: entry.description, debit: 0, credit: amt, costCenter: cc });
+          lines.push({ id: `cl-pv-1`, accountCode: debitAcc, accountName: accounts.find(a => a.code === debitAcc)?.nameAr || '', description: entry.description, debit: amt, credit: 0, ...(cc ? { costCenter: cc } : {}) });
+          lines.push({ id: `cl-pv-2`, accountCode: creditAcc, accountName: accounts.find(a => a.code === creditAcc)?.nameAr || '', description: entry.description, debit: 0, credit: amt, ...(cc ? { costCenter: cc } : {}) });
         }
       }
       
@@ -2443,528 +2302,6 @@ export default function GeneralLedgerPortal({
     triggerNotification('📥 تم تنزيل نسخة عرض من الدليل المحاسبي؛ هذه ليست قائمة أو نسخة مالية معتمدة.', 'info');
   };
 
-  // 1. TRIAL BALANCE EXPORT/PRINT
-  const handleExportTrialBalanceExcel = () => {
-      triggerNotification('📥 جاري تنزيل نسخة عرض من ميزان المراجعة؛ المصدر الحالي للقراءة فقط.', 'info');
-    setTimeout(() => {
-      const headers = ['رمز الحساب', 'اسم الحساب المحاسبي', 'التصنيف', 'طبيعة الحساب', 'أرصدة مدينة (ر.س)', 'أرصدة دائنة (ر.س)'];
-      let totalDebit = 0;
-      let totalCredit = 0;
-      
-      const rows = accounts.map(acc => {
-        const isDebit = acc.natureType === 'مدين' || acc.classification === 'أصول' || acc.classification === 'مصروفات';
-        const debitVal = isDebit ? acc.balance : 0;
-        const creditVal = !isDebit ? acc.balance : 0;
-        
-        totalDebit += debitVal;
-        totalCredit += creditVal;
-
-        return [
-          acc.code,
-          acc.nameAr,
-          acc.classification,
-          acc.natureType || (isDebit ? 'مدين' : 'دائن'),
-          debitVal.toFixed(2),
-          creditVal.toFixed(2)
-        ];
-      });
-
-      rows.push(['الإجمالي الموزون المتطابق', '', '', '', totalDebit.toFixed(2), totalCredit.toFixed(2)]);
-
-      const csvContent = "\uFEFF" 
-        + [headers.join(','), ...rows.map(e => e.map(cell => `"${String(cell).replace(/"/g, '""')}"`).join(','))].join('\n');
-      
-      const blob = new Blob([csvContent], { type: 'text/csv;charset=utf-8;' });
-      const url = URL.createObjectURL(blob);
-      const link = document.createElement("a");
-      link.setAttribute("href", url);
-      link.setAttribute("download", `ميزان_المراجعة_الشامل_ERP_${new Date().toISOString().split('T')[0]}.csv`);
-      document.body.appendChild(link);
-      link.click();
-      document.body.removeChild(link);
-      triggerNotification('📥 تم تنزيل نسخة عرض من ميزان المراجعة؛ لا تمثل ترحيلاً أو اعتماداً مركزياً.', 'info');
-    }, 600);
-  };
-
-  const handleExportTrialBalancePdf = () => {
-    const printWindow = window.open('', '_blank');
-    if (!printWindow) {
-      triggerNotification('❌ تم حظر فتح حوار الطباعة. يرجى تفعيل السماح بالنوافذ المنبثقة.', 'warning');
-      return;
-    }
-
-    let totalDebit = 0;
-    let totalCredit = 0;
-
-    const tableRowsHtml = accounts.map(acc => {
-      const isDebit = acc.natureType === 'مدين' || acc.classification === 'أصول' || acc.classification === 'مصروفات';
-      const debitVal = isDebit ? acc.balance : 0;
-      const creditVal = !isDebit ? acc.balance : 0;
-      
-      totalDebit += debitVal;
-      totalCredit += creditVal;
-
-      return `
-        <tr>
-          <td style="font-family: monospace; color: #4f46e5; border: 1px solid #cbd5e1; padding: 8px;">${acc.code}</td>
-          <td style="font-weight: bold; border: 1px solid #cbd5e1; padding: 8px;">${acc.nameAr}</td>
-          <td style="border: 1px solid #cbd5e1; padding: 8px;">${acc.classification}</td>
-          <td style="border: 1px solid #cbd5e1; padding: 8px;">${acc.natureType || (isDebit ? 'مدين' : 'دائن')}</td>
-          <td style="font-family: monospace; text-align: left; background-color: #fcfdfd; border: 1px solid #cbd5e1; padding: 8px;">${debitVal > 0 ? debitVal.toLocaleString(undefined, { minimumFractionDigits: 2 }) + ' د.ل' : '-'}</td>
-          <td style="font-family: monospace; text-align: left; background-color: #fdfcfc; border: 1px solid #cbd5e1; padding: 8px;">${creditVal > 0 ? creditVal.toLocaleString(undefined, { minimumFractionDigits: 2 }) + ' د.ل' : '-'}</td>
-        </tr>
-      `;
-    }).join('\n');
-
-    printWindow.document.write(`
-      <html dir="rtl">
-        <head>
-          <title>ميزان المراجعة الشامل - ERP Financials</title>
-          <style>
-            @import url('https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700;800&display=swap');
-            body { font-family: 'Inter', system-ui, sans-serif; padding: 40px; color: #0f172a; background-color: #ffffff; }
-            .header { display: flex; justify-content: space-between; align-items: center; border-bottom: 2px solid #000; padding-bottom: 15px; margin-bottom: 25px; }
-            h1 { font-size: 18px; font-weight: 900; margin: 0; }
-            h2 { font-size: 12px; color: #64748b; margin-top: 5px; font-weight: bold; }
-            table { width: 100%; border-collapse: collapse; font-size: 11px; margin-top: 15px; }
-            th { background-color: #f1f5f9; padding: 10px; border: 1px solid #cbd5e1; font-weight: bold; text-align: right; }
-            .totals { font-weight: bold; background-color: #f8fafc; }
-            .system-tag { text-align: center; font-size: 9px; color: #94a3b8; margin-top: 60px; border-top: 1px solid #e2e8f0; padding-top: 10px; }
-          </style>
-        </head>
-        <body>
-          <div class="header">
-            <div>
-              <p style="font-size: 11px; font-weight: bold; margin: 0;">الجمهورية الليبية / وزارة التعليم</p>
-              <h1 style="color: #4f46e5; margin-top: 3px;">مجمع المدارس التعليمي الموحد</h1>
-              <h2 style="margin: 0; margin-top: 2px;">نظام الإدارة المالية والتحصيل السحابي ERP</h2>
-            </div>
-            <div style="text-align: left; font-size: 10px; font-weight: bold; line-height: 1.4;">
-              <p>تقرير: ميزان المراجعة العام</p>
-              <p>تاريخ الاستخراج: ${new Date().toLocaleDateString('ar-SA')}</p>
-              <p>المستند: معتمد حسابياً</p>
-              <p>المستخدم: سليمان غازي</p>
-            </div>
-          </div>
-          
-          <h2 style="text-align: center; font-size: 15px; font-weight: 900; color: #1e293b; margin-bottom: 5px;">ميزان المراجعة السنوي الشامل لجميع الأرصدة والعمليات</h2>
-          <p style="text-align: center; font-size: 10px; color: #64748b; margin-bottom: 25px;">مطابق وموزون للمعادلة المحاسبية المركبة لمجمع المدارس</p>
-
-          <table>
-            <thead>
-              <tr>
-                <th style="width: 15%">رمز الحساب</th>
-                <th style="width: 35%">اسم الحساب الدفتري</th>
-                <th style="width: 15%">التصنيف المحاسبي</th>
-                <th style="width: 10%">الطبيعة</th>
-                <th style="width: 12.5%; text-align: left;">أرصدة مدينة</th>
-                <th style="width: 12.5%; text-align: left;">أرصدة دائنة</th>
-              </tr>
-            </thead>
-            <tbody>
-              ${tableRowsHtml}
-              <tr class="totals">
-                <td colspan="4" style="text-align: center; font-size: 12px; border: 1px solid #cbd5e1; padding: 10px;">الإجمالي الموزون المتطابق</td>
-                <td style="text-align: left; color: #166534; font-family: monospace; font-size: 12px; border: 1px solid #cbd5e1; padding: 10px; border-top: 2px solid #000;">
-                  ${totalDebit.toLocaleString(undefined, { minimumFractionDigits: 2 })} د.ل
-                </td>
-                <td style="text-align: left; color: #166534; font-family: monospace; font-size: 12px; border: 1px solid #cbd5e1; padding: 10px; border-top: 2px solid #000;">
-                  ${totalCredit.toLocaleString(undefined, { minimumFractionDigits: 2 })} د.ل
-                </td>
-              </tr>
-            </tbody>
-          </table>
-
-          <div style="margin-top: 50px; display: flex; justify-content: space-between; font-size: 11px; font-weight: bold;">
-            <p>مراجعة وتدقيق الحسابات: _________________</p>
-            <p>المدير المالي والرقابة: _________________</p>
-            <p>الختم الرسمي للمجمع</p>
-          </div>
-
-          <div class="system-tag">
-            تم التصدير والطباعة إلكترونياً من نظام المدير المالي ERP - تاريخ الطباعة: ${new Date().toLocaleString('ar-SA')} - صفحة 1 من 1
-          </div>
-          <script>
-            window.onload = function() { window.print(); }
-          </script>
-        </body>
-      </html>
-    `);
-    printWindow.document.close();
-    logAction('EXPORT_PDF', 'تصدير ميزان المراجعة الشامل كتقرير PDF مطبوع وموزون', 'الحسابات');
-  };
-
-  // 2. INCOME STATEMENT EXPORT/PRINT
-  const handleExportIncomeStatementExcel = () => {
-      triggerNotification('📥 جاري تنزيل نسخة عرض من بيان الدخل؛ المصدر الحالي للقراءة فقط.', 'info');
-    setTimeout(() => {
-      const revenueAccounts = accounts.filter(a => a.classification === 'إيرادات');
-      const expenseAccounts = accounts.filter(a => a.classification === 'مصروفات');
-      
-      const totalRevenues = revenueAccounts.reduce((sum, a) => sum + a.balance, 0);
-      const totalExpenses = expenseAccounts.reduce((sum, a) => sum + a.balance, 0);
-      const netResult = totalRevenues - totalExpenses;
-
-      const headers = ['الحساب المحاسبي', 'الرمز', 'النوع', 'القيمة (د.ل)'];
-      const rows: any[] = [];
-
-      rows.push(['الإيرادات التشغيلية المباشرة', '', '', '']);
-      revenueAccounts.forEach(a => {
-        rows.push([a.nameAr, a.code, 'إيراد', a.balance.toFixed(2)]);
-      });
-      rows.push(['إجمالي الإيرادات', '', '', totalRevenues.toFixed(2)]);
-      rows.push(['', '', '', '']);
-
-      rows.push(['المصروفات والأعباء التشغيلية', '', '', '']);
-      expenseAccounts.forEach(a => {
-        rows.push([a.nameAr, a.code, 'مصروف', a.balance.toFixed(2)]);
-      });
-      rows.push(['إجمالي المصروفات', '', '', totalExpenses.toFixed(2)]);
-      rows.push(['', '', '', '']);
-
-      rows.push([netResult >= 0 ? 'صافي أرباح الدورة (فائض الكسب)' : 'صافي خسائر الدورة (عجز)', '', '', netResult.toFixed(2)]);
-
-      const csvContent = "\uFEFF" 
-        + [headers.join(','), ...rows.map(e => e.map(cell => `"${String(cell).replace(/"/g, '""')}"`).join(','))].join('\n');
-      
-      const blob = new Blob([csvContent], { type: 'text/csv;charset=utf-8;' });
-      const url = URL.createObjectURL(blob);
-      const link = document.createElement("a");
-      link.setAttribute("href", url);
-      link.setAttribute("download", `كشف_الدخل_التشغيلي_ERP_${new Date().toISOString().split('T')[0]}.csv`);
-      document.body.appendChild(link);
-      link.click();
-      document.body.removeChild(link);
-      triggerNotification('📥 تم تنزيل نسخة عرض من بيان الدخل؛ لا تمثل قائمة مالية معتمدة.', 'info');
-    }, 600);
-  };
-
-  const handleExportIncomeStatementPdf = () => {
-    const printWindow = window.open('', '_blank');
-    if (!printWindow) {
-      triggerNotification('❌ تم حظر فتح نافذة الطباعة التلقائية.', 'warning');
-      return;
-    }
-
-    const revenueAccounts = accounts.filter(a => a.classification === 'إيرادات');
-    const expenseAccounts = accounts.filter(a => a.classification === 'مصروفات');
-    
-    const totalRevenues = revenueAccounts.reduce((sum, a) => sum + a.balance, 0);
-    const totalExpenses = expenseAccounts.reduce((sum, a) => sum + a.balance, 0);
-    const netResult = totalRevenues - totalExpenses;
-
-    const revenuesHtml = revenueAccounts.map(a => `
-      <tr>
-        <td style="padding: 8px 10px; border: 1px solid #cbd5e1; padding-right: 20px;">${a.nameAr}</td>
-        <td style="padding: 8px 10px; border: 1px solid #cbd5e1; font-family: monospace;">${a.code}</td>
-        <td style="padding: 8px 10px; border: 1px solid #cbd5e1; font-family: monospace; text-align: left;">${a.balance.toLocaleString(undefined, { minimumFractionDigits: 2 })} د.ل</td>
-      </tr>
-    `).join('\n');
-
-    const expensesHtml = expenseAccounts.map(a => `
-      <tr>
-        <td style="padding: 8px 10px; border: 1px solid #cbd5e1; padding-right: 20px; color: #b91c1c;">${a.nameAr}</td>
-        <td style="padding: 8px 10px; border: 1px solid #cbd5e1; font-family: monospace;">${a.code}</td>
-        <td style="padding: 8px 10px; border: 1px solid #cbd5e1; font-family: monospace; text-align: left; color: #b91c1c;">${a.balance.toLocaleString(undefined, { minimumFractionDigits: 2 })} د.ل</td>
-      </tr>
-    `).join('\n');
-
-    printWindow.document.write(`
-      <html dir="rtl">
-        <head>
-          <title>بيان كشف الدخل التشغيلي - ERP Financials</title>
-          <style>
-            @import url('https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700;800&display=swap');
-            body { font-family: 'Inter', system-ui, sans-serif; padding: 40px; color: #0f172a; background-color: #ffffff; }
-            .header { display: flex; justify-content: space-between; align-items: center; border-bottom: 2px solid #000; padding-bottom: 15px; margin-bottom: 25px; }
-            h1 { font-size: 18px; font-weight: 900; margin: 0; }
-            h2 { font-size: 12px; color: #64748b; margin-top: 5px; font-weight: bold; }
-            table { width: 100%; border-collapse: collapse; font-size: 12px; margin-top: 15px; margin-bottom: 30px; }
-            th { background-color: #f1f5f9; padding: 10px; border: 1px solid #cbd5e1; font-weight: bold; text-align: right; }
-            .section-header { font-weight: bold; background-color: #f8fafc; font-size: 13px; color: #1e1b4b; }
-            .total-row { font-weight: bold; background-color: #f1f5f9; font-size: 13px; }
-            .result-box { border: 2px solid #0f172a; padding: 15px; border-radius: 8px; text-align: center; font-size: 15px; font-weight: 950; margin-top: 20px; }
-            .system-tag { text-align: center; font-size: 9px; color: #94a3b8; margin-top: 60px; border-top: 1px solid #e2e8f0; padding-top: 10px; }
-          </style>
-        </head>
-        <body>
-          <div class="header">
-            <div>
-              <p style="font-size: 11px; font-weight: bold; margin: 0;">الجمهورية الليبية / وزارة التعليم</p>
-              <h1 style="color: #4f46e5; margin-top: 3px;">مجمع المدارس التعليمي الموحد</h1>
-              <h2 style="margin: 0; margin-top: 2px;">نظام الإدارة المالية والتحصيل السحابي ERP</h2>
-            </div>
-            <div style="text-align: left; font-size: 10px; font-weight: bold; line-height: 1.4;">
-              <p>بيان: كشف الدخل التشغيلي</p>
-              <p>دورة المراجعة: عام 2026</p>
-              <p>تاريخ الاستخراج: ${new Date().toLocaleDateString('ar-SA')}</p>
-              <p>المستخدم: سليمان غازي</p>
-            </div>
-          </div>
-          
-          <h2 style="text-align: center; font-size: 16px; font-weight: 900; color: #1e293b; margin-bottom: 5px;">قائمة الدخل والأرباح والخسائر للعام المالي 2026</h2>
-          <p style="text-align: center; font-size: 10px; color: #64748b; margin-bottom: 25px;">تحليل الفائض والعجز التشغيلي لفروع مجمع المدارس</p>
-
-          <table>
-            <thead>
-              <tr>
-                <th style="width: 50%">البند المحاسبي ومواصفاته</th>
-                <th style="width: 20%">رمز الحساب</th>
-                <th style="width: 30%; text-align: left;">القيمة والمقدار</th>
-              </tr>
-            </thead>
-            <tbody>
-              <tr class="section-header">
-                <td colspan="3" style="border: 1px solid #cbd5e1; padding: 10px;">أولاً: الإيرادات والمبيعات والتحصيلات الأكاديمية المباشرة</td>
-              </tr>
-              ${revenuesHtml}
-              <tr class="total-row">
-                <td style="border: 1px solid #cbd5e1; padding: 10px;">إجمالي التحصيلات والإيرادات العامة</td>
-                <td style="border: 1px solid #cbd5e1; padding: 10px;">-</td>
-                <td style="border: 1px solid #cbd5e1; padding: 10px; text-align: left; color: #166534; font-family: monospace;">${totalRevenues.toLocaleString(undefined, { minimumFractionDigits: 2 })} د.ل</td>
-              </tr>
-              
-              <tr class="section-header">
-                <td colspan="3" style="border: 1px solid #cbd5e1; padding: 10px; color: #b91c1c;">ثانياً: المصروفات والعموميات والأعباء التشغيلية</td>
-              </tr>
-              ${expensesHtml}
-              <tr class="total-row" style="color: #b91c1c;">
-                <td style="border: 1px solid #cbd5e1; padding: 10px;">إجمالي المصروفات والمنصرف العام</td>
-                <td style="border: 1px solid #cbd5e1; padding: 10px;">-</td>
-                <td style="border: 1px solid #cbd5e1; padding: 10px; text-align: left; color: #b91c1c; font-family: monospace;">${totalExpenses.toLocaleString(undefined, { minimumFractionDigits: 2 })} د.ل</td>
-              </tr>
-            </tbody>
-          </table>
-
-          <div class="result-box" style="${netResult >= 0 ? 'background-color: #f0fdf4; color: #166534; border-color: #166534;' : 'background-color: #fef2f2; color: #991b1b; border-color: #991b1b;'}">
-            ${netResult >= 0 ? 'صافي الأرباح المحققة للدورة المالية (فائض الأداء):' : 'صافي العجز والخسائر المسجلة للدورة (عجز الأداء):'}
-            <span style="font-family: monospace; font-size: 18px; font-weight: 900; margin-right: 15px;">
-              ${netResult.toLocaleString(undefined, { minimumFractionDigits: 2 })} د.ل
-            </span>
-          </div>
-
-          <div style="margin-top: 50px; display: flex; justify-content: space-between; font-size: 11px; font-weight: bold;">
-            <p>المحاسب المراجع: _________________</p>
-            <p>المدير المالي والرقابة: _________________</p>
-            <p>الختم والاعتماد</p>
-          </div>
-
-          <div class="system-tag">
-            تم التصدير والطباعة إلكترونياً من نظام المدير المالي ERP - تاريخ الطباعة: ${new Date().toLocaleString('ar-SA')} - صفحة 1 من 1
-          </div>
-          <script>
-            window.onload = function() { window.print(); }
-          </script>
-        </body>
-      </html>
-    `);
-    printWindow.document.close();
-    logAction('EXPORT_PDF', 'تصدير بيان كشف الدخل التشغيلي كتقرير PDF موثق ومطابق', 'الحسابات');
-  };
-
-  // 3. BALANCE SHEET EXPORT/PRINT
-  const handleExportBalanceSheetExcel = () => {
-      triggerNotification('📥 جاري تنزيل نسخة عرض من الميزانية العمومية؛ المصدر الحالي للقراءة فقط.', 'info');
-    setTimeout(() => {
-      const assetAccounts = accounts.filter(a => a.classification === 'أصول');
-      const liabilityAccounts = accounts.filter(a => a.classification === 'خصوم');
-      const equityAccounts = accounts.filter(a => a.classification === 'حقوق ملكية');
-      
-      const totalAssets = assetAccounts.reduce((sum, a) => sum + a.balance, 0);
-      const totalLiabilities = liabilityAccounts.reduce((sum, a) => sum + a.balance, 0);
-      const totalEquity = equityAccounts.reduce((sum, a) => sum + a.balance, 0);
-
-      const headers = ['المصنف المالي', 'الرمز الكودي', 'التصنيف الرئيسي', 'المقدار الدفتري (د.ل)'];
-      const rows: any[] = [];
-
-      rows.push(['الأصول والموجودات (Assets)', '', '', '']);
-      assetAccounts.forEach(a => {
-        rows.push([a.nameAr, a.code, 'أصول', a.balance.toFixed(2)]);
-      });
-      rows.push(['إجمالي الأصول', '', '', totalAssets.toFixed(2)]);
-      rows.push(['', '', '', '']);
-
-      rows.push(['الخصوم والالتزامات (Liabilities)', '', '', '']);
-      liabilityAccounts.forEach(a => {
-        rows.push([a.nameAr, a.code, 'خصوم', a.balance.toFixed(2)]);
-      });
-      rows.push(['إجمالي الخصوم', '', '', totalLiabilities.toFixed(2)]);
-      rows.push(['', '', '', '']);
-
-      rows.push(['حقوق الملكية ورأس المال (Equity)', '', '', '']);
-      equityAccounts.forEach(a => {
-        rows.push([a.nameAr, a.code, 'حقوق ملكية', a.balance.toFixed(2)]);
-      });
-      rows.push(['إجمالي حقوق الملكية', '', '', totalEquity.toFixed(2)]);
-      rows.push(['', '', '', '']);
-
-      rows.push(['إجمالي الخصوم وحقوق الملكية', '', '', (totalLiabilities + totalEquity).toFixed(2)]);
-
-      const csvContent = "\uFEFF" 
-        + [headers.join(','), ...rows.map(e => e.map(cell => `"${String(cell).replace(/"/g, '""')}"`).join(','))].join('\n');
-      
-      const blob = new Blob([csvContent], { type: 'text/csv;charset=utf-8;' });
-      const url = URL.createObjectURL(blob);
-      const link = document.createElement("a");
-      link.setAttribute("href", url);
-      link.setAttribute("download", `الميزانية_العمومية_ERP_${new Date().toISOString().split('T')[0]}.csv`);
-      document.body.appendChild(link);
-      link.click();
-      document.body.removeChild(link);
-      triggerNotification('📥 تم تنزيل نسخة عرض من الميزانية العمومية؛ لا تمثل قائمة مالية معتمدة.', 'info');
-    }, 600);
-  };
-
-  const handleExportBalanceSheetPdf = () => {
-    const printWindow = window.open('', '_blank');
-    if (!printWindow) {
-      triggerNotification('❌ تم حظر فتح نافذة الطباعة التلقائية.', 'warning');
-      return;
-    }
-
-    const assetAccounts = accounts.filter(a => a.classification === 'أصول');
-    const liabilityAccounts = accounts.filter(a => a.classification === 'خصوم');
-    const equityAccounts = accounts.filter(a => a.classification === 'حقوق ملكية');
-    
-    const totalAssets = assetAccounts.reduce((sum, a) => sum + a.balance, 0);
-    const totalLiabilities = liabilityAccounts.reduce((sum, a) => sum + a.balance, 0);
-    const totalEquity = equityAccounts.reduce((sum, a) => sum + a.balance, 0);
-
-    const assetsHtml = assetAccounts.map(a => `
-      <tr>
-        <td style="padding: 8px 10px; border: 1px solid #cbd5e1; padding-right: 20px;">${a.nameAr}</td>
-        <td style="padding: 8px 10px; border: 1px solid #cbd5e1; font-family: monospace;">${a.code}</td>
-        <td style="padding: 8px 10px; border: 1px solid #cbd5e1; font-family: monospace; text-align: left;">${a.balance.toLocaleString(undefined, { minimumFractionDigits: 2 })} د.ل</td>
-      </tr>
-    `).join('\n');
-
-    const liabilitiesHtml = liabilityAccounts.map(a => `
-      <tr>
-        <td style="padding: 8px 10px; border: 1px solid #cbd5e1; padding-right: 20px;">${a.nameAr}</td>
-        <td style="padding: 8px 10px; border: 1px solid #cbd5e1; font-family: monospace;">${a.code}</td>
-        <td style="padding: 8px 10px; border: 1px solid #cbd5e1; font-family: monospace; text-align: left;">${a.balance.toLocaleString(undefined, { minimumFractionDigits: 2 })} د.ل</td>
-      </tr>
-    `).join('\n');
-
-    const equityHtml = equityAccounts.map(a => `
-      <tr>
-        <td style="padding: 8px 10px; border: 1px solid #cbd5e1; padding-right: 20px;">${a.nameAr}</td>
-        <td style="padding: 8px 10px; border: 1px solid #cbd5e1; font-family: monospace;">${a.code}</td>
-        <td style="padding: 8px 10px; border: 1px solid #cbd5e1; font-family: monospace; text-align: left;">${a.balance.toLocaleString(undefined, { minimumFractionDigits: 2 })} د.ل</td>
-      </tr>
-    `).join('\n');
-
-    printWindow.document.write(`
-      <html dir="rtl">
-        <head>
-          <title>الميزانية العمومية والبيان الرأسمالي - ERP Financials</title>
-          <style>
-            @import url('https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700;800&display=swap');
-            body { font-family: 'Inter', system-ui, sans-serif; padding: 40px; color: #0f172a; background-color: #ffffff; }
-            .header { display: flex; justify-content: space-between; align-items: center; border-bottom: 2px solid #000; padding-bottom: 15px; margin-bottom: 25px; }
-            h1 { font-size: 18px; font-weight: 900; margin: 0; }
-            h2 { font-size: 12px; color: #64748b; margin-top: 5px; font-weight: bold; }
-            table { width: 100%; border-collapse: collapse; font-size: 12px; margin-top: 15px; margin-bottom: 30px; }
-            th { background-color: #f1f5f9; padding: 10px; border: 1px solid #cbd5e1; font-weight: bold; text-align: right; }
-            .section-header { font-weight: bold; background-color: #e2e8f0; font-size: 13px; color: #0f172a; }
-            .total-row { font-weight: bold; background-color: #f8fafc; font-size: 13px; }
-            .double-bottom { border-bottom: 4px double #0f172a !important; }
-            .system-tag { text-align: center; font-size: 9px; color: #94a3b8; margin-top: 60px; border-top: 1px solid #e2e8f0; padding-top: 10px; }
-          </style>
-        </head>
-        <body>
-          <div class="header">
-            <div>
-              <p style="font-size: 11px; font-weight: bold; margin: 0;">الجمهورية الليبية / وزارة التعليم</p>
-              <h1 style="color: #4f46e5; margin-top: 3px;">مجمع المدارس التعليمي الموحد</h1>
-              <h2 style="margin: 0; margin-top: 2px;">نظام الإدارة المالية والتحصيل السحابي ERP</h2>
-            </div>
-            <div style="text-align: left; font-size: 10px; font-weight: bold; line-height: 1.4;">
-              <p>بيان: الميزانية العمومية والمركز المالي</p>
-              <p>دورة المراجعة: عام 2026</p>
-              <p>تاريخ الاستخراج: ${new Date().toLocaleDateString('ar-SA')}</p>
-              <p>المستند: معتمد رسمياً</p>
-              <p>المستخدم: سليمان غازي</p>
-            </div>
-          </div>
-          
-          <h2 style="text-align: center; font-size: 16px; font-weight: 900; color: #1e293b; margin-bottom: 5px;">بيان المركز المالي والميزانية العمومية كما في 2026/12/31</h2>
-          <p style="text-align: center; font-size: 10px; color: #64748b; margin-bottom: 25px;">توازن الحسابات الإيجابية والسلبية للنشاط وفق أفضل المعايير المحاسبية العالمية</p>
-
-          <table>
-            <thead>
-              <tr>
-                <th style="width: 50%">اسم المصنف الحسابي</th>
-                <th style="width: 20%">رمز المصنف</th>
-                <th style="width: 30%; text-align: left;">الرصيد الدفتري</th>
-              </tr>
-            </thead>
-            <tbody>
-              <!-- Assets Section -->
-              <tr class="section-header">
-                <td colspan="3" style="border: 1px solid #cbd5e1; padding: 10px;">الجانب الأيمن: الأصول والموجودات (Assets)</td>
-              </tr>
-              ${assetsHtml}
-              <tr class="total-row double-bottom">
-                <td style="border: 1px solid #cbd5e1; padding: 10px;">إجمالي الموجودات والأصول العامة (أ)</td>
-                <td style="border: 1px solid #cbd5e1; padding: 10px;">-</td>
-                <td style="border: 1px solid #cbd5e1; padding: 10px; text-align: left; color: #166534; font-family: monospace;">${totalAssets.toLocaleString(undefined, { minimumFractionDigits: 2 })} د.ل</td>
-              </tr>
-
-              <!-- Liabilities Section -->
-              <tr class="section-header">
-                <td colspan="3" style="border: 1px solid #cbd5e1; padding: 10px;">الجانب الأيسر: الخصوم والالتزامات للغير (Liabilities)</td>
-              </tr>
-              ${liabilitiesHtml}
-              <tr class="total-row">
-                <td style="border: 1px solid #cbd5e1; padding: 10px;">إجمالي الخصوم والالتزامات للغير</td>
-                <td style="border: 1px solid #cbd5e1; padding: 10px;">-</td>
-                <td style="border: 1px solid #cbd5e1; padding: 10px; text-align: left; font-family: monospace;">${totalLiabilities.toLocaleString(undefined, { minimumFractionDigits: 2 })} د.ل</td>
-              </tr>
-
-              <!-- Equity Section -->
-              <tr class="section-header">
-                <td colspan="3" style="border: 1px solid #cbd5e1; padding: 10px;">حقوق الملكية ورأس المال المدور (Equity)</td>
-              </tr>
-              ${equityHtml}
-              <tr class="total-row">
-                <td style="border: 1px solid #cbd5e1; padding: 10px;">إجمالي حقوق الملكية ورأس المال</td>
-                <td style="border: 1px solid #cbd5e1; padding: 10px;">-</td>
-                <td style="border: 1px solid #cbd5e1; padding: 10px; text-align: left; font-family: monospace;">${totalEquity.toLocaleString(undefined, { minimumFractionDigits: 2 })} د.ل</td>
-              </tr>
-
-              <!-- Total Liabilities + Equity -->
-              <tr class="total-row double-bottom" style="background-color: #e0f2fe; color: #0369a1; font-weight: 900;">
-                <td style="border: 1px solid #cbd5e1; padding: 10px;">إجمالي الخصوم وحقوق الملكية للجانب الأيسر (ب)</td>
-                <td style="border: 1px solid #cbd5e1; padding: 10px;">-</td>
-                <td style="border: 1px solid #cbd5e1; padding: 10px; text-align: left; font-family: monospace; font-size: 13px;">${(totalLiabilities + totalEquity).toLocaleString(undefined, { minimumFractionDigits: 2 })} د.ل</td>
-              </tr>
-            </tbody>
-          </table>
-
-          <div style="background-color: #f8fafc; padding: 12px; border: 1px solid #cbd5e1; border-radius: 6px; font-size: 11px; text-align: center; font-weight: bold; color: #0284c7;">
-            حالة توازن المركز المالي: الجانب الأيمن (أ) = الجانب الأيسر (ب) | الفرق المتوازن: ${Math.abs(totalAssets - (totalLiabilities + totalEquity)).toLocaleString(undefined, { minimumFractionDigits: 2 })} د.ل (تطابق كامل)
-          </div>
-
-          <div style="margin-top: 50px; display: flex; justify-content: space-between; font-size: 11px; font-weight: bold;">
-            <p>المراجع الداخلي: _________________</p>
-            <p>المدير المالي والرقابة: _________________</p>
-            <p>الختم الرسمي للمركز</p>
-          </div>
-
-          <div class="system-tag">
-            تم التصدير والطباعة إلكترونياً من نظام المدير المالي ERP - تاريخ الطباعة: ${new Date().toLocaleString('ar-SA')} - صفحة 1 من 1
-          </div>
-          <script>
-            window.onload = function() { window.print(); }
-          </script>
-        </body>
-      </html>
-    `);
-    printWindow.document.close();
-    logAction('EXPORT_PDF', 'تصدير بيان المركز المالي والميزانية العمومية كتقرير PDF معتمد وموزون', 'الحسابات');
-  };
-
   // Add Custom Journal Entry
   const handleAddJV = async (e: React.FormEvent) => {
     e.preventDefault();
@@ -3052,7 +2389,11 @@ export default function GeneralLedgerPortal({
       const debAcc = debLine?.accountCode || '1101';
       const credAcc = credLine?.accountCode || '4101';
       const desc = activeJvState.description || 'قيد بسيط يدوي';
-      const cc = debLine?.costCenter || 'primary';
+      const cc = String(debLine?.costCenter || '').trim();
+      if (!cc) {
+        triggerNotification('⚠️ يجب تحديد مركز تكلفة للقيد قبل الحفظ.', 'warning');
+        return;
+      }
 
       const debAccName = accounts.find(a => a.code === debAcc)?.nameAr || '';
       const credAccName = accounts.find(a => a.code === credAcc)?.nameAr || '';
@@ -3082,6 +2423,11 @@ export default function GeneralLedgerPortal({
       const missingAccount = updatedLines.some(l => !l.accountCode);
       if (missingAccount) {
         triggerNotification('⚠️ يرجى التأكد من اختيار حساب لكل سطر في جدول القيد', 'warning');
+        return;
+      }
+      const missingCostCenter = updatedLines.some(l => !String(l.costCenter || '').trim());
+      if (missingCostCenter) {
+        triggerNotification('⚠️ يجب تحديد مركز تكلفة لكل سطر في القيد قبل الحفظ.', 'warning');
         return;
       }
     }

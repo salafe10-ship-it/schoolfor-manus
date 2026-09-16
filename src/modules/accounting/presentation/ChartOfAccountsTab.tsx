@@ -1,5 +1,5 @@
-import { AlertTriangle, BarChart2, Box, Calculator, Check, CheckCircle2, ChevronDown, ChevronLeft, ChevronRight, Clock, Download, Edit, Edit3, Eye, FileDown, FileSpreadsheet, FileText, Filter, Folder, FolderOpen, Hash, HelpCircle, Key, Layers, Play, Plus, Printer, RefreshCw, Save, Search, Settings2, ShieldAlert, ShieldCheck, Trash2, TrendingDown, TrendingUp, Type, Upload, X } from 'lucide-react';
-import React, { useState, useEffect, useMemo, useCallback } from 'react';
+import { Calculator, Check, ChevronDown, ChevronRight, Edit, Edit3, FileSpreadsheet, FileText, Folder, FolderOpen, Layers, Plus, Printer, RefreshCw, Save, Search, ShieldAlert, Trash2, TrendingUp, Type, Upload, X } from 'lucide-react';
+import React from 'react';
 import { AccountingContext, AccountNode } from '../../../components/GeneralLedgerPortal';
 import { triggerNotification } from '../../../lib/notifications';
 
@@ -1236,33 +1236,23 @@ export const ChartOfAccountsTab = () => {
                       })()}
 
                       {selectedAccTab === 'ledger' && (() => {
-                        // Generate mock ledger transactions based on classification
-                        let mockLines = [];
-                        if (currentAccount.classification === 'مصروفات') {
-                          mockLines = [
-                            { date: '2026-06-18', desc: 'رواتب وأجور معلمي وموظفي الفرع لشهر مايو', ref: 'JV-1081', debit: 18500.00, credit: 0.00, postedBy: 'سليمان غازي' },
-                            { date: '2026-06-10', desc: 'شراء وتجهيز كتب دراسية للمرحلتين الابتدائية والمتوسط', ref: 'PV-2041', debit: 3200.00, credit: 0.00, postedBy: 'سليمان غازي' },
-                            { date: '2026-06-05', desc: 'صيانة مكيفات فصول مرحلة الروضة والابتدائي للفرع', ref: 'JV-1049', debit: 1200.00, credit: 0.00, postedBy: 'سليمان غازي' },
-                          ];
-                        } else if (currentAccount.classification === 'إيرادات') {
-                          mockLines = [
-                            { date: '2026-06-22', desc: 'تحصيل رسوم دراسية نقدية - الطالب عبد الرحمن الورفلي', ref: 'RV-9041', debit: 0.00, credit: 2800.00, postedBy: 'سليمان غازي' },
-                            { date: '2026-06-19', desc: 'تحصيل رسوم حافلات النقل المدرسي الفصل الأول', ref: 'JV-2042', debit: 0.00, credit: 1500.00, postedBy: 'سليمان غازي' },
-                            { date: '2026-06-15', desc: 'تسجيل وقبول طالب جديد - مريم الدرسي (ابتدائي)', ref: 'RV-9018', debit: 0.00, credit: 3200.00, postedBy: 'سليمان غازي' },
-                          ];
-                        } else if (currentAccount.classification === 'أصول') {
-                          mockLines = [
-                            { date: '2026-06-01', desc: 'الرصيد الافتتاحي المعين للدورة المالية الحالية', ref: 'OP-0001', debit: 125000.00, credit: 0.00, postedBy: 'النظام' },
-                            { date: '2026-06-12', desc: 'توريد متحصلات نقدية من الرسوم الدراسية للخزينة', ref: 'JV-2110', debit: 15000.00, credit: 0.00, postedBy: 'سليمان غازي' },
-                            { date: '2026-06-20', desc: 'صرف دفعة سلفة نقدية لمستلزمات الصيانة والمشتريات', ref: 'PV-3001', debit: 0.00, credit: 3500.00, postedBy: 'سليمان غازي' },
-                          ];
-                        } else {
-                          // Equity, Liabilities, etc.
-                          mockLines = [
-                            { date: '2026-06-01', desc: 'رصيد مرحل من الدورة المحاسبية السابقة معتمد', ref: 'OP-0002', debit: 0.00, credit: currentAccount.balance || 12000.00, postedBy: 'النظام' },
-                            { date: '2026-06-15', desc: 'تسجيل ذمم والتزامات مورد الملابس والمطبوعات المدرسية', ref: 'JV-3091', debit: 0.00, credit: 4500.00, postedBy: 'سليمان غازي' },
-                          ];
-                        }
+                        // The account ledger is a direct view of persisted journal
+                        // lines. It must never invent opening balances or sample
+                        // transactions when the canonical source is empty.
+                        const accountLines = getNormalizedJournalEntries()
+                          .flatMap((entry: any) => (Array.isArray(entry.lines) ? entry.lines : [])
+                            .filter((line: any) => String(line.accountCode || line.accountId || '') === String(currentAccount.code))
+                            .map((line: any) => ({
+                              date: entry.date || '',
+                              desc: line.description || entry.description || '',
+                              ref: entry.id || '',
+                              debit: Number(line.debit || 0),
+                              credit: Number(line.credit || 0),
+                              costCenter: line.costCenter || '',
+                              postedBy: entry.createdByUser || entry.createdBy || 'المصدر المركزي',
+                              status: entry.status || ''
+                            })))
+                          .sort((a: any, b: any) => String(b.date).localeCompare(String(a.date)));
 
                         return (
                           <div className="printable-area space-y-4 animate-fade-in text-right">
@@ -1289,8 +1279,12 @@ export const ChartOfAccountsTab = () => {
                                   </tr>
                                 </thead>
                                 <tbody className="divide-y divide-slate-100 font-medium">
-                                  {mockLines.map((line, idx) => (
-                                    <tr key={idx} className="hover:bg-slate-50/50">
+                                  {accountLines.length === 0 ? (
+                                    <tr>
+                                      <td colSpan={6} className="p-6 text-center text-slate-400">لا توجد حركات مرحّلة موثقة لهذا الحساب في المصدر المركزي.</td>
+                                    </tr>
+                                  ) : accountLines.map((line: any, idx: number) => (
+                                    <tr key={`${line.ref}-${idx}`} className="hover:bg-slate-50/50">
                                       <td className="p-2 font-mono whitespace-nowrap">{line.date}</td>
                                       <td className="p-2 font-semibold text-slate-800">{line.desc}</td>
                                       <td className="p-2 font-mono text-indigo-700 font-bold">{line.ref}</td>
@@ -1300,7 +1294,7 @@ export const ChartOfAccountsTab = () => {
                                       <td className="p-2 font-mono text-left text-slate-900">
                                         {line.credit > 0 ? line.credit.toLocaleString(undefined, { minimumFractionDigits: 2 }) : '-'}
                                       </td>
-                                      <td className="p-2 text-center text-slate-400 font-bold whitespace-nowrap">{line.postedBy}</td>
+                                      <td className="p-2 text-center text-slate-400 font-bold whitespace-nowrap">{line.costCenter || 'عام'} — {line.status || line.postedBy}</td>
                                     </tr>
                                   ))}
                                 </tbody>

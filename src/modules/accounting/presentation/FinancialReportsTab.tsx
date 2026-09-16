@@ -1,5 +1,5 @@
-import { ArrowLeft, ArrowRightLeft, ArrowUpRight, BarChart2, Calculator, ChevronLeft, Coins, Download, FileDown, FileSpreadsheet, FileText, Filter, Layers, Percent, Printer, RefreshCw, Search, Settings, Settings2, ShieldAlert, TrendingUp } from 'lucide-react';
-import React, { useState, useEffect, useMemo, useCallback, Fragment } from 'react';
+import { ArrowLeft, ArrowRightLeft, ArrowUpRight, Calculator, ChevronLeft, Coins, Download, FileSpreadsheet, FileText, Layers, Percent, Printer, RefreshCw, Settings, TrendingUp } from 'lucide-react';
+import React, { useState, Fragment } from 'react';
 import { AccountingContext } from '../../../components/GeneralLedgerPortal';
 
 export const FinancialReportsTab = () => {
@@ -67,13 +67,19 @@ export const FinancialReportsTab = () => {
   currentUserIdentity
 } = React.useContext(AccountingContext);
 
-const activeCostCenters = (Array.isArray(liveCostCenters) ? liveCostCenters : [])
+const configuredCostCenters = (Array.isArray(liveCostCenters) ? liveCostCenters : [])
   .filter((center: any) => center?.isActive !== false)
   .map((center: any) => ({
     id: center.id,
     name: center.name || center.nameAr || center.code || center.id,
     code: center.code || center.id
   }));
+const hasUnclassifiedPostings = getNormalizedJournalEntries().some((entry: any) =>
+  Array.isArray(entry.lines) && entry.lines.some((line: any) => !String(line.costCenter || '').trim())
+);
+const activeCostCenters = hasUnclassifiedPostings
+  ? [...configuredCostCenters, { id: 'unclassified', name: 'حركات غير مصنفة', code: 'UNCLASSIFIED' }]
+  : configuredCostCenters;
 
 // Reports must fail closed when the authenticated profile has not loaded yet,
 // instead of crashing while dereferencing a null drill-down user.
@@ -275,7 +281,14 @@ const handleDrillDownToOriginalDocument = (jv: any) => {
             const status = String(entry.status || '').toLowerCase();
             return ['مرحل', 'مرحّل', 'مُرحّل', 'معتمد', 'approved', 'posted'].includes(status)
               && entry.date >= filterFromDate && entry.date <= filterToDate;
-          });
+          }).map((entry: any) => ({
+            ...entry,
+            lines: (Array.isArray(entry.lines) ? entry.lines : []).filter((line: any) => {
+              if (filterCostCenter === 'all') return true;
+              const lineCostCenter = String(line.costCenter || '').trim() || 'unclassified';
+              return lineCostCenter === filterCostCenter;
+            })
+          })).filter((entry: any) => entry.lines.length > 0);
           const cashAccountCodes = new Set(
             accounts
               .filter((account: any) => {

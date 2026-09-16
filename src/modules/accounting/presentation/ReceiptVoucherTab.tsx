@@ -1,4 +1,4 @@
-import { AlertTriangle, BookOpen, Calculator, Check, CheckCircle2, ChevronLeft, ChevronRight, Coins, CornerUpLeft, CreditCard, Edit, Eye, FileDown, FileText, Filter, Hash, LayoutTemplate, Link, List, Maximize2, Minimize2, PenTool, Play, Plus, Printer, Save, Search, Settings2, Share2, ShieldAlert, Table, Trash2, Upload, User, X } from 'lucide-react';
+import { Check, Coins, FileText, Printer, Search, ShieldAlert, Trash2, Upload, X } from 'lucide-react';
 import React from 'react';
 import { AccountingContext } from '../../../components/GeneralLedgerPortal';
 import { EnterpriseAuditLogger } from '../../../utils/EnterpriseAuditLogger';
@@ -162,6 +162,16 @@ export const ReceiptVoucherTab = () => {
       return;
     }
 
+    const selectedCostCenter = normalizeAccountingDimension(receiptVoucherForm.costCenter);
+    const permittedCostCenters = new Set([
+      'kindergarten', 'primary', 'middle', 'secondary',
+      ...activeAccountingStages.map((stage: any) => stageCostCenterKey(stage))
+    ]);
+    if (!selectedCostCenter || !permittedCostCenters.has(selectedCostCenter)) {
+      triggerNotification('❌ يجب تحديد مركز تكلفة صحيح للإيراد قبل اعتماد سند القبض.', 'warning');
+      return;
+    }
+
     const nextIdNum = receiptVouchers.length + 1;
     const rvId = `RV-2026-${String(nextIdNum).padStart(4, '0')}`;
     const jvId = `JV-2026-RV-${String(nextIdNum).padStart(4, '0')}`;
@@ -189,7 +199,7 @@ export const ReceiptVoucherTab = () => {
       date: receiptVoucherForm.date || new Date().toISOString().split('T')[0],
       school: receiptVoucherForm.school,
       stage: receiptVoucherForm.stage,
-      costCenter: receiptVoucherForm.costCenter,
+      costCenter: selectedCostCenter,
       receivedFrom: String(submitted?.get('receivedFrom') || receiptVoucherForm.receivedFrom || '').trim(),
       operationType: receiptVoucherForm.operationType,
       paymentMethod: receiptVoucherForm.paymentMethod,
@@ -227,7 +237,7 @@ export const ReceiptVoucherTab = () => {
           description: `استلام مقبوض السند ${rvId}`,
           debit: amt,
           credit: 0,
-          costCenter: receiptVoucherForm.costCenter
+          costCenter: selectedCostCenter
         },
         {
           id: `${jvId}-2`,
@@ -236,7 +246,7 @@ export const ReceiptVoucherTab = () => {
           description: `إثبات إيراد السند ${rvId}`,
           debit: 0,
           credit: amt,
-          costCenter: receiptVoucherForm.costCenter
+          costCenter: selectedCostCenter
         }
       ]
     };

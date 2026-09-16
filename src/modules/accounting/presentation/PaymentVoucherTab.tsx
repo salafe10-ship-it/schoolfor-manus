@@ -1,4 +1,4 @@
-import { AlertTriangle, BookOpen, Calculator, Check, CheckCircle2, ChevronLeft, ChevronRight, Coins, CornerUpLeft, CreditCard, Edit, Eye, FileDown, FileText, Filter, Hash, LayoutTemplate, Link, List, Maximize2, Minimize2, PenTool, Play, Plus, Printer, Save, Search, Settings2, Share2, ShieldAlert, Table, Trash2, Upload, User, X } from 'lucide-react';
+import { Check, Coins, FileText, Printer, Search, ShieldAlert, Trash2, Upload, X } from 'lucide-react';
 import React from 'react';
 import { AccountingContext } from '../../../components/GeneralLedgerPortal';
 import { EnterpriseAuditLogger } from '../../../utils/EnterpriseAuditLogger';
@@ -139,6 +139,16 @@ export const PaymentVoucherTab = () => {
       return;
     }
 
+    const selectedCostCenter = normalizeAccountingDimension(paymentVoucherForm.costCenter);
+    const permittedCostCenters = new Set([
+      'kindergarten', 'primary', 'middle', 'secondary',
+      ...activeAccountingStages.map((stage: any) => stageCostCenterKey(stage))
+    ]);
+    if (!selectedCostCenter || !permittedCostCenters.has(selectedCostCenter)) {
+      triggerNotification('❌ يجب تحديد مركز تكلفة صحيح للمصروف قبل اعتماد سند الصرف.', 'warning');
+      return;
+    }
+
     const nextIdNum = paymentVouchers.length + 1;
     const pvId = `PV-2026-${String(nextIdNum).padStart(4, '0')}`;
     const jvId = `JV-2026-PV-${String(nextIdNum).padStart(4, '0')}`;
@@ -155,7 +165,7 @@ export const PaymentVoucherTab = () => {
       date: paymentVoucherForm.date || new Date().toISOString().split('T')[0],
       beneficiary: paymentVoucherForm.beneficiary,
       stage: paymentVoucherForm.stage,
-      costCenter: paymentVoucherForm.costCenter || 'primary',
+      costCenter: selectedCostCenter,
       paidFromAccount: paymentVoucherForm.paidFromAccount,
       paidToAccount: paymentVoucherForm.paidToAccount,
       amount: amt,
@@ -191,7 +201,7 @@ export const PaymentVoucherTab = () => {
           description: `إثبات مصروف السند ${pvId}`,
           debit: amt,
           credit: 0,
-          costCenter: paymentVoucherForm.costCenter
+          costCenter: selectedCostCenter
         },
         {
           id: `${jvId}-2`,
@@ -200,7 +210,7 @@ export const PaymentVoucherTab = () => {
           description: `دفع قيمة السند ${pvId}`,
           debit: 0,
           credit: amt,
-          costCenter: paymentVoucherForm.costCenter
+          costCenter: selectedCostCenter
         }
       ]
     };

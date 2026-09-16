@@ -82,6 +82,20 @@ const DEFAULT_ACCOUNTS: Array<{ code: string; name: string; nature: string }> = 
   { code: '5280', name: 'فروقات وتسويات المخزون', nature: 'expense' }
 ];
 
+// Historical student-fee journals may predate the cost-center column. When a
+// journal is linked to a student invoice, derive the educational stage from
+// the student's current enrollment so reports do not silently place it in an
+// arbitrary center. Unknown non-student transactions remain unclassified.
+function deriveCostCenterFromClassReference(value: unknown): string | undefined {
+  const reference = String(value || '').trim().toLowerCase();
+  if (!reference) return undefined;
+  if (/روضة|رياض|تمهيدي|بستان|kindergarten|\bkg\b/.test(reference)) return 'kindergarten';
+  if (/ثانوي|العاشر|الحادي عشر|الثاني عشر|secondary|high school/.test(reference)) return 'secondary';
+  if (/متوسط|إعدادي|اعدادي|السابع|الثامن|التاسع|middle/.test(reference)) return 'middle';
+  if (/ابتدائي|أساسي|اساسي|primary/.test(reference)) return 'primary';
+  return undefined;
+}
+
 function rowValue(row: FinancialRow, ...keys: string[]): unknown {
   for (const key of keys) {
     if (row[key] !== undefined && row[key] !== null) return row[key];
@@ -868,9 +882,35 @@ export class CanonicalErpPostingService {
         `SELECT journal_entry_id, id, account_code, account_name, debit, credit, cost_center
            FROM public.erp_journal_lines WHERE school_id = $1 ORDER BY journal_entry_id, id`, [schoolId]
       );
+    const studentClassByJournal = new Map<string, string | undefined>();
+    try {
+      const studentJournalClasses = await db(transaction).query<{ journal_entry_id: string; class_reference: string | null }>(
+        `SELECT je.id AS journal_entry_id, enrollment.class_reference
+           FROM public.erp_journal_entries je
+           JOIN public.student_fee_invoices invoice
+             ON invoice.id::text = je.source_id AND invoice.school_id = je.school_id
+           LEFT JOIN LATERAL (
+             SELECT e.class_reference
+               FROM public.enrollments e
+              WHERE e.school_id = invoice.school_id
+                AND e.student_id::text = invoice.student_id::text
+                AND e.deleted_at IS NULL
+              ORDER BY e.starts_on DESC NULLS LAST, e.created_at DESC
+              LIMIT 1
+           ) enrollment ON true
+          WHERE je.school_id = $1 AND je.source_type = 'student_fee_invoice'`, [schoolId]
+      );
+      for (const row of studentJournalClasses.rows) {
+        studentClassByJournal.set(row.journal_entry_id, row.class_reference || undefined);
+      }
+    } catch (error: any) {
+      // The ERP ledger remains readable in deployments that have not yet
+      // installed the student-fee/enrollment tables.
+      if (String(error?.code || '') !== '42P01') throw error;
+    }
     const ledger = await db(transaction).query<any>(
         `SELECT id, journal_entry_id, journal_line_id, account_code, entry_date, debit, credit,
-                balance_after, source_type, source_id, description, created_at
+                balance_after, source_type, source_id, description, cost_center, created_at
            FROM public.erp_general_ledger WHERE school_id = $1 ORDER BY entry_date DESC, created_at DESC`, [schoolId]
       );
     const accounts = await db(transaction).query<any>(
@@ -896,7 +936,8 @@ export class CanonicalErpPostingService {
     for (const line of lines.rows) {
       const list = lineMap.get(line.journal_entry_id) || [];
       list.push({ id: line.id, accountCode: line.account_code, accountName: line.account_name,
-        debit: Number(line.debit), credit: Number(line.credit), costCenter: line.cost_center || undefined });
+        debit: Number(line.debit), credit: Number(line.credit),
+        costCenter: line.cost_center || deriveCostCenterFromClassReference(studentClassByJournal.get(line.journal_entry_id)) });
       lineMap.set(line.journal_entry_id, list);
     }
     const journalEntries = journals.rows.map(row => ({
@@ -915,9 +956,30 @@ export class CanonicalErpPostingService {
       createdAt: row.created_at
     }));
     const sourceLinks = journals.rows.map(row => ({ sourceType: row.source_type, sourceId: row.source_id, journalEntryId: row.id }));
-    const chartOfAccounts = accounts.rows.map(row => ({
+    const accountCodes = accounts.rows.map(row => String(row.account_code || '').trim()).filter(Boolean);
+    const parentByCode = new Map<string, string>();
+    for (const code of accountCodes) {
+      const parent = accountCodes
+        .filter(candidate => candidate !== code && code.startsWith(candidate))
+        .sort((a, b) => b.length - a.length)[0];
+      if (parent) parentByCode.set(code, parent);
+    }
+    const levelByCode = new Map<string, number>();
+    const resolveLevel = (code: string, visited = new Set<string>()): number => {
+      if (levelByCode.has(code)) return levelByCode.get(code)!;
+      if (visited.has(code)) return 1;
+      const parent = parentByCode.get(code);
+      const level = parent ? resolveLevel(parent, new Set([...visited, code])) + 1 : 1;
+      levelByCode.set(code, level);
+      return level;
+    };
+    for (const code of accountCodes) resolveLevel(code);
+
+    const chartOfAccounts = accounts.rows.map(row => {
+      const code = String(row.account_code || '').trim();
+      return {
       id: row.account_code,
-      code: row.account_code,
+      code,
       name: row.account_name,
       nameAr: row.account_name,
       nature: row.account_nature,
@@ -925,13 +987,16 @@ export class CanonicalErpPostingService {
       isActive: row.is_active,
       isLeaf: row.is_leaf,
       type: row.is_leaf ? 'فرعي' : 'رئيسي',
+      parentAccountId: parentByCode.get(code),
+      level: levelByCode.get(code) || 1,
       balance: Number(row.balance),
       debitBalance: Number(row.debit_balance),
       creditBalance: Number(row.credit_balance)
-    }));
+      };
+    });
     return {
       journalEntries,
-      ledgerEntries: ledger.rows.map(row => ({ ...row, debit: Number(row.debit), credit: Number(row.credit), balanceAfter: Number(row.balance_after) })),
+      ledgerEntries: ledger.rows.map(row => ({ ...row, debit: Number(row.debit), credit: Number(row.credit), balanceAfter: Number(row.balance_after), costCenter: row.cost_center || deriveCostCenterFromClassReference(studentClassByJournal.get(row.journal_entry_id)) })),
       chartOfAccounts,
       expenseAccruals: accruals.rows.map(row => ({ ...row, amount: Number(row.amount) })),
       sourceLinks
