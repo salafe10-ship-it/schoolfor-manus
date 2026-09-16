@@ -5,6 +5,12 @@
   "compatibility_date": "2026-09-16",
   "compatibility_flags": ["nodejs_compat"],
   "workers_dev": true,
+  "hyperdrive": [
+    {
+      "binding": "HYPERDRIVE",
+      "id": "eee116c2737343ed9621cf5e841da91a"
+    }
+  ],
   "alias": {
     "body-parser": "./cloudflare/body-parser-shim.js"
   },
