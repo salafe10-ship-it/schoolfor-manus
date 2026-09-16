@@ -50,6 +50,15 @@ class BrowserAsyncContextStorage<T> implements AsyncContextStorage<T> {
 }
 
 function createAsyncContextStorage<T>(): AsyncContextStorage<T> {
+  // Cloudflare's Node compatibility layer exposes AsyncLocalStorage types but
+  // does not implement enterWith(). UnitOfWork must be able to clear the
+  // request context after commit/rollback, so use the compatible local
+  // adapter in Workers instead of selecting a partial runtime API.
+  const isCloudflareWorker = (globalThis as typeof globalThis & {
+    __EDUPRO_CLOUDFLARE__?: boolean;
+  }).__EDUPRO_CLOUDFLARE__ === true;
+  if (isCloudflareWorker) return new BrowserAsyncContextStorage<T>();
+
   // `tsx` runs this module as native ESM, where `require` is undefined. The
   // old check therefore selected the browser fallback in the server and made
   // concurrent requests share one mutable transaction context. Node 22+
