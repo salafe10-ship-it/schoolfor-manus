@@ -6,6 +6,7 @@ import { env } from "cloudflare:workers";
 type CloudflareBindings = {
   ASSETS: Fetcher;
   HYPERDRIVE?: { connectionString: string };
+  HYPERDRIVE_ADMIN?: { connectionString: string };
   [key: string]: unknown;
 };
 type WorkerRequest = Parameters<NonNullable<ExportedHandler["fetch"]>>[0];
@@ -27,6 +28,9 @@ function configureProcessEnvironment(bindings: CloudflareBindings): void {
   }
   if (bindings.HYPERDRIVE?.connectionString) {
     processEnvironment.DATABASE_URL = bindings.HYPERDRIVE.connectionString;
+  }
+  if (bindings.HYPERDRIVE_ADMIN?.connectionString) {
+    processEnvironment.PLATFORM_ADMIN_DATABASE_URL = bindings.HYPERDRIVE_ADMIN.connectionString;
   }
 }
 
