@@ -49,12 +49,12 @@ type QuickAction = {
 
 function EmptyPanel({ title, description }: { title: string; description: string }) {
   return (
-    <div className="rounded-2xl border border-dashed border-[#c5a059]/50 bg-[#fffdf8]/70 p-5 text-center">
-      <div className="mx-auto mb-2 flex h-9 w-9 items-center justify-center rounded-full bg-[#2a1a0e] text-amber-300">
-        <CheckCircle2 className="h-4 w-4" aria-hidden="true" />
+    <div className="rounded-2xl border border-dashed border-[#c5a059]/50 bg-[#fffdf8]/70 p-3 text-center">
+      <div className="mx-auto mb-1.5 flex h-8 w-8 items-center justify-center rounded-full bg-[#2a1a0e] text-amber-300">
+        <CheckCircle2 className="h-3.5 w-3.5" aria-hidden="true" />
       </div>
-      <h4 className="text-xs font-black text-slate-800">{title}</h4>
-      <p className="mt-1 text-[10px] font-bold leading-relaxed text-slate-500">{description}</p>
+      <h4 className="text-[11px] font-black text-slate-800">{title}</h4>
+      <p className="mt-1 text-[9px] font-bold leading-relaxed text-slate-500">{description}</p>
     </div>
   );
 }
@@ -205,7 +205,7 @@ export default function ModernSchoolDashboard({
   return (
     <div
       id="schoolformanus-dashboard"
-      className="w-full min-h-screen space-y-6 bg-gradient-to-br from-[#f8f5ee] via-[#efe9dc] to-[#e8e0d0] p-2 text-right font-sans text-slate-900 transition-all duration-300 sm:p-4 md:p-6"
+      className="w-full min-h-full space-y-4 bg-gradient-to-br from-[#f8f5ee] via-[#efe9dc] to-[#e8e0d0] p-2 text-right font-sans text-slate-900 transition-all duration-300 sm:p-3 md:p-4"
       dir="rtl"
     >
       <header className="relative flex flex-wrap items-center justify-between gap-4 overflow-hidden rounded-3xl border-2 border-[#d4af37]/40 bg-gradient-to-r from-[#1c120c] via-[#2d1e12] to-[#1a100a] p-3 text-white shadow-2xl sm:p-4">
@@ -265,44 +265,33 @@ export default function ModernSchoolDashboard({
         <MetricCard label="نسبة التحصيل الكلية" value="—" detail={collectionRateDetail} icon={CheckCircle2} onClick={() => handleNav('student_accounts')} />
       </section>
 
-      <section className="grid grid-cols-1 gap-6 lg:grid-cols-12">
-        <div className="rounded-3xl border-2 border-[#d4af37]/30 bg-gradient-to-b from-[#fffefc] to-[#f8f3ea] p-5 shadow-lg lg:col-span-4">
-          <div className="mb-4 flex items-center gap-2 border-b border-amber-900/10 pb-3">
-            <div className="flex h-8 w-8 items-center justify-center rounded-xl bg-[#2a1a0e] text-amber-400"><ShieldCheck className="h-4 w-4" aria-hidden="true" /></div>
-            <h3 className="text-sm font-black text-slate-900">تنبيهات اليوم</h3>
+      <section className="grid grid-cols-1 gap-3 lg:grid-cols-12">
+        <div className="rounded-3xl border-2 border-[#d4af37]/30 bg-gradient-to-b from-[#fffefc] to-[#f8f3ea] p-3 shadow-lg lg:col-span-3">
+          <div className="mb-2 flex items-center gap-2 border-b border-amber-900/10 pb-2">
+            <div className="flex h-7 w-7 items-center justify-center rounded-xl bg-[#2a1a0e] text-amber-400"><ShieldCheck className="h-3.5 w-3.5" aria-hidden="true" /></div>
+            <h3 className="text-xs font-black text-slate-900">تنبيهات اليوم</h3>
           </div>
           <EmptyPanel title="لا توجد تنبيهات موثقة" description={isCustomerProductionPortal ? 'لا توجد تنبيهات تستدعي المتابعة اليوم.' : 'لم يتم تمرير مصدر Notifications حي إلى Dashboard، لذلك لا تُعرض أرقام أو تنبيهات ثابتة.'} />
         </div>
 
-        <div className="rounded-3xl border-2 border-[#d4af37]/30 bg-gradient-to-b from-[#fffefc] to-[#f8f3ea] p-5 shadow-lg lg:col-span-8">
-          <div className="mb-4 flex items-center gap-2 border-b border-amber-900/10 pb-3">
-            <div className="flex h-8 w-8 items-center justify-center rounded-xl bg-[#2a1a0e] text-amber-400"><Grid2X2 className="h-4 w-4" aria-hidden="true" /></div>
-            <h3 className="text-sm font-black text-slate-900">الاختصارات الرئيسية</h3>
+        <div className="rounded-3xl border-2 border-[#d4af37]/30 bg-gradient-to-b from-[#fffefc] to-[#f8f3ea] p-4 shadow-lg lg:col-span-9">
+          <div className="mb-3 flex items-center gap-2 border-b border-amber-900/10 pb-2">
+            <div className="flex h-7 w-7 items-center justify-center rounded-xl bg-[#2a1a0e] text-amber-400"><Grid2X2 className="h-3.5 w-3.5" aria-hidden="true" /></div>
+            <h3 className="text-xs font-black text-slate-900">الوحدات الرئيسية</h3>
           </div>
-          <div className="grid grid-cols-2 gap-3 sm:grid-cols-3 md:grid-cols-6">
+          <div className="grid grid-cols-2 gap-2 sm:grid-cols-3 md:grid-cols-4 xl:grid-cols-5">
             {quickActions.filter(({ section }) => canAccessSection(section)).map(({ section, label, icon: Icon }) => (
               <button
                 key={`${section}-${label}`}
                 type="button"
                 onClick={() => handleNav(section)}
-                className="flex h-28 flex-col items-center justify-center gap-2 rounded-2xl border-2 border-[#d4af37]/30 bg-gradient-to-b from-white to-[#fbf8f0] p-3.5 text-center transition-all hover:-translate-y-1 hover:border-[#d4af37] hover:shadow-lg focus:outline-none focus:ring-2 focus:ring-[#8b6508]/50"
+                className="flex h-20 flex-col items-center justify-center gap-1.5 rounded-2xl border-2 border-[#d4af37]/30 bg-gradient-to-b from-white to-[#fbf8f0] p-2.5 text-center transition-all hover:-translate-y-1 hover:border-[#d4af37] hover:shadow-lg focus:outline-none focus:ring-2 focus:ring-[#8b6508]/50"
               >
-                <span className="flex h-10 w-10 items-center justify-center rounded-xl bg-[#2a1a0e] text-amber-300"><Icon className="h-5 w-5" aria-hidden="true" /></span>
-                <span className="text-xs font-black text-slate-800">{label}</span>
+                <span className="flex h-8 w-8 items-center justify-center rounded-xl bg-[#2a1a0e] text-amber-300"><Icon className="h-4 w-4" aria-hidden="true" /></span>
+                <span className="text-[10px] font-black text-slate-800">{label}</span>
               </button>
             ))}
           </div>
-        </div>
-      </section>
-
-      <section className="grid grid-cols-1 gap-6 lg:grid-cols-12">
-        <div className="rounded-3xl border-2 border-[#d4af37]/30 bg-gradient-to-b from-[#fffefc] to-[#f8f3ea] p-5 shadow-lg lg:col-span-8">
-          <div className="mb-4 flex items-center justify-between border-b border-amber-900/10 pb-3"><h3 className="text-sm font-black text-slate-900">آخر العمليات المعتمدة</h3>{!isCustomerProductionPortal && <span className="text-[10px] font-bold text-amber-800">مصدر Audit حي مطلوب</span>}</div>
-          <EmptyPanel title="لا توجد عمليات موثقة للعرض" description={isCustomerProductionPortal ? 'ستظهر العمليات المعتمدة هنا عند تنفيذها.' : 'تم إخفاء السجلات التجريبية القديمة حتى لا تظهر كأنها عمليات حقيقية للمستخدم الحالي.'} />
-        </div>
-        <div className="rounded-3xl border-2 border-[#d4af37]/30 bg-gradient-to-b from-[#fffefc] to-[#f8f3ea] p-5 shadow-lg lg:col-span-4">
-          <div className="mb-4 flex items-center justify-between border-b border-amber-900/10 pb-3"><h3 className="text-sm font-black text-slate-900">جدول اليوم</h3><Calendar className="h-4 w-4 text-amber-800" aria-hidden="true" /></div>
-          <EmptyPanel title="لا يوجد جدول موثق" description="لم يتم ربط جدول اليوم بجدول أكاديمي حي ضمن نطاق Dashboard." />
         </div>
       </section>
 
