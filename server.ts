@@ -176,7 +176,7 @@ CMTyZKG3XEu5Ghl1LEnI3QmEKsqaCLv12BnVjbkSeZsMnevJPs1Ye6TjjJwdik5P
 o/bKiIz+Fq8=
 -----END CERTIFICATE-----`;
 
-const postgresSslConfig = process.env.PGSSLMODE === 'disable'
+const postgresSslConfig = process.env.EDUPRO_CLOUDFLARE_HYPERDRIVE === 'true' || process.env.PGSSLMODE === 'disable'
   ? undefined
   : {
       rejectUnauthorized: process.env.PGSSL_REJECT_UNAUTHORIZED === 'true',

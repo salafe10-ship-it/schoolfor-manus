@@ -22,6 +22,12 @@ const runtimeEnvKeys = [
 
 function configureProcessEnvironment(bindings: CloudflareBindings): void {
   const processEnvironment = process.env as Record<string, string | undefined>;
+  if (bindings.HYPERDRIVE?.connectionString || bindings.HYPERDRIVE_ADMIN?.connectionString) {
+    // Hyperdrive owns the encrypted connection to the origin. The pg driver
+    // must receive its generated connection string without a second SSL
+    // configuration intended for direct Supabase connections.
+    processEnvironment.EDUPRO_CLOUDFLARE_HYPERDRIVE = 'true';
+  }
   for (const key of runtimeEnvKeys) {
     const value = bindings[key];
     if (typeof value === "string" && value.length > 0) processEnvironment[key] = value;

@@ -23,7 +23,10 @@ o/bKiIz+Fq8=
 -----END CERTIFICATE-----`;
 
 export function createPostgresSslConfig(supabaseUrl?: string): { rejectUnauthorized: boolean; ca?: string } | undefined {
-  if (process.env.PGSSLMODE === 'disable') return undefined;
+  // Cloudflare Hyperdrive already owns the encrypted origin connection. Its
+  // generated driver endpoint rejects an additional pg SSL configuration;
+  // direct Supabase connections still use the certificate policy below.
+  if (process.env.EDUPRO_CLOUDFLARE_HYPERDRIVE === 'true' || process.env.PGSSLMODE === 'disable') return undefined;
   const normalizedSupabaseUrl = String(supabaseUrl || '').trim().toLowerCase();
   const ca = process.env.PGSSL_CA?.replaceAll('\\n', '\n')
     || (normalizedSupabaseUrl.includes('.supabase.co') || normalizedSupabaseUrl.includes('.supabase.com')

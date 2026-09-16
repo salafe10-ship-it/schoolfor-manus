@@ -19,5 +19,13 @@ describe('Cloudflare API routing contract', () => {
     expect(worker).toContain('processEnvironment.PLATFORM_ADMIN_DATABASE_URL = bindings.HYPERDRIVE_ADMIN.connectionString');
     expect(worker).toContain('processEnvironment.EDUPRO_CONFIGURED_DATABASE_URL = configuredDatabaseUrl');
     expect(worker).toContain('processEnvironment.EDUPRO_CONFIGURED_ADMIN_DATABASE_URL = configuredAdminDatabaseUrl');
+    expect(worker).toContain("processEnvironment.EDUPRO_CLOUDFLARE_HYPERDRIVE = 'true'");
+  });
+
+  it('does not layer direct Supabase SSL options over Hyperdrive connections', () => {
+    const sslConfig = read('server/infrastructure/PostgresSslConfig.ts');
+    const server = read('server.ts');
+    expect(sslConfig).toContain("process.env.EDUPRO_CLOUDFLARE_HYPERDRIVE === 'true'");
+    expect(server).toContain("process.env.EDUPRO_CLOUDFLARE_HYPERDRIVE === 'true'");
   });
 });
