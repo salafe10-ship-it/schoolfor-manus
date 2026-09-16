@@ -22,6 +22,7 @@
     "start": "node dist/server.cjs",
     "start:spa": "vite preview --port ${PORT:-10000} --host 0.0.0.0",
     "cloudflare:build": "npm run build:spa",
+    "precloudflare:deploy": "npm run build:spa",
     "cloudflare:deploy": "wrangler deploy",
     "cloudflare:types": "wrangler types",
     "clean": "rm -rf dist server.js",
