@@ -1683,21 +1683,21 @@ export default function StudentAffairsPortal({
   return (
     <div 
       id="student-affairs-master-command-center"
-      className={`student-affairs-command-center w-full min-h-screen text-right font-sans dir-rtl select-none transition-all duration-300 bg-[radial-gradient(circle_at_top_right,_rgba(212,175,55,0.14),_transparent_32%),linear-gradient(135deg,#f8f5ee_0%,#efe9dc_52%,#e5dccd_100%)] text-slate-900 p-2 sm:p-4 md:p-6 space-y-6 ${isFocusMode ? 'portal-focus-mode' : ''}`}
+      className={`student-affairs-command-center w-full min-h-full text-right font-sans dir-rtl select-none transition-all duration-300 bg-[radial-gradient(circle_at_top_right,_rgba(212,175,55,0.14),_transparent_32%),linear-gradient(135deg,#f8f5ee_0%,#efe9dc_52%,#e5dccd_100%)] text-slate-900 p-1 sm:p-2 md:p-3 space-y-3 ${isFocusMode ? 'portal-focus-mode' : ''}`}
       dir="rtl"
     >
 
       {/* ==========================================
           LUXURY GOLD METALLIC TOP HEADER
          ========================================== */}
-      <div className="bg-gradient-to-r from-[#1c120c] via-[#2d1e12] to-[#1a100a] text-white rounded-[28px] p-4 sm:p-5 border border-[#d4af37]/45 shadow-[0_20px_55px_rgba(42,29,19,0.28)] flex flex-wrap items-center justify-between gap-4 relative overflow-hidden">
-        <div className="absolute top-0 right-1/4 w-96 h-20 bg-[#d4af37]/10 blur-3xl pointer-events-none" />
+      <div className="bg-gradient-to-r from-[#1c120c] via-[#2d1e12] to-[#1a100a] text-white rounded-[24px] p-3 sm:p-3.5 border border-[#d4af37]/45 shadow-[0_16px_42px_rgba(42,29,19,0.24)] flex flex-wrap items-center justify-between gap-3 relative overflow-hidden">
+        <div className="absolute top-0 right-1/4 w-80 h-16 bg-[#d4af37]/10 blur-3xl pointer-events-none" />
         
         {/* Module Title & Breadcrumbs */}
-        <div className="flex items-center gap-3 relative z-10">
-          <div className="w-12 h-12 rounded-2xl bg-gradient-to-tr from-[#9a6a1d] via-[#f7d174] to-[#c58a22] p-[2px] shadow-lg shadow-[#d4af37]/20 flex-shrink-0">
-            <div className="w-full h-full rounded-[14px] bg-[#2a1b10] flex items-center justify-center text-amber-300 font-black">
-              <GraduationCap className="w-6 h-6" />
+        <div className="flex items-center gap-2.5 relative z-10">
+          <div className="w-10 h-10 rounded-2xl bg-gradient-to-tr from-[#9a6a1d] via-[#f7d174] to-[#c58a22] p-[2px] shadow-lg shadow-[#d4af37]/20 flex-shrink-0">
+            <div className="w-full h-full rounded-[12px] bg-[#2a1b10] flex items-center justify-center text-amber-300 font-black">
+              <GraduationCap className="w-5 h-5" />
             </div>
           </div>
           <div>
@@ -1706,8 +1706,8 @@ export default function StudentAffairsPortal({
               <span>‹</span>
               <span className="text-amber-100">شؤون الطلاب</span>
             </div>
-            <div className="flex flex-wrap items-center gap-2">
-              <h1 className="text-xl sm:text-2xl font-black tracking-tight bg-gradient-to-r from-[#ffe5a3] via-[#fce79a] to-[#d4af37] bg-clip-text text-transparent">
+            <div className="flex flex-wrap items-center gap-1.5">
+              <h1 className="text-lg sm:text-xl font-black tracking-tight bg-gradient-to-r from-[#ffe5a3] via-[#fce79a] to-[#d4af37] bg-clip-text text-transparent">
               منظومة شؤون الطلاب والأنشطة الأكاديمية
               </h1>
               <span className="inline-flex items-center gap-1 rounded-full border border-emerald-300/30 bg-emerald-300/10 px-2.5 py-1 text-[10px] font-black text-emerald-200">
@@ -1720,10 +1720,10 @@ export default function StudentAffairsPortal({
         </div>
 
         {/* Center Sub-Navigation Tabs */}
-        <div className="flex items-center gap-1.5 bg-[#2a1d13]/90 border border-[#d4af37]/40 p-1.5 rounded-2xl shadow-inner relative z-10 overflow-x-auto">
+        <div className="flex items-center gap-1 bg-[#2a1d13]/90 border border-[#d4af37]/40 p-1 rounded-2xl shadow-inner relative z-10 overflow-x-auto">
           <button 
             onClick={() => setActiveTab('student_data')}
-            className={`px-4 py-2 rounded-xl text-xs font-black transition-all flex items-center gap-1.5 ${
+            className={`px-3 py-1.5 rounded-xl text-[11px] font-black transition-all flex items-center gap-1 ${
               activeTab === 'student_data' 
                 ? 'bg-gradient-to-r from-[#9a6a1d] via-[#d4af37] to-[#c58a22] text-slate-950 shadow-md' 
                 : 'text-amber-200/80 hover:text-white hover:bg-white/5'
@@ -1735,7 +1735,7 @@ export default function StudentAffairsPortal({
 
           <button 
             onClick={() => setActiveTab('guardians')}
-            className={`px-4 py-2 rounded-xl text-xs font-black transition-all flex items-center gap-1.5 ${
+            className={`px-3 py-1.5 rounded-xl text-[11px] font-black transition-all flex items-center gap-1 ${
               activeTab === 'guardians' 
                 ? 'bg-gradient-to-r from-[#9a6a1d] via-[#d4af37] to-[#c58a22] text-slate-950 shadow-md' 
                 : 'text-amber-200/80 hover:text-white hover:bg-white/5'
@@ -1747,7 +1747,7 @@ export default function StudentAffairsPortal({
 
           <button 
             onClick={() => setActiveTab('documents')}
-            className={`px-4 py-2 rounded-xl text-xs font-black transition-all flex items-center gap-1.5 ${
+            className={`px-3 py-1.5 rounded-xl text-[11px] font-black transition-all flex items-center gap-1 ${
               activeTab === 'documents' 
                 ? 'bg-gradient-to-r from-[#9a6a1d] via-[#d4af37] to-[#c58a22] text-slate-950 shadow-md' 
                 : 'text-amber-200/80 hover:text-white hover:bg-white/5'
@@ -1759,7 +1759,7 @@ export default function StudentAffairsPortal({
 
           <button 
             onClick={() => setActiveTab('reports')}
-            className={`px-4 py-2 rounded-xl text-xs font-black transition-all flex items-center gap-1.5 ${
+            className={`px-3 py-1.5 rounded-xl text-[11px] font-black transition-all flex items-center gap-1 ${
               activeTab === 'reports' 
                 ? 'bg-gradient-to-r from-[#9a6a1d] via-[#d4af37] to-[#c58a22] text-slate-950 shadow-md' 
                 : 'text-amber-200/80 hover:text-white hover:bg-white/5'
@@ -1771,7 +1771,7 @@ export default function StudentAffairsPortal({
 
           <button 
             onClick={() => setActiveTab('settings')}
-            className={`px-4 py-2 rounded-xl text-xs font-black transition-all flex items-center gap-1.5 ${
+            className={`px-3 py-1.5 rounded-xl text-[11px] font-black transition-all flex items-center gap-1 ${
               activeTab === 'settings' 
                 ? 'bg-gradient-to-r from-[#9a6a1d] via-[#d4af37] to-[#c58a22] text-slate-950 shadow-md' 
                 : 'text-amber-200/80 hover:text-white hover:bg-white/5'
@@ -1783,13 +1783,13 @@ export default function StudentAffairsPortal({
         </div>
 
         {/* Quick Action Buttons */}
-        <div className="flex items-center gap-2 relative z-10">
+        <div className="flex items-center gap-1.5 relative z-10">
           <button 
             onClick={handleExportExcel}
             disabled={isExportingStudents || !canExportStudents}
             aria-disabled={!canExportStudents}
             aria-busy={isExportingStudents}
-            className="bg-[#2a1d13] border border-[#d4af37]/40 hover:border-[#f7d174] text-amber-200 px-3 py-2 rounded-xl text-xs font-bold flex items-center gap-1.5 hover:scale-105 transition-all shadow cursor-pointer"
+            className="bg-[#2a1d13] border border-[#d4af37]/40 hover:border-[#f7d174] text-amber-200 px-2.5 py-1.5 rounded-xl text-[11px] font-bold flex items-center gap-1 hover:scale-105 transition-all shadow cursor-pointer"
             title="تصدير بيانات الطلاب إلى ملف XLSX حقيقي"
           >
             <FileSpreadsheet className="w-4 h-4 text-emerald-400" />
@@ -1799,7 +1799,7 @@ export default function StudentAffairsPortal({
           <button 
             type="button"
             onClick={() => handlePrintList(false)}
-            className="bg-[#2a1d13] border border-[#d4af37]/40 hover:border-[#f7d174] text-amber-200 px-3 py-2 rounded-xl text-xs font-bold flex items-center gap-1.5 hover:scale-105 transition-all shadow cursor-pointer"
+            className="bg-[#2a1d13] border border-[#d4af37]/40 hover:border-[#f7d174] text-amber-200 px-2.5 py-1.5 rounded-xl text-[11px] font-bold flex items-center gap-1 hover:scale-105 transition-all shadow cursor-pointer"
             title="طباعة الكشف المعاين"
           >
             <Printer className="w-4 h-4 text-amber-400" />
@@ -1810,7 +1810,7 @@ export default function StudentAffairsPortal({
             onClick={handleOpenAddModal}
             disabled={!canWriteStudents}
             aria-disabled={!canWriteStudents}
-            className="bg-gradient-to-r from-[#9a6a1d] via-[#f7d174] to-[#c58a22] text-slate-950 font-black px-4 py-2 rounded-xl text-xs flex items-center gap-2 shadow-lg hover:scale-105 active:scale-95 transition-all cursor-pointer"
+            className="bg-gradient-to-r from-[#9a6a1d] via-[#f7d174] to-[#c58a22] text-slate-950 font-black px-3 py-1.5 rounded-xl text-[11px] flex items-center gap-1.5 shadow-lg hover:scale-105 active:scale-95 transition-all cursor-pointer"
           >
             <UserPlus className="w-4 h-4" />
             <span>إضافة طالب جديد</span>
@@ -1821,7 +1821,7 @@ export default function StudentAffairsPortal({
             onClick={() => setIsFocusMode(current => !current)}
             aria-pressed={isFocusMode}
             title={isFocusMode ? 'الرجوع إلى العرض الحالي' : 'عرض الوحدة كاملة'}
-            className="bg-[#2a1d13] border border-[#d4af37]/40 hover:border-[#f7d174] text-amber-200 px-3 py-2 rounded-xl text-xs font-bold flex items-center gap-1.5 transition-all shadow cursor-pointer"
+            className="bg-[#2a1d13] border border-[#d4af37]/40 hover:border-[#f7d174] text-amber-200 px-2.5 py-1.5 rounded-xl text-[11px] font-bold flex items-center gap-1 transition-all shadow cursor-pointer"
           >
             {isFocusMode ? <Minimize2 className="w-4 h-4" /> : <Maximize2 className="w-4 h-4" />}
             <span className="hidden sm:inline">{isFocusMode ? 'العرض الحالي' : 'عرض كامل'}</span>
@@ -1833,65 +1833,65 @@ export default function StudentAffairsPortal({
       {/* ==========================================
           STATISTICS & KPI CARDS ROW (5 Metallic Cards)
          ========================================== */}
-      <div className="grid grid-cols-2 sm:grid-cols-3 md:grid-cols-5 gap-3 sm:gap-4">
+      <div className="grid grid-cols-2 sm:grid-cols-3 md:grid-cols-5 gap-2 sm:gap-3">
         
         {/* KPI 1: Total Students */}
-        <div className="bg-gradient-to-b from-[#fffefc] via-[#fbf8f0] to-[#f5eeea] border border-[#d4af37]/35 hover:border-[#d4af37] hover:-translate-y-1 hover:shadow-xl rounded-3xl p-3.5 shadow-md transition-all duration-300 flex items-center justify-between group">
+        <div className="bg-gradient-to-b from-[#fffefc] via-[#fbf8f0] to-[#f5eeea] border border-[#d4af37]/35 hover:border-[#d4af37] hover:-translate-y-1 hover:shadow-xl rounded-2xl p-3 shadow-md transition-all duration-300 flex items-center justify-between group">
           <div>
             <span className="text-[11px] font-black text-slate-700 block">إجمالي الطلاب المسجلين</span>
-            <span className="text-2xl font-black text-slate-900 font-mono tracking-tight block mt-1">{totalCount.toLocaleString('ar-EG')}</span>
+            <span className="text-xl font-black text-slate-900 font-mono tracking-tight block mt-0.5">{totalCount.toLocaleString('ar-EG')}</span>
             <span className="text-[10px] font-bold text-emerald-700 bg-emerald-50 px-2 py-0.5 rounded-full inline-block mt-1">منتظمون بالدراسة</span>
           </div>
-          <div className="w-11 h-11 rounded-2xl bg-[#2a1a0e] text-amber-300 flex items-center justify-center border border-[#d4af37]/40 shadow-sm shrink-0">
-            <Users className="w-5 h-5" />
+          <div className="w-9 h-9 rounded-xl bg-[#2a1a0e] text-amber-300 flex items-center justify-center border border-[#d4af37]/40 shadow-sm shrink-0">
+            <Users className="w-4 h-4" />
           </div>
         </div>
 
         {/* KPI 2: Active Students */}
-        <div className="bg-gradient-to-b from-[#fffefc] via-[#fbf8f0] to-[#f5eeea] border border-[#d4af37]/35 hover:border-[#d4af37] hover:-translate-y-1 hover:shadow-xl rounded-3xl p-3.5 shadow-md transition-all duration-300 flex items-center justify-between group">
+        <div className="bg-gradient-to-b from-[#fffefc] via-[#fbf8f0] to-[#f5eeea] border border-[#d4af37]/35 hover:border-[#d4af37] hover:-translate-y-1 hover:shadow-xl rounded-2xl p-3 shadow-md transition-all duration-300 flex items-center justify-between group">
           <div>
             <span className="text-[11px] font-black text-slate-700 block">الطلاب النشطون</span>
-            <span className="text-2xl font-black text-slate-900 font-mono tracking-tight block mt-1">{activeCount.toLocaleString('ar-EG')}</span>
+            <span className="text-xl font-black text-slate-900 font-mono tracking-tight block mt-0.5">{activeCount.toLocaleString('ar-EG')}</span>
             <span className="text-[10px] font-bold text-slate-500 block mt-1">حالة القيد: نشط</span>
           </div>
-          <div className="w-11 h-11 rounded-2xl bg-[#2a1a0e] text-emerald-400 flex items-center justify-center border border-[#d4af37]/40 shadow-sm shrink-0">
-            <UserCheck className="w-5 h-5" />
+          <div className="w-9 h-9 rounded-xl bg-[#2a1a0e] text-emerald-400 flex items-center justify-center border border-[#d4af37]/40 shadow-sm shrink-0">
+            <UserCheck className="w-4 h-4" />
           </div>
         </div>
 
         {/* KPI 3: New Registered */}
-        <div className="bg-gradient-to-b from-[#fffefc] via-[#fbf8f0] to-[#f5eeea] border border-[#d4af37]/35 hover:border-[#d4af37] hover:-translate-y-1 hover:shadow-xl rounded-3xl p-3.5 shadow-md transition-all duration-300 flex items-center justify-between group">
+        <div className="bg-gradient-to-b from-[#fffefc] via-[#fbf8f0] to-[#f5eeea] border border-[#d4af37]/35 hover:border-[#d4af37] hover:-translate-y-1 hover:shadow-xl rounded-2xl p-3 shadow-md transition-all duration-300 flex items-center justify-between group">
           <div>
             <span className="text-[11px] font-black text-slate-700 block">الطلاب الجدد (هذا العام)</span>
-            <span className="text-2xl font-black text-slate-900 font-mono tracking-tight block mt-1">{newCount.toLocaleString('ar-EG')}</span>
+            <span className="text-xl font-black text-slate-900 font-mono tracking-tight block mt-0.5">{newCount.toLocaleString('ar-EG')}</span>
             <span className="text-[10px] font-bold text-indigo-700 bg-indigo-50 px-2 py-0.5 rounded-full inline-block mt-1">السنة الأكاديمية {academicYearLabel}</span>
           </div>
-          <div className="w-11 h-11 rounded-2xl bg-[#2a1a0e] text-amber-400 flex items-center justify-center border border-[#d4af37]/40 shadow-sm shrink-0">
-            <UserPlus className="w-5 h-5" />
+          <div className="w-9 h-9 rounded-xl bg-[#2a1a0e] text-amber-400 flex items-center justify-center border border-[#d4af37]/40 shadow-sm shrink-0">
+            <UserPlus className="w-4 h-4" />
           </div>
         </div>
 
         {/* KPI 4: Suspended / Inactive */}
-        <div className="bg-gradient-to-b from-[#fffefc] via-[#fbf8f0] to-[#f5eeea] border border-[#d4af37]/35 hover:border-[#d4af37] hover:-translate-y-1 hover:shadow-xl rounded-3xl p-3.5 shadow-md transition-all duration-300 flex items-center justify-between group">
+        <div className="bg-gradient-to-b from-[#fffefc] via-[#fbf8f0] to-[#f5eeea] border border-[#d4af37]/35 hover:border-[#d4af37] hover:-translate-y-1 hover:shadow-xl rounded-2xl p-3 shadow-md transition-all duration-300 flex items-center justify-between group">
           <div>
             <span className="text-[11px] font-black text-slate-700 block">الموقوفون والمنسحبون</span>
-            <span className="text-2xl font-black text-slate-900 font-mono tracking-tight block mt-1">{suspendedCount.toLocaleString('ar-EG')}</span>
+            <span className="text-xl font-black text-slate-900 font-mono tracking-tight block mt-0.5">{suspendedCount.toLocaleString('ar-EG')}</span>
             <span className="text-[10px] font-bold text-rose-700 bg-rose-50 px-2 py-0.5 rounded-full inline-block mt-1">موقوف / تحويل</span>
           </div>
-          <div className="w-11 h-11 rounded-2xl bg-[#2a1a0e] text-rose-400 flex items-center justify-center border border-[#d4af37]/40 shadow-sm shrink-0">
-            <UserX className="w-5 h-5" />
+          <div className="w-9 h-9 rounded-xl bg-[#2a1a0e] text-rose-400 flex items-center justify-center border border-[#d4af37]/40 shadow-sm shrink-0">
+            <UserX className="w-4 h-4" />
           </div>
         </div>
 
         {/* KPI 5: Pending Documents */}
-        <div className="bg-gradient-to-b from-[#fffefc] via-[#fbf8f0] to-[#f5eeea] border border-[#d4af37]/35 hover:border-[#d4af37] hover:-translate-y-1 hover:shadow-xl rounded-3xl p-3.5 shadow-md transition-all duration-300 flex items-center justify-between group">
+        <div className="bg-gradient-to-b from-[#fffefc] via-[#fbf8f0] to-[#f5eeea] border border-[#d4af37]/35 hover:border-[#d4af37] hover:-translate-y-1 hover:shadow-xl rounded-2xl p-3 shadow-md transition-all duration-300 flex items-center justify-between group">
           <div>
             <span className="text-[11px] font-black text-slate-700 block">مستندات غير مكتملة</span>
-            <span className="text-2xl font-black text-amber-700 font-mono tracking-tight block mt-1">{pendingDocsCount.toLocaleString('ar-EG')}</span>
+            <span className="text-xl font-black text-amber-700 font-mono tracking-tight block mt-0.5">{pendingDocsCount.toLocaleString('ar-EG')}</span>
             <span className="text-[10px] font-bold text-amber-800 bg-amber-50 px-2 py-0.5 rounded-full inline-block mt-1">متابعة الأوراق</span>
           </div>
-          <div className="w-11 h-11 rounded-2xl bg-[#2a1a0e] text-amber-400 flex items-center justify-center border border-[#d4af37]/40 shadow-sm shrink-0">
-            <FileCheck className="w-5 h-5" />
+          <div className="w-9 h-9 rounded-xl bg-[#2a1a0e] text-amber-400 flex items-center justify-center border border-[#d4af37]/40 shadow-sm shrink-0">
+            <FileCheck className="w-4 h-4" />
           </div>
         </div>
 
