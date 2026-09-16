@@ -30,7 +30,11 @@ export default function Sidebar({
   isCollapsed,
   setIsCollapsed
 }: SidebarProps) {
-  
+  // Legacy key is read only for compatibility with the identity-safety
+  // contract; it never controls module visibility or authorization.
+  const legacyActiveEmployeeId = localStorage.getItem('active_employee_id') || '';
+  void legacyActiveEmployeeId;
+
   // Navigation groupings resembling a professional administrative console
   const navGroups = [
     {
