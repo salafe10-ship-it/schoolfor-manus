@@ -5,6 +5,9 @@
   "compatibility_date": "2026-09-16",
   "compatibility_flags": ["nodejs_compat"],
   "workers_dev": true,
+  "alias": {
+    "body-parser": "./cloudflare/body-parser-shim.js"
+  },
   "assets": {
     "directory": "./dist",
     "binding": "ASSETS",
