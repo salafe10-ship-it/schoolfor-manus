@@ -11,6 +11,21 @@ type CloudflareBindings = {
 };
 type WorkerRequest = Parameters<NonNullable<ExportedHandler["fetch"]>>[0];
 
+// Wrangler injects these constants at deploy time with --define. Keeping the
+// compiled values as a fallback makes the build identity deterministic even
+// when a deployment has no persisted Worker vars (for example after a clean
+// environment replacement). The typeof guards keep local development builds
+// valid when Wrangler has not performed the substitution.
+declare const __EDUPRO_BUILD_VERSION__: unknown;
+declare const __EDUPRO_BUILD_COMMIT__: unknown;
+declare const __EDUPRO_BUILD_TIMESTAMP__: unknown;
+
+const compiledBuildIdentity = {
+  APP_VERSION: typeof __EDUPRO_BUILD_VERSION__ === "string" ? __EDUPRO_BUILD_VERSION__ : "",
+  BUILD_COMMIT_SHA: typeof __EDUPRO_BUILD_COMMIT__ === "string" ? __EDUPRO_BUILD_COMMIT__ : "",
+  BUILD_TIMESTAMP: typeof __EDUPRO_BUILD_TIMESTAMP__ === "string" ? __EDUPRO_BUILD_TIMESTAMP__ : "",
+} as const;
+
 const runtimeEnvKeys = [
   "EDUPRO_ENVIRONMENT", "SUPABASE_URL", "SUPABASE_ANON_KEY",
   "SUPABASE_SERVICE_ROLE_KEY", "DATABASE_URL", "DIRECT_URL",
@@ -30,7 +45,7 @@ function configureProcessEnvironment(bindings: CloudflareBindings): void {
     processEnvironment.EDUPRO_CLOUDFLARE_HYPERDRIVE = 'true';
   }
   for (const key of runtimeEnvKeys) {
-    const value = bindings[key];
+    const value = bindings[key] ?? compiledBuildIdentity[key as keyof typeof compiledBuildIdentity];
     if (typeof value === "string" && value.length > 0) processEnvironment[key] = value;
   }
   if (bindings.HYPERDRIVE?.connectionString) {
