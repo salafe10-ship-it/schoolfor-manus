@@ -1493,28 +1493,37 @@ export default function App() {
   }
 
   const isSuperAdminViewActive = !isClientMode && hasTrustedPlatformAdminAccess(trustedSessionUser) && isSuperAdminPortalActive && activeSection !== 'system_health';
+  // The student units provide their own contextual navigation. Hiding the
+  // global shell navigation here prevents two competing sidebars from being
+  // shown at the same time and gives each unit the full workspace width.
+  const isFocusedStudentUnit = activeSection === 'students' || activeSection === 'student_accounts';
+  // Keep the landing dashboard visually calm and full-width. The dashboard's
+  // own quick actions remain available, while the global sidebar stays intact
+  // for every operational module so navigation is not lost.
+  const showGlobalSidebar = !isSuperAdminViewActive && !isFocusedStudentUnit && activeSection !== 'dashboard';
 
   return (
     <div className="workspace-shell flex h-screen min-h-0 overflow-hidden bg-slate-50 font-sans text-slate-900 selection:bg-sky-500 selection:text-white w-full" dir="rtl">
       <GlobalNotificationToast notification={activeToast} />
-      
-      <Sidebar
-        activeSection={activeSection}
-        setActiveSection={setActiveSection}
-        activeSchool={selectedSchool}
-        currentRole={currentRole}
-        isSupabaseConnected={isSupabaseConnected}
-        isSuperAdminPortalActive={isSuperAdminPortalActive}
-        setIsSuperAdminPortalActive={setIsSuperAdminPortalActive}
-        isCollapsed={isSidebarCollapsed}
-        setIsCollapsed={setIsSidebarCollapsed}
-      />
+      {showGlobalSidebar && (
+        <Sidebar
+          activeSection={activeSection}
+          setActiveSection={setActiveSection}
+          activeSchool={selectedSchool}
+          currentRole={currentRole}
+          isSupabaseConnected={isSupabaseConnected}
+          isSuperAdminPortalActive={isSuperAdminPortalActive}
+          setIsSuperAdminPortalActive={setIsSuperAdminPortalActive}
+          isCollapsed={isSidebarCollapsed}
+          setIsCollapsed={setIsSidebarCollapsed}
+        />
+      )}
 
       {/* Main Area Wrapping Topbar and Dynamic Subview Stage */}
       <div className="flex-1 flex flex-col overflow-hidden w-full">
         
         {/* Top Header Actions Bar */}
-        {!isSuperAdminViewActive && activeSection !== 'system_health' && activeSection !== 'student_accounts' && (
+        {!isSuperAdminViewActive && !isFocusedStudentUnit && activeSection !== 'system_health' && activeSection !== 'student_accounts' && (
           <Topbar 
             schools={saasSchools}
             selectedSchool={selectedSchool}

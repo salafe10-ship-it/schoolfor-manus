@@ -172,8 +172,6 @@ export default function ModernSchoolDashboard({
     if (metricsError) return isCustomerProductionPortal ? 'تعذر تحديث المؤشر الآن.' : 'تعذر تحميل المؤشر من المصدر الحي';
     return isCustomerProductionPortal ? 'جارٍ تحديث المؤشر' : 'جار التحقق من المصدر الحي';
   };
-  const studentCount = formatMetric(metrics?.students);
-  const studentDetail = describeMetric(metrics?.students);
   const revenueMetric = metrics?.revenue || metrics?.finance;
   const expenseMetric = metrics?.expenses || metrics?.finance;
   const handleNav = (section: string) => {
@@ -255,14 +253,10 @@ export default function ModernSchoolDashboard({
         </div>
       </header>
 
-      <section aria-label="مؤشرات لوحة المدرسة" className="grid grid-cols-2 gap-3 sm:grid-cols-3 sm:gap-4 md:grid-cols-4 lg:grid-cols-7">
+      <section aria-label="مؤشرات لوحة المدرسة" className="grid grid-cols-2 gap-3 sm:grid-cols-3 sm:gap-4 md:grid-cols-3 lg:grid-cols-3">
         <MetricCard label="نسبة الحضور اليوم" value={formatMetric(metrics?.attendance)} detail={describeMetric(metrics?.attendance)} icon={UserCheck} onClick={() => handleNav('attendance')} />
         <MetricCard label="إجمالي المصروفات" value={formatMetric(expenseMetric)} detail={describeMetric(expenseMetric)} icon={Wallet} onClick={() => handleNav('accounts')} />
         <MetricCard label="إجمالي الإيرادات" value={formatMetric(revenueMetric)} detail={describeMetric(revenueMetric)} icon={Coins} onClick={() => handleNav('student_accounts')} />
-        <MetricCard label="الفصول الدراسية" value={formatMetric(metrics?.enrollments)} detail={describeMetric(metrics?.enrollments)} icon={GraduationCap} onClick={() => handleNav('academic')} />
-        <MetricCard label="الموظفون" value={formatMetric(metrics?.teachers)} detail={describeMetric(metrics?.teachers)} icon={Users} onClick={() => handleNav('teachers')} />
-        <MetricCard label="المعلمون" value={formatMetric(metrics?.teachers)} detail={describeMetric(metrics?.teachers)} icon={UserCheck} onClick={() => handleNav('teachers')} />
-        <MetricCard label="إجمالي الطلاب" value={studentCount} detail={studentDetail} icon={Users} onClick={() => handleNav('students')} />
       </section>
 
       <section className="grid grid-cols-1 gap-6 lg:grid-cols-12">
