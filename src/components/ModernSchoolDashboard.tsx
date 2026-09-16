@@ -76,17 +76,17 @@ function MetricCard({
     <button
       type="button"
       onClick={onClick}
-      className="group flex min-h-[132px] flex-col justify-between rounded-3xl border-2 border-[#d4af37]/30 bg-gradient-to-b from-[#fffefc] via-[#fbf8f0] to-[#f5eeea] p-3.5 text-right shadow-md transition-all hover:-translate-y-0.5 hover:border-[#d4af37] hover:shadow-xl focus:outline-none focus:ring-2 focus:ring-[#8b6508]/50"
+      className="group flex min-h-[104px] flex-col justify-between rounded-2xl border-2 border-[#d4af37]/30 bg-gradient-to-b from-[#fffefc] via-[#fbf8f0] to-[#f5eeea] p-3 text-right shadow-md transition-all hover:-translate-y-0.5 hover:border-[#d4af37] hover:shadow-xl focus:outline-none focus:ring-2 focus:ring-[#8b6508]/50"
     >
       <span className="flex items-center justify-between gap-2">
-        <span className="text-[11px] font-black text-slate-700">{label}</span>
-        <span className="flex h-10 w-10 shrink-0 items-center justify-center rounded-2xl bg-[#2a1a0e] text-amber-300 shadow-sm transition-transform group-hover:scale-105">
-          <Icon className="h-5 w-5" aria-hidden="true" />
+        <span className="text-[10px] font-black text-slate-700">{label}</span>
+        <span className="flex h-8 w-8 shrink-0 items-center justify-center rounded-xl bg-[#2a1a0e] text-amber-300 shadow-sm transition-transform group-hover:scale-105">
+          <Icon className="h-4 w-4" aria-hidden="true" />
         </span>
       </span>
-      <span className="mt-2 block text-right">
-        <span className="block text-2xl font-black tracking-tight text-slate-900">{value}</span>
-        <span className="mt-1 block text-[10px] font-bold text-slate-500">{detail}</span>
+      <span className="mt-1 block text-right">
+        <span className="block text-xl font-black tracking-tight text-slate-900">{value}</span>
+        <span className="mt-0.5 block text-[9px] font-bold text-slate-500">{detail}</span>
       </span>
     </button>
   );
@@ -174,6 +174,10 @@ export default function ModernSchoolDashboard({
   };
   const revenueMetric = metrics?.revenue || metrics?.finance;
   const expenseMetric = metrics?.expenses || metrics?.finance;
+  const revenueExpenseValue = `${formatMetric(revenueMetric)} / ${formatMetric(expenseMetric)}`;
+  const collectionRateDetail = isCustomerProductionPortal
+    ? 'سيظهر المؤشر عند اكتمال بيانات الرسوم.'
+    : 'لا يوجد مصدر حي لنسبة التحصيل حالياً.';
   const handleNav = (section: string) => {
     if (!canAccessSection(section)) {
       triggerNotification('لا تملك الصلاحية الموثقة لفتح هذه الوحدة.', 'warning');
@@ -253,10 +257,12 @@ export default function ModernSchoolDashboard({
         </div>
       </header>
 
-      <section aria-label="مؤشرات لوحة المدرسة" className="grid grid-cols-2 gap-3 sm:grid-cols-3 sm:gap-4 md:grid-cols-3 lg:grid-cols-3">
+      <section aria-label="مؤشرات لوحة المدرسة" className="grid grid-cols-2 gap-2.5 sm:grid-cols-3 sm:gap-3 md:grid-cols-5">
         <MetricCard label="نسبة الحضور اليوم" value={formatMetric(metrics?.attendance)} detail={describeMetric(metrics?.attendance)} icon={UserCheck} onClick={() => handleNav('attendance')} />
         <MetricCard label="إجمالي المصروفات" value={formatMetric(expenseMetric)} detail={describeMetric(expenseMetric)} icon={Wallet} onClick={() => handleNav('accounts')} />
         <MetricCard label="إجمالي الإيرادات" value={formatMetric(revenueMetric)} detail={describeMetric(revenueMetric)} icon={Coins} onClick={() => handleNav('student_accounts')} />
+        <MetricCard label="الإيرادات والمصروفات" value={revenueExpenseValue} detail="الإيرادات / المصروفات" icon={Wallet} onClick={() => handleNav('accounts')} />
+        <MetricCard label="نسبة التحصيل الكلية" value="—" detail={collectionRateDetail} icon={CheckCircle2} onClick={() => handleNav('student_accounts')} />
       </section>
 
       <section className="grid grid-cols-1 gap-6 lg:grid-cols-12">
@@ -287,13 +293,6 @@ export default function ModernSchoolDashboard({
             ))}
           </div>
         </div>
-      </section>
-
-      <section aria-label="تحليلات Dashboard" className="grid grid-cols-1 gap-4 md:grid-cols-2 lg:grid-cols-4">
-        <div className="rounded-3xl border-2 border-[#d4af37]/30 bg-gradient-to-b from-[#fffefc] to-[#f8f3ea] p-4 shadow-lg"><h4 className="mb-3 border-b border-amber-900/10 pb-2 text-xs font-black text-slate-900">الإيرادات والمصروفات</h4><EmptyPanel title="الرسم غير متاح" description={describeMetric(revenueMetric)} /></div>
-        <div className="rounded-3xl border-2 border-[#d4af37]/30 bg-gradient-to-b from-[#fffefc] to-[#f8f3ea] p-4 shadow-lg"><h4 className="mb-3 border-b border-amber-900/10 pb-2 text-xs font-black text-slate-900">توزيع الطلاب حسب المرحلة</h4><EmptyPanel title="الرسم غير متاح" description={isCustomerProductionPortal ? 'سيظهر هذا التحليل عند توفر بياناته.' : 'لا يوجد Query حي لتوزيع المراحل والصفوف في عقد Dashboard الحالي.'} /></div>
-        <div className="rounded-3xl border-2 border-[#d4af37]/30 bg-gradient-to-b from-[#fffefc] to-[#f8f3ea] p-4 shadow-lg"><h4 className="mb-3 border-b border-amber-900/10 pb-2 text-xs font-black text-slate-900">نسبة التحصيل الكلية</h4><EmptyPanel title="المؤشر غير متاح" description={isCustomerProductionPortal ? 'سيظهر المؤشر عند اكتمال بيانات الرسوم.' : 'لا تُعرض نسبة ثابتة دون إثبات Query وRLS ومصدرها في قاعدة البيانات.'} /></div>
-        <div className="rounded-3xl border-2 border-[#d4af37]/30 bg-gradient-to-b from-[#fffefc] to-[#f8f3ea] p-4 shadow-lg"><h4 className="mb-3 border-b border-amber-900/10 pb-2 text-xs font-black text-slate-900">تحصيل الرسوم خلال الأشهر</h4><EmptyPanel title="الرسم غير متاح" description={isCustomerProductionPortal ? 'سيظهر التحليل المالي عند توفر بياناته.' : 'لا يوجد مصدر مالي حي مربوط بهذه الشاشة حاليًا.'} /></div>
       </section>
 
       <section className="grid grid-cols-1 gap-6 lg:grid-cols-12">
