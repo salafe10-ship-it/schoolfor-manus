@@ -2009,25 +2009,9 @@ export default function StudentAffairsPortal({
                 </select>
               </div>
 
-              {/* Quick Actions Card */}
-              <div className="pt-2 border-t border-amber-900/10 space-y-2">
-                <section
-                  className="rounded-xl border border-amber-300 bg-amber-50 p-3 text-[11px] font-bold text-amber-950"
-                  aria-label="حالة ربط القيد التشغيلي"
-                >
-                  <p>سجلات تحتاج ربطاً تشغيلياً: {operationalPlacementCandidateCount.toLocaleString('ar-EG')}</p>
-                  <p className="mt-1 text-[10px] leading-4 text-amber-800">يُوزّع الخادم السجلات غير المرتبطة فقط على الفصول النشطة حسب السعة، ويثبت العملية في سجل التدقيق.</p>
-                  <button
-                    type="button"
-                    onClick={() => void handleOperationalEnrollmentRepair()}
-                    disabled={!canWriteStudents || isRepairingOperationalEnrollments || operationalPlacementCandidateCount === 0}
-                    aria-disabled={!canWriteStudents || operationalPlacementCandidateCount === 0}
-                    aria-busy={isRepairingOperationalEnrollments}
-                    className="mt-2 w-full rounded-lg bg-[#2a1a0e] px-3 py-2 text-xs font-black text-amber-300 transition hover:bg-[#3a2719] disabled:cursor-not-allowed disabled:opacity-50"
-                  >
-                    {isRepairingOperationalEnrollments ? 'جارٍ تثبيت الربط...' : 'إصلاح ربط القيد التشغيلي'}
-                  </button>
-                </section>
+              {/* Quick Actions Card: the operational repair panel is kept in the
+                  controller/state layer but hidden here to keep the workspace compact. */}
+              <div className="space-y-2">
                 <input
                   ref={importFileInputRef}
                   type="file"
