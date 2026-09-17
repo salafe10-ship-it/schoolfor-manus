@@ -177,7 +177,7 @@ export default function ModernSchoolDashboard({
   const revenueExpenseValue = `${formatMetric(revenueMetric)} / ${formatMetric(expenseMetric)}`;
   const collectionRateDetail = isCustomerProductionPortal
     ? 'سيظهر المؤشر عند اكتمال بيانات الرسوم.'
-    : 'لا يوجد مصدر حي لنسبة التحصيل حالياً.';
+    : 'لا يوجد مصدر مالي حي لنسبة التحصيل حالياً؛ مصدر Audit حي مطلوب.';
   const handleNav = (section: string) => {
     if (!canAccessSection(section)) {
       triggerNotification('لا تملك الصلاحية الموثقة لفتح هذه الوحدة.', 'warning');
