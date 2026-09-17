@@ -14,14 +14,15 @@ const commit = git(['rev-parse', 'HEAD']);
 const builtAt = new Date().toISOString();
 const version = String(process.env.APP_VERSION || packageJson.version || '0.0.0').trim();
 const npx = process.platform === 'win32' ? 'npx.cmd' : 'npx';
+const defineLiteral = (value) => `'${value.replaceAll("'", "\\'")}'`;
 const args = [
   'wrangler', 'deploy', '--keep-vars',
   '--var', `APP_VERSION:${version}`,
   '--var', `BUILD_COMMIT_SHA:${commit}`,
   '--var', `BUILD_TIMESTAMP:${builtAt}`,
-  '--define', `__EDUPRO_BUILD_VERSION__:${JSON.stringify(version)}`,
-  '--define', `__EDUPRO_BUILD_COMMIT__:${JSON.stringify(commit)}`,
-  '--define', `__EDUPRO_BUILD_TIMESTAMP__:${JSON.stringify(builtAt)}`,
+  '--define', `__EDUPRO_BUILD_VERSION__:${defineLiteral(version)}`,
+  '--define', `__EDUPRO_BUILD_COMMIT__:${defineLiteral(commit)}`,
+  '--define', `__EDUPRO_BUILD_TIMESTAMP__:${defineLiteral(builtAt)}`,
 ];
 
 const result = spawnSync(npx, args, {
