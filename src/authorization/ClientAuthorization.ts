@@ -50,6 +50,14 @@ export function canAccessSection(
   }
   const permission = SECTION_PERMISSIONS[sectionId];
   if (!permission) return false;
+  const isSchoolAdmin = context.currentPortal === 'school'
+    && Boolean(identity.schoolId)
+    && String(identity.role || '').trim().toLowerCase() === 'schooladmin';
+  // Permission hydration is a visibility hint. Keep a trusted school admin
+  // able to reach school modules during a transient RBAC read failure; the
+  // server remains authoritative for every operation and central sections
+  // above still require Platform.Admin.
+  if (isSchoolAdmin && (!Array.isArray(identity.permissions) || identity.permissions.length === 0)) return true;
   // School branding is a school-admin capability with a server-side
   // compatibility bridge for legacy schooladmin role rows. Keep the entry
   // point visible for that trusted role even when its older permission list

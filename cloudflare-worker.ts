@@ -2,6 +2,7 @@
 
 import { httpServerHandler } from "cloudflare:node";
 import { env } from "cloudflare:workers";
+import { AsyncLocalStorage } from "node:async_hooks";
 
 type CloudflareBindings = {
   ASSETS: Fetcher;
@@ -45,7 +46,14 @@ function configureProcessEnvironment(bindings: CloudflareBindings): void {
     processEnvironment.EDUPRO_CLOUDFLARE_HYPERDRIVE = 'true';
   }
   for (const key of runtimeEnvKeys) {
-    const value = bindings[key] ?? compiledBuildIdentity[key as keyof typeof compiledBuildIdentity];
+    // Cloudflare can expose an undeclared/kept variable as an empty string.
+    // Treat that as missing so it cannot mask the value compiled into this
+    // exact Worker release (especially for the public build identity).
+    const bindingValue = bindings[key];
+    const compiledValue = compiledBuildIdentity[key as keyof typeof compiledBuildIdentity];
+    const value = typeof bindingValue === "string" && bindingValue.length > 0
+      ? bindingValue
+      : compiledValue;
     if (typeof value === "string" && value.length > 0) processEnvironment[key] = value;
   }
   if (bindings.HYPERDRIVE?.connectionString) {
@@ -73,7 +81,17 @@ async function getApiHandler(bindings: CloudflareBindings): Promise<ExportedHand
   if (!apiHandlerPromise) {
     apiHandlerPromise = (async () => {
       configureProcessEnvironment(bindings);
-      (globalThis as { __EDUPRO_CLOUDFLARE__?: boolean }).__EDUPRO_CLOUDFLARE__ = true;
+      (globalThis as {
+        __EDUPRO_CLOUDFLARE__?: boolean;
+        __EDUPRO_ASYNC_LOCAL_STORAGE__?: typeof AsyncLocalStorage;
+      }).__EDUPRO_CLOUDFLARE__ = true;
+      // UnitOfWork is shared with the browser bundle, so it cannot import a
+      // Node builtin directly. Cloudflare exposes its request-safe
+      // AsyncLocalStorage through node:async_hooks; publish only the
+      // constructor before the server module is initialized.
+      (globalThis as {
+        __EDUPRO_ASYNC_LOCAL_STORAGE__?: typeof AsyncLocalStorage;
+      }).__EDUPRO_ASYNC_LOCAL_STORAGE__ = AsyncLocalStorage;
       const { createApp } = await import("./server.ts");
       const app = await createApp({ cloudflare: true });
       if (!app) throw new Error("Cloudflare application initialization returned no Express app.");

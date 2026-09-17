@@ -264,6 +264,12 @@ export default function App() {
   );
 
   const canUseTrustedPermission = (permission: string): boolean => {
+    const isSchoolAdmin = currentPortal === 'school'
+      && Boolean(trustedSessionUser?.schoolId)
+      && String(trustedSessionUser?.role || '').trim().toLowerCase() === 'schooladmin';
+    if (isSchoolAdmin && (!Array.isArray(trustedSessionUser?.permissions) || trustedSessionUser.permissions.length === 0)) {
+      return permission === PERMISSIONS.IDENTITY_USERS_WRITE || permission === PERMISSIONS.IDENTITY_USERS_ASSIGN;
+    }
     if (!Array.isArray(trustedSessionUser?.permissions)) return false;
     return trustedSessionUser.permissions.includes('*') || trustedSessionUser.permissions.includes(permission);
   };

@@ -2498,6 +2498,12 @@ html:not(.dark) #super-admin-portal button:not(.bg-indigo-600):not(.bg-rose-600)
   font-weight: 900;
 }
 
+#student-financial-portal .financial-sidebar-edit-state-blocked {
+  color: #fecaca;
+  border-color: rgba(248, 113, 113, 0.42);
+  background: rgba(127, 29, 29, 0.34);
+}
+
 #student-financial-portal .financial-sidebar-heading {
   display: flex;
   align-items: end;

@@ -247,9 +247,20 @@ export function createPostgresTransactionDriverFromEnvironment(): PostgresTransa
   const connectionString = process.env.DATABASE_URL || process.env.DIRECT_URL;
   if (!connectionString) return null;
 
+  // A Worker instance is short-lived and Hyperdrive already maintains the
+  // origin pool. Matching Hyperdrive's ceiling with a pg pool of 20 per
+  // isolate causes connection waits and eventually `timeout exceeded when
+  // trying to connect` during RBAC resolution. Keep the local pool small in
+  // Cloudflare while preserving the existing override for deliberate tuning.
+  const isCloudflareHyperdrive = process.env.EDUPRO_CLOUDFLARE_HYPERDRIVE === 'true';
+  const configuredPoolMax = Number(process.env.PG_POOL_MAX);
+  const poolMax = Number.isFinite(configuredPoolMax) && configuredPoolMax > 0
+    ? configuredPoolMax
+    : (isCloudflareHyperdrive ? 4 : 20);
+
   const pool = new Pool({
     connectionString,
-    max: Number(process.env.PG_POOL_MAX || 20),
+    max: poolMax,
     idleTimeoutMillis: Number(process.env.PG_IDLE_TIMEOUT_MS || 30_000),
     connectionTimeoutMillis: Number(process.env.PG_CONNECTION_TIMEOUT_MS || 5_000),
     allowExitOnIdle: process.env.NODE_ENV !== "production",

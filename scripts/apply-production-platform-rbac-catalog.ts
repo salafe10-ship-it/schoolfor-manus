@@ -2,7 +2,7 @@ import { readFile } from 'node:fs/promises';
 import { resolve } from 'node:path';
 import { Pool } from 'pg';
 
-const EXPECTED_PRODUCTION_PROJECT_REF = 'bwdjnjbexklsrwqbwzmk';
+const EXPECTED_PRODUCTION_PROJECT_REF = 'wjhraxvxvvthxqlpyohh';
 const REQUIRED_CONFIRMATION = 'APPLY_PLATFORM_RBAC_CATALOG';
 const MIGRATION = '202609011000_platform_rbac_catalog_seed.sql';
 

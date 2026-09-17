@@ -217,8 +217,12 @@ const platformAdminConnectionString = platformAdminConnectionStringRaw
 const platformAdminPool = platformAdminConnectionString
   ? new Pool({
       connectionString: platformAdminConnectionString,
-      max: Number(process.env.PG_PLATFORM_POOL_MAX || 5),
-      connectionTimeoutMillis: Number(process.env.PG_CONNECTION_TIMEOUT_MS || 5_000),
+      // Hyperdrive already owns the origin-side pool. A separate pg pool per
+      // Worker isolate must stay tiny or RBAC/directory reads can wait behind
+      // idle connections and be cancelled by the Workers runtime.
+      max: Number(process.env.PG_PLATFORM_POOL_MAX || (process.env.EDUPRO_CLOUDFLARE_HYPERDRIVE === 'true' ? 1 : 5)),
+      idleTimeoutMillis: Number(process.env.PG_PLATFORM_IDLE_TIMEOUT_MS || (process.env.EDUPRO_CLOUDFLARE_HYPERDRIVE === 'true' ? 10_000 : 30_000)),
+      connectionTimeoutMillis: Number(process.env.PG_PLATFORM_CONNECTION_TIMEOUT_MS || (process.env.EDUPRO_CLOUDFLARE_HYPERDRIVE === 'true' ? 3_000 : 5_000)),
       ssl: postgresSslConfig,
     })
   : null;
@@ -897,12 +901,11 @@ async function loadTenantPermissionsFromPlatformControl(identity: any) {
 // School identities use the same secure control-plane channel for RBAC
 // hydration. This is still strictly scoped by the verified Auth id, tenant,
 // school and branch; no scope is accepted from the browser.
-// The dedicated PostgreSQL control-plane pool is the single source of truth
-// for school-scoped RBAC.  Keep the REST service-role implementation as a
-// compatibility fallback only when that pool is unavailable; mixing the two
-// loaders lets a stale/mismatched service key make a valid school assignment
-// appear empty while the directory itself is queried through PostgreSQL.
-if (platformControl && !platformAdminPool) {
+// Cloudflare Workers should resolve RBAC through the server-only Supabase
+// control channel. Hyperdrive remains the canonical transaction path, but a
+// per-isolate PostgreSQL control pool can be cancelled while it waits for a
+// connection, making a valid school assignment look missing.
+if (platformControl) {
   roleResolver.configureDatabaseLoader(loadTenantPermissionsFromPlatformControl);
 }
 
@@ -5880,6 +5883,21 @@ export async function createApp(options: { cloudflare?: boolean } = {}): Promise
     if (!platformAdminPool) return next(new DatabaseError('مصدر الهوية المركزي غير متاح.'));
     try {
       const { tenantId, schoolId, branchId } = schoolIdentityScope(req);
+      if (platformControl) {
+        const permissionCatalog = [...new Set(permissionRegistry.list())]
+          .filter((permissionKey) => permissionKey !== PERMISSIONS.PLATFORM_ADMIN)
+          .map((permissionKey) => {
+            const { resource, action } = describePermission(permissionKey);
+            return { permissionKey, resource, action, description: permissionKey };
+          })
+          .sort((left, right) => left.permissionKey.localeCompare(right.permissionKey));
+        const roles = await readPlatformRows('roles', 'id, role_key, name, description, version', (query) => query
+          .eq('tenant_id', tenantId)
+          .eq('status', 'active')
+          .is('deleted_at', null)
+          .or(`school_id.is.null,school_id.eq.${schoolId}`));
+        return res.json({ success: true, roles: roles.map((role: any) => ({ ...role, roleKey: role.role_key, permissions: [] })), permissionCatalog });
+      }
       // A school may be provisioned before its first identity-directory read.
       // Hydrate only the canonical default role catalogue for this tenant,
       // atomically and idempotently, so the create-user selector never opens
@@ -5948,8 +5966,24 @@ export async function createApp(options: { cloudflare?: boolean } = {}): Promise
   app.get('/api/school/job-catalog', authenticateRequest, requirePermissionOnly(PERMISSIONS.IDENTITY_USERS_READ), async (req, res, next) => {
     if (!platformAdminPool) return next(new DatabaseError('مصدر الهوية المركزي غير متاح.'));
     try {
-      await ensureIdentityJobSchema();
       const { tenantId, schoolId } = schoolIdentityScope(req);
+      if (platformControl) {
+        const { data, error } = await platformControl
+          .from('hr_database')
+          .select('data')
+          .eq('tenant_id', tenantId)
+          .eq('school_id', schoolId)
+          .limit(1)
+          .maybeSingle();
+        if (error) throw error;
+        const snapshot = data?.data || {};
+        return res.json({
+          success: true,
+          departments: Array.isArray(snapshot.departments) ? snapshot.departments : [],
+          jobs: Array.isArray(snapshot.jobs) ? snapshot.jobs : [],
+          employees: Array.isArray(snapshot.employees) ? snapshot.employees : [],
+        });
+      }
       // Keep this catalogue on the same privileged PostgreSQL source used by
       // the HR snapshot writer and by the create/update validation below. This
       // is the canonical equivalent of from('hr_database').select('data'),
@@ -6005,8 +6039,21 @@ export async function createApp(options: { cloudflare?: boolean } = {}): Promise
   app.get('/api/school/users', authenticateRequest, requirePermissionOnly(PERMISSIONS.IDENTITY_USERS_READ), async (req, res, next) => {
     if (!platformAdminPool) return next(new DatabaseError('مصدر الهوية المركزي غير متاح.'));
     try {
-      await ensureIdentityJobSchema();
       const { tenantId, schoolId } = schoolIdentityScope(req);
+      // Read-only directory requests in a Worker use the same trusted
+      // Supabase control channel as RBAC resolution. This avoids waiting on a
+      // second Hyperdrive pool for a query that does not need a transaction.
+      if (platformControl) {
+        const users = await readPlatformRows('users', 'id, auth_user_id, tenant_id, school_id, branch_id, username, email, display_name, job_title, department, status, version, session_revoked_at, force_password_change, created_at', (query) => query
+          .eq('tenant_id', tenantId)
+          .eq('school_id', schoolId)
+          .is('deleted_at', null));
+        return res.json({
+          success: true,
+          scope: { tenantId, schoolId },
+          users: users.map((user: any) => ({ ...user, roles: [], directPermissions: [] })),
+        });
+      }
       // Read from the same canonical PostgreSQL source used by every school
       // identity mutation below. A control-plane-first read can display a
       // stale user that the mutation pool cannot find, producing the unsafe
@@ -13138,16 +13185,25 @@ ${JSON.stringify(snapshot)}
       // to the server logger and can be correlated by traceId.
       if (user?.schoolId && user?.id) {
         try {
-          await AuditRepository.log(
-            String(user.schoolId),
-            String(user.id),
-            String(user.name || user.id),
-            String(user.role || 'unknown'),
-            "SYSTEM_CRITICAL_ERROR",
-            "SystemError",
-            req.ip || "127.0.0.1",
-            `خطأ في النظام: ${message} (TraceID: ${traceId})`
-          );
+          // Error reporting must never hold the client response hostage. In
+          // Cloudflare, the same database path may be the reason the request
+          // failed; awaiting it here turns a recoverable 500 into a worker
+          // hang and hides the original failure. Keep the audit attempt
+          // bounded and let the structured runtime log remain authoritative.
+          const auditWrite = AuditRepository.log(
+              String(user.schoolId),
+              String(user.id),
+              String(user.name || user.id),
+              String(user.role || 'unknown'),
+              "SYSTEM_CRITICAL_ERROR",
+              "SystemError",
+              req.ip || "127.0.0.1",
+              `خطأ في النظام: ${message} (TraceID: ${traceId})`
+            );
+          await Promise.race([
+            auditWrite,
+            new Promise<never>((_, reject) => setTimeout(() => reject(new Error('Audit persistence timeout.')), 1500))
+          ]);
         } catch (logErr: any) {
           EnterpriseLogger.error("Failed to write critical error to Audit Logs:", "ServerBootstrap", { error: logErr?.message || logErr, traceId });
         }

@@ -877,8 +877,11 @@ export default function StudentFinancialPortal({
                        costCenter === 'primary' ? 'الابتدائي' :
                        costCenter === 'middle' ? 'الإعدادي' : 'الثانوي';
 
+    // A student profile is not a financial ledger. Never prefill a receipt
+    // from the legacy feesRemaining projection when no canonical invoice
+    // exists for the selected student.
     const financialStudent = financialStudentRows.find(s => s.id === studentId);
-    const remainingBalance = financialStudent ? Number(financialStudent.feesRemaining || 0) : Number(student.feesRemaining || 0);
+    const remainingBalance = financialStudent ? Number(financialStudent.feesRemaining || 0) : 0;
 
     setStudRvForm(prev => ({
       ...prev,
@@ -2520,64 +2523,80 @@ export default function StudentFinancialPortal({
     }
   }, [filteredReceiptVouchers, selectedStudRv]);
 
-  // Live aggregated numbers for the dashboard. Prefer the canonical invoice and
-  // posted-receipt snapshot when it exists; fall back to student balances only
-  // for schools that have not created any invoices yet.
+  // Live aggregated numbers for the dashboard. The canonical invoice stream is
+  // the only source for student balances; the profile-level fee projection is
+  // deliberately excluded from this view.
   const financialStudentRows = useMemo(() => {
     // لا تُشتق أرصدة مالية من قائمة الطلاب العامة؛ المصدر المالي المركزي هو
     // المرجع الوحيد، وعند غيابه يجب أن تبقى المؤشرات فارغة/غير متحققة.
     if (financialInvoices.length === 0) return [];
 
-    const invoiceTotals = new Map<string, number>();
+    const invoiceTotals = new Map<string, { invoiced: number; paid: number; remaining: number }>();
     financialInvoices.forEach(invoice => {
-      if (!['cancelled', 'void'].includes(String(invoice.status).toLowerCase())) {
-        invoiceTotals.set(invoice.studentId, (invoiceTotals.get(invoice.studentId) || 0) + Number(invoice.amount || 0));
-      }
-    });
-    const paidTotals = new Map<string, number>();
-    studentReceiptVouchers.forEach(voucher => {
-      if (String(voucher.status).toLowerCase() === 'posted') {
-        paidTotals.set(voucher.studentId, (paidTotals.get(voucher.studentId) || 0) + Number(voucher.amount || 0));
-      }
+      const status = String(invoice.status || '').toLowerCase();
+      if (['cancelled', 'void', 'written_off', 'refunded'].includes(status)) return;
+      const invoiced = Math.max(0, Number(invoice.totalAmount ?? Number(invoice.amount || 0) + Number(invoice.taxAmount || 0)));
+      const paid = Math.max(0, Number(invoice.paidAmount || 0));
+      const remainingValue = Number(invoice.remainingAmount);
+      const remaining = Number.isFinite(remainingValue)
+        ? Math.max(0, remainingValue)
+        : Math.max(0, invoiced - paid);
+      const current = invoiceTotals.get(invoice.studentId) || { invoiced: 0, paid: 0, remaining: 0 };
+      invoiceTotals.set(invoice.studentId, {
+        invoiced: current.invoiced + invoiced,
+        paid: current.paid + paid,
+        remaining: current.remaining + remaining
+      });
     });
 
-    return filteredStudents.map(student => {
-      const invoiced = invoiceTotals.get(student.id) || 0;
-      const paid = paidTotals.get(student.id) || 0;
-      return {
-        ...student,
-        feesPaid: paid,
-        feesRemaining: Math.max(0, invoiced - paid),
-      };
-    });
-  }, [filteredStudents, financialInvoices, studentReceiptVouchers]);
+    return filteredStudents
+      .filter(student => invoiceTotals.has(student.id))
+      .map(student => {
+        const totals = invoiceTotals.get(student.id)!;
+        return {
+          ...student,
+          feesPaid: totals.paid,
+          feesRemaining: totals.remaining,
+        };
+      });
+  }, [filteredStudents, financialInvoices]);
 
   const stats = useMemo(() => {
-    const totalSum = financialInvoices.length > 0
-      ? financialInvoices
-        .filter(invoice => !['cancelled', 'void'].includes(String(invoice.status).toLowerCase()))
-        .reduce((sum, invoice) => sum + Number(invoice.amount || 0), 0)
-      : 0;
-    const totalPaid = financialInvoices.length > 0
-      ? studentReceiptVouchers
-        .filter(v => String(v.status).toLowerCase() === 'posted')
-        .reduce((sum, v) => sum + Number(v.amount || 0), 0)
-      : 0;
-    const totalRemaining = Math.max(0, totalSum - totalPaid);
+    if (financialPersistence !== 'ready') {
+      return {
+        totalDebts: null,
+        totalPaid: null,
+        totalRemaining: null,
+        collectionRate: null,
+        todayCollected: null
+      };
+    }
+
+    const activeInvoices = financialInvoices.filter(invoice => {
+      const status = String(invoice.status || '').toLowerCase();
+      return !['cancelled', 'void', 'written_off', 'refunded'].includes(status);
+    });
+    const totalSum = activeInvoices.reduce((sum, invoice) => sum + Math.max(0, Number(invoice.totalAmount ?? Number(invoice.amount || 0) + Number(invoice.taxAmount || 0))), 0);
+    const totalPaid = activeInvoices.reduce((sum, invoice) => sum + Math.max(0, Number(invoice.paidAmount || 0)), 0);
+    const totalRemaining = activeInvoices.reduce((sum, invoice) => {
+      const invoiceAmount = Math.max(0, Number(invoice.totalAmount ?? Number(invoice.amount || 0) + Number(invoice.taxAmount || 0)));
+      const remainingValue = Number(invoice.remainingAmount);
+      return sum + (Number.isFinite(remainingValue) ? Math.max(0, remainingValue) : Math.max(0, invoiceAmount - Number(invoice.paidAmount || 0)));
+    }, 0);
     const collectionRate = totalSum > 0 ? (totalPaid / totalSum) * 100 : null;
     const today = new Date().toISOString().split('T')[0];
     const todayCollected = studentReceiptVouchers
       .filter(v => v.date === today && String(v.status).toLowerCase() === 'posted')
       .reduce((sum, v) => sum + Number(v.amount || 0), 0);
-    
+
     return {
       totalDebts: totalSum,
-      totalPaid: totalPaid,
-      totalRemaining: totalRemaining,
+      totalPaid,
+      totalRemaining,
       collectionRate,
       todayCollected
     };
-  }, [filteredStudents, financialInvoices, studentReceiptVouchers]);
+  }, [financialInvoices, financialPersistence, studentReceiptVouchers]);
 
   const debtorStudents = useMemo(() => {
     return [...financialStudentRows]
@@ -2588,7 +2607,7 @@ export default function StudentFinancialPortal({
 
   const selectedStudentFinancialView = useMemo(() => {
     if (!selectedStudent) return null;
-    return financialStudentRows.find(student => student.id === selectedStudent.id) || selectedStudent;
+    return financialStudentRows.find(student => student.id === selectedStudent.id) || null;
   }, [financialStudentRows, selectedStudent]);
 
   const formatFinancialValue = (value: number | null | undefined) =>
@@ -2601,51 +2620,25 @@ export default function StudentFinancialPortal({
     return Number.isFinite(timestamp) ? timestamp : null;
   };
 
-  // Build invoice-level outstanding balances from the canonical invoice and
-  // posted receipt streams. Payments without an invoice reference are
-  // allocated oldest-due-first per student, matching the collection policy.
+  // Use the persisted invoice remainder for ageing. Reallocating all posted
+  // receipts in the browser can double-count payments already reflected by
+  // the canonical invoice ledger.
   const outstandingInvoiceRows = useMemo(() => {
-    const activeInvoices = financialInvoices.filter(invoice =>
-      !['cancelled', 'void', 'Cancelled', 'Void'].includes(String(invoice.status))
-    );
-    const paidByStudent = new Map<string, number>();
-    studentReceiptVouchers
-      .filter(voucher => String(voucher.status || '').toLowerCase() === 'posted')
-      .forEach(voucher => {
-        const studentId = String(voucher.studentId || '');
-        if (!studentId) return;
-        paidByStudent.set(studentId, (paidByStudent.get(studentId) || 0) + Number(voucher.amount || 0));
-      });
-
-    const invoicesByStudent = new Map<string, Invoice[]>();
-    activeInvoices.forEach(invoice => {
-      const list = invoicesByStudent.get(invoice.studentId) || [];
-      list.push(invoice);
-      invoicesByStudent.set(invoice.studentId, list);
-    });
-
-    const rows: Array<Invoice & { outstandingAmount: number; dueTimestamp: number | null }> = [];
-    invoicesByStudent.forEach((studentInvoices, studentId) => {
-      let unappliedPayment = paidByStudent.get(studentId) || 0;
-      [...studentInvoices]
-        .sort((a, b) => (parseFinancialDate(a.dueDate) ?? Number.MAX_SAFE_INTEGER) - (parseFinancialDate(b.dueDate) ?? Number.MAX_SAFE_INTEGER))
-        .forEach(invoice => {
-          const invoiceAmount = Math.max(0, Number(invoice.totalAmount ?? invoice.amount ?? 0));
-          const appliedPayment = Math.min(invoiceAmount, unappliedPayment);
-          unappliedPayment = Math.max(0, unappliedPayment - appliedPayment);
-          const outstandingAmount = Math.max(0, invoiceAmount - appliedPayment);
-          if (outstandingAmount > 0) {
-            rows.push({
-              ...invoice,
-              outstandingAmount,
-              dueTimestamp: parseFinancialDate(invoice.dueDate)
-            });
-          }
-        });
-    });
-
-    return rows;
-  }, [financialInvoices, studentReceiptVouchers]);
+    return financialInvoices
+      .filter(invoice => {
+        const status = String(invoice.status || '').toLowerCase();
+        return !['cancelled', 'void', 'written_off', 'refunded', 'paid'].includes(status);
+      })
+      .map(invoice => {
+        const invoiceAmount = Math.max(0, Number(invoice.totalAmount ?? Number(invoice.amount || 0) + Number(invoice.taxAmount || 0)));
+        const persistedRemaining = Number(invoice.remainingAmount);
+        const outstandingAmount = Number.isFinite(persistedRemaining)
+          ? Math.max(0, persistedRemaining)
+          : Math.max(0, invoiceAmount - Number(invoice.paidAmount || 0));
+        return { ...invoice, outstandingAmount, dueTimestamp: parseFinancialDate(invoice.dueDate) };
+      })
+      .filter(invoice => invoice.outstandingAmount > 0);
+  }, [financialInvoices]);
 
   const agingAnalysis = useMemo(() => {
     const datedRows = outstandingInvoiceRows.filter(row => row.dueTimestamp !== null);
@@ -6072,7 +6065,13 @@ export default function StudentFinancialPortal({
               <span>الفرع: <b>{selectedBranch?.name || 'الفرع الرئيسي'}</b></span>
               <span>العام الدراسي: <b>{selectedSchool?.academicYear || '2026-2027'}</b></span>
             </div>
-            <span className="financial-sidebar-edit-state">🔒 مفتوح للتحرير</span>
+            <span className={`financial-sidebar-edit-state ${financialPersistence === 'blocked' ? 'financial-sidebar-edit-state-blocked' : ''}`}>
+              {financialPersistence === 'ready'
+                ? '✎ مفتوح للتحرير'
+                : financialPersistence === 'loading'
+                  ? '⏳ جارٍ التحقق من المصدر'
+                  : '🔒 قراءة فقط — الحفظ متوقف'}
+            </span>
           </div>
 
           {/* Menu title */}

@@ -13,6 +13,12 @@ type AsyncContextStorage<T> = {
   enterWith(store: T): void;
 };
 
+type AsyncLocalStorageLike<T> = {
+  run<R>(store: T, callback: () => R): R;
+  getStore(): T | undefined;
+  enterWith?: (store: T) => void;
+};
+
 /**
  * Node's AsyncLocalStorage is loaded only when the runtime provides require;
  * this keeps the client bundle free of a Node-only module. The browser
@@ -50,15 +56,26 @@ class BrowserAsyncContextStorage<T> implements AsyncContextStorage<T> {
 }
 
 function createAsyncContextStorage<T>(): AsyncContextStorage<T> {
-  // Cloudflare's Node compatibility layer exposes AsyncLocalStorage types but
-  // does not implement enterWith(). UnitOfWork must be able to clear the
-  // request context after commit/rollback, so use the compatible local
-  // adapter in Workers instead of selecting a partial runtime API.
-  const isCloudflareWorker = (globalThis as typeof globalThis & {
-    __EDUPRO_CLOUDFLARE__?: boolean;
-  }).__EDUPRO_CLOUDFLARE__ === true;
-  if (isCloudflareWorker) return new BrowserAsyncContextStorage<T>();
+  const cloudflareAsyncLocalStorage = (globalThis as typeof globalThis & {
+    __EDUPRO_ASYNC_LOCAL_STORAGE__?: new <S>() => AsyncLocalStorageLike<S>;
+  }).__EDUPRO_ASYNC_LOCAL_STORAGE__;
+  if (cloudflareAsyncLocalStorage) {
+    const storage = new cloudflareAsyncLocalStorage<T>();
+    return {
+      run: (store, callback) => storage.run(store, callback),
+      getStore: () => storage.getStore(),
+      // Cloudflare intentionally omits enterWith(). The transaction is
+      // created inside runInTransaction, so run/getStore are sufficient. The
+      // no-op keeps commit/rollback from calling the unsupported method; the
+      // run scope restores the previous context when the callback finishes.
+      enterWith: () => undefined
+    };
+  }
 
+  // Cloudflare's Node compatibility layer may expose AsyncLocalStorage without
+  // enterWith(). The adapter below supports that partial API; all database
+  // transactions are created inside runInTransaction, so run/getStore provide
+  // the required request isolation.
   // `tsx` runs this module as native ESM, where `require` is undefined. The
   // old check therefore selected the browser fallback in the server and made
   // concurrent requests share one mutable transaction context. Node 22+
@@ -69,10 +86,17 @@ function createAsyncContextStorage<T>(): AsyncContextStorage<T> {
     process?: { getBuiltinModule?: (name: string) => unknown };
   }).process;
   const asyncHooks = runtimeProcess?.getBuiltinModule?.('node:async_hooks') as {
-    AsyncLocalStorage?: new <S>() => AsyncContextStorage<S>;
+    AsyncLocalStorage?: new <S>() => AsyncLocalStorageLike<S>;
   } | undefined;
   if (asyncHooks?.AsyncLocalStorage) {
-    return new asyncHooks.AsyncLocalStorage<T>();
+    const storage = new asyncHooks.AsyncLocalStorage<T>();
+    return {
+      run: (store, callback) => storage.run(store, callback),
+      getStore: () => storage.getStore(),
+      // Cloudflare may not implement enterWith. Database transactions are
+      // created through runInTransaction, so the run scope clears naturally.
+      enterWith: (store) => storage.enterWith?.(store)
+    };
   }
 
   const runtimeRequire = typeof require === 'function' ? require : undefined;

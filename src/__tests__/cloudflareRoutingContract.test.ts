@@ -28,4 +28,16 @@ describe('Cloudflare API routing contract', () => {
     expect(sslConfig).toContain("process.env.EDUPRO_CLOUDFLARE_HYPERDRIVE === 'true'");
     expect(server).toContain("process.env.EDUPRO_CLOUDFLARE_HYPERDRIVE === 'true'");
   });
+
+  it('keeps UnitOfWork request contexts isolated in Cloudflare Node compatibility mode', () => {
+    const unitOfWork = read('src/database/UnitOfWork.ts');
+    const worker = read('cloudflare-worker.ts');
+    expect(worker).toContain('from "node:async_hooks"');
+    expect(worker).toContain('__EDUPRO_ASYNC_LOCAL_STORAGE__');
+    expect(unitOfWork).toContain('__EDUPRO_ASYNC_LOCAL_STORAGE__');
+    expect(unitOfWork).toContain('enterWith: () => undefined');
+    expect(unitOfWork).toContain("getBuiltinModule?.('node:async_hooks')");
+    expect(unitOfWork).toContain('AsyncLocalStorageLike');
+    expect(unitOfWork).not.toContain('if (isCloudflareWorker) return new BrowserAsyncContextStorage<T>();');
+  });
 });

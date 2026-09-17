@@ -1,6 +1,6 @@
 import { Pool } from 'pg';
 
-const EXPECTED_PRODUCTION_PROJECT_REF = 'bwdjnjbexklsrwqbwzmk';
+const EXPECTED_PRODUCTION_PROJECT_REF = 'wjhraxvxvvthxqlpyohh';
 const REQUIRED_CONFIRMATION = 'CONFIGURE_PRODUCTION_APP_ROLE';
 
 function required(value: string | undefined, code: string): string {

@@ -98,8 +98,6 @@ function databaseProviderConfigured(): boolean {
 
 class DefaultTenantDataProvider implements TenantDataProvider {
   async resolveSnapshot(identity: TrustedIdentity, diagnosticTrace?: Perf004TraceLike, accessToken?: string): Promise<TenantLookupSnapshot | null> {
-    if (!UnitOfWork.hasTransactionDriver()) return null;
-
     const userId = clean(identity.id);
     const tenantId = clean(identity.tenantId);
     const schoolId = clean(identity.schoolId);
@@ -114,6 +112,68 @@ class DefaultTenantDataProvider implements TenantDataProvider {
       userId,
       role
     };
+
+    // Cloudflare Hyperdrive is the write/transaction path, but tenant
+    // validation is a bounded read. Prefer the already configured Supabase
+    // control-plane client here so a slow or unavailable transaction pool
+    // cannot hold every authenticated request open before it reaches its
+    // actual endpoint.
+    const readSupabaseSnapshot = async (): Promise<TenantLookupSnapshot | null> => {
+      const branchId = clean(identity.branchId);
+      const supabaseClients = [getSupabaseClientForAccessToken(accessToken), getSupabaseAdminClient()]
+        .filter((client): client is NonNullable<typeof client> => Boolean(client));
+      for (const supabase of supabaseClients) {
+        try {
+          let academicYearQuery = supabase
+            .from('academic_years')
+            .select('id,name,status,is_current,tenant_id,school_id,branch_id')
+            .eq('tenant_id', tenantId)
+            .eq('school_id', schoolId)
+            .is('deleted_at', null)
+            .in('status', ['planned', 'active']);
+          if (branchId) academicYearQuery = academicYearQuery.or(`branch_id.is.null,branch_id.eq.${branchId}`);
+          const [schoolResult, branchResult, academicYearResult] = await Promise.all([
+            supabase
+              .from('schools')
+              .select('id')
+              .eq('tenant_id', tenantId)
+              .eq('id', schoolId)
+              .is('deleted_at', null)
+              .maybeSingle(),
+            supabase
+              .from('branches')
+              .select('id')
+              .eq('tenant_id', tenantId)
+              .eq('school_id', schoolId)
+              .is('deleted_at', null)
+              .in('status', ['provisioning', 'active']),
+            academicYearQuery
+          ]);
+          if (schoolResult.error || branchResult.error || academicYearResult.error || !schoolResult.data) continue;
+          const snapshot: TenantLookupSnapshot = {
+            schoolExists: true,
+            branchIds: (branchResult.data || []).map((branch: any) => String(branch.id)).filter(Boolean),
+            academicYears: (academicYearResult.data || []).map((year: any) => ({
+              id: String(year.id),
+              name: year.name ? String(year.name) : undefined,
+              isActive: year.status === 'active',
+              isCurrent: Boolean(year.is_current),
+              tenantId: year.tenant_id ? String(year.tenant_id) : undefined,
+              schoolId: year.school_id ? String(year.school_id) : undefined,
+              branchId: year.branch_id ? String(year.branch_id) : null
+            }))
+          };
+          if (resolveAcademicYearRecord(snapshot.academicYears, clean(identity.academicYear))) return snapshot;
+        } catch {
+          // Try the next server-side source, if configured.
+        }
+      }
+      return null;
+    };
+
+    const directSupabaseSnapshot = await readSupabaseSnapshot();
+    if (directSupabaseSnapshot) return directSupabaseSnapshot;
+    if (!UnitOfWork.hasTransactionDriver()) return null;
 
     const readSnapshot = async (): Promise<TenantLookupSnapshot> => {
       const transaction = UnitOfWork.getActiveContext()?.databaseTransaction;
@@ -184,13 +244,6 @@ class DefaultTenantDataProvider implements TenantDataProvider {
           : []
       };
 
-      // Render's tenant pool can be pointed at a database that is healthy but
-      // does not contain the control-plane school rows. The authenticated
-      // Supabase channel remains the canonical read source for this project,
-      // so retry the strictly scoped lookup there before rejecting a valid
-      // tenant. This keeps the PostgreSQL transaction path authoritative when
-      // it has the rows, while preventing a stale/mismatched pool from
-      // blocking the school dashboard and Student Affairs entry point.
       const branchId = clean(identity.branchId);
       const postgresContextLooksValid = postgresSnapshot.schoolExists
         && (!branchId || postgresSnapshot.branchIds.includes(branchId))
@@ -201,64 +254,6 @@ class DefaultTenantDataProvider implements TenantDataProvider {
         && Boolean(resolveAcademicYearRecord(postgresSnapshot.academicYears, clean(identity.academicYear)));
       if (postgresContextLooksValid) return postgresSnapshot;
 
-      // This is a server-side lookup only. Prefer the request-scoped client
-      // carrying the already verified token so RLS evaluates the real user;
-      // then fall back to the service-role client when configured. Both paths
-      // remain restricted by the verified identity values below, and no
-      // service-role credential ever leaves the server.
-      const supabaseClients = [getSupabaseClientForAccessToken(accessToken), getSupabaseAdminClient()]
-        .filter((client): client is NonNullable<typeof client> => Boolean(client));
-      if (supabaseClients.length === 0) return postgresSnapshot;
-      for (const supabase of supabaseClients) {
-        try {
-        let academicYearQuery = supabase
-          .from('academic_years')
-          .select('id,name,status,is_current,tenant_id,school_id,branch_id')
-          .eq('tenant_id', tenantId)
-          .eq('school_id', schoolId)
-          .is('deleted_at', null)
-          .in('status', ['planned', 'active']);
-        if (branchId) academicYearQuery = academicYearQuery.or(`branch_id.is.null,branch_id.eq.${branchId}`);
-        const [schoolResult, branchResult, academicYearResult] = await Promise.all([
-          supabase
-            .from('schools')
-            .select('id')
-            .eq('tenant_id', tenantId)
-            .eq('id', schoolId)
-            .is('deleted_at', null)
-            .maybeSingle(),
-          supabase
-            .from('branches')
-            .select('id')
-            .eq('tenant_id', tenantId)
-            .eq('school_id', schoolId)
-            .is('deleted_at', null)
-            .in('status', ['provisioning', 'active']),
-          academicYearQuery
-        ]);
-          if (schoolResult.error || branchResult.error || academicYearResult.error || !schoolResult.data) {
-            continue;
-          }
-          const supabaseSnapshot: TenantLookupSnapshot = {
-            schoolExists: true,
-            branchIds: (branchResult.data || []).map((branch: any) => String(branch.id)).filter(Boolean),
-            academicYears: (academicYearResult.data || []).map((year: any) => ({
-              id: String(year.id),
-              name: year.name ? String(year.name) : undefined,
-              isActive: year.status === 'active',
-              isCurrent: Boolean(year.is_current),
-              tenantId: year.tenant_id ? String(year.tenant_id) : undefined,
-              schoolId: year.school_id ? String(year.school_id) : undefined,
-              branchId: year.branch_id ? String(year.branch_id) : null
-            }))
-          };
-          if (resolveAcademicYearRecord(supabaseSnapshot.academicYears, clean(identity.academicYear))) {
-            return supabaseSnapshot;
-          }
-        } catch {
-          // Try the next canonical server-side source, if configured.
-        }
-      }
       return postgresSnapshot;
     };
 

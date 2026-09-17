@@ -8,6 +8,9 @@ describe('student financial source isolation', () => {
     expect(source).toContain('const [financialInvoices, setFinancialInvoices] = useState<Invoice[]>([]);');
     expect(source).toContain('if (financialInvoices.length === 0) return [];');
     expect(source).not.toContain('if (financialInvoices.length === 0) return filteredStudents;');
-    expect(source).toContain(': 0;\n    const totalPaid = financialInvoices.length > 0');
+    expect(source).toContain("if (financialPersistence !== 'ready')");
+    expect(source).toContain('totalDebts: null');
+    expect(source).toContain('financial-sidebar-edit-state-blocked');
+    expect(source).toContain('قراءة فقط — الحفظ متوقف');
   });
 });
