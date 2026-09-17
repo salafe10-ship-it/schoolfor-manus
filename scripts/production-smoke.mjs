@@ -8,10 +8,37 @@ if (!baseUrl) {
   process.exitCode = 1;
 } else {
   const failures = [];
-  const healthResponse = await fetch(`${baseUrl}/api/health`, { headers: { accept: 'application/json' } });
+  const sleep = (milliseconds) => new Promise(resolve => setTimeout(resolve, milliseconds));
+  const healthUrl = `${baseUrl}/api/health`;
+  let healthResponse = null;
   let health = null;
-  try { health = await healthResponse.json(); } catch { failures.push('HEALTH_NOT_JSON'); }
-  if (!healthResponse.ok) failures.push(`HEALTH_HTTP_${healthResponse.status}`);
+  // Cloudflare may serve the previous Worker version from an edge for a short
+  // period immediately after deploy. Retry the authoritative identity check
+  // so propagation is not reported as a failed release.
+  for (let attempt = 1; attempt <= 12; attempt += 1) {
+    try {
+      const cacheBust = `?deployment_check=${Date.now()}-${attempt}`;
+      const response = await fetch(`${healthUrl}${cacheBust}`, {
+        headers: { accept: 'application/json', 'cache-control': 'no-cache' },
+      });
+      const payload = await response.json().catch(() => null);
+      healthResponse = response;
+      health = payload;
+      const candidateCommit = payload?.data?.build?.commit;
+      const identityMatches = expectedCommit
+        ? candidateCommit === expectedCommit
+        : candidateCommit && candidateCommit !== 'unknown';
+      if (response.ok && identityMatches) break;
+    } catch {
+      healthResponse = null;
+      health = null;
+    }
+    if (attempt < 12) await sleep(2000);
+  }
+  if (!healthResponse) failures.push('HEALTH_REQUEST_FAILED');
+  else if (!health) failures.push('HEALTH_NOT_JSON');
+  const healthStatus = healthResponse?.status || 0;
+  if (healthResponse && !healthResponse.ok) failures.push(`HEALTH_HTTP_${healthStatus}`);
   const build = health?.data?.build;
   if (!build || typeof build.commit !== 'string' || typeof build.version !== 'string' || typeof build.builtAt !== 'string') {
     failures.push('BUILD_IDENTITY_MISSING');
@@ -37,7 +64,7 @@ if (!baseUrl) {
   const result = {
     success: failures.length === 0,
     baseUrl,
-    health: healthResponse.status,
+    health: healthStatus,
     build: build || null,
     index: indexResponse.status,
     assetReference: assetReference || null,

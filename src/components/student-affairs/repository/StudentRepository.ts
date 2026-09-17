@@ -1,6 +1,12 @@
-import { authenticatedRequest } from '../../../utils/authenticatedRequest';
+import { authenticatedRequest, AuthenticationRequestError } from '../../../utils/authenticatedRequest';
 
 const inFlightStudentLists = new Map<string, Promise<any>>();
+const STUDENT_READ_MAX_ATTEMPTS = 3;
+const STUDENT_READ_RETRYABLE_STATUSES = new Set([408, 425, 429, 500, 502, 503, 504]);
+
+const waitBeforeStudentReadRetry = (attempt: number) => new Promise(resolve => {
+  window.setTimeout(resolve, 300 * (attempt + 1));
+});
 
 /**
  * Student Repository Layer
@@ -370,18 +376,31 @@ export const StudentRepository = {
     const requestKey = params.toString();
     const existing = inFlightStudentLists.get(requestKey);
     if (existing) return existing;
-    const request = authenticatedRequest(`/api/students?${requestKey}`, {
-      method: "GET",
-      headers: { Accept: "application/json" },
-      signal,
-      cache: "no-store"
-    }).then(async response => {
-      if (!response.ok) {
+    const request = (async () => {
+      for (let attempt = 0; attempt < STUDENT_READ_MAX_ATTEMPTS; attempt += 1) {
+        let response: Response;
+        try {
+          response = await authenticatedRequest(`/api/students?${requestKey}`, {
+            method: "GET",
+            headers: { Accept: "application/json" },
+            signal,
+            cache: "no-store"
+          });
+        } catch (error) {
+          if (error instanceof AuthenticationRequestError || attempt === STUDENT_READ_MAX_ATTEMPTS - 1) throw error;
+          await waitBeforeStudentReadRetry(attempt);
+          continue;
+        }
+        if (response.ok) return response.json();
         const errorData = await response.json().catch(() => ({}));
-        throw new Error(errorData.message || errorData.error || `فشل جلب بيانات الطلاب من الخادم (${response.status})`);
+        const message = errorData.message || errorData.error || `فشل جلب بيانات الطلاب من الخادم (${response.status})`;
+        if (!STUDENT_READ_RETRYABLE_STATUSES.has(response.status) || attempt === STUDENT_READ_MAX_ATTEMPTS - 1) {
+          throw new Error(message);
+        }
+        await waitBeforeStudentReadRetry(attempt);
       }
-      return response.json();
-    }).finally(() => inFlightStudentLists.delete(requestKey));
+      throw new Error('تعذر جلب بيانات الطلاب من الخادم.');
+    })().finally(() => inFlightStudentLists.delete(requestKey));
     inFlightStudentLists.set(requestKey, request);
     // The shared request is intentionally not aborted by one unmounting view;
     // this prevents duplicate concurrent reads during React navigation.

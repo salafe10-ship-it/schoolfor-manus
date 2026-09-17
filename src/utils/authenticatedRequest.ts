@@ -13,6 +13,12 @@ function withAuthorization(init: RequestInit, token: string): RequestInit {
   return { ...init, headers };
 }
 
+function notifyAuthenticationExpired(): void {
+  if (typeof window !== 'undefined') {
+    window.dispatchEvent(new CustomEvent('edupro:auth-expired'));
+  }
+}
+
 /**
  * Sends an authenticated request using the official trusted session lifecycle.
  * A server-side 401 may trigger one explicit refresh and one retry only.
@@ -32,15 +38,24 @@ export async function authenticatedRequest(
     // Some isolated test/runtime adapters expose only the async contract.
   }
   let token = locallySafeToken || await auth.getTrustedAccessTokenAsync();
-  if (!token) throw new AuthenticationRequestError();
+  if (!token) {
+    notifyAuthenticationExpired();
+    throw new AuthenticationRequestError();
+  }
 
   let response = await fetch(input, withAuthorization(init, token));
   if (response.status !== 401) return response;
 
   token = await auth.refreshTrustedAccessToken();
-  if (!token) throw new AuthenticationRequestError();
+  if (!token) {
+    notifyAuthenticationExpired();
+    throw new AuthenticationRequestError();
+  }
 
   response = await fetch(input, withAuthorization(init, token));
-  if (response.status === 401) throw new AuthenticationRequestError();
+  if (response.status === 401) {
+    notifyAuthenticationExpired();
+    throw new AuthenticationRequestError();
+  }
   return response;
 }

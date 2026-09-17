@@ -711,6 +711,7 @@ export default function App() {
   const [activeToast, setActiveToast] = useState<any>(null);
   const saveIntentRef = useRef<number | null>(null);
   const toastTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const lastExpiredSessionRedirectRef = useRef(0);
 
   useEffect(() => {
     const markSaveIntent = (label: string) => {
@@ -1020,6 +1021,21 @@ export default function App() {
     logAction('PORTAL_LOGOUT', `تم إنهاء الجلسة وإغلاق التوكن لـ ${selectedSchool?.name || 'المدرسة'}`, 'المصادقة والأمان');
     triggerNotification('تم تسجيل الخروج بنجاح وإغلاق التوكن. الجلسة منتهية ولا يمكن الرجوع بالمتصفح.', 'info');
   };
+
+  // A protected module can outlive the access token while the browser tab is
+  // open. Route the whole shell back to the login boundary instead of leaving
+  // a module with disabled selectors and a misleading partial-data state.
+  useEffect(() => {
+    if (typeof window === 'undefined') return undefined;
+    const handleExpiredSession = () => {
+      if (currentPortal === 'login') return;
+      if (Date.now() - lastExpiredSessionRedirectRef.current < 5_000) return;
+      lastExpiredSessionRedirectRef.current = Date.now();
+      void handleLogout();
+    };
+    window.addEventListener('edupro:auth-expired', handleExpiredSession);
+    return () => window.removeEventListener('edupro:auth-expired', handleExpiredSession);
+  }, [currentPortal, handleLogout]);
 
   // Student Actions
   const handleStudentFormSubmit = async (e: React.FormEvent) => {
