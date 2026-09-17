@@ -94,6 +94,17 @@ describe('AUTH-004 database role-permission resolution', () => {
     await expect(wildcard.ensureDatabasePermissions(identity)).rejects.toBeInstanceOf(InvalidRoleError);
   });
 
+  it('restores the documented school-manager catalog for legacy incomplete assignments', async () => {
+    const resolver = new RoleResolver();
+    resolver.configureDatabaseLoader(async () => [
+      { roleKey: 'schooladmin', permissionKey: PERMISSIONS.STUDENT_READ },
+    ]);
+
+    await resolver.ensureDatabasePermissions({ ...identity, role: 'SchoolAdmin' });
+
+    expect(resolver.getPermissions({ ...identity, role: 'SchoolAdmin' }).has('*')).toBe(true);
+  });
+
   it('fails closed when trusted identity is incomplete and does not use its client role', async () => {
     const resolver = new RoleResolver();
     resolver.configureDatabaseLoader(async () => studentDocumentAssignments);

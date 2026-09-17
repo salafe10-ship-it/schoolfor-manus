@@ -138,6 +138,20 @@ export class RoleResolver {
       else permissions.add(permission);
     }
     for (const deniedPermission of deniedPermissions) permissions.delete(deniedPermission);
+    // Older school workspaces may have a canonical `schooladmin` assignment
+    // whose role_permissions rows predate the complete application catalog.
+    // The role itself is still database-resolved and the identity role comes
+    // from trusted Auth metadata; restore the documented full school-manager
+    // capability set only for that exact pairing. Explicit denies remain
+    // authoritative, and custom/other roles never receive this fallback.
+    if (
+      roleKeys.length === 1
+      && roleKeys[0] === 'schooladmin'
+      && String(identity.role || '').trim().toLowerCase() === 'schooladmin'
+      && deniedPermissions.size === 0
+    ) {
+      permissions.add('*');
+    }
     this.databaseAssignments.set(this.identityKey(identity), {
       roleKey: roleKeys[0],
       permissions,
