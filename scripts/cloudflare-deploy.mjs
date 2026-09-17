@@ -19,6 +19,9 @@ const args = [
   '--var', `APP_VERSION:${version}`,
   '--var', `BUILD_COMMIT_SHA:${commit}`,
   '--var', `BUILD_TIMESTAMP:${builtAt}`,
+  '--define', `__EDUPRO_BUILD_VERSION__:${JSON.stringify(version)}`,
+  '--define', `__EDUPRO_BUILD_COMMIT__:${JSON.stringify(commit)}`,
+  '--define', `__EDUPRO_BUILD_TIMESTAMP__:${JSON.stringify(builtAt)}`,
 ];
 
 const result = spawnSync(npx, args, {
