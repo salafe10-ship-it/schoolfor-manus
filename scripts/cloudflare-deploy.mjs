@@ -21,6 +21,12 @@ const args = [
   '--var', `BUILD_TIMESTAMP:${builtAt}`,
 ];
 
-const result = spawnSync(npx, args, { cwd: root, stdio: 'inherit', shell: false });
+const result = spawnSync(npx, args, {
+  cwd: root,
+  stdio: 'inherit',
+  // Windows launches .cmd shims through the shell; without this Node reports
+  // EINVAL before Wrangler gets a chance to run.
+  shell: process.platform === 'win32',
+});
 if (result.error) throw result.error;
 process.exit(result.status ?? 1);
