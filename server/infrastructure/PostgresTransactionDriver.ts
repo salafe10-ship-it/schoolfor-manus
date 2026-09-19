@@ -75,8 +75,15 @@ class PostgresTransactionSession implements TransactionSession {
           this.state = "rolled_back";
         }
       } finally {
-        this.client.release(true);
-        this.state = "released";
+        try {
+          this.client.release(true);
+        } catch {
+          // Hyperdrive may report a recycle error even for an explicitly
+          // discarded client. The client is already unusable; never turn
+          // that cleanup diagnostic into a failed read/commit response.
+        } finally {
+          this.state = "released";
+        }
       }
       this.diagnosticTrace?.mark(`${this.diagnosticPrefix}release_discarded`);
       this.recordPoolMetric?.({

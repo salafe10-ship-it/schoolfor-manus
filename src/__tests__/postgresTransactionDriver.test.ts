@@ -119,6 +119,26 @@ describe('PostgresTransactionDriver trusted context', () => {
     }
   });
 
+  it('does not fail a completed read when Hyperdrive rejects discard cleanup', async () => {
+    vi.stubEnv('EDUPRO_CLOUDFLARE_HYPERDRIVE', 'true');
+    try {
+      const { client, driver } = createDriverHarness();
+      client.release.mockImplementationOnce(() => { throw new Error('recycle rejected'); });
+      const session = await driver.begin({
+        transactionId: 'tx-hyperdrive-cleanup-diagnostic',
+        tenantId: 'tenant-a',
+        schoolId: 'school-a',
+        operationName: 'read-only lifecycle test',
+        trustedContext: { tenantId: 'tenant-a', schoolId: 'school-a' }
+      });
+
+      await session.commit();
+      await expect(session.release()).resolves.toBeUndefined();
+    } finally {
+      vi.unstubAllEnvs();
+    }
+  });
+
   it('samples real pool connections without returning secret fields', async () => {
     const client: any = {
       query: vi.fn(async (sql: string) => String(sql).includes('FROM pg_roles')
