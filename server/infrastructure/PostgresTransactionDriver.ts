@@ -62,17 +62,40 @@ class PostgresTransactionSession implements TransactionSession {
     if (this.state === "released") return;
     this.diagnosticTrace?.mark(`${this.diagnosticPrefix}release_started`);
     const releaseStartedAtMs = nowMs();
-    // Hyperdrive validates the transaction state while recycling a pooled
-    // connection.  Explicitly send ROLLBACK for every release path, even
-    // after COMMIT/ROLLBACK, so the adapter observes an idle connection
-    // before pg returns it to the pool.  ROLLBACK is a no-op when PostgreSQL
-    // is already idle and does not undo a completed COMMIT.
-    try {
-      await this.client.query("ROLLBACK");
-    } finally {
-      if (this.state === "active") this.state = "rolled_back";
+    // A committed/rolled-back session is already idle. Sending another
+    // ROLLBACK through Hyperdrive during recycling can race its protocol
+    // state machine and produce "connection still in a transaction". Only
+    // normalize an actually active session, then release it normally.
+    if (this.state === "active") {
+      try {
+        await this.client.query("ROLLBACK");
+        this.state = "rolled_back";
+      } catch (error) {
+        // Never return an uncertain session to the pool. `release(true)` is
+        // the pg contract for discarding a broken/transaction-tainted client.
+        try {
+          this.client.release(true);
+        } finally {
+          this.state = "released";
+        }
+        throw error;
+      }
     }
-    this.client.release();
+
+    try {
+      this.client.release();
+    } catch (error) {
+      // Hyperdrive may reject recycling when the server still reports an
+      // open transaction. Discard that client instead of turning a completed
+      // read/commit into an application failure or leaking a pooled session.
+      try {
+        this.client.release(true);
+      } finally {
+        this.state = "released";
+      }
+      this.diagnosticTrace?.mark(`${this.diagnosticPrefix}release_discarded`);
+      return;
+    }
     this.state = "released";
     this.diagnosticTrace?.mark(`${this.diagnosticPrefix}release_completed`);
     this.recordPoolMetric?.({

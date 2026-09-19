@@ -62,7 +62,7 @@ describe('PostgresTransactionDriver trusted context', () => {
     expect(client.query.mock.calls.filter(([sql]) => String(sql).startsWith('SELECT set_config'))).toHaveLength(0);
   });
 
-  it('normalizes the connection to idle before releasing after commit', async () => {
+  it('releases a committed connection without a second transaction command', async () => {
     const { client, driver } = createDriverHarness();
     const session = await driver.begin({
       transactionId: 'tx-hyperdrive-release',
@@ -77,8 +77,26 @@ describe('PostgresTransactionDriver trusted context', () => {
 
     const sql = client.query.mock.calls.map(([statement]) => String(statement));
     expect(sql.filter(statement => statement === 'COMMIT')).toHaveLength(1);
-    expect(sql.at(-1)).toBe('ROLLBACK');
+    expect(sql.filter(statement => statement === 'ROLLBACK')).toHaveLength(0);
     expect(client.release).toHaveBeenCalledTimes(1);
+  });
+
+  it('discards a client when Hyperdrive rejects pool recycling', async () => {
+    const { client, driver } = createDriverHarness();
+    client.release
+      .mockImplementationOnce(() => { throw new Error('connection still in a transaction'); })
+      .mockImplementationOnce(() => undefined);
+    const session = await driver.begin({
+      transactionId: 'tx-hyperdrive-discard',
+      tenantId: 'tenant-a',
+      schoolId: 'school-a',
+      operationName: 'read-only lifecycle test',
+      trustedContext: { tenantId: 'tenant-a', schoolId: 'school-a' }
+    });
+
+    await session.commit();
+    await expect(session.release()).resolves.toBeUndefined();
+    expect(client.release).toHaveBeenNthCalledWith(2, true);
   });
 
   it('samples real pool connections without returning secret fields', async () => {
