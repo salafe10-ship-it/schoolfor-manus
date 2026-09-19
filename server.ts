@@ -3866,24 +3866,79 @@ export async function createApp(options: { cloudflare?: boolean } = {}): Promise
       // while the Worker is serving authenticated reads, causing the runtime
       // to cancel the request as hung. Provision the owner-workspace schema
       // through the reviewed migration pipeline instead.
-      const result = await platformAdminPool.query<any>(
-        `SELECT s.id, s.display_name, s.status, s.central_metadata,
-                r.id AS release_id, r.release_version, r.release_kind, r.channel,
-                r.title AS release_title, r.created_at AS release_created_at,
-                r.feature_overrides, r.payload AS release_payload,
-                r.template_id, t.template_key, t.version AS template_version, t.manifest AS template_manifest
-           FROM public.schools s
-           LEFT JOIN LATERAL (
-             SELECT * FROM public.platform_school_releases
-              WHERE school_id = s.id AND status = 'active'
-              ORDER BY release_version DESC LIMIT 1
-           ) r ON true
-           LEFT JOIN public.platform_templates t ON t.id = r.template_id
-          WHERE s.id = $1::uuid AND s.status = 'active' AND s.deleted_at IS NULL`,
-        [schoolId],
-      );
-      if (result.rowCount !== 1) return next(new ConflictError('إعدادات المدرسة غير متاحة.'));
-      const row = result.rows[0];
+      let row: any;
+      if (platformControl) {
+        // Workspace bootstrap is a read-only control-plane lookup. Keep it
+        // off the Hyperdrive pool so the first app paint is not coupled to a
+        // pooled session that may still be recovering from a prior request.
+        const [{ data: school, error: schoolError }, { data: releases, error: releaseError }] = await Promise.all([
+          platformControl
+            .from('schools')
+            .select('id,display_name,status,central_metadata')
+            .eq('id', schoolId)
+            .eq('status', 'active')
+            .is('deleted_at', null)
+            .maybeSingle(),
+          platformControl
+            .from('platform_school_releases')
+            .select('id,release_version,release_kind,channel,title,created_at,feature_overrides,payload,template_id')
+            .eq('school_id', schoolId)
+            .eq('status', 'active')
+            .order('release_version', { ascending: false })
+            .limit(1),
+        ]);
+        if (schoolError) throw schoolError;
+        if (releaseError) throw releaseError;
+        if (!school) return next(new ConflictError('إعدادات المدرسة غير متاحة.'));
+        const release = releases?.[0] || null;
+        let template: any = null;
+        if (release?.template_id) {
+          const { data, error } = await platformControl
+            .from('platform_templates')
+            .select('template_key,version,manifest')
+            .eq('id', release.template_id)
+            .maybeSingle();
+          if (error) throw error;
+          template = data;
+        }
+        row = {
+          id: school.id,
+          display_name: school.display_name,
+          status: school.status,
+          central_metadata: school.central_metadata,
+          release_id: release?.id || null,
+          release_version: release?.release_version || null,
+          release_kind: release?.release_kind || null,
+          channel: release?.channel || null,
+          release_title: release?.title || null,
+          release_created_at: release?.created_at || null,
+          feature_overrides: release?.feature_overrides || null,
+          release_payload: release?.payload || null,
+          template_id: release?.template_id || null,
+          template_key: template?.template_key || null,
+          template_version: template?.version || null,
+          template_manifest: template?.manifest || null,
+        };
+      } else {
+        const result = await platformAdminPool.query<any>(
+          `SELECT s.id, s.display_name, s.status, s.central_metadata,
+                  r.id AS release_id, r.release_version, r.release_kind, r.channel,
+                  r.title AS release_title, r.created_at AS release_created_at,
+                  r.feature_overrides, r.payload AS release_payload,
+                  r.template_id, t.template_key, t.version AS template_version, t.manifest AS template_manifest
+             FROM public.schools s
+             LEFT JOIN LATERAL (
+               SELECT * FROM public.platform_school_releases
+                WHERE school_id = s.id AND status = 'active'
+                ORDER BY release_version DESC LIMIT 1
+             ) r ON true
+             LEFT JOIN public.platform_templates t ON t.id = r.template_id
+            WHERE s.id = $1::uuid AND s.status = 'active' AND s.deleted_at IS NULL`,
+          [schoolId],
+        );
+        if (result.rowCount !== 1) return next(new ConflictError('إعدادات المدرسة غير متاحة.'));
+        row = result.rows[0];
+      }
       const metadata = readObject(row.central_metadata);
       const workspace = readObject(metadata.ownerWorkspace);
       const releasePayload = readObject(row.release_payload);
@@ -12450,64 +12505,80 @@ export async function createApp(options: { cloudflare?: boolean } = {}): Promise
         throw new DatabaseError("Financial database requires the configured PostgreSQL transaction connection.");
       }
 
+      const canonicalReadClient = canonicalTenantReadClient(req);
+      if (!canonicalReadClient) throw new DatabaseError('مصدر القراءة المالية المباشر غير متاح.');
+
       let snapshot: { data: Record<string, unknown>; version: number; updated_at: string } | null = null;
       let canonicalErpReady = false;
       let canonicalErpModel: Awaited<ReturnType<typeof CanonicalErpPostingService.readModel>> | null = null;
       let canonicalFeeInvoices: any[] = [];
       let canonicalFeeReceipts: any[] = [];
-      await UnitOfWork.runInTransaction(
-        schoolId,
-        {
-          operationName: 'Read Financial Portal Snapshot',
-          tenantId,
-          userId: (req as any).user.id,
-          userName: (req as any).user.name || 'المستخدم الحالي',
-          ipAddress: req.ip || 'unknown',
-          affectedTables: ['financial_portal_snapshots'],
-          readOnly: true,
-          // Never allow a pooled/Hyperdrive read to hold the financial screen
-          // open indefinitely. The client also has a deadline, but the
-          // database transaction must enforce the same bounded contract.
-          timeoutMs: 10_000
-        },
-        async () => {
-          const transaction = UnitOfWork.getActiveContext()?.databaseTransaction;
-          if (!transaction) throw new DatabaseError('Financial snapshot transaction is unavailable.');
-          const result = await transaction.query<{ data: Record<string, unknown>; version: number; updated_at: string }>(
-            `SELECT data, version, updated_at
-               FROM public.financial_portal_snapshots
-              WHERE tenant_id = $1 AND school_id = $2
-              LIMIT 1`,
-            [tenantId, schoolId]
-          );
-          snapshot = result.rows[0] || null;
-          try {
-            const canonicalInvoices = await transaction.query(
-              `SELECT id, student_id AS "studentId", student_name AS "studentName", item, amount, tax_amount AS "taxAmount",
-                      paid_amount AS "paidAmount", remaining_amount AS "remainingAmount", invoice_date AS "invoiceDate",
-                      due_date AS "dueDate", status, journal_entry_id AS "journalEntryId", template_id AS "templateId",
-                      academic_year_id AS "academicYearId", academic_period_id AS "academicPeriodId", currency,
-                      idempotency_key AS "idempotencyKey", version
-                 FROM public.student_fee_invoices
-                WHERE tenant_id = $1 AND school_id = $2
-                ORDER BY invoice_date DESC NULLS LAST, created_at DESC`, [tenantId, schoolId]);
-            canonicalFeeInvoices = canonicalInvoices.rows;
-            const canonicalReceipts = await transaction.query(
-              `SELECT id, student_id AS "studentId", student_name AS "studentName", receipt_date AS "receiptDate", amount,
-                      payment_method AS "paymentMethod", receiving_account AS "receivingAccount", operational_type AS "operationalType",
-                      against_text AS against, status, journal_entry_id AS "journalEntryId", receipt_voucher_id AS "receiptVoucherId",
-                      source_payload AS "sourcePayload"
-                 FROM public.student_fee_receipts
-                WHERE tenant_id = $1 AND school_id = $2
-                ORDER BY receipt_date DESC NULLS LAST, created_at DESC`, [tenantId, schoolId]);
-            canonicalFeeReceipts = canonicalReceipts.rows;
-          } catch (canonicalError: any) {
-            if (String(canonicalError?.code || '') !== '42P01') throw canonicalError;
-            EnterpriseLogger.warn('Canonical student-fee tables are not migrated; retaining snapshot read model.', 'FinancialSnapshotRoute', { tenantId, schoolId });
-          }
-        },
-        tenantContext
-      );
+      // The first financial paint is read-only. Use the already verified
+      // server-side Supabase channel instead of waiting for a Hyperdrive pool
+      // client; all predicates remain tenant/school scoped and all writes keep
+      // their transactional path below.
+      const [snapshotResult, invoiceResult, receiptResult] = await Promise.all([
+        canonicalReadClient
+          .from('financial_portal_snapshots')
+          .select('data,version,updated_at')
+          .eq('tenant_id', tenantId)
+          .eq('school_id', schoolId)
+          .maybeSingle(),
+        canonicalReadClient
+          .from('student_fee_invoices')
+          .select('id,student_id,student_name,item,amount,tax_amount,paid_amount,remaining_amount,invoice_date,due_date,status,journal_entry_id,template_id,academic_year_id,academic_period_id,currency,idempotency_key,version')
+          .eq('tenant_id', tenantId)
+          .eq('school_id', schoolId)
+          .order('invoice_date', { ascending: false })
+          .order('created_at', { ascending: false }),
+        canonicalReadClient
+          .from('student_fee_receipts')
+          .select('id,student_id,student_name,receipt_date,amount,payment_method,receiving_account,operational_type,against_text,status,journal_entry_id,receipt_voucher_id,source_payload')
+          .eq('tenant_id', tenantId)
+          .eq('school_id', schoolId)
+          .order('receipt_date', { ascending: false })
+          .order('created_at', { ascending: false }),
+      ]);
+      if (snapshotResult.error) throw snapshotResult.error;
+      const isMissingCanonicalTable = (error: any) => ['42P01', 'PGRST205'].includes(String(error?.code || ''));
+      if (invoiceResult.error && !isMissingCanonicalTable(invoiceResult.error)) throw invoiceResult.error;
+      if (receiptResult.error && !isMissingCanonicalTable(receiptResult.error)) throw receiptResult.error;
+      snapshot = snapshotResult.data || null;
+      canonicalFeeInvoices = (invoiceResult.data || []).map((row: any) => ({
+        id: row.id,
+        studentId: row.student_id,
+        studentName: row.student_name,
+        item: row.item,
+        amount: row.amount,
+        taxAmount: row.tax_amount,
+        paidAmount: row.paid_amount,
+        remainingAmount: row.remaining_amount,
+        invoiceDate: row.invoice_date,
+        dueDate: row.due_date,
+        status: row.status,
+        journalEntryId: row.journal_entry_id,
+        templateId: row.template_id,
+        academicYearId: row.academic_year_id,
+        academicPeriodId: row.academic_period_id,
+        currency: row.currency,
+        idempotencyKey: row.idempotency_key,
+        version: row.version,
+      }));
+      canonicalFeeReceipts = (receiptResult.data || []).map((row: any) => ({
+        id: row.id,
+        studentId: row.student_id,
+        studentName: row.student_name,
+        receiptDate: row.receipt_date,
+        amount: row.amount,
+        paymentMethod: row.payment_method,
+        receivingAccount: row.receiving_account,
+        operationalType: row.operational_type,
+        against: row.against_text,
+        status: row.status,
+        journalEntryId: row.journal_entry_id,
+        receiptVoucherId: row.receipt_voucher_id,
+        sourcePayload: row.source_payload,
+      }));
       // ERP enrichment is optional for the fee read model. Keep it in its own
       // short, bounded transaction so a slow/partially provisioned ledger
       // cannot make the authoritative fee snapshot time out as a whole.
