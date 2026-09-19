@@ -1600,7 +1600,7 @@ export default function App() {
         )}
 
         {/* Outer view frame enclosing the interactive visual content of ERP */}
-        <main className={`workspace-main min-h-0 overflow-x-hidden overflow-y-auto bg-gradient-to-br from-[#130b04] via-[#1a1108] to-[#100903] text-[#f7eee1] ${activeSection === 'dashboard' ? 'lg:overflow-y-hidden p-3 sm:p-4' : 'p-0'}`}>
+        <main className={`workspace-main program-identity-surface min-h-0 overflow-x-hidden overflow-y-auto ${activeSection === 'dashboard' ? 'lg:overflow-y-hidden p-3 sm:p-4' : 'p-0'}`}>
           {isSuperAdminViewActive ? (
             <SuperAdminView
               activeSection={activeSection}

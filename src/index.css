@@ -111,6 +111,31 @@ body {
   scroll-padding-block: 1rem 5rem;
 }
 
+/* Unified application identity: the reference screen uses a warm paper
+   workspace beneath a dark coffee/gold navigation system. Keep module-owned
+   layouts intact while giving every screen the same neutral canvas, ink, and
+   selection treatment. */
+.program-identity-surface {
+  background:
+    radial-gradient(circle at 88% 0%, rgba(212, 175, 55, 0.14), transparent 26rem),
+    linear-gradient(135deg, #fbfaf6 0%, #f2ede4 52%, #e7dfd2 100%) !important;
+  color: #17213b !important;
+}
+
+.program-identity-surface :is(input, select, textarea) {
+  border-color: #c9b98f;
+  border-radius: 0.75rem;
+}
+
+.program-identity-surface :is(button, input, select, textarea):focus-visible {
+  outline: 3px solid rgba(200, 146, 46, 0.34);
+  outline-offset: 2px;
+}
+
+.program-identity-surface :is(.rounded-xl, .rounded-2xl, .rounded-3xl) {
+  border-color: rgba(216, 189, 128, 0.56);
+}
+
 #super-admin-portal,
 #super-admin-portal > aside,
 #super-admin-portal > div,
