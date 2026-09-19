@@ -3315,7 +3315,7 @@ export default function StudentFinancialPortal({
   }
 
   return (
-    <div id="student-financial-portal" className={`financial-luxury-shell financial-identity-unified w-full min-h-screen text-right font-sans dir-rtl select-none transition-all duration-300 p-2 sm:p-4 md:p-6 space-y-6 ${activeSubSec === 'management' ? 'financial-reference-management' : ''} ${isFocusMode ? 'portal-focus-mode' : ''}`} dir="rtl">
+    <div id="student-financial-portal" className={`financial-luxury-shell financial-identity-unified w-full min-h-screen text-right font-sans dir-rtl select-none transition-all duration-300 p-2 sm:p-4 md:p-6 space-y-6 ${activeSubSec === 'analytics' ? 'financial-analytics-density' : ''} ${activeSubSec === 'management' ? 'financial-reference-management' : ''} ${isFocusMode ? 'portal-focus-mode' : ''}`} dir="rtl">
 
       {/* ==========================================
           LUXURY GOLD METALLIC TOP HEADER
@@ -3466,7 +3466,7 @@ export default function StudentFinancialPortal({
         
         {/* VIEW 1: لوحة التحكم المالية والتحليلات */}
         {activeSubSec === 'analytics' && (
-          <div className="space-y-6 animate-fadeIn">
+          <div className="space-y-6 animate-fadeIn financial-analytics-view">
             
             {/* Blue Banner matching the uploaded screenshot */}
             <div className="bg-[#2a1d13] text-[#fce79a] p-6 relative overflow-hidden shadow-md">
@@ -3480,10 +3480,10 @@ export default function StudentFinancialPortal({
             </div>
 
             {/* Four main counters matching the screenshot values and text */}
-            <div className="grid grid-cols-1 sm:grid-cols-2 xl:grid-cols-4 gap-5">
+            <div className="grid grid-cols-1 sm:grid-cols-2 xl:grid-cols-4 gap-5 financial-analytics-counter-grid">
               
               {/* Card 1 */}
-              <div className="p-5 hover:border-slate-300 transition-all bg-gradient-to-b from-[#fffefc] via-[#fbf8f0] to-[#f5eeea] border-2 border-[#d4af37]/30 hover:border-[#d4af37] rounded-3xl p-4 sm:p-5 shadow-md transition-all duration-300">
+              <div className="p-5 financial-analytics-counter-card hover:border-slate-300 transition-all bg-gradient-to-b from-[#fffefc] via-[#fbf8f0] to-[#f5eeea] border-2 border-[#d4af37]/30 hover:border-[#d4af37] rounded-3xl p-4 sm:p-5 shadow-md transition-all duration-300">
                 <span className="text-[11px] font-black text-slate-500 block mb-1">إجمالي مديونيات الطلاب</span>
                 <div className="text-xl font-black text-slate-900 tracking-tight" dir="ltr">
                   {formatFinancialValue(stats.totalDebts)}
@@ -3495,7 +3495,7 @@ export default function StudentFinancialPortal({
               </div>
 
               {/* Card 2 */}
-              <div className="p-5 hover:border-slate-300 transition-all bg-gradient-to-b from-[#fffefc] via-[#fbf8f0] to-[#f5eeea] border-2 border-[#d4af37]/30 hover:border-[#d4af37] rounded-3xl p-4 sm:p-5 shadow-md transition-all duration-300">
+              <div className="p-5 financial-analytics-counter-card hover:border-slate-300 transition-all bg-gradient-to-b from-[#fffefc] via-[#fbf8f0] to-[#f5eeea] border-2 border-[#d4af37]/30 hover:border-[#d4af37] rounded-3xl p-4 sm:p-5 shadow-md transition-all duration-300">
                 <span className="text-[11px] font-black text-slate-500 block mb-1">إجمالي التحصيلات</span>
                 <div className="text-xl font-black text-emerald-600 tracking-tight" dir="ltr">
                   {formatFinancialValue(stats.totalPaid)}
@@ -3507,7 +3507,7 @@ export default function StudentFinancialPortal({
               </div>
 
               {/* Card 3 */}
-              <div className="p-5 hover:border-slate-300 transition-all bg-gradient-to-b from-[#fffefc] via-[#fbf8f0] to-[#f5eeea] border-2 border-[#d4af37]/30 hover:border-[#d4af37] rounded-3xl p-4 sm:p-5 shadow-md transition-all duration-300">
+              <div className="p-5 financial-analytics-counter-card hover:border-slate-300 transition-all bg-gradient-to-b from-[#fffefc] via-[#fbf8f0] to-[#f5eeea] border-2 border-[#d4af37]/30 hover:border-[#d4af37] rounded-3xl p-4 sm:p-5 shadow-md transition-all duration-300">
                 <span className="text-[11px] font-black text-slate-500 block mb-1">الأرصدة المتبقية</span>
                 <div className="text-xl font-black text-amber-600 tracking-tight" dir="ltr">
                   {formatFinancialValue(stats.totalRemaining)}
@@ -3519,7 +3519,7 @@ export default function StudentFinancialPortal({
               </div>
 
               {/* Card 4 */}
-              <div className="p-5 hover:border-slate-300 transition-all bg-gradient-to-b from-[#fffefc] via-[#fbf8f0] to-[#f5eeea] border-2 border-[#d4af37]/30 hover:border-[#d4af37] rounded-3xl p-4 sm:p-5 shadow-md transition-all duration-300">
+              <div className="p-5 financial-analytics-counter-card hover:border-slate-300 transition-all bg-gradient-to-b from-[#fffefc] via-[#fbf8f0] to-[#f5eeea] border-2 border-[#d4af37]/30 hover:border-[#d4af37] rounded-3xl p-4 sm:p-5 shadow-md transition-all duration-300">
                 <span className="text-[11px] font-black text-slate-500 block mb-1">تحصيلات اليوم</span>
                 <div className="text-xl font-black text-orange-600 tracking-tight" dir="ltr">
                   {formatFinancialValue(stats.todayCollected)}

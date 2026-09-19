@@ -2745,6 +2745,71 @@ html:not(.dark) #super-admin-portal button:not(.bg-indigo-600):not(.bg-rose-600)
   background: #fff8d4;
 }
 
+/* --------------------------------------------------------------------------
+   Financial analytics density
+   Reclaims only shell whitespace; typography and control hit areas stay
+   unchanged. The result prevents the analytics surface from creating an
+   accidental horizontal scrollbar at common laptop widths.
+   -------------------------------------------------------------------------- */
+#student-financial-portal.financial-analytics-density {
+  max-width: 100%;
+  overflow-x: hidden;
+}
+
+#student-financial-portal.financial-analytics-density > * {
+  min-width: 0;
+  max-width: 100%;
+}
+
+#student-financial-portal.financial-analytics-density .financial-module-header {
+  gap: 0.75rem !important;
+  padding: 0.9rem 1rem !important;
+}
+
+#student-financial-portal.financial-analytics-density .financial-module-header > * {
+  min-width: 0;
+}
+
+#student-financial-portal.financial-analytics-density .enterprise-action-toolbar {
+  margin-inline: 0 !important;
+}
+
+#student-financial-portal.financial-analytics-density .financial-workspace-layout {
+  gap: 0.75rem;
+  padding: 0.75rem;
+  max-width: 100%;
+}
+
+#student-financial-portal.financial-analytics-density .financial-content-viewport {
+  min-width: 0;
+  padding: 1rem !important;
+}
+
+#student-financial-portal.financial-analytics-density .financial-analytics-view {
+  row-gap: 1rem;
+}
+
+#student-financial-portal.financial-analytics-density .financial-analytics-counter-grid {
+  gap: 0.75rem !important;
+}
+
+#student-financial-portal.financial-analytics-density .financial-analytics-counter-card {
+  min-width: 0;
+  padding: 1rem !important;
+  border-radius: 1.25rem !important;
+}
+
+#student-financial-portal.financial-analytics-density .financial-analytics-view > .grid {
+  gap: 1rem !important;
+}
+
+@media (min-width: 1024px) {
+  #student-financial-portal.financial-analytics-density {
+    padding-inline: 1rem !important;
+    gap: 1rem !important;
+  }
+}
+
 #student-financial-portal .financial-sidebar-button .text-slate-400,
 #student-financial-portal .financial-sidebar-button .text-white {
   color: currentColor !important;
