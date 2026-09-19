@@ -57,6 +57,11 @@ Required next operational check:
    existing account credential path.
 3. Re-run the smoke gate and record the resulting active version.
 
+Cloudflare's production Build configuration was updated to use
+`node scripts/cloudflare-deploy.mjs` as the Deploy command. This keeps the
+Git-derived commit and build timestamp injection in the managed build path;
+the previous `npx wrangler deploy` command omitted those values.
+
 No API token or secret was written to the repository or guessed from the
 environment.
 
