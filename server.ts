@@ -12432,27 +12432,43 @@ export async function createApp(options: { cloudflare?: boolean } = {}): Promise
             if (String(canonicalError?.code || '') !== '42P01') throw canonicalError;
             EnterpriseLogger.warn('Canonical student-fee tables are not migrated; retaining snapshot read model.', 'FinancialSnapshotRoute', { tenantId, schoolId });
           }
-          // The ERP ledger is an optional enrichment of the student-fee read
-          // model. A partially migrated or restricted ledger must not make
-          // the authoritative fee snapshot unreadable; writes remain closed
-          // until the operational context and the canonical write path pass.
-          try {
-            canonicalErpReady = await CanonicalErpPostingService.isProvisioned(transaction);
-            if (canonicalErpReady) {
-              canonicalErpModel = await CanonicalErpPostingService.readModel(transaction, schoolId, true);
-            }
-          } catch (canonicalErpError: any) {
-            canonicalErpReady = false;
-            canonicalErpModel = null;
-            EnterpriseLogger.warn('Canonical ERP enrichment unavailable; serving fee snapshot only.', 'FinancialSnapshotRoute', {
-              tenantId,
-              schoolId,
-              error: canonicalErpError?.message || String(canonicalErpError),
-            });
-          }
         },
         tenantContext
       );
+      // ERP enrichment is optional for the fee read model. Keep it in its own
+      // short, bounded transaction so a slow/partially provisioned ledger
+      // cannot make the authoritative fee snapshot time out as a whole.
+      try {
+        await UnitOfWork.runInTransaction(
+          schoolId,
+          {
+            operationName: 'Read optional canonical ERP enrichment',
+            tenantId,
+            userId: (req as any).user.id,
+            userName: (req as any).user.name || 'المستخدم الحالي',
+            ipAddress: req.ip || 'unknown',
+            affectedTables: [...CANONICAL_ERP_TABLES],
+            timeoutMs: 3_000,
+          },
+          async () => {
+            const enrichmentTransaction = UnitOfWork.getActiveContext()?.databaseTransaction;
+            if (!enrichmentTransaction) throw new DatabaseError('Financial ERP enrichment transaction is unavailable.');
+            canonicalErpReady = await CanonicalErpPostingService.isProvisioned(enrichmentTransaction);
+            if (canonicalErpReady) {
+              canonicalErpModel = await CanonicalErpPostingService.readModel(enrichmentTransaction, schoolId, true);
+            }
+          },
+          tenantContext
+        );
+      } catch (canonicalErpError: any) {
+        canonicalErpReady = false;
+        canonicalErpModel = null;
+        EnterpriseLogger.warn('Canonical ERP enrichment unavailable; serving fee snapshot only.', 'FinancialSnapshotRoute', {
+          tenantId,
+          schoolId,
+          error: canonicalErpError?.message || String(canonicalErpError),
+        });
+      }
       (req as any).financialErpReady = canonicalErpReady;
       const snapshotData = snapshot?.data || {};
       let responseData: Record<string, any> = {
