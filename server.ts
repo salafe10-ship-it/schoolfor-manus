@@ -11174,50 +11174,54 @@ export async function createApp(options: { cloudflare?: boolean } = {}): Promise
 
   app.get("/api/financial/operational-context", authenticateRequest, requirePermission(PERMISSIONS.FINANCIAL_READ), async (req, res, next) => {
     try {
-      const { tenantId, schoolId, actorId, tenantContext } = canonicalFeeContext(req);
-      let operationalContext: Record<string, unknown> | null = null;
-      await UnitOfWork.runInTransaction(schoolId, {
-        operationName: 'Read canonical financial operational context',
-        tenantId,
-        userId: actorId,
-        userName: String((req as any).user.name || 'مستخدم الرسوم'),
-        ipAddress: req.ip || 'unknown',
-        affectedTables: ['academic_years', 'terms']
-      }, async () => {
-        const transaction = UnitOfWork.getActiveContext()?.databaseTransaction;
-        if (!transaction) throw new DatabaseError('تعذر فتح معاملة قراءة السياق المالي.');
-        const yearResult = await transaction.query(
-          `SELECT id, name, starts_on, ends_on
-             FROM public.academic_years
-            WHERE tenant_id = $1 AND school_id = $2 AND id = $3
-              AND status = 'active' AND deleted_at IS NULL
-            LIMIT 1`,
-          [tenantId, schoolId, tenantContext.academicYear]
-        );
-        const year = yearResult.rows[0];
-        if (!year) throw new ValidationError('السنة الدراسية النشطة لا تطابق السياق المالي الموثوق.');
-        const termResult = await transaction.query(
-          `SELECT id, name, starts_on, ends_on
-             FROM public.terms
-            WHERE tenant_id = $1 AND school_id = $2 AND academic_year_id = $3
-              AND (branch_id = $4 OR branch_id IS NULL)
-              AND status = 'active' AND deleted_at IS NULL
-            ORDER BY starts_on DESC, sequence DESC, id ASC
-            LIMIT 1`,
-          [tenantId, schoolId, tenantContext.academicYear, tenantContext.branchId]
-        );
-        const term = termResult.rows[0];
-        if (!term) throw new ValidationError('لا توجد فترة دراسية نشطة مرتبطة بالسنة والفرع الموثوقين.');
-        operationalContext = {
-          academicYearId: String(year.id),
-          academicYearName: String(year.name || ''),
-          academicPeriodId: String(term.id),
-          academicPeriodName: String(term.name || ''),
-          branchId: tenantContext.branchId,
-          financialPeriod: String(year.name || year.id)
-        };
-      }, tenantContext);
-      res.json({ success: true, data: operationalContext, meta: { source: 'canonical_postgres' } });
+      const { tenantId, schoolId, tenantContext } = canonicalFeeContext(req);
+      const supabase = canonicalTenantReadClient(req);
+      if (!supabase) throw new DatabaseError('مصدر السياق التشغيلي المالي غير متاح.');
+
+      // This endpoint is read-only. Keep it out of the Hyperdrive transaction
+      // pool so the financial snapshot and the school dashboard cannot starve
+      // the second connection during the first paint. The client is still
+      // server-selected from the verified request and every predicate remains
+      // tenant/school/branch/year scoped; writes continue through UnitOfWork.
+      const { data: year, error: yearError } = await supabase
+        .from('academic_years')
+        .select('id,name,starts_on,ends_on,branch_id')
+        .eq('tenant_id', tenantId)
+        .eq('school_id', schoolId)
+        .eq('id', tenantContext.academicYear)
+        .eq('status', 'active')
+        .is('deleted_at', null)
+        .limit(1)
+        .maybeSingle();
+      if (yearError) throw yearError;
+      if (!year) throw new ValidationError('السنة الدراسية النشطة لا تطابق السياق المالي الموثوق.');
+
+      const { data: terms, error: termsError } = await supabase
+        .from('terms')
+        .select('id,name,starts_on,ends_on,sequence,branch_id')
+        .eq('tenant_id', tenantId)
+        .eq('school_id', schoolId)
+        .eq('academic_year_id', tenantContext.academicYear)
+        .eq('status', 'active')
+        .is('deleted_at', null)
+        .order('starts_on', { ascending: false })
+        .order('sequence', { ascending: false });
+      if (termsError) throw termsError;
+      const term = (terms || []).find((candidate: any) =>
+        !candidate.branch_id || String(candidate.branch_id) === String(tenantContext.branchId)
+      );
+      if (!term) throw new ValidationError('لا توجد فترة دراسية نشطة مرتبطة بالسنة والفرع الموثوقين.');
+
+      const operationalContext = {
+        academicYearId: String(year.id),
+        academicYearName: String(year.name || ''),
+        academicPeriodId: String(term.id),
+        academicPeriodName: String(term.name || ''),
+        branchId: tenantContext.branchId,
+        financialPeriod: String(year.name || year.id)
+      };
+      res.setHeader('Cache-Control', 'no-store');
+      res.json({ success: true, data: operationalContext, meta: { source: 'canonical_supabase_read' } });
     } catch (err: any) {
       next(err instanceof AuthenticationError || err instanceof ValidationError || err instanceof DatabaseError
         ? err
