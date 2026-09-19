@@ -62,6 +62,8 @@ export type CanonicalErpReadModel = {
 const DEFAULT_MAPPING: Record<string, string> = {
   'student_fees.receivable': '1201',
   'student_fees.revenue': '4101',
+  'student_fees.discount': '4205',
+  'student_fees.tax': '2201',
   'treasury.cash': '1101',
   'expenses.default': '5270',
   'liabilities.accrued_expense': '2101',
@@ -79,7 +81,9 @@ const DEFAULT_ACCOUNTS: Array<{ code: string; name: string; nature: string }> = 
   { code: '1301', name: 'مخزون وأصناف تشغيلية', nature: 'asset' },
   { code: '1401', name: 'ضريبة مدخلات قابلة للاسترداد', nature: 'asset' },
   { code: '2101', name: 'مصروفات مستحقة والتزامات موردين', nature: 'liability' },
+  { code: '2201', name: 'ضريبة مخرجات مستحقة', nature: 'liability' },
   { code: '4101', name: 'إيرادات الرسوم الدراسية', nature: 'revenue' },
+  { code: '4205', name: 'خصومات ومنح على الإيرادات', nature: 'revenue' },
   { code: '5270', name: 'تكلفة الأصناف المصروفة', nature: 'expense' },
   { code: '5280', name: 'فروقات وتسويات المخزون', nature: 'expense' }
 ];
@@ -182,12 +186,29 @@ export function buildCanonicalPosting(
     const status = normalizedStatus(rowValue(input, 'status'), 'unpaid');
     if (['draft', 'cancelled', 'void'].includes(status)) return null;
     const amount = positiveAmount(rowValue(input, 'totalAmount', 'amount'), 'invoice.amount');
+    const discountAmount = Number(rowValue(input, 'discountAmount', 'discount') || 0);
+    if (!Number.isFinite(discountAmount) || discountAmount < 0) throw new Error('خصم الفاتورة غير صالح.');
+    const grossAmount = positiveAmount(rowValue(input, 'grossAmount') ?? Number((Number(rowValue(input, 'amount')) + discountAmount).toFixed(2)), 'invoice.grossAmount');
+    const taxAmount = Number(rowValue(input, 'taxAmount') || 0);
+    if (!Number.isFinite(taxAmount) || taxAmount < 0) throw new Error('ضريبة الفاتورة غير صالحة.');
+    const netRevenue = Number((grossAmount - discountAmount).toFixed(2));
+    const expectedReceivable = Number((netRevenue + taxAmount).toFixed(2));
+    if (Math.abs(expectedReceivable - amount) > 0.001) {
+      throw new Error(`الفاتورة ${sourceId} لا تتطابق فيها قيمة الذمم مع الإجمالي الصافي بعد الخصم والضريبة.`);
+    }
     const receivable = mappingValue(mappings, 'student_fees.receivable', input, ['receivableAccount', 'debitAccount'], '1201');
     const revenue = mappingValue(mappings, 'student_fees.revenue', input, ['revenueAccount', 'creditAccount', 'account'], '4101');
-    const lines = [
-      { id: `${sourceId}-D`, accountCode: receivable, debit: amount, credit: 0, costCenter: textValue(rowValue(input, 'costCenter', 'costCenterId')) || undefined },
-      { id: `${sourceId}-C`, accountCode: revenue, debit: 0, credit: amount, costCenter: textValue(rowValue(input, 'costCenter', 'costCenterId')) || undefined }
+    const costCenter = textValue(rowValue(input, 'costCenter', 'costCenterId')) || undefined;
+    const lines: CanonicalPostingLine[] = [
+      { id: `${sourceId}-D`, accountCode: receivable, debit: amount, credit: 0, costCenter },
+      { id: `${sourceId}-C`, accountCode: revenue, debit: 0, credit: grossAmount, costCenter }
     ];
+    if (discountAmount > 0) {
+      lines.push({ id: `${sourceId}-DISC`, accountCode: mappingValue(mappings, 'student_fees.discount', input, ['discountAccount'], '4205'), debit: discountAmount, credit: 0, costCenter });
+    }
+    if (taxAmount > 0) {
+      lines.push({ id: `${sourceId}-TAX`, accountCode: mappingValue(mappings, 'student_fees.tax', input, ['taxAccount'], '2201'), debit: 0, credit: taxAmount, costCenter });
+    }
     balanced(lines);
     return {
       sourceType,

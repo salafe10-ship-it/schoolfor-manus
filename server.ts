@@ -11438,8 +11438,12 @@ export async function createApp(options: { cloudflare?: boolean } = {}): Promise
       const revenueAccount = String(body.revenueAccount || '').trim();
       if (!academicYearId || !academicPeriodId || !financialPeriod || !description || !revenueAccount) throw new ValidationError('السنة والفترة والوصف والحساب الإيرادي حقول مطلوبة لإصدار المطالبة.');
       const amount = assertMoney(body.amount, 'قيمة المطالبة');
+      const discountAmount = assertMoney(body.discountAmount || 0, 'خصم المطالبة', true);
+      const grossAmount = assertMoney(body.grossAmount ?? Number((amount + discountAmount).toFixed(2)), 'إجمالي المطالبة');
+      if (discountAmount > grossAmount) throw new ValidationError('خصم المطالبة لا يمكن أن يتجاوز إجماليها.');
+      const netAmount = Number((grossAmount - discountAmount).toFixed(2));
       const taxAmount = assertMoney(body.taxAmount || 0, 'الضريبة', true);
-      const totalAmount = Number((amount + taxAmount).toFixed(2));
+      const totalAmount = Number((netAmount + taxAmount).toFixed(2));
       const invoiceDate = String(body.invoiceDate || new Date().toISOString().slice(0, 10)).slice(0, 10);
       const dueDate = String(body.dueDate || '').slice(0, 10);
       if (!/^\d{4}-\d{2}-\d{2}$/.test(dueDate)) throw new ValidationError('تاريخ الاستحقاق غير صالح.');
@@ -11475,10 +11479,41 @@ export async function createApp(options: { cloudflare?: boolean } = {}): Promise
            VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,0,$10,$11,$12,'issued',$13::jsonb,$14,$15,$16,$17,$18,$19,1)
            RETURNING *`,
           [tenantId, schoolId, invoiceId, body.branchId || student.rows[0].branch_id || null, studentId, studentName, description,
-            amount, taxAmount, totalAmount, invoiceDate, dueDate,
-            JSON.stringify({ command: 'issue', idempotencyKey, revenueAccount, receivableAccount: String(body.receivableAccount || '1201'), financialPeriod }), databaseActorId,
+            netAmount, taxAmount, totalAmount, invoiceDate, dueDate,
+            JSON.stringify({ command: 'issue', idempotencyKey, revenueAccount, receivableAccount: String(body.receivableAccount || '1201'),
+              discountAmount, grossAmount, discountAccount: String(body.discountAccount || ''), taxAccount: String(body.taxAccount || ''),
+              costCenter: String(body.costCenter || ''), academicStageCode: String(body.academicStageCode || ''), currency: String(body.currency || 'SAR'), financialPeriod }), databaseActorId,
             String(body.templateId || ''), academicYearId, academicPeriodId, String(body.currency || 'SAR'), idempotencyKey]);
         invoice = result.rows[0];
+        const erpSync = await CanonicalErpPostingService.syncSnapshot(transaction, tenantId, schoolId, databaseActorId, {
+          invoices: [{
+            id: invoiceId,
+            amount: totalAmount,
+            totalAmount,
+            grossAmount,
+            discountAmount,
+            taxAmount,
+            invoiceDate,
+            status: 'issued',
+            item: description,
+            revenueAccount,
+            receivableAccount: String(body.receivableAccount || '1201'),
+            discountAccount: String(body.discountAccount || ''),
+            taxAccount: String(body.taxAccount || ''),
+            costCenter: String(body.costCenter || ''),
+            academicStageCode: String(body.academicStageCode || '')
+          }]
+        });
+        const journalLink = erpSync.sourceLinks.find(link => link.sourceType === 'student_fee_invoice' && link.sourceId === invoiceId);
+        if (!journalLink) throw new DatabaseError('تعذر إثبات القيد الكانوني للمطالبة المالية؛ تم التراجع عن الإصدار.');
+        const linkedInvoice = await transaction.query(
+          `UPDATE public.student_fee_invoices
+              SET journal_entry_id = $4, updated_at = now(), updated_by = $5
+            WHERE tenant_id = $1 AND school_id = $2 AND id = $3
+            RETURNING *`,
+          [tenantId, schoolId, invoiceId, journalLink.journalEntryId, databaseActorId]
+        );
+        invoice = linkedInvoice.rows[0] || invoice;
         if (body.installmentPlan && typeof body.installmentPlan === 'object') {
           const plan = body.installmentPlan as Record<string, any>;
           const frequency = String(plan.frequency || 'monthly').toLowerCase() as InstallmentFrequency;
@@ -11526,6 +11561,7 @@ export async function createApp(options: { cloudflare?: boolean } = {}): Promise
       const discountAmount = assertMoney(body.discountAmount || 0, 'الخصم', true);
       if (discountAmount > grossAmount) throw new ValidationError('الخصم لا يمكن أن يتجاوز قيمة الرسم.');
       const results: any[] = [];
+      const invoicesToPost: Array<Record<string, unknown>> = [];
       await UnitOfWork.runInTransaction(schoolId, {
         operationName: 'Bulk assign canonical student fee', tenantId, userId: actorId,
         userName: String((req as any).user.name || 'مدير الرسوم'), ipAddress: req.ip || 'unknown', affectedTables: ['student_fee_assignments', 'audit_events']
@@ -11562,6 +11598,38 @@ export async function createApp(options: { cloudflare?: boolean } = {}): Promise
                RETURNING id, student_id AS "studentId", student_name AS "studentName", amount, remaining_amount AS "remainingAmount", due_date AS "dueDate", status`,
               [tenantId, schoolId, invoiceId, studentId, studentName, String(body.description || body.item || `رسوم ${templateId}`), Number((grossAmount - discountAmount).toFixed(2)), dueDate, JSON.stringify({ source, assignmentId: row.rows[0].id, idempotencyKey: invoiceKey }), databaseActorId, templateId, academicYearId, academicPeriodId, String(body.currency || 'SAR'), invoiceKey]);
             results[results.length - 1] = { ...results[results.length - 1], invoice: invoice.rows[0] };
+            invoicesToPost.push({
+              id: invoiceId,
+              amount: Number((grossAmount - discountAmount).toFixed(2)),
+              totalAmount: Number((grossAmount - discountAmount).toFixed(2)),
+              grossAmount,
+              discountAmount,
+              taxAmount: 0,
+              invoiceDate: new Date().toISOString().slice(0, 10),
+              status: 'issued',
+              item: String(body.description || body.item || `رسوم ${templateId}`),
+              revenueAccount: String(body.revenueAccount || ''),
+              receivableAccount: String(body.receivableAccount || '1201'),
+              discountAccount: String(body.discountAccount || ''),
+              costCenter: String(body.costCenter || ''),
+              academicStageCode: String(body.academicStageCode || '')
+            });
+          }
+        }
+        if (invoicesToPost.length > 0) {
+          const erpSync = await CanonicalErpPostingService.syncSnapshot(transaction, tenantId, schoolId, databaseActorId, { invoices: invoicesToPost });
+          const links = new Map(erpSync.sourceLinks
+            .filter(link => link.sourceType === 'student_fee_invoice')
+            .map(link => [link.sourceId, link.journalEntryId]));
+          for (const invoice of invoicesToPost) {
+            const journalEntryId = links.get(String(invoice.id));
+            if (!journalEntryId) throw new DatabaseError(`تعذر إثبات القيد الكانوني للمطالبة ${String(invoice.id)}؛ تم التراجع عن التوزيع.`);
+            await transaction.query(
+              `UPDATE public.student_fee_invoices
+                  SET journal_entry_id = $4, updated_at = now(), updated_by = $5
+                WHERE tenant_id = $1 AND school_id = $2 AND id = $3`,
+              [tenantId, schoolId, String(invoice.id), journalEntryId, databaseActorId]
+            );
           }
         }
       }, tenantContext);

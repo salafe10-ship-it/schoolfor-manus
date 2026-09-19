@@ -1098,14 +1098,17 @@ export default function GeneralLedgerPortal({
 
   useEffect(() => {
     let active = true;
+    const controller = new AbortController();
+    const timeoutId = window.setTimeout(() => controller.abort(), 15_000);
 
     const loadCanonicalFinancialSnapshot = async () => {
       try {
         const response = await authenticatedRequest('/api/financial/database', {
           headers: {
-            'Accept': 'application/json'
+            'Accept': 'application/json',
           },
-          cache: 'no-store'
+          cache: 'no-store',
+          signal: controller.signal,
         });
         const result = await response.json().catch(() => ({}));
         if (!response.ok || !result.success) {
@@ -1238,13 +1241,17 @@ export default function GeneralLedgerPortal({
         setCanonicalSnapshotHasAccounts(false);
         setAccounts(previous => previous.map(account => ({ ...account, balance: 0 })));
         setCanonicalFinancialStatus('blocked');
-        setCanonicalFinancialMessage(error?.message || 'تعذر ربط الأستاذ العام بالمصدر المالي الموحد');
+        setCanonicalFinancialMessage(error?.name === 'AbortError'
+          ? 'انتهت مهلة الاتصال بالمصدر المالي الموحد. لم تُعرض بيانات غير موثقة؛ اضغط تحديث لإعادة المحاولة.'
+          : error?.message || 'تعذر ربط الأستاذ العام بالمصدر المالي الموحد');
       }
     };
 
     void loadCanonicalFinancialSnapshot();
     return () => {
       active = false;
+      window.clearTimeout(timeoutId);
+      controller.abort();
     };
   }, [selectedSchool?.id, canonicalFinancialRefreshNonce]);
 

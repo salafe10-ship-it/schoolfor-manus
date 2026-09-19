@@ -64,6 +64,27 @@ describe('canonical ERP accounting mappings', () => {
     expect(receipt?.lines.map(line => line.accountCode)).toEqual(['1110', '1290']);
   });
 
+  it('posts a discounted invoice as receivable plus contra-revenue and tax lines', () => {
+    const invoice = buildCanonicalPosting('student_fee_invoice', {
+      id: 'INV-DISCOUNT-1', amount: 95, totalAmount: 95, grossAmount: 100,
+      discountAmount: 10, taxAmount: 5, invoiceDate: '2026-09-19', status: 'issued',
+      revenueAccount: '4101', receivableAccount: '1201', discountAccount: '4205', taxAccount: '2201',
+      costCenter: 'primary', item: 'رسوم دراسية بعد خصم'
+    });
+
+    expect(invoice?.lines.map(line => line.accountCode)).toEqual(['1201', '4101', '4205', '2201']);
+    expect(invoice?.lines.reduce((sum, line) => sum + line.debit, 0)).toBe(105);
+    expect(invoice?.lines.reduce((sum, line) => sum + line.credit, 0)).toBe(105);
+    expect(invoice?.lines.every(line => line.costCenter === 'primary')).toBe(true);
+  });
+
+  it('rejects an invoice whose receivable total does not match its gross, discount, and tax', () => {
+    expect(() => buildCanonicalPosting('student_fee_invoice', {
+      id: 'INV-DISCOUNT-INVALID', amount: 90, totalAmount: 90, grossAmount: 100,
+      discountAmount: 10, taxAmount: 5, invoiceDate: '2026-09-19', status: 'issued'
+    })).toThrow('لا تتطابق');
+  });
+
   it('normalizes PostgreSQL midnight timestamps to the accounting calendar date', () => {
     const invoice = buildCanonicalPosting('student_fee_invoice', {
       id: 'INV-PG-DATE', amount: 300, invoiceDate: '2026-09-14T00:00:00.000Z', status: 'issued'
