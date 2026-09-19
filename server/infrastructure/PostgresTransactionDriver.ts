@@ -36,6 +36,23 @@ class PostgresTransactionSession implements TransactionSession {
     private readonly acquiredAtMs = nowMs()
   ) {}
 
+  /**
+   * Hyperdrive's pg adapter can expose release() as either a synchronous
+   * method or a thenable cleanup operation. Always await the result so a
+   * rejected discard cannot escape as an unhandled protocol error and mask
+   * the original database failure.
+   */
+  private async discardClient(): Promise<void> {
+    try {
+      await Promise.resolve(this.client.release(true));
+    } catch {
+      // The client is already unusable from the transaction boundary's point
+      // of view. Never return it to the pool and never replace the original
+      // query/transaction error with a cleanup diagnostic.
+      this.diagnosticTrace?.mark(`${this.diagnosticPrefix}release_discard_failed`);
+    }
+  }
+
   public async query<Row extends Record<string, unknown> = PostgresRow>(
     sqlText: string,
     parameters: readonly unknown[] = []
@@ -75,15 +92,8 @@ class PostgresTransactionSession implements TransactionSession {
           this.state = "rolled_back";
         }
       } finally {
-        try {
-          this.client.release(true);
-        } catch {
-          // Hyperdrive may report a recycle error even for an explicitly
-          // discarded client. The client is already unusable; never turn
-          // that cleanup diagnostic into a failed read/commit response.
-        } finally {
-          this.state = "released";
-        }
+        await this.discardClient();
+        this.state = "released";
       }
       this.diagnosticTrace?.mark(`${this.diagnosticPrefix}release_discarded`);
       this.recordPoolMetric?.({
@@ -106,26 +116,20 @@ class PostgresTransactionSession implements TransactionSession {
       } catch (error) {
         // Never return an uncertain session to the pool. `release(true)` is
         // the pg contract for discarding a broken/transaction-tainted client.
-        try {
-          this.client.release(true);
-        } finally {
-          this.state = "released";
-        }
+        await this.discardClient();
+        this.state = "released";
         throw error;
       }
     }
 
     try {
-      this.client.release();
+      await Promise.resolve(this.client.release());
     } catch (error) {
       // Hyperdrive may reject recycling when the server still reports an
       // open transaction. Discard that client instead of turning a completed
       // read/commit into an application failure or leaking a pooled session.
-      try {
-        this.client.release(true);
-      } finally {
-        this.state = "released";
-      }
+      await this.discardClient();
+      this.state = "released";
       this.diagnosticTrace?.mark(`${this.diagnosticPrefix}release_discarded`);
       return;
     }
@@ -289,7 +293,11 @@ export class PostgresTransactionDriver implements TransactionDriver {
       } catch {
         // The connection is released even if the failed begin cannot be rolled back.
       } finally {
-        client.release();
+        try {
+          await Promise.resolve(client.release(true));
+        } catch {
+          // Never replace the begin error with a Hyperdrive cleanup error.
+        }
       }
       throw error;
     }
