@@ -147,6 +147,7 @@ export default function StudentFinancialPortal({
   // Sub-navigation state inside Student Financial Portal (Rethought according to the image)
   const [activeSubSec, setActiveSubSec] = useState<string>('analytics');
   const [refreshing, setRefreshing] = useState<boolean>(false);
+  const refreshInFlightRef = React.useRef(false);
   const [selectedStudent, setSelectedStudent] = useState<Student | null>(null);
   const [reportSearch, setReportSearch] = useState<string>('');
   const [reportStatusFilter, setReportStatusFilter] = useState<string>('all');
@@ -2718,6 +2719,12 @@ export default function StudentFinancialPortal({
 
   // Refresh the same server-backed source used during initial load.
   const handleRefreshData = async () => {
+    // Keep repeated clicks/read-only retries from opening concurrent financial
+    // snapshot and operational-context requests against the small Hyperdrive
+    // pool. The button is disabled while refreshing as a visual cue, while
+    // this ref also protects the handler before React applies that update.
+    if (refreshInFlightRef.current) return;
+    refreshInFlightRef.current = true;
     setRefreshing(true);
     try {
       const requests = Promise.all([
@@ -2765,6 +2772,7 @@ export default function StudentFinancialPortal({
         : 'تعذر التحقق من المصدر المالي. تم تعطيل الحفظ والترحيل حمايةً للبيانات.');
       triggerNotification(`تعذر تحديث البيانات المالية: ${error.message || 'خطأ غير معروف'}`, 'warning');
     } finally {
+      refreshInFlightRef.current = false;
       setRefreshing(false);
     }
   };
