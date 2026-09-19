@@ -99,6 +99,26 @@ describe('PostgresTransactionDriver trusted context', () => {
     expect(client.release).toHaveBeenNthCalledWith(2, true);
   });
 
+  it('discards every completed session in the Cloudflare Hyperdrive runtime', async () => {
+    vi.stubEnv('EDUPRO_CLOUDFLARE_HYPERDRIVE', 'true');
+    try {
+      const { client, driver } = createDriverHarness();
+      const session = await driver.begin({
+        transactionId: 'tx-hyperdrive-runtime',
+        tenantId: 'tenant-a',
+        schoolId: 'school-a',
+        operationName: 'read-only lifecycle test',
+        trustedContext: { tenantId: 'tenant-a', schoolId: 'school-a' }
+      });
+
+      await session.commit();
+      await session.release();
+      expect(client.release).toHaveBeenCalledWith(true);
+    } finally {
+      vi.unstubAllEnvs();
+    }
+  });
+
   it('samples real pool connections without returning secret fields', async () => {
     const client: any = {
       query: vi.fn(async (sql: string) => String(sql).includes('FROM pg_roles')

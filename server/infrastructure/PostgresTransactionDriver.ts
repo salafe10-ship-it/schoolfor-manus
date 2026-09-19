@@ -23,6 +23,7 @@ function nowMs(): number {
 
 class PostgresTransactionSession implements TransactionSession {
   private state: "active" | "committed" | "rolled_back" | "released" = "active";
+  private readonly discardOnRelease = process.env.EDUPRO_CLOUDFLARE_HYPERDRIVE === "true";
 
   public constructor(
     public readonly id: string,
@@ -62,6 +63,31 @@ class PostgresTransactionSession implements TransactionSession {
     if (this.state === "released") return;
     this.diagnosticTrace?.mark(`${this.diagnosticPrefix}release_started`);
     const releaseStartedAtMs = nowMs();
+
+    // Hyperdrive can reject recycling a pg client even after COMMIT/ROLLBACK
+    // has completed because its origin-side protocol state is not observable
+    // to node-postgres. In that runtime, discard the session explicitly so a
+    // transaction-tainted connection can never return to the shared pool.
+    if (this.discardOnRelease) {
+      try {
+        if (this.state === "active") {
+          await this.client.query("ROLLBACK");
+          this.state = "rolled_back";
+        }
+      } finally {
+        this.client.release(true);
+        this.state = "released";
+      }
+      this.diagnosticTrace?.mark(`${this.diagnosticPrefix}release_discarded`);
+      this.recordPoolMetric?.({
+        phase: 'released',
+        ...(this.poolSnapshot ? this.poolSnapshot() : { totalCount: 0, idleCount: 0, waitingCount: 0, activeCount: 0 }),
+        transactionOccupancyDurationMs: Number((releaseStartedAtMs - this.acquiredAtMs).toFixed(3)),
+        releaseDurationMs: Number((nowMs() - releaseStartedAtMs).toFixed(3))
+      });
+      return;
+    }
+
     // A committed/rolled-back session is already idle. Sending another
     // ROLLBACK through Hyperdrive during recycling can race its protocol
     // state machine and produce "connection still in a transaction". Only
