@@ -551,10 +551,22 @@ export default function StudentFinancialPortal({
   React.useEffect(() => {
     const loadFinancialDb = async () => {
       try {
-        const requests = Promise.all([
-          authenticatedRequest('/api/financial/database', { headers: { 'Accept': 'application/json' } }),
-          authenticatedRequest('/api/financial/operational-context', { headers: { 'Accept': 'application/json' } })
-        ]);
+        // Read the authoritative financial snapshot first. Opening the
+        // operational-context transaction in parallel used two pool clients
+        // during the first paint and could starve the Hyperdrive-backed pool
+        // when the school dashboard was still refreshing. The context is
+        // required for writes, but never needs to race the read-only snapshot.
+        const requests = (async () => {
+          const response = await authenticatedRequest('/api/financial/database', {
+            headers: { 'Accept': 'application/json' },
+            cache: 'no-store'
+          });
+          const contextResponse = await authenticatedRequest('/api/financial/operational-context', {
+            headers: { 'Accept': 'application/json' },
+            cache: 'no-store'
+          });
+          return [response, contextResponse] as const;
+        })();
         const timeout = new Promise<never>((_, reject) => {
           window.setTimeout(() => reject(new Error('انتهت مهلة الاتصال بالمصدر المالي.')), 15000);
         });
