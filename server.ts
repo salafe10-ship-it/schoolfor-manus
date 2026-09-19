@@ -8937,7 +8937,24 @@ export async function createApp(options: { cloudflare?: boolean } = {}): Promise
         data: { ...metrics, degraded: false, source: 'canonical-postgres' }
       });
     } catch (error) {
-      return next(error instanceof DatabaseError ? error : new DatabaseError('تعذر تحميل مؤشرات شؤون الطلاب.', error));
+      // Keep the client message safe while preserving a non-sensitive
+      // PostgreSQL classification for production forensics. This endpoint is
+      // canonical-only; never turn a failed metrics query into zeroes.
+      const code = typeof error === 'object' && error !== null && 'code' in error
+        ? String((error as { code?: unknown }).code || '')
+        : '';
+      const classification = code === '42P01' || code === '42703'
+        ? 'SCHEMA_OBJECT_MISSING_OR_INVALID'
+        : code === '42501'
+          ? 'DATABASE_PERMISSION_OR_RLS'
+          : code.startsWith('08')
+            ? 'DATABASE_CONNECTION'
+            : code === '57014'
+              ? 'DATABASE_QUERY_CANCELLED_OR_TIMEOUT'
+              : 'DATABASE_ERROR_UNCLASSIFIED';
+      return next(error instanceof DatabaseError
+        ? new DatabaseError(error.message, { classification })
+        : new DatabaseError('تعذر تحميل مؤشرات شؤون الطلاب.', { classification }));
     }
   });
 
