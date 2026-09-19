@@ -27,6 +27,23 @@ const compiledBuildIdentity = {
   BUILD_TIMESTAMP: typeof __EDUPRO_BUILD_TIMESTAMP__ === "string" ? __EDUPRO_BUILD_TIMESTAMP__ : "",
 } as const;
 
+// The API server is loaded dynamically below. Publish the exact compiled
+// release identity on the global scope as well as process.env so the server
+// can report it even when Cloudflare's runtime does not expose Worker vars to
+// the Node compatibility layer.
+const buildIdentityGlobals = globalThis as typeof globalThis & {
+  __EDUPRO_BUILD_IDENTITY__?: {
+    version: string;
+    commit: string;
+    builtAt: string;
+  };
+};
+buildIdentityGlobals.__EDUPRO_BUILD_IDENTITY__ = {
+  version: compiledBuildIdentity.APP_VERSION,
+  commit: compiledBuildIdentity.BUILD_COMMIT_SHA,
+  builtAt: compiledBuildIdentity.BUILD_TIMESTAMP,
+};
+
 const runtimeEnvKeys = [
   "EDUPRO_ENVIRONMENT", "SUPABASE_URL", "SUPABASE_ANON_KEY",
   "SUPABASE_SERVICE_ROLE_KEY", "DATABASE_URL", "DIRECT_URL",

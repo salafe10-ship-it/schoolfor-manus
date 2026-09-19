@@ -7,6 +7,10 @@ export type BuildIdentity = {
   builtAt: string;
 };
 
+const compiledBuildIdentity = (globalThis as typeof globalThis & {
+  __EDUPRO_BUILD_IDENTITY__?: Partial<BuildIdentity>;
+}).__EDUPRO_BUILD_IDENTITY__ || {};
+
 const firstDefined = (...keys: string[]) => {
   for (const key of keys) {
     const value = process.env[key]?.trim();
@@ -28,10 +32,10 @@ const readBuildArtifact = (): Partial<BuildIdentity> => {
 export function getBuildIdentity(): BuildIdentity {
   const artifact = readBuildArtifact();
   return {
-    version: firstDefined('APP_VERSION') !== 'unknown' ? firstDefined('APP_VERSION') : artifact.version || 'unknown',
+    version: firstDefined('APP_VERSION') !== 'unknown' ? firstDefined('APP_VERSION') : compiledBuildIdentity.version || artifact.version || 'unknown',
     commit: firstDefined('RENDER_GIT_COMMIT', 'RENDER_GIT_COMMIT_SHA', 'GIT_COMMIT_SHA', 'BUILD_COMMIT_SHA') !== 'unknown'
       ? firstDefined('RENDER_GIT_COMMIT', 'RENDER_GIT_COMMIT_SHA', 'GIT_COMMIT_SHA', 'BUILD_COMMIT_SHA')
-      : artifact.commit || 'unknown',
-    builtAt: firstDefined('BUILD_TIMESTAMP') !== 'unknown' ? firstDefined('BUILD_TIMESTAMP') : artifact.builtAt || 'unknown',
+      : compiledBuildIdentity.commit || artifact.commit || 'unknown',
+    builtAt: firstDefined('BUILD_TIMESTAMP') !== 'unknown' ? firstDefined('BUILD_TIMESTAMP') : compiledBuildIdentity.builtAt || artifact.builtAt || 'unknown',
   };
 }
