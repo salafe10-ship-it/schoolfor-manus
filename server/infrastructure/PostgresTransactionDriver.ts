@@ -72,8 +72,13 @@ class PostgresTransactionSession implements TransactionSession {
 
   public async rollback(): Promise<void> {
     this.assertActive();
-    await this.client.query("ROLLBACK");
-    this.state = "rolled_back";
+    try {
+      await this.client.query("ROLLBACK");
+      this.state = "rolled_back";
+    } catch (error) {
+      this.diagnosticTrace?.mark(`${this.diagnosticPrefix}rollback_failed`);
+      throw error;
+    }
   }
 
   public async release(): Promise<void> {
@@ -88,8 +93,15 @@ class PostgresTransactionSession implements TransactionSession {
     if (this.discardOnRelease) {
       try {
         if (this.state === "active") {
-          await this.client.query("ROLLBACK");
-          this.state = "rolled_back";
+          try {
+            await this.client.query("ROLLBACK");
+            this.state = "rolled_back";
+          } catch {
+            // The connection is already tainted from the failed transaction.
+            // Discard it below and never let a cleanup protocol error replace
+            // the original database exception.
+            this.diagnosticTrace?.mark(`${this.diagnosticPrefix}release_rollback_failed`);
+          }
         }
       } finally {
         await this.discardClient();

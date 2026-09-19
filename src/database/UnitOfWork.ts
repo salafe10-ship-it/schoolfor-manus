@@ -291,7 +291,19 @@ export class UnitOfWork {
         return result;
       } catch (error) {
         if (this.isTransactionActive()) {
-          await this.rollback();
+          try {
+            await this.rollback();
+          } catch (rollbackError: any) {
+            // A rollback/release failure is cleanup telemetry, not the
+            // business/database error that caused the transaction to abort.
+            // Preserve the original exception so production diagnostics can
+            // identify the real failing query instead of reporting a pooled
+            // connection protocol error.
+            EnterpriseLogger.error('Transaction cleanup failed while preserving the original error.', 'UnitOfWork', {
+              transactionId: context.id,
+              error: rollbackError?.message || String(rollbackError),
+            });
+          }
         }
         throw error;
       }
@@ -592,7 +604,14 @@ export class UnitOfWork {
     } catch (err: any) {
       EnterpriseLogger.error(`Error during commit, executing rollback: ${err?.message || err}`, 'UnitOfWork', { error: err });
       if (this.isTransactionActive()) {
-        await this.rollback();
+        try {
+          await this.rollback();
+        } catch (rollbackError: any) {
+          EnterpriseLogger.error('Commit cleanup failed while preserving the original error.', 'UnitOfWork', {
+            transactionId: store.id,
+            error: rollbackError?.message || String(rollbackError),
+          });
+        }
       }
       throw err;
     }
@@ -610,10 +629,24 @@ export class UnitOfWork {
     EnterpriseLogger.warn(`Rolling back transaction ${store.id}...`, 'UnitOfWork');
     store.sqlQueries.push("ROLLBACK; -- Discarding all transaction operations");
 
+    let rollbackError: any = null;
     try {
       if (store.databaseTransaction) {
-        await store.databaseTransaction.rollback();
-        await store.databaseTransaction.release();
+        try {
+          await store.databaseTransaction.rollback();
+        } catch (error) {
+          rollbackError = error;
+        } finally {
+          try {
+            await store.databaseTransaction.release();
+          } catch (releaseError: any) {
+            rollbackError ||= releaseError;
+            EnterpriseLogger.error('Transaction release failed during rollback cleanup.', 'UnitOfWork', {
+              transactionId: store.id,
+              error: releaseError?.message || String(releaseError),
+            });
+          }
+        }
         store.databaseTransaction = undefined;
       }
     } finally {
@@ -622,6 +655,7 @@ export class UnitOfWork {
       this.setActiveContext(null);
       EnterpriseLogger.info(`Transaction ${store.id} rolled back successfully.`, 'UnitOfWork');
     }
+    if (rollbackError) throw rollbackError;
   }
 
   // --- FALLBACK STORAGE UTILITIES ---

@@ -3,6 +3,7 @@ import React from 'react';
 interface EnterpriseActionToolbarProps {
   title?: string;
   stats?: React.ReactNode;
+  status?: React.ReactNode;
   
   // Handlers
   onNew?: () => void;
@@ -35,6 +36,7 @@ interface EnterpriseActionToolbarProps {
 export default function EnterpriseActionToolbar({
   title = 'شؤون الطلاب',
   stats,
+  status,
   onNew,
   onSave,
   onEdit,
@@ -85,7 +87,7 @@ export default function EnterpriseActionToolbar({
   const subtitle = subtitleMap[title] || 'لوحة الإجراءات المتكاملة لنظام إدارة المدرسة';
 
   return (
-    <div className={`enterprise-action-toolbar bg-gradient-to-r from-[#1c120c] via-[#2d1e12] to-[#1a100a] text-white rounded-3xl p-4 sm:p-5 border-2 border-[#d4af37]/40 shadow-2xl flex flex-wrap items-center justify-between gap-4 relative overflow-hidden z-30 ${minimal ? 'mb-4' : 'mb-6'}`}>
+    <div className={`enterprise-action-toolbar bg-gradient-to-r from-[#1c120c] via-[#2d1e12] to-[#1a100a] text-white rounded-3xl p-4 sm:p-5 border-2 border-[#d4af37]/40 shadow-2xl flex flex-wrap items-center justify-between gap-3 relative overflow-hidden z-30 ${minimal ? 'mb-4' : 'mb-6'}`}>
       <div className="absolute top-0 right-1/4 w-96 h-20 bg-[#d4af37]/10 blur-3xl pointer-events-none" />
       {/* Right Section: Compact Title and KPI Stats */}
       {!minimal && (
@@ -106,7 +108,7 @@ export default function EnterpriseActionToolbar({
       )}
 
       {/* Middle/Left Section: Unified Single-Row Action Controls (RTL Flow) */}
-      <div className={`flex flex-wrap items-center gap-2 max-sm:w-full overflow-x-auto scrollbar-none py-0.5 ${minimal ? 'w-full justify-between sm:justify-start' : ''}`}>
+      <div className={`flex flex-wrap items-center gap-2 max-sm:w-full overflow-x-auto scrollbar-none py-0.5 ${minimal ? (status ? 'w-auto flex-1 justify-between sm:justify-end' : 'w-full justify-between sm:justify-start') : ''}`}>
         
         <div className="flex flex-wrap items-center bg-[#130b04] border border-[#d4af37]/30 p-1 gap-1 shadow-inner">
           {/* 1. جديد */}
@@ -316,6 +318,12 @@ export default function EnterpriseActionToolbar({
         )}
 
       </div>
+
+      {status && (
+        <div className="enterprise-action-toolbar-status min-w-0 flex-1 basis-full sm:basis-auto sm:max-w-[48rem] sm:order-last" role="status">
+          {status}
+        </div>
+      )}
     </div>
   );
 }

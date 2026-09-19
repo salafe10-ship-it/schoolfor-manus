@@ -2826,6 +2826,50 @@ html:not(.dark) #super-admin-portal button:not(.bg-indigo-600):not(.bg-rose-600)
   order: 3;
 }
 
+#student-financial-portal .enterprise-action-toolbar-status {
+  display: flex;
+  align-items: center;
+  min-height: 34px;
+}
+
+#student-financial-portal .financial-toolbar-status-content {
+  display: flex;
+  align-items: center;
+  gap: 0.5rem;
+  width: 100%;
+  min-width: 0;
+  padding: 0.45rem 0.7rem;
+  border: 1px solid rgba(248, 113, 113, 0.5);
+  border-radius: 0.75rem;
+  color: #fee2e2;
+  background: rgba(127, 29, 29, 0.34);
+}
+
+#student-financial-portal .financial-toolbar-status-content > div,
+#student-financial-portal .financial-toolbar-status-content p {
+  min-width: 0;
+  overflow-wrap: anywhere;
+}
+
+#student-financial-portal .financial-toolbar-status-warning {
+  border-color: rgba(251, 191, 36, 0.55);
+  color: #fef3c7;
+  background: rgba(120, 53, 15, 0.34);
+}
+
+#student-financial-portal .financial-toolbar-status-blocked {
+  border-color: rgba(248, 113, 113, 0.55);
+  color: #fee2e2;
+  background: rgba(127, 29, 29, 0.34);
+}
+
+@media (max-width: 640px) {
+  #student-financial-portal .enterprise-action-toolbar-status {
+    flex-basis: 100%;
+    order: 3;
+  }
+}
+
 @media (max-width: 1023px) {
   #student-financial-portal .financial-workspace-layout {
     grid-template-columns: minmax(0, 1fr);

@@ -3416,6 +3416,15 @@ export default function StudentFinancialPortal({
 
       <EnterpriseActionToolbar minimal={true}
         title="الرسوم والأقساط المدرسية"
+        status={financialPersistence !== 'ready' ? (
+          <div className={`financial-toolbar-status-content ${financialPersistence === 'blocked' ? 'financial-toolbar-status-blocked' : 'financial-toolbar-status-warning'}`}>
+            <AlertTriangle className="w-4 h-4 shrink-0" />
+            <div className="min-w-0">
+              <p className="text-[11px] font-black leading-tight">الحركات المالية متوقفة للحماية</p>
+              <p className="text-[10px] font-bold leading-tight opacity-90">{financialPersistenceMessage}</p>
+            </div>
+          </div>
+        ) : undefined}
         stats={
           <div className="flex flex-wrap items-center gap-x-2.5 gap-y-1 text-[10px] sm:text-xs">
             <span className="text-slate-300 font-bold">إجمالي سجلات المطالبات المركزية: <span className="text-amber-400 font-mono">{financialInvoices.length}</span> مطالبة موثقة</span>
@@ -3450,15 +3459,6 @@ export default function StudentFinancialPortal({
         aria-label="استيراد بنود الرسوم"
         onChange={(event) => { void handleFeeConfigFileChange(event); }}
       />
-      {financialPersistence !== 'ready' && (
-        <div className={`mx-3 sm:mx-4 rounded-2xl border p-4 flex items-start gap-3 ${financialPersistence === 'blocked' ? 'border-red-200 bg-red-50 text-red-800' : 'border-amber-200 bg-amber-50 text-amber-800'}`} role="status">
-          <AlertTriangle className="w-5 h-5 shrink-0 mt-0.5" />
-          <div>
-            <p className="text-sm font-black">الحركات المالية متوقفة للحماية</p>
-            <p className="text-xs font-bold mt-1">{financialPersistenceMessage}</p>
-          </div>
-        </div>
-      )}
        <div id="student-financial-portal-layout" className="financial-workspace-layout grid grid-cols-1 lg:grid-cols-[minmax(0,1fr)_16.5rem] gap-4 w-full p-3 sm:p-4 text-right">
       
       {/* LEFT AREA: Content Window based on nested state */}
