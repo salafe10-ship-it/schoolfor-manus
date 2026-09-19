@@ -74,3 +74,6 @@ other financial writes remain closed. No database mutation was performed.
 ## 6. Final status
 
 `VERIFIED — RUNTIME IDENTITY AND REGRESSION GATE PASS; CLOUDFLARE ACTIVE-VIEW RECONCILIATION AND FINANCIAL READ VERIFICATION REMAIN`
+
+The subsequent sidebar enforcement is tracked in commit `c49b57e`; its
+Cloudflare build must be the release used for the final visual check.
