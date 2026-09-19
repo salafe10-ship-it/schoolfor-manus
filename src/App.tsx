@@ -1544,10 +1544,24 @@ export default function App() {
   // global shell navigation here prevents two competing sidebars from being
   // shown at the same time and gives each unit the full workspace width.
   const isFocusedStudentUnit = activeSection === 'students' || activeSection === 'student_accounts';
+  // Module-owned workspaces already render their own contextual navigation.
+  // Keep the global shell out of those views so the user never sees two
+  // competing sidebars, while preserving every route and handler inside the
+  // module.  Modules without an internal navigation continue to use the
+  // global sidebar as before.
+  const moduleOwnsNavigation = new Set([
+    'students',
+    'student_accounts',
+    'accounts',
+    'financial_reports',
+    'treasury',
+    'teachers',
+    'exams',
+  ]).has(activeSection);
   // Keep the landing dashboard visually calm and full-width. The dashboard's
   // own quick actions remain available, while the global sidebar stays intact
   // for every operational module so navigation is not lost.
-  const showGlobalSidebar = !isSuperAdminViewActive && !isFocusedStudentUnit && activeSection !== 'dashboard';
+  const showGlobalSidebar = !isSuperAdminViewActive && !moduleOwnsNavigation && activeSection !== 'dashboard';
 
   return (
     <div className="workspace-shell flex h-screen min-h-0 overflow-hidden bg-slate-50 font-sans text-slate-900 selection:bg-sky-500 selection:text-white w-full" dir="rtl">
