@@ -2925,3 +2925,72 @@ html:not(.dark) #super-admin-portal button:not(.bg-indigo-600):not(.bg-rose-600)
     margin-inline: auto;
   }
 }
+
+/* Final contrast contract for the fees portal. The management view used to
+   keep its light-reference text rules while a later shared identity rule
+   switched the header back to mahogany, producing nearly black text on a
+   dark surface. Keep the header identity consistent and explicitly readable
+   without changing any control behavior. */
+#student-financial-portal .financial-module-header,
+#student-financial-portal.financial-reference-management .financial-module-header {
+  background: linear-gradient(115deg, #1c120c 0%, #2d1e12 54%, #1a100a 100%) !important;
+  color: #fff6d2 !important;
+  border: 1px solid rgba(212, 175, 55, 0.62) !important;
+}
+
+#student-financial-portal .financial-module-header h1,
+#student-financial-portal.financial-reference-management .financial-module-header h1 {
+  background: none !important;
+  color: #fff0ad !important;
+  -webkit-text-fill-color: #fff0ad !important;
+  opacity: 1 !important;
+  text-shadow: 0 1px 0 rgba(0, 0, 0, 0.45) !important;
+}
+
+#student-financial-portal .financial-module-header .text-amber-300\/80,
+#student-financial-portal .financial-module-header .text-amber-300,
+#student-financial-portal .financial-module-header .text-amber-100,
+#student-financial-portal .financial-module-header .text-amber-200\/80,
+#student-financial-portal .financial-module-header .text-amber-200,
+#student-financial-portal.financial-reference-management .financial-module-header .text-amber-300\/80,
+#student-financial-portal.financial-reference-management .financial-module-header .text-amber-300,
+#student-financial-portal.financial-reference-management .financial-module-header .text-amber-100,
+#student-financial-portal.financial-reference-management .financial-module-header .text-amber-200\/80,
+#student-financial-portal.financial-reference-management .financial-module-header .text-amber-200 {
+  color: #f7d174 !important;
+  -webkit-text-fill-color: #f7d174 !important;
+  opacity: 1 !important;
+}
+
+#student-financial-portal .financial-module-header .text-amber-100,
+#student-financial-portal.financial-reference-management .financial-module-header .text-amber-100 {
+  color: #fff6d2 !important;
+  -webkit-text-fill-color: #fff6d2 !important;
+}
+
+#student-financial-portal .financial-module-tabs,
+#student-financial-portal.financial-reference-management .financial-module-tabs {
+  background: rgba(42, 29, 19, 0.96) !important;
+  border-color: rgba(212, 175, 55, 0.62) !important;
+  opacity: 1 !important;
+}
+
+#student-financial-portal .financial-module-tabs > button,
+#student-financial-portal.financial-reference-management .financial-module-tabs > button {
+  color: #f7d174 !important;
+  -webkit-text-fill-color: #f7d174 !important;
+  opacity: 1 !important;
+  text-shadow: 0 1px 0 rgba(0, 0, 0, 0.45) !important;
+}
+
+#student-financial-portal .financial-module-tabs > button.bg-gradient-to-r,
+#student-financial-portal.financial-reference-management .financial-module-tabs > button.bg-gradient-to-r {
+  color: #24150d !important;
+  -webkit-text-fill-color: #24150d !important;
+  text-shadow: none !important;
+}
+
+#student-financial-portal .financial-module-header button:not(:disabled),
+#student-financial-portal .financial-module-header button:not(:disabled) svg {
+  opacity: 1 !important;
+}

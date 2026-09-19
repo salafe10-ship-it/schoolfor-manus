@@ -552,9 +552,12 @@ export default function StudentFinancialPortal({
   React.useEffect(() => {
     const loadFinancialDb = async () => {
       try {
-        // Both endpoints are server-side read-only paths. Run them together so
-        // the first usable financial screen does not wait on two round trips.
-        const requests = Promise.all([
+        // Both endpoints are server-side read-only paths. Run them together,
+        // but hydrate the financial read model independently from the
+        // operational context. A slow context lookup must not hide verified
+        // invoices/receipts or make the screen look empty; it only keeps
+        // writes blocked until the academic scope is confirmed.
+        const requests = Promise.allSettled([
           authenticatedRequest('/api/financial/database', {
             headers: { 'Accept': 'application/json' },
             cache: 'no-store'
@@ -565,55 +568,76 @@ export default function StudentFinancialPortal({
           })
         ] as const);
         const timeout = new Promise<never>((_, reject) => {
-          window.setTimeout(() => reject(new Error('انتهت مهلة الاتصال بالمصدر المالي.')), 8000);
+          window.setTimeout(() => reject(new Error('انتهت مهلة الاتصال بالمصدر المالي.')), 15000);
         });
-        const [response, contextResponse] = await Promise.race([requests, timeout]);
+        const [databaseResult, contextResult] = await Promise.race([requests, timeout]);
+        if (databaseResult.status !== 'fulfilled') {
+          throw databaseResult.reason instanceof Error
+            ? databaseResult.reason
+            : new Error('تعذر قراءة المصدر المالي المعتمد.');
+        }
+        const response = databaseResult.value;
         const res = await response.json();
-        const contextResult = await contextResponse.json().catch(() => ({}));
         if (!response.ok || !res.success) {
           throw new Error(res.message || `فشل تحميل المصدر المالي (${response.status})`);
         }
-        if (!contextResponse.ok || !contextResult.success || !contextResult.data?.academicYearId || !contextResult.data?.academicPeriodId) {
-          throw new Error(contextResult.message || 'السنة أو الفترة الدراسية الموثوقة غير جاهزة للعمليات المالية.');
-        }
-        setFinancialOperationalContext(contextResult.data);
+
         if (res.data && Object.keys(res.data).length > 0) {
-           setFinancialInvoices(res.data.invoices || []);
-           setInvoices(res.data.invoices || []);
-           setFeeConfigs(res.data.feeConfigs || []);
-           if (res.data.feeSettings) {
-             const loadedFeeSettings = {
-               ...res.data.feeSettings,
-               siblingDiscountPercent: Number(res.data.feeSettings.siblingDiscountPercent || 0)
-             };
-             setFeeSettings(loadedFeeSettings);
-             setSiblingDiscountPercent(loadedFeeSettings.siblingDiscountPercent);
-           }
-           if (res.data.studentReceiptVouchers) setStudentReceiptVouchers(res.data.studentReceiptVouchers);
+          setFinancialInvoices(res.data.invoices || []);
+          setInvoices(res.data.invoices || []);
+          setFeeConfigs(res.data.feeConfigs || []);
+          if (res.data.feeSettings) {
+            const loadedFeeSettings = {
+              ...res.data.feeSettings,
+              siblingDiscountPercent: Number(res.data.feeSettings.siblingDiscountPercent || 0)
+            };
+            setFeeSettings(loadedFeeSettings);
+            setSiblingDiscountPercent(loadedFeeSettings.siblingDiscountPercent);
+          }
+          if (res.data.studentReceiptVouchers) setStudentReceiptVouchers(res.data.studentReceiptVouchers);
           if (res.data.receiptVouchers) setGlRvs(res.data.receiptVouchers);
           if (res.data.journalEntries) setGlJvs(res.data.journalEntries);
           if (res.data.chartOfAccounts) setChartOfAccounts(res.data.chartOfAccounts);
           if (setCostCenters && Array.isArray(res.data.costCenters)) setCostCenters(res.data.costCenters);
           setExpenseAccruals(Array.isArray(res.data.expenseAccruals) ? res.data.expenseAccruals : []);
-          setFinancialPersistence('ready');
-          setFinancialPersistenceVersion(Number(res.meta?.version || 0));
-          setFinancialPersistenceMessage('البيانات المالية محملة من المصدر المعتمد.');
         } else {
           // An empty financial store is valid. Never seed financial records from
           // browser storage or demo fixtures; the server is the only source of truth.
           setStudentReceiptVouchers([]);
           setGlRvs([]);
           setGlJvs([]);
-           setChartOfAccounts([]);
-           if (setCostCenters) setCostCenters([]);
-           setFinancialInvoices([]);
-           setInvoices([]);
-           setFeeConfigs([]);
-           setExpenseAccruals([]);
-          setFinancialPersistence('ready');
-          setFinancialPersistenceVersion(Number(res.meta?.version || 0));
-          setFinancialPersistenceMessage('المصدر المعتمد متاح ولا توجد حركات مالية مسجلة بعد.');
+          setChartOfAccounts([]);
+          if (setCostCenters) setCostCenters([]);
+          setFinancialInvoices([]);
+          setInvoices([]);
+          setFeeConfigs([]);
+          setExpenseAccruals([]);
         }
+        setFinancialPersistenceVersion(Number(res.meta?.version || 0));
+
+        const contextResponse = contextResult.status === 'fulfilled' ? contextResult.value : null;
+        const contextPayload = contextResponse ? await contextResponse.json().catch(() => ({})) : {};
+        const contextIsReady = Boolean(contextResponse?.ok
+          && contextPayload.success
+          && contextPayload.data?.academicYearId
+          && contextPayload.data?.academicPeriodId);
+        if (!contextIsReady) {
+          setFinancialPersistence('blocked');
+          setFinancialPersistenceMessage(
+            contextPayload.message
+              ? `تم تحميل القراءة المالية، لكن السياق التشغيلي غير جاهز: ${contextPayload.message}`
+              : 'تم تحميل القراءة المالية، لكن تعذر التحقق من السنة والفترة الدراسية؛ الحفظ والترحيل متوقفان للحماية.'
+          );
+          return;
+        }
+
+        setFinancialOperationalContext(contextPayload.data);
+        setFinancialPersistence('ready');
+        setFinancialPersistenceMessage(
+          res.data && Object.keys(res.data).length > 0
+            ? 'البيانات المالية محملة من المصدر المعتمد.'
+            : 'المصدر المعتمد متاح ولا توجد حركات مالية مسجلة بعد.'
+        );
       } catch (err: any) {
         setFinancialPersistence('blocked');
         const detail = String(err?.message || '').trim();
