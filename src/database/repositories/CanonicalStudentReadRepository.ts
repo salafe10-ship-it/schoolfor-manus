@@ -661,7 +661,7 @@ async function queryCanonicalStudentAffairsMetrics(
     FROM public.students AS s
     WHERE s.tenant_id = $1
       AND s.school_id = $2
-      AND s.branch_id = $3
+      AND (s.branch_id = $3 OR s.branch_id IS NULL)
       AND s.deleted_at IS NULL
   `, [context.tenantId, context.schoolId, context.branchId, context.academicYear]);
 
