@@ -3861,7 +3861,11 @@ export async function createApp(options: { cloudflare?: boolean } = {}): Promise
     if (!isUuid(schoolId)) return next(new AuthorizationError('هذه النقطة متاحة فقط داخل جلسة مدرسة موثقة.'));
     disableAuthCaching(res);
     try {
-      await ensureOwnerWorkspaceReleaseSchema();
+      // This is a read-only tenant request. Schema creation/DDL must never be
+      // performed on the request path: Hyperdrive can hold the DDL session
+      // while the Worker is serving authenticated reads, causing the runtime
+      // to cancel the request as hung. Provision the owner-workspace schema
+      // through the reviewed migration pipeline instead.
       const result = await platformAdminPool.query<any>(
         `SELECT s.id, s.display_name, s.status, s.central_metadata,
                 r.id AS release_id, r.release_version, r.release_kind, r.channel,
