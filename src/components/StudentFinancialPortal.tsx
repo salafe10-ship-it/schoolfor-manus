@@ -551,10 +551,14 @@ export default function StudentFinancialPortal({
   React.useEffect(() => {
     const loadFinancialDb = async () => {
       try {
-        const [response, contextResponse] = await Promise.all([
+        const requests = Promise.all([
           authenticatedRequest('/api/financial/database', { headers: { 'Accept': 'application/json' } }),
           authenticatedRequest('/api/financial/operational-context', { headers: { 'Accept': 'application/json' } })
         ]);
+        const timeout = new Promise<never>((_, reject) => {
+          window.setTimeout(() => reject(new Error('انتهت مهلة الاتصال بالمصدر المالي.')), 15000);
+        });
+        const [response, contextResponse] = await Promise.race([requests, timeout]);
         const res = await response.json();
         const contextResult = await contextResponse.json().catch(() => ({}));
         if (!response.ok || !res.success) {
@@ -599,9 +603,12 @@ export default function StudentFinancialPortal({
           setFinancialPersistenceVersion(Number(res.meta?.version || 0));
           setFinancialPersistenceMessage('المصدر المعتمد متاح ولا توجد حركات مالية مسجلة بعد.');
         }
-      } catch (err) {
+      } catch (err: any) {
         setFinancialPersistence('blocked');
-        setFinancialPersistenceMessage('لم يتم التحقق من مصدر مالي معتمد؛ تم تعطيل الحفظ والترحيل حمايةً للبيانات.');
+        const detail = String(err?.message || '').trim();
+        setFinancialPersistenceMessage(detail
+          ? `تعذر التحقق من المصدر المالي (${detail}). تم تعطيل الحفظ والترحيل حمايةً للبيانات.`
+          : 'تعذر التحقق من المصدر المالي. تم تعطيل الحفظ والترحيل حمايةً للبيانات.');
         console.error("Failed to load financial database from server", err);
       }
     };
@@ -2699,10 +2706,14 @@ export default function StudentFinancialPortal({
   const handleRefreshData = async () => {
     setRefreshing(true);
     try {
-      const [response, contextResponse] = await Promise.all([
+      const requests = Promise.all([
         authenticatedRequest('/api/financial/database', { headers: { 'Accept': 'application/json' }, cache: 'no-store' }),
         authenticatedRequest('/api/financial/operational-context', { headers: { 'Accept': 'application/json' }, cache: 'no-store' })
       ]);
+      const timeout = new Promise<never>((_, reject) => {
+        window.setTimeout(() => reject(new Error('انتهت مهلة الاتصال بالمصدر المالي.')), 15000);
+      });
+      const [response, contextResponse] = await Promise.race([requests, timeout]);
       const res = await response.json();
       const contextResult = await contextResponse.json().catch(() => ({}));
       if (!response.ok || !res.success) throw new Error(res.message || 'تعذر تحميل البيانات المالية');
@@ -2733,7 +2744,10 @@ export default function StudentFinancialPortal({
       triggerNotification('تم تحديث البيانات المالية من المصدر المعتمد', 'success');
     } catch (error: any) {
       setFinancialPersistence('blocked');
-      setFinancialPersistenceMessage('لم يتم التحقق من مصدر مالي معتمد؛ تم تعطيل الحفظ والترحيل حمايةً للبيانات.');
+      const detail = String(error?.message || '').trim();
+      setFinancialPersistenceMessage(detail
+        ? `تعذر التحقق من المصدر المالي (${detail}). تم تعطيل الحفظ والترحيل حمايةً للبيانات.`
+        : 'تعذر التحقق من المصدر المالي. تم تعطيل الحفظ والترحيل حمايةً للبيانات.');
       triggerNotification(`تعذر تحديث البيانات المالية: ${error.message || 'خطأ غير معروف'}`, 'warning');
     } finally {
       setRefreshing(false);

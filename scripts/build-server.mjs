@@ -8,11 +8,13 @@ const projectRoot = path.dirname(fileURLToPath(import.meta.url));
 // This script lives in `scripts/`; the repository root is its parent.
 const workspaceRoot = path.resolve(projectRoot, '..');
 
-// esbuild's Windows launcher treats an absolute entry path as a package name
-// in some Node/npm combinations. Resolve the working directory explicitly and
-// pass repository-relative paths to keep local and CI builds deterministic.
-const serverEntry = './server.ts';
-const serverOutput = './dist/server.cjs';
+// Use normalized absolute paths for the esbuild API. The Windows launcher can
+// treat a repository-relative entry such as `./server.ts` as a package path
+// when invoked through npm, which makes the server build fail even though the
+// file exists. Absolute paths are unambiguous for the API and remain portable
+// because they are derived from the current workspace.
+const serverEntry = path.resolve(workspaceRoot, 'server.ts');
+const serverOutput = path.resolve(workspaceRoot, 'dist', 'server.cjs');
 const buildIdentityPath = path.join(workspaceRoot, 'dist', 'build-identity.json');
 const packageJson = JSON.parse(fs.readFileSync(path.join(workspaceRoot, 'package.json'), 'utf8'));
 const commitFromEnvironment = [
