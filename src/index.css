@@ -1413,6 +1413,10 @@ html:not(.dark) #super-admin-portal button:not(.bg-indigo-600):not(.bg-rose-600)
 #student-financial-portal .financial-workspace-layout {
   position: relative;
   z-index: 1;
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) minmax(14rem, 16.5rem);
+  align-items: start;
+  gap: 1rem;
   border: 1px solid rgba(247, 209, 116, 0.16);
   border-radius: 1.75rem;
   background: rgba(7, 16, 31, 0.46);
@@ -2549,22 +2553,35 @@ html:not(.dark) #super-admin-portal button:not(.bg-indigo-600):not(.bg-rose-600)
 
 #student-financial-portal .financial-sidebar-nav {
   display: flex;
-  flex-wrap: wrap;
-  align-items: center;
+  flex-direction: column;
+  flex-wrap: nowrap;
+  align-items: stretch;
   justify-content: flex-start;
   gap: 0.45rem;
 }
 
-/* The application shell already owns the primary navigation. The financial
-   module navigation is therefore a compact in-content toolbar, never a
-   second vertical sidebar. */
+/* Keep the module navigation as one compact, predictable sidebar. The outer
+   application shell remains unchanged; this menu owns only fee-module views. */
 #student-financial-portal .financial-sidebar-menu {
   min-height: auto;
+  grid-column: 2;
+  grid-row: 1;
+  width: 100%;
+  position: sticky;
+  top: 1rem;
+  align-self: start;
 }
 
 #student-financial-portal .financial-sidebar-button {
-  flex: 0 1 auto;
+  width: 100%;
+  flex: 0 0 auto;
   min-height: 2.65rem;
+}
+
+#student-financial-portal #financial-content-viewport {
+  grid-column: 1;
+  grid-row: 1;
+  min-width: 0;
 }
 
 #student-financial-portal .financial-sidebar-button {
@@ -2617,8 +2634,15 @@ html:not(.dark) #super-admin-portal button:not(.bg-indigo-600):not(.bg-rose-600)
 }
 
 @media (max-width: 1023px) {
+  #student-financial-portal .financial-workspace-layout {
+    grid-template-columns: minmax(0, 1fr);
+  }
+
   #student-financial-portal .financial-sidebar-menu {
     min-height: auto;
+    grid-column: 1;
+    grid-row: 2;
+    position: static;
   }
 
   #student-financial-portal .financial-sidebar-brand {
