@@ -1413,6 +1413,7 @@ html:not(.dark) #super-admin-portal button:not(.bg-indigo-600):not(.bg-rose-600)
 #student-financial-portal .financial-workspace-layout {
   position: relative;
   z-index: 1;
+  direction: ltr;
   display: grid;
   grid-template-columns: minmax(0, 1fr) minmax(14rem, 16.5rem);
   align-items: start;
@@ -2582,6 +2583,11 @@ html:not(.dark) #super-admin-portal button:not(.bg-indigo-600):not(.bg-rose-600)
   grid-column: 1;
   grid-row: 1;
   min-width: 0;
+  direction: rtl;
+}
+
+#student-financial-portal .financial-sidebar-menu {
+  direction: rtl;
 }
 
 #student-financial-portal .financial-sidebar-button {
