@@ -2194,6 +2194,7 @@ export async function createApp(options: { cloudflare?: boolean } = {}): Promise
   // environment. This prevents a missing EDUPRO_ENVIRONMENT variable from
   // silently making a BYPASSRLS connection appear production-ready.
   const restrictedDataPlaneRequired = !unsafeLocalDatabaseRoleOptIn && process.env.NODE_ENV !== 'test';
+  const cloudflareHyperdriveRuntime = process.env.EDUPRO_CLOUDFLARE_HYPERDRIVE === 'true';
   const configuredExpectedRoles = String(process.env.DATABASE_ROLE_EXPECTED || '')
     .split(',')
     .map(role => role.trim())
@@ -2201,14 +2202,19 @@ export async function createApp(options: { cloudflare?: boolean } = {}): Promise
   const expectedDataPlaneRoles = configuredExpectedRoles.length > 0
     ? configuredExpectedRoles
     : ['edupro_app'];
-  const identityProbe = restrictedDataPlaneRequired
+  // Hyperdrive already owns the origin-side connection pool. Running the
+  // optional pg_roles sampling probe during Worker bootstrap can pin pool
+  // clients while the isolate is serving its first requests; the Workers
+  // runtime then cancels authenticated API requests as hung. Tenant
+  // transactions still enforce DATABASE_ROLE_EXPECTED with SET LOCAL ROLE.
+  const identityProbe = restrictedDataPlaneRequired && !cloudflareHyperdriveRuntime
     ? transactionDriver?.inspectPoolIdentity(2) || Promise.reject(new Error('Restricted transaction driver is unavailable.'))
     : Promise.resolve([]);
 
   void Promise.all([DatabaseService.initialize(), identityProbe])
     .then(([result, identities]) => {
       if (result.supabaseConnected) {
-        if (restrictedDataPlaneRequired) {
+        if (restrictedDataPlaneRequired && !cloudflareHyperdriveRuntime) {
           const restricted = identities.length === 2 && identities.every(identity =>
             expectedDataPlaneRoles.includes(identity.current_user)
             && identity.session_user === identity.current_user
