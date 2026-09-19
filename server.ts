@@ -12370,7 +12370,11 @@ export async function createApp(options: { cloudflare?: boolean } = {}): Promise
           userId: (req as any).user.id,
           userName: (req as any).user.name || 'المستخدم الحالي',
           ipAddress: req.ip || 'unknown',
-          affectedTables: ['financial_portal_snapshots']
+          affectedTables: ['financial_portal_snapshots'],
+          // Never allow a pooled/Hyperdrive read to hold the financial screen
+          // open indefinitely. The client also has a deadline, but the
+          // database transaction must enforce the same bounded contract.
+          timeoutMs: 10_000
         },
         async () => {
           const transaction = UnitOfWork.getActiveContext()?.databaseTransaction;

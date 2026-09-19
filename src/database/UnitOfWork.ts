@@ -135,6 +135,7 @@ export interface TransactionContext {
     userName: string;
     ipAddress: string;
     affectedTables: string[];
+    timeoutMs?: number;
     tenantContext?: {
       tenantId: string;
       schoolId: string;
@@ -272,7 +273,8 @@ export class UnitOfWork {
             scope: 'tenant',
             tenantId: metadata.tenantId,
             schoolId,
-            operationName: metadata.operationName,
+          operationName: metadata.operationName,
+            timeoutMs: metadata.timeoutMs,
             trustedContext: context.metadata?.tenantContext,
             diagnosticTrace: metadata.diagnosticTrace,
             diagnosticPrefix: metadata.operationName === 'Canonical Student Read' ? 'student_' : metadata.operationName === 'TenantEngine authenticated lookup' ? 'tenant_' : undefined,
