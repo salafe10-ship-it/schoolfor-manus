@@ -12577,41 +12577,16 @@ export async function createApp(options: { cloudflare?: boolean } = {}): Promise
         receiptVoucherId: row.receipt_voucher_id,
         sourcePayload: row.source_payload,
       }));
-      // ERP enrichment is optional for the fee read model. Keep it in its own
-      // short, bounded transaction so a slow/partially provisioned ledger
-      // cannot make the authoritative fee snapshot time out as a whole.
-      try {
-        await UnitOfWork.runInTransaction(
-          schoolId,
-          {
-            operationName: 'Read optional canonical ERP enrichment',
-            tenantId,
-            userId: (req as any).user.id,
-            userName: (req as any).user.name || 'المستخدم الحالي',
-            ipAddress: req.ip || 'unknown',
-            affectedTables: [...CANONICAL_ERP_TABLES],
-            readOnly: true,
-            timeoutMs: 3_000,
-          },
-          async () => {
-            const enrichmentTransaction = UnitOfWork.getActiveContext()?.databaseTransaction;
-            if (!enrichmentTransaction) throw new DatabaseError('Financial ERP enrichment transaction is unavailable.');
-            canonicalErpReady = await CanonicalErpPostingService.isProvisioned(enrichmentTransaction);
-            if (canonicalErpReady) {
-              canonicalErpModel = await CanonicalErpPostingService.readModel(enrichmentTransaction, schoolId, true);
-            }
-          },
-          tenantContext
-        );
-      } catch (canonicalErpError: any) {
-        canonicalErpReady = false;
-        canonicalErpModel = null;
-        EnterpriseLogger.warn('Canonical ERP enrichment unavailable; serving fee snapshot only.', 'FinancialSnapshotRoute', {
-          tenantId,
-          schoolId,
-          error: canonicalErpError?.message || String(canonicalErpError),
-        });
-      }
+      // The first financial paint must never open a Hyperdrive transaction.
+      // Hyperdrive can reject recycling a read session that still carries
+      // transaction state; treating optional ERP enrichment as part of this
+      // request therefore turns an otherwise valid Supabase fee read into a
+      // 500. The authoritative snapshot, invoices and receipts above are
+      // sufficient for the read model. Ledger enrichment remains available
+      // through its dedicated accounting routes, while all writes continue
+      // through the canonical transaction boundary.
+      canonicalErpReady = false;
+      canonicalErpModel = null;
       (req as any).financialErpReady = canonicalErpReady;
       const snapshotData = snapshot?.data || {};
       let responseData: Record<string, any> = {
