@@ -12401,9 +12401,23 @@ export async function createApp(options: { cloudflare?: boolean } = {}): Promise
             if (String(canonicalError?.code || '') !== '42P01') throw canonicalError;
             EnterpriseLogger.warn('Canonical student-fee tables are not migrated; retaining snapshot read model.', 'FinancialSnapshotRoute', { tenantId, schoolId });
           }
-          canonicalErpReady = await CanonicalErpPostingService.isProvisioned(transaction);
-          if (canonicalErpReady) {
-            canonicalErpModel = await CanonicalErpPostingService.readModel(transaction, schoolId, true);
+          // The ERP ledger is an optional enrichment of the student-fee read
+          // model. A partially migrated or restricted ledger must not make
+          // the authoritative fee snapshot unreadable; writes remain closed
+          // until the operational context and the canonical write path pass.
+          try {
+            canonicalErpReady = await CanonicalErpPostingService.isProvisioned(transaction);
+            if (canonicalErpReady) {
+              canonicalErpModel = await CanonicalErpPostingService.readModel(transaction, schoolId, true);
+            }
+          } catch (canonicalErpError: any) {
+            canonicalErpReady = false;
+            canonicalErpModel = null;
+            EnterpriseLogger.warn('Canonical ERP enrichment unavailable; serving fee snapshot only.', 'FinancialSnapshotRoute', {
+              tenantId,
+              schoolId,
+              error: canonicalErpError?.message || String(canonicalErpError),
+            });
           }
         },
         tenantContext
