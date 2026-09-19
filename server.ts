@@ -11214,7 +11214,7 @@ export async function createApp(options: { cloudflare?: boolean } = {}): Promise
   const canonicalFeeUuid = (value: unknown): value is string =>
     /^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i.test(String(value || '').trim());
 
-  const canonicalFeeContext = (req: express.Request) => {
+  const canonicalFeeContext = (req: express.Request, requireTransaction = true) => {
     const identity = (req as any).user;
     const tenantId = String(identity?.tenantId || '').trim();
     const schoolId = String(identity?.schoolId || '').trim();
@@ -11223,13 +11223,13 @@ export async function createApp(options: { cloudflare?: boolean } = {}): Promise
     if (!tenantId || !schoolId || !actorId || !tenantContext || tenantContext.tenantId !== tenantId || tenantContext.schoolId !== schoolId) {
       throw new AuthenticationError('السياق الموثوق للوحدة المالية غير مكتمل.');
     }
-    if (!transactionDriver) throw new DatabaseError('تحتاج العمليات المالية الكانونية إلى اتصال PostgreSQL مهيأ.');
+    if (requireTransaction && !transactionDriver) throw new DatabaseError('تحتاج العمليات المالية الكانونية إلى اتصال PostgreSQL مهيأ.');
     return { tenantId, schoolId, actorId, tenantContext, identity };
   };
 
   app.get("/api/financial/operational-context", authenticateRequest, requirePermission(PERMISSIONS.FINANCIAL_READ), async (req, res, next) => {
     try {
-      const { tenantId, schoolId, tenantContext } = canonicalFeeContext(req);
+      const { tenantId, schoolId, tenantContext } = canonicalFeeContext(req, false);
       const supabase = canonicalTenantReadClient(req);
       if (!supabase) throw new DatabaseError('مصدر السياق التشغيلي المالي غير متاح.');
 
