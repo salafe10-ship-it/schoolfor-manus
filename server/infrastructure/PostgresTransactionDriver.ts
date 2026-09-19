@@ -62,12 +62,15 @@ class PostgresTransactionSession implements TransactionSession {
     if (this.state === "released") return;
     this.diagnosticTrace?.mark(`${this.diagnosticPrefix}release_started`);
     const releaseStartedAtMs = nowMs();
-    if (this.state === "active") {
-      try {
-        await this.client.query("ROLLBACK");
-      } finally {
-        this.state = "rolled_back";
-      }
+    // Hyperdrive validates the transaction state while recycling a pooled
+    // connection.  Explicitly send ROLLBACK for every release path, even
+    // after COMMIT/ROLLBACK, so the adapter observes an idle connection
+    // before pg returns it to the pool.  ROLLBACK is a no-op when PostgreSQL
+    // is already idle and does not undo a completed COMMIT.
+    try {
+      await this.client.query("ROLLBACK");
+    } finally {
+      if (this.state === "active") this.state = "rolled_back";
     }
     this.client.release();
     this.state = "released";

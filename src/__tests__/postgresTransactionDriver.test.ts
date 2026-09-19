@@ -62,6 +62,25 @@ describe('PostgresTransactionDriver trusted context', () => {
     expect(client.query.mock.calls.filter(([sql]) => String(sql).startsWith('SELECT set_config'))).toHaveLength(0);
   });
 
+  it('normalizes the connection to idle before releasing after commit', async () => {
+    const { client, driver } = createDriverHarness();
+    const session = await driver.begin({
+      transactionId: 'tx-hyperdrive-release',
+      tenantId: 'tenant-a',
+      schoolId: 'school-a',
+      operationName: 'read-only lifecycle test',
+      trustedContext: { tenantId: 'tenant-a', schoolId: 'school-a' }
+    });
+
+    await session.commit();
+    await session.release();
+
+    const sql = client.query.mock.calls.map(([statement]) => String(statement));
+    expect(sql.filter(statement => statement === 'COMMIT')).toHaveLength(1);
+    expect(sql.at(-1)).toBe('ROLLBACK');
+    expect(client.release).toHaveBeenCalledTimes(1);
+  });
+
   it('samples real pool connections without returning secret fields', async () => {
     const client: any = {
       query: vi.fn(async (sql: string) => String(sql).includes('FROM pg_roles')
