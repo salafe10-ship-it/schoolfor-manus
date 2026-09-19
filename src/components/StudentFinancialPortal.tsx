@@ -1,4 +1,4 @@
-import { AlertTriangle, ArrowLeft, BarChart3, CalendarRange, CheckCircle2, ChevronLeft, ClipboardCheck, Coins, DollarSign, Download, FileSpreadsheet, FileText, GraduationCap, Home, Maximize2, Minimize2, Pencil, Percent, PiggyBank, Plus, Printer, QrCode, RefreshCw, Save, Search, Settings, Settings2, Trash2, TrendingUp, Undo2, Upload, UserCheck, Users, X } from 'lucide-react';
+import { AlertTriangle, ArrowLeft, BarChart3, CalendarRange, CheckCircle2, ChevronLeft, ClipboardCheck, Coins, DollarSign, Download, FileSpreadsheet, FileText, GraduationCap, Home, Maximize2, Minimize2, Pencil, Percent, Plus, Printer, QrCode, RefreshCw, Save, Search, Settings, Settings2, Trash2, TrendingUp, Undo2, Upload, UserCheck, Users, X } from 'lucide-react';
 /**
  * @license
  * SPDX-License-Identifier: Apache-2.0
@@ -552,24 +552,20 @@ export default function StudentFinancialPortal({
   React.useEffect(() => {
     const loadFinancialDb = async () => {
       try {
-        // Read the authoritative financial snapshot first. Opening the
-        // operational-context transaction in parallel used two pool clients
-        // during the first paint and could starve the Hyperdrive-backed pool
-        // when the school dashboard was still refreshing. The context is
-        // required for writes, but never needs to race the read-only snapshot.
-        const requests = (async () => {
-          const response = await authenticatedRequest('/api/financial/database', {
+        // Both endpoints are server-side read-only paths. Run them together so
+        // the first usable financial screen does not wait on two round trips.
+        const requests = Promise.all([
+          authenticatedRequest('/api/financial/database', {
             headers: { 'Accept': 'application/json' },
             cache: 'no-store'
-          });
-          const contextResponse = await authenticatedRequest('/api/financial/operational-context', {
+          }),
+          authenticatedRequest('/api/financial/operational-context', {
             headers: { 'Accept': 'application/json' },
             cache: 'no-store'
-          });
-          return [response, contextResponse] as const;
-        })();
+          })
+        ] as const);
         const timeout = new Promise<never>((_, reject) => {
-          window.setTimeout(() => reject(new Error('انتهت مهلة الاتصال بالمصدر المالي.')), 15000);
+          window.setTimeout(() => reject(new Error('انتهت مهلة الاتصال بالمصدر المالي.')), 8000);
         });
         const [response, contextResponse] = await Promise.race([requests, timeout]);
         const res = await response.json();
@@ -3336,7 +3332,7 @@ export default function StudentFinancialPortal({
               <span>‹</span>
               <span className="text-amber-100">الحسابات والرسوم</span>
             </div>
-            <h1 className="text-xl sm:text-2xl font-black bg-gradient-to-r from-[#ffe5a3] via-[#fce79a] to-[#d4af37] bg-clip-text text-transparent">
+            <h1 className="text-xl sm:text-2xl font-black text-[#fce79a]">
               {activeSubSec === 'analytics' ? 'لوحة القيادة والتحليل المالي السحابية' : 'منظومة حسابات الطلاب والرسوم الدراسية'}
             </h1>
           </div>
@@ -3366,7 +3362,7 @@ export default function StudentFinancialPortal({
         </button>
 
         {/* Center Sub-Navigation Tabs */}
-        <div className="flex items-center gap-1.5 bg-[#2a1d13]/90 border border-[#d4af37]/40 p-1.5 rounded-2xl shadow-inner relative z-10 overflow-x-auto">
+        <div className="financial-module-tabs flex items-center gap-1.5 bg-[#2a1d13]/90 border border-[#d4af37]/40 p-1.5 rounded-2xl shadow-inner relative z-10 overflow-x-auto">
           <button 
             onClick={() => setActiveSubSec('analytics')}
             className={`px-4 py-2 rounded-xl text-xs font-black transition-all flex items-center gap-1.5 ${
@@ -3484,49 +3480,54 @@ export default function StudentFinancialPortal({
               
               {/* Card 1 */}
               <div className="p-5 financial-analytics-counter-card hover:border-slate-300 transition-all bg-gradient-to-b from-[#fffefc] via-[#fbf8f0] to-[#f5eeea] border-2 border-[#d4af37]/30 hover:border-[#d4af37] rounded-3xl p-4 sm:p-5 shadow-md transition-all duration-300">
-                <span className="text-[11px] font-black text-slate-500 block mb-1">إجمالي مديونيات الطلاب</span>
+                 <span className="text-[11px] font-black text-slate-700 block mb-1">إجمالي المطالبات المالية</span>
                 <div className="text-xl font-black text-slate-900 tracking-tight" dir="ltr">
                   {formatFinancialValue(stats.totalDebts)}
                 </div>
                 <div className="flex items-center gap-1.5 mt-2 text-[10px] text-slate-400 font-semibold">
                   <span className="w-1.5 h-1.5 rounded-full bg-slate-400" />
-                  <span>الوعاء المالي الإجمالي المقيد</span>
+                   <span>القيمة قبل التسويات والتحصيل</span>
                 </div>
               </div>
 
               {/* Card 2 */}
               <div className="p-5 financial-analytics-counter-card hover:border-slate-300 transition-all bg-gradient-to-b from-[#fffefc] via-[#fbf8f0] to-[#f5eeea] border-2 border-[#d4af37]/30 hover:border-[#d4af37] rounded-3xl p-4 sm:p-5 shadow-md transition-all duration-300">
-                <span className="text-[11px] font-black text-slate-500 block mb-1">إجمالي التحصيلات</span>
+                 <span className="text-[11px] font-black text-slate-700 block mb-1">إجمالي المسدد المرحّل</span>
                 <div className="text-xl font-black text-emerald-600 tracking-tight" dir="ltr">
                   {formatFinancialValue(stats.totalPaid)}
                 </div>
                 <div className="flex items-center gap-1.5 mt-2 text-[10px] text-emerald-500 font-bold">
                   <span className="w-1.5 h-1.5 rounded-full bg-emerald-500 animate-pulse" />
-                  <span>{financialPersistence === 'ready' && financialInvoices.length > 0 ? '✓ مصدر مركزي موثق' : 'غير متاح — لا يوجد تحصيل موثق'}</span>
+                   <span>{financialPersistence === 'ready' && financialInvoices.length > 0 ? '✓ سندات قبض مرتبطة بالمطالبات' : 'غير متاح — لا يوجد تحصيل موثق'}</span>
                 </div>
               </div>
 
               {/* Card 3 */}
               <div className="p-5 financial-analytics-counter-card hover:border-slate-300 transition-all bg-gradient-to-b from-[#fffefc] via-[#fbf8f0] to-[#f5eeea] border-2 border-[#d4af37]/30 hover:border-[#d4af37] rounded-3xl p-4 sm:p-5 shadow-md transition-all duration-300">
-                <span className="text-[11px] font-black text-slate-500 block mb-1">الأرصدة المتبقية</span>
+                 <span className="text-[11px] font-black text-slate-700 block mb-1">الرصيد المستحق</span>
                 <div className="text-xl font-black text-amber-600 tracking-tight" dir="ltr">
                   {formatFinancialValue(stats.totalRemaining)}
                 </div>
                 <div className="flex items-center gap-1.5 mt-2 text-[10px] text-amber-500 font-bold">
                   <span className="w-1.5 h-1.5 rounded-full bg-amber-500" />
-                  <span>ذمم مالية معلقة قيد المتابعة</span>
+                   <span>ذمم مدينة تشمل الأقساط غير المسددة</span>
                 </div>
               </div>
 
               {/* Card 4 */}
               <div className="p-5 financial-analytics-counter-card hover:border-slate-300 transition-all bg-gradient-to-b from-[#fffefc] via-[#fbf8f0] to-[#f5eeea] border-2 border-[#d4af37]/30 hover:border-[#d4af37] rounded-3xl p-4 sm:p-5 shadow-md transition-all duration-300">
-                <span className="text-[11px] font-black text-slate-500 block mb-1">تحصيلات اليوم</span>
+                 <span className="text-[11px] font-black text-slate-700 block mb-1">تحصيلات اليوم</span>
                 <div className="text-xl font-black text-orange-600 tracking-tight" dir="ltr">
                   {formatFinancialValue(stats.todayCollected)}
                 </div>
                 <div className="flex items-center gap-1.5 mt-2 text-[10px] text-orange-500 font-bold">
                   <span className="w-1.5 h-1.5 rounded-full bg-orange-500" />
-                  <span>مبيعات وتسجيلات فورية معتمدة</span>
+                   <span>سندات قبض مرحّلة في تاريخ اليوم</span>
+                 </div>
+                 <div className="mt-2 border-t border-slate-200/80 pt-2 text-[10px] font-bold text-slate-600">
+                   {nextMonthForecast
+                     ? `توقع الشهر القادم: ${formatLD(nextMonthForecast.amount)} — ${nextMonthForecast.label}`
+                     : 'توقع الشهر القادم: لا توجد استحقاقات مؤرخة'}
                 </div>
               </div>
 
@@ -3661,38 +3662,6 @@ export default function StudentFinancialPortal({
                       ? 'سيظهر المؤشر بعد تسجيل أرصدة أو سندات قبض معتمدة.'
                       : 'النسبة محسوبة من أرصدة الطلاب والسندات المعتمدة المتاحة.'}
                   </p>
-                </div>
-              </div>
-
-            </div>
-
-            {/* Sub and Footer values matching screenshot (Bottom row) */}
-            <div className="grid grid-cols-1 md:grid-cols-2 gap-6 pt-2">
-              
-              {/* Detailed Item 1 */}
-              <div className="bg-gradient-to-l from-slate-900 to-slate-950 text-slate-200 border border-slate-800 p-5 shadow flex items-center justify-between">
-                <div>
-                  <span className="text-[10px] font-black text-slate-400 block mb-1">إجمالي الأقساط المجدولة المعلقة</span>
-                  <div className="text-xl font-bold tracking-tight text-amber-300 font-mono" dir="ltr">
-                    {formatFinancialValue(stats.totalRemaining)}
-                  </div>
-                </div>
-                <div className="w-10 h-10 rounded-full bg-slate-850 border border-slate-750 flex items-center justify-center text-amber-300">
-                  <PiggyBank className="w-5 h-5" />
-                </div>
-              </div>
-
-              {/* Detailed Item 2 */}
-              <div className="bg-gradient-to-l from-slate-900 to-slate-950 text-slate-200 border border-slate-800 p-5 shadow flex items-center justify-between">
-                <div>
-                  <span className="text-[10px] font-black text-slate-400 block mb-1">التوقعات المالية (الشهر القادم)</span>
-                  <div className="text-xl font-bold tracking-tight text-emerald-400 font-mono" dir="ltr">
-                    {nextMonthForecast ? formatLD(nextMonthForecast.amount) : 'غير متاح'}
-                  </div>
-                  {nextMonthForecast && <span className="text-[9px] text-slate-400 font-bold">استحقاقات {nextMonthForecast.label}</span>}
-                </div>
-                <div className="w-10 h-10 rounded-full bg-slate-850 border border-slate-750 flex items-center justify-center text-emerald-400">
-                  <TrendingUp className="w-5 h-5" />
                 </div>
               </div>
 

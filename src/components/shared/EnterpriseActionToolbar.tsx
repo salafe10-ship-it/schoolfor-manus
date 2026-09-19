@@ -108,7 +108,7 @@ export default function EnterpriseActionToolbar({
       )}
 
       {/* Middle/Left Section: Unified Single-Row Action Controls (RTL Flow) */}
-      <div className={`flex flex-wrap items-center gap-2 max-sm:w-full overflow-x-auto scrollbar-none py-0.5 ${minimal ? (status ? 'w-auto flex-1 justify-between sm:justify-end' : 'w-full justify-between sm:justify-start') : ''}`}>
+      <div className={`enterprise-action-toolbar-actions flex flex-wrap items-center gap-2 max-sm:w-full overflow-x-auto scrollbar-none py-0.5 ${minimal ? (status ? 'w-auto justify-between sm:justify-end' : 'w-full justify-between sm:justify-start') : ''}`}>
         
         <div className="flex flex-wrap items-center bg-[#130b04] border border-[#d4af37]/30 p-1 gap-1 shadow-inner">
           {/* 1. جديد */}
@@ -320,7 +320,7 @@ export default function EnterpriseActionToolbar({
       </div>
 
       {status && (
-        <div className="enterprise-action-toolbar-status min-w-0 flex-1 basis-full sm:basis-auto sm:max-w-[48rem] sm:order-last" role="status">
+        <div className="enterprise-action-toolbar-status min-w-0 basis-full sm:basis-auto sm:order-last" role="status">
           {status}
         </div>
       )}
