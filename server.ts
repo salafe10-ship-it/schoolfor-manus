@@ -12499,7 +12499,12 @@ export async function createApp(options: { cloudflare?: boolean } = {}): Promise
         throw new AuthenticationError("السياق الموثوق للمصدر المالي غير مكتمل.");
       }
       const canonicalReadClient = canonicalTenantReadClient(req);
-      if (!canonicalReadClient) throw new DatabaseError('مصدر القراءة المالية المباشر غير متاح.');
+      if (!canonicalReadClient) {
+        if (!process.env.SUPABASE_URL || !process.env.SUPABASE_ANON_KEY) {
+          FallbackStorage.assertCanonicalPersistence("financial database read");
+        }
+        throw new DatabaseError('مصدر القراءة المالية المباشر غير متاح.');
+      }
 
       let snapshot: { data: Record<string, unknown>; version: number; updated_at: string } | null = null;
       let canonicalErpReady = false;
