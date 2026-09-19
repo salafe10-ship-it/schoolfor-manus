@@ -220,6 +220,14 @@ async function attachTrustedPlatformPermissions(identity: TrustedIdentity): Prom
 
 async function attachTrustedEffectivePermissions(identity: TrustedIdentity): Promise<TrustedIdentity> {
   const tenantIdentity = await attachTrustedTenantPermissions(identity);
+  // Platform RBAC belongs to the central, schoolless control plane. A normal
+  // school request must not perform a second remote control-plane lookup just
+  // to discover that it has no platform role. Apart from being unnecessary,
+  // that lookup made every tenant read depend on the platform RBAC channel and
+  // produced the repeated "Platform permission resolution failed closed"
+  // signal in production. Central routes use schoolless identities and still
+  // resolve platform permissions below.
+  if (tenantIdentity.schoolId) return { ...tenantIdentity, platformPermissions: [] };
   return attachTrustedPlatformPermissions(tenantIdentity);
 }
 
