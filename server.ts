@@ -12498,13 +12498,6 @@ export async function createApp(options: { cloudflare?: boolean } = {}): Promise
       if (!tenantContext || tenantContext.tenantId !== tenantId || tenantContext.schoolId !== schoolId) {
         throw new AuthenticationError("السياق الموثوق للمصدر المالي غير مكتمل.");
       }
-      if (!transactionDriver) {
-        if (!process.env.SUPABASE_URL || !process.env.SUPABASE_ANON_KEY) {
-          FallbackStorage.assertCanonicalPersistence("financial database read");
-        }
-        throw new DatabaseError("Financial database requires the configured PostgreSQL transaction connection.");
-      }
-
       const canonicalReadClient = canonicalTenantReadClient(req);
       if (!canonicalReadClient) throw new DatabaseError('مصدر القراءة المالية المباشر غير متاح.');
 
