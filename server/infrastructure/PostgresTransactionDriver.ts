@@ -33,7 +33,8 @@ class PostgresTransactionSession implements TransactionSession {
     private readonly diagnosticPrefix = '',
     private readonly poolSnapshot?: () => PoolSnapshot,
     private readonly recordPoolMetric?: (metric: Perf004PoolMetric) => void,
-    private readonly acquiredAtMs = nowMs()
+    private readonly acquiredAtMs = nowMs(),
+    private readonly transactionStarted = true
   ) {}
 
   /**
@@ -65,6 +66,11 @@ class PostgresTransactionSession implements TransactionSession {
   public async commit(): Promise<void> {
     this.assertActive();
     this.diagnosticTrace?.mark(`${this.diagnosticPrefix}commit_started`);
+    if (!this.transactionStarted) {
+      this.state = "committed";
+      this.diagnosticTrace?.mark(`${this.diagnosticPrefix}commit_completed`);
+      return;
+    }
     await this.client.query("COMMIT");
     this.state = "committed";
     this.diagnosticTrace?.mark(`${this.diagnosticPrefix}commit_completed`);
@@ -72,6 +78,10 @@ class PostgresTransactionSession implements TransactionSession {
 
   public async rollback(): Promise<void> {
     this.assertActive();
+    if (!this.transactionStarted) {
+      this.state = "rolled_back";
+      return;
+    }
     try {
       await this.client.query("ROLLBACK");
       this.state = "rolled_back";
@@ -85,6 +95,32 @@ class PostgresTransactionSession implements TransactionSession {
     if (this.state === "released") return;
     this.diagnosticTrace?.mark(`${this.diagnosticPrefix}release_started`);
     const releaseStartedAtMs = nowMs();
+
+    // Hyperdrive operates in transaction-pooling mode. A read-only session
+    // deliberately does not issue BEGIN/COMMIT, so return it normally; using
+    // release(true) here would discard a healthy pooled connection and can
+    // trigger the very recycle protocol error this boundary is designed to
+    // contain.
+    if (!this.transactionStarted) {
+      try {
+        if (!this.discardOnRelease) await this.client.query("RESET ALL");
+        await Promise.resolve(this.client.release());
+      } catch (error) {
+        await this.discardClient();
+        this.state = "released";
+        this.diagnosticTrace?.mark(`${this.diagnosticPrefix}read_only_release_discarded`);
+        return;
+      }
+      this.state = "released";
+      this.diagnosticTrace?.mark(`${this.diagnosticPrefix}read_only_release_completed`);
+      this.recordPoolMetric?.({
+        phase: 'released',
+        ...(this.poolSnapshot ? this.poolSnapshot() : { totalCount: 0, idleCount: 0, waitingCount: 0, activeCount: 0 }),
+        transactionOccupancyDurationMs: Number((releaseStartedAtMs - this.acquiredAtMs).toFixed(3)),
+        releaseDurationMs: Number((nowMs() - releaseStartedAtMs).toFixed(3))
+      });
+      return;
+    }
 
     // Hyperdrive can reject recycling a pg client even after COMMIT/ROLLBACK
     // has completed because its origin-side protocol state is not observable
@@ -210,7 +246,8 @@ export class PostgresTransactionDriver implements TransactionDriver {
     client: PoolClient,
     context: NonNullable<TransactionBeginOptions['trustedContext']>,
     diagnosticTrace?: { mark(stage: string): void; count?(name: string, increment?: number): void },
-    diagnosticPrefix = ''
+    diagnosticPrefix = '',
+    local = true
   ): Promise<void> {
     if (!context.tenantId || !context.schoolId) {
       throw new Error('Trusted tenant context is missing or invalid.');
@@ -234,7 +271,7 @@ export class PostgresTransactionDriver implements TransactionDriver {
         const settingIndex = index * 2 + 1;
         const valueIndex = settingIndex + 1;
         parameters.push(setting, value);
-        return `set_config($${settingIndex}, $${valueIndex}, true)`;
+        return `set_config($${settingIndex}, $${valueIndex}, ${local ? 'true' : 'false'})`;
       });
       await client.query(`SELECT ${expressions.join(', ')}`, parameters);
       diagnosticTrace?.count?.('contextCommands');
@@ -310,6 +347,68 @@ export class PostgresTransactionDriver implements TransactionDriver {
         } catch {
           // Never replace the begin error with a Hyperdrive cleanup error.
         }
+      }
+      throw error;
+    }
+  }
+
+  /**
+   * Runs a bounded read against Hyperdrive without opening an explicit
+   * transaction. Hyperdrive already pools in transaction mode; keeping a
+   * read-only connection out of an application BEGIN/COMMIT cycle avoids
+   * recycle races while preserving tenant RLS through session-local context
+   * that is cleared before the connection is returned.
+   */
+  public async beginReadOnly(options: TransactionBeginOptions): Promise<TransactionSession> {
+    const diagnosticPrefix = options.diagnosticPrefix || '';
+    const poolRequestedAtMs = nowMs();
+    const poolEventsBefore = this.poolConnectEvents;
+    options.diagnosticTrace?.mark(`${diagnosticPrefix}pool_connection_requested`);
+    options.diagnosticTrace?.recordPoolMetric?.({ phase: 'requested', ...this.poolSnapshot() });
+    const client = await this.pool.connect();
+    const poolAcquiredAtMs = nowMs();
+    options.diagnosticTrace?.mark(`${diagnosticPrefix}pool_connection_acquired`);
+    options.diagnosticTrace?.count?.('poolAcquisitions');
+    const acquisitionDurationMs = Number((poolAcquiredAtMs - poolRequestedAtMs).toFixed(3));
+    const connectionCreated = this.poolConnectEvents > poolEventsBefore;
+    options.diagnosticTrace?.recordPoolMetric?.({
+      phase: 'acquired',
+      ...this.poolSnapshot(),
+      acquisitionDurationMs,
+      waitDurationMs: connectionCreated ? 0 : acquisitionDurationMs,
+      connectionCreationDurationMs: connectionCreated ? acquisitionDurationMs : 0
+    });
+    const transactionId = options.transactionId || randomUUID();
+    try {
+      if (options.scope !== 'platform') {
+        const tenantRole = String(process.env.DATABASE_ROLE_EXPECTED || '').trim();
+        if (tenantRole && !/^[A-Za-z_][A-Za-z0-9_]*$/.test(tenantRole)) {
+          throw new Error('DATABASE_ROLE_EXPECTED contains an invalid PostgreSQL role name.');
+        }
+        if (tenantRole) await client.query(`SET ROLE "${tenantRole}"`);
+      }
+      if (options.trustedContext) {
+        await this.applyTrustedContext(client, options.trustedContext, options.diagnosticTrace, diagnosticPrefix, false);
+      }
+      if (options.timeoutMs && options.timeoutMs > 0) {
+        await client.query("SELECT set_config('statement_timeout', $1, false)", [String(options.timeoutMs)]);
+      }
+      return new PostgresTransactionSession(
+        transactionId,
+        client,
+        options.timeoutMs,
+        options.diagnosticTrace,
+        diagnosticPrefix,
+        () => this.poolSnapshot(),
+        options.diagnosticTrace?.recordPoolMetric,
+        poolAcquiredAtMs,
+        false
+      );
+    } catch (error) {
+      try {
+        await Promise.resolve(client.release(true));
+      } catch {
+        // Preserve the original setup/query error.
       }
       throw error;
     }

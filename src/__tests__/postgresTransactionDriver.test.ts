@@ -159,6 +159,32 @@ describe('PostgresTransactionDriver trusted context', () => {
     }
   });
 
+  it('keeps Hyperdrive read-only sessions outside an explicit transaction', async () => {
+    vi.stubEnv('EDUPRO_CLOUDFLARE_HYPERDRIVE', 'true');
+    try {
+      const { client, driver } = createDriverHarness();
+      const session = await driver.beginReadOnly({
+        transactionId: 'tx-hyperdrive-read-only',
+        tenantId: 'tenant-a',
+        schoolId: 'school-a',
+        operationName: 'read-only lifecycle test',
+        trustedContext: { tenantId: 'tenant-a', schoolId: 'school-a' }
+      });
+
+      await session.query('SELECT 1');
+      await session.commit();
+      await session.release();
+
+      const sql = client.query.mock.calls.map(([statement]) => String(statement));
+      expect(sql).not.toContain('BEGIN');
+      expect(sql).not.toContain('COMMIT');
+      expect(sql).not.toContain('ROLLBACK');
+      expect(client.release).toHaveBeenCalledWith();
+    } finally {
+      vi.unstubAllEnvs();
+    }
+  });
+
   it('samples real pool connections without returning secret fields', async () => {
     const client: any = {
       query: vi.fn(async (sql: string) => String(sql).includes('FROM pg_roles')

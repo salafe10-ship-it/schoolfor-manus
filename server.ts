@@ -12464,6 +12464,7 @@ export async function createApp(options: { cloudflare?: boolean } = {}): Promise
           userName: (req as any).user.name || 'المستخدم الحالي',
           ipAddress: req.ip || 'unknown',
           affectedTables: ['financial_portal_snapshots'],
+          readOnly: true,
           // Never allow a pooled/Hyperdrive read to hold the financial screen
           // open indefinitely. The client also has a deadline, but the
           // database transaction must enforce the same bounded contract.
@@ -12520,6 +12521,7 @@ export async function createApp(options: { cloudflare?: boolean } = {}): Promise
             userName: (req as any).user.name || 'المستخدم الحالي',
             ipAddress: req.ip || 'unknown',
             affectedTables: [...CANONICAL_ERP_TABLES],
+            readOnly: true,
             timeoutMs: 3_000,
           },
           async () => {

@@ -242,7 +242,7 @@ export class UnitOfWork {
    */
   public static async runInTransaction<T>(
     schoolId: string,
-    metadata: TransactionContext['metadata'] & { tenantId: string },
+    metadata: TransactionContext['metadata'] & { tenantId: string; readOnly?: boolean },
     work: () => Promise<T> | T,
     trustedContext?: NonNullable<TransactionContext['metadata']>['tenantContext']
   ): Promise<T> {
@@ -279,7 +279,12 @@ export class UnitOfWork {
             diagnosticTrace: metadata.diagnosticTrace,
             diagnosticPrefix: metadata.operationName === 'Canonical Student Read' ? 'student_' : metadata.operationName === 'TenantEngine authenticated lookup' ? 'tenant_' : undefined,
           };
-          context.databaseTransaction = await this.transactionDriver.begin(beginOptions);
+          const readOnlyDriver = this.transactionDriver as TransactionDriver & {
+            beginReadOnly?: TransactionDriver['begin'];
+          };
+          context.databaseTransaction = metadata.readOnly && readOnlyDriver.beginReadOnly
+            ? await readOnlyDriver.beginReadOnly(beginOptions)
+            : await this.transactionDriver.begin(beginOptions);
           metadata.diagnosticTrace?.mark(metadata.operationName === 'Canonical Student Read'
             ? 'student_transaction_acquired'
             : metadata.operationName === 'TenantEngine authenticated lookup'
