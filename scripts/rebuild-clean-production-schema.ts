@@ -34,6 +34,7 @@ const MIGRATIONS = [
   '202608201000_student_finance_module.sql',
   '202608241000_canonical_erp_financial_integration.sql',
   '202608241200_erp_financial_append_only_audit.sql',
+  '202609191200_financial_account_groups_cost_centers.sql',
   '202608251200_exams_database.sql',
   '202608251700_exams_result_archives.sql',
   '202608271500_hr_canonical_records.sql',

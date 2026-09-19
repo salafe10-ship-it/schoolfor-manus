@@ -55,6 +55,8 @@ export type CanonicalErpReadModel = {
   chartOfAccounts: Array<Record<string, unknown>>;
   expenseAccruals: Array<Record<string, unknown>>;
   sourceLinks: Array<{ sourceType: string; sourceId: string; journalEntryId: string }>;
+  accountGroups: Array<Record<string, unknown>>;
+  costCenters: Array<Record<string, unknown>>;
 };
 
 const DEFAULT_MAPPING: Record<string, string> = {
@@ -868,7 +870,7 @@ export class CanonicalErpPostingService {
     provisioned = false
   ): Promise<CanonicalErpReadModel> {
     if (!provisioned && !(await this.isProvisioned(transaction))) {
-      return { journalEntries: [], ledgerEntries: [], chartOfAccounts: [], expenseAccruals: [], sourceLinks: [] };
+      return { journalEntries: [], ledgerEntries: [], chartOfAccounts: [], expenseAccruals: [], sourceLinks: [], accountGroups: [], costCenters: [] };
     }
     // A transaction is backed by one checked-out PostgreSQL client. Issuing a
     // Promise.all against that client is unsupported by node-postgres, causes
@@ -931,6 +933,24 @@ export class CanonicalErpPostingService {
                 payable_account, status, journal_entry_id, created_at
            FROM public.erp_expense_accruals WHERE school_id = $1 ORDER BY accrual_date DESC, created_at DESC`, [schoolId]
       );
+    let accountGroups: any[] = [];
+    let costCenters: any[] = [];
+    try {
+      const groups = await db(transaction).query<any>(
+        `SELECT group_code, group_name, account_nature, parent_group_code, is_active
+           FROM public.erp_account_groups
+          WHERE school_id = $1 AND is_active = true ORDER BY group_code`, [schoolId]
+      );
+      accountGroups = groups.rows;
+      const centers = await db(transaction).query<any>(
+        `SELECT cost_center_code, cost_center_name, academic_stage_code, parent_cost_center_code, is_active
+           FROM public.erp_cost_centers
+          WHERE school_id = $1 AND is_active = true ORDER BY cost_center_code`, [schoolId]
+      );
+      costCenters = centers.rows;
+    } catch (error: any) {
+      if (String(error?.code || '') !== '42P01') throw error;
+    }
 
     const lineMap = new Map<string, any[]>();
     for (const line of lines.rows) {
@@ -999,6 +1019,8 @@ export class CanonicalErpPostingService {
       ledgerEntries: ledger.rows.map(row => ({ ...row, debit: Number(row.debit), credit: Number(row.credit), balanceAfter: Number(row.balance_after), costCenter: row.cost_center || deriveCostCenterFromClassReference(studentClassByJournal.get(row.journal_entry_id)) })),
       chartOfAccounts,
       expenseAccruals: accruals.rows.map(row => ({ ...row, amount: Number(row.amount) })),
+      accountGroups,
+      costCenters,
       sourceLinks
     };
   }

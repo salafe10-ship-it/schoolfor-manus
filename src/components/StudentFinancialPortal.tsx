@@ -584,6 +584,7 @@ export default function StudentFinancialPortal({
           if (res.data.receiptVouchers) setGlRvs(res.data.receiptVouchers);
           if (res.data.journalEntries) setGlJvs(res.data.journalEntries);
           if (res.data.chartOfAccounts) setChartOfAccounts(res.data.chartOfAccounts);
+          if (setCostCenters && Array.isArray(res.data.costCenters)) setCostCenters(res.data.costCenters);
           setExpenseAccruals(Array.isArray(res.data.expenseAccruals) ? res.data.expenseAccruals : []);
           setFinancialPersistence('ready');
           setFinancialPersistenceVersion(Number(res.meta?.version || 0));
@@ -595,6 +596,7 @@ export default function StudentFinancialPortal({
           setGlRvs([]);
           setGlJvs([]);
            setChartOfAccounts([]);
+           if (setCostCenters) setCostCenters([]);
            setFinancialInvoices([]);
            setInvoices([]);
            setFeeConfigs([]);
@@ -2737,6 +2739,7 @@ export default function StudentFinancialPortal({
       setGlRvs(data.receiptVouchers || []);
       setGlJvs(data.journalEntries || []);
        setChartOfAccounts(data.chartOfAccounts || []);
+       if (setCostCenters) setCostCenters(Array.isArray(data.costCenters) ? data.costCenters : []);
        setExpenseAccruals(Array.isArray(data.expenseAccruals) ? data.expenseAccruals : []);
       setFinancialPersistence('ready');
       setFinancialPersistenceVersion(Number(res.meta?.version || 0));
@@ -3436,7 +3439,7 @@ export default function StudentFinancialPortal({
           </div>
         </div>
       )}
-       <div id="student-financial-portal-layout" className="financial-workspace-layout flex flex-col lg:flex-row-reverse gap-4 w-full p-3 sm:p-4 text-right">
+       <div id="student-financial-portal-layout" className="financial-workspace-layout flex flex-col gap-4 w-full p-3 sm:p-4 text-right">
       
       {/* LEFT AREA: Content Window based on nested state */}
       <div id="financial-content-viewport" className="financial-content-viewport flex-1 bg-gradient-to-b from-[#fffefc] via-[#fbf8f0] to-[#f5eeea] border-2 border-[#d4af37]/30 hover:border-[#d4af37] rounded-3xl p-4 sm:p-5 shadow-md transition-all duration-300 overflow-hidden min-h-[550px] p-6">
@@ -6061,11 +6064,11 @@ export default function StudentFinancialPortal({
       {/* RIGHT SIDEBAR: Category Menu (matches design & color from uploaded image) */}
       <div 
         id="financial-sidebar-menu" 
-        className="financial-sidebar-menu w-full lg:w-80 text-white p-4 sm:p-5 flex flex-col justify-between shrink-0"
+        className="financial-sidebar-menu order-first w-full text-white p-3 sm:p-4 flex flex-col justify-between shrink-0"
       >
         <div className="space-y-6">
           {/* School identity card: the same compact control-room identity used by the main shell. */}
-          <div className="financial-sidebar-brand">
+          <div className="financial-sidebar-brand hidden">
             <div className="financial-sidebar-logo-row">
               <span className="financial-sidebar-logo-mark">EXAM</span>
               <span className="financial-sidebar-logo-name">SchoolForManus</span>
@@ -6089,13 +6092,13 @@ export default function StudentFinancialPortal({
           </div>
 
           {/* Menu title */}
-          <div className="financial-sidebar-heading">
+          <div className="financial-sidebar-heading hidden">
             <span>الرسوم والأقساط</span>
             <small>حسابات الطلاب</small>
           </div>
 
           {/* List of Navigation Buttons as in the image */}
-          <div className="financial-sidebar-nav">
+          <div className="financial-sidebar-nav flex flex-wrap items-center justify-start gap-2">
             {menuItems.map((item) => {
               const Icon = item.icon;
               const isActive = activeSubSec === item.id;

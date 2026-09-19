@@ -2523,8 +2523,23 @@ html:not(.dark) #super-admin-portal button:not(.bg-indigo-600):not(.bg-rose-600)
 }
 
 #student-financial-portal .financial-sidebar-nav {
-  display: grid;
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  justify-content: flex-start;
   gap: 0.45rem;
+}
+
+/* The application shell already owns the primary navigation. The financial
+   module navigation is therefore a compact in-content toolbar, never a
+   second vertical sidebar. */
+#student-financial-portal .financial-sidebar-menu {
+  min-height: auto;
+}
+
+#student-financial-portal .financial-sidebar-button {
+  flex: 0 1 auto;
+  min-height: 2.65rem;
 }
 
 #student-financial-portal .financial-sidebar-button {

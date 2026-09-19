@@ -12476,7 +12476,11 @@ export async function createApp(options: { cloudflare?: boolean } = {}): Promise
           erpJournalEntries: canonicalErpModel.journalEntries,
           erpLedgerEntries: canonicalErpModel.ledgerEntries,
           erpChartOfAccounts: canonicalErpModel.chartOfAccounts,
-          erpExpenseAccruals: canonicalErpModel.expenseAccruals
+          erpExpenseAccruals: canonicalErpModel.expenseAccruals,
+          accountGroups: canonicalErpModel.accountGroups,
+          costCenters: canonicalErpModel.costCenters,
+          erpAccountGroups: canonicalErpModel.accountGroups,
+          erpCostCenters: canonicalErpModel.costCenters
         };
       }
       EnterpriseLogger.info('Financial snapshot read completed', 'FinancialSnapshotRoute', {
