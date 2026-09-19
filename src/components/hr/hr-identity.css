@@ -62,6 +62,53 @@
   box-shadow: 0 7px 16px rgba(154, 106, 29, 0.24) !important;
 }
 
+/* The internal HR navigation follows the same dark/gold identity as the
+   student-affairs, fees, and accounting sidebars. Keep the content panes
+   light, but never render a competing light sidebar inside the workspace. */
+#hr-portal #hr-sidebar-menu {
+  background: linear-gradient(180deg, #2a1d13 0%, #1a100a 100%) !important;
+  border: 1px solid rgba(212, 175, 55, 0.42) !important;
+  border-radius: 1.15rem !important;
+  box-shadow: 0 16px 38px rgba(42, 29, 19, 0.18) !important;
+  color: #fff6d2 !important;
+}
+
+#hr-portal #hr-sidebar-menu h3,
+#hr-portal #hr-sidebar-menu .text-white,
+#hr-portal #hr-sidebar-menu .text-slate-100,
+#hr-portal #hr-sidebar-menu .text-slate-200,
+#hr-portal #hr-sidebar-menu .text-slate-300,
+#hr-portal #hr-sidebar-menu .text-slate-400,
+#hr-portal #hr-sidebar-menu .text-slate-500 {
+  color: #fff6d2 !important;
+}
+
+#hr-portal #hr-sidebar-menu .border-slate-800,
+#hr-portal #hr-sidebar-menu .border-slate-800\/60,
+#hr-portal #hr-sidebar-menu .border-slate-700 {
+  border-color: rgba(212, 175, 55, 0.28) !important;
+}
+
+#hr-portal #hr-sidebar-menu button {
+  background: rgba(26, 16, 10, 0.72) !important;
+  border-color: rgba(212, 175, 55, 0.32) !important;
+  box-shadow: none !important;
+  color: #fff6d2 !important;
+}
+
+#hr-portal #hr-sidebar-menu button:hover {
+  background: rgba(212, 175, 55, 0.16) !important;
+  border-color: rgba(247, 209, 116, 0.9) !important;
+  color: #fff6d2 !important;
+}
+
+#hr-portal #hr-sidebar-menu button.hr-nav-active {
+  background: linear-gradient(135deg, #9a6a1d, #d4af37) !important;
+  border-color: #f7d174 !important;
+  color: #1c120c !important;
+  box-shadow: 0 7px 16px rgba(154, 106, 29, 0.24) !important;
+}
+
 #hr-portal .hr-subtabs {
   background: linear-gradient(180deg, #fffefc, #f8f3ea) !important;
   border: 2px solid rgba(212, 175, 55, 0.28) !important;
