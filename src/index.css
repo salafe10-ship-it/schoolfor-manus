@@ -2561,6 +2561,77 @@ html:not(.dark) #super-admin-portal button:not(.bg-indigo-600):not(.bg-rose-600)
   box-shadow: 0 18px 40px rgba(29, 19, 11, 0.08);
 }
 
+/* Shared identity standard: the Student Affairs header is the visual source
+   of truth for module-owned headers and sidebars. Presentation only. */
+.edupro-identity-header,
+#student-financial-portal.financial-identity-unified .financial-module-header,
+#student-financial-portal > .financial-module-header,
+#general-ledger-portal > .financial-module-header,
+#hr-portal > .financial-module-header,
+#library-portal-container > .financial-module-header,
+#fixed-assets-portal > .financial-module-header,
+#inventory-portal > .financial-module-header,
+#procurement-management-portal > .financial-module-header {
+  background: linear-gradient(115deg, #1c120c 0%, #2d1e12 54%, #1a100a 100%) !important;
+  border: 1px solid rgba(212, 175, 55, .48) !important;
+  border-radius: 1.35rem !important;
+  box-shadow: 0 16px 42px rgba(42, 29, 19, .24) !important;
+}
+
+.enterprise-action-toolbar {
+  background: linear-gradient(115deg, #1c120c 0%, #2d1e12 54%, #1a100a 100%) !important;
+  border: 1px solid rgba(212, 175, 55, .48) !important;
+  border-radius: 1.35rem !important;
+  box-shadow: 0 16px 42px rgba(42, 29, 19, .24) !important;
+}
+
+#student-financial-portal.financial-identity-unified .financial-module-header,
+#student-financial-portal.financial-identity-unified .financial-module-header .text-white,
+#student-financial-portal.financial-identity-unified .financial-module-header .text-slate-300 {
+  color: #fff6d2 !important;
+}
+
+#financial-sidebar-menu,
+#ledger-sidebar-menu,
+#hr-sidebar-menu,
+#inventory-sidebar,
+#sa-sidebar {
+  background: linear-gradient(180deg, #2a1d13 0%, #1a100a 100%) !important;
+  border: 1px solid rgba(212, 175, 55, .42) !important;
+  border-radius: 1.15rem !important;
+  box-shadow: 0 16px 38px rgba(42, 29, 19, .18) !important;
+}
+
+#financial-sidebar-menu button,
+#ledger-sidebar-menu button,
+#hr-sidebar-menu button,
+#inventory-sidebar button,
+#sa-sidebar button {
+  border-radius: .8rem;
+  transition: background-color .2s ease, border-color .2s ease, color .2s ease, transform .2s ease;
+}
+
+#financial-sidebar-menu button:hover,
+#ledger-sidebar-menu button:hover,
+#hr-sidebar-menu button:hover,
+#inventory-sidebar button:hover,
+#sa-sidebar button:hover {
+  border-color: rgba(247, 209, 116, .9);
+  background-color: rgba(212, 175, 55, .12);
+  transform: translateX(-2px);
+}
+
+@media (max-width: 1023px) {
+  #financial-sidebar-menu,
+  #ledger-sidebar-menu,
+  #hr-sidebar-menu,
+  #inventory-sidebar,
+  #sa-sidebar {
+    width: 100% !important;
+    max-height: none;
+  }
+}
+
 #student-financial-portal .financial-sidebar-edit-state-blocked {
   color: #fecaca;
   border-color: rgba(248, 113, 113, 0.42);

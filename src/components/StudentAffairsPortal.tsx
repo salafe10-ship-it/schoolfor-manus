@@ -1731,7 +1731,7 @@ export default function StudentAffairsPortal({
       {/* ==========================================
           LUXURY GOLD METALLIC TOP HEADER
          ========================================== */}
-      <div className="bg-gradient-to-r from-[#1c120c] via-[#2d1e12] to-[#1a100a] text-white rounded-[24px] p-3 sm:p-3.5 border border-[#d4af37]/45 shadow-[0_16px_42px_rgba(42,29,19,0.24)] flex flex-wrap items-center justify-between gap-3 relative overflow-hidden">
+      <div className="edupro-identity-header bg-gradient-to-r from-[#1c120c] via-[#2d1e12] to-[#1a100a] text-white rounded-[24px] p-3 sm:p-3.5 border border-[#d4af37]/45 shadow-[0_16px_42px_rgba(42,29,19,0.24)] flex flex-wrap items-center justify-between gap-3 relative overflow-hidden">
         <div className="absolute top-0 right-1/4 w-80 h-16 bg-[#d4af37]/10 blur-3xl pointer-events-none" />
         
         {/* Module Title & Breadcrumbs */}
