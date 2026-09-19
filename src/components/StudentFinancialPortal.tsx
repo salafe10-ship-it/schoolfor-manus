@@ -3439,7 +3439,7 @@ export default function StudentFinancialPortal({
           </div>
         </div>
       )}
-       <div id="student-financial-portal-layout" className="financial-workspace-layout flex flex-col gap-4 w-full p-3 sm:p-4 text-right">
+       <div id="student-financial-portal-layout" className="financial-workspace-layout grid grid-cols-1 lg:grid-cols-[minmax(0,1fr)_16.5rem] gap-4 w-full p-3 sm:p-4 text-right">
       
       {/* LEFT AREA: Content Window based on nested state */}
       <div id="financial-content-viewport" className="financial-content-viewport flex-1 bg-gradient-to-b from-[#fffefc] via-[#fbf8f0] to-[#f5eeea] border-2 border-[#d4af37]/30 hover:border-[#d4af37] rounded-3xl p-4 sm:p-5 shadow-md transition-all duration-300 overflow-hidden min-h-[550px] p-6">
@@ -6064,7 +6064,7 @@ export default function StudentFinancialPortal({
       {/* RIGHT SIDEBAR: Category Menu (matches design & color from uploaded image) */}
       <div 
         id="financial-sidebar-menu" 
-        className="financial-sidebar-menu order-first w-full text-white p-3 sm:p-4 flex flex-col justify-between shrink-0"
+        className="financial-sidebar-menu order-first w-full lg:w-[16.5rem] text-white p-3 sm:p-4 flex flex-col justify-between shrink-0"
       >
         <div className="space-y-6">
           {/* School identity card: the same compact control-room identity used by the main shell. */}
@@ -6098,7 +6098,7 @@ export default function StudentFinancialPortal({
           </div>
 
           {/* List of Navigation Buttons as in the image */}
-          <div className="financial-sidebar-nav flex flex-wrap items-center justify-start gap-2">
+          <div className="financial-sidebar-nav flex flex-col items-stretch justify-start gap-2">
             {menuItems.map((item) => {
               const Icon = item.icon;
               const isActive = activeSubSec === item.id;
