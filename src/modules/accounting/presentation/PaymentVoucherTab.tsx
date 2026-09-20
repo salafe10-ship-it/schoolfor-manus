@@ -115,6 +115,7 @@ export const PaymentVoucherTab = () => {
     }));
   }, [activeAccountingStages, paymentVoucherForm.costCenter, paymentVoucherForm.stage, setPaymentVoucherForm]);
   const ledgerPostingReady = canonicalFinancialWriteMode === 'ledger_ready' || canonicalFinancialWriteMode === 'erp_integrated';
+  const financialWritesLocked = import.meta.env.VITE_FINANCIAL_WRITES_ENABLED !== 'true';
   const snapshotWriteReady = canonicalFinancialWriteMode === 'snapshot_write';
   const canonicalWriteReady = canonicalFinancialStatus === 'ready'
     && (ledgerPostingReady || snapshotWriteReady)
@@ -127,6 +128,11 @@ export const PaymentVoucherTab = () => {
 
   const handleAddPaymentVoucher = async (e: React.FormEvent) => {
     e.preventDefault();
+
+    if (financialWritesLocked) {
+      triggerNotification('الكتابة المالية مقفلة حتى اعتماد دورة السندات ومحرك دفتر الأستاذ.', 'warning');
+      return;
+    }
 
     if (!canonicalWriteReady) {
       triggerNotification('تعذر اعتماد سند الصرف: المصدر الحالي snapshot للقراءة فقط، ولم تعتمد خدمة دفتر الأستاذ الكانونية.', 'warning');
@@ -174,7 +180,7 @@ export const PaymentVoucherTab = () => {
       attachmentName: paymentVoucherForm.attachmentName,
       notes: paymentVoucherForm.notes,
       user: 'سليمان غازي',
-      status: 'معتمد',
+      status: 'draft',
       financialPeriod: 'السنة المالية 2026',
       createdAt: new Date().toLocaleDateString('ar-LY') + ' ' + new Date().toLocaleTimeString('ar-LY'),
       journalEntryId: jvId
@@ -189,7 +195,7 @@ export const PaymentVoucherTab = () => {
       creditSum: amt,
       debitTotal: amt,
       creditTotal: amt,
-      status: 'مرحل',
+      status: 'مسودة',
       isSystemGenerated: true,
       stage: paymentVoucherForm.stage,
       paymentVoucherId: pvId,

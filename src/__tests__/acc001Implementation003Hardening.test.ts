@@ -57,6 +57,12 @@ describe('ACC-001-IMPLEMENTATION-003 accounting hardening', () => {
     expect(journal).toContain('guardJournalWrite(\'اعتماد القيد\')');
     expect(receipt).toContain('إلغاء سند القبض متوقف: المصدر للقراءة فقط');
     expect(payment).toContain('إلغاء سند الصرف متوقف: المصدر للقراءة فقط');
+    expect(receipt).toContain('const financialWritesLocked = import.meta.env.VITE_FINANCIAL_WRITES_ENABLED !== \'true\';');
+    expect(payment).toContain('const financialWritesLocked = import.meta.env.VITE_FINANCIAL_WRITES_ENABLED !== \'true\';');
+    expect(receipt).toContain("status: 'draft'");
+    expect(payment).toContain("status: 'draft'");
+    expect(receipt).toContain("status: 'مسودة'");
+    expect(payment).toContain("status: 'مسودة'");
   });
 
   it('keeps read-only report and closing claims explicitly unverified', () => {

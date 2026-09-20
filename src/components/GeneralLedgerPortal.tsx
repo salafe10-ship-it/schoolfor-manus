@@ -19,6 +19,7 @@ import { EstimatedBudgetTab } from '../modules/accounting/presentation/Estimated
 import { ClosingTab } from '../modules/accounting/presentation/ClosingTab';
 import { FinancialReportsTab } from '../modules/accounting/presentation/FinancialReportsTab';
 import { CalcToolsTab } from '../modules/accounting/presentation/CalcToolsTab';
+import { buildAccountingDimensions } from '../modules/accounting/domain/accountingDimensions';
 export { AccountingContext };
 export type { AccountNode };
 
@@ -3045,14 +3046,15 @@ export default function GeneralLedgerPortal({
             </div>
             {Array.isArray(costCenters) && costCenters.length > 0 ? (
               <div className="grid gap-4 md:grid-cols-2 xl:grid-cols-3">
-                {costCenters.filter((center: any) => center?.isActive !== false).map((center: any) => (
-                  <article key={center.id} className="rounded-2xl border border-slate-200 bg-white p-5 shadow-sm">
+                {buildAccountingDimensions(stages || [], costCenters || []).map((center: any) => (
+                  <article key={center.key} className="rounded-2xl border border-slate-200 bg-white p-5 shadow-sm">
                     <div className="flex items-center justify-between gap-3">
-                      <span className="rounded-lg bg-amber-50 px-2 py-1 font-mono text-xs font-black text-amber-800">{center.code || center.id}</span>
-                      <span className="text-[10px] font-bold text-emerald-700">نشط</span>
+                      <span className="rounded-lg bg-amber-50 px-2 py-1 font-mono text-xs font-black text-amber-800">CC_{center.key.toUpperCase()}</span>
+                      <span className="text-[10px] font-bold text-emerald-700">نشط ومربوط</span>
                     </div>
-                    <h3 className="mt-4 text-base font-black text-slate-900">{center.name || center.nameAr || 'مركز غير مسمى'}</h3>
-                    <p className="mt-2 text-xs text-slate-500">{center.parentCostCenterId ? `يتبع: ${center.parentCostCenterId}` : 'مركز رئيسي'}</p>
+                    <h3 className="mt-4 text-base font-black text-slate-900">{center.name}</h3>
+                    <p className="mt-2 text-xs text-slate-500">المرحلة المرتبطة: <strong>{center.stageName || 'غير مرتبطة'}</strong></p>
+                    <p className="mt-1 text-[11px] text-slate-400">يستخدم تلقائيًا في القيود والسندات والتقارير.</p>
                   </article>
                 ))}
               </div>

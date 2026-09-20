@@ -114,6 +114,7 @@ export const ReceiptVoucherTab = () => {
     }
   }, [activeAccountingStages, receiptVoucherForm.costCenter, receiptVoucherForm.stage, setReceiptVoucherForm]);
   const ledgerPostingReady = canonicalFinancialWriteMode === 'ledger_ready' || canonicalFinancialWriteMode === 'erp_integrated';
+  const financialWritesLocked = import.meta.env.VITE_FINANCIAL_WRITES_ENABLED !== 'true';
   const snapshotWriteReady = canonicalFinancialWriteMode === 'snapshot_write';
   const canonicalWriteReady = canonicalFinancialStatus === 'ready'
     && (ledgerPostingReady || snapshotWriteReady)
@@ -149,6 +150,11 @@ export const ReceiptVoucherTab = () => {
 
   const handleAddReceiptVoucher = async () => {
     const submitted = receiptFormRef.current ? new FormData(receiptFormRef.current) : null;
+
+    if (financialWritesLocked) {
+      triggerNotification('الكتابة المالية مقفلة حتى اعتماد دورة السندات ومحرك دفتر الأستاذ.', 'warning');
+      return;
+    }
 
     if (typeof persistCanonicalFinancialSnapshot !== 'function' || !ledgerPostingReady) {
       triggerNotification('تعذر اعتماد سند القبض: الكاتب الكانوني غير متاح في جلسة الحسابات الحالية.', 'warning');
@@ -211,7 +217,7 @@ export const ReceiptVoucherTab = () => {
       attachmentName: receiptVoucherForm.attachmentName,
       notes: receiptVoucherForm.notes,
       user: 'سليمان غازي',
-      status: ledgerPostingReady ? 'posted' : 'approved',
+      status: 'draft',
       financialPeriod: 'السنة المالية 2026',
       createdAt: new Date().toLocaleDateString('ar-LY') + ' ' + new Date().toLocaleTimeString('ar-LY'),
       journalEntryId: jvId
@@ -226,7 +232,7 @@ export const ReceiptVoucherTab = () => {
       creditSum: amt,
       debitTotal: amt,
       creditTotal: amt,
-      status: 'مرحل',
+      status: 'مسودة',
       isSystemGenerated: true,
       receiptVoucherId: rvId,
       lines: [
