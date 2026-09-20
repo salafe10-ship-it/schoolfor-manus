@@ -589,7 +589,7 @@ const handlePrintPV = (pv: any) => {
 
             <div className="grid grid-cols-1 lg:grid-cols-12 gap-6">
               {/* Left Side: Create Payment Form */}
-              <div className="lg:col-span-7 bg-white p-6 rounded-xl border border-slate-200 shadow-xs">
+              <div className="lg:col-span-12 bg-white p-6 rounded-xl border border-slate-200 shadow-xs">
                 <div className="flex items-center gap-2 mb-4 text-rose-700 pb-3 border-b border-slate-100">
                   <Coins className="w-5 h-5 text-rose-600" />
                   <span className="font-black text-sm">إنشاء سند صرف مالي جديد</span>
@@ -833,7 +833,7 @@ const handlePrintPV = (pv: any) => {
               </div>
 
               {/* Right Side: Informational Widget & Guidelines */}
-              <div className="lg:col-span-5 space-y-6">
+              <div className="hidden lg:col-span-5 space-y-6" aria-hidden="true">
                 <div className="bg-slate-50 text-slate-800 p-6 rounded-xl shadow-xs border border-slate-200 space-y-4">
                   <div className="flex items-center gap-2 pb-2 border-b border-slate-200 text-rose-700">
                     <ShieldAlert className="w-5 h-5 text-rose-600" />
