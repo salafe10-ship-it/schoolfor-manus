@@ -214,7 +214,8 @@ export const ReceiptVoucherTab = () => {
       receivableAccount: creditAccountCode === '1201' ? creditAccountCode : undefined,
       amount: amt,
       against: receiptVoucherForm.against,
-      attachmentName: receiptVoucherForm.attachmentName,
+      // Attachments are intentionally out of scope for the client workflow.
+      attachmentName: undefined,
       notes: receiptVoucherForm.notes,
       user: 'سليمان غازي',
       status: 'draft',
@@ -841,7 +842,7 @@ const handlePrintRV = (rv: any) => {
                   </div>
 
                   {/* Drag and Drop File Upload Container */}
-                  <div className="space-y-1">
+                  <div className="hidden" aria-hidden="true">
                     <label className="block text-slate-700 font-bold mb-1">إرفاق مستند أو إشعار البنك (اختياري):</label>
                     <div 
                       onDragOver={(e) => { e.preventDefault(); e.currentTarget.classList.add('border-emerald-500', 'bg-emerald-50/50'); }}

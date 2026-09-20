@@ -178,7 +178,8 @@ export const PaymentVoucherTab = () => {
       amount: amt,
       against: paymentVoucherForm.against,
       paymentMethod: paymentVoucherForm.paymentMethod,
-      attachmentName: paymentVoucherForm.attachmentName,
+      // Attachments are intentionally out of scope for the client workflow.
+      attachmentName: undefined,
       notes: paymentVoucherForm.notes,
       user: 'سليمان غازي',
       status: 'draft',
@@ -747,7 +748,7 @@ const handlePrintPV = (pv: any) => {
                   </div>
 
                   {/* Drag and Drop File Upload Container for Payments */}
-                  <div className="space-y-1">
+                  <div className="hidden" aria-hidden="true">
                     <label className="block text-slate-700 font-bold mb-1">إرفاق الفاتورة أو إيصال استلام المستفيد (اختياري):</label>
                     <div 
                       onDragOver={(e) => { e.preventDefault(); e.currentTarget.classList.add('border-rose-500', 'bg-rose-50/50'); }}
