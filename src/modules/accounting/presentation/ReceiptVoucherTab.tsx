@@ -23,7 +23,7 @@ export const ReceiptVoucherTab = () => {
   const {
   activeTab, setActiveTab, activeSidebarItem, setActiveSidebarItem,
   refreshing, setRefreshing, currency, setCurrency, activeSaving, setActiveSaving,
-  stages, costCenters,
+  stages, costCenters, students,
   simAmount, setSimAmount, simCostCenter, setSimCostCenter, isStrictEnforcement, setIsStrictEnforcement,
   accounts, setAccounts, suppliers, setSuppliers, journalEntries, setJournalEntries,
   showAddAccountModal, setShowAddAccountModal, newAccount, setNewAccount,
@@ -101,6 +101,10 @@ export const ReceiptVoucherTab = () => {
     const center = (Array.isArray(costCenters) ? costCenters : []).find((item: any) => [item.id, item.code, item.costCenterId].some((entry: any) => normalizeAccountingDimension(entry) === normalized));
     return center?.name || center?.nameAr || normalized;
   };
+  const studentNameOf = (student: any) => String(student?.fullName || student?.name || [student?.firstName, student?.middleName, student?.lastName].filter(Boolean).join(' ') || student?.studentName || '').trim();
+  const studentStageOf = (student: any) => String(student?.stageName || student?.stage || student?.schoolStage || student?.educationStage || '').trim();
+  const searchableStudents = (Array.isArray(students) ? students : []).filter((student: any) => studentNameOf(student));
+  const selectedStudent = searchableStudents.find((student: any) => studentNameOf(student) === String(receiptVoucherForm.receivedFrom || '').trim());
   React.useEffect(() => {
     if (activeAccountingStages.length === 0) return;
     if (activeAccountingStages.some((stage: any) => String(stage.name || stage.type || stage.id) === String(receiptVoucherForm.stage || ''))) return;
@@ -676,7 +680,7 @@ const handlePrintRV = (rv: any) => {
                   className="space-y-4"
                 >
                   <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
-                    <div>
+                    <div className="hidden">
                       <label className="block text-slate-700 font-bold mb-1">المدرسة والموقع:</label>
                       <select 
                         value={receiptVoucherForm.school}
@@ -702,22 +706,39 @@ const handlePrintRV = (rv: any) => {
                   </div>
 
                   <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+                    <div className="md:col-span-2">
+                      <label className="block text-slate-700 font-bold mb-1">اسم الطالب:</label>
+                      <input
+                        type="search"
+                        list="accounting-students-list"
+                        value={receiptVoucherForm.receivedFrom}
+                        required
+                        autoComplete="off"
+                        onChange={(e) => {
+                          const value = e.target.value;
+                          const student = searchableStudents.find((item: any) => studentNameOf(item) === value);
+                          const studentStage = studentStageOf(student);
+                          const linkedStage = activeAccountingStages.find((stage: any) => [stage.name, stage.type, stage.id].some((entry: any) => String(entry || '').trim() === studentStage));
+                          setReceiptVoucherForm((prev: any) => linkedStage ? ({ ...prev, receivedFrom: value, stage: linkedStage.name || linkedStage.type || linkedStage.id, costCenter: stageCostCenterKey(linkedStage), studentId: student?.id || student?.studentId }) : ({ ...prev, receivedFrom: value, studentId: student?.id || student?.studentId }));
+                        }}
+                        className="w-full bg-white border-2 border-emerald-200 rounded-lg p-3 text-base font-bold focus:outline-none focus:ring-2 focus:ring-emerald-500"
+                        placeholder="اضغط واكتب للبحث في سجل الطلاب"
+                      />
+                      <datalist id="accounting-students-list">
+                        {searchableStudents.slice(0, 300).map((student: any) => <option key={student.id || student.studentId || studentNameOf(student)} value={studentNameOf(student)} />)}
+                      </datalist>
+                      {selectedStudent && <p className="mt-1 text-xs font-bold text-emerald-700">تم اختيار الطالب من سجل شؤون الطلاب — المرحلة مرتبطة تلقائيًا.</p>}
+                    </div>
+                  </div>
+
+                  <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
                     <div>
                       <label className="block text-slate-700 font-bold mb-1">المرحلة التعليمية:</label>
                       <select 
                         value={receiptVoucherForm.stage}
-                        onChange={(e) => {
-                           const val = e.target.value;
-                           const selectedStage = activeAccountingStages.find((stage: any) => String(stage.name || stage.type || stage.id) === val);
-                           let cc = selectedStage ? stageCostCenterKey(selectedStage) : 'primary';
-                           if (!selectedStage) {
-                             if (val === 'الروضة') cc = 'kindergarten';
-                             if (val === 'المتوسط') cc = 'middle';
-                             if (val === 'الثانوي') cc = 'secondary';
-                           }
-                           setReceiptVoucherForm(prev => ({ ...prev, stage: val, costCenter: cc }));
-                         }}
-                        className="w-full bg-slate-50 border border-slate-200 rounded-lg p-2.5 font-bold focus:outline-none"
+                        disabled
+                        aria-readonly="true"
+                        className="w-full bg-slate-200 text-slate-700 border border-slate-300 rounded-lg p-3 text-base font-bold cursor-not-allowed"
                       >
                          {activeAccountingStages.length > 0 ? activeAccountingStages.map((stage: any) => (
                            <option key={stage.id || stage.code} value={stage.name || stage.type || stage.id}>{stage.name || stage.type || stage.id}</option>
@@ -746,7 +767,7 @@ const handlePrintRV = (rv: any) => {
                   </div>
 
                   <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
-                    <div>
+                    <div className="hidden">
                       <label className="block text-slate-700 font-bold mb-1">اسم الطالب أو الجهة المقبوض منها:</label>
                       <input 
                         type="text" 
@@ -754,7 +775,7 @@ const handlePrintRV = (rv: any) => {
                         required
                         value={receiptVoucherForm.receivedFrom}
                         onChange={(e) => setReceiptVoucherForm(prev => ({ ...prev, receivedFrom: e.target.value }))}
-                        className="w-full bg-slate-50 border border-slate-200 rounded-lg p-2.5 font-bold focus:outline-none focus:ring-1 focus:ring-emerald-500"
+                        className="hidden"
                         placeholder="اكتب اسم ولي الأمر أو الطالب بالكامل"
                       />
                     </div>
