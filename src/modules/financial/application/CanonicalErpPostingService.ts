@@ -372,10 +372,6 @@ export class CanonicalErpPostingService {
     );
     const available = new Set(result.rows.map(row => row.table_name));
     if (!CANONICAL_ERP_TABLES.every(table => available.has(table))) return false;
-    await db(transaction).query(
-      `ALTER TABLE public.erp_journal_entries
-         ADD COLUMN IF NOT EXISTS source_payload jsonb NOT NULL DEFAULT '{}'::jsonb`
-    );
     return true;
   }
 
