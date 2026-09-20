@@ -12867,13 +12867,21 @@ export async function createApp(options: { cloudflare?: boolean } = {}): Promise
           }
           canonicalErpReady = await CanonicalErpPostingService.isProvisioned(transaction);
           if (canonicalErpReady) {
-            canonicalErpSync = await CanonicalErpPostingService.syncSnapshot(
-              transaction,
-              tenantId,
-              schoolId,
-              databaseActorId,
-              payload
-            );
+            canonicalErpSync = studentFinanceProjectionChanged
+              ? await CanonicalErpPostingService.syncSnapshot(
+                transaction,
+                tenantId,
+                schoolId,
+                databaseActorId,
+                payload
+              )
+              : await CanonicalErpPostingService.syncChartOfAccountsOnly(
+                transaction,
+                tenantId,
+                schoolId,
+                databaseActorId,
+                payload
+              );
             const postedReceiptIds = [
               ...(Array.isArray(payload.studentReceiptVouchers) ? payload.studentReceiptVouchers : []),
               ...(Array.isArray(payload.receiptVouchers) ? payload.receiptVouchers : [])

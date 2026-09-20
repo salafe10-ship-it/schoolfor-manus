@@ -803,6 +803,32 @@ export class CanonicalErpPostingService {
     return { createdJournalCount, existingJournalCount, ledgerLineCount, expenseAccrualCount, sourceLinks };
   }
 
+  /**
+   * Persists chart-of-accounts changes without traversing student-fee or
+   * voucher documents. This keeps an account-tree save atomic while avoiding
+   * unrelated projection/mapping work that can invalidate an otherwise valid
+   * chart edit.
+   */
+  public static async syncChartOfAccountsOnly(
+    transaction: TransactionLike,
+    tenantId: string,
+    schoolId: string,
+    actorId: string,
+    payload: FinancialRow
+  ): Promise<CanonicalErpSyncResult> {
+    if (!(await this.isProvisioned(transaction))) {
+      throw new Error('المخطط المحاسبي الكانوني غير مثبت؛ طبّق ترحيل ERP المالي قبل التفعيل.');
+    }
+    await this.ensureChartAccounts(transaction, tenantId, schoolId, actorId, payload);
+    await db(transaction).query(
+      `INSERT INTO public.erp_financial_audit_events
+        (tenant_id, school_id, operation, entity_type, entity_id, actor_user_id, after_payload)
+       VALUES ($1::uuid, $2::uuid, 'CANONICAL_ERP_CHART_SYNC', 'erp_chart_of_accounts', NULL, $3::uuid, $4::jsonb)`,
+      [tenantId, schoolId, actorId, JSON.stringify({ accountCount: Array.isArray(payload.chartOfAccounts) ? payload.chartOfAccounts.length : 0 })]
+    );
+    return { createdJournalCount: 0, existingJournalCount: 0, ledgerLineCount: 0, expenseAccrualCount: 0, sourceLinks: [] };
+  }
+
   /** Creates an immutable compensating journal for a posted canonical entry. */
   public static async reverseJournal(
     transaction: TransactionLike,
