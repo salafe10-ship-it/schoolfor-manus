@@ -12640,15 +12640,14 @@ export async function createApp(options: { cloudflare?: boolean } = {}): Promise
         receiptVoucherId: row.receipt_voucher_id,
         sourcePayload: row.source_payload,
       }));
-      // The first financial paint must never open a Hyperdrive transaction.
-      // Hyperdrive can reject recycling a read session that still carries
-      // transaction state; treating optional ERP enrichment as part of this
-      // request therefore turns an otherwise valid Supabase fee read into a
-      // 500. The authoritative snapshot, invoices and receipts above are
-      // sufficient for the read model. Ledger enrichment remains available
-      // through its dedicated accounting routes, while all writes continue
-      // through the canonical transaction boundary.
-      canonicalErpReady = false;
+      // The read path uses the direct Supabase channel and must not open a
+      // Hyperdrive transaction merely to enrich the first paint. The explicit
+      // production mode is the deployment-level readiness signal; every
+      // mutation route still calls isProvisioned(transaction) inside its own
+      // PostgreSQL transaction and fails closed if the canonical schema is
+      // missing. This keeps the UI mode aligned with the reviewed deployment
+      // without weakening write-time schema validation.
+      canonicalErpReady = process.env.FINANCIAL_ERP_MODE === 'canonical';
       canonicalErpModel = null;
       (req as any).financialErpReady = canonicalErpReady;
       const snapshotData = snapshot?.data || {};
