@@ -12641,6 +12641,11 @@ export async function createApp(options: { cloudflare?: boolean } = {}): Promise
         idempotencyKey: row.idempotency_key,
         version: row.version,
       }));
+      const canonicalChartOfAccounts = (chartResult.data || []).map((row: any) => ({
+        id: row.account_code, code: row.account_code, name: row.account_name, nameAr: row.account_name,
+        nature: row.account_nature, classification: row.account_nature, isActive: row.is_active !== false,
+        isLeaf: row.is_leaf !== false, type: row.is_leaf === false ? 'رئيسي' : 'فرعي', balance: 0
+      }));
       canonicalFeeReceipts = (receiptResult.data || []).map((row: any) => ({
         id: row.id,
         studentId: row.student_id,
@@ -12655,18 +12660,6 @@ export async function createApp(options: { cloudflare?: boolean } = {}): Promise
         journalEntryId: row.journal_entry_id,
         receiptVoucherId: row.receipt_voucher_id,
         sourcePayload: row.source_payload,
-      }));
-      const canonicalChartOfAccounts = (chartResult.data || []).map((row: any) => ({
-        id: row.account_code,
-        code: row.account_code,
-        name: row.account_name,
-        nameAr: row.account_name,
-        nature: row.account_nature,
-        classification: row.account_nature,
-        isActive: row.is_active !== false,
-        isLeaf: row.is_leaf !== false,
-        type: row.is_leaf === false ? 'رئيسي' : 'فرعي',
-        balance: 0,
       }));
       // The read path uses the direct Supabase channel and must not open a
       // Hyperdrive transaction merely to enrich the first paint. The explicit
