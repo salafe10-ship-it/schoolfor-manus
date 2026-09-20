@@ -555,14 +555,14 @@ const handleDrillDownToOriginalDocument = (jv: any) => {
                 <div className="flex items-center justify-between border-b border-slate-100 pb-2.5">
                   <div className="flex items-center gap-1.5 text-slate-900 font-black">
                     <Settings className="w-4 h-4 text-blue-600 animate-pulse" />
-                    <span>محددات الفلترة والتحكم بالتقارير (خيارات تصفية متعددة الأبعاد)</span>
+                    <span>فلاتر التقارير</span>
                   </div>
                   <div className="text-[10px] bg-slate-100 text-slate-600 px-2.5 py-1 rounded-full font-mono">
                     {reportsAreCanonical ? 'مطابقة مع الدليل المحاسبي ومعتمدة من الرقابة المالية 🔐' : 'نسخة عرض من snapshot — غير معتمدة للرقابة أو الإقفال'}
                   </div>
                 </div>
 
-                <div className="grid grid-cols-1 sm:grid-cols-2 md:grid-cols-4 lg:grid-cols-4 gap-4">
+                <div className="grid grid-cols-1 sm:grid-cols-2 md:grid-cols-4 gap-2.5">
                   {/* السنة المالية */}
                   <div className="space-y-1">
                     <label className="block text-slate-600 font-bold">السنة المالية</label>
@@ -578,11 +578,11 @@ const handleDrillDownToOriginalDocument = (jv: any) => {
 
                   {/* الفترة المالية */}
                   <div className="space-y-1">
-                    <label className="block text-slate-600 font-bold">الفترة المالية الاختيارية</label>
+                    <label className="block text-slate-600 font-bold">الفترة المالية</label>
                     <select
                       value={filterAccountingPeriod}
                       onChange={(e) => handlePeriodChange(e.target.value)}
-                      className="w-full bg-slate-50 border border-slate-200 rounded-lg px-2.5 py-2 text-slate-800 font-medium focus:outline-none focus:ring-1 focus:ring-blue-500 cursor-pointer text-xs"
+                      className="w-full bg-slate-50 border border-slate-200 rounded-lg px-2 py-1.5 text-slate-800 font-medium focus:outline-none focus:ring-1 focus:ring-blue-500 cursor-pointer text-xs"
                     >
                       <option value="full">الدورة التشغيلية الكاملة 2026</option>
                       <option value="q1">الربع الأول Q1 (يناير - مارس)</option>
@@ -599,7 +599,7 @@ const handleDrillDownToOriginalDocument = (jv: any) => {
                       type="date"
                       value={filterFromDate}
                       onChange={(e) => setFilterFromDate(e.target.value)}
-                      className="w-full bg-slate-50 border border-slate-200 rounded-lg px-2.5 py-2 text-slate-800 focus:outline-none focus:ring-1 focus:ring-blue-500 text-xs font-mono"
+                      className="w-full bg-slate-50 border border-slate-200 rounded-lg px-2 py-1.5 text-slate-800 focus:outline-none focus:ring-1 focus:ring-blue-500 text-xs font-mono"
                     />
                   </div>
 
@@ -610,13 +610,13 @@ const handleDrillDownToOriginalDocument = (jv: any) => {
                       type="date"
                       value={filterToDate}
                       onChange={(e) => setFilterToDate(e.target.value)}
-                      className="w-full bg-slate-50 border border-slate-200 rounded-lg px-2.5 py-2 text-slate-800 focus:outline-none focus:ring-1 focus:ring-blue-500 text-xs font-mono"
+                      className="w-full bg-slate-50 border border-slate-200 rounded-lg px-2 py-1.5 text-slate-800 focus:outline-none focus:ring-1 focus:ring-blue-500 text-xs font-mono"
                     />
                   </div>
 
                   {/* مركز التكلفة */}
                   <div className="space-y-1">
-                    <label className="block text-slate-600 font-bold">مركز التكلفة (مطابق لشجرة المراكز والصفوف)</label>
+                    <label className="block text-slate-600 font-bold">مركز التكلفة</label>
                     <select
                       value={filterCostCenter}
                       onChange={(e) => setFilterCostCenter(e.target.value)}
