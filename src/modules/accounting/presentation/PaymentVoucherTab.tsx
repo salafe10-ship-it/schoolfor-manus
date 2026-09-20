@@ -2,6 +2,7 @@ import { Check, Coins, FileText, Printer, Search, ShieldAlert, Trash2, Upload, X
 import React from 'react';
 import { AccountingContext } from '../../../components/GeneralLedgerPortal';
 import { EnterpriseAuditLogger } from '../../../utils/EnterpriseAuditLogger';
+import { authenticatedRequest } from '../../../utils/authenticatedRequest';
 
 const VOUCHER_STAGE_LABELS: Record<string, string> = {
   kindergarten: 'الروضة',
@@ -235,8 +236,29 @@ export const PaymentVoucherTab = () => {
     const updatedPvs = [newPv, ...paymentVouchers];
     const updatedJvs = [newJv, ...journalEntries];
 
-    // 4. Never fall back to localStorage for a financial voucher.
+    // 4. Route any ledger-ready payment through the same canonical journal API
+    // used by receipts. Snapshot persistence remains an isolated UAT projection.
     try {
+      if (ledgerPostingReady) {
+        const requestInit: RequestInit = {
+          method: 'POST',
+          headers: { 'Accept': 'application/json', 'Content-Type': 'application/json' },
+          body: JSON.stringify(newPv)
+        };
+        let canonicalResponse: Response;
+        try {
+          canonicalResponse = await authenticatedRequest('/api/financial/payments/post', requestInit);
+        } catch (authError) {
+          canonicalResponse = await fetch('/api/financial/payments/post', { ...requestInit, credentials: 'include' });
+          if (!canonicalResponse.ok && authError) throw authError;
+        }
+        const canonicalResult = await canonicalResponse.json().catch(() => ({}));
+        if (!canonicalResponse.ok || !canonicalResult.success || !canonicalResult.data?.journalId) {
+          throw new Error(canonicalResult.message || canonicalResult.error?.message || canonicalResult.error || 'تعذر إثبات القيد الكانوني لسند الصرف.');
+        }
+        newPv.journalEntryId = canonicalResult.data.journalId;
+        newJv.id = canonicalResult.data.journalId;
+      }
       await persistCanonicalFinancialSnapshot({
         paymentVouchers: updatedPvs,
         journalEntries: updatedJvs,

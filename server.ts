@@ -11224,6 +11224,47 @@ export async function createApp(options: { cloudflare?: boolean } = {}): Promise
     }
   });
 
+  app.post("/api/financial/payments/post", authenticateRequest, requirePermission(PERMISSIONS.FINANCIAL_WRITE), async (req, res, next) => {
+    try {
+      const user = (req as any).user;
+      const schoolId = String(user.schoolId || '').trim();
+      const tenantId = String(user.tenantId || '').trim();
+      const actorId = String(user.id || '').trim();
+      const tenantContext = (req as any).tenantContext;
+      if (!schoolId || !tenantId || !actorId || !tenantContext
+        || tenantContext.tenantId !== tenantId || tenantContext.schoolId !== schoolId) {
+        throw new AuthenticationError('السياق المالي الموثوق غير مكتمل.');
+      }
+      if (!transactionDriver) throw new DatabaseError('ترحيل سند الصرف يتطلب اتصال PostgreSQL.');
+      const voucher = req.body && typeof req.body === 'object' && !Array.isArray(req.body) ? req.body : {};
+      const document = buildCanonicalPosting('payment_voucher', { ...voucher, status: 'posted' });
+      if (!document) throw new ValidationError('سند الصرف غير صالح للترحيل.');
+      let result: Awaited<ReturnType<typeof CanonicalErpPostingService.syncSnapshot>>;
+      await UnitOfWork.runInTransaction(schoolId, {
+        operationName: `Post payment ${document.sourceId}`,
+        tenantId, userId: actorId, userName: user.name || 'المستخدم المالي',
+        ipAddress: req.ip || 'unknown', affectedTables: ['erp_journal_entries', 'erp_journal_lines', 'erp_general_ledger']
+      }, async () => {
+        const transaction = UnitOfWork.getActiveContext()?.databaseTransaction;
+        if (!transaction) throw new DatabaseError('المعاملة المالية غير متاحة.');
+        const actor = await transaction.query<{ id: string }>(
+          `SELECT id FROM public.users WHERE tenant_id = $1 AND school_id = $2 AND status = 'active' AND deleted_at IS NULL AND (id = $3 OR auth_user_id = $3) LIMIT 1`,
+          [tenantId, schoolId, actorId]
+        );
+        if (!actor.rows[0]) throw new AuthenticationError('المستخدم المالي غير موجود.');
+        result = await CanonicalErpPostingService.syncSnapshot(transaction, tenantId, schoolId, actor.rows[0].id, {
+          paymentVouchers: [{ ...voucher, status: 'posted' }], chartOfAccounts: []
+        });
+      }, tenantContext);
+      const link = result!.sourceLinks.find(item => item.sourceType === 'payment_voucher' && item.sourceId === document.sourceId);
+      if (!link) throw new DatabaseError('تمت المعاملة دون إثبات رابط القيد الكانوني.');
+      res.json({ success: true, data: { journalId: link.journalEntryId, sourceId: document.sourceId }, meta: result });
+    } catch (err: any) {
+      EnterpriseLogger.error('Canonical payment posting failed', 'FinancialPaymentRoute', { error: err?.message || String(err) });
+      next(err instanceof AuthenticationError || err instanceof DatabaseError || err instanceof ValidationError ? err : new DatabaseError('تعذر ترحيل سند الصرف الكانوني.', err?.message));
+    }
+  });
+
   // -----------------------------------------------------------------------
   // Canonical student-fee command API
   // -----------------------------------------------------------------------
