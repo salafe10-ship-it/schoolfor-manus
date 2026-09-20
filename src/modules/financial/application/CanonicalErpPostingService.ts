@@ -32,6 +32,7 @@ export type CanonicalPostingDocument = {
   description: string;
   lines: CanonicalPostingLine[];
   fiscalPeriod?: string;
+  sourcePayload?: FinancialRow;
   expenseAccrual?: {
     supplierName: string;
     amount: number;
@@ -216,6 +217,7 @@ export function buildCanonicalPosting(
       date: dateValue(rowValue(input, 'invoiceDate', 'date')),
       description: textValue(rowValue(input, 'item', 'description'), `إثبات رسوم الطالب ${sourceId}`),
       fiscalPeriod: fiscalPeriodFor(dateValue(rowValue(input, 'invoiceDate', 'date'))),
+      sourcePayload: input,
       lines
     };
   }
@@ -257,6 +259,7 @@ export function buildCanonicalPosting(
       date: dateValue(rowValue(input, 'date', 'receiptDate')),
       description: textValue(rowValue(input, 'against', 'description'), `تحصيل رسوم الطالب ${sourceId}`),
       fiscalPeriod: fiscalPeriodFor(dateValue(rowValue(input, 'date', 'receiptDate'))),
+      sourcePayload: input,
       lines
     };
   }
@@ -278,6 +281,7 @@ export function buildCanonicalPosting(
       date: dateValue(rowValue(input, 'accrualDate', 'date')),
       description: textValue(rowValue(input, 'description', 'against'), `إثبات مصروف مستحق ${sourceId}`),
       fiscalPeriod: fiscalPeriodFor(dateValue(rowValue(input, 'accrualDate', 'date'))),
+      sourcePayload: input,
       lines,
       expenseAccrual: {
         supplierName: textValue(rowValue(input, 'supplierName', 'supplier', 'beneficiary')),
@@ -324,6 +328,7 @@ export function buildCanonicalPosting(
       date: dateValue(rowValue(input, 'date', 'entryDate')),
       description: textValue(rowValue(input, 'description', 'memo'), `قيد يومية ${sourceId}`),
       fiscalPeriod: fiscalPeriodFor(dateValue(rowValue(input, 'date', 'entryDate'))),
+      sourcePayload: input,
       lines
     };
   }
@@ -348,6 +353,7 @@ export function buildCanonicalPosting(
     date: dateValue(rowValue(input, 'date', 'paymentDate')),
     description: textValue(rowValue(input, 'against', 'description'), `سداد مصروف ${sourceId}`),
     fiscalPeriod: fiscalPeriodFor(dateValue(rowValue(input, 'date', 'paymentDate'))),
+    sourcePayload: input,
     lines
   };
 }
@@ -365,7 +371,12 @@ export class CanonicalErpPostingService {
       [CANONICAL_ERP_TABLES]
     );
     const available = new Set(result.rows.map(row => row.table_name));
-    return CANONICAL_ERP_TABLES.every(table => available.has(table));
+    if (!CANONICAL_ERP_TABLES.every(table => available.has(table))) return false;
+    await db(transaction).query(
+      `ALTER TABLE public.erp_journal_entries
+         ADD COLUMN IF NOT EXISTS source_payload jsonb NOT NULL DEFAULT '{}'::jsonb`
+    );
+    return true;
   }
 
   private static async loadMappings(transaction: TransactionLike, schoolId: string): Promise<Map<string, string>> {
@@ -493,10 +504,10 @@ export class CanonicalErpPostingService {
     await db(transaction).query(
       `INSERT INTO public.erp_journal_entries
         (tenant_id, school_id, id, entry_date, description, source_type, source_id,
-         fiscal_period, idempotency_key, total_debit, total_credit, created_by)
-       VALUES ($1::uuid, $2::uuid, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12::uuid)`,
+        fiscal_period, idempotency_key, total_debit, total_credit, source_payload, created_by)
+       VALUES ($1::uuid, $2::uuid, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12::jsonb, $13::uuid)`,
       [tenantId, schoolId, journalEntryId, document.date, document.description, document.sourceType,
-        document.sourceId, fiscalPeriod, idempotencyKey, debitTotal, creditTotal, actorId]
+        document.sourceId, fiscalPeriod, idempotencyKey, debitTotal, creditTotal, JSON.stringify(document.sourcePayload || {}), actorId]
     );
 
     const orderedLines = [...document.lines].sort((a, b) => a.accountCode.localeCompare(b.accountCode));
