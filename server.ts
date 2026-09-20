@@ -12587,7 +12587,7 @@ export async function createApp(options: { cloudflare?: boolean } = {}): Promise
       // server-side Supabase channel instead of waiting for a Hyperdrive pool
       // client; all predicates remain tenant/school scoped and all writes keep
       // their transactional path below.
-      const [snapshotResult, invoiceResult, receiptResult] = await Promise.all([
+      const [snapshotResult, invoiceResult, receiptResult, chartResult] = await Promise.all([
         canonicalReadClient
           .from('financial_portal_snapshots')
           .select('data,version,updated_at')
@@ -12608,11 +12608,18 @@ export async function createApp(options: { cloudflare?: boolean } = {}): Promise
           .eq('school_id', schoolId)
           .order('receipt_date', { ascending: false })
           .order('created_at', { ascending: false }),
+        canonicalReadClient
+          .from('erp_chart_of_accounts')
+          .select('account_code,account_name,account_nature,is_active,is_leaf')
+          .eq('tenant_id', tenantId)
+          .eq('school_id', schoolId)
+          .order('account_code', { ascending: true }),
       ]);
       if (snapshotResult.error) throw snapshotResult.error;
       const isMissingCanonicalTable = (error: any) => ['42P01', 'PGRST205'].includes(String(error?.code || ''));
       if (invoiceResult.error && !isMissingCanonicalTable(invoiceResult.error)) throw invoiceResult.error;
       if (receiptResult.error && !isMissingCanonicalTable(receiptResult.error)) throw receiptResult.error;
+      if (chartResult.error && !isMissingCanonicalTable(chartResult.error)) throw chartResult.error;
       snapshot = snapshotResult.data || null;
       canonicalFeeInvoices = (invoiceResult.data || []).map((row: any) => ({
         id: row.id,
@@ -12649,6 +12656,18 @@ export async function createApp(options: { cloudflare?: boolean } = {}): Promise
         receiptVoucherId: row.receipt_voucher_id,
         sourcePayload: row.source_payload,
       }));
+      const canonicalChartOfAccounts = (chartResult.data || []).map((row: any) => ({
+        id: row.account_code,
+        code: row.account_code,
+        name: row.account_name,
+        nameAr: row.account_name,
+        nature: row.account_nature,
+        classification: row.account_nature,
+        isActive: row.is_active !== false,
+        isLeaf: row.is_leaf !== false,
+        type: row.is_leaf === false ? 'رئيسي' : 'فرعي',
+        balance: 0,
+      }));
       // The read path uses the direct Supabase channel and must not open a
       // Hyperdrive transaction merely to enrich the first paint. The explicit
       // production mode is the deployment-level readiness signal; every
@@ -12667,6 +12686,7 @@ export async function createApp(options: { cloudflare?: boolean } = {}): Promise
         // second authoritative copy.
         ...(canonicalFeeInvoices.length > 0 ? { invoices: canonicalFeeInvoices } : {}),
         ...(canonicalFeeReceipts.length > 0 ? { studentReceiptVouchers: canonicalFeeReceipts, receiptVouchers: canonicalFeeReceipts } : {}),
+        ...(canonicalChartOfAccounts.length > 0 ? { chartOfAccounts: canonicalChartOfAccounts } : {}),
       };
       if (canonicalErpReady && canonicalErpModel) {
         const sourceLinks = new Map(
