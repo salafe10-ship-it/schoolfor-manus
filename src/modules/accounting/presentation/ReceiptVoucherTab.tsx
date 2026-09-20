@@ -1,4 +1,4 @@
-import { Check, Coins, FileText, Printer, Search, ShieldAlert, Trash2, Upload, X } from 'lucide-react';
+import { Check, Coins, Edit3, FileText, Printer, Search, ShieldAlert, Trash2, Upload, X } from 'lucide-react';
 import React from 'react';
 import { AccountingContext } from '../../../components/GeneralLedgerPortal';
 import { EnterpriseAuditLogger } from '../../../utils/EnterpriseAuditLogger';
@@ -23,6 +23,7 @@ export const ReceiptVoucherTab = () => {
   const receiptAttachmentFileRef = React.useRef<File | null>(null);
   type ReceiptEntryMode = 'general' | 'student';
   const [receiptEntryMode, setReceiptEntryMode] = React.useState<ReceiptEntryMode>('general');
+  const [editingReceiptVoucherId, setEditingReceiptVoucherId] = React.useState<string | null>(null);
   const {
   activeTab, setActiveTab, activeSidebarItem, setActiveSidebarItem,
   refreshing, setRefreshing, currency, setCurrency, activeSaving, setActiveSaving,
@@ -203,7 +204,7 @@ export const ReceiptVoucherTab = () => {
     }
 
     const nextIdNum = receiptVouchers.length + 1;
-    const rvId = `RV-2026-${String(nextIdNum).padStart(4, '0')}`;
+    const rvId = editingReceiptVoucherId || `RV-2026-${String(nextIdNum).padStart(4, '0')}`;
     const jvId = `JV-2026-RV-${String(nextIdNum).padStart(4, '0')}`;
 
     const revenueAccountCode = receiptVoucherForm.operationType === 'رسوم حافلة' ? '4300' :
@@ -713,6 +714,26 @@ const handlePrintRV = (rv: any) => {
   };
 
 
+  const handleNewReceiptVoucher = () => {
+    setEditingReceiptVoucherId(null);
+    setReceiptEntryMode('general');
+    setReceiptVoucherForm((prev: any) => ({ ...prev, studentId: '', receivedFrom: '', operationType: 'أخرى', amount: '', against: '', notes: '', attachmentName: '', status: 'draft' }));
+    receiptAttachmentFileRef.current = null;
+    triggerNotification('تم فتح نموذج سند قبض جديد.', 'info');
+  };
+
+  const handleEditReceiptVoucher = (voucher: any) => {
+    if (String(voucher.status || '').toLowerCase() !== 'draft') {
+      triggerNotification('لا يمكن تعديل سند قبض مرحّل؛ استخدم الإلغاء العكسي المعتمد ثم أنشئ سندًا جديدًا.', 'warning');
+      return;
+    }
+    setEditingReceiptVoucherId(voucher.id);
+    const isStudent = Boolean(voucher.studentId || voucher.studentPaymentId);
+    setReceiptEntryMode(isStudent ? 'student' : 'general');
+    setReceiptVoucherForm((prev: any) => ({ ...prev, ...voucher, amount: String(voucher.amount ?? ''), studentId: isStudent ? voucher.studentId : '' }));
+    triggerNotification(`تم تحميل السند ${voucher.id} للتعديل قبل الترحيل.`, 'info');
+  };
+
   return (
     <>
               {activeTab === 'receipt_voucher' && (
@@ -734,19 +755,13 @@ const handlePrintRV = (rv: any) => {
                 <div className="flex items-center gap-2 mb-4 text-emerald-700 pb-3 border-b border-slate-100">
                   <Coins className="w-5 h-5" />
                   <span className="font-black text-sm">إنشاء سند قبض مالي جديد</span>
-                  <button
-                    type="button"
-                    onClick={() => {
-                      setReceiptEntryMode('general');
-                      setReceiptVoucherForm((prev: any) => ({ ...prev, studentId: '', receivedFrom: '', operationType: 'أخرى', amount: '', against: '', notes: '', attachmentName: '' }));
-                      receiptAttachmentFileRef.current = null;
-                      triggerNotification('تم فتح نموذج سند قبض عام جديد.', 'info');
-                    }}
+                  <button type="button" onClick={handleNewReceiptVoucher}
                     className="mr-2 inline-flex items-center gap-1 rounded-lg border border-emerald-200 bg-white px-3 py-1.5 text-[10px] font-black text-emerald-700 hover:bg-emerald-50"
                     title="إضافة سند قبض جديد"
                   >
                     <Coins className="h-3.5 w-3.5" /> إضافة جديد
                   </button>
+                  {editingReceiptVoucherId && <span className="rounded-lg bg-amber-100 px-2 py-1 text-[10px] font-black text-amber-800">تعديل {editingReceiptVoucherId}</span>}
                   <span className="mr-auto font-mono text-[10px] bg-slate-100 text-slate-700 px-2 py-0.5 rounded-md font-bold">
                     السند التالي: RV-2026-{String(receiptVouchers.length + 1).padStart(4, '0')}
                   </span>
@@ -1044,7 +1059,7 @@ const handlePrintRV = (rv: any) => {
                         }}
                       />
                     </div>
-                    {receiptVoucherForm.attachmentName && (
+                  {receiptVoucherForm.attachmentName && (
                       <div className="bg-slate-50 border border-slate-200 rounded-lg p-2.5 flex items-center justify-between mt-2 font-bold text-slate-700">
                         <span className="flex items-center gap-2 text-indigo-700">
                           <FileText className="w-4 h-4" />
@@ -1085,7 +1100,7 @@ const handlePrintRV = (rv: any) => {
                       className="relative z-20 w-full bg-gradient-to-r from-emerald-600 to-teal-600 hover:from-emerald-700 hover:to-teal-700 text-white font-black py-3 rounded-lg flex items-center justify-center gap-2 shadow-md hover:shadow-lg cursor-pointer transition-all active:scale-[0.99]"
                     >
                       <Coins className="w-4 h-4" />
-                      <span>{receiptSubmitLabel}</span>
+                      <span>{editingReceiptVoucherId ? 'حفظ التعديل ثم الترحيل الكانوني' : receiptSubmitLabel}</span>
                     </button>
                     {!canonicalWriteReady && (
                       <p role="alert" className="mt-2 text-[10px] font-bold text-amber-700">
@@ -1285,6 +1300,16 @@ const handlePrintRV = (rv: any) => {
                           </td>
                           <td className="px-6 py-3 text-left">
                             <div className="flex justify-end gap-2">
+                              <button
+                                type="button"
+                                onClick={() => handleEditReceiptVoucher(v)}
+                                disabled={v.status !== 'draft'}
+                                className="bg-amber-50 hover:bg-amber-100 text-amber-800 p-1.5 rounded-lg flex items-center gap-1 font-extrabold text-[10px] disabled:opacity-40 disabled:cursor-not-allowed"
+                                title={v.status === 'draft' ? 'تعديل السند قبل الترحيل' : 'لا يمكن تعديل سند مرحّل'}
+                              >
+                                <Edit3 className="w-3 h-3" />
+                                <span>تعديل</span>
+                              </button>
                               <button 
                                 onClick={() => {
                                   setSelectedReceiptVoucher(v);
