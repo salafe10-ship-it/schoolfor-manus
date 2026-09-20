@@ -123,7 +123,7 @@ export const PaymentVoucherTab = () => {
     && (ledgerPostingReady || snapshotWriteReady)
     && typeof persistCanonicalFinancialSnapshot === 'function';
   const paymentSubmitLabel = ledgerPostingReady
-    ? 'ترحيل سند الصرف عبر دفتر الأستاذ الكانوني 🖹'
+    ? 'حفظ سند الصرف ثم ترحيله عبر دفتر الأستاذ الكانوني 🖹'
     : snapshotWriteReady
       ? 'حفظ سند الصرف في المصدر المركزي UAT'
       : 'الترحيل غير متاح — خدمة دفتر الأستاذ غير معتمدة';
