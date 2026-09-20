@@ -182,6 +182,13 @@ export const ReceiptVoucherTab = () => {
       return;
     }
 
+    const studentId = String(receiptVoucherForm.studentId || '').trim();
+    const studentFeeOperation = ['رسوم دراسية', 'رسوم حافلة', 'رسوم أنشطة'].includes(String(receiptVoucherForm.operationType || '').trim());
+    if (studentFeeOperation && !studentId) {
+      triggerNotification('سندات رسوم الطلاب تُنشأ من خلال اختيار الطالب أولاً؛ أما القبض العام غير الطلابي فيُسجل من هنا.', 'warning');
+      return;
+    }
+
     const nextIdNum = receiptVouchers.length + 1;
     const rvId = `RV-2026-${String(nextIdNum).padStart(4, '0')}`;
     const jvId = `JV-2026-RV-${String(nextIdNum).padStart(4, '0')}`;
@@ -208,6 +215,9 @@ export const ReceiptVoucherTab = () => {
       id: rvId,
       date: receiptVoucherForm.date || new Date().toISOString().split('T')[0],
       school: receiptVoucherForm.school,
+      studentId: studentId || undefined,
+      studentPaymentId: undefined,
+      receiptVoucherId: undefined,
       stage: receiptVoucherForm.stage,
       costCenter: selectedCostCenter,
       receivedFrom: String(submitted?.get('receivedFrom') || receiptVoucherForm.receivedFrom || '').trim(),
@@ -284,14 +294,36 @@ export const ReceiptVoucherTab = () => {
         headers: { 'Accept': 'application/json', 'Content-Type': 'application/json' },
         body: JSON.stringify(newRv)
       };
+      const studentPaymentMethod = ({
+        'نقدي': 'نقدي',
+        'شيك مصرفي معتمد': 'شيك',
+        'تحويل بنكي فوري': 'تحويل',
+        'بطاقة مدى البنكية (Mada)': 'بطاقة مدى البنكية (Mada)',
+        'فيزا / ماستركارد': 'فيزا / ماستركارد'
+      } as Record<string, string>)[String(newRv.paymentMethod || '').trim()] || 'نقدي';
+      const isStudentReceipt = Boolean(studentId);
+      const endpoint = isStudentReceipt ? '/api/financial/receipts/manual-settle' : '/api/financial/receipts/post';
+      const requestBody = isStudentReceipt
+        ? {
+            receiptId: rvId,
+            studentId,
+            receiptDate: newRv.date,
+            paymentMethod: studentPaymentMethod,
+            receivingAccount: debitAccountCode,
+            amount: amt,
+            operationalType: newRv.operationType,
+            against: newRv.against || newRv.notes || 'سداد رسوم طالب',
+            costCenter: selectedCostCenter
+          }
+        : newRv;
       let canonicalResponse: Response;
       try {
-        canonicalResponse = await authenticatedRequest('/api/financial/receipts/post', requestInit);
+        canonicalResponse = await authenticatedRequest(endpoint, { ...requestInit, body: JSON.stringify(requestBody) });
       } catch (authError) {
         // The trusted session may be cookie-backed after a portal handoff.
         // Retry once through the same-origin session only; never downgrade to
         // local persistence or report success without a canonical journal id.
-        canonicalResponse = await fetch('/api/financial/receipts/post', { ...requestInit, credentials: 'include' });
+        canonicalResponse = await fetch(endpoint, { ...requestInit, body: JSON.stringify(requestBody), credentials: 'include' });
         if (!canonicalResponse.ok && authError) throw authError;
       }
       const canonicalResult = await canonicalResponse.json().catch(() => ({}));
@@ -299,6 +331,12 @@ export const ReceiptVoucherTab = () => {
         throw new Error(canonicalResult.message || canonicalResult.error?.message || canonicalResult.error || 'تعذر إثبات القيد الكانوني لسند القبض.');
       }
       newRv.journalEntryId = canonicalResult.data.journalId;
+      if (isStudentReceipt) {
+        newRv.studentPaymentId = canonicalResult.data.receipt?.id || rvId;
+        newRv.receiptVoucherId = canonicalResult.data.receipt?.receiptVoucherId || rvId;
+        newRv.paymentMethod = studentPaymentMethod;
+        newRv.status = 'posted';
+      }
       newJv.id = canonicalResult.data.journalId;
     } catch (error: any) {
       console.error('[ReceiptVoucherTab] canonical receipt posting failed', error);
@@ -707,12 +745,11 @@ const handlePrintRV = (rv: any) => {
 
                   <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
                     <div className="md:col-span-2">
-                      <label className="block text-slate-700 font-bold mb-1">اسم الطالب:</label>
+                      <label className="block text-slate-700 font-bold mb-1">اسم الطالب / الجهة المستلمة:</label>
                       <input
                         type="search"
                         list="accounting-students-list"
                         value={receiptVoucherForm.receivedFrom}
-                        required
                         autoComplete="off"
                         onChange={(e) => {
                           const value = e.target.value;
@@ -722,12 +759,13 @@ const handlePrintRV = (rv: any) => {
                           setReceiptVoucherForm((prev: any) => linkedStage ? ({ ...prev, receivedFrom: value, stage: linkedStage.name || linkedStage.type || linkedStage.id, costCenter: stageCostCenterKey(linkedStage), studentId: student?.id || student?.studentId }) : ({ ...prev, receivedFrom: value, studentId: student?.id || student?.studentId }));
                         }}
                         className="w-full bg-white border-2 border-emerald-200 rounded-lg p-3 text-base font-bold focus:outline-none focus:ring-2 focus:ring-emerald-500"
-                        placeholder="اضغط واكتب للبحث في سجل الطلاب"
+                        placeholder="لرسوم الطلاب اختر طالبًا من القائمة — وللقبض العام اكتب اسم الجهة"
                       />
                       <datalist id="accounting-students-list">
                         {searchableStudents.slice(0, 300).map((student: any) => <option key={student.id || student.studentId || studentNameOf(student)} value={studentNameOf(student)} />)}
                       </datalist>
                       {selectedStudent && <p className="mt-1 text-xs font-bold text-emerald-700">تم اختيار الطالب من سجل شؤون الطلاب — المرحلة مرتبطة تلقائيًا.</p>}
+                      {!selectedStudent && <p className="mt-1 text-xs font-bold text-slate-500">رسوم الطلاب تُرحّل إلى حساب الطالب والفواتير تلقائيًا عند اختيار طالب؛ السندات العامة مخصصة للجهات غير الطلابية.</p>}
                     </div>
                   </div>
 
