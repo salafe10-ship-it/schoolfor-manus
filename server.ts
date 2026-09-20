@@ -12826,7 +12826,19 @@ export async function createApp(options: { cloudflare?: boolean } = {}): Promise
               { expectedVersion, actualVersion: currentVersion }
             );
           }
-          validateFinancialSnapshotTransition(existing.rows[0]?.data || {}, payload);
+          const previousPayload = existing.rows[0]?.data || {};
+          validateFinancialSnapshotTransition(previousPayload, payload);
+          const projectionKeys = [
+            'invoices',
+            'studentReceiptVouchers',
+            'receiptVouchers',
+            'paymentVouchers',
+            'journalEntries',
+            'feeConfigs'
+          ] as const;
+          const studentFinanceProjectionChanged = projectionKeys.some((key) =>
+            JSON.stringify(previousPayload[key] ?? null) !== JSON.stringify(payload[key] ?? null)
+          );
           nextVersion = currentVersion + 1;
           await transaction.query(
             `INSERT INTO public.financial_portal_snapshots
@@ -12840,14 +12852,19 @@ export async function createApp(options: { cloudflare?: boolean } = {}): Promise
                updated_by = EXCLUDED.updated_by`,
             [schoolId, tenantId, JSON.stringify(payload), nextVersion, updatedAt, databaseActorId]
           );
-          await replaceStudentFinanceProjection(
-            transaction,
-            tenantId,
-            schoolId,
-            databaseActorId,
-            payload,
-            nextVersion
-          );
+          // Account-tree-only saves must not rewrite the student-fee projection.
+          // They remain fully transactional and are audited by the canonical ERP
+          // sync below, while unrelated projection tables cannot roll them back.
+          if (studentFinanceProjectionChanged) {
+            await replaceStudentFinanceProjection(
+              transaction,
+              tenantId,
+              schoolId,
+              databaseActorId,
+              payload,
+              nextVersion
+            );
+          }
           canonicalErpReady = await CanonicalErpPostingService.isProvisioned(transaction);
           if (canonicalErpReady) {
             canonicalErpSync = await CanonicalErpPostingService.syncSnapshot(
