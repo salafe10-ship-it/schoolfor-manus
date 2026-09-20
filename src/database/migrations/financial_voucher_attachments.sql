@@ -33,3 +33,17 @@ CREATE POLICY financial_voucher_attachments_tenant_isolation
     WITH CHECK (tenant_id::text = (auth.jwt()->'app_metadata'->>'tenant_id')
        AND school_id::text = (auth.jwt()->'app_metadata'->>'school_id'));
 
+-- Private bucket; binaries are never public and are only exposed by short-lived
+-- signed URLs issued after the server-side tenant/permission check.
+INSERT INTO storage.buckets (id, name, public, file_size_limit, allowed_mime_types)
+VALUES (
+    'financial-voucher-attachments',
+    'financial-voucher-attachments',
+    false,
+    10485760,
+    ARRAY['application/pdf', 'image/jpeg', 'image/png', 'image/webp']::text[]
+)
+ON CONFLICT (id) DO UPDATE SET
+    public = false,
+    file_size_limit = 10485760,
+    allowed_mime_types = EXCLUDED.allowed_mime_types;
