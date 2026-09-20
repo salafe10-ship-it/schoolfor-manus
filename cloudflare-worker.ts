@@ -12,11 +12,6 @@ type CloudflareBindings = {
 };
 type WorkerRequest = Parameters<NonNullable<ExportedHandler["fetch"]>>[0];
 
-// Wrangler injects these constants at deploy time with --define. Keeping the
-// compiled values as a fallback makes the build identity deterministic even
-// when a deployment has no persisted Worker vars (for example after a clean
-// environment replacement). The typeof guards keep local development builds
-// valid when Wrangler has not performed the substitution.
 declare const __EDUPRO_BUILD_VERSION__: unknown;
 declare const __EDUPRO_BUILD_COMMIT__: unknown;
 declare const __EDUPRO_BUILD_TIMESTAMP__: unknown;
@@ -27,16 +22,8 @@ const compiledBuildIdentity = {
   BUILD_TIMESTAMP: typeof __EDUPRO_BUILD_TIMESTAMP__ === "string" ? __EDUPRO_BUILD_TIMESTAMP__ : "",
 } as const;
 
-// The API server is loaded dynamically below. Publish the exact compiled
-// release identity on the global scope as well as process.env so the server
-// can report it even when Cloudflare's runtime does not expose Worker vars to
-// the Node compatibility layer.
 const buildIdentityGlobals = globalThis as typeof globalThis & {
-  __EDUPRO_BUILD_IDENTITY__?: {
-    version: string;
-    commit: string;
-    builtAt: string;
-  };
+  __EDUPRO_BUILD_IDENTITY__?: { version: string; commit: string; builtAt: string };
 };
 buildIdentityGlobals.__EDUPRO_BUILD_IDENTITY__ = {
   version: compiledBuildIdentity.APP_VERSION,
@@ -51,21 +38,19 @@ const runtimeEnvKeys = [
   "PGSSL_REJECT_UNAUTHORIZED", "JWT_SECRET", "PUBLIC_APP_URL",
   "ALLOW_IFRAME_EMBEDDING", "EDUPRO_AI_FORECAST_ENABLED", "GEMINI_API_KEY",
   "OPENAI_API_KEY",
+  // Financial write-phase controls must reach process.env before server.ts
+  // initializes; otherwise the reviewed fail-closed gate stays locked even
+  // when the controls are configured in the Cloudflare production Worker.
+  "FINANCIAL_ERP_MODE", "FINANCIAL_WRITES_LOCKED",
   "APP_VERSION", "BUILD_COMMIT_SHA", "BUILD_TIMESTAMP",
 ] as const;
 
 function configureProcessEnvironment(bindings: CloudflareBindings): void {
   const processEnvironment = process.env as Record<string, string | undefined>;
   if (bindings.HYPERDRIVE?.connectionString || bindings.HYPERDRIVE_ADMIN?.connectionString) {
-    // Hyperdrive owns the encrypted connection to the origin. The pg driver
-    // must receive its generated connection string without a second SSL
-    // configuration intended for direct Supabase connections.
     processEnvironment.EDUPRO_CLOUDFLARE_HYPERDRIVE = 'true';
   }
   for (const key of runtimeEnvKeys) {
-    // Cloudflare can expose an undeclared/kept variable as an empty string.
-    // Treat that as missing so it cannot mask the value compiled into this
-    // exact Worker release (especially for the public build identity).
     const bindingValue = bindings[key];
     const compiledValue = compiledBuildIdentity[key as keyof typeof compiledBuildIdentity];
     const value = typeof bindingValue === "string" && bindingValue.length > 0
@@ -74,9 +59,6 @@ function configureProcessEnvironment(bindings: CloudflareBindings): void {
     if (typeof value === "string" && value.length > 0) processEnvironment[key] = value;
   }
   if (bindings.HYPERDRIVE?.connectionString) {
-    // Hyperdrive intentionally hides the upstream Supabase project ref in its
-    // proxy URL. Preserve the configured origin so the server can still run
-    // its project-alignment guard without replacing the runtime connection.
     const configuredDatabaseUrl = typeof bindings.DATABASE_URL === 'string'
       ? bindings.DATABASE_URL
       : processEnvironment.DATABASE_URL;
@@ -98,17 +80,8 @@ async function getApiHandler(bindings: CloudflareBindings): Promise<ExportedHand
   if (!apiHandlerPromise) {
     apiHandlerPromise = (async () => {
       configureProcessEnvironment(bindings);
-      (globalThis as {
-        __EDUPRO_CLOUDFLARE__?: boolean;
-        __EDUPRO_ASYNC_LOCAL_STORAGE__?: typeof AsyncLocalStorage;
-      }).__EDUPRO_CLOUDFLARE__ = true;
-      // UnitOfWork is shared with the browser bundle, so it cannot import a
-      // Node builtin directly. Cloudflare exposes its request-safe
-      // AsyncLocalStorage through node:async_hooks; publish only the
-      // constructor before the server module is initialized.
-      (globalThis as {
-        __EDUPRO_ASYNC_LOCAL_STORAGE__?: typeof AsyncLocalStorage;
-      }).__EDUPRO_ASYNC_LOCAL_STORAGE__ = AsyncLocalStorage;
+      (globalThis as { __EDUPRO_CLOUDFLARE__?: boolean; __EDUPRO_ASYNC_LOCAL_STORAGE__?: typeof AsyncLocalStorage }).__EDUPRO_CLOUDFLARE__ = true;
+      (globalThis as { __EDUPRO_ASYNC_LOCAL_STORAGE__?: typeof AsyncLocalStorage }).__EDUPRO_ASYNC_LOCAL_STORAGE__ = AsyncLocalStorage;
       const { createApp } = await import("./server.ts");
       const app = await createApp({ cloudflare: true });
       if (!app) throw new Error("Cloudflare application initialization returned no Express app.");
