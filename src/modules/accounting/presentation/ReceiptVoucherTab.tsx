@@ -21,6 +21,8 @@ const getReceiptStageKey = (voucher: any): string => {
 export const ReceiptVoucherTab = () => {
   const receiptFormRef = React.useRef<HTMLFormElement>(null);
   const receiptAttachmentFileRef = React.useRef<File | null>(null);
+  type ReceiptEntryMode = 'general' | 'student';
+  const [receiptEntryMode, setReceiptEntryMode] = React.useState<ReceiptEntryMode>('general');
   const {
   activeTab, setActiveTab, activeSidebarItem, setActiveSidebarItem,
   refreshing, setRefreshing, currency, setCurrency, activeSaving, setActiveSaving,
@@ -193,8 +195,8 @@ export const ReceiptVoucherTab = () => {
       return;
     }
 
-    const studentId = String(receiptVoucherForm.studentId || '').trim();
-    const studentFeeOperation = ['رسوم دراسية', 'رسوم حافلة', 'رسوم أنشطة'].includes(String(receiptVoucherForm.operationType || '').trim());
+    const studentId = receiptEntryMode === 'student' ? String(receiptVoucherForm.studentId || '').trim() : '';
+    const studentFeeOperation = receiptEntryMode === 'student';
     if (studentFeeOperation && !studentId) {
       triggerNotification('سندات رسوم الطلاب تُنشأ من خلال اختيار الطالب أولاً؛ أما القبض العام غير الطلابي فيُسجل من هنا.', 'warning');
       return;
@@ -312,7 +314,7 @@ export const ReceiptVoucherTab = () => {
         'بطاقة مدى البنكية (Mada)': 'بطاقة مدى البنكية (Mada)',
         'فيزا / ماستركارد': 'فيزا / ماستركارد'
       } as Record<string, string>)[String(newRv.paymentMethod || '').trim()] || 'نقدي';
-      const isStudentReceipt = Boolean(studentId);
+      const isStudentReceipt = receiptEntryMode === 'student' && Boolean(studentId);
       const endpoint = isStudentReceipt ? '/api/financial/receipts/manual-settle' : '/api/financial/receipts/post';
       const requestBody = isStudentReceipt
         ? {
@@ -335,7 +337,11 @@ export const ReceiptVoucherTab = () => {
         // Retry once through the same-origin session only; never downgrade to
         // local persistence or report success without a canonical journal id.
         canonicalResponse = await fetch(endpoint, { ...requestInit, body: JSON.stringify(requestBody), credentials: 'include' });
-        if (!canonicalResponse.ok && authError) throw authError;
+        // Keep the canonical server validation/conflict message when the
+        // cookie-backed retry returns a structured error. Replacing it with
+        // the initial auth error hid actionable causes such as a missing
+        // student invoice and made the UI look like a generic write failure.
+        void authError;
       }
       const canonicalResult = await canonicalResponse.json().catch(() => ({}));
       if (!canonicalResponse.ok || !canonicalResult.success || !canonicalResult.data?.journalId) {
@@ -725,9 +731,60 @@ const handlePrintRV = (rv: any) => {
                 <div className="flex items-center gap-2 mb-4 text-emerald-700 pb-3 border-b border-slate-100">
                   <Coins className="w-5 h-5" />
                   <span className="font-black text-sm">إنشاء سند قبض مالي جديد</span>
+                  <button
+                    type="button"
+                    onClick={() => {
+                      setReceiptEntryMode('general');
+                      setReceiptVoucherForm((prev: any) => ({ ...prev, studentId: '', receivedFrom: '', operationType: 'أخرى', amount: '', against: '', notes: '', attachmentName: '' }));
+                      receiptAttachmentFileRef.current = null;
+                      triggerNotification('تم فتح نموذج سند قبض عام جديد.', 'info');
+                    }}
+                    className="mr-2 inline-flex items-center gap-1 rounded-lg border border-emerald-200 bg-white px-3 py-1.5 text-[10px] font-black text-emerald-700 hover:bg-emerald-50"
+                    title="إضافة سند قبض جديد"
+                  >
+                    <Coins className="h-3.5 w-3.5" /> إضافة جديد
+                  </button>
                   <span className="mr-auto font-mono text-[10px] bg-slate-100 text-slate-700 px-2 py-0.5 rounded-md font-bold">
                     السند التالي: RV-2026-{String(receiptVouchers.length + 1).padStart(4, '0')}
                   </span>
+                </div>
+
+                <div className="mb-5 rounded-xl border border-slate-200 bg-slate-50 p-3">
+                  <div className="flex flex-col gap-2 md:flex-row md:items-center md:justify-between">
+                    <div>
+                      <p className="font-black text-slate-800">نوع سند القبض</p>
+                      <p className="text-[11px] font-semibold text-slate-500">اختر المسار قبل إدخال المستلم لضمان الفصل المحاسبي وعدم خلط قبض الطلاب بالقبض العام.</p>
+                    </div>
+                    <div className="flex gap-2" role="group" aria-label="مسار سند القبض">
+                      <button
+                        type="button"
+                        aria-pressed={receiptEntryMode === 'general'}
+                        onClick={() => {
+                          setReceiptEntryMode('general');
+                          setReceiptVoucherForm((prev: any) => ({ ...prev, studentId: '', operationType: 'أخرى', receivedFrom: '' }));
+                        }}
+                        className={`rounded-lg px-4 py-2 font-black transition ${receiptEntryMode === 'general' ? 'bg-emerald-600 text-white shadow' : 'bg-white text-slate-700 border border-slate-200'}`}
+                      >
+                        سند قبض عام
+                      </button>
+                      <button
+                        type="button"
+                        aria-pressed={receiptEntryMode === 'student'}
+                        onClick={() => {
+                          setReceiptEntryMode('student');
+                          setReceiptVoucherForm((prev: any) => ({ ...prev, studentId: '', receivedFrom: '', operationType: 'رسوم دراسية' }));
+                        }}
+                        className={`rounded-lg px-4 py-2 font-black transition ${receiptEntryMode === 'student' ? 'bg-indigo-600 text-white shadow' : 'bg-white text-slate-700 border border-slate-200'}`}
+                      >
+                        سند قبض رسوم طالب
+                      </button>
+                    </div>
+                  </div>
+                  <div className={`mt-3 rounded-lg px-3 py-2 text-[11px] font-bold ${receiptEntryMode === 'general' ? 'bg-emerald-100 text-emerald-900' : 'bg-indigo-100 text-indigo-900'}`}>
+                    {receiptEntryMode === 'general'
+                      ? 'المسار العام: لا يرتبط بفاتورة طالب، ويُثبت كإيراد/تحصيل عام عبر الحسابات العامة.'
+                      : 'المسار الطلابي: يتطلب اختيار طالب ومطالبة مفتوحة موثقة؛ لا يُسمح بالترحيل الاصطناعي أو خارج الفاتورة.'}
+                  </div>
                 </div>
 
                 <form
@@ -767,29 +824,40 @@ const handlePrintRV = (rv: any) => {
 
                   <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
                     <div className="md:col-span-2">
-                      <label className="block text-slate-700 font-bold mb-1">اسم الطالب / الجهة المستلمة:</label>
-                      <input
-                        type="search"
-                        list="accounting-students-list"
-                        value={receiptVoucherForm.receivedFrom}
-                        autoComplete="off"
-                        onChange={(e) => {
-                          const value = e.target.value;
-                          const student = searchableStudents.find((item: any) => studentNameOf(item) === value);
-                          const studentStage = studentStageOf(student);
-                          const linkedStage = activeAccountingStages.find((stage: any) => [stage.name, stage.type, stage.id, stage.code, stage.costCenterId]
-                            .some((entry: any) => String(entry || '').trim() === studentStage
-                              || normalizeAccountingDimension(entry) === normalizeAccountingDimension(studentStage)));
-                          setReceiptVoucherForm((prev: any) => linkedStage ? ({ ...prev, receivedFrom: value, stage: linkedStage.name || linkedStage.type || linkedStage.id, costCenter: stageCostCenterKey(linkedStage), studentId: student?.id || student?.studentId }) : ({ ...prev, receivedFrom: value, studentId: student?.id || student?.studentId }));
-                        }}
-                        className="w-full bg-white border-2 border-emerald-200 rounded-lg p-3 text-base font-bold focus:outline-none focus:ring-2 focus:ring-emerald-500"
-                        placeholder="لرسوم الطلاب اختر طالبًا من القائمة — وللقبض العام اكتب اسم الجهة"
-                      />
-                      <datalist id="accounting-students-list">
-                        {searchableStudents.slice(0, 300).map((student: any) => <option key={student.id || student.studentId || studentNameOf(student)} value={studentNameOf(student)} />)}
-                      </datalist>
-                      {selectedStudent && <p className="mt-1 text-xs font-bold text-emerald-700">تم اختيار الطالب من سجل شؤون الطلاب — المرحلة مرتبطة تلقائيًا.</p>}
-                      {!selectedStudent && <p className="mt-1 text-xs font-bold text-slate-500">رسوم الطلاب تُرحّل إلى حساب الطالب والفواتير تلقائيًا عند اختيار طالب؛ السندات العامة مخصصة للجهات غير الطلابية.</p>}
+                      <label className="block text-slate-700 font-bold mb-1">{receiptEntryMode === 'student' ? 'الطالب المسدد:' : 'الجهة المستلمة:'}</label>
+                      {receiptEntryMode === 'student' ? (
+                        <>
+                          <input
+                            type="search"
+                            list="accounting-students-list"
+                            value={receiptVoucherForm.receivedFrom}
+                            autoComplete="off"
+                            onChange={(e) => {
+                              const value = e.target.value;
+                              const student = searchableStudents.find((item: any) => studentNameOf(item) === value);
+                              const studentStage = studentStageOf(student);
+                              const linkedStage = activeAccountingStages.find((stage: any) => [stage.name, stage.type, stage.id, stage.code, stage.costCenterId]
+                                .some((entry: any) => String(entry || '').trim() === studentStage || normalizeAccountingDimension(entry) === normalizeAccountingDimension(studentStage)));
+                              setReceiptVoucherForm((prev: any) => linkedStage ? ({ ...prev, receivedFrom: value, stage: linkedStage.name || linkedStage.type || linkedStage.id, costCenter: stageCostCenterKey(linkedStage), studentId: student?.id || student?.studentId }) : ({ ...prev, receivedFrom: value, studentId: student?.id || student?.studentId }));
+                            }}
+                            className="w-full bg-white border-2 border-indigo-200 rounded-lg p-3 text-base font-bold focus:outline-none focus:ring-2 focus:ring-indigo-500"
+                            placeholder="اختر الطالب من القائمة"
+                          />
+                          <datalist id="accounting-students-list">
+                            {searchableStudents.slice(0, 300).map((student: any) => <option key={student.id || student.studentId || studentNameOf(student)} value={studentNameOf(student)} />)}
+                          </datalist>
+                          {selectedStudent && <p className="mt-1 text-xs font-bold text-indigo-700">تم اختيار الطالب — سيُتحقق الخادم من وجود فاتورة مفتوحة قبل الترحيل.</p>}
+                        </>
+                      ) : (
+                        <input
+                          type="text"
+                          required
+                          value={receiptVoucherForm.receivedFrom}
+                          onChange={(e) => setReceiptVoucherForm((prev: any) => ({ ...prev, receivedFrom: e.target.value, studentId: '' }))}
+                          className="w-full bg-white border-2 border-emerald-200 rounded-lg p-3 text-base font-bold focus:outline-none focus:ring-2 focus:ring-emerald-500"
+                          placeholder="اكتب اسم الجهة أو الشخص المستلم"
+                        />
+                      )}
                     </div>
                   </div>
 
@@ -846,13 +914,23 @@ const handlePrintRV = (rv: any) => {
                       <label className="block text-slate-700 font-bold mb-1">نوع المعاملة / الإيراد:</label>
                       <select 
                         value={receiptVoucherForm.operationType}
-                        onChange={(e) => setReceiptVoucherForm(prev => ({ ...prev, operationType: e.target.value }))}
+                        disabled={receiptEntryMode === 'student'}
+                        onChange={(e) => setReceiptVoucherForm(prev => ({ ...prev, operationType: e.target.value, studentId: receiptEntryMode === 'general' ? '' : prev.studentId }))}
                         className="w-full bg-slate-50 border border-slate-200 rounded-lg p-2.5 font-bold focus:outline-none"
                       >
-                        <option value="رسوم دراسية">رسوم دراسية سنوية مجمعة</option>
-                        <option value="رسوم حافلة">رسوم اشتراك الحافلة المدرسية</option>
-                        <option value="رسوم أنشطة">رسوم الأنشطة والرحلات اللامنهجية</option>
-                        <option value="أخرى">متحصلات وإيرادات تعليمية أخرى</option>
+                        {receiptEntryMode === 'student' ? (
+                          <>
+                            <option value="رسوم دراسية">رسوم دراسية سنوية مجمعة</option>
+                            <option value="رسوم حافلة">رسوم اشتراك الحافلة المدرسية</option>
+                            <option value="رسوم أنشطة">رسوم الأنشطة والرحلات اللامنهجية</option>
+                          </>
+                        ) : (
+                          <>
+                            <option value="أخرى">متحصلات وإيرادات تعليمية أخرى</option>
+                            <option value="إيراد عام">إيراد عام / تحصيل متنوع</option>
+                            <option value="تبرع">تبرع أو منحة</option>
+                          </>
+                        )}
                       </select>
                     </div>
                   </div>
@@ -946,7 +1024,8 @@ const handlePrintRV = (rv: any) => {
                       }}
                     >
                       <Upload className="w-8 h-8 text-slate-400 group-hover:text-emerald-500 transition-colors" />
-                      <p className="font-extrabold text-slate-700 text-xs">اسحب وأفلت صورة مستند القبض هنا، أو اضغط للتصفح المباشر</p>
+                      <p className="font-extrabold text-slate-700 text-xs"><Upload className="inline-block ml-1 h-4 w-4 align-[-3px] text-emerald-600" />رفع إشعار التوريد / مستند القبض</p>
+                      <p className="text-[10px] text-slate-500 font-bold">يمكن السحب والإفلات أو الضغط لاختيار الملف</p>
                       <p className="text-[10px] text-slate-400 font-medium">يدعم صيغ PDF, PNG, JPG لغاية حجم 5 ميجابايت</p>
                       <input 
                         type="file" 
@@ -968,6 +1047,7 @@ const handlePrintRV = (rv: any) => {
                           <FileText className="w-4 h-4" />
                           <span>{receiptVoucherForm.attachmentName}</span>
                         </span>
+                        <span className="text-[10px] text-emerald-700 font-black">جاهز للرفع مع السند</span>
                         <button 
                           type="button" 
                           onClick={(e) => {

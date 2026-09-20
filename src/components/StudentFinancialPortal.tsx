@@ -2209,12 +2209,22 @@ export default function StudentFinancialPortal({
             }
             .receipt-copy {
               width: 190mm;
-              height: 132mm;
-              margin: 7mm auto 0;
+              min-height: 280mm;
+              margin: 8mm auto;
               padding: 7mm 8mm 6mm;
               border: 1px solid #0f172a;
               position: relative;
               overflow: hidden;
+              page-break-after: always;
+            }
+            .copy-label {
+              position: absolute;
+              top: 4mm;
+              left: 8mm;
+              color: #475569;
+              font-size: 9px;
+              font-weight: 900;
+              letter-spacing: .3px;
             }
             .header {
               display: flex;
@@ -2339,6 +2349,7 @@ export default function StudentFinancialPortal({
         </head>
         <body>
           <section class="receipt-copy">
+          <div class="copy-label">نسخة العميل</div>
           <div class="header">
             <div class="school-brand">
               ${logoMarkup}
@@ -2416,6 +2427,13 @@ export default function StudentFinancialPortal({
 
           <script>
             window.onload = function() {
+              const customerCopy = document.querySelector('.receipt-copy');
+              if (customerCopy) {
+                const accountingCopy = customerCopy.cloneNode(true);
+                accountingCopy.querySelector('.copy-label').textContent = 'نسخة الحسابات العامة';
+                accountingCopy.querySelector('.system-tag').textContent = 'نسخة الحسابات • تحفظ مع المستندات المالية • رقم السند: ${escapePrintHtml(receiptNumber)} • القيد: ${escapePrintHtml(journalNumber)}';
+                document.body.appendChild(accountingCopy);
+              }
               window.print();
             }
           </script>
