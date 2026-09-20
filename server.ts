@@ -2073,8 +2073,11 @@ export async function createApp(options: { cloudflare?: boolean } = {}): Promise
   // ledger source, tenant isolation, and reporting gates are approved.
   // Reads remain available; every non-read financial API request is blocked
   // here before any handler can reach a database write.
-  const financialWritesLocked = process.env.FINANCIAL_WRITES_LOCKED !== 'false'
-    || (cloudflareMode && process.env.EDUPRO_ENVIRONMENT === 'production');
+  // Production may enter the canonical write phase only through the explicit
+  // deployment control.  Keep the default fail-closed behavior, but do not
+  // add a second platform-specific lock that contradicts the reviewed
+  // FINANCIAL_WRITES_LOCKED setting.
+  const financialWritesLocked = process.env.FINANCIAL_WRITES_LOCKED !== 'false';
   app.use((req, res, next) => {
     const isFinancialApi = req.path.startsWith('/api/financial');
     const isRead = ['GET', 'HEAD', 'OPTIONS'].includes(req.method.toUpperCase());
