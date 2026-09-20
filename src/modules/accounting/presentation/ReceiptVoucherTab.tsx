@@ -464,18 +464,21 @@ const handlePrintRV = (rv: any) => {
           <style>
             body {
               font-family: 'Inter', system-ui, sans-serif;
-              padding: 40px;
+              width: 210mm;
+              min-height: 297mm;
+              margin: 0 auto;
+              padding: 10mm 12mm;
               color: #000000;
               background-color: #ffffff;
-              font-size: 12px;
+              font-size: 10px;
             }
             .header-container {
               display: flex;
               justify-content: justify;
               align-items: center;
               border-bottom: 2px solid #059669;
-              padding-bottom: 15px;
-              margin-bottom: 20px;
+              padding-bottom: 8px;
+              margin-bottom: 10px;
             }
             .school-info {
               flex-grow: 1;
@@ -512,10 +515,10 @@ const handlePrintRV = (rv: any) => {
             }
             .title-section {
               text-align: center;
-              margin: 20px 0;
+              margin: 10px 0;
               background-color: #ecfdf5;
               border: 1px solid #a7f3d0;
-              padding: 10px;
+              padding: 7px;
               border-radius: 8px;
             }
             .title-main {
@@ -533,12 +536,12 @@ const handlePrintRV = (rv: any) => {
             .info-grid {
               display: grid;
               grid-template-columns: 1fr 1fr;
-              gap: 15px;
+              gap: 8px;
               background-color: #f8fafc;
               border: 1px solid #cbd5e1;
               border-radius: 8px;
-              padding: 15px;
-              margin-bottom: 20px;
+              padding: 8px;
+              margin-bottom: 10px;
               line-height: 1.6;
             }
             .info-item {
@@ -549,7 +552,7 @@ const handlePrintRV = (rv: any) => {
               grid-template-columns: 1fr 2fr;
               gap: 15px;
               align-items: center;
-              margin-bottom: 25px;
+              margin-bottom: 10px;
             }
             .amount-val {
               background-color: #059669;
@@ -571,13 +574,13 @@ const handlePrintRV = (rv: any) => {
             table {
               width: 100%;
               border-collapse: collapse;
-              margin-bottom: 30px;
-              font-size: 11px;
+              margin-bottom: 10px;
+              font-size: 9px;
             }
             th {
               background-color: #f1f5f9;
               border: 1px solid #cbd5e1;
-              padding: 8px;
+              padding: 4px;
               font-weight: bold;
             }
             td {
@@ -589,7 +592,7 @@ const handlePrintRV = (rv: any) => {
               grid-template-columns: 1fr 1fr 1fr;
               gap: 20px;
               text-align: center;
-              margin-top: 40px;
+              margin-top: 12px;
             }
             .signature-box {
               border-top: 1px dashed #cbd5e1;
@@ -601,8 +604,8 @@ const handlePrintRV = (rv: any) => {
               margin-bottom: 15px;
             }
             @media print {
-              body { padding: 0; }
-              @page { size: A4; margin: 1.5cm; }
+              body { width: 210mm; min-height: 297mm; padding: 10mm 12mm; }
+              @page { size: A4 portrait; margin: 0; }
             }
           </style>
         </head>
