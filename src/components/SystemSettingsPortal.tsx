@@ -38,6 +38,11 @@ export default function SystemSettingsPortal({
     selectedSchool?.logo && /^(https:\/\/|data:image\/)/i.test(selectedSchool.logo) ? selectedSchool.logo : ''
   ));
   const [brandingSaving, setBrandingSaving] = useState(false);
+  const defaultStageLogos: Record<string, string> = {
+    primary: '/branding/stages/primary.png',
+    middle: '/branding/stages/middle.png',
+    secondary: '/branding/stages/secondary.png'
+  };
   const [stageBrandingLogos, setStageBrandingLogos] = useState<Record<string, string>>(() => ({ ...(selectedSchool?.stageLogos || {}) }));
 
   useEffect(() => {
@@ -411,7 +416,7 @@ export default function SystemSettingsPortal({
               {(['primary', 'middle', 'secondary'] as const).map((stage) => (
                 <label key={stage} className="rounded-xl border border-dashed border-slate-700 bg-slate-950 p-4 text-center cursor-pointer hover:border-[#dfb55a]">
                   <div className="h-20 mb-2 rounded-lg bg-white flex items-center justify-center overflow-hidden">
-                    {stageBrandingLogos[stage] ? <img src={stageBrandingLogos[stage]} alt={`شعار ${stage}`} className="h-full w-full object-contain" /> : <span className="text-slate-400 text-xs">لا يوجد شعار</span>}
+                    <img src={stageBrandingLogos[stage] || defaultStageLogos[stage]} alt={`شعار ${stage}`} className="h-full w-full object-contain" />
                   </div>
                   <span className="block text-white font-black text-xs">{stage === 'primary' ? 'الابتدائي' : stage === 'middle' ? 'المتوسط' : 'الثانوي'}</span>
                   <span className="block text-slate-500 text-[10px] mt-1">اضغط لرفع/استبدال الشعار</span>

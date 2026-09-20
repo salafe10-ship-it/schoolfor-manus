@@ -223,7 +223,7 @@ export default function GeneralLedgerPortal({
     }
     const safe = (value: unknown) => String(value ?? '—').replace(/[&<>"']/g, char => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[char] || char));
     const stageKey = String(voucher.costCenter || voucher.stage || '').trim().toLowerCase().replace(/^cc[_-]/, '');
-    const configuredLogo = String(selectedSchool?.stageLogos?.[stageKey] || selectedSchool?.logo || '').trim();
+    const configuredLogo = String(selectedSchool?.stageLogos?.[stageKey] || (['primary', 'middle', 'secondary'].includes(stageKey) ? `${window.location.origin}/branding/stages/${stageKey}.png` : '') || selectedSchool?.logo || '').trim();
     const logoMarkup = /^(https:\/\/|data:image\/)/i.test(configuredLogo)
       ? `<img class="school-logo" src="${safe(configuredLogo)}" alt="شعار المدرسة" onerror="this.style.display='none'" />`
       : `<div class="school-logo school-logo-fallback">${safe(configuredLogo || '🏫')}</div>`;
