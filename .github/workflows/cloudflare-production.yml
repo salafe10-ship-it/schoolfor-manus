@@ -68,7 +68,9 @@ jobs:
             --define "__EDUPRO_BUILD_TIMESTAMP__:\"${BUILD_TIMESTAMP}\"" \
             --var "APP_VERSION:${BUILD_VERSION}" \
             --var "BUILD_COMMIT_SHA:${GITHUB_SHA}" \
-            --var "BUILD_TIMESTAMP:${BUILD_TIMESTAMP}"
+            --var "BUILD_TIMESTAMP:${BUILD_TIMESTAMP}" \
+            --var "FINANCIAL_ERP_MODE:canonical" \
+            --var "FINANCIAL_WRITES_LOCKED:false"
 
       - name: Verify live Cloudflare build identity and assets
         run: npm run smoke:production
