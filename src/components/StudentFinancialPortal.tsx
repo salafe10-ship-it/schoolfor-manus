@@ -343,7 +343,7 @@ export default function StudentFinancialPortal({
   const [financialPersistenceVersion, setFinancialPersistenceVersion] = useState(0);
   // Keep financial mutations locked until the canonical ledger, tenant
   // isolation, and reporting gates are explicitly approved.
-  const financialWritesLocked = true;
+  const financialWritesLocked = import.meta.env.VITE_FINANCIAL_WRITES_ENABLED !== 'true';
   const [financialOperationalContext, setFinancialOperationalContext] = useState<{
     academicYearId: string;
     academicYearName: string;

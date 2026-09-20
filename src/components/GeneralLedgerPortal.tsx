@@ -2319,7 +2319,17 @@ export default function GeneralLedgerPortal({
       return;
     }
 
-    const jvCode = `JV-2026-${Math.floor(Math.random() * 899) + 100}`;
+    const jvCode = `JV-${new Date().getFullYear()}-${Date.now().toString().slice(-8)}`;
+    const debitAccount = accounts.find(account => account.code === newJV.debitAccount);
+    const creditAccount = accounts.find(account => account.code === newJV.creditAccount);
+    if (!debitAccount || !creditAccount || !debitAccount.isActive || !creditAccount.isActive) {
+      triggerNotification('لا يمكن إنشاء القيد: الحساب المدين أو الدائن غير موجود أو غير نشط.', 'warning');
+      return;
+    }
+    if (debitAccount.type === 'رئيسي' || creditAccount.type === 'رئيسي') {
+      triggerNotification('لا يمكن إنشاء قيد على حساب رئيسي؛ اختر حسابًا فرعيًا.', 'warning');
+      return;
+    }
 
     // Create a new Journal Entry as draft
     const newEntry = {
@@ -2328,7 +2338,10 @@ export default function GeneralLedgerPortal({
       description: newJV.description,
       debitTotal: amt,
       creditTotal: amt,
-      status: 'مرحل' as const,
+      status: 'مسودة' as const,
+      schoolId: selectedSchool?.id,
+      branchId: 'branch_1_1',
+      academicYearId: '2026-2027',
       type: 'بسيط' as const,
       createdByUser: 'سليمان غازي',
       createdAt: new Date().toISOString(),
@@ -2354,7 +2367,7 @@ export default function GeneralLedgerPortal({
 
       addJvAuditEvent(jvCode, 'قيد مزدوج تلقائي', 'سليمان غازي', `إنشاء قيد مزدوج يدوي ${jvCode} وترحيله فورياً عبر PostingEngine`);
       logAction('JOURNAL_ENTRY', `قيد مزدوج يدوي ${jvCode}: ${newJV.description} بقيمة ${amt.toLocaleString()} د.ل`, 'الحسابات العامة');
-      triggerNotification('✓ تم حفظ وترحيل القيد المزدوج بنجاح عبر محرك الترحيل المالي الموحد', 'success');
+      triggerNotification('✓ تم حفظ القيد كمسودة متوازنة؛ يجب اعتماده ثم ترحيله من دورة القيود.', 'success');
       setShowAddJVModal(false);
       setNewJV({ description: '', debitAccount: '1101', creditAccount: '4101', amount: '' });
     } catch (error: any) {
@@ -2832,9 +2845,24 @@ export default function GeneralLedgerPortal({
     }
     const editing = coaMode === 'edit';
     const existing = accounts.find(account => account.code === code);
-    if (!editing && existing) {
+    if (existing && (!editing || existing.code !== selectedAccountCode)) {
       triggerNotification('كود الحساب موجود مسبقاً ولا يمكن تكراره.', 'warning');
       return;
+    }
+    if (coaForm.parentAccountId && coaForm.parentAccountId === selectedAccountCode) {
+      triggerNotification('لا يمكن جعل الحساب أباً لنفسه.', 'warning');
+      return;
+    }
+    if (coaForm.parentAccountId && !accounts.some(account => account.code === coaForm.parentAccountId && account.isActive !== false)) {
+      triggerNotification('الحساب الأب غير موجود أو غير نشط.', 'warning');
+      return;
+    }
+    if (editing && selectedAccountCode && code !== selectedAccountCode) {
+      const hasPostedReference = journalEntries.some(entry => (entry.lines || []).some((line: any) => String(line.accountCode) === selectedAccountCode) && String(entry.status).toLowerCase() === 'posted');
+      if (hasPostedReference) {
+        triggerNotification('لا يمكن تغيير كود حساب مستخدم في قيد مرحل؛ أنشئ حساباً بديلاً أو استخدم التعطيل.', 'warning');
+        return;
+      }
     }
     const baseAccount = existing || accounts.find(account => account.code === selectedAccountCode);
     const accountNode: AccountNode = {

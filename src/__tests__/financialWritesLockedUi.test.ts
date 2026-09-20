@@ -9,7 +9,7 @@ const source = fs.readFileSync(
 
 describe('financial write lock is visible and enforced in the student finance UI', () => {
   it('keeps the canonical financial mutation lock enabled', () => {
-    expect(source).toContain('const financialWritesLocked = true;');
+    expect(source).toContain("const financialWritesLocked = import.meta.env.VITE_FINANCIAL_WRITES_ENABLED !== 'true';");
     expect(source).toContain('المصدر المالي متصل للقراءة فقط — الحفظ والترحيل مقفلان');
   });
 
