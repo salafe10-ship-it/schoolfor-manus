@@ -166,7 +166,8 @@ class PostgresTransactionSession implements TransactionSession {
         // the pg contract for discarding a broken/transaction-tainted client.
         await this.discardClient();
         this.state = "released";
-        throw error;
+        this.diagnosticTrace?.mark(`${this.diagnosticPrefix}active_release_discarded`);
+        return;
       }
     }
 

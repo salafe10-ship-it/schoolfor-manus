@@ -660,7 +660,16 @@ export class UnitOfWork {
       this.setActiveContext(null);
       EnterpriseLogger.info(`Transaction ${store.id} rolled back successfully.`, 'UnitOfWork');
     }
-    if (rollbackError) throw rollbackError;
+    // Cleanup errors must never replace the original business/database error
+    // that caused runInTransaction() to enter the rollback path. Re-throwing
+    // here makes a harmless pool-recycle diagnostic look like the write
+    // failure and hides the actionable root cause from the API and audit log.
+    if (rollbackError) {
+      EnterpriseLogger.error('Transaction rollback cleanup completed with a recoverable error.', 'UnitOfWork', {
+        transactionId: store.id,
+        error: rollbackError?.message || String(rollbackError),
+      });
+    }
   }
 
   // --- FALLBACK STORAGE UTILITIES ---
