@@ -102,7 +102,17 @@ export const ReceiptVoucherTab = () => {
     return center?.name || center?.nameAr || normalized;
   };
   const studentNameOf = (student: any) => String(student?.fullName || student?.name || [student?.firstName, student?.middleName, student?.lastName].filter(Boolean).join(' ') || student?.studentName || '').trim();
-  const studentStageOf = (student: any) => String(student?.stageName || student?.stage || student?.schoolStage || student?.educationStage || '').trim();
+  const studentStageOf = (student: any) => String(
+    student?.stageName
+    || student?.stage
+    || student?.schoolStage
+    || student?.educationStage
+    || student?.educationLevel
+    || student?.stageId
+    || student?.costCenterId
+    || student?.gradeId
+    || ''
+  ).trim();
   const searchableStudents = (Array.isArray(students) ? students : []).filter((student: any) => studentNameOf(student));
   const selectedStudent = searchableStudents.find((student: any) => studentNameOf(student) === String(receiptVoucherForm.receivedFrom || '').trim());
   React.useEffect(() => {
@@ -755,7 +765,9 @@ const handlePrintRV = (rv: any) => {
                           const value = e.target.value;
                           const student = searchableStudents.find((item: any) => studentNameOf(item) === value);
                           const studentStage = studentStageOf(student);
-                          const linkedStage = activeAccountingStages.find((stage: any) => [stage.name, stage.type, stage.id].some((entry: any) => String(entry || '').trim() === studentStage));
+                          const linkedStage = activeAccountingStages.find((stage: any) => [stage.name, stage.type, stage.id, stage.code, stage.costCenterId]
+                            .some((entry: any) => String(entry || '').trim() === studentStage
+                              || normalizeAccountingDimension(entry) === normalizeAccountingDimension(studentStage)));
                           setReceiptVoucherForm((prev: any) => linkedStage ? ({ ...prev, receivedFrom: value, stage: linkedStage.name || linkedStage.type || linkedStage.id, costCenter: stageCostCenterKey(linkedStage), studentId: student?.id || student?.studentId }) : ({ ...prev, receivedFrom: value, studentId: student?.id || student?.studentId }));
                         }}
                         className="w-full bg-white border-2 border-emerald-200 rounded-lg p-3 text-base font-bold focus:outline-none focus:ring-2 focus:ring-emerald-500"
