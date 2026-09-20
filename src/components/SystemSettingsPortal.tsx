@@ -12,8 +12,9 @@ interface SystemSettingsPortalProps {
   triggerNotification: (msg: string, type: 'success' | 'warning' | 'error' | 'info') => void;
   logAction: (action: string, details: string, module: string) => void;
   currentRole: string;
-  selectedSchool?: { id?: string; name?: string; logo?: string };
+  selectedSchool?: { id?: string; name?: string; logo?: string; stageLogos?: Record<string, string> };
   onSchoolLogoUpdated?: (logo: string) => void;
+  onSchoolStageLogosUpdated?: (stageLogos: Record<string, string>) => void;
   initialTab?: 'dashboard' | 'branding' | 'organization' | 'school' | 'financial' | 'exams' | 'fees' | 'hr' | 'system' | 'master_data' | 'audit' | 'backup';
   brandingOnly?: boolean;
 }
@@ -25,6 +26,7 @@ export default function SystemSettingsPortal({
   currentRole,
   selectedSchool,
   onSchoolLogoUpdated,
+  onSchoolStageLogosUpdated,
   initialTab = 'dashboard',
   brandingOnly = false
 }: SystemSettingsPortalProps) {
@@ -36,11 +38,27 @@ export default function SystemSettingsPortal({
     selectedSchool?.logo && /^(https:\/\/|data:image\/)/i.test(selectedSchool.logo) ? selectedSchool.logo : ''
   ));
   const [brandingSaving, setBrandingSaving] = useState(false);
+  const [stageBrandingLogos, setStageBrandingLogos] = useState<Record<string, string>>(() => ({ ...(selectedSchool?.stageLogos || {}) }));
 
   useEffect(() => {
     const logo = selectedSchool?.logo || '';
     setBrandingLogo(/^(https:\/\/|data:image\/)/i.test(logo) ? logo : '');
   }, [selectedSchool?.id, selectedSchool?.logo]);
+
+  useEffect(() => {
+    setStageBrandingLogos({ ...(selectedSchool?.stageLogos || {}) });
+  }, [selectedSchool?.id, selectedSchool?.stageLogos]);
+
+  const handleStageBrandingFile = async (stage: string, file: File | undefined) => {
+    if (!file) return;
+    if (!['image/png', 'image/jpeg', 'image/webp'].includes(file.type) || file.size > 5 * 1024 * 1024) {
+      triggerNotification('اختر صورة PNG أو JPEG أو WebP لا تتجاوز 5 ميجابايت.', 'warning');
+      return;
+    }
+    const source = await new Promise<string>((resolve, reject) => { const reader = new FileReader(); reader.onload = () => resolve(String(reader.result || '')); reader.onerror = () => reject(new Error('تعذر قراءة شعار المرحلة.')); reader.readAsDataURL(file); });
+    setStageBrandingLogos((current) => ({ ...current, [stage]: source }));
+    triggerNotification(`تم تجهيز شعار مرحلة ${stage}. اضغط حفظ الهوية لاعتماده.`, 'info');
+  };
 
   const handleBrandingFile = async (file: File | undefined) => {
     if (!file) return;
@@ -99,12 +117,13 @@ export default function SystemSettingsPortal({
       const response = await authenticatedRequest('/api/school/branding', {
         method: 'PUT',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ logoDataUrl: brandingLogo || '' })
+        body: JSON.stringify({ logoDataUrl: brandingLogo || '', stageLogos: stageBrandingLogos })
       });
       const payload = await response.json().catch(() => ({}));
       if (!response.ok || !payload?.success) throw new Error(payload?.message || 'تعذر حفظ شعار المدرسة.');
       const savedLogo = String(payload?.data?.logo || brandingLogo || '🏫');
       onSchoolLogoUpdated?.(savedLogo);
+      onSchoolStageLogosUpdated?.(payload?.data?.stageLogos || stageBrandingLogos);
       logAction('SCHOOL_BRANDING_UPDATED', brandingLogo ? 'تم رفع شعار المدرسة واعتماده للمستندات والتقارير.' : 'تمت إزالة شعار المدرسة والعودة إلى الافتراضي.', 'هوية المدرسة');
       triggerNotification('تم حفظ الشعار مركزيًا وسيظهر في سندات القبض والقيود والتقارير بعد إعادة تحميل الشاشة.', 'success');
     } catch (error) {
@@ -383,6 +402,22 @@ export default function SystemSettingsPortal({
                 </div>
               </div>
               <p className="text-[10px] text-emerald-400 mt-4">مصدر مركزي واحد للهوية — عزل كامل بين المدارس</p>
+            </div>
+          </div>
+          <div className="border-t border-slate-800 pt-5">
+            <h4 className="text-sm font-black text-white">شعارات المراحل للطباعة المالية</h4>
+            <p className="text-xs text-slate-400 mt-1">يظهر شعار المرحلة المختار تلقائيًا في رأس سند القبض والتقارير المرتبطة بمركز التكلفة.</p>
+            <div className="grid grid-cols-1 md:grid-cols-3 gap-3 mt-4">
+              {(['primary', 'middle', 'secondary'] as const).map((stage) => (
+                <label key={stage} className="rounded-xl border border-dashed border-slate-700 bg-slate-950 p-4 text-center cursor-pointer hover:border-[#dfb55a]">
+                  <div className="h-20 mb-2 rounded-lg bg-white flex items-center justify-center overflow-hidden">
+                    {stageBrandingLogos[stage] ? <img src={stageBrandingLogos[stage]} alt={`شعار ${stage}`} className="h-full w-full object-contain" /> : <span className="text-slate-400 text-xs">لا يوجد شعار</span>}
+                  </div>
+                  <span className="block text-white font-black text-xs">{stage === 'primary' ? 'الابتدائي' : stage === 'middle' ? 'المتوسط' : 'الثانوي'}</span>
+                  <span className="block text-slate-500 text-[10px] mt-1">اضغط لرفع/استبدال الشعار</span>
+                  <input type="file" accept="image/png,image/jpeg,image/webp" className="sr-only" onChange={(event) => { void handleStageBrandingFile(stage, event.target.files?.[0]); event.currentTarget.value = ''; }} />
+                </label>
+              ))}
             </div>
           </div>
         </div>

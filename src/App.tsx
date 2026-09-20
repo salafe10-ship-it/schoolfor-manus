@@ -1808,6 +1808,7 @@ export default function App() {
                 currentRole={currentRole}
                 selectedSchool={selectedSchool}
                 onSchoolLogoUpdated={(logo) => setSelectedSchool((current) => ({ ...current, logo }))}
+                onSchoolStageLogosUpdated={(stageLogos) => setSelectedSchool((current) => ({ ...current, stageLogos }))}
                 initialTab="branding"
                 brandingOnly
               />
@@ -2353,7 +2354,8 @@ export default function App() {
                   logAction={logAction}
                   currentRole={currentRole}
                   selectedSchool={selectedSchool}
-                  onSchoolLogoUpdated={(logo) => setSelectedSchool((current) => ({ ...current, logo }))}
+                onSchoolLogoUpdated={(logo) => setSelectedSchool((current) => ({ ...current, logo }))}
+                onSchoolStageLogosUpdated={(stageLogos) => setSelectedSchool((current) => ({ ...current, stageLogos }))}
                 />
               ) : settingsTab === 'rbac' ? (
                 <>

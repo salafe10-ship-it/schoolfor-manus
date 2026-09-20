@@ -28,7 +28,7 @@ const TreasuryPlatformPortal = React.lazy(() => import('./TreasuryPlatformPortal
 interface GeneralLedgerPortalProps {
   students: Student[];
   invoices: Invoice[];
-  selectedSchool: { id: string; name: string; logo?: string; licenseNumber?: string };
+  selectedSchool: { id: string; name: string; logo?: string; licenseNumber?: string; stageLogos?: Record<string, string> };
   setActiveSection: (sec: string) => void;
   logAction: (action: string, details: string, module: string) => void;
   triggerNotification: (text: string, type: 'info' | 'warning' | 'success') => void;
@@ -222,7 +222,8 @@ export default function GeneralLedgerPortal({
       return;
     }
     const safe = (value: unknown) => String(value ?? '—').replace(/[&<>"']/g, char => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[char] || char));
-    const configuredLogo = String(selectedSchool?.logo || '').trim();
+    const stageKey = String(voucher.costCenter || voucher.stage || '').trim().toLowerCase().replace(/^cc[_-]/, '');
+    const configuredLogo = String(selectedSchool?.stageLogos?.[stageKey] || selectedSchool?.logo || '').trim();
     const logoMarkup = /^(https:\/\/|data:image\/)/i.test(configuredLogo)
       ? `<img class="school-logo" src="${safe(configuredLogo)}" alt="شعار المدرسة" onerror="this.style.display='none'" />`
       : `<div class="school-logo school-logo-fallback">${safe(configuredLogo || '🏫')}</div>`;

@@ -7886,6 +7886,14 @@ export async function createApp(options: { cloudflare?: boolean } = {}): Promise
       const schoolId = String(identity?.schoolId || '').trim();
       if (!tenantId || !schoolId) throw new AuthenticationError('هوية المدرسة الموثوقة غير مكتملة.');
       const logoDataUrl = String(req.body?.logoDataUrl || '').trim();
+      const requestedStageLogos = readObject(req.body?.stageLogos);
+      const stageLogos: Record<string, string | null> = {};
+      for (const stage of ['primary', 'middle', 'secondary']) {
+        const value = String(requestedStageLogos[stage] || '').trim();
+        if (value && value.length > 700_000) throw new ValidationError(`شعار مرحلة ${stage} يتجاوز الحد الآمن المسموح به.`);
+        if (value && !/^data:image\/(?:png|jpeg|webp);base64,[a-z0-9+/=\s]+$/i.test(value)) throw new ValidationError(`صيغة شعار مرحلة ${stage} غير مدعومة.`);
+        stageLogos[stage] = value || null;
+      }
       if (logoDataUrl && logoDataUrl.length > 700_000) throw new ValidationError('ملف الشعار المضغوط يتجاوز الحد الآمن المسموح به.');
       if (logoDataUrl && !/^data:image\/(?:png|jpeg|webp);base64,[a-z0-9+/=\s]+$/i.test(logoDataUrl)) {
         throw new ValidationError('صيغة الشعار غير مدعومة. استخدم PNG أو JPEG أو WebP.');
@@ -7905,6 +7913,7 @@ export async function createApp(options: { cloudflare?: boolean } = {}): Promise
         branding: {
           ...currentBranding,
           logoDataUrl: logoDataUrl || null,
+          stageLogos,
           updatedAt: new Date().toISOString(),
         },
       };
@@ -7918,7 +7927,7 @@ export async function createApp(options: { cloudflare?: boolean } = {}): Promise
       if (updated.error) throw updated.error;
       return res.json({
         success: true,
-        data: { logo: logoDataUrl || '🏫', updatedAt: nextMetadata.branding.updatedAt },
+        data: { logo: logoDataUrl || '🏫', stageLogos, updatedAt: nextMetadata.branding.updatedAt },
         message: logoDataUrl ? 'تم حفظ شعار المدرسة في المصدر المركزي.' : 'تمت إزالة شعار المدرسة والعودة إلى الشعار الافتراضي.',
       });
     } catch (error) {

@@ -2183,7 +2183,8 @@ export default function StudentFinancialPortal({
     const receiptNumber = v.receiptVoucherId || v.id;
     const journalNumber = v.journalEntryId || 'غير مرحل';
     const escapePrintHtml = (value: unknown) => String(value ?? '').replace(/[&<>"']/g, char => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[char] || char));
-    const configuredLogo = String(selectedSchool?.logo || '').trim();
+    const stageKey = String(v.costCenter || v.stage || '').trim().toLowerCase().replace(/^cc[_-]/, '');
+    const configuredLogo = String(selectedSchool?.stageLogos?.[stageKey] || selectedSchool?.logo || '').trim();
     const logoMarkup = /^(https:\/\/|data:image\/)/i.test(configuredLogo)
       ? `<img class="school-logo" src="${escapePrintHtml(configuredLogo)}" alt="شعار المدرسة" onerror="this.style.display='none'" />`
       : `<div class="school-logo school-logo-fallback" aria-label="شعار المدرسة">${escapePrintHtml(configuredLogo || '🏫')}</div>`;
