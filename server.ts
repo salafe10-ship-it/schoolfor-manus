@@ -2069,6 +2069,24 @@ export async function createApp(options: { cloudflare?: boolean } = {}): Promise
   // Trust the proxy (Express/Vite reverse proxy setup)
   app.set('trust proxy', 1);
 
+  // Financial mutation is deliberately fail-closed until the canonical
+  // ledger source, tenant isolation, and reporting gates are approved.
+  // Reads remain available; every non-read financial API request is blocked
+  // here before any handler can reach a database write.
+  const financialWritesLocked = true;
+  app.use((req, res, next) => {
+    const isFinancialApi = req.path.startsWith('/api/financial');
+    const isRead = ['GET', 'HEAD', 'OPTIONS'].includes(req.method.toUpperCase());
+    if (financialWritesLocked && isFinancialApi && !isRead) {
+      return res.status(423).json({
+        success: false,
+        error: 'FINANCIAL_WRITES_LOCKED',
+        message: 'الكتابة المالية مقفلة حتى اعتماد دفتر الأستاذ الكانوني ومصدر الحقيقة والعزل والتقارير.'
+      });
+    }
+    return next();
+  });
+
   // Security headers are strict by default. Embedding is an explicit opt-in
   // for deployments that genuinely require an iframe host.
   const allowIframeEmbedding = process.env.ALLOW_IFRAME_EMBEDDING === 'true';

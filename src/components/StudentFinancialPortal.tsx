@@ -39,7 +39,6 @@ interface StudentFinancialPortalProps {
   selectedSchool?: any;
   selectedBranch?: { id?: string; name?: string } | null;
 }
-
 interface InstallmentScheduleView {
   scheduleId: string;
   installmentNumber: number;
@@ -342,6 +341,9 @@ export default function StudentFinancialPortal({
   const [financialPersistence, setFinancialPersistence] = useState<'loading' | 'ready' | 'blocked'>('loading');
   const [financialPersistenceMessage, setFinancialPersistenceMessage] = useState('جارٍ التحقق من مصدر البيانات المالية...');
   const [financialPersistenceVersion, setFinancialPersistenceVersion] = useState(0);
+  // Keep financial mutations locked until the canonical ledger, tenant
+  // isolation, and reporting gates are explicitly approved.
+  const financialWritesLocked = true;
   const [financialOperationalContext, setFinancialOperationalContext] = useState<{
     academicYearId: string;
     academicYearName: string;
@@ -3465,7 +3467,7 @@ export default function StudentFinancialPortal({
         onDownloadTemplate={portalOnDownloadTemplate}
         isSaving={false}
         isLoading={false}
-        disabled={financialPersistence !== 'ready'}
+        disabled={financialWritesLocked || financialPersistence !== 'ready'}
         selectedId={portalSelectedId}
         isEditing={portalIsEditing}
         userRole={currentRole || 'SuperAdmin'}
@@ -4198,7 +4200,7 @@ export default function StudentFinancialPortal({
               
               <button
                 onClick={() => handleMassDistribution()}
-                disabled={financialPersistence !== 'ready' || massTargetStudents.filter(student => selectedStudentIds[student.id] !== false).length === 0 || massFeeAmount <= 0}
+                disabled={financialWritesLocked || financialPersistence !== 'ready' || massTargetStudents.filter(student => selectedStudentIds[student.id] !== false).length === 0 || massFeeAmount <= 0}
                 className="financial-fee-module-action financial-fee-module-navy text-sm font-bold px-8 py-4 rounded shadow-md flex items-center gap-2 transition-colors cursor-pointer disabled:cursor-not-allowed disabled:opacity-50"
               >
                 <CheckCircle2 className="w-5 h-5" />
@@ -4312,7 +4314,7 @@ export default function StudentFinancialPortal({
                 <button
                   type="button"
                   onClick={() => { void handleSaveInstallmentPlan(); }}
-                  disabled={financialPersistence !== 'ready' || !selectedPlanInvoice || installmentPlans.some(plan => plan.invoiceId === selectedPlanInvoice?.id && plan.status !== 'cancelled') || generatedInstallments.length === 0}
+                  disabled={financialWritesLocked || financialPersistence !== 'ready' || !selectedPlanInvoice || installmentPlans.some(plan => plan.invoiceId === selectedPlanInvoice?.id && plan.status !== 'cancelled') || generatedInstallments.length === 0}
                   className="w-full rounded-xl border border-amber-300 bg-gradient-to-r from-[#9b6c17] via-[#d4af37] to-[#9b6c17] px-4 py-3 text-sm font-black text-[#24150d] shadow-md disabled:cursor-not-allowed disabled:opacity-50"
                 >
                   {installmentPlans.some(plan => plan.invoiceId === selectedPlanInvoice?.id && plan.status !== 'cancelled') ? '✓ خطة محفوظة لهذه المطالبة' : 'حفظ واعتماد خطة الأقساط'}
@@ -4538,7 +4540,7 @@ export default function StudentFinancialPortal({
                       const newId = `row_${Date.now()}`;
                       setFeeRows([...feeRows, { id: newId, type: feeTypeOptions[0]?.value || 'زي مدرسي', amount: 0, remarks: '' }]);
                     }}
-                    disabled={financialPersistence !== 'ready' || !selectedStudent}
+                    disabled={financialWritesLocked || financialPersistence !== 'ready' || !selectedStudent}
                     className="fee-management-add-action text-[11px] font-black px-3.5 py-1.5 flex items-center gap-1 transition-all transform active:scale-95 cursor-pointer shadow-sm disabled:cursor-not-allowed disabled:opacity-50"
                   >
                     <span>+</span>
@@ -4678,7 +4680,7 @@ export default function StudentFinancialPortal({
                   <button
                     type="button"
                     onClick={() => { void handleIssueStudentFeeDemand(); }}
-                    disabled={financialPersistence !== 'ready' || !selectedStudent || feeRows.length === 0}
+                    disabled={financialWritesLocked || financialPersistence !== 'ready' || !selectedStudent || feeRows.length === 0}
                     className="fee-management-action fee-management-primary-action text-xs font-black py-3 px-1 transition-transform active:scale-95 text-center cursor-pointer disabled:cursor-not-allowed disabled:opacity-50"
                   >
                     🧾 إصدار المطالبة
@@ -4688,7 +4690,7 @@ export default function StudentFinancialPortal({
                   <button
                     type="button"
                     onClick={handlePrepareCollectionDraft}
-                    disabled={financialPersistence !== 'ready' || !selectedStudent || !financialInvoices.some(invoice => invoice.studentId === selectedStudent.id && Number(invoice.remainingAmount ?? invoice.amount ?? 0) > 0 && !['paid', 'cancelled', 'void', 'written_off', 'refunded'].includes(String(invoice.status || '').toLowerCase()))}
+                    disabled={financialWritesLocked || financialPersistence !== 'ready' || !selectedStudent || !financialInvoices.some(invoice => invoice.studentId === selectedStudent.id && Number(invoice.remainingAmount ?? invoice.amount ?? 0) > 0 && !['paid', 'cancelled', 'void', 'written_off', 'refunded'].includes(String(invoice.status || '').toLowerCase()))}
                     className="fee-management-action fee-management-collect-action text-xs font-black py-3 px-1 transition-transform active:scale-95 text-center cursor-pointer disabled:cursor-not-allowed disabled:opacity-50"
                   >
                     💵 قبض وتحصيل
@@ -4948,12 +4950,12 @@ export default function StudentFinancialPortal({
                   <Coins className="w-5 h-5 text-amber-500" />
                   <span>👑 بوابـة سندات القبض الماليـة للطلاب</span>
                 </h3>
-                <p className="text-xs text-slate-500 font-semibold mt-1">توليد وإدارة وطباعة إيصالات الدفع والتحصيل، مع ترحيل فوري للحسابات العامة وقيد اليومية المزدوج وعزل كامل للبيانات</p>
+                <p className="text-xs text-slate-500 font-semibold mt-1">عرض وإدارة وطباعة إيصالات الدفع والتحصيل، مع ترحيل متوقف حتى اعتماد دفتر الأستاذ الكانوني وعزل كامل للبيانات</p>
               </div>
               <div className="flex items-center gap-2">
-                <span className={`text-[11px] font-black px-3 py-1.5 flex items-center gap-1 ${financialPersistence === 'ready' ? 'bg-emerald-50 text-emerald-800' : financialPersistence === 'loading' ? 'bg-amber-50 text-amber-800' : 'bg-rose-50 text-rose-800'}`}>
-                  <span className={`w-2 h-2 rounded-full ${financialPersistence === 'ready' ? 'bg-emerald-500' : financialPersistence === 'loading' ? 'bg-amber-500 animate-pulse' : 'bg-rose-500'}`} />
-                  {financialPersistence === 'ready' ? 'المصدر المالي الموثق متصل' : financialPersistence === 'loading' ? 'جارٍ التحقق من المصدر المالي' : 'المصدر المالي غير متاح — الحفظ متوقف'}
+                <span className={`text-[11px] font-black px-3 py-1.5 flex items-center gap-1 ${financialWritesLocked ? 'bg-amber-50 text-amber-800' : financialPersistence === 'ready' ? 'bg-emerald-50 text-emerald-800' : financialPersistence === 'loading' ? 'bg-amber-50 text-amber-800' : 'bg-rose-50 text-rose-800'}`}>
+                  <span className={`w-2 h-2 rounded-full ${financialWritesLocked ? 'bg-amber-500' : financialPersistence === 'ready' ? 'bg-emerald-500' : financialPersistence === 'loading' ? 'bg-amber-500 animate-pulse' : 'bg-rose-500'}`} />
+                  {financialWritesLocked ? 'المصدر المالي متصل للقراءة فقط — الحفظ والترحيل مقفلان' : financialPersistence === 'ready' ? 'المصدر المالي الموثق متصل' : financialPersistence === 'loading' ? 'جارٍ التحقق من المصدر المالي' : 'المصدر المالي غير متاح — الحفظ متوقف'}
                 </span>
               </div>
             </div>
@@ -4965,7 +4967,7 @@ export default function StudentFinancialPortal({
               <button
                 type="button"
                 onClick={handleNewStudRv}
-                disabled={financialPersistence !== 'ready'}
+                disabled={financialWritesLocked || financialPersistence !== 'ready'}
                 className="financial-receipts-action financial-receipts-gold text-xs font-bold px-3 py-2 flex items-center gap-1.5 transition-colors cursor-pointer disabled:cursor-not-allowed disabled:opacity-50"
                 title="إصدار سند مالي جديد"
               >
@@ -4977,7 +4979,7 @@ export default function StudentFinancialPortal({
               <button
                 type="button"
                 onClick={handleSaveStudRv}
-                disabled={financialPersistence !== 'ready' || studRvMode === 'view'}
+                disabled={financialWritesLocked || financialPersistence !== 'ready' || studRvMode === 'view'}
                 className={`financial-receipts-action financial-receipts-navy text-xs font-bold px-3 py-2 flex items-center gap-1.5 transition-colors cursor-pointer ${
                   studRvMode !== 'view'
                     ? 'bg-emerald-600 hover:bg-emerald-500 text-white'
@@ -5012,7 +5014,7 @@ export default function StudentFinancialPortal({
                   setStudRvMode('edit');
                   triggerNotification('📝 تم فتح وضع التحرير للسند الحالي.', 'info');
                 }}
-                disabled={financialPersistence !== 'ready' || studRvMode !== 'view' || !selectedStudRv || selectedStudRv.status !== 'saved'}
+                disabled={financialWritesLocked || financialPersistence !== 'ready' || studRvMode !== 'view' || !selectedStudRv || selectedStudRv.status !== 'saved'}
                 className={`financial-receipts-action financial-receipts-paper text-xs font-bold px-3 py-2 flex items-center gap-1.5 transition-colors cursor-pointer ${
                   studRvMode === 'view' && selectedStudRv && selectedStudRv.status === 'saved'
                     ? 'bg-amber-600 hover:bg-amber-500 text-white'
@@ -5028,7 +5030,7 @@ export default function StudentFinancialPortal({
               <button
                 type="button"
                 onClick={handleApproveStudRv}
-                disabled={financialPersistence !== 'ready' || studRvMode !== 'view' || !selectedStudRv || selectedStudRv.status === 'approved' || selectedStudRv.status === 'posted' || selectedStudRv.status === 'cancelled'}
+                disabled={financialWritesLocked || financialPersistence !== 'ready' || studRvMode !== 'view' || !selectedStudRv || selectedStudRv.status === 'approved' || selectedStudRv.status === 'posted' || selectedStudRv.status === 'cancelled'}
                 className={`financial-receipts-action financial-receipts-gold text-xs font-bold px-3 py-2 flex items-center gap-1.5 transition-colors cursor-pointer ${
                   studRvMode === 'view' && selectedStudRv && selectedStudRv.status === 'saved'
                     ? 'bg-amber-600 hover:bg-amber-500 text-white'
@@ -5044,7 +5046,7 @@ export default function StudentFinancialPortal({
               <button
                 type="button"
                 onClick={handlePostStudRv}
-                disabled={financialPersistence !== 'ready' || studRvMode !== 'view' || !selectedStudRv || selectedStudRv.status !== 'approved'}
+                disabled={financialWritesLocked || financialPersistence !== 'ready' || studRvMode !== 'view' || !selectedStudRv || selectedStudRv.status !== 'approved'}
                 className={`financial-receipts-action financial-receipts-navy text-xs font-bold px-3 py-2 flex items-center gap-1.5 transition-colors cursor-pointer ${
                   studRvMode === 'view' && selectedStudRv && selectedStudRv.status === 'approved'
                     ? 'bg-purple-600 hover:bg-purple-500 text-white shadow-md shadow-purple-900/30 font-extrabold'
@@ -5060,7 +5062,7 @@ export default function StudentFinancialPortal({
               <button
                 type="button"
                 onClick={handleCancelStudRv}
-                disabled={financialPersistence !== 'ready' || studRvMode !== 'view' || !selectedStudRv || selectedStudRv.status === 'cancelled' || selectedStudRv.status === 'posted'}
+                disabled={financialWritesLocked || financialPersistence !== 'ready' || studRvMode !== 'view' || !selectedStudRv || selectedStudRv.status === 'cancelled' || selectedStudRv.status === 'posted'}
                 className={`financial-receipts-action financial-receipts-danger text-xs font-bold px-3 py-2 flex items-center gap-1.5 transition-colors cursor-pointer ${
                   studRvMode === 'view' && selectedStudRv && selectedStudRv.status !== 'cancelled'
                     ? 'bg-rose-600 hover:bg-rose-500 text-white'
@@ -5076,7 +5078,7 @@ export default function StudentFinancialPortal({
               <button
                 type="button"
                 onClick={handleDeleteStudRv}
-                disabled={financialPersistence !== 'ready' || studRvMode !== 'view' || !selectedStudRv || selectedStudRv.status === 'posted'}
+                disabled={financialWritesLocked || financialPersistence !== 'ready' || studRvMode !== 'view' || !selectedStudRv || selectedStudRv.status === 'posted'}
                 className={`financial-receipts-action financial-receipts-danger text-xs font-bold px-3 py-2 flex items-center gap-1.5 transition-colors cursor-pointer ${
                   studRvMode === 'view' && selectedStudRv && selectedStudRv.status !== 'posted'
                     ? 'bg-red-700 hover:bg-red-600 text-white'
@@ -6172,3 +6174,4 @@ export default function StudentFinancialPortal({
     </div>
   );
 }
+

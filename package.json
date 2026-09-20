@@ -39,7 +39,7 @@
     "provisioning:school-owner": "tsx scripts/provisioning-school-owner.ts",
     "financial:seed-uat-review": "tsx scripts/seed-uat-accounting-review.ts",
     "provisioning:platform-admin": "tsx scripts/provisioning-platform-admin.ts",
-    "test": "vitest",
+    "test": "vitest --configLoader native",
     "test:coverage": "vitest run --coverage"
   },
   "dependencies": {
