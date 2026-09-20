@@ -1,4 +1,4 @@
-import { Check, Coins, FileText, Printer, Search, ShieldAlert, Trash2, Upload, X } from 'lucide-react';
+import { Check, Coins, FileText, Pencil, Printer, Search, ShieldAlert, Trash2, Upload, X } from 'lucide-react';
 import React from 'react';
 import { AccountingContext } from '../../../components/GeneralLedgerPortal';
 import { EnterpriseAuditLogger } from '../../../utils/EnterpriseAuditLogger';
@@ -24,6 +24,7 @@ const getVoucherCostCenterLabel = (voucher: any): string => {
 };
 
 export const PaymentVoucherTab = () => {
+  const [editingPaymentVoucherId, setEditingPaymentVoucherId] = React.useState<string | null>(null);
   const {
   activeTab, setActiveTab, activeSidebarItem, setActiveSidebarItem,
   refreshing, setRefreshing, currency, setCurrency, activeSaving, setActiveSaving,
@@ -157,7 +158,7 @@ export const PaymentVoucherTab = () => {
     }
 
     const nextIdNum = paymentVouchers.length + 1;
-    const pvId = `PV-2026-${String(nextIdNum).padStart(4, '0')}`;
+    const pvId = editingPaymentVoucherId || `PV-2026-${String(nextIdNum).padStart(4, '0')}`;
     const jvId = `JV-2026-PV-${String(nextIdNum).padStart(4, '0')}`;
     const creditAccountCode = paymentVoucherForm.paidFromAccount;
     const debitAccountCode = paymentVoucherForm.paidToAccount;
@@ -233,7 +234,9 @@ export const PaymentVoucherTab = () => {
       return acc;
     });
 
-    const updatedPvs = [newPv, ...paymentVouchers];
+    const updatedPvs = editingPaymentVoucherId
+      ? paymentVouchers.map(item => item.id === editingPaymentVoucherId ? { ...item, ...newPv } : item)
+      : [newPv, ...paymentVouchers];
     const updatedJvs = [newJv, ...journalEntries];
 
     // 4. Route any ledger-ready payment through the same canonical journal API
@@ -270,6 +273,7 @@ export const PaymentVoucherTab = () => {
     }
 
     setPaymentVouchers(updatedPvs);
+    setEditingPaymentVoucherId(null);
     setJournalEntries(updatedJvs);
     setAccounts(updatedAccounts);
 
@@ -302,6 +306,31 @@ export const PaymentVoucherTab = () => {
     triggerNotification(ledgerPostingReady
       ? `تم إنشاء وترحيل سند الصرف ${pvId} عبر خدمة دفتر الأستاذ الكانونية.`
       : `تم حفظ سند الصرف ${pvId} في المصدر المركزي UAT بإصدار موثق؛ لم يُعتمد كترحيل نهائي في دفتر الأستاذ العام.`, 'success');
+  };
+
+  const handleNewPaymentVoucher = () => {
+    setEditingPaymentVoucherId(null);
+    setPaymentVoucherForm((prev: any) => ({
+      ...prev,
+      date: new Date().toISOString().split('T')[0],
+      beneficiary: '',
+      amount: '',
+      against: '',
+      attachmentName: '',
+      notes: '',
+      status: 'draft'
+    }));
+    triggerNotification('تم فتح نموذج سند صرف جديد.', 'info');
+  };
+
+  const handleEditPaymentVoucher = (voucher: any) => {
+    if (voucher.status !== 'draft') {
+      triggerNotification('لا يمكن تعديل سند صرف مرحل؛ استخدم الإلغاء العكسي المعتمد ثم أنشئ سندًا جديدًا.', 'warning');
+      return;
+    }
+    setEditingPaymentVoucherId(voucher.id);
+    setPaymentVoucherForm((prev: any) => ({ ...prev, ...voucher, amount: String(voucher.amount ?? '') }));
+    triggerNotification(`تم تحميل السند ${voucher.id} للتعديل قبل الترحيل.`, 'info');
   };
 
 
@@ -593,6 +622,14 @@ const handlePrintPV = (pv: any) => {
                 <div className="flex items-center gap-2 mb-4 text-rose-700 pb-3 border-b border-slate-100">
                   <Coins className="w-5 h-5 text-rose-600" />
                   <span className="font-black text-sm">إنشاء سند صرف مالي جديد</span>
+                  <button
+                    type="button"
+                    onClick={handleNewPaymentVoucher}
+                    className="mr-3 rounded-lg bg-slate-900 px-3 py-1.5 text-[10px] font-black text-white hover:bg-slate-700"
+                  >
+                    + إضافة جديد
+                  </button>
+                  {editingPaymentVoucherId && <span className="rounded-lg bg-amber-100 px-2 py-1 text-[10px] font-black text-amber-800">تعديل {editingPaymentVoucherId}</span>}
                   <span className="mr-auto font-mono text-[10px] bg-slate-100 text-slate-700 px-2 py-0.5 rounded-md font-bold">
                     السند التالي: PV-2026-{String(paymentVouchers.length + 1).padStart(4, '0')}
                   </span>
@@ -821,7 +858,7 @@ const handlePrintPV = (pv: any) => {
                       className="w-full bg-gradient-to-r from-rose-600 to-red-650 hover:from-rose-700 hover:to-red-700 text-white font-black py-3 rounded-lg flex items-center justify-center gap-2 shadow-md hover:shadow-lg cursor-pointer transition-all active:scale-[0.99]"
                     >
                       <Coins className="w-4 h-4 text-white" />
-                      <span>{paymentSubmitLabel}</span>
+                      <span>{editingPaymentVoucherId ? 'حفظ التعديل ثم الترحيل الكانوني' : paymentSubmitLabel}</span>
                     </button>
                     {!canonicalWriteReady && (
                       <p role="alert" className="mt-2 text-[10px] font-bold text-amber-700">
@@ -1025,6 +1062,16 @@ const handlePrintPV = (pv: any) => {
                           </td>
                           <td className="px-6 py-3 text-left">
                             <div className="flex justify-end gap-2">
+                              <button
+                                type="button"
+                                onClick={() => handleEditPaymentVoucher(v)}
+                                disabled={v.status !== 'draft'}
+                                className="rounded-lg bg-amber-50 p-1.5 text-[10px] font-extrabold text-amber-700 disabled:cursor-not-allowed disabled:opacity-35"
+                                title={v.status === 'draft' ? 'تعديل السند قبل الترحيل' : 'لا يمكن تعديل سند مرحل؛ استخدم الإلغاء العكسي'}
+                              >
+                                <Pencil className="w-3 h-3" />
+                                تعديل
+                              </button>
                               <button 
                                 onClick={() => {
                                   setSelectedPaymentVoucher(v);

@@ -912,14 +912,18 @@ export default function StudentFinancialPortal({
     }
 
     const classroom = student.classroom || '';
-    const costCenter = classroom.includes('روضة') || classroom.includes('تمهيدي') ? 'kindergarten' :
-                       classroom.includes('ابتدائي') || classroom.includes('الأول') || classroom.includes('الثاني') || classroom.includes('الثالث') || classroom.includes('الرابع') || classroom.includes('الخامس') || classroom.includes('السادس') ? 'primary' :
-                       classroom.includes('إعدادي') || classroom.includes('متوسط') || classroom.includes('السابع') || classroom.includes('الثامن') || classroom.includes('التاسع') ? 'middle' :
-                       classroom.includes('ثانوي') || classroom.includes('العاشر') || classroom.includes('الحادي عشر') || classroom.includes('الثاني عشر') ? 'secondary' : 'primary';
+    const profileCostCenter = String(student.costCenterId || '').trim().toLowerCase().replace(/^cc[_-]/, '');
+    const stageRecord = activeMassStages.find(stage => [stage.id, stage.code, stage.costCenterId, stage.type, stage.name]
+      .some(value => String(value || '').trim() === String(student.stageId || '').trim()));
+    const stageText = String(stageRecord?.name || student.educationLevel || student.stageId || '').trim().toLowerCase();
+    const costCenter = ['kindergarten', 'primary', 'middle', 'secondary'].includes(profileCostCenter) ? profileCostCenter : stageText.includes('روضة') || stageText.includes('تمهيدي') || classroom.includes('روضة') || classroom.includes('تمهيدي') ? 'kindergarten' :
+                       stageText.includes('ابتدائي') || classroom.includes('ابتدائي') || classroom.includes('الأول') || classroom.includes('الثاني') || classroom.includes('الثالث') || classroom.includes('الرابع') || classroom.includes('الخامس') || classroom.includes('السادس') ? 'primary' :
+                       stageText.includes('إعدادي') || stageText.includes('متوسط') || classroom.includes('إعدادي') || classroom.includes('متوسط') || classroom.includes('السابع') || classroom.includes('الثامن') || classroom.includes('التاسع') ? 'middle' :
+                       stageText.includes('ثانوي') || classroom.includes('ثانوي') || classroom.includes('العاشر') || classroom.includes('الحادي عشر') || classroom.includes('الثاني عشر') ? 'secondary' : 'primary';
 
-    const stageLabel = costCenter === 'kindergarten' ? 'الروضة' :
+    const stageLabel = stageRecord?.name || (costCenter === 'kindergarten' ? 'الروضة' :
                        costCenter === 'primary' ? 'الابتدائي' :
-                       costCenter === 'middle' ? 'الإعدادي' : 'الثانوي';
+                       costCenter === 'middle' ? 'الإعدادي' : 'الثانوي');
 
     // A student profile is not a financial ledger. Never prefill a receipt
     // from the legacy feesRemaining projection when no canonical invoice
@@ -5278,6 +5282,16 @@ export default function StudentFinancialPortal({
                             return `${student.academicId || student.studentCode || 'دون رقم أكاديمي'} • ${student.classroom || 'الفصل غير محدد'} • المتبقي ${formatLD(remainingBalance)}`;
                           }}
                         />
+                        <div className="mt-3 grid grid-cols-1 sm:grid-cols-2 gap-3 rounded-xl border border-emerald-200 bg-emerald-50/70 p-3">
+                          <div>
+                            <span className="block text-[10px] font-black text-slate-500">المرحلة التعليمية المرتبطة</span>
+                            <span className="block mt-1 text-sm font-black text-slate-800">{studRvForm.stage || 'تظهر تلقائيًا بعد اختيار الطالب'}</span>
+                          </div>
+                          <div>
+                            <span className="block text-[10px] font-black text-slate-500">مركز التكلفة المرتبط تلقائيًا</span>
+                            <span className="block mt-1 font-mono text-sm font-black text-emerald-800">{STUDENT_COST_CENTER_LABELS[studRvForm.costCenter] || studRvForm.costCenter || 'يظهر تلقائيًا بعد اختيار الطالب'}</span>
+                          </div>
+                        </div>
                       </div>
 
                       {/* Date */}
@@ -5453,27 +5467,6 @@ export default function StudentFinancialPortal({
                           <option value="رسوم حافلة">رسوم اشتراك النقل المدرسي (حافلة)</option>
                           <option value="رسوم كتب ومطبوعات">كتب ومناهج ومستلزمات دراسية</option>
                         </select>
-                      </div>
-
-                      {/* Stage & Cost Center displays */}
-                      <div className="space-y-1">
-                        <label className="font-extrabold text-slate-400 block">المرحلة التعليمية المرتبطة:</label>
-                        <input
-                          type="text"
-                          value={studRvForm.stage}
-                          disabled
-                          className="block w-full bg-transparent text-slate-500 p-2.5 font-bold"
-                        />
-                      </div>
-
-                      <div className="space-y-1">
-                        <label className="font-extrabold text-slate-400 block">مركز التكلفة:</label>
-                        <input
-                          type="text"
-                          value={studRvForm.costCenter}
-                          disabled
-                          className="block w-full bg-transparent text-slate-500 p-2.5 font-mono font-bold"
-                        />
                       </div>
 
                     </div>
