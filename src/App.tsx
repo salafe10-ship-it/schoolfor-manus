@@ -727,6 +727,10 @@ export default function App() {
       const target = event.target;
       if (!(target instanceof Element)) return;
       const control = target.closest('button, [role="button"], input[type="submit"]');
+      if (control?.hasAttribute('data-no-save-toast')) {
+        saveIntentRef.current = null;
+        return;
+      }
       markSaveIntent(control?.textContent || (control as HTMLInputElement | null)?.value || '');
     };
     const handleSubmit = (event: Event) => {

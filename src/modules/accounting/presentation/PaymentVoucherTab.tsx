@@ -624,6 +624,7 @@ const handlePrintPV = (pv: any) => {
                   <span className="font-black text-sm">إنشاء سند صرف مالي جديد</span>
                   <button
                     type="button"
+                    data-no-save-toast="true"
                     onClick={handleNewPaymentVoucher}
                     className="mr-3 rounded-lg bg-slate-900 px-3 py-1.5 text-[10px] font-black text-white hover:bg-slate-700"
                   >
