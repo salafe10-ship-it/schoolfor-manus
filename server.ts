@@ -13553,6 +13553,105 @@ ${JSON.stringify(snapshot)}
     });
   }
 
+  // FIN-ATT-001: financial voucher attachments are private binary objects with
+  // canonical metadata in PostgreSQL. The voucher itself must already exist in
+  // the canonical ledger; this prevents orphan uploads and snapshot-only files.
+  const financialAttachmentBucket = process.env.FINANCIAL_VOUCHER_ATTACHMENT_BUCKET || 'financial-voucher-attachments';
+  const financialAttachmentRawUpload = express.raw({
+    type: ['application/pdf', 'image/jpeg', 'image/png', 'image/webp'],
+    limit: MAX_DOCUMENT_BYTES
+  });
+  const financialVoucherTypes = new Set(['receipt_voucher', 'payment_voucher', 'student_fee_receipt']);
+  const financialAttachmentFileName = (value: unknown) => safeDocumentFileName(value) || 'financial-voucher-attachment';
+
+  app.get('/api/financial/vouchers/:voucherType/:voucherId/attachments', authenticateRequest, requirePermission(PERMISSIONS.FINANCIAL_READ), async (req, res, next) => {
+    try {
+      const { tenantId, schoolId } = canonicalFeeContext(req, false);
+      const voucherType = String(req.params.voucherType || '');
+      if (!financialVoucherTypes.has(voucherType)) throw new ValidationError('نوع السند غير مدعوم.');
+      if (!platformAdminPool) throw new DatabaseError('مصدر المرفقات المالية غير مهيأ.');
+      const rows = await platformAdminPool.query(
+        `SELECT id, voucher_type, voucher_id, original_file_name, media_type, byte_size, content_hash, status, uploaded_by, created_at
+           FROM public.financial_voucher_attachments
+          WHERE tenant_id = $1::uuid AND school_id = $2::uuid AND voucher_type = $3 AND voucher_id = $4 AND status = 'active'
+          ORDER BY created_at DESC`,
+        [tenantId, schoolId, voucherType, String(req.params.voucherId)]
+      );
+      res.json({ success: true, data: rows.rows, meta: { source: 'canonical-postgres', binary: 'private-storage-lazy-signed' } });
+    } catch (error) { next(error); }
+  });
+
+  app.get('/api/financial/voucher-attachments/:attachmentId/content', authenticateRequest, requirePermission(PERMISSIONS.FINANCIAL_READ), async (req, res, next) => {
+    try {
+      const { tenantId, schoolId } = canonicalFeeContext(req, false);
+      if (!platformAdminPool || !platformAdminAuth) throw new ExternalServiceError('التخزين الخاص للمرفقات المالية غير مهيأ.');
+      const row = await platformAdminPool.query<{ bucket_id: string; object_key: string; original_file_name: string; media_type: string }>(
+        `SELECT bucket_id, object_key, original_file_name, media_type
+           FROM public.financial_voucher_attachments
+          WHERE id = $1::uuid AND tenant_id = $2::uuid AND school_id = $3::uuid AND status = 'active'`,
+        [String(req.params.attachmentId), tenantId, schoolId]
+      );
+      if (!row.rows[0]) throw new ValidationError('المرفق غير موجود في النطاق الموثوق.');
+      const signed = await platformAdminAuth.storage.from(row.rows[0].bucket_id).createSignedUrl(row.rows[0].object_key, 300, { download: row.rows[0].original_file_name });
+      if (signed.error || !signed.data?.signedUrl) throw new ExternalServiceError('تعذر إنشاء رابط معاينة مؤقت للمرفق.');
+      res.set('Cache-Control', 'no-store, private');
+      res.json({ success: true, data: { url: signed.data.signedUrl, expiresInSeconds: 300, fileName: row.rows[0].original_file_name, mediaType: row.rows[0].media_type } });
+    } catch (error) { next(error); }
+  });
+
+  app.post('/api/financial/vouchers/:voucherType/:voucherId/attachments', authenticateRequest, requirePermission(PERMISSIONS.FINANCIAL_WRITE), resolveStudentTenantMiddleware, financialAttachmentRawUpload, async (req, res, next) => {
+    let uploadedKey = '';
+    try {
+      const context = await resolveStudentTenantContext(req);
+      const voucherType = String(req.params.voucherType || '');
+      const voucherId = String(req.params.voucherId || '').trim();
+      if (!financialVoucherTypes.has(voucherType) || !voucherId) throw new ValidationError('نوع السند أو رقم السند غير صالح.');
+      if (!platformAdminPool || !platformAdminAuth) throw new ExternalServiceError('التخزين الخاص للمرفقات المالية غير مهيأ.');
+      if (!transactionDriver) throw new DatabaseError('رفع مرفق مالي يتطلب اتصال PostgreSQL.');
+      const body = req.body as Buffer;
+      if (!Buffer.isBuffer(body) || body.length < 4 || body.length > MAX_DOCUMENT_BYTES) throw new ValidationError('ملف المرفق غير صالح أو يتجاوز 10 ميجابايت.');
+      const mediaType = String(req.get('Content-Type') || '').split(';')[0].toLowerCase();
+      const allowed = new Set(['application/pdf', 'image/jpeg', 'image/png', 'image/webp']);
+      if (!allowed.has(mediaType)) throw new ValidationError('يسمح بالمرفقات PDF أو JPG أو PNG أو WEBP فقط.');
+      const hash = createHash('sha256').update(body).digest('hex');
+      const idempotencyKey = String(req.get('Idempotency-Key') || '').trim();
+      if (!/^[\\x21-\\x7e]{8,200}$/.test(idempotencyKey)) throw new ValidationError('يجب إرسال Idempotency-Key صالح للمرفق.');
+      const canonicalSourceType = voucherType === 'receipt_voucher' ? 'student_receipt' : voucherType === 'payment_voucher' ? 'payment_voucher' : 'student_fee_receipt';
+      const voucher = await platformAdminPool.query(
+        `SELECT id FROM public.erp_journal_entries
+          WHERE tenant_id = $1::uuid AND school_id = $2::uuid AND source_type = $3 AND source_id = $4 AND status IN ('posted', 'approved') LIMIT 1`,
+        [context.tenantId, context.schoolId, canonicalSourceType, voucherId]
+      );
+      if (!voucher.rows[0]) throw new ValidationError('لا يمكن إرفاق ملف قبل وجود السند في دفتر الأستاذ الكانوني المعتمد.');
+      const existing = await platformAdminPool.query(
+        `SELECT id, original_file_name, media_type, byte_size, content_hash FROM public.financial_voucher_attachments
+          WHERE tenant_id = $1::uuid AND school_id = $2::uuid AND voucher_type = $3 AND voucher_id = $4 AND content_hash = $5 AND status = 'active' LIMIT 1`,
+        [context.tenantId, context.schoolId, voucherType, voucherId, hash]
+      );
+      if (existing.rows[0]) return res.json({ success: true, data: existing.rows[0], meta: { idempotent: true, source: 'canonical-postgres' } });
+      const safeName = financialAttachmentFileName(req.query.originalFileName || req.get('X-Original-File-Name'));
+      const extension = mediaType === 'application/pdf' ? 'pdf' : mediaType.split('/')[1];
+      uploadedKey = `${context.tenantId}/${context.schoolId}/${voucherType}/${voucherId}/${hash}.${extension}`;
+      const upload = await platformAdminAuth.storage.from(financialAttachmentBucket).upload(uploadedKey, body, { contentType: mediaType, cacheControl: '3600', upsert: false });
+      const duplicate = Boolean(upload.error && /already exists|duplicate/i.test(upload.error.message || ''));
+      if (upload.error && !duplicate) throw new ExternalServiceError('فشل رفع المرفق إلى التخزين الخاص.');
+      const identity = (req as any).user;
+      const inserted = await platformAdminPool.query(
+        `INSERT INTO public.financial_voucher_attachments
+          (tenant_id, school_id, branch_id, voucher_type, voucher_id, original_file_name, object_key, bucket_id, media_type, byte_size, content_hash, uploaded_by)
+         VALUES ($1::uuid, $2::uuid, NULLIF($3, '')::uuid, $4, $5, $6, $7, $8, $9, $10, $11, $12::uuid)
+         ON CONFLICT (tenant_id, school_id, voucher_type, voucher_id, content_hash)
+         DO UPDATE SET updated_at = now()
+         RETURNING id, voucher_type, voucher_id, original_file_name, media_type, byte_size, content_hash, status, created_at`,
+        [context.tenantId, context.schoolId, context.branchId || '', voucherType, voucherId, safeName, uploadedKey, financialAttachmentBucket, mediaType, body.length, hash, identity.id]
+      );
+      res.status(201).json({ success: true, data: inserted.rows[0], meta: { source: 'canonical-postgres', storage: 'private', signedDownloadOnly: true, idempotencyKey } });
+    } catch (error) {
+      if (uploadedKey && platformAdminAuth) await platformAdminAuth.storage.from(financialAttachmentBucket).remove([uploadedKey]).catch(() => undefined);
+      next(error);
+    }
+  });
+
   // Align the separately configured control-plane schema before accepting
   // identity-management requests. This is transactional and idempotent.
   try {

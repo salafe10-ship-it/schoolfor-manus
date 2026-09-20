@@ -25,6 +25,7 @@ const getVoucherCostCenterLabel = (voucher: any): string => {
 
 export const PaymentVoucherTab = () => {
   const [editingPaymentVoucherId, setEditingPaymentVoucherId] = React.useState<string | null>(null);
+  const paymentAttachmentFileRef = React.useRef<File | null>(null);
   const {
   activeTab, setActiveTab, activeSidebarItem, setActiveSidebarItem,
   refreshing, setRefreshing, currency, setCurrency, activeSaving, setActiveSaving,
@@ -261,6 +262,17 @@ export const PaymentVoucherTab = () => {
         }
         newPv.journalEntryId = canonicalResult.data.journalId;
         newJv.id = canonicalResult.data.journalId;
+        const paymentAttachment = paymentAttachmentFileRef.current;
+        if (paymentAttachment) {
+          const attachmentResponse = await authenticatedRequest(`/api/financial/vouchers/payment_voucher/${encodeURIComponent(String(canonicalResult.data.sourceId || newPv.id))}/attachments?originalFileName=${encodeURIComponent(paymentAttachment.name)}`, {
+            method: 'POST',
+            headers: { 'Content-Type': paymentAttachment.type || 'application/octet-stream', 'Idempotency-Key': crypto.randomUUID() },
+            body: paymentAttachment
+          });
+          const attachmentResult = await attachmentResponse.json().catch(() => ({}));
+          if (!attachmentResponse.ok || !attachmentResult.success) throw new Error(attachmentResult.message || 'تعذر حفظ مرفق سند الصرف في التخزين الخاص.');
+          paymentAttachmentFileRef.current = null;
+        }
       }
       await persistCanonicalFinancialSnapshot({
         paymentVouchers: updatedPvs,
@@ -795,6 +807,7 @@ const handlePrintPV = (pv: any) => {
                         e.currentTarget.classList.remove('border-rose-500', 'bg-rose-50/50');
                         if (e.dataTransfer.files && e.dataTransfer.files[0]) {
                           const file = e.dataTransfer.files[0];
+                          paymentAttachmentFileRef.current = file;
                           setPaymentVoucherForm(prev => ({ ...prev, attachmentName: file.name }));
                           triggerNotification(`✓ تم التقاط مرفق الصرف بنجاح: ${file.name}`, 'success');
                         }
@@ -815,6 +828,7 @@ const handlePrintPV = (pv: any) => {
                         onChange={(e) => {
                           if (e.target.files && e.target.files[0]) {
                             const file = e.target.files[0];
+                            paymentAttachmentFileRef.current = file;
                             setPaymentVoucherForm(prev => ({ ...prev, attachmentName: file.name }));
                             triggerNotification(`✓ تم تحميل مرفق الصرف بنجاح: ${file.name}`, 'success');
                           }
@@ -832,6 +846,7 @@ const handlePrintPV = (pv: any) => {
                           onClick={(e) => {
                             e.stopPropagation();
                             setPaymentVoucherForm(prev => ({ ...prev, attachmentName: '' }));
+                            paymentAttachmentFileRef.current = null;
                           }}
                           className="text-red-500 hover:text-red-700 hover:bg-red-50 p-1 rounded"
                         >

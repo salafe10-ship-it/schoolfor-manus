@@ -20,6 +20,7 @@ const getReceiptStageKey = (voucher: any): string => {
 
 export const ReceiptVoucherTab = () => {
   const receiptFormRef = React.useRef<HTMLFormElement>(null);
+  const receiptAttachmentFileRef = React.useRef<File | null>(null);
   const {
   activeTab, setActiveTab, activeSidebarItem, setActiveSidebarItem,
   refreshing, setRefreshing, currency, setCurrency, activeSaving, setActiveSaving,
@@ -348,6 +349,17 @@ export const ReceiptVoucherTab = () => {
         newRv.status = 'posted';
       }
       newJv.id = canonicalResult.data.journalId;
+      const receiptAttachment = receiptAttachmentFileRef.current;
+      if (receiptAttachment) {
+        const attachmentResponse = await authenticatedRequest(`/api/financial/vouchers/${isStudentReceipt ? 'student_fee_receipt' : 'receipt_voucher'}/${encodeURIComponent(String(canonicalResult.data.sourceId || newRv.id))}/attachments?originalFileName=${encodeURIComponent(receiptAttachment.name)}`, {
+          method: 'POST',
+          headers: { 'Content-Type': receiptAttachment.type || 'application/octet-stream', 'Idempotency-Key': crypto.randomUUID() },
+          body: receiptAttachment
+        });
+        const attachmentResult = await attachmentResponse.json().catch(() => ({}));
+        if (!attachmentResponse.ok || !attachmentResult.success) throw new Error(attachmentResult.message || 'تعذر حفظ مرفق سند القبض في التخزين الخاص.');
+        receiptAttachmentFileRef.current = null;
+      }
     } catch (error: any) {
       console.error('[ReceiptVoucherTab] canonical receipt posting failed', error);
       triggerNotification(`تعذر حفظ سند القبض مركزياً: ${error?.message || 'خطأ غير معروف'}`, 'warning');
@@ -922,6 +934,7 @@ const handlePrintRV = (rv: any) => {
                         e.currentTarget.classList.remove('border-emerald-500', 'bg-emerald-50/50');
                         if (e.dataTransfer.files && e.dataTransfer.files[0]) {
                           const file = e.dataTransfer.files[0];
+                          receiptAttachmentFileRef.current = file;
                           setReceiptVoucherForm(prev => ({ ...prev, attachmentName: file.name }));
                           triggerNotification(`✓ تم التقاط المرفق بنجاح: ${file.name}`, 'success');
                         }
@@ -942,6 +955,7 @@ const handlePrintRV = (rv: any) => {
                         onChange={(e) => {
                           if (e.target.files && e.target.files[0]) {
                             const file = e.target.files[0];
+                            receiptAttachmentFileRef.current = file;
                             setReceiptVoucherForm(prev => ({ ...prev, attachmentName: file.name }));
                             triggerNotification(`✓ تم تحميل المرفق بنجاح: ${file.name}`, 'success');
                           }
@@ -959,6 +973,7 @@ const handlePrintRV = (rv: any) => {
                           onClick={(e) => {
                             e.stopPropagation();
                             setReceiptVoucherForm(prev => ({ ...prev, attachmentName: '' }));
+                            receiptAttachmentFileRef.current = null;
                           }}
                           className="text-red-500 hover:text-red-700 hover:bg-red-50 p-1 rounded"
                         >
