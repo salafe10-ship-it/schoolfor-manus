@@ -72,3 +72,5 @@ jobs:
 
       - name: Verify live Cloudflare build identity and assets
         run: npm run smoke:production
+env:
+  VITE_FINANCIAL_WRITES_ENABLED: 'true'
