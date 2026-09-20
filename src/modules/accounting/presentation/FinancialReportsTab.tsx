@@ -551,7 +551,7 @@ const handleDrillDownToOriginalDocument = (jv: any) => {
               </div>
 
               {/* Advanced filter panel */}
-              <div className="bg-white border border-slate-200 rounded-xl p-5 shadow-sm space-y-4">
+              <div className="bg-white border border-slate-200 rounded-xl p-3 shadow-sm space-y-3">
                 <div className="flex items-center justify-between border-b border-slate-100 pb-2.5">
                   <div className="flex items-center gap-1.5 text-slate-900 font-black">
                     <Settings className="w-4 h-4 text-blue-600 animate-pulse" />
@@ -748,20 +748,20 @@ const handleDrillDownToOriginalDocument = (jv: any) => {
                   </div>
 
                   {/* Grid of 7 ERP Report Cards */}
-                  <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-6">
+                <div className="grid grid-cols-1 sm:grid-cols-2 xl:grid-cols-4 gap-3">
                     {/* Report 1: ميزان المراجعة */}
-                    <div className="bg-white border border-slate-200 rounded-2xl p-5 hover:border-indigo-300 hover:shadow-lg transition-all flex flex-col justify-between group">
-                      <div className="space-y-2.5">
+                    <div className="bg-white border border-slate-200 rounded-xl p-3 hover:border-indigo-300 hover:shadow-md transition-all flex flex-col justify-between group min-h-[142px]">
+                      <div className="space-y-1.5">
                         <div className="flex justify-between items-start">
-                          <span className="p-2.5 bg-indigo-50 text-indigo-600 rounded-xl group-hover:scale-110 transition-transform">
-                            <FileSpreadsheet className="w-5 h-5" />
+                          <span className="p-2 bg-indigo-50 text-indigo-600 rounded-lg group-hover:scale-110 transition-transform">
+                            <FileSpreadsheet className="w-4 h-4" />
                           </span>
                           <span className="text-[10px] font-bold px-2 py-0.5 bg-indigo-50 text-indigo-700 rounded-full">6 أعمدة ومستويات</span>
                         </div>
                         <h3 className="text-sm font-black text-slate-900">ميزان المراجعة الشامل (Trial Balance)</h3>
-                        <p className="text-[11px] text-slate-500 leading-relaxed">مطابقة ميزان المدفوعات بمجاميع الحركات الدائنة والمدينة والأرصدة الافتتاحية والختامية، مع إمكانية التصفية على مستوى مستويات الشجرة أو الحسابات الفرعية.</p>
+                        <p className="report-card-description hidden">مطابقة ميزان المدفوعات بمجاميع الحركات الدائنة والمدينة.</p>
                       </div>
-                      <div className="mt-5 pt-4 border-t border-slate-100 flex gap-2">
+                      <div className="mt-2 pt-2 border-t border-slate-100 flex gap-2">
                         <button
                           onClick={() => handleSelectReport('trial_balance')}
                           className="flex-1 bg-indigo-600 hover:bg-indigo-700 text-white font-bold py-2 rounded-lg text-xs transition-colors cursor-pointer text-center"
@@ -772,7 +772,7 @@ const handleDrillDownToOriginalDocument = (jv: any) => {
                     </div>
 
                     {/* Report 2: قائمة الدخل */}
-                    <div className="bg-white border border-slate-200 rounded-2xl p-5 hover:border-emerald-300 hover:shadow-lg transition-all flex flex-col justify-between group">
+                    <div className="bg-white border border-slate-200 rounded-xl p-3 hover:border-emerald-300 hover:shadow-md transition-all flex flex-col justify-between group min-h-[142px]">
                       <div className="space-y-2.5">
                         <div className="flex justify-between items-start">
                           <span className="p-2.5 bg-emerald-50 text-emerald-600 rounded-xl group-hover:scale-110 transition-transform">
@@ -781,9 +781,9 @@ const handleDrillDownToOriginalDocument = (jv: any) => {
                           <span className="text-[10px] font-bold px-2 py-0.5 bg-emerald-50 text-emerald-700 rounded-full">كشف أرباح وخسائر</span>
                         </div>
                         <h3 className="text-sm font-black text-slate-900">قائمة الدخل الختامية (Income Statement)</h3>
-                        <p className="text-[11px] text-slate-500 leading-relaxed">احتساب الفائض التشغيلي للمؤسسة التعليمية برصد الإيرادات والمصروفات والرواتب ومصاريف الامتحانات، وإظهار صافي الربح أو الخسارة للفترة الحالية.</p>
+                        <p className="report-card-description hidden">احتساب الفائض التشغيلي للمؤسسة التعليمية.</p>
                       </div>
-                      <div className="mt-5 pt-4 border-t border-slate-100 flex gap-2">
+                      <div className="mt-2 pt-2 border-t border-slate-100 flex gap-2">
                         <button
                           onClick={() => handleSelectReport('income_statement')}
                           className="flex-1 bg-emerald-600 hover:bg-emerald-700 text-white font-bold py-2 rounded-lg text-xs transition-colors cursor-pointer text-center"
@@ -794,7 +794,7 @@ const handleDrillDownToOriginalDocument = (jv: any) => {
                     </div>
 
                     {/* Report 3: الميزانية العمومية */}
-                    <div className="bg-white border border-slate-200 rounded-2xl p-5 hover:border-amber-300 hover:shadow-lg transition-all flex flex-col justify-between group">
+                    <div className="bg-white border border-slate-200 rounded-xl p-3 hover:border-amber-300 hover:shadow-md transition-all flex flex-col justify-between group min-h-[142px]">
                       <div className="space-y-2.5">
                         <div className="flex justify-between items-start">
                           <span className="p-2.5 bg-amber-50 text-amber-600 rounded-xl group-hover:scale-110 transition-transform">
@@ -803,9 +803,9 @@ const handleDrillDownToOriginalDocument = (jv: any) => {
                           <span className="text-[10px] font-bold px-2 py-0.5 bg-amber-50 text-amber-700 rounded-full">المركز المالي</span>
                         </div>
                         <h3 className="text-sm font-black text-slate-900">الميزانية العمومية (Balance Sheet)</h3>
-                        <p className="text-[11px] text-slate-500 leading-relaxed">تحليل بنود المعادلة المحاسبية من الأصول والسيولة المتوفرة بالصندوق مقابل الالتزامات قصيرة الأجل وطويلة الأجل وحقوق المساهمين لتقييم الموقف المالي.</p>
+                        <p className="report-card-description hidden">تحليل المركز المالي.</p>
                       </div>
-                      <div className="mt-5 pt-4 border-t border-slate-100 flex gap-2">
+                      <div className="mt-2 pt-2 border-t border-slate-100 flex gap-2">
                         <button
                           onClick={() => handleSelectReport('balance_sheet')}
                           className="flex-1 bg-amber-600 hover:bg-amber-700 text-white font-bold py-2 rounded-lg text-xs transition-colors cursor-pointer text-center"
@@ -816,7 +816,7 @@ const handleDrillDownToOriginalDocument = (jv: any) => {
                     </div>
 
                     {/* Report 4: قائمة التدفقات النقدية */}
-                    <div className="bg-white border border-slate-200 rounded-2xl p-5 hover:border-teal-300 hover:shadow-lg transition-all flex flex-col justify-between group">
+                    <div className="bg-white border border-slate-200 rounded-xl p-3 hover:border-teal-300 hover:shadow-md transition-all flex flex-col justify-between group min-h-[142px]">
                       <div className="space-y-2.5">
                         <div className="flex justify-between items-start">
                           <span className="p-2.5 bg-teal-50 text-teal-600 rounded-xl group-hover:scale-110 transition-transform">
@@ -825,7 +825,7 @@ const handleDrillDownToOriginalDocument = (jv: any) => {
                           <span className="text-[10px] font-bold px-2 py-0.5 bg-teal-50 text-teal-700 rounded-full">السيولة النقدية</span>
                         </div>
                         <h3 className="text-sm font-black text-slate-900">قائمة التدفقات النقدية (Cash Flow Statement)</h3>
-                        <p className="text-[11px] text-slate-500 leading-relaxed">تتبع مصادر التمويل والتدفق المالي الوارد والمنصرف مقسمة حسب الأنشطة التشغيلية للمدارس، الأنشطة الاستثمارية كشراء الحافلات، والأنشطة التمويلية.</p>
+                        <p className="report-card-description hidden">تتبع حركة السيولة.</p>
                       </div>
                       <div className="mt-5 pt-4 border-t border-slate-100 flex gap-2">
                         <button
@@ -838,7 +838,7 @@ const handleDrillDownToOriginalDocument = (jv: any) => {
                     </div>
 
                     {/* Report 5: كشف حساب تفصيلي */}
-                    <div className="bg-white border border-slate-200 rounded-2xl p-5 hover:border-purple-300 hover:shadow-lg transition-all flex flex-col justify-between group">
+                    <div className="bg-white border border-slate-200 rounded-xl p-3 hover:border-purple-300 hover:shadow-md transition-all flex flex-col justify-between group min-h-[142px]">
                       <div className="space-y-2.5">
                         <div className="flex justify-between items-start">
                           <span className="p-2.5 bg-purple-50 text-purple-600 rounded-xl group-hover:scale-110 transition-transform">
@@ -847,7 +847,7 @@ const handleDrillDownToOriginalDocument = (jv: any) => {
                           <span className="text-[10px] font-bold px-2 py-0.5 bg-purple-50 text-purple-700 rounded-full">دفتر مساعد</span>
                         </div>
                         <h3 className="text-sm font-black text-slate-900">كشف حساب تفصيلي للعملاء والبنود (Account Card)</h3>
-                        <p className="text-[11px] text-slate-500 leading-relaxed">استخراج كشف دقيق لحركة حساب معين مع احتساب الرصيد التراكمي خطوة بخطوة من واقع القيود الحقيقية المسجلة، مصفى بمركز التكلفة.</p>
+                        <p className="report-card-description hidden">كشف حركة الحساب.</p>
                       </div>
                       <div className="mt-5 pt-4 border-t border-slate-100 flex gap-2">
                         <button
@@ -881,7 +881,7 @@ const handleDrillDownToOriginalDocument = (jv: any) => {
                     </div>
 
                     {/* Report 6: دفتر الأستاذ العام */}
-                    <div className="bg-white border border-slate-200 rounded-2xl p-5 hover:border-blue-300 hover:shadow-lg transition-all flex flex-col justify-between group">
+                    <div className="bg-white border border-slate-200 rounded-xl p-3 hover:border-blue-300 hover:shadow-md transition-all flex flex-col justify-between group min-h-[142px]">
                       <div className="space-y-2.5">
                         <div className="flex justify-between items-start">
                           <span className="p-2.5 bg-blue-50 text-blue-600 rounded-xl group-hover:scale-110 transition-transform">
@@ -890,7 +890,7 @@ const handleDrillDownToOriginalDocument = (jv: any) => {
                           <span className="text-[10px] font-bold px-2 py-0.5 bg-blue-50 text-blue-700 rounded-full">الأستاذ العام</span>
                         </div>
                         <h3 className="text-sm font-black text-slate-900">دفتر الأستاذ العام الشامل (General Ledger)</h3>
-                        <p className="text-[11px] text-slate-500 leading-relaxed">عرض ميزان حركات جميع البنود المحاسبية مع الأرصدة الافتتاحية والختامية الموازية لكل حساب في الدليل الحسابي خلال الفترة المحددة بالتفصيل.</p>
+                        <p className="report-card-description hidden">عرض الحركات والأرصدة.</p>
                       </div>
                       <div className="mt-5 pt-4 border-t border-slate-100 flex gap-2">
                         <button
@@ -903,7 +903,7 @@ const handleDrillDownToOriginalDocument = (jv: any) => {
                     </div>
 
                     {/* Report 7: ميزان المراجعة بالأرصدة والحركات */}
-                    <div className="bg-white border border-slate-200 rounded-2xl p-5 hover:border-rose-300 hover:shadow-lg transition-all flex flex-col justify-between group">
+                    <div className="bg-white border border-slate-200 rounded-xl p-3 hover:border-rose-300 hover:shadow-md transition-all flex flex-col justify-between group min-h-[142px]">
                       <div className="space-y-2.5">
                         <div className="flex justify-between items-start">
                           <span className="p-2.5 bg-rose-50 text-rose-600 rounded-xl group-hover:scale-110 transition-transform">
@@ -912,7 +912,7 @@ const handleDrillDownToOriginalDocument = (jv: any) => {
                           <span className="text-[10px] font-bold px-2 py-0.5 bg-rose-50 text-rose-700 rounded-full">نموذج 6 أعمدة</span>
                         </div>
                         <h3 className="text-sm font-black text-slate-900">ميزان المراجعة بالأرصدة والحركات (Multi-Column)</h3>
-                        <p className="text-[11px] text-slate-500 leading-relaxed">نموذج التقرير المالي الأكثر طلباً من مكاتب المحاسبة والتدقيق القانونية، ويوضح الحركات والأرصدة جنباً إلى جنب مع مطابقة صارمة.</p>
+                        <p className="report-card-description hidden">الحركات والأرصدة مع المطابقة.</p>
                       </div>
                       <div className="mt-5 pt-4 border-t border-slate-100 flex gap-2">
                         <button
@@ -925,7 +925,7 @@ const handleDrillDownToOriginalDocument = (jv: any) => {
                     </div>
 
                     {/* Report 8: الموازنة التقديرية */}
-                    <div className="bg-white border border-slate-200 rounded-2xl p-5 hover:border-sky-300 hover:shadow-lg transition-all flex flex-col justify-between group">
+                    <div className="bg-white border border-slate-200 rounded-xl p-3 hover:border-sky-300 hover:shadow-md transition-all flex flex-col justify-between group min-h-[142px]">
                       <div className="space-y-2.5">
                         <div className="flex justify-between items-start">
                           <span className="p-2.5 bg-sky-50 text-sky-600 rounded-xl group-hover:scale-110 transition-transform">
@@ -934,7 +934,7 @@ const handleDrillDownToOriginalDocument = (jv: any) => {
                           <span className="text-[10px] font-bold px-2 py-0.5 bg-sky-50 text-sky-700 rounded-full">مقارنة المخطط والفعلي</span>
                         </div>
                         <h3 className="text-sm font-black text-slate-900">{reportsAreCanonical ? 'الموازنات السنوية المعتمدة' : 'الموازنات السنوية — نسخة عرض'} (Estimated Budget)</h3>
-                        <p className="text-[11px] text-slate-500 leading-relaxed">مقارنة المصروفات التشغيلية والرواتب الحاصلة فعلياً بالمطابقة مع المخصص السنوي المعتمد مسبقاً من مجلس الإدارة لتفادي العجز.</p>
+                        <p className="report-card-description hidden">مقارنة المصروفات بالموازنة.</p>
                       </div>
                       <div className="mt-5 pt-4 border-t border-slate-100 flex gap-2">
                         <button
