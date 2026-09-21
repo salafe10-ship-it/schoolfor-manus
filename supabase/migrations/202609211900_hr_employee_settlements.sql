@@ -31,6 +31,6 @@ ALTER TABLE public.hr_employee_settlements FORCE ROW LEVEL SECURITY;
 REVOKE ALL ON public.hr_employee_settlements FROM anon, authenticated;
 GRANT SELECT, INSERT, UPDATE ON public.hr_employee_settlements TO authenticated;
 DROP POLICY IF EXISTS hr_employee_settlements_scope ON public.hr_employee_settlements;
-CREATE POLICY hr_employee_settlements_scope ON public.hr_employee_settlements FOR ALL TO authenticated USING (tenant_id = app_current_tenant_id() AND school_id = app_current_school_id()) WITH CHECK (tenant_id = app_current_tenant_id() AND school_id = app_current_school_id());
+CREATE POLICY hr_employee_settlements_scope ON public.hr_employee_settlements FOR ALL TO authenticated USING (tenant_id::text = current_setting('app.tenant_id', true) AND school_id::text = current_setting('app.school_id', true)) WITH CHECK (tenant_id::text = current_setting('app.tenant_id', true) AND school_id::text = current_setting('app.school_id', true));
 NOTIFY pgrst, 'reload schema';
 COMMIT;
