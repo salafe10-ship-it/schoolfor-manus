@@ -10246,7 +10246,6 @@ export async function createApp(options: { cloudflare?: boolean } = {}): Promise
         : req.body?.data;
       const requestedCountryCode = String(req.body?.countryCode || 'ZZ').trim().toUpperCase();
       const requestedLegalConfiguration = req.body?.legalConfiguration ?? {};
-      const tenantContext = (req as any).tenantContext;
       const expectedCollections = ['employees', 'departments', 'jobs', 'contracts', 'attendance', 'leaves', 'penalties', 'advances', 'rewards', 'performance', 'documents', 'payrollRuns'];
       if (!tenantId || !schoolId || !tenantContext || tenantContext.tenantId !== tenantId || tenantContext.schoolId !== schoolId
         || !Number.isInteger(expectedVersion) || expectedVersion < 0) {
@@ -10541,6 +10540,7 @@ export async function createApp(options: { cloudflare?: boolean } = {}): Promise
   app.get('/api/hr/bank-disbursements', authenticateRequest, requirePermission(PERMISSIONS.FINANCIAL_READ), async (req, res, next) => {
     try {
       const identity = (req as any).user;
+      const tenantContext = (req as any).tenantContext || await resolveStudentReadTenantContext(req);
       const tenantId = String(identity?.tenantId || '').trim();
       const schoolId = String(identity?.schoolId || '').trim();
       if (!tenantId || !schoolId || !tenantContext || tenantContext.tenantId !== tenantId || tenantContext.schoolId !== schoolId) {
