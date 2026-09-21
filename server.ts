@@ -11466,11 +11466,14 @@ export async function createApp(options: { cloudflare?: boolean } = {}): Promise
         if (JSON.stringify(readBack.rows[0] || null) !== JSON.stringify(updated)) {
           throw new DatabaseError('فشل تحقق القراءة بعد تعديل بند الرسوم؛ أُلغيت العملية.');
         }
+        // Fee configuration ids are deliberately text keys (not UUIDs), so the
+        // canonical fee audit table must be used here.  The generic audit_events
+        // entity_id is UUID-typed and would roll the whole update back.
         await transaction.query(
-          `INSERT INTO public.audit_events
-            (id, tenant_id, school_id, actor_user_id, entity_type, entity_id, action, source, result, metadata)
-           VALUES ($1,$2,$3,$4,'student_fee_configuration',$5,'update','StudentFeeConfigurationRoute','success',$6::jsonb)`,
-          [randomUUID(), tenantId, schoolId, databaseActorId, configId, JSON.stringify({ previous: existing, updated, previousVersion: currentVersion, nextVersion })]
+          `INSERT INTO public.student_fee_audit_events
+            (tenant_id, school_id, operation, entity_type, entity_id, actor_user_id, before_payload, after_payload)
+           VALUES ($1,$2,'update','student_fee_configuration',$3,$4,$5::jsonb,$6::jsonb)`,
+          [tenantId, schoolId, configId, databaseActorId, JSON.stringify(existing), JSON.stringify({ ...updated, version: nextVersion })]
         );
       }, tenantContext);
       res.json({ success: true, data: updated, meta: { source: 'canonical_postgres', version: nextVersion, readBackVerified: true } });
