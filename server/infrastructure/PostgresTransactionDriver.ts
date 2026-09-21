@@ -122,10 +122,13 @@ class PostgresTransactionSession implements TransactionSession {
       return;
     }
 
-    // Hyperdrive can reject recycling a pg client even after COMMIT/ROLLBACK
-    // has completed because its origin-side protocol state is not observable
-    // to node-postgres. In that runtime, discard the session explicitly so a
-    // transaction-tainted connection can never return to the shared pool.
+    // Hyperdrive owns the origin pool. After the transaction has been
+    // finalized, return the checked-out client exactly once. Calling
+    // release(true) here asks the adapter to recycle/discard the connection
+    // while it may still be draining its transaction protocol, which can
+    // produce: "Tried to recycle a connection still in a transaction".
+    // Cleanup is deliberately best-effort; it must never turn a committed
+    // database write into an API failure.
     if (this.discardOnRelease) {
       try {
         if (this.state === "active") {
@@ -140,10 +143,14 @@ class PostgresTransactionSession implements TransactionSession {
           }
         }
       } finally {
-        await this.discardClient();
+        try {
+          await Promise.resolve(this.client.release());
+        } catch {
+          this.diagnosticTrace?.mark(`${this.diagnosticPrefix}release_failed`);
+        }
         this.state = "released";
       }
-      this.diagnosticTrace?.mark(`${this.diagnosticPrefix}release_discarded`);
+      this.diagnosticTrace?.mark(`${this.diagnosticPrefix}release_completed`);
       this.recordPoolMetric?.({
         phase: 'released',
         ...(this.poolSnapshot ? this.poolSnapshot() : { totalCount: 0, idleCount: 0, waitingCount: 0, activeCount: 0 }),

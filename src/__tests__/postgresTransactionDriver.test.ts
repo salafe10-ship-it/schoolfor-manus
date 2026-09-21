@@ -99,7 +99,7 @@ describe('PostgresTransactionDriver trusted context', () => {
     expect(client.release).toHaveBeenNthCalledWith(2, true);
   });
 
-  it('discards every completed session in the Cloudflare Hyperdrive runtime', async () => {
+  it('returns every completed session once in the Cloudflare Hyperdrive runtime', async () => {
     vi.stubEnv('EDUPRO_CLOUDFLARE_HYPERDRIVE', 'true');
     try {
       const { client, driver } = createDriverHarness();
@@ -113,7 +113,7 @@ describe('PostgresTransactionDriver trusted context', () => {
 
       await session.commit();
       await session.release();
-      expect(client.release).toHaveBeenCalledWith(true);
+      expect(client.release).toHaveBeenCalledWith();
     } finally {
       vi.unstubAllEnvs();
     }
@@ -134,6 +134,7 @@ describe('PostgresTransactionDriver trusted context', () => {
 
       await session.commit();
       await expect(session.release()).resolves.toBeUndefined();
+      expect(client.release).toHaveBeenCalledTimes(1);
     } finally {
       vi.unstubAllEnvs();
     }
@@ -154,6 +155,7 @@ describe('PostgresTransactionDriver trusted context', () => {
 
       await session.commit();
       await expect(session.release()).resolves.toBeUndefined();
+      expect(client.release).toHaveBeenCalledTimes(1);
     } finally {
       vi.unstubAllEnvs();
     }
