@@ -24,4 +24,14 @@ describe('HR settlement route contract', () => {
     expect(source).toContain("'hr.end_of_service.expense'");
     expect(source).toContain('costCenter: row.cost_center');
   });
+
+  it('records bank payouts in a tenant-scoped reconciliation register', () => {
+    expect(source).toContain("/api/hr/bank-disbursements");
+    expect(source).toContain('public.hr_bank_disbursements');
+    expect(source).toContain('recordHrBankDisbursement');
+    expect(source).toContain("sourceType: 'advance'");
+    expect(source).toContain("sourceType: 'payroll'");
+    expect(source).toContain("sourceType: 'settlement'");
+    expect(source).toContain("ON CONFLICT (school_id, source_type, source_id)");
+  });
 });

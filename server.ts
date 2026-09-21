@@ -1370,6 +1370,33 @@ function assertExamFieldsUnchanged(
   if (changed) throw new ConflictError(message);
 }
 
+async function recordHrBankDisbursement(
+  transaction: any,
+  input: {
+    tenantId: string; schoolId: string; sourceType: 'advance' | 'payroll' | 'settlement';
+    sourceId: string; employeeId?: string | null; period?: string | null; costCenter?: string | null;
+    bankAccount: string; amount: number; paymentDate?: string; journalId: string; actorId: string;
+    externalReference?: string | null; metadata?: Record<string, unknown>;
+  }
+): Promise<void> {
+  if (!input.bankAccount || !Number.isFinite(input.amount) || input.amount <= 0 || !input.journalId) {
+    throw new ValidationError('سجل الصرف البنكي يتطلب حساب بنك ومبلغاً وقيداً كانونياً صالحاً.');
+  }
+  await transaction.query(
+    `INSERT INTO public.hr_bank_disbursements
+      (tenant_id, school_id, source_type, source_id, employee_id, period, cost_center,
+       bank_account, amount, payment_date, journal_id, external_reference, metadata, created_by)
+     VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13::jsonb,$14)
+     ON CONFLICT (school_id, source_type, source_id) DO UPDATE SET
+       bank_account=EXCLUDED.bank_account, amount=EXCLUDED.amount, journal_id=EXCLUDED.journal_id,
+       external_reference=EXCLUDED.external_reference, metadata=EXCLUDED.metadata`,
+    [input.tenantId, input.schoolId, input.sourceType, input.sourceId, input.employeeId || null,
+      input.period || null, input.costCenter || null, input.bankAccount, input.amount,
+      input.paymentDate || new Date().toISOString().slice(0, 10), input.journalId,
+      input.externalReference || null, JSON.stringify(input.metadata || {}), input.actorId]
+  );
+}
+
 /**
  * UAT-only bridge for the existing versioned financial snapshot writer.
  * This is intentionally not named ledger_ready: the current endpoint does
@@ -10510,6 +10537,38 @@ export async function createApp(options: { cloudflare?: boolean } = {}): Promise
     }
   });
 
+  app.get('/api/hr/bank-disbursements', authenticateRequest, requirePermission(PERMISSIONS.FINANCIAL_READ), async (req, res, next) => {
+    try {
+      const identity = (req as any).user;
+      const tenantId = String(identity?.tenantId || '').trim();
+      const schoolId = String(identity?.schoolId || '').trim();
+      const tenantContext = (req as any).tenantContext;
+      if (!tenantId || !schoolId || !tenantContext || tenantContext.tenantId !== tenantId || tenantContext.schoolId !== schoolId) {
+        throw new AuthenticationError('سياق قراءة التسويات البنكية غير مكتمل.');
+      }
+      const rows = await UnitOfWork.runInTransaction(schoolId, {
+        operationName: 'Read HR bank disbursements', tenantId, userId: identity.id,
+        userName: identity.name || 'المستخدم الحالي', ipAddress: req.ip || 'unknown',
+        affectedTables: ['hr_bank_disbursements']
+      }, async () => {
+        const transaction = UnitOfWork.getActiveContext()?.databaseTransaction;
+        if (!transaction) throw new DatabaseError('معاملة قراءة التسويات البنكية غير متاحة.');
+        const result = await transaction.query(
+          `SELECT id,source_type,source_id,employee_id,period,cost_center,bank_account,amount,
+                  payment_date,journal_id,external_reference,reconciliation_status,matched_at,metadata
+             FROM public.hr_bank_disbursements
+            WHERE tenant_id=$1 AND school_id=$2
+            ORDER BY payment_date DESC, created_at DESC`, [tenantId, schoolId]
+        );
+        return result.rows;
+      }, tenantContext);
+      res.json({ success: true, data: rows, meta: { source: 'canonical-postgres', scope: { tenantId, schoolId } } });
+    } catch (err: any) {
+      next(err instanceof AuthenticationError || err instanceof AuthorizationError || err instanceof DatabaseError
+        ? err : new DatabaseError('تعذر قراءة سجل التسويات البنكية للموارد البشرية.', err?.message));
+    }
+  });
+
   // Calculates and persists an end-of-service settlement from the canonical HR snapshot.
   // The formula is deliberately explicit and auditable: half-month per service year for
   // the first five years, then one full month per year; school policy can revise it later.
@@ -10552,7 +10611,7 @@ export async function createApp(options: { cloudflare?: boolean } = {}): Promise
         const tx = UnitOfWork.getActiveContext()?.databaseTransaction; if (!tx) throw new DatabaseError('معاملة صرف التسوية غير متاحة.'); const actor = await tx.query<{id:string}>(`SELECT id FROM public.users WHERE tenant_id=$1 AND auth_user_id=$2 AND status='active' AND deleted_at IS NULL LIMIT 1`, [tenantId, identity.id]); if (!actor.rows[0]) throw new AuthenticationError('تعذر ربط هوية المستخدم المالي.'); if (!await CanonicalErpPostingService.isProvisioned(tx)) throw new DatabaseError('دفتر الأستاذ الكانوني غير مهيأ.');
         const settlement = await tx.query<any>(`SELECT * FROM public.hr_employee_settlements WHERE tenant_id=$1 AND school_id=$2 AND id=$3 FOR UPDATE`, [tenantId, schoolId, id]); const row = settlement.rows[0]; if (!row || row.status !== 'approved' || row.journal_id) throw new ConflictError('لا يمكن الصرف إلا لتسوية معتمدة غير مصروفة.');
         const key = payoutMethod === 'bank' ? 'treasury.bank' : 'treasury.cash'; const mappings = await tx.query<{mapping_key:string;account_code:string}>(`SELECT mapping_key,account_code FROM public.erp_account_mappings WHERE school_id=$1 AND is_active=true AND mapping_key = ANY($2::text[])`, [schoolId, ['hr.end_of_service.expense', key]]); const map = new Map(mappings.rows.map(item => [item.mapping_key,item.account_code])); if (!map.get('hr.end_of_service.expense') || !map.get(key)) throw new ValidationError('اعتمد حساب نهاية الخدمة وحساب الصرف أولاً.');
-        const lines = [{ id: `${id}-expense`, accountCode: map.get('hr.end_of_service.expense'), debit: Number(row.net_amount), credit: 0, costCenter: row.cost_center }, { id: `${id}-payout`, accountCode: map.get(key), debit: 0, credit: Number(row.net_amount), costCenter: row.cost_center }]; const sync = await CanonicalErpPostingService.syncSnapshot(tx, tenantId, schoolId, actor.rows[0].id, { journalEntries: [{ id: `hr-settlement-${id}`, sourceType: 'journal_entry', status: 'posted', date: row.termination_date, description: `صرف تسوية نهاية خدمة ${row.employee_id}`, lines }] }); journalId = sync.sourceLinks.find(link => link.sourceId === `hr-settlement-${id}`)?.journalEntryId || ''; if (!journalId) throw new DatabaseError('تعذر إثبات قيد التسوية.'); await tx.query(`UPDATE public.hr_employee_settlements SET status='paid',journal_id=$4,paid_at=now(),updated_by=$5,updated_at=now() WHERE tenant_id=$1 AND school_id=$2 AND id=$3`, [tenantId, schoolId, id, journalId, actor.rows[0].id]); await tx.query(`INSERT INTO public.audit_events (tenant_id,school_id,actor_user_id,entity_type,entity_id,action,source,reason,result,metadata) VALUES ($1,$2,$3,'hr_employee_settlement',$4,'pay','HrSettlementRoute','صرف تسوية نهاية الخدمة وترحيلها','success',$5::jsonb)`, [tenantId, schoolId, actor.rows[0].id, id, JSON.stringify({ journalId, payoutMethod })]);
+        const lines = [{ id: `${id}-expense`, accountCode: map.get('hr.end_of_service.expense'), debit: Number(row.net_amount), credit: 0, costCenter: row.cost_center }, { id: `${id}-payout`, accountCode: map.get(key), debit: 0, credit: Number(row.net_amount), costCenter: row.cost_center }]; const sync = await CanonicalErpPostingService.syncSnapshot(tx, tenantId, schoolId, actor.rows[0].id, { journalEntries: [{ id: `hr-settlement-${id}`, sourceType: 'journal_entry', status: 'posted', date: row.termination_date, description: `صرف تسوية نهاية خدمة ${row.employee_id}`, lines }] }); journalId = sync.sourceLinks.find(link => link.sourceId === `hr-settlement-${id}`)?.journalEntryId || ''; if (!journalId) throw new DatabaseError('تعذر إثبات قيد التسوية.'); if (payoutMethod === 'bank') await recordHrBankDisbursement(tx, { tenantId, schoolId, sourceType: 'settlement', sourceId: id, employeeId: row.employee_id, costCenter: row.cost_center, bankAccount: map.get(key)!, amount: Number(row.net_amount), paymentDate: row.termination_date, journalId, actorId: actor.rows[0].id }); await tx.query(`UPDATE public.hr_employee_settlements SET status='paid',journal_id=$4,paid_at=now(),updated_by=$5,updated_at=now() WHERE tenant_id=$1 AND school_id=$2 AND id=$3`, [tenantId, schoolId, id, journalId, actor.rows[0].id]); await tx.query(`INSERT INTO public.audit_events (tenant_id,school_id,actor_user_id,entity_type,entity_id,action,source,reason,result,metadata) VALUES ($1,$2,$3,'hr_employee_settlement',$4,'pay','HrSettlementRoute','صرف تسوية نهاية الخدمة وترحيلها','success',$5::jsonb)`, [tenantId, schoolId, actor.rows[0].id, id, JSON.stringify({ journalId, payoutMethod })]);
       }, tenantContext); res.json({ success: true, data: { id, journalId, status: 'paid' } });
     } catch (err: any) { next(err instanceof AuthenticationError || err instanceof AuthorizationError || err instanceof ValidationError || err instanceof ConflictError || err instanceof DatabaseError ? err : new DatabaseError('تعذر صرف تسوية نهاية الخدمة.', err?.message)); }
   });
@@ -10609,6 +10668,7 @@ export async function createApp(options: { cloudflare?: boolean } = {}): Promise
         });
         journalId = sync.sourceLinks.find(link => link.sourceId === `hr-advance-${advanceId}`)?.journalEntryId || '';
         if (!journalId) throw new DatabaseError('تعذر إثبات قيد السلفة الكانوني.');
+        if (payoutMethod === 'bank') await recordHrBankDisbursement(transaction, { tenantId, schoolId, sourceType: 'advance', sourceId: advanceId, employeeId: advance.employeeId, costCenter: advance.costCenter, bankAccount: payoutAccount, amount, paymentDate: String(advance.date || new Date().toISOString().slice(0, 10)), journalId, actorId });
         const paidAt = new Date().toISOString();
         paidAdvance = { ...advance, journalId, paidAt, paidBy: actorId };
         data.advances = (Array.isArray(data.advances) ? data.advances : []).map((item: any) => item?.id === advanceId ? paidAdvance : item);
@@ -10786,6 +10846,7 @@ export async function createApp(options: { cloudflare?: boolean } = {}): Promise
         const sync = await CanonicalErpPostingService.syncSnapshot(transaction, tenantId, schoolId, actorId, { journalEntries: [{ id: `hr-payroll-${period}`, sourceType: 'journal_entry', status: 'posted', date: `${period}-01`, description: `صرف مسير الرواتب المعتمد للفترة ${period}`, lines }] });
         journalId = sync.sourceLinks.find(link => link.sourceId === `hr-payroll-${period}`)?.journalEntryId || '';
         if (!journalId) throw new DatabaseError('تعذر إثبات قيد صرف الرواتب الكانوني.');
+        if (requestedPayoutMethod === 'bank') await recordHrBankDisbursement(transaction, { tenantId, schoolId, sourceType: 'payroll', sourceId: period, period, bankAccount: mappings.get(payoutMappingKey)!, amount: net, paymentDate: `${period}-01`, journalId, actorId });
         run.status = 'paid'; run.paidAt = new Date().toISOString(); run.paidBy = actorId; run.journalId = journalId;
         for (const line of (Array.isArray(run.lines) ? run.lines : [])) {
           const deduction = Number(line.advanceDeduction || 0);
