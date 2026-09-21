@@ -1112,7 +1112,7 @@ function validateHrSnapshotData(data: Record<string, any>): void {
     const runPeriod = String(row.period || '');
     if (payrollPeriods.has(runPeriod)) throw new ConflictError(`مسير الرواتب للفترة ${runPeriod} مكرر.`);
     payrollPeriods.add(runPeriod);
-    if (!/^\d{4}-\d{2}$/.test(String(row.period || '')) || !['approved', 'paid'].includes(row.status)
+    if (!/^\d{4}-\d{2}$/.test(String(row.period || '')) || !['approved', 'committed', 'paid'].includes(row.status)
       || !Array.isArray(row.lines) || !row.totals || typeof row.totals !== 'object' || !String(row.fingerprint || '').trim()) {
       throw new ValidationError(`مسير الرواتب ${String(row.id || row.period || '')} غير صالح.`);
     }
@@ -10278,7 +10278,7 @@ export async function createApp(options: { cloudflare?: boolean } = {}): Promise
         }
         const currentRuns = Array.isArray((current.rows[0]?.data as any)?.payrollRuns) ? (current.rows[0]?.data as any).payrollRuns : [];
         const requestedRuns = (requestedData as any).payrollRuns as any[];
-        for (const currentRun of currentRuns.filter((item: any) => ['approved', 'paid'].includes(item?.status))) {
+        for (const currentRun of currentRuns.filter((item: any) => ['approved', 'committed', 'paid'].includes(item?.status))) {
           const requestedRun = requestedRuns.find(item => item?.period === currentRun?.period);
           if (!requestedRun || stableJsonStringify(requestedRun) !== stableJsonStringify(currentRun)) {
             throw new ConflictError(`مسير الرواتب للفترة ${String(currentRun?.period || '')} محمي بعد الاعتماد ولا يقبل تعديلاً عاماً.`);
@@ -10607,7 +10607,7 @@ export async function createApp(options: { cloudflare?: boolean } = {}): Promise
         const actualVersion = Number(current.rows[0]?.version || 0);
         if (!data || actualVersion !== expectedVersion) throw new ConflictError('تغير سجل HR؛ أعد تحميل المسير قبل اعتماده.', { expectedVersion, actualVersion });
         const existingRuns = Array.isArray(data.payrollRuns) ? data.payrollRuns : [];
-        if (existingRuns.some((item: any) => item?.period === period && ['approved', 'paid'].includes(item?.status))) throw new ConflictError('مسير هذه الفترة معتمد أو مصروف بالفعل.');
+        if (existingRuns.some((item: any) => item?.period === period && ['approved', 'committed', 'paid'].includes(item?.status))) throw new ConflictError('مسير هذه الفترة معتمد أو مصروف بالفعل.');
         const calculation = calculatePayrollRun({
           period,
           employees: Array.isArray(data.employees) ? data.employees : [],
@@ -10630,6 +10630,55 @@ export async function createApp(options: { cloudflare?: boolean } = {}): Promise
     } catch (err: any) {
       next(err instanceof AuthenticationError || err instanceof AuthorizationError || err instanceof ValidationError || err instanceof ConflictError || err instanceof DatabaseError ? err : new DatabaseError('تعذر اعتماد مسير الرواتب.', err?.message));
     }
+  });
+
+  // Financial commitment is a separate checkpoint from the eventual cash/bank payout.
+  // It preserves the approved HR snapshot and records the payable by cost center.
+  app.post('/api/hr/payroll-runs/:period/commit', authenticateRequest, requirePermission(PERMISSIONS.FINANCIAL_WRITE), async (req, res, next) => {
+    try {
+      const identity = (req as any).user;
+      const tenantId = String(identity?.tenantId || '').trim();
+      const schoolId = String(identity?.schoolId || '').trim();
+      const period = String(req.params.period || '').trim();
+      const expectedVersion = Number(req.body?.expectedVersion);
+      const tenantContext = (req as any).tenantContext;
+      if (!/^\d{4}-\d{2}$/.test(period) || !Number.isInteger(expectedVersion) || expectedVersion < 0 || !tenantContext || tenantContext.tenantId !== tenantId || tenantContext.schoolId !== schoolId) throw new ValidationError('ترحيل الالتزام يتطلب مسيراً معتمداً وسياق مدرسة موثوقاً.');
+      let journalId = '';
+      let nextVersion = expectedVersion + 1;
+      await UnitOfWork.runInTransaction(schoolId, { operationName: `Commit HR payroll ${period}`, tenantId, userId: identity.id, userName: identity.name || 'المستخدم الحالي', ipAddress: req.ip || 'unknown', affectedTables: ['hr_database', ...CANONICAL_ERP_TABLES] }, async () => {
+        const transaction = UnitOfWork.getActiveContext()?.databaseTransaction;
+        if (!transaction) throw new DatabaseError('معاملة التزام مسير الرواتب غير متاحة.');
+        const actor = await transaction.query<{ id: string }>(`SELECT id FROM public.users WHERE tenant_id=$1 AND auth_user_id=$2 AND status='active' AND deleted_at IS NULL LIMIT 1`, [tenantId, identity.id]);
+        const actorId = actor.rows[0]?.id;
+        if (!actorId) throw new AuthenticationError('تعذر ربط هوية المستخدم المالي.');
+        if (!await CanonicalErpPostingService.isProvisioned(transaction)) throw new DatabaseError('دفتر الأستاذ الكانوني غير مهيأ لهذه المدرسة.');
+        const current = await transaction.query<{ data: Record<string, any>; version: number }>(`SELECT data,version FROM public.hr_database WHERE tenant_id=$1 AND school_id=$2 FOR UPDATE`, [tenantId, schoolId]);
+        const data = current.rows[0]?.data; const actualVersion = Number(current.rows[0]?.version || 0);
+        if (!data || actualVersion !== expectedVersion) throw new ConflictError('تغير سجل HR؛ أعد تحميل المسير قبل الترحيل.', { expectedVersion, actualVersion });
+        const run = (Array.isArray(data.payrollRuns) ? data.payrollRuns : []).find((item: any) => item?.period === period);
+        if (!run || run.status !== 'approved' || run.commitJournalId) throw new ConflictError('لا يمكن إنشاء الالتزام إلا لمسير معتمد غير ملتزم.');
+        const fingerprint = createHash('sha256').update(stableJsonStringify({ period, lines: run.lines, totals: run.totals })).digest('hex');
+        if (run.fingerprint !== fingerprint) throw new ConflictError('بصمة المسير المعتمد غير صحيحة.');
+        const mappingRows = await transaction.query<{ mapping_key: string; account_code: string }>(`SELECT mapping_key,account_code FROM public.erp_account_mappings WHERE school_id=$1 AND is_active=true AND mapping_key = ANY($2::text[])`, [schoolId, ['hr.payroll.expense','hr.payroll.payable']]);
+        const mappings = new Map(mappingRows.rows.map(row => [row.mapping_key, row.account_code]));
+        if (!mappings.get('hr.payroll.expense') || !mappings.get('hr.payroll.payable')) throw new ValidationError('اعتمد حساب مصروف الرواتب وحساب الالتزام أولاً.');
+        const lines: Array<Record<string, any>> = [];
+        for (const line of (Array.isArray(run.lines) ? run.lines : [])) {
+          const cc = String(line.costCenter || '').trim();
+          const expense = Number(line.gross || 0) + Number(line.overtimePay || 0);
+          if (expense > 0) lines.push({ id: `${line.employeeId}-expense`, accountCode: mappings.get('hr.payroll.expense'), debit: expense, credit: 0, costCenter: cc });
+          if (Number(line.net || 0) > 0) lines.push({ id: `${line.employeeId}-payable`, accountCode: mappings.get('hr.payroll.payable'), debit: 0, credit: Number(line.net), costCenter: cc });
+        }
+        const sync = await CanonicalErpPostingService.syncSnapshot(transaction, tenantId, schoolId, actorId, { journalEntries: [{ id: `hr-payroll-commit-${period}`, sourceType: 'journal_entry', status: 'posted', date: `${period}-01`, description: `إثبات التزام رواتب الفترة ${period}`, lines }] });
+        journalId = sync.sourceLinks.find(link => link.sourceId === `hr-payroll-commit-${period}`)?.journalEntryId || '';
+        if (!journalId) throw new DatabaseError('تعذر إثبات قيد التزام الرواتب.');
+        run.status = 'committed'; run.commitJournalId = journalId; run.committedAt = new Date().toISOString(); run.committedBy = actorId;
+        nextVersion = actualVersion + 1;
+        await transaction.query(`UPDATE public.hr_database SET data=$3::jsonb,version=$4,updated_at=now(),updated_by=$5 WHERE tenant_id=$1 AND school_id=$2`, [tenantId, schoolId, JSON.stringify(data), nextVersion, actorId]);
+        await transaction.query(`INSERT INTO public.audit_events (tenant_id,school_id,branch_id,actor_user_id,entity_type,entity_id,action,source,reason,result,metadata) VALUES ($1,$2,$3,$4,'hr_payroll_run',$5,'commit','HrPayrollRoute','إثبات التزام رواتب قبل الصرف','success',$6::jsonb)`, [tenantId, schoolId, identity.branchId || null, actorId, schoolId, JSON.stringify({ runId: `payroll-${period}`, period, journalId })]);
+      }, tenantContext);
+      res.json({ success: true, data: { period, journalId, status: 'committed' }, meta: { version: nextVersion } });
+    } catch (err: any) { next(err instanceof AuthenticationError || err instanceof AuthorizationError || err instanceof ValidationError || err instanceof ConflictError || err instanceof DatabaseError ? err : new DatabaseError('تعذر ترحيل التزام الرواتب.', err?.message)); }
   });
 
   app.post('/api/hr/payroll-runs/:period/pay', authenticateRequest, requirePermission(PERMISSIONS.FINANCIAL_WRITE), async (req, res, next) => {
@@ -10659,16 +10708,16 @@ export async function createApp(options: { cloudflare?: boolean } = {}): Promise
         const actualVersion = Number(current.rows[0]?.version || 0);
         if (!data || actualVersion !== expectedVersion) throw new ConflictError('تغير سجل HR؛ أعد تحميل المسير قبل تنفيذ الصرف.', { expectedVersion, actualVersion });
         const run = (Array.isArray(data.payrollRuns) ? data.payrollRuns : []).find((item: any) => item?.period === period);
-         if (!run || run.status !== 'approved' || run.journalId) throw new ConflictError('لا يمكن الصرف إلا لمسير معتمد وغير مصروف.');
+        if (!run || !['approved', 'committed'].includes(run.status) || run.journalId) throw new ConflictError('لا يمكن الصرف إلا لمسير معتمد أو ملتزم وغير مصروف.');
         const recomputedFingerprint = createHash('sha256').update(stableJsonStringify({ period, lines: run.lines, totals: run.totals })).digest('hex');
         if (run.fingerprint !== recomputedFingerprint) throw new ConflictError('بصمة مسير الرواتب المعتمد غير صحيحة.');
         const requestedPayoutMethod = String(req.body?.payoutMethod || 'cash').trim();
         const requestedPayoutAccount = String(req.body?.payoutAccount || '').trim();
         if (!['cash', 'bank'].includes(requestedPayoutMethod)) throw new ValidationError('طريقة صرف الرواتب يجب أن تكون خزينة أو بنكاً.');
         const payoutMappingKey = requestedPayoutMethod === 'bank' ? 'treasury.bank' : 'treasury.cash';
-        const mappingRows = await transaction.query<{ mapping_key: string; account_code: string }>(`SELECT mapping_key,account_code FROM public.erp_account_mappings WHERE school_id=$1 AND is_active=true AND mapping_key = ANY($2::text[])`, [schoolId, ['treasury.cash','treasury.bank','hr.payroll.expense','hr.advance.receivable','hr.deductions.clearing']]);
+        const mappingRows = await transaction.query<{ mapping_key: string; account_code: string }>(`SELECT mapping_key,account_code FROM public.erp_account_mappings WHERE school_id=$1 AND is_active=true AND mapping_key = ANY($2::text[])`, [schoolId, ['treasury.cash','treasury.bank','hr.payroll.expense','hr.payroll.payable','hr.advance.receivable','hr.deductions.clearing']]);
         const mappings = new Map(mappingRows.rows.map(row => [row.mapping_key, row.account_code]));
-        const required = [payoutMappingKey,'hr.payroll.expense','hr.advance.receivable','hr.deductions.clearing'];
+        const required = [payoutMappingKey, run.status === 'committed' ? 'hr.payroll.payable' : 'hr.payroll.expense','hr.advance.receivable','hr.deductions.clearing'];
         if (required.some(key => !mappings.get(key))) throw new ValidationError('لا يمكن تنفيذ الصرف قبل اعتماد جميع خرائط حسابات HR من شاشة الحسابات.');
         if (requestedPayoutAccount && requestedPayoutAccount !== mappings.get(payoutMappingKey)) throw new ValidationError('حساب الصرف المحدد لا يطابق الحساب المعتمد لطريقة الصرف.');
         const totals = run.totals || {};
@@ -10680,7 +10729,8 @@ export async function createApp(options: { cloudflare?: boolean } = {}): Promise
           const cc = String(line.costCenter || '').trim();
           const expense = Number(line.gross || 0) + Number(line.overtimePay || 0);
           const deductions = Number(line.penalty || 0) + Number(line.attendanceDeduction || 0) + Number(line.leaveDeduction || 0);
-          if (expense > 0) lines.push({ id: `${line.employeeId}-expense`, accountCode: mappings.get('hr.payroll.expense'), debit: expense, credit: 0, costCenter: cc });
+          if (run.status !== 'committed' && expense > 0) lines.push({ id: `${line.employeeId}-expense`, accountCode: mappings.get('hr.payroll.expense'), debit: expense, credit: 0, costCenter: cc });
+          if (run.status === 'committed' && Number(line.net || 0) > 0) lines.push({ id: `${line.employeeId}-payable-settlement`, accountCode: mappings.get('hr.payroll.payable'), debit: Number(line.net), credit: 0, costCenter: cc });
           if (Number(line.net || 0) > 0) lines.push({ id: `${line.employeeId}-payout`, accountCode: mappings.get(payoutMappingKey), debit: 0, credit: Number(line.net), costCenter: cc });
           if (Number(line.advanceDeduction || 0) > 0) lines.push({ id: `${line.employeeId}-advance`, accountCode: mappings.get('hr.advance.receivable'), debit: 0, credit: Number(line.advanceDeduction), costCenter: cc });
           if (deductions > 0) lines.push({ id: `${line.employeeId}-deductions`, accountCode: mappings.get('hr.deductions.clearing'), debit: 0, credit: deductions, costCenter: cc });

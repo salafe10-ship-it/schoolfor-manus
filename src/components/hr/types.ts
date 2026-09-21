@@ -167,7 +167,7 @@ export interface HRSettings {
 export interface HRPayrollRun {
   id: string;
   period: string;
-  status: 'approved' | 'paid';
+  status: 'approved' | 'committed' | 'paid';
   lines: Array<{
     employeeId: string;
     costCenter: 'kindergarten' | 'primary' | 'middle' | 'secondary' | 'admin';
