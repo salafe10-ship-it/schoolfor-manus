@@ -253,6 +253,11 @@ EnterpriseLogger.info('PostgreSQL connection policy resolved.', 'ServerBootstrap
 let identityJobSchemaPromise: Promise<void> | null = null;
 const ensureIdentityJobSchema = async (): Promise<void> => {
   if (!platformAdminPool) return;
+  const schemaCheck = await platformAdminPool.query(
+    `SELECT 1 FROM information_schema.columns
+      WHERE table_schema = 'public' AND table_name = 'users' AND column_name = 'job_id' LIMIT 1`,
+  );
+  if (schemaCheck.rowCount === 1) return;
   if (!identityJobSchemaPromise) {
     identityJobSchemaPromise = platformAdminPool.query(
       `ALTER TABLE public.users ADD COLUMN IF NOT EXISTS job_id text`,
@@ -273,6 +278,14 @@ const ensureIdentityJobSchema = async (): Promise<void> => {
 let studentAuditRlsSchemaPromise: Promise<void> | null = null;
 const ensureStudentAuditRlsSchema = async (): Promise<void> => {
   if (!platformAdminPool) return;
+  const schemaCheck = await platformAdminPool.query(`
+    SELECT
+      EXISTS (SELECT 1 FROM pg_proc WHERE pronamespace = 'public'::regnamespace AND proname = 'dbsec010_audit_actor_allowed') AS actor_guard,
+      EXISTS (SELECT 1 FROM pg_policies WHERE schemaname = 'public' AND tablename = 'audit_events' AND policyname = 'p_dbsec010_audit_insert_authenticated') AS audit_policy,
+      EXISTS (SELECT 1 FROM pg_policies WHERE schemaname = 'public' AND tablename = 'student_fee_audit_events' AND policyname = 'p_student_fee_audit_events_insert') AS fee_policy
+  `);
+  const schemaReady = schemaCheck.rows[0]?.actor_guard && schemaCheck.rows[0]?.audit_policy && schemaCheck.rows[0]?.fee_policy;
+  if (schemaReady) return;
   if (!studentAuditRlsSchemaPromise) {
     studentAuditRlsSchemaPromise = platformAdminPool.query(`
       CREATE OR REPLACE FUNCTION public.dbsec010_audit_actor_allowed(
@@ -2830,6 +2843,14 @@ export async function createApp(options: { cloudflare?: boolean } = {}): Promise
   let centralDirectorySyncInFlight: Promise<{ syncedSchools: number; syncedBranches: number; schools: string[] }> | null = null;
   const ensureControlIdentitySchema = async () => {
     if (!platformAdminPool) return;
+    const schemaCheck = await platformAdminPool.query(`
+      SELECT
+        (SELECT count(*) FROM information_schema.columns
+          WHERE table_schema = 'public' AND table_name = 'users'
+            AND column_name IN ('username','email','job_title','department','session_revoked_at','force_password_change')) = 6 AS user_columns,
+        to_regclass('public.user_permission_grants') IS NOT NULL AS grants_table
+    `);
+    if (schemaCheck.rows[0]?.user_columns && schemaCheck.rows[0]?.grants_table) return;
     const client = await platformAdminPool.connect();
     try {
       await client.query('BEGIN');
