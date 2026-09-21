@@ -101,10 +101,10 @@ export default function HumanResourcesPortal({ setActiveSection, selectedSchool,
     return false;
   };
 
-  const runPayrollWorkflow = async (period: string, action: 'approve' | 'pay'): Promise<boolean> => {
+  const runPayrollWorkflow = async (period: string, action: 'approve' | 'commit' | 'pay'): Promise<boolean> => {
     try {
       if (action === 'approve' && !canApprove && !canManage) return requireHrWrite();
-      if (action === 'pay' && !canFinancialWrite) {
+      if ((action === 'pay' || action === 'commit') && !canFinancialWrite) {
         triggerNotification('صرف المسير يتطلب صلاحية الكتابة المالية.', 'warning');
         return false;
       }
@@ -122,12 +122,12 @@ export default function HumanResourcesPortal({ setActiveSection, selectedSchool,
         const nextRuns = [...payrollRuns.filter(run => run.period !== period), returnedData as HRPayrollRun];
         setPayrollRuns(nextRuns);
         canonicalBaselineRef.current = JSON.stringify({ employees, departments, jobs, contracts, attendance, leaves, penalties, advances, rewards, performance, documents, payrollRuns: nextRuns, settings });
-      } else if (action === 'pay' && returnedData?.period) {
-        const nextRuns = payrollRuns.map(run => run.period === period ? { ...run, ...returnedData, status: 'paid' as const } : run);
+      } else if ((action === 'commit' || action === 'pay') && returnedData?.period) {
+        const nextRuns = payrollRuns.map(run => run.period === period ? { ...run, ...returnedData, status: returnedData.status } : run);
         setPayrollRuns(nextRuns);
         canonicalBaselineRef.current = JSON.stringify({ employees, departments, jobs, contracts, attendance, leaves, penalties, advances, rewards, performance, documents, payrollRuns: nextRuns, settings });
       }
-      triggerNotification(action === 'approve' ? 'تم اعتماد المسير دون إنشاء قيد.' : `تم تنفيذ الصرف وإثبات القيد ${payload?.data?.journalId || ''}.`, 'success');
+      triggerNotification(action === 'approve' ? 'تم اعتماد المسير دون إنشاء قيد.' : action === 'commit' ? `تم إثبات التزام الرواتب ${payload?.data?.journalId || ''} قبل الصرف.` : `تم تنفيذ الصرف وإثبات القيد ${payload?.data?.journalId || ''}.`, 'success');
       return true;
     } catch (error: any) {
       triggerNotification(error?.message || 'تعذر تنفيذ مسار الرواتب.', 'error');
@@ -1104,6 +1104,7 @@ export default function HumanResourcesPortal({ setActiveSection, selectedSchool,
               canApprove={canApprove || canManage}
               canFinancialWrite={canFinancialWrite}
               onApprovePayroll={(period) => runPayrollWorkflow(period, 'approve')}
+              onCommitPayroll={(period) => runPayrollWorkflow(period, 'commit')}
               onPayPayroll={(period) => runPayrollWorkflow(period, 'pay')}
             />
           )}

@@ -18,6 +18,7 @@ interface PayrollTabProps {
   canApprove?: boolean;
   canFinancialWrite?: boolean;
   onApprovePayroll: (period: string) => Promise<boolean>;
+  onCommitPayroll: (period: string) => Promise<boolean>;
   onPayPayroll: (period: string) => Promise<boolean>;
 }
 
@@ -48,18 +49,21 @@ export default function PayrollTab({
   canApprove = false,
   canFinancialWrite = false,
   onApprovePayroll,
+  onCommitPayroll,
   onPayPayroll
 }: PayrollTabProps) {
   const [selectedMonth, setSelectedMonth] = useState('2026-06');
   const [payrollList, setPayrollList] = useState<PayrollItem[]>([]);
   const [isPosted, setIsPosted] = useState(false);
   const [isApproved, setIsApproved] = useState(false);
+  const [isCommitted, setIsCommitted] = useState(false);
   const [selectedSlip, setSelectedSlip] = useState<PayrollItem | null>(null);
 
   // Sync / Calculate payroll for selected month
   useEffect(() => {
     const persistedRun = payrollRuns.find(run => run.period === selectedMonth);
-    setIsApproved(persistedRun?.status === 'approved' || persistedRun?.status === 'paid');
+    setIsApproved(['approved', 'committed', 'paid'].includes(persistedRun?.status || ''));
+    setIsCommitted(persistedRun?.status === 'committed' || persistedRun?.status === 'paid');
     setIsPosted(persistedRun?.status === 'paid');
 
     // Calculate items
@@ -110,6 +114,11 @@ export default function PayrollTab({
     if (!isApproved) {
       const approved = await onApprovePayroll(selectedMonth);
       if (approved) setIsApproved(true);
+      return;
+    }
+    if (!isCommitted) {
+      const committed = await onCommitPayroll(selectedMonth);
+      if (committed) setIsCommitted(true);
       return;
     }
     const posted = await onPayPayroll(selectedMonth);
@@ -225,11 +234,11 @@ export default function PayrollTab({
             <button 
               onClick={handlePostPayroll}
               disabled={isApproved ? !canFinancialWrite : !canApprove}
-              title={isApproved ? 'يتطلب تنفيذ الصرف صلاحية الكتابة المالية' : 'يتطلب اعتماد المسير صلاحية اعتماد الموارد البشرية'}
+              title={!isApproved ? 'يتطلب اعتماد المسير صلاحية اعتماد الموارد البشرية' : !isCommitted ? 'يتطلب إثبات الالتزام صلاحية الكتابة المالية' : 'يتطلب تنفيذ الصرف صلاحية الكتابة المالية'}
               className="bg-gradient-to-r from-emerald-600 to-teal-500 hover:opacity-90 disabled:opacity-40 disabled:cursor-not-allowed text-white font-bold px-4 py-1.5 rounded-lg text-xs flex items-center gap-1.5 shadow-md transition-all"
             >
               <Play className="w-4 h-4" />
-              <span>{isApproved ? 'تنفيذ الصرف وترحيل القيد' : 'اعتماد مسير الرواتب'}</span>
+              <span>{!isApproved ? 'اعتماد مسير الرواتب' : !isCommitted ? 'إثبات التزام الرواتب' : 'تنفيذ الصرف وترحيل القيد'}</span>
             </button>
           )}
         </div>
