@@ -251,6 +251,7 @@ EnterpriseLogger.info('PostgreSQL connection policy resolved.', 'ServerBootstrap
 // deliberately limited to the non-destructive column addition; all data
 // changes still go through the authenticated screen APIs below.
 let identityJobSchemaPromise: Promise<void> | null = null;
+const runtimeSchemaBootstrapEnabled = process.env.RUNTIME_SCHEMA_BOOTSTRAP === 'true';
 const ensureIdentityJobSchema = async (): Promise<void> => {
   if (!platformAdminPool) return;
   const schemaCheck = await platformAdminPool.query(
@@ -451,12 +452,12 @@ const ensureOwnerWorkspaceReleaseSchema = async (): Promise<void> => {
 };
 
 if (platformAdminPool) {
-  void ensureIdentityJobSchema().catch((error) => {
+  if (runtimeSchemaBootstrapEnabled) void ensureIdentityJobSchema().catch((error) => {
     EnterpriseLogger.error('Identity job reference schema bootstrap failed.', 'ServerBootstrap', {
       error: error instanceof Error ? error.message : String(error),
     });
   });
-  void ensureStudentAuditRlsSchema().catch((error) => {
+  if (runtimeSchemaBootstrapEnabled) void ensureStudentAuditRlsSchema().catch((error) => {
     EnterpriseLogger.error('Student audit RLS schema bootstrap failed.', 'ServerBootstrap', {
       error: error instanceof Error ? error.message : String(error),
     });
@@ -6224,7 +6225,7 @@ export async function createApp(options: { cloudflare?: boolean } = {}): Promise
     const correlationId = String(req.body?.correlationId || req.get('X-Correlation-Id') || randomUUID()).trim();
     let authUserId = '';
     try {
-      await ensureIdentityJobSchema();
+      if (runtimeSchemaBootstrapEnabled) await ensureIdentityJobSchema();
       const { tenantId, schoolId, actorAuthUserId } = schoolIdentityScope(req);
       const displayName = String(req.body?.name || req.body?.displayName || '').trim();
       const jobId = String(req.body?.jobId || '').trim();
@@ -6348,7 +6349,7 @@ export async function createApp(options: { cloudflare?: boolean } = {}): Promise
   app.patch('/api/school/users/:userId', authenticateRequest, requireSchoolIdentityMutationPermission, async (req, res, next) => {
     if (!platformAdminPool || !platformAdminAuth) return next(new ExternalServiceError('خدمة هوية المدرسة غير مهيأة.'));
     try {
-      await ensureIdentityJobSchema();
+      if (runtimeSchemaBootstrapEnabled) await ensureIdentityJobSchema();
       const { tenantId, schoolId, actorAuthUserId } = schoolIdentityScope(req);
       const userId = String(req.params.userId || '').trim();
       const operation = String(req.body?.operation || '').trim();
@@ -7347,7 +7348,7 @@ export async function createApp(options: { cloudflare?: boolean } = {}): Promise
 
   async function resolveStudentTenantContext(req: express.Request) {
     const identity = (req as any).user;
-    await ensureStudentAuditRlsSchema();
+    if (runtimeSchemaBootstrapEnabled) await ensureStudentAuditRlsSchema();
     const context = tenantEngine.validate(await tenantEngine.resolve(identity, (req as any).trustedAccessToken, (req as any).perf004Trace));
     tenantEngine.assertRequestTarget(context, requestTarget(req));
     const actorUserId = await resolveCanonicalTenantActor(context);
@@ -13852,7 +13853,7 @@ ${JSON.stringify(snapshot)}
   // Align the separately configured control-plane schema before accepting
   // identity-management requests. This is transactional and idempotent.
   try {
-    await ensureControlIdentitySchema();
+    if (runtimeSchemaBootstrapEnabled) await ensureControlIdentitySchema();
   } catch (error) {
     EnterpriseLogger.error('Control-plane identity schema alignment failed.', 'ServerBootstrap', {
       error: error instanceof Error ? error.message : String(error),
