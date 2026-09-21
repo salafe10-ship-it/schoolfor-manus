@@ -10316,6 +10316,23 @@ export async function createApp(options: { cloudflare?: boolean } = {}): Promise
            WHERE public.hr_database.tenant_id = EXCLUDED.tenant_id`,
           [tenantId, schoolId, requestedCountryCode, JSON.stringify(requestedLegalConfiguration), JSON.stringify(requestedData), nextVersion, actorId]
         );
+        // Repayment schedules are durable relational records as well as a
+        // compatibility projection in the HR snapshot. Never rely on browser
+        // state for installment-level reconciliation.
+        for (const advance of (requestedData as any).advances || []) {
+          for (const schedule of (Array.isArray(advance.repaymentSchedule) ? advance.repaymentSchedule : [])) {
+            await transaction.query(
+              `INSERT INTO public.hr_advance_repayment_schedules
+                 (tenant_id, school_id, advance_id, employee_id, cost_center, installment_number, due_date, amount, paid_amount, status)
+               VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10)
+               ON CONFLICT (school_id, advance_id, installment_number) DO UPDATE SET
+                 due_date = EXCLUDED.due_date, amount = EXCLUDED.amount,
+                 updated_at = now()
+               WHERE public.hr_advance_repayment_schedules.paid_amount = 0`,
+              [tenantId, schoolId, String(advance.id), String(advance.employeeId), String(advance.costCenter), Number(schedule.installment), String(schedule.dueDate), Number(schedule.amount), Number(schedule.paidAmount || 0), String(schedule.status || 'scheduled')]
+            );
+          }
+        }
         await transaction.query(
           `INSERT INTO public.audit_events
              (tenant_id, school_id, branch_id, actor_user_id, entity_type, entity_id, action, source, reason, result, metadata)
