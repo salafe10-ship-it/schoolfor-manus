@@ -86,7 +86,7 @@ export default function OtherHRTabs({
   const [contractForm, setContractForm] = useState({ employeeId: '', type: 'fixed' as any, startDate: '', endDate: '', monthlySalary: 3500 });
   const [leaveForm, setLeaveForm] = useState({ employeeId: '', type: 'annual' as any, startDate: '', endDate: '', reason: '' });
   const [penaltyForm, setPenaltyForm] = useState({ employeeId: '', type: 'deduction' as any, date: '', amount: 0, reason: '' });
-  const [advanceForm, setAdvanceForm] = useState({ employeeId: '', costCenter: 'admin' as any, amount: 1000, date: '', installments: 10, deductionPerMonth: 100, reason: '' });
+  const [advanceForm, setAdvanceForm] = useState({ employeeId: '', costCenter: 'admin' as any, loanType: 'short_term' as any, payoutMethod: 'cash' as any, amount: 1000, date: '', installments: 10, deductionPerMonth: 100, reason: '' });
   const [rewardForm, setRewardForm] = useState({ employeeId: '', amount: 0, date: '', reason: '' });
   const [perfForm, setPerfForm] = useState({ employeeId: '', date: '', score: 0, reviewer: '', strengths: '', improvements: '', trainingNeeds: '' });
   const [docForm, setDocForm] = useState({ employeeId: '', title: '', type: 'passport', issueDate: '', expiryDate: '' });
@@ -824,6 +824,13 @@ export default function OtherHRTabs({
         id: `ADV-${Date.now().toString().slice(-4)}`,
         ...advanceForm,
         remainingAmount: advanceForm.amount,
+        repaymentSchedule: Array.from({ length: Math.max(1, advanceForm.installments) }, (_, index) => ({
+          installment: index + 1,
+          dueDate: new Date(new Date(advanceForm.date).setMonth(new Date(advanceForm.date).getMonth() + index + 1)).toISOString().slice(0, 10),
+          amount: advanceForm.deductionPerMonth,
+          paidAmount: 0,
+          status: 'scheduled' as const
+        })),
         status: 'pending'
       };
       setAdvances(prev => [newAdvance, ...prev]);
@@ -845,7 +852,7 @@ export default function OtherHRTabs({
             <p className="text-xs text-slate-400">إدارة القروض والسلف المالية الممنوحة للعاملين مع الاسترداد الآلي عبر مسير الرواتب.</p>
           </div>
           <button 
-            onClick={() => { setAdvanceForm({ employeeId: '', costCenter: 'admin', amount: 0, date: new Date().toISOString().split('T')[0], installments: 0, deductionPerMonth: 0, reason: '' }); setShowAddModal(true); }}
+            onClick={() => { setAdvanceForm({ employeeId: '', costCenter: 'admin', loanType: 'short_term', payoutMethod: 'cash', amount: 0, date: new Date().toISOString().split('T')[0], installments: 0, deductionPerMonth: 0, reason: '' }); setShowAddModal(true); }}
             className="bg-gradient-to-r from-emerald-600 to-emerald-700 text-white font-bold px-4 py-2 rounded-lg text-xs flex items-center gap-1 shadow-md"
           >
             <Plus className="w-4 h-4" />
@@ -920,6 +927,22 @@ export default function OtherHRTabs({
                     </select>
                   </div>
                   <div />
+                </div>
+                <div className="grid grid-cols-2 gap-3">
+                  <div className="space-y-1">
+                    <label>نوع التمويل</label>
+                    <select value={advanceForm.loanType} onChange={e => setAdvanceForm(p=>({...p, loanType: e.target.value as any}))} className="w-full bg-slate-800 border border-slate-700 rounded p-2 text-white">
+                      <option value="short_term">سلفة قصيرة الأجل</option>
+                      <option value="long_term">قرض طويل الأجل</option>
+                    </select>
+                  </div>
+                  <div className="space-y-1">
+                    <label>طريقة الصرف</label>
+                    <select value={advanceForm.payoutMethod} onChange={e => setAdvanceForm(p=>({...p, payoutMethod: e.target.value as any}))} className="w-full bg-slate-800 border border-slate-700 rounded p-2 text-white">
+                      <option value="cash">خزينة</option>
+                      <option value="bank">بنك</option>
+                    </select>
+                  </div>
                 </div>
                 <div className="grid grid-cols-2 gap-3">
                   <div className="space-y-1">

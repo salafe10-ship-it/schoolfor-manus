@@ -1075,6 +1075,9 @@ function validateHrSnapshotData(data: Record<string, any>): void {
     assertMoney(row.remainingAmount, `رصيد السلفة ${row.id}`);
     if (!Number.isInteger(Number(row.installments)) || Number(row.installments) <= 0) throw new ValidationError(`عدد أقساط السلفة ${row.id} غير صالح.`);
     if (Number(row.remainingAmount) > Number(row.amount)) throw new ValidationError(`رصيد السلفة ${row.id} يتجاوز أصل السلفة.`);
+    if (row.loanType !== undefined && !['short_term', 'long_term'].includes(String(row.loanType))) throw new ValidationError(`نوع السلفة ${row.id} غير صالح.`);
+    if (row.payoutMethod !== undefined && !['cash', 'bank'].includes(String(row.payoutMethod))) throw new ValidationError(`طريقة صرف السلفة ${row.id} غير صالحة.`);
+    if (row.repaymentSchedule !== undefined && (!Array.isArray(row.repaymentSchedule) || row.repaymentSchedule.length !== Number(row.installments))) throw new ValidationError(`جدول سداد السلفة ${row.id} غير مكتمل.`);
   }
   for (const row of data.attendance) {
     assertMoney(row.delayMinutes, `تأخير الحضور ${row.id}`);
@@ -10437,6 +10440,7 @@ export async function createApp(options: { cloudflare?: boolean } = {}): Promise
       const tenantContext = (req as any).tenantContext;
       const mappings = [
         ['treasury.cash', String(req.body?.cashAccount || '').trim(), 'asset'],
+        ...(String(req.body?.bankAccount || '').trim() ? [['treasury.bank', String(req.body?.bankAccount || '').trim(), 'asset'] as const] : []),
         ['hr.payroll.expense', String(req.body?.payrollExpenseAccount || '').trim(), 'expense'],
         ['hr.payroll.payable', String(req.body?.payrollPayableAccount || '').trim(), 'liability'],
         ['hr.advance.receivable', String(req.body?.advanceReceivableAccount || '').trim(), 'asset'],
@@ -10525,13 +10529,17 @@ export async function createApp(options: { cloudflare?: boolean } = {}): Promise
         const employee = (Array.isArray(data.employees) ? data.employees : []).find((item: any) => item?.id === advance.employeeId);
         if (!employee || String(employee.costCenter) !== String(advance.costCenter)) throw new ValidationError('مركز تكلفة السلفة لا يطابق مركز تكلفة الموظف؛ تم رفض الصرف حفاظاً على فصل المراحل.');
         if (!Number.isFinite(amount) || amount <= 0) throw new ValidationError('قيمة السلفة غير صالحة للصرف.');
-        const mappingRows = await transaction.query<{ mapping_key: string; account_code: string }>(`SELECT mapping_key,account_code FROM public.erp_account_mappings WHERE school_id=$1 AND is_active=true AND mapping_key = ANY($2::text[])`, [schoolId, ['treasury.cash', 'hr.advance.receivable']]);
+        const payoutMethod = String(advance.payoutMethod || 'cash');
+        const requestedPayoutAccount = String(advance.payoutAccount || '').trim();
+        const payoutKey = payoutMethod === 'bank' ? 'treasury.bank' : 'treasury.cash';
+        const mappingRows = await transaction.query<{ mapping_key: string; account_code: string }>(`SELECT mapping_key,account_code FROM public.erp_account_mappings WHERE school_id=$1 AND is_active=true AND mapping_key = ANY($2::text[])`, [schoolId, [payoutKey, 'treasury.cash', 'hr.advance.receivable']]);
         const mappings = new Map(mappingRows.rows.map(row => [row.mapping_key, row.account_code]));
-        if (!mappings.get('treasury.cash') || !mappings.get('hr.advance.receivable')) throw new ValidationError('لا يمكن صرف السلفة قبل اعتماد خريطة النقد وذمم السلف.');
+        const payoutAccount = requestedPayoutAccount || mappings.get(payoutKey);
+        if (!payoutAccount || !mappings.get('hr.advance.receivable') || (requestedPayoutAccount && requestedPayoutAccount !== payoutAccount)) throw new ValidationError('حساب صرف السلفة غير معتمد ضمن خرائط المدرسة.');
         const sync = await CanonicalErpPostingService.syncSnapshot(transaction, tenantId, schoolId, actorId, {
           journalEntries: [{ id: `hr-advance-${advanceId}`, sourceType: 'journal_entry', status: 'posted', date: String(advance.date || new Date().toISOString().slice(0, 10)), description: `صرف سلفة موظف ${advance.employeeId} — ${advance.costCenter}`, lines: [
             { id: 'advance-receivable', accountCode: mappings.get('hr.advance.receivable'), debit: amount, credit: 0, costCenter: advance.costCenter },
-            { id: 'cash', accountCode: mappings.get('treasury.cash'), debit: 0, credit: amount, costCenter: advance.costCenter }
+            { id: 'payout', accountCode: payoutAccount, debit: 0, credit: amount, costCenter: advance.costCenter }
           ] }]
         });
         journalId = sync.sourceLinks.find(link => link.sourceId === `hr-advance-${advanceId}`)?.journalEntryId || '';

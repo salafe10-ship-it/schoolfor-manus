@@ -102,6 +102,10 @@ export interface HRAdvance {
   employeeId: string;
   /** Mandatory accounting dimension; advances may not cross stages. */
   costCenter: 'kindergarten' | 'primary' | 'middle' | 'secondary' | 'admin';
+  loanType?: 'short_term' | 'long_term';
+  payoutMethod?: 'cash' | 'bank';
+  payoutAccount?: string;
+  repaymentSchedule?: Array<{ installment: number; dueDate: string; amount: number; paidAmount: number; status: 'scheduled' | 'paid' | 'partial' | 'overdue' }>;
   amount: number;
   date: string;
   installments: number;
