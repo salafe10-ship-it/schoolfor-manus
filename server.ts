@@ -10200,9 +10200,16 @@ export async function createApp(options: { cloudflare?: boolean } = {}): Promise
   app.get('/api/hr/database', authenticateRequest, requirePermission(PERMISSIONS.HR_READ), async (req, res, next) => {
     try {
       const identity = (req as any).user;
-      const tenantContext = (req as any).tenantContext || await resolveStudentReadTenantContext(req);
       const tenantId = String(identity?.tenantId || '').trim();
       const schoolId = String(identity?.schoolId || '').trim();
+      const tenantContext = {
+        tenantId,
+        schoolId,
+        branchId: String(identity?.branchId || '').trim(),
+        academicYear: String(identity?.academicYear || '').trim(),
+        userId: String(identity?.id || '').trim(),
+        role: String(identity?.role || 'SchoolAdmin').trim()
+      };
       if (!tenantId || !schoolId || !tenantContext || tenantContext.tenantId !== tenantId || tenantContext.schoolId !== schoolId) {
         throw new AuthenticationError('السياق الموثوق لقراءة سجلات الموارد البشرية غير مكتمل.');
       }
@@ -10237,9 +10244,24 @@ export async function createApp(options: { cloudflare?: boolean } = {}): Promise
   app.post('/api/hr/database', authenticateRequest, requirePermission(PERMISSIONS.HR_WRITE), async (req, res, next) => {
     try {
       const identity = (req as any).user;
-      const tenantContext = (req as any).tenantContext || await resolveStudentTenantContext(req);
       const tenantId = String(identity?.tenantId || '').trim();
       const schoolId = String(identity?.schoolId || '').trim();
+      let tenantContext: {
+        tenantId: string;
+        schoolId: string;
+        branchId: string;
+        academicYear: string;
+        userId: string;
+        role: string;
+        actorUserId?: string;
+      } = {
+        tenantId,
+        schoolId,
+        branchId: String(identity?.branchId || '').trim(),
+        academicYear: String(identity?.academicYear || '').trim(),
+        userId: String(identity?.id || '').trim(),
+        role: String(identity?.role || 'SchoolAdmin').trim()
+      };
       const expectedVersion = Number(req.body?.expectedVersion);
       const requestedData = req.body?.data && typeof req.body.data === 'object' && !Array.isArray(req.body.data)
         ? JSON.parse(JSON.stringify(req.body.data)) as Record<string, any>
@@ -10255,7 +10277,7 @@ export async function createApp(options: { cloudflare?: boolean } = {}): Promise
       // Heal the local actor bridge before entering the data-plane unit of
       // work, otherwise valid school identities fail as opaque 500 responses
       // on older provisioned schools.
-      await resolveCanonicalTenantActor({
+      const canonicalActorId = await resolveCanonicalTenantActor({
         tenantId,
         schoolId,
         branchId: String(tenantContext.branchId || identity.branchId || '').trim(),
@@ -10263,6 +10285,7 @@ export async function createApp(options: { cloudflare?: boolean } = {}): Promise
         userId: String(identity.id || '').trim(),
         role: String(identity.role || '').trim(),
       });
+      tenantContext = { ...tenantContext, actorUserId: canonicalActorId };
       if (!requestedData || typeof requestedData !== 'object' || Array.isArray(requestedData)
         || !requestedLegalConfiguration || typeof requestedLegalConfiguration !== 'object' || Array.isArray(requestedLegalConfiguration)) {
         throw new ValidationError('بيانات وإعدادات الموارد البشرية يجب أن تكون كائنات صالحة.');
