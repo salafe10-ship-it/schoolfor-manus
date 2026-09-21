@@ -10213,7 +10213,21 @@ export async function createApp(options: { cloudflare?: boolean } = {}): Promise
       if (!tenantId || !schoolId || !tenantContext || tenantContext.tenantId !== tenantId || tenantContext.schoolId !== schoolId) {
         throw new AuthenticationError('السياق الموثوق لقراءة سجلات الموارد البشرية غير مكتمل.');
       }
-      const snapshot = await UnitOfWork.runInTransaction(schoolId, {
+      const snapshot = platformControl
+        ? await (async () => {
+          const { data, error } = await platformControl
+            .from('hr_database')
+            .select('data, version, country_code, legal_configuration')
+            .eq('tenant_id', tenantId)
+            .eq('school_id', schoolId)
+            .maybeSingle();
+          if (error) throw new DatabaseError('تعذر قراءة سجل الموارد البشرية المركزي.', error.message);
+          return data || {
+            data: { employees: [], departments: [], jobs: [], contracts: [], attendance: [], leaves: [], penalties: [], advances: [], rewards: [], performance: [], documents: [], payrollRuns: [], settings: {} },
+            version: 0, country_code: 'ZZ', legal_configuration: {}
+          };
+        })()
+        : await UnitOfWork.runInTransaction(schoolId, {
         operationName: 'Read versioned HR database', tenantId, userId: identity.id,
         userName: identity.name || 'المستخدم الحالي', ipAddress: req.ip || 'unknown',
         affectedTables: ['hr_database']
@@ -10303,6 +10317,54 @@ export async function createApp(options: { cloudflare?: boolean } = {}): Promise
         throw new ValidationError('إعدادات الموارد البشرية يجب أن تكون كائناً.');
       }
       validateHrSnapshotData(requestedData as Record<string, any>);
+
+      // The production worker's canonical Supabase control channel is the
+      // authoritative path for HR snapshots.  Use it when available so a
+      // stale pooler/role configuration cannot make a successful UI change
+      // disappear after reload.  Scope remains fully server-derived above.
+      if (platformControl) {
+        const { data: current, error: currentError } = await platformControl
+          .from('hr_database')
+          .select('data, version')
+          .eq('tenant_id', tenantId)
+          .eq('school_id', schoolId)
+          .maybeSingle();
+        if (currentError) throw new DatabaseError('تعذر قراءة إصدار سجل الموارد البشرية قبل الحفظ.', currentError.message);
+        const actualVersion = Number(current?.version || 0);
+        if (actualVersion !== expectedVersion) {
+          throw new ConflictError('تم تعديل سجلات الموارد البشرية بواسطة مستخدم آخر. أعد المزامنة قبل الحفظ.', { expectedVersion, actualVersion });
+        }
+        const actorId = canonicalActorId;
+        const { error: writeError } = await platformControl
+          .from('hr_database')
+          .upsert({
+            tenant_id: tenantId,
+            school_id: schoolId,
+            country_code: requestedCountryCode,
+            legal_configuration: requestedLegalConfiguration,
+            data: requestedData,
+            version: actualVersion + 1,
+            updated_at: new Date().toISOString(),
+            updated_by: actorId
+          }, { onConflict: 'school_id' });
+        if (writeError) throw new DatabaseError('تعذر حفظ سجل الموارد البشرية المركزي.', writeError.message);
+        const { error: auditError } = await platformControl.from('audit_events').insert({
+          tenant_id: tenantId,
+          school_id: schoolId,
+          branch_id: identity.branchId || null,
+          actor_user_id: actorId,
+          entity_type: 'hr_database',
+          entity_id: schoolId,
+          action: 'write',
+          source: 'HrDatabaseRoute',
+          reason: 'حفظ سجل الموارد البشرية',
+          result: 'success',
+          metadata: { expectedVersion, actualVersion, nextVersion: actualVersion + 1, countryCode: requestedCountryCode }
+        });
+        if (auditError) throw new DatabaseError('تم حفظ سجل الموارد البشرية دون اكتمال سجل التدقيق.', auditError.message);
+        res.json({ success: true, data: { updated: true }, meta: { version: actualVersion + 1 } });
+        return;
+      }
 
       let nextVersion = expectedVersion + 1;
       await UnitOfWork.runInTransaction(schoolId, {
