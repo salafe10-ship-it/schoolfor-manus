@@ -11397,6 +11397,89 @@ export async function createApp(options: { cloudflare?: boolean } = {}): Promise
     }
   });
 
+  app.put("/api/financial/fee-configurations/:configId", authenticateRequest, requirePermission(PERMISSIONS.FINANCIAL_WRITE), async (req, res, next) => {
+    try {
+      const { tenantId, schoolId, actorId, tenantContext } = canonicalFeeContext(req);
+      const configId = String(req.params.configId || '').trim();
+      const body = req.body && typeof req.body === 'object' && !Array.isArray(req.body) ? req.body as Record<string, any> : {};
+      const type = String(body.type || '').trim();
+      const account = String(body.account || '').trim();
+      const orderNumber = String(body.orderNumber || '').trim();
+      const activities = String(body.activities || '').trim();
+      const amount = assertMoney(body.amount, 'مبلغ بند الرسوم');
+      const expectedVersion = body.expectedVersion === undefined ? undefined : parseFinancialExpectedVersion(body.expectedVersion);
+      if (!configId || !type || !account || !orderNumber || amount <= 0) {
+        throw new ValidationError('بيانات بند الرسوم غير مكتملة أو غير صالحة.');
+      }
+      let updated: Record<string, unknown> | null = null;
+      let nextVersion = 0;
+      await UnitOfWork.runInTransaction(schoolId, {
+        operationName: 'Update canonical student fee configuration', tenantId, userId: actorId,
+        userName: String((req as any).user.name || 'مدير الرسوم'), ipAddress: req.ip || 'unknown',
+        affectedTables: ['student_fee_configurations', 'financial_portal_snapshots', 'audit_events']
+      }, async () => {
+        const transaction = UnitOfWork.getActiveContext()?.databaseTransaction;
+        if (!transaction) throw new DatabaseError('تعذر فتح المعاملة المالية.');
+        const databaseActorId = await resolveCanonicalFeeActor(transaction, tenantId, schoolId, actorId);
+        const snapshotResult = await transaction.query<{ data: Record<string, unknown>; version: number }>(
+          `SELECT data, version FROM public.financial_portal_snapshots
+            WHERE tenant_id = $1 AND school_id = $2 FOR UPDATE`, [tenantId, schoolId]
+        );
+        const snapshot = snapshotResult.rows[0];
+        if (!snapshot) throw new DatabaseError('مصدر إعدادات الرسوم غير مهيأ في قاعدة البيانات.');
+        const currentVersion = Number(snapshot.version || 0);
+        if (expectedVersion !== undefined && expectedVersion !== currentVersion) {
+          throw new ConflictError('تغيرت إعدادات الرسوم بواسطة مستخدم آخر. حدّث الشاشة ثم أعد المحاولة.', { expectedVersion, actualVersion: currentVersion });
+        }
+        const currentData = snapshot.data || {};
+        const currentFeeConfigs = Array.isArray((currentData as any).feeConfigs) ? (currentData as any).feeConfigs : [];
+        const existing = currentFeeConfigs.find((item: any) => String(item?.id || '').trim() === configId);
+        if (!existing) throw new ValidationError('بند الرسوم المطلوب تعديله غير موجود في المصدر المالي.');
+        const nextConfig = { ...existing, type, amount, account, orderNumber, activities };
+        const nextData = {
+          ...currentData,
+          feeConfigs: currentFeeConfigs.map((item: any) => String(item?.id || '').trim() === configId ? nextConfig : item)
+        };
+        nextVersion = currentVersion + 1;
+        await transaction.query(
+          `UPDATE public.financial_portal_snapshots
+              SET data = $3::jsonb, version = $4, updated_at = now(), updated_by = $5
+            WHERE tenant_id = $1 AND school_id = $2 AND version = $6`,
+          [tenantId, schoolId, JSON.stringify(nextData), nextVersion, databaseActorId, currentVersion]
+        );
+        const result = await transaction.query(
+          `UPDATE public.student_fee_configurations
+              SET fee_type = $4, amount = $5, revenue_account = $6, order_number = $7,
+                  activities = $8, source_payload = $9::jsonb, updated_at = now(), updated_by = $3
+            WHERE tenant_id = $1 AND school_id = $2 AND id = $10
+            RETURNING id, fee_type AS "type", amount, revenue_account AS "account",
+                      order_number AS "orderNumber", activities`,
+          [tenantId, schoolId, databaseActorId, type, amount, account, orderNumber, activities, JSON.stringify(nextConfig), configId]
+        );
+        if (!result.rows[0]) throw new ValidationError('تعذر تعديل بند الرسوم في الإسقاط الكانوني.');
+        updated = result.rows[0];
+        const readBack = await transaction.query(
+          `SELECT id, fee_type AS "type", amount, revenue_account AS "account", order_number AS "orderNumber", activities
+             FROM public.student_fee_configurations WHERE tenant_id = $1 AND school_id = $2 AND id = $3`,
+          [tenantId, schoolId, configId]
+        );
+        if (JSON.stringify(readBack.rows[0] || null) !== JSON.stringify(updated)) {
+          throw new DatabaseError('فشل تحقق القراءة بعد تعديل بند الرسوم؛ أُلغيت العملية.');
+        }
+        await transaction.query(
+          `INSERT INTO public.audit_events
+            (id, tenant_id, school_id, actor_user_id, entity_type, entity_id, action, source, result, metadata)
+           VALUES ($1,$2,$3,$4,'student_fee_configuration',$5,'update','StudentFeeConfigurationRoute','success',$6::jsonb)`,
+          [randomUUID(), tenantId, schoolId, databaseActorId, configId, JSON.stringify({ previous: existing, updated, previousVersion: currentVersion, nextVersion })]
+        );
+      }, tenantContext);
+      res.json({ success: true, data: updated, meta: { source: 'canonical_postgres', version: nextVersion, readBackVerified: true } });
+    } catch (err: any) {
+      next(err instanceof AuthenticationError || err instanceof AuthorizationError || err instanceof ValidationError || err instanceof DatabaseError
+        ? err : new DatabaseError('تعذر تعديل بند الرسوم في المصدر المالي.', err?.message));
+    }
+  });
+
   app.delete("/api/financial/fee-configurations/:configId", authenticateRequest, requirePermission(PERMISSIONS.FINANCIAL_WRITE), async (req, res, next) => {
     try {
       const { tenantId, schoolId, actorId, tenantContext } = canonicalFeeContext(req);

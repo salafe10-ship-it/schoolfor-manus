@@ -35,6 +35,9 @@ describe('student fees integrity contract', () => {
     expect(serverSource).toContain('public.student_fee_configurations');
     expect(financialPortalSource).toContain('const readBackFeeConfig = async');
     expect(financialPortalSource).toContain('فشل تطابق القراءة اللاحقة مع بيانات بند الرسوم');
+    expect(serverSource).toContain('app.put("/api/financial/fee-configurations/:configId"');
+    expect(financialPortalSource).toContain("method: 'PUT'");
+    expect(financialPortalSource).toContain('readBackVerified');
   });
 
   it('keeps mass fee distribution stage-first and school-scoped', () => {

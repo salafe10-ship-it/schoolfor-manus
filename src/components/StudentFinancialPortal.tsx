@@ -3310,7 +3310,22 @@ export default function StudentFinancialPortal({
           orderNumber: currFeeOrderNumber,
           activities: currFeeActivities
         } : item);
-        await saveToServerDb(undefined, undefined, undefined, undefined, undefined, updatedFeeConfigs);
+        const updateResponse = await authenticatedRequest(`/api/financial/fee-configurations/${encodeURIComponent(currFeeId)}`, {
+          method: 'PUT',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({
+            type: currFeeType,
+            amount: currFeeAmount,
+            account: currFeeAccount,
+            orderNumber: currFeeOrderNumber,
+            activities: currFeeActivities,
+            expectedVersion: financialPersistenceVersion
+          })
+        });
+        const updateResult = await updateResponse.json().catch(() => ({}));
+        if (!updateResponse.ok || !updateResult.success || updateResult.meta?.readBackVerified !== true) {
+          throw new Error(updateResult.message || 'تعذر إثبات تعديل بند الرسوم في قاعدة البيانات.');
+        }
         const readBack = await readBackFeeConfig(currFeeId, updatedFeeConfigs.find(item => item.id === currFeeId)!);
         setFeeConfigs(readBack.data.feeConfigs || updatedFeeConfigs);
         logAction('UPDATE_FEE_CONFIG', `تحديث بند الرسوم: ${currFeeType}`, 'الإعدادات المالية');
