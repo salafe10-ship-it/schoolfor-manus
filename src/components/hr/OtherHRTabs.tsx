@@ -1,5 +1,5 @@
 import { AlertCircle, Award, Briefcase, Building2, Calendar, Check, ChevronRight, Coins, Download, Edit, Eye, FileText, FolderOpen, HelpCircle, Plus, Scale, Settings2, ShieldCheck, Trash2, TrendingUp, User, X } from 'lucide-react';
-import React, { useState } from 'react';
+import React, { useEffect, useState } from 'react';
 import { 
   HREmployee, HRDepartment, HRJob, HRContract, HRLeave, 
   HRPenalty, HRAdvance, HRBonus, HRPerformance, HRDocument, HRSettings 
@@ -87,6 +87,19 @@ export default function OtherHRTabs({
   const [leaveForm, setLeaveForm] = useState({ employeeId: '', type: 'annual' as any, startDate: '', endDate: '', reason: '' });
   const [penaltyForm, setPenaltyForm] = useState({ employeeId: '', type: 'deduction' as any, date: '', amount: 0, reason: '' });
   const [advanceForm, setAdvanceForm] = useState({ employeeId: '', costCenter: 'admin' as any, loanType: 'short_term' as any, payoutMethod: 'cash' as any, amount: 1000, date: '', installments: 10, deductionPerMonth: 100, reason: '' });
+
+  // The first employee is only a visual default in a native select when the
+  // controlled value is empty. Keep the submitted id explicit and keep the
+  // cost center synchronized with the selected employee before validation.
+  useEffect(() => {
+    if (employees.length === 0) return;
+    setAdvanceForm(previous => {
+      const selected = employees.find(employee => employee.id === previous.employeeId) || employees[0];
+      const costCenter = selected.costCenter || previous.costCenter;
+      if (previous.employeeId === selected.id && previous.costCenter === costCenter) return previous;
+      return { ...previous, employeeId: selected.id, costCenter };
+    });
+  }, [employees]);
   const [rewardForm, setRewardForm] = useState({ employeeId: '', amount: 0, date: '', reason: '' });
   const [perfForm, setPerfForm] = useState({ employeeId: '', date: '', score: 0, reviewer: '', strengths: '', improvements: '', trainingNeeds: '' });
   const [docForm, setDocForm] = useState({ employeeId: '', title: '', type: 'passport', issueDate: '', expiryDate: '' });
@@ -852,7 +865,7 @@ export default function OtherHRTabs({
             <p className="text-xs text-slate-400">إدارة القروض والسلف المالية الممنوحة للعاملين مع الاسترداد الآلي عبر مسير الرواتب.</p>
           </div>
           <button 
-            onClick={() => { setAdvanceForm({ employeeId: '', costCenter: 'admin', loanType: 'short_term', payoutMethod: 'cash', amount: 0, date: new Date().toISOString().split('T')[0], installments: 0, deductionPerMonth: 0, reason: '' }); setShowAddModal(true); }}
+            onClick={() => { const employee = employees[0]; setAdvanceForm({ employeeId: employee?.id || '', costCenter: employee?.costCenter || 'admin', loanType: 'short_term', payoutMethod: 'cash', amount: 0, date: new Date().toISOString().split('T')[0], installments: 0, deductionPerMonth: 0, reason: '' }); setShowAddModal(true); }}
             className="bg-gradient-to-r from-emerald-600 to-emerald-700 text-white font-bold px-4 py-2 rounded-lg text-xs flex items-center gap-1 shadow-md"
           >
             <Plus className="w-4 h-4" />
@@ -915,7 +928,7 @@ export default function OtherHRTabs({
               <div className="p-5 space-y-4">
                 <div className="space-y-1">
                   <label>الموظف المستفيد</label>
-                  <select value={advanceForm.employeeId} onChange={e => setAdvanceForm(p=>({...p, employeeId: e.target.value}))} className="w-full bg-slate-800 border border-slate-700 rounded p-2 text-white">
+                    <select value={advanceForm.employeeId} onChange={e => { const employee = employees.find(item => item.id === e.target.value); setAdvanceForm(p=>({...p, employeeId: e.target.value, costCenter: employee?.costCenter || p.costCenter})); }} required className="w-full bg-slate-800 border border-slate-700 rounded p-2 text-white">
                     {employees.map(e => <option key={e.id} value={e.id}>{e.name}</option>)}
                   </select>
                 </div>
