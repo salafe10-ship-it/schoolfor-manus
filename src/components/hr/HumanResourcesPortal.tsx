@@ -82,6 +82,19 @@ export default function HumanResourcesPortal({ setActiveSection, selectedSchool,
     setTimeout(() => setNotification(null), 5000);
   };
 
+  // PDF export uses the browser's real print pipeline so the user can choose
+  // "Save as PDF" from the system dialog. It exports the currently rendered
+  // canonical HR view and never fabricates a downloadable document.
+  const exportHrPdf = () => {
+    if (typeof window === 'undefined') return;
+    const previousTitle = document.title;
+    document.title = `EduPro - HR - ${selectedSchool?.name || 'الموارد البشرية'}`;
+    window.setTimeout(() => {
+      window.print();
+      window.setTimeout(() => { document.title = previousTitle; }, 500);
+    }, 0);
+  };
+
   const requireHrWrite = () => {
     if (canManage) return true;
     triggerNotification('حسابك للعرض فقط؛ لا تملك صلاحية تعديل سجلات شؤون العاملين.', 'warning');
@@ -591,8 +604,8 @@ export default function HumanResourcesPortal({ setActiveSection, selectedSchool,
           </div>
         }
         onExit={setActiveSection ? () => setActiveSection('dashboard') : undefined}
-        onPrint={() => {}}
-        onExportPdf={() => {}}
+        onPrint={exportHrPdf}
+        onExportPdf={exportHrPdf}
         onExportExcel={() => {}}
         onImportExcel={() => {}}
         onDownloadTemplate={() => {}}
