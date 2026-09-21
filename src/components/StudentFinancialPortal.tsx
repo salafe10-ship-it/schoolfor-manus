@@ -521,6 +521,26 @@ export default function StudentFinancialPortal({
     return result;
   };
 
+  const readBackFeeConfig = async (configId: string, expected: Record<string, any>) => {
+    const response = await authenticatedRequest('/api/financial/database', {
+      headers: { 'Accept': 'application/json' },
+      cache: 'no-store'
+    });
+    const result = await response.json().catch(() => ({}));
+    if (!response.ok || !result.success) throw new Error(result.message || 'تعذر إثبات قراءة بند الرسوم بعد الحفظ.');
+    const persisted = (Array.isArray(result.data?.feeConfigs) ? result.data.feeConfigs : [])
+      .find((item: any) => String(item?.id || '').trim() === configId);
+    if (!persisted) throw new Error('تم الحفظ دون العثور على بند الرسوم في القراءة اللاحقة.');
+    const same = String(persisted.type || '') === String(expected.type || '')
+      && Number(persisted.amount || 0) === Number(expected.amount || 0)
+      && String(persisted.account || '') === String(expected.account || '')
+      && String(persisted.orderNumber || '') === String(expected.orderNumber || '')
+      && String(persisted.activities || '') === String(expected.activities || '');
+    if (!same) throw new Error('فشل تطابق القراءة اللاحقة مع بيانات بند الرسوم؛ لم يُعتمد الحفظ.');
+    setFinancialPersistenceVersion(Number(result.meta?.version || 0));
+    return { data: result.data, persisted };
+  };
+
   const ensureFinancialWriteReady = () => {
     if (financialPersistence === 'ready') return true;
     triggerNotification('الحفظ والترحيل الماليان متوقفان حتى يتم الاتصال بمصدر قاعدة البيانات المعتمد.', 'warning');
@@ -3291,7 +3311,8 @@ export default function StudentFinancialPortal({
           activities: currFeeActivities
         } : item);
         await saveToServerDb(undefined, undefined, undefined, undefined, undefined, updatedFeeConfigs);
-        setFeeConfigs(updatedFeeConfigs);
+        const readBack = await readBackFeeConfig(currFeeId, updatedFeeConfigs.find(item => item.id === currFeeId)!);
+        setFeeConfigs(readBack.data.feeConfigs || updatedFeeConfigs);
         logAction('UPDATE_FEE_CONFIG', `تحديث بند الرسوم: ${currFeeType}`, 'الإعدادات المالية');
         triggerNotification('تم تحديث بند الرسوم بنجاح', 'success');
       } else {
@@ -3306,7 +3327,8 @@ export default function StudentFinancialPortal({
         };
         const updatedFeeConfigs = [...feeConfigs, newItem];
         await saveToServerDb(undefined, undefined, undefined, undefined, undefined, updatedFeeConfigs);
-        setFeeConfigs(updatedFeeConfigs);
+        const readBack = await readBackFeeConfig(newId, newItem);
+        setFeeConfigs(readBack.data.feeConfigs || updatedFeeConfigs);
         setCurrFeeId(newId);
         logAction('CREATE_FEE_CONFIG', `إضافة بند رسوم جديد: ${currFeeType}`, 'الإعدادات المالية');
         triggerNotification('تم إضافة وحفظ بند الرسوم الجديد بنجاح', 'success');

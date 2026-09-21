@@ -12864,6 +12864,40 @@ export async function createApp(options: { cloudflare?: boolean } = {}): Promise
               payload,
               nextVersion
             );
+
+            // A successful snapshot write is not enough for fee configuration
+            // commands: the canonical projection must contain the exact rows
+            // before this endpoint can report success. This closes the gap
+            // where the UI could show a success toast and a later read could
+            // silently return the previous fee configuration.
+            if (JSON.stringify(previousPayload.feeConfigs ?? null) !== JSON.stringify(payload.feeConfigs ?? null)) {
+              const expectedFeeConfigs = financialRecordRows(payload.feeConfigs);
+              const persistedFeeConfigs = await transaction.query<any>(
+                `SELECT id, fee_type AS "type", amount, revenue_account AS "account",
+                        order_number AS "orderNumber", activities
+                   FROM public.student_fee_configurations
+                  WHERE tenant_id = $1 AND school_id = $2
+                  ORDER BY order_number ASC, id ASC`,
+                [tenantId, schoolId]
+              );
+              const actual = (persistedFeeConfigs as any)?.rows || [];
+              if (actual.length !== expectedFeeConfigs.length) {
+                throw new DatabaseError('تم حفظ لقطة الرسوم دون اكتمال الإسقاط الكانوني؛ أُلغيت العملية حمايةً للبيانات.');
+              }
+              const normalizeFee = (row: any) => ({
+                id: financialText(row.id),
+                type: financialText(row.type),
+                amount: financialNumber(row.amount),
+                account: financialText(row.account),
+                orderNumber: financialText(row.orderNumber),
+                activities: financialText(row.activities)
+              });
+              const expected = expectedFeeConfigs.map(normalizeFee).sort((a, b) => a.id.localeCompare(b.id));
+              const received = actual.map(normalizeFee).sort((a: any, b: any) => a.id.localeCompare(b.id));
+              if (JSON.stringify(received) !== JSON.stringify(expected)) {
+                throw new DatabaseError('فشل تحقق القراءة بعد حفظ بند الرسوم؛ أُلغيت العملية ولم يُعلن نجاح زائف.');
+              }
+            }
           }
           canonicalErpReady = await CanonicalErpPostingService.isProvisioned(transaction);
           if (canonicalErpReady) {

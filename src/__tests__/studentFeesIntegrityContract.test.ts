@@ -30,6 +30,13 @@ describe('student fees integrity contract', () => {
     expect(financialPortalSource).toContain('<span>حذف</span>');
   });
 
+  it('requires canonical fee projection read-back before reporting a snapshot save success', () => {
+    expect(serverSource).toContain('فشل تحقق القراءة بعد حفظ بند الرسوم');
+    expect(serverSource).toContain('public.student_fee_configurations');
+    expect(financialPortalSource).toContain('const readBackFeeConfig = async');
+    expect(financialPortalSource).toContain('فشل تطابق القراءة اللاحقة مع بيانات بند الرسوم');
+  });
+
   it('keeps mass fee distribution stage-first and school-scoped', () => {
     expect(financialPortalSource).toContain('const [massStageId, setMassStageId]');
     expect(financialPortalSource).toContain('المرحلة الدراسية');
