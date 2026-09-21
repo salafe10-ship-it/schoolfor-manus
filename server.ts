@@ -10197,7 +10197,7 @@ export async function createApp(options: { cloudflare?: boolean } = {}): Promise
 
   // Canonical Human Resources Database API. The client never supplies a
   // tenant, school, or actor: all three are taken from the trusted request.
-  app.get('/api/hr/database', authenticateRequest, requirePermission(PERMISSIONS.HR_READ), async (req, res, next) => {
+  app.get('/api/hr/database', authenticateRequest, requirePermission(PERMISSIONS.HR_READ), resolveStudentTenantMiddleware, async (req, res, next) => {
     try {
       const identity = (req as any).user;
       const tenantId = String(identity?.tenantId || '').trim();
@@ -10234,7 +10234,7 @@ export async function createApp(options: { cloudflare?: boolean } = {}): Promise
     }
   });
 
-  app.post('/api/hr/database', authenticateRequest, requirePermission(PERMISSIONS.HR_WRITE), async (req, res, next) => {
+  app.post('/api/hr/database', authenticateRequest, requirePermission(PERMISSIONS.HR_WRITE), resolveStudentTenantMiddleware, async (req, res, next) => {
     try {
       const identity = (req as any).user;
       const tenantId = String(identity?.tenantId || '').trim();
