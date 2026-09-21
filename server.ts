@@ -10662,10 +10662,15 @@ export async function createApp(options: { cloudflare?: boolean } = {}): Promise
          if (!run || run.status !== 'approved' || run.journalId) throw new ConflictError('لا يمكن الصرف إلا لمسير معتمد وغير مصروف.');
         const recomputedFingerprint = createHash('sha256').update(stableJsonStringify({ period, lines: run.lines, totals: run.totals })).digest('hex');
         if (run.fingerprint !== recomputedFingerprint) throw new ConflictError('بصمة مسير الرواتب المعتمد غير صحيحة.');
-        const mappingRows = await transaction.query<{ mapping_key: string; account_code: string }>(`SELECT mapping_key,account_code FROM public.erp_account_mappings WHERE school_id=$1 AND is_active=true AND mapping_key = ANY($2::text[])`, [schoolId, ['treasury.cash','hr.payroll.expense','hr.advance.receivable','hr.deductions.clearing']]);
+        const requestedPayoutMethod = String(req.body?.payoutMethod || 'cash').trim();
+        const requestedPayoutAccount = String(req.body?.payoutAccount || '').trim();
+        if (!['cash', 'bank'].includes(requestedPayoutMethod)) throw new ValidationError('طريقة صرف الرواتب يجب أن تكون خزينة أو بنكاً.');
+        const payoutMappingKey = requestedPayoutMethod === 'bank' ? 'treasury.bank' : 'treasury.cash';
+        const mappingRows = await transaction.query<{ mapping_key: string; account_code: string }>(`SELECT mapping_key,account_code FROM public.erp_account_mappings WHERE school_id=$1 AND is_active=true AND mapping_key = ANY($2::text[])`, [schoolId, ['treasury.cash','treasury.bank','hr.payroll.expense','hr.advance.receivable','hr.deductions.clearing']]);
         const mappings = new Map(mappingRows.rows.map(row => [row.mapping_key, row.account_code]));
-        const required = ['treasury.cash','hr.payroll.expense','hr.advance.receivable','hr.deductions.clearing'];
+        const required = [payoutMappingKey,'hr.payroll.expense','hr.advance.receivable','hr.deductions.clearing'];
         if (required.some(key => !mappings.get(key))) throw new ValidationError('لا يمكن تنفيذ الصرف قبل اعتماد جميع خرائط حسابات HR من شاشة الحسابات.');
+        if (requestedPayoutAccount && requestedPayoutAccount !== mappings.get(payoutMappingKey)) throw new ValidationError('حساب الصرف المحدد لا يطابق الحساب المعتمد لطريقة الصرف.');
         const totals = run.totals || {};
         const gross = Number(totals.gross || 0), net = Number(totals.net || 0), advance = Number(totals.advance || 0), penalty = Number(totals.penalty || 0);
         const attendance = Number(totals.attendance || 0), leave = Number(totals.leave || 0), overtime = Number(totals.overtime || 0);
@@ -10676,7 +10681,7 @@ export async function createApp(options: { cloudflare?: boolean } = {}): Promise
           const expense = Number(line.gross || 0) + Number(line.overtimePay || 0);
           const deductions = Number(line.penalty || 0) + Number(line.attendanceDeduction || 0) + Number(line.leaveDeduction || 0);
           if (expense > 0) lines.push({ id: `${line.employeeId}-expense`, accountCode: mappings.get('hr.payroll.expense'), debit: expense, credit: 0, costCenter: cc });
-          if (Number(line.net || 0) > 0) lines.push({ id: `${line.employeeId}-cash`, accountCode: mappings.get('treasury.cash'), debit: 0, credit: Number(line.net), costCenter: cc });
+          if (Number(line.net || 0) > 0) lines.push({ id: `${line.employeeId}-payout`, accountCode: mappings.get(payoutMappingKey), debit: 0, credit: Number(line.net), costCenter: cc });
           if (Number(line.advanceDeduction || 0) > 0) lines.push({ id: `${line.employeeId}-advance`, accountCode: mappings.get('hr.advance.receivable'), debit: 0, credit: Number(line.advanceDeduction), costCenter: cc });
           if (deductions > 0) lines.push({ id: `${line.employeeId}-deductions`, accountCode: mappings.get('hr.deductions.clearing'), debit: 0, credit: deductions, costCenter: cc });
         }
@@ -10684,6 +10689,21 @@ export async function createApp(options: { cloudflare?: boolean } = {}): Promise
         journalId = sync.sourceLinks.find(link => link.sourceId === `hr-payroll-${period}`)?.journalEntryId || '';
         if (!journalId) throw new DatabaseError('تعذر إثبات قيد صرف الرواتب الكانوني.');
         run.status = 'paid'; run.paidAt = new Date().toISOString(); run.paidBy = actorId; run.journalId = journalId;
+        for (const line of (Array.isArray(run.lines) ? run.lines : [])) {
+          const deduction = Number(line.advanceDeduction || 0);
+          if (deduction <= 0) continue;
+          const advance = (Array.isArray(data.advances) ? data.advances : []).find((item: any) => item?.employeeId === line.employeeId && item?.status === 'approved' && Number(item?.remainingAmount || 0) > 0);
+          if (!advance) continue;
+          const schedule = await transaction.query<{ id: string; paid_amount: number; amount: number }>(`SELECT id, paid_amount, amount FROM public.hr_advance_repayment_schedules WHERE tenant_id=$1 AND school_id=$2 AND advance_id=$3 AND status IN ('scheduled','partial','overdue') ORDER BY installment_number FOR UPDATE LIMIT 1`, [tenantId, schoolId, String(advance.id)]);
+          const installment = schedule.rows[0];
+          if (installment) {
+            const paidAmount = Math.min(Number(installment.amount), Number(installment.paid_amount || 0) + deduction);
+            const status = paidAmount >= Number(installment.amount) ? 'paid' : 'partial';
+            await transaction.query(`UPDATE public.hr_advance_repayment_schedules SET paid_amount=$4, status=$5, paid_at=CASE WHEN $5='paid' THEN now() ELSE paid_at END, updated_at=now() WHERE tenant_id=$1 AND school_id=$2 AND id=$3`, [tenantId, schoolId, installment.id, paidAmount, status]);
+          }
+          advance.remainingAmount = Math.max(0, Number(advance.remainingAmount || 0) - deduction);
+          if (advance.remainingAmount === 0) advance.status = 'paid';
+        }
         nextVersion = actualVersion + 1;
         await transaction.query(`UPDATE public.hr_database SET data=$3::jsonb,version=$4,updated_at=now(),updated_by=$5 WHERE tenant_id=$1 AND school_id=$2`, [tenantId, schoolId, JSON.stringify(data), nextVersion, actorId]);
         await transaction.query(`INSERT INTO public.audit_events (tenant_id,school_id,branch_id,actor_user_id,entity_type,entity_id,action,source,reason,result,metadata) VALUES ($1,$2,$3,$4,'hr_payroll_run',$5,'pay','HrPayrollRoute','تنفيذ صرف وترحيل مسير معتمد','success',$6::jsonb)`, [tenantId, schoolId, identity.branchId || null, actorId, schoolId, JSON.stringify({ runId: `payroll-${period}`, period, journalId, totals })]);
