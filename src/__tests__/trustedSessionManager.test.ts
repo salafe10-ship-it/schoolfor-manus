@@ -45,6 +45,17 @@ function storageWith(values: Record<string, string> = {}): SessionStorage {
 }
 
 describe('Wave 1B trusted session manager', () => {
+  it('does not leave a persisted session in an infinite restoring state when the session endpoint hangs', async () => {
+    vi.useFakeTimers();
+    const storage = storageWith({ edupro_token: 'stale-token', edupro_refresh_token: 'stale-refresh' });
+    const request = vi.fn(() => new Promise<never>(() => undefined));
+    const manager = new TrustedSessionManager(storage, request);
+    const restore = manager.restore();
+    const rejection = expect(restore).rejects.toMatchObject({ code: 'REQUEST_FAILED' });
+    await vi.advanceTimersByTimeAsync(10_000);
+    await rejection;
+    vi.useRealTimers();
+  });
   it('creates and stores one trusted session', async () => {
     const request = vi.fn().mockResolvedValue(response(true, sessionBody()));
     const storage = storageWith();

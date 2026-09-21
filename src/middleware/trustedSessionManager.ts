@@ -39,6 +39,7 @@ const ACCESS_TOKEN_KEY = 'edupro_token';
 const REFRESH_TOKEN_KEY = 'edupro_refresh_token';
 const EXPIRES_AT_KEY = 'edupro_session_expires_at';
 const ACCESS_TOKEN_EXPIRY_SKEW_SECONDS = 30;
+const SESSION_REQUEST_TIMEOUT_MS = 10_000;
 
 function isRecord(value: unknown): value is Record<string, any> {
   return typeof value === 'object' && value !== null;
@@ -141,6 +142,16 @@ export class TrustedSessionManager {
     return this.activeStorage;
   }
 
+  private requestWithTimeout(path: string, init?: RequestInit): Promise<SessionResponse> {
+    let timeoutId: ReturnType<typeof setTimeout> | undefined;
+    const timeout = new Promise<SessionResponse>((_, reject) => {
+      timeoutId = setTimeout(() => reject(new TrustedSessionError('REQUEST_FAILED', 'انتهت مهلة التحقق من جلسة المدرسة.')), SESSION_REQUEST_TIMEOUT_MS);
+    });
+    return Promise.race([this.request(path, init), timeout]).finally(() => {
+      if (timeoutId) clearTimeout(timeoutId);
+    });
+  }
+
   getAccessToken(): string | null {
     const persistentToken = this.persistentStorage.getItem(ACCESS_TOKEN_KEY);
     if (persistentToken && persistentToken.trim()) {
@@ -182,7 +193,7 @@ export class TrustedSessionManager {
   private async postJson(path: string, body: Record<string, unknown>): Promise<unknown> {
     let response: SessionResponse;
     try {
-      response = await this.request(path, {
+      response = await this.requestWithTimeout(path, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify(body)
@@ -205,7 +216,7 @@ export class TrustedSessionManager {
   private async getSession(token: string): Promise<TrustedSessionUser> {
     let response: SessionResponse;
     try {
-      response = await this.request('/api/auth/session', { headers: { Authorization: `Bearer ${token}` } });
+      response = await this.requestWithTimeout('/api/auth/session', { headers: { Authorization: `Bearer ${token}` } });
     } catch {
       throw new TrustedSessionError('REQUEST_FAILED');
     }
