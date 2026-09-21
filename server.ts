@@ -10337,16 +10337,17 @@ export async function createApp(options: { cloudflare?: boolean } = {}): Promise
         const actorId = canonicalActorId;
         const { error: writeError } = await platformControl
           .from('hr_database')
-          .upsert({
-            tenant_id: tenantId,
-            school_id: schoolId,
+          .update({
             country_code: requestedCountryCode,
             legal_configuration: requestedLegalConfiguration,
             data: requestedData,
             version: actualVersion + 1,
             updated_at: new Date().toISOString(),
             updated_by: actorId
-          }, { onConflict: 'school_id' });
+          })
+          .eq('tenant_id', tenantId)
+          .eq('school_id', schoolId)
+          .eq('version', actualVersion);
         if (writeError) throw new DatabaseError('تعذر حفظ سجل الموارد البشرية المركزي.', writeError.message);
         const { error: auditError } = await platformControl.from('audit_events').insert({
           tenant_id: tenantId,
