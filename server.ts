@@ -711,6 +711,11 @@ const resolveCanonicalTenantActor = async (context: TenantContext): Promise<stri
     if (!error && data?.id) controlPlaneActorId = String(data.id);
   }
 
+  // The canonical control-plane identity is authoritative. Once it is found,
+  // do not fall through to a legacy PostgreSQL pool that may be stale or
+  // unavailable in production.
+  if (controlPlaneActorId) return controlPlaneActorId;
+
   if (platformAdminPool) {
     const result = await platformAdminPool.query<{ id: string }>(
       `SELECT id
