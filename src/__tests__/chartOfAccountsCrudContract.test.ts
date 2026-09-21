@@ -3,6 +3,7 @@ import fs from 'node:fs';
 import path from 'node:path';
 
 const source = fs.readFileSync(path.resolve(process.cwd(), 'src/components/GeneralLedgerPortal.tsx'), 'utf8');
+const uiSource = fs.readFileSync(path.resolve(process.cwd(), 'src/modules/accounting/presentation/ChartOfAccountsTab.tsx'), 'utf8');
 
 describe('chart of accounts CRUD contract', () => {
   const saveStart = source.indexOf('const handleSaveCoa = async');
@@ -23,5 +24,12 @@ describe('chart of accounts CRUD contract', () => {
   it('persists through the canonical financial adapter', () => {
     expect(saveHandler).toContain('persistCanonicalFinancialSnapshot({ chartOfAccounts: updatedAccounts })');
     expect(saveHandler).not.toContain('localStorage.setItem');
+  });
+
+  it('keeps snapshot reads visibly read-only and disables account writes', () => {
+    expect(uiSource).toContain('const chartWritesAvailable = chartWritesAreCanonical;');
+    expect(uiSource).toContain('disabled={!chartWritesAvailable}');
+    expect(uiSource).toContain('المصدر المالي متصل للقراءة فقط');
+    expect(uiSource).toContain('الحفظ المالي غير متاح حاليًا لأن الكتابة المالية المركزية مغلقة.');
   });
 });

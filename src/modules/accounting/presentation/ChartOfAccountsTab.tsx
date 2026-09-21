@@ -78,7 +78,10 @@ export const ChartOfAccountsTab = () => {
   } = React.useContext(AccountingContext);
   const chartWritesAreCanonical = canonicalFinancialStatus === 'ready'
     && (canonicalFinancialWriteMode === 'ledger_ready' || canonicalFinancialWriteMode === 'erp_integrated');
-  const chartWritesAvailable = canonicalFinancialStatus === 'ready' && canonicalFinancialWriteMode !== 'snapshot_read_only';
+  // Match the authoritative write guard in GeneralLedgerPortal. A connected
+  // snapshot (including snapshot_write/UAT mode) is still not a production
+  // ledger write path, so it must not expose account mutations in this UI.
+  const chartWritesAvailable = chartWritesAreCanonical;
   const guardChartWrite = (actionName: string) => {
     if (chartWritesAvailable) return true;
     triggerNotification(`تعذر تنفيذ ${actionName}: شجرة الحسابات للقراءة فقط حتى تفعيل مسار الكتابة المركزي.`, 'warning');
@@ -125,6 +128,15 @@ export const ChartOfAccountsTab = () => {
 
               {/* Action Buttons Toolbar */}
               <div className="flex flex-wrap items-center gap-2">
+                {!chartWritesAvailable && (
+                  <div
+                    role="status"
+                    aria-live="polite"
+                    className="w-full rounded-lg border border-amber-200 bg-amber-50 px-3 py-2 text-[11px] font-bold text-amber-900"
+                  >
+                    المصدر المالي متصل للقراءة فقط — الحفظ المالي مقفل حتى اعتماد مسار دفتر الأستاذ المركزي.
+                  </div>
+                )}
                 <button
                   type="button"
                   onClick={handleCreateNewCoaClick}
@@ -1524,7 +1536,10 @@ export const ChartOfAccountsTab = () => {
 
                       <button
                         type="submit"
-                        className="bg-indigo-600 hover:bg-indigo-500 text-white font-black px-6 py-2.5 rounded-lg text-[11px] shadow-md transition-all flex items-center gap-1.5"
+                        disabled={!chartWritesAvailable}
+                        aria-disabled={!chartWritesAvailable}
+                        title={!chartWritesAvailable ? 'الحفظ المالي غير متاح حاليًا لأن الكتابة المالية المركزية مغلقة.' : 'حفظ الحساب المالي الموحد'}
+                        className="bg-indigo-600 hover:bg-indigo-500 disabled:cursor-not-allowed disabled:opacity-50 text-white font-black px-6 py-2.5 rounded-lg text-[11px] shadow-md transition-all flex items-center gap-1.5"
                       >
                         <Check className="w-4 h-4" />
                         <span>حفظ الحساب المالي الموحد</span>

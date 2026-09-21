@@ -4978,7 +4978,13 @@ export default function StudentFinancialPortal({
               <div className="flex items-center gap-2">
                 <span className={`text-[11px] font-black px-3 py-1.5 flex items-center gap-1 ${financialWritesLocked ? 'bg-amber-50 text-amber-800' : financialPersistence === 'ready' ? 'bg-emerald-50 text-emerald-800' : financialPersistence === 'loading' ? 'bg-amber-50 text-amber-800' : 'bg-rose-50 text-rose-800'}`}>
                   <span className={`w-2 h-2 rounded-full ${financialWritesLocked ? 'bg-amber-500' : financialPersistence === 'ready' ? 'bg-emerald-500' : financialPersistence === 'loading' ? 'bg-amber-500 animate-pulse' : 'bg-rose-500'}`} />
-                  {financialWritesLocked ? 'المصدر المالي متصل للقراءة فقط — الحفظ والترحيل مقفلان' : financialPersistence === 'ready' ? 'المصدر المالي الموثق متصل' : financialPersistence === 'loading' ? 'جارٍ التحقق من المصدر المالي' : 'المصدر المالي غير متاح — الحفظ متوقف'}
+                  {financialWritesLocked
+                    ? 'المصدر المالي متصل للقراءة فقط — الحفظ والترحيل مقفلان'
+                    : financialPersistence === 'ready'
+                      ? 'المصدر المالي الموثق متصل'
+                      : financialPersistenceMessage || (financialPersistence === 'loading'
+                        ? 'جارٍ التحقق من المصدر المالي'
+                        : 'المصدر المالي غير متاح — الحفظ متوقف')}
                 </span>
               </div>
             </div>
