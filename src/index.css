@@ -2994,3 +2994,58 @@ html:not(.dark) #super-admin-portal button:not(.bg-indigo-600):not(.bg-rose-600)
 #student-financial-portal .financial-module-header button:not(:disabled) svg {
   opacity: 1 !important;
 }
+
+/* HR identity polish: presentation-only rules that reuse the existing
+   EduPro brown/gold identity. No module behavior or layout is changed. */
+#hr-portal {
+  color: #172033;
+  font-family: var(--font-sans);
+}
+
+#hr-portal .hr-subtabs {
+  background: linear-gradient(115deg, #2a1d13 0%, #1a100a 100%) !important;
+  border-color: rgba(212, 175, 55, 0.48) !important;
+  border-radius: 0.9rem !important;
+  box-shadow: 0 10px 24px rgba(42, 29, 19, 0.16) !important;
+}
+
+#hr-portal .hr-subtabs > button {
+  min-height: 2.5rem;
+  border-radius: 0.65rem;
+  transition: background-color 0.2s ease, border-color 0.2s ease,
+    color 0.2s ease, box-shadow 0.2s ease;
+}
+
+#hr-portal .hr-subtabs > button:hover,
+#hr-portal .hr-subtabs > button:focus-visible {
+  outline: none;
+  border-color: rgba(247, 209, 116, 0.9);
+  box-shadow: 0 0 0 2px rgba(212, 175, 55, 0.2);
+}
+
+#hr-portal input:focus,
+#hr-portal select:focus,
+#hr-portal textarea:focus,
+#hr-portal button:focus-visible {
+  outline: 2px solid rgba(212, 175, 55, 0.72);
+  outline-offset: 2px;
+}
+
+#hr-portal table thead th {
+  color: #5a3b1d;
+  background: rgba(247, 209, 116, 0.16);
+  border-bottom-color: rgba(154, 106, 29, 0.32);
+}
+
+#hr-portal table tbody tr {
+  border-color: rgba(154, 106, 29, 0.18);
+}
+
+#hr-portal table tbody tr:hover {
+  background: rgba(247, 209, 116, 0.08);
+}
+
+#hr-portal button:not(:disabled) {
+  transition: background-color 0.2s ease, border-color 0.2s ease,
+    color 0.2s ease, box-shadow 0.2s ease;
+}
