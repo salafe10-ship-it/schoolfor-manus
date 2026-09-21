@@ -10197,12 +10197,12 @@ export async function createApp(options: { cloudflare?: boolean } = {}): Promise
 
   // Canonical Human Resources Database API. The client never supplies a
   // tenant, school, or actor: all three are taken from the trusted request.
-  app.get('/api/hr/database', authenticateRequest, requirePermission(PERMISSIONS.HR_READ), resolveStudentTenantMiddleware, async (req, res, next) => {
+  app.get('/api/hr/database', authenticateRequest, requirePermission(PERMISSIONS.HR_READ), async (req, res, next) => {
     try {
       const identity = (req as any).user;
+      const tenantContext = (req as any).tenantContext || await resolveStudentReadTenantContext(req);
       const tenantId = String(identity?.tenantId || '').trim();
       const schoolId = String(identity?.schoolId || '').trim();
-      const tenantContext = (req as any).tenantContext;
       if (!tenantId || !schoolId || !tenantContext || tenantContext.tenantId !== tenantId || tenantContext.schoolId !== schoolId) {
         throw new AuthenticationError('السياق الموثوق لقراءة سجلات الموارد البشرية غير مكتمل.');
       }
@@ -10234,9 +10234,10 @@ export async function createApp(options: { cloudflare?: boolean } = {}): Promise
     }
   });
 
-  app.post('/api/hr/database', authenticateRequest, requirePermission(PERMISSIONS.HR_WRITE), resolveStudentTenantMiddleware, async (req, res, next) => {
+  app.post('/api/hr/database', authenticateRequest, requirePermission(PERMISSIONS.HR_WRITE), async (req, res, next) => {
     try {
       const identity = (req as any).user;
+      const tenantContext = (req as any).tenantContext || await resolveStudentTenantContext(req);
       const tenantId = String(identity?.tenantId || '').trim();
       const schoolId = String(identity?.schoolId || '').trim();
       const expectedVersion = Number(req.body?.expectedVersion);
@@ -10542,7 +10543,6 @@ export async function createApp(options: { cloudflare?: boolean } = {}): Promise
       const identity = (req as any).user;
       const tenantId = String(identity?.tenantId || '').trim();
       const schoolId = String(identity?.schoolId || '').trim();
-      const tenantContext = (req as any).tenantContext;
       if (!tenantId || !schoolId || !tenantContext || tenantContext.tenantId !== tenantId || tenantContext.schoolId !== schoolId) {
         throw new AuthenticationError('سياق قراءة التسويات البنكية غير مكتمل.');
       }
