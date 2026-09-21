@@ -44,6 +44,7 @@ export default function HumanResourcesPortal({ setActiveSection, selectedSchool,
   const [activeTab, setActiveTab] = useState('employees');
   const [notification, setNotification] = useState<{ message: string; type: 'success' | 'warning' | 'error' } | null>(null);
   const [canonicalSaveError, setCanonicalSaveError] = useState('');
+  const [canonicalSaveRetry, setCanonicalSaveRetry] = useState(0);
 
   // Core database states (loaded from localStorage or initialized with professional seed data)
   const [employees, setEmployees] = useState<HREmployee[]>([]);
@@ -75,6 +76,7 @@ export default function HumanResourcesPortal({ setActiveSection, selectedSchool,
   const canonicalVersionRef = useRef(0);
   const canonicalBaselineRef = useRef<string | null>(null);
   const canonicalSaveInFlightRef = useRef(false);
+  const canonicalLatestSerializedRef = useRef<string | null>(null);
 
   // Global notification trigger helper
   const triggerNotification = (message: string, type: 'success' | 'warning' | 'error') => {
@@ -482,6 +484,7 @@ export default function HumanResourcesPortal({ setActiveSection, selectedSchool,
     if (!canonicalPersistenceRequired || !canonicalBaselineRef.current) return;
     const data = { employees, departments, jobs, contracts, attendance, leaves, penalties, advances, rewards, performance, documents, payrollRuns, settings };
     const serialized = JSON.stringify(data);
+    canonicalLatestSerializedRef.current = serialized;
     if (serialized === canonicalBaselineRef.current) return;
     const timer = window.setTimeout(async () => {
       if (canonicalSaveInFlightRef.current) return;
@@ -530,10 +533,15 @@ export default function HumanResourcesPortal({ setActiveSection, selectedSchool,
         triggerNotification(`${message} تمت استعادة آخر نسخة محفوظة.`, 'error');
       } finally {
         canonicalSaveInFlightRef.current = false;
+        // Changes made while a canonical write was in flight must not be
+        // dropped. Re-run the effect against the latest in-memory snapshot.
+        if (canonicalLatestSerializedRef.current !== serialized) {
+          setCanonicalSaveRetry(value => value + 1);
+        }
       }
     }, 500);
     return () => window.clearTimeout(timer);
-  }, [canonicalPersistenceRequired, employees, departments, jobs, contracts, attendance, leaves, penalties, advances, rewards, performance, documents, payrollRuns, settings]);
+  }, [canonicalPersistenceRequired, employees, departments, jobs, contracts, attendance, leaves, penalties, advances, rewards, performance, documents, payrollRuns, settings, canonicalSaveRetry]);
 
   // 2. Local State synchronization to LocalStorage on modifications
   useEffect(() => {
