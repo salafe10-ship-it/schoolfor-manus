@@ -23,6 +23,7 @@ interface PayrollTabProps {
 
 interface PayrollItem {
   employeeId: string;
+  costCenter: string;
   employeeName: string;
   basicSalary: number;
   allowances: number;
@@ -30,7 +31,6 @@ interface PayrollItem {
   deductions: number;
   advancesDeducted: number;
   netSalary: number;
-  costCenter: string;
 }
 
 export default function PayrollTab({
@@ -78,7 +78,7 @@ export default function PayrollTab({
         deductions: line.penalty + line.attendanceDeduction + (line.leaveDeduction || 0),
         advancesDeducted: line.advanceDeduction,
         netSalary: line.net,
-        costCenter: employee?.costCenter || 'admin'
+        costCenter: line.costCenter || employee?.costCenter || 'admin'
       };
     });
 

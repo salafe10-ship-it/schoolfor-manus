@@ -100,6 +100,8 @@ export interface HRPenalty {
 export interface HRAdvance {
   id: string;
   employeeId: string;
+  /** Mandatory accounting dimension; advances may not cross stages. */
+  costCenter: 'kindergarten' | 'primary' | 'middle' | 'secondary' | 'admin';
   amount: number;
   date: string;
   installments: number;
@@ -164,6 +166,7 @@ export interface HRPayrollRun {
   status: 'approved' | 'paid';
   lines: Array<{
     employeeId: string;
+    costCenter: 'kindergarten' | 'primary' | 'middle' | 'secondary' | 'admin';
     gross: number;
     penalty: number;
     advanceDeduction: number;

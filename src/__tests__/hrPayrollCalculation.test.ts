@@ -13,12 +13,12 @@ describe('HR payroll calculation', () => {
     const result = calculatePayrollRun({
       period: '2026-06', employees: [employee], rewards: [],
       penalties: [{ id: 'P-1', employeeId: 'EMP-1', type: 'deduction', date: '2026-06-10', amount: 50, reason: 'test', status: 'applied' }],
-      advances: [{ id: 'A-1', employeeId: 'EMP-1', amount: 200, date: '2026-01-01', installments: 2, deductionPerMonth: 100, remainingAmount: 200, reason: 'test', status: 'approved' }],
+      advances: [{ id: 'A-1', employeeId: 'EMP-1', costCenter: 'admin', amount: 200, date: '2026-01-01', installments: 2, deductionPerMonth: 100, remainingAmount: 200, reason: 'test', status: 'approved' }],
       attendance: [{ id: 'AT-1', employeeId: 'EMP-1', date: '2026-06-10', status: 'late', delayMinutes: 60, overtimeHours: 0 }],
       leaves: [],
       settings: { lateDeductionRate: 1, workingHoursPerDay: 8 }
     });
-    expect(result.lines[0]).toMatchObject({ gross: 3000, penalty: 50, advanceDeduction: 100, attendanceDeduction: 12.5, overtimePay: 0, net: 2837.5 });
+    expect(result.lines[0]).toMatchObject({ costCenter: 'admin', gross: 3000, penalty: 50, advanceDeduction: 100, attendanceDeduction: 12.5, overtimePay: 0, net: 2837.5 });
     expect(result.totals).toEqual({ gross: 3000, penalty: 50, advance: 100, attendance: 12.5, leave: 0, overtime: 0, net: 2837.5 });
   });
 

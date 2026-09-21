@@ -86,7 +86,7 @@ export default function OtherHRTabs({
   const [contractForm, setContractForm] = useState({ employeeId: '', type: 'fixed' as any, startDate: '', endDate: '', monthlySalary: 3500 });
   const [leaveForm, setLeaveForm] = useState({ employeeId: '', type: 'annual' as any, startDate: '', endDate: '', reason: '' });
   const [penaltyForm, setPenaltyForm] = useState({ employeeId: '', type: 'deduction' as any, date: '', amount: 0, reason: '' });
-  const [advanceForm, setAdvanceForm] = useState({ employeeId: '', amount: 1000, date: '', installments: 10, deductionPerMonth: 100, reason: '' });
+  const [advanceForm, setAdvanceForm] = useState({ employeeId: '', costCenter: 'admin' as any, amount: 1000, date: '', installments: 10, deductionPerMonth: 100, reason: '' });
   const [rewardForm, setRewardForm] = useState({ employeeId: '', amount: 0, date: '', reason: '' });
   const [perfForm, setPerfForm] = useState({ employeeId: '', date: '', score: 0, reviewer: '', strengths: '', improvements: '', trainingNeeds: '' });
   const [docForm, setDocForm] = useState({ employeeId: '', title: '', type: 'passport', issueDate: '', expiryDate: '' });
@@ -845,7 +845,7 @@ export default function OtherHRTabs({
             <p className="text-xs text-slate-400">إدارة القروض والسلف المالية الممنوحة للعاملين مع الاسترداد الآلي عبر مسير الرواتب.</p>
           </div>
           <button 
-            onClick={() => { setAdvanceForm({ employeeId: '', amount: 0, date: new Date().toISOString().split('T')[0], installments: 0, deductionPerMonth: 0, reason: '' }); setShowAddModal(true); }}
+            onClick={() => { setAdvanceForm({ employeeId: '', costCenter: 'admin', amount: 0, date: new Date().toISOString().split('T')[0], installments: 0, deductionPerMonth: 0, reason: '' }); setShowAddModal(true); }}
             className="bg-gradient-to-r from-emerald-600 to-emerald-700 text-white font-bold px-4 py-2 rounded-lg text-xs flex items-center gap-1 shadow-md"
           >
             <Plus className="w-4 h-4" />
@@ -911,6 +911,15 @@ export default function OtherHRTabs({
                   <select value={advanceForm.employeeId} onChange={e => setAdvanceForm(p=>({...p, employeeId: e.target.value}))} className="w-full bg-slate-800 border border-slate-700 rounded p-2 text-white">
                     {employees.map(e => <option key={e.id} value={e.id}>{e.name}</option>)}
                   </select>
+                </div>
+                <div className="grid grid-cols-2 gap-3">
+                  <div className="space-y-1">
+                    <label>مركز تكلفة المرحلة</label>
+                    <select required value={advanceForm.costCenter} onChange={e => setAdvanceForm(p=>({...p, costCenter: e.target.value as any}))} className="w-full bg-slate-800 border border-slate-700 rounded p-2 text-white">
+                      {Object.entries(costCenterLabels).map(([k,v]) => <option key={k} value={k}>{v}</option>)}
+                    </select>
+                  </div>
+                  <div />
                 </div>
                 <div className="grid grid-cols-2 gap-3">
                   <div className="space-y-1">

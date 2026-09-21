@@ -10,6 +10,7 @@ import type {
 
 export interface PayrollCalculationLine {
   employeeId: string;
+  costCenter: HREmployee['costCenter'];
   gross: number;
   penalty: number;
   advanceDeduction: number;
@@ -72,7 +73,7 @@ export function calculatePayrollRun(input: {
       const penalty = input.penalties
         .filter(item => item.employeeId === employee.id && item.status === 'applied' && String(item.date || '').startsWith(input.period))
         .reduce((sum, item) => sum + Math.max(0, Number(item.amount || 0)), 0);
-      const advance = input.advances.find(item => item.employeeId === employee.id && item.status === 'approved' && Number(item.remainingAmount || 0) > 0);
+      const advance = input.advances.find(item => item.employeeId === employee.id && item.costCenter === employee.costCenter && item.status === 'approved' && Number(item.remainingAmount || 0) > 0);
       const advanceDeduction = advance
         ? Math.min(Math.max(0, Number(advance.deductionPerMonth || 0)), Math.max(0, Number(advance.remainingAmount || 0)))
         : 0;
@@ -101,6 +102,7 @@ export function calculatePayrollRun(input: {
       const net = Math.max(0, gross + overtimePay - penalty - advanceDeduction - attendanceDeduction - leaveDeduction);
       return {
         employeeId: String(employee.id),
+        costCenter: employee.costCenter,
         gross: money(gross),
         penalty: money(penalty),
         advanceDeduction: money(advanceDeduction),

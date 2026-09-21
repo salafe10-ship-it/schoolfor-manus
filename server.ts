@@ -1040,7 +1040,7 @@ function validateHrSnapshotData(data: Record<string, any>): void {
       ids.add(id);
     }
   }
-  const employees = new Set(data.employees.map((row: any) => String(row.id)));
+  const employees = new Map<string, any>(data.employees.map((row: any) => [String(row.id), row] as [string, any]));
   const departments = new Set(data.departments.map((row: any) => String(row.id)));
   for (const collection of ['contracts', 'attendance', 'leaves', 'penalties', 'advances', 'rewards', 'performance', 'documents']) {
     for (const row of data[collection]) {
@@ -1057,12 +1057,19 @@ function validateHrSnapshotData(data: Record<string, any>): void {
     const amount = Number(value);
     if (!Number.isFinite(amount) || (allowZero ? amount < 0 : amount <= 0)) throw new ValidationError(`${label} يجب أن يكون رقماً مالياً صالحاً.`);
   };
+  const allowedHrCostCenters = new Set(['kindergarten', 'primary', 'middle', 'secondary', 'admin']);
+  for (const row of data.employees) {
+    if (!allowedHrCostCenters.has(String(row.costCenter || ''))) throw new ValidationError(`مركز تكلفة الموظف ${row.id} غير صالح.`);
+  }
   for (const row of data.employees) assertMoney(row.basicSalary, `راتب الموظف ${row.id}`);
   for (const row of data.jobs) assertMoney(row.baseSalary, `راتب الوظيفة ${row.id}`);
   for (const row of data.contracts) assertMoney(row.monthlySalary, `راتب العقد ${row.id}`, false);
   for (const row of data.penalties) assertMoney(row.amount, `قيمة الجزاء ${row.id}`);
   for (const row of data.rewards) assertMoney(row.amount, `قيمة المكافأة ${row.id}`);
   for (const row of data.advances) {
+    if (!allowedHrCostCenters.has(String(row.costCenter || ''))) throw new ValidationError(`مركز تكلفة السلفة ${row.id} غير صالح.`);
+    const employee = employees.get(String(row.employeeId || ''));
+    if (!employee || String(employee.costCenter) !== String(row.costCenter)) throw new ValidationError(`السلفة ${row.id} لا تطابق مركز تكلفة الموظف المستفيد.`);
     assertMoney(row.amount, `قيمة السلفة ${row.id}`, false);
     assertMoney(row.deductionPerMonth, `قسط السلفة ${row.id}`, false);
     assertMoney(row.remainingAmount, `رصيد السلفة ${row.id}`);
@@ -1113,6 +1120,10 @@ function validateHrSnapshotData(data: Record<string, any>): void {
         throw new ValidationError(`خط مسير الرواتب ${String(row.period)} مرتبط بموظف غير صالح أو مكرر.`);
       }
       lineEmployeeIds.add(employeeId);
+      const employee = employees.get(employeeId);
+      if (!allowedHrCostCenters.has(String(line?.costCenter || '')) || String(line.costCenter) !== String(employee?.costCenter)) {
+        throw new ValidationError(`خط مسير الرواتب ${String(row.period)} لا يطابق مركز تكلفة الموظف.`);
+      }
       for (const field of ['gross', 'penalty', 'advanceDeduction', 'attendanceDeduction', 'leaveDeduction', 'overtimePay', 'net']) {
         if (line[field] !== undefined) assertMoney(line[field], `قيمة ${field} في مسير ${String(row.period)}`);
       }
@@ -10511,14 +10522,16 @@ export async function createApp(options: { cloudflare?: boolean } = {}): Promise
         if (!advance || advance.status !== 'approved') throw new ConflictError('لا يمكن صرف سلفة غير معتمدة.');
         if (advance.journalId) throw new ConflictError('تم صرف هذه السلفة وإثبات قيدها مسبقاً.');
         const amount = Number(advance.amount || 0);
+        const employee = (Array.isArray(data.employees) ? data.employees : []).find((item: any) => item?.id === advance.employeeId);
+        if (!employee || String(employee.costCenter) !== String(advance.costCenter)) throw new ValidationError('مركز تكلفة السلفة لا يطابق مركز تكلفة الموظف؛ تم رفض الصرف حفاظاً على فصل المراحل.');
         if (!Number.isFinite(amount) || amount <= 0) throw new ValidationError('قيمة السلفة غير صالحة للصرف.');
         const mappingRows = await transaction.query<{ mapping_key: string; account_code: string }>(`SELECT mapping_key,account_code FROM public.erp_account_mappings WHERE school_id=$1 AND is_active=true AND mapping_key = ANY($2::text[])`, [schoolId, ['treasury.cash', 'hr.advance.receivable']]);
         const mappings = new Map(mappingRows.rows.map(row => [row.mapping_key, row.account_code]));
         if (!mappings.get('treasury.cash') || !mappings.get('hr.advance.receivable')) throw new ValidationError('لا يمكن صرف السلفة قبل اعتماد خريطة النقد وذمم السلف.');
         const sync = await CanonicalErpPostingService.syncSnapshot(transaction, tenantId, schoolId, actorId, {
-          journalEntries: [{ id: `hr-advance-${advanceId}`, sourceType: 'journal_entry', status: 'posted', date: String(advance.date || new Date().toISOString().slice(0, 10)), description: `صرف سلفة موظف ${advance.employeeId}`, lines: [
-            { id: 'advance-receivable', accountCode: mappings.get('hr.advance.receivable'), debit: amount, credit: 0 },
-            { id: 'cash', accountCode: mappings.get('treasury.cash'), debit: 0, credit: amount }
+          journalEntries: [{ id: `hr-advance-${advanceId}`, sourceType: 'journal_entry', status: 'posted', date: String(advance.date || new Date().toISOString().slice(0, 10)), description: `صرف سلفة موظف ${advance.employeeId} — ${advance.costCenter}`, lines: [
+            { id: 'advance-receivable', accountCode: mappings.get('hr.advance.receivable'), debit: amount, credit: 0, costCenter: advance.costCenter },
+            { id: 'cash', accountCode: mappings.get('treasury.cash'), debit: 0, credit: amount, costCenter: advance.costCenter }
           ] }]
         });
         journalId = sync.sourceLinks.find(link => link.sourceId === `hr-advance-${advanceId}`)?.journalEntryId || '';
@@ -10632,14 +10645,16 @@ export async function createApp(options: { cloudflare?: boolean } = {}): Promise
         const gross = Number(totals.gross || 0), net = Number(totals.net || 0), advance = Number(totals.advance || 0), penalty = Number(totals.penalty || 0);
         const attendance = Number(totals.attendance || 0), leave = Number(totals.leave || 0), overtime = Number(totals.overtime || 0);
         if (![gross, net, advance, penalty, attendance, leave, overtime].every(Number.isFinite) || gross <= 0 || Math.round((gross + overtime) * 100) !== Math.round((net + advance + penalty + attendance + leave) * 100)) throw new ValidationError('إجماليات مسير الرواتب المعتمد غير متوازنة.');
-        const lines = [
-          { id: 'expense', accountCode: mappings.get('hr.payroll.expense'), debit: gross + overtime, credit: 0 },
-          { id: 'cash', accountCode: mappings.get('treasury.cash'), debit: 0, credit: net }
-        ];
-        if (advance > 0) lines.push({ id: 'advance', accountCode: mappings.get('hr.advance.receivable'), debit: 0, credit: advance });
-        if (penalty > 0) lines.push({ id: 'deduction', accountCode: mappings.get('hr.deductions.clearing'), debit: 0, credit: penalty });
-        if (attendance > 0) lines.push({ id: 'attendance-deduction', accountCode: mappings.get('hr.deductions.clearing'), debit: 0, credit: attendance });
-        if (leave > 0) lines.push({ id: 'unpaid-leave-deduction', accountCode: mappings.get('hr.deductions.clearing'), debit: 0, credit: leave });
+        const lines: Array<Record<string, any>> = [];
+        for (const line of (Array.isArray(run.lines) ? run.lines : [])) {
+          const cc = String(line.costCenter || '').trim();
+          const expense = Number(line.gross || 0) + Number(line.overtimePay || 0);
+          const deductions = Number(line.penalty || 0) + Number(line.attendanceDeduction || 0) + Number(line.leaveDeduction || 0);
+          if (expense > 0) lines.push({ id: `${line.employeeId}-expense`, accountCode: mappings.get('hr.payroll.expense'), debit: expense, credit: 0, costCenter: cc });
+          if (Number(line.net || 0) > 0) lines.push({ id: `${line.employeeId}-cash`, accountCode: mappings.get('treasury.cash'), debit: 0, credit: Number(line.net), costCenter: cc });
+          if (Number(line.advanceDeduction || 0) > 0) lines.push({ id: `${line.employeeId}-advance`, accountCode: mappings.get('hr.advance.receivable'), debit: 0, credit: Number(line.advanceDeduction), costCenter: cc });
+          if (deductions > 0) lines.push({ id: `${line.employeeId}-deductions`, accountCode: mappings.get('hr.deductions.clearing'), debit: 0, credit: deductions, costCenter: cc });
+        }
         const sync = await CanonicalErpPostingService.syncSnapshot(transaction, tenantId, schoolId, actorId, { journalEntries: [{ id: `hr-payroll-${period}`, sourceType: 'journal_entry', status: 'posted', date: `${period}-01`, description: `صرف مسير الرواتب المعتمد للفترة ${period}`, lines }] });
         journalId = sync.sourceLinks.find(link => link.sourceId === `hr-payroll-${period}`)?.journalEntryId || '';
         if (!journalId) throw new DatabaseError('تعذر إثبات قيد صرف الرواتب الكانوني.');
