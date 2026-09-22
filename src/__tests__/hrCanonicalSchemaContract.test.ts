@@ -4,6 +4,7 @@ import { readFileSync } from 'node:fs';
 describe('HR canonical schema contract', () => {
   const source = readFileSync('supabase/migrations/202608271500_hr_canonical_records.sql', 'utf8');
   const payrollUpgrade = readFileSync('supabase/migrations/202608291000_hr_payroll_runs_snapshot.sql', 'utf8');
+  const forceRls = readFileSync('supabase/migrations/202608301200_hr_force_rls.sql', 'utf8');
 
   it('keeps HR records isolated by tenant and school with no country-specific default', () => {
     expect(source).toContain('CREATE TABLE IF NOT EXISTS public.hr_database');
@@ -23,5 +24,9 @@ describe('HR canonical schema contract', () => {
     expect(payrollUpgrade).toContain("jsonb_set(data, '{payrollRuns}', '[]'::jsonb, true)");
     expect(payrollUpgrade).toContain('version = version + 1');
     expect(payrollUpgrade).toContain("'schema_upgrade'");
+  });
+
+  it('keeps HR RLS forced so table owners cannot bypass school isolation', () => {
+    expect(forceRls).toContain('ALTER TABLE public.hr_database FORCE ROW LEVEL SECURITY');
   });
 });
