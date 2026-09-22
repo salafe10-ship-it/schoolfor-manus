@@ -273,7 +273,25 @@ export default function PayrollTab({
             <span className="rounded-full border border-amber-700/30 bg-white px-2.5 py-1 text-[10px] font-black text-slate-900">{payrollStageLabel}</span>
           </div>
           <div className="mt-3 grid grid-cols-4 gap-1.5">
-            {stageSteps.map((step, index) => <div key={step} className={`rounded-md px-1.5 py-1.5 text-center text-[9px] font-black ${index <= payrollStage ? 'bg-emerald-700 text-white' : 'bg-white text-slate-500 border border-slate-200'}`}><span className="block">{index + 1}</span>{step}</div>)}
+            {stageSteps.map((step, index) => {
+              const isCurrent = index === payrollStage;
+              const isComplete = index < payrollStage;
+              return (
+                <div
+                  key={step}
+                  aria-label={`${step}: ${isCurrent || isComplete ? 'نشطة' : 'غير نشطة'}`}
+                  className={`rounded-md px-1.5 py-1.5 text-center text-[9px] font-black ${
+                    isCurrent ? 'bg-emerald-700 text-white shadow-sm ring-2 ring-emerald-300/50' :
+                    isComplete ? 'bg-emerald-100 text-emerald-900 border border-emerald-300' :
+                    'bg-white text-slate-500 border border-slate-300'
+                  }`}
+                >
+                  <span className="block">{index + 1}</span>
+                  <span className="block">{step}</span>
+                  <span className="mt-0.5 block text-[8px] opacity-80">{isCurrent ? 'الحالية' : isComplete ? 'مكتملة' : 'غير نشطة'}</span>
+                </div>
+              );
+            })}
           </div>
         </div>
         <div className="text-[10px] font-bold leading-5 text-slate-700 md:max-w-xs">لا يتم إنشاء قيد مالي عند اعتماد HR. يثبت الالتزام أولاً، ثم ينفذ الصرف فقط بصلاحية مالية موثقة.</div>
