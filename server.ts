@@ -1143,6 +1143,23 @@ function validateHrSnapshotData(data: Record<string, any>): void {
   if (data.settings !== undefined && (!data.settings || typeof data.settings !== 'object' || Array.isArray(data.settings))) {
     throw new ValidationError('إعدادات الموارد البشرية يجب أن تكون كائناً.');
   }
+  if (data.recruitmentApplications !== undefined) {
+    if (!Array.isArray(data.recruitmentApplications)) throw new ValidationError('طلبات التوظيف يجب أن تكون قائمة.');
+    const recruitmentIds = new Set<string>();
+    const recruitmentStatuses = new Set(['submitted', 'screening', 'interview', 'offer', 'approved', 'rejected', 'withdrawn', 'converted']);
+    for (const row of data.recruitmentApplications) {
+      const id = String(row?.id || '').trim();
+      if (!id || recruitmentIds.has(id)) throw new ConflictError(`معرّف طلب التوظيف ${id || '(فارغ)'} مكرر أو مفقود.`);
+      recruitmentIds.add(id);
+      if (!String(row.applicantName || '').trim() || !String(row.phone || '').trim() || !String(row.jobId || '').trim() || !String(row.departmentId || '').trim()) {
+        throw new ValidationError(`بيانات طلب التوظيف ${id} غير مكتملة.`);
+      }
+      if (!recruitmentStatuses.has(String(row.status || '')) || !Array.isArray(row.auditLog)) throw new ValidationError(`طلب التوظيف ${id} غير صالح.`);
+      if (!departments.has(String(row.departmentId))) throw new ValidationError(`طلب التوظيف ${id} مرتبط بقسم غير موجود.`);
+      if (!data.jobs.some((job: any) => String(job.id) === String(row.jobId))) throw new ValidationError(`طلب التوظيف ${id} مرتبط بوظيفة غير موجودة.`);
+      if (row.status === 'converted' && !employees.has(String(row.convertedEmployeeId || ''))) throw new ValidationError(`طلب التوظيف ${id} محوّل دون موظف حقيقي مرتبط.`);
+    }
+  }
   const leavePolicies = Array.isArray(data.settings?.leavePolicies) ? data.settings.leavePolicies : [];
   const leaveTypes = new Set(['annual', 'sick', 'emergency', 'unpaid']);
   const policyTypes = new Set<string>();

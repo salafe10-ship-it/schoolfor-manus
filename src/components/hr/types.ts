@@ -158,6 +158,20 @@ export interface HRDocument {
   status: 'valid' | 'expired' | 'warning';
 }
 
+export interface HRRecruitmentApplication {
+  id: string;
+  applicantName: string;
+  phone: string;
+  email: string;
+  jobId: string;
+  departmentId: string;
+  submittedAt: string;
+  status: 'submitted' | 'screening' | 'interview' | 'offer' | 'approved' | 'rejected' | 'withdrawn' | 'converted';
+  notes?: string;
+  convertedEmployeeId?: string;
+  auditLog: { action: string; at: string; actor: string; details: string }[];
+}
+
 export interface HRSettings {
   workingHoursStart: string;
   workingHoursEnd: string;
