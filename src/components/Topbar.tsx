@@ -279,7 +279,7 @@ export default function Topbar({
         <div className="hidden sm:flex items-center gap-1.5">
           <div id="trusted-academic-year-display" className="flex items-center gap-2 bg-[#2a1d13] border border-[#d4af37]/30 px-4 py-2 text-xs font-black text-amber-100 select-none shadow-2xs">
             <Calendar className="w-3.5 h-3.5 text-amber-400" />
-            <span>{selectedSchool.academicYear || (isCustomerProductionPortal ? 'العام الدراسي غير محدد' : 'السنة غير محددة في السجل الموثوق')}</span>
+            <span dir="ltr" className="whitespace-nowrap">{selectedSchool.academicYear || (isCustomerProductionPortal ? 'العام الدراسي غير محدد' : 'السنة غير محددة في السجل الموثوق')}</span>
             <span className="text-[9px] text-amber-300/70">{isCustomerProductionPortal ? 'العام الدراسي' : 'من الهوية الموثوقة'}</span>
           </div>
         </div>
