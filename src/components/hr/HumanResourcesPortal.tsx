@@ -85,17 +85,33 @@ export default function HumanResourcesPortal({ setActiveSection, selectedSchool,
     setTimeout(() => setNotification(null), 5000);
   };
 
-  // PDF export uses the browser's real print pipeline so the user can choose
-  // "Save as PDF" from the system dialog. It exports the currently rendered
-  // canonical HR view and never fabricates a downloadable document.
+  // Open a visible, read-only snapshot first. The embedded browser does not
+  // reliably expose the native print dialog, so sending window.print() from
+  // the live SPA made the user think nothing happened. The preview keeps the
+  // exact rendered HR output, then lets the user invoke the real print flow.
   const exportHrPdf = () => {
     if (typeof window === 'undefined') return;
-    const previousTitle = document.title;
-    document.title = `EduPro - HR - ${selectedSchool?.name || 'الموارد البشرية'}`;
-    window.setTimeout(() => {
-      window.print();
-      window.setTimeout(() => { document.title = previousTitle; }, 500);
-    }, 0);
+    const preview = window.open('', '_blank', 'noopener,noreferrer,width=1280,height=900');
+    if (!preview) {
+      triggerNotification('تعذر فتح نافذة المعاينة؛ اسمح بالنوافذ المنبثقة ثم أعد المحاولة.', 'warning');
+      return;
+    }
+
+    const snapshot = document.documentElement.cloneNode(true) as HTMLElement;
+    snapshot.querySelectorAll('script').forEach(node => node.remove());
+    const previewBar = document.createElement('div');
+    previewBar.innerHTML = '<strong>معاينة مستند شؤون العاملين</strong><button type="button" onclick="window.print()">طباعة هذه المعاينة</button><button type="button" onclick="window.close()">إغلاق المعاينة</button>';
+    previewBar.setAttribute('style', 'position:sticky;top:0;z-index:99999;display:flex;gap:12px;align-items:center;justify-content:center;background:#1f2937;color:#fff;padding:12px;font:700 14px Arial;direction:rtl;');
+    previewBar.querySelectorAll('button').forEach(button => button.setAttribute('style', 'border:0;border-radius:8px;background:#d4af37;color:#1f2937;padding:8px 14px;font-weight:800;cursor:pointer;'));
+    const style = document.createElement('style');
+    style.textContent = '@page{size:A4;margin:12mm}body{background:#fff!important;color:#111!important}.hr-print-preview-bar{display:block}@media print{.hr-print-preview-bar{display:none!important}button,[role="button"]{print-color-adjust:exact}}';
+    snapshot.querySelector('head')?.appendChild(style);
+    snapshot.querySelector('body')?.prepend(previewBar);
+
+    preview.document.open();
+    preview.document.write('<!doctype html>' + snapshot.outerHTML);
+    preview.document.close();
+    preview.document.title = `معاينة شؤون العاملين - ${selectedSchool?.name || 'المدرسة'}`;
   };
 
   const requireHrWrite = () => {
