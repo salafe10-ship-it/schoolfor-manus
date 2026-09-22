@@ -52,7 +52,7 @@ export default function PayrollTab({
   onCommitPayroll,
   onPayPayroll
 }: PayrollTabProps) {
-  const [selectedMonth, setSelectedMonth] = useState('2026-06');
+  const [selectedMonth, setSelectedMonth] = useState(() => new Date().toISOString().slice(0, 7));
   const [payrollList, setPayrollList] = useState<PayrollItem[]>([]);
   const [isPosted, setIsPosted] = useState(false);
   const [isApproved, setIsApproved] = useState(false);
@@ -99,6 +99,10 @@ export default function PayrollTab({
     acc.net += item.netSalary;
     return acc;
   }, { basic: 0, allowances: 0, bonuses: 0, deductions: 0, advances: 0, net: 0 });
+
+  const payrollStage = isPosted ? 3 : isCommitted ? 2 : isApproved ? 1 : 0;
+  const payrollStageLabel = isPosted ? 'مصروف ومرحل' : isCommitted ? 'ملتزم محاسبيًا' : isApproved ? 'معتمد من HR' : 'مسودة للمراجعة';
+  const stageSteps = ['مسودة', 'اعتماد HR', 'إثبات الالتزام', 'الصرف والترحيل'];
 
   // Handle Post Payroll to General Ledger
   const handlePostPayroll = async () => {
@@ -244,6 +248,19 @@ export default function PayrollTab({
         </div>
       </div>
 
+      <div className="grid gap-4 rounded-xl border border-amber-700/25 bg-amber-50/70 p-4 md:grid-cols-[1fr_auto] md:items-center" role="status" aria-label="مسار اعتماد مسير الرواتب">
+        <div>
+          <div className="flex items-center justify-between gap-3">
+            <span className="text-xs font-black text-slate-900">حالة مسير {selectedMonth}</span>
+            <span className="rounded-full border border-amber-700/30 bg-white px-2.5 py-1 text-[10px] font-black text-slate-900">{payrollStageLabel}</span>
+          </div>
+          <div className="mt-3 grid grid-cols-4 gap-1.5">
+            {stageSteps.map((step, index) => <div key={step} className={`rounded-md px-1.5 py-1.5 text-center text-[9px] font-black ${index <= payrollStage ? 'bg-emerald-700 text-white' : 'bg-white text-slate-500 border border-slate-200'}`}><span className="block">{index + 1}</span>{step}</div>)}
+          </div>
+        </div>
+        <div className="text-[10px] font-bold leading-5 text-slate-700 md:max-w-xs">لا يتم إنشاء قيد مالي عند اعتماد HR. يثبت الالتزام أولاً، ثم ينفذ الصرف فقط بصلاحية مالية موثقة.</div>
+      </div>
+
       {/* Financial totals bento summary */}
       <div className="grid grid-cols-2 md:grid-cols-6 gap-4">
         <div className="bg-slate-900/40 p-4 border border-slate-800 text-center">
@@ -291,7 +308,9 @@ export default function PayrollTab({
               </tr>
             </thead>
             <tbody className="divide-y divide-slate-800 text-xs">
-              {payrollList.map(item => (
+              {payrollList.length === 0 ? (
+                <tr><td colSpan={10} className="p-12 text-center"><div className="mx-auto max-w-md rounded-xl border border-dashed border-amber-700/30 bg-amber-50/60 p-6"><FileText className="mx-auto mb-2 h-8 w-8 text-amber-700" /><p className="font-black text-slate-900">لا توجد رواتب قابلة للعرض لهذه الفترة</p><p className="mt-1 text-xs font-bold text-slate-600">تحقق من الموظفين النشطين أو اختر شهر استحقاق آخر. لم يتم إنشاء أي مسير تلقائيًا.</p></div></td></tr>
+              ) : payrollList.map(item => (
                 <tr key={item.employeeId} className="hover:bg-slate-800/40 transition-colors">
                   <td className="p-4 font-mono font-semibold text-slate-400">{item.employeeId}</td>
                   <td className="p-4 font-bold text-white">{item.employeeName}</td>
