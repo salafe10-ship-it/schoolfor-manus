@@ -6,6 +6,7 @@ import {
 } from './types';
 import { getTrustedAccessToken } from '../../utils/auth';
 import { calculateLeaveBalance, canRequestLeave } from '../../modules/hr/domain/LeaveBalance';
+import { moveRecruitmentStatus } from '../../modules/hr/domain/RecruitmentWorkflow';
 
 interface OtherHRTabsProps {
   activeTab: string;
@@ -109,6 +110,37 @@ export default function OtherHRTabs({
   const [rewardForm, setRewardForm] = useState({ employeeId: '', amount: 0, date: '', reason: '' });
   const [perfForm, setPerfForm] = useState({ employeeId: '', date: '', score: 0, reviewer: '', strengths: '', improvements: '', trainingNeeds: '' });
   const [docForm, setDocForm] = useState({ employeeId: '', title: '', type: 'passport', issueDate: '', expiryDate: '' });
+  const [recruitmentForm, setRecruitmentForm] = useState({ applicantName: '', phone: '', email: '', jobId: '', departmentId: '', notes: '' });
+
+  if (activeTab === 'recruitment') {
+    const statusLabels: Record<string, string> = { submitted: 'جديد', screening: 'فرز أولي', interview: 'مقابلة', offer: 'عرض وظيفي', approved: 'معتمد', rejected: 'مرفوض', withdrawn: 'منسحب', converted: 'تم التعيين' };
+    const createApplication = (event: React.FormEvent) => {
+      event.preventDefault();
+      if (!requireWrite() || !setRecruitmentApplications) return;
+      if (!recruitmentForm.applicantName.trim() || !recruitmentForm.phone.trim() || !recruitmentForm.jobId || !recruitmentForm.departmentId) { triggerNotification('أكمل الاسم والهاتف والقسم والوظيفة قبل حفظ طلب التوظيف.', 'warning'); return; }
+      const now = new Date().toISOString();
+      setRecruitmentApplications(previous => [{ id: `APP-${Date.now()}`, applicantName: recruitmentForm.applicantName.trim(), phone: recruitmentForm.phone.trim(), email: recruitmentForm.email.trim(), jobId: recruitmentForm.jobId, departmentId: recruitmentForm.departmentId, submittedAt: now, status: 'submitted', notes: recruitmentForm.notes.trim(), auditLog: [{ action: 'submitted', at: now, actor: 'hr.current_user', details: 'إنشاء طلب توظيف من وحدة شؤون العاملين' }] }, ...previous]);
+      setRecruitmentForm({ applicantName: '', phone: '', email: '', jobId: '', departmentId: '', notes: '' });
+      triggerNotification('تم حفظ طلب التوظيف ضمن سجل HR المركزي.', 'success');
+    };
+    const advanceApplication = (application: HRRecruitmentApplication, nextStatus: 'screening' | 'interview' | 'offer' | 'approved' | 'rejected') => {
+      if (!requireWrite() || !setRecruitmentApplications) return;
+      try { const updated = moveRecruitmentStatus(application, nextStatus, 'hr.current_user', new Date().toISOString(), 'تحديث مرحلة الطلب من شاشة التوظيف'); setRecruitmentApplications(previous => previous.map(item => item.id === updated.id ? updated : item)); triggerNotification(`تم نقل الطلب إلى مرحلة: ${statusLabels[nextStatus]}.`, 'success'); } catch (error: any) { triggerNotification(error?.message || 'تعذر تحديث مرحلة الطلب.', 'error'); }
+    };
+    return <div className="space-y-5" dir="rtl">
+      <div className="bg-slate-900 border border-slate-800 p-5"><h3 className="text-white font-black text-lg">طلبات التوظيف</h3><p className="text-slate-400 text-xs mt-1">سجل تشغيلي حقيقي مرتبط ببيانات HR المركزية، مع مسار مراحل وسجل تدقيق لكل انتقال.</p></div>
+      <form onSubmit={createApplication} className="bg-slate-900 border border-slate-800 p-4 grid grid-cols-1 md:grid-cols-3 gap-3">
+        <input value={recruitmentForm.applicantName} onChange={e => setRecruitmentForm(p => ({ ...p, applicantName: e.target.value }))} placeholder="اسم المتقدم *" className="bg-slate-800 border border-slate-700 rounded px-3 py-2 text-white text-sm" />
+        <input value={recruitmentForm.phone} onChange={e => setRecruitmentForm(p => ({ ...p, phone: e.target.value }))} placeholder="الهاتف *" className="bg-slate-800 border border-slate-700 rounded px-3 py-2 text-white text-sm" />
+        <input value={recruitmentForm.email} onChange={e => setRecruitmentForm(p => ({ ...p, email: e.target.value }))} placeholder="البريد الإلكتروني" className="bg-slate-800 border border-slate-700 rounded px-3 py-2 text-white text-sm" />
+        <select value={recruitmentForm.departmentId} onChange={e => setRecruitmentForm(p => ({ ...p, departmentId: e.target.value, jobId: '' }))} className="bg-slate-800 border border-slate-700 rounded px-3 py-2 text-white text-sm"><option value="">اختر القسم *</option>{departments.map(item => <option key={item.id} value={item.id}>{item.nameAr}</option>)}</select>
+        <select value={recruitmentForm.jobId} onChange={e => setRecruitmentForm(p => ({ ...p, jobId: e.target.value }))} className="bg-slate-800 border border-slate-700 rounded px-3 py-2 text-white text-sm"><option value="">اختر الوظيفة *</option>{jobs.filter(item => !recruitmentForm.departmentId || item.departmentId === recruitmentForm.departmentId).map(item => <option key={item.id} value={item.id}>{item.titleAr}</option>)}</select>
+        <input value={recruitmentForm.notes} onChange={e => setRecruitmentForm(p => ({ ...p, notes: e.target.value }))} placeholder="ملاحظات" className="bg-slate-800 border border-slate-700 rounded px-3 py-2 text-white text-sm" />
+        <button type="submit" disabled={!canManage} className="md:col-span-3 bg-[#dfb55a] text-slate-950 rounded px-4 py-2 font-black disabled:opacity-40">حفظ طلب توظيف حقيقي</button>
+      </form>
+      <div className="bg-slate-900 border border-slate-800 overflow-x-auto"><table className="w-full text-xs text-right"><thead className="bg-slate-800 text-slate-200"><tr><th className="p-3">المتقدم</th><th className="p-3">القسم / الوظيفة</th><th className="p-3">المرحلة</th><th className="p-3">آخر تحديث</th><th className="p-3">الإجراء</th></tr></thead><tbody>{recruitmentApplications.map(application => { const department = departments.find(item => item.id === application.departmentId); const job = jobs.find(item => item.id === application.jobId); const next: Record<string, 'screening' | 'interview' | 'offer' | 'approved' | 'rejected' | undefined> = { submitted: 'screening', screening: 'interview', interview: 'offer', offer: 'approved' }; return <tr key={application.id} className="border-t border-slate-800"><td className="p-3 text-white font-bold">{application.applicantName}<div className="text-slate-500 font-normal">{application.phone}</div></td><td className="p-3 text-slate-300">{department?.nameAr || '—'}<div className="text-slate-500">{job?.titleAr || '—'}</div></td><td className="p-3"><span className="rounded-full border border-[#dfb55a]/50 px-2 py-1 text-[#dfb55a]">{statusLabels[application.status]}</span></td><td className="p-3 text-slate-400">{new Date(application.auditLog.at(-1)?.at || application.submittedAt).toLocaleString('ar-EG')}</td><td className="p-3 flex gap-2">{next[application.status] && <button onClick={() => advanceApplication(application, next[application.status] as any)} disabled={!canManage} className="rounded bg-emerald-700 px-2 py-1 text-white disabled:opacity-40">{statusLabels[next[application.status] as string]}</button>}{['submitted', 'screening', 'interview', 'offer'].includes(application.status) && <button onClick={() => advanceApplication(application, 'rejected')} disabled={!canManage} className="rounded bg-rose-900 px-2 py-1 text-rose-100 disabled:opacity-40">رفض</button>}</td></tr>; })}</tbody></table>{recruitmentApplications.length === 0 && <div className="p-8 text-center text-slate-500">لا توجد طلبات توظيف محفوظة بعد.</div>}</div>
+    </div>;
+  }
 
   // 1. ORGANIZATIONAL STRUCTURE
   if (activeTab === 'org') {

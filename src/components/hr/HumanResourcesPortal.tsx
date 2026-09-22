@@ -991,6 +991,14 @@ export default function HumanResourcesPortal({ setActiveSection, selectedSchool,
                 📂 أرشيف المستندات والملفات
               </button>
               <button
+                onClick={() => setActiveTab('recruitment')}
+                className={`px-4 py-2 rounded-lg text-xs font-bold transition-all duration-150 ${
+                  activeTab === 'recruitment' ? 'bg-[#dfb55a] text-slate-950 font-black shadow-md' : 'text-slate-400 hover:text-white hover:bg-slate-800/40'
+                }`}
+              >
+                🧑‍💼 طلبات التوظيف
+              </button>
+              <button
                 onClick={() => setActiveTab('settings')}
                 className={`px-4 py-2 rounded-lg text-xs font-bold transition-all duration-150 ${
                   activeTab === 'settings' ? 'bg-[#dfb55a] text-slate-950 font-black shadow-md' : 'text-slate-400 hover:text-white hover:bg-slate-800/40'
@@ -1219,7 +1227,7 @@ export default function HumanResourcesPortal({ setActiveSection, selectedSchool,
           )}
 
           {/* Renders other consolidated sub-tabs */}
-          {['org', 'depts', 'jobs', 'contracts', 'leaves', 'penalties', 'advances', 'rewards', 'performance', 'documents', 'settings'].includes(activeTab) && (
+          {['org', 'depts', 'jobs', 'contracts', 'leaves', 'penalties', 'advances', 'rewards', 'performance', 'documents', 'recruitment', 'settings'].includes(activeTab) && (
             <OtherHRTabs 
               activeTab={activeTab}
               employees={employees}
