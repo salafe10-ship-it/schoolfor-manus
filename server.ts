@@ -6100,7 +6100,7 @@ export async function createApp(options: { cloudflare?: boolean } = {}): Promise
               AND r.role_key = 'schooladmin'
               AND r.status = 'active' AND r.deleted_at IS NULL
             LIMIT 1`,
-          [tenantId, schoolId],
+          [tenantId],
         );
         if (existingRole.rowCount === 0) await ensureCanonicalRbacDefaults(client, tenantId);
         result = await client.query(

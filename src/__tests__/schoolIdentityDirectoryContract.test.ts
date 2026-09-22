@@ -59,6 +59,14 @@ describe('school-scoped identity directory contracts', () => {
     expect(migration).not.toContain("'Platform.Admin'");
   });
 
+  it('keeps the canonical role bootstrap query parameter count aligned', () => {
+    const server = read('server.ts');
+    const route = server.slice(server.indexOf("app.get('/api/school/identity-roles'"), server.indexOf("app.get('/api/school/job-catalog'"));
+    expect(route).toContain("WHERE r.tenant_id = $1::uuid");
+    expect(route).toContain("[tenantId],");
+    expect(route).not.toContain("[tenantId, schoolId],");
+  });
+
   it('exposes a canonical, server-backed school UI and header entry point', () => {
     const module = read('src/components/school/SchoolUsersPermissionsModule.tsx');
     const app = read('src/App.tsx');
