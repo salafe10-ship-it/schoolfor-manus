@@ -93,6 +93,7 @@ export default function SchoolUsersPermissionsModule({ selectedSchool, selectedB
   const [statusFilter, setStatusFilter] = useState<StatusFilter>('all');
   const [roleFilter, setRoleFilter] = useState('all');
   const [activeView, setActiveView] = useState<ManagementView>('users');
+  const [compareRoleKeys, setCompareRoleKeys] = useState({ left: '', right: '' });
   const [form, setForm] = useState({ name: '', email: '', jobId: '', jobTitle: '', department: '', initialRole: '', password: '', branchId: '' });
   const canCreate = canManage && canAssign;
   // Central role templates remain the published baseline. A school manager
@@ -396,6 +397,16 @@ export default function SchoolUsersPermissionsModule({ selectedSchool, selectedB
 
   const confirmAction = (message: string) => typeof window === 'undefined' || window.confirm(message);
 
+  const comparedRoles = useMemo(() => {
+    const left = roles.find((role) => role.roleKey === compareRoleKeys.left);
+    const right = roles.find((role) => role.roleKey === compareRoleKeys.right);
+    if (!left || !right || left.roleKey === right.roleKey) return null;
+    const leftKeys = new Set((left.permissions || []).map((permission) => permission.permissionKey));
+    const rightKeys = new Set((right.permissions || []).map((permission) => permission.permissionKey));
+    const allKeys = [...new Set([...leftKeys, ...rightKeys])].sort();
+    return { left, right, rows: allKeys.map((permissionKey) => ({ permissionKey, left: leftKeys.has(permissionKey), right: rightKeys.has(permissionKey) })) };
+  }, [compareRoleKeys, roles]);
+
   // The permission editor intentionally owns the whole working surface. This
   // keeps the security decision readable on smaller screens and prevents an
   // administrator from confusing a role permission with a direct exception.
@@ -527,8 +538,9 @@ export default function SchoolUsersPermissionsModule({ selectedSchool, selectedB
         </div>}
 
         {activeView === 'roles' && <section className="identity-panel overflow-hidden rounded-3xl border border-slate-200 bg-white shadow-sm" aria-labelledby="roles-screen-title">
-          <div className="border-b border-slate-100 bg-slate-50 p-5"><h2 id="roles-screen-title" className="font-black">الأدوار المعتمدة من المدرسة الأم</h2><p className="mt-1 text-xs leading-5 text-slate-500">هذه الشاشة للعرض الواضح فقط؛ الإضافة والتعديل والنشر تتم في المدرسة الأم المركزية ثم تصل إلى هذه المدرسة تلقائيًا.</p></div>
+          <div className="border-b border-slate-100 bg-slate-50 p-5"><h2 id="roles-screen-title" className="font-black">الأدوار المعتمدة من المدرسة الأم</h2><p className="mt-1 text-xs leading-5 text-slate-500">هذه الشاشة للعرض الواضح فقط؛ الإضافة والتعديل والنشر تتم في المدرسة الأم المركزية ثم تصل إلى هذه المدرسة تلقائيًا.</p><div className="mt-4 flex flex-col gap-2 rounded-2xl border border-amber-200 bg-white p-3 sm:flex-row sm:items-center"><span className="text-xs font-black text-slate-700">مقارنة دورين منشورين</span><select aria-label="الدور الأول للمقارنة" value={compareRoleKeys.left} onChange={(event) => setCompareRoleKeys((current) => ({ ...current, left: event.target.value }))} className="rounded-xl border border-slate-200 px-3 py-2 text-xs font-bold"><option value="">اختر الدور الأول</option>{roles.map((role) => <option key={role.roleKey} value={role.roleKey}>{role.name}</option>)}</select><select aria-label="الدور الثاني للمقارنة" value={compareRoleKeys.right} onChange={(event) => setCompareRoleKeys((current) => ({ ...current, right: event.target.value }))} className="rounded-xl border border-slate-200 px-3 py-2 text-xs font-bold"><option value="">اختر الدور الثاني</option>{roles.map((role) => <option key={role.roleKey} value={role.roleKey}>{role.name}</option>)}</select><span className="text-[10px] font-bold text-slate-500">للقراءة فقط، ولا يغير أي صلاحية.</span></div></div>
           <div className="grid gap-4 p-5 md:grid-cols-2">{roles.map((role) => <article key={role.roleKey} className="rounded-2xl border border-amber-200 bg-amber-50/40 p-4"><div className="flex items-start justify-between gap-3"><div><h3 className="font-black text-slate-900">{role.name}</h3><p className="mt-1 font-mono text-[10px] text-slate-500">{role.roleKey}</p></div><span className="rounded-full bg-white px-2.5 py-1 text-[10px] font-black text-amber-800">{(role.permissions || []).length} صلاحية</span></div>{role.description && <p className="mt-3 text-xs leading-5 text-slate-600">{role.description}</p>}<div className="mt-3 flex flex-wrap gap-1.5">{(role.permissions || []).slice(0, 12).map((permission) => <span key={permission.permissionKey} className="rounded-lg border border-slate-200 bg-white px-2 py-1 text-[10px] font-bold text-slate-600">{permissionLabel(permission)}</span>)}{(role.permissions || []).length > 12 && <span className="rounded-lg bg-slate-100 px-2 py-1 text-[10px] font-black text-slate-500">+{(role.permissions || []).length - 12} أخرى</span>}</div></article>)}</div>
+          {comparedRoles && <div className="border-t border-slate-100 p-5"><div className="mb-3 flex items-center justify-between"><div><h3 className="font-black">نتيجة المقارنة</h3><p className="mt-1 text-[10px] text-slate-500">المضاف والمحذوف يظهران من القوالب المنشورة فعليًا فقط.</p></div><span className="rounded-full bg-slate-100 px-3 py-1 text-[10px] font-black text-slate-700">{comparedRoles.rows.length} صلاحية مفحوصة</span></div><div className="overflow-x-auto rounded-2xl border border-slate-200"><table className="w-full min-w-[560px] text-right text-xs"><thead className="bg-slate-950 text-amber-200"><tr><th className="p-3">الصلاحية</th><th className="p-3 text-center">{comparedRoles.left.name}</th><th className="p-3 text-center">{comparedRoles.right.name}</th><th className="p-3">الفرق</th></tr></thead><tbody className="divide-y divide-slate-100">{comparedRoles.rows.map((row) => <tr key={row.permissionKey}><td className="p-3 font-mono text-[10px]">{row.permissionKey}</td><td className="p-3 text-center">{row.left ? '✓' : '—'}</td><td className="p-3 text-center">{row.right ? '✓' : '—'}</td><td className="p-3 font-bold text-slate-600">{row.left && !row.right ? 'موجود في الدور الأول فقط' : row.right && !row.left ? 'موجود في الدور الثاني فقط' : 'مشترك'}</td></tr>)}</tbody></table></div></div>}
           {roles.length === 0 && <div className="p-12 text-center text-sm font-bold text-slate-500">لا توجد أدوار منشورة من المدرسة الأم بعد.</div>}
         </section>}
 
