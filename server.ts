@@ -6072,21 +6072,11 @@ export async function createApp(options: { cloudflare?: boolean } = {}): Promise
     if (!platformAdminPool) return next(new DatabaseError('مصدر الهوية المركزي غير متاح.'));
     try {
       const { tenantId, schoolId, branchId } = schoolIdentityScope(req);
-      if (platformControl) {
-        const permissionCatalog = [...new Set(permissionRegistry.list())]
-          .filter((permissionKey) => permissionKey !== PERMISSIONS.PLATFORM_ADMIN)
-          .map((permissionKey) => {
-            const { resource, action } = describePermission(permissionKey);
-            return { permissionKey, resource, action, description: permissionKey };
-          })
-          .sort((left, right) => left.permissionKey.localeCompare(right.permissionKey));
-        const roles = await readPlatformRows('roles', 'id, role_key, name, description, version', (query) => query
-          .eq('tenant_id', tenantId)
-          .eq('status', 'active')
-          .is('deleted_at', null)
-          .or(`school_id.is.null,school_id.eq.${schoolId}`));
-        return res.json({ success: true, roles: roles.map((role: any) => ({ ...role, roleKey: role.role_key, permissions: [] })), permissionCatalog });
-      }
+      // Use the canonical relational catalogue below even when the platform
+      // Supabase client is available. The former fast path returned roles with
+      // `permissions: []`, while the assignment endpoint correctly required
+      // active role_permissions rows; users could see HR in the selector but
+      // every assignment was rejected as an unpublished role template.
       // A school may be provisioned before its first identity-directory read.
       // Hydrate only the canonical default role catalogue for this tenant,
       // atomically and idempotently, so the create-user selector never opens
