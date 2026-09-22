@@ -246,6 +246,24 @@ export default function HumanResourcesPortal({ setActiveSection, selectedSchool,
       void loadCanonicalHr();
       return () => { cancelled = true; };
     }
+
+    // لا نُنشئ بيانات HR محلية تجريبية. التشغيل الموثوق يجب أن يعتمد على
+    // المصدر المركزي فقط؛ وعند غيابه نعرض حالة فارغة قابلة للمراجعة بدلاً من
+    // إظهار موظفين أو عقود أو تقييمات غير حقيقية.
+    setEmployees([]);
+    setDepartments([]);
+    setJobs([]);
+    setContracts([]);
+    setAttendance([]);
+    setLeaves([]);
+    setPenalties([]);
+    setAdvances([]);
+    setRewards([]);
+    setPerformance([]);
+    setDocuments([]);
+    setPayrollRuns([]);
+    return;
+
     // Load or Seed Departments
     const savedDepts = localStorage.getItem('erp_hr_departments');
     let deptsList: HRDepartment[] = [];
