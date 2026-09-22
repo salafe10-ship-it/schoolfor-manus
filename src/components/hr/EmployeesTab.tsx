@@ -39,7 +39,8 @@ export default function EmployeesTab({
   const [deptFilter, setDeptFilter] = useState('all');
   const [statusFilter, setStatusFilter] = useState('all');
   const [costCenterFilter, setCostCenterFilter] = useState('all');
-  const [viewMode, setViewMode] = useState<'grid' | 'list'>('grid');
+  // الجدول هو العرض الافتراضي لأنه أوضح للمراجعة اليومية، مع إبقاء البطاقات اختياراً إضافياً.
+  const [viewMode, setViewMode] = useState<'grid' | 'list'>('list');
   
   // Selected employee for detail view modal
   const [selectedEmp, setSelectedEmp] = useState<HREmployee | null>(null);
@@ -658,12 +659,12 @@ export default function EmployeesTab({
         </div>
       ) : (
         /* List Mode - Traditional Professional Table */
-        <div className="bg-slate-900/60 border border-slate-800 overflow-hidden shadow-md">
+        <div className="hr-employees-table bg-slate-900/60 border border-slate-800 overflow-hidden shadow-md">
           <div className="overflow-x-auto">
             <table className="w-full text-right border-collapse">
               <thead>
                 <tr className="bg-slate-800/80 border-b border-slate-700 text-[11px] text-slate-400 uppercase font-bold">
-                  <th className="p-4">الكود</th>
+                  <th className="p-4"># / الكود</th>
                   <th className="p-4">الموظف</th>
                   <th className="p-4">القسم والوظيفة</th>
                   <th className="p-4">الهاتف</th>
@@ -671,7 +672,7 @@ export default function EmployeesTab({
                   <th className="p-4">مركز التكلفة</th>
                   <th className="p-4">الراتب الأساسي</th>
                   <th className="p-4">الحالة</th>
-                  <th className="p-4 text-center">العمليات</th>
+                  <th className="p-4 text-center">الإجراءات</th>
                 </tr>
               </thead>
               <tbody className="divide-y divide-slate-800 text-xs">
@@ -680,7 +681,10 @@ export default function EmployeesTab({
                   const job = jobs.find(j => j.id === emp.jobId)?.titleAr || 'غير محدد';
                   return (
                     <tr key={emp.id} className="hover:bg-slate-800/40 transition-colors">
-                      <td className="p-4 font-mono font-bold text-slate-400">{emp.id}</td>
+                      <td className="p-4 font-mono font-bold text-slate-400">
+                        <span className="hr-row-number">{filtered.indexOf(emp) + 1}</span>
+                        <span className="block text-[10px] mt-1">{emp.id}</span>
+                      </td>
                       <td className="p-4">
                         <div className="flex items-center gap-3">
                           {emp.profileImage ? (
@@ -715,13 +719,13 @@ export default function EmployeesTab({
                       </td>
                       <td className="p-4 text-center">
                         <div className="flex items-center justify-center gap-2">
-                          <button onClick={() => setSelectedEmp(emp)} className="p-1 bg-slate-800 hover:bg-slate-700 text-yellow-400 rounded" title="عرض التفاصيل">
+                          <button aria-label={`عرض ملف ${emp.name}`} onClick={() => setSelectedEmp(emp)} className="p-1 bg-slate-800 hover:bg-slate-700 text-yellow-400 rounded" title="عرض التفاصيل">
                             <Eye className="w-3.5 h-3.5" />
                           </button>
-                          <button onClick={() => handleOpenEdit(emp)} className="p-1 bg-slate-800 hover:bg-slate-700 text-amber-400 rounded" title="تعديل">
+                          <button aria-label={`تعديل بيانات ${emp.name}`} onClick={() => handleOpenEdit(emp)} className="p-1 bg-slate-800 hover:bg-slate-700 text-amber-400 rounded" title="تعديل">
                             <Edit className="w-3.5 h-3.5" />
                           </button>
-                          <button onClick={() => handleDelete(emp.id)} className="p-1 bg-slate-800 hover:bg-rose-950/40 text-rose-400 rounded" title="حذف">
+                          <button aria-label={`حذف ${emp.name}`} onClick={() => handleDelete(emp.id)} className="p-1 bg-slate-800 hover:bg-rose-950/40 text-rose-400 rounded" title="حذف">
                             <Trash2 className="w-3.5 h-3.5" />
                           </button>
                         </div>

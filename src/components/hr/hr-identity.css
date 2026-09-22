@@ -203,6 +203,89 @@
   border-radius: 1.25rem;
 }
 
+/* عرض الموظفين: جدول إداري واضح بحدود متناسقة مع هوية HR */
+#hr-portal .hr-employees-table {
+  border: 1px solid rgba(223, 181, 90, 0.28);
+  background: rgba(38, 24, 15, 0.72);
+}
+
+#hr-portal .hr-employees-table table {
+  min-width: 1040px;
+  border-radius: 0;
+  border-collapse: separate;
+  border-spacing: 0;
+}
+
+#hr-portal .hr-employees-table th,
+#hr-portal .hr-employees-table td {
+  border-left: 1px solid rgba(223, 181, 90, 0.16);
+  border-bottom: 1px solid rgba(223, 181, 90, 0.16);
+  vertical-align: middle;
+}
+
+#hr-portal .hr-employees-table th:last-child,
+#hr-portal .hr-employees-table td:last-child {
+  border-left: 0;
+}
+
+#hr-portal .hr-employees-table thead th {
+  background: linear-gradient(180deg, rgba(91, 57, 25, 0.96), rgba(57, 34, 20, 0.96));
+  color: #f5d789;
+  letter-spacing: 0;
+  white-space: nowrap;
+}
+
+#hr-portal .hr-employees-table tbody tr:last-child td {
+  border-bottom: 0;
+}
+
+#hr-portal .hr-employees-table tbody tr:nth-child(even) {
+  background: rgba(255, 255, 255, 0.025);
+}
+
+#hr-portal .hr-employees-table tbody tr:hover {
+  background: rgba(223, 181, 90, 0.09);
+}
+
+#hr-portal .hr-employees-table td {
+  color: #f6f0e5;
+  font-size: 0.78rem;
+}
+
+#hr-portal .hr-row-number {
+  display: inline-flex;
+  min-width: 1.75rem;
+  height: 1.75rem;
+  align-items: center;
+  justify-content: center;
+  border: 1px solid rgba(223, 181, 90, 0.55);
+  border-radius: 0.55rem;
+  background: rgba(223, 181, 90, 0.12);
+  color: #f5d789;
+  font-family: inherit;
+}
+
+#hr-portal .hr-employees-table td:last-child button {
+  width: 2rem;
+  height: 2rem;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  border: 1px solid rgba(223, 181, 90, 0.22);
+  transition: transform 160ms ease, border-color 160ms ease, background 160ms ease;
+}
+
+#hr-portal .hr-employees-table td:last-child button:hover {
+  transform: translateY(-1px);
+  border-color: rgba(223, 181, 90, 0.7);
+}
+
+@media (max-width: 1100px) {
+  #hr-portal .hr-employees-table .overflow-x-auto {
+    scrollbar-color: var(--hr-gold-dark) rgba(30, 19, 13, 0.8);
+  }
+}
+
 @media (max-width: 1023px) {
   #hr-portal #hr-sidebar-menu { border-radius: 1.25rem; }
 }
