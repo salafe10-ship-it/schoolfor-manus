@@ -4,7 +4,7 @@ import EnterpriseActionToolbar from '../shared/EnterpriseActionToolbar';
 
 import { 
   HREmployee, HRDepartment, HRJob, HRContract, HRAttendance, 
-  HRLeave, HRPenalty, HRAdvance, HRBonus, HRPerformance, HRDocument, HRSettings,
+  HRLeave, HRPenalty, HRAdvance, HRBonus, HRPerformance, HRDocument, HRSettings, HRRecruitmentApplication,
   HRPayrollRun
 } from './types';
 
@@ -58,6 +58,7 @@ export default function HumanResourcesPortal({ setActiveSection, selectedSchool,
   const [rewards, setRewards] = useState<HRBonus[]>([]);
   const [performance, setPerformance] = useState<HRPerformance[]>([]);
   const [documents, setDocuments] = useState<HRDocument[]>([]);
+  const [recruitmentApplications, setRecruitmentApplications] = useState<HRRecruitmentApplication[]>([]);
   const [payrollRuns, setPayrollRuns] = useState<HRPayrollRun[]>([]);
   const [settings, setSettings] = useState<HRSettings>({
     workingHoursStart: '08:00',
@@ -230,14 +231,14 @@ export default function HumanResourcesPortal({ setActiveSection, selectedSchool,
             attendance: list<HRAttendance>(data.attendance), leaves: list<HRLeave>(data.leaves),
             penalties: list<HRPenalty>(data.penalties), advances: list<HRAdvance>(data.advances),
             rewards: list<HRBonus>(data.rewards), performance: list<HRPerformance>(data.performance),
-            documents: list<HRDocument>(data.documents), payrollRuns: list<HRPayrollRun>(data.payrollRuns), settings: loadedSettings
+            documents: list<HRDocument>(data.documents), recruitmentApplications: list<HRRecruitmentApplication>(data.recruitmentApplications), payrollRuns: list<HRPayrollRun>(data.payrollRuns), settings: loadedSettings
           };
           canonicalVersionRef.current = Number(payload?.meta?.version || 0);
           canonicalBaselineRef.current = JSON.stringify(canonicalData);
           setEmployees(canonicalData.employees); setDepartments(canonicalData.departments); setJobs(canonicalData.jobs);
           setContracts(canonicalData.contracts); setAttendance(canonicalData.attendance); setLeaves(canonicalData.leaves);
           setPenalties(canonicalData.penalties); setAdvances(canonicalData.advances); setRewards(canonicalData.rewards);
-          setPerformance(canonicalData.performance); setDocuments(canonicalData.documents); setSettings(loadedSettings);
+          setPerformance(canonicalData.performance); setDocuments(canonicalData.documents); setRecruitmentApplications(canonicalData.recruitmentApplications); setSettings(loadedSettings);
           setPayrollRuns(canonicalData.payrollRuns);
         } catch (error: any) {
           if (!cancelled) triggerNotification(error?.message || 'تعذر تحميل سجل الموارد البشرية المركزي.', 'error');
@@ -261,6 +262,7 @@ export default function HumanResourcesPortal({ setActiveSection, selectedSchool,
     setRewards([]);
     setPerformance([]);
     setDocuments([]);
+    setRecruitmentApplications([]);
     setPayrollRuns([]);
     return;
 
@@ -500,7 +502,7 @@ export default function HumanResourcesPortal({ setActiveSection, selectedSchool,
 
   useEffect(() => {
     if (!canonicalPersistenceRequired || !canonicalBaselineRef.current) return;
-    const data = { employees, departments, jobs, contracts, attendance, leaves, penalties, advances, rewards, performance, documents, payrollRuns, settings };
+    const data = { employees, departments, jobs, contracts, attendance, leaves, penalties, advances, rewards, performance, documents, recruitmentApplications, payrollRuns, settings };
     const serialized = JSON.stringify(data);
     canonicalLatestSerializedRef.current = serialized;
     if (serialized === canonicalBaselineRef.current) return;
@@ -559,7 +561,7 @@ export default function HumanResourcesPortal({ setActiveSection, selectedSchool,
       }
     }, 500);
     return () => window.clearTimeout(timer);
-  }, [canonicalPersistenceRequired, employees, departments, jobs, contracts, attendance, leaves, penalties, advances, rewards, performance, documents, payrollRuns, settings, canonicalSaveRetry]);
+  }, [canonicalPersistenceRequired, employees, departments, jobs, contracts, attendance, leaves, penalties, advances, rewards, performance, documents, recruitmentApplications, payrollRuns, settings, canonicalSaveRetry]);
 
   // 2. Local State synchronization to LocalStorage on modifications
   useEffect(() => {
@@ -1240,6 +1242,8 @@ export default function HumanResourcesPortal({ setActiveSection, selectedSchool,
               setPerformance={setPerformance}
               documents={documents}
               setDocuments={setDocuments}
+              recruitmentApplications={recruitmentApplications}
+              setRecruitmentApplications={setRecruitmentApplications}
               settings={settings}
               setSettings={setSettings}
               formatCurrency={formatCurrency}

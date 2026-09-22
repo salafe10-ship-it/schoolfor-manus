@@ -2,7 +2,7 @@ import { AlertCircle, Award, Briefcase, Building2, Calendar, Check, ChevronRight
 import React, { useEffect, useState } from 'react';
 import { 
   HREmployee, HRDepartment, HRJob, HRContract, HRLeave, 
-  HRPenalty, HRAdvance, HRBonus, HRPerformance, HRDocument, HRSettings 
+  HRPenalty, HRAdvance, HRBonus, HRPerformance, HRDocument, HRSettings, HRRecruitmentApplication
 } from './types';
 import { getTrustedAccessToken } from '../../utils/auth';
 import { calculateLeaveBalance, canRequestLeave } from '../../modules/hr/domain/LeaveBalance';
@@ -30,6 +30,8 @@ interface OtherHRTabsProps {
   setPerformance: React.Dispatch<React.SetStateAction<HRPerformance[]>>;
   documents: HRDocument[];
   setDocuments: React.Dispatch<React.SetStateAction<HRDocument[]>>;
+  recruitmentApplications?: HRRecruitmentApplication[];
+  setRecruitmentApplications?: React.Dispatch<React.SetStateAction<HRRecruitmentApplication[]>>;
   settings: HRSettings;
   setSettings: React.Dispatch<React.SetStateAction<HRSettings>>;
   formatCurrency: (amount: number, showSymbol?: boolean) => string;
@@ -62,6 +64,8 @@ export default function OtherHRTabs({
   setPerformance,
   documents,
   setDocuments,
+  recruitmentApplications = [],
+  setRecruitmentApplications,
   settings,
   setSettings,
   formatCurrency,
