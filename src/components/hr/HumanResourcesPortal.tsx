@@ -620,6 +620,29 @@ export default function HumanResourcesPortal({ setActiveSection, selectedSchool,
   const presentTodayCount = todayAttendance.filter(a => a.status === 'present' || a.status === 'late').length;
   const attendanceRate = employees.length > 0 ? Math.round((presentTodayCount / employees.length) * 100) : 100;
   const attendanceRateLabel = todayAttendance.length === 0 ? 'غير مرصود' : `${attendanceRate}%`;
+  const alertWindow = new Date(Date.now() + 90 * 24 * 60 * 60 * 1000);
+  const hrAlerts = [
+    ...contracts.flatMap(contract => {
+      const end = new Date(contract.endDate);
+      const employee = employees.find(item => item.id === contract.employeeId);
+      if (!employee || contract.status !== 'active' || Number.isNaN(end.getTime())) return [];
+      return end < new Date()
+        ? [{ key: `contract-expired-${contract.id}`, tone: 'danger', text: `عقد ${employee.name} منتهٍ ويحتاج إجراءً` }]
+        : end <= alertWindow
+          ? [{ key: `contract-warning-${contract.id}`, tone: 'warning', text: `عقد ${employee.name} ينتهي خلال 90 يومًا` }]
+          : [];
+    }),
+    ...documents.flatMap(document => {
+      const expiry = new Date(document.expiryDate);
+      const employee = employees.find(item => item.id === document.employeeId);
+      if (!employee || Number.isNaN(expiry.getTime())) return [];
+      return expiry < new Date()
+        ? [{ key: `document-expired-${document.id}`, tone: 'danger', text: `مستند ${document.title} للموظف ${employee.name} منتهٍ` }]
+        : expiry <= alertWindow
+          ? [{ key: `document-warning-${document.id}`, tone: 'warning', text: `مستند ${document.title} للموظف ${employee.name} ينتهي خلال 90 يومًا` }]
+          : [];
+    })
+  ];
 
   return (
     <div id="hr-portal" className="w-full min-h-screen text-right font-sans dir-rtl select-none transition-all duration-300 bg-gradient-to-br from-[#f8f5ee] via-[#efe9dc] to-[#e8e0d0] text-slate-900 p-2 sm:p-4 md:p-6 space-y-6" dir="rtl">
@@ -1091,6 +1114,20 @@ export default function HumanResourcesPortal({ setActiveSection, selectedSchool,
                   </div>
                 </div>
 
+              </div>
+
+              <div className="bg-slate-900/60 border border-slate-800 p-5 space-y-3" role="status" aria-label="تنبيهات الموارد البشرية">
+                <div className="flex items-center justify-between border-b border-slate-800 pb-2">
+                  <h4 className="font-bold text-white text-xs flex items-center gap-1.5"><AlertTriangle className="w-4 h-4 text-[#dfb55a]" />تنبيهات العقود والمستندات</h4>
+                  <span className="text-[10px] font-black text-amber-300">{hrAlerts.length} تحتاج مراجعة</span>
+                </div>
+                {hrAlerts.length === 0 ? (
+                  <p className="text-xs font-bold text-emerald-300">لا توجد تنبيهات موثقة ضمن نافذة المراجعة الحالية.</p>
+                ) : (
+                  <ul className="space-y-2 text-xs font-bold">
+                    {hrAlerts.slice(0, 8).map(alert => <li key={alert.key} className={`border px-3 py-2 ${alert.tone === 'danger' ? 'border-rose-500/30 bg-rose-950/20 text-rose-200' : 'border-amber-500/30 bg-amber-950/20 text-amber-200'}`}>{alert.text}</li>)}
+                  </ul>
+                )}
               </div>
 
               {/* Banner alerts */}
