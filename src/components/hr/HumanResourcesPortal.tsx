@@ -601,6 +601,7 @@ export default function HumanResourcesPortal({ setActiveSection, selectedSchool,
   const todayAttendance = attendance.filter(a => a.date === todayStr);
   const presentTodayCount = todayAttendance.filter(a => a.status === 'present' || a.status === 'late').length;
   const attendanceRate = employees.length > 0 ? Math.round((presentTodayCount / employees.length) * 100) : 100;
+  const attendanceRateLabel = todayAttendance.length === 0 ? 'غير مرصود' : `${attendanceRate}%`;
 
   return (
     <div id="hr-portal" className="w-full min-h-screen text-right font-sans dir-rtl select-none transition-all duration-300 bg-gradient-to-br from-[#f8f5ee] via-[#efe9dc] to-[#e8e0d0] text-slate-900 p-2 sm:p-4 md:p-6 space-y-6" dir="rtl">
@@ -618,6 +619,30 @@ export default function HumanResourcesPortal({ setActiveSection, selectedSchool,
         onImportExcel={() => {}}
         onDownloadTemplate={() => {}}
       />
+      <section className="hr-hero relative overflow-hidden rounded-[1.5rem] border border-amber-700/25 bg-[linear-gradient(135deg,#24160d_0%,#4a2b12_52%,#8b641e_100%)] px-5 py-6 text-white shadow-[0_18px_45px_rgba(73,43,18,0.22)] sm:px-8 sm:py-7" aria-labelledby="hr-hero-title">
+        <div className="pointer-events-none absolute -left-16 -top-20 h-56 w-56 rounded-full bg-amber-300/10 blur-3xl" />
+        <div className="relative flex flex-col gap-6 lg:flex-row lg:items-center lg:justify-between">
+          <div className="max-w-2xl">
+            <div className="mb-3 flex flex-wrap items-center gap-2 text-[10px] font-black tracking-wide text-amber-200">
+              <span className="rounded-full border border-amber-200/30 bg-white/10 px-2.5 py-1">HRMS • مركز موحد</span>
+              <span className="rounded-full border border-emerald-300/30 bg-emerald-400/10 px-2.5 py-1">حماية الصلاحيات مفعّلة</span>
+            </div>
+            <h1 id="hr-hero-title" className="text-2xl font-black leading-tight sm:text-3xl">شؤون العاملين بين يديك</h1>
+            <p className="mt-2 max-w-xl text-xs font-semibold leading-6 text-amber-50/80 sm:text-sm">إدارة الكادر، الحضور، الإجازات، السلف، الرواتب والتقارير من مساحة عمل واحدة موثقة وقابلة للمراجعة.</p>
+          </div>
+          <div className="grid grid-cols-2 gap-2 sm:grid-cols-4 lg:min-w-[520px]">
+            <div className="rounded-xl border border-white/15 bg-black/15 p-3 backdrop-blur-sm"><span className="block text-[10px] font-bold text-amber-100/70">الكادر</span><strong className="mt-1 block text-xl font-black">{employees.length}</strong><span className="text-[9px] text-amber-100/70">موظف ومعلم</span></div>
+            <div className="rounded-xl border border-white/15 bg-black/15 p-3 backdrop-blur-sm"><span className="block text-[10px] font-bold text-amber-100/70">الحضور اليوم</span><strong className="mt-1 block text-lg font-black">{attendanceRateLabel}</strong><span className="text-[9px] text-amber-100/70">آخر رصد موثق</span></div>
+            <div className="rounded-xl border border-white/15 bg-black/15 p-3 backdrop-blur-sm"><span className="block text-[10px] font-bold text-amber-100/70">طلبات الإجازة</span><strong className="mt-1 block text-xl font-black">{leaves.filter(item => item.status === 'pending').length}</strong><span className="text-[9px] text-amber-100/70">قيد المراجعة</span></div>
+            <div className="rounded-xl border border-white/15 bg-black/15 p-3 backdrop-blur-sm"><span className="block text-[10px] font-bold text-amber-100/70">سلف معلقة</span><strong className="mt-1 block text-xl font-black">{advances.filter(item => item.status === 'pending').length}</strong><span className="text-[9px] text-amber-100/70">تحتاج إجراء</span></div>
+          </div>
+        </div>
+        <div className="relative mt-5 flex flex-wrap gap-2 border-t border-white/15 pt-4">
+          <button type="button" onClick={() => { setActiveGroup('employees_group'); setActiveTab('employees'); }} className="rounded-lg bg-amber-300 px-4 py-2 text-xs font-black text-amber-950 shadow-lg transition hover:bg-amber-200">فتح دليل الكادر</button>
+          <button type="button" onClick={() => { setActiveGroup('attendance_group'); setActiveTab('attendance'); }} className="rounded-lg border border-white/25 bg-white/10 px-4 py-2 text-xs font-black text-white transition hover:bg-white/20">رصد حضور اليوم</button>
+          <button type="button" onClick={() => { setActiveGroup('reports_group'); setActiveTab('dashboard'); }} className="rounded-lg border border-white/25 bg-white/10 px-4 py-2 text-xs font-black text-white transition hover:bg-white/20">عرض المؤشرات</button>
+        </div>
+      </section>
       <div className="p-3 sm:p-4 text-slate-100 flex-1 flex flex-col">
       
       {/* Real-time Dynamic Notification Toast */}
@@ -981,8 +1006,8 @@ export default function HumanResourcesPortal({ setActiveSection, selectedSchool,
                 <div className="bg-slate-900/60 p-4 border border-slate-800 flex items-center justify-between">
                   <div>
                     <span className="text-[10px] text-slate-400 block font-semibold">نسبة الانضباط اليومي</span>
-                    <span className="text-xl font-black text-white font-mono">{attendanceRate}%</span>
-                    <span className="text-[9px] text-amber-400 block font-bold mt-1">تاريخ اليوم</span>
+                    <span className="text-xl font-black text-white font-mono">{attendanceRateLabel}</span>
+                    <span className="text-[9px] text-amber-400 block font-bold mt-1">{todayAttendance.length === 0 ? 'بانتظار الرصد' : 'تاريخ اليوم'}</span>
                   </div>
                   <div className="p-3 bg-amber-500/10 rounded-lg text-amber-400"><Clock className="w-5 h-5" /></div>
                 </div>
