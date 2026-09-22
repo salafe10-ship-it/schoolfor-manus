@@ -579,6 +579,16 @@ export default function OtherHRTabs({
       triggerNotification(status === 'approved' ? 'تم اعتماد طلب الإجازة وتحديث حالة الموظف.' : 'تم رفض طلب الإجازة.', status === 'approved' ? 'success' : 'warning');
     };
 
+    const currentYear = new Date().getFullYear();
+    const leaveDays = (leave: HRLeave) => {
+      const start = new Date(`${leave.startDate}T00:00:00Z`).getTime();
+      const end = new Date(`${leave.endDate}T00:00:00Z`).getTime();
+      return Number.isFinite(start) && Number.isFinite(end) && end >= start ? Math.floor((end - start) / 86400000) + 1 : 0;
+    };
+    const approvedDaysThisYear = leaves.filter(leave => leave.status === 'approved' && new Date(`${leave.startDate}T00:00:00Z`).getUTCFullYear() === currentYear).reduce((sum, leave) => sum + leaveDays(leave), 0);
+    const pendingRequests = leaves.filter(leave => leave.status === 'pending').length;
+    const activeLeaveEmployees = employees.filter(employee => employee.status === 'on_leave').length;
+
     return (
       <div className="space-y-6">
         <div className="flex justify-between items-center bg-slate-900/40 p-4 border border-slate-800">
@@ -593,6 +603,13 @@ export default function OtherHRTabs({
             <Plus className="w-4 h-4" />
             <span>تقديم طلب إجازة</span>
           </button>
+        </div>
+
+        <div className="grid grid-cols-2 gap-3 md:grid-cols-4" aria-label="مؤشرات الإجازات">
+          <div className="rounded-xl border border-slate-800 bg-slate-900/60 p-3"><span className="block text-[10px] font-bold text-slate-500">طلبات قيد المراجعة</span><strong className="mt-1 block text-lg font-black text-amber-400">{pendingRequests}</strong></div>
+          <div className="rounded-xl border border-slate-800 bg-slate-900/60 p-3"><span className="block text-[10px] font-bold text-slate-500">إجازات معتمدة هذا العام</span><strong className="mt-1 block text-lg font-black text-emerald-400">{approvedDaysThisYear} يوم</strong></div>
+          <div className="rounded-xl border border-slate-800 bg-slate-900/60 p-3"><span className="block text-[10px] font-bold text-slate-500">موظفون في إجازة حاليًا</span><strong className="mt-1 block text-lg font-black text-sky-400">{activeLeaveEmployees}</strong></div>
+          <div className="rounded-xl border border-amber-700/30 bg-amber-50/10 p-3"><span className="block text-[10px] font-bold text-amber-200">تنبيه تشغيلي</span><strong className="mt-1 block text-xs font-black text-amber-100">الاعتماد يحدّث حالة الموظف فقط</strong></div>
         </div>
 
         <div className="bg-slate-900/60 border border-slate-800 overflow-hidden">
