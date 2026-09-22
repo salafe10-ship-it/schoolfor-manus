@@ -6095,7 +6095,9 @@ export async function createApp(options: { cloudflare?: boolean } = {}): Promise
              JOIN public.role_permissions rp
                ON rp.tenant_id = r.tenant_id AND rp.role_id = r.id
               AND rp.status = 'active' AND rp.deleted_at IS NULL
-            WHERE r.tenant_id = $1::uuid AND (r.school_id IS NULL OR r.school_id = $2::uuid)
+            WHERE r.tenant_id = $1::uuid
+              AND r.school_id IS NULL AND r.branch_id IS NULL
+              AND r.role_key = 'schooladmin'
               AND r.status = 'active' AND r.deleted_at IS NULL
             LIMIT 1`,
           [tenantId, schoolId],
