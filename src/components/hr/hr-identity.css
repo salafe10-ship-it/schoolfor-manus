@@ -13,6 +13,25 @@
   --hr-surface-muted: #f8f3ea;
   --hr-border: rgba(154, 106, 29, 0.24);
   color: var(--hr-ink);
+  overflow-x: hidden;
+}
+
+/* Compact, high-contrast opening panel: keep the first viewport focused and
+   prevent RTL content from creating a horizontal page scrollbar. */
+#hr-portal .hr-hero {
+  max-width: 100%;
+}
+
+#hr-portal .hr-hero-stat {
+  color: #11100d !important;
+  border-color: rgba(28, 18, 12, 0.24) !important;
+  box-shadow: 0 4px 12px rgba(28, 18, 12, 0.12);
+}
+
+#hr-portal .hr-hero-stat span,
+#hr-portal .hr-hero-stat strong {
+  color: #11100d !important;
+  font-weight: 900 !important;
 }
 
 #hr-portal #hr-sidebar-menu {

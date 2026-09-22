@@ -606,7 +606,7 @@ export default function HumanResourcesPortal({ setActiveSection, selectedSchool,
   return (
     <div id="hr-portal" className="w-full min-h-screen text-right font-sans dir-rtl select-none transition-all duration-300 bg-gradient-to-br from-[#f8f5ee] via-[#efe9dc] to-[#e8e0d0] text-slate-900 p-2 sm:p-4 md:p-6 space-y-6" dir="rtl">
       <EnterpriseActionToolbar
-        title="شؤون المعلمين والموظفين"
+        title="شؤون العاملين"
         stats={
           <div className="flex flex-wrap items-center gap-x-2.5 gap-y-1 text-[10px] sm:text-xs">
             <span className="text-slate-300 font-bold">إجمالي الموظفين والمعلمين: <span className="text-amber-400 font-mono">{employees.length}</span> موظفاً</span>
@@ -619,7 +619,7 @@ export default function HumanResourcesPortal({ setActiveSection, selectedSchool,
         onImportExcel={() => {}}
         onDownloadTemplate={() => {}}
       />
-      <section className="hr-hero relative overflow-hidden rounded-[1.5rem] border border-amber-700/25 bg-[linear-gradient(135deg,#24160d_0%,#4a2b12_52%,#8b641e_100%)] px-5 py-6 text-white shadow-[0_18px_45px_rgba(73,43,18,0.22)] sm:px-8 sm:py-7" aria-labelledby="hr-hero-title">
+      <section className="hr-hero relative overflow-hidden rounded-[1.25rem] border border-amber-700/25 bg-[linear-gradient(135deg,#24160d_0%,#4a2b12_52%,#8b641e_100%)] px-4 py-4 text-white shadow-[0_12px_30px_rgba(73,43,18,0.18)] sm:px-6 sm:py-5" aria-labelledby="hr-hero-title">
         <div className="pointer-events-none absolute -left-16 -top-20 h-56 w-56 rounded-full bg-amber-300/10 blur-3xl" />
         <div className="relative flex flex-col gap-6 lg:flex-row lg:items-center lg:justify-between">
           <div className="max-w-2xl">
@@ -627,20 +627,20 @@ export default function HumanResourcesPortal({ setActiveSection, selectedSchool,
               <span className="rounded-full border border-amber-200/30 bg-white/10 px-2.5 py-1">HRMS • مركز موحد</span>
               <span className="rounded-full border border-emerald-300/30 bg-emerald-400/10 px-2.5 py-1">حماية الصلاحيات مفعّلة</span>
             </div>
-            <h1 id="hr-hero-title" className="text-2xl font-black leading-tight sm:text-3xl">شؤون العاملين بين يديك</h1>
-            <p className="mt-2 max-w-xl text-xs font-semibold leading-6 text-amber-50/80 sm:text-sm">إدارة الكادر، الحضور، الإجازات، السلف، الرواتب والتقارير من مساحة عمل واحدة موثقة وقابلة للمراجعة.</p>
+            <h1 id="hr-hero-title" className="text-xl font-black leading-tight sm:text-2xl">شؤون العاملين</h1>
+            <p className="mt-1 max-w-xl text-[11px] font-semibold leading-5 text-amber-50/80 sm:text-xs">إدارة الكادر والحضور والإجازات والسلف والرواتب والتقارير من مساحة عمل موثقة.</p>
           </div>
           <div className="grid grid-cols-2 gap-2 sm:grid-cols-4 lg:min-w-[520px]">
-            <div className="rounded-xl border border-white/15 bg-black/15 p-3 backdrop-blur-sm"><span className="block text-[10px] font-bold text-amber-100/70">الكادر</span><strong className="mt-1 block text-xl font-black">{employees.length}</strong><span className="text-[9px] text-amber-100/70">موظف ومعلم</span></div>
-            <div className="rounded-xl border border-white/15 bg-black/15 p-3 backdrop-blur-sm"><span className="block text-[10px] font-bold text-amber-100/70">الحضور اليوم</span><strong className="mt-1 block text-lg font-black">{attendanceRateLabel}</strong><span className="text-[9px] text-amber-100/70">آخر رصد موثق</span></div>
-            <div className="rounded-xl border border-white/15 bg-black/15 p-3 backdrop-blur-sm"><span className="block text-[10px] font-bold text-amber-100/70">طلبات الإجازة</span><strong className="mt-1 block text-xl font-black">{leaves.filter(item => item.status === 'pending').length}</strong><span className="text-[9px] text-amber-100/70">قيد المراجعة</span></div>
-            <div className="rounded-xl border border-white/15 bg-black/15 p-3 backdrop-blur-sm"><span className="block text-[10px] font-bold text-amber-100/70">سلف معلقة</span><strong className="mt-1 block text-xl font-black">{advances.filter(item => item.status === 'pending').length}</strong><span className="text-[9px] text-amber-100/70">تحتاج إجراء</span></div>
+            <div className="hr-hero-stat rounded-lg border border-white/15 bg-white/90 p-2.5"><span className="block text-[9px] font-black">الكادر</span><strong className="mt-0.5 block text-lg font-black">{employees.length}</strong><span className="text-[8px] font-bold">موظف ومعلم</span></div>
+            <div className="hr-hero-stat rounded-lg border border-white/15 bg-white/90 p-2.5"><span className="block text-[9px] font-black">الحضور اليوم</span><strong className="mt-0.5 block text-base font-black">{attendanceRateLabel}</strong><span className="text-[8px] font-bold">آخر رصد موثق</span></div>
+            <div className="hr-hero-stat rounded-lg border border-white/15 bg-white/90 p-2.5"><span className="block text-[9px] font-black">طلبات الإجازة</span><strong className="mt-0.5 block text-lg font-black">{leaves.filter(item => item.status === 'pending').length}</strong><span className="text-[8px] font-bold">قيد المراجعة</span></div>
+            <div className="hr-hero-stat rounded-lg border border-white/15 bg-white/90 p-2.5"><span className="block text-[9px] font-black">سلف معلقة</span><strong className="mt-0.5 block text-lg font-black">{advances.filter(item => item.status === 'pending').length}</strong><span className="text-[8px] font-bold">تحتاج إجراء</span></div>
           </div>
         </div>
-        <div className="relative mt-5 flex flex-wrap gap-2 border-t border-white/15 pt-4">
-          <button type="button" onClick={() => { setActiveGroup('employees_group'); setActiveTab('employees'); }} className="rounded-lg bg-amber-300 px-4 py-2 text-xs font-black text-amber-950 shadow-lg transition hover:bg-amber-200">فتح دليل الكادر</button>
-          <button type="button" onClick={() => { setActiveGroup('attendance_group'); setActiveTab('attendance'); }} className="rounded-lg border border-white/25 bg-white/10 px-4 py-2 text-xs font-black text-white transition hover:bg-white/20">رصد حضور اليوم</button>
-          <button type="button" onClick={() => { setActiveGroup('reports_group'); setActiveTab('dashboard'); }} className="rounded-lg border border-white/25 bg-white/10 px-4 py-2 text-xs font-black text-white transition hover:bg-white/20">عرض المؤشرات</button>
+        <div className="relative mt-3 flex flex-wrap gap-2 border-t border-white/15 pt-3">
+          <button type="button" onClick={() => { setActiveGroup('employees_group'); setActiveTab('employees'); }} className="rounded-lg bg-amber-300 px-3 py-1.5 text-[11px] font-black text-amber-950 shadow-lg transition hover:bg-amber-200">فتح دليل الكادر</button>
+          <button type="button" onClick={() => { setActiveGroup('attendance_group'); setActiveTab('attendance'); }} className="rounded-lg border border-white/25 bg-white/10 px-3 py-1.5 text-[11px] font-black text-white transition hover:bg-white/20">رصد حضور اليوم</button>
+          <button type="button" onClick={() => { setActiveGroup('reports_group'); setActiveTab('dashboard'); }} className="rounded-lg border border-white/25 bg-white/10 px-3 py-1.5 text-[11px] font-black text-white transition hover:bg-white/20">عرض المؤشرات</button>
         </div>
       </section>
       <div className="p-3 sm:p-4 text-slate-100 flex-1 flex flex-col">
@@ -686,7 +686,7 @@ export default function HumanResourcesPortal({ setActiveSection, selectedSchool,
           <div className="flex flex-col space-y-4 overflow-hidden">
             {/* Menu Title Header */}
             <div className="text-center pb-3.5 border-b border-slate-800/60">
-              <h3 className="text-base font-extrabold text-white tracking-wide">شؤون المعلمين والموظفين</h3>
+              <h3 className="text-base font-extrabold text-white tracking-wide">شؤون العاملين</h3>
               <p className="text-[11px] text-slate-400 font-semibold mt-0.5">نظام الموارد البشرية والرواتب HRMS</p>
               <div className="w-14 h-0.5 mx-auto bg-gradient-to-r from-amber-500 via-yellow-400 to-emerald-400 rounded mt-2" />
             </div>
