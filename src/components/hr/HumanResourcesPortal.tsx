@@ -669,9 +669,9 @@ export default function HumanResourcesPortal({ setActiveSection, selectedSchool,
       )}
 
       {canonicalSaveError && canonicalPersistenceRequired && (
-        <div className="mb-4 flex flex-wrap items-center justify-between gap-3 border border-rose-500/30 bg-rose-950/30 px-4 py-3 text-xs text-rose-200" role="alert">
-          <span><b>تعذر مزامنة سجل HR:</b> تمت استعادة آخر نسخة محفوظة. أعد التحميل بعد التحقق من اتصالك.</span>
-          <button type="button" onClick={() => window.location.reload()} className="rounded border border-rose-300/40 px-3 py-1.5 font-bold hover:bg-rose-900/50">إعادة المزامنة</button>
+        <div className="hr-sync-alert mb-2 flex flex-wrap items-center justify-between gap-2 border border-rose-500/35 bg-rose-950/25 px-2.5 py-1.5 text-[10px] text-rose-100" role="alert">
+          <span><b>تعذر مزامنة سجل HR:</b> تمت استعادة آخر نسخة محفوظة.</span>
+          <button type="button" onClick={() => window.location.reload()} className="rounded border border-rose-300/45 px-2 py-1 text-[10px] font-black hover:bg-rose-900/50">إعادة المزامنة</button>
         </div>
       )}
 

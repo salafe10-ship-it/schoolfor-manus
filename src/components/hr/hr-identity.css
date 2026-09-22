@@ -34,6 +34,12 @@
   font-weight: 900 !important;
 }
 
+#hr-portal .hr-sync-alert {
+  min-height: 0;
+  line-height: 1.35;
+  border-radius: 0.5rem;
+}
+
 #hr-portal #hr-sidebar-menu {
   background: linear-gradient(180deg, #fffefc, #f7efe1) !important;
   border: 2px solid rgba(212, 175, 55, 0.32) !important;
