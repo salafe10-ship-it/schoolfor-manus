@@ -1124,6 +1124,7 @@ export default function HumanResourcesPortal({ setActiveSection, selectedSchool,
           {activeTab === 'payroll' && (
             <PayrollTab 
               employees={employees}
+              contracts={contracts}
               attendance={attendance}
               leaves={leaves}
               penalties={penalties}

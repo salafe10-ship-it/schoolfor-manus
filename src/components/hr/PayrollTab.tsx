@@ -1,10 +1,11 @@
 import { Check, CheckSquare, Coins, CreditCard, Eye, FileText, Filter, Play, Printer, Search, ShieldAlert, ShieldCheck, TrendingDown, TrendingUp } from 'lucide-react';
 import React, { useState, useEffect } from 'react';
-import { HRAttendance, HREmployee, HRPenalty, HRAdvance, HRBonus, HRPayrollRun, HRSettings } from './types';
+import { HRAttendance, HREmployee, HRPenalty, HRAdvance, HRBonus, HRPayrollRun, HRSettings, HRContract } from './types';
 import { calculatePayrollRun } from '../../modules/hr/domain/PayrollCalculation';
 
 interface PayrollTabProps {
   employees: HREmployee[];
+  contracts: HRContract[];
   attendance: HRAttendance[];
   leaves: import('./types').HRLeave[];
   penalties: HRPenalty[];
@@ -36,6 +37,7 @@ interface PayrollItem {
 
 export default function PayrollTab({
   employees,
+  contracts,
   attendance,
   leaves,
   penalties,
@@ -103,6 +105,22 @@ export default function PayrollTab({
   const payrollStage = isPosted ? 3 : isCommitted ? 2 : isApproved ? 1 : 0;
   const payrollStageLabel = isPosted ? 'مصروف ومرحل' : isCommitted ? 'ملتزم محاسبيًا' : isApproved ? 'معتمد من HR' : 'مسودة للمراجعة';
   const stageSteps = ['مسودة', 'اعتماد HR', 'إثبات الالتزام', 'الصرف والترحيل'];
+
+  const activeEmployees = employees.filter(employee => employee.status === 'active');
+  const coveredEmployees = activeEmployees.filter(employee => contracts.some(contract => (
+    contract.employeeId === employee.id &&
+    contract.status === 'active' &&
+    contract.startDate <= `${selectedMonth}-31` &&
+    (!contract.endDate || contract.endDate >= `${selectedMonth}-01`)
+  )));
+  const employeesWithoutContract = activeEmployees.length - coveredEmployees.length;
+  const employeesWithoutBank = activeEmployees.filter(employee => !employee.bankName || !employee.iban).length;
+  const attendanceDaysInPeriod = attendance.filter(item => String(item.date || '').startsWith(selectedMonth)).length;
+  const readinessWarnings = [
+    employeesWithoutContract > 0 ? `${employeesWithoutContract} موظف نشط بلا عقد سارٍ مربوط بالفترة` : '',
+    employeesWithoutBank > 0 ? `${employeesWithoutBank} موظف يحتاج مراجعة بيانات الحساب البنكي` : '',
+    attendanceDaysInPeriod === 0 ? 'لا توجد سجلات حضور موثقة لهذه الفترة؛ راجعها قبل اعتماد الخصومات' : ''
+  ].filter(Boolean);
 
   // Handle Post Payroll to General Ledger
   const handlePostPayroll = async () => {
@@ -259,6 +277,24 @@ export default function PayrollTab({
           </div>
         </div>
         <div className="text-[10px] font-bold leading-5 text-slate-700 md:max-w-xs">لا يتم إنشاء قيد مالي عند اعتماد HR. يثبت الالتزام أولاً، ثم ينفذ الصرف فقط بصلاحية مالية موثقة.</div>
+      </div>
+
+      <div className={`rounded-xl border p-4 ${readinessWarnings.length > 0 ? 'border-amber-700/30 bg-amber-50/70' : 'border-emerald-700/30 bg-emerald-50/70'}`} role="status" aria-label="فحص جاهزية مسير الرواتب">
+        <div className="flex flex-wrap items-center justify-between gap-2">
+          <div>
+            <h4 className="font-black text-slate-900">فحص الجاهزية قبل الاعتماد</h4>
+            <p className="mt-1 text-xs font-bold text-slate-600">مراجعة غير تدميرية للعقد والحساب البنكي والحضور قبل انتقال المسير للمرحلة التالية.</p>
+          </div>
+          <span className={`rounded-full px-3 py-1 text-xs font-black ${readinessWarnings.length > 0 ? 'bg-amber-200 text-amber-950' : 'bg-emerald-200 text-emerald-950'}`}>
+            {readinessWarnings.length > 0 ? `${readinessWarnings.length} تنبيه للمراجعة` : 'جاهز مبدئيًا'}
+          </span>
+        </div>
+        <div className="mt-3 grid gap-2 text-xs font-bold text-slate-700 md:grid-cols-3">
+          <div className="rounded-lg bg-white/80 p-2">العقود السارية: {coveredEmployees.length} / {activeEmployees.length}</div>
+          <div className="rounded-lg bg-white/80 p-2">الحسابات البنكية المكتملة: {activeEmployees.length - employeesWithoutBank} / {activeEmployees.length}</div>
+          <div className="rounded-lg bg-white/80 p-2">سجلات الحضور: {attendanceDaysInPeriod}</div>
+        </div>
+        {readinessWarnings.length > 0 && <ul className="mt-3 space-y-1 text-xs font-bold text-amber-950" aria-label="تنبيهات الجاهزية">{readinessWarnings.map(warning => <li key={warning}>• {warning}</li>)}</ul>}
       </div>
 
       {/* Financial totals bento summary */}
