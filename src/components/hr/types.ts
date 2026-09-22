@@ -87,6 +87,16 @@ export interface HRLeave {
   attachment?: string;
 }
 
+export interface HRLeavePolicy {
+  type: HRLeave['type'];
+  annualEntitlement: number;
+  carryOverLimit: number;
+  accrualMethod: 'annual' | 'monthly';
+  requiresApproval: boolean;
+  allowNegativeBalance: boolean;
+  active: boolean;
+}
+
 export interface HRPenalty {
   id: string;
   employeeId: string;
@@ -162,6 +172,7 @@ export interface HRSettings {
   unpaidAbsenceDeduction?: boolean;
   overtimeMultiplier?: number;
   workingHoursPerDay?: number;
+  leavePolicies?: HRLeavePolicy[];
 }
 
 export interface HRPayrollRun {

@@ -1143,6 +1143,23 @@ function validateHrSnapshotData(data: Record<string, any>): void {
   if (data.settings !== undefined && (!data.settings || typeof data.settings !== 'object' || Array.isArray(data.settings))) {
     throw new ValidationError('إعدادات الموارد البشرية يجب أن تكون كائناً.');
   }
+  const leavePolicies = Array.isArray(data.settings?.leavePolicies) ? data.settings.leavePolicies : [];
+  const leaveTypes = new Set(['annual', 'sick', 'emergency', 'unpaid']);
+  const policyTypes = new Set<string>();
+  for (const policy of leavePolicies) {
+    if (!policy || typeof policy !== 'object' || !leaveTypes.has(String(policy.type)) || policyTypes.has(String(policy.type))) {
+      throw new ValidationError('سياسة الإجازة غير صالحة أو مكررة.');
+    }
+    policyTypes.add(String(policy.type));
+    for (const field of ['annualEntitlement', 'carryOverLimit']) assertMoney(policy[field], `قيمة سياسة الإجازة ${String(policy.type)}`);
+    if (!['annual', 'monthly'].includes(String(policy.accrualMethod)) || typeof policy.requiresApproval !== 'boolean'
+      || typeof policy.allowNegativeBalance !== 'boolean' || typeof policy.active !== 'boolean') {
+      throw new ValidationError(`إعدادات سياسة الإجازة ${String(policy.type)} غير مكتملة.`);
+    }
+    if (Number(policy.carryOverLimit) > Number(policy.annualEntitlement)) {
+      throw new ValidationError(`ترحيل سياسة الإجازة ${String(policy.type)} لا يجوز أن يتجاوز الاستحقاق السنوي.`);
+    }
+  }
 }
 
 const INVENTORY_FINANCIAL_COLLECTIONS = ['goodsReceipts', 'vendorBills', 'movements', 'stocktakes'] as const;

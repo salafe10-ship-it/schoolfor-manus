@@ -5,6 +5,7 @@ import {
   HRPenalty, HRAdvance, HRBonus, HRPerformance, HRDocument, HRSettings 
 } from './types';
 import { getTrustedAccessToken } from '../../utils/auth';
+import { calculateLeaveBalance, canRequestLeave } from '../../modules/hr/domain/LeaveBalance';
 
 interface OtherHRTabsProps {
   activeTab: string;
@@ -85,6 +86,7 @@ export default function OtherHRTabs({
   const [jobForm, setJobForm] = useState({ titleAr: '', titleEn: '', departmentId: '', grade: 'أ', baseSalary: 3000 });
   const [contractForm, setContractForm] = useState({ employeeId: '', type: 'fixed' as any, startDate: '', endDate: '', monthlySalary: 3500 });
   const [leaveForm, setLeaveForm] = useState({ employeeId: '', type: 'annual' as any, startDate: '', endDate: '', reason: '' });
+  const [leavePolicyForm, setLeavePolicyForm] = useState({ type: 'annual' as any, annualEntitlement: 0, carryOverLimit: 0, accrualMethod: 'annual' as any, requiresApproval: true, allowNegativeBalance: false, active: true });
   const [penaltyForm, setPenaltyForm] = useState({ employeeId: '', type: 'deduction' as any, date: '', amount: 0, reason: '' });
   const [advanceForm, setAdvanceForm] = useState({ employeeId: '', costCenter: 'admin' as any, loanType: 'short_term' as any, payoutMethod: 'cash' as any, amount: 1000, date: '', installments: 10, deductionPerMonth: 100, reason: '' });
 
@@ -406,6 +408,36 @@ export default function OtherHRTabs({
 
   // 4. CONTRACTS
   if (activeTab === 'contracts') {
+    const contractExpiry = (endDate: string) => {
+      const target = Date.parse(`${endDate}T00:00:00Z`);
+      const today = Date.parse(`${new Date().toISOString().slice(0, 10)}T00:00:00Z`);
+      if (!Number.isFinite(target)) return { label: 'تاريخ غير صالح', className: 'text-rose-400' };
+      const days = Math.ceil((target - today) / 86400000);
+      if (days < 0) return { label: 'منتهي', className: 'text-rose-400' };
+      if (days <= 30) return { label: `ينتهي خلال ${days} يومًا`, className: 'text-amber-300' };
+      return { label: 'ساري', className: 'text-emerald-400' };
+    };
+    const renewContract = (contract: HRContract) => {
+      if (!requireWrite()) return;
+      if (!contract.endDate || contract.status === 'terminated') return;
+      const start = new Date(`${contract.endDate}T00:00:00Z`);
+      start.setUTCDate(start.getUTCDate() + 1);
+      const end = new Date(start);
+      end.setUTCFullYear(end.getUTCFullYear() + 1);
+      const nextContract: HRContract = {
+        ...contract,
+        id: `${contract.id}-R${Number(contract.version || 1) + 1}`,
+        startDate: start.toISOString().slice(0, 10),
+        endDate: end.toISOString().slice(0, 10),
+        status: 'draft',
+        version: Number(contract.version || 1) + 1,
+        signedAt: undefined,
+        signatureHash: undefined,
+        terminationReason: undefined
+      };
+      setContracts(previous => [nextContract, ...previous]);
+      triggerNotification('تم إنشاء مسودة تجديد جديدة مرتبطة بالعقد السابق؛ لا تصبح نافذة قبل التوقيع.', 'success');
+    };
     const handleSaveContract = (e: React.FormEvent) => {
       e.preventDefault();
       if (!requireWrite()) return;
@@ -480,14 +512,18 @@ export default function OtherHRTabs({
                     <td className="p-4 text-center font-mono text-slate-400">{c.endDate}</td>
                     <td className="p-4 text-center font-bold text-emerald-400 font-mono">{formatCurrency(c.monthlySalary, true)}</td>
                     <td className="p-4 text-center">
+                      <div className="flex flex-col items-center gap-1">
                       <span className={`px-2 py-0.5 rounded text-[10px] font-bold ${
                         c.status === 'active' ? 'bg-emerald-500/10 text-emerald-400' : 'bg-rose-500/10 text-rose-400'
                       }`}>{c.status === 'draft' ? 'مسودة' : c.status === 'active' ? 'ساري وموقّع' : 'منتهي / ملغي'}</span>
+                      <span className={`text-[10px] font-bold ${contractExpiry(c.endDate).className}`}>{contractExpiry(c.endDate).label}</span>
+                      </div>
                     </td>
                     <td className="p-4 text-center">
                       <div className="flex items-center justify-center gap-2">
                         <button onClick={() => { setEditingItem(c); setContractForm({ ...c }); setShowAddModal(true); }} className="p-1 bg-slate-800 hover:bg-slate-700 text-amber-400 rounded"><Edit className="w-3.5 h-3.5" /></button>
                         {c.status === 'draft' && <button onClick={() => handleSignContract(c.id)} className="p-1 bg-emerald-900/60 hover:bg-emerald-800 text-emerald-300 rounded" title="توقيع واعتماد">توقيع</button>}
+                        {c.status === 'active' && <button onClick={() => renewContract(c)} className="p-1 bg-amber-900/60 hover:bg-amber-800 text-amber-300 rounded text-[10px]" title="إنشاء تجديد">تجديد</button>}
                         <button onClick={() => { if (!requireWrite()) return; if(confirm('إلغاء أو إنهاء هذا العقد؟')) setContracts(prev => prev.map(x => x.id === c.id ? {...x, status: 'terminated'} : x)); }} disabled={!canManage} className="p-1 bg-slate-800 hover:bg-rose-950 disabled:cursor-not-allowed disabled:opacity-40 text-rose-400 rounded"><X className="w-3.5 h-3.5" /></button>
                       </div>
                     </td>
@@ -554,6 +590,19 @@ export default function OtherHRTabs({
     const handleSaveLeave = (e: React.FormEvent) => {
       e.preventDefault();
       if (!requireWrite()) return;
+      const policy = settings.leavePolicies?.find(item => item.type === leaveForm.type && item.active);
+      const balance = calculateLeaveBalance(leaveForm.employeeId, leaveForm.type, new Date(`${leaveForm.startDate}T00:00:00Z`).getUTCFullYear(), leaves, policy);
+      const start = Date.parse(`${leaveForm.startDate}T00:00:00Z`);
+      const end = Date.parse(`${leaveForm.endDate}T00:00:00Z`);
+      const requestedDays = Number.isFinite(start) && Number.isFinite(end) && end >= start ? Math.floor((end - start) / 86400000) + 1 : 0;
+      if (!requestedDays) {
+        triggerNotification('تحقق من أن تاريخ نهاية الإجازة لا يسبق تاريخ البداية.', 'warning');
+        return;
+      }
+      if (leaveForm.type !== 'unpaid' && (!policy || !policy.active || !canRequestLeave(balance, requestedDays, policy.allowNegativeBalance))) {
+        triggerNotification(`الرصيد المتاح لهذا النوع هو ${balance.available} يومًا فقط.`, 'warning');
+        return;
+      }
       const newLeave: HRLeave = {
         id: `LV-${Date.now().toString().slice(-4)}`,
         ...leaveForm,
@@ -588,6 +637,8 @@ export default function OtherHRTabs({
     const approvedDaysThisYear = leaves.filter(leave => leave.status === 'approved' && new Date(`${leave.startDate}T00:00:00Z`).getUTCFullYear() === currentYear).reduce((sum, leave) => sum + leaveDays(leave), 0);
     const pendingRequests = leaves.filter(leave => leave.status === 'pending').length;
     const activeLeaveEmployees = employees.filter(employee => employee.status === 'on_leave').length;
+    const selectedPolicy = settings.leavePolicies?.find(item => item.type === leaveForm.type && item.active);
+    const selectedBalance = leaveForm.employeeId ? calculateLeaveBalance(leaveForm.employeeId, leaveForm.type, currentYear, leaves, selectedPolicy) : null;
 
     return (
       <div className="space-y-6">
@@ -610,6 +661,10 @@ export default function OtherHRTabs({
           <div className="rounded-xl border border-slate-800 bg-slate-900/60 p-3"><span className="block text-[10px] font-bold text-slate-500">إجازات معتمدة هذا العام</span><strong className="mt-1 block text-lg font-black text-emerald-400">{approvedDaysThisYear} يوم</strong></div>
           <div className="rounded-xl border border-slate-800 bg-slate-900/60 p-3"><span className="block text-[10px] font-bold text-slate-500">موظفون في إجازة حاليًا</span><strong className="mt-1 block text-lg font-black text-sky-400">{activeLeaveEmployees}</strong></div>
           <div className="rounded-xl border border-amber-700/30 bg-amber-50/10 p-3"><span className="block text-[10px] font-bold text-amber-200">تنبيه تشغيلي</span><strong className="mt-1 block text-xs font-black text-amber-100">الاعتماد يحدّث حالة الموظف فقط</strong></div>
+        </div>
+        <div className="rounded-xl border border-emerald-700/30 bg-emerald-950/20 p-4 text-xs text-emerald-100">
+          <div className="flex items-center justify-between gap-3"><strong>رصيد الإجازة السنوية</strong><span className="font-mono">متاح: {employees[0] ? calculateLeaveBalance(employees[0].id, 'annual', currentYear, leaves, settings.leavePolicies?.find(item => item.type === 'annual' && item.active)).available : 0} يوم</span></div>
+          <p className="mt-1 text-emerald-200/70">يُحتسب من المستحق والمستخدم والمعلق والترحيل، ويُراجع قبل إرسال الطلب.</p>
         </div>
 
         <div className="bg-slate-900/60 border border-slate-800 overflow-hidden">
@@ -677,6 +732,7 @@ export default function OtherHRTabs({
                     <option value="emergency">إجازة طارئة</option>
                     <option value="unpaid">إجازة بدون راتب</option>
                   </select>
+                  {selectedBalance && leaveForm.type !== 'unpaid' && <span className="mt-1 block text-[11px] text-emerald-300">المتاح: {selectedBalance.available} يوم | المستخدم: {selectedBalance.used} | المعلق: {selectedBalance.pending}</span>}
                 </div>
                 <div className="grid grid-cols-2 gap-3">
                   <div className="space-y-1">
@@ -1383,6 +1439,16 @@ export default function OtherHRTabs({
 
   // 11. SETTINGS
   if (activeTab === 'settings') {
+    const saveLeavePolicy = (event: React.FormEvent) => {
+      event.preventDefault();
+      if (!requireWrite()) return;
+      if (leavePolicyForm.annualEntitlement < 0 || leavePolicyForm.carryOverLimit < 0 || leavePolicyForm.carryOverLimit > leavePolicyForm.annualEntitlement) {
+        triggerNotification('تحقق من الاستحقاق وحد الترحيل قبل حفظ سياسة الإجازة.', 'warning');
+        return;
+      }
+      setSettings(previous => ({ ...previous, leavePolicies: [...(previous.leavePolicies || []).filter(item => item.type !== leavePolicyForm.type), leavePolicyForm] }));
+      triggerNotification('تم حفظ سياسة الإجازة ضمن سجل HR الكانوني.', 'success');
+    };
     const handleSaveSettings = async (e: React.FormEvent) => {
       e.preventDefault();
       if (!requireWrite()) return;
@@ -1443,9 +1509,23 @@ export default function OtherHRTabs({
               </div>
             </div>
 
+            <div>
+              <h4 className="font-bold text-[#dfb55a] border-b border-slate-800 pb-1.5 mb-4 uppercase">ثانياً: سياسات الإجازات والأرصدة</h4>
+              <p className="mb-4 text-slate-500">لا توجد أرصدة افتراضية. لا يمكن تقديم إجازة مدفوعة قبل حفظ سياسة فعلية للنوع المطلوب.</p>
+              <div className="grid grid-cols-1 md:grid-cols-6 gap-3 items-end">
+                <label className="space-y-1"><span>النوع</span><select value={leavePolicyForm.type} onChange={e => setLeavePolicyForm(p => ({ ...p, type: e.target.value as any }))} className="w-full bg-slate-850 border border-slate-700 rounded p-2 text-white"><option value="annual">سنوية</option><option value="sick">مرضية</option><option value="emergency">طارئة</option><option value="unpaid">بدون راتب</option></select></label>
+                <label className="space-y-1"><span>الاستحقاق السنوي</span><input type="number" min="0" value={leavePolicyForm.annualEntitlement} onChange={e => setLeavePolicyForm(p => ({ ...p, annualEntitlement: Math.max(0, Number(e.target.value)) }))} className="w-full bg-slate-850 border border-slate-700 rounded p-2 text-white font-mono" /></label>
+                <label className="space-y-1"><span>حد الترحيل</span><input type="number" min="0" value={leavePolicyForm.carryOverLimit} onChange={e => setLeavePolicyForm(p => ({ ...p, carryOverLimit: Math.max(0, Number(e.target.value)) }))} className="w-full bg-slate-850 border border-slate-700 rounded p-2 text-white font-mono" /></label>
+                <label className="space-y-1"><span>طريقة التراكم</span><select value={leavePolicyForm.accrualMethod} onChange={e => setLeavePolicyForm(p => ({ ...p, accrualMethod: e.target.value as any }))} className="w-full bg-slate-850 border border-slate-700 rounded p-2 text-white"><option value="annual">سنوي</option><option value="monthly">شهري</option></select></label>
+                <label className="flex items-center gap-2 pb-2"><input type="checkbox" checked={leavePolicyForm.requiresApproval} onChange={e => setLeavePolicyForm(p => ({ ...p, requiresApproval: e.target.checked }))} /> يتطلب اعتمادًا</label>
+                <button type="button" onClick={saveLeavePolicy as any} className="bg-[#dfb55a] text-slate-950 font-bold rounded p-2">حفظ السياسة</button>
+              </div>
+              <div className="mt-4 grid grid-cols-1 md:grid-cols-2 gap-2">{(settings.leavePolicies || []).map(policy => <div key={policy.type} className="rounded border border-slate-700 bg-slate-950/40 p-3 text-slate-300">{policy.type === 'annual' ? 'سنوية' : policy.type === 'sick' ? 'مرضية' : policy.type === 'emergency' ? 'طارئة' : 'بدون راتب'}: {policy.annualEntitlement} يوم، ترحيل {policy.carryOverLimit}، {policy.active ? 'فعالة' : 'موقوفة'}</div>)}</div>
+            </div>
+
             {/* General Ledger Syncing */}
             <div>
-              <h4 className="font-bold text-[#dfb55a] border-b border-slate-800 pb-1.5 mb-4 uppercase">ثانياً: ربط الحسابات المزدوجة بالدفتر العام للشركة</h4>
+              <h4 className="font-bold text-[#dfb55a] border-b border-slate-800 pb-1.5 mb-4 uppercase">ثالثاً: ربط الحسابات المزدوجة بالدفتر العام للشركة</h4>
               <div className="grid grid-cols-1 md:grid-cols-2 gap-6">
                 <div className="space-y-1.5">
                   <label className="text-slate-400 font-semibold block">حساب أصل السداد المالي (صندوق الخزينة أو البنك الجاري)</label>

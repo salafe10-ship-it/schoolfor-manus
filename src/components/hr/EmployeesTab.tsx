@@ -1169,6 +1169,18 @@ export default function EmployeesTab({
                   {(() => {
                     const empContracts = contracts.filter(c => c.employeeId === selectedEmp.id);
                     const empDocs = documents.filter(d => d.employeeId === selectedEmp.id);
+                    const today = new Date(`${new Date().toISOString().slice(0, 10)}T00:00:00Z`).getTime();
+                    const daysUntil = (value: string) => {
+                      const target = Date.parse(`${value}T00:00:00Z`);
+                      return Number.isFinite(target) ? Math.ceil((target - today) / 86400000) : null;
+                    };
+                    const expiryLabel = (value: string) => {
+                      const days = daysUntil(value);
+                      if (days === null) return { text: 'تاريخ غير صالح', className: 'bg-rose-500/10 text-rose-400 border-rose-500/20' };
+                      if (days < 0) return { text: 'منتهي', className: 'bg-rose-500/10 text-rose-400 border-rose-500/20' };
+                      if (days <= 30) return { text: `ينتهي خلال ${days} يومًا`, className: 'bg-amber-500/10 text-amber-300 border-amber-500/20' };
+                      return { text: 'ساري المفعول', className: 'bg-emerald-500/10 text-emerald-400 border-emerald-500/20' };
+                    };
 
                     return (
                       <div className="space-y-3">
@@ -1184,8 +1196,8 @@ export default function EmployeesTab({
                                 <span className="font-bold text-white block">عقد عمل رقم ({c.id})</span>
                                 <span className="text-[10px] text-slate-400">تاريخ الانتهاء: {c.endDate}</span>
                               </div>
-                              <span className="px-2.5 py-1 bg-emerald-500/10 text-emerald-400 border border-emerald-500/20 rounded font-bold text-[10px]">
-                                ساري المفعول ✓
+                              <span className={`px-2.5 py-1 border rounded font-bold text-[10px] ${expiryLabel(c.endDate).className}`}>
+                                {expiryLabel(c.endDate).text}
                               </span>
                             </div>
                           ))
@@ -1197,8 +1209,8 @@ export default function EmployeesTab({
                               <span className="font-bold text-white block">{doc.title}</span>
                               <span className="text-[10px] text-slate-400">تاريخ الانتهاء: {doc.expiryDate}</span>
                             </div>
-                            <span className="px-2.5 py-1 bg-emerald-500/10 text-emerald-400 border border-emerald-500/20 rounded font-bold text-[10px]">
-                              موثق وساري ✓
+                            <span className={`px-2.5 py-1 border rounded font-bold text-[10px] ${expiryLabel(doc.expiryDate).className}`}>
+                              {expiryLabel(doc.expiryDate).text}
                             </span>
                           </div>
                         ))}
