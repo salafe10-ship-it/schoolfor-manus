@@ -1563,9 +1563,10 @@ export default function App() {
     'exams',
   ]).has(activeSection);
   // Keep the landing dashboard visually calm and full-width. The dashboard's
-  // own quick actions remain available, while the global sidebar stays intact
-  // for every operational module so navigation is not lost.
-  const showGlobalSidebar = !isSuperAdminViewActive && !moduleOwnsNavigation && activeSection !== 'dashboard';
+  // own quick actions and existing route state remain available.
+  // The global sidebar is intentionally removed from the shell. Navigation remains
+  // available through the existing dashboard/module controls and route state.
+  const showGlobalSidebar = false;
 
   return (
     <div className="workspace-shell flex h-screen min-h-0 overflow-hidden bg-slate-50 font-sans text-slate-900 selection:bg-sky-500 selection:text-white w-full" dir="rtl">
