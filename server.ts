@@ -6223,7 +6223,7 @@ export async function createApp(options: { cloudflare?: boolean } = {}): Promise
   app.get('/api/school/users', authenticateRequest, requirePermissionOnly(PERMISSIONS.IDENTITY_USERS_READ), async (req, res, next) => {
     if (!platformAdminPool) return next(new DatabaseError('مصدر الهوية المركزي غير متاح.'));
     try {
-      const { tenantId, schoolId } = schoolIdentityScope(req);
+      const { tenantId, schoolId, branchId } = schoolIdentityScope(req);
       // Read-only directory requests in a Worker use the same trusted
       // Supabase control channel as RBAC resolution. This avoids waiting on a
       // second Hyperdrive pool for a query that does not need a transaction.
@@ -6232,10 +6232,71 @@ export async function createApp(options: { cloudflare?: boolean } = {}): Promise
           .eq('tenant_id', tenantId)
           .eq('school_id', schoolId)
           .is('deleted_at', null));
+        const userIds = users.map((user: any) => user.id).filter(Boolean);
+        const assignments = userIds.length ? await readPlatformRows('user_roles', 'user_id, role_id, school_id, branch_id, starts_at, ends_at, status, deleted_at', (query) => query
+          .in('user_id', userIds)
+          .eq('tenant_id', tenantId)
+          .eq('status', 'active')
+          .is('deleted_at', null)) : [];
+        const now = new Date().toISOString();
+        const activeAssignments = assignments.filter((assignment: any) =>
+          (!assignment.school_id || assignment.school_id === schoolId)
+          && (!assignment.branch_id || !branchId || assignment.branch_id === branchId)
+          && (!assignment.starts_at || assignment.starts_at <= now)
+          && (!assignment.ends_at || assignment.ends_at > now));
+        const roleIds = [...new Set(activeAssignments.map((assignment: any) => assignment.role_id).filter(Boolean))];
+        const roles = roleIds.length ? await readPlatformRows('roles', 'id, role_key, name, description, tenant_id, school_id, status, deleted_at', (query) => query
+          .in('id', roleIds)
+          .eq('tenant_id', tenantId)
+          .eq('status', 'active')
+          .is('deleted_at', null)) : [];
+        const roleById = new Map(roles.map((role: any) => [role.id, role]));
+        const rolePermissions = roleIds.length ? await readPlatformRows('role_permissions', 'role_id, permission_id, tenant_id, status, deleted_at', (query) => query
+          .in('role_id', roleIds)
+          .eq('tenant_id', tenantId)
+          .eq('status', 'active')
+          .is('deleted_at', null)) : [];
+        const grants = userIds.length ? await readPlatformRows('user_permission_grants', 'user_id, permission_id, effect, source, school_id, branch_id, tenant_id, status, deleted_at', (query) => query
+          .in('user_id', userIds)
+          .eq('tenant_id', tenantId)
+          .eq('school_id', schoolId)
+          .eq('status', 'active')
+          .is('deleted_at', null)) : [];
+        const permissionIds = [...new Set([...rolePermissions, ...grants].map((entry: any) => entry.permission_id).filter(Boolean))];
+        const permissions = permissionIds.length ? await readPlatformRows('permissions', 'id, permission_key, resource, action, tenant_id, status, deleted_at', (query) => query
+          .in('id', permissionIds)
+          .eq('status', 'active')
+          .is('deleted_at', null)) : [];
+        const permissionById = new Map(permissions.filter((permission: any) => !permission.tenant_id || permission.tenant_id === tenantId).map((permission: any) => [permission.id, permission]));
+        const rolesByUser = new Map<string, any[]>();
+        for (const assignment of activeAssignments) {
+          const role = roleById.get(assignment.role_id);
+          if (!role) continue;
+          const current = rolesByUser.get(assignment.user_id) || [];
+          current.push({ id: role.id, roleKey: role.role_key, name: role.name, description: role.description, assignmentBranchId: assignment.branch_id });
+          rolesByUser.set(assignment.user_id, current);
+        }
+        const permissionsByUser = new Map<string, any[]>();
+        for (const assignment of activeAssignments) {
+          for (const rolePermission of rolePermissions.filter((entry: any) => entry.role_id === assignment.role_id)) {
+            const permission = permissionById.get(rolePermission.permission_id);
+            if (!permission) continue;
+            const current = permissionsByUser.get(assignment.user_id) || [];
+            current.push({ permissionKey: permission.permission_key, resource: permission.resource, action: permission.action, effect: 'allow', source: 'role', branchId: assignment.branch_id });
+            permissionsByUser.set(assignment.user_id, current);
+          }
+        }
+        for (const grant of grants.filter((entry: any) => !entry.branch_id || !branchId || entry.branch_id === branchId)) {
+          const permission = permissionById.get(grant.permission_id);
+          if (!permission) continue;
+          const current = permissionsByUser.get(grant.user_id) || [];
+          current.push({ permissionKey: permission.permission_key, resource: permission.resource, action: permission.action, effect: grant.effect === 'deny' ? 'deny' : 'allow', source: grant.source || 'school', branchId: grant.branch_id });
+          permissionsByUser.set(grant.user_id, current);
+        }
         return res.json({
           success: true,
           scope: { tenantId, schoolId },
-          users: users.map((user: any) => ({ ...user, roles: [], directPermissions: [] })),
+          users: users.map((user: any) => ({ ...user, roles: rolesByUser.get(user.id) || [], directPermissions: permissionsByUser.get(user.id) || [] })),
         });
       }
       // Read from the same canonical PostgreSQL source used by every school
