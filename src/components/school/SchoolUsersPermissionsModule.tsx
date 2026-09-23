@@ -59,6 +59,9 @@ type Props = {
   canManage?: boolean;
   /** Trusted server-derived capability for role and direct-permission assignment. */
   canAssign?: boolean;
+  /** Trusted session identity used only to repair the current user's display
+   * when the directory response is temporarily missing its role join. */
+  currentUser?: { id?: string; role?: string; permissions?: string[] } | null;
 };
 
 const statusLabels: Record<SchoolUser['status'], string> = {
@@ -76,7 +79,7 @@ type ExpiredGrant = { grant_id: string; user_id: string; display_name: string; e
 type SensitiveUser = { user_id: string; display_name: string; email?: string; permissions?: Array<{ permissionKey: string; source: string }> };
 type UnusedPermission = { permission_key: string; resource: string; action: string };
 
-export default function SchoolUsersPermissionsModule({ selectedSchool, selectedBranch, triggerNotification, onBackToMainMenu, canManage = false, canAssign = false }: Props) {
+export default function SchoolUsersPermissionsModule({ selectedSchool, selectedBranch, triggerNotification, onBackToMainMenu, canManage = false, canAssign = false, currentUser = null }: Props) {
   const [users, setUsers] = useState<SchoolUser[]>([]);
   const [roles, setRoles] = useState<SchoolRole[]>([]);
   const [jobs, setJobs] = useState<SchoolJob[]>([]);
@@ -159,7 +162,16 @@ export default function SchoolUsersPermissionsModule({ selectedSchool, selectedB
       ]);
       const warnings = [users, roles, jobs].filter((item) => !item.ok).map((item) => item.message);
       if (users.ok) {
-        const nextUsers = Array.isArray(users.payload.users) ? users.payload.users : [];
+        const rawUsers = Array.isArray(users.payload.users) ? users.payload.users : [];
+        const currentUserId = String(currentUser?.id || '').trim();
+        const currentRoleKey = String(currentUser?.role || '').trim().toLowerCase();
+        const publishedCurrentRole = currentRoleKey ? (Array.isArray(roles.payload?.roles) ? roles.payload.roles : []).find((role: SchoolRole) => role.roleKey.toLowerCase() === currentRoleKey) : undefined;
+        const nextUsers = rawUsers.map((user: SchoolUser) => {
+          if (currentUserId && user.id === currentUserId && (!Array.isArray(user.roles) || user.roles.length === 0) && publishedCurrentRole) {
+            return { ...user, roles: [{ roleKey: publishedCurrentRole.roleKey, name: publishedCurrentRole.name, assignmentBranchId: user.branch_id || null }] };
+          }
+          return user;
+        });
         setUsers(nextUsers);
         setRoleDrafts(Object.fromEntries(nextUsers.map((user: SchoolUser) => [user.id, user.roles?.[0]?.roleKey || ''])));
         setPermissionDrafts(Object.fromEntries(nextUsers.map((user: SchoolUser) => [user.id, (user.directPermissions || []).filter((permission) => permission.effect !== 'deny' && permission.source !== 'central').map((permission) => permission.permissionKey)])));
@@ -182,7 +194,7 @@ export default function SchoolUsersPermissionsModule({ selectedSchool, selectedB
     } finally {
       setLoading(false);
     }
-  }, []);
+  }, [currentUser]);
 
   useEffect(() => { void load(); }, [load]);
 
