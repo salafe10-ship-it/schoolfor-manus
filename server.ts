@@ -6068,6 +6068,121 @@ export async function createApp(options: { cloudflare?: boolean } = {}): Promise
     return auditId;
   };
 
+  const recordAccessGovernanceAudit = async (client: any, input: { tenantId: string; schoolId: string; branchId?: string | null; actorUserId: string; requestId: string; correlationId: string; action: string; entityId: string; before: unknown; after: unknown; reason: string }) => {
+    const auditId = randomUUID();
+    const metadata = JSON.stringify({ before: input.before, after: input.after, requestId: input.requestId, correlationId: input.correlationId });
+    await client.query(
+      `INSERT INTO public.audit_events (id, tenant_id, school_id, branch_id, actor_user_id, entity_type, entity_id, action, source, reason, result, metadata, request_id, correlation_id)
+       VALUES ($1::uuid,$2::uuid,$3::uuid,$4::uuid,$5::uuid,'identity_access_request',$6::uuid,$7,'SchoolIdentityGovernance',$8,'success',$9::jsonb,$10::uuid,$11::uuid)`,
+      [auditId, input.tenantId, input.schoolId, input.branchId || null, input.actorUserId, input.entityId, input.action, input.reason, metadata, input.requestId, input.correlationId],
+    );
+    return auditId;
+  };
+
+  app.get('/api/school/access-requests', authenticateRequest, requirePermissionOnly(PERMISSIONS.IDENTITY_USERS_READ), async (req, res, next) => {
+    if (!platformAdminPool) return next(new DatabaseError('مصدر الهوية المركزي غير متاح.'));
+    try {
+      const { tenantId, schoolId, branchId } = schoolIdentityScope(req);
+      const result = await platformAdminPool.query(
+        `SELECT r.id, r.tenant_id, r.school_id, r.branch_id, r.user_id, r.requested_by, r.permission_keys,
+                r.reason, r.status, r.starts_at, r.ends_at, r.approved_by, r.approved_at,
+                r.rejected_by, r.rejected_at, r.decision_reason,
+                r.version, r.created_at, r.updated_at,
+                u.display_name AS user_name, requester.display_name AS requested_by_name,
+                COALESCE(jsonb_agg(DISTINCT jsonb_build_object('id', a.id, 'sequenceNo', a.sequence_no,
+                  'approverId', a.approver_id, 'status', a.status,
+                  'decisionReason', a.decision_reason, 'decidedAt', a.decided_at))
+                  FILTER (WHERE a.id IS NOT NULL), '[]'::jsonb) AS approvals
+           FROM public.identity_access_requests r
+           JOIN public.users u ON u.id = r.user_id
+           JOIN public.users requester ON requester.id = r.requested_by
+           LEFT JOIN public.identity_access_request_approvals a ON a.request_id = r.id
+          WHERE r.tenant_id = $1::uuid AND r.school_id = $2::uuid
+            AND ($3::uuid IS NULL OR r.branch_id IS NULL OR r.branch_id = $3::uuid)
+            AND r.deleted_at IS NULL
+          GROUP BY r.id, u.display_name, requester.display_name
+          ORDER BY r.created_at DESC`,
+        [tenantId, schoolId, branchId || null],
+      );
+      return res.json({ success: true, scope: { tenantId, schoolId, branchId: branchId || null }, requests: result.rows });
+    } catch (error) { return next(error instanceof Error ? error : new DatabaseError('تعذر تحميل طلبات الصلاحيات.')); }
+  });
+
+  app.post('/api/school/access-requests', authenticateRequest, requirePermissionOnly(PERMISSIONS.IDENTITY_USERS_ASSIGN), async (req, res, next) => {
+    if (!platformAdminPool) return next(new DatabaseError('مصدر الهوية المركزي غير متاح.'));
+    const requestId = String(req.body?.requestId || req.get('X-Request-Id') || randomUUID()).trim();
+    const correlationId = String(req.body?.correlationId || req.get('X-Correlation-Id') || randomUUID()).trim();
+    try {
+      const { tenantId, schoolId, branchId, actorAuthUserId } = schoolIdentityScope(req);
+      const userId = String(req.body?.userId || '').trim();
+      const permissionKeys = [...new Set((Array.isArray(req.body?.permissionKeys) ? req.body.permissionKeys : []).map((value: unknown) => permissionRegistry.normalize(value)).filter(Boolean))] as string[];
+      const reason = String(req.body?.reason || '').trim();
+      const startsAt = new Date(String(req.body?.startsAt || new Date().toISOString()));
+      const endsAt = new Date(String(req.body?.endsAt || ''));
+      if (!/^[0-9a-f-]{36}$/i.test(userId)) return next(new ValidationError('مستخدم طلب الصلاحية غير صالح.'));
+      if (!permissionKeys.length) return next(new ValidationError('يجب اختيار صلاحية واحدة على الأقل.'));
+      if (reason.length < 10 || reason.length > 2000) return next(new ValidationError('سبب الطلب يجب أن يكون بين 10 و2000 حرف.'));
+      if (Number.isNaN(startsAt.getTime()) || Number.isNaN(endsAt.getTime()) || endsAt <= startsAt) return next(new ValidationError('فترة الصلاحية غير صالحة.'));
+      assertNoSegregationOfDutiesConflict(permissionKeys);
+      const client = await platformAdminPool.connect();
+      try {
+        await client.query('BEGIN');
+        const actor = await client.query(`SELECT id FROM public.users WHERE tenant_id=$1::uuid AND auth_user_id=$2::uuid AND deleted_at IS NULL LIMIT 1`, [tenantId, actorAuthUserId]);
+        if (actor.rowCount !== 1) throw new AuthenticationError('تعذر تحديد مقدم الطلب.');
+        const target = await client.query(`SELECT id, branch_id FROM public.users WHERE id=$1::uuid AND tenant_id=$2::uuid AND school_id=$3::uuid AND deleted_at IS NULL`, [userId, tenantId, schoolId]);
+        if (target.rowCount !== 1) throw new ValidationError('المستخدم لا ينتمي إلى مدرسة الجلسة الحالية.');
+        if (branchId && target.rows[0].branch_id && target.rows[0].branch_id !== branchId) throw new ValidationError('المستخدم خارج نطاق فرع الجلسة الحالية.');
+        const valid = await client.query(`SELECT permission_key FROM public.permissions WHERE status='active' AND deleted_at IS NULL AND permission_key = ANY($1::text[]) AND (tenant_id IS NULL OR tenant_id=$2::uuid)`, [permissionKeys, tenantId]);
+        const validKeys = new Set(valid.rows.map((row: any) => row.permission_key));
+        if (validKeys.size !== permissionKeys.length) throw new ValidationError('تتضمن الطلبات صلاحية غير منشورة في الكتالوج المركزي.');
+        const created = await client.query(
+          `INSERT INTO public.identity_access_requests (tenant_id, school_id, branch_id, user_id, requested_by, permission_keys, reason, status, starts_at, ends_at, created_by, updated_by)
+           VALUES ($1::uuid,$2::uuid,$3::uuid,$4::uuid,$5::uuid,$6::text[],$7,'pending',$8::timestamptz,$9::timestamptz,$5::uuid,$5::uuid)
+           RETURNING *`,
+          [tenantId, schoolId, branchId || target.rows[0].branch_id || null, userId, actor.rows[0].id, permissionKeys, reason, startsAt.toISOString(), endsAt.toISOString()],
+        );
+        const createdRow = created.rows[0];
+        const auditId = await recordAccessGovernanceAudit(client, { tenantId, schoolId, branchId: createdRow.branch_id, actorUserId: actor.rows[0].id, requestId, correlationId, action: 'request_created', entityId: createdRow.id, before: null, after: { status: createdRow.status, permissionKeys, startsAt, endsAt }, reason });
+        await client.query('COMMIT');
+        return res.status(201).json({ success: true, requestId, correlationId, auditId, request: createdRow });
+      } catch (error) { await client.query('ROLLBACK').catch(() => undefined); return next(error instanceof Error ? error : new DatabaseError('تعذر إنشاء طلب الصلاحية.')); }
+      finally { client.release(); }
+    } catch (error) { return next(error instanceof Error ? error : new DatabaseError('تعذر إنشاء طلب الصلاحية.')); }
+  });
+
+  app.patch('/api/school/access-requests/:requestId/decision', authenticateRequest, requirePermissionOnly(PERMISSIONS.IDENTITY_USERS_ASSIGN), async (req, res, next) => {
+    if (!platformAdminPool) return next(new DatabaseError('مصدر الهوية المركزي غير متاح.'));
+    try {
+      const { tenantId, schoolId, branchId, actorAuthUserId } = schoolIdentityScope(req);
+      const accessRequestId = String(req.params.requestId || '').trim();
+      const decision = String(req.body?.decision || '').trim().toLowerCase();
+      const note = String(req.body?.reason || req.body?.note || '').trim();
+      const requestId = String(req.body?.requestId || req.get('X-Request-Id') || randomUUID()).trim();
+      const correlationId = String(req.body?.correlationId || req.get('X-Correlation-Id') || randomUUID()).trim();
+      if (!/^[0-9a-f-]{36}$/i.test(accessRequestId)) return next(new ValidationError('معرف طلب الصلاحية غير صالح.'));
+      if (!['approved', 'rejected'].includes(decision)) return next(new ValidationError('قرار الموافقة غير صالح.'));
+      if (note.length < 5 || note.length > 2000) return next(new ValidationError('سبب القرار يجب أن يكون بين 5 و2000 حرف.'));
+      const client = await platformAdminPool.connect();
+      try {
+        await client.query('BEGIN');
+        const actor = await client.query(`SELECT id FROM public.users WHERE tenant_id=$1::uuid AND auth_user_id=$2::uuid AND deleted_at IS NULL LIMIT 1`, [tenantId, actorAuthUserId]);
+        if (actor.rowCount !== 1) throw new AuthenticationError('تعذر تحديد الموافق.');
+        const current = await client.query(`SELECT * FROM public.identity_access_requests WHERE id=$1::uuid AND tenant_id=$2::uuid AND school_id=$3::uuid AND ($4::uuid IS NULL OR branch_id IS NULL OR branch_id=$4::uuid) AND deleted_at IS NULL FOR UPDATE`, [accessRequestId, tenantId, schoolId, branchId || null]);
+        if (current.rowCount !== 1) throw new ValidationError('طلب الصلاحية غير موجود داخل نطاق المدرسة.');
+        const before = current.rows[0];
+        if (before.status !== 'pending') throw new ConflictError('لا يمكن اتخاذ قرار على طلب غير معلّق.');
+        if (before.requested_by === actor.rows[0].id) throw new ValidationError('لا يجوز لمقدم الطلب اعتماد طلبه بنفسه.');
+        const approval = await client.query(`INSERT INTO public.identity_access_request_approvals (request_id, sequence_no, approver_id, status, decision_reason, decided_at) VALUES ($1::uuid,1,$2::uuid,$3,$4,now()) ON CONFLICT (request_id,sequence_no) DO UPDATE SET status=EXCLUDED.status, decision_reason=EXCLUDED.decision_reason, decided_at=EXCLUDED.decided_at RETURNING *`, [accessRequestId, actor.rows[0].id, decision, note]);
+        const updated = await client.query(`UPDATE public.identity_access_requests SET status=$4, approved_by=CASE WHEN $4='approved' THEN $2::uuid ELSE approved_by END, approved_at=CASE WHEN $4='approved' THEN now() ELSE approved_at END, rejected_by=CASE WHEN $4='rejected' THEN $2::uuid ELSE rejected_by END, rejected_at=CASE WHEN $4='rejected' THEN now() ELSE rejected_at END, decision_reason=$5, updated_by=$2::uuid, updated_at=now(), version=version+1 WHERE id=$1::uuid AND version=$3 RETURNING *`, [accessRequestId, actor.rows[0].id, before.version, decision, note]);
+        if (updated.rowCount !== 1) throw new ConflictError('تغير طلب الصلاحية قبل اعتماد القرار.');
+        const auditId = await recordAccessGovernanceAudit(client, { tenantId, schoolId, branchId: before.branch_id, actorUserId: actor.rows[0].id, requestId, correlationId, action: `request_${decision}`, entityId: accessRequestId, before: { status: before.status, version: before.version }, after: { status: updated.rows[0].status, version: updated.rows[0].version, decision, note }, reason: note });
+        await client.query('COMMIT');
+        return res.json({ success: true, requestId, correlationId, auditId, request: updated.rows[0], approval: approval.rows[0] });
+      } catch (error) { await client.query('ROLLBACK').catch(() => undefined); return next(error instanceof Error ? error : new DatabaseError('تعذر حفظ قرار طلب الصلاحية.')); }
+      finally { client.release(); }
+    } catch (error) { return next(error instanceof Error ? error : new DatabaseError('تعذر حفظ قرار طلب الصلاحية.')); }
+  });
+
   app.get('/api/school/identity-roles', authenticateRequest, requirePermissionOnly(PERMISSIONS.IDENTITY_USERS_READ), async (req, res, next) => {
     if (!platformAdminPool) return next(new DatabaseError('مصدر الهوية المركزي غير متاح.'));
     try {
