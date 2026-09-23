@@ -66,9 +66,11 @@ const statusLabels: Record<SchoolUser['status'], string> = {
 };
 
 type StatusFilter = 'all' | SchoolUser['status'];
-type ManagementView = 'users' | 'roles' | 'permissions' | 'report';
+type ManagementView = 'users' | 'roles' | 'permissions' | 'report' | 'governance';
 type PermissionStateFilter = 'all' | 'effective' | 'direct' | 'inherited' | 'unassigned' | 'denied';
 type EffectivePermissionReportRow = { id: string; display_name: string; email?: string; username?: string; job_title?: string; department?: string; inherited_count: number; direct_count: number; denied_count: number; effective_count: number };
+type AccessReview = { id: string; user_name?: string; due_at: string; status: string; permission_snapshot?: unknown[]; decision_reason?: string | null };
+type SodConflict = { user_id: string; display_name: string; email?: string; rule_key: string; permission_a: string; permission_b: string; severity: string; description: string };
 
 export default function SchoolUsersPermissionsModule({ selectedSchool, selectedBranch, triggerNotification, onBackToMainMenu, canManage = false, canAssign = false }: Props) {
   const [users, setUsers] = useState<SchoolUser[]>([]);
@@ -96,6 +98,9 @@ export default function SchoolUsersPermissionsModule({ selectedSchool, selectedB
   const [activeView, setActiveView] = useState<ManagementView>('users');
   const [compareRoleKeys, setCompareRoleKeys] = useState({ left: '', right: '' });
   const [serverEffectiveReport, setServerEffectiveReport] = useState<EffectivePermissionReportRow[]>([]);
+  const [accessReviews, setAccessReviews] = useState<AccessReview[]>([]);
+  const [sodConflicts, setSodConflicts] = useState<SodConflict[]>([]);
+  const [governanceLoading, setGovernanceLoading] = useState(false);
   const [form, setForm] = useState({ name: '', email: '', jobId: '', jobTitle: '', department: '', initialRole: '', password: '', branchId: '' });
   const canCreate = canManage && canAssign;
   // Central role templates remain the published baseline. A school manager
@@ -181,6 +186,23 @@ export default function SchoolUsersPermissionsModule({ selectedSchool, selectedB
         if (!cancelled) setServerEffectiveReport(Array.isArray(payload.users) ? payload.users : []);
       })
       .catch((reportError) => { if (!cancelled) notify(reportError instanceof Error ? reportError.message : 'تعذر تحميل التقرير الخادمي.', 'warning'); });
+    return () => { cancelled = true; };
+  }, [activeView, notify]);
+
+  useEffect(() => {
+    if (activeView !== 'governance') return;
+    let cancelled = false;
+    setGovernanceLoading(true);
+    Promise.all([
+      authenticatedRequest('/api/school/access-reviews', { cache: 'no-store' }),
+      authenticatedRequest('/api/school/sod-conflicts', { cache: 'no-store' }),
+    ]).then(async ([reviewsResponse, conflictsResponse]) => {
+      const [reviewsPayload, conflictsPayload] = await Promise.all([reviewsResponse.json().catch(() => ({})), conflictsResponse.json().catch(() => ({}))]);
+      if (!reviewsResponse.ok || !reviewsPayload?.success) throw new Error(reviewsPayload?.message || 'تعذر تحميل مراجعات الصلاحيات.');
+      if (!conflictsResponse.ok || !conflictsPayload?.success) throw new Error(conflictsPayload?.message || 'تعذر تحميل تعارضات الصلاحيات.');
+      if (!cancelled) { setAccessReviews(Array.isArray(reviewsPayload.reviews) ? reviewsPayload.reviews : []); setSodConflicts(Array.isArray(conflictsPayload.conflicts) ? conflictsPayload.conflicts : []); }
+    }).catch((governanceError) => { if (!cancelled) notify(governanceError instanceof Error ? governanceError.message : 'تعذر تحميل حوكمة الصلاحيات.', 'warning'); })
+      .finally(() => { if (!cancelled) setGovernanceLoading(false); });
     return () => { cancelled = true; };
   }, [activeView, notify]);
 
@@ -557,6 +579,7 @@ export default function SchoolUsersPermissionsModule({ selectedSchool, selectedB
             ['roles', 'الأدوار المعتمدة'],
             ['permissions', 'مصفوفة الصلاحيات'],
             ['report', 'تقرير الصلاحيات الفعالة'],
+            ['governance', 'الحوكمة والتعارضات'],
           ] as Array<[ManagementView, string]>).map(([view, label]) => (
             <button key={view} type="button" onClick={() => setActiveView(view)} className={`rounded-xl px-4 py-2.5 text-xs font-black transition ${activeView === view ? 'bg-slate-950 text-amber-300 shadow' : 'text-slate-600 hover:bg-amber-50 hover:text-amber-800'}`}>
               {label}
@@ -584,6 +607,15 @@ export default function SchoolUsersPermissionsModule({ selectedSchool, selectedB
         {activeView === 'report' && <section className="identity-panel overflow-hidden rounded-3xl border border-slate-200 bg-white shadow-sm" aria-labelledby="effective-report-title">
           <div className="border-b border-slate-100 bg-slate-50 p-5"><h2 id="effective-report-title" className="font-black">تقرير الصلاحيات الفعالة</h2><p className="mt-1 text-xs leading-5 text-slate-500">قراءة موحدة للصلاحيات الموروثة من الدور، والمنح المباشرة، والمنع المسجل لكل مستخدم داخل نطاق المدرسة.</p></div>
           <div className="overflow-x-auto"><table className="w-full min-w-[820px] text-right text-sm"><thead className="bg-slate-950 text-xs text-amber-200"><tr><th className="p-4">المستخدم</th><th className="p-4">الوظيفة والقسم</th><th className="p-4">موروثة</th><th className="p-4">منح مباشرة</th><th className="p-4">منع</th><th className="p-4">فعالة</th></tr></thead><tbody className="divide-y divide-slate-100">{(serverEffectiveReport.length ? serverEffectiveReport : effectivePermissionReport.map(({ user, inherited, direct, denied, effective }) => ({ id: user.id, display_name: user.display_name, email: user.email, username: user.username, job_title: user.job_title, department: user.department, inherited_count: inherited, direct_count: direct, denied_count: denied, effective_count: effective }))).map((row) => <tr key={row.id}><td className="p-4"><div className="font-black">{row.display_name}</div><div className="text-xs text-slate-500">{row.email || row.username || 'هوية داخلية'}</div></td><td className="p-4">{row.job_title || '—'}<div className="text-xs text-slate-500">{row.department || '—'}</div></td><td className="p-4 font-black text-emerald-700">{row.inherited_count}</td><td className="p-4 font-black text-amber-700">{row.direct_count}</td><td className="p-4 font-black text-rose-700">{row.denied_count}</td><td className="p-4 font-black text-slate-950">{row.effective_count}</td></tr>)}</tbody></table>{(serverEffectiveReport.length || effectivePermissionReport.length) === 0 && <div className="p-12 text-center text-sm font-bold text-slate-500">لا توجد بيانات صلاحيات متاحة.</div>}</div>
+        </section>}
+
+        {activeView === 'governance' && <section className="identity-panel space-y-5 overflow-hidden rounded-3xl border border-slate-200 bg-white p-5 shadow-sm" aria-labelledby="governance-screen-title">
+          <div><h2 id="governance-screen-title" className="font-black">حوكمة الوصول ومراجعة التعارضات</h2><p className="mt-1 text-xs leading-5 text-slate-500">قراءة مباشرة من جداول الحوكمة في قاعدة البيانات؛ لا تعرض هذه الشاشة أي بيانات محلية أو افتراضية.</p></div>
+          {governanceLoading ? <div className="rounded-2xl bg-slate-50 p-10 text-center text-sm font-bold text-slate-500">جارٍ تحميل سجلات الحوكمة...</div> : <>
+            <div className="grid gap-3 sm:grid-cols-3"><div className="rounded-2xl border border-amber-200 bg-amber-50 p-4"><div className="text-2xl font-black text-amber-900">{accessReviews.filter((review) => review.status === 'pending').length}</div><div className="text-xs font-bold text-amber-800">مراجعات معلقة</div></div><div className="rounded-2xl border border-rose-200 bg-rose-50 p-4"><div className="text-2xl font-black text-rose-900">{sodConflicts.length}</div><div className="text-xs font-bold text-rose-800">تعارضات فصل المهام</div></div><div className="rounded-2xl border border-slate-200 bg-slate-50 p-4"><div className="text-2xl font-black text-slate-900">{accessReviews.length}</div><div className="text-xs font-bold text-slate-700">إجمالي سجلات المراجعة</div></div></div>
+            <div className="overflow-x-auto rounded-2xl border border-slate-200"><table className="w-full min-w-[720px] text-right text-xs"><thead className="bg-slate-950 text-amber-200"><tr><th className="p-3">المستخدم</th><th className="p-3">الاستحقاق</th><th className="p-3">الحالة</th><th className="p-3">لقطة الصلاحيات</th></tr></thead><tbody className="divide-y divide-slate-100">{accessReviews.map((review) => <tr key={review.id}><td className="p-3 font-black">{review.user_name || 'مستخدم'}</td><td className="p-3">{new Date(review.due_at).toLocaleDateString('ar')}</td><td className="p-3"><span className={`rounded-full px-2 py-1 font-black ${review.status === 'pending' ? 'bg-amber-50 text-amber-800' : review.status === 'revoked' ? 'bg-rose-50 text-rose-700' : 'bg-emerald-50 text-emerald-700'}`}>{review.status}</span></td><td className="p-3 font-black">{Array.isArray(review.permission_snapshot) ? review.permission_snapshot.length : 0} صلاحية</td></tr>)}</tbody></table>{accessReviews.length === 0 && <div className="p-10 text-center text-sm font-bold text-slate-500">لا توجد مراجعات مسجلة حاليًا.</div>}</div>
+            <div className="overflow-x-auto rounded-2xl border border-rose-200"><table className="w-full min-w-[860px] text-right text-xs"><thead className="bg-rose-950 text-rose-100"><tr><th className="p-3">المستخدم</th><th className="p-3">قاعدة التعارض</th><th className="p-3">الصلاحية الأولى</th><th className="p-3">الصلاحية الثانية</th><th className="p-3">الخطورة</th></tr></thead><tbody className="divide-y divide-rose-100">{sodConflicts.map((conflict, index) => <tr key={`${conflict.user_id}-${conflict.rule_key}-${index}`}><td className="p-3 font-black">{conflict.display_name}</td><td className="p-3 font-mono">{conflict.rule_key}</td><td className="p-3 font-mono">{conflict.permission_a}</td><td className="p-3 font-mono">{conflict.permission_b}</td><td className="p-3 font-black text-rose-700">{conflict.severity}</td></tr>)}</tbody></table>{sodConflicts.length === 0 && <div className="p-10 text-center text-sm font-bold text-emerald-700">لا توجد تعارضات فعالة داخل نطاق المدرسة.</div>}</div>
+          </>}
         </section>}
 
         <div className="rounded-2xl border border-amber-200 bg-amber-50 p-4 text-xs leading-6 text-amber-950"><b>سياسة الصلاحيات:</b> المدرسة الأم تنشر القوالب الأساسية، وكل مدرسة تدير مستخدميها وتفويضاتها المحلية داخل نطاقها فقط. لا يمكن منح Platform.Admin أو تجاوز منع مركزي، ولا تنتقل التفويضات المحلية إلى مدرسة أخرى.</div>
