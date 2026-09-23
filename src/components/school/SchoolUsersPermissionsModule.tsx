@@ -621,8 +621,8 @@ export default function SchoolUsersPermissionsModule({ selectedSchool, selectedB
             </div>
 
             <div className="flex items-center gap-2 border-b border-slate-100 bg-white px-4 pt-3" role="tablist" aria-label="نمط عرض الصلاحيات">
-              <button type="button" role="tab" aria-selected={permissionPresentation === 'compact'} onClick={() => setPermissionPresentation('compact')} className={`rounded-t-xl border-b-2 px-4 py-2.5 text-xs font-black ${permissionPresentation === 'compact' ? 'border-amber-600 bg-amber-50 text-amber-900' : 'border-transparent text-slate-500 hover:bg-slate-50'}`}>العرض الاحترافي</button>
-              <button type="button" role="tab" aria-selected={permissionPresentation === 'detailed'} onClick={() => setPermissionPresentation('detailed')} className={`rounded-t-xl border-b-2 px-4 py-2.5 text-xs font-black ${permissionPresentation === 'detailed' ? 'border-slate-900 bg-slate-50 text-slate-900' : 'border-transparent text-slate-500 hover:bg-slate-50'}`}>العرض التفصيلي القديم</button>
+              <button type="button" role="tab" aria-selected={permissionPresentation === 'compact'} onClick={() => setPermissionPresentation('compact')} className={`rounded-t-xl border-b-2 px-4 py-2.5 text-xs font-black ${permissionPresentation === 'compact' ? 'border-amber-600 bg-amber-50 text-amber-900' : 'border-transparent text-slate-500 hover:bg-slate-50'}`}>تقرير الصلاحيات</button>
+              <button type="button" role="tab" aria-selected={permissionPresentation === 'detailed'} onClick={() => setPermissionPresentation('detailed')} className={`rounded-t-xl border-b-2 px-4 py-2.5 text-xs font-black ${permissionPresentation === 'detailed' ? 'border-slate-900 bg-slate-50 text-slate-900' : 'border-transparent text-slate-500 hover:bg-slate-50'}`}>إدارة الصلاحيات التفصيلية</button>
             </div>
 
             {permissionPresentation === 'compact' ? <div className="bg-slate-50/70 p-3 sm:p-5">
