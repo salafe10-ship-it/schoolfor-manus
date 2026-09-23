@@ -5,6 +5,10 @@ import { Pool } from 'pg';
 
 const migrations = [
   '202609101200_identity_job_reference.sql',
+  // Required production seed for the central school role templates. This is
+  // additive/idempotent and must run before the governance tables are verified
+  // so the school Users & Permissions module has a published baseline.
+  '202609221000_seed_canonical_school_roles.sql',
   '202609231000_identity_access_governance.sql',
   '202609231100_identity_access_governance_hardening.sql',
   '202609231200_identity_review_sod.sql',
@@ -27,7 +31,7 @@ try {
       const sql = await readFile(resolve(process.cwd(), 'supabase', 'migrations', migration), 'utf8');
       await client.query(sql);
     }
-    const verification = await client.query<{ job_id: boolean; access_requests: boolean; access_request_approvals: boolean; actor_guard: boolean; fee_policy: boolean; institutional_sessions: boolean; institutional_service_accounts: boolean; institutional_api_keys: boolean }>(`
+    const verification = await client.query<{ job_id: boolean; access_requests: boolean; access_request_approvals: boolean; actor_guard: boolean; fee_policy: boolean; institutional_sessions: boolean; institutional_service_accounts: boolean; institutional_api_keys: boolean; canonical_roles: boolean; canonical_role_permissions: boolean }>(`
     SELECT
         EXISTS (SELECT 1 FROM information_schema.columns WHERE table_schema='public' AND table_name='users' AND column_name='job_id') AS job_id,
         EXISTS (SELECT 1 FROM information_schema.tables WHERE table_schema='public' AND table_name='identity_access_requests') AS access_requests,
@@ -36,9 +40,11 @@ try {
         EXISTS (SELECT 1 FROM pg_policies WHERE schemaname='public' AND tablename='student_fee_audit_events' AND policyname='p_student_fee_audit_events_insert') AS fee_policy,
         to_regclass('public.identity_sessions') IS NOT NULL AS institutional_sessions,
         to_regclass('public.identity_service_accounts') IS NOT NULL AS institutional_service_accounts,
-        to_regclass('public.identity_api_keys') IS NOT NULL AS institutional_api_keys
+        to_regclass('public.identity_api_keys') IS NOT NULL AS institutional_api_keys,
+        (SELECT COUNT(*) = 4 FROM public.roles WHERE school_id IS NULL AND branch_id IS NULL AND role_key IN ('schooladmin','accountant','teacher','hr') AND status = 'active' AND deleted_at IS NULL) AS canonical_roles,
+        (SELECT COUNT(*) > 0 FROM public.role_permissions rp JOIN public.roles r ON r.id = rp.role_id WHERE r.school_id IS NULL AND r.branch_id IS NULL AND r.role_key IN ('schooladmin','accountant','teacher','hr') AND rp.status = 'active' AND rp.deleted_at IS NULL) AS canonical_role_permissions
     `);
-    if (!verification.rows[0]?.job_id || !verification.rows[0]?.access_requests || !verification.rows[0]?.access_request_approvals || !verification.rows[0]?.actor_guard || !verification.rows[0]?.fee_policy || !verification.rows[0]?.institutional_sessions || !verification.rows[0]?.institutional_service_accounts || !verification.rows[0]?.institutional_api_keys) {
+    if (!verification.rows[0]?.job_id || !verification.rows[0]?.access_requests || !verification.rows[0]?.access_request_approvals || !verification.rows[0]?.actor_guard || !verification.rows[0]?.fee_policy || !verification.rows[0]?.institutional_sessions || !verification.rows[0]?.institutional_service_accounts || !verification.rows[0]?.institutional_api_keys || !verification.rows[0]?.canonical_roles || !verification.rows[0]?.canonical_role_permissions) {
       throw new Error('IDENTITY_STRUCTURE_VERIFICATION_FAILED');
     }
     await client.query('COMMIT');
