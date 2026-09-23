@@ -30,6 +30,17 @@ try {
       grant_time_columns: number;
       review_columns: number;
       sod_rule_columns: number;
+      sessions_table: boolean;
+      service_accounts_table: boolean;
+      api_keys_table: boolean;
+      sessions_rls: boolean;
+      service_accounts_rls: boolean;
+      api_keys_rls: boolean;
+      sessions_force_rls: boolean;
+      service_accounts_force_rls: boolean;
+      api_keys_force_rls: boolean;
+      institutional_session_columns: number;
+      institutional_key_columns: number;
       request_fk_count: number;
       approval_fk_count: number;
       grant_fk_count: number;
@@ -40,6 +51,9 @@ try {
         to_regclass('public.user_permission_grants') IS NOT NULL AS grants_table,
         to_regclass('public.identity_access_reviews') IS NOT NULL AS reviews_table,
         to_regclass('public.identity_sod_rules') IS NOT NULL AS sod_rules_table,
+        to_regclass('public.identity_sessions') IS NOT NULL AS sessions_table,
+        to_regclass('public.identity_service_accounts') IS NOT NULL AS service_accounts_table,
+        to_regclass('public.identity_api_keys') IS NOT NULL AS api_keys_table,
         COALESCE((SELECT c.relrowsecurity FROM pg_class c JOIN pg_namespace n ON n.oid=c.relnamespace WHERE n.nspname='public' AND c.relname='identity_access_requests'), false) AS requests_rls,
         COALESCE((SELECT c.relforcerowsecurity FROM pg_class c JOIN pg_namespace n ON n.oid=c.relnamespace WHERE n.nspname='public' AND c.relname='identity_access_requests'), false) AS requests_force_rls,
         COALESCE((SELECT c.relrowsecurity FROM pg_class c JOIN pg_namespace n ON n.oid=c.relnamespace WHERE n.nspname='public' AND c.relname='identity_access_request_approvals'), false) AS approvals_rls,
@@ -49,11 +63,19 @@ try {
         COALESCE((SELECT c.relforcerowsecurity FROM pg_class c JOIN pg_namespace n ON n.oid=c.relnamespace WHERE n.nspname='public' AND c.relname='identity_access_reviews'), false) AS reviews_force_rls,
         COALESCE((SELECT c.relrowsecurity FROM pg_class c JOIN pg_namespace n ON n.oid=c.relnamespace WHERE n.nspname='public' AND c.relname='identity_sod_rules'), false) AS sod_rules_rls,
         COALESCE((SELECT c.relforcerowsecurity FROM pg_class c JOIN pg_namespace n ON n.oid=c.relnamespace WHERE n.nspname='public' AND c.relname='identity_sod_rules'), false) AS sod_rules_force_rls,
+        COALESCE((SELECT c.relrowsecurity FROM pg_class c JOIN pg_namespace n ON n.oid=c.relnamespace WHERE n.nspname='public' AND c.relname='identity_sessions'), false) AS sessions_rls,
+        COALESCE((SELECT c.relrowsecurity FROM pg_class c JOIN pg_namespace n ON n.oid=c.relnamespace WHERE n.nspname='public' AND c.relname='identity_service_accounts'), false) AS service_accounts_rls,
+        COALESCE((SELECT c.relrowsecurity FROM pg_class c JOIN pg_namespace n ON n.oid=c.relnamespace WHERE n.nspname='public' AND c.relname='identity_api_keys'), false) AS api_keys_rls,
+        COALESCE((SELECT c.relforcerowsecurity FROM pg_class c JOIN pg_namespace n ON n.oid=c.relnamespace WHERE n.nspname='public' AND c.relname='identity_sessions'), false) AS sessions_force_rls,
+        COALESCE((SELECT c.relforcerowsecurity FROM pg_class c JOIN pg_namespace n ON n.oid=c.relnamespace WHERE n.nspname='public' AND c.relname='identity_service_accounts'), false) AS service_accounts_force_rls,
+        COALESCE((SELECT c.relforcerowsecurity FROM pg_class c JOIN pg_namespace n ON n.oid=c.relnamespace WHERE n.nspname='public' AND c.relname='identity_api_keys'), false) AS api_keys_force_rls,
         (SELECT count(*) FROM information_schema.columns WHERE table_schema='public' AND table_name='identity_access_requests' AND column_name IN ('reason','status','starts_at','ends_at','permission_keys','decision_reason'))::int AS request_columns,
         (SELECT count(*) FROM information_schema.columns WHERE table_schema='public' AND table_name='identity_access_request_approvals' AND column_name IN ('request_id','approver_id','status','decision_reason','decided_at'))::int AS approval_columns,
         (SELECT count(*) FROM information_schema.columns WHERE table_schema='public' AND table_name='user_permission_grants' AND column_name IN ('starts_at','ends_at'))::int AS grant_time_columns,
         (SELECT count(*) FROM information_schema.columns WHERE table_schema='public' AND table_name='identity_access_reviews' AND column_name IN ('user_id','due_at','status','permission_snapshot','reviewer_id','decision_reason','version'))::int AS review_columns,
         (SELECT count(*) FROM information_schema.columns WHERE table_schema='public' AND table_name='identity_sod_rules' AND column_name IN ('rule_key','permission_a','permission_b','severity','status','description'))::int AS sod_rule_columns,
+        (SELECT count(*) FROM information_schema.columns WHERE table_schema='public' AND table_name='identity_sessions' AND column_name IN ('tenant_id','user_id','auth_session_id','issued_at','expires_at','status'))::int AS institutional_session_columns,
+        (SELECT count(*) FROM information_schema.columns WHERE table_schema='public' AND table_name='identity_api_keys' AND column_name IN ('tenant_id','service_account_id','key_prefix','key_hash','scopes','expires_at'))::int AS institutional_key_columns,
         (SELECT count(*) FROM pg_constraint WHERE conname IN ('identity_access_requests_tenant_fk','identity_access_requests_school_fk','identity_access_requests_user_fk','identity_access_requests_requested_by_fk'))::int AS request_fk_count,
         (SELECT count(*) FROM pg_constraint WHERE conname='identity_access_request_approvals_request_fk')::int AS approval_fk_count,
         (SELECT count(*) FROM pg_constraint WHERE conname IN ('user_permission_grants_user_fk','user_permission_grants_permission_fk'))::int AS grant_fk_count
@@ -65,10 +87,14 @@ try {
       && verification.approvals_rls && verification.approvals_force_rls && verification.grants_rls
       && verification.reviews_rls && verification.reviews_force_rls
       && verification.sod_rules_rls && verification.sod_rules_force_rls
+      && verification.sessions_table && verification.service_accounts_table && verification.api_keys_table
+      && verification.sessions_rls && verification.service_accounts_rls && verification.api_keys_rls
+      && verification.sessions_force_rls && verification.service_accounts_force_rls && verification.api_keys_force_rls
       && verification.request_columns === 6 && verification.approval_columns === 5
       && verification.grant_time_columns === 2 && verification.review_columns === 7
       && verification.sod_rule_columns === 6 && verification.request_fk_count === 4
-      && verification.approval_fk_count === 1 && verification.grant_fk_count === 2;
+      && verification.approval_fk_count === 1 && verification.grant_fk_count === 2
+      && verification.institutional_session_columns === 6 && verification.institutional_key_columns === 6;
     if (!ok) throw new Error(`IDENTITY_ACCESS_GOVERNANCE_NOT_READY: ${JSON.stringify(verification)}`);
     console.log(JSON.stringify({ success: true, verification }));
   } finally { client.release(); }
