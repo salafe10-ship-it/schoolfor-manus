@@ -13,7 +13,9 @@ const migrations = [
   '202609141200_harden_student_fee_audit_actor_policy.sql',
 ];
 
-const connectionString = process.env.PLATFORM_ADMIN_DATABASE_URL || process.env.DIRECT_URL || process.env.DATABASE_URL;
+// Never fall back to a generic application connection: identity migrations
+// must target the explicitly approved platform-admin database only.
+const connectionString = process.env.PLATFORM_ADMIN_DATABASE_URL;
 if (!connectionString) throw new Error('ADMIN_DATABASE_CONNECTION_REQUIRED');
 
 const pool = new Pool({ connectionString, max: 1, connectionTimeoutMillis: 12_000, ssl: { rejectUnauthorized: false } });
@@ -25,15 +27,18 @@ try {
       const sql = await readFile(resolve(process.cwd(), 'supabase', 'migrations', migration), 'utf8');
       await client.query(sql);
     }
-    const verification = await client.query<{ job_id: boolean; access_requests: boolean; access_request_approvals: boolean; actor_guard: boolean; fee_policy: boolean }>(`
+    const verification = await client.query<{ job_id: boolean; access_requests: boolean; access_request_approvals: boolean; actor_guard: boolean; fee_policy: boolean; institutional_sessions: boolean; institutional_service_accounts: boolean; institutional_api_keys: boolean }>(`
     SELECT
         EXISTS (SELECT 1 FROM information_schema.columns WHERE table_schema='public' AND table_name='users' AND column_name='job_id') AS job_id,
         EXISTS (SELECT 1 FROM information_schema.tables WHERE table_schema='public' AND table_name='identity_access_requests') AS access_requests,
         EXISTS (SELECT 1 FROM information_schema.tables WHERE table_schema='public' AND table_name='identity_access_request_approvals') AS access_request_approvals,
         EXISTS (SELECT 1 FROM pg_proc WHERE pronamespace='public'::regnamespace AND proname='dbsec010_audit_actor_allowed') AS actor_guard,
-        EXISTS (SELECT 1 FROM pg_policies WHERE schemaname='public' AND tablename='student_fee_audit_events' AND policyname='p_student_fee_audit_events_insert') AS fee_policy
+        EXISTS (SELECT 1 FROM pg_policies WHERE schemaname='public' AND tablename='student_fee_audit_events' AND policyname='p_student_fee_audit_events_insert') AS fee_policy,
+        to_regclass('public.identity_sessions') IS NOT NULL AS institutional_sessions,
+        to_regclass('public.identity_service_accounts') IS NOT NULL AS institutional_service_accounts,
+        to_regclass('public.identity_api_keys') IS NOT NULL AS institutional_api_keys
     `);
-    if (!verification.rows[0]?.job_id || !verification.rows[0]?.access_requests || !verification.rows[0]?.access_request_approvals || !verification.rows[0]?.actor_guard || !verification.rows[0]?.fee_policy) {
+    if (!verification.rows[0]?.job_id || !verification.rows[0]?.access_requests || !verification.rows[0]?.access_request_approvals || !verification.rows[0]?.actor_guard || !verification.rows[0]?.fee_policy || !verification.rows[0]?.institutional_sessions || !verification.rows[0]?.institutional_service_accounts || !verification.rows[0]?.institutional_api_keys) {
       throw new Error('IDENTITY_STRUCTURE_VERIFICATION_FAILED');
     }
     await client.query('COMMIT');
