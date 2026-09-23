@@ -20,6 +20,7 @@ jobs:
     env:
       CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
       CLOUDFLARE_ACCOUNT_ID: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}
+      PLATFORM_ADMIN_DATABASE_URL: ${{ secrets.PLATFORM_ADMIN_DATABASE_URL }}
       PRODUCTION_URL: ${{ vars.CLOUDFLARE_PRODUCTION_URL || 'https://schoolfor-manus.salafe10.workers.dev' }}
       EXPECTED_BUILD_COMMIT: ${{ github.sha }}
     steps:
@@ -46,6 +47,11 @@ jobs:
           npm run route-integrity
           npm run lint
           npm test -- --run
+
+      - name: Verify identity governance database contract
+        run: |
+          test -n "$PLATFORM_ADMIN_DATABASE_URL" || { echo 'Missing GitHub secret PLATFORM_ADMIN_DATABASE_URL required for identity governance release gate'; exit 1; }
+          npm run db:verify-identity-governance
 
       - name: Build release artifact
         run: npm run build
