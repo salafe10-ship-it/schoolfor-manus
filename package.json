@@ -30,6 +30,7 @@
     "lint": "tsc --noEmit",
     "db:migrate": "tsx src/database/scripts/migrate.ts",
     "db:verify-central": "tsx scripts/verify-central-control-plane.ts",
+    "db:verify-identity-governance": "tsx scripts/verify-identity-access-governance.ts",
     "db:apply-owner-workspace": "tsx scripts/apply-owner-workspace-releases.ts",
     "db:bind-owner-school": "tsx scripts/bind-owner-school.ts",
     "db:seed": "tsx src/database/scripts/seed.ts",
