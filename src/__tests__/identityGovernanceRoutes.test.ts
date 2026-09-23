@@ -37,4 +37,11 @@ describe('identity governance route contract', () => {
     expect(directPermissionBlock).toContain('r.ends_at > now()');
     expect(directPermissionBlock).toContain('assertNoSegregationOfDutiesConflict');
   });
+
+  it('does not expose or approve an expired pending access request', () => {
+    const requestBlock = server.slice(server.indexOf("app.get('/api/school/access-requests'"), server.indexOf("app.get('/api/school/effective-permissions'"));
+    expect(requestBlock).toContain("r.ends_at <= now() THEN 'expired'");
+    expect(requestBlock).toContain('before.ends_at');
+    expect(requestBlock).toContain('انتهت صلاحية الطلب');
+  });
 });
