@@ -6381,7 +6381,7 @@ export async function createApp(options: { cloudflare?: boolean } = {}): Promise
     if (!platformAdminPool) return next(new DatabaseError('مصدر الهوية المركزي غير متاح.'));
     try {
       const { tenantId, schoolId, branchId } = schoolIdentityScope(req);
-      const [expired, sensitive] = await Promise.all([
+      const [expired, sensitive, unused] = await Promise.all([
         platformAdminPool.query(
           `SELECT g.id AS grant_id, u.id AS user_id, u.display_name, u.email, p.permission_key, g.source, g.ends_at, g.status
              FROM public.user_permission_grants g
@@ -6413,8 +6413,26 @@ export async function createApp(options: { cloudflare?: boolean } = {}): Promise
               GROUP BY user_id, display_name, email ORDER BY display_name`,
           [tenantId, schoolId, branchId || null],
         ),
+        platformAdminPool.query(
+          `SELECT p.permission_key, p.resource, p.action
+             FROM public.permissions p
+            WHERE p.status='active' AND p.deleted_at IS NULL AND (p.tenant_id IS NULL OR p.tenant_id=$1::uuid)
+              AND NOT EXISTS (
+                SELECT 1 FROM public.role_permissions rp
+                JOIN public.roles r ON r.id=rp.role_id AND r.tenant_id=$1::uuid AND r.status='active' AND r.deleted_at IS NULL
+                WHERE rp.permission_id=p.id AND rp.tenant_id=$1::uuid AND rp.status='active' AND rp.deleted_at IS NULL
+              )
+              AND NOT EXISTS (
+                SELECT 1 FROM public.user_permission_grants g
+                JOIN public.users u ON u.id=g.user_id AND u.tenant_id=$1::uuid AND u.school_id=$2::uuid AND u.deleted_at IS NULL
+                WHERE g.permission_id=p.id AND g.tenant_id=$1::uuid AND g.school_id=$2::uuid AND g.status='active' AND g.deleted_at IS NULL
+                  AND (g.branch_id IS NULL OR $3::uuid IS NULL OR g.branch_id=$3::uuid)
+              )
+            ORDER BY p.resource, p.permission_key`,
+          [tenantId, schoolId, branchId || null],
+        ),
       ]);
-      return res.json({ success: true, source: 'canonical_database', expired: expired.rows, sensitiveUsers: sensitive.rows });
+      return res.json({ success: true, source: 'canonical_database', expired: expired.rows, sensitiveUsers: sensitive.rows, unusedPermissions: unused.rows });
     } catch (error) { return next(error instanceof Error ? error : new DatabaseError('تعذر إنشاء تقارير حوكمة الصلاحيات.')); }
   });
 
