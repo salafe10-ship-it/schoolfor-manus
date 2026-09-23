@@ -6344,6 +6344,78 @@ export async function createApp(options: { cloudflare?: boolean } = {}): Promise
     } catch (error) { return next(error instanceof Error ? error : new DatabaseError('تعذر حفظ قرار المراجعة.')); }
   });
 
+  app.get('/api/school/sod-conflicts', authenticateRequest, requirePermissionOnly(PERMISSIONS.IDENTITY_USERS_READ), async (req, res, next) => {
+    if (!platformAdminPool) return next(new DatabaseError('مصدر الهوية المركزي غير متاح.'));
+    try {
+      const { tenantId, schoolId, branchId } = schoolIdentityScope(req);
+      const result = await platformAdminPool.query(
+        `WITH scoped_users AS (
+          SELECT id, display_name, email FROM public.users
+           WHERE tenant_id=$1::uuid AND school_id=$2::uuid AND deleted_at IS NULL
+             AND ($3::uuid IS NULL OR branch_id IS NULL OR branch_id=$3::uuid)
+        ), grants AS (
+          SELECT su.id AS user_id, p.permission_key
+            FROM scoped_users su JOIN public.user_permission_grants g ON g.user_id=su.id AND g.tenant_id=$1::uuid AND g.school_id=$2::uuid AND g.status='active' AND g.deleted_at IS NULL
+             AND (g.branch_id IS NULL OR $3::uuid IS NULL OR g.branch_id=$3::uuid) AND (g.starts_at IS NULL OR g.starts_at<=now()) AND (g.ends_at IS NULL OR g.ends_at>now()) AND g.effect='allow'
+            JOIN public.permissions p ON p.id=g.permission_id AND p.status='active' AND p.deleted_at IS NULL
+          UNION
+          SELECT su.id, p.permission_key
+            FROM scoped_users su JOIN public.user_roles ur ON ur.user_id=su.id AND ur.tenant_id=$1::uuid AND ur.status='active' AND ur.deleted_at IS NULL
+             AND (ur.branch_id IS NULL OR $3::uuid IS NULL OR ur.branch_id=$3::uuid) AND (ur.starts_at IS NULL OR ur.starts_at<=now()) AND (ur.ends_at IS NULL OR ur.ends_at>now())
+            JOIN public.role_permissions rp ON rp.role_id=ur.role_id AND rp.tenant_id=$1::uuid AND rp.status='active' AND rp.deleted_at IS NULL
+            JOIN public.permissions p ON p.id=rp.permission_id AND p.status='active' AND p.deleted_at IS NULL
+        ), conflicts AS (
+          SELECT su.id AS user_id, su.display_name, su.email, r.id AS rule_id, r.rule_key, r.permission_a, r.permission_b, r.severity, r.description
+            FROM scoped_users su JOIN public.identity_sod_rules r ON (r.tenant_id IS NULL OR r.tenant_id=$1::uuid) AND r.status='active'
+           WHERE EXISTS (SELECT 1 FROM grants g WHERE g.user_id=su.id AND g.permission_key=r.permission_a)
+             AND EXISTS (SELECT 1 FROM grants g WHERE g.user_id=su.id AND g.permission_key=r.permission_b)
+        ) SELECT * FROM conflicts ORDER BY severity DESC, display_name, rule_key`,
+        [tenantId, schoolId, branchId || null],
+      );
+      return res.json({ success: true, source: 'canonical_database', conflicts: result.rows });
+    } catch (error) { return next(error instanceof Error ? error : new DatabaseError('تعذر تحميل تعارضات فصل المهام.')); }
+  });
+
+  app.get('/api/school/sod-rules', authenticateRequest, requirePermissionOnly(PERMISSIONS.IDENTITY_USERS_READ), async (req, res, next) => {
+    if (!platformAdminPool) return next(new DatabaseError('مصدر الهوية المركزي غير متاح.'));
+    try {
+      const { tenantId } = schoolIdentityScope(req);
+      const result = await platformAdminPool.query(`SELECT * FROM public.identity_sod_rules WHERE tenant_id IS NULL OR tenant_id=$1::uuid ORDER BY severity DESC, rule_key`, [tenantId]);
+      return res.json({ success: true, rules: result.rows });
+    } catch (error) { return next(error instanceof Error ? error : new DatabaseError('تعذر تحميل قواعد فصل المهام.')); }
+  });
+
+  app.post('/api/school/sod-rules', authenticateRequest, requirePermissionOnly(PERMISSIONS.IDENTITY_USERS_ASSIGN), async (req, res, next) => {
+    if (!platformAdminPool) return next(new DatabaseError('مصدر الهوية المركزي غير متاح.'));
+    const requestId = String(req.body?.requestId || req.get('X-Request-Id') || randomUUID()).trim();
+    const correlationId = String(req.body?.correlationId || req.get('X-Correlation-Id') || randomUUID()).trim();
+    try {
+      const { tenantId, schoolId, actorAuthUserId } = schoolIdentityScope(req);
+      const ruleKey = String(req.body?.ruleKey || '').trim().toLowerCase().replace(/[^a-z0-9._-]/g, '');
+      const a = permissionRegistry.normalize(req.body?.permissionA);
+      const b = permissionRegistry.normalize(req.body?.permissionB);
+      const severity = String(req.body?.severity || 'high').trim().toLowerCase();
+      const description = String(req.body?.description || '').trim();
+      if (!ruleKey || !a || !b || a === b || a >= b) return next(new ValidationError('قاعدة التعارض أو ترتيب الصلاحيات غير صالح.'));
+      if (!['low','medium','high','critical'].includes(severity)) return next(new ValidationError('درجة التعارض غير صالحة.'));
+      if (description.length < 5 || description.length > 1000) return next(new ValidationError('وصف قاعدة التعارض مطلوب.'));
+      const client = await platformAdminPool.connect();
+      try {
+        await client.query('BEGIN');
+        const actor = await client.query(`SELECT id FROM public.users WHERE tenant_id=$1::uuid AND auth_user_id=$2::uuid AND deleted_at IS NULL LIMIT 1`, [tenantId, actorAuthUserId]);
+        if (actor.rowCount !== 1) throw new AuthenticationError('تعذر تحديد منشئ قاعدة التعارض.');
+        const valid = await client.query(`SELECT permission_key FROM public.permissions WHERE status='active' AND deleted_at IS NULL AND permission_key=ANY($1::text[]) AND (tenant_id IS NULL OR tenant_id=$2::uuid)`, [[a, b], tenantId]);
+        if (valid.rowCount !== 2) throw new ValidationError('قاعدة التعارض تحتوي صلاحية غير منشورة.');
+        const inserted = await client.query(`INSERT INTO public.identity_sod_rules (tenant_id, rule_key, permission_a, permission_b, severity, description) VALUES ($1::uuid,$2,$3,$4,$5,$6) RETURNING *`, [tenantId, ruleKey, a, b, severity, description]);
+        const row = inserted.rows[0];
+        const auditId = await recordAccessGovernanceAudit(client, { tenantId, schoolId, actorUserId: actor.rows[0].id, requestId, correlationId, action: 'sod_rule_created', entityId: row.id, before: null, after: row, reason: description });
+        await client.query('COMMIT');
+        return res.status(201).json({ success: true, requestId, correlationId, auditId, rule: row });
+      } catch (error) { await client.query('ROLLBACK').catch(() => undefined); return next(error instanceof Error ? error : new DatabaseError('تعذر إنشاء قاعدة فصل المهام.')); }
+      finally { client.release(); }
+    } catch (error) { return next(error instanceof Error ? error : new DatabaseError('تعذر إنشاء قاعدة فصل المهام.')); }
+  });
+
   app.get('/api/school/identity-roles', authenticateRequest, requirePermissionOnly(PERMISSIONS.IDENTITY_USERS_READ), async (req, res, next) => {
     if (!platformAdminPool) return next(new DatabaseError('مصدر الهوية المركزي غير متاح.'));
     try {
