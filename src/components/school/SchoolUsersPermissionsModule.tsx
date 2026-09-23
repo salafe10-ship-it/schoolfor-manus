@@ -66,7 +66,7 @@ const statusLabels: Record<SchoolUser['status'], string> = {
 };
 
 type StatusFilter = 'all' | SchoolUser['status'];
-type ManagementView = 'users' | 'roles' | 'permissions';
+type ManagementView = 'users' | 'roles' | 'permissions' | 'report';
 type PermissionStateFilter = 'all' | 'effective' | 'direct' | 'inherited' | 'unassigned' | 'denied';
 
 export default function SchoolUsersPermissionsModule({ selectedSchool, selectedBranch, triggerNotification, onBackToMainMenu, canManage = false, canAssign = false }: Props) {
@@ -414,6 +414,15 @@ export default function SchoolUsersPermissionsModule({ selectedSchool, selectedB
     return { left, right, rows: allKeys.map((permissionKey) => ({ permissionKey, left: leftKeys.has(permissionKey), right: rightKeys.has(permissionKey) })) };
   }, [compareRoleKeys, roles]);
 
+  const effectivePermissionReport = useMemo(() => users.map((user) => {
+    const roleKeys = new Set((user.roles || []).map((role) => role.roleKey));
+    const inherited = new Set(roles.filter((role) => roleKeys.has(role.roleKey)).flatMap((role) => (role.permissions || []).map((permission) => permission.permissionKey)));
+    const denied = new Set((user.directPermissions || []).filter((permission) => permission.effect === 'deny').map((permission) => permission.permissionKey));
+    const directAllowed = new Set((user.directPermissions || []).filter((permission) => permission.effect !== 'deny').map((permission) => permission.permissionKey));
+    const effective = new Set([...inherited, ...directAllowed].filter((permissionKey) => !denied.has(permissionKey)));
+    return { user, inherited: inherited.size, direct: directAllowed.size, denied: denied.size, effective: effective.size };
+  }), [roles, users]);
+
   // The permission editor intentionally owns the whole working surface. This
   // keeps the security decision readable on smaller screens and prevents an
   // administrator from confusing a role permission with a direct exception.
@@ -532,6 +541,7 @@ export default function SchoolUsersPermissionsModule({ selectedSchool, selectedB
             ['users', 'المستخدمون والوظائف'],
             ['roles', 'الأدوار المعتمدة'],
             ['permissions', 'مصفوفة الصلاحيات'],
+            ['report', 'تقرير الصلاحيات الفعالة'],
           ] as Array<[ManagementView, string]>).map(([view, label]) => (
             <button key={view} type="button" onClick={() => setActiveView(view)} className={`rounded-xl px-4 py-2.5 text-xs font-black transition ${activeView === view ? 'bg-slate-950 text-amber-300 shadow' : 'text-slate-600 hover:bg-amber-50 hover:text-amber-800'}`}>
               {label}
@@ -554,6 +564,11 @@ export default function SchoolUsersPermissionsModule({ selectedSchool, selectedB
         {activeView === 'permissions' && <section className="identity-panel overflow-hidden rounded-3xl border border-slate-200 bg-white shadow-sm" aria-labelledby="permissions-screen-title">
           <div className="border-b border-slate-100 bg-slate-50 p-5"><h2 id="permissions-screen-title" className="font-black">مصفوفة وإدارة الصلاحيات حسب الموظف</h2><p className="mt-1 text-xs leading-5 text-slate-500">اختر الموظف لإدارة التفويض الكامل داخل نطاق المدرسة الحالية. القالب المركزي أساس قابل للتخصيص محليًا، والمنع المركزي محمي من أي تجاوز.</p></div>
           <div className="divide-y divide-slate-100">{users.map((user) => <div key={user.id} className="flex flex-col gap-3 p-4 sm:flex-row sm:items-center sm:justify-between"><div><div className="font-black">{user.display_name}</div><div className="mt-1 text-xs text-slate-500">{user.job_title || 'مسمى وظيفي غير محدد'} • {(user.roles || []).map((role) => role.name).join('، ') || 'دون دور'}</div></div><div className="flex flex-wrap items-center gap-2 text-[10px] font-black"><span className="rounded-full bg-emerald-50 px-2.5 py-1 text-emerald-700">{(user.roles || []).length} دور</span><span className="rounded-full bg-amber-50 px-2.5 py-1 text-amber-800">{(user.directPermissions || []).filter((permission) => permission.source === 'school' && permission.effect !== 'deny').length} منح محلية</span><span className="rounded-full bg-rose-50 px-2.5 py-1 text-rose-700">{(user.directPermissions || []).filter((permission) => permission.source === 'school' && permission.effect === 'deny').length} منع محلي</span><button type="button" disabled={!canAssign} onClick={() => openPermissionEditor(user)} className="rounded-xl bg-slate-950 px-3 py-2 text-[10px] font-black text-amber-300 disabled:cursor-not-allowed disabled:opacity-50">إدارة قرارات المدرسة</button></div></div>)}{users.length === 0 && <div className="p-12 text-center text-sm font-bold text-slate-500">لا توجد حسابات لعرض مصفوفة الصلاحيات.</div>}</div>
+        </section>}
+
+        {activeView === 'report' && <section className="identity-panel overflow-hidden rounded-3xl border border-slate-200 bg-white shadow-sm" aria-labelledby="effective-report-title">
+          <div className="border-b border-slate-100 bg-slate-50 p-5"><h2 id="effective-report-title" className="font-black">تقرير الصلاحيات الفعالة</h2><p className="mt-1 text-xs leading-5 text-slate-500">قراءة موحدة للصلاحيات الموروثة من الدور، والمنح المباشرة، والمنع المسجل لكل مستخدم داخل نطاق المدرسة.</p></div>
+          <div className="overflow-x-auto"><table className="w-full min-w-[820px] text-right text-sm"><thead className="bg-slate-950 text-xs text-amber-200"><tr><th className="p-4">المستخدم</th><th className="p-4">الوظيفة والقسم</th><th className="p-4">الدور</th><th className="p-4">موروثة</th><th className="p-4">منح مباشرة</th><th className="p-4">منع</th><th className="p-4">فعالة</th></tr></thead><tbody className="divide-y divide-slate-100">{effectivePermissionReport.map(({ user, inherited, direct, denied, effective }) => <tr key={user.id}><td className="p-4"><div className="font-black">{user.display_name}</div><div className="text-xs text-slate-500">{user.email || user.username || 'هوية داخلية'}</div></td><td className="p-4">{user.job_title || '—'}<div className="text-xs text-slate-500">{user.department || '—'}</div></td><td className="p-4">{(user.roles || []).map((role) => role.name).join('، ') || 'دون دور'}</td><td className="p-4 font-black text-emerald-700">{inherited}</td><td className="p-4 font-black text-amber-700">{direct}</td><td className="p-4 font-black text-rose-700">{denied}</td><td className="p-4 font-black text-slate-950">{effective}</td></tr>)}</tbody></table>{effectivePermissionReport.length === 0 && <div className="p-12 text-center text-sm font-bold text-slate-500">لا توجد بيانات صلاحيات متاحة.</div>}</div>
         </section>}
 
         <div className="rounded-2xl border border-amber-200 bg-amber-50 p-4 text-xs leading-6 text-amber-950"><b>سياسة الصلاحيات:</b> المدرسة الأم تنشر القوالب الأساسية، وكل مدرسة تدير مستخدميها وتفويضاتها المحلية داخل نطاقها فقط. لا يمكن منح Platform.Admin أو تجاوز منع مركزي، ولا تنتقل التفويضات المحلية إلى مدرسة أخرى.</div>
