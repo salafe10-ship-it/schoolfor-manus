@@ -13,4 +13,14 @@ describe('identity review and SoD schema', () => {
     expect(migration).not.toContain('INSERT INTO');
     expect(readFileSync(resolve(process.cwd(), 'scripts/apply-identity-structure-migrations.ts'), 'utf8')).toContain('202609231200_identity_review_sod.sql');
   });
+
+  it('requires review generation to snapshot effective permissions from the database', () => {
+    const server = readFileSync(resolve(process.cwd(), 'server.ts'), 'utf8');
+    const reviewGeneration = server.slice(server.indexOf("app.post('/api/school/access-reviews/generate'"), server.indexOf("app.patch('/api/school/access-reviews/:reviewId/decision'"));
+    expect(reviewGeneration).toContain('jsonb_agg');
+    expect(reviewGeneration).toContain("entries.effect='allow'");
+    expect(reviewGeneration).toContain('upg.ends_at>now()');
+    expect(reviewGeneration).toContain("denied.effect='deny'");
+    expect(reviewGeneration).not.toContain("now() + interval '90 days', '[]'::jsonb");
+  });
 });
