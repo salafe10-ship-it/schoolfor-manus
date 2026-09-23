@@ -6,6 +6,8 @@ coverage/
 .vite/
 .turbo/
 .cache/
+.codex-worktrees/
+.wrangler/
 backups/
 *.tsbuildinfo
 .DS_Store
@@ -18,3 +20,6 @@ backups/
 # Local runtime artifacts; never publish logs or generated fallback audit data.
 +
 src/db/auditlogs_database.json
+
+# Local visual QA reports; never publish generated review artifacts.
+VISUAL_TEST_REPORT_*.md
