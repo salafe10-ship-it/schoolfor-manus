@@ -256,12 +256,13 @@ const ensureIdentityJobSchema = async (): Promise<void> => {
   if (!platformAdminPool) return;
   const schemaCheck = await platformAdminPool.query(
     `SELECT 1 FROM information_schema.columns
-      WHERE table_schema = 'public' AND table_name = 'users' AND column_name = 'job_id' LIMIT 1`,
+      WHERE table_schema = 'public' AND table_name = 'users' AND column_name IN ('job_id', 'employee_id')
+      GROUP BY table_name HAVING COUNT(*) = 2`,
   );
   if (schemaCheck.rowCount === 1) return;
   if (!identityJobSchemaPromise) {
     identityJobSchemaPromise = platformAdminPool.query(
-      `ALTER TABLE public.users ADD COLUMN IF NOT EXISTS job_id text`,
+      `ALTER TABLE public.users ADD COLUMN IF NOT EXISTS job_id text; ALTER TABLE public.users ADD COLUMN IF NOT EXISTS employee_id text`,
     ).then(() => undefined).catch((error) => {
       identityJobSchemaPromise = null;
       throw error;
@@ -6877,7 +6878,7 @@ export async function createApp(options: { cloudflare?: boolean } = {}): Promise
       // Supabase control channel as RBAC resolution. This avoids waiting on a
       // second Hyperdrive pool for a query that does not need a transaction.
       if (platformControl) {
-        const users = await readPlatformRows('users', 'id, auth_user_id, tenant_id, school_id, branch_id, username, email, display_name, job_title, department, status, version, session_revoked_at, force_password_change, created_at', (query) => query
+        const users = await readPlatformRows('users', 'id, auth_user_id, tenant_id, school_id, branch_id, username, email, display_name, employee_id, job_title, department, status, version, session_revoked_at, force_password_change, created_at', (query) => query
           .eq('tenant_id', tenantId)
           .eq('school_id', schoolId)
           .is('deleted_at', null));
@@ -6954,7 +6955,7 @@ export async function createApp(options: { cloudflare?: boolean } = {}): Promise
       // false error "المستخدم غير موجود داخل مدرسة الجلسة الحالية".
       const result = await platformAdminPool.query(
         `SELECT u.id, u.auth_user_id, u.tenant_id, u.school_id, u.branch_id,
-                u.username, u.job_id,
+                u.username, u.employee_id, u.job_id,
                 u.email AS email,
                 u.display_name, u.job_title, u.department, u.status, u.version,
                 u.session_revoked_at, u.force_password_change, u.created_at,
@@ -7013,6 +7014,7 @@ export async function createApp(options: { cloudflare?: boolean } = {}): Promise
       if (runtimeSchemaBootstrapEnabled) await ensureIdentityJobSchema();
       const { tenantId, schoolId, actorAuthUserId } = schoolIdentityScope(req);
       const displayName = String(req.body?.name || req.body?.displayName || '').trim();
+      const employeeId = String(req.body?.employeeId || '').trim();
       const jobId = String(req.body?.jobId || '').trim();
       const jobTitle = String(req.body?.jobTitle || '').trim();
       const department = String(req.body?.department || '').trim();
@@ -7029,6 +7031,7 @@ export async function createApp(options: { cloudflare?: boolean } = {}): Promise
       let branchId = String(req.body?.branchId || '').trim();
       if (!/^[0-9a-f-]{36}$/i.test(requestId) || !/^[0-9a-f-]{36}$/i.test(correlationId)) return next(new ValidationError('معرف الطلب أو الارتباط غير صالح.'));
       if (displayName.length < 2 || displayName.length > 160) return next(new ValidationError('اسم المستخدم يجب أن يكون بين حرفين و160 حرفاً.'));
+      if (!employeeId) return next(new ValidationError('اختيار موظف من سجل شؤون الموظفين إلزامي لإنشاء الحساب.'));
       if (jobId.length > 120 || jobTitle.length > 160 || department.length > 160) return next(new ValidationError('الوظيفة أو المسمى الوظيفي أو القسم يتجاوز الحد المسموح.'));
       if (email && !/^\S+@\S+\.\S+$/.test(email)) return next(new ValidationError('البريد الإلكتروني غير صالح.'));
       if (requestedPassword && requestedPassword.length < 8) return next(new ValidationError('كلمة المرور يجب ألا تقل عن 8 رموز.'));
@@ -7075,6 +7078,10 @@ export async function createApp(options: { cloudflare?: boolean } = {}): Promise
         const roleSpec = { name: roleLookup.rows[0].name, description: roleLookup.rows[0].description, permissions: roleLookup.rows[0].permission_keys as string[] };
         const roleId = roleLookup.rows[0].id;
         let resolvedJobTitle = jobTitle;
+        const employeeResult = await client.query(`SELECT employee->>'id' AS employee_id, employee->>'name' AS employee_name, employee->>'jobId' AS employee_job_id FROM public.hr_database h CROSS JOIN LATERAL jsonb_array_elements(COALESCE(h.data->'employees', '[]'::jsonb)) AS employee WHERE h.tenant_id = $1::uuid AND h.school_id = $2::uuid AND employee->>'id' = $3 AND COALESCE(employee->>'status', '') <> 'resigned' LIMIT 1`, [tenantId, schoolId, employeeId]);
+        if (employeeResult.rowCount !== 1) return next(new ConflictError('الموظف المختار غير موجود أو غير نشط في دليل شؤون الموظفين الحالي.'));
+        if (employeeResult.rows[0].employee_name !== displayName) return next(new ConflictError('اسم المستخدم يجب أن يطابق اسم الموظف المختار من شؤون الموظفين.'));
+        if (jobId && employeeResult.rows[0].employee_job_id && employeeResult.rows[0].employee_job_id !== jobId) return next(new ConflictError('الوظيفة لا تطابق سجل الموظف المختار.'));
         if (jobId) {
           const jobResult = await client.query(
             `SELECT job->>'titleAr' AS title_ar, job->>'titleEn' AS title_en
@@ -7096,7 +7103,7 @@ export async function createApp(options: { cloudflare?: boolean } = {}): Promise
         if (authResult.error || !authResult.data.user) throw new ExternalServiceError(authResult.error?.message || 'تعذر إنشاء هوية Supabase Auth.');
         authUserId = authResult.data.user.id;
         await client.query('BEGIN');
-        const userResult = await client.query(`INSERT INTO public.users (auth_user_id, tenant_id, school_id, branch_id, username, email, display_name, job_id, job_title, department, status, force_password_change, created_by, updated_by) VALUES ($1::uuid, $2::uuid, $3::uuid, $4::uuid, $5, $6, $7, $8, $9, $10, 'active', $11, $12::uuid, $12::uuid) RETURNING id, auth_user_id, tenant_id, school_id, branch_id, username, email, display_name, job_id, job_title, department, status, force_password_change, version, created_at`, [authUserId, tenantId, schoolId, branchId, loginIdentity.username, email, displayName, jobId || null, resolvedJobTitle || null, department || null, !requestedPassword, actorAuthUserId]);
+        const userResult = await client.query(`INSERT INTO public.users (auth_user_id, tenant_id, school_id, branch_id, username, email, display_name, employee_id, job_id, job_title, department, status, force_password_change, created_by, updated_by) VALUES ($1::uuid, $2::uuid, $3::uuid, $4::uuid, $5, $6, $7, $8, $9, $10, $11, 'active', $12, $13::uuid, $13::uuid) RETURNING id, auth_user_id, tenant_id, school_id, branch_id, username, email, display_name, employee_id, job_id, job_title, department, status, force_password_change, version, created_at`, [authUserId, tenantId, schoolId, branchId, loginIdentity.username, email, displayName, employeeId, jobId || null, resolvedJobTitle || null, department || null, !requestedPassword, actorAuthUserId]);
         for (const permissionKey of roleSpec.permissions) {
           const { resource, action } = describePermission(permissionKey);
           const permissionResult = await client.query(`INSERT INTO public.permissions (tenant_id, permission_key, resource, action, description, status, created_by, updated_by) VALUES (NULL, $1, $2, $3, $1, 'active', $4::uuid, $4::uuid) ON CONFLICT (permission_key) DO UPDATE SET status = 'active', deleted_at = NULL, deleted_by = NULL, updated_at = now() RETURNING id`, [permissionKey, resource, action, actorAuthUserId]);
