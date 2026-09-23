@@ -6294,7 +6294,39 @@ export async function createApp(options: { cloudflare?: boolean } = {}): Promise
         if (actor.rowCount !== 1) throw new AuthenticationError('تعذر تحديد منشئ دورة المراجعة.');
         const created = await client.query(
           `INSERT INTO public.identity_access_reviews (tenant_id, school_id, branch_id, user_id, due_at, permission_snapshot, created_by, updated_by)
-           SELECT u.tenant_id, u.school_id, u.branch_id, u.id, now() + interval '90 days', '[]'::jsonb, $4::uuid, $4::uuid
+           SELECT u.tenant_id, u.school_id, u.branch_id, u.id, now() + interval '90 days',
+                  COALESCE((
+                    SELECT jsonb_agg(jsonb_build_object('permissionKey', effective.permission_key, 'resource', effective.resource, 'action', effective.action, 'source', effective.source) ORDER BY effective.permission_key)
+                      FROM (
+                        SELECT DISTINCT entries.permission_key, entries.resource, entries.action, entries.source
+                          FROM (
+                            SELECT p.permission_key, p.resource, p.action, 'inherited'::text AS source, 'allow'::text AS effect
+                              FROM public.user_roles ur
+                              JOIN public.role_permissions rp ON rp.role_id=ur.role_id AND rp.tenant_id=$1::uuid AND rp.status='active' AND rp.deleted_at IS NULL
+                              JOIN public.permissions p ON p.id=rp.permission_id AND p.status='active' AND p.deleted_at IS NULL
+                             WHERE ur.user_id=u.id AND ur.tenant_id=$1::uuid AND ur.status='active' AND ur.deleted_at IS NULL
+                               AND (ur.school_id IS NULL OR ur.school_id=$2::uuid) AND (ur.branch_id IS NULL OR $3::uuid IS NULL OR ur.branch_id=$3::uuid)
+                               AND (ur.starts_at IS NULL OR ur.starts_at<=now()) AND (ur.ends_at IS NULL OR ur.ends_at>now())
+                            UNION ALL
+                            SELECT p.permission_key, p.resource, p.action, COALESCE(upg.source,'school')::text, upg.effect::text
+                              FROM public.user_permission_grants upg
+                              JOIN public.permissions p ON p.id=upg.permission_id AND p.status='active' AND p.deleted_at IS NULL
+                             WHERE upg.user_id=u.id AND upg.tenant_id=$1::uuid AND upg.school_id=$2::uuid AND upg.status='active' AND upg.deleted_at IS NULL
+                               AND (upg.branch_id IS NULL OR $3::uuid IS NULL OR upg.branch_id=$3::uuid) AND (upg.starts_at IS NULL OR upg.starts_at<=now()) AND (upg.ends_at IS NULL OR upg.ends_at>now())
+                          ) entries
+                         WHERE entries.effect='allow'
+                           AND NOT EXISTS (
+                             SELECT 1 FROM (
+                               SELECT p2.permission_key, upg2.effect::text AS effect
+                                 FROM public.user_permission_grants upg2
+                                 JOIN public.permissions p2 ON p2.id=upg2.permission_id AND p2.status='active' AND p2.deleted_at IS NULL
+                                WHERE upg2.user_id=u.id AND upg2.tenant_id=$1::uuid AND upg2.school_id=$2::uuid AND upg2.status='active' AND upg2.deleted_at IS NULL
+                                  AND (upg2.branch_id IS NULL OR $3::uuid IS NULL OR upg2.branch_id=$3::uuid) AND (upg2.starts_at IS NULL OR upg2.starts_at<=now()) AND (upg2.ends_at IS NULL OR upg2.ends_at>now())
+                             ) denied
+                            WHERE denied.permission_key=entries.permission_key AND denied.effect='deny'
+                           )
+                      ) effective
+                  ), '[]'::jsonb), $4::uuid, $4::uuid
              FROM public.users u
             WHERE u.tenant_id=$1::uuid AND u.school_id=$2::uuid AND u.deleted_at IS NULL AND u.status IN ('active','invited')
               AND ($3::uuid IS NULL OR u.branch_id IS NULL OR u.branch_id=$3::uuid)
