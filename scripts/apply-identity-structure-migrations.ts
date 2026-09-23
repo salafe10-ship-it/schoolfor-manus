@@ -7,6 +7,7 @@ const migrations = [
   '202609101200_identity_job_reference.sql',
   '202609231000_identity_access_governance.sql',
   '202609231100_identity_access_governance_hardening.sql',
+  '202609231200_identity_review_sod.sql',
   '202609141100_harden_audit_actor_policy.sql',
   '202609141200_harden_student_fee_audit_actor_policy.sql',
 ];
