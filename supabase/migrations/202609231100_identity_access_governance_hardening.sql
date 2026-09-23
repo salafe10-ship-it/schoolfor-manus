@@ -74,6 +74,15 @@ BEGIN
   IF NOT EXISTS (SELECT 1 FROM pg_constraint WHERE conname = 'identity_access_requests_requested_by_fk') THEN
     ALTER TABLE public.identity_access_requests ADD CONSTRAINT identity_access_requests_requested_by_fk FOREIGN KEY (requested_by) REFERENCES public.users(id);
   END IF;
+  IF NOT EXISTS (SELECT 1 FROM pg_constraint WHERE conname = 'identity_access_request_approvals_request_fk') THEN
+    ALTER TABLE public.identity_access_request_approvals ADD CONSTRAINT identity_access_request_approvals_request_fk FOREIGN KEY (request_id) REFERENCES public.identity_access_requests(id) ON DELETE CASCADE;
+  END IF;
+  IF NOT EXISTS (SELECT 1 FROM pg_constraint WHERE conname = 'user_permission_grants_user_fk') THEN
+    ALTER TABLE public.user_permission_grants ADD CONSTRAINT user_permission_grants_user_fk FOREIGN KEY (user_id) REFERENCES public.users(id);
+  END IF;
+  IF NOT EXISTS (SELECT 1 FROM pg_constraint WHERE conname = 'user_permission_grants_permission_fk') THEN
+    ALTER TABLE public.user_permission_grants ADD CONSTRAINT user_permission_grants_permission_fk FOREIGN KEY (permission_id) REFERENCES public.permissions(id);
+  END IF;
 END $$;
 
 ALTER TABLE public.identity_access_requests ENABLE ROW LEVEL SECURITY;
