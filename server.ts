@@ -6509,7 +6509,7 @@ export async function createApp(options: { cloudflare?: boolean } = {}): Promise
   });
 
   app.get('/api/school/identity-roles', authenticateRequest, requirePermissionOnly(PERMISSIONS.IDENTITY_USERS_READ), async (req, res, next) => {
-    if (!platformAdminPool) return next(new DatabaseError('مصدر الهوية المركزي غير متاح.'));
+    if (!platformControl && !platformAdminPool) return next(new DatabaseError('مصدر الهوية المركزي غير متاح.'));
     try {
       const { tenantId, schoolId, branchId } = schoolIdentityScope(req);
       // Use the canonical relational catalogue below even when the platform
@@ -6521,7 +6521,60 @@ export async function createApp(options: { cloudflare?: boolean } = {}): Promise
       // Hydrate only the canonical default role catalogue for this tenant,
       // atomically and idempotently, so the create-user selector never opens
       // with an empty role list because of provisioning order.
-      const client = await platformAdminPool.connect();
+      // Worker reads use the same Supabase control channel as the school
+      // directory. This avoids a second pg/Hyperdrive connection for a
+      // read-only catalogue, which can be unavailable even while the trusted
+      // control-plane channel is healthy.
+      if (platformControl) {
+        const scopedRoles = await readPlatformRows('roles', 'id, role_key, name, description, version, tenant_id, school_id, branch_id, status, deleted_at', (query) => query
+          .eq('tenant_id', tenantId)
+          .eq('status', 'active')
+          .is('deleted_at', null));
+        const roles = scopedRoles.filter((role: any) =>
+          (!role.school_id || role.school_id === schoolId)
+          && (!role.branch_id || !branchId || role.branch_id === branchId));
+        const roleIds = roles.map((role: any) => role.id).filter(Boolean);
+        const rolePermissions = roleIds.length ? await readPlatformRows('role_permissions', 'role_id, permission_id, tenant_id, status, deleted_at', (query) => query
+          .in('role_id', roleIds)
+          .eq('tenant_id', tenantId)
+          .eq('status', 'active')
+          .is('deleted_at', null)) : [];
+        const permissionIds = [...new Set(rolePermissions.map((entry: any) => entry.permission_id).filter(Boolean))];
+        const permissions = permissionIds.length ? await readPlatformRows('permissions', 'id, permission_key, resource, action, tenant_id, status, deleted_at', (query) => query
+          .in('id', permissionIds)
+          .eq('status', 'active')
+          .is('deleted_at', null)) : [];
+        const permissionsById = new Map(permissions.map((permission: any) => [permission.id, permission]));
+        const permissionsByRole = new Map<string, any[]>();
+        for (const assignment of rolePermissions) {
+          const permission = permissionsById.get(assignment.permission_id);
+          if (!permission) continue;
+          const current = permissionsByRole.get(assignment.role_id) || [];
+          current.push({ permissionKey: permission.permission_key, resource: permission.resource, action: permission.action });
+          permissionsByRole.set(assignment.role_id, current);
+        }
+        const permissionCatalog = [...new Set(permissionRegistry.list())]
+          .filter((permissionKey) => permissionKey !== PERMISSIONS.PLATFORM_ADMIN)
+          .map((permissionKey) => {
+            const { resource, action } = describePermission(permissionKey);
+            return { permissionKey, resource, action, description: permissionKey };
+          })
+          .sort((left, right) => left.permissionKey.localeCompare(right.permissionKey));
+        return res.json({
+          success: true,
+          source: 'canonical_control_plane',
+          roles: roles.map((role: any) => ({
+            id: role.id,
+            roleKey: role.role_key,
+            name: role.name,
+            description: role.description,
+            version: role.version,
+            permissions: permissionsByRole.get(role.id) || [],
+          })),
+          permissionCatalog,
+        });
+      }
+      const client = await platformAdminPool!.connect();
       let result: any;
       try {
         await client.query('BEGIN');
