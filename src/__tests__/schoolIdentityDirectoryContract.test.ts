@@ -25,6 +25,11 @@ describe('school-scoped identity directory contracts', () => {
     expect(server).toContain("operation === 'set_permissions'");
     expect(server).toContain('permissionKeys.length !== requested.length');
     expect(server).toContain('permissionCatalog');
+    expect(server).toContain("readPlatformRows('user_roles'");
+    expect(server).toContain("readPlatformRows('role_permissions'");
+    expect(server).toContain("readPlatformRows('user_permission_grants'");
+    expect(server).toContain('rolesByUser.get(user.id) || []');
+    expect(server).toContain('permissionsByUser.get(user.id) || []');
     expect(server).toContain('const loginIdentity = provisionLoginIdentity(req.body?.email);');
     expect(server).toContain('loginIdentifier: loginIdentity.loginIdentifier');
     expect(server).toContain('username, email');
@@ -110,6 +115,7 @@ describe('school-scoped identity directory contracts', () => {
     expect(module).toContain('الصلاحية الفعالة');
     expect(module).toContain('تحديد المباشر الظاهر');
     expect(module).toContain('حفظ الصلاحيات وتسجيلها');
+    expect(module).toContain('setRoleDrafts((drafts) => ({ ...drafts, [user.id]: user.roles?.[0]?.roleKey || \'\' }));');
     expect(module).toContain('visiblePermissionGroups');
     expect(module).toContain('setModuleDirectPermissions');
     expect(module).toContain('وحدة {group.label}');

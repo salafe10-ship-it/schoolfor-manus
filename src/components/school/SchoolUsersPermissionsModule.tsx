@@ -227,6 +227,13 @@ export default function SchoolUsersPermissionsModule({ selectedSchool, selectedB
       await load();
       return true;
     } catch (saveError) {
+      setRoleDrafts((drafts) => ({ ...drafts, [user.id]: user.roles?.[0]?.roleKey || '' }));
+      setPermissionDrafts((drafts) => ({
+        ...drafts,
+        [user.id]: (user.directPermissions || [])
+          .filter((permission) => permission.effect !== 'deny' && permission.source === 'school')
+          .map((permission) => permission.permissionKey),
+      }));
       notify(saveError instanceof Error ? saveError.message : 'تعذر حفظ التغيير.', 'warning');
       return false;
     } finally { setSaving(false); }
