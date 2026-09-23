@@ -8,6 +8,10 @@ describe('identity governance database verifier', () => {
     expect(script).toContain('relforcerowsecurity');
     expect(script).toContain('identity_access_request_approvals_request_fk');
     expect(script).toContain('user_permission_grants_permission_fk');
+    expect(script).toContain("identity_access_reviews");
+    expect(script).toContain("identity_sod_rules");
+    expect(script).toContain('review_columns === 7');
+    expect(script).toContain('sod_rule_columns === 6');
     expect(script).not.toContain('INSERT INTO');
     expect(script).not.toContain('ALTER TABLE');
     expect(script).not.toContain('DROP ');
