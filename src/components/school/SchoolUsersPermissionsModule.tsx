@@ -68,6 +68,7 @@ const statusLabels: Record<SchoolUser['status'], string> = {
 type StatusFilter = 'all' | SchoolUser['status'];
 type ManagementView = 'users' | 'roles' | 'permissions' | 'report';
 type PermissionStateFilter = 'all' | 'effective' | 'direct' | 'inherited' | 'unassigned' | 'denied';
+type EffectivePermissionReportRow = { id: string; display_name: string; email?: string; username?: string; job_title?: string; department?: string; inherited_count: number; direct_count: number; denied_count: number; effective_count: number };
 
 export default function SchoolUsersPermissionsModule({ selectedSchool, selectedBranch, triggerNotification, onBackToMainMenu, canManage = false, canAssign = false }: Props) {
   const [users, setUsers] = useState<SchoolUser[]>([]);
@@ -94,6 +95,7 @@ export default function SchoolUsersPermissionsModule({ selectedSchool, selectedB
   const [roleFilter, setRoleFilter] = useState('all');
   const [activeView, setActiveView] = useState<ManagementView>('users');
   const [compareRoleKeys, setCompareRoleKeys] = useState({ left: '', right: '' });
+  const [serverEffectiveReport, setServerEffectiveReport] = useState<EffectivePermissionReportRow[]>([]);
   const [form, setForm] = useState({ name: '', email: '', jobId: '', jobTitle: '', department: '', initialRole: '', password: '', branchId: '' });
   const canCreate = canManage && canAssign;
   // Central role templates remain the published baseline. A school manager
@@ -168,6 +170,19 @@ export default function SchoolUsersPermissionsModule({ selectedSchool, selectedB
   }, []);
 
   useEffect(() => { void load(); }, [load]);
+
+  useEffect(() => {
+    if (activeView !== 'report') return;
+    let cancelled = false;
+    void authenticatedRequest('/api/school/effective-permissions', { cache: 'no-store' })
+      .then(async (response) => {
+        const payload = await response.json().catch(() => ({}));
+        if (!response.ok || !payload?.success) throw new Error(payload?.message || 'تعذر تحميل التقرير الخادمي.');
+        if (!cancelled) setServerEffectiveReport(Array.isArray(payload.users) ? payload.users : []);
+      })
+      .catch((reportError) => { if (!cancelled) notify(reportError instanceof Error ? reportError.message : 'تعذر تحميل التقرير الخادمي.', 'warning'); });
+    return () => { cancelled = true; };
+  }, [activeView, notify]);
 
   useEffect(() => {
     if (editing) setForm((current) => ({ ...current, jobId: editing.job_id || '' }));
@@ -568,7 +583,7 @@ export default function SchoolUsersPermissionsModule({ selectedSchool, selectedB
 
         {activeView === 'report' && <section className="identity-panel overflow-hidden rounded-3xl border border-slate-200 bg-white shadow-sm" aria-labelledby="effective-report-title">
           <div className="border-b border-slate-100 bg-slate-50 p-5"><h2 id="effective-report-title" className="font-black">تقرير الصلاحيات الفعالة</h2><p className="mt-1 text-xs leading-5 text-slate-500">قراءة موحدة للصلاحيات الموروثة من الدور، والمنح المباشرة، والمنع المسجل لكل مستخدم داخل نطاق المدرسة.</p></div>
-          <div className="overflow-x-auto"><table className="w-full min-w-[820px] text-right text-sm"><thead className="bg-slate-950 text-xs text-amber-200"><tr><th className="p-4">المستخدم</th><th className="p-4">الوظيفة والقسم</th><th className="p-4">الدور</th><th className="p-4">موروثة</th><th className="p-4">منح مباشرة</th><th className="p-4">منع</th><th className="p-4">فعالة</th></tr></thead><tbody className="divide-y divide-slate-100">{effectivePermissionReport.map(({ user, inherited, direct, denied, effective }) => <tr key={user.id}><td className="p-4"><div className="font-black">{user.display_name}</div><div className="text-xs text-slate-500">{user.email || user.username || 'هوية داخلية'}</div></td><td className="p-4">{user.job_title || '—'}<div className="text-xs text-slate-500">{user.department || '—'}</div></td><td className="p-4">{(user.roles || []).map((role) => role.name).join('، ') || 'دون دور'}</td><td className="p-4 font-black text-emerald-700">{inherited}</td><td className="p-4 font-black text-amber-700">{direct}</td><td className="p-4 font-black text-rose-700">{denied}</td><td className="p-4 font-black text-slate-950">{effective}</td></tr>)}</tbody></table>{effectivePermissionReport.length === 0 && <div className="p-12 text-center text-sm font-bold text-slate-500">لا توجد بيانات صلاحيات متاحة.</div>}</div>
+          <div className="overflow-x-auto"><table className="w-full min-w-[820px] text-right text-sm"><thead className="bg-slate-950 text-xs text-amber-200"><tr><th className="p-4">المستخدم</th><th className="p-4">الوظيفة والقسم</th><th className="p-4">موروثة</th><th className="p-4">منح مباشرة</th><th className="p-4">منع</th><th className="p-4">فعالة</th></tr></thead><tbody className="divide-y divide-slate-100">{(serverEffectiveReport.length ? serverEffectiveReport : effectivePermissionReport.map(({ user, inherited, direct, denied, effective }) => ({ id: user.id, display_name: user.display_name, email: user.email, username: user.username, job_title: user.job_title, department: user.department, inherited_count: inherited, direct_count: direct, denied_count: denied, effective_count: effective }))).map((row) => <tr key={row.id}><td className="p-4"><div className="font-black">{row.display_name}</div><div className="text-xs text-slate-500">{row.email || row.username || 'هوية داخلية'}</div></td><td className="p-4">{row.job_title || '—'}<div className="text-xs text-slate-500">{row.department || '—'}</div></td><td className="p-4 font-black text-emerald-700">{row.inherited_count}</td><td className="p-4 font-black text-amber-700">{row.direct_count}</td><td className="p-4 font-black text-rose-700">{row.denied_count}</td><td className="p-4 font-black text-slate-950">{row.effective_count}</td></tr>)}</tbody></table>{(serverEffectiveReport.length || effectivePermissionReport.length) === 0 && <div className="p-12 text-center text-sm font-bold text-slate-500">لا توجد بيانات صلاحيات متاحة.</div>}</div>
         </section>}
 
         <div className="rounded-2xl border border-amber-200 bg-amber-50 p-4 text-xs leading-6 text-amber-950"><b>سياسة الصلاحيات:</b> المدرسة الأم تنشر القوالب الأساسية، وكل مدرسة تدير مستخدميها وتفويضاتها المحلية داخل نطاقها فقط. لا يمكن منح Platform.Admin أو تجاوز منع مركزي، ولا تنتقل التفويضات المحلية إلى مدرسة أخرى.</div>

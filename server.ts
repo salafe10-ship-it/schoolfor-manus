@@ -6200,6 +6200,68 @@ export async function createApp(options: { cloudflare?: boolean } = {}): Promise
     } catch (error) { return next(error instanceof Error ? error : new DatabaseError('تعذر حفظ قرار طلب الصلاحية.')); }
   });
 
+  app.get('/api/school/effective-permissions', authenticateRequest, requirePermissionOnly(PERMISSIONS.IDENTITY_USERS_READ), async (req, res, next) => {
+    if (!platformAdminPool) return next(new DatabaseError('مصدر الهوية المركزي غير متاح.'));
+    try {
+      const { tenantId, schoolId, branchId } = schoolIdentityScope(req);
+      const userId = String(req.query.userId || '').trim();
+      const permissionKey = String(req.query.permissionKey || '').trim();
+      if (userId && !/^[0-9a-f-]{36}$/i.test(userId)) return next(new ValidationError('معرف المستخدم غير صالح.'));
+      const result = await platformAdminPool.query(
+        `WITH scoped_users AS (
+           SELECT u.id, u.display_name, u.email, u.username, u.job_title, u.department, u.branch_id
+             FROM public.users u
+            WHERE u.tenant_id=$1::uuid AND u.school_id=$2::uuid AND u.deleted_at IS NULL
+              AND ($3::uuid IS NULL OR u.id=$3::uuid)
+              AND ($4::uuid IS NULL OR u.branch_id IS NULL OR u.branch_id=$4::uuid)
+         ), inherited AS (
+           SELECT su.id AS user_id, p.permission_key, p.resource, p.action, 'inherited'::text AS source, 'allow'::text AS effect
+             FROM scoped_users su
+             JOIN public.user_roles ur ON ur.user_id=su.id AND ur.tenant_id=$1::uuid AND ur.status='active' AND ur.deleted_at IS NULL
+              AND (ur.school_id IS NULL OR ur.school_id=$2::uuid) AND (ur.branch_id IS NULL OR $4::uuid IS NULL OR ur.branch_id=$4::uuid)
+              AND (ur.starts_at IS NULL OR ur.starts_at<=now()) AND (ur.ends_at IS NULL OR ur.ends_at>now())
+             JOIN public.roles r ON r.id=ur.role_id AND r.tenant_id=$1::uuid AND r.status='active' AND r.deleted_at IS NULL
+              AND (r.school_id IS NULL OR r.school_id=$2::uuid) AND (r.branch_id IS NULL OR $4::uuid IS NULL OR r.branch_id=$4::uuid)
+             JOIN public.role_permissions rp ON rp.role_id=r.id AND rp.tenant_id=$1::uuid AND rp.status='active' AND rp.deleted_at IS NULL
+             JOIN public.permissions p ON p.id=rp.permission_id AND p.status='active' AND p.deleted_at IS NULL
+         ), direct AS (
+           SELECT su.id AS user_id, p.permission_key, p.resource, p.action, COALESCE(upg.source,'school')::text AS source, upg.effect::text AS effect
+             FROM scoped_users su
+             JOIN public.user_permission_grants upg ON upg.user_id=su.id AND upg.tenant_id=$1::uuid AND upg.school_id=$2::uuid
+              AND (upg.branch_id IS NULL OR $4::uuid IS NULL OR upg.branch_id=$4::uuid) AND upg.status='active' AND upg.deleted_at IS NULL
+              AND (upg.starts_at IS NULL OR upg.starts_at<=now()) AND (upg.ends_at IS NULL OR upg.ends_at>now())
+             JOIN public.permissions p ON p.id=upg.permission_id AND p.status='active' AND p.deleted_at IS NULL
+         ), entries AS (
+           SELECT * FROM inherited UNION ALL SELECT * FROM direct
+         ), effective AS (
+           SELECT DISTINCT e.* FROM entries e
+            WHERE e.effect='allow'
+              AND NOT EXISTS (SELECT 1 FROM entries denied WHERE denied.user_id=e.user_id AND denied.permission_key=e.permission_key AND denied.effect='deny')
+         ), grouped AS (
+           SELECT e.user_id,
+             count(*) FILTER (WHERE e.source='inherited')::int AS inherited_count,
+             count(*) FILTER (WHERE e.source<>'inherited')::int AS direct_count,
+             count(*)::int AS effective_count,
+             jsonb_agg(jsonb_build_object('permissionKey',e.permission_key,'resource',e.resource,'action',e.action,'source',e.source) ORDER BY e.permission_key) AS permissions
+           FROM effective e
+           WHERE ($5='' OR e.permission_key=$5)
+           GROUP BY e.user_id
+         ), denied AS (
+           SELECT e.user_id, count(DISTINCT e.permission_key)::int AS denied_count
+             FROM entries e WHERE e.effect='deny' GROUP BY e.user_id
+         )
+         SELECT su.id, su.display_name, su.email, su.username, su.job_title, su.department, su.branch_id,
+                COALESCE(g.inherited_count,0)::int AS inherited_count, COALESCE(g.direct_count,0)::int AS direct_count,
+                COALESCE(d.denied_count,0)::int AS denied_count, COALESCE(g.effective_count,0)::int AS effective_count,
+                COALESCE(g.permissions,'[]'::jsonb) AS permissions
+           FROM scoped_users su LEFT JOIN grouped g ON g.user_id=su.id LEFT JOIN denied d ON d.user_id=su.id
+          ORDER BY su.display_name ASC`,
+        [tenantId, schoolId, userId || null, branchId || null, permissionKey],
+      );
+      return res.json({ success: true, source: 'canonical_database', scope: { tenantId, schoolId, branchId: branchId || null }, users: result.rows });
+    } catch (error) { return next(error instanceof Error ? error : new DatabaseError('تعذر إنشاء تقرير الصلاحيات الفعالة.')); }
+  });
+
   app.get('/api/school/identity-roles', authenticateRequest, requirePermissionOnly(PERMISSIONS.IDENTITY_USERS_READ), async (req, res, next) => {
     if (!platformAdminPool) return next(new DatabaseError('مصدر الهوية المركزي غير متاح.'));
     try {
