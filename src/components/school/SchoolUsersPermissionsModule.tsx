@@ -460,6 +460,20 @@ export default function SchoolUsersPermissionsModule({ selectedSchool, selectedB
     return { user, inherited: inherited.size, direct: directAllowed.size, denied: denied.size, effective: effective.size };
   }), [roles, users]);
 
+  const generateAccessReviews = async () => {
+    if (!canAssign) { notify('إنشاء دورة المراجعة يتطلب صلاحية إسناد الصلاحيات.', 'warning'); return; }
+    if (!confirmAction('سيتم إنشاء مراجعة دورية لكل حساب نشط أو مدعو لا يملك مراجعة معلقة. هل تريد المتابعة؟')) return;
+    setGovernanceLoading(true);
+    try {
+      const response = await authenticatedRequest('/api/school/access-reviews/generate', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({}) });
+      const payload = await response.json().catch(() => ({}));
+      if (!response.ok || !payload?.success) throw new Error(payload?.message || 'تعذر إنشاء دورة المراجعة.');
+      setAccessReviews((current) => [...(Array.isArray(payload.reviews) ? payload.reviews : []), ...current]);
+      notify(`تم إنشاء ${Number(payload.createdCount || 0)} مراجعة من قاعدة البيانات وتسجيل العملية.`, 'success');
+    } catch (reviewError) { notify(reviewError instanceof Error ? reviewError.message : 'تعذر إنشاء دورة المراجعة.', 'warning'); }
+    finally { setGovernanceLoading(false); }
+  };
+
   // The permission editor intentionally owns the whole working surface. This
   // keeps the security decision readable on smaller screens and prevents an
   // administrator from confusing a role permission with a direct exception.
@@ -610,7 +624,7 @@ export default function SchoolUsersPermissionsModule({ selectedSchool, selectedB
         </section>}
 
         {activeView === 'governance' && <section className="identity-panel space-y-5 overflow-hidden rounded-3xl border border-slate-200 bg-white p-5 shadow-sm" aria-labelledby="governance-screen-title">
-          <div><h2 id="governance-screen-title" className="font-black">حوكمة الوصول ومراجعة التعارضات</h2><p className="mt-1 text-xs leading-5 text-slate-500">قراءة مباشرة من جداول الحوكمة في قاعدة البيانات؛ لا تعرض هذه الشاشة أي بيانات محلية أو افتراضية.</p></div>
+          <div className="flex flex-col gap-3 sm:flex-row sm:items-start sm:justify-between"><div><h2 id="governance-screen-title" className="font-black">حوكمة الوصول ومراجعة التعارضات</h2><p className="mt-1 text-xs leading-5 text-slate-500">قراءة مباشرة من جداول الحوكمة في قاعدة البيانات؛ لا تعرض هذه الشاشة أي بيانات محلية أو افتراضية.</p></div><button type="button" disabled={!canAssign || governanceLoading} onClick={() => void generateAccessReviews()} className="rounded-xl bg-amber-600 px-4 py-2.5 text-xs font-black text-white shadow disabled:cursor-not-allowed disabled:opacity-50">إنشاء دورة مراجعة 90 يومًا</button></div>
           {governanceLoading ? <div className="rounded-2xl bg-slate-50 p-10 text-center text-sm font-bold text-slate-500">جارٍ تحميل سجلات الحوكمة...</div> : <>
             <div className="grid gap-3 sm:grid-cols-3"><div className="rounded-2xl border border-amber-200 bg-amber-50 p-4"><div className="text-2xl font-black text-amber-900">{accessReviews.filter((review) => review.status === 'pending').length}</div><div className="text-xs font-bold text-amber-800">مراجعات معلقة</div></div><div className="rounded-2xl border border-rose-200 bg-rose-50 p-4"><div className="text-2xl font-black text-rose-900">{sodConflicts.length}</div><div className="text-xs font-bold text-rose-800">تعارضات فصل المهام</div></div><div className="rounded-2xl border border-slate-200 bg-slate-50 p-4"><div className="text-2xl font-black text-slate-900">{accessReviews.length}</div><div className="text-xs font-bold text-slate-700">إجمالي سجلات المراجعة</div></div></div>
             <div className="overflow-x-auto rounded-2xl border border-slate-200"><table className="w-full min-w-[720px] text-right text-xs"><thead className="bg-slate-950 text-amber-200"><tr><th className="p-3">المستخدم</th><th className="p-3">الاستحقاق</th><th className="p-3">الحالة</th><th className="p-3">لقطة الصلاحيات</th></tr></thead><tbody className="divide-y divide-slate-100">{accessReviews.map((review) => <tr key={review.id}><td className="p-3 font-black">{review.user_name || 'مستخدم'}</td><td className="p-3">{new Date(review.due_at).toLocaleDateString('ar')}</td><td className="p-3"><span className={`rounded-full px-2 py-1 font-black ${review.status === 'pending' ? 'bg-amber-50 text-amber-800' : review.status === 'revoked' ? 'bg-rose-50 text-rose-700' : 'bg-emerald-50 text-emerald-700'}`}>{review.status}</span></td><td className="p-3 font-black">{Array.isArray(review.permission_snapshot) ? review.permission_snapshot.length : 0} صلاحية</td></tr>)}</tbody></table>{accessReviews.length === 0 && <div className="p-10 text-center text-sm font-bold text-slate-500">لا توجد مراجعات مسجلة حاليًا.</div>}</div>
