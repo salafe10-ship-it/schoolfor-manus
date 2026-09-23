@@ -810,6 +810,107 @@ const readPlatformRows = async (table: string, columns: string, configure?: (que
   return rows;
 };
 
+type SchoolGovernanceScope = { tenantId: string; schoolId: string; branchId?: string | null };
+type SchoolGovernanceData = {
+  users: any[];
+  requests: any[];
+  requestApprovals: any[];
+  reviews: any[];
+  sodRules: any[];
+  grants: any[];
+  permissions: any[];
+  userRoles: any[];
+  roles: any[];
+  rolePermissions: any[];
+};
+
+const isScopedBranch = (row: any, branchId?: string | null) => !branchId || !row.branch_id || row.branch_id === branchId;
+const isActiveAt = (row: any, now = Date.now()) => {
+  if (row.status && row.status !== 'active' && row.status !== 'pending') return false;
+  if (row.deleted_at) return false;
+  if (row.starts_at && new Date(row.starts_at).getTime() > now) return false;
+  if (row.ends_at && new Date(row.ends_at).getTime() <= now) return false;
+  return true;
+};
+
+/**
+ * Read-only governance snapshot through the same canonical Supabase channel
+ * used by the school directory. The legacy pg pool is intentionally not used
+ * here: production can have a healthy control-plane channel while the old
+ * pooler is unavailable. All rows are narrowed again in memory by the trusted
+ * tenant/school/branch scope before reaching a response.
+ */
+const readSchoolGovernanceData = async (scope: SchoolGovernanceScope): Promise<SchoolGovernanceData> => {
+  if (!platformControl) throw new DatabaseError('مصدر قاعدة البيانات المركزية غير متاح.');
+  const [users, requests, requestApprovals, reviews, sodRules, grants, permissions, userRoles, roles, rolePermissions] = await Promise.all([
+    readPlatformRows('users', 'id, tenant_id, school_id, branch_id, display_name, email, username, job_title, department, status, deleted_at', (query) => query.eq('tenant_id', scope.tenantId).eq('school_id', scope.schoolId).is('deleted_at', null)),
+    readPlatformRows('identity_access_requests', 'id, tenant_id, school_id, branch_id, user_id, requested_by, permission_keys, reason, status, starts_at, ends_at, approved_by, approved_at, rejected_by, rejected_at, decision_reason, version, created_at, updated_at, deleted_at', (query) => query.eq('tenant_id', scope.tenantId).eq('school_id', scope.schoolId).is('deleted_at', null)),
+    readPlatformRows('identity_access_request_approvals', 'id, request_id, sequence_no, approver_id, status, decision_reason, decided_at, created_at'),
+    readPlatformRows('identity_access_reviews', 'id, tenant_id, school_id, branch_id, user_id, reviewer_id, due_at, status, reviewed_at, decision_reason, permission_snapshot, version, created_at, updated_at, deleted_at', (query) => query.eq('tenant_id', scope.tenantId).eq('school_id', scope.schoolId).is('deleted_at', null)),
+    readPlatformRows('identity_sod_rules', 'id, tenant_id, rule_key, permission_a, permission_b, severity, status, description, created_at, updated_at', (query) => query.eq('status', 'active')),
+    readPlatformRows('user_permission_grants', 'id, tenant_id, user_id, permission_id, school_id, branch_id, source, effect, status, starts_at, ends_at, deleted_at', (query) => query.eq('tenant_id', scope.tenantId).eq('school_id', scope.schoolId).is('deleted_at', null)),
+    readPlatformRows('permissions', 'id, tenant_id, permission_key, resource, action, status, deleted_at', (query) => query.eq('status', 'active').is('deleted_at', null)),
+    readPlatformRows('user_roles', 'id, tenant_id, user_id, role_id, school_id, branch_id, starts_at, ends_at, status, deleted_at', (query) => query.eq('tenant_id', scope.tenantId).is('deleted_at', null)),
+    readPlatformRows('roles', 'id, tenant_id, role_key, name, description, version, school_id, branch_id, status, deleted_at', (query) => query.eq('tenant_id', scope.tenantId).eq('status', 'active').is('deleted_at', null)),
+    readPlatformRows('role_permissions', 'role_id, permission_id, tenant_id, status, deleted_at', (query) => query.eq('tenant_id', scope.tenantId).eq('status', 'active').is('deleted_at', null)),
+  ]);
+  const userIds = new Set(users.map((user: any) => user.id));
+  const roleIds = new Set(roles.filter((role: any) => (!role.school_id || role.school_id === scope.schoolId) && (!role.branch_id || !scope.branchId || role.branch_id === scope.branchId)).map((role: any) => role.id));
+  return {
+    users,
+    requests: requests.filter((row: any) => isScopedBranch(row, scope.branchId)),
+    requestApprovals: requestApprovals.filter((row: any) => requests.some((request: any) => request.id === row.request_id)),
+    reviews: reviews.filter((row: any) => isScopedBranch(row, scope.branchId)),
+    sodRules: sodRules.filter((row: any) => row.tenant_id == null || row.tenant_id === scope.tenantId),
+    grants: grants.filter((row: any) => userIds.has(row.user_id) && isScopedBranch(row, scope.branchId)),
+    permissions: permissions.filter((row: any) => (row.tenant_id == null || row.tenant_id === scope.tenantId) && !row.deleted_at),
+    userRoles: userRoles.filter((row: any) => userIds.has(row.user_id) && roleIds.has(row.role_id) && isScopedBranch(row, scope.branchId)),
+    roles: roles.filter((row: any) => roleIds.has(row.id)),
+    rolePermissions: rolePermissions.filter((row: any) => roleIds.has(row.role_id)),
+  };
+};
+
+const buildEffectivePermissionRows = (data: SchoolGovernanceData, scope: SchoolGovernanceScope, requestedUserId = '', requestedPermissionKey = '') => {
+  const permissionById = new Map(data.permissions.map((permission: any) => [permission.id, permission]));
+  const rolePermissionIds = new Map<string, string[]>();
+  for (const entry of data.rolePermissions) {
+    const current = rolePermissionIds.get(entry.role_id) || [];
+    current.push(entry.permission_id);
+    rolePermissionIds.set(entry.role_id, current);
+  }
+  const rolesById = new Map(data.roles.map((role: any) => [role.id, role]));
+  const users = data.users.filter((user: any) => !requestedUserId || user.id === requestedUserId);
+  return users.map((user: any) => {
+    const entries = new Map<string, { permission: any; sources: Set<string>; effects: Set<string> }>();
+    const addEntry = (permission: any, source: string, effect: string) => {
+      if (!permission || (requestedPermissionKey && permission.permission_key !== requestedPermissionKey)) return;
+      const current = entries.get(permission.permission_key) || { permission, sources: new Set<string>(), effects: new Set<string>() };
+      current.sources.add(source);
+      current.effects.add(effect);
+      entries.set(permission.permission_key, current);
+    };
+    for (const assignment of data.userRoles.filter((row: any) => row.user_id === user.id && isActiveAt(row) && (!row.school_id || row.school_id === scope.schoolId) && isScopedBranch(row, scope.branchId))) {
+      const role = rolesById.get(assignment.role_id);
+      if (!role) continue;
+      for (const permissionId of rolePermissionIds.get(role.id) || []) addEntry(permissionById.get(permissionId), 'inherited', 'allow');
+    }
+    for (const grant of data.grants.filter((row: any) => row.user_id === user.id && isActiveAt(row) && row.school_id === scope.schoolId && isScopedBranch(row, scope.branchId))) {
+      addEntry(permissionById.get(grant.permission_id), grant.source || 'school', grant.effect || 'allow');
+    }
+    const denied = new Set([...entries].filter(([, entry]) => entry.effects.has('deny')).map(([key]) => key));
+    const effective = [...entries.values()].filter((entry) => entry.effects.has('allow') && !denied.has(entry.permission.permission_key));
+    const inherited = effective.filter((entry) => entry.sources.has('inherited'));
+    const central = effective.filter((entry) => entry.sources.has('central') && !entry.sources.has('inherited'));
+    const school = effective.filter((entry) => entry.sources.has('school') && !entry.sources.has('inherited') && !entry.sources.has('central'));
+    return {
+      id: user.id, display_name: user.display_name, email: user.email, username: user.username, job_title: user.job_title, department: user.department, branch_id: user.branch_id,
+      inherited_count: inherited.length, central_direct_count: central.length, school_direct_count: school.length, direct_count: new Set([...central, ...school].map((entry) => entry.permission.permission_key)).size,
+      denied_count: denied.size, effective_count: effective.length,
+      permissions: effective.map((entry) => ({ permissionKey: entry.permission.permission_key, resource: entry.permission.resource, action: entry.permission.action, source: [...entry.sources].sort().join('+') })).sort((left, right) => left.permissionKey.localeCompare(right.permissionKey)),
+    };
+  });
+};
+
 const insertPlatformRow = async (table: string, values: Record<string, unknown>, columns = '*') => {
   if (!platformControl) throw new DatabaseError('مصدر قاعدة البيانات المركزية غير متاح.');
   const { data, error } = await platformControl.from(table).insert(values).select(columns).single();
@@ -6085,6 +6186,16 @@ export async function createApp(options: { cloudflare?: boolean } = {}): Promise
   };
 
   app.get('/api/school/access-requests', authenticateRequest, requirePermissionOnly(PERMISSIONS.IDENTITY_USERS_READ), async (req, res, next) => {
+    if (platformControl) {
+      try {
+        const scope = schoolIdentityScope(req);
+        const data = await readSchoolGovernanceData(scope);
+        const userNames = new Map(data.users.map((user: any) => [user.id, user.display_name]));
+        const approvalsByRequest = new Map<string, any[]>();
+        for (const approval of data.requestApprovals) approvalsByRequest.set(approval.request_id, [...(approvalsByRequest.get(approval.request_id) || []), { id: approval.id, sequenceNo: approval.sequence_no, approverId: approval.approver_id, approverName: userNames.get(approval.approver_id) || null, status: approval.status, decisionReason: approval.decision_reason, decidedAt: approval.decided_at }]);
+        return res.json({ success: true, source: 'canonical_control_plane', scope: { tenantId: scope.tenantId, schoolId: scope.schoolId, branchId: scope.branchId || null }, requests: data.requests.map((row: any) => ({ ...row, status: row.status === 'pending' && new Date(row.ends_at).getTime() <= Date.now() ? 'expired' : row.status, user_name: userNames.get(row.user_id) || 'مستخدم غير معروف', requested_by_name: userNames.get(row.requested_by) || 'مستخدم غير معروف', approvals: approvalsByRequest.get(row.id) || [] })).sort((left: any, right: any) => String(right.created_at).localeCompare(String(left.created_at))) });
+      } catch (error) { return next(error instanceof Error ? error : new DatabaseError('تعذر تحميل طلبات الصلاحيات.')); }
+    }
     if (!platformAdminPool) return next(new DatabaseError('مصدر الهوية المركزي غير متاح.'));
     try {
       const { tenantId, schoolId, branchId } = schoolIdentityScope(req);
@@ -6202,6 +6313,16 @@ export async function createApp(options: { cloudflare?: boolean } = {}): Promise
   });
 
   app.get('/api/school/effective-permissions', authenticateRequest, requirePermissionOnly(PERMISSIONS.IDENTITY_USERS_READ), async (req, res, next) => {
+    if (platformControl) {
+      try {
+        const scope = schoolIdentityScope(req);
+        const userId = String(req.query.userId || '').trim();
+        const permissionKey = String(req.query.permissionKey || '').trim();
+        if (userId && !/^[0-9a-f-]{36}$/i.test(userId)) return next(new ValidationError('معرف المستخدم غير صالح.'));
+        const data = await readSchoolGovernanceData(scope);
+        return res.json({ success: true, source: 'canonical_control_plane', scope: { tenantId: scope.tenantId, schoolId: scope.schoolId, branchId: scope.branchId || null }, users: buildEffectivePermissionRows(data, scope, userId, permissionKey) });
+      } catch (error) { return next(error instanceof Error ? error : new DatabaseError('تعذر إنشاء تقرير الصلاحيات الفعالة.')); }
+    }
     if (!platformAdminPool) return next(new DatabaseError('مصدر الهوية المركزي غير متاح.'));
     try {
       const { tenantId, schoolId, branchId } = schoolIdentityScope(req);
@@ -6264,6 +6385,14 @@ export async function createApp(options: { cloudflare?: boolean } = {}): Promise
   });
 
   app.get('/api/school/access-reviews', authenticateRequest, requirePermissionOnly(PERMISSIONS.IDENTITY_USERS_READ), async (req, res, next) => {
+    if (platformControl) {
+      try {
+        const scope = schoolIdentityScope(req);
+        const data = await readSchoolGovernanceData(scope);
+        const userNames = new Map(data.users.map((user: any) => [user.id, user.display_name]));
+        return res.json({ success: true, source: 'canonical_control_plane', reviews: data.reviews.sort((left: any, right: any) => String(left.due_at).localeCompare(String(right.due_at))).map((row: any) => ({ ...row, user_name: userNames.get(row.user_id) || 'مستخدم غير معروف', reviewer_name: row.reviewer_id ? userNames.get(row.reviewer_id) || 'مستخدم غير معروف' : null })) });
+      } catch (error) { return next(error instanceof Error ? error : new DatabaseError('تعذر تحميل مراجعات الصلاحيات.')); }
+    }
     if (!platformAdminPool) return next(new DatabaseError('مصدر الهوية المركزي غير متاح.'));
     try {
       const { tenantId, schoolId, branchId } = schoolIdentityScope(req);
@@ -6378,6 +6507,20 @@ export async function createApp(options: { cloudflare?: boolean } = {}): Promise
   });
 
   app.get('/api/school/access-governance-reports', authenticateRequest, requirePermissionOnly(PERMISSIONS.IDENTITY_USERS_READ), async (req, res, next) => {
+    if (platformControl) {
+      try {
+        const scope = schoolIdentityScope(req);
+        const data = await readSchoolGovernanceData(scope);
+        const userNames = new Map(data.users.map((user: any) => [user.id, user]));
+        const permissionById = new Map(data.permissions.map((permission: any) => [permission.id, permission]));
+        const expired = data.grants.filter((grant: any) => grant.status === 'active' && !grant.deleted_at && grant.ends_at && new Date(grant.ends_at).getTime() <= Date.now()).map((grant: any) => ({ grant_id: grant.id, user_id: grant.user_id, display_name: userNames.get(grant.user_id)?.display_name || 'مستخدم غير معروف', email: userNames.get(grant.user_id)?.email, permission_key: permissionById.get(grant.permission_id)?.permission_key, source: grant.source || 'school', ends_at: grant.ends_at, status: grant.status }));
+        const effectiveRows = buildEffectivePermissionRows(data, scope);
+        const sensitiveUsers = effectiveRows.filter((row: any) => row.permissions.some((permission: any) => permission.permissionKey.startsWith('financial:') || ['Identity.Users.Assign', 'Identity.Users.Write'].includes(permission.permissionKey))).map((row: any) => ({ user_id: row.id, display_name: row.display_name, email: row.email, permissions: row.permissions.filter((permission: any) => permission.permissionKey.startsWith('financial:') || ['Identity.Users.Assign', 'Identity.Users.Write'].includes(permission.permissionKey)) }));
+        const usedPermissionIds = new Set([...data.rolePermissions.map((entry: any) => entry.permission_id), ...data.grants.filter((grant: any) => grant.status === 'active' && !grant.deleted_at).map((grant: any) => grant.permission_id)]);
+        const unusedPermissions = data.permissions.filter((permission: any) => !usedPermissionIds.has(permission.id)).map((permission: any) => ({ permission_key: permission.permission_key, resource: permission.resource, action: permission.action })).sort((left: any, right: any) => left.permission_key.localeCompare(right.permission_key));
+        return res.json({ success: true, source: 'canonical_control_plane', expired, sensitiveUsers, unusedPermissions });
+      } catch (error) { return next(error instanceof Error ? error : new DatabaseError('تعذر إنشاء تقارير حوكمة الصلاحيات.')); }
+    }
     if (!platformAdminPool) return next(new DatabaseError('مصدر الهوية المركزي غير متاح.'));
     try {
       const { tenantId, schoolId, branchId } = schoolIdentityScope(req);
@@ -6437,6 +6580,19 @@ export async function createApp(options: { cloudflare?: boolean } = {}): Promise
   });
 
   app.get('/api/school/sod-conflicts', authenticateRequest, requirePermissionOnly(PERMISSIONS.IDENTITY_USERS_READ), async (req, res, next) => {
+    if (platformControl) {
+      try {
+        const scope = schoolIdentityScope(req);
+        const data = await readSchoolGovernanceData(scope);
+        const effectiveRows = buildEffectivePermissionRows(data, scope);
+        const rules = data.sodRules.filter((rule: any) => rule.status === 'active');
+        const conflicts = effectiveRows.flatMap((row: any) => {
+          const keys = new Set(row.permissions.map((permission: any) => permission.permissionKey));
+          return rules.filter((rule: any) => keys.has(rule.permission_a) && keys.has(rule.permission_b)).map((rule: any) => ({ user_id: row.id, display_name: row.display_name, email: row.email, rule_id: rule.id, rule_key: rule.rule_key, permission_a: rule.permission_a, permission_b: rule.permission_b, severity: rule.severity, description: rule.description }));
+        }).sort((left: any, right: any) => `${right.severity}:${left.display_name}`.localeCompare(`${left.severity}:${right.display_name}`));
+        return res.json({ success: true, source: 'canonical_control_plane', conflicts });
+      } catch (error) { return next(error instanceof Error ? error : new DatabaseError('تعذر تحميل تعارضات فصل المهام.')); }
+    }
     if (!platformAdminPool) return next(new DatabaseError('مصدر الهوية المركزي غير متاح.'));
     try {
       const { tenantId, schoolId, branchId } = schoolIdentityScope(req);
@@ -6509,7 +6665,7 @@ export async function createApp(options: { cloudflare?: boolean } = {}): Promise
   });
 
   app.get('/api/school/identity-roles', authenticateRequest, requirePermissionOnly(PERMISSIONS.IDENTITY_USERS_READ), async (req, res, next) => {
-    if (!platformAdminPool) return next(new DatabaseError('مصدر الهوية المركزي غير متاح.'));
+    if (!platformControl && !platformAdminPool) return next(new DatabaseError('مصدر الهوية المركزي غير متاح.'));
     try {
       const { tenantId, schoolId, branchId } = schoolIdentityScope(req);
       // Use the canonical relational catalogue below even when the platform
@@ -6521,7 +6677,60 @@ export async function createApp(options: { cloudflare?: boolean } = {}): Promise
       // Hydrate only the canonical default role catalogue for this tenant,
       // atomically and idempotently, so the create-user selector never opens
       // with an empty role list because of provisioning order.
-      const client = await platformAdminPool.connect();
+      // Worker reads use the same Supabase control channel as the school
+      // directory. This avoids a second pg/Hyperdrive connection for a
+      // read-only catalogue, which can be unavailable even while the trusted
+      // control-plane channel is healthy.
+      if (platformControl) {
+        const scopedRoles = await readPlatformRows('roles', 'id, role_key, name, description, version, tenant_id, school_id, branch_id, status, deleted_at', (query) => query
+          .eq('tenant_id', tenantId)
+          .eq('status', 'active')
+          .is('deleted_at', null));
+        const roles = scopedRoles.filter((role: any) =>
+          (!role.school_id || role.school_id === schoolId)
+          && (!role.branch_id || !branchId || role.branch_id === branchId));
+        const roleIds = roles.map((role: any) => role.id).filter(Boolean);
+        const rolePermissions = roleIds.length ? await readPlatformRows('role_permissions', 'role_id, permission_id, tenant_id, status, deleted_at', (query) => query
+          .in('role_id', roleIds)
+          .eq('tenant_id', tenantId)
+          .eq('status', 'active')
+          .is('deleted_at', null)) : [];
+        const permissionIds = [...new Set(rolePermissions.map((entry: any) => entry.permission_id).filter(Boolean))];
+        const permissions = permissionIds.length ? await readPlatformRows('permissions', 'id, permission_key, resource, action, tenant_id, status, deleted_at', (query) => query
+          .in('id', permissionIds)
+          .eq('status', 'active')
+          .is('deleted_at', null)) : [];
+        const permissionsById = new Map(permissions.map((permission: any) => [permission.id, permission]));
+        const permissionsByRole = new Map<string, any[]>();
+        for (const assignment of rolePermissions) {
+          const permission = permissionsById.get(assignment.permission_id);
+          if (!permission) continue;
+          const current = permissionsByRole.get(assignment.role_id) || [];
+          current.push({ permissionKey: permission.permission_key, resource: permission.resource, action: permission.action });
+          permissionsByRole.set(assignment.role_id, current);
+        }
+        const permissionCatalog = [...new Set(permissionRegistry.list())]
+          .filter((permissionKey) => permissionKey !== PERMISSIONS.PLATFORM_ADMIN)
+          .map((permissionKey) => {
+            const { resource, action } = describePermission(permissionKey);
+            return { permissionKey, resource, action, description: permissionKey };
+          })
+          .sort((left, right) => left.permissionKey.localeCompare(right.permissionKey));
+        return res.json({
+          success: true,
+          source: 'canonical_control_plane',
+          roles: roles.map((role: any) => ({
+            id: role.id,
+            roleKey: role.role_key,
+            name: role.name,
+            description: role.description,
+            version: role.version,
+            permissions: permissionsByRole.get(role.id) || [],
+          })),
+          permissionCatalog,
+        });
+      }
+      const client = await platformAdminPool!.connect();
       let result: any;
       try {
         await client.query('BEGIN');
