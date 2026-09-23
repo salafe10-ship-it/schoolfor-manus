@@ -71,7 +71,7 @@ const statusLabels: Record<SchoolUser['status'], string> = {
 type StatusFilter = 'all' | SchoolUser['status'];
 type ManagementView = 'users' | 'roles' | 'permissions' | 'report' | 'governance';
 type PermissionStateFilter = 'all' | 'effective' | 'direct' | 'inherited' | 'unassigned' | 'denied';
-type EffectivePermissionReportRow = { id: string; display_name: string; email?: string; username?: string; job_title?: string; department?: string; inherited_count: number; direct_count: number; denied_count: number; effective_count: number };
+type EffectivePermissionReportRow = { id: string; display_name: string; email?: string; username?: string; job_title?: string; department?: string; inherited_count: number; central_direct_count?: number; school_direct_count?: number; direct_count: number; denied_count: number; effective_count: number };
 type AccessReview = { id: string; user_name?: string; due_at: string; status: string; permission_snapshot?: unknown[]; decision_reason?: string | null };
 type SodConflict = { user_id: string; display_name: string; email?: string; rule_key: string; permission_a: string; permission_b: string; severity: string; description: string };
 type AccessRequest = { id: string; user_name?: string; permission_keys?: string[]; reason: string; status: string; starts_at?: string | null; ends_at?: string | null; approval_status?: string | null; requested_at?: string };
@@ -215,19 +215,29 @@ export default function SchoolUsersPermissionsModule({ selectedSchool, selectedB
     if (activeView !== 'governance') return;
     let cancelled = false;
     setGovernanceLoading(true);
-    Promise.all([
+    Promise.allSettled([
       authenticatedRequest('/api/school/access-requests', { cache: 'no-store' }),
       authenticatedRequest('/api/school/access-reviews', { cache: 'no-store' }),
       authenticatedRequest('/api/school/sod-conflicts', { cache: 'no-store' }),
       authenticatedRequest('/api/school/access-governance-reports', { cache: 'no-store' }),
-    ]).then(async ([requestsResponse, reviewsResponse, conflictsResponse, reportsResponse]) => {
-      const [requestsPayload, reviewsPayload, conflictsPayload, reportsPayload] = await Promise.all([requestsResponse.json().catch(() => ({})), reviewsResponse.json().catch(() => ({})), conflictsResponse.json().catch(() => ({})), reportsResponse.json().catch(() => ({}))]);
-      if (!requestsResponse.ok || !requestsPayload?.success) throw new Error(requestsPayload?.message || 'تعذر تحميل طلبات الصلاحيات.');
-      if (!reviewsResponse.ok || !reviewsPayload?.success) throw new Error(reviewsPayload?.message || 'تعذر تحميل مراجعات الصلاحيات.');
-      if (!conflictsResponse.ok || !conflictsPayload?.success) throw new Error(conflictsPayload?.message || 'تعذر تحميل تعارضات الصلاحيات.');
-      if (!reportsResponse.ok || !reportsPayload?.success) throw new Error(reportsPayload?.message || 'تعذر تحميل تقارير حوكمة الصلاحيات.');
-      if (!cancelled) { setAccessRequests(Array.isArray(requestsPayload.requests) ? requestsPayload.requests : []); setAccessReviews(Array.isArray(reviewsPayload.reviews) ? reviewsPayload.reviews : []); setSodConflicts(Array.isArray(conflictsPayload.conflicts) ? conflictsPayload.conflicts : []); setExpiredGrants(Array.isArray(reportsPayload.expired) ? reportsPayload.expired : []); setSensitiveUsers(Array.isArray(reportsPayload.sensitiveUsers) ? reportsPayload.sensitiveUsers : []); setUnusedPermissions(Array.isArray(reportsPayload.unusedPermissions) ? reportsPayload.unusedPermissions : []); }
-    }).catch((governanceError) => { if (!cancelled) notify(governanceError instanceof Error ? governanceError.message : 'تعذر تحميل حوكمة الصلاحيات.', 'warning'); })
+    ]).then(async (results) => {
+      const labels = ['طلبات الصلاحيات', 'مراجعات الصلاحيات', 'تعارضات الصلاحيات', 'تقارير الحوكمة'];
+      const warnings: string[] = [];
+      const payloads = await Promise.all(results.map(async (result, index) => {
+        if (result.status === 'rejected') { warnings.push(`${labels[index]}: تعذر الاتصال بالخدمة.`); return null; }
+        const payload = await result.value.json().catch(() => ({}));
+        if (!result.value.ok || !payload?.success) { warnings.push(`${labels[index]}: ${payload?.message || 'تعذر تحميل البيانات.'}`); return null; }
+        return payload;
+      }));
+      if (!cancelled) {
+        const [requestsPayload, reviewsPayload, conflictsPayload, reportsPayload] = payloads;
+        if (requestsPayload) setAccessRequests(Array.isArray(requestsPayload.requests) ? requestsPayload.requests : []);
+        if (reviewsPayload) setAccessReviews(Array.isArray(reviewsPayload.reviews) ? reviewsPayload.reviews : []);
+        if (conflictsPayload) setSodConflicts(Array.isArray(conflictsPayload.conflicts) ? conflictsPayload.conflicts : []);
+        if (reportsPayload) { setExpiredGrants(Array.isArray(reportsPayload.expired) ? reportsPayload.expired : []); setSensitiveUsers(Array.isArray(reportsPayload.sensitiveUsers) ? reportsPayload.sensitiveUsers : []); setUnusedPermissions(Array.isArray(reportsPayload.unusedPermissions) ? reportsPayload.unusedPermissions : []); }
+        if (warnings.length) notify(`تعذر تحميل بعض أجزاء الحوكمة: ${warnings.join(' • ')}`, 'warning');
+      }
+    })
       .finally(() => { if (!cancelled) setGovernanceLoading(false); });
     return () => { cancelled = true; };
   }, [activeView, notify]);
@@ -316,8 +326,10 @@ export default function SchoolUsersPermissionsModule({ selectedSchool, selectedB
     const centralDenied = new Set<string>((user.directPermissions || []).filter((permission) => permission.effect === 'deny' && permission.source !== 'school').map((permission) => permission.permissionKey));
     const localDenied = new Set<string>((user.directPermissions || []).filter((permission) => permission.effect === 'deny' && permission.source === 'school').map((permission) => permission.permissionKey));
     const localAllowed = new Set<string>((user.directPermissions || []).filter((permission) => permission.effect !== 'deny' && permission.source === 'school').map((permission) => permission.permissionKey));
-    const centralAllowed = new Set<string>((user.directPermissions || []).filter((permission) => permission.effect !== 'deny' && permission.source === 'central').map((permission) => permission.permissionKey));
-    const initialSchoolDecisions = [...new Set<string>([...inheritedKeys, ...centralAllowed, ...localAllowed])]
+    // The draft sent to the school API must contain school-local decisions
+    // only. Role-inherited and centrally granted permissions are effective
+    // baselines, not local grants, and must never be rewritten as school rows.
+    const initialSchoolDecisions = [...localAllowed]
       .filter((permissionKey) => !centralDenied.has(permissionKey) && !localDenied.has(permissionKey))
       .sort();
     setPermissionDrafts((drafts) => ({ ...drafts, [user.id]: initialSchoolDecisions }));
@@ -386,8 +398,10 @@ export default function SchoolUsersPermissionsModule({ selectedSchool, selectedB
     const centrallyGranted = centrallyGrantedPermissionKeys.has(permission.permissionKey);
     const inherited = inheritedPermissionKeys.has(permission.permissionKey);
     const direct = (permissionDrafts[permissionEditing?.id || ''] || []).includes(permission.permissionKey);
-    const baseline = inherited || centrallyGranted;
-    const overridden = direct !== baseline;
+    // A direct decision in this editor means a school-local grant. Central
+    // grants remain visible through the effective state but are not editable
+    // or counted as local overrides.
+    const overridden = direct;
     const effective = !centrallyDenied && (effectivePermissionKeys.has(permission.permissionKey) || centrallyGranted);
     return { centrallyDenied, centrallyGranted, inherited, direct, overridden, effective };
   };
@@ -483,7 +497,9 @@ export default function SchoolUsersPermissionsModule({ selectedSchool, selectedB
     const denied = new Set((user.directPermissions || []).filter((permission) => permission.effect === 'deny').map((permission) => permission.permissionKey));
     const directAllowed = new Set((user.directPermissions || []).filter((permission) => permission.effect !== 'deny').map((permission) => permission.permissionKey));
     const effective = new Set([...inherited, ...directAllowed].filter((permissionKey) => !denied.has(permissionKey)));
-    return { user, inherited: inherited.size, direct: directAllowed.size, denied: denied.size, effective: effective.size };
+    const schoolDirect = new Set((user.directPermissions || []).filter((permission) => permission.source === 'school' && permission.effect !== 'deny').map((permission) => permission.permissionKey));
+    const centralDirect = new Set((user.directPermissions || []).filter((permission) => permission.source === 'central' && permission.effect !== 'deny').map((permission) => permission.permissionKey));
+    return { user, inherited: inherited.size, centralDirect: centralDirect.size, schoolDirect: schoolDirect.size, direct: new Set([...centralDirect, ...schoolDirect]).size, denied: denied.size, effective: effective.size };
   }), [roles, users]);
 
   const generateAccessReviews = async () => {
@@ -696,7 +712,7 @@ export default function SchoolUsersPermissionsModule({ selectedSchool, selectedB
 
         {activeView === 'report' && <section className="identity-panel overflow-hidden rounded-3xl border border-slate-200 bg-white shadow-sm" aria-labelledby="effective-report-title">
           <div className="border-b border-slate-100 bg-slate-50 p-5"><h2 id="effective-report-title" className="font-black">تقرير الصلاحيات الفعالة</h2><p className="mt-1 text-xs leading-5 text-slate-500">قراءة موحدة للصلاحيات الموروثة من الدور، والمنح المباشرة، والمنع المسجل لكل مستخدم داخل نطاق المدرسة.</p></div>
-          <div className="overflow-x-auto"><table className="w-full min-w-[820px] text-right text-sm"><thead className="bg-slate-950 text-xs text-amber-200"><tr><th className="p-4">المستخدم</th><th className="p-4">الوظيفة والقسم</th><th className="p-4">موروثة</th><th className="p-4">منح مباشرة</th><th className="p-4">منع</th><th className="p-4">فعالة</th></tr></thead><tbody className="divide-y divide-slate-100">{(serverEffectiveReport.length ? serverEffectiveReport : effectivePermissionReport.map(({ user, inherited, direct, denied, effective }) => ({ id: user.id, display_name: user.display_name, email: user.email, username: user.username, job_title: user.job_title, department: user.department, inherited_count: inherited, direct_count: direct, denied_count: denied, effective_count: effective }))).map((row) => <tr key={row.id}><td className="p-4"><div className="font-black">{row.display_name}</div><div className="text-xs text-slate-500">{row.email || row.username || 'هوية داخلية'}</div></td><td className="p-4">{row.job_title || '—'}<div className="text-xs text-slate-500">{row.department || '—'}</div></td><td className="p-4 font-black text-emerald-700">{row.inherited_count}</td><td className="p-4 font-black text-amber-700">{row.direct_count}</td><td className="p-4 font-black text-rose-700">{row.denied_count}</td><td className="p-4 font-black text-slate-950">{row.effective_count}</td></tr>)}</tbody></table>{(serverEffectiveReport.length || effectivePermissionReport.length) === 0 && <div className="p-12 text-center text-sm font-bold text-slate-500">لا توجد بيانات صلاحيات متاحة.</div>}</div>
+          <div className="overflow-x-auto"><table className="w-full min-w-[980px] text-right text-sm"><thead className="bg-slate-950 text-xs text-amber-200"><tr><th className="p-4">المستخدم</th><th className="p-4">الوظيفة والقسم</th><th className="p-4">موروثة</th><th className="p-4">مباشرة مركزية</th><th className="p-4">مباشرة محلية</th><th className="p-4">منع</th><th className="p-4">فعالة</th></tr></thead><tbody className="divide-y divide-slate-100">{(serverEffectiveReport.length ? serverEffectiveReport : effectivePermissionReport.map(({ user, inherited, centralDirect, schoolDirect, direct, denied, effective }) => ({ id: user.id, display_name: user.display_name, email: user.email, username: user.username, job_title: user.job_title, department: user.department, inherited_count: inherited, central_direct_count: centralDirect, school_direct_count: schoolDirect, direct_count: direct, denied_count: denied, effective_count: effective }))).map((row) => <tr key={row.id}><td className="p-4"><div className="font-black">{row.display_name}</div><div className="text-xs text-slate-500">{row.email || row.username || 'هوية داخلية'}</div></td><td className="p-4">{row.job_title || '—'}<div className="text-xs text-slate-500">{row.department || '—'}</div></td><td className="p-4 font-black text-emerald-700">{row.inherited_count}</td><td className="p-4 font-black text-indigo-700">{row.central_direct_count ?? row.direct_count}</td><td className="p-4 font-black text-amber-700">{row.school_direct_count ?? 0}</td><td className="p-4 font-black text-rose-700">{row.denied_count}</td><td className="p-4 font-black text-slate-950">{row.effective_count}</td></tr>)}</tbody></table>{(serverEffectiveReport.length || effectivePermissionReport.length) === 0 && <div className="p-12 text-center text-sm font-bold text-slate-500">لا توجد بيانات صلاحيات متاحة.</div>}</div>
         </section>}
 
         {activeView === 'governance' && <section className="identity-panel space-y-5 overflow-hidden rounded-3xl border border-slate-200 bg-white p-5 shadow-sm" aria-labelledby="governance-screen-title">
