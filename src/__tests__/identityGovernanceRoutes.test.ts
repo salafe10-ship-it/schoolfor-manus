@@ -31,7 +31,7 @@ describe('identity governance route contract', () => {
   });
 
   it('requires an approved live request for direct financial exceptions', () => {
-    const directPermissionBlock = server.slice(server.indexOf("operation === 'set_permissions'"), server.indexOf("operation === 'reset_password'"));
+    const directPermissionBlock = server.slice(server.lastIndexOf("operation === 'set_permissions'"), server.lastIndexOf("operation === 'reset_password'"));
     expect(directPermissionBlock).toContain('sensitiveFinancialKeys');
     expect(directPermissionBlock).toContain("r.status = 'approved'");
     expect(directPermissionBlock).toContain('r.ends_at > now()');
