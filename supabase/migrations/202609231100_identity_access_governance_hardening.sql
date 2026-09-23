@@ -9,6 +9,15 @@ BEGIN
   END IF;
 END $$;
 
+DO $$
+BEGIN
+  IF to_regclass('public.user_permission_grants') IS NOT NULL THEN
+    ALTER TABLE public.user_permission_grants ADD COLUMN IF NOT EXISTS starts_at timestamptz NOT NULL DEFAULT now();
+    ALTER TABLE public.user_permission_grants ADD COLUMN IF NOT EXISTS ends_at timestamptz;
+    CREATE INDEX IF NOT EXISTS idx_user_permission_grants_expiry ON public.user_permission_grants(tenant_id, user_id, starts_at, ends_at) WHERE deleted_at IS NULL;
+  END IF;
+END $$;
+
 ALTER TABLE public.identity_access_requests
   ADD COLUMN IF NOT EXISTS created_by uuid,
   ADD COLUMN IF NOT EXISTS updated_by uuid,

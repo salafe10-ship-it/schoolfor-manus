@@ -893,13 +893,14 @@ async function loadTenantPermissionsFromPlatformControl(identity: any) {
       .eq('status', 'active')
       .is('deleted_at', null))
     : [];
-  const directOverrides = await readPlatformRows('user_permission_grants', 'permission_id, effect, source, tenant_id, school_id, branch_id, status, deleted_at', (query) => query
+  const directOverrides = await readPlatformRows('user_permission_grants', 'permission_id, effect, source, tenant_id, school_id, branch_id, starts_at, ends_at, status, deleted_at', (query) => query
     .eq('user_id', user.id)
     .eq('tenant_id', tenantId)
     .eq('school_id', schoolId)
     .eq('status', 'active')
     .is('deleted_at', null));
-  const scopedDirectOverrides = directOverrides.filter((entry: any) => !entry.branch_id || !branchId || entry.branch_id === branchId);
+  const nowMs = Date.now();
+  const scopedDirectOverrides = directOverrides.filter((entry: any) => (!entry.branch_id || !branchId || entry.branch_id === branchId) && (!entry.starts_at || Date.parse(entry.starts_at) <= nowMs) && (!entry.ends_at || Date.parse(entry.ends_at) > nowMs));
   const permissionIds = [...new Set([...rolePermissions, ...scopedDirectOverrides].map((entry: any) => entry.permission_id).filter(Boolean))];
   if (!permissionIds.length) return [];
 
@@ -5452,7 +5453,9 @@ export async function createApp(options: { cloudflare?: boolean } = {}): Promise
                     'action', gp.action,
                     'effect', upg.effect,
                     'source', upg.source,
-                    'branchId', upg.branch_id
+                    'branchId', upg.branch_id,
+                    'startsAt', upg.starts_at,
+                    'endsAt', upg.ends_at
                   ) ORDER BY gp.permission_key)
                     FROM public.user_permission_grants upg
                     JOIN public.permissions gp ON gp.id = upg.permission_id
@@ -5460,6 +5463,8 @@ export async function createApp(options: { cloudflare?: boolean } = {}): Promise
                      AND upg.user_id = u.id
                      AND upg.school_id = u.school_id
                      AND (upg.branch_id IS NULL OR upg.branch_id = u.branch_id)
+                     AND (upg.starts_at IS NULL OR upg.starts_at <= now())
+                     AND (upg.ends_at IS NULL OR upg.ends_at > now())
                      AND upg.status = 'active' AND upg.deleted_at IS NULL
                      AND gp.status = 'active' AND gp.deleted_at IS NULL
                 ), '[]'::jsonb) AS "directPermissions"
@@ -6175,6 +6180,18 @@ export async function createApp(options: { cloudflare?: boolean } = {}): Promise
         const approval = await client.query(`INSERT INTO public.identity_access_request_approvals (request_id, sequence_no, approver_id, status, decision_reason, decided_at) VALUES ($1::uuid,1,$2::uuid,$3,$4,now()) ON CONFLICT (request_id,sequence_no) DO UPDATE SET status=EXCLUDED.status, decision_reason=EXCLUDED.decision_reason, decided_at=EXCLUDED.decided_at RETURNING *`, [accessRequestId, actor.rows[0].id, decision, note]);
         const updated = await client.query(`UPDATE public.identity_access_requests SET status=$4, approved_by=CASE WHEN $4='approved' THEN $2::uuid ELSE approved_by END, approved_at=CASE WHEN $4='approved' THEN now() ELSE approved_at END, rejected_by=CASE WHEN $4='rejected' THEN $2::uuid ELSE rejected_by END, rejected_at=CASE WHEN $4='rejected' THEN now() ELSE rejected_at END, decision_reason=$5, updated_by=$2::uuid, updated_at=now(), version=version+1 WHERE id=$1::uuid AND version=$3 RETURNING *`, [accessRequestId, actor.rows[0].id, before.version, decision, note]);
         if (updated.rowCount !== 1) throw new ConflictError('تغير طلب الصلاحية قبل اعتماد القرار.');
+        if (decision === 'approved') {
+          await client.query(
+            `INSERT INTO public.user_permission_grants (tenant_id, user_id, permission_id, school_id, branch_id, source, effect, status, starts_at, ends_at, created_by, updated_by)
+             SELECT $1::uuid, r.user_id, p.id, r.school_id, r.branch_id, 'school', 'allow', 'active', r.starts_at, r.ends_at, $2::uuid, $2::uuid
+               FROM public.identity_access_requests r
+               CROSS JOIN LATERAL unnest(r.permission_keys) AS requested(permission_key)
+               JOIN public.permissions p ON p.permission_key=requested.permission_key AND p.status='active' AND p.deleted_at IS NULL
+              WHERE r.id=$3::uuid
+             ON CONFLICT (user_id, permission_id, source) DO UPDATE SET school_id=EXCLUDED.school_id, branch_id=EXCLUDED.branch_id, effect='allow', status='active', starts_at=EXCLUDED.starts_at, ends_at=EXCLUDED.ends_at, deleted_at=NULL, deleted_by=NULL, updated_at=now(), updated_by=EXCLUDED.updated_by`,
+            [tenantId, actor.rows[0].id, accessRequestId],
+          );
+        }
         const auditId = await recordAccessGovernanceAudit(client, { tenantId, schoolId, branchId: before.branch_id, actorUserId: actor.rows[0].id, requestId, correlationId, action: `request_${decision}`, entityId: accessRequestId, before: { status: before.status, version: before.version }, after: { status: updated.rows[0].status, version: updated.rows[0].version, decision, note }, reason: note });
         await client.query('COMMIT');
         return res.json({ success: true, requestId, correlationId, auditId, request: updated.rows[0], approval: approval.rows[0] });
@@ -6371,7 +6388,7 @@ export async function createApp(options: { cloudflare?: boolean } = {}): Promise
           .eq('tenant_id', tenantId)
           .eq('status', 'active')
           .is('deleted_at', null)) : [];
-        const grants = userIds.length ? await readPlatformRows('user_permission_grants', 'user_id, permission_id, effect, source, school_id, branch_id, tenant_id, status, deleted_at', (query) => query
+        const grants = userIds.length ? await readPlatformRows('user_permission_grants', 'user_id, permission_id, effect, source, school_id, branch_id, starts_at, ends_at, tenant_id, status, deleted_at', (query) => query
           .in('user_id', userIds)
           .eq('tenant_id', tenantId)
           .eq('school_id', schoolId)
@@ -6401,7 +6418,7 @@ export async function createApp(options: { cloudflare?: boolean } = {}): Promise
             permissionsByUser.set(assignment.user_id, current);
           }
         }
-        for (const grant of grants.filter((entry: any) => !entry.branch_id || !branchId || entry.branch_id === branchId)) {
+        for (const grant of grants.filter((entry: any) => (!entry.branch_id || !branchId || entry.branch_id === branchId) && (!entry.starts_at || Date.parse(entry.starts_at) <= Date.now()) && (!entry.ends_at || Date.parse(entry.ends_at) > Date.now()))) {
           const permission = permissionById.get(grant.permission_id);
           if (!permission) continue;
           const current = permissionsByUser.get(grant.user_id) || [];
