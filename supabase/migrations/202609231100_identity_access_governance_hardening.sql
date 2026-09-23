@@ -9,13 +9,33 @@ BEGIN
   END IF;
 END $$;
 
+CREATE TABLE IF NOT EXISTS public.user_permission_grants (
+  id uuid PRIMARY KEY DEFAULT gen_random_uuid(),
+  tenant_id uuid NOT NULL,
+  user_id uuid NOT NULL,
+  permission_id uuid NOT NULL,
+  school_id uuid NOT NULL,
+  branch_id uuid,
+  source text NOT NULL DEFAULT 'central',
+  effect text NOT NULL DEFAULT 'allow' CHECK (effect IN ('allow','deny')),
+  status text NOT NULL DEFAULT 'active' CHECK (status IN ('active','revoked','archived')),
+  starts_at timestamptz NOT NULL DEFAULT now(),
+  ends_at timestamptz,
+  created_at timestamptz NOT NULL DEFAULT now(),
+  updated_at timestamptz NOT NULL DEFAULT now(),
+  created_by uuid,
+  updated_by uuid,
+  deleted_at timestamptz,
+  deleted_by uuid,
+  version integer NOT NULL DEFAULT 1 CHECK (version > 0),
+  UNIQUE (user_id, permission_id, source)
+);
+
 DO $$
 BEGIN
-  IF to_regclass('public.user_permission_grants') IS NOT NULL THEN
-    ALTER TABLE public.user_permission_grants ADD COLUMN IF NOT EXISTS starts_at timestamptz NOT NULL DEFAULT now();
-    ALTER TABLE public.user_permission_grants ADD COLUMN IF NOT EXISTS ends_at timestamptz;
-    CREATE INDEX IF NOT EXISTS idx_user_permission_grants_expiry ON public.user_permission_grants(tenant_id, user_id, starts_at, ends_at) WHERE deleted_at IS NULL;
-  END IF;
+  ALTER TABLE public.user_permission_grants ADD COLUMN IF NOT EXISTS starts_at timestamptz NOT NULL DEFAULT now();
+  ALTER TABLE public.user_permission_grants ADD COLUMN IF NOT EXISTS ends_at timestamptz;
+  CREATE INDEX IF NOT EXISTS idx_user_permission_grants_expiry ON public.user_permission_grants(tenant_id, user_id, starts_at, ends_at) WHERE deleted_at IS NULL;
 END $$;
 
 ALTER TABLE public.identity_access_requests
