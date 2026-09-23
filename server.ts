@@ -6924,6 +6924,39 @@ export async function createApp(options: { cloudflare?: boolean } = {}): Promise
           if (requestedPermissionKeys.length !== rawPermissionKeys.length || requestedPermissionKeys.length > 200 || requestedPermissionKeys.includes(PERMISSIONS.PLATFORM_ADMIN)) {
             throw new ValidationError('قائمة الصلاحيات المحلية تحتوي مفتاحاً غير مسجل أو غير صالح.');
           }
+          assertNoSegregationOfDutiesConflict(requestedPermissionKeys);
+          const sensitiveFinancialKeys = requestedPermissionKeys.filter((permissionKey) => permissionKey.startsWith('financial:'));
+          if (sensitiveFinancialKeys.length > 0) {
+            const inheritedFinancial = await client.query(
+              `SELECT DISTINCT p.permission_key
+                 FROM public.user_roles ur
+                 JOIN public.role_permissions rp ON rp.role_id = ur.role_id AND rp.tenant_id = $1::uuid AND rp.status = 'active' AND rp.deleted_at IS NULL
+                 JOIN public.permissions p ON p.id = rp.permission_id AND p.status = 'active' AND p.deleted_at IS NULL
+                WHERE ur.tenant_id = $1::uuid AND ur.user_id = $2::uuid AND ur.status = 'active' AND ur.deleted_at IS NULL
+                  AND (ur.school_id IS NULL OR ur.school_id = $3::uuid) AND p.permission_key = ANY($4::text[])`,
+              [tenantId, userId, schoolId, sensitiveFinancialKeys],
+            );
+            const inheritedKeys = new Set(inheritedFinancial.rows.map((entry: any) => String(entry.permission_key || '')));
+            const directSensitiveFinancialKeys = sensitiveFinancialKeys.filter((permissionKey) => !inheritedKeys.has(permissionKey));
+            if (directSensitiveFinancialKeys.length === 0) {
+              // Role-inherited financial access is governed by the published role;
+              // only direct school exceptions require an approved request.
+            } else {
+            const approvedFinancial = await client.query(
+              `SELECT DISTINCT requested.permission_key
+                 FROM public.identity_access_requests r
+                 CROSS JOIN LATERAL unnest(r.permission_keys) AS requested(permission_key)
+                WHERE r.tenant_id = $1::uuid AND r.school_id = $2::uuid AND r.user_id = $3::uuid
+                  AND r.status = 'approved' AND r.deleted_at IS NULL
+                  AND (r.starts_at IS NULL OR r.starts_at <= now()) AND (r.ends_at IS NULL OR r.ends_at > now())
+                  AND requested.permission_key = ANY($4::text[])`,
+              [tenantId, schoolId, userId, directSensitiveFinancialKeys],
+            );
+            const approvedKeys = new Set(approvedFinancial.rows.map((entry: any) => String(entry.permission_key || '')));
+            const missingApprovals = directSensitiveFinancialKeys.filter((permissionKey) => !approvedKeys.has(permissionKey));
+            if (missingApprovals.length > 0) throw new AuthorizationError(`الصلاحيات المالية الحساسة تتطلب طلب موافقة معتمدًا وساريًا: ${missingApprovals.join('، ')}`);
+            }
+          }
           const canonicalPermissionKeys = permissionRegistry.list()
             .map((permissionKey) => permissionRegistry.normalize(permissionKey))
             .filter((permissionKey): permissionKey is string => Boolean(permissionKey))
