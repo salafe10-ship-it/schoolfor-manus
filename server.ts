@@ -893,13 +893,14 @@ async function loadTenantPermissionsFromPlatformControl(identity: any) {
       .eq('status', 'active')
       .is('deleted_at', null))
     : [];
-  const directOverrides = await readPlatformRows('user_permission_grants', 'permission_id, effect, source, tenant_id, school_id, branch_id, status, deleted_at', (query) => query
+  const directOverrides = await readPlatformRows('user_permission_grants', 'permission_id, effect, source, tenant_id, school_id, branch_id, starts_at, ends_at, status, deleted_at', (query) => query
     .eq('user_id', user.id)
     .eq('tenant_id', tenantId)
     .eq('school_id', schoolId)
     .eq('status', 'active')
     .is('deleted_at', null));
-  const scopedDirectOverrides = directOverrides.filter((entry: any) => !entry.branch_id || !branchId || entry.branch_id === branchId);
+  const nowMs = Date.now();
+  const scopedDirectOverrides = directOverrides.filter((entry: any) => (!entry.branch_id || !branchId || entry.branch_id === branchId) && (!entry.starts_at || Date.parse(entry.starts_at) <= nowMs) && (!entry.ends_at || Date.parse(entry.ends_at) > nowMs));
   const permissionIds = [...new Set([...rolePermissions, ...scopedDirectOverrides].map((entry: any) => entry.permission_id).filter(Boolean))];
   if (!permissionIds.length) return [];
 
@@ -5452,7 +5453,9 @@ export async function createApp(options: { cloudflare?: boolean } = {}): Promise
                     'action', gp.action,
                     'effect', upg.effect,
                     'source', upg.source,
-                    'branchId', upg.branch_id
+                    'branchId', upg.branch_id,
+                    'startsAt', upg.starts_at,
+                    'endsAt', upg.ends_at
                   ) ORDER BY gp.permission_key)
                     FROM public.user_permission_grants upg
                     JOIN public.permissions gp ON gp.id = upg.permission_id
@@ -5460,6 +5463,8 @@ export async function createApp(options: { cloudflare?: boolean } = {}): Promise
                      AND upg.user_id = u.id
                      AND upg.school_id = u.school_id
                      AND (upg.branch_id IS NULL OR upg.branch_id = u.branch_id)
+                     AND (upg.starts_at IS NULL OR upg.starts_at <= now())
+                     AND (upg.ends_at IS NULL OR upg.ends_at > now())
                      AND upg.status = 'active' AND upg.deleted_at IS NULL
                      AND gp.status = 'active' AND gp.deleted_at IS NULL
                 ), '[]'::jsonb) AS "directPermissions"
@@ -6068,6 +6073,441 @@ export async function createApp(options: { cloudflare?: boolean } = {}): Promise
     return auditId;
   };
 
+  const recordAccessGovernanceAudit = async (client: any, input: { tenantId: string; schoolId: string; branchId?: string | null; actorUserId: string; requestId: string; correlationId: string; action: string; entityId: string; before: unknown; after: unknown; reason: string }) => {
+    const auditId = randomUUID();
+    const metadata = JSON.stringify({ before: input.before, after: input.after, requestId: input.requestId, correlationId: input.correlationId });
+    await client.query(
+      `INSERT INTO public.audit_events (id, tenant_id, school_id, branch_id, actor_user_id, entity_type, entity_id, action, source, reason, result, metadata, request_id, correlation_id)
+       VALUES ($1::uuid,$2::uuid,$3::uuid,$4::uuid,$5::uuid,'identity_access_request',$6::uuid,$7,'SchoolIdentityGovernance',$8,'success',$9::jsonb,$10::uuid,$11::uuid)`,
+      [auditId, input.tenantId, input.schoolId, input.branchId || null, input.actorUserId, input.entityId, input.action, input.reason, metadata, input.requestId, input.correlationId],
+    );
+    return auditId;
+  };
+
+  app.get('/api/school/access-requests', authenticateRequest, requirePermissionOnly(PERMISSIONS.IDENTITY_USERS_READ), async (req, res, next) => {
+    if (!platformAdminPool) return next(new DatabaseError('مصدر الهوية المركزي غير متاح.'));
+    try {
+      const { tenantId, schoolId, branchId } = schoolIdentityScope(req);
+      const result = await platformAdminPool.query(
+        `SELECT r.id, r.tenant_id, r.school_id, r.branch_id, r.user_id, r.requested_by, r.permission_keys,
+                r.reason, CASE WHEN r.status='pending' AND r.ends_at <= now() THEN 'expired' ELSE r.status END AS status, r.starts_at, r.ends_at, r.approved_by, r.approved_at,
+                r.rejected_by, r.rejected_at, r.decision_reason,
+                r.version, r.created_at, r.updated_at,
+                u.display_name AS user_name, requester.display_name AS requested_by_name,
+                COALESCE(jsonb_agg(DISTINCT jsonb_build_object('id', a.id, 'sequenceNo', a.sequence_no,
+                  'approverId', a.approver_id, 'status', a.status,
+                  'decisionReason', a.decision_reason, 'decidedAt', a.decided_at))
+                  FILTER (WHERE a.id IS NOT NULL), '[]'::jsonb) AS approvals
+           FROM public.identity_access_requests r
+           JOIN public.users u ON u.id = r.user_id
+           JOIN public.users requester ON requester.id = r.requested_by
+           LEFT JOIN public.identity_access_request_approvals a ON a.request_id = r.id
+          WHERE r.tenant_id = $1::uuid AND r.school_id = $2::uuid
+            AND ($3::uuid IS NULL OR r.branch_id IS NULL OR r.branch_id = $3::uuid)
+            AND r.deleted_at IS NULL
+          GROUP BY r.id, u.display_name, requester.display_name
+          ORDER BY r.created_at DESC`,
+        [tenantId, schoolId, branchId || null],
+      );
+      return res.json({ success: true, scope: { tenantId, schoolId, branchId: branchId || null }, requests: result.rows });
+    } catch (error) { return next(error instanceof Error ? error : new DatabaseError('تعذر تحميل طلبات الصلاحيات.')); }
+  });
+
+  app.post('/api/school/access-requests', authenticateRequest, requirePermissionOnly(PERMISSIONS.IDENTITY_USERS_ASSIGN), async (req, res, next) => {
+    if (!platformAdminPool) return next(new DatabaseError('مصدر الهوية المركزي غير متاح.'));
+    const requestId = String(req.body?.requestId || req.get('X-Request-Id') || randomUUID()).trim();
+    const correlationId = String(req.body?.correlationId || req.get('X-Correlation-Id') || randomUUID()).trim();
+    try {
+      const { tenantId, schoolId, branchId, actorAuthUserId } = schoolIdentityScope(req);
+      const userId = String(req.body?.userId || '').trim();
+      const permissionKeys = [...new Set((Array.isArray(req.body?.permissionKeys) ? req.body.permissionKeys : []).map((value: unknown) => permissionRegistry.normalize(value)).filter(Boolean))] as string[];
+      const reason = String(req.body?.reason || '').trim();
+      const startsAt = new Date(String(req.body?.startsAt || new Date().toISOString()));
+      const endsAt = new Date(String(req.body?.endsAt || ''));
+      if (!/^[0-9a-f-]{36}$/i.test(userId)) return next(new ValidationError('مستخدم طلب الصلاحية غير صالح.'));
+      if (!permissionKeys.length) return next(new ValidationError('يجب اختيار صلاحية واحدة على الأقل.'));
+      if (reason.length < 10 || reason.length > 2000) return next(new ValidationError('سبب الطلب يجب أن يكون بين 10 و2000 حرف.'));
+      if (Number.isNaN(startsAt.getTime()) || Number.isNaN(endsAt.getTime()) || endsAt <= startsAt) return next(new ValidationError('فترة الصلاحية غير صالحة.'));
+      assertNoSegregationOfDutiesConflict(permissionKeys);
+      const client = await platformAdminPool.connect();
+      try {
+        await client.query('BEGIN');
+        const actor = await client.query(`SELECT id FROM public.users WHERE tenant_id=$1::uuid AND auth_user_id=$2::uuid AND deleted_at IS NULL LIMIT 1`, [tenantId, actorAuthUserId]);
+        if (actor.rowCount !== 1) throw new AuthenticationError('تعذر تحديد مقدم الطلب.');
+        const target = await client.query(`SELECT id, branch_id FROM public.users WHERE id=$1::uuid AND tenant_id=$2::uuid AND school_id=$3::uuid AND deleted_at IS NULL`, [userId, tenantId, schoolId]);
+        if (target.rowCount !== 1) throw new ValidationError('المستخدم لا ينتمي إلى مدرسة الجلسة الحالية.');
+        if (branchId && target.rows[0].branch_id && target.rows[0].branch_id !== branchId) throw new ValidationError('المستخدم خارج نطاق فرع الجلسة الحالية.');
+        const valid = await client.query(`SELECT permission_key FROM public.permissions WHERE status='active' AND deleted_at IS NULL AND permission_key = ANY($1::text[]) AND (tenant_id IS NULL OR tenant_id=$2::uuid)`, [permissionKeys, tenantId]);
+        const validKeys = new Set(valid.rows.map((row: any) => row.permission_key));
+        if (validKeys.size !== permissionKeys.length) throw new ValidationError('تتضمن الطلبات صلاحية غير منشورة في الكتالوج المركزي.');
+        const created = await client.query(
+          `INSERT INTO public.identity_access_requests (tenant_id, school_id, branch_id, user_id, requested_by, permission_keys, reason, status, starts_at, ends_at, created_by, updated_by)
+           VALUES ($1::uuid,$2::uuid,$3::uuid,$4::uuid,$5::uuid,$6::text[],$7,'pending',$8::timestamptz,$9::timestamptz,$5::uuid,$5::uuid)
+           RETURNING *`,
+          [tenantId, schoolId, branchId || target.rows[0].branch_id || null, userId, actor.rows[0].id, permissionKeys, reason, startsAt.toISOString(), endsAt.toISOString()],
+        );
+        const createdRow = created.rows[0];
+        const auditId = await recordAccessGovernanceAudit(client, { tenantId, schoolId, branchId: createdRow.branch_id, actorUserId: actor.rows[0].id, requestId, correlationId, action: 'request_created', entityId: createdRow.id, before: null, after: { status: createdRow.status, permissionKeys, startsAt, endsAt }, reason });
+        await client.query('COMMIT');
+        return res.status(201).json({ success: true, requestId, correlationId, auditId, request: createdRow });
+      } catch (error) { await client.query('ROLLBACK').catch(() => undefined); return next(error instanceof Error ? error : new DatabaseError('تعذر إنشاء طلب الصلاحية.')); }
+      finally { client.release(); }
+    } catch (error) { return next(error instanceof Error ? error : new DatabaseError('تعذر إنشاء طلب الصلاحية.')); }
+  });
+
+  app.patch('/api/school/access-requests/:requestId/decision', authenticateRequest, requirePermissionOnly(PERMISSIONS.IDENTITY_USERS_ASSIGN), async (req, res, next) => {
+    if (!platformAdminPool) return next(new DatabaseError('مصدر الهوية المركزي غير متاح.'));
+    try {
+      const { tenantId, schoolId, branchId, actorAuthUserId } = schoolIdentityScope(req);
+      const accessRequestId = String(req.params.requestId || '').trim();
+      const decision = String(req.body?.decision || '').trim().toLowerCase();
+      const note = String(req.body?.reason || req.body?.note || '').trim();
+      const requestId = String(req.body?.requestId || req.get('X-Request-Id') || randomUUID()).trim();
+      const correlationId = String(req.body?.correlationId || req.get('X-Correlation-Id') || randomUUID()).trim();
+      if (!/^[0-9a-f-]{36}$/i.test(accessRequestId)) return next(new ValidationError('معرف طلب الصلاحية غير صالح.'));
+      if (!['approved', 'rejected'].includes(decision)) return next(new ValidationError('قرار الموافقة غير صالح.'));
+      if (note.length < 5 || note.length > 2000) return next(new ValidationError('سبب القرار يجب أن يكون بين 5 و2000 حرف.'));
+      const client = await platformAdminPool.connect();
+      try {
+        await client.query('BEGIN');
+        const actor = await client.query(`SELECT id FROM public.users WHERE tenant_id=$1::uuid AND auth_user_id=$2::uuid AND deleted_at IS NULL LIMIT 1`, [tenantId, actorAuthUserId]);
+        if (actor.rowCount !== 1) throw new AuthenticationError('تعذر تحديد الموافق.');
+        const current = await client.query(`SELECT * FROM public.identity_access_requests WHERE id=$1::uuid AND tenant_id=$2::uuid AND school_id=$3::uuid AND ($4::uuid IS NULL OR branch_id IS NULL OR branch_id=$4::uuid) AND deleted_at IS NULL FOR UPDATE`, [accessRequestId, tenantId, schoolId, branchId || null]);
+        if (current.rowCount !== 1) throw new ValidationError('طلب الصلاحية غير موجود داخل نطاق المدرسة.');
+        const before = current.rows[0];
+        if (before.status !== 'pending') throw new ConflictError('لا يمكن اتخاذ قرار على طلب غير معلّق.');
+        if (new Date(before.ends_at).getTime() <= Date.now()) throw new ConflictError('انتهت صلاحية الطلب ولا يمكن اعتماده.');
+        if (before.requested_by === actor.rows[0].id) throw new ValidationError('لا يجوز لمقدم الطلب اعتماد طلبه بنفسه.');
+        const approval = await client.query(`INSERT INTO public.identity_access_request_approvals (request_id, sequence_no, approver_id, status, decision_reason, decided_at) VALUES ($1::uuid,1,$2::uuid,$3,$4,now()) ON CONFLICT (request_id,sequence_no) DO UPDATE SET status=EXCLUDED.status, decision_reason=EXCLUDED.decision_reason, decided_at=EXCLUDED.decided_at RETURNING *`, [accessRequestId, actor.rows[0].id, decision, note]);
+        const updated = await client.query(`UPDATE public.identity_access_requests SET status=$4, approved_by=CASE WHEN $4='approved' THEN $2::uuid ELSE approved_by END, approved_at=CASE WHEN $4='approved' THEN now() ELSE approved_at END, rejected_by=CASE WHEN $4='rejected' THEN $2::uuid ELSE rejected_by END, rejected_at=CASE WHEN $4='rejected' THEN now() ELSE rejected_at END, decision_reason=$5, updated_by=$2::uuid, updated_at=now(), version=version+1 WHERE id=$1::uuid AND version=$3 RETURNING *`, [accessRequestId, actor.rows[0].id, before.version, decision, note]);
+        if (updated.rowCount !== 1) throw new ConflictError('تغير طلب الصلاحية قبل اعتماد القرار.');
+        if (decision === 'approved') {
+          await client.query(
+            `INSERT INTO public.user_permission_grants (tenant_id, user_id, permission_id, school_id, branch_id, source, effect, status, starts_at, ends_at, created_by, updated_by)
+             SELECT $1::uuid, r.user_id, p.id, r.school_id, r.branch_id, 'school', 'allow', 'active', r.starts_at, r.ends_at, $2::uuid, $2::uuid
+               FROM public.identity_access_requests r
+               CROSS JOIN LATERAL unnest(r.permission_keys) AS requested(permission_key)
+               JOIN public.permissions p ON p.permission_key=requested.permission_key AND p.status='active' AND p.deleted_at IS NULL
+              WHERE r.id=$3::uuid
+             ON CONFLICT (user_id, permission_id, source) DO UPDATE SET school_id=EXCLUDED.school_id, branch_id=EXCLUDED.branch_id, effect='allow', status='active', starts_at=EXCLUDED.starts_at, ends_at=EXCLUDED.ends_at, deleted_at=NULL, deleted_by=NULL, updated_at=now(), updated_by=EXCLUDED.updated_by`,
+            [tenantId, actor.rows[0].id, accessRequestId],
+          );
+        }
+        const auditId = await recordAccessGovernanceAudit(client, { tenantId, schoolId, branchId: before.branch_id, actorUserId: actor.rows[0].id, requestId, correlationId, action: `request_${decision}`, entityId: accessRequestId, before: { status: before.status, version: before.version }, after: { status: updated.rows[0].status, version: updated.rows[0].version, decision, note }, reason: note });
+        await client.query('COMMIT');
+        return res.json({ success: true, requestId, correlationId, auditId, request: updated.rows[0], approval: approval.rows[0] });
+      } catch (error) { await client.query('ROLLBACK').catch(() => undefined); return next(error instanceof Error ? error : new DatabaseError('تعذر حفظ قرار طلب الصلاحية.')); }
+      finally { client.release(); }
+    } catch (error) { return next(error instanceof Error ? error : new DatabaseError('تعذر حفظ قرار طلب الصلاحية.')); }
+  });
+
+  app.get('/api/school/effective-permissions', authenticateRequest, requirePermissionOnly(PERMISSIONS.IDENTITY_USERS_READ), async (req, res, next) => {
+    if (!platformAdminPool) return next(new DatabaseError('مصدر الهوية المركزي غير متاح.'));
+    try {
+      const { tenantId, schoolId, branchId } = schoolIdentityScope(req);
+      const userId = String(req.query.userId || '').trim();
+      const permissionKey = String(req.query.permissionKey || '').trim();
+      if (userId && !/^[0-9a-f-]{36}$/i.test(userId)) return next(new ValidationError('معرف المستخدم غير صالح.'));
+      const result = await platformAdminPool.query(
+        `WITH scoped_users AS (
+           SELECT u.id, u.display_name, u.email, u.username, u.job_title, u.department, u.branch_id
+             FROM public.users u
+            WHERE u.tenant_id=$1::uuid AND u.school_id=$2::uuid AND u.deleted_at IS NULL
+              AND ($3::uuid IS NULL OR u.id=$3::uuid)
+              AND ($4::uuid IS NULL OR u.branch_id IS NULL OR u.branch_id=$4::uuid)
+         ), inherited AS (
+           SELECT su.id AS user_id, p.permission_key, p.resource, p.action, 'inherited'::text AS source, 'allow'::text AS effect
+             FROM scoped_users su
+             JOIN public.user_roles ur ON ur.user_id=su.id AND ur.tenant_id=$1::uuid AND ur.status='active' AND ur.deleted_at IS NULL
+              AND (ur.school_id IS NULL OR ur.school_id=$2::uuid) AND (ur.branch_id IS NULL OR $4::uuid IS NULL OR ur.branch_id=$4::uuid)
+              AND (ur.starts_at IS NULL OR ur.starts_at<=now()) AND (ur.ends_at IS NULL OR ur.ends_at>now())
+             JOIN public.roles r ON r.id=ur.role_id AND r.tenant_id=$1::uuid AND r.status='active' AND r.deleted_at IS NULL
+              AND (r.school_id IS NULL OR r.school_id=$2::uuid) AND (r.branch_id IS NULL OR $4::uuid IS NULL OR r.branch_id=$4::uuid)
+             JOIN public.role_permissions rp ON rp.role_id=r.id AND rp.tenant_id=$1::uuid AND rp.status='active' AND rp.deleted_at IS NULL
+             JOIN public.permissions p ON p.id=rp.permission_id AND p.status='active' AND p.deleted_at IS NULL
+         ), direct AS (
+           SELECT su.id AS user_id, p.permission_key, p.resource, p.action, COALESCE(upg.source,'school')::text AS source, upg.effect::text AS effect
+             FROM scoped_users su
+             JOIN public.user_permission_grants upg ON upg.user_id=su.id AND upg.tenant_id=$1::uuid AND upg.school_id=$2::uuid
+              AND (upg.branch_id IS NULL OR $4::uuid IS NULL OR upg.branch_id=$4::uuid) AND upg.status='active' AND upg.deleted_at IS NULL
+              AND (upg.starts_at IS NULL OR upg.starts_at<=now()) AND (upg.ends_at IS NULL OR upg.ends_at>now())
+             JOIN public.permissions p ON p.id=upg.permission_id AND p.status='active' AND p.deleted_at IS NULL
+         ), entries AS (
+           SELECT * FROM inherited UNION ALL SELECT * FROM direct
+         ), effective AS (
+           SELECT DISTINCT e.* FROM entries e
+            WHERE e.effect='allow'
+              AND NOT EXISTS (SELECT 1 FROM entries denied WHERE denied.user_id=e.user_id AND denied.permission_key=e.permission_key AND denied.effect='deny')
+         ), grouped AS (
+           SELECT e.user_id,
+             count(*) FILTER (WHERE e.source='inherited')::int AS inherited_count,
+             count(*) FILTER (WHERE e.source<>'inherited')::int AS direct_count,
+             count(*)::int AS effective_count,
+             jsonb_agg(jsonb_build_object('permissionKey',e.permission_key,'resource',e.resource,'action',e.action,'source',e.source) ORDER BY e.permission_key) AS permissions
+           FROM effective e
+           WHERE ($5='' OR e.permission_key=$5)
+           GROUP BY e.user_id
+         ), denied AS (
+           SELECT e.user_id, count(DISTINCT e.permission_key)::int AS denied_count
+             FROM entries e WHERE e.effect='deny' GROUP BY e.user_id
+         )
+         SELECT su.id, su.display_name, su.email, su.username, su.job_title, su.department, su.branch_id,
+                COALESCE(g.inherited_count,0)::int AS inherited_count, COALESCE(g.direct_count,0)::int AS direct_count,
+                COALESCE(d.denied_count,0)::int AS denied_count, COALESCE(g.effective_count,0)::int AS effective_count,
+                COALESCE(g.permissions,'[]'::jsonb) AS permissions
+           FROM scoped_users su LEFT JOIN grouped g ON g.user_id=su.id LEFT JOIN denied d ON d.user_id=su.id
+          ORDER BY su.display_name ASC`,
+        [tenantId, schoolId, userId || null, branchId || null, permissionKey],
+      );
+      return res.json({ success: true, source: 'canonical_database', scope: { tenantId, schoolId, branchId: branchId || null }, users: result.rows });
+    } catch (error) { return next(error instanceof Error ? error : new DatabaseError('تعذر إنشاء تقرير الصلاحيات الفعالة.')); }
+  });
+
+  app.get('/api/school/access-reviews', authenticateRequest, requirePermissionOnly(PERMISSIONS.IDENTITY_USERS_READ), async (req, res, next) => {
+    if (!platformAdminPool) return next(new DatabaseError('مصدر الهوية المركزي غير متاح.'));
+    try {
+      const { tenantId, schoolId, branchId } = schoolIdentityScope(req);
+      const result = await platformAdminPool.query(
+        `SELECT r.*, u.display_name AS user_name, reviewer.display_name AS reviewer_name
+           FROM public.identity_access_reviews r
+           JOIN public.users u ON u.id=r.user_id
+           LEFT JOIN public.users reviewer ON reviewer.id=r.reviewer_id
+          WHERE r.tenant_id=$1::uuid AND r.school_id=$2::uuid
+            AND ($3::uuid IS NULL OR r.branch_id IS NULL OR r.branch_id=$3::uuid)
+            AND r.deleted_at IS NULL
+          ORDER BY r.due_at ASC, r.created_at DESC`,
+        [tenantId, schoolId, branchId || null],
+      );
+      return res.json({ success: true, source: 'canonical_database', reviews: result.rows });
+    } catch (error) { return next(error instanceof Error ? error : new DatabaseError('تعذر تحميل مراجعات الصلاحيات.')); }
+  });
+
+  app.post('/api/school/access-reviews/generate', authenticateRequest, requirePermissionOnly(PERMISSIONS.IDENTITY_USERS_ASSIGN), async (req, res, next) => {
+    if (!platformAdminPool) return next(new DatabaseError('مصدر الهوية المركزي غير متاح.'));
+    const requestId = String(req.body?.requestId || req.get('X-Request-Id') || randomUUID()).trim();
+    const correlationId = String(req.body?.correlationId || req.get('X-Correlation-Id') || randomUUID()).trim();
+    try {
+      const { tenantId, schoolId, branchId, actorAuthUserId } = schoolIdentityScope(req);
+      const client = await platformAdminPool.connect();
+      try {
+        await client.query('BEGIN');
+        const actor = await client.query(`SELECT id FROM public.users WHERE tenant_id=$1::uuid AND auth_user_id=$2::uuid AND deleted_at IS NULL LIMIT 1`, [tenantId, actorAuthUserId]);
+        if (actor.rowCount !== 1) throw new AuthenticationError('تعذر تحديد منشئ دورة المراجعة.');
+        const created = await client.query(
+          `INSERT INTO public.identity_access_reviews (tenant_id, school_id, branch_id, user_id, due_at, permission_snapshot, created_by, updated_by)
+           SELECT u.tenant_id, u.school_id, u.branch_id, u.id, now() + interval '90 days',
+                  COALESCE((
+                    SELECT jsonb_agg(jsonb_build_object('permissionKey', effective.permission_key, 'resource', effective.resource, 'action', effective.action, 'source', effective.source) ORDER BY effective.permission_key)
+                      FROM (
+                        SELECT DISTINCT entries.permission_key, entries.resource, entries.action, entries.source
+                          FROM (
+                            SELECT p.permission_key, p.resource, p.action, 'inherited'::text AS source, 'allow'::text AS effect
+                              FROM public.user_roles ur
+                              JOIN public.role_permissions rp ON rp.role_id=ur.role_id AND rp.tenant_id=$1::uuid AND rp.status='active' AND rp.deleted_at IS NULL
+                              JOIN public.permissions p ON p.id=rp.permission_id AND p.status='active' AND p.deleted_at IS NULL
+                             WHERE ur.user_id=u.id AND ur.tenant_id=$1::uuid AND ur.status='active' AND ur.deleted_at IS NULL
+                               AND (ur.school_id IS NULL OR ur.school_id=$2::uuid) AND (ur.branch_id IS NULL OR $3::uuid IS NULL OR ur.branch_id=$3::uuid)
+                               AND (ur.starts_at IS NULL OR ur.starts_at<=now()) AND (ur.ends_at IS NULL OR ur.ends_at>now())
+                            UNION ALL
+                            SELECT p.permission_key, p.resource, p.action, COALESCE(upg.source,'school')::text, upg.effect::text
+                              FROM public.user_permission_grants upg
+                              JOIN public.permissions p ON p.id=upg.permission_id AND p.status='active' AND p.deleted_at IS NULL
+                             WHERE upg.user_id=u.id AND upg.tenant_id=$1::uuid AND upg.school_id=$2::uuid AND upg.status='active' AND upg.deleted_at IS NULL
+                               AND (upg.branch_id IS NULL OR $3::uuid IS NULL OR upg.branch_id=$3::uuid) AND (upg.starts_at IS NULL OR upg.starts_at<=now()) AND (upg.ends_at IS NULL OR upg.ends_at>now())
+                          ) entries
+                         WHERE entries.effect='allow'
+                           AND NOT EXISTS (
+                             SELECT 1 FROM (
+                               SELECT p2.permission_key, upg2.effect::text AS effect
+                                 FROM public.user_permission_grants upg2
+                                 JOIN public.permissions p2 ON p2.id=upg2.permission_id AND p2.status='active' AND p2.deleted_at IS NULL
+                                WHERE upg2.user_id=u.id AND upg2.tenant_id=$1::uuid AND upg2.school_id=$2::uuid AND upg2.status='active' AND upg2.deleted_at IS NULL
+                                  AND (upg2.branch_id IS NULL OR $3::uuid IS NULL OR upg2.branch_id=$3::uuid) AND (upg2.starts_at IS NULL OR upg2.starts_at<=now()) AND (upg2.ends_at IS NULL OR upg2.ends_at>now())
+                             ) denied
+                            WHERE denied.permission_key=entries.permission_key AND denied.effect='deny'
+                           )
+                      ) effective
+                  ), '[]'::jsonb), $4::uuid, $4::uuid
+             FROM public.users u
+            WHERE u.tenant_id=$1::uuid AND u.school_id=$2::uuid AND u.deleted_at IS NULL AND u.status IN ('active','invited')
+              AND ($3::uuid IS NULL OR u.branch_id IS NULL OR u.branch_id=$3::uuid)
+              AND NOT EXISTS (SELECT 1 FROM public.identity_access_reviews r WHERE r.tenant_id=u.tenant_id AND r.school_id=u.school_id AND r.user_id=u.id AND r.status='pending' AND r.deleted_at IS NULL)
+           RETURNING *`,
+          [tenantId, schoolId, branchId || null, actor.rows[0].id],
+        );
+        const auditId = await recordAccessGovernanceAudit(client, { tenantId, schoolId, branchId: branchId || null, actorUserId: actor.rows[0].id, requestId, correlationId, action: 'reviews_generated', entityId: actor.rows[0].id, before: null, after: { createdCount: created.rowCount, dueInDays: 90 }, reason: 'إنشاء دورة مراجعة الصلاحيات الدورية' });
+        await client.query('COMMIT');
+        return res.status(201).json({ success: true, requestId, correlationId, auditId, createdCount: created.rowCount, reviews: created.rows });
+      } catch (error) { await client.query('ROLLBACK').catch(() => undefined); return next(error instanceof Error ? error : new DatabaseError('تعذر إنشاء دورة المراجعة.')); }
+      finally { client.release(); }
+    } catch (error) { return next(error instanceof Error ? error : new DatabaseError('تعذر إنشاء دورة المراجعة.')); }
+  });
+
+  app.patch('/api/school/access-reviews/:reviewId/decision', authenticateRequest, requirePermissionOnly(PERMISSIONS.IDENTITY_USERS_ASSIGN), async (req, res, next) => {
+    if (!platformAdminPool) return next(new DatabaseError('مصدر الهوية المركزي غير متاح.'));
+    try {
+      const { tenantId, schoolId, branchId, actorAuthUserId } = schoolIdentityScope(req);
+      const reviewId = String(req.params.reviewId || '').trim();
+      const decision = String(req.body?.decision || '').trim().toLowerCase();
+      const reason = String(req.body?.reason || '').trim();
+      const requestId = String(req.body?.requestId || req.get('X-Request-Id') || randomUUID()).trim();
+      const correlationId = String(req.body?.correlationId || req.get('X-Correlation-Id') || randomUUID()).trim();
+      if (!/^[0-9a-f-]{36}$/i.test(reviewId)) return next(new ValidationError('معرف المراجعة غير صالح.'));
+      if (!['approved', 'revoked', 'waived'].includes(decision)) return next(new ValidationError('قرار المراجعة غير صالح.'));
+      if (reason.length < 5 || reason.length > 2000) return next(new ValidationError('سبب قرار المراجعة يجب أن يكون بين 5 و2000 حرف.'));
+      const client = await platformAdminPool.connect();
+      try {
+        await client.query('BEGIN');
+        const actor = await client.query(`SELECT id FROM public.users WHERE tenant_id=$1::uuid AND auth_user_id=$2::uuid AND deleted_at IS NULL LIMIT 1`, [tenantId, actorAuthUserId]);
+        if (actor.rowCount !== 1) throw new AuthenticationError('تعذر تحديد مراجع الصلاحيات.');
+        const current = await client.query(`SELECT * FROM public.identity_access_reviews WHERE id=$1::uuid AND tenant_id=$2::uuid AND school_id=$3::uuid AND ($4::uuid IS NULL OR branch_id IS NULL OR branch_id=$4::uuid) AND deleted_at IS NULL FOR UPDATE`, [reviewId, tenantId, schoolId, branchId || null]);
+        if (current.rowCount !== 1) throw new ValidationError('المراجعة غير موجودة داخل نطاق المدرسة.');
+        const before = current.rows[0];
+        if (before.status !== 'pending') throw new ConflictError('لا يمكن تعديل مراجعة غير معلقة.');
+        const updated = await client.query(`UPDATE public.identity_access_reviews SET status=$4, reviewer_id=$2::uuid, reviewed_at=now(), decision_reason=$5, updated_by=$2::uuid, updated_at=now(), version=version+1 WHERE id=$1::uuid AND version=$3 RETURNING *`, [reviewId, actor.rows[0].id, before.version, decision, reason]);
+        if (updated.rowCount !== 1) throw new ConflictError('تغيرت المراجعة قبل حفظ القرار.');
+        if (decision === 'revoked') {
+          await client.query(`UPDATE public.user_permission_grants SET status='revoked', deleted_at=now(), deleted_by=$4::uuid, updated_at=now(), updated_by=$4::uuid, version=version+1 WHERE tenant_id=$1::uuid AND school_id=$2::uuid AND user_id=$3::uuid AND source='school' AND status='active'`, [tenantId, schoolId, before.user_id, actor.rows[0].id]);
+        }
+        const auditId = await recordAccessGovernanceAudit(client, { tenantId, schoolId, branchId: before.branch_id, actorUserId: actor.rows[0].id, requestId, correlationId, action: `review_${decision}`, entityId: reviewId, before: { status: before.status, version: before.version }, after: { status: decision, version: updated.rows[0].version, reason }, reason });
+        await client.query('COMMIT');
+        return res.json({ success: true, requestId, correlationId, auditId, review: updated.rows[0] });
+      } catch (error) { await client.query('ROLLBACK').catch(() => undefined); return next(error instanceof Error ? error : new DatabaseError('تعذر حفظ قرار المراجعة.')); }
+      finally { client.release(); }
+    } catch (error) { return next(error instanceof Error ? error : new DatabaseError('تعذر حفظ قرار المراجعة.')); }
+  });
+
+  app.get('/api/school/access-governance-reports', authenticateRequest, requirePermissionOnly(PERMISSIONS.IDENTITY_USERS_READ), async (req, res, next) => {
+    if (!platformAdminPool) return next(new DatabaseError('مصدر الهوية المركزي غير متاح.'));
+    try {
+      const { tenantId, schoolId, branchId } = schoolIdentityScope(req);
+      const [expired, sensitive, unused] = await Promise.all([
+        platformAdminPool.query(
+          `SELECT g.id AS grant_id, u.id AS user_id, u.display_name, u.email, p.permission_key, g.source, g.ends_at, g.status
+             FROM public.user_permission_grants g
+             JOIN public.users u ON u.id=g.user_id AND u.tenant_id=$1::uuid AND u.school_id=$2::uuid AND u.deleted_at IS NULL
+             JOIN public.permissions p ON p.id=g.permission_id AND p.status='active' AND p.deleted_at IS NULL
+            WHERE g.tenant_id=$1::uuid AND g.school_id=$2::uuid AND ($3::uuid IS NULL OR g.branch_id IS NULL OR g.branch_id=$3::uuid)
+              AND g.status='active' AND g.deleted_at IS NULL AND g.ends_at IS NOT NULL AND g.ends_at <= now()
+            ORDER BY g.ends_at ASC, u.display_name ASC`,
+          [tenantId, schoolId, branchId || null],
+        ),
+        platformAdminPool.query(
+          `WITH effective AS (
+             SELECT u.id AS user_id, u.display_name, u.email, p.permission_key, 'inherited'::text AS source
+               FROM public.users u
+               JOIN public.user_roles ur ON ur.user_id=u.id AND ur.tenant_id=$1::uuid AND ur.status='active' AND ur.deleted_at IS NULL
+                AND (ur.school_id IS NULL OR ur.school_id=$2::uuid) AND ($3::uuid IS NULL OR ur.branch_id IS NULL OR ur.branch_id=$3::uuid)
+               JOIN public.role_permissions rp ON rp.role_id=ur.role_id AND rp.tenant_id=$1::uuid AND rp.status='active' AND rp.deleted_at IS NULL
+               JOIN public.permissions p ON p.id=rp.permission_id AND p.status='active' AND p.deleted_at IS NULL
+              WHERE u.tenant_id=$1::uuid AND u.school_id=$2::uuid AND u.deleted_at IS NULL
+             UNION
+             SELECT u.id, u.display_name, u.email, p.permission_key, COALESCE(g.source,'school')::text
+               FROM public.users u
+               JOIN public.user_permission_grants g ON g.user_id=u.id AND g.tenant_id=$1::uuid AND g.school_id=$2::uuid AND g.status='active' AND g.deleted_at IS NULL
+                AND ($3::uuid IS NULL OR g.branch_id IS NULL OR g.branch_id=$3::uuid) AND (g.starts_at IS NULL OR g.starts_at<=now()) AND (g.ends_at IS NULL OR g.ends_at>now()) AND g.effect='allow'
+               JOIN public.permissions p ON p.id=g.permission_id AND p.status='active' AND p.deleted_at IS NULL
+              WHERE u.tenant_id=$1::uuid AND u.school_id=$2::uuid AND u.deleted_at IS NULL
+           ) SELECT user_id, display_name, email, jsonb_agg(jsonb_build_object('permissionKey', permission_key, 'source', source) ORDER BY permission_key) AS permissions
+               FROM effective WHERE permission_key LIKE 'financial:%' OR permission_key IN ('Identity.Users.Assign','Identity.Users.Write')
+              GROUP BY user_id, display_name, email ORDER BY display_name`,
+          [tenantId, schoolId, branchId || null],
+        ),
+        platformAdminPool.query(
+          `SELECT p.permission_key, p.resource, p.action
+             FROM public.permissions p
+            WHERE p.status='active' AND p.deleted_at IS NULL AND (p.tenant_id IS NULL OR p.tenant_id=$1::uuid)
+              AND NOT EXISTS (
+                SELECT 1 FROM public.role_permissions rp
+                JOIN public.roles r ON r.id=rp.role_id AND r.tenant_id=$1::uuid AND r.status='active' AND r.deleted_at IS NULL
+                WHERE rp.permission_id=p.id AND rp.tenant_id=$1::uuid AND rp.status='active' AND rp.deleted_at IS NULL
+              )
+              AND NOT EXISTS (
+                SELECT 1 FROM public.user_permission_grants g
+                JOIN public.users u ON u.id=g.user_id AND u.tenant_id=$1::uuid AND u.school_id=$2::uuid AND u.deleted_at IS NULL
+                WHERE g.permission_id=p.id AND g.tenant_id=$1::uuid AND g.school_id=$2::uuid AND g.status='active' AND g.deleted_at IS NULL
+                  AND (g.branch_id IS NULL OR $3::uuid IS NULL OR g.branch_id=$3::uuid)
+              )
+            ORDER BY p.resource, p.permission_key`,
+          [tenantId, schoolId, branchId || null],
+        ),
+      ]);
+      return res.json({ success: true, source: 'canonical_database', expired: expired.rows, sensitiveUsers: sensitive.rows, unusedPermissions: unused.rows });
+    } catch (error) { return next(error instanceof Error ? error : new DatabaseError('تعذر إنشاء تقارير حوكمة الصلاحيات.')); }
+  });
+
+  app.get('/api/school/sod-conflicts', authenticateRequest, requirePermissionOnly(PERMISSIONS.IDENTITY_USERS_READ), async (req, res, next) => {
+    if (!platformAdminPool) return next(new DatabaseError('مصدر الهوية المركزي غير متاح.'));
+    try {
+      const { tenantId, schoolId, branchId } = schoolIdentityScope(req);
+      const result = await platformAdminPool.query(
+        `WITH scoped_users AS (
+          SELECT id, display_name, email FROM public.users
+           WHERE tenant_id=$1::uuid AND school_id=$2::uuid AND deleted_at IS NULL
+             AND ($3::uuid IS NULL OR branch_id IS NULL OR branch_id=$3::uuid)
+        ), grants AS (
+          SELECT su.id AS user_id, p.permission_key
+            FROM scoped_users su JOIN public.user_permission_grants g ON g.user_id=su.id AND g.tenant_id=$1::uuid AND g.school_id=$2::uuid AND g.status='active' AND g.deleted_at IS NULL
+             AND (g.branch_id IS NULL OR $3::uuid IS NULL OR g.branch_id=$3::uuid) AND (g.starts_at IS NULL OR g.starts_at<=now()) AND (g.ends_at IS NULL OR g.ends_at>now()) AND g.effect='allow'
+            JOIN public.permissions p ON p.id=g.permission_id AND p.status='active' AND p.deleted_at IS NULL
+          UNION
+          SELECT su.id, p.permission_key
+            FROM scoped_users su JOIN public.user_roles ur ON ur.user_id=su.id AND ur.tenant_id=$1::uuid AND ur.status='active' AND ur.deleted_at IS NULL
+             AND (ur.branch_id IS NULL OR $3::uuid IS NULL OR ur.branch_id=$3::uuid) AND (ur.starts_at IS NULL OR ur.starts_at<=now()) AND (ur.ends_at IS NULL OR ur.ends_at>now())
+            JOIN public.role_permissions rp ON rp.role_id=ur.role_id AND rp.tenant_id=$1::uuid AND rp.status='active' AND rp.deleted_at IS NULL
+            JOIN public.permissions p ON p.id=rp.permission_id AND p.status='active' AND p.deleted_at IS NULL
+        ), conflicts AS (
+          SELECT su.id AS user_id, su.display_name, su.email, r.id AS rule_id, r.rule_key, r.permission_a, r.permission_b, r.severity, r.description
+            FROM scoped_users su JOIN public.identity_sod_rules r ON (r.tenant_id IS NULL OR r.tenant_id=$1::uuid) AND r.status='active'
+           WHERE EXISTS (SELECT 1 FROM grants g WHERE g.user_id=su.id AND g.permission_key=r.permission_a)
+             AND EXISTS (SELECT 1 FROM grants g WHERE g.user_id=su.id AND g.permission_key=r.permission_b)
+        ) SELECT * FROM conflicts ORDER BY severity DESC, display_name, rule_key`,
+        [tenantId, schoolId, branchId || null],
+      );
+      return res.json({ success: true, source: 'canonical_database', conflicts: result.rows });
+    } catch (error) { return next(error instanceof Error ? error : new DatabaseError('تعذر تحميل تعارضات فصل المهام.')); }
+  });
+
+  app.get('/api/school/sod-rules', authenticateRequest, requirePermissionOnly(PERMISSIONS.IDENTITY_USERS_READ), async (req, res, next) => {
+    if (!platformAdminPool) return next(new DatabaseError('مصدر الهوية المركزي غير متاح.'));
+    try {
+      const { tenantId } = schoolIdentityScope(req);
+      const result = await platformAdminPool.query(`SELECT * FROM public.identity_sod_rules WHERE tenant_id IS NULL OR tenant_id=$1::uuid ORDER BY severity DESC, rule_key`, [tenantId]);
+      return res.json({ success: true, rules: result.rows });
+    } catch (error) { return next(error instanceof Error ? error : new DatabaseError('تعذر تحميل قواعد فصل المهام.')); }
+  });
+
+  app.post('/api/school/sod-rules', authenticateRequest, requirePermissionOnly(PERMISSIONS.IDENTITY_USERS_ASSIGN), async (req, res, next) => {
+    if (!platformAdminPool) return next(new DatabaseError('مصدر الهوية المركزي غير متاح.'));
+    const requestId = String(req.body?.requestId || req.get('X-Request-Id') || randomUUID()).trim();
+    const correlationId = String(req.body?.correlationId || req.get('X-Correlation-Id') || randomUUID()).trim();
+    try {
+      const { tenantId, schoolId, actorAuthUserId } = schoolIdentityScope(req);
+      const ruleKey = String(req.body?.ruleKey || '').trim().toLowerCase().replace(/[^a-z0-9._-]/g, '');
+      const a = permissionRegistry.normalize(req.body?.permissionA);
+      const b = permissionRegistry.normalize(req.body?.permissionB);
+      const severity = String(req.body?.severity || 'high').trim().toLowerCase();
+      const description = String(req.body?.description || '').trim();
+      if (!ruleKey || !a || !b || a === b || a >= b) return next(new ValidationError('قاعدة التعارض أو ترتيب الصلاحيات غير صالح.'));
+      if (!['low','medium','high','critical'].includes(severity)) return next(new ValidationError('درجة التعارض غير صالحة.'));
+      if (description.length < 5 || description.length > 1000) return next(new ValidationError('وصف قاعدة التعارض مطلوب.'));
+      const client = await platformAdminPool.connect();
+      try {
+        await client.query('BEGIN');
+        const actor = await client.query(`SELECT id FROM public.users WHERE tenant_id=$1::uuid AND auth_user_id=$2::uuid AND deleted_at IS NULL LIMIT 1`, [tenantId, actorAuthUserId]);
+        if (actor.rowCount !== 1) throw new AuthenticationError('تعذر تحديد منشئ قاعدة التعارض.');
+        const valid = await client.query(`SELECT permission_key FROM public.permissions WHERE status='active' AND deleted_at IS NULL AND permission_key=ANY($1::text[]) AND (tenant_id IS NULL OR tenant_id=$2::uuid)`, [[a, b], tenantId]);
+        if (valid.rowCount !== 2) throw new ValidationError('قاعدة التعارض تحتوي صلاحية غير منشورة.');
+        const inserted = await client.query(`INSERT INTO public.identity_sod_rules (tenant_id, rule_key, permission_a, permission_b, severity, description) VALUES ($1::uuid,$2,$3,$4,$5,$6) RETURNING *`, [tenantId, ruleKey, a, b, severity, description]);
+        const row = inserted.rows[0];
+        const auditId = await recordAccessGovernanceAudit(client, { tenantId, schoolId, actorUserId: actor.rows[0].id, requestId, correlationId, action: 'sod_rule_created', entityId: row.id, before: null, after: row, reason: description });
+        await client.query('COMMIT');
+        return res.status(201).json({ success: true, requestId, correlationId, auditId, rule: row });
+      } catch (error) { await client.query('ROLLBACK').catch(() => undefined); return next(error instanceof Error ? error : new DatabaseError('تعذر إنشاء قاعدة فصل المهام.')); }
+      finally { client.release(); }
+    } catch (error) { return next(error instanceof Error ? error : new DatabaseError('تعذر إنشاء قاعدة فصل المهام.')); }
+  });
+
   app.get('/api/school/identity-roles', authenticateRequest, requirePermissionOnly(PERMISSIONS.IDENTITY_USERS_READ), async (req, res, next) => {
     if (!platformAdminPool) return next(new DatabaseError('مصدر الهوية المركزي غير متاح.'));
     try {
@@ -6256,7 +6696,7 @@ export async function createApp(options: { cloudflare?: boolean } = {}): Promise
           .eq('tenant_id', tenantId)
           .eq('status', 'active')
           .is('deleted_at', null)) : [];
-        const grants = userIds.length ? await readPlatformRows('user_permission_grants', 'user_id, permission_id, effect, source, school_id, branch_id, tenant_id, status, deleted_at', (query) => query
+        const grants = userIds.length ? await readPlatformRows('user_permission_grants', 'user_id, permission_id, effect, source, school_id, branch_id, starts_at, ends_at, tenant_id, status, deleted_at', (query) => query
           .in('user_id', userIds)
           .eq('tenant_id', tenantId)
           .eq('school_id', schoolId)
@@ -6286,7 +6726,7 @@ export async function createApp(options: { cloudflare?: boolean } = {}): Promise
             permissionsByUser.set(assignment.user_id, current);
           }
         }
-        for (const grant of grants.filter((entry: any) => !entry.branch_id || !branchId || entry.branch_id === branchId)) {
+        for (const grant of grants.filter((entry: any) => (!entry.branch_id || !branchId || entry.branch_id === branchId) && (!entry.starts_at || Date.parse(entry.starts_at) <= Date.now()) && (!entry.ends_at || Date.parse(entry.ends_at) > Date.now()))) {
           const permission = permissionById.get(grant.permission_id);
           if (!permission) continue;
           const current = permissionsByUser.get(grant.user_id) || [];
@@ -6543,6 +6983,39 @@ export async function createApp(options: { cloudflare?: boolean } = {}): Promise
           )];
           if (requestedPermissionKeys.length !== rawPermissionKeys.length || requestedPermissionKeys.length > 200 || requestedPermissionKeys.includes(PERMISSIONS.PLATFORM_ADMIN)) {
             throw new ValidationError('قائمة الصلاحيات المحلية تحتوي مفتاحاً غير مسجل أو غير صالح.');
+          }
+          assertNoSegregationOfDutiesConflict(requestedPermissionKeys);
+          const sensitiveFinancialKeys = requestedPermissionKeys.filter((permissionKey) => permissionKey.startsWith('financial:'));
+          if (sensitiveFinancialKeys.length > 0) {
+            const inheritedFinancial = await client.query(
+              `SELECT DISTINCT p.permission_key
+                 FROM public.user_roles ur
+                 JOIN public.role_permissions rp ON rp.role_id = ur.role_id AND rp.tenant_id = $1::uuid AND rp.status = 'active' AND rp.deleted_at IS NULL
+                 JOIN public.permissions p ON p.id = rp.permission_id AND p.status = 'active' AND p.deleted_at IS NULL
+                WHERE ur.tenant_id = $1::uuid AND ur.user_id = $2::uuid AND ur.status = 'active' AND ur.deleted_at IS NULL
+                  AND (ur.school_id IS NULL OR ur.school_id = $3::uuid) AND p.permission_key = ANY($4::text[])`,
+              [tenantId, userId, schoolId, sensitiveFinancialKeys],
+            );
+            const inheritedKeys = new Set(inheritedFinancial.rows.map((entry: any) => String(entry.permission_key || '')));
+            const directSensitiveFinancialKeys = sensitiveFinancialKeys.filter((permissionKey) => !inheritedKeys.has(permissionKey));
+            if (directSensitiveFinancialKeys.length === 0) {
+              // Role-inherited financial access is governed by the published role;
+              // only direct school exceptions require an approved request.
+            } else {
+            const approvedFinancial = await client.query(
+              `SELECT DISTINCT requested.permission_key
+                 FROM public.identity_access_requests r
+                 CROSS JOIN LATERAL unnest(r.permission_keys) AS requested(permission_key)
+                WHERE r.tenant_id = $1::uuid AND r.school_id = $2::uuid AND r.user_id = $3::uuid
+                  AND r.status = 'approved' AND r.deleted_at IS NULL
+                  AND (r.starts_at IS NULL OR r.starts_at <= now()) AND (r.ends_at IS NULL OR r.ends_at > now())
+                  AND requested.permission_key = ANY($4::text[])`,
+              [tenantId, schoolId, userId, directSensitiveFinancialKeys],
+            );
+            const approvedKeys = new Set(approvedFinancial.rows.map((entry: any) => String(entry.permission_key || '')));
+            const missingApprovals = directSensitiveFinancialKeys.filter((permissionKey) => !approvedKeys.has(permissionKey));
+            if (missingApprovals.length > 0) throw new AuthorizationError(`الصلاحيات المالية الحساسة تتطلب طلب موافقة معتمدًا وساريًا: ${missingApprovals.join('، ')}`);
+            }
           }
           const canonicalPermissionKeys = permissionRegistry.list()
             .map((permissionKey) => permissionRegistry.normalize(permissionKey))

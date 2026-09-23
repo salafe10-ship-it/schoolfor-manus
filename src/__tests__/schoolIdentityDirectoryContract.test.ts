@@ -87,6 +87,8 @@ describe('school-scoped identity directory contracts', () => {
     expect(module).toContain("'set_permissions'");
     expect(module).toContain('canManage');
     expect(module).toContain('canAssign');
+    expect(module).toContain('publishedCurrentRole');
+    expect(module).toContain('currentUserId && user.id === currentUserId');
     expect(module).toContain('صلاحيات الإدارة مفصولة');
     expect(module).toContain('البريد الإلكتروني <span className="font-normal text-slate-500">(اختياري)</span>');
     expect(module).toContain('تم الحفظ بنجاح وتأكيد الربط بقاعدة البيانات.');

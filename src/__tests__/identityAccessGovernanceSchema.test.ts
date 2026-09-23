@@ -17,4 +17,15 @@ describe('identity access governance schema', () => {
     expect(migration).not.toContain('INSERT INTO public.identity_access_requests');
     expect(read('scripts/apply-identity-structure-migrations.ts')).toContain('202609231000_identity_access_governance.sql');
   });
+
+  it('ships idempotent hardening for older manual deployments', () => {
+    const migration = read('supabase/migrations/202609231100_identity_access_governance_hardening.sql');
+    expect(migration).toContain('ADD COLUMN IF NOT EXISTS created_by uuid');
+    expect(migration).toContain('FORCE ROW LEVEL SECURITY');
+    expect(migration).toContain('CREATE UNIQUE INDEX IF NOT EXISTS uq_identity_access_request_approver');
+    expect(migration).toContain('identity_access_request_approvals_request_fk');
+    expect(migration).toContain('user_permission_grants_permission_fk');
+    expect(migration).not.toContain('DROP TABLE');
+    expect(read('scripts/apply-identity-structure-migrations.ts')).toContain('202609231100_identity_access_governance_hardening.sql');
+  });
 });

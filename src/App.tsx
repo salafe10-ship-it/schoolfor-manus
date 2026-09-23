@@ -2604,6 +2604,7 @@ export default function App() {
                 onBackToMainMenu={() => setActiveSection('dashboard')}
                 canManage={canUseTrustedPermission(PERMISSIONS.IDENTITY_USERS_WRITE)}
                 canAssign={canUseTrustedPermission(PERMISSIONS.IDENTITY_USERS_ASSIGN)}
+                currentUser={trustedSessionUser}
               />
             </React.Suspense>
           )}

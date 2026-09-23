@@ -59,6 +59,9 @@ type Props = {
   canManage?: boolean;
   /** Trusted server-derived capability for role and direct-permission assignment. */
   canAssign?: boolean;
+  /** Trusted session identity used only to repair the current user's display
+   * when the directory response is temporarily missing its role join. */
+  currentUser?: { id?: string; role?: string; permissions?: string[] } | null;
 };
 
 const statusLabels: Record<SchoolUser['status'], string> = {
@@ -66,10 +69,17 @@ const statusLabels: Record<SchoolUser['status'], string> = {
 };
 
 type StatusFilter = 'all' | SchoolUser['status'];
-type ManagementView = 'users' | 'roles' | 'permissions' | 'report';
+type ManagementView = 'users' | 'roles' | 'permissions' | 'report' | 'governance';
 type PermissionStateFilter = 'all' | 'effective' | 'direct' | 'inherited' | 'unassigned' | 'denied';
+type EffectivePermissionReportRow = { id: string; display_name: string; email?: string; username?: string; job_title?: string; department?: string; inherited_count: number; direct_count: number; denied_count: number; effective_count: number };
+type AccessReview = { id: string; user_name?: string; due_at: string; status: string; permission_snapshot?: unknown[]; decision_reason?: string | null };
+type SodConflict = { user_id: string; display_name: string; email?: string; rule_key: string; permission_a: string; permission_b: string; severity: string; description: string };
+type AccessRequest = { id: string; user_name?: string; permission_keys?: string[]; reason: string; status: string; starts_at?: string | null; ends_at?: string | null; approval_status?: string | null; requested_at?: string };
+type ExpiredGrant = { grant_id: string; user_id: string; display_name: string; email?: string; permission_key: string; source: string; ends_at: string; status: string };
+type SensitiveUser = { user_id: string; display_name: string; email?: string; permissions?: Array<{ permissionKey: string; source: string }> };
+type UnusedPermission = { permission_key: string; resource: string; action: string };
 
-export default function SchoolUsersPermissionsModule({ selectedSchool, selectedBranch, triggerNotification, onBackToMainMenu, canManage = false, canAssign = false }: Props) {
+export default function SchoolUsersPermissionsModule({ selectedSchool, selectedBranch, triggerNotification, onBackToMainMenu, canManage = false, canAssign = false, currentUser = null }: Props) {
   const [users, setUsers] = useState<SchoolUser[]>([]);
   const [roles, setRoles] = useState<SchoolRole[]>([]);
   const [jobs, setJobs] = useState<SchoolJob[]>([]);
@@ -94,6 +104,16 @@ export default function SchoolUsersPermissionsModule({ selectedSchool, selectedB
   const [roleFilter, setRoleFilter] = useState('all');
   const [activeView, setActiveView] = useState<ManagementView>('users');
   const [compareRoleKeys, setCompareRoleKeys] = useState({ left: '', right: '' });
+  const [serverEffectiveReport, setServerEffectiveReport] = useState<EffectivePermissionReportRow[]>([]);
+  const [accessReviews, setAccessReviews] = useState<AccessReview[]>([]);
+  const [sodConflicts, setSodConflicts] = useState<SodConflict[]>([]);
+  const [accessRequests, setAccessRequests] = useState<AccessRequest[]>([]);
+  const [expiredGrants, setExpiredGrants] = useState<ExpiredGrant[]>([]);
+  const [sensitiveUsers, setSensitiveUsers] = useState<SensitiveUser[]>([]);
+  const [unusedPermissions, setUnusedPermissions] = useState<UnusedPermission[]>([]);
+  const [governanceLoading, setGovernanceLoading] = useState(false);
+  const [showAccessRequestForm, setShowAccessRequestForm] = useState(false);
+  const [accessRequestDraft, setAccessRequestDraft] = useState({ userId: '', permissionKey: '', reason: '', endsAt: '' });
   const [form, setForm] = useState({ name: '', email: '', jobId: '', jobTitle: '', department: '', initialRole: '', password: '', branchId: '' });
   const canCreate = canManage && canAssign;
   // Central role templates remain the published baseline. A school manager
@@ -142,7 +162,16 @@ export default function SchoolUsersPermissionsModule({ selectedSchool, selectedB
       ]);
       const warnings = [users, roles, jobs].filter((item) => !item.ok).map((item) => item.message);
       if (users.ok) {
-        const nextUsers = Array.isArray(users.payload.users) ? users.payload.users : [];
+        const rawUsers = Array.isArray(users.payload.users) ? users.payload.users : [];
+        const currentUserId = String(currentUser?.id || '').trim();
+        const currentRoleKey = String(currentUser?.role || '').trim().toLowerCase();
+        const publishedCurrentRole = currentRoleKey ? (Array.isArray(roles.payload?.roles) ? roles.payload.roles : []).find((role: SchoolRole) => role.roleKey.toLowerCase() === currentRoleKey) : undefined;
+        const nextUsers = rawUsers.map((user: SchoolUser) => {
+          if (currentUserId && user.id === currentUserId && (!Array.isArray(user.roles) || user.roles.length === 0) && publishedCurrentRole) {
+            return { ...user, roles: [{ roleKey: publishedCurrentRole.roleKey, name: publishedCurrentRole.name, assignmentBranchId: user.branch_id || null }] };
+          }
+          return user;
+        });
         setUsers(nextUsers);
         setRoleDrafts(Object.fromEntries(nextUsers.map((user: SchoolUser) => [user.id, user.roles?.[0]?.roleKey || ''])));
         setPermissionDrafts(Object.fromEntries(nextUsers.map((user: SchoolUser) => [user.id, (user.directPermissions || []).filter((permission) => permission.effect !== 'deny' && permission.source !== 'central').map((permission) => permission.permissionKey)])));
@@ -165,9 +194,43 @@ export default function SchoolUsersPermissionsModule({ selectedSchool, selectedB
     } finally {
       setLoading(false);
     }
-  }, []);
+  }, [currentUser]);
 
   useEffect(() => { void load(); }, [load]);
+
+  useEffect(() => {
+    if (activeView !== 'report') return;
+    let cancelled = false;
+    void authenticatedRequest('/api/school/effective-permissions', { cache: 'no-store' })
+      .then(async (response) => {
+        const payload = await response.json().catch(() => ({}));
+        if (!response.ok || !payload?.success) throw new Error(payload?.message || 'تعذر تحميل التقرير الخادمي.');
+        if (!cancelled) setServerEffectiveReport(Array.isArray(payload.users) ? payload.users : []);
+      })
+      .catch((reportError) => { if (!cancelled) notify(reportError instanceof Error ? reportError.message : 'تعذر تحميل التقرير الخادمي.', 'warning'); });
+    return () => { cancelled = true; };
+  }, [activeView, notify]);
+
+  useEffect(() => {
+    if (activeView !== 'governance') return;
+    let cancelled = false;
+    setGovernanceLoading(true);
+    Promise.all([
+      authenticatedRequest('/api/school/access-requests', { cache: 'no-store' }),
+      authenticatedRequest('/api/school/access-reviews', { cache: 'no-store' }),
+      authenticatedRequest('/api/school/sod-conflicts', { cache: 'no-store' }),
+      authenticatedRequest('/api/school/access-governance-reports', { cache: 'no-store' }),
+    ]).then(async ([requestsResponse, reviewsResponse, conflictsResponse, reportsResponse]) => {
+      const [requestsPayload, reviewsPayload, conflictsPayload, reportsPayload] = await Promise.all([requestsResponse.json().catch(() => ({})), reviewsResponse.json().catch(() => ({})), conflictsResponse.json().catch(() => ({})), reportsResponse.json().catch(() => ({}))]);
+      if (!requestsResponse.ok || !requestsPayload?.success) throw new Error(requestsPayload?.message || 'تعذر تحميل طلبات الصلاحيات.');
+      if (!reviewsResponse.ok || !reviewsPayload?.success) throw new Error(reviewsPayload?.message || 'تعذر تحميل مراجعات الصلاحيات.');
+      if (!conflictsResponse.ok || !conflictsPayload?.success) throw new Error(conflictsPayload?.message || 'تعذر تحميل تعارضات الصلاحيات.');
+      if (!reportsResponse.ok || !reportsPayload?.success) throw new Error(reportsPayload?.message || 'تعذر تحميل تقارير حوكمة الصلاحيات.');
+      if (!cancelled) { setAccessRequests(Array.isArray(requestsPayload.requests) ? requestsPayload.requests : []); setAccessReviews(Array.isArray(reviewsPayload.reviews) ? reviewsPayload.reviews : []); setSodConflicts(Array.isArray(conflictsPayload.conflicts) ? conflictsPayload.conflicts : []); setExpiredGrants(Array.isArray(reportsPayload.expired) ? reportsPayload.expired : []); setSensitiveUsers(Array.isArray(reportsPayload.sensitiveUsers) ? reportsPayload.sensitiveUsers : []); setUnusedPermissions(Array.isArray(reportsPayload.unusedPermissions) ? reportsPayload.unusedPermissions : []); }
+    }).catch((governanceError) => { if (!cancelled) notify(governanceError instanceof Error ? governanceError.message : 'تعذر تحميل حوكمة الصلاحيات.', 'warning'); })
+      .finally(() => { if (!cancelled) setGovernanceLoading(false); });
+    return () => { cancelled = true; };
+  }, [activeView, notify]);
 
   useEffect(() => {
     if (editing) setForm((current) => ({ ...current, jobId: editing.job_id || '' }));
@@ -423,6 +486,70 @@ export default function SchoolUsersPermissionsModule({ selectedSchool, selectedB
     return { user, inherited: inherited.size, direct: directAllowed.size, denied: denied.size, effective: effective.size };
   }), [roles, users]);
 
+  const generateAccessReviews = async () => {
+    if (!canAssign) { notify('إنشاء دورة المراجعة يتطلب صلاحية إسناد الصلاحيات.', 'warning'); return; }
+    if (!confirmAction('سيتم إنشاء مراجعة دورية لكل حساب نشط أو مدعو لا يملك مراجعة معلقة. هل تريد المتابعة؟')) return;
+    setGovernanceLoading(true);
+    try {
+      const response = await authenticatedRequest('/api/school/access-reviews/generate', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({}) });
+      const payload = await response.json().catch(() => ({}));
+      if (!response.ok || !payload?.success) throw new Error(payload?.message || 'تعذر إنشاء دورة المراجعة.');
+      setAccessReviews((current) => [...(Array.isArray(payload.reviews) ? payload.reviews : []), ...current]);
+      notify(`تم إنشاء ${Number(payload.createdCount || 0)} مراجعة من قاعدة البيانات وتسجيل العملية.`, 'success');
+    } catch (reviewError) { notify(reviewError instanceof Error ? reviewError.message : 'تعذر إنشاء دورة المراجعة.', 'warning'); }
+    finally { setGovernanceLoading(false); }
+  };
+
+  const decideAccessRequest = async (request: AccessRequest, decision: 'approved' | 'rejected') => {
+    if (!canAssign) { notify('اعتماد طلب الصلاحية يتطلب صلاحية إسناد الصلاحيات.', 'warning'); return; }
+    if (!confirmAction(decision === 'approved' ? 'سيتم تفعيل الصلاحيات المطلوبة حسب تاريخها وتسجيل الموافقة. هل تريد المتابعة؟' : 'سيتم رفض طلب الصلاحية وتسجيل السبب. هل تريد المتابعة؟')) return;
+    const reason = typeof window === 'undefined' ? '' : window.prompt('اكتب سبب القرار (5 أحرف على الأقل):', decision === 'approved' ? 'تمت المراجعة والموافقة ضمن نطاق المدرسة.' : 'لم تستوفِ الصلاحية متطلبات الاعتماد.') || '';
+    if (reason.trim().length < 5) { notify('سبب القرار مطلوب ولا يمكن تركه فارغًا.', 'warning'); return; }
+    setGovernanceLoading(true);
+    try {
+      const response = await authenticatedRequest(`/api/school/access-requests/${encodeURIComponent(request.id)}/decision`, { method: 'PATCH', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ decision, reason }) });
+      const payload = await response.json().catch(() => ({}));
+      if (!response.ok || !payload?.success) throw new Error(payload?.message || 'تعذر حفظ قرار طلب الصلاحية.');
+      setAccessRequests((current) => current.map((item) => item.id === request.id ? { ...item, status: decision, approval_status: decision } : item));
+      notify(decision === 'approved' ? 'تم اعتماد الطلب وتفعيل الصلاحيات المؤقتة إن وجدت.' : 'تم رفض الطلب وتسجيل القرار.', 'success');
+    } catch (decisionError) { notify(decisionError instanceof Error ? decisionError.message : 'تعذر حفظ القرار.', 'warning'); }
+    finally { setGovernanceLoading(false); }
+  };
+
+  const decideAccessReview = async (review: AccessReview, decision: 'approved' | 'revoked' | 'waived') => {
+    if (!canAssign) { notify('قرار المراجعة يتطلب صلاحية إسناد الصلاحيات.', 'warning'); return; }
+    const labels = { approved: 'اعتماد', revoked: 'إلغاء المنح المحلية', waived: 'تجاوز موثق' };
+    if (!confirmAction(`سيتم تنفيذ قرار «${labels[decision]}» للمراجعة وتسجيله. هل تريد المتابعة؟`)) return;
+    const reason = typeof window === 'undefined' ? '' : window.prompt('اكتب سبب قرار المراجعة (5 أحرف على الأقل):', `تمت مراجعة الوصول — ${labels[decision]}.`) || '';
+    if (reason.trim().length < 5) { notify('سبب قرار المراجعة مطلوب.', 'warning'); return; }
+    setGovernanceLoading(true);
+    try {
+      const response = await authenticatedRequest(`/api/school/access-reviews/${encodeURIComponent(review.id)}/decision`, { method: 'PATCH', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ decision, reason }) });
+      const payload = await response.json().catch(() => ({}));
+      if (!response.ok || !payload?.success) throw new Error(payload?.message || 'تعذر حفظ قرار المراجعة.');
+      setAccessReviews((current) => current.map((item) => item.id === review.id ? { ...item, status: decision, decision_reason: reason } : item));
+      notify('تم حفظ قرار المراجعة وتسجيله في Audit.', 'success');
+    } catch (decisionError) { notify(decisionError instanceof Error ? decisionError.message : 'تعذر حفظ قرار المراجعة.', 'warning'); }
+    finally { setGovernanceLoading(false); }
+  };
+
+  const createAccessRequest = async (event: React.FormEvent) => {
+    event.preventDefault();
+    if (!canAssign) { notify('إنشاء طلب صلاحية يتطلب صلاحية إسناد الصلاحيات.', 'warning'); return; }
+    if (!accessRequestDraft.userId || !accessRequestDraft.permissionKey || accessRequestDraft.reason.trim().length < 10 || !accessRequestDraft.endsAt) { notify('أكمل المستخدم والصلاحية والسبب وتاريخ الانتهاء.', 'warning'); return; }
+    setGovernanceLoading(true);
+    try {
+      const response = await authenticatedRequest('/api/school/access-requests', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ userId: accessRequestDraft.userId, permissionKeys: [accessRequestDraft.permissionKey], reason: accessRequestDraft.reason.trim(), endsAt: new Date(accessRequestDraft.endsAt).toISOString() }) });
+      const payload = await response.json().catch(() => ({}));
+      if (!response.ok || !payload?.success) throw new Error(payload?.message || 'تعذر إنشاء طلب الصلاحية.');
+      setAccessRequests((current) => [payload.request, ...current]);
+      setAccessRequestDraft({ userId: '', permissionKey: '', reason: '', endsAt: '' });
+      setShowAccessRequestForm(false);
+      notify('تم إنشاء طلب الصلاحية وتسجيله للموافقة.', 'success');
+    } catch (requestError) { notify(requestError instanceof Error ? requestError.message : 'تعذر إنشاء طلب الصلاحية.', 'warning'); }
+    finally { setGovernanceLoading(false); }
+  };
+
   // The permission editor intentionally owns the whole working surface. This
   // keeps the security decision readable on smaller screens and prevents an
   // administrator from confusing a role permission with a direct exception.
@@ -542,6 +669,7 @@ export default function SchoolUsersPermissionsModule({ selectedSchool, selectedB
             ['roles', 'الأدوار المعتمدة'],
             ['permissions', 'مصفوفة الصلاحيات'],
             ['report', 'تقرير الصلاحيات الفعالة'],
+            ['governance', 'الحوكمة والتعارضات'],
           ] as Array<[ManagementView, string]>).map(([view, label]) => (
             <button key={view} type="button" onClick={() => setActiveView(view)} className={`rounded-xl px-4 py-2.5 text-xs font-black transition ${activeView === view ? 'bg-slate-950 text-amber-300 shadow' : 'text-slate-600 hover:bg-amber-50 hover:text-amber-800'}`}>
               {label}
@@ -568,7 +696,21 @@ export default function SchoolUsersPermissionsModule({ selectedSchool, selectedB
 
         {activeView === 'report' && <section className="identity-panel overflow-hidden rounded-3xl border border-slate-200 bg-white shadow-sm" aria-labelledby="effective-report-title">
           <div className="border-b border-slate-100 bg-slate-50 p-5"><h2 id="effective-report-title" className="font-black">تقرير الصلاحيات الفعالة</h2><p className="mt-1 text-xs leading-5 text-slate-500">قراءة موحدة للصلاحيات الموروثة من الدور، والمنح المباشرة، والمنع المسجل لكل مستخدم داخل نطاق المدرسة.</p></div>
-          <div className="overflow-x-auto"><table className="w-full min-w-[820px] text-right text-sm"><thead className="bg-slate-950 text-xs text-amber-200"><tr><th className="p-4">المستخدم</th><th className="p-4">الوظيفة والقسم</th><th className="p-4">الدور</th><th className="p-4">موروثة</th><th className="p-4">منح مباشرة</th><th className="p-4">منع</th><th className="p-4">فعالة</th></tr></thead><tbody className="divide-y divide-slate-100">{effectivePermissionReport.map(({ user, inherited, direct, denied, effective }) => <tr key={user.id}><td className="p-4"><div className="font-black">{user.display_name}</div><div className="text-xs text-slate-500">{user.email || user.username || 'هوية داخلية'}</div></td><td className="p-4">{user.job_title || '—'}<div className="text-xs text-slate-500">{user.department || '—'}</div></td><td className="p-4">{(user.roles || []).map((role) => role.name).join('، ') || 'دون دور'}</td><td className="p-4 font-black text-emerald-700">{inherited}</td><td className="p-4 font-black text-amber-700">{direct}</td><td className="p-4 font-black text-rose-700">{denied}</td><td className="p-4 font-black text-slate-950">{effective}</td></tr>)}</tbody></table>{effectivePermissionReport.length === 0 && <div className="p-12 text-center text-sm font-bold text-slate-500">لا توجد بيانات صلاحيات متاحة.</div>}</div>
+          <div className="overflow-x-auto"><table className="w-full min-w-[820px] text-right text-sm"><thead className="bg-slate-950 text-xs text-amber-200"><tr><th className="p-4">المستخدم</th><th className="p-4">الوظيفة والقسم</th><th className="p-4">موروثة</th><th className="p-4">منح مباشرة</th><th className="p-4">منع</th><th className="p-4">فعالة</th></tr></thead><tbody className="divide-y divide-slate-100">{(serverEffectiveReport.length ? serverEffectiveReport : effectivePermissionReport.map(({ user, inherited, direct, denied, effective }) => ({ id: user.id, display_name: user.display_name, email: user.email, username: user.username, job_title: user.job_title, department: user.department, inherited_count: inherited, direct_count: direct, denied_count: denied, effective_count: effective }))).map((row) => <tr key={row.id}><td className="p-4"><div className="font-black">{row.display_name}</div><div className="text-xs text-slate-500">{row.email || row.username || 'هوية داخلية'}</div></td><td className="p-4">{row.job_title || '—'}<div className="text-xs text-slate-500">{row.department || '—'}</div></td><td className="p-4 font-black text-emerald-700">{row.inherited_count}</td><td className="p-4 font-black text-amber-700">{row.direct_count}</td><td className="p-4 font-black text-rose-700">{row.denied_count}</td><td className="p-4 font-black text-slate-950">{row.effective_count}</td></tr>)}</tbody></table>{(serverEffectiveReport.length || effectivePermissionReport.length) === 0 && <div className="p-12 text-center text-sm font-bold text-slate-500">لا توجد بيانات صلاحيات متاحة.</div>}</div>
+        </section>}
+
+        {activeView === 'governance' && <section className="identity-panel space-y-5 overflow-hidden rounded-3xl border border-slate-200 bg-white p-5 shadow-sm" aria-labelledby="governance-screen-title">
+          <div className="flex flex-col gap-3 sm:flex-row sm:items-start sm:justify-between"><div><h2 id="governance-screen-title" className="font-black">حوكمة الوصول ومراجعة التعارضات</h2><p className="mt-1 text-xs leading-5 text-slate-500">قراءة مباشرة من جداول الحوكمة في قاعدة البيانات؛ لا تعرض هذه الشاشة أي بيانات محلية أو افتراضية.</p></div><div className="flex flex-wrap gap-2"><button type="button" disabled={!canAssign || governanceLoading} onClick={() => setShowAccessRequestForm((current) => !current)} className="rounded-xl bg-sky-700 px-4 py-2.5 text-xs font-black text-white shadow disabled:cursor-not-allowed disabled:opacity-50">طلب صلاحية</button><button type="button" disabled={!canAssign || governanceLoading} onClick={() => void generateAccessReviews()} className="rounded-xl bg-amber-600 px-4 py-2.5 text-xs font-black text-white shadow disabled:cursor-not-allowed disabled:opacity-50">إنشاء دورة مراجعة 90 يومًا</button></div></div>
+          {showAccessRequestForm && <form onSubmit={createAccessRequest} className="grid gap-3 rounded-2xl border border-sky-200 bg-sky-50 p-4 sm:grid-cols-2"><label className="text-xs font-bold text-sky-950">المستخدم<select required value={accessRequestDraft.userId} onChange={(event) => setAccessRequestDraft((current) => ({ ...current, userId: event.target.value }))} className="mt-1 w-full rounded-xl border border-sky-200 bg-white p-2.5"><option value="">اختر المستخدم</option>{users.filter((user) => user.status === 'active' || user.status === 'invited').map((user) => <option key={user.id} value={user.id}>{user.display_name}</option>)}</select></label><label className="text-xs font-bold text-sky-950">الصلاحية<select required value={accessRequestDraft.permissionKey} onChange={(event) => setAccessRequestDraft((current) => ({ ...current, permissionKey: event.target.value }))} className="mt-1 w-full rounded-xl border border-sky-200 bg-white p-2.5"><option value="">اختر الصلاحية</option>{permissionCatalog.map((permission) => <option key={permission.permissionKey} value={permission.permissionKey}>{permission.permissionKey}</option>)}</select></label><label className="text-xs font-bold text-sky-950">تاريخ الانتهاء<input required type="datetime-local" value={accessRequestDraft.endsAt} onChange={(event) => setAccessRequestDraft((current) => ({ ...current, endsAt: event.target.value }))} className="mt-1 w-full rounded-xl border border-sky-200 bg-white p-2.5" /></label><label className="text-xs font-bold text-sky-950 sm:col-span-2">سبب الطلب<textarea required minLength={10} value={accessRequestDraft.reason} onChange={(event) => setAccessRequestDraft((current) => ({ ...current, reason: event.target.value }))} className="mt-1 min-h-20 w-full rounded-xl border border-sky-200 bg-white p-2.5" placeholder="اكتب سببًا تشغيليًا واضحًا للطلب" /></label><div className="flex gap-2 sm:col-span-2"><button type="submit" disabled={governanceLoading} className="rounded-xl bg-sky-700 px-4 py-2 text-xs font-black text-white disabled:opacity-50">حفظ الطلب</button><button type="button" onClick={() => setShowAccessRequestForm(false)} className="rounded-xl border border-sky-200 bg-white px-4 py-2 text-xs font-black text-sky-800">إلغاء</button></div></form>}
+          {governanceLoading ? <div className="rounded-2xl bg-slate-50 p-10 text-center text-sm font-bold text-slate-500">جارٍ تحميل سجلات الحوكمة...</div> : <>
+            <div className="grid gap-3 sm:grid-cols-7"><div className="rounded-2xl border border-amber-200 bg-amber-50 p-4"><div className="text-2xl font-black text-amber-900">{accessReviews.filter((review) => review.status === 'pending').length}</div><div className="text-xs font-bold text-amber-800">مراجعات معلقة</div></div><div className="rounded-2xl border border-sky-200 bg-sky-50 p-4"><div className="text-2xl font-black text-sky-900">{accessRequests.filter((request) => request.status === 'pending').length}</div><div className="text-xs font-bold text-sky-800">طلبات وصول معلقة</div></div><div className="rounded-2xl border border-rose-200 bg-rose-50 p-4"><div className="text-2xl font-black text-rose-900">{sodConflicts.length}</div><div className="text-xs font-bold text-rose-800">تعارضات فصل المهام</div></div><div className="rounded-2xl border border-orange-200 bg-orange-50 p-4"><div className="text-2xl font-black text-orange-900">{expiredGrants.length}</div><div className="text-xs font-bold text-orange-800">منح منتهية</div></div><div className="rounded-2xl border border-purple-200 bg-purple-50 p-4"><div className="text-2xl font-black text-purple-900">{sensitiveUsers.length}</div><div className="text-xs font-bold text-purple-800">مستخدمون حساسون</div></div><div className="rounded-2xl border border-cyan-200 bg-cyan-50 p-4"><div className="text-2xl font-black text-cyan-900">{unusedPermissions.length}</div><div className="text-xs font-bold text-cyan-800">صلاحيات غير مستخدمة</div></div><div className="rounded-2xl border border-slate-200 bg-slate-50 p-4"><div className="text-2xl font-black text-slate-900">{accessReviews.length}</div><div className="text-xs font-bold text-slate-700">إجمالي سجلات المراجعة</div></div></div>
+            <div className="overflow-x-auto rounded-2xl border border-sky-200"><table className="w-full min-w-[1020px] text-right text-xs"><thead className="bg-sky-950 text-sky-100"><tr><th className="p-3">المستخدم</th><th className="p-3">الصلاحيات المطلوبة</th><th className="p-3">سبب الطلب</th><th className="p-3">الفترة</th><th className="p-3">الحالة</th><th className="p-3">قرار</th></tr></thead><tbody className="divide-y divide-sky-100">{accessRequests.map((request) => <tr key={request.id}><td className="p-3 font-black">{request.user_name || 'مستخدم'}</td><td className="p-3 font-mono">{Array.isArray(request.permission_keys) ? request.permission_keys.join('، ') : '—'}</td><td className="max-w-xs p-3">{request.reason}</td><td className="p-3">{request.starts_at ? new Date(request.starts_at).toLocaleDateString('ar') : 'فوري'} — {request.ends_at ? new Date(request.ends_at).toLocaleDateString('ar') : 'مفتوح'}</td><td className="p-3"><span className={`rounded-full px-2 py-1 font-black ${request.status === 'pending' ? 'bg-amber-50 text-amber-800' : request.status === 'approved' ? 'bg-emerald-50 text-emerald-700' : 'bg-rose-50 text-rose-700'}`}>{request.status}</span>{request.approval_status && <div className="mt-1 text-[10px] text-slate-500">موافقة: {request.approval_status}</div>}</td><td className="p-3">{request.status === 'pending' ? <div className="flex gap-1"><button type="button" disabled={!canAssign || governanceLoading} onClick={() => void decideAccessRequest(request, 'approved')} className="rounded-lg bg-emerald-600 px-2 py-1.5 text-[10px] font-black text-white disabled:opacity-50">اعتماد</button><button type="button" disabled={!canAssign || governanceLoading} onClick={() => void decideAccessRequest(request, 'rejected')} className="rounded-lg bg-rose-600 px-2 py-1.5 text-[10px] font-black text-white disabled:opacity-50">رفض</button></div> : <span className="text-slate-400">مغلق</span>}</td></tr>)}</tbody></table>{accessRequests.length === 0 && <div className="p-10 text-center text-sm font-bold text-slate-500">لا توجد طلبات صلاحيات مسجلة.</div>}</div>
+            <div className="overflow-x-auto rounded-2xl border border-slate-200"><table className="w-full min-w-[980px] text-right text-xs"><thead className="bg-slate-950 text-amber-200"><tr><th className="p-3">المستخدم</th><th className="p-3">الاستحقاق</th><th className="p-3">الحالة</th><th className="p-3">لقطة الصلاحيات</th><th className="p-3">قرار المراجع</th></tr></thead><tbody className="divide-y divide-slate-100">{accessReviews.map((review) => <tr key={review.id}><td className="p-3 font-black">{review.user_name || 'مستخدم'}</td><td className="p-3">{new Date(review.due_at).toLocaleDateString('ar')}</td><td className="p-3"><span className={`rounded-full px-2 py-1 font-black ${review.status === 'pending' ? 'bg-amber-50 text-amber-800' : review.status === 'revoked' ? 'bg-rose-50 text-rose-700' : 'bg-emerald-50 text-emerald-700'}`}>{review.status}</span></td><td className="p-3 font-black">{Array.isArray(review.permission_snapshot) ? review.permission_snapshot.length : 0} صلاحية</td><td className="p-3">{review.status === 'pending' ? <div className="flex flex-wrap gap-1"><button type="button" disabled={!canAssign || governanceLoading} onClick={() => void decideAccessReview(review, 'approved')} className="rounded-lg bg-emerald-600 px-2 py-1.5 text-[10px] font-black text-white disabled:opacity-50">اعتماد</button><button type="button" disabled={!canAssign || governanceLoading} onClick={() => void decideAccessReview(review, 'revoked')} className="rounded-lg bg-rose-600 px-2 py-1.5 text-[10px] font-black text-white disabled:opacity-50">إلغاء المنح</button><button type="button" disabled={!canAssign || governanceLoading} onClick={() => void decideAccessReview(review, 'waived')} className="rounded-lg bg-slate-600 px-2 py-1.5 text-[10px] font-black text-white disabled:opacity-50">تجاوز موثق</button></div> : <span className="text-[10px] text-slate-500">{review.decision_reason || 'تم اتخاذ القرار'}</span>}</td></tr>)}</tbody></table>{accessReviews.length === 0 && <div className="p-10 text-center text-sm font-bold text-slate-500">لا توجد مراجعات مسجلة حاليًا.</div>}</div>
+            <div className="overflow-x-auto rounded-2xl border border-rose-200"><table className="w-full min-w-[860px] text-right text-xs"><thead className="bg-rose-950 text-rose-100"><tr><th className="p-3">المستخدم</th><th className="p-3">قاعدة التعارض</th><th className="p-3">الصلاحية الأولى</th><th className="p-3">الصلاحية الثانية</th><th className="p-3">الخطورة</th></tr></thead><tbody className="divide-y divide-rose-100">{sodConflicts.map((conflict, index) => <tr key={`${conflict.user_id}-${conflict.rule_key}-${index}`}><td className="p-3 font-black">{conflict.display_name}</td><td className="p-3 font-mono">{conflict.rule_key}</td><td className="p-3 font-mono">{conflict.permission_a}</td><td className="p-3 font-mono">{conflict.permission_b}</td><td className="p-3 font-black text-rose-700">{conflict.severity}</td></tr>)}</tbody></table>{sodConflicts.length === 0 && <div className="p-10 text-center text-sm font-bold text-emerald-700">لا توجد تعارضات فعالة داخل نطاق المدرسة.</div>}</div>
+            <div className="overflow-x-auto rounded-2xl border border-orange-200"><table className="w-full min-w-[760px] text-right text-xs"><thead className="bg-orange-950 text-orange-100"><tr><th className="p-3">المستخدم</th><th className="p-3">الصلاحية</th><th className="p-3">المصدر</th><th className="p-3">انتهت في</th></tr></thead><tbody className="divide-y divide-orange-100">{expiredGrants.map((grant) => <tr key={grant.grant_id}><td className="p-3 font-black">{grant.display_name}</td><td className="p-3 font-mono">{grant.permission_key}</td><td className="p-3">{grant.source}</td><td className="p-3">{new Date(grant.ends_at).toLocaleString('ar')}</td></tr>)}</tbody></table>{expiredGrants.length === 0 && <div className="p-10 text-center text-sm font-bold text-emerald-700">لا توجد منح منتهية.</div>}</div>
+            <div className="overflow-x-auto rounded-2xl border border-purple-200"><table className="w-full min-w-[760px] text-right text-xs"><thead className="bg-purple-950 text-purple-100"><tr><th className="p-3">المستخدم</th><th className="p-3">البريد</th><th className="p-3">الصلاحيات الحساسة</th></tr></thead><tbody className="divide-y divide-purple-100">{sensitiveUsers.map((user) => <tr key={user.user_id}><td className="p-3 font-black">{user.display_name}</td><td className="p-3">{user.email || '—'}</td><td className="p-3 font-mono">{(user.permissions || []).map((permission) => `${permission.permissionKey} (${permission.source})`).join('، ')}</td></tr>)}</tbody></table>{sensitiveUsers.length === 0 && <div className="p-10 text-center text-sm font-bold text-emerald-700">لا يوجد مستخدمون ذوو صلاحيات حساسة.</div>}</div>
+            <div className="overflow-x-auto rounded-2xl border border-cyan-200"><table className="w-full min-w-[680px] text-right text-xs"><thead className="bg-cyan-950 text-cyan-100"><tr><th className="p-3">مفتاح الصلاحية</th><th className="p-3">الوحدة</th><th className="p-3">الفعل</th></tr></thead><tbody className="divide-y divide-cyan-100">{unusedPermissions.map((permission) => <tr key={permission.permission_key}><td className="p-3 font-mono">{permission.permission_key}</td><td className="p-3">{permission.resource}</td><td className="p-3">{permission.action}</td></tr>)}</tbody></table>{unusedPermissions.length === 0 && <div className="p-10 text-center text-sm font-bold text-emerald-700">لا توجد صلاحيات منشورة غير مستخدمة.</div>}</div>
+          </>}
         </section>}
 
         <div className="rounded-2xl border border-amber-200 bg-amber-50 p-4 text-xs leading-6 text-amber-950"><b>سياسة الصلاحيات:</b> المدرسة الأم تنشر القوالب الأساسية، وكل مدرسة تدير مستخدميها وتفويضاتها المحلية داخل نطاقها فقط. لا يمكن منح Platform.Admin أو تجاوز منع مركزي، ولا تنتقل التفويضات المحلية إلى مدرسة أخرى.</div>
