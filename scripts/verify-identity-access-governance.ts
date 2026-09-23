@@ -1,8 +1,10 @@
 import 'dotenv/config';
 import { Pool } from 'pg';
 
-const connectionString = process.env.PLATFORM_ADMIN_DATABASE_URL || process.env.DIRECT_URL || process.env.DATABASE_URL;
-if (!connectionString) throw new Error('ADMIN_DATABASE_CONNECTION_REQUIRED');
+const allowNonProductionDatabase = process.env.ALLOW_NON_PRODUCTION_DB === 'true';
+const connectionString = process.env.PLATFORM_ADMIN_DATABASE_URL
+  || (allowNonProductionDatabase ? (process.env.DIRECT_URL || process.env.DATABASE_URL) : '');
+if (!connectionString) throw new Error('PLATFORM_ADMIN_DATABASE_URL_REQUIRED');
 
 const pool = new Pool({ connectionString, max: 1, connectionTimeoutMillis: 12_000, ssl: { rejectUnauthorized: false } });
 try {
