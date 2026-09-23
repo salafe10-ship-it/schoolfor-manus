@@ -6377,6 +6377,47 @@ export async function createApp(options: { cloudflare?: boolean } = {}): Promise
     } catch (error) { return next(error instanceof Error ? error : new DatabaseError('تعذر حفظ قرار المراجعة.')); }
   });
 
+  app.get('/api/school/access-governance-reports', authenticateRequest, requirePermissionOnly(PERMISSIONS.IDENTITY_USERS_READ), async (req, res, next) => {
+    if (!platformAdminPool) return next(new DatabaseError('مصدر الهوية المركزي غير متاح.'));
+    try {
+      const { tenantId, schoolId, branchId } = schoolIdentityScope(req);
+      const [expired, sensitive] = await Promise.all([
+        platformAdminPool.query(
+          `SELECT g.id AS grant_id, u.id AS user_id, u.display_name, u.email, p.permission_key, g.source, g.ends_at, g.status
+             FROM public.user_permission_grants g
+             JOIN public.users u ON u.id=g.user_id AND u.tenant_id=$1::uuid AND u.school_id=$2::uuid AND u.deleted_at IS NULL
+             JOIN public.permissions p ON p.id=g.permission_id AND p.status='active' AND p.deleted_at IS NULL
+            WHERE g.tenant_id=$1::uuid AND g.school_id=$2::uuid AND ($3::uuid IS NULL OR g.branch_id IS NULL OR g.branch_id=$3::uuid)
+              AND g.status='active' AND g.deleted_at IS NULL AND g.ends_at IS NOT NULL AND g.ends_at <= now()
+            ORDER BY g.ends_at ASC, u.display_name ASC`,
+          [tenantId, schoolId, branchId || null],
+        ),
+        platformAdminPool.query(
+          `WITH effective AS (
+             SELECT u.id AS user_id, u.display_name, u.email, p.permission_key, 'inherited'::text AS source
+               FROM public.users u
+               JOIN public.user_roles ur ON ur.user_id=u.id AND ur.tenant_id=$1::uuid AND ur.status='active' AND ur.deleted_at IS NULL
+                AND (ur.school_id IS NULL OR ur.school_id=$2::uuid) AND ($3::uuid IS NULL OR ur.branch_id IS NULL OR ur.branch_id=$3::uuid)
+               JOIN public.role_permissions rp ON rp.role_id=ur.role_id AND rp.tenant_id=$1::uuid AND rp.status='active' AND rp.deleted_at IS NULL
+               JOIN public.permissions p ON p.id=rp.permission_id AND p.status='active' AND p.deleted_at IS NULL
+              WHERE u.tenant_id=$1::uuid AND u.school_id=$2::uuid AND u.deleted_at IS NULL
+             UNION
+             SELECT u.id, u.display_name, u.email, p.permission_key, COALESCE(g.source,'school')::text
+               FROM public.users u
+               JOIN public.user_permission_grants g ON g.user_id=u.id AND g.tenant_id=$1::uuid AND g.school_id=$2::uuid AND g.status='active' AND g.deleted_at IS NULL
+                AND ($3::uuid IS NULL OR g.branch_id IS NULL OR g.branch_id=$3::uuid) AND (g.starts_at IS NULL OR g.starts_at<=now()) AND (g.ends_at IS NULL OR g.ends_at>now()) AND g.effect='allow'
+               JOIN public.permissions p ON p.id=g.permission_id AND p.status='active' AND p.deleted_at IS NULL
+              WHERE u.tenant_id=$1::uuid AND u.school_id=$2::uuid AND u.deleted_at IS NULL
+           ) SELECT user_id, display_name, email, jsonb_agg(jsonb_build_object('permissionKey', permission_key, 'source', source) ORDER BY permission_key) AS permissions
+               FROM effective WHERE permission_key LIKE 'financial:%' OR permission_key IN ('Identity.Users.Assign','Identity.Users.Write')
+              GROUP BY user_id, display_name, email ORDER BY display_name`,
+          [tenantId, schoolId, branchId || null],
+        ),
+      ]);
+      return res.json({ success: true, source: 'canonical_database', expired: expired.rows, sensitiveUsers: sensitive.rows });
+    } catch (error) { return next(error instanceof Error ? error : new DatabaseError('تعذر إنشاء تقارير حوكمة الصلاحيات.')); }
+  });
+
   app.get('/api/school/sod-conflicts', authenticateRequest, requirePermissionOnly(PERMISSIONS.IDENTITY_USERS_READ), async (req, res, next) => {
     if (!platformAdminPool) return next(new DatabaseError('مصدر الهوية المركزي غير متاح.'));
     try {

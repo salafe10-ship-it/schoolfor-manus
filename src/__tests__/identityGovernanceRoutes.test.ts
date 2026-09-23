@@ -14,6 +14,7 @@ describe('identity governance route contract', () => {
       "app.get('/api/school/access-reviews'",
       "app.post('/api/school/access-reviews/generate'",
       "app.patch('/api/school/access-reviews/:reviewId/decision'",
+      "app.get('/api/school/access-governance-reports'",
       "app.get('/api/school/sod-conflicts'",
       "app.get('/api/school/sod-rules'",
       "app.post('/api/school/sod-rules'",
