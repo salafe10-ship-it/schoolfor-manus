@@ -6262,6 +6262,88 @@ export async function createApp(options: { cloudflare?: boolean } = {}): Promise
     } catch (error) { return next(error instanceof Error ? error : new DatabaseError('تعذر إنشاء تقرير الصلاحيات الفعالة.')); }
   });
 
+  app.get('/api/school/access-reviews', authenticateRequest, requirePermissionOnly(PERMISSIONS.IDENTITY_USERS_READ), async (req, res, next) => {
+    if (!platformAdminPool) return next(new DatabaseError('مصدر الهوية المركزي غير متاح.'));
+    try {
+      const { tenantId, schoolId, branchId } = schoolIdentityScope(req);
+      const result = await platformAdminPool.query(
+        `SELECT r.*, u.display_name AS user_name, reviewer.display_name AS reviewer_name
+           FROM public.identity_access_reviews r
+           JOIN public.users u ON u.id=r.user_id
+           LEFT JOIN public.users reviewer ON reviewer.id=r.reviewer_id
+          WHERE r.tenant_id=$1::uuid AND r.school_id=$2::uuid
+            AND ($3::uuid IS NULL OR r.branch_id IS NULL OR r.branch_id=$3::uuid)
+            AND r.deleted_at IS NULL
+          ORDER BY r.due_at ASC, r.created_at DESC`,
+        [tenantId, schoolId, branchId || null],
+      );
+      return res.json({ success: true, source: 'canonical_database', reviews: result.rows });
+    } catch (error) { return next(error instanceof Error ? error : new DatabaseError('تعذر تحميل مراجعات الصلاحيات.')); }
+  });
+
+  app.post('/api/school/access-reviews/generate', authenticateRequest, requirePermissionOnly(PERMISSIONS.IDENTITY_USERS_ASSIGN), async (req, res, next) => {
+    if (!platformAdminPool) return next(new DatabaseError('مصدر الهوية المركزي غير متاح.'));
+    const requestId = String(req.body?.requestId || req.get('X-Request-Id') || randomUUID()).trim();
+    const correlationId = String(req.body?.correlationId || req.get('X-Correlation-Id') || randomUUID()).trim();
+    try {
+      const { tenantId, schoolId, branchId, actorAuthUserId } = schoolIdentityScope(req);
+      const client = await platformAdminPool.connect();
+      try {
+        await client.query('BEGIN');
+        const actor = await client.query(`SELECT id FROM public.users WHERE tenant_id=$1::uuid AND auth_user_id=$2::uuid AND deleted_at IS NULL LIMIT 1`, [tenantId, actorAuthUserId]);
+        if (actor.rowCount !== 1) throw new AuthenticationError('تعذر تحديد منشئ دورة المراجعة.');
+        const created = await client.query(
+          `INSERT INTO public.identity_access_reviews (tenant_id, school_id, branch_id, user_id, due_at, permission_snapshot, created_by, updated_by)
+           SELECT u.tenant_id, u.school_id, u.branch_id, u.id, now() + interval '90 days', '[]'::jsonb, $4::uuid, $4::uuid
+             FROM public.users u
+            WHERE u.tenant_id=$1::uuid AND u.school_id=$2::uuid AND u.deleted_at IS NULL AND u.status IN ('active','invited')
+              AND ($3::uuid IS NULL OR u.branch_id IS NULL OR u.branch_id=$3::uuid)
+              AND NOT EXISTS (SELECT 1 FROM public.identity_access_reviews r WHERE r.tenant_id=u.tenant_id AND r.school_id=u.school_id AND r.user_id=u.id AND r.status='pending' AND r.deleted_at IS NULL)
+           RETURNING *`,
+          [tenantId, schoolId, branchId || null, actor.rows[0].id],
+        );
+        const auditId = await recordAccessGovernanceAudit(client, { tenantId, schoolId, branchId: branchId || null, actorUserId: actor.rows[0].id, requestId, correlationId, action: 'reviews_generated', entityId: actor.rows[0].id, before: null, after: { createdCount: created.rowCount, dueInDays: 90 }, reason: 'إنشاء دورة مراجعة الصلاحيات الدورية' });
+        await client.query('COMMIT');
+        return res.status(201).json({ success: true, requestId, correlationId, auditId, createdCount: created.rowCount, reviews: created.rows });
+      } catch (error) { await client.query('ROLLBACK').catch(() => undefined); return next(error instanceof Error ? error : new DatabaseError('تعذر إنشاء دورة المراجعة.')); }
+      finally { client.release(); }
+    } catch (error) { return next(error instanceof Error ? error : new DatabaseError('تعذر إنشاء دورة المراجعة.')); }
+  });
+
+  app.patch('/api/school/access-reviews/:reviewId/decision', authenticateRequest, requirePermissionOnly(PERMISSIONS.IDENTITY_USERS_ASSIGN), async (req, res, next) => {
+    if (!platformAdminPool) return next(new DatabaseError('مصدر الهوية المركزي غير متاح.'));
+    try {
+      const { tenantId, schoolId, branchId, actorAuthUserId } = schoolIdentityScope(req);
+      const reviewId = String(req.params.reviewId || '').trim();
+      const decision = String(req.body?.decision || '').trim().toLowerCase();
+      const reason = String(req.body?.reason || '').trim();
+      const requestId = String(req.body?.requestId || req.get('X-Request-Id') || randomUUID()).trim();
+      const correlationId = String(req.body?.correlationId || req.get('X-Correlation-Id') || randomUUID()).trim();
+      if (!/^[0-9a-f-]{36}$/i.test(reviewId)) return next(new ValidationError('معرف المراجعة غير صالح.'));
+      if (!['approved', 'revoked', 'waived'].includes(decision)) return next(new ValidationError('قرار المراجعة غير صالح.'));
+      if (reason.length < 5 || reason.length > 2000) return next(new ValidationError('سبب قرار المراجعة يجب أن يكون بين 5 و2000 حرف.'));
+      const client = await platformAdminPool.connect();
+      try {
+        await client.query('BEGIN');
+        const actor = await client.query(`SELECT id FROM public.users WHERE tenant_id=$1::uuid AND auth_user_id=$2::uuid AND deleted_at IS NULL LIMIT 1`, [tenantId, actorAuthUserId]);
+        if (actor.rowCount !== 1) throw new AuthenticationError('تعذر تحديد مراجع الصلاحيات.');
+        const current = await client.query(`SELECT * FROM public.identity_access_reviews WHERE id=$1::uuid AND tenant_id=$2::uuid AND school_id=$3::uuid AND ($4::uuid IS NULL OR branch_id IS NULL OR branch_id=$4::uuid) AND deleted_at IS NULL FOR UPDATE`, [reviewId, tenantId, schoolId, branchId || null]);
+        if (current.rowCount !== 1) throw new ValidationError('المراجعة غير موجودة داخل نطاق المدرسة.');
+        const before = current.rows[0];
+        if (before.status !== 'pending') throw new ConflictError('لا يمكن تعديل مراجعة غير معلقة.');
+        const updated = await client.query(`UPDATE public.identity_access_reviews SET status=$4, reviewer_id=$2::uuid, reviewed_at=now(), decision_reason=$5, updated_by=$2::uuid, updated_at=now(), version=version+1 WHERE id=$1::uuid AND version=$3 RETURNING *`, [reviewId, actor.rows[0].id, before.version, decision, reason]);
+        if (updated.rowCount !== 1) throw new ConflictError('تغيرت المراجعة قبل حفظ القرار.');
+        if (decision === 'revoked') {
+          await client.query(`UPDATE public.user_permission_grants SET status='revoked', deleted_at=now(), deleted_by=$4::uuid, updated_at=now(), updated_by=$4::uuid, version=version+1 WHERE tenant_id=$1::uuid AND school_id=$2::uuid AND user_id=$3::uuid AND source='school' AND status='active'`, [tenantId, schoolId, before.user_id, actor.rows[0].id]);
+        }
+        const auditId = await recordAccessGovernanceAudit(client, { tenantId, schoolId, branchId: before.branch_id, actorUserId: actor.rows[0].id, requestId, correlationId, action: `review_${decision}`, entityId: reviewId, before: { status: before.status, version: before.version }, after: { status: decision, version: updated.rows[0].version, reason }, reason });
+        await client.query('COMMIT');
+        return res.json({ success: true, requestId, correlationId, auditId, review: updated.rows[0] });
+      } catch (error) { await client.query('ROLLBACK').catch(() => undefined); return next(error instanceof Error ? error : new DatabaseError('تعذر حفظ قرار المراجعة.')); }
+      finally { client.release(); }
+    } catch (error) { return next(error instanceof Error ? error : new DatabaseError('تعذر حفظ قرار المراجعة.')); }
+  });
+
   app.get('/api/school/identity-roles', authenticateRequest, requirePermissionOnly(PERMISSIONS.IDENTITY_USERS_READ), async (req, res, next) => {
     if (!platformAdminPool) return next(new DatabaseError('مصدر الهوية المركزي غير متاح.'));
     try {
