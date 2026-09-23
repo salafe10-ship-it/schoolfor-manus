@@ -120,7 +120,12 @@ export default function SchoolUsersPermissionsModule({ selectedSchool, selectedB
   // may make complete, auditable allow/deny decisions for users in this
   // school; central denials still win and platform permissions are protected.
 
-  const notify = (message: string, type: 'info' | 'warning' | 'success' = 'info') => triggerNotification?.(message, type);
+  // Keep the notification callback stable. Governance reads depend on this
+  // callback; recreating it on every render would restart the effect, fire a
+  // new four-request batch, and eventually trip the API limiter.
+  const notify = useCallback((message: string, type: 'info' | 'warning' | 'success' = 'info') => {
+    triggerNotification?.(message, type);
+  }, [triggerNotification]);
 
   const load = useCallback(async () => {
     setLoading(true);
