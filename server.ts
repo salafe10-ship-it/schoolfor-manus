@@ -6090,7 +6090,7 @@ export async function createApp(options: { cloudflare?: boolean } = {}): Promise
       const { tenantId, schoolId, branchId } = schoolIdentityScope(req);
       const result = await platformAdminPool.query(
         `SELECT r.id, r.tenant_id, r.school_id, r.branch_id, r.user_id, r.requested_by, r.permission_keys,
-                r.reason, r.status, r.starts_at, r.ends_at, r.approved_by, r.approved_at,
+                r.reason, CASE WHEN r.status='pending' AND r.ends_at <= now() THEN 'expired' ELSE r.status END AS status, r.starts_at, r.ends_at, r.approved_by, r.approved_at,
                 r.rejected_by, r.rejected_at, r.decision_reason,
                 r.version, r.created_at, r.updated_at,
                 u.display_name AS user_name, requester.display_name AS requested_by_name,
@@ -6176,6 +6176,7 @@ export async function createApp(options: { cloudflare?: boolean } = {}): Promise
         if (current.rowCount !== 1) throw new ValidationError('طلب الصلاحية غير موجود داخل نطاق المدرسة.');
         const before = current.rows[0];
         if (before.status !== 'pending') throw new ConflictError('لا يمكن اتخاذ قرار على طلب غير معلّق.');
+        if (new Date(before.ends_at).getTime() <= Date.now()) throw new ConflictError('انتهت صلاحية الطلب ولا يمكن اعتماده.');
         if (before.requested_by === actor.rows[0].id) throw new ValidationError('لا يجوز لمقدم الطلب اعتماد طلبه بنفسه.');
         const approval = await client.query(`INSERT INTO public.identity_access_request_approvals (request_id, sequence_no, approver_id, status, decision_reason, decided_at) VALUES ($1::uuid,1,$2::uuid,$3,$4,now()) ON CONFLICT (request_id,sequence_no) DO UPDATE SET status=EXCLUDED.status, decision_reason=EXCLUDED.decision_reason, decided_at=EXCLUDED.decided_at RETURNING *`, [accessRequestId, actor.rows[0].id, decision, note]);
         const updated = await client.query(`UPDATE public.identity_access_requests SET status=$4, approved_by=CASE WHEN $4='approved' THEN $2::uuid ELSE approved_by END, approved_at=CASE WHEN $4='approved' THEN now() ELSE approved_at END, rejected_by=CASE WHEN $4='rejected' THEN $2::uuid ELSE rejected_by END, rejected_at=CASE WHEN $4='rejected' THEN now() ELSE rejected_at END, decision_reason=$5, updated_by=$2::uuid, updated_at=now(), version=version+1 WHERE id=$1::uuid AND version=$3 RETURNING *`, [accessRequestId, actor.rows[0].id, before.version, decision, note]);
