@@ -13976,7 +13976,12 @@ export async function createApp(options: { cloudflare?: boolean } = {}): Promise
         const actor = await transaction.query<{ id: string }>(`SELECT id FROM public.users WHERE tenant_id=$1 AND auth_user_id=$2 AND status='active' AND deleted_at IS NULL LIMIT 1`, [tenantId, identity.id]);
         const actorId = actor.rows[0]?.id;
         if (!actorId) throw new AuthenticationError('تعذر ربط هوية الجلسة بالمستخدم المالي المعتمد.');
-        await CanonicalErpPostingService.ensureDefaultChartOfAccounts(transaction, tenantId, schoolId, actorId);
+        // Mapping configuration must stay a bounded, idempotent write. The
+        // chart is provisioned by the canonical ERP setup flow; re-running
+        // the full default chart materialization here made a simple mapping
+        // save issue dozens of sequential inserts and could exceed the
+        // Worker request deadline. Validate the selected leaf accounts below
+        // and let the provisioning flow own chart creation.
         for (const item of normalized) {
           const account = await transaction.query<{ account_code: string }>(`SELECT account_code FROM public.erp_chart_of_accounts WHERE tenant_id=$1 AND school_id=$2 AND account_code=$3 AND account_nature=$4 AND is_active=true AND is_leaf=true LIMIT 1`, [tenantId, schoolId, item.accountCode, item.nature]);
           if (!account.rows[0]) throw new ValidationError(`الحساب ${item.accountCode} غير موجود أو لا يحمل طبيعة ${item.nature} المطلوبة للخريطة ${item.key}.`);
