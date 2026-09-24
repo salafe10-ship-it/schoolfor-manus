@@ -13888,16 +13888,66 @@ export async function createApp(options: { cloudflare?: boolean } = {}): Promise
       if (!tenantId || !schoolId || !tenantContext || tenantContext.tenantId !== tenantId || tenantContext.schoolId !== schoolId) {
         throw new AuthenticationError('السياق الموثوق لبوابة جاهزية الحسابات غير مكتمل.');
       }
-      if (!transactionDriver) throw new DatabaseError('اتصال PostgreSQL المعاملاتي غير متاح لفحص جاهزية دفتر الأستاذ.');
-      const readiness = await UnitOfWork.runInTransaction(schoolId, {
-        operationName: 'Read canonical accounting readiness', tenantId, userId: identity.id,
-        userName: identity.name || 'المستخدم الحالي', ipAddress: req.ip || 'unknown',
-        affectedTables: [...CANONICAL_ERP_TABLES, 'erp_account_mappings']
-      }, async () => {
-        const transaction = UnitOfWork.getActiveContext()?.databaseTransaction;
-        if (!transaction) throw new DatabaseError('معاملة فحص جاهزية دفتر الأستاذ غير متاحة.');
-        return CanonicalErpPostingService.getReadiness(transaction, schoolId);
-      }, tenantContext);
+      // Readiness is a read-only release gate. Keep it on the verified
+      // Supabase read channel so a Hyperdrive transaction hiccup cannot make
+      // the accounting module look unavailable while the source is healthy.
+      const canonicalReadClient = canonicalTenantReadClient(req);
+      if (!canonicalReadClient) throw new DatabaseError('مصدر القراءة المركزي لفحص جاهزية دفتر الأستاذ غير متاح.');
+      const isMissingCanonicalTable = (error: any) => ['42P01', 'PGRST205'].includes(String(error?.code || ''));
+      const [mappingResult, chartResult] = await Promise.all([
+        canonicalReadClient
+          .from('erp_account_mappings')
+          .select('mapping_key,account_code')
+          .eq('tenant_id', tenantId)
+          .eq('school_id', schoolId)
+          .eq('is_active', true),
+        canonicalReadClient
+          .from('erp_chart_of_accounts')
+          .select('account_code,account_name,account_nature,is_active,is_leaf')
+          .eq('tenant_id', tenantId)
+          .eq('school_id', schoolId)
+          .order('account_code', { ascending: true }),
+      ]);
+      if (mappingResult.error && !isMissingCanonicalTable(mappingResult.error)) throw mappingResult.error;
+      if (chartResult.error && !isMissingCanonicalTable(chartResult.error)) throw chartResult.error;
+      const schemaReady = !mappingResult.error && !chartResult.error;
+      const mappingRows = Array.isArray(mappingResult.data) ? mappingResult.data : [];
+      const chartByCode = new Map((Array.isArray(chartResult.data) ? chartResult.data : []).map((row: any) => [String(row.account_code), row]));
+      const configuredByKey = new Map(mappingRows.map((row: any) => [String(row.mapping_key), row]));
+      const mappings = CANONICAL_MAPPING_DEFINITIONS.map(definition => {
+        const configured = configuredByKey.get(definition.key);
+        const accountCode = String(configured?.account_code || '');
+        const account = chartByCode.get(accountCode);
+        const valid = Boolean(
+          accountCode
+          && account?.is_active !== false
+          && account?.is_leaf !== false
+          && account?.account_nature === definition.nature
+        );
+        return {
+          ...definition,
+          configured: Boolean(accountCode),
+          accountCode,
+          accountName: String(account?.account_name || ''),
+          nature: String(account?.account_nature || ''),
+          valid,
+        };
+      });
+      const missing = mappings.filter(item => item.required && !item.configured).map(item => item.label);
+      const invalid = mappings.filter(item => item.configured && !item.valid).map(item => item.label);
+      const optionalMissing = mappings.filter(item => !item.required && !item.configured).map(item => item.label);
+      const readiness = {
+        schemaReady,
+        ready: schemaReady && missing.length === 0 && invalid.length === 0,
+        mappings,
+        missing,
+        invalid,
+        optionalMissing,
+        sourceSupport: Object.fromEntries(['fees', 'hr', 'inventory', 'treasury'].map(source => [
+          source,
+          mappings.filter(item => item.source === source && item.required).every(item => item.valid),
+        ])),
+      };
       const writeEnabledByDeployment = process.env.FINANCIAL_WRITES_LOCKED === 'false'
         && process.env.FINANCIAL_ERP_MODE === 'canonical';
       res.setHeader('Cache-Control', 'no-store');
