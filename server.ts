@@ -14084,11 +14084,32 @@ export async function createApp(options: { cloudflare?: boolean } = {}): Promise
         // save issue dozens of sequential inserts and could exceed the
         // Worker request deadline. Validate the selected leaf accounts below
         // and let the provisioning flow own chart creation.
+        // Validate and upsert the whole submitted set in bounded queries. A
+        // query per mapping can exceed the Worker deadline on Hyperdrive and
+        // leave an otherwise safe, idempotent configuration write hanging.
+        const accountResult = await transaction.query<{ account_code: string; account_nature: string }>(
+          `SELECT account_code, account_nature
+             FROM public.erp_chart_of_accounts
+            WHERE tenant_id=$1 AND school_id=$2
+              AND account_code = ANY($3::text[])
+              AND is_active=true AND is_leaf=true`,
+          [tenantId, schoolId, normalized.map(item => item.accountCode)]
+        );
+        const accounts = new Map(accountResult.rows.map(row => [String(row.account_code), String(row.account_nature)]));
         for (const item of normalized) {
-          const account = await transaction.query<{ account_code: string }>(`SELECT account_code FROM public.erp_chart_of_accounts WHERE tenant_id=$1 AND school_id=$2 AND account_code=$3 AND account_nature=$4 AND is_active=true AND is_leaf=true LIMIT 1`, [tenantId, schoolId, item.accountCode, item.nature]);
-          if (!account.rows[0]) throw new ValidationError(`الحساب ${item.accountCode} غير موجود أو لا يحمل طبيعة ${item.nature} المطلوبة للخريطة ${item.key}.`);
-          await transaction.query(`INSERT INTO public.erp_account_mappings (tenant_id,school_id,mapping_key,account_code,is_active,updated_by) VALUES ($1,$2,$3,$4,true,$5) ON CONFLICT (school_id,mapping_key) DO UPDATE SET account_code=EXCLUDED.account_code,is_active=true,updated_at=now(),updated_by=EXCLUDED.updated_by`, [tenantId, schoolId, item.key, item.accountCode, actorId]);
+          if (accounts.get(item.accountCode) !== item.nature) {
+            throw new ValidationError(`الحساب ${item.accountCode} غير موجود أو لا يحمل طبيعة ${item.nature} المطلوبة للخريطة ${item.key}.`);
+          }
         }
+        await transaction.query(
+          `INSERT INTO public.erp_account_mappings
+             (tenant_id,school_id,mapping_key,account_code,is_active,updated_by)
+           SELECT $1,$2,item.mapping_key,item.account_code,true,$3
+             FROM jsonb_to_recordset($4::jsonb) AS item(mapping_key text, account_code text)
+           ON CONFLICT (school_id,mapping_key) DO UPDATE SET
+             account_code=EXCLUDED.account_code,is_active=true,updated_at=now(),updated_by=EXCLUDED.updated_by`,
+          [tenantId, schoolId, actorId, JSON.stringify(normalized.map(item => ({ mapping_key: item.key, account_code: item.accountCode })))]
+        );
         await transaction.query(`INSERT INTO public.audit_events (tenant_id,school_id,branch_id,actor_user_id,entity_type,entity_id,action,source,reason,result,metadata) VALUES ($1,$2,$3,$4,'erp_account_mapping',$2,'configure','FinancialMappingRoute','اعتماد خريطة حسابات مركزية','success',$5::jsonb)`, [tenantId, schoolId, identity.branchId || null, actorId, JSON.stringify({ mappingKeys: normalized.map(item => item.key) })]);
       }, tenantContext);
       res.json({ success: true, message: 'تم اعتماد خرائط الحسابات المركزية دون إنشاء قيود.', meta: { configured: normalized.length } });
