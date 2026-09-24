@@ -6881,10 +6881,21 @@ export async function createApp(options: { cloudflare?: boolean } = {}): Promise
       // Supabase control channel as RBAC resolution. This avoids waiting on a
       // second Hyperdrive pool for a query that does not need a transaction.
       if (platformControl) {
-        const users = await readPlatformRows('users', 'id, auth_user_id, tenant_id, school_id, branch_id, username, email, display_name, employee_id, job_title, department, status, version, session_revoked_at, force_password_change, created_at', (query) => query
-          .eq('tenant_id', tenantId)
-          .eq('school_id', schoolId)
-          .is('deleted_at', null));
+        let users: any[];
+        try {
+          users = await readPlatformRows('users', 'id, auth_user_id, tenant_id, school_id, branch_id, username, email, display_name, employee_id, job_title, department, status, version, session_revoked_at, force_password_change, created_at', (query) => query
+            .eq('tenant_id', tenantId)
+            .eq('school_id', schoolId)
+            .is('deleted_at', null));
+        } catch {
+          // Older production schemas may not yet contain optional identity
+          // profile columns. Keep the directory readable from canonical core
+          // columns until the additive migrations are applied.
+          users = await readPlatformRows('users', 'id, auth_user_id, tenant_id, school_id, branch_id, display_name, status, version, created_at', (query) => query
+            .eq('tenant_id', tenantId)
+            .eq('school_id', schoolId)
+            .is('deleted_at', null));
+        }
         const userIds = users.map((user: any) => user.id).filter(Boolean);
         const assignments = userIds.length ? await readPlatformRows('user_roles', 'user_id, role_id, school_id, branch_id, starts_at, ends_at, status, deleted_at', (query) => query
           .in('user_id', userIds)
