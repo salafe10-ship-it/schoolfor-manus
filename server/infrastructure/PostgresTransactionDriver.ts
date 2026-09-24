@@ -320,7 +320,38 @@ export class PostgresTransactionDriver implements TransactionDriver {
         if (tenantRole && !/^[A-Za-z_][A-Za-z0-9_]*$/.test(tenantRole)) {
           throw new Error('DATABASE_ROLE_EXPECTED contains an invalid PostgreSQL role name.');
         }
-        if (tenantRole) await client.query(`SET LOCAL ROLE "${tenantRole}"`);
+        if (tenantRole) {
+          // Hyperdrive may already authenticate with a non-superuser role
+          // that inherits the expected application role (for example
+          // edupro_staging_app -> edupro_app). Forcing SET LOCAL ROLE in that
+          // case is both unnecessary and rejected by PostgreSQL when the
+          // connection role does not have SET ROLE privilege. Keep the
+          // existing safe role so its inherited grants and RLS policies stay
+          // active; only switch when the current role is not already an
+          // approved, non-bypass member of the expected role.
+          const roleState = await client.query<{
+            current_user: string;
+            rolsuper: boolean;
+            rolbypassrls: boolean;
+            can_use_expected_role: boolean;
+          }>(
+            `SELECT current_user::text AS current_user,
+                    COALESCE(r.rolsuper, false) AS rolsuper,
+                    COALESCE(r.rolbypassrls, false) AS rolbypassrls,
+                    pg_has_role(current_user, $1, 'member') AS can_use_expected_role
+               FROM pg_roles r
+              WHERE r.rolname = current_user`,
+            [tenantRole]
+          );
+          const currentRole = roleState.rows[0];
+          const currentRoleIsSafe = Boolean(
+            currentRole
+            && !currentRole.rolsuper
+            && !currentRole.rolbypassrls
+            && currentRole.can_use_expected_role
+          );
+          if (!currentRoleIsSafe) await client.query(`SET LOCAL ROLE "${tenantRole}"`);
+        }
       }
       options.diagnosticTrace?.count?.('transactions');
       // PostgreSQL's default_transaction_isolation is READ COMMITTED in the
