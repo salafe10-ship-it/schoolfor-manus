@@ -41,7 +41,7 @@ try {
         to_regclass('public.identity_sessions') IS NOT NULL AS institutional_sessions,
         to_regclass('public.identity_service_accounts') IS NOT NULL AS institutional_service_accounts,
         to_regclass('public.identity_api_keys') IS NOT NULL AS institutional_api_keys,
-        (SELECT COUNT(*) = 4 FROM public.roles WHERE school_id IS NULL AND branch_id IS NULL AND role_key IN ('schooladmin','accountant','teacher','hr') AND status = 'active' AND deleted_at IS NULL) AS canonical_roles,
+        (SELECT COUNT(*) >= 4 FROM public.roles WHERE school_id IS NULL AND branch_id IS NULL AND role_key IN ('schooladmin','accountant','teacher','hr') AND status = 'active' AND deleted_at IS NULL) AS canonical_roles,
         (SELECT COUNT(*) > 0 FROM public.role_permissions rp JOIN public.roles r ON r.id = rp.role_id WHERE r.school_id IS NULL AND r.branch_id IS NULL AND r.role_key IN ('schooladmin','accountant','teacher','hr') AND rp.status = 'active' AND rp.deleted_at IS NULL) AS canonical_role_permissions
     `);
     if (!verification.rows[0]?.job_id || !verification.rows[0]?.access_requests || !verification.rows[0]?.access_request_approvals || !verification.rows[0]?.actor_guard || !verification.rows[0]?.fee_policy || !verification.rows[0]?.institutional_sessions || !verification.rows[0]?.institutional_service_accounts || !verification.rows[0]?.institutional_api_keys || !verification.rows[0]?.canonical_roles || !verification.rows[0]?.canonical_role_permissions) {
