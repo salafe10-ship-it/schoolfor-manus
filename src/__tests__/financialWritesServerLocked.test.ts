@@ -16,4 +16,13 @@ describe('financial API server-side write lock', () => {
     expect(gate).toContain('res.status(423)');
     expect(gate).toContain('FINANCIAL_WRITES_LOCKED');
   });
+
+  it('keeps mapping configuration bounded and separate from chart provisioning', () => {
+    const start = server.indexOf("app.post('/api/financial/account-mappings'");
+    const end = server.indexOf("app.get(\"/api/financial/database\"", start);
+    const route = server.slice(start, end);
+    expect(route).toContain('Validate the selected leaf accounts below');
+    expect(route).not.toContain('ensureDefaultChartOfAccounts');
+    expect(route).toContain('INSERT INTO public.erp_account_mappings');
+  });
 });
