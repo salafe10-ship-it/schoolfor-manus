@@ -20,6 +20,11 @@ interface ReportsTabProps {
 
 export type ReportType = 'employees' | 'attendance' | 'leaves' | 'advances' | 'rewards' | 'penalties';
 
+const csvCell = (value: unknown) => {
+  const text = value === null || value === undefined ? '' : String(value);
+  return /[",\n\r]/.test(text) ? `"${text.replace(/"/g, '""')}"` : text;
+};
+
 export default function ReportsTab({
   employees,
   departments,
@@ -96,6 +101,10 @@ export default function ReportsTab({
 
   // CSV Excel export simulation
   const handleExportCSV = async () => {
+    if (reportData.length === 0) {
+      triggerNotification('لا توجد بيانات حقيقية مطابقة للفلاتر الحالية؛ لم يتم إنشاء ملف فارغ.', 'warning');
+      return;
+    }
     if (FallbackStorage.isCanonicalPersistenceRequired() && onCanonicalReportAudit) {
       const allowed = await onCanonicalReportAudit({ reportType, format: 'csv', startDate, endDate, rowCount: reportData.length });
       if (!allowed) return;
@@ -107,37 +116,37 @@ export default function ReportsTab({
       (reportData as HREmployee[]).forEach(e => {
         const d = departments.find(dep => dep.id === e.departmentId)?.nameAr || '';
         const j = jobs.find(jb => j.id === e.jobId)?.titleAr || '';
-        csvContent += `${e.id},${e.name},${d},${j},${e.basicSalary},${e.hiringDate},${e.status}\n`;
+      csvContent += `${[e.id, e.name, d, j, e.basicSalary, e.hiringDate, e.status].map(csvCell).join(',')}\n`;
       });
     } else if (reportType === 'attendance') {
       csvContent += "الموظف,التاريخ,الحالة,وقت الدخول,وقت الخروج,التأخير (دقيقة),الإضافي (ساعة)\n";
       (reportData as HRAttendance[]).forEach(a => {
         const empName = employees.find(e => e.id === a.employeeId)?.name || '';
-        csvContent += `${empName},${a.date},${a.status},${a.checkIn || ''},${a.checkOut || ''},${a.delayMinutes},${a.overtimeHours}\n`;
+        csvContent += `${[empName, a.date, a.status, a.checkIn || '', a.checkOut || '', a.delayMinutes, a.overtimeHours].map(csvCell).join(',')}\n`;
       });
     } else if (reportType === 'leaves') {
       csvContent += "الموظف,نوع الإجازة,من تاريخ,إلى تاريخ,السبب,حالة الطلب\n";
       (reportData as HRLeave[]).forEach(l => {
         const empName = employees.find(e => e.id === l.employeeId)?.name || '';
-        csvContent += `${empName},${l.type},${l.startDate},${l.endDate},${l.reason},${l.status}\n`;
+        csvContent += `${[empName, l.type, l.startDate, l.endDate, l.reason, l.status].map(csvCell).join(',')}\n`;
       });
     } else if (reportType === 'advances') {
       csvContent += "الموظف,المبلغ,التاريخ,عدد الأقساط,القسط الشهري,المتبقي,الحالة\n";
       (reportData as HRAdvance[]).forEach(ad => {
         const empName = employees.find(e => e.id === ad.employeeId)?.name || '';
-        csvContent += `${empName},${ad.amount},${ad.date},${ad.installments},${ad.deductionPerMonth},${ad.remainingAmount},${ad.status}\n`;
+        csvContent += `${[empName, ad.amount, ad.date, ad.installments, ad.deductionPerMonth, ad.remainingAmount, ad.status].map(csvCell).join(',')}\n`;
       });
     } else if (reportType === 'rewards') {
       csvContent += "الموظف,المبلغ,التاريخ,السبب,الحالة\n";
       (reportData as HRBonus[]).forEach(r => {
         const empName = employees.find(e => e.id === r.employeeId)?.name || '';
-        csvContent += `${empName},${r.amount},${r.date},${r.reason},${r.status}\n`;
+        csvContent += `${[empName, r.amount, r.date, r.reason, r.status].map(csvCell).join(',')}\n`;
       });
     } else if (reportType === 'penalties') {
       csvContent += "الموظف,نوع الجزاء,التاريخ,المبلغ / الخصم,السبب,الحالة\n";
       (reportData as HRPenalty[]).forEach(p => {
         const empName = employees.find(e => e.id === p.employeeId)?.name || '';
-        csvContent += `${empName},${p.type},${p.date},${p.amount},${p.reason},${p.status}\n`;
+        csvContent += `${[empName, p.type, p.date, p.amount, p.reason, p.status].map(csvCell).join(',')}\n`;
       });
     }
 
