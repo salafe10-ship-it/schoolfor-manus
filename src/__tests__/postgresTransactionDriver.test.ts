@@ -62,6 +62,39 @@ describe('PostgresTransactionDriver trusted context', () => {
     expect(client.query.mock.calls.filter(([sql]) => String(sql).startsWith('SELECT set_config'))).toHaveLength(0);
   });
 
+  it('keeps a safe inherited Hyperdrive role instead of forcing an unauthorized role switch', async () => {
+    vi.stubEnv('DATABASE_ROLE_EXPECTED', 'edupro_app');
+    try {
+      const { client, driver } = createDriverHarness();
+      client.query.mockImplementation(async (sql: string) => String(sql).includes('FROM pg_roles')
+        ? {
+            rows: [{
+              current_user: 'edupro_staging_app',
+              rolsuper: false,
+              rolbypassrls: false,
+              can_use_expected_role: true
+            }],
+            rowCount: 1
+          }
+        : { rows: [], rowCount: 0 });
+
+      const session = await driver.begin({
+        transactionId: 'tx-safe-inherited-role',
+        tenantId: 'tenant-a',
+        schoolId: 'school-a',
+        operationName: 'safe inherited role test',
+        trustedContext: { tenantId: 'tenant-a', schoolId: 'school-a' }
+      });
+
+      const sql = client.query.mock.calls.map(([statement]) => String(statement));
+      expect(sql.some(statement => statement.startsWith('SET LOCAL ROLE'))).toBe(false);
+      await session.rollback();
+      await session.release();
+    } finally {
+      vi.unstubAllEnvs();
+    }
+  });
+
   it('releases a committed connection without a second transaction command', async () => {
     const { client, driver } = createDriverHarness();
     const session = await driver.begin({
