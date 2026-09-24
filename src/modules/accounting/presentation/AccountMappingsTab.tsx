@@ -31,8 +31,10 @@ export function AccountMappingsTab({
 
   const load = async () => {
     setLoading(true);
+    const controller = new AbortController();
+    const timeoutId = window.setTimeout(() => controller.abort(), 20_000);
     try {
-      const response = await authenticatedRequest('/api/financial/account-mappings', { headers: { Accept: 'application/json' }, cache: 'no-store' });
+      const response = await authenticatedRequest('/api/financial/account-mappings', { headers: { Accept: 'application/json' }, cache: 'no-store', signal: controller.signal });
       const payload = await response.json().catch(() => ({}));
       if (!response.ok || !payload?.success) throw new Error(payload?.message || 'تعذر قراءة خرائط الحسابات.');
       setRows(Array.isArray(payload.data?.mappings) ? payload.data.mappings : []);
@@ -44,8 +46,9 @@ export function AccountMappingsTab({
         optionalMissing: Array.isArray(payload.data?.optionalMissing) ? payload.data.optionalMissing : []
       });
     } catch (error: any) {
-      triggerNotification(error?.message || 'تعذر قراءة خرائط الحسابات.', 'warning');
+      triggerNotification(controller.signal.aborted ? 'انتهت مهلة قراءة خرائط الحسابات؛ أعد الفحص.' : error?.message || 'تعذر قراءة خرائط الحسابات.', 'warning');
     } finally {
+      window.clearTimeout(timeoutId);
       setLoading(false);
     }
   };
@@ -63,15 +66,18 @@ export function AccountMappingsTab({
       return;
     }
     setSaving(true);
+    const controller = new AbortController();
+    const timeoutId = window.setTimeout(() => controller.abort(), 45_000);
     try {
-      const response = await authenticatedRequest('/api/financial/account-mappings', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ mappings }) });
+      const response = await authenticatedRequest('/api/financial/account-mappings', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ mappings }), signal: controller.signal });
       const payload = await response.json().catch(() => ({}));
       if (!response.ok || !payload?.success) throw new Error(payload?.message || 'تعذر اعتماد خرائط الحسابات.');
       triggerNotification('تم اعتماد خرائط الحسابات دون إنشاء قيود؛ أصبحت جاهزية الترحيل قابلة للفحص.', 'success');
       await load();
     } catch (error: any) {
-      triggerNotification(error?.message || 'تعذر اعتماد خرائط الحسابات.', 'warning');
+      triggerNotification(controller.signal.aborted ? 'لم يصل تأكيد اعتماد الخرائط خلال المهلة. أعد الفحص قبل إعادة الحفظ.' : error?.message || 'تعذر اعتماد خرائط الحسابات.', 'warning');
     } finally {
+      window.clearTimeout(timeoutId);
       setSaving(false);
     }
   };
