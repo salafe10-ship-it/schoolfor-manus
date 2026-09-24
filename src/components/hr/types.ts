@@ -179,7 +179,7 @@ export interface HRSettings {
   lateDeductionRate: number; // e.g., 0.5 means half hour salary per hour delay
   defaultBankSafeAccount: string; // "1101" or "1102"
   bankAccount?: string;
-  defaultSalariesExpenseAccount: string; // "5101"
+  defaultSalariesExpenseAccount: string; // "5110"
   payrollPayableAccount: string;
   advanceReceivableAccount: string;
   deductionClearingAccount: string;
