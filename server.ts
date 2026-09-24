@@ -6871,7 +6871,10 @@ export async function createApp(options: { cloudflare?: boolean } = {}): Promise
   });
 
   app.get('/api/school/users', authenticateRequest, requirePermissionOnly(PERMISSIONS.IDENTITY_USERS_READ), async (req, res, next) => {
-    if (!platformAdminPool) return next(new DatabaseError('مصدر الهوية المركزي غير متاح.'));
+    // Cloudflare Workers use the Supabase control channel for read-only
+    // identity directory requests and do not expose the PostgreSQL pool.
+    // Reject only when both canonical sources are unavailable.
+    if (!platformAdminPool && !platformControl) return next(new DatabaseError('مصدر الهوية المركزي غير متاح.'));
     try {
       const { tenantId, schoolId, branchId } = schoolIdentityScope(req);
       // Read-only directory requests in a Worker use the same trusted
