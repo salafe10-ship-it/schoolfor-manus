@@ -14068,50 +14068,74 @@ export async function createApp(options: { cloudflare?: boolean } = {}): Promise
         return { key, accountCode, nature: definition.nature };
       });
       if (new Set(normalized.map(item => item.key)).size !== normalized.length) throw new ConflictError('لا يمكن تكرار مفتاح خريطة الحساب.');
-      await UnitOfWork.runInTransaction(schoolId, {
-        operationName: 'Configure canonical account mappings', tenantId, userId: identity.id,
-        userName: identity.name || 'المستخدم الحالي', ipAddress: req.ip || 'unknown',
-        affectedTables: ['erp_account_mappings', 'erp_chart_of_accounts', 'audit_events']
-      }, async () => {
-        const transaction = UnitOfWork.getActiveContext()?.databaseTransaction;
-        if (!transaction) throw new DatabaseError('معاملة اعتماد خرائط الحسابات غير متاحة.');
-        const actor = await transaction.query<{ id: string }>(`SELECT id FROM public.users WHERE tenant_id=$1 AND auth_user_id=$2 AND status='active' AND deleted_at IS NULL LIMIT 1`, [tenantId, identity.id]);
-        const actorId = actor.rows[0]?.id;
-        if (!actorId) throw new AuthenticationError('تعذر ربط هوية الجلسة بالمستخدم المالي المعتمد.');
-        // Mapping configuration must stay a bounded, idempotent write. The
-        // chart is provisioned by the canonical ERP setup flow; re-running
-        // the full default chart materialization here made a simple mapping
-        // save issue dozens of sequential inserts and could exceed the
-        // Worker request deadline. Validate the selected leaf accounts below
-        // and let the provisioning flow own chart creation.
-        // Validate and upsert the whole submitted set in bounded queries. A
-        // query per mapping can exceed the Worker deadline on Hyperdrive and
-        // leave an otherwise safe, idempotent configuration write hanging.
-        const accountResult = await transaction.query<{ account_code: string; account_nature: string }>(
-          `SELECT account_code, account_nature
-             FROM public.erp_chart_of_accounts
-            WHERE tenant_id=$1 AND school_id=$2
-              AND account_code = ANY($3::text[])
-              AND is_active=true AND is_leaf=true`,
-          [tenantId, schoolId, normalized.map(item => item.accountCode)]
-        );
-        const accounts = new Map(accountResult.rows.map(row => [String(row.account_code), String(row.account_nature)]));
-        for (const item of normalized) {
-          if (accounts.get(item.accountCode) !== item.nature) {
-            throw new ValidationError(`الحساب ${item.accountCode} غير موجود أو لا يحمل طبيعة ${item.nature} المطلوبة للخريطة ${item.key}.`);
-          }
+      // This is deployment configuration, not a journal posting. Use the
+      // already verified server-side Supabase channel for the bounded write,
+      // just as the first-paint read path does. The previous Hyperdrive
+      // transaction path could remain pending in Workers even after the
+      // validation/upsert SQL had been reduced to two statements, leaving the
+      // user-facing approval button stuck indefinitely.
+      const canonicalWriteClient = canonicalTenantReadClient(req);
+      if (!canonicalWriteClient) throw new DatabaseError('مصدر الكتابة المركزي لخرائط الحسابات غير متاح.');
+      const { data: actor, error: actorError } = await canonicalWriteClient
+        .from('users')
+        .select('id')
+        .eq('tenant_id', tenantId)
+        .eq('auth_user_id', identity.id)
+        .eq('status', 'active')
+        .is('deleted_at', null)
+        .limit(1)
+        .maybeSingle();
+      if (actorError) throw actorError;
+      const actorId = actor?.id;
+      if (!actorId) throw new AuthenticationError('تعذر ربط هوية الجلسة بالمستخدم المالي المعتمد.');
+
+      const { data: accountRows, error: accountError } = await canonicalWriteClient
+        .from('erp_chart_of_accounts')
+        .select('account_code,account_nature')
+        .eq('tenant_id', tenantId)
+        .eq('school_id', schoolId)
+        .in('account_code', normalized.map(item => item.accountCode))
+        .eq('is_active', true)
+        .eq('is_leaf', true);
+      if (accountError) throw accountError;
+      const accounts = new Map((accountRows || []).map((row: any) => [String(row.account_code), String(row.account_nature)]));
+      for (const item of normalized) {
+        if (accounts.get(item.accountCode) !== item.nature) {
+          throw new ValidationError(`الحساب ${item.accountCode} غير موجود أو لا يحمل طبيعة ${item.nature} المطلوبة للخريطة ${item.key}.`);
         }
-        await transaction.query(
-          `INSERT INTO public.erp_account_mappings
-             (tenant_id,school_id,mapping_key,account_code,is_active,updated_by)
-           SELECT $1,$2,item.mapping_key,item.account_code,true,$3
-             FROM jsonb_to_recordset($4::jsonb) AS item(mapping_key text, account_code text)
-           ON CONFLICT (school_id,mapping_key) DO UPDATE SET
-             account_code=EXCLUDED.account_code,is_active=true,updated_at=now(),updated_by=EXCLUDED.updated_by`,
-          [tenantId, schoolId, actorId, JSON.stringify(normalized.map(item => ({ mapping_key: item.key, account_code: item.accountCode })))]
+      }
+
+      const { error: mappingError } = await canonicalWriteClient
+        .from('erp_account_mappings')
+        .upsert(
+          normalized.map(item => ({
+            tenant_id: tenantId,
+            school_id: schoolId,
+            mapping_key: item.key,
+            account_code: item.accountCode,
+            is_active: true,
+            updated_by: actorId,
+          })),
+          { onConflict: 'school_id,mapping_key' },
         );
-        await transaction.query(`INSERT INTO public.audit_events (tenant_id,school_id,branch_id,actor_user_id,entity_type,entity_id,action,source,reason,result,metadata) VALUES ($1,$2,$3,$4,'erp_account_mapping',$2,'configure','FinancialMappingRoute','اعتماد خريطة حسابات مركزية','success',$5::jsonb)`, [tenantId, schoolId, identity.branchId || null, actorId, JSON.stringify({ mappingKeys: normalized.map(item => item.key) })]);
-      }, tenantContext);
+      if (mappingError) throw mappingError;
+
+      const { error: auditError } = await canonicalWriteClient
+        .from('audit_events')
+        .insert({
+          tenant_id: tenantId,
+          school_id: schoolId,
+          branch_id: identity.branchId || null,
+          actor_user_id: actorId,
+          entity_type: 'erp_account_mapping',
+          entity_id: schoolId,
+          action: 'configure',
+          source: 'FinancialMappingRoute',
+          reason: 'اعتماد خريطة حسابات مركزية',
+          result: 'success',
+          metadata: { mappingKeys: normalized.map(item => item.key) },
+        });
+      if (auditError) throw auditError;
       res.json({ success: true, message: 'تم اعتماد خرائط الحسابات المركزية دون إنشاء قيود.', meta: { configured: normalized.length } });
     } catch (err: any) {
       next(err instanceof AuthenticationError || err instanceof AuthorizationError || err instanceof ValidationError || err instanceof ConflictError || err instanceof DatabaseError ? err : new DatabaseError('تعذر اعتماد خرائط الحسابات.', err?.message));
