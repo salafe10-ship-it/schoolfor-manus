@@ -89,7 +89,7 @@ import { inspectSupabaseDatabaseTargetAlignment } from "./server/security/Supaba
 import { FallbackStorage } from "./src/database/repositories/FallbackStorage.js";
 import { AdmissionInquiry, AdmissionStatus } from './src/modules/student-admission/domain/AdmissionInquiry.js';
 import { SupabaseAdmissionInquiryRepository } from './src/modules/student-admission/repository/SupabaseAdmissionInquiryRepository.js';
-import { CANONICAL_ERP_TABLES, CanonicalErpPostingService, buildCanonicalPosting } from './src/modules/financial/application/CanonicalErpPostingService.js';
+import { CANONICAL_ERP_TABLES, CANONICAL_MAPPING_DEFINITIONS, CanonicalErpPostingService, buildCanonicalPosting } from './src/modules/financial/application/CanonicalErpPostingService.js';
 import { ExamValidator } from './src/validation/validators.js';
 import { evaluateExamClosureReadiness } from './src/modules/exams/domain/ExamClosureReadiness.js';
 import { calculateCohortExamResults } from './src/modules/exams/domain/ExamResultEngine.js';
@@ -11374,14 +11374,7 @@ export async function createApp(options: { cloudflare?: boolean } = {}): Promise
       const tenantId = String(identity?.tenantId || '').trim();
       const schoolId = String(identity?.schoolId || '').trim();
       const tenantContext = (req as any).tenantContext;
-      const definitions = [
-        { key: 'treasury.cash', label: 'حساب صندوق السداد', required: true },
-        { key: 'hr.payroll.expense', label: 'مصروف الرواتب', required: true },
-        { key: 'hr.payroll.payable', label: 'التزام الرواتب', required: true },
-        { key: 'hr.advance.receivable', label: 'ذمم سلف الموظفين', required: true },
-        { key: 'hr.deductions.clearing', label: 'تسوية الخصومات والجزاءات', required: true },
-        { key: 'hr.end_of_service.expense', label: 'مصروف نهاية الخدمة', required: false },
-      ];
+      const definitions = CANONICAL_MAPPING_DEFINITIONS.filter(item => item.source === 'hr' || item.source === 'treasury');
       if (!tenantId || !schoolId || !tenantContext || tenantContext.tenantId !== tenantId || tenantContext.schoolId !== schoolId) {
         throw new AuthenticationError('السياق الموثوق لقراءة خرائط HR غير مكتمل.');
       }
@@ -11429,8 +11422,15 @@ export async function createApp(options: { cloudflare?: boolean } = {}): Promise
         ...(String(req.body?.bankAccount || '').trim() ? [['treasury.bank', String(req.body?.bankAccount || '').trim(), 'asset'] as const] : []),
         ['hr.payroll.expense', String(req.body?.payrollExpenseAccount || '').trim(), 'expense'],
         ['hr.payroll.payable', String(req.body?.payrollPayableAccount || '').trim(), 'liability'],
+        ...(String(req.body?.payrollBasicSalaryAccount || '').trim() ? [['hr.payroll.basic_salary', String(req.body?.payrollBasicSalaryAccount || '').trim(), 'expense'] as const] : []),
+        ...(String(req.body?.payrollAllowancesAccount || '').trim() ? [['hr.payroll.allowances', String(req.body?.payrollAllowancesAccount || '').trim(), 'expense'] as const] : []),
+        ...(String(req.body?.medicalAllowanceAccount || '').trim() ? [['hr.payroll.medical_allowance', String(req.body?.medicalAllowanceAccount || '').trim(), 'expense'] as const] : []),
+        ...(String(req.body?.payrollBonusesAccount || '').trim() ? [['hr.payroll.bonuses', String(req.body?.payrollBonusesAccount || '').trim(), 'expense'] as const] : []),
+        ...(String(req.body?.payrollOvertimeAccount || '').trim() ? [['hr.payroll.overtime', String(req.body?.payrollOvertimeAccount || '').trim(), 'expense'] as const] : []),
         ...(String(req.body?.endOfServiceExpenseAccount || '').trim() ? [['hr.end_of_service.expense', String(req.body?.endOfServiceExpenseAccount || '').trim(), 'expense'] as const] : []),
         ['hr.advance.receivable', String(req.body?.advanceReceivableAccount || '').trim(), 'asset'],
+        ...(String(req.body?.shortTermAdvanceAccount || '').trim() ? [['hr.advance.short_term.receivable', String(req.body?.shortTermAdvanceAccount || '').trim(), 'asset'] as const] : []),
+        ...(String(req.body?.longTermAdvanceAccount || '').trim() ? [['hr.advance.long_term.receivable', String(req.body?.longTermAdvanceAccount || '').trim(), 'asset'] as const] : []),
         ['hr.deductions.clearing', String(req.body?.deductionClearingAccount || '').trim(), 'liability']
       ] as const;
       if (!tenantId || !schoolId || !tenantContext || tenantContext.tenantId !== tenantId || tenantContext.schoolId !== schoolId || mappings.some(([, code]) => !code)) {
@@ -11452,6 +11452,7 @@ export async function createApp(options: { cloudflare?: boolean } = {}): Promise
         if (!await CanonicalErpPostingService.isProvisioned(transaction)) {
           throw new DatabaseError('دفتر الأستاذ الكانوني غير مهيأ بعد لهذه المدرسة.');
         }
+        await CanonicalErpPostingService.ensureDefaultChartOfAccounts(transaction, tenantId, schoolId, actorId);
         for (const [key, code, nature] of mappings) {
           const account = await transaction.query<{ account_code: string }>(
             `SELECT account_code FROM public.erp_chart_of_accounts
@@ -11598,13 +11599,17 @@ export async function createApp(options: { cloudflare?: boolean } = {}): Promise
         const payoutMethod = String(advance.payoutMethod || 'cash');
         const requestedPayoutAccount = String(advance.payoutAccount || '').trim();
         const payoutKey = payoutMethod === 'bank' ? 'treasury.bank' : 'treasury.cash';
-        const mappingRows = await transaction.query<{ mapping_key: string; account_code: string }>(`SELECT mapping_key,account_code FROM public.erp_account_mappings WHERE school_id=$1 AND is_active=true AND mapping_key = ANY($2::text[])`, [schoolId, [payoutKey, 'treasury.cash', 'hr.advance.receivable']]);
+        const advanceReceivableKey = String(advance.loanType || 'short_term') === 'long_term'
+          ? 'hr.advance.long_term.receivable'
+          : 'hr.advance.short_term.receivable';
+        const mappingRows = await transaction.query<{ mapping_key: string; account_code: string }>(`SELECT mapping_key,account_code FROM public.erp_account_mappings WHERE school_id=$1 AND is_active=true AND mapping_key = ANY($2::text[])`, [schoolId, [payoutKey, 'treasury.cash', 'hr.advance.receivable', 'hr.advance.short_term.receivable', 'hr.advance.long_term.receivable']]);
         const mappings = new Map(mappingRows.rows.map(row => [row.mapping_key, row.account_code]));
         const payoutAccount = requestedPayoutAccount || mappings.get(payoutKey);
-        if (!payoutAccount || !mappings.get('hr.advance.receivable') || (requestedPayoutAccount && requestedPayoutAccount !== payoutAccount)) throw new ValidationError('حساب صرف السلفة غير معتمد ضمن خرائط المدرسة.');
+        const advanceReceivableAccount = mappings.get(advanceReceivableKey) || mappings.get('hr.advance.receivable');
+        if (!payoutAccount || !advanceReceivableAccount || (requestedPayoutAccount && requestedPayoutAccount !== payoutAccount)) throw new ValidationError('حساب صرف السلفة غير معتمد ضمن خرائط المدرسة.');
         const sync = await CanonicalErpPostingService.syncSnapshot(transaction, tenantId, schoolId, actorId, {
           journalEntries: [{ id: `hr-advance-${advanceId}`, sourceType: 'journal_entry', status: 'posted', date: String(advance.date || new Date().toISOString().slice(0, 10)), description: `صرف سلفة موظف ${advance.employeeId} — ${advance.costCenter}`, lines: [
-            { id: 'advance-receivable', accountCode: mappings.get('hr.advance.receivable'), debit: amount, credit: 0, costCenter: advance.costCenter },
+            { id: 'advance-receivable', accountCode: advanceReceivableAccount, debit: amount, credit: 0, costCenter: advance.costCenter },
             { id: 'payout', accountCode: payoutAccount, debit: 0, credit: amount, costCenter: advance.costCenter }
           ] }]
         });
@@ -11709,15 +11714,28 @@ export async function createApp(options: { cloudflare?: boolean } = {}): Promise
         if (!run || run.status !== 'approved' || run.commitJournalId) throw new ConflictError('لا يمكن إنشاء الالتزام إلا لمسير معتمد غير ملتزم.');
         const fingerprint = createHash('sha256').update(stableJsonStringify({ period, lines: run.lines, totals: run.totals })).digest('hex');
         if (run.fingerprint !== fingerprint) throw new ConflictError('بصمة المسير المعتمد غير صحيحة.');
-        const mappingRows = await transaction.query<{ mapping_key: string; account_code: string }>(`SELECT mapping_key,account_code FROM public.erp_account_mappings WHERE school_id=$1 AND is_active=true AND mapping_key = ANY($2::text[])`, [schoolId, ['hr.payroll.expense','hr.payroll.payable']]);
+        const mappingRows = await transaction.query<{ mapping_key: string; account_code: string }>(`SELECT mapping_key,account_code FROM public.erp_account_mappings WHERE school_id=$1 AND is_active=true AND mapping_key = ANY($2::text[])`, [schoolId, ['hr.payroll.expense','hr.payroll.basic_salary','hr.payroll.allowances','hr.payroll.medical_allowance','hr.payroll.bonuses','hr.payroll.overtime','hr.payroll.payable']]);
         const mappings = new Map(mappingRows.rows.map(row => [row.mapping_key, row.account_code]));
         if (!mappings.get('hr.payroll.expense') || !mappings.get('hr.payroll.payable')) throw new ValidationError('اعتمد حساب مصروف الرواتب وحساب الالتزام أولاً.');
         const lines: Array<Record<string, any>> = [];
         for (const line of (Array.isArray(run.lines) ? run.lines : [])) {
           const cc = String(line.costCenter || '').trim();
-          const expense = Number(line.gross || 0) + Number(line.overtimePay || 0);
-          if (expense > 0) lines.push({ id: `${line.employeeId}-expense`, accountCode: mappings.get('hr.payroll.expense'), debit: expense, credit: 0, costCenter: cc });
-          if (Number(line.net || 0) > 0) lines.push({ id: `${line.employeeId}-payable`, accountCode: mappings.get('hr.payroll.payable'), debit: 0, credit: Number(line.net), costCenter: cc });
+          const componentLines = [
+            ['basic_salary', Number(line.basicSalary || 0), mappings.get('hr.payroll.basic_salary') || mappings.get('hr.payroll.expense')],
+            ['allowances', Number(line.otherAllowances || 0), mappings.get('hr.payroll.allowances') || mappings.get('hr.payroll.expense')],
+            ['medical_allowance', Number(line.medicalAllowance || 0), mappings.get('hr.payroll.medical_allowance') || mappings.get('hr.payroll.allowances') || mappings.get('hr.payroll.expense')],
+            ['bonuses', Number(line.bonuses || 0), mappings.get('hr.payroll.bonuses') || mappings.get('hr.payroll.expense')],
+            ['overtime', Number(line.overtimePay || 0), mappings.get('hr.payroll.overtime') || mappings.get('hr.payroll.expense')]
+          ];
+          const hasComponents = componentLines.some(([, amount]) => Number(amount) > 0);
+          if (!hasComponents && Number(line.gross || 0) + Number(line.overtimePay || 0) > 0) {
+            componentLines.push(['gross_legacy', Number(line.gross || 0) + Number(line.overtimePay || 0), mappings.get('hr.payroll.expense')]);
+          }
+          for (const [component, amount, accountCode] of componentLines) {
+            if (Number(amount) > 0 && accountCode) lines.push({ id: `${line.employeeId}-${component}-expense`, accountCode, debit: Number(amount), credit: 0, costCenter: cc });
+          }
+          const obligation = Number(line.gross || 0) + Number(line.overtimePay || 0);
+          if (obligation > 0) lines.push({ id: `${line.employeeId}-payable`, accountCode: mappings.get('hr.payroll.payable'), debit: 0, credit: obligation, costCenter: cc });
         }
         const sync = await CanonicalErpPostingService.syncSnapshot(transaction, tenantId, schoolId, actorId, { journalEntries: [{ id: `hr-payroll-commit-${period}`, sourceType: 'journal_entry', status: 'posted', date: `${period}-01`, description: `إثبات التزام رواتب الفترة ${period}`, lines }] });
         journalId = sync.sourceLinks.find(link => link.sourceId === `hr-payroll-commit-${period}`)?.journalEntryId || '';
@@ -11765,7 +11783,7 @@ export async function createApp(options: { cloudflare?: boolean } = {}): Promise
         const requestedPayoutAccount = String(req.body?.payoutAccount || '').trim();
         if (!['cash', 'bank'].includes(requestedPayoutMethod)) throw new ValidationError('طريقة صرف الرواتب يجب أن تكون خزينة أو بنكاً.');
         const payoutMappingKey = requestedPayoutMethod === 'bank' ? 'treasury.bank' : 'treasury.cash';
-        const mappingRows = await transaction.query<{ mapping_key: string; account_code: string }>(`SELECT mapping_key,account_code FROM public.erp_account_mappings WHERE school_id=$1 AND is_active=true AND mapping_key = ANY($2::text[])`, [schoolId, ['treasury.cash','treasury.bank','hr.payroll.expense','hr.payroll.payable','hr.advance.receivable','hr.deductions.clearing']]);
+        const mappingRows = await transaction.query<{ mapping_key: string; account_code: string }>(`SELECT mapping_key,account_code FROM public.erp_account_mappings WHERE school_id=$1 AND is_active=true AND mapping_key = ANY($2::text[])`, [schoolId, ['treasury.cash','treasury.bank','hr.payroll.expense','hr.payroll.basic_salary','hr.payroll.allowances','hr.payroll.medical_allowance','hr.payroll.bonuses','hr.payroll.overtime','hr.payroll.payable','hr.advance.receivable','hr.advance.short_term.receivable','hr.advance.long_term.receivable','hr.deductions.clearing']]);
         const mappings = new Map(mappingRows.rows.map(row => [row.mapping_key, row.account_code]));
         const required = [payoutMappingKey, run.status === 'committed' ? 'hr.payroll.payable' : 'hr.payroll.expense','hr.advance.receivable','hr.deductions.clearing'];
         if (required.some(key => !mappings.get(key))) throw new ValidationError('لا يمكن تنفيذ الصرف قبل اعتماد جميع خرائط حسابات HR من شاشة الحسابات.');
@@ -11777,12 +11795,31 @@ export async function createApp(options: { cloudflare?: boolean } = {}): Promise
         const lines: Array<Record<string, any>> = [];
         for (const line of (Array.isArray(run.lines) ? run.lines : [])) {
           const cc = String(line.costCenter || '').trim();
-          const expense = Number(line.gross || 0) + Number(line.overtimePay || 0);
+          const componentLines = [
+            ['basic_salary', Number(line.basicSalary || 0), mappings.get('hr.payroll.basic_salary') || mappings.get('hr.payroll.expense')],
+            ['allowances', Number(line.otherAllowances || 0), mappings.get('hr.payroll.allowances') || mappings.get('hr.payroll.expense')],
+            ['medical_allowance', Number(line.medicalAllowance || 0), mappings.get('hr.payroll.medical_allowance') || mappings.get('hr.payroll.allowances') || mappings.get('hr.payroll.expense')],
+            ['bonuses', Number(line.bonuses || 0), mappings.get('hr.payroll.bonuses') || mappings.get('hr.payroll.expense')],
+            ['overtime', Number(line.overtimePay || 0), mappings.get('hr.payroll.overtime') || mappings.get('hr.payroll.expense')]
+          ];
+          const hasComponents = componentLines.some(([, amount]) => Number(amount) > 0);
+          if (!hasComponents && Number(line.gross || 0) + Number(line.overtimePay || 0) > 0) {
+            componentLines.push(['gross_legacy', Number(line.gross || 0) + Number(line.overtimePay || 0), mappings.get('hr.payroll.expense')]);
+          }
+          const obligation = Number(line.gross || 0) + Number(line.overtimePay || 0);
           const deductions = Number(line.penalty || 0) + Number(line.attendanceDeduction || 0) + Number(line.leaveDeduction || 0);
-          if (run.status !== 'committed' && expense > 0) lines.push({ id: `${line.employeeId}-expense`, accountCode: mappings.get('hr.payroll.expense'), debit: expense, credit: 0, costCenter: cc });
-          if (run.status === 'committed' && Number(line.net || 0) > 0) lines.push({ id: `${line.employeeId}-payable-settlement`, accountCode: mappings.get('hr.payroll.payable'), debit: Number(line.net), credit: 0, costCenter: cc });
+          if (run.status !== 'committed') {
+            for (const [component, amount, accountCode] of componentLines) {
+              if (Number(amount) > 0 && accountCode) lines.push({ id: `${line.employeeId}-${component}-expense`, accountCode, debit: Number(amount), credit: 0, costCenter: cc });
+            }
+          }
+          if (run.status === 'committed' && obligation > 0) lines.push({ id: `${line.employeeId}-payable-settlement`, accountCode: mappings.get('hr.payroll.payable'), debit: obligation, credit: 0, costCenter: cc });
           if (Number(line.net || 0) > 0) lines.push({ id: `${line.employeeId}-payout`, accountCode: mappings.get(payoutMappingKey), debit: 0, credit: Number(line.net), costCenter: cc });
-          if (Number(line.advanceDeduction || 0) > 0) lines.push({ id: `${line.employeeId}-advance`, accountCode: mappings.get('hr.advance.receivable'), debit: 0, credit: Number(line.advanceDeduction), costCenter: cc });
+          if (Number(line.advanceDeduction || 0) > 0) {
+            const advanceKey = line.advanceLoanType === 'long_term' ? 'hr.advance.long_term.receivable' : 'hr.advance.short_term.receivable';
+            const advanceAccount = mappings.get(advanceKey) || mappings.get('hr.advance.receivable');
+            lines.push({ id: `${line.employeeId}-advance`, accountCode: advanceAccount, debit: 0, credit: Number(line.advanceDeduction), costCenter: cc });
+          }
           if (deductions > 0) lines.push({ id: `${line.employeeId}-deductions`, accountCode: mappings.get('hr.deductions.clearing'), debit: 0, credit: deductions, costCenter: cc });
         }
         const sync = await CanonicalErpPostingService.syncSnapshot(transaction, tenantId, schoolId, actorId, { journalEntries: [{ id: `hr-payroll-${period}`, sourceType: 'journal_entry', status: 'posted', date: `${period}-01`, description: `صرف مسير الرواتب المعتمد للفترة ${period}`, lines }] });
@@ -13830,6 +13867,123 @@ export async function createApp(options: { cloudflare?: boolean } = {}): Promise
     }
   });
 
+  /**
+   * Read-only release gate for the accounting module. It answers the one
+   * question the UI and the release operator must agree on: can every source
+   * module post to a valid leaf account in the canonical ledger? It never
+   * creates accounts, mappings, periods, or journals.
+   */
+  app.get('/api/financial/readiness', authenticateRequest, requirePermission(PERMISSIONS.FINANCIAL_READ), async (req, res, next) => {
+    try {
+      const identity = (req as any).user;
+      const tenantId = String(identity?.tenantId || '').trim();
+      const schoolId = String(identity?.schoolId || '').trim();
+      const tenantContext = (req as any).tenantContext;
+      if (!tenantId || !schoolId || !tenantContext || tenantContext.tenantId !== tenantId || tenantContext.schoolId !== schoolId) {
+        throw new AuthenticationError('السياق الموثوق لبوابة جاهزية الحسابات غير مكتمل.');
+      }
+      if (!transactionDriver) throw new DatabaseError('اتصال PostgreSQL المعاملاتي غير متاح لفحص جاهزية دفتر الأستاذ.');
+      const readiness = await UnitOfWork.runInTransaction(schoolId, {
+        operationName: 'Read canonical accounting readiness', tenantId, userId: identity.id,
+        userName: identity.name || 'المستخدم الحالي', ipAddress: req.ip || 'unknown',
+        affectedTables: [...CANONICAL_ERP_TABLES, 'erp_account_mappings']
+      }, async () => {
+        const transaction = UnitOfWork.getActiveContext()?.databaseTransaction;
+        if (!transaction) throw new DatabaseError('معاملة فحص جاهزية دفتر الأستاذ غير متاحة.');
+        return CanonicalErpPostingService.getReadiness(transaction, schoolId);
+      }, tenantContext);
+      const writeEnabledByDeployment = process.env.FINANCIAL_WRITES_LOCKED === 'false'
+        && process.env.FINANCIAL_ERP_MODE === 'canonical';
+      res.setHeader('Cache-Control', 'no-store');
+      res.json({
+        success: true,
+        data: {
+          ...readiness,
+          writeEnabledByDeployment,
+          canAcceptPostedSources: readiness.ready && writeEnabledByDeployment,
+          sources: CANONICAL_MAPPING_DEFINITIONS.reduce<Record<string, { ready: boolean; missing: string[] }>>((acc, definition) => {
+            const sourceMappings = readiness.mappings.filter(item => item.source === definition.source);
+            const missing = sourceMappings.filter(item => item.required && !item.valid).map(item => item.label);
+            acc[definition.source] = { ready: missing.length === 0, missing };
+            return acc;
+          }, {})
+        },
+        meta: { source: 'canonical-postgres', scope: { tenantId, schoolId } }
+      });
+    } catch (err: any) {
+      next(err instanceof AuthenticationError || err instanceof DatabaseError ? err : new DatabaseError('تعذر فحص جاهزية وحدة الحسابات.', err?.message));
+    }
+  });
+
+  app.get('/api/financial/account-mappings', authenticateRequest, requirePermission(PERMISSIONS.FINANCIAL_READ), async (req, res, next) => {
+    try {
+      const identity = (req as any).user;
+      const tenantId = String(identity?.tenantId || '').trim();
+      const schoolId = String(identity?.schoolId || '').trim();
+      const tenantContext = (req as any).tenantContext;
+      if (!tenantId || !schoolId || !tenantContext || tenantContext.tenantId !== tenantId || tenantContext.schoolId !== schoolId) {
+        throw new AuthenticationError('السياق الموثوق لقراءة خرائط الحسابات غير مكتمل.');
+      }
+      if (!transactionDriver) throw new DatabaseError('اتصال PostgreSQL المعاملاتي غير متاح لقراءة خرائط الحسابات.');
+      const data = await UnitOfWork.runInTransaction(schoolId, {
+        operationName: 'Read canonical account mappings', tenantId, userId: identity.id,
+        userName: identity.name || 'المستخدم الحالي', ipAddress: req.ip || 'unknown',
+        affectedTables: ['erp_account_mappings', 'erp_chart_of_accounts']
+      }, async () => {
+        const transaction = UnitOfWork.getActiveContext()?.databaseTransaction;
+        if (!transaction) throw new DatabaseError('معاملة قراءة خرائط الحسابات غير متاحة.');
+        return CanonicalErpPostingService.getReadiness(transaction, schoolId);
+      }, tenantContext);
+      res.setHeader('Cache-Control', 'no-store');
+      res.json({ success: true, data, meta: { source: 'canonical-postgres', scope: { tenantId, schoolId } } });
+    } catch (err: any) {
+      next(err instanceof AuthenticationError || err instanceof DatabaseError ? err : new DatabaseError('تعذر قراءة خرائط الحسابات.', err?.message));
+    }
+  });
+
+  app.post('/api/financial/account-mappings', authenticateRequest, requirePermission(PERMISSIONS.FINANCIAL_WRITE), async (req, res, next) => {
+    try {
+      const identity = (req as any).user;
+      const tenantId = String(identity?.tenantId || '').trim();
+      const schoolId = String(identity?.schoolId || '').trim();
+      const tenantContext = (req as any).tenantContext;
+      const submitted = Array.isArray(req.body?.mappings) ? req.body.mappings : [];
+      if (!tenantId || !schoolId || !tenantContext || tenantContext.tenantId !== tenantId || tenantContext.schoolId !== schoolId || submitted.length === 0 || submitted.length > CANONICAL_MAPPING_DEFINITIONS.length) {
+        throw new ValidationError('أرسل قائمة خرائط حسابات صالحة ضمن نطاق المدرسة الموثوق.');
+      }
+      const definitions = new Map(CANONICAL_MAPPING_DEFINITIONS.map(item => [item.key, item]));
+      const normalized = submitted.map((item: any) => {
+        const key = String(item?.key || '').trim();
+        const accountCode = String(item?.accountCode || '').trim();
+        const definition = definitions.get(key);
+        if (!definition || !accountCode) throw new ValidationError(`خريطة الحساب ${key || 'غير معروفة'} غير صالحة.`);
+        return { key, accountCode, nature: definition.nature };
+      });
+      if (new Set(normalized.map(item => item.key)).size !== normalized.length) throw new ConflictError('لا يمكن تكرار مفتاح خريطة الحساب.');
+      await UnitOfWork.runInTransaction(schoolId, {
+        operationName: 'Configure canonical account mappings', tenantId, userId: identity.id,
+        userName: identity.name || 'المستخدم الحالي', ipAddress: req.ip || 'unknown',
+        affectedTables: ['erp_account_mappings', 'erp_chart_of_accounts', 'audit_events']
+      }, async () => {
+        const transaction = UnitOfWork.getActiveContext()?.databaseTransaction;
+        if (!transaction) throw new DatabaseError('معاملة اعتماد خرائط الحسابات غير متاحة.');
+        const actor = await transaction.query<{ id: string }>(`SELECT id FROM public.users WHERE tenant_id=$1 AND auth_user_id=$2 AND status='active' AND deleted_at IS NULL LIMIT 1`, [tenantId, identity.id]);
+        const actorId = actor.rows[0]?.id;
+        if (!actorId) throw new AuthenticationError('تعذر ربط هوية الجلسة بالمستخدم المالي المعتمد.');
+        await CanonicalErpPostingService.ensureDefaultChartOfAccounts(transaction, tenantId, schoolId, actorId);
+        for (const item of normalized) {
+          const account = await transaction.query<{ account_code: string }>(`SELECT account_code FROM public.erp_chart_of_accounts WHERE tenant_id=$1 AND school_id=$2 AND account_code=$3 AND account_nature=$4 AND is_active=true AND is_leaf=true LIMIT 1`, [tenantId, schoolId, item.accountCode, item.nature]);
+          if (!account.rows[0]) throw new ValidationError(`الحساب ${item.accountCode} غير موجود أو لا يحمل طبيعة ${item.nature} المطلوبة للخريطة ${item.key}.`);
+          await transaction.query(`INSERT INTO public.erp_account_mappings (tenant_id,school_id,mapping_key,account_code,is_active,updated_by) VALUES ($1,$2,$3,$4,true,$5) ON CONFLICT (school_id,mapping_key) DO UPDATE SET account_code=EXCLUDED.account_code,is_active=true,updated_at=now(),updated_by=EXCLUDED.updated_by`, [tenantId, schoolId, item.key, item.accountCode, actorId]);
+        }
+        await transaction.query(`INSERT INTO public.audit_events (tenant_id,school_id,branch_id,actor_user_id,entity_type,entity_id,action,source,reason,result,metadata) VALUES ($1,$2,$3,$4,'erp_account_mapping',$2,'configure','FinancialMappingRoute','اعتماد خريطة حسابات مركزية','success',$5::jsonb)`, [tenantId, schoolId, identity.branchId || null, actorId, JSON.stringify({ mappingKeys: normalized.map(item => item.key) })]);
+      }, tenantContext);
+      res.json({ success: true, message: 'تم اعتماد خرائط الحسابات المركزية دون إنشاء قيود.', meta: { configured: normalized.length } });
+    } catch (err: any) {
+      next(err instanceof AuthenticationError || err instanceof AuthorizationError || err instanceof ValidationError || err instanceof ConflictError || err instanceof DatabaseError ? err : new DatabaseError('تعذر اعتماد خرائط الحسابات.', err?.message));
+    }
+  });
+
   app.get("/api/financial/database", authenticateRequest, requirePermission(PERMISSIONS.FINANCIAL_READ), async (req, res, next) => {
     try {
       const schoolId = String((req as any).user.schoolId || '').trim();
@@ -14108,6 +14262,17 @@ export async function createApp(options: { cloudflare?: boolean } = {}): Promise
           const studentFinanceProjectionChanged = projectionKeys.some((key) =>
             JSON.stringify(previousPayload[key] ?? null) !== JSON.stringify(payload[key] ?? null)
           );
+          canonicalErpReady = await CanonicalErpPostingService.isProvisioned(transaction);
+          if (!canonicalErpReady) {
+            throw new DatabaseError('لا يمكن كتابة بيانات الحسابات قبل تثبيت دفتر الأستاذ الكانوني؛ بقيت الوحدة للقراءة فقط حمايةً للمصدر المالي.');
+          }
+          if (studentFinanceProjectionChanged) {
+            const readiness = await CanonicalErpPostingService.getReadiness(transaction, schoolId);
+            if (!readiness.ready) {
+              const blockers = [...readiness.missing, ...readiness.invalid].slice(0, 6).join('، ');
+              throw new ValidationError(`لا يمكن ترحيل المصدر المالي قبل اعتماد خرائط الحسابات الكانونية${blockers ? `: ${blockers}` : '.'}`);
+            }
+          }
           nextVersion = currentVersion + 1;
           await transaction.query(
             `INSERT INTO public.financial_portal_snapshots
@@ -14168,7 +14333,6 @@ export async function createApp(options: { cloudflare?: boolean } = {}): Promise
               }
             }
           }
-          canonicalErpReady = await CanonicalErpPostingService.isProvisioned(transaction);
           if (canonicalErpReady) {
             canonicalErpSync = studentFinanceProjectionChanged
               ? await CanonicalErpPostingService.syncSnapshot(
@@ -14359,6 +14523,18 @@ export async function createApp(options: { cloudflare?: boolean } = {}): Promise
         const currentData = current.rows[0]?.data || {};
         validateInventoryPostingMetadata(currentData, requestedData as Record<string, any>);
         validateInventoryProcurementSnapshot(requestedData as Record<string, any>, { allowCanonicalPostingReferences: true });
+        canonicalErpReady = await CanonicalErpPostingService.isProvisioned(transaction);
+        if (!canonicalErpReady) {
+          throw new DatabaseError('لا يمكن كتابة المخزون مع إعلان نجاح مالي قبل تثبيت دفتر الأستاذ الكانوني وربطه بالمخزون.');
+        }
+        const accountingReadiness = await CanonicalErpPostingService.getReadiness(transaction, schoolId);
+        if (!accountingReadiness.sourceSupport.inventory) {
+          const blockers = [...accountingReadiness.missing, ...accountingReadiness.invalid]
+            .filter((label, index, all) => all.indexOf(label) === index)
+            .slice(0, 6)
+            .join('، ');
+          throw new ValidationError(`لا يمكن حفظ حركة مخزنية قبل اعتماد خرائط المخزون في الأستاذ العام${blockers ? `: ${blockers}` : '.'}`);
+        }
         for (const key of ['movements', 'stocktakes', 'purchaseRequests', 'rfqs', 'quotations', 'purchaseOrders', 'goodsReceipts', 'vendorBills', 'vendorPayments']) {
           for (const locked of (Array.isArray(currentData[key]) ? currentData[key] : []).filter((row: any) => ['approved', 'issued', 'awarded', 'posted', 'closed', 'paid', 'posted_to_gl', 'fully_received', 'converted_to_po', 'responses_received', 'sent', 'inspected_received', 'partially_accepted'].includes(String(row?.status)))) {
             const requested = (requestedData as any)[key].find((row: any) => row?.id === locked.id);
@@ -14368,7 +14544,6 @@ export async function createApp(options: { cloudflare?: boolean } = {}): Promise
             }
           }
         }
-        canonicalErpReady = await CanonicalErpPostingService.isProvisioned(transaction);
         if (canonicalErpReady) {
           canonicalErpSync = await CanonicalErpPostingService.syncInventoryProcurementSnapshot(
             transaction, tenantId, schoolId, actorId, requestedData as Record<string, any>

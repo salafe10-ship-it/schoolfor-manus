@@ -11,6 +11,13 @@ import type {
 export interface PayrollCalculationLine {
   employeeId: string;
   costCenter: HREmployee['costCenter'];
+  /** Component amounts are retained so accounting can post to the correct
+   * expense accounts without changing the payroll calculation contract. */
+  basicSalary: number;
+  allowances: number;
+  medicalAllowance: number;
+  otherAllowances: number;
+  bonuses: number;
   gross: number;
   penalty: number;
   advanceDeduction: number;
@@ -18,6 +25,8 @@ export interface PayrollCalculationLine {
   leaveDeduction: number;
   overtimePay: number;
   net: number;
+  advanceId?: string;
+  advanceLoanType?: HRAdvance['loanType'];
 }
 
 export interface PayrollCalculationTotals {
@@ -65,8 +74,13 @@ export function calculatePayrollRun(input: {
     .filter(employee => employee.status !== 'resigned')
     .map(employee => {
       const basicSalary = Math.max(0, Number(employee.basicSalary || 0));
-      const allowance = (Array.isArray(employee.allowances) ? employee.allowances : [])
+      const allowanceItems = Array.isArray(employee.allowances) ? employee.allowances : [];
+      const medicalAllowance = allowanceItems
+        .filter(item => /علاج|طب|medical|health/i.test(String(item?.name || '')))
         .reduce((sum, item) => sum + Math.max(0, Number(item?.amount || 0)), 0);
+      const allowance = allowanceItems
+        .reduce((sum, item) => sum + Math.max(0, Number(item?.amount || 0)), 0);
+      const otherAllowances = Math.max(0, allowance - medicalAllowance);
       const bonus = input.rewards
         .filter(item => item.employeeId === employee.id && item.status === 'applied' && String(item.date || '').startsWith(input.period))
         .reduce((sum, item) => sum + Math.max(0, Number(item.amount || 0)), 0);
@@ -103,13 +117,20 @@ export function calculatePayrollRun(input: {
       return {
         employeeId: String(employee.id),
         costCenter: employee.costCenter,
+        basicSalary: money(basicSalary),
+        allowances: money(allowance),
+        medicalAllowance: money(medicalAllowance),
+        otherAllowances: money(otherAllowances),
+        bonuses: money(bonus),
         gross: money(gross),
         penalty: money(penalty),
         advanceDeduction: money(advanceDeduction),
         attendanceDeduction: money(attendanceDeduction),
         leaveDeduction: money(leaveDeduction),
         overtimePay: money(overtimePay),
-        net: money(net)
+        net: money(net),
+        advanceId: advance?.id,
+        advanceLoanType: advance?.loanType
       };
     })
     .filter(line => line.gross > 0 || line.overtimePay > 0);

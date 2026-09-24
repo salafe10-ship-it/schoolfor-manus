@@ -66,6 +66,19 @@ const DEFAULT_MAPPING: Record<string, string> = {
   'student_fees.discount': '4205',
   'student_fees.tax': '2201',
   'treasury.cash': '1101',
+  'treasury.bank': '1102',
+  'hr.payroll.expense': '5101',
+  'hr.payroll.basic_salary': '5101',
+  'hr.payroll.allowances': '5102',
+  'hr.payroll.medical_allowance': '5103',
+  'hr.payroll.bonuses': '5104',
+  'hr.payroll.overtime': '5105',
+  'hr.payroll.payable': '2102',
+  'hr.advance.receivable': '1210',
+  'hr.advance.short_term.receivable': '1210',
+  'hr.advance.long_term.receivable': '1211',
+  'hr.deductions.clearing': '2103',
+  'hr.end_of_service.expense': '5106',
   'expenses.default': '5270',
   'liabilities.accrued_expense': '2101',
   'inventory.asset': '1301',
@@ -76,15 +89,65 @@ const DEFAULT_MAPPING: Record<string, string> = {
   'inventory.input_vat': '1401'
 };
 
+export type CanonicalMappingNature = 'asset' | 'liability' | 'revenue' | 'expense';
+
+/**
+ * The mapping registry is shared by readiness, HR configuration, and the
+ * posting service. Keeping the keys in one place prevents a screen from
+ * claiming that accounting is ready while a source module still has no
+ * auditable destination account.
+ */
+export const CANONICAL_MAPPING_DEFINITIONS: Array<{
+  key: string;
+  label: string;
+  nature: CanonicalMappingNature;
+  required: boolean;
+  source: 'fees' | 'hr' | 'inventory' | 'treasury';
+}> = [
+  { key: 'student_fees.receivable', label: 'ذمم الطلاب المدينة', nature: 'asset', required: true, source: 'fees' },
+  { key: 'student_fees.revenue', label: 'إيرادات الرسوم الدراسية', nature: 'revenue', required: true, source: 'fees' },
+  { key: 'treasury.cash', label: 'صندوق السداد', nature: 'asset', required: true, source: 'treasury' },
+  { key: 'treasury.bank', label: 'حساب البنك', nature: 'asset', required: true, source: 'treasury' },
+  { key: 'hr.payroll.expense', label: 'مصروف الرواتب العام', nature: 'expense', required: true, source: 'hr' },
+  { key: 'hr.payroll.payable', label: 'التزام الرواتب', nature: 'liability', required: true, source: 'hr' },
+  { key: 'hr.advance.receivable', label: 'ذمم سلف الموظفين', nature: 'asset', required: true, source: 'hr' },
+  { key: 'hr.deductions.clearing', label: 'تسوية الخصومات والجزاءات', nature: 'liability', required: true, source: 'hr' },
+  { key: 'inventory.asset', label: 'أصل المخزون', nature: 'asset', required: true, source: 'inventory' },
+  { key: 'inventory.grni', label: 'استلامات لم تصل فاتورتها', nature: 'liability', required: true, source: 'inventory' },
+  { key: 'inventory.ap', label: 'ذمم الموردين', nature: 'liability', required: true, source: 'inventory' },
+  { key: 'inventory.cogs', label: 'تكلفة الأصناف المصروفة', nature: 'expense', required: true, source: 'inventory' },
+  { key: 'inventory.adjustment', label: 'فروقات وتسويات المخزون', nature: 'expense', required: true, source: 'inventory' },
+  { key: 'inventory.input_vat', label: 'ضريبة المدخلات', nature: 'asset', required: true, source: 'inventory' },
+  { key: 'hr.payroll.basic_salary', label: 'مصروف الراتب الأساسي', nature: 'expense', required: false, source: 'hr' },
+  { key: 'hr.payroll.allowances', label: 'مصروف البدلات والمزايا', nature: 'expense', required: false, source: 'hr' },
+  { key: 'hr.payroll.medical_allowance', label: 'بدل العلاج الطبي', nature: 'expense', required: false, source: 'hr' },
+  { key: 'hr.payroll.bonuses', label: 'المكافآت والحوافز', nature: 'expense', required: false, source: 'hr' },
+  { key: 'hr.payroll.overtime', label: 'مصروف العمل الإضافي', nature: 'expense', required: false, source: 'hr' },
+  { key: 'hr.advance.short_term.receivable', label: 'ذمم السلف القصيرة', nature: 'asset', required: false, source: 'hr' },
+  { key: 'hr.advance.long_term.receivable', label: 'ذمم السلف الطويلة', nature: 'asset', required: false, source: 'hr' },
+  { key: 'hr.end_of_service.expense', label: 'مصروف نهاية الخدمة', nature: 'expense', required: false, source: 'hr' },
+];
+
 const DEFAULT_ACCOUNTS: Array<{ code: string; name: string; nature: string }> = [
   { code: '1101', name: 'صندوق النقدية والخزينة', nature: 'asset' },
+  { code: '1102', name: 'حسابات البنوك', nature: 'asset' },
   { code: '1201', name: 'ذمم الطلاب المدينة', nature: 'asset' },
+  { code: '1210', name: 'ذمم سلف الموظفين القصيرة', nature: 'asset' },
+  { code: '1211', name: 'ذمم سلف الموظفين الطويلة', nature: 'asset' },
   { code: '1301', name: 'مخزون وأصناف تشغيلية', nature: 'asset' },
   { code: '1401', name: 'ضريبة مدخلات قابلة للاسترداد', nature: 'asset' },
   { code: '2101', name: 'مصروفات مستحقة والتزامات موردين', nature: 'liability' },
+  { code: '2102', name: 'التزام رواتب مستحقة', nature: 'liability' },
+  { code: '2103', name: 'تسوية خصومات وجزاءات الرواتب', nature: 'liability' },
   { code: '2201', name: 'ضريبة مخرجات مستحقة', nature: 'liability' },
   { code: '4101', name: 'إيرادات الرسوم الدراسية', nature: 'revenue' },
   { code: '4205', name: 'خصومات ومنح على الإيرادات', nature: 'revenue' },
+  { code: '5101', name: 'مصروف الراتب الأساسي', nature: 'expense' },
+  { code: '5102', name: 'مصروف البدلات والمزايا', nature: 'expense' },
+  { code: '5103', name: 'مصروف بدل العلاج الطبي', nature: 'expense' },
+  { code: '5104', name: 'مصروف المكافآت والحوافز', nature: 'expense' },
+  { code: '5105', name: 'مصروف العمل الإضافي', nature: 'expense' },
+  { code: '5106', name: 'مصروف نهاية الخدمة', nature: 'expense' },
   { code: '5270', name: 'تكلفة الأصناف المصروفة', nature: 'expense' },
   { code: '5280', name: 'فروقات وتسويات المخزون', nature: 'expense' }
 ];
@@ -375,6 +438,91 @@ export class CanonicalErpPostingService {
     return true;
   }
 
+  public static async getReadiness(
+    transaction: TransactionLike,
+    schoolId: string
+  ): Promise<{
+    schemaReady: boolean;
+    ready: boolean;
+    mappings: Array<{ key: string; label: string; source: string; required: boolean; configured: boolean; accountCode: string; accountName: string; nature: string; valid: boolean }>;
+    missing: string[];
+    invalid: string[];
+    optionalMissing: string[];
+    sourceSupport: Record<string, boolean>;
+  }> {
+    const schemaReady = await this.isProvisioned(transaction);
+    if (!schemaReady) {
+      const mappings = CANONICAL_MAPPING_DEFINITIONS.map(definition => ({
+        ...definition,
+        configured: false,
+        accountCode: '',
+        accountName: '',
+        valid: false
+      }));
+      return {
+        schemaReady: false,
+        ready: false,
+        mappings,
+        missing: CANONICAL_MAPPING_DEFINITIONS.filter(item => item.required).map(item => item.label),
+        invalid: [],
+        optionalMissing: CANONICAL_MAPPING_DEFINITIONS.filter(item => !item.required).map(item => item.label),
+        sourceSupport: { fees: false, hr: false, inventory: false, treasury: false }
+      };
+    }
+
+    const result = await db(transaction).query<{
+      mapping_key: string;
+      account_code: string;
+      account_name: string | null;
+      account_nature: string | null;
+      is_active: boolean | null;
+      is_leaf: boolean | null;
+    }>(
+      `SELECT m.mapping_key, m.account_code, c.account_name, c.account_nature,
+              c.is_active, c.is_leaf
+         FROM public.erp_account_mappings m
+         LEFT JOIN public.erp_chart_of_accounts c
+           ON c.school_id = m.school_id AND c.account_code = m.account_code
+        WHERE m.school_id = $1 AND m.is_active = true`,
+      [schoolId]
+    );
+    const rows = new Map(result.rows.map(row => [row.mapping_key, row]));
+    const mappings = CANONICAL_MAPPING_DEFINITIONS.map(definition => {
+      const row = rows.get(definition.key);
+      const configured = Boolean(row?.account_code);
+      const valid = Boolean(
+        configured
+        && row?.is_active !== false
+        && row?.is_leaf !== false
+        && row?.account_nature === definition.nature
+      );
+      return {
+        ...definition,
+        configured,
+        accountCode: configured ? String(row?.account_code || '') : '',
+        accountName: String(row?.account_name || ''),
+        nature: String(row?.account_nature || ''),
+        valid
+      };
+    });
+    const missing = mappings.filter(item => item.required && !item.configured).map(item => item.label);
+    const invalid = mappings.filter(item => item.configured && !item.valid).map(item => item.label);
+    const optionalMissing = mappings.filter(item => !item.required && !item.configured).map(item => item.label);
+    const sourceSupport = Object.fromEntries(['fees', 'hr', 'inventory', 'treasury'].map(source => [
+      source,
+      mappings.filter(item => item.source === source && item.required).every(item => item.valid)
+    ]));
+    return {
+      schemaReady: true,
+      ready: missing.length === 0 && invalid.length === 0,
+      mappings,
+      missing,
+      invalid,
+      optionalMissing,
+      sourceSupport
+    };
+  }
+
   private static async loadMappings(transaction: TransactionLike, schoolId: string): Promise<Map<string, string>> {
     const result = await db(transaction).query<{ mapping_key: string; account_code: string }>(
       `SELECT mapping_key, account_code
@@ -423,6 +571,21 @@ export class CanonicalErpPostingService {
         [tenantId, schoolId, code, name, normalizedNature(account), account.isActive !== false, account.type ? textValue(account.type) !== 'رئيسي' : true, actorId]
       );
     }
+  }
+
+  /** Materializes the reviewed baseline accounts during an explicit mapping
+   * setup. It does not create mappings or journals and is safe to call more
+   * than once inside the caller's transaction. */
+  public static async ensureDefaultChartOfAccounts(
+    transaction: TransactionLike,
+    tenantId: string,
+    schoolId: string,
+    actorId: string
+  ): Promise<void> {
+    if (!(await this.isProvisioned(transaction))) {
+      throw new Error('المخطط المحاسبي الكانوني غير مثبت بعد.');
+    }
+    await this.ensureChartAccounts(transaction, tenantId, schoolId, actorId, {});
   }
 
   private static async ensureExpenseAccrual(
