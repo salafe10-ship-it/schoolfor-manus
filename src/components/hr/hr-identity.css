@@ -80,6 +80,37 @@
   overflow: hidden;
 }
 
+/* On the compact desktop viewport the legacy md:col-span-12 utilities stack
+   the navigation above the workspace. The employee directory is a focused
+   two-pane screen, so keep both panes in the same row and let only its table
+   consume the remaining height. */
+@media (min-width: 768px) {
+  #hr-portal.hr-employee-mode .hr-portal-grid {
+    grid-template-columns: minmax(220px, 0.3fr) minmax(0, 0.7fr);
+  }
+
+  #hr-portal.hr-employee-mode #hr-sidebar-menu,
+  #hr-portal.hr-employee-mode .hr-workspace {
+    grid-column: span 1 / span 1;
+    min-height: 0;
+    height: 100% !important;
+  }
+
+  #hr-portal.hr-employee-mode .hr-employees-screen {
+    gap: 0.75rem;
+  }
+
+  #hr-portal.hr-employee-mode .hr-employees-analytics {
+    display: none;
+  }
+
+  #hr-portal.hr-employee-mode .hr-employees-toolbar {
+    flex: 0 0 auto;
+    gap: 0.65rem;
+    padding: 0.7rem;
+  }
+}
+
 #hr-portal .hr-employees-table,
 #hr-portal .hr-employees-grid {
   scrollbar-width: thin;
