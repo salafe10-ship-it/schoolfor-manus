@@ -2282,7 +2282,13 @@ export async function createApp(options: { cloudflare?: boolean } = {}): Promise
   app.use((req, res, next) => {
     const isFinancialApi = req.path.startsWith('/api/financial');
     const isRead = ['GET', 'HEAD', 'OPTIONS'].includes(req.method.toUpperCase());
-    if (financialWritesLocked && isFinancialApi && !isRead) {
+    // Account mappings are deployment configuration, not a financial posting.
+    // They must be configurable before the ledger write phase can be opened;
+    // the route still enforces authentication, FINANCIAL_WRITE permission,
+    // tenant scope, account validation, and an audit event.
+    const isAccountMappingConfiguration = req.path === '/api/financial/account-mappings'
+      && req.method.toUpperCase() === 'POST';
+    if (financialWritesLocked && isFinancialApi && !isRead && !isAccountMappingConfiguration) {
       return res.status(423).json({
         success: false,
         error: 'FINANCIAL_WRITES_LOCKED',

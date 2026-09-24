@@ -11,6 +11,8 @@ describe('financial API server-side write lock', () => {
     const gate = server.slice(start, end);
     expect(gate).toContain("req.path.startsWith('/api/financial')");
     expect(gate).toContain("['GET', 'HEAD', 'OPTIONS']");
+    expect(gate).toContain("req.path === '/api/financial/account-mappings'");
+    expect(gate).toContain("req.method.toUpperCase() === 'POST'");
     expect(gate).toContain('res.status(423)');
     expect(gate).toContain('FINANCIAL_WRITES_LOCKED');
   });
