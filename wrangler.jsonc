@@ -5,6 +5,10 @@
   "compatibility_date": "2026-09-16",
   "compatibility_flags": ["nodejs_compat"],
   "workers_dev": true,
+  "vars": {
+    "FINANCIAL_WRITES_LOCKED": "false",
+    "FINANCIAL_ERP_MODE": "canonical"
+  },
   "hyperdrive": [
     {
       "binding": "HYPERDRIVE",
