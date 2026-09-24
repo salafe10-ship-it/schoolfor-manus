@@ -706,7 +706,7 @@ export default function HumanResourcesPortal({ setActiveSection, selectedSchool,
   ];
 
   return (
-    <div id="hr-portal" className={`w-full h-full min-h-0 overflow-hidden text-right font-sans dir-rtl select-none transition-all duration-300 bg-gradient-to-br from-[#f8f5ee] via-[#efe9dc] to-[#e8e0d0] p-2 sm:p-4 md:p-6 flex flex-col gap-3 ${activeTab === 'employees' ? 'hr-employee-mode' : ''}`} dir="rtl">
+    <div id="hr-portal" className={`w-full h-full min-h-0 overflow-hidden text-right font-sans dir-rtl select-none transition-all duration-300 bg-gradient-to-br from-[#f8f5ee] via-[#efe9dc] to-[#e8e0d0] p-2 sm:p-4 md:p-6 flex flex-col gap-3 ${activeTab === 'employees' ? 'hr-employee-mode' : ''} ${!canManage ? 'hr-read-only' : ''}`} dir="rtl">
       <EnterpriseActionToolbar
         title="شؤون العاملين"
         stats={
@@ -1319,6 +1319,7 @@ export default function HumanResourcesPortal({ setActiveSection, selectedSchool,
               triggerNotification={triggerNotification}
               costCenterLabels={costCenterLabels}
               canManage={canManage}
+              canFinancialWrite={canFinancialWrite}
               onPayAdvance={runAdvanceWorkflow}
               onSignContract={runContractSigning}
             />

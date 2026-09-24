@@ -16,6 +16,28 @@
   overflow-x: hidden;
 }
 
+/* Keep the HR opening viewport compact without changing the shared toolbar or
+   the spacing of any other module. The table should receive the reclaimed
+   height while labels and action buttons keep their existing safe heights. */
+#hr-portal > .enterprise-action-toolbar {
+  margin-bottom: 0 !important;
+  padding: 0.75rem 1rem !important;
+  gap: 0.5rem;
+  border-radius: 1.1rem !important;
+}
+
+#hr-portal > .hr-hero {
+  padding-block: 0.9rem;
+}
+
+#hr-portal > .hr-hero > .relative {
+  gap: 1rem;
+}
+
+#hr-portal > .hr-content-shell {
+  padding: 0.5rem 0.75rem !important;
+}
+
 /* Keep the HR workspace inside the height supplied by the school shell. The
    employee list owns the vertical scroll so the page itself never leaves a
    blank tail or a second scrollbar. */
@@ -85,6 +107,13 @@
    two-pane screen, so keep both panes in the same row and let only its table
    consume the remaining height. */
 @media (min-width: 768px) {
+  /* A quiet divider gives the HR workspace its own edge next to the menu
+     without adding another panel or crowding the employee table. */
+  #hr-portal .hr-workspace {
+    border-inline-start: 1px solid rgba(154, 106, 29, 0.2);
+    padding-inline-start: 0.6rem;
+  }
+
   #hr-portal.hr-employee-mode .hr-portal-grid {
     grid-template-columns: minmax(220px, 0.3fr) minmax(0, 0.7fr);
   }
@@ -121,6 +150,25 @@
   position: sticky;
   top: 0;
   z-index: 2;
+}
+
+/* Read-only users can still navigate, search, filter and export. Mutation
+   controls inside HR forms are visually and interactively locked so the UI
+   never offers an action that the server must reject later. */
+#hr-portal.hr-read-only .hr-workspace form input,
+#hr-portal.hr-read-only .hr-workspace form select,
+#hr-portal.hr-read-only .hr-workspace form textarea,
+#hr-portal.hr-read-only .hr-workspace form button {
+  pointer-events: none;
+  cursor: not-allowed;
+  opacity: 0.62;
+}
+
+#hr-portal .hr-workspace fieldset:disabled input,
+#hr-portal .hr-workspace fieldset:disabled select,
+#hr-portal .hr-workspace fieldset:disabled textarea,
+#hr-portal .hr-workspace fieldset:disabled button {
+  cursor: not-allowed;
 }
 
 /* Compact, high-contrast opening panel: keep the first viewport focused and
