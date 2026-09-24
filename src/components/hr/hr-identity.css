@@ -35,8 +35,49 @@
   overflow: hidden;
 }
 
+/* The employee directory needs the navigation and the table in the same
+   viewport. Keep the identity hero present, but remove only its secondary
+   action row and tighten its spacing in this focused mode. */
+#hr-portal.hr-employee-mode .hr-hero {
+  padding-block: 0.8rem;
+}
+
+#hr-portal.hr-employee-mode .hr-hero > .relative {
+  gap: 0.65rem;
+}
+
+#hr-portal.hr-employee-mode .hr-hero > .relative.mt-3 {
+  display: none;
+}
+
+#hr-portal.hr-employee-mode .hr-hero .mb-3 {
+  margin-bottom: 0.35rem;
+}
+
+#hr-portal.hr-employee-mode .hr-hero-stat {
+  padding: 0.55rem;
+}
+
+#hr-portal.hr-employee-mode #hr-sidebar-menu {
+  height: 100% !important;
+  min-height: 0;
+}
+
+#hr-portal.hr-employee-mode #hr-sidebar-menu > div:first-child > div:nth-child(2) {
+  max-height: none;
+  min-height: 0;
+}
+
+#hr-portal.hr-employee-mode .hr-employees-table {
+  margin-bottom: 0.6rem;
+  scroll-padding-bottom: 0.6rem;
+}
+
 #hr-portal .hr-employees-screen {
   min-height: 0;
+  flex: 1 1 0%;
+  height: auto;
+  overflow: hidden;
 }
 
 #hr-portal .hr-employees-table,
