@@ -55,6 +55,11 @@ CREATE INDEX IF NOT EXISTS idx_erp_cost_centers_school_stage
 CREATE INDEX IF NOT EXISTS idx_erp_journal_lines_cost_center
     ON public.erp_journal_lines (school_id, cost_center_code, academic_stage_code);
 
+ALTER TABLE public.erp_account_groups ENABLE ROW LEVEL SECURITY;
+ALTER TABLE public.erp_account_groups FORCE ROW LEVEL SECURITY;
+ALTER TABLE public.erp_cost_centers ENABLE ROW LEVEL SECURITY;
+ALTER TABLE public.erp_cost_centers FORCE ROW LEVEL SECURITY;
+
 COMMENT ON TABLE public.erp_account_groups IS
     'School-owned account grouping reference; no synthetic balances are stored here.';
 COMMENT ON TABLE public.erp_cost_centers IS
