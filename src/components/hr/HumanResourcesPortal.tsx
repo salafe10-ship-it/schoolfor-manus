@@ -706,7 +706,7 @@ export default function HumanResourcesPortal({ setActiveSection, selectedSchool,
   ];
 
   return (
-    <div id="hr-portal" className="w-full min-h-screen text-right font-sans dir-rtl select-none transition-all duration-300 bg-gradient-to-br from-[#f8f5ee] via-[#efe9dc] to-[#e8e0d0] text-slate-900 p-2 sm:p-4 md:p-6 space-y-6" dir="rtl">
+    <div id="hr-portal" className={`w-full h-full min-h-0 overflow-hidden text-right font-sans dir-rtl select-none transition-all duration-300 bg-gradient-to-br from-[#f8f5ee] via-[#efe9dc] to-[#e8e0d0] p-2 sm:p-4 md:p-6 flex flex-col gap-3 ${activeTab === 'employees' ? 'hr-employee-mode' : ''}`} dir="rtl">
       <EnterpriseActionToolbar
         title="شؤون العاملين"
         stats={
@@ -747,7 +747,7 @@ export default function HumanResourcesPortal({ setActiveSection, selectedSchool,
           <button type="button" onClick={() => { setActiveGroup('reports_group'); setActiveTab('dashboard'); }} className="rounded-lg border border-white/25 bg-white/10 px-3 py-1.5 text-[11px] font-black text-white transition hover:bg-white/20">عرض المؤشرات</button>
         </div>
       </section>
-      <div className="p-3 sm:p-4 text-slate-100 flex-1 flex flex-col">
+      <div className="hr-content-shell p-3 sm:p-4 text-slate-100 flex-1 flex flex-col min-h-0 overflow-hidden">
       
       {/* Real-time Dynamic Notification Toast */}
       {notification && (
@@ -780,7 +780,7 @@ export default function HumanResourcesPortal({ setActiveSection, selectedSchool,
       )}
 
       {/* Internal Grid Router Layout */}
-      <div className="grid grid-cols-1 md:grid-cols-12 flex-1 p-0 gap-4">
+      <div className="hr-portal-grid grid grid-cols-1 md:grid-cols-12 flex-1 min-h-0 p-0 gap-4 overflow-hidden">
 
         {/* RIGHT SIDEBAR MENU - Refactored to perfectly match the beautiful dark slate & teal theme of the general ledger and financial portals */}
         <div 
@@ -919,7 +919,7 @@ export default function HumanResourcesPortal({ setActiveSection, selectedSchool,
         </div>
 
         {/* LEFT WORKSPACE SCREEN RENDERING */}
-        <div className="md:col-span-12 lg:col-span-9 space-y-6">
+        <div className="hr-workspace md:col-span-12 lg:col-span-9 min-h-0 flex flex-col gap-4 overflow-hidden">
           
           {/* Dynamic Sub-tab Bar depending on active high-level Group */}
           {activeGroup === 'employees_group' && (

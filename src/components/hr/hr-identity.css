@@ -16,6 +16,41 @@
   overflow-x: hidden;
 }
 
+/* Keep the HR workspace inside the height supplied by the school shell. The
+   employee list owns the vertical scroll so the page itself never leaves a
+   blank tail or a second scrollbar. */
+#hr-portal .hr-content-shell,
+#hr-portal .hr-portal-grid,
+#hr-portal .hr-workspace {
+  min-height: 0;
+}
+
+#hr-portal .hr-workspace {
+  overflow-y: auto;
+  scrollbar-width: thin;
+  scrollbar-color: var(--hr-gold-dark) transparent;
+}
+
+#hr-portal.hr-employee-mode .hr-workspace {
+  overflow: hidden;
+}
+
+#hr-portal .hr-employees-screen {
+  min-height: 0;
+}
+
+#hr-portal .hr-employees-table,
+#hr-portal .hr-employees-grid {
+  scrollbar-width: thin;
+  scrollbar-color: var(--hr-gold-dark) rgba(30, 19, 13, 0.18);
+}
+
+#hr-portal .hr-employees-table thead th {
+  position: sticky;
+  top: 0;
+  z-index: 2;
+}
+
 /* Compact, high-contrast opening panel: keep the first viewport focused and
    prevent RTL content from creating a horizontal page scrollbar. */
 #hr-portal .hr-hero {
@@ -355,5 +390,14 @@
   #hr-portal .hr-subtabs > button {
     flex: 0 0 auto;
     white-space: nowrap;
+  }
+
+  #hr-portal {
+    padding: 0.5rem;
+    gap: 0.5rem;
+  }
+
+  #hr-portal .hr-content-shell {
+    padding: 0.5rem;
   }
 }
