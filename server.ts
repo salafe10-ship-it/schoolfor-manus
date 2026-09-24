@@ -11368,6 +11368,54 @@ export async function createApp(options: { cloudflare?: boolean } = {}): Promise
     }
   });
 
+  app.get('/api/hr/accounting-mappings', authenticateRequest, requirePermission(PERMISSIONS.FINANCIAL_READ), async (req, res, next) => {
+    try {
+      const identity = (req as any).user;
+      const tenantId = String(identity?.tenantId || '').trim();
+      const schoolId = String(identity?.schoolId || '').trim();
+      const tenantContext = (req as any).tenantContext;
+      const definitions = [
+        { key: 'treasury.cash', label: 'حساب صندوق السداد', required: true },
+        { key: 'hr.payroll.expense', label: 'مصروف الرواتب', required: true },
+        { key: 'hr.payroll.payable', label: 'التزام الرواتب', required: true },
+        { key: 'hr.advance.receivable', label: 'ذمم سلف الموظفين', required: true },
+        { key: 'hr.deductions.clearing', label: 'تسوية الخصومات والجزاءات', required: true },
+        { key: 'hr.end_of_service.expense', label: 'مصروف نهاية الخدمة', required: false },
+      ];
+      if (!tenantId || !schoolId || !tenantContext || tenantContext.tenantId !== tenantId || tenantContext.schoolId !== schoolId) {
+        throw new AuthenticationError('السياق الموثوق لقراءة خرائط HR غير مكتمل.');
+      }
+      const rows = await UnitOfWork.runInTransaction(schoolId, {
+        operationName: 'Read HR accounting mappings', tenantId, userId: identity.id,
+        userName: identity.name || 'المستخدم الحالي', ipAddress: req.ip || 'unknown',
+        affectedTables: ['erp_account_mappings', 'erp_chart_of_accounts']
+      }, async () => {
+        const transaction = UnitOfWork.getActiveContext()?.databaseTransaction;
+        if (!transaction) throw new DatabaseError('معاملة قراءة خرائط HR غير متاحة.');
+        const result = await transaction.query(`
+          SELECT m.mapping_key, m.account_code, c.account_name, c.account_nature, c.is_active, c.is_leaf
+            FROM public.erp_account_mappings m
+            LEFT JOIN public.erp_chart_of_accounts c
+              ON c.tenant_id = m.tenant_id AND c.school_id = m.school_id AND c.account_code = m.account_code
+           WHERE m.tenant_id = $1 AND m.school_id = $2 AND m.is_active = true
+             AND m.mapping_key = ANY($3::text[])
+           ORDER BY m.mapping_key`, [tenantId, schoolId, definitions.map(item => item.key)]);
+        return result.rows;
+      }, tenantContext);
+      const byKey = new Map(rows.map((row: any) => [String(row.mapping_key), row]));
+      const status = definitions.map(definition => {
+        const row = byKey.get(definition.key);
+        const valid = Boolean(row?.account_code && row?.is_active !== false && row?.is_leaf !== false);
+        return { ...definition, configured: valid, accountCode: valid ? String(row.account_code) : '', accountName: valid ? String(row.account_name || '') : '' };
+      });
+      const missing = status.filter(item => item.required && !item.configured).map(item => item.label);
+      const missingOptional = status.filter(item => !item.required && !item.configured).map(item => item.label);
+      res.json({ success: true, data: { configured: missing.length === 0, complete: missing.length === 0 && missingOptional.length === 0, missing, missingOptional, status }, meta: { source: 'canonical-postgres', scope: { tenantId, schoolId } } });
+    } catch (err: any) {
+      next(err instanceof AuthenticationError || err instanceof AuthorizationError || err instanceof DatabaseError ? err : new DatabaseError('تعذر قراءة خرائط حسابات الموارد البشرية.', err?.message));
+    }
+  });
+
   // HR only records school-owned account mappings here. It deliberately does
   // not create a journal: posting remains an explicit approved-payment action.
   app.post('/api/hr/accounting-mappings', authenticateRequest, requirePermission(PERMISSIONS.FINANCIAL_WRITE), async (req, res, next) => {

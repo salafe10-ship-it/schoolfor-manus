@@ -113,6 +113,31 @@ export default function OtherHRTabs({
   const [perfForm, setPerfForm] = useState({ employeeId: '', date: '', score: 0, reviewer: '', strengths: '', improvements: '', trainingNeeds: '' });
   const [docForm, setDocForm] = useState({ employeeId: '', title: '', type: 'passport', issueDate: '', expiryDate: '' });
   const [recruitmentForm, setRecruitmentForm] = useState({ applicantName: '', phone: '', email: '', jobId: '', departmentId: '', notes: '' });
+  const [accountingMappingStatus, setAccountingMappingStatus] = useState<{
+    configured: boolean;
+    complete: boolean;
+    missing: string[];
+    missingOptional: string[];
+  } | null>(null);
+
+  useEffect(() => {
+    if (activeTab !== 'settings' || !canFinancialWrite) return;
+    let cancelled = false;
+    const loadMappingStatus = async () => {
+      try {
+        const token = getTrustedAccessToken();
+        if (!token) return;
+        const response = await fetch('/api/hr/accounting-mappings', { headers: { Authorization: `Bearer ${token}` }, cache: 'no-store' });
+        const payload = await response.json();
+        if (!response.ok || !payload?.success || cancelled) return;
+        setAccountingMappingStatus(payload.data || null);
+      } catch {
+        if (!cancelled) setAccountingMappingStatus(null);
+      }
+    };
+    void loadMappingStatus();
+    return () => { cancelled = true; };
+  }, [activeTab, canFinancialWrite]);
 
   if (activeTab === 'recruitment') {
     const statusLabels: Record<string, string> = { submitted: 'جديد', screening: 'فرز أولي', interview: 'مقابلة', offer: 'عرض وظيفي', approved: 'معتمد', rejected: 'مرفوض', withdrawn: 'منسحب', converted: 'تم التعيين' };
@@ -1569,6 +1594,13 @@ export default function OtherHRTabs({
             <fieldset disabled={!canManage || !canFinancialWrite} className="min-w-0 disabled:opacity-75">
               <h4 className="font-bold text-[#dfb55a] border-b border-slate-800 pb-1.5 mb-4 uppercase">ثالثاً: ربط الحسابات المزدوجة بالدفتر العام للشركة</h4>
               {!canFinancialWrite && <p className="mb-4 rounded border border-amber-700/30 bg-amber-50/10 p-3 text-amber-200">الربط المحاسبي في وضع القراءة فقط؛ يلزم تفويض الكتابة المالية لاعتماد الخرائط.</p>}
+              {canFinancialWrite && accountingMappingStatus && (
+                <div className={`mb-4 rounded border p-3 ${accountingMappingStatus.complete ? 'border-emerald-600/40 bg-emerald-50/10 text-emerald-200' : 'border-amber-600/40 bg-amber-50/10 text-amber-200'}`} role="status">
+                  <div className="font-black">{accountingMappingStatus.complete ? 'الربط الكانوني مكتمل' : 'الربط الكانوني غير مكتمل'}</div>
+                  {!accountingMappingStatus.complete && <p className="mt-1 text-[10px]">الحسابات الناقصة: {[...accountingMappingStatus.missing, ...accountingMappingStatus.missingOptional].join('، ')}</p>}
+                  <p className="mt-1 text-[10px]">لا يُعلن إغلاق الوحدة قبل نجاح هذا الفحص من الدفتر العام.</p>
+                </div>
+              )}
               <div className="grid grid-cols-1 md:grid-cols-2 gap-6">
                 <div className="space-y-1.5">
                   <label className="text-slate-400 font-semibold block">حساب أصل السداد المالي (صندوق الخزينة أو البنك الجاري)</label>
