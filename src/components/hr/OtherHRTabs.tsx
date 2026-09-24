@@ -13,6 +13,7 @@ interface OtherHRTabsProps {
   employees: HREmployee[];
   setEmployees: React.Dispatch<React.SetStateAction<HREmployee[]>>;
   canManage?: boolean;
+  canFinancialWrite?: boolean;
   departments: HRDepartment[];
   setDepartments: React.Dispatch<React.SetStateAction<HRDepartment[]>>;
   jobs: HRJob[];
@@ -47,6 +48,7 @@ export default function OtherHRTabs({
   employees,
   setEmployees,
   canManage = false,
+  canFinancialWrite = false,
   departments,
   setDepartments,
   jobs,
@@ -1488,6 +1490,10 @@ export default function OtherHRTabs({
     const handleSaveSettings = async (e: React.FormEvent) => {
       e.preventDefault();
       if (!requireWrite()) return;
+      if (!canFinancialWrite) {
+        triggerNotification('اعتماد خرائط الحسابات يتطلب صلاحية الكتابة المالية.', 'warning');
+        return;
+      }
       try {
         const response = await fetch('/api/hr/accounting-mappings', {
           method: 'POST',
@@ -1560,8 +1566,9 @@ export default function OtherHRTabs({
             </div>
 
             {/* General Ledger Syncing */}
-            <div>
+            <fieldset disabled={!canManage || !canFinancialWrite} className="min-w-0 disabled:opacity-75">
               <h4 className="font-bold text-[#dfb55a] border-b border-slate-800 pb-1.5 mb-4 uppercase">ثالثاً: ربط الحسابات المزدوجة بالدفتر العام للشركة</h4>
+              {!canFinancialWrite && <p className="mb-4 rounded border border-amber-700/30 bg-amber-50/10 p-3 text-amber-200">الربط المحاسبي في وضع القراءة فقط؛ يلزم تفويض الكتابة المالية لاعتماد الخرائط.</p>}
               <div className="grid grid-cols-1 md:grid-cols-2 gap-6">
                 <div className="space-y-1.5">
                   <label className="text-slate-400 font-semibold block">حساب أصل السداد المالي (صندوق الخزينة أو البنك الجاري)</label>
@@ -1599,12 +1606,12 @@ export default function OtherHRTabs({
                   <p className="text-[10px] text-slate-500">حساب المصروف الذي سيُحمّل بالقيمة المدينة الكلية للمرتبات المعتمدة.</p>
                 </div>
               </div>
-            </div>
+            </fieldset>
 
           </div>
 
           <div className="bg-slate-850 p-4 border-t border-slate-700 flex justify-end gap-3">
-            <button type="submit" className="bg-gradient-to-r from-[#dfb55a] to-[#c99e4c] hover:opacity-90 text-slate-950 font-bold px-6 py-2 rounded-lg shadow">
+            <button type="submit" disabled={!canManage || !canFinancialWrite} className="bg-gradient-to-r from-[#dfb55a] to-[#c99e4c] hover:opacity-90 text-slate-950 font-bold px-6 py-2 rounded-lg shadow disabled:cursor-not-allowed disabled:opacity-50">
               حفظ وتطبيق إعدادات الربط
             </button>
           </div>

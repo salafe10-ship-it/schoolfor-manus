@@ -152,6 +152,25 @@
   z-index: 2;
 }
 
+/* Read-only users can still navigate, search, filter and export. Mutation
+   controls inside HR forms are visually and interactively locked so the UI
+   never offers an action that the server must reject later. */
+#hr-portal.hr-read-only .hr-workspace form input,
+#hr-portal.hr-read-only .hr-workspace form select,
+#hr-portal.hr-read-only .hr-workspace form textarea,
+#hr-portal.hr-read-only .hr-workspace form button {
+  pointer-events: none;
+  cursor: not-allowed;
+  opacity: 0.62;
+}
+
+#hr-portal .hr-workspace fieldset:disabled input,
+#hr-portal .hr-workspace fieldset:disabled select,
+#hr-portal .hr-workspace fieldset:disabled textarea,
+#hr-portal .hr-workspace fieldset:disabled button {
+  cursor: not-allowed;
+}
+
 /* Compact, high-contrast opening panel: keep the first viewport focused and
    prevent RTL content from creating a horizontal page scrollbar. */
 #hr-portal .hr-hero {
