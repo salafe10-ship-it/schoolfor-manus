@@ -25,4 +25,13 @@ describe('financial API server-side write lock', () => {
     expect(route).not.toContain('ensureDefaultChartOfAccounts');
     expect(route).toContain('INSERT INTO public.erp_account_mappings');
   });
+
+  it('keeps mapping readiness reads off the transactional pool', () => {
+    const start = server.indexOf("app.get('/api/financial/account-mappings'");
+    const end = server.indexOf("app.post('/api/financial/account-mappings'", start);
+    const route = server.slice(start, end);
+    expect(route).toContain('canonicalTenantReadClient(req)');
+    expect(route).toContain("from('erp_account_mappings')");
+    expect(route).not.toContain('UnitOfWork.runInTransaction');
+  });
 });
