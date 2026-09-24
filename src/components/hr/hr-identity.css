@@ -289,3 +289,71 @@
 @media (max-width: 1023px) {
   #hr-portal #hr-sidebar-menu { border-radius: 1.25rem; }
 }
+
+/* Medium desktop/tablet widths need the navigation to stop consuming the
+   entire first viewport. Keep the established dark/gold identity, but place
+   the five primary HR areas in one compact, clearly grouped row. */
+@media (min-width: 768px) and (max-width: 1279px) {
+  #hr-portal > .enterprise-action-toolbar {
+    padding: 0.75rem 1rem;
+    border-radius: 1.15rem;
+  }
+
+  #hr-portal #hr-sidebar-menu {
+    height: auto !important;
+    padding: 0.9rem !important;
+  }
+
+  #hr-portal #hr-sidebar-menu > div:first-child {
+    display: grid;
+    grid-template-columns: minmax(190px, 0.8fr) minmax(0, 2.2fr);
+    align-items: center;
+    gap: 1rem;
+  }
+
+  #hr-portal #hr-sidebar-menu > div:first-child > div:first-child {
+    height: 100%;
+    display: flex;
+    justify-content: center;
+    border-bottom: 0;
+    border-left: 1px solid rgba(212, 175, 55, 0.28);
+    padding: 0 0 0 1rem;
+  }
+
+  #hr-portal #hr-sidebar-menu > div:first-child > div:nth-child(2) {
+    max-height: none;
+    overflow: visible;
+    padding: 0;
+  }
+
+  #hr-portal #hr-sidebar-menu > div:first-child > div:nth-child(2) > div:first-child > div:last-child {
+    display: grid;
+    grid-template-columns: repeat(5, minmax(0, 1fr));
+    gap: 0.5rem;
+  }
+
+  #hr-portal #hr-sidebar-menu button {
+    min-width: 0;
+    height: 2.75rem;
+    padding-inline: 0.65rem;
+  }
+
+  #hr-portal #hr-sidebar-menu button span:last-child {
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+  }
+}
+
+@media (max-width: 767px) {
+  #hr-portal .hr-subtabs {
+    flex-wrap: nowrap;
+    overflow-x: auto;
+    scrollbar-width: thin;
+  }
+
+  #hr-portal .hr-subtabs > button {
+    flex: 0 0 auto;
+    white-space: nowrap;
+  }
+}

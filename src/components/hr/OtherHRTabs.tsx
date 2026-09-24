@@ -269,8 +269,8 @@ export default function OtherHRTabs({
                   <td className="p-4 text-center font-medium">{costCenterLabels[d.costCenter]}</td>
                   <td className="p-4 text-center">
                     <div className="flex items-center justify-center gap-2">
-                      <button onClick={() => handleOpenEdit(d)} className="p-1 bg-slate-800 hover:bg-slate-700 text-amber-400 rounded"><Edit className="w-3.5 h-3.5" /></button>
-                      <button onClick={() => { if (!requireWrite()) return; if(confirm('حذف القسم؟')) setDepartments(prev => prev.filter(x => x.id !== d.id)); }} disabled={!canManage} className="p-1 bg-slate-800 hover:bg-rose-950 disabled:cursor-not-allowed disabled:opacity-40 text-rose-400 rounded"><Trash2 className="w-3.5 h-3.5" /></button>
+                      <button type="button" aria-label={`تعديل القسم ${d.nameAr}`} title={`تعديل القسم ${d.nameAr}`} onClick={() => handleOpenEdit(d)} className="p-1 bg-slate-800 hover:bg-slate-700 text-amber-400 rounded"><Edit className="w-3.5 h-3.5" /></button>
+                      <button type="button" aria-label={`حذف القسم ${d.nameAr}`} title={`حذف القسم ${d.nameAr}`} onClick={() => { if (!requireWrite()) return; if(confirm('حذف القسم؟')) setDepartments(prev => prev.filter(x => x.id !== d.id)); }} disabled={!canManage} className="p-1 bg-slate-800 hover:bg-rose-950 disabled:cursor-not-allowed disabled:opacity-40 text-rose-400 rounded"><Trash2 className="w-3.5 h-3.5" /></button>
                     </div>
                   </td>
                 </tr>
@@ -387,8 +387,8 @@ export default function OtherHRTabs({
                   <td className="p-4 text-center font-bold text-emerald-400 font-mono">{formatCurrency(j.baseSalary, true)}</td>
                   <td className="p-4 text-center">
                     <div className="flex items-center justify-center gap-2">
-                      <button onClick={() => { setEditingItem(j); setJobForm({ ...j }); setShowAddModal(true); }} className="p-1 bg-slate-800 hover:bg-slate-700 text-amber-400 rounded"><Edit className="w-3.5 h-3.5" /></button>
-                      <button onClick={() => { if (!requireWrite()) return; if(confirm('حذف المسمى الوظيفي؟')) setJobs(prev => prev.filter(x => x.id !== j.id)); }} disabled={!canManage} className="p-1 bg-slate-800 hover:bg-rose-950 disabled:cursor-not-allowed disabled:opacity-40 text-rose-400 rounded"><Trash2 className="w-3.5 h-3.5" /></button>
+                      <button type="button" aria-label={`تعديل الوظيفة ${j.titleAr}`} title={`تعديل الوظيفة ${j.titleAr}`} onClick={() => { setEditingItem(j); setJobForm({ ...j }); setShowAddModal(true); }} className="p-1 bg-slate-800 hover:bg-slate-700 text-amber-400 rounded"><Edit className="w-3.5 h-3.5" /></button>
+                      <button type="button" aria-label={`حذف الوظيفة ${j.titleAr}`} title={`حذف الوظيفة ${j.titleAr}`} onClick={() => { if (!requireWrite()) return; if(confirm('حذف المسمى الوظيفي؟')) setJobs(prev => prev.filter(x => x.id !== j.id)); }} disabled={!canManage} className="p-1 bg-slate-800 hover:bg-rose-950 disabled:cursor-not-allowed disabled:opacity-40 text-rose-400 rounded"><Trash2 className="w-3.5 h-3.5" /></button>
                     </div>
                   </td>
                 </tr>
