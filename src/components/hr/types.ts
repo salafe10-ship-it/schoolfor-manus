@@ -178,10 +178,19 @@ export interface HRSettings {
   weekends: number[]; // [5, 6] for Friday/Saturday
   lateDeductionRate: number; // e.g., 0.5 means half hour salary per hour delay
   defaultBankSafeAccount: string; // "1101" or "1102"
+  bankAccount?: string;
   defaultSalariesExpenseAccount: string; // "5101"
   payrollPayableAccount: string;
   advanceReceivableAccount: string;
   deductionClearingAccount: string;
+  payrollBasicSalaryAccount?: string;
+  payrollAllowancesAccount?: string;
+  medicalAllowanceAccount?: string;
+  payrollBonusesAccount?: string;
+  payrollOvertimeAccount?: string;
+  shortTermAdvanceAccount?: string;
+  longTermAdvanceAccount?: string;
+  endOfServiceExpenseAccount?: string;
   /** Optional policy switches. Absent values retain the safe defaults. */
   unpaidAbsenceDeduction?: boolean;
   overtimeMultiplier?: number;

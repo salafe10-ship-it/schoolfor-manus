@@ -1525,10 +1525,19 @@ export default function OtherHRTabs({
           headers: { Authorization: `Bearer ${getTrustedAccessToken()}`, 'Content-Type': 'application/json' },
           body: JSON.stringify({
             cashAccount: settings.defaultBankSafeAccount,
+            bankAccount: settings.bankAccount || '1102',
             payrollExpenseAccount: settings.defaultSalariesExpenseAccount,
             payrollPayableAccount: settings.payrollPayableAccount,
+            payrollBasicSalaryAccount: settings.payrollBasicSalaryAccount,
+            payrollAllowancesAccount: settings.payrollAllowancesAccount,
+            medicalAllowanceAccount: settings.medicalAllowanceAccount,
+            payrollBonusesAccount: settings.payrollBonusesAccount,
+            payrollOvertimeAccount: settings.payrollOvertimeAccount,
             advanceReceivableAccount: settings.advanceReceivableAccount,
-            deductionClearingAccount: settings.deductionClearingAccount
+            shortTermAdvanceAccount: settings.shortTermAdvanceAccount,
+            longTermAdvanceAccount: settings.longTermAdvanceAccount,
+            deductionClearingAccount: settings.deductionClearingAccount,
+            endOfServiceExpenseAccount: settings.endOfServiceExpenseAccount
           })
         });
         const payload = await response.json();
@@ -1606,11 +1615,18 @@ export default function OtherHRTabs({
                   <label className="text-slate-400 font-semibold block">حساب أصل السداد المالي (صندوق الخزينة أو البنك الجاري)</label>
                   <select value={settings.defaultBankSafeAccount} onChange={e => setSettings(p=>({...p, defaultBankSafeAccount: e.target.value}))} className="w-full bg-slate-850 border border-slate-700 rounded p-2.5 text-white">
                     <option value="1101">1101 • صندوق الخزينة الرئيسي المدرسية (كاش)</option>
-                    <option value="1102">1102 • حساب مصرف الوحدة الجاري الرئيسي</option>
                     <option value="1110">1110 • صندوق الروضة (كاش فرعي)</option>
                     <option value="1120">1120 • صندوق الابتدائي (كاش فرعي)</option>
                   </select>
                   <p className="text-[10px] text-slate-500">الحساب الذي سُتقتطع منه السيولة النقدية تلقائياً عند اعتماد مسير الرواتب أو صرف سلفة.</p>
+                </div>
+
+                <div className="space-y-1.5">
+                  <label className="text-slate-400 font-semibold block">حساب البنك للصرف والتحويلات</label>
+                  <select value={settings.bankAccount || '1102'} onChange={e => setSettings(p=>({...p, bankAccount: e.target.value}))} className="w-full bg-slate-850 border border-slate-700 rounded p-2.5 text-white">
+                    <option value="1102">1102 • حساب مصرف الوحدة الجاري الرئيسي</option>
+                  </select>
+                  <p className="text-[10px] text-slate-500">يفصل حساب البنك عن الصندوق حتى لا تُرحّل عملية الصرف البنكي على خزينة نقدية.</p>
                 </div>
 
                 <div className="space-y-1.5">
@@ -1636,6 +1652,21 @@ export default function OtherHRTabs({
                     <option value="5100">5100 • مصروف الرواتب والأجور والمزايا العامة</option>
                   </select>
                   <p className="text-[10px] text-slate-500">حساب المصروف الذي سيُحمّل بالقيمة المدينة الكلية للمرتبات المعتمدة.</p>
+                </div>
+
+                <div className="md:col-span-2 rounded border border-slate-700 bg-slate-950/30 p-4">
+                  <h5 className="font-black text-[#dfb55a] mb-3">تفصيل مصروفات الرواتب والسلف</h5>
+                  <p className="text-[10px] text-slate-500 mb-3">هذه الخرائط اختيارية؛ عند اعتمادها تُرحّل البدلات وبدل العلاج والمكافآت والعمل الإضافي والسلف القصيرة والطويلة إلى حساباتها التفصيلية، وإلا يُستخدم الحساب العام.</p>
+                  <div className="grid grid-cols-1 md:grid-cols-3 gap-3">
+                    <label className="space-y-1"><span>الراتب الأساسي</span><input value={settings.payrollBasicSalaryAccount || ''} onChange={e => setSettings(p => ({ ...p, payrollBasicSalaryAccount: e.target.value.trim() }))} placeholder="5101" className="w-full bg-slate-850 border border-slate-700 rounded p-2 text-white font-mono" /></label>
+                    <label className="space-y-1"><span>البدلات والمزايا</span><input value={settings.payrollAllowancesAccount || ''} onChange={e => setSettings(p => ({ ...p, payrollAllowancesAccount: e.target.value.trim() }))} placeholder="5102" className="w-full bg-slate-850 border border-slate-700 rounded p-2 text-white font-mono" /></label>
+                    <label className="space-y-1"><span>بدل العلاج الطبي</span><input value={settings.medicalAllowanceAccount || ''} onChange={e => setSettings(p => ({ ...p, medicalAllowanceAccount: e.target.value.trim() }))} placeholder="5103" className="w-full bg-slate-850 border border-slate-700 rounded p-2 text-white font-mono" /></label>
+                    <label className="space-y-1"><span>المكافآت والحوافز</span><input value={settings.payrollBonusesAccount || ''} onChange={e => setSettings(p => ({ ...p, payrollBonusesAccount: e.target.value.trim() }))} placeholder="5104" className="w-full bg-slate-850 border border-slate-700 rounded p-2 text-white font-mono" /></label>
+                    <label className="space-y-1"><span>العمل الإضافي</span><input value={settings.payrollOvertimeAccount || ''} onChange={e => setSettings(p => ({ ...p, payrollOvertimeAccount: e.target.value.trim() }))} placeholder="5105" className="w-full bg-slate-850 border border-slate-700 rounded p-2 text-white font-mono" /></label>
+                    <label className="space-y-1"><span>مصروف نهاية الخدمة</span><input value={settings.endOfServiceExpenseAccount || ''} onChange={e => setSettings(p => ({ ...p, endOfServiceExpenseAccount: e.target.value.trim() }))} placeholder="5106" className="w-full bg-slate-850 border border-slate-700 rounded p-2 text-white font-mono" /></label>
+                    <label className="space-y-1"><span>ذمم السلف القصيرة</span><input value={settings.shortTermAdvanceAccount || ''} onChange={e => setSettings(p => ({ ...p, shortTermAdvanceAccount: e.target.value.trim() }))} placeholder="1210" className="w-full bg-slate-850 border border-slate-700 rounded p-2 text-white font-mono" /></label>
+                    <label className="space-y-1"><span>ذمم السلف الطويلة</span><input value={settings.longTermAdvanceAccount || ''} onChange={e => setSettings(p => ({ ...p, longTermAdvanceAccount: e.target.value.trim() }))} placeholder="1211" className="w-full bg-slate-850 border border-slate-700 rounded p-2 text-white font-mono" /></label>
+                  </div>
                 </div>
               </div>
             </fieldset>

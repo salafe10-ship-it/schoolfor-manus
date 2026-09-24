@@ -40,4 +40,17 @@ describe('HR payroll calculation', () => {
     expect(result.lines[0]).toMatchObject({ leaveDeduction: 200, overtimePay: 50, net: 2850 });
     expect(result.totals).toMatchObject({ leave: 200, overtime: 50, net: 2850 });
   });
+
+  it('keeps payroll components and loan classification available for canonical posting', () => {
+    const result = calculatePayrollRun({
+      period: '2026-06',
+      employees: [{ ...employee, allowances: [{ name: 'بدل علاج طبي', amount: 250 }, { name: 'بدل نقل', amount: 150 }] }],
+      rewards: [{ id: 'R-1', employeeId: 'EMP-1', amount: 300, date: '2026-06-05', reason: 'تميز', status: 'applied' }],
+      penalties: [],
+      advances: [{ id: 'A-LONG', employeeId: 'EMP-1', costCenter: 'admin', amount: 1200, date: '2026-01-01', installments: 12, deductionPerMonth: 100, remainingAmount: 1200, reason: 'سلفة طويلة', status: 'approved', loanType: 'long_term' }],
+      attendance: [],
+      leaves: []
+    });
+    expect(result.lines[0]).toMatchObject({ basicSalary: 3000, medicalAllowance: 250, otherAllowances: 150, bonuses: 300, gross: 3700, advanceId: 'A-LONG', advanceLoanType: 'long_term' });
+  });
 });

@@ -1,4 +1,4 @@
-import { ArrowRightLeft, Building2, Calculator, CheckCircle2, Coins, FileSpreadsheet, FileText, HelpCircle, Landmark, Layers, Lock as LockIcon, Percent, Printer, RefreshCw, Search, TrendingUp, Users, X } from 'lucide-react';
+import { ArrowRightLeft, Building2, Calculator, CheckCircle2, Coins, FileSpreadsheet, FileText, HelpCircle, Landmark, Layers, Link2, Lock as LockIcon, Percent, Printer, RefreshCw, Search, TrendingUp, Users, X } from 'lucide-react';
 import React, { useEffect, useState } from 'react';
 import { Student, Invoice, Stage, Grade, AcademicClass, CostCenter } from '../types';
 import { FallbackStorage } from '../database/repositories/FallbackStorage';
@@ -19,6 +19,7 @@ import { EstimatedBudgetTab } from '../modules/accounting/presentation/Estimated
 import { ClosingTab } from '../modules/accounting/presentation/ClosingTab';
 import { FinancialReportsTab } from '../modules/accounting/presentation/FinancialReportsTab';
 import { CalcToolsTab } from '../modules/accounting/presentation/CalcToolsTab';
+import { AccountMappingsTab } from '../modules/accounting/presentation/AccountMappingsTab';
 import { buildAccountingDimensions } from '../modules/accounting/domain/accountingDimensions';
 export { AccountingContext };
 export type { AccountNode };
@@ -1639,6 +1640,7 @@ export default function GeneralLedgerPortal({
       case 'suppliers':
       case 'fixed_assets':
       case 'financial_reports':
+      case 'account_mappings':
       case 'governance':
       case 'calc_tools':
         return hasUserPermission(PERMISSIONS.FINANCIAL_READ);
@@ -2754,6 +2756,7 @@ export default function GeneralLedgerPortal({
     {
       title: "الإعدادات والسياسات",
       items: [
+        { id: 'account_mappings', label: 'خرائط الترحيل المحاسبي', targetTab: 'account_mappings', icon: Link2, badge: canonicalFinancialWriteMode === 'snapshot_read_only' ? 'تحقق' : 'جاهز' },
         { id: 'governance', label: 'السياسات المالية', targetTab: 'governance', icon: CheckCircle2, badge: 'نشط' },
         { id: 'closing', label: 'إقفال السنة', targetTab: 'closing', icon: LockIcon },
         { id: 'calc_tools', label: 'أدوات الحسبة', targetTab: 'calc_tools', icon: Calculator },
@@ -3065,6 +3068,13 @@ export default function GeneralLedgerPortal({
               </div>
             )}
           </section>
+        )}
+
+        {activeTab === 'account_mappings' && (
+          <AccountMappingsTab
+            canWrite={hasUserPermission(PERMISSIONS.FINANCIAL_WRITE)}
+            triggerNotification={triggerNotification}
+          />
         )}
 
         {/* ========================================================== */}
