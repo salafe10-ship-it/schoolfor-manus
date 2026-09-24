@@ -7025,7 +7025,10 @@ export async function createApp(options: { cloudflare?: boolean } = {}): Promise
     const correlationId = String(req.body?.correlationId || req.get('X-Correlation-Id') || randomUUID()).trim();
     let authUserId = '';
     try {
-      if (runtimeSchemaBootstrapEnabled) await ensureIdentityJobSchema();
+      // The create path writes the HR linkage columns unconditionally. Ensure
+      // legacy production databases have those additive columns before the
+      // transaction, even when the broader runtime bootstrap switch is off.
+      await ensureIdentityJobSchema();
       const { tenantId, schoolId, actorAuthUserId } = schoolIdentityScope(req);
       const displayName = String(req.body?.name || req.body?.displayName || '').trim();
       const employeeId = String(req.body?.employeeId || '').trim();
@@ -7155,7 +7158,9 @@ export async function createApp(options: { cloudflare?: boolean } = {}): Promise
   app.patch('/api/school/users/:userId', authenticateRequest, requireSchoolIdentityMutationPermission, async (req, res, next) => {
     if (!platformAdminPool || !platformAdminAuth) return next(new ExternalServiceError('خدمة هوية المدرسة غير مهيأة.'));
     try {
-      if (runtimeSchemaBootstrapEnabled) await ensureIdentityJobSchema();
+      // The edit path also persists the HR linkage columns and must tolerate
+      // databases that predate the identity schema migration.
+      await ensureIdentityJobSchema();
       const { tenantId, schoolId, actorAuthUserId } = schoolIdentityScope(req);
       const userId = String(req.params.userId || '').trim();
       const operation = String(req.body?.operation || '').trim();
