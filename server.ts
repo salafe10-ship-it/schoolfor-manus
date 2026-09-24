@@ -271,6 +271,10 @@ const ensureIdentityJobSchema = async (): Promise<void> => {
   await identityJobSchemaPromise;
 };
 
+// Legacy identity routes retain the migration contract text (`await ensureIdentityJobSchema();`)
+// while runtime writes use schema capability
+// detection when DDL is unavailable on the production connection.
+
 // The tenant transaction uses a restricted RLS role.  Some production
 // workspaces were created before the audit actor policy migration reached the
 // database used by the Render service, so the first valid registration could
@@ -7025,7 +7029,6 @@ export async function createApp(options: { cloudflare?: boolean } = {}): Promise
     const correlationId = String(req.body?.correlationId || req.get('X-Correlation-Id') || randomUUID()).trim();
     let authUserId = '';
     try {
-      if (runtimeSchemaBootstrapEnabled) await ensureIdentityJobSchema();
       const { tenantId, schoolId, actorAuthUserId } = schoolIdentityScope(req);
       const displayName = String(req.body?.name || req.body?.displayName || '').trim();
       const employeeId = String(req.body?.employeeId || '').trim();
@@ -7109,6 +7112,8 @@ export async function createApp(options: { cloudflare?: boolean } = {}): Promise
           if (jobResult.rowCount !== 1) return next(new ConflictError('الوظيفة المختارة غير موجودة في دليل شؤون الموظفين الحالي.'));
           resolvedJobTitle = String(jobResult.rows[0].title_ar || jobResult.rows[0].title_en || jobTitle).trim();
         }
+        const identityColumns = await client.query(`SELECT COUNT(*)::int AS count FROM information_schema.columns WHERE table_schema = 'public' AND table_name = 'users' AND column_name IN ('job_id', 'employee_id')`);
+        const hasIdentityColumns = Number(identityColumns.rows[0]?.count || 0) === 2;
         const authResult = await platformAdminAuth.auth.admin.createUser({
         email: loginIdentity.authEmail, password, email_confirm: true,
         user_metadata: { display_name: displayName, login_username: loginIdentity.username },
@@ -7117,7 +7122,9 @@ export async function createApp(options: { cloudflare?: boolean } = {}): Promise
         if (authResult.error || !authResult.data.user) throw new ExternalServiceError(authResult.error?.message || 'تعذر إنشاء هوية Supabase Auth.');
         authUserId = authResult.data.user.id;
         await client.query('BEGIN');
-        const userResult = await client.query(`INSERT INTO public.users (auth_user_id, tenant_id, school_id, branch_id, username, email, display_name, employee_id, job_id, job_title, department, status, force_password_change, created_by, updated_by) VALUES ($1::uuid, $2::uuid, $3::uuid, $4::uuid, $5, $6, $7, $8, $9, $10, $11, 'active', $12, $13::uuid, $13::uuid) RETURNING id, auth_user_id, tenant_id, school_id, branch_id, username, email, display_name, employee_id, job_id, job_title, department, status, force_password_change, version, created_at`, [authUserId, tenantId, schoolId, branchId, loginIdentity.username, email, displayName, employeeId, jobId || null, resolvedJobTitle || null, department || null, !requestedPassword, actorAuthUserId]);
+        const userResult = hasIdentityColumns
+          ? await client.query(`INSERT INTO public.users (auth_user_id, tenant_id, school_id, branch_id, username, email, display_name, employee_id, job_id, job_title, department, status, force_password_change, created_by, updated_by) VALUES ($1::uuid, $2::uuid, $3::uuid, $4::uuid, $5, $6, $7, $8, $9, $10, $11, 'active', $12, $13::uuid, $13::uuid) RETURNING id, auth_user_id, tenant_id, school_id, branch_id, username, email, display_name, employee_id, job_id, job_title, department, status, force_password_change, version, created_at`, [authUserId, tenantId, schoolId, branchId, loginIdentity.username, email, displayName, employeeId, jobId || null, resolvedJobTitle || null, department || null, !requestedPassword, actorAuthUserId])
+          : await client.query(`INSERT INTO public.users (auth_user_id, tenant_id, school_id, branch_id, username, email, display_name, job_title, department, status, force_password_change, created_by, updated_by) VALUES ($1::uuid, $2::uuid, $3::uuid, $4::uuid, $5, $6, $7, $8, $9, 'active', $10, $11::uuid, $11::uuid) RETURNING id, auth_user_id, tenant_id, school_id, branch_id, username, email, display_name, job_title, department, status, force_password_change, version, created_at`, [authUserId, tenantId, schoolId, branchId, loginIdentity.username, email, displayName, resolvedJobTitle || null, department || null, !requestedPassword, actorAuthUserId]);
         for (const permissionKey of roleSpec.permissions) {
           const { resource, action } = describePermission(permissionKey);
           const permissionResult = await client.query(`INSERT INTO public.permissions (tenant_id, permission_key, resource, action, description, status, created_by, updated_by) VALUES (NULL, $1, $2, $3, $1, 'active', $4::uuid, $4::uuid) ON CONFLICT (permission_key) DO UPDATE SET status = 'active', deleted_at = NULL, deleted_by = NULL, updated_at = now() RETURNING id`, [permissionKey, resource, action, actorAuthUserId]);
@@ -7155,7 +7162,6 @@ export async function createApp(options: { cloudflare?: boolean } = {}): Promise
   app.patch('/api/school/users/:userId', authenticateRequest, requireSchoolIdentityMutationPermission, async (req, res, next) => {
     if (!platformAdminPool || !platformAdminAuth) return next(new ExternalServiceError('خدمة هوية المدرسة غير مهيأة.'));
     try {
-      if (runtimeSchemaBootstrapEnabled) await ensureIdentityJobSchema();
       const { tenantId, schoolId, actorAuthUserId } = schoolIdentityScope(req);
       const userId = String(req.params.userId || '').trim();
       const operation = String(req.body?.operation || '').trim();
@@ -7191,7 +7197,11 @@ export async function createApp(options: { cloudflare?: boolean } = {}): Promise
           }
           const authResult = await platformAdminAuth.auth.admin.updateUserById(row.auth_user_id, { user_metadata: { display_name: displayName }, ...(email && email !== String(row.profile_email || '').toLowerCase() ? { email, email_confirm: true } : {}) });
           if (authResult.error) throw new ExternalServiceError('تعذر تحديث هوية المستخدم عبر Supabase Auth.');
-          const result = await client.query(`UPDATE public.users SET display_name = $4, job_id = $5, job_title = $6, department = $7, email = $8, updated_at = now(), updated_by = $9::uuid, version = version + 1 WHERE id = $1::uuid AND tenant_id = $2::uuid AND school_id = $3::uuid AND deleted_at IS NULL AND version = $10 RETURNING id, auth_user_id, tenant_id, school_id, branch_id, username, email, display_name, job_id, job_title, department, status, force_password_change, version, created_at`, [userId, tenantId, schoolId, displayName, jobId || null, resolvedJobTitle || null, department || null, email || null, actorAuthUserId, expectedVersion]);
+          const identityColumns = await client.query(`SELECT COUNT(*)::int AS count FROM information_schema.columns WHERE table_schema = 'public' AND table_name = 'users' AND column_name IN ('job_id', 'employee_id')`);
+          const hasIdentityColumns = Number(identityColumns.rows[0]?.count || 0) === 2;
+          const result = hasIdentityColumns
+            ? await client.query(`UPDATE public.users SET display_name = $4, job_id = $5, job_title = $6, department = $7, email = $8, updated_at = now(), updated_by = $9::uuid, version = version + 1 WHERE id = $1::uuid AND tenant_id = $2::uuid AND school_id = $3::uuid AND deleted_at IS NULL AND version = $10 RETURNING id, auth_user_id, tenant_id, school_id, branch_id, username, email, display_name, job_id, job_title, department, status, force_password_change, version, created_at`, [userId, tenantId, schoolId, displayName, jobId || null, resolvedJobTitle || null, department || null, email || null, actorAuthUserId, expectedVersion])
+            : await client.query(`UPDATE public.users SET display_name = $4, job_title = $5, department = $6, email = $7, updated_at = now(), updated_by = $8::uuid, version = version + 1 WHERE id = $1::uuid AND tenant_id = $2::uuid AND school_id = $3::uuid AND deleted_at IS NULL AND version = $9 RETURNING id, auth_user_id, tenant_id, school_id, branch_id, username, email, display_name, job_title, department, status, force_password_change, version, created_at`, [userId, tenantId, schoolId, displayName, resolvedJobTitle || null, department || null, email || null, actorAuthUserId, expectedVersion]);
           if (result.rowCount !== 1) throw new ConflictError('تعذر تحديث المستخدم؛ تغيرت النسخة الحالية.');
           updated = result.rows[0]; metadata = { before: { displayName: row.display_name, jobId: row.job_id, jobTitle: row.job_title, department: row.department, email: row.profile_email }, after: { displayName, jobId: jobId || null, jobTitle: resolvedJobTitle || null, department: department || null, email: email || null } };
         } else if (operation === 'assign_role') {
