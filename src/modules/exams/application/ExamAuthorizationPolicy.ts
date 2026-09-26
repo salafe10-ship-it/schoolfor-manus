@@ -69,6 +69,83 @@ export function assertTeacherWriteScope(
   if (unauthorized.length > 0) {
     throw new Error(`دور المعلم لا يملك صلاحية تعديل حقول الامتحان: ${unauthorized.join(', ')}.`);
   }
+
+  assertTeacherAssessmentStateScope(
+    currentData.exams_assessment_state,
+    requestedData.exams_assessment_state
+  );
+}
+
+/**
+ * The assessment state is stored as one versioned document, but a teacher is
+ * not allowed to use that document boundary to approve, reopen, publish, or
+ * delete an existing online assessment. The UI intentionally gives reviewers
+ * access to question authoring, attempts, and marking, so those records remain
+ * writable while lifecycle transitions stay server-owned.
+ */
+function assertTeacherAssessmentStateScope(currentRaw: unknown, requestedRaw: unknown): void {
+  if (stableJson(currentRaw) === stableJson(requestedRaw)) return;
+
+  const current = currentRaw && typeof currentRaw === 'object' && !Array.isArray(currentRaw)
+    ? currentRaw as Record<string, unknown>
+    : {};
+  const requested = requestedRaw && typeof requestedRaw === 'object' && !Array.isArray(requestedRaw)
+    ? requestedRaw as Record<string, unknown>
+    : {};
+
+  const preserveExistingIds = (field: string): void => {
+    const currentItems = Array.isArray(current[field]) ? current[field] as Array<Record<string, unknown>> : [];
+    const requestedItems = Array.isArray(requested[field]) ? requested[field] as Array<Record<string, unknown>> : [];
+    const requestedIds = new Set(requestedItems.map(item => String(item?.id || '').trim()).filter(Boolean));
+    const hasUnidentifiedCurrentItem = currentItems.some(item => !String(item?.id || '').trim());
+    if (hasUnidentifiedCurrentItem && stableJson(currentItems) !== stableJson(requestedItems)) {
+      throw new Error(`دور المعلم لا يملك صلاحية استبدال سجلات ${field} غير المعرفة بمعرفات ثابتة.`);
+    }
+    const missing = currentItems
+      .map(item => String(item?.id || '').trim())
+      .filter(id => id && !requestedIds.has(id));
+    if (missing.length > 0) {
+      throw new Error(`دور المعلم لا يملك صلاحية حذف سجلات ${field}: ${missing.join(', ')}.`);
+    }
+  };
+
+  for (const field of ['questionBank', 'assessments', 'blueprints', 'attempts', 'objections', 'reports', 'auditEvents']) {
+    preserveExistingIds(field);
+  }
+
+  const currentLifecycles = new Map<string, Record<string, unknown>>(
+    (Array.isArray(current.lifecycles) ? current.lifecycles : [])
+      .map(item => [
+        String((item as Record<string, unknown>)?.assessmentId || '').trim(),
+        item as Record<string, unknown>,
+      ] as [string, Record<string, unknown>])
+      .filter(([id]) => Boolean(id))
+  );
+  const requestedLifecycles = Array.isArray(requested.lifecycles)
+    ? requested.lifecycles as Array<Record<string, unknown>>
+    : [];
+  const requestedLifecycleIds = new Set<string>();
+
+  requestedLifecycles.forEach(lifecycle => {
+    const assessmentId = String(lifecycle?.assessmentId || '').trim();
+    if (!assessmentId) return;
+    requestedLifecycleIds.add(assessmentId);
+    const previous = currentLifecycles.get(assessmentId);
+    if (!previous) {
+      if (String(lifecycle.state || '') !== 'draft') {
+        throw new Error('إنشاء دورة امتحان إلكتروني جديدة للمعلم يجب أن يبدأ كمسودة.');
+      }
+      return;
+    }
+    if (stableJson(previous) !== stableJson(lifecycle)) {
+      throw new Error('تغيير دورة الامتحان الإلكتروني أو اعتمادها أو نشرها يتطلب مدير الامتحانات.');
+    }
+  });
+
+  const deletedLifecycle = [...currentLifecycles.keys()].some(id => !requestedLifecycleIds.has(id));
+  if (deletedLifecycle) {
+    throw new Error('دور المعلم لا يملك صلاحية حذف دورة امتحان إلكتروني موجودة.');
+  }
 }
 
 const copy = <T,>(value: T): T => {

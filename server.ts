@@ -11900,7 +11900,9 @@ export async function createApp(options: { cloudflare?: boolean } = {}): Promise
         schoolId: (req as any).user?.schoolId,
         error: err?.message || String(err)
       });
-      next(new DatabaseError("Failed to read exams database", err.message));
+      next(err instanceof AuthenticationError || err instanceof AuthorizationError || err instanceof ValidationError || err instanceof ConflictError || err instanceof DatabaseError
+        ? err
+        : new DatabaseError('Failed to read exams database', err?.message || String(err)));
     }
   });
 
@@ -12006,6 +12008,78 @@ export async function createApp(options: { cloudflare?: boolean } = {}): Promise
         error: err?.message || String(err)
       });
       next(err instanceof AuthenticationError || err instanceof AuthorizationError || err instanceof DatabaseError ? err : new DatabaseError('Failed to read exams audit events', err.message));
+    }
+  });
+
+  app.get("/api/exams/result-archives/:archiveId/verify", authenticateRequest, requirePermission(PERMISSIONS.EXAM_READ), async (req, res, next) => {
+    try {
+      const identity = (req as any).user;
+      const schoolId = String(identity.schoolId || '').trim();
+      const tenantId = String(identity.tenantId || '').trim();
+      const archiveId = String(req.params.archiveId || '').trim();
+      const studentId = String(req.query.studentId || '').trim();
+      const tenantContext = (req as any).tenantContext;
+      if (!schoolId || !tenantId || !tenantContext || tenantContext.tenantId !== tenantId || tenantContext.schoolId !== schoolId) {
+        throw new AuthenticationError('السياق الموثوق للتحقق من إفادة النتيجة غير مكتمل.');
+      }
+      if (!/^[0-9a-f-]{36}$/i.test(archiveId) || !studentId || studentId.length > 128) {
+        throw new ValidationError('رمز التحقق أو معرف الطالب غير صالح.');
+      }
+
+      const verification = await UnitOfWork.runInTransaction(schoolId, {
+        operationName: 'Verify immutable exam result archive',
+        tenantId,
+        userId: identity.id,
+        userName: identity.name || 'المستخدم الحالي',
+        ipAddress: req.ip || 'unknown',
+        affectedTables: ['exams_result_archives']
+      }, async () => {
+        const transaction = UnitOfWork.getActiveContext()?.databaseTransaction;
+        if (!transaction) throw new DatabaseError('معاملة التحقق من أرشيف الامتحانات غير متاحة.');
+        const result = await transaction.query<{
+          id: string;
+          operational_version: number;
+          payload: Record<string, unknown>;
+          signature_hash: string;
+          created_at: string;
+        }>(
+          `SELECT id, operational_version, payload, signature_hash, created_at
+             FROM public.exams_result_archives
+            WHERE tenant_id = $1 AND school_id = $2 AND id = $3
+            LIMIT 1`,
+          [tenantId, schoolId, archiveId]
+        );
+        const archive = result.rows[0];
+        if (!archive) throw new ValidationError('أرشيف النتيجة المطلوب غير موجود داخل المدرسة الحالية.');
+        const payload = archive.payload && typeof archive.payload === 'object' ? archive.payload : {};
+        const expectedSignature = createHash('sha256').update(stableJsonStringify({
+          tenantId,
+          schoolId,
+          operationalVersion: Number(archive.operational_version),
+          payload
+        })).digest('hex');
+        const signatureValid = expectedSignature === String(archive.signature_hash || '').toLowerCase();
+        const students = Array.isArray(payload.students) ? payload.students as Array<Record<string, unknown>> : [];
+        const student = students.find(item => String(item?.id || '').trim() === studentId);
+        return {
+          archiveId: archive.id,
+          studentId,
+          studentName: student ? String(student.name || '').trim() : '',
+          operationalVersion: Number(archive.operational_version),
+          archivedAt: archive.created_at,
+          valid: Boolean(signatureValid && student)
+        };
+      }, tenantContext);
+
+      res.json({ success: true, data: verification });
+    } catch (err: any) {
+      EnterpriseLogger.error('Failed to verify immutable exam result archive', 'ExamsCertificateVerificationRoute', {
+        schoolId: (req as any).user?.schoolId,
+        error: err?.message || String(err)
+      });
+      next(err instanceof AuthenticationError || err instanceof AuthorizationError || err instanceof ValidationError || err instanceof DatabaseError
+        ? err
+        : new DatabaseError('Failed to verify immutable exam result archive', err?.message || String(err)));
     }
   });
 
