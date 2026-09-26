@@ -35,6 +35,8 @@ export interface AssessmentRecord {
   createdBy: string;
   createdAt: string;
   blueprintId: string;
+  /** The canonical school subject that receives the published online score. */
+  subjectId?: string;
 }
 
 export interface AssessmentAuditEvent {
@@ -83,7 +85,38 @@ export interface CreateAssessmentInput {
   durationMinutes: number;
   actorId: string;
   questionRefs: { questionId: string; version: number }[];
+  subjectId?: string;
   createdAt?: string;
+}
+
+export interface AssessmentGradeProjection {
+  assessmentId: string;
+  subjectId: string;
+  candidateId: string;
+  score: number;
+  subjectMaximum: number;
+  assessmentScore: number;
+  assessmentMaximum: number;
+}
+
+export interface AssessmentPsychometricItem {
+  questionId: string;
+  questionVersion: number;
+  attempts: number;
+  facilityIndex: number;
+  discriminationIndex: number | null;
+  averageScore: number;
+  maximumScore: number;
+  responseFrequencies: Array<{ answer: string; count: number }>;
+}
+
+export interface AssessmentPsychometricSummary {
+  assessmentId: string;
+  attemptCount: number;
+  averagePercentage: number;
+  standardDeviation: number;
+  cronbachAlpha: number | null;
+  items: AssessmentPsychometricItem[];
 }
 
 export interface AssessmentPublicationGateError {
@@ -337,6 +370,11 @@ export function createAssessment(
   if (selected.length === 0) throw new AssessmentWorkflowError('يجب اختيار سؤال مفعّل واحداً على الأقل.');
   const assessmentId = input.id || makeId('assessment');
   const blueprintId = makeId('blueprint');
+  const selectedSubjectIds = [...new Set(selected.map(question => String(question.classification.subjectId || '').trim()).filter(Boolean))];
+  const subjectId = String(input.subjectId || '').trim() || (selectedSubjectIds.length === 1 && selectedSubjectIds[0] !== 'general' ? selectedSubjectIds[0] : undefined);
+  if (subjectId && selected.some(question => String(question.classification.subjectId || '').trim() !== subjectId)) {
+    throw new AssessmentWorkflowError('أسئلة الامتحان الإلكتروني يجب أن تنتمي إلى المادة المحددة نفسها قبل ترحيل النتيجة.');
+  }
   const blueprint: AssessmentBlueprint = {
     id: blueprintId,
     assessmentId,
@@ -352,7 +390,8 @@ export function createAssessment(
     durationMinutes: input.durationMinutes,
     createdBy: input.actorId.trim(),
     createdAt,
-    blueprintId
+    blueprintId,
+    subjectId
   };
   const lifecycle = createAssessmentLifecycle(assessmentId, input.actorId, createdAt);
   const next = {
@@ -362,6 +401,152 @@ export function createAssessment(
     lifecycles: [...state.lifecycles, lifecycle]
   };
   return addAudit(next, input.actorId, 'assessment.created', 'assessment', assessmentId, { questionCount: selected.length });
+}
+
+/**
+ * Projects final online-assessment attempts into the canonical school grade
+ * matrix. Only published/archived assessments with one unambiguous subject
+ * are eligible; the caller still persists the returned rows through the
+ * central exams transaction.
+ */
+export function projectMarkedAssessmentResultsToSubject(
+  state: AssessmentWorkflowState,
+  assessmentId: string,
+  subjectId: string,
+  subjectMaximum: number
+): AssessmentGradeProjection[] {
+  const assessment = state.assessments.find(item => item.id === assessmentId);
+  const blueprint = state.blueprints.find(item => item.assessmentId === assessmentId);
+  const lifecycle = state.lifecycles.find(item => item.assessmentId === assessmentId);
+  if (!assessment || !blueprint || !lifecycle) throw new AssessmentWorkflowError('بيانات الامتحان الإلكتروني غير مكتملة للترحيل.');
+  if (!['published', 'archived'].includes(String(lifecycle.state))) {
+    throw new AssessmentWorkflowError('لا يمكن ترحيل الدرجات قبل نشر نتائج الامتحان الإلكتروني واعتمادها.');
+  }
+  const normalizedSubjectId = String(subjectId || '').trim();
+  const maximum = Number(subjectMaximum);
+  if (!normalizedSubjectId || !Number.isFinite(maximum) || maximum <= 0) {
+    throw new AssessmentWorkflowError('المادة والدرجة العظمى مطلوبتان لترحيل نتيجة الامتحان الإلكتروني.');
+  }
+  const selectedQuestions = blueprint.questionRefs.map(reference => state.questionBank.find(question => question.id === reference.questionId && question.version === reference.version));
+  if (selectedQuestions.some(question => !question)) throw new AssessmentWorkflowError('لا يمكن الترحيل؛ نموذج الامتحان يشير إلى سؤال غير موجود.');
+  const questionSubjectIds = [...new Set(selectedQuestions.map(question => String(question?.classification.subjectId || '').trim()).filter(Boolean))];
+  const effectiveSubjectId = String(assessment.subjectId || '').trim() || (questionSubjectIds.length === 1 ? questionSubjectIds[0] : '');
+  if (!effectiveSubjectId || effectiveSubjectId === 'general' || effectiveSubjectId !== normalizedSubjectId || questionSubjectIds.some(value => value !== normalizedSubjectId)) {
+    throw new AssessmentWorkflowError('لا يمكن الترحيل؛ الامتحان لا يرتبط بمادة واحدة مطابقة للمادة المختارة.');
+  }
+  const attempts = state.attempts.filter(attempt => attempt.assessmentId === assessmentId && attempt.status === 'marked');
+  if (attempts.length === 0) throw new AssessmentWorkflowError('لا توجد محاولات نهائية مصححة قابلة للترحيل.');
+  const candidateIds = new Set<string>();
+  return attempts.map(attempt => {
+    const candidateId = String(attempt.candidateId || '').trim();
+    if (!candidateId) throw new AssessmentWorkflowError('توجد محاولة نهائية بلا معرف طالب.');
+    if (candidateIds.has(candidateId)) throw new AssessmentWorkflowError(`توجد أكثر من نتيجة نهائية للطالب ${candidateId}; عالج التكرار قبل الترحيل.`);
+    candidateIds.add(candidateId);
+    const assessmentScore = Number(attempt.recordedTotal);
+    const assessmentMaximum = Number(attempt.maximumTotal);
+    if (!Number.isFinite(assessmentScore) || !Number.isFinite(assessmentMaximum) || assessmentMaximum <= 0 || assessmentScore < 0 || assessmentScore > assessmentMaximum) {
+      throw new AssessmentWorkflowError(`نتيجة الطالب ${candidateId} خارج النطاق الصالح للترحيل.`);
+    }
+    return {
+      assessmentId,
+      subjectId: normalizedSubjectId,
+      candidateId,
+      score: Math.round(((assessmentScore / assessmentMaximum) * maximum) * 100) / 100,
+      subjectMaximum: maximum,
+      assessmentScore,
+      assessmentMaximum
+    };
+  });
+}
+
+const pearsonCorrelation = (left: number[], right: number[]): number | null => {
+  if (left.length < 2 || left.length !== right.length) return null;
+  const leftMean = left.reduce((sum, value) => sum + value, 0) / left.length;
+  const rightMean = right.reduce((sum, value) => sum + value, 0) / right.length;
+  let numerator = 0;
+  let leftVariance = 0;
+  let rightVariance = 0;
+  left.forEach((value, index) => {
+    const leftDelta = value - leftMean;
+    const rightDelta = right[index] - rightMean;
+    numerator += leftDelta * rightDelta;
+    leftVariance += leftDelta ** 2;
+    rightVariance += rightDelta ** 2;
+  });
+  const denominator = Math.sqrt(leftVariance * rightVariance);
+  return denominator > 0 ? numerator / denominator : null;
+};
+
+const safeVariance = (values: number[]): number => {
+  if (values.length < 2) return 0;
+  const mean = values.reduce((sum, value) => sum + value, 0) / values.length;
+  return values.reduce((sum, value) => sum + ((value - mean) ** 2), 0) / values.length;
+};
+
+const answerFrequencyKey = (answer: unknown): string => {
+  if (answer === undefined || answer === null || answer === '') return 'بلا إجابة';
+  if (typeof answer === 'object') {
+    try { return JSON.stringify(answer); } catch { return String(answer); }
+  }
+  return String(answer);
+};
+
+export function calculateAssessmentPsychometrics(
+  state: AssessmentWorkflowState,
+  assessmentId: string
+): AssessmentPsychometricSummary {
+  const assessment = state.assessments.find(item => item.id === assessmentId);
+  const blueprint = state.blueprints.find(item => item.assessmentId === assessmentId);
+  if (!assessment || !blueprint) throw new AssessmentWorkflowError('بيانات الامتحان الإلكتروني غير مكتملة للتحليل الإحصائي.');
+  const questions = blueprint.questionRefs.map(reference => state.questionBank.find(question => question.id === reference.questionId && question.version === reference.version)).filter(Boolean) as AssessmentQuestionBankItem[];
+  if (questions.length === 0) throw new AssessmentWorkflowError('لا توجد أسئلة قابلة للتحليل في نموذج الامتحان.');
+  const attempts = state.attempts.filter(attempt => attempt.assessmentId === assessmentId && attempt.status === 'marked');
+  if (attempts.length === 0) {
+    return { assessmentId, attemptCount: 0, averagePercentage: 0, standardDeviation: 0, cronbachAlpha: null, items: [] };
+  }
+  const totals = attempts.map(attempt => Number(attempt.recordedTotal) || 0);
+  const maximumTotal = Math.max(...attempts.map(attempt => Number(attempt.maximumTotal) || 0), 0);
+  const percentages = totals.map(total => maximumTotal > 0 ? (total / maximumTotal) * 100 : 0);
+  const averagePercentage = percentages.reduce((sum, value) => sum + value, 0) / percentages.length;
+  const standardDeviation = Math.sqrt(safeVariance(percentages));
+  const itemScores = questions.map(question => attempts.map(attempt => {
+    const response = attempt.responses.find(item => item.questionId === question.id && item.questionVersion === question.version);
+    return Number(response?.awardedPoints) || 0;
+  }));
+  const totalScoreByAttempt = attempts.map((_, index) => totals[index]);
+  const cronbachAlpha = questions.length > 1 && safeVariance(totalScoreByAttempt) > 0
+    ? (questions.length / (questions.length - 1)) * (1 - itemScores.reduce((sum, scores) => sum + safeVariance(scores), 0) / safeVariance(totalScoreByAttempt))
+    : null;
+  const items = questions.map((question, questionIndex) => {
+    const scores = itemScores[questionIndex];
+    const maximumScore = Number(question.points) || 0;
+    const averageScore = scores.reduce((sum, value) => sum + value, 0) / scores.length;
+    const frequencyMap = new Map<string, number>();
+    attempts.forEach(attempt => {
+      const response = attempt.responses.find(item => item.questionId === question.id && item.questionVersion === question.version);
+      const key = answerFrequencyKey(response?.answer);
+      frequencyMap.set(key, (frequencyMap.get(key) || 0) + 1);
+    });
+    const totalWithoutItem = scores.map((score, index) => totalScoreByAttempt[index] - score);
+    return {
+      questionId: question.id,
+      questionVersion: question.version,
+      attempts: attempts.length,
+      facilityIndex: maximumScore > 0 ? Math.round((averageScore / maximumScore) * 10000) / 100 : 0,
+      discriminationIndex: pearsonCorrelation(scores, totalWithoutItem),
+      averageScore: Math.round(averageScore * 100) / 100,
+      maximumScore,
+      responseFrequencies: [...frequencyMap.entries()].map(([answer, count]) => ({ answer, count })).sort((left, right) => right.count - left.count)
+    };
+  });
+  return {
+    assessmentId,
+    attemptCount: attempts.length,
+    averagePercentage: Math.round(averagePercentage * 100) / 100,
+    standardDeviation: Math.round(standardDeviation * 100) / 100,
+    cronbachAlpha: cronbachAlpha === null ? null : Math.round(cronbachAlpha * 1000) / 1000,
+    items
+  };
 }
 
 const getContext = (state: AssessmentWorkflowState, assessmentId: string) => {

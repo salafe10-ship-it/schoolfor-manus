@@ -6,6 +6,7 @@ import {
   assessmentLifecycleLabel,
   assessmentQuestionTypeLabel,
   autoMarkAssessmentAttempt,
+  calculateAssessmentPsychometrics,
   cloneQuestionVersion,
   createAssessment,
   createQuestionDraft,
@@ -13,6 +14,7 @@ import {
   getAssessmentPublicationReadiness,
   markManualAssessmentResponse,
   normalizeAssessmentWorkflowState,
+  projectMarkedAssessmentResultsToSubject,
   setQuestionStatus,
   startAssessmentAttempt,
   submitAssessmentAttempt,
@@ -26,8 +28,10 @@ interface ExamsAssessmentPanelProps {
   state: AssessmentWorkflowState;
   actorId: string;
   candidateIds: readonly string[];
+  subjects?: Array<{ id: string; name: string; maxScore: number }>;
   permissionRole?: 'admin' | 'reviewer' | 'officer';
   onChange: (next: AssessmentWorkflowState, reason: string) => Promise<boolean>;
+  onPublishGrades?: (assessmentId: string, projections: ReturnType<typeof projectMarkedAssessmentResultsToSubject>) => Promise<boolean>;
 }
 
 const questionTypes: AssessmentQuestionType[] = ['single', 'multiple', 'true_false', 'text', 'numeric', 'matching', 'ordering', 'essay', 'file', 'media', 'equation'];
@@ -61,10 +65,11 @@ const escapeHtml = (value: unknown): string => String(value ?? '')
   .replaceAll('"', '&quot;')
   .replaceAll("'", '&#039;');
 
-export default function ExamsAssessmentPanel({ state, actorId, candidateIds, permissionRole = 'admin', onChange }: ExamsAssessmentPanelProps) {
+export default function ExamsAssessmentPanel({ state, actorId, candidateIds, subjects = [], permissionRole = 'admin', onChange, onPublishGrades }: ExamsAssessmentPanelProps) {
   const [form, setForm] = useState(initialForm);
   const [assessmentTitle, setAssessmentTitle] = useState('الامتحان الإلكتروني الأول');
   const [assessmentDuration, setAssessmentDuration] = useState(60);
+  const [assessmentSubjectId, setAssessmentSubjectId] = useState('');
   const [selectedQuestions, setSelectedQuestions] = useState<string[]>([]);
   const [candidateId, setCandidateId] = useState('');
   const [answerDrafts, setAnswerDrafts] = useState<Record<string, unknown>>({});
@@ -265,8 +270,32 @@ export default function ExamsAssessmentPanel({ state, actorId, candidateIds, per
       title: assessmentTitle,
       durationMinutes: Number(assessmentDuration),
       actorId,
+      subjectId: assessmentSubjectId || undefined,
       questionRefs: refs
     }));
+  };
+
+  const publishGrades = async (assessmentId: string) => {
+    if (!onPublishGrades) return;
+    const assessment = state.assessments.find(item => item.id === assessmentId);
+    const subjectId = String(assessment?.subjectId || '').trim();
+    const subject = subjects.find(item => item.id === subjectId);
+    if (!subject) {
+      setMessage({ tone: 'error', text: 'لا يمكن الترحيل: الامتحان غير مرتبط بمادة مدرسية واحدة.' });
+      return;
+    }
+    setBusy(`grades.publish.${assessmentId}`);
+    setMessage(null);
+    try {
+      const projections = projectMarkedAssessmentResultsToSubject(state, assessmentId, subject.id, subject.maxScore);
+      const persisted = await onPublishGrades(assessmentId, projections);
+      if (!persisted) throw new AssessmentWorkflowError('لم يؤكد المصدر المركزي ترحيل الدرجات.');
+      setMessage({ tone: 'success', text: `تم ترحيل ${projections.length} نتيجة إلى مادة ${subject.name} في كشف الدرجات العام.` });
+    } catch (error) {
+      setMessage({ tone: 'error', text: errorMessage(error) });
+    } finally {
+      setBusy('');
+    }
   };
 
   const nextLifecycleState = (stateName: string) => {
@@ -346,7 +375,7 @@ export default function ExamsAssessmentPanel({ state, actorId, candidateIds, per
       </div>
 
       <section className="border border-[#d4af37]/35 bg-[#1c120c] p-5 text-amber-50 shadow-lg">
-        <div className="flex flex-col gap-4 border-b border-amber-500/20 pb-4 lg:flex-row lg:items-end lg:justify-between"><div><h3 className="text-sm font-black text-white">إنشاء نموذج الامتحان الإلكتروني</h3><p className="mt-1 text-[10px] text-amber-100/55">اختر الإصدارات المفعلة فقط؛ نموذج منشور يحتفظ بإصداراته ولا يتغير بتعديل البنك.</p></div><div className="flex flex-wrap gap-2"><input disabled={!canManageQuestions} value={assessmentTitle} onChange={event => setAssessmentTitle(event.target.value)} className="border border-[#d4af37]/30 bg-[#130b04] px-3 py-2 text-xs text-amber-50 disabled:opacity-40" placeholder="عنوان الامتحان" /><input disabled={!canManageQuestions} type="number" min="1" value={assessmentDuration} onChange={event => setAssessmentDuration(Number(event.target.value))} className="w-24 border border-[#d4af37]/30 bg-[#130b04] px-3 py-2 text-xs text-amber-50 disabled:opacity-40" /><button type="button" onClick={createNewAssessment} disabled={!canManageQuestions || Boolean(busy) || selectedQuestions.length === 0} className="flex items-center gap-2 bg-[#d4af37] px-4 py-2 text-xs font-black text-slate-950 disabled:opacity-40"><Plus className="h-4 w-4" />إنشاء النموذج</button></div></div>
+        <div className="flex flex-col gap-4 border-b border-amber-500/20 pb-4 lg:flex-row lg:items-end lg:justify-between"><div><h3 className="text-sm font-black text-white">إنشاء نموذج الامتحان الإلكتروني</h3><p className="mt-1 text-[10px] text-amber-100/55">اختر الإصدارات المفعلة فقط؛ نموذج منشور يحتفظ بإصداراته ولا يتغير بتعديل البنك.</p></div><div className="flex flex-wrap gap-2"><select disabled={!canManageQuestions || Boolean(busy)} value={assessmentSubjectId} onChange={event => setAssessmentSubjectId(event.target.value)} className="border border-[#d4af37]/30 bg-[#130b04] px-3 py-2 text-xs text-amber-50 disabled:opacity-40"><option value="">مادة الترحيل بعد النشر</option>{subjects.map(subject => <option key={subject.id} value={subject.id}>{subject.name}</option>)}</select><input disabled={!canManageQuestions} value={assessmentTitle} onChange={event => setAssessmentTitle(event.target.value)} className="border border-[#d4af37]/30 bg-[#130b04] px-3 py-2 text-xs text-amber-50 disabled:opacity-40" placeholder="عنوان الامتحان" /><input disabled={!canManageQuestions} type="number" min="1" value={assessmentDuration} onChange={event => setAssessmentDuration(Number(event.target.value))} className="w-24 border border-[#d4af37]/30 bg-[#130b04] px-3 py-2 text-xs text-amber-50 disabled:opacity-40" /><button type="button" onClick={createNewAssessment} disabled={!canManageQuestions || Boolean(busy) || selectedQuestions.length === 0 || (subjects.length > 0 && !assessmentSubjectId)} className="flex items-center gap-2 bg-[#d4af37] px-4 py-2 text-xs font-black text-slate-950 disabled:opacity-40"><Plus className="h-4 w-4" />إنشاء النموذج</button></div></div>
         <div className="mt-4 grid grid-cols-1 gap-2 md:grid-cols-2 xl:grid-cols-3">{activeQuestions.map(question => { const key = `${question.id}@${question.version}`; return <label key={key} className={`flex cursor-pointer items-start gap-2 border p-3 ${selectedQuestions.includes(key) ? 'border-[#f7d174] bg-[#2a1d13]' : 'border-amber-500/20 bg-black/15'}`}><input type="checkbox" checked={selectedQuestions.includes(key)} onChange={() => setSelectedQuestions(current => current.includes(key) ? current.filter(item => item !== key) : [...current, key])} className="mt-1 accent-amber-500" /><span><span className="block text-[10px] font-black text-[#f7d174]">v{question.version} • {question.points} درجة</span><span className="mt-1 block text-xs font-bold text-amber-50">{question.prompt}</span></span></label>; })}</div>
         {activeQuestions.length === 0 && <p className="mt-4 border border-dashed border-amber-500/30 p-6 text-center text-xs font-bold text-amber-100/55">فعّل سؤالاً واحداً على الأقل قبل إنشاء النموذج.</p>}
       </section>
@@ -356,12 +385,14 @@ export default function ExamsAssessmentPanel({ state, actorId, candidateIds, per
         {state.assessments.map(assessment => {
           const lifecycle = lifecycleById(assessment.id);
           const readiness = (() => { try { return getAssessmentPublicationReadiness(state, assessment.id); } catch { return { ready: false, blockers: [] as any[], checkedAttemptCount: 0, expectedTotalPoints: null }; } })();
+          const psychometrics = (() => { try { return calculateAssessmentPsychometrics(state, assessment.id); } catch { return null; } })();
           const next = lifecycle ? nextLifecycleState(lifecycle.state) : undefined;
           const attempts = state.attempts.filter(attempt => attempt.assessmentId === assessment.id);
-          return <div key={assessment.id} className="border border-[#d4af37]/35 bg-[#1c120c] p-5 text-amber-50 shadow-lg"><div className="flex flex-col gap-3 xl:flex-row xl:items-start xl:justify-between"><div><div className="flex flex-wrap items-center gap-2"><h4 className="text-base font-black text-white">{assessment.title}</h4><span className="border border-[#d4af37]/40 bg-black/20 px-2 py-1 text-[10px] font-black text-[#f7d174]">{lifecycle ? assessmentLifecycleLabel[lifecycle.state] : 'غير مكتمل'}</span><span className="text-[10px] text-amber-100/50">{assessment.durationMinutes} دقيقة • {attempts.length} محاولة</span></div><p className="mt-1 text-[10px] text-amber-100/50">الإصدار التشغيلي {lifecycle?.version ?? 0} • {assessment.id}</p></div><div className="flex flex-wrap gap-1.5">{next && <button type="button" disabled={!canAdminister || Boolean(busy)} onClick={() => void commit(`assessment.${next}`, () => transitionAssessment(state, assessment.id, next, actorId, `انتقال تشغيلي موثق إلى ${assessmentLifecycleLabel[next]}`))} className="flex items-center gap-1 bg-gradient-to-r from-[#d4af37] to-[#9a6a1d] px-3 py-2 text-[10px] font-black text-slate-950 disabled:opacity-30"><ChevronLeft className="h-3 w-3" />{assessmentLifecycleLabel[next]}</button>}{lifecycle?.state === 'open' && <button type="button" disabled={!canOperateAttempt || Boolean(busy) || !candidateId.trim()} onClick={() => void commit('attempt.started', () => startAssessmentAttempt(state, assessment.id, candidateId, actorId, candidateIds))} className="flex items-center gap-1 border border-emerald-500/40 px-3 py-2 text-[10px] font-black text-emerald-200 disabled:opacity-30"><Play className="h-3 w-3" />بدء محاولة</button>}<button type="button" onClick={() => exportAssessmentCsv(assessment)} disabled={Boolean(busy)} className="flex items-center gap-1 border border-cyan-500/30 px-2 py-2 text-[10px] font-black text-cyan-200 disabled:opacity-30" aria-label={`تصدير CSV للامتحان ${assessment.title}`}><Download className="h-3 w-3" />CSV</button><button type="button" onClick={() => void exportAssessmentXlsx(assessment)} disabled={Boolean(busy)} className="flex items-center gap-1 border border-emerald-500/30 px-2 py-2 text-[10px] font-black text-emerald-200 disabled:opacity-30" aria-label={`تصدير XLSX للامتحان ${assessment.title}`}><Download className="h-3 w-3" />XLSX</button><button type="button" onClick={() => printAssessmentReport(assessment)} disabled={Boolean(busy)} className="flex items-center gap-1 border border-amber-500/30 px-2 py-2 text-[10px] font-black text-amber-200 disabled:opacity-30" aria-label={`طباعة أو حفظ PDF للامتحان ${assessment.title}`}><Printer className="h-3 w-3" />PDF/طباعة</button></div></div>
+          return <div key={assessment.id} className="border border-[#d4af37]/35 bg-[#1c120c] p-5 text-amber-50 shadow-lg"><div className="flex flex-col gap-3 xl:flex-row xl:items-start xl:justify-between"><div><div className="flex flex-wrap items-center gap-2"><h4 className="text-base font-black text-white">{assessment.title}</h4><span className="border border-[#d4af37]/40 bg-black/20 px-2 py-1 text-[10px] font-black text-[#f7d174]">{lifecycle ? assessmentLifecycleLabel[lifecycle.state] : 'غير مكتمل'}</span><span className="text-[10px] text-amber-100/50">{assessment.durationMinutes} دقيقة • {attempts.length} محاولة</span></div><p className="mt-1 text-[10px] text-amber-100/50">الإصدار التشغيلي {lifecycle?.version ?? 0} • {assessment.id}{assessment.subjectId ? ` • مادة الترحيل: ${subjects.find(item => item.id === assessment.subjectId)?.name || assessment.subjectId}` : ' • بلا مادة ترحيل'}</p></div><div className="flex flex-wrap gap-1.5">{next && <button type="button" disabled={!canAdminister || Boolean(busy)} onClick={() => void commit(`assessment.${next}`, () => transitionAssessment(state, assessment.id, next, actorId, `انتقال تشغيلي موثق إلى ${assessmentLifecycleLabel[next]}`))} className="flex items-center gap-1 bg-gradient-to-r from-[#d4af37] to-[#9a6a1d] px-3 py-2 text-[10px] font-black text-slate-950 disabled:opacity-30"><ChevronLeft className="h-3 w-3" />{assessmentLifecycleLabel[next]}</button>}{lifecycle?.state === 'open' && <button type="button" disabled={!canOperateAttempt || Boolean(busy) || !candidateId.trim()} onClick={() => void commit('attempt.started', () => startAssessmentAttempt(state, assessment.id, candidateId, actorId, candidateIds))} className="flex items-center gap-1 border border-emerald-500/40 px-3 py-2 text-[10px] font-black text-emerald-200 disabled:opacity-30"><Play className="h-3 w-3" />بدء محاولة</button>}{onPublishGrades && ['published', 'archived'].includes(String(lifecycle?.state)) && <button type="button" disabled={Boolean(busy)} onClick={() => void publishGrades(assessment.id)} className="flex items-center gap-1 border border-violet-400/40 px-2 py-2 text-[10px] font-black text-violet-200 disabled:opacity-30">{busy === `grades.publish.${assessment.id}` ? 'جارٍ الترحيل...' : 'ترحيل للنتيجة العامة'}</button>}<button type="button" onClick={() => exportAssessmentCsv(assessment)} disabled={Boolean(busy)} className="flex items-center gap-1 border border-cyan-500/30 px-2 py-2 text-[10px] font-black text-cyan-200 disabled:opacity-30" aria-label={`تصدير CSV للامتحان ${assessment.title}`}><Download className="h-3 w-3" />CSV</button><button type="button" onClick={() => void exportAssessmentXlsx(assessment)} disabled={Boolean(busy)} className="flex items-center gap-1 border border-emerald-500/30 px-2 py-2 text-[10px] font-black text-emerald-200 disabled:opacity-30" aria-label={`تصدير XLSX للامتحان ${assessment.title}`}><Download className="h-3 w-3" />XLSX</button><button type="button" onClick={() => printAssessmentReport(assessment)} disabled={Boolean(busy)} className="flex items-center gap-1 border border-amber-500/30 px-2 py-2 text-[10px] font-black text-amber-200 disabled:opacity-30" aria-label={`طباعة أو حفظ PDF للامتحان ${assessment.title}`}><Printer className="h-3 w-3" />PDF/طباعة</button></div></div>
             {lifecycle?.state === 'open' && <div className="mt-3 flex flex-wrap items-center gap-2 border-t border-amber-500/20 pt-3"><input disabled={!canOperateAttempt} value={candidateId} onChange={event => setCandidateId(event.target.value)} className="border border-[#d4af37]/30 bg-[#130b04] px-3 py-2 text-xs text-amber-50 disabled:opacity-40" placeholder="معرف الطالب الرسمي" /><span className="text-[10px] font-bold text-amber-100/50">ابدأ المحاولة بعد تحقق هوية الطالب من المصدر المركزي.</span></div>}
             <div className={`mt-4 border p-3 text-xs font-bold ${readiness.ready ? 'border-emerald-400/40 bg-emerald-950/30 text-emerald-200' : 'border-amber-400/30 bg-amber-950/20 text-amber-100/80'}`}><div className="flex items-center gap-2">{readiness.ready ? <CheckCircle className="h-4 w-4" /> : <AlertTriangle className="h-4 w-4" />}<span>{readiness.ready ? 'بوابة النشر مكتملة.' : `بوابة النشر: ${readiness.blockers.length} مانعاً يحتاج معالجة.`}</span></div>{!readiness.ready && readiness.blockers.slice(0, 3).map(blocker => <p key={`${blocker.code}-${blocker.entityId}`} className="mt-1 text-[10px]">• {blocker.message}</p>)}</div>
             <div className="mt-4 flex flex-wrap gap-1.5">{ASSESSMENT_LIFECYCLE_STATES.map(stateName => <span key={stateName} className={`border px-2 py-1 text-[9px] font-black ${stateName === lifecycle?.state ? 'border-[#f7d174] bg-[#2a1d13] text-[#f7d174]' : lifecycle && ASSESSMENT_LIFECYCLE_STATES.indexOf(stateName) < ASSESSMENT_LIFECYCLE_STATES.indexOf(lifecycle.state) ? 'border-emerald-500/20 text-emerald-300/70' : 'border-amber-500/15 text-amber-100/35'}`}>{assessmentLifecycleLabel[stateName]}</span>)}</div>
+            {psychometrics && psychometrics.attemptCount > 0 && <section className="mt-4 border border-cyan-400/25 bg-cyan-950/20 p-3"><div className="flex flex-wrap items-center justify-between gap-2"><div><h5 className="text-xs font-black text-cyan-100">التحليل السيكومتري</h5><p className="mt-1 text-[10px] text-cyan-100/60">مبني على المحاولات المصححة النهائية فقط.</p></div><div className="flex flex-wrap gap-2 text-[10px] font-black text-cyan-100"><span>المحاولات: {psychometrics.attemptCount}</span><span>المتوسط: {psychometrics.averagePercentage}%</span><span>الانحراف: {psychometrics.standardDeviation}</span><span>ألفا: {psychometrics.cronbachAlpha ?? 'غير متاح'}</span></div></div><div className="mt-3 overflow-x-auto"><table className="w-full min-w-[720px] text-[10px]"><thead><tr className="border-b border-cyan-400/20 text-cyan-100/70"><th className="p-2 text-right">السؤال</th><th className="p-2">المحاولات</th><th className="p-2">مؤشر السهولة %</th><th className="p-2">معامل التمييز</th><th className="p-2">متوسط الدرجة</th><th className="p-2 text-right">أكثر الإجابات</th></tr></thead><tbody>{psychometrics.items.map(item => <tr key={`${item.questionId}@${item.questionVersion}`} className="border-b border-cyan-400/10 text-cyan-50"><td className="p-2 text-right">{item.questionId}@v{item.questionVersion}</td><td className="p-2 text-center">{item.attempts}</td><td className="p-2 text-center">{item.facilityIndex}</td><td className="p-2 text-center">{item.discriminationIndex === null ? 'غير متاح' : item.discriminationIndex.toFixed(3)}</td><td className="p-2 text-center">{item.averageScore} / {item.maximumScore}</td><td className="max-w-[240px] p-2 text-right">{item.responseFrequencies.slice(0, 3).map(frequency => `${frequency.answer} (${frequency.count})`).join('، ')}</td></tr>)}</tbody></table></div></section>}
           </div>;
         })}
         {state.assessments.length === 0 && <div className="border border-dashed border-[#d4af37]/30 p-8 text-center text-xs font-bold text-amber-100/55">أنشئ نموذجاً من الأسئلة المفعلة لبدء دورة التشغيل.</div>}

@@ -24,6 +24,7 @@ import ExamsDistributionPanel from './exams/ExamsDistributionPanel';
 import ExamsAssessmentPanel from './exams/ExamsAssessmentPanel';
 import { canAssignProctorForWeek } from '../modules/exams/application/ExamSchedulingRules';
 import {
+  AssessmentGradeProjection,
   AssessmentWorkflowState,
   createEmptyAssessmentWorkflowState,
   normalizeAssessmentWorkflowState
@@ -56,6 +57,23 @@ const normalizeSubjectName = (value: unknown): string => String(value ?? '')
   .trim()
   .replace(/\s+/g, ' ')
   .toLocaleLowerCase('ar');
+
+const EXAMS_SOURCE_REQUEST_TIMEOUT_MS = 15_000;
+
+const fetchExamsSource = async (input: RequestInfo | URL, init: RequestInit = {}): Promise<Response> => {
+  const controller = new AbortController();
+  const timeoutId = window.setTimeout(() => controller.abort(), EXAMS_SOURCE_REQUEST_TIMEOUT_MS);
+  try {
+    return await fetch(input, { ...init, signal: controller.signal });
+  } catch (error) {
+    if (error instanceof DOMException && error.name === 'AbortError') {
+      throw new Error('انتهت مهلة الاتصال بالمصدر المركزي. تحقق من الشبكة ثم أعد المحاولة.');
+    }
+    throw error;
+  } finally {
+    window.clearTimeout(timeoutId);
+  }
+};
 
 const getScheduleRulesError = (config: any): string => {
   if (!/^\d{4}-\d{2}-\d{2}$/.test(config?.startDate || '')) return 'حدد تاريخ بداية صالحاً للامتحانات.';
@@ -347,8 +365,8 @@ export default function ExamsResultsModule({
     const collected: any[] = [];
     let page = 1;
     let hasNext = true;
-    while (hasNext) {
-      const response = await fetch(`/api/students?page=${page}&limit=100&sortBy=name&sortOrder=asc`, {
+    while (hasNext && page <= 1000) {
+      const response = await fetchExamsSource(`/api/students?page=${page}&limit=100&sortBy=name&sortOrder=asc`, {
         headers: { 'Authorization': token ? `Bearer ${token}` : '' },
         cache: 'no-store'
       });
@@ -358,6 +376,7 @@ export default function ExamsResultsModule({
       hasNext = Boolean(result.meta?.hasNext);
       page += 1;
     }
+    if (hasNext) throw new Error('تعذر إكمال قراءة الطلاب من المصدر المركزي: عدد الصفحات تجاوز الحد الآمن.');
     const normalizeAcademicYear = (value: unknown) => String(value || '').replace(/\D/g, '');
     const targetAcademicYear = normalizeAcademicYear(selectedSchool?.academicYear || examSettings.academicYear);
     const diagnostics = {
@@ -388,7 +407,7 @@ export default function ExamsResultsModule({
   };
 
   const fetchCentralAuditLogs = async (token: string | null) => {
-    const response = await fetch('/api/exams/audit-events', {
+    const response = await fetchExamsSource('/api/exams/audit-events', {
       headers: { 'Authorization': token ? `Bearer ${token}` : '' },
       cache: 'no-store'
     });
@@ -459,7 +478,7 @@ export default function ExamsResultsModule({
         exams_assessment_state: persistenceExtras.assessmentState ?? assessmentState
       };
       const token = getTrustedAccessToken();
-      const response = await fetch('/api/exams/database', {
+      const response = await fetchExamsSource('/api/exams/database', {
         method: 'POST',
         headers: {
           'Content-Type': 'application/json',
@@ -561,7 +580,7 @@ export default function ExamsResultsModule({
     try {
       const token = getTrustedAccessToken();
       const [response, canonicalStudents, canonicalAuditEvents] = await Promise.all([
-        fetch('/api/exams/database', {
+        fetchExamsSource('/api/exams/database', {
           headers: {
             'Authorization': token ? `Bearer ${token}` : ''
           }
@@ -607,16 +626,26 @@ export default function ExamsResultsModule({
           if (dbData.exams_schedule_config) updateScheduleConfig(dbData.exams_schedule_config);
           if (dbData.exams_custom_proctor_unavailable) setCustomProctorUnavailable(dbData.exams_custom_proctor_unavailable);
           if (dbData.exams_assessment_state) restoreAssessmentState(dbData.exams_assessment_state);
-          setDbSyncStatus('success');
-          setLastSyncTime(new Date().toLocaleTimeString('ar-EG'));
-          triggerNotification('تمت مزامنة واسترجاع كامل البيانات من السيرفر بنجاح', 'success');
+          if (canonicalStudents === null) {
+            setDbSyncStatus('error');
+            triggerNotification('تم استرجاع بيانات الامتحانات، لكن تعذر تحديث الطلاب من المصدر المركزي. أعد التحقق قبل أي تعديل.', 'warning');
+          } else {
+            setDbSyncStatus('success');
+            setLastSyncTime(new Date().toLocaleTimeString('ar-EG'));
+            triggerNotification('تمت مزامنة واسترجاع كامل البيانات من السيرفر بنجاح', 'success');
+          }
           logAction('مزامنة واسترجاع البيانات يدوياً من السيرفر', 'النظام وقاعدة البيانات');
         } else {
           // An empty canonical database is an empty state, not permission to
           // promote browser/demo fixtures into authoritative exam records.
           if (canonicalStudents) setStudentList(mergeCanonicalStudents(canonicalStudents));
-          setDbSyncStatus('success');
-          triggerNotification('المصدر المركزي متاح لكنه لا يحتوي سجلات امتحانات بعد.', 'info');
+          if (canonicalStudents === null) {
+            setDbSyncStatus('error');
+            triggerNotification('المصدر المركزي ردّ بلا سجلات امتحانات، لكن تعذر التحقق من الطلاب. أعد المحاولة.', 'warning');
+          } else {
+            setDbSyncStatus('success');
+            triggerNotification('المصدر المركزي متاح لكنه لا يحتوي سجلات امتحانات بعد.', 'info');
+          }
         }
       } else {
         setDbSyncStatus('error');
@@ -637,7 +666,7 @@ export default function ExamsResultsModule({
     setIsCanonicalClassSyncing(true);
     try {
       const token = getTrustedAccessToken();
-      const response = await fetch('/api/exams/sync-canonical-classes', {
+      const response = await fetchExamsSource('/api/exams/sync-canonical-classes', {
         method: 'POST',
         headers: {
           'Content-Type': 'application/json',
@@ -684,7 +713,7 @@ export default function ExamsResultsModule({
       try {
         const token = getTrustedAccessToken();
         const [response, canonicalStudents, canonicalAuditEvents] = await Promise.all([
-          fetch('/api/exams/database', {
+          fetchExamsSource('/api/exams/database', {
           headers: {
             'Authorization': token ? `Bearer ${token}` : ''
           }
@@ -729,13 +758,23 @@ export default function ExamsResultsModule({
             if (dbData.exams_schedule_config) updateScheduleConfig(dbData.exams_schedule_config);
             if (dbData.exams_custom_proctor_unavailable) setCustomProctorUnavailable(dbData.exams_custom_proctor_unavailable);
             if (dbData.exams_assessment_state) restoreAssessmentState(dbData.exams_assessment_state);
-            setDbSyncStatus('success');
-            setLastSyncTime(new Date().toLocaleTimeString('ar-EG'));
-            triggerNotification('تم الاتصال بقاعدة البيانات واسترجاع كافة السجلات بنجاح', 'success');
+            if (canonicalStudents === null) {
+              setDbSyncStatus('error');
+              triggerNotification('تم تحميل بيانات الامتحانات، لكن تعذر التحقق من الطلاب. أعد التحقق قبل المتابعة.', 'warning');
+            } else {
+              setDbSyncStatus('success');
+              setLastSyncTime(new Date().toLocaleTimeString('ar-EG'));
+              triggerNotification('تم الاتصال بقاعدة البيانات واسترجاع كافة السجلات بنجاح', 'success');
+            }
           } else {
             if (canonicalStudents) setStudentList(mergeCanonicalStudents(canonicalStudents));
-            setDbSyncStatus('success');
-            triggerNotification('المصدر المركزي متاح لكنه لا يحتوي سجلات امتحانات بعد.', 'info');
+            if (canonicalStudents === null) {
+              setDbSyncStatus('error');
+              triggerNotification('المصدر المركزي متاح، لكن تعذر التحقق من الطلاب. أعد المحاولة قبل إنشاء دورة.', 'warning');
+            } else {
+              setDbSyncStatus('success');
+              triggerNotification('المصدر المركزي متاح لكنه لا يحتوي سجلات امتحانات بعد.', 'info');
+            }
           }
         } else {
           setDbSyncStatus('error');
@@ -1332,6 +1371,96 @@ export default function ExamsResultsModule({
     setProctorAssignments(newProctorAssignments);
     triggerNotification('تم توزيع المراقبين والملاحظين تلقائياً على اللجان دون أي تعارض زمني!', 'success');
     logAction('تشغيل محرك التوزيع الآلي للمراقبين على اللجان', 'المراقبون والملاحظون');
+  };
+
+  const handlePublishOnlineAssessmentGrades = async (
+    assessmentId: string,
+    projections: AssessmentGradeProjection[]
+  ): Promise<boolean> => {
+    if (approvalStatus.approved) {
+      triggerNotification('لا يمكن ترحيل درجات إلكترونية؛ النتائج العامة معتمدة ومقفلة.', 'warning');
+      return false;
+    }
+    if (dbSyncStatus !== 'success') {
+      triggerNotification('لا يمكن الترحيل قبل اتصال المصدر المركزي والتحقق من الطلاب.', 'warning');
+      return false;
+    }
+    if (!Array.isArray(projections) || projections.length === 0) {
+      triggerNotification('لا توجد نتائج إلكترونية نهائية قابلة للترحيل.', 'warning');
+      return false;
+    }
+
+    const updatedMatrix = structuredClone(gradesMatrix);
+    const updatedGradeHistory = [...gradeHistory];
+    const updatedAuditLogs = [...auditLogs];
+    let changedCount = 0;
+    for (const projection of projections) {
+      const student = studentList.find(item => String(item.id) === projection.candidateId);
+      const subject = subjects.find(item => item.id === projection.subjectId);
+      if (!student || !subject) {
+        triggerNotification(`تعذر ترحيل نتيجة الطالب ${projection.candidateId}: الطالب أو المادة غير موجودة في الدورة الحالية.`, 'warning');
+        return false;
+      }
+      if (projection.score < 0 || projection.score > subject.maxScore) {
+        triggerNotification(`تعذر ترحيل نتيجة ${student.name}: الدرجة خارج نطاق مادة ${subject.name}.`, 'warning');
+        return false;
+      }
+      const oldGrade = updatedMatrix[projection.candidateId]?.[projection.subjectId];
+      if (!updatedMatrix[projection.candidateId]) updatedMatrix[projection.candidateId] = {};
+      updatedMatrix[projection.candidateId][projection.subjectId] = projection.score;
+      if (oldGrade !== projection.score) {
+        updatedGradeHistory.unshift({
+          id: `gh-online-${Date.now()}-${changedCount}`,
+          studentName: student.name,
+          classroom: student.classroom,
+          subjectName: subject.name,
+          oldGrade,
+          newGrade: projection.score,
+          modifiedBy: trustedActorLabel,
+          reason: `ترحيل نتيجة امتحان إلكتروني منشور (${assessmentId}) إلى كشف الدرجات العام`,
+          source: 'online_assessment',
+          assessmentId,
+          timestamp: new Date().toISOString().replace('T', ' ').substring(0, 19)
+        });
+        updatedAuditLogs.unshift({
+          id: `a-online-${Date.now()}-${changedCount}`,
+          timestamp: new Date().toISOString().replace('T', ' ').substring(0, 19),
+          user: trustedActorLabel,
+          action: `ترحيل نتيجة إلكترونية للطالب [${student.name}] في مادة [${subject.name}] من [${oldGrade ?? 'غير مرصود'}] إلى [${projection.score}]`,
+          module: 'الامتحان الإلكتروني والنتائج العامة',
+          source: 'online_assessment',
+          assessmentId
+        });
+        changedCount += 1;
+      }
+    }
+
+    const persisted = await saveToServerDb(
+      examSettings,
+      halls,
+      subjects,
+      studentList,
+      updatedMatrix,
+      schedule,
+      proctorAssignments,
+      approvalStatus,
+      updatedAuditLogs,
+      classesList,
+      controlClosures,
+      reEvaluationRequests,
+      snapshots,
+      reviewedStagesSubjects,
+      stageApprovalStatus,
+      'write',
+      { gradeHistory: updatedGradeHistory, operationReason: `ترحيل نتائج الامتحان الإلكتروني ${assessmentId}` }
+    );
+    if (!persisted) return false;
+    setGradesMatrix(updatedMatrix);
+    setGradeHistory(updatedGradeHistory);
+    setAuditLogs(updatedAuditLogs);
+    triggerNotification(`تم ترحيل ${projections.length} نتيجة إلكترونية إلى كشف الدرجات العام${changedCount === 0 ? ' دون تغييرات جديدة' : ''}.`, 'success');
+    logAction(`ترحيل نتائج الامتحان الإلكتروني ${assessmentId} إلى كشف الدرجات العام`, 'الامتحان الإلكتروني والنتائج العامة');
+    return true;
   };
 
   // 7. Grades Input System Spreadsheet
@@ -2806,8 +2935,10 @@ export default function ExamsResultsModule({
             state={assessmentState}
             actorId={trustedActorLabel}
             candidateIds={studentList.map(student => String(student.id || '').trim()).filter(Boolean)}
+            subjects={subjects.map(subject => ({ id: String(subject.id), name: String(subject.name), maxScore: Number(subject.maxScore) }))}
             permissionRole={currentUserRole}
             onChange={persistAssessmentState}
+            onPublishGrades={handlePublishOnlineAssessmentGrades}
           />
         )}
 
