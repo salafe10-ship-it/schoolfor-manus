@@ -31,6 +31,34 @@ describe('exams authorization and read-scope policy', () => {
     )).toThrow(/exams_schedule/);
   });
 
+  it('keeps online assessment lifecycle transitions server-owned for teachers', () => {
+    const currentState = {
+      questionBank: [],
+      assessments: [],
+      blueprints: [],
+      lifecycles: [{ assessmentId: 'assessment-1', state: 'review', version: 2 }],
+      attempts: [],
+      objections: [],
+      reports: [],
+      auditEvents: []
+    };
+
+    expect(() => assertTeacherWriteScope(
+      { exams_assessment_state: currentState },
+      { exams_assessment_state: { ...currentState, lifecycles: [{ assessmentId: 'assessment-1', state: 'published', version: 3 }] } }
+    )).toThrow(/تغيير دورة الامتحان الإلكتروني/);
+
+    expect(() => assertTeacherWriteScope(
+      { exams_assessment_state: currentState },
+      { exams_assessment_state: { ...currentState, lifecycles: [{ assessmentId: 'assessment-2', state: 'published', version: 1 }] } }
+    )).toThrow(/يجب أن يبدأ كمسودة/);
+
+    expect(() => assertTeacherWriteScope(
+      { exams_assessment_state: currentState },
+      { exams_assessment_state: { ...currentState, lifecycles: [{ assessmentId: 'assessment-1', state: 'review', version: 2 }], questionBank: [{ id: 'question-1' }] } }
+    )).not.toThrow();
+  });
+
   it('uses server-derived permissions for full staff access without trusting a display role', () => {
     const staffPermissions = new Set(['Exam.Write']);
     expect(canWriteExamOperation('employee', staffPermissions)).toBe(true);

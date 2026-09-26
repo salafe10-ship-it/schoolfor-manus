@@ -12,6 +12,7 @@ interface ExamsCertificatesPanelProps {
   approvalStatus: { approved: boolean; approvedBy?: string; approvedAt?: string };
   closures: any[];
   classes: any[];
+  accessToken?: string | null;
   notify: (message: string, type: NotificationType) => void;
 }
 
@@ -37,6 +38,7 @@ export default function ExamsCertificatesPanel({
   approvalStatus,
   closures,
   classes,
+  accessToken,
   notify
 }: ExamsCertificatesPanelProps) {
   const immutableArchive = closures.find(closure => closure?.isImmutableArchive && /^[0-9a-f]{64}$/i.test(String(closure.signatureHash || '')));
@@ -45,6 +47,8 @@ export default function ExamsCertificatesPanel({
   const [selectedClass, setSelectedClass] = useState('الكل');
   const [verificationCode, setVerificationCode] = useState('');
   const [verifiedStudentId, setVerifiedStudentId] = useState<string | null>(null);
+  const [verifiedStudentName, setVerifiedStudentName] = useState<string | null>(null);
+  const [isVerifying, setIsVerifying] = useState(false);
   const selectedStudent = students.find(student => student.id === selectedStudentId) || students[0];
   const verifiedStudent = students.find(student => student.id === verifiedStudentId);
 
@@ -122,15 +126,39 @@ export default function ExamsCertificatesPanel({
     notify('تم تصدير كشف الدرجات الفعلي بصيغة CSV.', 'success');
   };
 
-  const verify = () => {
+  const verify = async () => {
     if (!canIssue) {
       setVerifiedStudentId(null);
+      setVerifiedStudentName(null);
       notify('لا يوجد أرشيف نتائج معتمد يمكن التحقق منه.', 'warning');
       return;
     }
-    const student = students.find(item => certificateCode(item).toLowerCase() === verificationCode.trim().toLowerCase());
-    setVerifiedStudentId(student?.id || null);
-    notify(student ? `تمت مطابقة الرمز مع أرشيف نتيجة ${student.name}.` : 'رمز التحقق لا يطابق أرشيف النتائج الحالي.', student ? 'success' : 'warning');
+    const [archiveId, studentId, ...extra] = verificationCode.trim().split(':');
+    if (!accessToken || !archiveId || !studentId || extra.length > 0) {
+      setVerifiedStudentId(null);
+      setVerifiedStudentName(null);
+      notify('تعذر التحقق: يلزم رمز أرشيف كامل واتصال موثق بالخادم.', 'warning');
+      return;
+    }
+    setIsVerifying(true);
+    try {
+      const response = await fetch(`/api/exams/result-archives/${encodeURIComponent(archiveId)}/verify?studentId=${encodeURIComponent(studentId)}`, {
+        headers: { Authorization: `Bearer ${accessToken}` },
+        cache: 'no-store'
+      });
+      const result = await response.json().catch(() => ({}));
+      const verification = result?.data;
+      const verified = response.ok && verification?.valid === true;
+      setVerifiedStudentId(verified ? String(verification.studentId) : null);
+      setVerifiedStudentName(verified ? String(verification.studentName || '').trim() : null);
+      notify(verified ? `تمت مطابقة الرمز بختم الخادم للطالب ${verification.studentName || studentId}.` : (result?.message || 'رمز التحقق لا يطابق ختم أرشيف النتائج.'), verified ? 'success' : 'warning');
+    } catch {
+      setVerifiedStudentId(null);
+      setVerifiedStudentName(null);
+      notify('تعذر الوصول إلى خدمة التحقق المركزية.', 'warning');
+    } finally {
+      setIsVerifying(false);
+    }
   };
 
   return (
@@ -160,7 +188,7 @@ export default function ExamsCertificatesPanel({
         </section>
       </div>
 
-      <section className="border border-emerald-500/35 bg-emerald-950/30 p-5"><div className="flex items-center gap-2"><ShieldCheck className="h-5 w-5 text-emerald-300"/><h3 className="text-sm font-black text-emerald-100">التحقق من إفادة نتيجة</h3></div><p className="mt-1 text-[11px] text-emerald-100/70">أدخل الرمز الكامل المطبوع في الإفادة لمطابقته مع أرشيف الجلسة الحالية.</p><div className="mt-3 flex flex-col gap-2 sm:flex-row"><input value={verificationCode} onChange={event => setVerificationCode(event.target.value)} placeholder="معرف الأرشيف:معرف الطالب" className="flex-1 border border-emerald-500/40 bg-[#130b04] p-2.5 text-xs font-bold text-emerald-50 placeholder:text-emerald-100/35 outline-none"/><button type="button" onClick={verify} className="bg-emerald-700 px-5 py-2.5 text-xs font-black text-white transition hover:bg-emerald-600">تحقق</button></div>{verifiedStudent && <div className="mt-3 flex items-center gap-2 border border-emerald-500/40 bg-[#130b04] p-3 text-xs font-bold text-emerald-100"><CheckCircle className="h-5 w-5"/>تمت مطابقة الرمز مع الطالب {verifiedStudent.name} والأرشيف {immutableArchive.archiveId}.</div>}</section>
+      <section className="border border-emerald-500/35 bg-emerald-950/30 p-5"><div className="flex items-center gap-2"><ShieldCheck className="h-5 w-5 text-emerald-300"/><h3 className="text-sm font-black text-emerald-100">التحقق من إفادة نتيجة</h3></div><p className="mt-1 text-[11px] text-emerald-100/70">أدخل الرمز الكامل المطبوع في الإفادة للتحقق من ختم الأرشيف مباشرة من الخادم.</p><div className="mt-3 flex flex-col gap-2 sm:flex-row"><input value={verificationCode} onChange={event => setVerificationCode(event.target.value)} placeholder="معرف الأرشيف:معرف الطالب" className="flex-1 border border-emerald-500/40 bg-[#130b04] p-2.5 text-xs font-bold text-emerald-50 placeholder:text-emerald-100/35 outline-none"/><button type="button" disabled={isVerifying} onClick={() => void verify()} className="bg-emerald-700 px-5 py-2.5 text-xs font-black text-white transition hover:bg-emerald-600 disabled:opacity-50">{isVerifying ? 'جارٍ التحقق...' : 'تحقق'}</button></div>{verifiedStudentId && <div className="mt-3 flex items-center gap-2 border border-emerald-500/40 bg-[#130b04] p-3 text-xs font-bold text-emerald-100"><CheckCircle className="h-5 w-5"/>تمت مطابقة الرمز بختم الخادم للطالب {verifiedStudentName || verifiedStudent?.name || verifiedStudentId}.</div>}</section>
     </div>
   );
 }
