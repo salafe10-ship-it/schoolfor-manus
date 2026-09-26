@@ -341,7 +341,7 @@ export default function ExamsAssessmentPanel({ state, actorId, candidateIds, sub
     }
     if (question.type === 'ordering') {
       const ordering = Array.isArray(value) ? value.map(String) : [];
-      return <select multiple value={ordering} onChange={event => setAnswer(Array.from(event.target.selectedOptions).map(option => option.value))} className="min-h-24 w-full border border-[#d4af37]/30 bg-[#130b04] px-3 py-2 text-xs text-amber-50">{question.configuration.items.map(item => <option key={item.id} value={item.id}>{item.label}</option>)}</select>;
+      return <select multiple value={ordering} onChange={event => setAnswer(Array.from(event.currentTarget.selectedOptions) .map(option => (option as HTMLOptionElement).value))} className="min-h-24 w-full border border-[#d4af37]/30 bg-[#130b04] px-3 py-2 text-xs text-amber-50">{question.configuration.items.map(item => <option key={item.id} value={item.id}>{item.label}</option>)}</select>;
     }
     return <input value={String(value ?? '')} onChange={event => setAnswer(event.target.value)} className="w-full border border-[#d4af37]/30 bg-[#130b04] px-3 py-2 text-xs text-amber-50" placeholder="إجابة الطالب" />;
   };
