@@ -730,7 +730,17 @@ const handlePrintPV = (pv: any) => {
                         onChange={(e) => setPaymentVoucherForm(prev => ({ ...prev, paidFromAccount: e.target.value }))}
                         className="w-full bg-slate-50 border border-slate-200 rounded-lg p-2.5 font-bold focus:outline-none"
                       >
-                        {accounts.filter(a => a.classification === 'أصول' && a.type === 'فرعي' && (a.code === '1101' || a.code === '1102')).map(a => (
+                        {accounts.filter((account: any) => {
+                          const code = String(account.code || account.accountCode || '').trim();
+                          const classification = String(account.classification || '').trim().toLowerCase();
+                          const type = String(account.type || '').trim().toLowerCase();
+                          const isCashOrBankCode = code.startsWith('110') || code.startsWith('111') || code.startsWith('112');
+                          const isLeaf = account.isLeaf !== false && account.is_leaf !== false;
+                          const isAsset = ['أصول', 'asset', 'assets'].includes(classification);
+                          const isDetailType = ['فرعي', 'sub', 'subaccount', 'detail'].includes(type);
+                          return isCashOrBankCode && isLeaf && (isAsset || isDetailType || (!classification && !type))
+                            && (Number(account.level || 0) >= 3 || ['1101', '1110', '1120'].includes(code));
+                        }).map((a: any) => (
                           <option key={a.code} value={a.code}>
                             {a.code} - {a.name} (الرصيد: {a.balance.toLocaleString()} {currency})
                           </option>
