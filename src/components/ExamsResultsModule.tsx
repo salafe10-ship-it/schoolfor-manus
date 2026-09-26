@@ -583,7 +583,9 @@ export default function ExamsResultsModule({
   const handleForceSync = async () => {
     setIsDbSyncing(true);
     try {
-      const token = await getTrustedAccessTokenAsync();
+      // authenticatedRequest owns the read-session restore/retry lifecycle;
+      // do not race it with a second explicit restore in this fan-out.
+      const token = getTrustedAccessToken();
       const [response, canonicalStudents, canonicalAuditEvents] = await Promise.all([
         fetchExamsSource('/api/exams/database', {
           headers: {
@@ -716,7 +718,9 @@ export default function ExamsResultsModule({
     const fetchDbOnMount = async () => {
       setIsDbSyncing(true);
       try {
-        const token = await getTrustedAccessTokenAsync();
+        // authenticatedRequest owns the read-session restore/retry lifecycle;
+        // do not race it with a second explicit restore during mount.
+        const token = getTrustedAccessToken();
         const [response, canonicalStudents, canonicalAuditEvents] = await Promise.all([
           fetchExamsSource('/api/exams/database', {
           headers: {
@@ -2014,7 +2018,7 @@ export default function ExamsResultsModule({
   const handleLoadStudents = async () => {
     setIsReloadingStudents(true);
     try {
-      const canonicalStudents = await fetchCanonicalStudents(await getTrustedAccessTokenAsync());
+      const canonicalStudents = await fetchCanonicalStudents(getTrustedAccessToken());
       const refreshedStudents = mergeCanonicalStudents(canonicalStudents, studentList);
       setStudentList(refreshedStudents);
       triggerNotification(`تم تحميل ${refreshedStudents.length} طالباً من المصدر الرسمي مع الحفاظ على بيانات الامتحانات.`, 'success');
