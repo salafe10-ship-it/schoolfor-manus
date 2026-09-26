@@ -1286,7 +1286,7 @@ function validateHrSnapshotData(data: Record<string, any>): void {
   }
 }
 
-const INVENTORY_FINANCIAL_COLLECTIONS = ['goodsReceipts', 'vendorBills', 'movements', 'stocktakes'] as const;
+const INVENTORY_FINANCIAL_COLLECTIONS = ['goodsReceipts', 'vendorBills', 'movements', 'stocktakes', 'vendorPayments'] as const;
 
 function validateInventoryPostingMetadata(currentData: Record<string, any>, requestedData: Record<string, any>): void {
   for (const collection of INVENTORY_FINANCIAL_COLLECTIONS) {
@@ -1312,7 +1312,8 @@ function applyInventoryPostingLinks(data: Record<string, any>, sourceLinks: Arra
     inventory_receipt: 'goodsReceipts',
     vendor_bill: 'vendorBills',
     inventory_movement: 'movements',
-    inventory_stocktake: 'stocktakes'
+    inventory_stocktake: 'stocktakes',
+    vendor_payment: 'vendorPayments'
   };
   for (const link of sourceLinks) {
     const collection = sourceCollection[link.sourceType];
@@ -1324,6 +1325,7 @@ function applyInventoryPostingLinks(data: Record<string, any>, sourceLinks: Arra
     if (collection === 'goodsReceipts') row.status = 'posted_to_gl';
     if (collection === 'movements') { row.status = 'posted'; row.statusLabel = `مرحل محاسبياً — ${link.journalEntryId}`; }
     if (collection === 'stocktakes') row.statusLabel = `مرحل محاسبياً — ${link.journalEntryId}`;
+    if (collection === 'vendorPayments') row.glJournalEntryId = link.journalEntryId;
   }
   return next;
 }
@@ -12500,6 +12502,121 @@ export async function createApp(options: { cloudflare?: boolean } = {}): Promise
     } catch (err: any) {
       EnterpriseLogger.error('Canonical payment posting failed', 'FinancialPaymentRoute', { error: err?.message || String(err) });
       next(err instanceof AuthenticationError || err instanceof DatabaseError || err instanceof ValidationError ? err : new DatabaseError('تعذر ترحيل سند الصرف الكانوني.', err?.message));
+    }
+  });
+
+  app.post('/api/financial/vendor-bills/:billId/pay', authenticateRequest, requirePermission(PERMISSIONS.FINANCIAL_WRITE), async (req, res, next) => {
+    try {
+      const identity = (req as any).user;
+      const tenantId = String(identity?.tenantId || '').trim();
+      const schoolId = String(identity?.schoolId || '').trim();
+      const actorId = String(identity?.id || '').trim();
+      const tenantContext = (req as any).tenantContext;
+      const billId = String(req.params.billId || '').trim();
+      const amount = Number(req.body?.amountPaid);
+      const paymentMethod = String(req.body?.paymentMethod || 'cash').trim();
+      const paymentId = String(req.body?.paymentId || req.get('Idempotency-Key') || '').trim();
+      const paidFromAccount = String(req.body?.paidFromAccount || '').trim();
+      if (!tenantId || !schoolId || !actorId || !tenantContext || tenantContext.tenantId !== tenantId || tenantContext.schoolId !== schoolId) {
+        throw new AuthenticationError('السياق المالي الموثوق غير مكتمل.');
+      }
+      if (!billId || !paymentId || !/^[A-Za-z0-9:_-]{8,160}$/.test(paymentId)) throw new ValidationError('معرف سداد المورد أو مفتاح منع التكرار غير صالح.');
+      if (!Number.isFinite(amount) || amount <= 0) throw new ValidationError('قيمة سداد المورد يجب أن تكون أكبر من صفر.');
+      if (!['bank_transfer', 'check', 'cash', 'treasury_voucher'].includes(paymentMethod)) throw new ValidationError('وسيلة سداد المورد غير معتمدة.');
+      if (!transactionDriver) throw new DatabaseError('سداد المورد يتطلب اتصال PostgreSQL.');
+
+      let responseData: { journalId: string; paymentId: string; billId: string; status: string } | null = null;
+      await UnitOfWork.runInTransaction(schoolId, {
+        operationName: `Pay vendor bill ${billId}`,
+        tenantId, userId: actorId, userName: identity.name || 'المستخدم المالي',
+        ipAddress: req.ip || 'unknown', affectedTables: ['inventory_database', 'erp_journal_entries', 'erp_journal_lines', 'erp_general_ledger', 'audit_events']
+      }, async () => {
+        const transaction = UnitOfWork.getActiveContext()?.databaseTransaction;
+        if (!transaction) throw new DatabaseError('المعاملة المالية غير متاحة.');
+        const actor = await transaction.query<{ id: string }>(
+          `SELECT id FROM public.users WHERE tenant_id = $1 AND school_id = $2 AND status = 'active' AND deleted_at IS NULL AND (id = $3 OR auth_user_id = $3) LIMIT 1`,
+          [tenantId, schoolId, actorId]
+        );
+        if (!actor.rows[0]) throw new AuthenticationError('المستخدم المالي غير موجود.');
+        const readiness = await CanonicalErpPostingService.getReadiness(transaction, schoolId);
+        if (!readiness.sourceSupport.inventory || !readiness.sourceSupport.treasury) {
+          throw new ValidationError(`لا يمكن سداد المورد قبل اعتماد خرائط المخزون والخزينة: ${[...readiness.missing, ...readiness.invalid].slice(0, 8).join('، ')}`);
+        }
+        const inventory = await transaction.query<{ data: Record<string, any>; version: number }>(
+          `SELECT data, version FROM public.inventory_database WHERE tenant_id = $1 AND school_id = $2 FOR UPDATE`,
+          [tenantId, schoolId]
+        );
+        const data = inventory.rows[0]?.data || {};
+        const bills = Array.isArray(data.vendorBills) ? data.vendorBills : [];
+        const bill = bills.find((row: any) => String(row?.id || '') === billId);
+        if (!bill) throw new ValidationError('فاتورة المورد غير موجودة في المصدر المركزي.');
+        if (!['approved', 'partially_paid'].includes(String(bill.status))) throw new ValidationError('لا يمكن سداد فاتورة المورد قبل اعتمادها أو بعد إغلاقها.');
+        if (!String(bill.glJournalEntryId || bill.journalEntryId || '').trim()) throw new ValidationError('لا يمكن سداد فاتورة المورد قبل ترحيل قيد الالتزام الكانوني.');
+        const grandTotal = Number(bill.grandTotal);
+        const paidAmount = Number(bill.paidAmount || 0);
+        const remainingAmount = Number(bill.remainingAmount ?? grandTotal - paidAmount);
+        if (!Number.isFinite(grandTotal) || !Number.isFinite(paidAmount) || !Number.isFinite(remainingAmount) || remainingAmount <= 0.01) throw new ValidationError('فاتورة المورد مسددة بالكامل أو تحمل رصيداً غير صالح.');
+        if (amount > remainingAmount + 0.01) throw new ValidationError('قيمة السداد تتجاوز الرصيد المتبقي من فاتورة المورد.');
+
+        const sourceId = `vendor-payment:${billId}:${paymentId}`;
+        const existing = await transaction.query<{ id: string }>(
+          `SELECT id FROM public.erp_journal_entries WHERE tenant_id = $1 AND school_id = $2 AND source_type = 'vendor_payment' AND source_id = $3 LIMIT 1`,
+          [tenantId, schoolId, sourceId]
+        );
+        if (existing.rows[0]?.id) {
+          responseData = { journalId: existing.rows[0].id, paymentId, billId, status: String(bill.status) };
+          return;
+        }
+
+        const payment = {
+          id: sourceId,
+          sourceType: 'vendor_payment',
+          status: 'posted',
+          amountPaid: Number(amount.toFixed(2)),
+          paymentDate: String(req.body?.paymentDate || new Date().toISOString().slice(0, 10)),
+          paymentMethod,
+          paidFromAccount,
+          vendorBillId: billId,
+          billNo: String(bill.billNo || billId),
+          vendorId: String(bill.vendorId || ''),
+          vendorName: String(bill.vendorName || ''),
+          referenceNo: String(req.body?.referenceNo || paymentId),
+          description: `سداد فاتورة المورد ${String(bill.billNo || billId)}`
+        };
+        const sync = await CanonicalErpPostingService.syncSnapshot(transaction, tenantId, schoolId, actor.rows[0].id, {
+          journalEntries: [payment], chartOfAccounts: []
+        });
+        const link = sync.sourceLinks.find(item => item.sourceType === 'vendor_payment' && item.sourceId === sourceId);
+        if (!link) throw new DatabaseError('تم السداد دون إثبات رابط القيد الكانوني.');
+        const nextPaid = Number((paidAmount + amount).toFixed(2));
+        const nextRemaining = Number(Math.max(0, grandTotal - nextPaid).toFixed(2));
+        const nextData = JSON.parse(JSON.stringify(data)) as Record<string, any>;
+        nextData.vendorBills = bills.map((row: any) => String(row?.id || '') === billId ? {
+          ...row, paidAmount: nextPaid, remainingAmount: nextRemaining,
+          status: nextRemaining <= 0.01 ? 'paid' : 'partially_paid', lastPaymentId: sourceId
+        } : row);
+        nextData.vendorPayments = [...(Array.isArray(nextData.vendorPayments) ? nextData.vendorPayments : []), {
+          id: sourceId, schoolId, paymentNo: paymentId, paymentDate: payment.paymentDate,
+          vendorId: payment.vendorId, vendorName: payment.vendorName, vendorBillId: billId,
+          billNo: payment.billNo, amountPaid: payment.amountPaid, paymentMethod,
+          referenceNo: payment.referenceNo, glJournalEntryId: link.journalEntryId, createdAt: new Date().toISOString()
+        }];
+        await transaction.query(
+          `UPDATE public.inventory_database SET data = $3::jsonb, version = version + 1, updated_at = now(), updated_by = $4 WHERE tenant_id = $1 AND school_id = $2`,
+          [tenantId, schoolId, JSON.stringify(nextData), actor.rows[0].id]
+        );
+        await transaction.query(
+          `INSERT INTO public.audit_events (tenant_id, school_id, branch_id, actor_user_id, entity_type, entity_id, action, source, reason, result, metadata)
+           VALUES ($1, $2, $3, $4, 'vendor_bill', $5, 'pay', 'VendorBillPaymentRoute', 'سداد فاتورة مورد وترحيل القيد الكانوني', 'success', $6::jsonb)`,
+          [tenantId, schoolId, identity.branchId || null, actor.rows[0].id, billId, JSON.stringify({ sourceId, journalId: link.journalEntryId, amount, paymentMethod })]
+        );
+        responseData = { journalId: link.journalEntryId, paymentId, billId, status: nextRemaining <= 0.01 ? 'paid' : 'partially_paid' };
+      }, tenantContext);
+      if (!responseData) throw new DatabaseError('تعذر إكمال سداد فاتورة المورد.');
+      res.json({ success: true, data: responseData });
+    } catch (err: any) {
+      EnterpriseLogger.error('Canonical vendor bill payment failed', 'VendorBillPaymentRoute', { error: err?.message || String(err) });
+      next(err instanceof AuthenticationError || err instanceof DatabaseError || err instanceof ValidationError ? err : new DatabaseError('تعذر سداد فاتورة المورد كانونيًا.', err?.message));
     }
   });
 

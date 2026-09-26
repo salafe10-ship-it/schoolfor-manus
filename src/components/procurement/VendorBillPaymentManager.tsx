@@ -11,8 +11,11 @@ interface VendorBillPaymentManagerProps {
   orders: PurchaseOrder[];
   onSaveBill: (bill: VendorBill) => Promise<void>;
   onApproveBill?: (bill: VendorBill) => Promise<void>;
+  onPayBill?: (bill: VendorBill, amount: number, paymentMethod: VendorPaymentMethod, referenceNo: string) => Promise<void>;
   triggerNotification?: (msg: string, type: 'success' | 'warning' | 'info' | 'danger') => void;
 }
+
+type VendorPaymentMethod = 'bank_transfer' | 'check' | 'cash' | 'treasury_voucher';
 
 export default function VendorBillPaymentManager({
   vendorBills,
@@ -20,12 +23,17 @@ export default function VendorBillPaymentManager({
   orders,
   onSaveBill,
   onApproveBill,
+  onPayBill,
   triggerNotification
 }: VendorBillPaymentManagerProps) {
   const [searchTerm, setSearchTerm] = useState('');
   const [showBillForm, setShowBillForm] = useState(false);
   const [billReceiptId, setBillReceiptId] = useState('');
   const [vendorInvoiceNo, setVendorInvoiceNo] = useState('');
+  const [paymentBill, setPaymentBill] = useState<VendorBill | null>(null);
+  const [paymentAmount, setPaymentAmount] = useState('');
+  const [paymentMethod, setPaymentMethod] = useState<VendorPaymentMethod>('cash');
+  const [paymentReference, setPaymentReference] = useState('');
   const billableReceipts = receipts.filter(receipt => receipt.status !== 'rejected' && Number(receipt.totalReceivedValue) > 0);
   const filtered = vendorBills.filter(b => 
     b.billNo.toLowerCase().includes(searchTerm.toLowerCase()) ||
@@ -65,6 +73,29 @@ export default function VendorBillPaymentManager({
     catch (error: any) { triggerNotification?.(error?.message || 'تعذر اعتماد الفاتورة وترحيلها.', 'danger'); }
   };
 
+  const openPaymentForm = (bill: VendorBill) => {
+    setPaymentBill(bill);
+    setPaymentAmount(String(Number(bill.remainingAmount || 0)));
+    setPaymentMethod('cash');
+    setPaymentReference(`QA-${Date.now()}`);
+  };
+
+  const handlePayBill = async (event: React.FormEvent) => {
+    event.preventDefault();
+    if (!paymentBill || !onPayBill) return;
+    const amount = Number(paymentAmount);
+    if (!Number.isFinite(amount) || amount <= 0 || amount > Number(paymentBill.remainingAmount) + 0.01) {
+      triggerNotification?.('قيمة السداد يجب أن تكون موجبة ولا تتجاوز المتبقي من الفاتورة.', 'warning');
+      return;
+    }
+    const reference = paymentReference.trim();
+    if (!reference) { triggerNotification?.('مرجع السداد مطلوب للتدقيق والمطابقة.', 'warning'); return; }
+    try {
+      await onPayBill(paymentBill, Number(amount.toFixed(2)), paymentMethod, reference);
+      setPaymentBill(null);
+    } catch (error: any) { triggerNotification?.(error?.message || 'تعذر سداد فاتورة المورد.', 'danger'); }
+  };
+
   return (
     <div className="space-y-6" id="vendor-bill-payment-manager">
       {/* Top Header Card */}
@@ -87,6 +118,19 @@ export default function VendorBillPaymentManager({
             </select>
             <input required value={vendorInvoiceNo} onChange={event => setVendorInvoiceNo(event.target.value)} placeholder="رقم فاتورة المورد" className="w-full p-2.5 border border-slate-300" />
             <div className="flex justify-end gap-2"><button type="button" onClick={() => setShowBillForm(false)} className="px-4 py-2 bg-slate-100">إلغاء</button><button type="submit" className="px-4 py-2 bg-slate-900 text-white font-bold">حفظ بانتظار المطابقة</button></div>
+          </form>
+        </div>
+      )}
+
+      {paymentBill && (
+        <div className="fixed inset-0 z-50 bg-slate-900/60 flex items-center justify-center p-4">
+          <form onSubmit={handlePayBill} className="bg-white p-6 w-full max-w-lg space-y-4" dir="rtl">
+            <h3 className="font-black text-lg">إحالة فاتورة المورد إلى الخزينة</h3>
+            <p className="text-xs text-slate-500">{paymentBill.billNo} — المتبقي {Number(paymentBill.remainingAmount).toLocaleString('ar-LY')} د.ل</p>
+            <label className="block text-xs font-bold">قيمة السداد<input required type="number" min="0.01" max={paymentBill.remainingAmount} step="0.01" value={paymentAmount} onChange={event => setPaymentAmount(event.target.value)} className="mt-1 w-full p-2.5 border border-slate-300" /></label>
+            <label className="block text-xs font-bold">وسيلة السداد<select value={paymentMethod} onChange={event => setPaymentMethod(event.target.value as VendorPaymentMethod)} className="mt-1 w-full p-2.5 border border-slate-300"><option value="cash">نقدي</option><option value="bank_transfer">تحويل بنكي</option><option value="check">شيك</option><option value="treasury_voucher">سند خزينة</option></select></label>
+            <label className="block text-xs font-bold">مرجع السداد<input required value={paymentReference} onChange={event => setPaymentReference(event.target.value)} className="mt-1 w-full p-2.5 border border-slate-300" /></label>
+            <div className="flex justify-end gap-2"><button type="button" onClick={() => setPaymentBill(null)} className="px-4 py-2 bg-slate-100">إلغاء</button><button type="submit" className="px-4 py-2 bg-amber-600 text-white font-bold">تأكيد السداد والترحيل</button></div>
           </form>
         </div>
       )}
@@ -152,7 +196,7 @@ export default function VendorBillPaymentManager({
                       </button>
                     ) : bill.remainingAmount > 0 ? (
                       <button
-                        onClick={() => triggerNotification?.('الفاتورة معتمدة ومرحلّة؛ أحل طلب السداد إلى وحدة الخزينة لتنفيذ الدفع.', 'info')}
+                        onClick={() => onPayBill ? openPaymentForm(bill) : triggerNotification?.('لا يتوفر مسار سداد مركزي لفاتورة المورد.', 'warning')}
                         className="px-3 py-1.5 bg-amber-100 text-amber-900 font-bold text-xs inline-flex items-center gap-1"
                       >
                         <Coins className="w-3.5 h-3.5" /> إحالة إلى الخزينة

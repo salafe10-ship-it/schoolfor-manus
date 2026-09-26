@@ -1110,8 +1110,10 @@ export default function GeneralLedgerPortal({
   // posted source documents are persisted to the canonical journal and GL.
   type CanonicalFinancialWriteMode = 'snapshot_read_only' | 'snapshot_write' | 'erp_integrated' | 'ledger_ready';
   const [canonicalFinancialWriteMode, setCanonicalFinancialWriteMode] = useState<CanonicalFinancialWriteMode>('snapshot_read_only');
+  const [canonicalMappingsReady, setCanonicalMappingsReady] = useState(false);
   const canonicalFinancialWriteReady = canonicalFinancialStatus === 'ready'
-    && canonicalFinancialWriteMode !== 'snapshot_read_only';
+    && canonicalFinancialWriteMode !== 'snapshot_read_only'
+    && canonicalMappingsReady;
   const canonicalLedgerReady = canonicalFinancialStatus === 'ready'
     && (canonicalFinancialWriteMode === 'ledger_ready' || canonicalFinancialWriteMode === 'erp_integrated');
   const requireCanonicalFinancialWrite = (actionName: string) => {
@@ -1140,6 +1142,16 @@ export default function GeneralLedgerPortal({
         }
 
         const data = result.data || {};
+        let mappingsReady = false;
+        try {
+          const mappingsResponse = await authenticatedRequest('/api/financial/account-mappings', {
+            headers: { Accept: 'application/json' }, cache: 'no-store', signal: controller.signal
+          });
+          const mappingsPayload = await mappingsResponse.json().catch(() => ({}));
+          mappingsReady = mappingsResponse.ok && mappingsPayload?.success === true && mappingsPayload?.data?.ready === true;
+        } catch { mappingsReady = false; }
+        if (!active) return;
+        setCanonicalMappingsReady(mappingsReady);
         const canonicalJournalEntries = Array.isArray(data.journalEntries) ? data.journalEntries : [];
         const canonicalStudentReceiptVouchers = Array.isArray(data.studentReceiptVouchers) ? data.studentReceiptVouchers : [];
         // Student Financials stores student receipts under studentReceiptVouchers,
@@ -1262,6 +1274,7 @@ export default function GeneralLedgerPortal({
         setCanonicalFinancialData({});
         setCanonicalFinancialVersion(0);
         setCanonicalFinancialWriteMode('snapshot_read_only');
+        setCanonicalMappingsReady(false);
         setCanonicalSnapshotHasAccounts(false);
         setAccounts(previous => previous.map(account => ({ ...account, balance: 0 })));
         setCanonicalFinancialStatus('blocked');
@@ -2780,7 +2793,7 @@ export default function GeneralLedgerPortal({
     {
       title: "الإعدادات والسياسات",
       items: [
-        { id: 'account_mappings', label: 'خرائط الترحيل المحاسبي', targetTab: 'account_mappings', icon: Link2, badge: canonicalFinancialWriteMode === 'snapshot_read_only' ? 'تحقق' : 'جاهز' },
+        { id: 'account_mappings', label: 'خرائط الترحيل المحاسبي', targetTab: 'account_mappings', icon: Link2, badge: canonicalMappingsReady && canonicalFinancialWriteMode !== 'snapshot_read_only' ? 'جاهز' : 'يحتاج استكمالاً' },
         { id: 'governance', label: 'السياسات المالية', targetTab: 'governance', icon: CheckCircle2, badge: 'نشط' },
         { id: 'closing', label: 'إقفال السنة', targetTab: 'closing', icon: LockIcon },
         { id: 'calc_tools', label: 'أدوات الحسبة', targetTab: 'calc_tools', icon: Calculator },

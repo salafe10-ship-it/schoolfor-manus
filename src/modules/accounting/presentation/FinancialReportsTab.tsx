@@ -196,10 +196,22 @@ const handleDrillDownToOriginalDocument = (jv: any) => {
     }
 
     let docId = '';
-    let docType: 'receipt_voucher' | 'payment_voucher' | 'invoice' | 'journal_entry' = 'journal_entry';
+    let docType: 'receipt_voucher' | 'payment_voucher' | 'invoice' | 'journal_entry' | 'canonical_source' = 'journal_entry';
     let title = '';
+
+    const canonicalSourceType = String(jv.sourceType || jv.source_type || '').trim().toLowerCase();
+    const canonicalSourceId = String(jv.sourceId || jv.source_id || '').trim();
+    if (canonicalSourceType && canonicalSourceId && canonicalSourceType !== 'journal_entry') {
+      docId = canonicalSourceId;
+      docType = 'canonical_source';
+      title = `المستند التشغيلي المرتبط: ${canonicalSourceId}`;
+    }
     
-    if (jv.receiptVoucherId || jv.id.includes('JV-RV-') || jv.description.includes('سند قبض')) {
+    if (docType === 'canonical_source') {
+      // Canonical modules do not all share one UI document component. Keep the
+      // source identity and journal link visible instead of pretending an
+      // inventory/payroll/AP document is a receipt or payment voucher.
+    } else if (jv.receiptVoucherId || jv.id.includes('JV-RV-') || jv.description.includes('سند قبض')) {
       const rvIdMatch = jv.description.match(/سند قبض (RV-\d+-\d+)/);
       docId = rvIdMatch ? rvIdMatch[1] : (jv.receiptVoucherId || jv.id.replace('JV-RV-', ''));
       docType = 'receipt_voucher';
@@ -1234,6 +1246,21 @@ const handleDrillDownToOriginalDocument = (jv: any) => {
                     {currentStep.level === 'original_document' && (() => {
                       const docId = currentStep.documentId;
                       const docType = currentStep.documentType;
+
+                      if (docType === 'canonical_source') {
+                        return (
+                          <div className="space-y-4 animate-fade-in">
+                            <div className="rounded-xl border border-indigo-200 bg-indigo-50 p-4 text-xs font-semibold text-indigo-950">
+                              <div className="font-black">المستند التشغيلي المرتبط بالقيد الكانوني</div>
+                              <div className="mt-2">المصدر: <span className="font-mono">{currentStep.documentId}</span></div>
+                              <div className="mt-1 text-indigo-800">تم الحفاظ على نوع المصدر ورقمه كما وردا من دفتر الأستاذ؛ افتح الوحدة المالكة للمستند لاستعراض تفاصيله الكاملة.</div>
+                            </div>
+                            <div className="rounded-xl border border-slate-200 bg-white p-5 text-center text-sm text-slate-600">
+                              لا يوجد تحويل شكلي إلى سند قبض أو صرف. هذا يمنع عرض مستند غير مطابق للمصدر الأصلي.
+                            </div>
+                          </div>
+                        );
+                      }
 
                       if (docType === 'receipt_voucher') {
                         const rv = receiptVouchers.find(r => r.id === docId);
