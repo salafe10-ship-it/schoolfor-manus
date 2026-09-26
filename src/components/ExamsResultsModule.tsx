@@ -31,6 +31,7 @@ import {
 } from '../modules/exams/application/AssessmentWorkflowService';
 import { calculateCohortExamResults } from '../modules/exams/domain/ExamResultEngine';
 import { getTrustedAccessToken, getTrustedAccessTokenAsync } from '../utils/auth';
+import { authenticatedRequest } from '../utils/authenticatedRequest';
 
 const today = new Date();
 const currentAcademicYearStart = today.getMonth() >= 6 ? today.getFullYear() : today.getFullYear() - 1;
@@ -64,7 +65,11 @@ const fetchExamsSource = async (input: RequestInfo | URL, init: RequestInit = {}
   const controller = new AbortController();
   const timeoutId = window.setTimeout(() => controller.abort(), EXAMS_SOURCE_REQUEST_TIMEOUT_MS);
   try {
-    return await fetch(input, { ...init, signal: controller.signal });
+    // Keep all exams reads and writes on the same trusted-session transport as
+    // the other canonical modules. It refreshes once and retries on a 401,
+    // which is essential when an already-open production tab outlives its
+    // short-lived access token.
+    return await authenticatedRequest(input, { ...init, signal: controller.signal });
   } catch (error) {
     if (error instanceof DOMException && error.name === 'AbortError') {
       throw new Error('انتهت مهلة الاتصال بالمصدر المركزي. تحقق من الشبكة ثم أعد المحاولة.');
