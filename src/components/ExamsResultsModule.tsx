@@ -22,6 +22,7 @@ import EnterpriseActionToolbar from './shared/EnterpriseActionToolbar';
 import ExamsCertificatesPanel from './exams/ExamsCertificatesPanel';
 import ExamsDistributionPanel from './exams/ExamsDistributionPanel';
 import ExamsAssessmentPanel from './exams/ExamsAssessmentPanel';
+import { StudentRepository } from './student-affairs/repository/StudentRepository';
 import { canAssignProctorForWeek } from '../modules/exams/application/ExamSchedulingRules';
 import {
   AssessmentGradeProjection,
@@ -366,17 +367,16 @@ export default function ExamsResultsModule({
     });
   };
 
-  const fetchCanonicalStudents = async (token: string | null) => {
+  const fetchCanonicalStudents = async (_token: string | null) => {
     const collected: any[] = [];
     let page = 1;
     let hasNext = true;
     while (hasNext && page <= 1000) {
-      const response = await fetchExamsSource(`/api/students?page=${page}&limit=100&sortBy=name&sortOrder=asc`, {
-        headers: { 'Authorization': token ? `Bearer ${token}` : '' },
-        cache: 'no-store'
-      });
-      if (!response.ok) throw new Error(`Canonical student read failed (${response.status})`);
-      const result = await response.json();
+      // Use the canonical Student Affairs repository so Exams follows the
+      // same trusted-session refresh and bounded retry policy as the source
+      // module, instead of treating one transient read failure as a hard
+      // database disconnect.
+      const result = await StudentRepository.list({ page, limit: 100, sortBy: 'name', sortOrder: 'asc' });
       collected.push(...(Array.isArray(result.data) ? result.data : []));
       hasNext = Boolean(result.meta?.hasNext);
       page += 1;
