@@ -625,7 +625,8 @@ export default function ExamsResultsModule({
       }
     } catch (err: any) {
       setDbSyncStatus('error');
-      triggerNotification('حدث خطأ أثناء مزامنة قاعدة البيانات', 'warning');
+      EnterpriseLogger.error('Failed to force-sync exams database', 'ExamsResultsModule', { error: err });
+      triggerNotification('تعذر الاتصال بالمصدر المركزي أثناء المزامنة.', 'warning');
     } finally {
       setIsDbSyncing(false);
     }
@@ -738,10 +739,13 @@ export default function ExamsResultsModule({
           }
         } else {
           setDbSyncStatus('error');
+          const errorResult = await response.json().catch(() => ({}));
+          triggerNotification(errorResult.message || `تعذر الاتصال بالمصدر المركزي (${response.status}).`, 'warning');
         }
       } catch (err: any) {
         EnterpriseLogger.error("Failed to fetch exams database", "ExamsResultsModule", { error: err });
         setDbSyncStatus('error');
+        triggerNotification('تعذر الاتصال بالمصدر المركزي أثناء تحميل وحدة الامتحانات.', 'warning');
       } finally {
         setIsDbSyncing(false);
       }
@@ -917,16 +921,16 @@ export default function ExamsResultsModule({
 
   // Generic CSV Export Utility (Excel-compatible with UTF-8 BOM for Arabic)
   const handleExportToCSV = (data: any[], headers: string[], filename: string) => {
+    const escapeCsvCell = (value: any): string => {
+      const raw = String(value === undefined || value === null ? "" : value);
+      const formulaSafe = /^[=+\-@]/.test(raw) ? `'${raw}` : raw;
+      return `"${formulaSafe.replace(/"/g, '""')}"`;
+    };
     let csvContent = "\uFEFF"; // UTF-8 BOM to make Excel render Arabic correctly
-    csvContent += headers.join(",") + "\n";
+    csvContent += headers.map(escapeCsvCell).join(",") + "\n";
 
     data.forEach(row => {
-      const line = row.map((val: any) => {
-        const raw = String(val === undefined || val === null ? "" : val);
-        const formulaSafe = /^[=+\-@]/.test(raw) ? `'${raw}` : raw;
-        const str = formulaSafe.replace(/"/g, '""');
-        return `"${str}"`;
-      }).join(",");
+      const line = row.map(escapeCsvCell).join(",");
       csvContent += line + "\n";
     });
 
@@ -938,7 +942,8 @@ export default function ExamsResultsModule({
     document.body.appendChild(link);
     link.click();
     document.body.removeChild(link);
-    triggerNotification(`تم تصدير ملف ${filename} بنجاح بصيغة Excel CSV`, 'success');
+    window.setTimeout(() => URL.revokeObjectURL(url), 1000);
+    triggerNotification(`تم تصدير ملف ${filename} بنجاح بصيغة CSV المتوافقة مع Excel`, 'success');
   };
 
   const handleExportBackup = async () => {
@@ -1784,25 +1789,15 @@ export default function ExamsResultsModule({
   const handleDownloadTemplate = () => {
     const subName = subjects.find(s => s.id === selectedGradeSubject)?.name || 'درجات';
     const maxVal = subjects.find(s => s.id === selectedGradeSubject)?.maxScore || 100;
-    const headers = "رقم الطالب,اسم الطالب,رقم الجلوس,المادة,الدرجة العظمى,الدرجة الحالية";
-    const rows = filteredStudentsForGrades.map(st =>
-      `"${st.nationalId || st.id}","${st.name}","${st.seatNumber || ''}","${subName}","${maxVal}",""`
+    handleExportToCSV(
+      filteredStudentsForGrades.map(st => [st.id, st.studentNumber || '', st.nationalId || '', st.seatNumber || '', st.name, st.classroom, st.section, subName, maxVal, '']),
+      ['معرف الطالب', 'رقم الطالب', 'الرقم الوطني', 'رقم الجلوس', 'اسم الطالب', 'الصف', 'الشعبة', 'المادة', 'الدرجة العظمى', 'الدرجة'],
+      `قالب_رصد_${subName}`
     );
-    const csvContent = "\uFEFF" + [headers, ...rows].join("\n");
-    const blob = new Blob([csvContent], { type: 'text/csv;charset=utf-8;' });
-    const url = URL.createObjectURL(blob);
-    const link = document.createElement("a");
-    link.setAttribute("href", url);
-    link.setAttribute("download", `قالب_رصد_${subName}.csv`);
-    document.body.appendChild(link);
-    link.click();
-    document.body.removeChild(link);
-    triggerNotification('تم تنزيل قالب رصد الدرجات المخصص بنجاح!', 'success');
   };
 
   const handleExportExcel = () => {
     const subName = subjects.find(s => s.id === selectedGradeSubject)?.name || 'درجات';
-    const headers = "الرقم التسلسلي,رقم الطالب,رقم الجلوس,اسم الطالب,الصف والمجموعة,الدرجة,المجموع,النسبة المئوية,التقدير,النتيجة";
     const rows = filteredStudentsForGrades.map((st, idx) => {
       const currentMark = gradesMatrix[st.id]?.[selectedGradeSubject];
       const isAbsent = st.absentSubjects?.includes(selectedGradeSubject);
@@ -1828,18 +1823,46 @@ export default function ExamsResultsModule({
       const isPass = currentMark !== undefined && currentMark >= (subjects.find(s=>s.id===selectedGradeSubject)?.passScore || 50);
       const resText = isAbsent ? 'غياب' : (currentMark === undefined ? 'غير مرصود' : (isPass ? 'ناجح' : 'راسب'));
 
-      return `${idx + 1},"${st.nationalId || st.id}","${st.seatNumber || ''}","${st.name}","${st.classroom} - ${st.section}",${isAbsent ? 0 : (currentMark !== undefined ? currentMark : '')},${totalScore},${pct}%,${grade},"${resText}"`;
+      return [idx + 1, st.nationalId || st.id, st.seatNumber || '', st.name, `${st.classroom} - ${st.section}`, isAbsent ? 0 : (currentMark !== undefined ? currentMark : ''), totalScore, `${pct}%`, grade, resText];
     });
-    const csvContent = "\uFEFF" + [headers, ...rows].join("\n");
-    const blob = new Blob([csvContent], { type: 'text/csv;charset=utf-8;' });
-    const url = URL.createObjectURL(blob);
-    const link = document.createElement("a");
-    link.setAttribute("href", url);
-    link.setAttribute("download", `تقرير_درجات_${selectedGradeClass}_${subName}.csv`);
-    document.body.appendChild(link);
-    link.click();
-    document.body.removeChild(link);
-    triggerNotification('تم تصدير كشف الدرجات المفلتر إلى Excel بنجاح!', 'success');
+    handleExportToCSV(rows, ['الرقم التسلسلي', 'رقم الطالب', 'رقم الجلوس', 'اسم الطالب', 'الصف والمجموعة', 'الدرجة', 'المجموع', 'النسبة المئوية', 'التقدير', 'النتيجة'], `تقرير_درجات_${selectedGradeClass}_${subName}`);
+  };
+
+  const handleExportXlsx = async () => {
+    const subject = subjects.find(item => item.id === selectedGradeSubject);
+    if (!subject) {
+      triggerNotification('حدد مادة دراسية قبل تصدير ملف XLSX.', 'warning');
+      return;
+    }
+    try {
+      const { writeExamGradeXlsx } = await import('../modules/exams/application/ExamSpreadsheetService');
+      const buffer = await writeExamGradeXlsx({
+        subject: { id: String(subject.id), name: String(subject.name), maxScore: Number(subject.maxScore) },
+        rows: filteredStudentsForGrades.map(student => ({
+          studentId: String(student.id),
+          studentNumber: student.studentNumber,
+          nationalId: student.nationalId,
+          seatNumber: student.seatNumber,
+          studentName: String(student.name || ''),
+          classroom: student.classroom,
+          section: student.section,
+          grade: student.absentSubjects?.includes(subject.id) ? 0 : gradesMatrix[student.id]?.[subject.id] ?? null
+        }))
+      });
+      const blob = new Blob([buffer], { type: 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet' });
+      const url = URL.createObjectURL(blob);
+      const link = document.createElement('a');
+      link.href = url;
+      link.download = `تقرير_درجات_${selectedGradeClass}_${subject.name}.xlsx`;
+      document.body.appendChild(link);
+      link.click();
+      document.body.removeChild(link);
+      window.setTimeout(() => URL.revokeObjectURL(url), 1000);
+      triggerNotification('تم تصدير ملف XLSX حقيقي وآمن لدرجات المادة.', 'success');
+    } catch (error) {
+      EnterpriseLogger.error('Failed to export exam grades as XLSX', 'ExamsResultsModule', { error });
+      triggerNotification('تعذر إنشاء ملف XLSX لدرجات المادة.', 'warning');
+    }
   };
 
   const handleResetFilters = () => {
@@ -1940,11 +1963,28 @@ export default function ExamsResultsModule({
   };
 
   const metrics = getReviewMetrics();
+  const reviewDataReady = studentList.length > 0 && subjects.length > 0;
+  const reviewInvalidGradesCount = studentList.reduce((count, student) => count + subjects.filter(subject => {
+    const grade = gradesMatrix[student.id]?.[subject.id];
+    return grade !== undefined && (!Number.isFinite(grade) || grade < 0 || grade > Number(subject.maxScore));
+  }).length, 0);
+  const reviewDistributionReady = reviewDataReady && studentList.every(student => {
+    const hall = halls.find(item => item.id === student.hallId);
+    return Boolean(hall && student.seatNumber);
+  });
 
   const handleApproveAndLock = async () => {
     // Role-Based Access Control
     if (currentUserRole !== 'admin') {
       triggerNotification('❌ عذراً، لا تمتلك الصلاحية الكافية لاعتماد النتائج وتجميد الكنترول. تتطلب هذه العملية دور "مدير الكنترول".', 'warning');
+      return;
+    }
+
+    // The canonical archive and approval operation are currently school-wide.
+    // Never let a future committee selector imply a stage-only approval while
+    // the server still creates one immutable archive for the complete cycle.
+    if (activeControlStage !== 'all') {
+      triggerNotification('لا يمكن اعتماد مرحلة منفردة قبل تفعيل مسار أرشفة مرحلي مستقل على الخادم. اختر نطاق كامل المراحل.', 'warning');
       return;
     }
 
@@ -2766,6 +2806,7 @@ export default function ExamsResultsModule({
             state={assessmentState}
             actorId={trustedActorLabel}
             candidateIds={studentList.map(student => String(student.id || '').trim()).filter(Boolean)}
+            permissionRole={currentUserRole}
             onChange={persistAssessmentState}
           />
         )}
@@ -6563,7 +6604,7 @@ export default function ExamsResultsModule({
                 <div className="flex flex-wrap items-center gap-2">
                   <label className="p-2 bg-emerald-50 hover:bg-emerald-100 text-emerald-800 border border-emerald-200 text-xs font-bold flex items-center gap-1.5 cursor-pointer transition-all">
                     <UploadCloud className="w-4 h-4" />
-                    <span>استيراد Excel</span>
+                    <span>استيراد XLSX / CSV</span>
                     <input
                       type="file"
                       accept=".xlsx, .csv"
@@ -6593,10 +6634,19 @@ export default function ExamsResultsModule({
                   <button
                     onClick={handleExportExcel}
                     className="p-2 bg-emerald-600 hover:bg-emerald-700 text-white text-xs font-bold flex items-center gap-1.5 cursor-pointer transition-all shadow-md shadow-emerald-600/10"
-                    title="تصدير جدول الدرجات الحالي إلى ملف Excel"
+                    title="تصدير كشف الدرجات التفصيلي بصيغة CSV المتوافقة مع Excel"
                   >
                     <FileSpreadsheet className="w-4 h-4" />
-                    <span>تصدير Excel</span>
+                    <span>تصدير CSV تفصيلي</span>
+                  </button>
+
+                  <button
+                    onClick={() => void handleExportXlsx()}
+                    className="p-2 bg-cyan-700 hover:bg-cyan-800 text-white text-xs font-bold flex items-center gap-1.5 cursor-pointer transition-all shadow-md shadow-cyan-700/10"
+                    title="تصدير كشف المادة إلى ملف XLSX حقيقي"
+                  >
+                    <FileSpreadsheet className="w-4 h-4" />
+                    <span>تصدير XLSX</span>
                   </button>
 
                   <button
@@ -8353,23 +8403,43 @@ export default function ExamsResultsModule({
 
                 <div className="space-y-3">
                   <div className="flex items-start gap-3 p-3 bg-transparent border border-slate-200">
-                    <CheckCircle className="w-5 h-5 text-emerald-600 shrink-0 mt-0.5" />
+                     {reviewDataReady && reviewInvalidGradesCount === 0 ? (
+                       <CheckCircle className="w-5 h-5 text-emerald-600 shrink-0 mt-0.5" />
+                     ) : (
+                       <AlertTriangle className="w-5 h-5 text-amber-500 shrink-0 mt-0.5" />
+                     )}
                     <div>
                       <h4 className="font-bold text-xs text-slate-900">التحقق من عدم تجاوز النهاية العظمى</h4>
-                      <p className="text-[10px] text-slate-500">تم فحص جميع درجات الطلاب لضمان عدم وجود أي درجة مدخلة تتجاوز الـ 100 درجة.</p>
+                       <p className="text-[10px] text-slate-500">
+                         {!reviewDataReady
+                           ? 'لا توجد مواد وطلاب كافون لإجراء الفحص.'
+                           : reviewInvalidGradesCount > 0
+                             ? `توجد ${reviewInvalidGradesCount} درجة خارج النهاية العظمى وتحتاج إلى تصحيح.`
+                             : 'تم فحص درجات الطلاب ولم تُكتشف درجات تتجاوز النهاية العظمى.'}
+                       </p>
                     </div>
                   </div>
 
                   <div className="flex items-start gap-3 p-3 bg-transparent border border-slate-200">
-                    <CheckCircle className="w-5 h-5 text-emerald-600 shrink-0 mt-0.5" />
+                     {reviewDistributionReady ? (
+                       <CheckCircle className="w-5 h-5 text-emerald-600 shrink-0 mt-0.5" />
+                     ) : (
+                       <AlertTriangle className="w-5 h-5 text-amber-500 shrink-0 mt-0.5" />
+                     )}
                     <div>
                       <h4 className="font-bold text-xs text-slate-900">التحقق من توزيع الطلاب</h4>
-                      <p className="text-[10px] text-slate-500">تم التحقق من توزيع جميع الطلاب النشطين على قاعات اختبار صالحة.</p>
+                       <p className="text-[10px] text-slate-500">
+                         {!reviewDataReady
+                           ? 'لا توجد قائمة طلاب امتحانات مكتملة لفحص التوزيع.'
+                           : reviewDistributionReady
+                             ? 'تم التحقق من توزيع جميع الطلاب على قاعات وأرقام جلوس صالحة.'
+                             : 'لم يكتمل توزيع جميع الطلاب على قاعات وأرقام جلوس صالحة.'}
+                       </p>
                     </div>
                   </div>
 
                   <div className="flex items-start gap-3 p-3 bg-transparent border border-slate-200">
-                    {metrics.missingGradesCount > 0 ? (
+                     {!reviewDataReady || metrics.missingGradesCount > 0 ? (
                       <AlertTriangle className="w-5 h-5 text-amber-500 shrink-0 mt-0.5" />
                     ) : (
                       <CheckCircle className="w-5 h-5 text-emerald-600 shrink-0 mt-0.5" />
@@ -8377,7 +8447,9 @@ export default function ExamsResultsModule({
                     <div>
                       <h4 className="font-bold text-xs text-slate-900">التحقق من رصد درجات المواد الغائبة</h4>
                       <p className="text-[10px] text-slate-500">
-                        {metrics.missingGradesCount > 0
+                         {!reviewDataReady
+                           ? 'لا توجد مواد وطلاب موثقون لإكمال فحص الرصد.'
+                           : metrics.missingGradesCount > 0
                           ? `تنبيه: هناك عدد ${metrics.missingGradesCount} درجة لم يتم رصدها بعد.`
                           : 'ممتاز: تم رصد وإكمال جميع درجات الطلاب بنجاح.'}
                       </p>
@@ -8402,6 +8474,10 @@ export default function ExamsResultsModule({
 
                 <button
                   onClick={() => {
+                    if (!reviewDataReady) {
+                      triggerNotification('لا توجد مواد وطلاب موثقون لمعالجة النتائج. أكمل تهيئة دورة الامتحانات أولاً.', 'warning');
+                      return;
+                    }
                     triggerNotification('تمت معالجة كشوف الدرجات واحتساب المعدلات والأوائل بنجاح', 'success');
                     logAction('تشغيل محرك احتساب المعدلات والأوائل', 'معالجة النتائج');
                   }}
@@ -8592,6 +8668,7 @@ export default function ExamsResultsModule({
             approvalStatus={approvalStatus}
             closures={controlClosures}
             classes={classesList}
+            accessToken={getTrustedAccessToken()}
             notify={triggerNotification}
           />
         )}
