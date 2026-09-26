@@ -1056,6 +1056,10 @@ export default function ExamsResultsModule({
   const handleAddSubject = async (e: React.FormEvent) => {
     e.preventDefault();
     if (isDbSyncing || isCanonicalClassSyncing) return;
+    if (scheduleApprovalStatus.approved || approvalStatus.approved) {
+      triggerNotification('لا يمكن إضافة مادة بعد اعتماد الجدول أو إغلاق النتائج. أعد فتح الدورة بسبب موثق أولاً.', 'warning');
+      return;
+    }
     const subjectName = String(newSubject.name || '').trim().replace(/\s+/g, ' ');
     if (!subjectName) return;
     if (newSubject.maxScore <= 0 || newSubject.passScore < 0 || newSubject.passScore > newSubject.maxScore) {
@@ -1118,9 +1122,17 @@ export default function ExamsResultsModule({
   const [newHall, setNewHall] = useState({ name: '', capacity: 25, location: '' });
   const handleAddHall = async (e: React.FormEvent) => {
     e.preventDefault();
+    if (scheduleApprovalStatus.approved || approvalStatus.approved) {
+      triggerNotification('لا يمكن إضافة قاعة بعد اعتماد الجدول أو إغلاق النتائج. أعد فتح الدورة بسبب موثق أولاً.', 'warning');
+      return;
+    }
     if (!newHall.name.trim()) return;
     if (newHall.capacity <= 0) {
       triggerNotification('يجب أن تكون سعة القاعة أكبر من صفر.', 'warning');
+      return;
+    }
+    if (halls.some(hall => normalizeSubjectName(hall.name) === normalizeSubjectName(newHall.name))) {
+      triggerNotification('اسم القاعة موجود بالفعل في دورة الامتحانات.', 'warning');
       return;
     }
     const item = {
@@ -1139,6 +1151,80 @@ export default function ExamsResultsModule({
     setNewHall({ name: '', capacity: 25, location: '' });
     triggerNotification(`تم تسجيل قاعة ${item.name} الاستيعابية بنجاح`, 'success');
     logAction(`إضافة قاعة اختبار جديدة: ${item.name}`, 'لجان وقاعات الامتحان');
+  };
+
+  const persistPreparationSubjects = async (updatedSubjects: any[], successMessage = 'تم حفظ تجهيزات المواد في المصدر المركزي.') => {
+    if (databaseWriteLockRef.current) {
+      triggerNotification('جارٍ حفظ تعديل سابق. انتظر اكتماله ثم أعد المحاولة.', 'info');
+      return false;
+    }
+    if (scheduleApprovalStatus.approved || approvalStatus.approved) {
+      triggerNotification('تجهيزات المواد مقفلة بعد الاعتماد. أعد فتح الجدول بسبب موثق قبل تعديلها.', 'warning');
+      return false;
+    }
+    const names = new Set<string>();
+    for (const subject of updatedSubjects) {
+      const name = String(subject?.name || '').trim().replace(/\s+/g, ' ');
+      const maxScore = Number(subject?.maxScore);
+      const passScore = Number(subject?.passScore);
+      const normalizedName = normalizeSubjectName(name);
+      if (!name || !Number.isFinite(maxScore) || maxScore <= 0 || !Number.isFinite(passScore) || passScore < 0 || passScore > maxScore) {
+        triggerNotification('لم تُحفظ التجهيزات: تحقق من اسم المادة والدرجة العظمى ودرجة النجاح.', 'warning');
+        void handleForceSync();
+        return false;
+      }
+      if (names.has(normalizedName)) {
+        triggerNotification(`لم تُحفظ التجهيزات: اسم المادة ${name} مكرر.`, 'warning');
+        void handleForceSync();
+        return false;
+      }
+      names.add(normalizedName);
+    }
+    const persisted = await saveToServerDb(examSettings, halls, updatedSubjects);
+    if (!persisted) {
+      void handleForceSync();
+      return false;
+    }
+    setSubjects(updatedSubjects);
+    triggerNotification(successMessage, 'success');
+    return true;
+  };
+
+  const persistPreparationHalls = async (updatedHalls: any[], successMessage = 'تم حفظ تجهيزات القاعات في المصدر المركزي.') => {
+    if (databaseWriteLockRef.current) {
+      triggerNotification('جارٍ حفظ تعديل سابق. انتظر اكتماله ثم أعد المحاولة.', 'info');
+      return false;
+    }
+    if (scheduleApprovalStatus.approved || approvalStatus.approved) {
+      triggerNotification('تجهيزات القاعات مقفلة بعد الاعتماد. أعد فتح الجدول بسبب موثق قبل تعديلها.', 'warning');
+      return false;
+    }
+    const names = new Set<string>();
+    for (const hall of updatedHalls) {
+      const name = String(hall?.name || '').trim();
+      const capacity = Number(hall?.capacity);
+      const normalizedName = normalizeSubjectName(name);
+      const assignedCount = studentList.filter(student => student.hallId === hall.id).length;
+      if (!name || !Number.isSafeInteger(capacity) || capacity <= 0 || capacity < assignedCount) {
+        triggerNotification(`لم تُحفظ القاعات: تحقق من الاسم والسعة، ويجب ألا تقل سعة ${name || 'القاعة'} عن ${assignedCount} طالباً موزعاً.`, 'warning');
+        void handleForceSync();
+        return false;
+      }
+      if (names.has(normalizedName)) {
+        triggerNotification(`لم تُحفظ القاعات: اسم القاعة ${name} مكرر.`, 'warning');
+        void handleForceSync();
+        return false;
+      }
+      names.add(normalizedName);
+    }
+    const persisted = await saveToServerDb(examSettings, updatedHalls);
+    if (!persisted) {
+      void handleForceSync();
+      return false;
+    }
+    setHalls(updatedHalls);
+    triggerNotification(successMessage, 'success');
+    return true;
   };
 
   // 4. Seating & Distribution Automatic Generators (Smart/Capacity-bounded)
@@ -5195,10 +5281,21 @@ export default function ExamsResultsModule({
                     {/* Category: Subjects */}
                     {prepActiveCategory === 'subjects' && (
                       <div className="space-y-6">
-                        <div className="border-b pb-2">
-                          <h4 className="font-black text-slate-900 text-sm">تجهيزات المواد الدراسية وخيارات الامتحانات</h4>
-                          <p className="text-[10px] text-slate-400">تحديد أزمنة الامتحان والدرجات العظمى والصغرى لضبط عمليات القياس والجدولة والتحقق</p>
+                        <div className="border-b pb-2 flex flex-wrap items-center justify-between gap-3">
+                          <div>
+                            <h4 className="font-black text-slate-900 text-sm">تجهيزات المواد الدراسية وخيارات الامتحانات</h4>
+                            <p className="text-[10px] text-slate-400">تحديد أزمنة الامتحان والدرجات العظمى والصغرى لضبط عمليات القياس والجدولة والتحقق</p>
+                          </div>
+                          <button type="button" onClick={() => setActiveTab('classes')} className="px-3 py-2 border border-amber-300 bg-amber-50 text-amber-900 text-xs font-bold">
+                            إضافة مادة المنهج الفعلي
+                          </button>
                         </div>
+
+                        {subjects.length === 0 && (
+                          <p className="border border-amber-200 bg-amber-50 p-3 text-xs font-semibold leading-6 text-amber-900">
+                            لا توجد مواد امتحانية محفوظة لهذه الدورة. أضف أسماء المواد ودرجاتها من شاشة «الفصول والمواد» وفق المنهج المعتمد للمدرسة.
+                          </p>
+                        )}
 
                         <div className="overflow-x-auto border border-slate-200">
                           <table className="w-full text-right text-xs">
@@ -5225,6 +5322,8 @@ export default function ExamsResultsModule({
                                         const updated = subjects.map(s => s.id === sub.id ? { ...s, maxScore: Number(e.target.value) } : s);
                                         setSubjects(updated);
                                       }}
+                                      onBlur={() => { void persistPreparationSubjects(subjects); }}
+                                      min={1}
                                       className="w-20 p-1 border rounded text-xs text-center font-bold"
                                     />
                                   </td>
@@ -5237,6 +5336,9 @@ export default function ExamsResultsModule({
                                         const updated = subjects.map(s => s.id === sub.id ? { ...s, passScore: Number(e.target.value) } : s);
                                         setSubjects(updated);
                                       }}
+                                      onBlur={() => { void persistPreparationSubjects(subjects); }}
+                                      min={0}
+                                      max={sub.maxScore}
                                       className="w-20 p-1 border rounded text-xs text-center font-bold"
                                     />
                                   </td>
@@ -5248,6 +5350,7 @@ export default function ExamsResultsModule({
                                         const updated = subjects.map(s => s.id === sub.id ? { ...s, examDuration: Number(e.target.value) } : s);
                                         setSubjects(updated);
                                       }}
+                                      onBlur={() => { void persistPreparationSubjects(subjects); }}
                                       className="p-1 border rounded text-xs font-bold bg-white"
                                     >
                                       <option value="60">60 دقيقة (ساعة)</option>
@@ -5259,9 +5362,9 @@ export default function ExamsResultsModule({
                                   <td className="p-3 text-center">
                                     <button
                                       disabled={scheduleApprovalStatus.approved}
-                                      onClick={() => {
+                                      onClick={async () => {
                                         const updated = subjects.map(s => s.id === sub.id ? { ...s, isPractical: !s.isPractical } : s);
-                                        setSubjects(updated);
+                                        await persistPreparationSubjects(updated);
                                       }}
                                       className={`px-2.5 py-1 rounded-full text-[10px] font-bold ${
                                         sub.isPractical ? 'bg-amber-100 text-amber-800' : 'bg-yellow-100 text-yellow-800'
@@ -5272,9 +5375,16 @@ export default function ExamsResultsModule({
                                   </td>
                                   <td className="p-3 text-center">
                                     <button
-                                      onClick={() => {
-                                        setSubjects(subjects.filter(s => s.id !== sub.id));
-                                        triggerNotification('تمت إزالة المادة من لوحة الكنترول', 'info');
+                                      disabled={scheduleApprovalStatus.approved || approvalStatus.approved || isDbSyncing}
+                                      onClick={async () => {
+                                        const isReferenced = schedule.some(item => item.subjectId === sub.id)
+                                          || Object.values(gradesMatrix).some((studentGrades: any) => Object.prototype.hasOwnProperty.call(studentGrades || {}, sub.id))
+                                          || reEvaluationRequests.some(request => request.subjectId === sub.id);
+                                        if (isReferenced) {
+                                          triggerNotification(`لا يمكن حذف مادة ${sub.name} لأنها مرتبطة بجدول أو درجات أو تظلم.`, 'warning');
+                                          return;
+                                        }
+                                        await persistPreparationSubjects(subjects.filter(s => s.id !== sub.id), 'تمت إزالة المادة من الدورة وحفظ التعديل مركزياً.');
                                       }}
                                       className="p-1 text-red-500 hover:bg-red-50 rounded"
                                     >
@@ -5300,22 +5410,12 @@ export default function ExamsResultsModule({
 
                           <button
                             disabled={scheduleApprovalStatus.approved}
-                            onClick={async () => {
-                              const newHallId = `hall-${Date.now()}`;
-                              const newHallObj = {
-                                id: newHallId,
-                                name: `لجنة قاعة جديدة ${halls.length + 1}`,
-                                capacity: 30,
-                                location: 'مبنى الامتحانات الرئيسي',
-                                status: 'active'
-                              };
-                              setHalls([...halls, newHallObj]);
-                              triggerNotification('تم إنشاء قاعة لجنة جديدة بنجاح', 'success');
-                            }}
+                            type="button"
+                            onClick={() => setActiveTab('halls')}
                             className="px-3 py-1.5 bg-amber-50 text-amber-700 hover:bg-amber-100 rounded-lg text-xs font-bold cursor-pointer flex items-center gap-1"
                           >
                             <Plus className="w-3.5 h-3.5" />
-                            <span>إضافة لجنة / قاعة</span>
+                            <span>تسجيل قاعة ببياناتها الفعلية</span>
                           </button>
                         </div>
 
@@ -5336,45 +5436,49 @@ export default function ExamsResultsModule({
                                   <td className="p-3">
                                     <input
                                       type="text"
-                                      disabled={scheduleApprovalStatus.approved}
+                                      disabled={scheduleApprovalStatus.approved || approvalStatus.approved || isDbSyncing}
                                       value={hall.name}
                                       onChange={(e) => {
                                         const updated = halls.map(h => h.id === hall.id ? { ...h, name: e.target.value } : h);
                                         setHalls(updated);
                                       }}
+                                      onBlur={() => { void persistPreparationHalls(halls); }}
                                       className="w-full p-1 border rounded text-xs font-bold"
                                     />
                                   </td>
                                   <td className="p-3 text-center">
                                     <input
                                       type="number"
-                                      disabled={scheduleApprovalStatus.approved}
+                                      disabled={scheduleApprovalStatus.approved || approvalStatus.approved || isDbSyncing}
                                       value={hall.capacity}
                                       onChange={(e) => {
                                         const updated = halls.map(h => h.id === hall.id ? { ...h, capacity: Number(e.target.value) } : h);
                                         setHalls(updated);
                                       }}
+                                      onBlur={() => { void persistPreparationHalls(halls); }}
+                                      min={1}
                                       className="w-20 p-1 border rounded text-xs text-center font-bold"
                                     />
                                   </td>
                                   <td className="p-3">
                                     <input
                                       type="text"
-                                      disabled={scheduleApprovalStatus.approved}
+                                      disabled={scheduleApprovalStatus.approved || approvalStatus.approved || isDbSyncing}
                                       value={hall.location}
                                       onChange={(e) => {
                                         const updated = halls.map(h => h.id === hall.id ? { ...h, location: e.target.value } : h);
                                         setHalls(updated);
                                       }}
+                                      onBlur={() => { void persistPreparationHalls(halls); }}
                                       className="w-full p-1 border rounded text-xs font-semibold"
                                     />
                                   </td>
                                   <td className="p-3 text-center">
                                     <button
-                                      disabled={scheduleApprovalStatus.approved}
-                                      onClick={() => {
+                                      disabled={scheduleApprovalStatus.approved || approvalStatus.approved || isDbSyncing}
+                                      onClick={async () => {
                                         const updated = halls.map(h => h.id === hall.id ? { ...h, status: h.status === 'inactive' ? 'active' : 'inactive' } : h);
-                                        setHalls(updated);
+                                        await persistPreparationHalls(updated);
                                       }}
                                       className={`px-2 py-0.5 rounded text-[10px] font-bold ${
                                         hall.status === 'inactive' ? 'bg-rose-100 text-rose-800' : 'bg-emerald-100 text-emerald-800'
@@ -5385,9 +5489,17 @@ export default function ExamsResultsModule({
                                   </td>
                                   <td className="p-3 text-center">
                                     <button
-                                      onClick={() => {
-                                        setHalls(halls.filter(h => h.id !== hall.id));
-                                        triggerNotification('تم حذف اللجنة بنجاح', 'info');
+                                      type="button"
+                                      disabled={scheduleApprovalStatus.approved || approvalStatus.approved || isDbSyncing}
+                                      onClick={async () => {
+                                        const isReferenced = studentList.some(student => student.hallId === hall.id)
+                                          || proctorAssignments.some(proctor => proctor.hallId === hall.id)
+                                          || schedule.some(item => item.hallId === hall.id || (Array.isArray(item.splitHalls) && item.splitHalls.includes(hall.id)));
+                                        if (isReferenced) {
+                                          triggerNotification(`لا يمكن حذف قاعة ${hall.name} لأنها مرتبطة بطلاب أو مراقبين أو جدول امتحانات.`, 'warning');
+                                          return;
+                                        }
+                                        await persistPreparationHalls(halls.filter(h => h.id !== hall.id), 'تم حذف القاعة وحفظ التعديل في المصدر المركزي.');
                                       }}
                                       className="p-1 text-red-500 hover:bg-red-50 rounded"
                                     >
