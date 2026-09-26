@@ -3,6 +3,7 @@ import {
   AssessmentWorkflowError,
   AssessmentWorkflowState,
   autoMarkAssessmentAttempt,
+  calculateAssessmentPsychometrics,
   cloneQuestionVersion,
   createAssessment,
   createEmptyAssessmentWorkflowState,
@@ -11,6 +12,7 @@ import {
   getAssessmentPublicationReadiness,
   markManualAssessmentResponse,
   normalizeAssessmentWorkflowState,
+  projectMarkedAssessmentResultsToSubject,
   setQuestionStatus,
   startAssessmentAttempt,
   submitAssessmentAttempt,
@@ -171,5 +173,44 @@ describe('online assessment workflow and closure gates', () => {
     state = createAssessment(state, { id: 'assessment-3', title: 'اختبار الهوية', durationMinutes: 20, actorId: 'admin-1', questionRefs: [{ questionId: 'q-3', version: 1 }] });
     state = openAssessment(state, 'assessment-3');
     expect(() => startAssessmentAttempt(state, 'assessment-3', 'unknown-student', 'admin-1', ['student-1'])).toThrow(/السجلات الأكاديمية/);
+  });
+
+  it('projects only published final attempts into the canonical subject grade', () => {
+    let state = createEmptyAssessmentWorkflowState();
+    state = createQuestionDraft(state, { ...singleQuestion, id: 'q-projection', bankId: 'bank-projection' });
+    state = activate(state, 'q-projection');
+    state = createAssessment(state, {
+      id: 'assessment-projection',
+      title: 'اختبار الترحيل',
+      durationMinutes: 30,
+      actorId: 'admin-1',
+      subjectId: 'arabic',
+      questionRefs: [{ questionId: 'q-projection', version: 1 }]
+    });
+    state = openAssessment(state, 'assessment-projection');
+    state = startAssessmentAttempt(state, 'assessment-projection', 'student-projection', 'admin-1');
+    const attemptId = state.attempts[0].id;
+    state = autosaveAssessmentResponse(state, attemptId, 'q-projection', 'kh', 'student-projection');
+    state = submitAssessmentAttempt(state, attemptId, 'student-projection');
+    state = transitionAssessment(state, 'assessment-projection', 'closed', 'admin-1', 'إغلاق');
+    state = transitionAssessment(state, 'assessment-projection', 'marking', 'admin-1', 'تصحيح');
+    state = autoMarkAssessmentAttempt(state, attemptId, 'admin-1');
+    state = finalizeAssessmentAttempt(state, attemptId, 'admin-1');
+    state = transitionAssessment(state, 'assessment-projection', 'results_approved', 'admin-1', 'اعتماد');
+    state = transitionAssessment(state, 'assessment-projection', 'published', 'admin-1', 'نشر');
+
+    const projection = projectMarkedAssessmentResultsToSubject(state, 'assessment-projection', 'arabic', 100);
+    expect(projection).toEqual([expect.objectContaining({
+      candidateId: 'student-projection',
+      subjectId: 'arabic',
+      score: 100,
+      assessmentScore: 10,
+      assessmentMaximum: 10
+    })]);
+    expect(() => projectMarkedAssessmentResultsToSubject({ ...state, lifecycles: state.lifecycles.map(item => ({ ...item, state: 'marking' as const })) }, 'assessment-projection', 'arabic', 100)).toThrow(/قبل نشر/);
+    const psychometrics = calculateAssessmentPsychometrics(state, 'assessment-projection');
+    expect(psychometrics.attemptCount).toBe(1);
+    expect(psychometrics.averagePercentage).toBe(100);
+    expect(psychometrics.items[0].facilityIndex).toBe(100);
   });
 });
