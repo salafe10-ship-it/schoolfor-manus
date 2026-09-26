@@ -11881,23 +11881,20 @@ export async function createApp(options: { cloudflare?: boolean } = {}): Promise
       if (!schoolId || !tenantId || !tenantContext) {
         throw new AuthenticationError('السياق الموثوق لقراءة الامتحانات غير مكتمل.');
       }
-      const snapshot = await UnitOfWork.runInTransaction(schoolId, {
-        operationName: 'Read versioned exams database',
-        tenantId,
-        userId: identity.id,
-        userName: identity.name || 'المستخدم الحالي',
-        ipAddress: req.ip || 'unknown',
-        affectedTables: ['exams_database'],
-        readOnly: true
-      }, async () => {
-        const transaction = UnitOfWork.getActiveContext()?.databaseTransaction;
-        if (!transaction) throw new DatabaseError('معاملة قراءة الامتحانات غير متاحة.');
-        const result = await transaction.query<{ data: Record<string, unknown>; version: number }>(
-          `SELECT data, version FROM public.exams_database WHERE tenant_id = $1 AND school_id = $2`,
-          [tenantId, schoolId]
-        );
-        return result.rows[0] || { data: {}, version: 0 };
-      }, tenantContext);
+      // This is a read-only projection. Use the server-selected canonical
+      // Supabase client so opening the Exams module does not consume a
+      // Hyperdrive transaction slot needed by writes or concurrent reads.
+      const supabase = canonicalTenantReadClient(req);
+      if (!supabase) throw new DatabaseError('مصدر بيانات الامتحانات الكانوني غير متاح.');
+      const { data: snapshotRow, error: snapshotError } = await supabase
+        .from('exams_database')
+        .select('data,version')
+        .eq('tenant_id', tenantId)
+        .eq('school_id', schoolId)
+        .limit(1)
+        .maybeSingle();
+      if (snapshotError) throw snapshotError;
+      const snapshot = snapshotRow || { data: {}, version: 0 };
       const projection = projectExamDatabaseForRead(snapshot.data || {}, actorRole, actorPermissions);
       res.json({
         success: true,
@@ -11959,47 +11956,33 @@ export async function createApp(options: { cloudflare?: boolean } = {}): Promise
       if (!schoolId || !tenantId || !tenantContext || tenantContext.tenantId !== tenantId || tenantContext.schoolId !== schoolId) {
         throw new AuthenticationError('السياق الموثوق لسجل تدقيق الامتحانات غير مكتمل.');
       }
-      const events = await UnitOfWork.runInTransaction(schoolId, {
-        operationName: 'Read canonical exams audit events',
-        tenantId,
-        userId: (req as any).user.id,
-        userName: (req as any).user.name || 'المستخدم الحالي',
-        ipAddress: req.ip || 'unknown',
-        affectedTables: ['audit_events'],
-        readOnly: true
-      }, async () => {
-        const transaction = UnitOfWork.getActiveContext()?.databaseTransaction;
-        if (!transaction) throw new DatabaseError('معاملة قراءة سجل تدقيق الامتحانات غير متاحة.');
-        const result = await transaction.query<{
-          id: string;
-          action: string;
-          reason: string | null;
-          result: string;
-          metadata: Record<string, unknown>;
-          created_at: string;
-          actor_name: string | null;
-        }>(
-          `SELECT event.id,
-                  event.action,
-                  event.reason,
-                  event.result,
-                  event.metadata,
-                  event.created_at,
-                  actor.display_name AS actor_name
-             FROM public.audit_events event
-             LEFT JOIN public.users actor
-               ON actor.tenant_id = event.tenant_id
-              AND actor.id = event.actor_user_id
-            WHERE event.tenant_id = $1
-              AND event.school_id = $2
-              AND event.entity_type = 'exams_database'
-              AND event.entity_id = $2
-            ORDER BY event.created_at DESC, event.id DESC
-            LIMIT 200`,
-          [tenantId, schoolId]
-        );
-        return result.rows;
-      }, tenantContext);
+      // Audit is also a bounded read projection; keep it off the Hyperdrive
+      // pool and resolve actor names in one additional canonical read.
+      const supabase = canonicalTenantReadClient(req);
+      if (!supabase) throw new DatabaseError('مصدر سجل تدقيق الامتحانات الكانوني غير متاح.');
+      const { data: eventRows, error: eventsError } = await supabase
+        .from('audit_events')
+        .select('id,action,reason,result,metadata,created_at,actor_user_id')
+        .eq('tenant_id', tenantId)
+        .eq('school_id', schoolId)
+        .eq('entity_type', 'exams_database')
+        .eq('entity_id', schoolId)
+        .order('created_at', { ascending: false })
+        .order('id', { ascending: false })
+        .limit(200);
+      if (eventsError) throw eventsError;
+      const actorIds = [...new Set((eventRows || []).map((event: any) => String(event.actor_user_id || '').trim()).filter(Boolean))];
+      const actorNames = new Map<string, string>();
+      if (actorIds.length) {
+        const { data: actors, error: actorsError } = await supabase
+          .from('users')
+          .select('id,display_name')
+          .eq('tenant_id', tenantId)
+          .in('id', actorIds);
+        if (actorsError) throw actorsError;
+        (actors || []).forEach((actor: any) => actorNames.set(String(actor.id), String(actor.display_name || '')));
+      }
+      const events = (eventRows || []).map((event: any) => ({ ...event, actor_name: actorNames.get(String(event.actor_user_id || '').trim()) || null }));
       res.json({
         success: true,
         data: events.map(event => ({
