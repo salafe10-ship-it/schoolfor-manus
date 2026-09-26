@@ -11861,7 +11861,7 @@ export async function createApp(options: { cloudflare?: boolean } = {}): Promise
   });
 
   // Exams and Results Database API
-  app.get("/api/exams/database", authenticateRequest, requirePermission(PERMISSIONS.EXAM_READ), async (req, res, next) => {
+  app.get("/api/exams/database", authenticateRequest, requirePermission(PERMISSIONS.EXAM_READ), resolveStudentTenantMiddleware, async (req, res, next) => {
     try {
       const identity = (req as any).user;
       const schoolId = String(identity.schoolId || '').trim();
@@ -11906,7 +11906,7 @@ export async function createApp(options: { cloudflare?: boolean } = {}): Promise
     }
   });
 
-  app.post("/api/exams/sync-canonical-classes", authenticateRequest, requirePermission(PERMISSIONS.EXAM_WRITE), async (req, res, next) => {
+  app.post("/api/exams/sync-canonical-classes", authenticateRequest, requirePermission(PERMISSIONS.EXAM_WRITE), resolveStudentTenantMiddleware, async (req, res, next) => {
     try {
       const tenantContext = (req as any).tenantContext;
       if (!tenantContext) throw new AuthenticationError('سياق المدرسة الموثوق غير مكتمل لمزامنة صفوف الامتحانات.');
@@ -11935,7 +11935,7 @@ export async function createApp(options: { cloudflare?: boolean } = {}): Promise
     }
   });
 
-  app.get("/api/exams/audit-events", authenticateRequest, requirePermission(PERMISSIONS.EXAM_READ), async (req, res, next) => {
+  app.get("/api/exams/audit-events", authenticateRequest, requirePermission(PERMISSIONS.EXAM_READ), resolveStudentTenantMiddleware, async (req, res, next) => {
     try {
       const identity = (req as any).user;
       const schoolId = String(identity.schoolId || '').trim();
@@ -12011,7 +12011,7 @@ export async function createApp(options: { cloudflare?: boolean } = {}): Promise
     }
   });
 
-  app.get("/api/exams/result-archives/:archiveId/verify", authenticateRequest, requirePermission(PERMISSIONS.EXAM_READ), async (req, res, next) => {
+  app.get("/api/exams/result-archives/:archiveId/verify", authenticateRequest, requirePermission(PERMISSIONS.EXAM_READ), resolveStudentTenantMiddleware, async (req, res, next) => {
     try {
       const identity = (req as any).user;
       const schoolId = String(identity.schoolId || '').trim();
@@ -12083,7 +12083,7 @@ export async function createApp(options: { cloudflare?: boolean } = {}): Promise
     }
   });
 
-  app.post("/api/exams/database", authenticateRequest, requirePermission(PERMISSIONS.EXAM_WRITE), async (req, res, next) => {
+  app.post("/api/exams/database", authenticateRequest, requirePermission(PERMISSIONS.EXAM_WRITE), resolveStudentTenantMiddleware, async (req, res, next) => {
     try {
       const schoolId = String((req as any).user.schoolId || '').trim();
       const tenantId = String((req as any).user.tenantId || '').trim();
