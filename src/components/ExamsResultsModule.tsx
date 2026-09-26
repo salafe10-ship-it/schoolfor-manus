@@ -30,7 +30,7 @@ import {
   normalizeAssessmentWorkflowState
 } from '../modules/exams/application/AssessmentWorkflowService';
 import { calculateCohortExamResults } from '../modules/exams/domain/ExamResultEngine';
-import { getTrustedAccessToken } from '../utils/auth';
+import { getTrustedAccessToken, getTrustedAccessTokenAsync } from '../utils/auth';
 
 const today = new Date();
 const currentAcademicYearStart = today.getMonth() >= 6 ? today.getFullYear() : today.getFullYear() - 1;
@@ -477,7 +477,7 @@ export default function ExamsResultsModule({
         exams_custom_proctor_unavailable: persistenceExtras.customProctorUnavailable ?? customProctorUnavailable,
         exams_assessment_state: persistenceExtras.assessmentState ?? assessmentState
       };
-      const token = getTrustedAccessToken();
+      const token = await getTrustedAccessTokenAsync();
       const response = await fetchExamsSource('/api/exams/database', {
         method: 'POST',
         headers: {
@@ -578,7 +578,7 @@ export default function ExamsResultsModule({
   const handleForceSync = async () => {
     setIsDbSyncing(true);
     try {
-      const token = getTrustedAccessToken();
+      const token = await getTrustedAccessTokenAsync();
       const [response, canonicalStudents, canonicalAuditEvents] = await Promise.all([
         fetchExamsSource('/api/exams/database', {
           headers: {
@@ -665,7 +665,7 @@ export default function ExamsResultsModule({
     if (isCanonicalClassSyncing || isDbSyncing) return;
     setIsCanonicalClassSyncing(true);
     try {
-      const token = getTrustedAccessToken();
+      const token = await getTrustedAccessTokenAsync();
       const response = await fetchExamsSource('/api/exams/sync-canonical-classes', {
         method: 'POST',
         headers: {
@@ -711,7 +711,7 @@ export default function ExamsResultsModule({
     const fetchDbOnMount = async () => {
       setIsDbSyncing(true);
       try {
-        const token = getTrustedAccessToken();
+        const token = await getTrustedAccessTokenAsync();
         const [response, canonicalStudents, canonicalAuditEvents] = await Promise.all([
           fetchExamsSource('/api/exams/database', {
           headers: {
@@ -2009,7 +2009,7 @@ export default function ExamsResultsModule({
   const handleLoadStudents = async () => {
     setIsReloadingStudents(true);
     try {
-      const canonicalStudents = await fetchCanonicalStudents(getTrustedAccessToken());
+      const canonicalStudents = await fetchCanonicalStudents(await getTrustedAccessTokenAsync());
       const refreshedStudents = mergeCanonicalStudents(canonicalStudents, studentList);
       setStudentList(refreshedStudents);
       triggerNotification(`تم تحميل ${refreshedStudents.length} طالباً من المصدر الرسمي مع الحفاظ على بيانات الامتحانات.`, 'success');
