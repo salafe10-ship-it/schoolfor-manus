@@ -11887,7 +11887,8 @@ export async function createApp(options: { cloudflare?: boolean } = {}): Promise
         userId: identity.id,
         userName: identity.name || 'المستخدم الحالي',
         ipAddress: req.ip || 'unknown',
-        affectedTables: ['exams_database']
+        affectedTables: ['exams_database'],
+        readOnly: true
       }, async () => {
         const transaction = UnitOfWork.getActiveContext()?.databaseTransaction;
         if (!transaction) throw new DatabaseError('معاملة قراءة الامتحانات غير متاحة.');
@@ -11964,7 +11965,8 @@ export async function createApp(options: { cloudflare?: boolean } = {}): Promise
         userId: (req as any).user.id,
         userName: (req as any).user.name || 'المستخدم الحالي',
         ipAddress: req.ip || 'unknown',
-        affectedTables: ['audit_events']
+        affectedTables: ['audit_events'],
+        readOnly: true
       }, async () => {
         const transaction = UnitOfWork.getActiveContext()?.databaseTransaction;
         if (!transaction) throw new DatabaseError('معاملة قراءة سجل تدقيق الامتحانات غير متاحة.');
@@ -12041,7 +12043,8 @@ export async function createApp(options: { cloudflare?: boolean } = {}): Promise
         userId: identity.id,
         userName: identity.name || 'المستخدم الحالي',
         ipAddress: req.ip || 'unknown',
-        affectedTables: ['exams_result_archives']
+        affectedTables: ['exams_result_archives'],
+        readOnly: true
       }, async () => {
         const transaction = UnitOfWork.getActiveContext()?.databaseTransaction;
         if (!transaction) throw new DatabaseError('معاملة التحقق من أرشيف الامتحانات غير متاحة.');
