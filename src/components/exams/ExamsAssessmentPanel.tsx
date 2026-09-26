@@ -228,6 +228,14 @@ export default function ExamsAssessmentPanel({ state, actorId, candidateIds, sub
       setMessage({ tone: 'error', text: 'أدخل خيارين صحيحين على الأقل للسؤال.' });
       return;
     }
+    const selectedCorrectIndexes = (form.type === 'multiple' ? form.correctIndex.split(',') : [form.correctIndex])
+      .map(value => Number(value.trim()))
+      .filter(index => Number.isInteger(index) && index >= 0 && index < options.length);
+    const correctOptionIds = [...new Set(selectedCorrectIndexes.map(index => options[index]?.id).filter(Boolean))] as string[];
+    if ((form.type === 'single' || form.type === 'multiple') && correctOptionIds.length === 0) {
+      setMessage({ tone: 'error', text: 'حدد إجابة صحيحة واحدة على الأقل.' });
+      return;
+    }
     void commit('question.created', () => createQuestionDraft(state, {
       ownerId: actorId,
       type: form.type,
@@ -243,7 +251,7 @@ export default function ExamsAssessmentPanel({ state, actorId, candidateIds, sub
         language: 'ar'
       },
       configuration: form.type === 'single' || form.type === 'multiple'
-        ? { options, correctOptionIds: [options[Number(form.correctIndex)]?.id || options[0]?.id] }
+        ? { options, correctOptionIds }
         : form.type === 'true_false'
           ? { correctAnswer: true }
           : form.type === 'numeric'
@@ -320,6 +328,21 @@ export default function ExamsAssessmentPanel({ state, actorId, candidateIds, sub
     if (question.type === 'true_false') {
       return <select value={String(value ?? '')} onChange={event => setAnswer(event.target.value === 'true')} className="w-full border border-[#d4af37]/30 bg-[#130b04] px-3 py-2 text-xs text-amber-50"><option value="">اختر الإجابة</option><option value="true">صح</option><option value="false">خطأ</option></select>;
     }
+    if (question.type === 'multiple') {
+      const selected = Array.isArray(value) ? value.map(String) : [];
+      return <div className="space-y-1 rounded border border-[#d4af37]/20 p-2">{question.configuration.options.map(option => <label key={option.id} className="flex items-center gap-2 text-xs text-amber-50"><input type="checkbox" checked={selected.includes(option.id)} onChange={event => setAnswer(event.target.checked ? [...selected, option.id] : selected.filter(item => item !== option.id))} />{option.label}</label>)}</div>;
+    }
+    if (question.type === 'numeric') {
+      return <input type="number" value={String(value ?? '')} onChange={event => setAnswer(event.target.value)} className="w-full border border-[#d4af37]/30 bg-[#130b04] px-3 py-2 text-xs text-amber-50" placeholder="أدخل رقماً" />;
+    }
+    if (question.type === 'matching') {
+      const matching = value && typeof value === 'object' && !Array.isArray(value) ? value as Record<string, unknown> : {};
+      return <div className="space-y-1 rounded border border-[#d4af37]/20 p-2">{question.configuration.pairs.map(pair => <label key={pair.left} className="grid grid-cols-[90px_1fr] items-center gap-2 text-xs text-amber-50"><span>{pair.left}</span><input value={String(matching[pair.left] ?? '')} onChange={event => setAnswer({ ...matching, [pair.left]: event.target.value })} className="border border-[#d4af37]/30 bg-[#130b04] px-2 py-1 text-xs text-amber-50" placeholder="المطابقة" /></label>)}</div>;
+    }
+    if (question.type === 'ordering') {
+      const ordering = Array.isArray(value) ? value.map(String) : [];
+      return <select multiple value={ordering} onChange={event => setAnswer(Array.from(event.target.selectedOptions).map(option => option.value))} className="min-h-24 w-full border border-[#d4af37]/30 bg-[#130b04] px-3 py-2 text-xs text-amber-50">{question.configuration.items.map(item => <option key={item.id} value={item.id}>{item.label}</option>)}</select>;
+    }
     return <input value={String(value ?? '')} onChange={event => setAnswer(event.target.value)} className="w-full border border-[#d4af37]/30 bg-[#130b04] px-3 py-2 text-xs text-amber-50" placeholder="إجابة الطالب" />;
   };
 
@@ -355,7 +378,7 @@ export default function ExamsAssessmentPanel({ state, actorId, candidateIds, sub
             <textarea value={form.prompt} onChange={event => setForm({ ...form, prompt: event.target.value })} className="min-h-20 w-full border border-[#d4af37]/30 bg-[#130b04] p-3 text-xs text-amber-50" placeholder="نص السؤال" />
             <div className="grid grid-cols-2 gap-2"><input value={form.subjectId} onChange={event => setForm({ ...form, subjectId: event.target.value })} className="border border-[#d4af37]/30 bg-[#130b04] px-3 py-2 text-xs text-amber-50" placeholder="معرف المادة" /><input value={form.gradeId} onChange={event => setForm({ ...form, gradeId: event.target.value })} className="border border-[#d4af37]/30 bg-[#130b04] px-3 py-2 text-xs text-amber-50" placeholder="معرف الصف" /></div>
             <div className="grid grid-cols-3 gap-2"><select value={form.type} onChange={event => setForm({ ...form, type: event.target.value as AssessmentQuestionType })} className="border border-[#d4af37]/30 bg-[#130b04] px-2 py-2 text-xs text-amber-50">{questionTypes.map(type => <option key={type} value={type}>{assessmentQuestionTypeLabel[type]}</option>)}</select><select value={form.difficulty} onChange={event => setForm({ ...form, difficulty: event.target.value as typeof form.difficulty })} className="border border-[#d4af37]/30 bg-[#130b04] px-2 py-2 text-xs text-amber-50"><option value="easy">سهل</option><option value="medium">متوسط</option><option value="hard">صعب</option></select><input type="number" min="1" value={form.points} onChange={event => setForm({ ...form, points: Number(event.target.value) })} className="border border-[#d4af37]/30 bg-[#130b04] px-3 py-2 text-xs text-amber-50" placeholder="الدرجة" /></div>
-            {(form.type === 'single' || form.type === 'multiple') && <><div className="grid grid-cols-1 gap-2 sm:grid-cols-3"><input value={form.optionA} onChange={event => setForm({ ...form, optionA: event.target.value })} className="border border-[#d4af37]/30 bg-[#130b04] px-3 py-2 text-xs text-amber-50" placeholder="الخيار الأول" /><input value={form.optionB} onChange={event => setForm({ ...form, optionB: event.target.value })} className="border border-[#d4af37]/30 bg-[#130b04] px-3 py-2 text-xs text-amber-50" placeholder="الخيار الثاني" /><input value={form.optionC} onChange={event => setForm({ ...form, optionC: event.target.value })} className="border border-[#d4af37]/30 bg-[#130b04] px-3 py-2 text-xs text-amber-50" placeholder="خيار ثالث اختياري" /></div><select value={form.correctIndex} onChange={event => setForm({ ...form, correctIndex: event.target.value })} className="w-full border border-[#d4af37]/30 bg-[#130b04] px-3 py-2 text-xs text-amber-50"><option value="0">الإجابة الصحيحة: الخيار الأول</option><option value="1">الإجابة الصحيحة: الخيار الثاني</option><option value="2">الإجابة الصحيحة: الخيار الثالث</option></select></>}
+            {(form.type === 'single' || form.type === 'multiple') && <><div className="grid grid-cols-1 gap-2 sm:grid-cols-3"><input value={form.optionA} onChange={event => setForm({ ...form, optionA: event.target.value })} className="border border-[#d4af37]/30 bg-[#130b04] px-3 py-2 text-xs text-amber-50" placeholder="الخيار الأول" /><input value={form.optionB} onChange={event => setForm({ ...form, optionB: event.target.value })} className="border border-[#d4af37]/30 bg-[#130b04] px-3 py-2 text-xs text-amber-50" placeholder="الخيار الثاني" /><input value={form.optionC} onChange={event => setForm({ ...form, optionC: event.target.value })} className="border border-[#d4af37]/30 bg-[#130b04] px-3 py-2 text-xs text-amber-50" placeholder="خيار ثالث اختياري" /></div>{form.type === 'multiple' ? <input value={form.correctIndex} onChange={event => setForm({ ...form, correctIndex: event.target.value })} className="w-full border border-[#d4af37]/30 bg-[#130b04] px-3 py-2 text-xs text-amber-50" placeholder="الإجابات الصحيحة: أرقام الخيارات مفصولة بفاصلة، مثال 0,2" /> : <select value={form.correctIndex} onChange={event => setForm({ ...form, correctIndex: event.target.value })} className="w-full border border-[#d4af37]/30 bg-[#130b04] px-3 py-2 text-xs text-amber-50"><option value="0">الإجابة الصحيحة: الخيار الأول</option><option value="1">الإجابة الصحيحة: الخيار الثاني</option><option value="2">الإجابة الصحيحة: الخيار الثالث</option></select>}</>}
             <button type="button" onClick={createQuestion} disabled={!canManageQuestions || Boolean(busy) || !form.prompt.trim()} className="flex w-full items-center justify-center gap-2 bg-gradient-to-r from-[#d4af37] via-[#f7d174] to-[#9a6a1d] px-4 py-3 text-xs font-black text-slate-950 disabled:opacity-40"><Save className="h-4 w-4" />{busy === 'question.created' ? 'جارٍ الحفظ...' : 'حفظ السؤال كمسودة'}</button>
           </div>
         </section>
