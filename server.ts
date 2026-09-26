@@ -8342,6 +8342,15 @@ export async function createApp(options: { cloudflare?: boolean } = {}): Promise
     }
   }
 
+  async function resolveStudentReadTenantMiddleware(req: express.Request, _res: express.Response, next: express.NextFunction) {
+    try {
+      await resolveStudentReadTenantContext(req);
+      next();
+    } catch (error) {
+      next(error);
+    }
+  }
+
   function canonicalEnrollmentWorkflowRequired(res: express.Response, operation: string) {
     return res.status(409).json({
       success: false,
@@ -11861,7 +11870,7 @@ export async function createApp(options: { cloudflare?: boolean } = {}): Promise
   });
 
   // Exams and Results Database API
-  app.get("/api/exams/database", authenticateRequest, requirePermission(PERMISSIONS.EXAM_READ), resolveStudentTenantMiddleware, async (req, res, next) => {
+  app.get("/api/exams/database", authenticateRequest, requirePermission(PERMISSIONS.EXAM_READ), resolveStudentReadTenantMiddleware, async (req, res, next) => {
     try {
       const identity = (req as any).user;
       const schoolId = String(identity.schoolId || '').trim();
@@ -11935,7 +11944,7 @@ export async function createApp(options: { cloudflare?: boolean } = {}): Promise
     }
   });
 
-  app.get("/api/exams/audit-events", authenticateRequest, requirePermission(PERMISSIONS.EXAM_READ), resolveStudentTenantMiddleware, async (req, res, next) => {
+  app.get("/api/exams/audit-events", authenticateRequest, requirePermission(PERMISSIONS.EXAM_READ), resolveStudentReadTenantMiddleware, async (req, res, next) => {
     try {
       const identity = (req as any).user;
       const schoolId = String(identity.schoolId || '').trim();
@@ -12011,7 +12020,7 @@ export async function createApp(options: { cloudflare?: boolean } = {}): Promise
     }
   });
 
-  app.get("/api/exams/result-archives/:archiveId/verify", authenticateRequest, requirePermission(PERMISSIONS.EXAM_READ), resolveStudentTenantMiddleware, async (req, res, next) => {
+  app.get("/api/exams/result-archives/:archiveId/verify", authenticateRequest, requirePermission(PERMISSIONS.EXAM_READ), resolveStudentReadTenantMiddleware, async (req, res, next) => {
     try {
       const identity = (req as any).user;
       const schoolId = String(identity.schoolId || '').trim();
