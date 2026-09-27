@@ -8340,6 +8340,15 @@ export async function createApp(options: { cloudflare?: boolean } = {}): Promise
     }
   }
 
+  async function resolveStudentReadTenantMiddleware(req: express.Request, _res: express.Response, next: express.NextFunction) {
+    try {
+      await resolveStudentReadTenantContext(req);
+      next();
+    } catch (error) {
+      next(error);
+    }
+  }
+
   function canonicalEnrollmentWorkflowRequired(res: express.Response, operation: string) {
     return res.status(409).json({
       success: false,
@@ -11859,7 +11868,7 @@ export async function createApp(options: { cloudflare?: boolean } = {}): Promise
   });
 
   // Exams and Results Database API
-  app.get("/api/exams/database", authenticateRequest, requirePermission(PERMISSIONS.EXAM_READ), async (req, res, next) => {
+  app.get("/api/exams/database", authenticateRequest, requirePermission(PERMISSIONS.EXAM_READ), resolveStudentReadTenantMiddleware, async (req, res, next) => {
     try {
       const identity = (req as any).user;
       const schoolId = String(identity.schoolId || '').trim();
@@ -11870,22 +11879,20 @@ export async function createApp(options: { cloudflare?: boolean } = {}): Promise
       if (!schoolId || !tenantId || !tenantContext) {
         throw new AuthenticationError('السياق الموثوق لقراءة الامتحانات غير مكتمل.');
       }
-      const snapshot = await UnitOfWork.runInTransaction(schoolId, {
-        operationName: 'Read versioned exams database',
-        tenantId,
-        userId: identity.id,
-        userName: identity.name || 'المستخدم الحالي',
-        ipAddress: req.ip || 'unknown',
-        affectedTables: ['exams_database']
-      }, async () => {
-        const transaction = UnitOfWork.getActiveContext()?.databaseTransaction;
-        if (!transaction) throw new DatabaseError('معاملة قراءة الامتحانات غير متاحة.');
-        const result = await transaction.query<{ data: Record<string, unknown>; version: number }>(
-          `SELECT data, version FROM public.exams_database WHERE tenant_id = $1 AND school_id = $2`,
-          [tenantId, schoolId]
-        );
-        return result.rows[0] || { data: {}, version: 0 };
-      }, tenantContext);
+      // This is a read-only projection. Use the server-selected canonical
+      // Supabase client so opening the Exams module does not consume a
+      // Hyperdrive transaction slot needed by writes or concurrent reads.
+      const supabase = canonicalTenantReadClient(req);
+      if (!supabase) throw new DatabaseError('مصدر بيانات الامتحانات الكانوني غير متاح.');
+      const { data: snapshotRow, error: snapshotError } = await supabase
+        .from('exams_database')
+        .select('data,version')
+        .eq('tenant_id', tenantId)
+        .eq('school_id', schoolId)
+        .limit(1)
+        .maybeSingle();
+      if (snapshotError) throw snapshotError;
+      const snapshot = snapshotRow || { data: {}, version: 0 };
       const projection = projectExamDatabaseForRead(snapshot.data || {}, actorRole, actorPermissions);
       res.json({
         success: true,
@@ -11898,11 +11905,13 @@ export async function createApp(options: { cloudflare?: boolean } = {}): Promise
         schoolId: (req as any).user?.schoolId,
         error: err?.message || String(err)
       });
-      next(new DatabaseError("Failed to read exams database", err.message));
+      next(err instanceof AuthenticationError || err instanceof AuthorizationError || err instanceof ValidationError || err instanceof ConflictError || err instanceof DatabaseError
+        ? err
+        : new DatabaseError('Failed to read exams database', err?.message || String(err)));
     }
   });
 
-  app.post("/api/exams/sync-canonical-classes", authenticateRequest, requirePermission(PERMISSIONS.EXAM_WRITE), async (req, res, next) => {
+  app.post("/api/exams/sync-canonical-classes", authenticateRequest, requirePermission(PERMISSIONS.EXAM_WRITE), resolveStudentTenantMiddleware, async (req, res, next) => {
     try {
       const tenantContext = (req as any).tenantContext;
       if (!tenantContext) throw new AuthenticationError('سياق المدرسة الموثوق غير مكتمل لمزامنة صفوف الامتحانات.');
@@ -11931,7 +11940,7 @@ export async function createApp(options: { cloudflare?: boolean } = {}): Promise
     }
   });
 
-  app.get("/api/exams/audit-events", authenticateRequest, requirePermission(PERMISSIONS.EXAM_READ), async (req, res, next) => {
+  app.get("/api/exams/audit-events", authenticateRequest, requirePermission(PERMISSIONS.EXAM_READ), resolveStudentReadTenantMiddleware, async (req, res, next) => {
     try {
       const identity = (req as any).user;
       const schoolId = String(identity.schoolId || '').trim();
@@ -11945,46 +11954,33 @@ export async function createApp(options: { cloudflare?: boolean } = {}): Promise
       if (!schoolId || !tenantId || !tenantContext || tenantContext.tenantId !== tenantId || tenantContext.schoolId !== schoolId) {
         throw new AuthenticationError('السياق الموثوق لسجل تدقيق الامتحانات غير مكتمل.');
       }
-      const events = await UnitOfWork.runInTransaction(schoolId, {
-        operationName: 'Read canonical exams audit events',
-        tenantId,
-        userId: (req as any).user.id,
-        userName: (req as any).user.name || 'المستخدم الحالي',
-        ipAddress: req.ip || 'unknown',
-        affectedTables: ['audit_events']
-      }, async () => {
-        const transaction = UnitOfWork.getActiveContext()?.databaseTransaction;
-        if (!transaction) throw new DatabaseError('معاملة قراءة سجل تدقيق الامتحانات غير متاحة.');
-        const result = await transaction.query<{
-          id: string;
-          action: string;
-          reason: string | null;
-          result: string;
-          metadata: Record<string, unknown>;
-          created_at: string;
-          actor_name: string | null;
-        }>(
-          `SELECT event.id,
-                  event.action,
-                  event.reason,
-                  event.result,
-                  event.metadata,
-                  event.created_at,
-                  actor.display_name AS actor_name
-             FROM public.audit_events event
-             LEFT JOIN public.users actor
-               ON actor.tenant_id = event.tenant_id
-              AND actor.id = event.actor_user_id
-            WHERE event.tenant_id = $1
-              AND event.school_id = $2
-              AND event.entity_type = 'exams_database'
-              AND event.entity_id = $2
-            ORDER BY event.created_at DESC, event.id DESC
-            LIMIT 200`,
-          [tenantId, schoolId]
-        );
-        return result.rows;
-      }, tenantContext);
+      // Audit is also a bounded read projection; keep it off the Hyperdrive
+      // pool and resolve actor names in one additional canonical read.
+      const supabase = canonicalTenantReadClient(req);
+      if (!supabase) throw new DatabaseError('مصدر سجل تدقيق الامتحانات الكانوني غير متاح.');
+      const { data: eventRows, error: eventsError } = await supabase
+        .from('audit_events')
+        .select('id,action,reason,result,metadata,created_at,actor_user_id')
+        .eq('tenant_id', tenantId)
+        .eq('school_id', schoolId)
+        .eq('entity_type', 'exams_database')
+        .eq('entity_id', schoolId)
+        .order('created_at', { ascending: false })
+        .order('id', { ascending: false })
+        .limit(200);
+      if (eventsError) throw eventsError;
+      const actorIds = [...new Set((eventRows || []).map((event: any) => String(event.actor_user_id || '').trim()).filter(Boolean))];
+      const actorNames = new Map<string, string>();
+      if (actorIds.length) {
+        const { data: actors, error: actorsError } = await supabase
+          .from('users')
+          .select('id,display_name')
+          .eq('tenant_id', tenantId)
+          .in('id', actorIds);
+        if (actorsError) throw actorsError;
+        (actors || []).forEach((actor: any) => actorNames.set(String(actor.id), String(actor.display_name || '')));
+      }
+      const events = (eventRows || []).map((event: any) => ({ ...event, actor_name: actorNames.get(String(event.actor_user_id || '').trim()) || null }));
       res.json({
         success: true,
         data: events.map(event => ({
@@ -12007,7 +12003,80 @@ export async function createApp(options: { cloudflare?: boolean } = {}): Promise
     }
   });
 
-  app.post("/api/exams/database", authenticateRequest, requirePermission(PERMISSIONS.EXAM_WRITE), async (req, res, next) => {
+  app.get("/api/exams/result-archives/:archiveId/verify", authenticateRequest, requirePermission(PERMISSIONS.EXAM_READ), resolveStudentReadTenantMiddleware, async (req, res, next) => {
+    try {
+      const identity = (req as any).user;
+      const schoolId = String(identity.schoolId || '').trim();
+      const tenantId = String(identity.tenantId || '').trim();
+      const archiveId = String(req.params.archiveId || '').trim();
+      const studentId = String(req.query.studentId || '').trim();
+      const tenantContext = (req as any).tenantContext;
+      if (!schoolId || !tenantId || !tenantContext || tenantContext.tenantId !== tenantId || tenantContext.schoolId !== schoolId) {
+        throw new AuthenticationError('السياق الموثوق للتحقق من إفادة النتيجة غير مكتمل.');
+      }
+      if (!/^[0-9a-f-]{36}$/i.test(archiveId) || !studentId || studentId.length > 128) {
+        throw new ValidationError('رمز التحقق أو معرف الطالب غير صالح.');
+      }
+
+      const verification = await UnitOfWork.runInTransaction(schoolId, {
+        operationName: 'Verify immutable exam result archive',
+        tenantId,
+        userId: identity.id,
+        userName: identity.name || 'المستخدم الحالي',
+        ipAddress: req.ip || 'unknown',
+        affectedTables: ['exams_result_archives'],
+        readOnly: true
+      }, async () => {
+        const transaction = UnitOfWork.getActiveContext()?.databaseTransaction;
+        if (!transaction) throw new DatabaseError('معاملة التحقق من أرشيف الامتحانات غير متاحة.');
+        const result = await transaction.query<{
+          id: string;
+          operational_version: number;
+          payload: Record<string, unknown>;
+          signature_hash: string;
+          created_at: string;
+        }>(
+          `SELECT id, operational_version, payload, signature_hash, created_at
+             FROM public.exams_result_archives
+            WHERE tenant_id = $1 AND school_id = $2 AND id = $3
+            LIMIT 1`,
+          [tenantId, schoolId, archiveId]
+        );
+        const archive = result.rows[0];
+        if (!archive) throw new ValidationError('أرشيف النتيجة المطلوب غير موجود داخل المدرسة الحالية.');
+        const payload = archive.payload && typeof archive.payload === 'object' ? archive.payload : {};
+        const expectedSignature = createHash('sha256').update(stableJsonStringify({
+          tenantId,
+          schoolId,
+          operationalVersion: Number(archive.operational_version),
+          payload
+        })).digest('hex');
+        const signatureValid = expectedSignature === String(archive.signature_hash || '').toLowerCase();
+        const students = Array.isArray(payload.students) ? payload.students as Array<Record<string, unknown>> : [];
+        const student = students.find(item => String(item?.id || '').trim() === studentId);
+        return {
+          archiveId: archive.id,
+          studentId,
+          studentName: student ? String(student.name || '').trim() : '',
+          operationalVersion: Number(archive.operational_version),
+          archivedAt: archive.created_at,
+          valid: Boolean(signatureValid && student)
+        };
+      }, tenantContext);
+
+      res.json({ success: true, data: verification });
+    } catch (err: any) {
+      EnterpriseLogger.error('Failed to verify immutable exam result archive', 'ExamsCertificateVerificationRoute', {
+        schoolId: (req as any).user?.schoolId,
+        error: err?.message || String(err)
+      });
+      next(err instanceof AuthenticationError || err instanceof AuthorizationError || err instanceof ValidationError || err instanceof DatabaseError
+        ? err
+        : new DatabaseError('Failed to verify immutable exam result archive', err?.message || String(err)));
+    }
+  });
+
+  app.post("/api/exams/database", authenticateRequest, requirePermission(PERMISSIONS.EXAM_WRITE), resolveStudentTenantMiddleware, async (req, res, next) => {
     try {
       const schoolId = String((req as any).user.schoolId || '').trim();
       const tenantId = String((req as any).user.tenantId || '').trim();

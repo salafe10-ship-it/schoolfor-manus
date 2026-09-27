@@ -424,7 +424,30 @@ export class PostgresTransactionDriver implements TransactionDriver {
         if (tenantRole && !/^[A-Za-z_][A-Za-z0-9_]*$/.test(tenantRole)) {
           throw new Error('DATABASE_ROLE_EXPECTED contains an invalid PostgreSQL role name.');
         }
-        if (tenantRole) await client.query(`SET ROLE "${tenantRole}"`);
+        if (tenantRole) {
+          const roleState = await client.query<{
+            current_user: string;
+            rolsuper: boolean;
+            rolbypassrls: boolean;
+            can_use_expected_role: boolean;
+          }>(
+            `SELECT current_user::text AS current_user,
+                    COALESCE(r.rolsuper, false) AS rolsuper,
+                    COALESCE(r.rolbypassrls, false) AS rolbypassrls,
+                    pg_has_role(current_user, $1, 'member') AS can_use_expected_role
+               FROM pg_roles r
+              WHERE r.rolname = current_user`,
+            [tenantRole]
+          );
+          const currentRole = roleState.rows[0];
+          const currentRoleIsSafe = Boolean(
+            currentRole
+            && !currentRole.rolsuper
+            && !currentRole.rolbypassrls
+            && currentRole.can_use_expected_role
+          );
+          if (!currentRoleIsSafe) await client.query(`SET ROLE "${tenantRole}"`);
+        }
       }
       if (options.trustedContext) {
         await this.applyTrustedContext(client, options.trustedContext, options.diagnosticTrace, diagnosticPrefix, false);
@@ -467,13 +490,16 @@ export function createPostgresTransactionDriverFromEnvironment(): PostgresTransa
   // A Worker instance is short-lived and Hyperdrive already maintains the
   // origin pool. Matching Hyperdrive's ceiling with a pg pool of 20 per
   // isolate causes connection waits and eventually `timeout exceeded when
-  // trying to connect` during RBAC resolution. Keep the local pool small in
-  // Cloudflare while preserving the existing override for deliberate tuning.
+  // trying to connect` during parallel authenticated reads. Keep the local
+  // pool below Hyperdrive's configured origin ceiling while allowing the
+  // dashboard, canonical students, exams, and audit reads to overlap without
+  // starving one another. Preserve the explicit override for deliberate
+  // tuning.
   const isCloudflareHyperdrive = process.env.EDUPRO_CLOUDFLARE_HYPERDRIVE === 'true';
   const configuredPoolMax = Number(process.env.PG_POOL_MAX);
   const poolMax = Number.isFinite(configuredPoolMax) && configuredPoolMax > 0
     ? configuredPoolMax
-    : (isCloudflareHyperdrive ? 4 : 20);
+    : (isCloudflareHyperdrive ? 8 : 20);
 
   const pool = new Pool({
     connectionString,

@@ -1,5 +1,6 @@
 import ExcelJS from 'exceljs';
 import { readSpreadsheetMatrix } from '../../../utils/ExcelWorkbookUtils';
+import { csvEscapeField } from './CsvExportSafety';
 
 export const EXAM_GRADE_XLSX_CONTENT_TYPE = 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet';
 export const EXAM_GRADE_CSV_CONTENT_TYPE = 'text/csv;charset=utf-8';
@@ -362,7 +363,7 @@ export async function writeExamGradeXlsx(input: ExamGradeWorkbookInput): Promise
 
 export function writeExamGradeCsv(input: ExamGradeWorkbookInput): string {
   const rows = [[...EXAM_GRADE_EXPORT_HEADERS], ...buildExamGradeRows(input)];
-  return `\uFEFF${rows.map(row => row.map(value => `"${String(value ?? '').replaceAll('"', '""')}"`).join(',')).join('\r\n')}`;
+  return `\uFEFF${rows.map(row => row.map(csvEscapeField).join(',')).join('\r\n')}`;
 }
 
 function isEmptyCell(value: unknown): boolean {

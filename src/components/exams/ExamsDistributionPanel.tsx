@@ -1,5 +1,6 @@
 import React, { useMemo, useState } from 'react';
 import { Download, Printer, RefreshCw, Search, ShieldAlert, Sparkles, UserX, Users } from 'lucide-react';
+import { csvEscapeField } from '../../modules/exams/application/CsvExportSafety';
 
 interface ExamsDistributionPanelProps {
   schoolName: string;
@@ -18,11 +19,6 @@ const escapeHtml = (value: unknown): string => String(value ?? '')
   .replaceAll('>', '&gt;')
   .replaceAll('"', '&quot;')
   .replaceAll("'", '&#039;');
-
-const csvCell = (value: unknown): string => {
-  const raw = String(value ?? '').replaceAll('"', '""');
-  return `"${/^[=+\-@]/.test(raw) ? `'${raw}` : raw}"`;
-};
 
 export default function ExamsDistributionPanel({
   schoolName,
@@ -90,7 +86,7 @@ export default function ExamsDistributionPanel({
       halls.find(hall => hall.id === student.hallId)?.name || 'غير موزع'
     ]);
     const csv = '\uFEFF' + [['معرف الطالب', 'الاسم', 'الصف', 'الشعبة', 'الهوية', 'رقم الجلوس', 'القاعة'], ...rows]
-      .map(row => row.map(csvCell).join(','))
+      .map(row => row.map(csvEscapeField).join(','))
       .join('\n');
     const url = URL.createObjectURL(new Blob([csv], { type: 'text/csv;charset=utf-8' }));
     const link = document.createElement('a');

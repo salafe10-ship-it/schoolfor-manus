@@ -22,14 +22,18 @@ import EnterpriseActionToolbar from './shared/EnterpriseActionToolbar';
 import ExamsCertificatesPanel from './exams/ExamsCertificatesPanel';
 import ExamsDistributionPanel from './exams/ExamsDistributionPanel';
 import ExamsAssessmentPanel from './exams/ExamsAssessmentPanel';
+import { StudentRepository } from './student-affairs/repository/StudentRepository';
 import { canAssignProctorForWeek } from '../modules/exams/application/ExamSchedulingRules';
 import {
+  AssessmentGradeProjection,
   AssessmentWorkflowState,
   createEmptyAssessmentWorkflowState,
   normalizeAssessmentWorkflowState
 } from '../modules/exams/application/AssessmentWorkflowService';
 import { calculateCohortExamResults } from '../modules/exams/domain/ExamResultEngine';
-import { getTrustedAccessToken } from '../utils/auth';
+import { csvEscapeField } from '../modules/exams/application/CsvExportSafety';
+import { getTrustedAccessToken, getTrustedAccessTokenAsync } from '../utils/auth';
+import { authenticatedRequest } from '../utils/authenticatedRequest';
 
 const today = new Date();
 const currentAcademicYearStart = today.getMonth() >= 6 ? today.getFullYear() : today.getFullYear() - 1;
@@ -56,6 +60,27 @@ const normalizeSubjectName = (value: unknown): string => String(value ?? '')
   .trim()
   .replace(/\s+/g, ' ')
   .toLocaleLowerCase('ar');
+
+const EXAMS_SOURCE_REQUEST_TIMEOUT_MS = 15_000;
+
+const fetchExamsSource = async (input: RequestInfo | URL, init: RequestInit = {}): Promise<Response> => {
+  const controller = new AbortController();
+  const timeoutId = window.setTimeout(() => controller.abort(), EXAMS_SOURCE_REQUEST_TIMEOUT_MS);
+  try {
+    // Keep all exams reads and writes on the same trusted-session transport as
+    // the other canonical modules. It refreshes once and retries on a 401,
+    // which is essential when an already-open production tab outlives its
+    // short-lived access token.
+    return await authenticatedRequest(input, { ...init, signal: controller.signal });
+  } catch (error) {
+    if (error instanceof DOMException && error.name === 'AbortError') {
+      throw new Error('انتهت مهلة الاتصال بالمصدر المركزي. تحقق من الشبكة ثم أعد المحاولة.');
+    }
+    throw error;
+  } finally {
+    window.clearTimeout(timeoutId);
+  }
+};
 
 const getScheduleRulesError = (config: any): string => {
   if (!/^\d{4}-\d{2}-\d{2}$/.test(config?.startDate || '')) return 'حدد تاريخ بداية صالحاً للامتحانات.';
@@ -343,21 +368,21 @@ export default function ExamsResultsModule({
     });
   };
 
-  const fetchCanonicalStudents = async (token: string | null) => {
+  const fetchCanonicalStudents = async (_token: string | null) => {
     const collected: any[] = [];
     let page = 1;
     let hasNext = true;
-    while (hasNext) {
-      const response = await fetch(`/api/students?page=${page}&limit=100&sortBy=name&sortOrder=asc`, {
-        headers: { 'Authorization': token ? `Bearer ${token}` : '' },
-        cache: 'no-store'
-      });
-      if (!response.ok) throw new Error(`Canonical student read failed (${response.status})`);
-      const result = await response.json();
+    while (hasNext && page <= 1000) {
+      // Use the canonical Student Affairs repository so Exams follows the
+      // same trusted-session refresh and bounded retry policy as the source
+      // module, instead of treating one transient read failure as a hard
+      // database disconnect.
+      const result = await StudentRepository.list({ page, limit: 100, sortBy: 'name', sortOrder: 'asc' });
       collected.push(...(Array.isArray(result.data) ? result.data : []));
       hasNext = Boolean(result.meta?.hasNext);
       page += 1;
     }
+    if (hasNext) throw new Error('تعذر إكمال قراءة الطلاب من المصدر المركزي: عدد الصفحات تجاوز الحد الآمن.');
     const normalizeAcademicYear = (value: unknown) => String(value || '').replace(/\D/g, '');
     const targetAcademicYear = normalizeAcademicYear(selectedSchool?.academicYear || examSettings.academicYear);
     const diagnostics = {
@@ -388,7 +413,7 @@ export default function ExamsResultsModule({
   };
 
   const fetchCentralAuditLogs = async (token: string | null) => {
-    const response = await fetch('/api/exams/audit-events', {
+    const response = await fetchExamsSource('/api/exams/audit-events', {
       headers: { 'Authorization': token ? `Bearer ${token}` : '' },
       cache: 'no-store'
     });
@@ -458,8 +483,8 @@ export default function ExamsResultsModule({
         exams_custom_proctor_unavailable: persistenceExtras.customProctorUnavailable ?? customProctorUnavailable,
         exams_assessment_state: persistenceExtras.assessmentState ?? assessmentState
       };
-      const token = getTrustedAccessToken();
-      const response = await fetch('/api/exams/database', {
+      const token = await getTrustedAccessTokenAsync();
+      const response = await fetchExamsSource('/api/exams/database', {
         method: 'POST',
         headers: {
           'Content-Type': 'application/json',
@@ -559,9 +584,11 @@ export default function ExamsResultsModule({
   const handleForceSync = async () => {
     setIsDbSyncing(true);
     try {
+      // authenticatedRequest owns the read-session restore/retry lifecycle;
+      // do not race it with a second explicit restore in this fan-out.
       const token = getTrustedAccessToken();
       const [response, canonicalStudents, canonicalAuditEvents] = await Promise.all([
-        fetch('/api/exams/database', {
+        fetchExamsSource('/api/exams/database', {
           headers: {
             'Authorization': token ? `Bearer ${token}` : ''
           }
@@ -607,16 +634,26 @@ export default function ExamsResultsModule({
           if (dbData.exams_schedule_config) updateScheduleConfig(dbData.exams_schedule_config);
           if (dbData.exams_custom_proctor_unavailable) setCustomProctorUnavailable(dbData.exams_custom_proctor_unavailable);
           if (dbData.exams_assessment_state) restoreAssessmentState(dbData.exams_assessment_state);
-          setDbSyncStatus('success');
-          setLastSyncTime(new Date().toLocaleTimeString('ar-EG'));
-          triggerNotification('تمت مزامنة واسترجاع كامل البيانات من السيرفر بنجاح', 'success');
+          if (canonicalStudents === null) {
+            setDbSyncStatus('error');
+            triggerNotification('تم استرجاع بيانات الامتحانات، لكن تعذر تحديث الطلاب من المصدر المركزي. أعد التحقق قبل أي تعديل.', 'warning');
+          } else {
+            setDbSyncStatus('success');
+            setLastSyncTime(new Date().toLocaleTimeString('ar-EG'));
+            triggerNotification('تمت مزامنة واسترجاع كامل البيانات من السيرفر بنجاح', 'success');
+          }
           logAction('مزامنة واسترجاع البيانات يدوياً من السيرفر', 'النظام وقاعدة البيانات');
         } else {
           // An empty canonical database is an empty state, not permission to
           // promote browser/demo fixtures into authoritative exam records.
           if (canonicalStudents) setStudentList(mergeCanonicalStudents(canonicalStudents));
-          setDbSyncStatus('success');
-          triggerNotification('المصدر المركزي متاح لكنه لا يحتوي سجلات امتحانات بعد.', 'info');
+          if (canonicalStudents === null) {
+            setDbSyncStatus('error');
+            triggerNotification('المصدر المركزي ردّ بلا سجلات امتحانات، لكن تعذر التحقق من الطلاب. أعد المحاولة.', 'warning');
+          } else {
+            setDbSyncStatus('success');
+            triggerNotification('المصدر المركزي متاح لكنه لا يحتوي سجلات امتحانات بعد.', 'info');
+          }
         }
       } else {
         setDbSyncStatus('error');
@@ -625,7 +662,8 @@ export default function ExamsResultsModule({
       }
     } catch (err: any) {
       setDbSyncStatus('error');
-      triggerNotification('حدث خطأ أثناء مزامنة قاعدة البيانات', 'warning');
+      EnterpriseLogger.error('Failed to force-sync exams database', 'ExamsResultsModule', { error: err });
+      triggerNotification('تعذر الاتصال بالمصدر المركزي أثناء المزامنة.', 'warning');
     } finally {
       setIsDbSyncing(false);
     }
@@ -635,8 +673,8 @@ export default function ExamsResultsModule({
     if (isCanonicalClassSyncing || isDbSyncing) return;
     setIsCanonicalClassSyncing(true);
     try {
-      const token = getTrustedAccessToken();
-      const response = await fetch('/api/exams/sync-canonical-classes', {
+      const token = await getTrustedAccessTokenAsync();
+      const response = await fetchExamsSource('/api/exams/sync-canonical-classes', {
         method: 'POST',
         headers: {
           'Content-Type': 'application/json',
@@ -681,9 +719,11 @@ export default function ExamsResultsModule({
     const fetchDbOnMount = async () => {
       setIsDbSyncing(true);
       try {
+        // authenticatedRequest owns the read-session restore/retry lifecycle;
+        // do not race it with a second explicit restore during mount.
         const token = getTrustedAccessToken();
         const [response, canonicalStudents, canonicalAuditEvents] = await Promise.all([
-          fetch('/api/exams/database', {
+          fetchExamsSource('/api/exams/database', {
           headers: {
             'Authorization': token ? `Bearer ${token}` : ''
           }
@@ -728,20 +768,33 @@ export default function ExamsResultsModule({
             if (dbData.exams_schedule_config) updateScheduleConfig(dbData.exams_schedule_config);
             if (dbData.exams_custom_proctor_unavailable) setCustomProctorUnavailable(dbData.exams_custom_proctor_unavailable);
             if (dbData.exams_assessment_state) restoreAssessmentState(dbData.exams_assessment_state);
-            setDbSyncStatus('success');
-            setLastSyncTime(new Date().toLocaleTimeString('ar-EG'));
-            triggerNotification('تم الاتصال بقاعدة البيانات واسترجاع كافة السجلات بنجاح', 'success');
+            if (canonicalStudents === null) {
+              setDbSyncStatus('error');
+              triggerNotification('تم تحميل بيانات الامتحانات، لكن تعذر التحقق من الطلاب. أعد التحقق قبل المتابعة.', 'warning');
+            } else {
+              setDbSyncStatus('success');
+              setLastSyncTime(new Date().toLocaleTimeString('ar-EG'));
+              triggerNotification('تم الاتصال بقاعدة البيانات واسترجاع كافة السجلات بنجاح', 'success');
+            }
           } else {
             if (canonicalStudents) setStudentList(mergeCanonicalStudents(canonicalStudents));
-            setDbSyncStatus('success');
-            triggerNotification('المصدر المركزي متاح لكنه لا يحتوي سجلات امتحانات بعد.', 'info');
+            if (canonicalStudents === null) {
+              setDbSyncStatus('error');
+              triggerNotification('المصدر المركزي متاح، لكن تعذر التحقق من الطلاب. أعد المحاولة قبل إنشاء دورة.', 'warning');
+            } else {
+              setDbSyncStatus('success');
+              triggerNotification('المصدر المركزي متاح لكنه لا يحتوي سجلات امتحانات بعد.', 'info');
+            }
           }
         } else {
           setDbSyncStatus('error');
+          const errorResult = await response.json().catch(() => ({}));
+          triggerNotification(errorResult.message || `تعذر الاتصال بالمصدر المركزي (${response.status}).`, 'warning');
         }
       } catch (err: any) {
         EnterpriseLogger.error("Failed to fetch exams database", "ExamsResultsModule", { error: err });
         setDbSyncStatus('error');
+        triggerNotification('تعذر الاتصال بالمصدر المركزي أثناء تحميل وحدة الامتحانات.', 'warning');
       } finally {
         setIsDbSyncing(false);
       }
@@ -918,15 +971,10 @@ export default function ExamsResultsModule({
   // Generic CSV Export Utility (Excel-compatible with UTF-8 BOM for Arabic)
   const handleExportToCSV = (data: any[], headers: string[], filename: string) => {
     let csvContent = "\uFEFF"; // UTF-8 BOM to make Excel render Arabic correctly
-    csvContent += headers.join(",") + "\n";
+    csvContent += headers.map(csvEscapeField).join(",") + "\n";
 
     data.forEach(row => {
-      const line = row.map((val: any) => {
-        const raw = String(val === undefined || val === null ? "" : val);
-        const formulaSafe = /^[=+\-@]/.test(raw) ? `'${raw}` : raw;
-        const str = formulaSafe.replace(/"/g, '""');
-        return `"${str}"`;
-      }).join(",");
+      const line = row.map(csvEscapeField).join(",");
       csvContent += line + "\n";
     });
 
@@ -938,7 +986,8 @@ export default function ExamsResultsModule({
     document.body.appendChild(link);
     link.click();
     document.body.removeChild(link);
-    triggerNotification(`تم تصدير ملف ${filename} بنجاح بصيغة Excel CSV`, 'success');
+    window.setTimeout(() => URL.revokeObjectURL(url), 1000);
+    triggerNotification(`تم تصدير ملف ${filename} بنجاح بصيغة CSV المتوافقة مع Excel`, 'success');
   };
 
   const handleExportBackup = async () => {
@@ -1003,6 +1052,10 @@ export default function ExamsResultsModule({
   const handleAddSubject = async (e: React.FormEvent) => {
     e.preventDefault();
     if (isDbSyncing || isCanonicalClassSyncing) return;
+    if (scheduleApprovalStatus.approved || approvalStatus.approved) {
+      triggerNotification('لا يمكن إضافة مادة بعد اعتماد الجدول أو إغلاق النتائج. أعد فتح الدورة بسبب موثق أولاً.', 'warning');
+      return;
+    }
     const subjectName = String(newSubject.name || '').trim().replace(/\s+/g, ' ');
     if (!subjectName) return;
     if (newSubject.maxScore <= 0 || newSubject.passScore < 0 || newSubject.passScore > newSubject.maxScore) {
@@ -1065,9 +1118,17 @@ export default function ExamsResultsModule({
   const [newHall, setNewHall] = useState({ name: '', capacity: 25, location: '' });
   const handleAddHall = async (e: React.FormEvent) => {
     e.preventDefault();
+    if (scheduleApprovalStatus.approved || approvalStatus.approved) {
+      triggerNotification('لا يمكن إضافة قاعة بعد اعتماد الجدول أو إغلاق النتائج. أعد فتح الدورة بسبب موثق أولاً.', 'warning');
+      return;
+    }
     if (!newHall.name.trim()) return;
     if (newHall.capacity <= 0) {
       triggerNotification('يجب أن تكون سعة القاعة أكبر من صفر.', 'warning');
+      return;
+    }
+    if (halls.some(hall => normalizeSubjectName(hall.name) === normalizeSubjectName(newHall.name))) {
+      triggerNotification('اسم القاعة موجود بالفعل في دورة الامتحانات.', 'warning');
       return;
     }
     const item = {
@@ -1086,6 +1147,80 @@ export default function ExamsResultsModule({
     setNewHall({ name: '', capacity: 25, location: '' });
     triggerNotification(`تم تسجيل قاعة ${item.name} الاستيعابية بنجاح`, 'success');
     logAction(`إضافة قاعة اختبار جديدة: ${item.name}`, 'لجان وقاعات الامتحان');
+  };
+
+  const persistPreparationSubjects = async (updatedSubjects: any[], successMessage = 'تم حفظ تجهيزات المواد في المصدر المركزي.') => {
+    if (databaseWriteLockRef.current) {
+      triggerNotification('جارٍ حفظ تعديل سابق. انتظر اكتماله ثم أعد المحاولة.', 'info');
+      return false;
+    }
+    if (scheduleApprovalStatus.approved || approvalStatus.approved) {
+      triggerNotification('تجهيزات المواد مقفلة بعد الاعتماد. أعد فتح الجدول بسبب موثق قبل تعديلها.', 'warning');
+      return false;
+    }
+    const names = new Set<string>();
+    for (const subject of updatedSubjects) {
+      const name = String(subject?.name || '').trim().replace(/\s+/g, ' ');
+      const maxScore = Number(subject?.maxScore);
+      const passScore = Number(subject?.passScore);
+      const normalizedName = normalizeSubjectName(name);
+      if (!name || !Number.isFinite(maxScore) || maxScore <= 0 || !Number.isFinite(passScore) || passScore < 0 || passScore > maxScore) {
+        triggerNotification('لم تُحفظ التجهيزات: تحقق من اسم المادة والدرجة العظمى ودرجة النجاح.', 'warning');
+        void handleForceSync();
+        return false;
+      }
+      if (names.has(normalizedName)) {
+        triggerNotification(`لم تُحفظ التجهيزات: اسم المادة ${name} مكرر.`, 'warning');
+        void handleForceSync();
+        return false;
+      }
+      names.add(normalizedName);
+    }
+    const persisted = await saveToServerDb(examSettings, halls, updatedSubjects);
+    if (!persisted) {
+      void handleForceSync();
+      return false;
+    }
+    setSubjects(updatedSubjects);
+    triggerNotification(successMessage, 'success');
+    return true;
+  };
+
+  const persistPreparationHalls = async (updatedHalls: any[], successMessage = 'تم حفظ تجهيزات القاعات في المصدر المركزي.') => {
+    if (databaseWriteLockRef.current) {
+      triggerNotification('جارٍ حفظ تعديل سابق. انتظر اكتماله ثم أعد المحاولة.', 'info');
+      return false;
+    }
+    if (scheduleApprovalStatus.approved || approvalStatus.approved) {
+      triggerNotification('تجهيزات القاعات مقفلة بعد الاعتماد. أعد فتح الجدول بسبب موثق قبل تعديلها.', 'warning');
+      return false;
+    }
+    const names = new Set<string>();
+    for (const hall of updatedHalls) {
+      const name = String(hall?.name || '').trim();
+      const capacity = Number(hall?.capacity);
+      const normalizedName = normalizeSubjectName(name);
+      const assignedCount = studentList.filter(student => student.hallId === hall.id).length;
+      if (!name || !Number.isSafeInteger(capacity) || capacity <= 0 || capacity < assignedCount) {
+        triggerNotification(`لم تُحفظ القاعات: تحقق من الاسم والسعة، ويجب ألا تقل سعة ${name || 'القاعة'} عن ${assignedCount} طالباً موزعاً.`, 'warning');
+        void handleForceSync();
+        return false;
+      }
+      if (names.has(normalizedName)) {
+        triggerNotification(`لم تُحفظ القاعات: اسم القاعة ${name} مكرر.`, 'warning');
+        void handleForceSync();
+        return false;
+      }
+      names.add(normalizedName);
+    }
+    const persisted = await saveToServerDb(examSettings, updatedHalls);
+    if (!persisted) {
+      void handleForceSync();
+      return false;
+    }
+    setHalls(updatedHalls);
+    triggerNotification(successMessage, 'success');
+    return true;
   };
 
   // 4. Seating & Distribution Automatic Generators (Smart/Capacity-bounded)
@@ -1327,6 +1462,96 @@ export default function ExamsResultsModule({
     setProctorAssignments(newProctorAssignments);
     triggerNotification('تم توزيع المراقبين والملاحظين تلقائياً على اللجان دون أي تعارض زمني!', 'success');
     logAction('تشغيل محرك التوزيع الآلي للمراقبين على اللجان', 'المراقبون والملاحظون');
+  };
+
+  const handlePublishOnlineAssessmentGrades = async (
+    assessmentId: string,
+    projections: AssessmentGradeProjection[]
+  ): Promise<boolean> => {
+    if (approvalStatus.approved) {
+      triggerNotification('لا يمكن ترحيل درجات إلكترونية؛ النتائج العامة معتمدة ومقفلة.', 'warning');
+      return false;
+    }
+    if (dbSyncStatus !== 'success') {
+      triggerNotification('لا يمكن الترحيل قبل اتصال المصدر المركزي والتحقق من الطلاب.', 'warning');
+      return false;
+    }
+    if (!Array.isArray(projections) || projections.length === 0) {
+      triggerNotification('لا توجد نتائج إلكترونية نهائية قابلة للترحيل.', 'warning');
+      return false;
+    }
+
+    const updatedMatrix = structuredClone(gradesMatrix);
+    const updatedGradeHistory = [...gradeHistory];
+    const updatedAuditLogs = [...auditLogs];
+    let changedCount = 0;
+    for (const projection of projections) {
+      const student = studentList.find(item => String(item.id) === projection.candidateId);
+      const subject = subjects.find(item => item.id === projection.subjectId);
+      if (!student || !subject) {
+        triggerNotification(`تعذر ترحيل نتيجة الطالب ${projection.candidateId}: الطالب أو المادة غير موجودة في الدورة الحالية.`, 'warning');
+        return false;
+      }
+      if (projection.score < 0 || projection.score > subject.maxScore) {
+        triggerNotification(`تعذر ترحيل نتيجة ${student.name}: الدرجة خارج نطاق مادة ${subject.name}.`, 'warning');
+        return false;
+      }
+      const oldGrade = updatedMatrix[projection.candidateId]?.[projection.subjectId];
+      if (!updatedMatrix[projection.candidateId]) updatedMatrix[projection.candidateId] = {};
+      updatedMatrix[projection.candidateId][projection.subjectId] = projection.score;
+      if (oldGrade !== projection.score) {
+        updatedGradeHistory.unshift({
+          id: `gh-online-${Date.now()}-${changedCount}`,
+          studentName: student.name,
+          classroom: student.classroom,
+          subjectName: subject.name,
+          oldGrade,
+          newGrade: projection.score,
+          modifiedBy: trustedActorLabel,
+          reason: `ترحيل نتيجة امتحان إلكتروني منشور (${assessmentId}) إلى كشف الدرجات العام`,
+          source: 'online_assessment',
+          assessmentId,
+          timestamp: new Date().toISOString().replace('T', ' ').substring(0, 19)
+        });
+        updatedAuditLogs.unshift({
+          id: `a-online-${Date.now()}-${changedCount}`,
+          timestamp: new Date().toISOString().replace('T', ' ').substring(0, 19),
+          user: trustedActorLabel,
+          action: `ترحيل نتيجة إلكترونية للطالب [${student.name}] في مادة [${subject.name}] من [${oldGrade ?? 'غير مرصود'}] إلى [${projection.score}]`,
+          module: 'الامتحان الإلكتروني والنتائج العامة',
+          source: 'online_assessment',
+          assessmentId
+        });
+        changedCount += 1;
+      }
+    }
+
+    const persisted = await saveToServerDb(
+      examSettings,
+      halls,
+      subjects,
+      studentList,
+      updatedMatrix,
+      schedule,
+      proctorAssignments,
+      approvalStatus,
+      updatedAuditLogs,
+      classesList,
+      controlClosures,
+      reEvaluationRequests,
+      snapshots,
+      reviewedStagesSubjects,
+      stageApprovalStatus,
+      'write',
+      { gradeHistory: updatedGradeHistory, operationReason: `ترحيل نتائج الامتحان الإلكتروني ${assessmentId}` }
+    );
+    if (!persisted) return false;
+    setGradesMatrix(updatedMatrix);
+    setGradeHistory(updatedGradeHistory);
+    setAuditLogs(updatedAuditLogs);
+    triggerNotification(`تم ترحيل ${projections.length} نتيجة إلكترونية إلى كشف الدرجات العام${changedCount === 0 ? ' دون تغييرات جديدة' : ''}.`, 'success');
+    logAction(`ترحيل نتائج الامتحان الإلكتروني ${assessmentId} إلى كشف الدرجات العام`, 'الامتحان الإلكتروني والنتائج العامة');
+    return true;
   };
 
   // 7. Grades Input System Spreadsheet
@@ -1784,25 +2009,15 @@ export default function ExamsResultsModule({
   const handleDownloadTemplate = () => {
     const subName = subjects.find(s => s.id === selectedGradeSubject)?.name || 'درجات';
     const maxVal = subjects.find(s => s.id === selectedGradeSubject)?.maxScore || 100;
-    const headers = "رقم الطالب,اسم الطالب,رقم الجلوس,المادة,الدرجة العظمى,الدرجة الحالية";
-    const rows = filteredStudentsForGrades.map(st =>
-      `"${st.nationalId || st.id}","${st.name}","${st.seatNumber || ''}","${subName}","${maxVal}",""`
+    handleExportToCSV(
+      filteredStudentsForGrades.map(st => [st.id, st.studentNumber || '', st.nationalId || '', st.seatNumber || '', st.name, st.classroom, st.section, subName, maxVal, '']),
+      ['معرف الطالب', 'رقم الطالب', 'الرقم الوطني', 'رقم الجلوس', 'اسم الطالب', 'الصف', 'الشعبة', 'المادة', 'الدرجة العظمى', 'الدرجة'],
+      `قالب_رصد_${subName}`
     );
-    const csvContent = "\uFEFF" + [headers, ...rows].join("\n");
-    const blob = new Blob([csvContent], { type: 'text/csv;charset=utf-8;' });
-    const url = URL.createObjectURL(blob);
-    const link = document.createElement("a");
-    link.setAttribute("href", url);
-    link.setAttribute("download", `قالب_رصد_${subName}.csv`);
-    document.body.appendChild(link);
-    link.click();
-    document.body.removeChild(link);
-    triggerNotification('تم تنزيل قالب رصد الدرجات المخصص بنجاح!', 'success');
   };
 
   const handleExportExcel = () => {
     const subName = subjects.find(s => s.id === selectedGradeSubject)?.name || 'درجات';
-    const headers = "الرقم التسلسلي,رقم الطالب,رقم الجلوس,اسم الطالب,الصف والمجموعة,الدرجة,المجموع,النسبة المئوية,التقدير,النتيجة";
     const rows = filteredStudentsForGrades.map((st, idx) => {
       const currentMark = gradesMatrix[st.id]?.[selectedGradeSubject];
       const isAbsent = st.absentSubjects?.includes(selectedGradeSubject);
@@ -1828,18 +2043,46 @@ export default function ExamsResultsModule({
       const isPass = currentMark !== undefined && currentMark >= (subjects.find(s=>s.id===selectedGradeSubject)?.passScore || 50);
       const resText = isAbsent ? 'غياب' : (currentMark === undefined ? 'غير مرصود' : (isPass ? 'ناجح' : 'راسب'));
 
-      return `${idx + 1},"${st.nationalId || st.id}","${st.seatNumber || ''}","${st.name}","${st.classroom} - ${st.section}",${isAbsent ? 0 : (currentMark !== undefined ? currentMark : '')},${totalScore},${pct}%,${grade},"${resText}"`;
+      return [idx + 1, st.nationalId || st.id, st.seatNumber || '', st.name, `${st.classroom} - ${st.section}`, isAbsent ? 0 : (currentMark !== undefined ? currentMark : ''), totalScore, `${pct}%`, grade, resText];
     });
-    const csvContent = "\uFEFF" + [headers, ...rows].join("\n");
-    const blob = new Blob([csvContent], { type: 'text/csv;charset=utf-8;' });
-    const url = URL.createObjectURL(blob);
-    const link = document.createElement("a");
-    link.setAttribute("href", url);
-    link.setAttribute("download", `تقرير_درجات_${selectedGradeClass}_${subName}.csv`);
-    document.body.appendChild(link);
-    link.click();
-    document.body.removeChild(link);
-    triggerNotification('تم تصدير كشف الدرجات المفلتر إلى Excel بنجاح!', 'success');
+    handleExportToCSV(rows, ['الرقم التسلسلي', 'رقم الطالب', 'رقم الجلوس', 'اسم الطالب', 'الصف والمجموعة', 'الدرجة', 'المجموع', 'النسبة المئوية', 'التقدير', 'النتيجة'], `تقرير_درجات_${selectedGradeClass}_${subName}`);
+  };
+
+  const handleExportXlsx = async () => {
+    const subject = subjects.find(item => item.id === selectedGradeSubject);
+    if (!subject) {
+      triggerNotification('حدد مادة دراسية قبل تصدير ملف XLSX.', 'warning');
+      return;
+    }
+    try {
+      const { writeExamGradeXlsx } = await import('../modules/exams/application/ExamSpreadsheetService');
+      const buffer = await writeExamGradeXlsx({
+        subject: { id: String(subject.id), name: String(subject.name), maxScore: Number(subject.maxScore) },
+        rows: filteredStudentsForGrades.map(student => ({
+          studentId: String(student.id),
+          studentNumber: student.studentNumber,
+          nationalId: student.nationalId,
+          seatNumber: student.seatNumber,
+          studentName: String(student.name || ''),
+          classroom: student.classroom,
+          section: student.section,
+          grade: student.absentSubjects?.includes(subject.id) ? 0 : gradesMatrix[student.id]?.[subject.id] ?? null
+        }))
+      });
+      const blob = new Blob([buffer], { type: 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet' });
+      const url = URL.createObjectURL(blob);
+      const link = document.createElement('a');
+      link.href = url;
+      link.download = `تقرير_درجات_${selectedGradeClass}_${subject.name}.xlsx`;
+      document.body.appendChild(link);
+      link.click();
+      document.body.removeChild(link);
+      window.setTimeout(() => URL.revokeObjectURL(url), 1000);
+      triggerNotification('تم تصدير ملف XLSX حقيقي وآمن لدرجات المادة.', 'success');
+    } catch (error) {
+      EnterpriseLogger.error('Failed to export exam grades as XLSX', 'ExamsResultsModule', { error });
+      triggerNotification('تعذر إنشاء ملف XLSX لدرجات المادة.', 'warning');
+    }
   };
 
   const handleResetFilters = () => {
@@ -1940,11 +2183,28 @@ export default function ExamsResultsModule({
   };
 
   const metrics = getReviewMetrics();
+  const reviewDataReady = studentList.length > 0 && subjects.length > 0;
+  const reviewInvalidGradesCount = studentList.reduce((count, student) => count + subjects.filter(subject => {
+    const grade = gradesMatrix[student.id]?.[subject.id];
+    return grade !== undefined && (!Number.isFinite(grade) || grade < 0 || grade > Number(subject.maxScore));
+  }).length, 0);
+  const reviewDistributionReady = reviewDataReady && studentList.every(student => {
+    const hall = halls.find(item => item.id === student.hallId);
+    return Boolean(hall && student.seatNumber);
+  });
 
   const handleApproveAndLock = async () => {
     // Role-Based Access Control
     if (currentUserRole !== 'admin') {
       triggerNotification('❌ عذراً، لا تمتلك الصلاحية الكافية لاعتماد النتائج وتجميد الكنترول. تتطلب هذه العملية دور "مدير الكنترول".', 'warning');
+      return;
+    }
+
+    // The canonical archive and approval operation are currently school-wide.
+    // Never let a future committee selector imply a stage-only approval while
+    // the server still creates one immutable archive for the complete cycle.
+    if (activeControlStage !== 'all') {
+      triggerNotification('لا يمكن اعتماد مرحلة منفردة قبل تفعيل مسار أرشفة مرحلي مستقل على الخادم. اختر نطاق كامل المراحل.', 'warning');
       return;
     }
 
@@ -2158,10 +2418,12 @@ export default function ExamsResultsModule({
   const handlePrintReport = (title: string) => {
     const printWindow = window.open('', '_blank');
     if (!printWindow) return;
+    const schoolName = escapeHtml(selectedSchool?.name || 'المدرسة الحالية');
+    const reportTitle = escapeHtml(title);
     printWindow.document.write(`
       <html dir="rtl" lang="ar">
         <head>
-          <title>${title}</title>
+          <title>${reportTitle}</title>
           <style>
             body { font-family: 'Cairo', sans-serif; padding: 40px; color: #0f172a; }
             table { width: 100%; border-collapse: collapse; margin-top: 20px; }
@@ -2174,8 +2436,8 @@ export default function ExamsResultsModule({
         </head>
         <body>
           <div class="header">
-            <h1>مجمع المدارس النموذجية الأهلية</h1>
-            <h2>تقرير إدارة الامتحانات - ${title}</h2>
+            <h1>${schoolName}</h1>
+            <h2>تقرير إدارة الامتحانات - ${reportTitle}</h2>
             <p>التاريخ: ${new Date().toLocaleDateString('ar-SA')}</p>
           </div>
           <hr/>
@@ -2194,13 +2456,13 @@ export default function ExamsResultsModule({
             <tbody>
               ${processedStudents.map(st => `
                 <tr>
-                  <td>${st.seatNumber}</td>
-                  <td>${st.name}</td>
-                  <td>${st.classroom}</td>
-                  <td>${st.totalEarned} / ${st.totalMax}</td>
-                  <td>${st.percentage}%</td>
-                  <td>${st.gradeSymbol}</td>
-                  <td style="color: ${st.status === 'ناجح' ? 'green' : 'red'}; font-weight: bold;">${st.status}</td>
+                  <td>${escapeHtml(st.seatNumber)}</td>
+                  <td>${escapeHtml(st.name)}</td>
+                  <td>${escapeHtml(st.classroom)}</td>
+                  <td>${escapeHtml(st.totalEarned)} / ${escapeHtml(st.totalMax)}</td>
+                  <td>${escapeHtml(st.percentage)}%</td>
+                  <td>${escapeHtml(st.gradeSymbol)}</td>
+                  <td style="color: ${st.status === 'ناجح' ? 'green' : 'red'}; font-weight: bold;">${escapeHtml(st.status)}</td>
                 </tr>
               `).join('')}
             </tbody>
@@ -2310,7 +2572,7 @@ export default function ExamsResultsModule({
     printWindow.document.write(`
       <html dir="rtl" lang="ar">
         <head>
-          <title>${title}</title>
+          <title>${escapeHtml(title)}</title>
           <style>
             @import url('https://fonts.googleapis.com/css2?family=Cairo:wght@400;600;700;900&display=swap');
             body {
@@ -2766,7 +3028,10 @@ export default function ExamsResultsModule({
             state={assessmentState}
             actorId={trustedActorLabel}
             candidateIds={studentList.map(student => String(student.id || '').trim()).filter(Boolean)}
+            subjects={subjects.map(subject => ({ id: String(subject.id), name: String(subject.name), maxScore: Number(subject.maxScore) }))}
+            permissionRole={currentUserRole}
             onChange={persistAssessmentState}
+            onPublishGrades={handlePublishOnlineAssessmentGrades}
           />
         )}
 
@@ -3617,9 +3882,9 @@ export default function ExamsResultsModule({
                                 <tbody>
                                   ${halls.map(h => `
                                     <tr>
-                                      <td>${h.name}</td>
-                                      <td>${h.capacity}</td>
-                                      <td>${h.location}</td>
+                                      <td>${escapeHtml(h.name)}</td>
+                                      <td>${escapeHtml(h.capacity)}</td>
+                                      <td>${escapeHtml(h.location)}</td>
                                     </tr>
                                   `).join('')}
                                 </tbody>
@@ -4111,9 +4376,9 @@ export default function ExamsResultsModule({
                                 <tbody>
                                   ${proctorAssignments.map(pa => `
                                     <tr>
-                                      <td>${pa.name}</td>
-                                      <td>${halls.find(h => h.id === pa.hallId)?.name || 'غير محدد'}</td>
-                                      <td>${pa.shift}</td>
+                                      <td>${escapeHtml(pa.name)}</td>
+                                      <td>${escapeHtml(halls.find(h => h.id === pa.hallId)?.name || 'غير محدد')}</td>
+                                      <td>${escapeHtml(pa.shift)}</td>
                                     </tr>
                                   `).join('')}
                                 </tbody>
@@ -5014,10 +5279,21 @@ export default function ExamsResultsModule({
                     {/* Category: Subjects */}
                     {prepActiveCategory === 'subjects' && (
                       <div className="space-y-6">
-                        <div className="border-b pb-2">
-                          <h4 className="font-black text-slate-900 text-sm">تجهيزات المواد الدراسية وخيارات الامتحانات</h4>
-                          <p className="text-[10px] text-slate-400">تحديد أزمنة الامتحان والدرجات العظمى والصغرى لضبط عمليات القياس والجدولة والتحقق</p>
+                        <div className="border-b pb-2 flex flex-wrap items-center justify-between gap-3">
+                          <div>
+                            <h4 className="font-black text-slate-900 text-sm">تجهيزات المواد الدراسية وخيارات الامتحانات</h4>
+                            <p className="text-[10px] text-slate-400">تحديد أزمنة الامتحان والدرجات العظمى والصغرى لضبط عمليات القياس والجدولة والتحقق</p>
+                          </div>
+                          <button type="button" onClick={() => setActiveTab('classes')} className="px-3 py-2 border border-amber-300 bg-amber-50 text-amber-900 text-xs font-bold">
+                            إضافة مادة المنهج الفعلي
+                          </button>
                         </div>
+
+                        {subjects.length === 0 && (
+                          <p className="border border-amber-200 bg-amber-50 p-3 text-xs font-semibold leading-6 text-amber-900">
+                            لا توجد مواد امتحانية محفوظة لهذه الدورة. أضف أسماء المواد ودرجاتها من شاشة «الفصول والمواد» وفق المنهج المعتمد للمدرسة.
+                          </p>
+                        )}
 
                         <div className="overflow-x-auto border border-slate-200">
                           <table className="w-full text-right text-xs">
@@ -5044,6 +5320,8 @@ export default function ExamsResultsModule({
                                         const updated = subjects.map(s => s.id === sub.id ? { ...s, maxScore: Number(e.target.value) } : s);
                                         setSubjects(updated);
                                       }}
+                                      onBlur={() => { void persistPreparationSubjects(subjects); }}
+                                      min={1}
                                       className="w-20 p-1 border rounded text-xs text-center font-bold"
                                     />
                                   </td>
@@ -5056,6 +5334,9 @@ export default function ExamsResultsModule({
                                         const updated = subjects.map(s => s.id === sub.id ? { ...s, passScore: Number(e.target.value) } : s);
                                         setSubjects(updated);
                                       }}
+                                      onBlur={() => { void persistPreparationSubjects(subjects); }}
+                                      min={0}
+                                      max={sub.maxScore}
                                       className="w-20 p-1 border rounded text-xs text-center font-bold"
                                     />
                                   </td>
@@ -5067,6 +5348,7 @@ export default function ExamsResultsModule({
                                         const updated = subjects.map(s => s.id === sub.id ? { ...s, examDuration: Number(e.target.value) } : s);
                                         setSubjects(updated);
                                       }}
+                                      onBlur={() => { void persistPreparationSubjects(subjects); }}
                                       className="p-1 border rounded text-xs font-bold bg-white"
                                     >
                                       <option value="60">60 دقيقة (ساعة)</option>
@@ -5078,9 +5360,9 @@ export default function ExamsResultsModule({
                                   <td className="p-3 text-center">
                                     <button
                                       disabled={scheduleApprovalStatus.approved}
-                                      onClick={() => {
+                                      onClick={async () => {
                                         const updated = subjects.map(s => s.id === sub.id ? { ...s, isPractical: !s.isPractical } : s);
-                                        setSubjects(updated);
+                                        await persistPreparationSubjects(updated);
                                       }}
                                       className={`px-2.5 py-1 rounded-full text-[10px] font-bold ${
                                         sub.isPractical ? 'bg-amber-100 text-amber-800' : 'bg-yellow-100 text-yellow-800'
@@ -5091,9 +5373,16 @@ export default function ExamsResultsModule({
                                   </td>
                                   <td className="p-3 text-center">
                                     <button
-                                      onClick={() => {
-                                        setSubjects(subjects.filter(s => s.id !== sub.id));
-                                        triggerNotification('تمت إزالة المادة من لوحة الكنترول', 'info');
+                                      disabled={scheduleApprovalStatus.approved || approvalStatus.approved || isDbSyncing}
+                                      onClick={async () => {
+                                        const isReferenced = schedule.some(item => item.subjectId === sub.id)
+                                          || Object.values(gradesMatrix).some((studentGrades: any) => Object.prototype.hasOwnProperty.call(studentGrades || {}, sub.id))
+                                          || reEvaluationRequests.some(request => request.subjectId === sub.id);
+                                        if (isReferenced) {
+                                          triggerNotification(`لا يمكن حذف مادة ${sub.name} لأنها مرتبطة بجدول أو درجات أو تظلم.`, 'warning');
+                                          return;
+                                        }
+                                        await persistPreparationSubjects(subjects.filter(s => s.id !== sub.id), 'تمت إزالة المادة من الدورة وحفظ التعديل مركزياً.');
                                       }}
                                       className="p-1 text-red-500 hover:bg-red-50 rounded"
                                     >
@@ -5119,22 +5408,12 @@ export default function ExamsResultsModule({
 
                           <button
                             disabled={scheduleApprovalStatus.approved}
-                            onClick={async () => {
-                              const newHallId = `hall-${Date.now()}`;
-                              const newHallObj = {
-                                id: newHallId,
-                                name: `لجنة قاعة جديدة ${halls.length + 1}`,
-                                capacity: 30,
-                                location: 'مبنى الامتحانات الرئيسي',
-                                status: 'active'
-                              };
-                              setHalls([...halls, newHallObj]);
-                              triggerNotification('تم إنشاء قاعة لجنة جديدة بنجاح', 'success');
-                            }}
+                            type="button"
+                            onClick={() => setActiveTab('halls')}
                             className="px-3 py-1.5 bg-amber-50 text-amber-700 hover:bg-amber-100 rounded-lg text-xs font-bold cursor-pointer flex items-center gap-1"
                           >
                             <Plus className="w-3.5 h-3.5" />
-                            <span>إضافة لجنة / قاعة</span>
+                            <span>تسجيل قاعة ببياناتها الفعلية</span>
                           </button>
                         </div>
 
@@ -5155,45 +5434,49 @@ export default function ExamsResultsModule({
                                   <td className="p-3">
                                     <input
                                       type="text"
-                                      disabled={scheduleApprovalStatus.approved}
+                                      disabled={scheduleApprovalStatus.approved || approvalStatus.approved || isDbSyncing}
                                       value={hall.name}
                                       onChange={(e) => {
                                         const updated = halls.map(h => h.id === hall.id ? { ...h, name: e.target.value } : h);
                                         setHalls(updated);
                                       }}
+                                      onBlur={() => { void persistPreparationHalls(halls); }}
                                       className="w-full p-1 border rounded text-xs font-bold"
                                     />
                                   </td>
                                   <td className="p-3 text-center">
                                     <input
                                       type="number"
-                                      disabled={scheduleApprovalStatus.approved}
+                                      disabled={scheduleApprovalStatus.approved || approvalStatus.approved || isDbSyncing}
                                       value={hall.capacity}
                                       onChange={(e) => {
                                         const updated = halls.map(h => h.id === hall.id ? { ...h, capacity: Number(e.target.value) } : h);
                                         setHalls(updated);
                                       }}
+                                      onBlur={() => { void persistPreparationHalls(halls); }}
+                                      min={1}
                                       className="w-20 p-1 border rounded text-xs text-center font-bold"
                                     />
                                   </td>
                                   <td className="p-3">
                                     <input
                                       type="text"
-                                      disabled={scheduleApprovalStatus.approved}
+                                      disabled={scheduleApprovalStatus.approved || approvalStatus.approved || isDbSyncing}
                                       value={hall.location}
                                       onChange={(e) => {
                                         const updated = halls.map(h => h.id === hall.id ? { ...h, location: e.target.value } : h);
                                         setHalls(updated);
                                       }}
+                                      onBlur={() => { void persistPreparationHalls(halls); }}
                                       className="w-full p-1 border rounded text-xs font-semibold"
                                     />
                                   </td>
                                   <td className="p-3 text-center">
                                     <button
-                                      disabled={scheduleApprovalStatus.approved}
-                                      onClick={() => {
+                                      disabled={scheduleApprovalStatus.approved || approvalStatus.approved || isDbSyncing}
+                                      onClick={async () => {
                                         const updated = halls.map(h => h.id === hall.id ? { ...h, status: h.status === 'inactive' ? 'active' : 'inactive' } : h);
-                                        setHalls(updated);
+                                        await persistPreparationHalls(updated);
                                       }}
                                       className={`px-2 py-0.5 rounded text-[10px] font-bold ${
                                         hall.status === 'inactive' ? 'bg-rose-100 text-rose-800' : 'bg-emerald-100 text-emerald-800'
@@ -5204,9 +5487,17 @@ export default function ExamsResultsModule({
                                   </td>
                                   <td className="p-3 text-center">
                                     <button
-                                      onClick={() => {
-                                        setHalls(halls.filter(h => h.id !== hall.id));
-                                        triggerNotification('تم حذف اللجنة بنجاح', 'info');
+                                      type="button"
+                                      disabled={scheduleApprovalStatus.approved || approvalStatus.approved || isDbSyncing}
+                                      onClick={async () => {
+                                        const isReferenced = studentList.some(student => student.hallId === hall.id)
+                                          || proctorAssignments.some(proctor => proctor.hallId === hall.id)
+                                          || schedule.some(item => item.hallId === hall.id || (Array.isArray(item.splitHalls) && item.splitHalls.includes(hall.id)));
+                                        if (isReferenced) {
+                                          triggerNotification(`لا يمكن حذف قاعة ${hall.name} لأنها مرتبطة بطلاب أو مراقبين أو جدول امتحانات.`, 'warning');
+                                          return;
+                                        }
+                                        await persistPreparationHalls(halls.filter(h => h.id !== hall.id), 'تم حذف القاعة وحفظ التعديل في المصدر المركزي.');
                                       }}
                                       className="p-1 text-red-500 hover:bg-red-50 rounded"
                                     >
@@ -6563,7 +6854,7 @@ export default function ExamsResultsModule({
                 <div className="flex flex-wrap items-center gap-2">
                   <label className="p-2 bg-emerald-50 hover:bg-emerald-100 text-emerald-800 border border-emerald-200 text-xs font-bold flex items-center gap-1.5 cursor-pointer transition-all">
                     <UploadCloud className="w-4 h-4" />
-                    <span>استيراد Excel</span>
+                    <span>استيراد XLSX / CSV</span>
                     <input
                       type="file"
                       accept=".xlsx, .csv"
@@ -6593,10 +6884,19 @@ export default function ExamsResultsModule({
                   <button
                     onClick={handleExportExcel}
                     className="p-2 bg-emerald-600 hover:bg-emerald-700 text-white text-xs font-bold flex items-center gap-1.5 cursor-pointer transition-all shadow-md shadow-emerald-600/10"
-                    title="تصدير جدول الدرجات الحالي إلى ملف Excel"
+                    title="تصدير كشف الدرجات التفصيلي بصيغة CSV المتوافقة مع Excel"
                   >
                     <FileSpreadsheet className="w-4 h-4" />
-                    <span>تصدير Excel</span>
+                    <span>تصدير CSV تفصيلي</span>
+                  </button>
+
+                  <button
+                    onClick={() => void handleExportXlsx()}
+                    className="p-2 bg-cyan-700 hover:bg-cyan-800 text-white text-xs font-bold flex items-center gap-1.5 cursor-pointer transition-all shadow-md shadow-cyan-700/10"
+                    title="تصدير كشف المادة إلى ملف XLSX حقيقي"
+                  >
+                    <FileSpreadsheet className="w-4 h-4" />
+                    <span>تصدير XLSX</span>
                   </button>
 
                   <button
@@ -8353,23 +8653,43 @@ export default function ExamsResultsModule({
 
                 <div className="space-y-3">
                   <div className="flex items-start gap-3 p-3 bg-transparent border border-slate-200">
-                    <CheckCircle className="w-5 h-5 text-emerald-600 shrink-0 mt-0.5" />
+                     {reviewDataReady && reviewInvalidGradesCount === 0 ? (
+                       <CheckCircle className="w-5 h-5 text-emerald-600 shrink-0 mt-0.5" />
+                     ) : (
+                       <AlertTriangle className="w-5 h-5 text-amber-500 shrink-0 mt-0.5" />
+                     )}
                     <div>
                       <h4 className="font-bold text-xs text-slate-900">التحقق من عدم تجاوز النهاية العظمى</h4>
-                      <p className="text-[10px] text-slate-500">تم فحص جميع درجات الطلاب لضمان عدم وجود أي درجة مدخلة تتجاوز الـ 100 درجة.</p>
+                       <p className="text-[10px] text-slate-500">
+                         {!reviewDataReady
+                           ? 'لا توجد مواد وطلاب كافون لإجراء الفحص.'
+                           : reviewInvalidGradesCount > 0
+                             ? `توجد ${reviewInvalidGradesCount} درجة خارج النهاية العظمى وتحتاج إلى تصحيح.`
+                             : 'تم فحص درجات الطلاب ولم تُكتشف درجات تتجاوز النهاية العظمى.'}
+                       </p>
                     </div>
                   </div>
 
                   <div className="flex items-start gap-3 p-3 bg-transparent border border-slate-200">
-                    <CheckCircle className="w-5 h-5 text-emerald-600 shrink-0 mt-0.5" />
+                     {reviewDistributionReady ? (
+                       <CheckCircle className="w-5 h-5 text-emerald-600 shrink-0 mt-0.5" />
+                     ) : (
+                       <AlertTriangle className="w-5 h-5 text-amber-500 shrink-0 mt-0.5" />
+                     )}
                     <div>
                       <h4 className="font-bold text-xs text-slate-900">التحقق من توزيع الطلاب</h4>
-                      <p className="text-[10px] text-slate-500">تم التحقق من توزيع جميع الطلاب النشطين على قاعات اختبار صالحة.</p>
+                       <p className="text-[10px] text-slate-500">
+                         {!reviewDataReady
+                           ? 'لا توجد قائمة طلاب امتحانات مكتملة لفحص التوزيع.'
+                           : reviewDistributionReady
+                             ? 'تم التحقق من توزيع جميع الطلاب على قاعات وأرقام جلوس صالحة.'
+                             : 'لم يكتمل توزيع جميع الطلاب على قاعات وأرقام جلوس صالحة.'}
+                       </p>
                     </div>
                   </div>
 
                   <div className="flex items-start gap-3 p-3 bg-transparent border border-slate-200">
-                    {metrics.missingGradesCount > 0 ? (
+                     {!reviewDataReady || metrics.missingGradesCount > 0 ? (
                       <AlertTriangle className="w-5 h-5 text-amber-500 shrink-0 mt-0.5" />
                     ) : (
                       <CheckCircle className="w-5 h-5 text-emerald-600 shrink-0 mt-0.5" />
@@ -8377,7 +8697,9 @@ export default function ExamsResultsModule({
                     <div>
                       <h4 className="font-bold text-xs text-slate-900">التحقق من رصد درجات المواد الغائبة</h4>
                       <p className="text-[10px] text-slate-500">
-                        {metrics.missingGradesCount > 0
+                         {!reviewDataReady
+                           ? 'لا توجد مواد وطلاب موثقون لإكمال فحص الرصد.'
+                           : metrics.missingGradesCount > 0
                           ? `تنبيه: هناك عدد ${metrics.missingGradesCount} درجة لم يتم رصدها بعد.`
                           : 'ممتاز: تم رصد وإكمال جميع درجات الطلاب بنجاح.'}
                       </p>
@@ -8402,6 +8724,10 @@ export default function ExamsResultsModule({
 
                 <button
                   onClick={() => {
+                    if (!reviewDataReady) {
+                      triggerNotification('لا توجد مواد وطلاب موثقون لمعالجة النتائج. أكمل تهيئة دورة الامتحانات أولاً.', 'warning');
+                      return;
+                    }
                     triggerNotification('تمت معالجة كشوف الدرجات واحتساب المعدلات والأوائل بنجاح', 'success');
                     logAction('تشغيل محرك احتساب المعدلات والأوائل', 'معالجة النتائج');
                   }}
@@ -8592,6 +8918,7 @@ export default function ExamsResultsModule({
             approvalStatus={approvalStatus}
             closures={controlClosures}
             classes={classesList}
+            accessToken={getTrustedAccessToken()}
             notify={triggerNotification}
           />
         )}
