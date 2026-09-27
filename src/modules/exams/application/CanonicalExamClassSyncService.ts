@@ -41,6 +41,36 @@ function databaseErrorCode(error: unknown): string | undefined {
   return typeof code === 'string' && /^[0-9A-Z]{5}$/.test(code) ? code : undefined;
 }
 
+function databaseErrorDiagnostics(error: unknown): Record<string, string> {
+  const code = databaseErrorCode(error);
+  if (!code || !error || typeof error !== 'object') return {};
+
+  const candidate = error as { name?: unknown; message?: unknown };
+  const name = typeof candidate.name === 'string' && /^[A-Za-z0-9_$.-]{1,80}$/.test(candidate.name)
+    ? candidate.name
+    : undefined;
+  // Only capture the opaque PostgreSQL system-error family we are diagnosing.
+  // Constraint and validation messages can echo submitted values.
+  const message = code === '58000' && typeof candidate.message === 'string'
+    ? candidate.message
+      .replace(/(?:postgres(?:ql)?:\/\/)[^\s"'`]+/gi, '[redacted-connection]')
+      .replace(/\b(password|passwd|pwd|token|secret|authorization|api[_-]?key)\b(\s*[:=]\s*)(?:"[^"]*"|'[^']*'|[^\s,;]+)/gi, '$1$2[redacted]')
+      .replace(/\bBearer\s+[A-Za-z0-9._~+/-]+=*/gi, 'Bearer [redacted]')
+      .replace(/\beyJ[a-zA-Z0-9_-]{8,}\.[a-zA-Z0-9_-]{8,}\.[a-zA-Z0-9_-]{8,}\b/g, '[redacted-token]')
+      .replace(/\b[A-Z0-9._%+-]+@[A-Z0-9.-]+\.[A-Z]{2,}\b/gi, '[redacted-email]')
+      .replace(/\b[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}\b/gi, '[redacted-id]')
+      .replace(/[\r\n\t]+/g, ' ')
+      .replace(/\s{2,}/g, ' ')
+      .trim()
+      .slice(0, 240)
+    : '';
+
+  return {
+    ...(name ? { databaseErrorName: name } : {}),
+    ...(message ? { databaseErrorMessage: message } : {})
+  };
+}
+
 async function runSyncStage<T>(requestId: string, stage: string, operation: () => Promise<T>): Promise<T> {
   const startedAt = Date.now();
   EnterpriseLogger.info('Canonical exam-class sync stage started.', 'CanonicalExamClassSyncService', { requestId, stage });
@@ -57,7 +87,8 @@ async function runSyncStage<T>(requestId: string, stage: string, operation: () =
       requestId,
       stage,
       durationMs: Date.now() - startedAt,
-      ...(databaseErrorCode(error) ? { databaseErrorCode: databaseErrorCode(error) } : {})
+      ...(databaseErrorCode(error) ? { databaseErrorCode: databaseErrorCode(error) } : {}),
+      ...databaseErrorDiagnostics(error)
     });
     throw error;
   }
@@ -308,7 +339,8 @@ export class CanonicalExamClassSyncService {
     } catch (error) {
       EnterpriseLogger.error('Canonical exam-class synchronization failed.', 'CanonicalExamClassSyncService', {
         requestId,
-        ...(databaseErrorCode(error) ? { databaseErrorCode: databaseErrorCode(error) } : {})
+        ...(databaseErrorCode(error) ? { databaseErrorCode: databaseErrorCode(error) } : {}),
+        ...databaseErrorDiagnostics(error)
       });
       throw error;
     }
