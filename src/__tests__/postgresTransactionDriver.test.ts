@@ -152,6 +152,51 @@ describe('PostgresTransactionDriver trusted context', () => {
     }
   });
 
+  it('creates and closes a request-scoped Hyperdrive pool for each transaction', async () => {
+    vi.stubEnv('EDUPRO_CLOUDFLARE_HYPERDRIVE', 'true');
+    try {
+      const pools: any[] = [];
+      const driver = new PostgresTransactionDriver(null, () => {
+        const client = {
+          query: vi.fn(async () => ({ rows: [], rowCount: 0 })),
+          release: vi.fn()
+        };
+        const pool = {
+          connect: vi.fn(async () => client),
+          end: vi.fn(async () => undefined),
+          on: vi.fn(),
+          totalCount: 1,
+          idleCount: 0,
+          waitingCount: 0
+        };
+        pools.push({ pool, client });
+        return pool as any;
+      });
+      const options = {
+        tenantId: 'tenant-a',
+        schoolId: 'school-a',
+        operationName: 'request scoped Hyperdrive test',
+        trustedContext: { tenantId: 'tenant-a', schoolId: 'school-a' }
+      };
+
+      for (let index = 0; index < 2; index += 1) {
+        const session = await driver.begin({ ...options, transactionId: `tx-request-${index}` });
+        await session.commit();
+        await session.release();
+      }
+
+      expect(pools).toHaveLength(2);
+      expect(pools[0].pool).not.toBe(pools[1].pool);
+      for (const { pool, client } of pools) {
+        expect(pool.connect).toHaveBeenCalledTimes(1);
+        expect(client.release).toHaveBeenCalledTimes(1);
+        expect(pool.end).toHaveBeenCalledTimes(1);
+      }
+    } finally {
+      vi.unstubAllEnvs();
+    }
+  });
+
   it('does not fail a completed read when Hyperdrive rejects discard cleanup', async () => {
     vi.stubEnv('EDUPRO_CLOUDFLARE_HYPERDRIVE', 'true');
     try {
