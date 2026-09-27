@@ -5,7 +5,7 @@ import ExamsResultsModule from '../components/ExamsResultsModule';
 describe('ExamsResultsModule runtime', () => {
   const tabs = [
     'control-center', 'exams-guide', 'quality-governance', 'settings', 'classes',
-    'halls', 'distribution', 'seating', 'proctors', 'schedule', 'grades-entry',
+    'assessment', 'halls', 'distribution', 'seating', 'proctors', 'schedule', 'grades-entry',
     'review', 'processing', 'reports', 'certificates', 'system-settings'
   ];
 

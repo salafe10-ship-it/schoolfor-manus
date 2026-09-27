@@ -5,7 +5,7 @@ import path from 'node:path';
 const source = fs.readFileSync(
   path.resolve(process.cwd(), 'src/components/ExamsResultsModule.tsx'),
   'utf8',
-);
+).replace(/\r\n/g, '\n');
 
 describe('exams governance evidence safety', () => {
   it('does not seed closures, re-evaluation decisions, or audit history', () => {

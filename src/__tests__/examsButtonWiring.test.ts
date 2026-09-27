@@ -4,6 +4,7 @@ import { Project, SyntaxKind } from 'ts-morph';
 
 const examComponentFiles = [
   'src/components/ExamsResultsModule.tsx',
+  'src/components/exams/ExamsAssessmentPanel.tsx',
   'src/components/exams/ExamsCertificatesPanel.tsx',
   'src/components/exams/ExamsDistributionPanel.tsx'
 ];
