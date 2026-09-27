@@ -362,7 +362,17 @@ export class PostgresTransactionDriver implements TransactionDriver {
     });
     const transactionId = options.transactionId || randomUUID();
     try {
+      options.diagnosticTrace?.mark(`${diagnosticPrefix}transaction_begin_started`);
       await client.query("BEGIN");
+      options.diagnosticTrace?.mark(`${diagnosticPrefix}transaction_begin_completed`);
+      // Bound role validation and trusted-context setup too. Applying the
+      // transaction-local timeout only after both steps leaves this setup path
+      // able to outlive the caller's request deadline (notably in Workers).
+      if (options.timeoutMs && options.timeoutMs > 0) {
+        options.diagnosticTrace?.mark(`${diagnosticPrefix}transaction_timeout_config_started`);
+        await client.query("SELECT set_config('statement_timeout', $1, true)", [String(options.timeoutMs)]);
+        options.diagnosticTrace?.mark(`${diagnosticPrefix}transaction_timeout_config_completed`);
+      }
       // Tenant RLS policies are intentionally granted to the explicitly
       // provisioned application role (for example edupro_staging_app). A
       // pooler connection may authenticate as a transport role, so enter the
@@ -382,6 +392,7 @@ export class PostgresTransactionDriver implements TransactionDriver {
           // existing safe role so its inherited grants and RLS policies stay
           // active; only switch when the current role is not already an
           // approved, non-bypass member of the expected role.
+          options.diagnosticTrace?.mark(`${diagnosticPrefix}tenant_role_check_started`);
           const roleState = await client.query<{
             current_user: string;
             rolsuper: boolean;
@@ -396,6 +407,7 @@ export class PostgresTransactionDriver implements TransactionDriver {
               WHERE r.rolname = current_user`,
             [tenantRole]
           );
+          options.diagnosticTrace?.mark(`${diagnosticPrefix}tenant_role_check_completed`);
           const currentRole = roleState.rows[0];
           const currentRoleIsSafe = Boolean(
             currentRole
@@ -403,7 +415,11 @@ export class PostgresTransactionDriver implements TransactionDriver {
             && !currentRole.rolbypassrls
             && currentRole.can_use_expected_role
           );
-          if (!currentRoleIsSafe) await client.query(`SET LOCAL ROLE "${tenantRole}"`);
+          if (!currentRoleIsSafe) {
+            options.diagnosticTrace?.mark(`${diagnosticPrefix}tenant_role_switch_started`);
+            await client.query(`SET LOCAL ROLE "${tenantRole}"`);
+            options.diagnosticTrace?.mark(`${diagnosticPrefix}tenant_role_switch_completed`);
+          }
         }
       }
       options.diagnosticTrace?.count?.('transactions');
@@ -415,9 +431,6 @@ export class PostgresTransactionDriver implements TransactionDriver {
         await this.applyTrustedContext(client, options.trustedContext, options.diagnosticTrace, diagnosticPrefix);
       }
       options.diagnosticTrace?.mark(`${diagnosticPrefix}transaction_begin_configured`);
-      if (options.timeoutMs && options.timeoutMs > 0) {
-        await client.query("SELECT set_config('statement_timeout', $1, true)", [String(options.timeoutMs)]);
-      }
       return new PostgresTransactionSession(
         transactionId,
         client,

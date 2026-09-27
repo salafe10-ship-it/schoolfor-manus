@@ -179,7 +179,13 @@ export class CanonicalExamClassSyncService {
         userName: context.userId,
         ipAddress: cleanText(request.ipAddress) || 'unknown',
         affectedTables: ['school_settings', 'students', 'enrollments', 'exams_database', 'audit_events'],
-        timeoutMs: DATABASE_STATEMENT_TIMEOUT_MS
+        timeoutMs: DATABASE_STATEMENT_TIMEOUT_MS,
+        diagnosticTrace: {
+          mark: stage => EnterpriseLogger.info('Canonical exam-class sync transaction diagnostic.', 'CanonicalExamClassSyncService', {
+            requestId,
+            stage
+          })
+        }
       },
       async () => {
         const db = transaction();

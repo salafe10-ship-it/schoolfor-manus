@@ -11,6 +11,36 @@ function createDriverHarness() {
 }
 
 describe('PostgresTransactionDriver trusted context', () => {
+  it('sets the transaction statement timeout before tenant role and context setup', async () => {
+    vi.stubEnv('DATABASE_ROLE_EXPECTED', 'edupro_app');
+    try {
+      const { client, driver } = createDriverHarness();
+      client.query.mockImplementation(async (sql: string) => String(sql).includes('FROM pg_roles')
+        ? { rows: [{ current_user: 'edupro_app', rolsuper: false, rolbypassrls: false, can_use_expected_role: true }], rowCount: 1 }
+        : { rows: [], rowCount: 0 });
+
+      const session = await driver.begin({
+        transactionId: 'tx-timeout-before-tenant-setup',
+        tenantId: 'tenant-a',
+        schoolId: 'school-a',
+        operationName: 'bounded tenant transaction setup',
+        timeoutMs: 9_000,
+        trustedContext: { tenantId: 'tenant-a', schoolId: 'school-a' }
+      });
+
+      const sql = client.query.mock.calls.map(([statement]) => String(statement));
+      expect(sql[0]).toBe('BEGIN');
+      expect(sql[1]).toContain("set_config('statement_timeout', $1, true)");
+      expect(sql[2]).toContain('FROM pg_roles');
+      expect(sql.findIndex(statement => statement.startsWith('SELECT set_config($1, $2, true)'))).toBeGreaterThan(2);
+
+      await session.rollback();
+      await session.release();
+    } finally {
+      vi.unstubAllEnvs();
+    }
+  });
+
   it('combines all present transaction-local settings into one parameterized command', async () => {
     const { client, pool, driver } = createDriverHarness();
 

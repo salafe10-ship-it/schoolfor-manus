@@ -53,10 +53,17 @@ describe('canonical exam class synchronization', () => {
     const [, metadata] = transaction.mock.calls[0];
     expect(metadata.timeoutMs).toBe(9_000);
     expect(metadata.timeoutMs).toBeLessThan(15_000);
+    expect(metadata.diagnosticTrace).toEqual({ mark: expect.any(Function) });
+    metadata.diagnosticTrace.mark('pool_connection_requested');
     expect(info).toHaveBeenCalledWith(
       'Canonical exam-class sync stage started.',
       'CanonicalExamClassSyncService',
       expect.objectContaining({ stage: 'transaction' })
+    );
+    expect(info).toHaveBeenCalledWith(
+      'Canonical exam-class sync transaction diagnostic.',
+      'CanonicalExamClassSyncService',
+      expect.objectContaining({ requestId: expect.any(String), stage: 'pool_connection_requested' })
     );
     expect(error).toHaveBeenCalledWith(
       'Canonical exam-class sync stage failed.',
