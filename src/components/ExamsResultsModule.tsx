@@ -34,6 +34,7 @@ import { calculateCohortExamResults } from '../modules/exams/domain/ExamResultEn
 import { csvEscapeField } from '../modules/exams/application/CsvExportSafety';
 import { getTrustedAccessToken, getTrustedAccessTokenAsync } from '../utils/auth';
 import { authenticatedRequest } from '../utils/authenticatedRequest';
+import type { ExamProctorCandidate } from '../modules/exams/application/ExamProctorCandidates';
 
 const today = new Date();
 const currentAcademicYearStart = today.getMonth() >= 6 ? today.getFullYear() : today.getFullYear() - 1;
@@ -104,14 +105,35 @@ interface ExamModuleProps {
 
 export default function ExamsResultsModule({
   students: initialStudents = [],
-  teachers: initialTeachers = [],
   classes: initialClasses = [],
   triggerNotification,
   setActiveSection,
   selectedSchool,
   currentRole
 }: ExamModuleProps) {
-  const availableTeachers = initialTeachers;
+  const [availableTeachers, setAvailableTeachers] = useState<ExamProctorCandidate[]>([]);
+  const [proctorSourceStatus, setProctorSourceStatus] = useState<'loading' | 'ready' | 'error'>('loading');
+  const loadProctorCandidates = async (signal?: AbortSignal) => {
+    setProctorSourceStatus('loading');
+    setAvailableTeachers([]);
+    try {
+      const response = await fetchExamsSource('/api/exams/proctor-candidates');
+      const result = await response.json();
+      if (!response.ok || !result.success || !Array.isArray(result.data)) throw new Error('Invalid proctor catalogue');
+      if (signal?.aborted) return;
+      setAvailableTeachers(result.data);
+      setProctorSourceStatus('ready');
+    } catch {
+      if (signal?.aborted) return;
+      setAvailableTeachers([]);
+      setProctorSourceStatus('error');
+    }
+  };
+  useEffect(() => {
+    const controller = new AbortController();
+    void loadProctorCandidates(controller.signal);
+    return () => controller.abort();
+  }, [selectedSchool?.id]);
   // Navigation Sidebar
   const validTabIds = useMemo(() => [
     'control-center', 'settings', 'classes', 'assessment', 'halls', 'distribution',
@@ -583,6 +605,7 @@ export default function ExamsResultsModule({
   // Function to manually sync with server-side database
   const handleForceSync = async () => {
     setIsDbSyncing(true);
+    void loadProctorCandidates();
     try {
       // authenticatedRequest owns the read-session restore/retry lifecycle;
       // do not race it with a second explicit restore in this fan-out.
@@ -1402,7 +1425,6 @@ export default function ExamsResultsModule({
       return;
     }
 
-    const availableTeachers = initialTeachers;
     if (availableTeachers.length === 0) {
       triggerNotification('تحذير: لا يوجد معلمون مسجلون لتكليفهم!', 'warning');
       return;
@@ -2894,6 +2916,20 @@ export default function ExamsResultsModule({
           </div>
         </header>
 
+        {(activeTab === 'proctors' || activeTab === 'schedule') && (
+          <section aria-label="مصدر مراقبي الامتحانات" className="flex flex-wrap items-center justify-between gap-3 rounded-xl border border-amber-300/30 bg-slate-900 p-4 text-amber-50">
+            <p className="text-xs font-semibold" role={proctorSourceStatus === 'error' ? 'alert' : 'status'}>
+              {proctorSourceStatus === 'loading' ? 'جارٍ تحميل الموظفين المؤهلين للمراقبة…'
+                : proctorSourceStatus === 'error' ? 'تعذر تحميل المراقبين. أعد المحاولة قبل تكوين الجدول.'
+                : availableTeachers.length ? `متاح للتكليف: ${availableTeachers.length} من الموظفين النشطين في المدرسة.`
+                : 'لا يوجد موظفون نشطون في سجل المدرسة. أضف موظفي الاختبار في الموارد البشرية ثم حدّث القائمة.'}
+            </p>
+            <button type="button" disabled={proctorSourceStatus === 'loading'} onClick={() => void loadProctorCandidates()} className="rounded-lg border border-amber-300/50 px-3 py-2 text-xs font-bold disabled:opacity-50">
+              تحديث قائمة المراقبين
+            </button>
+          </section>
+        )}
+
         {examCandidateDiagnostics.totalCanonical > examCandidateDiagnostics.eligible && (
           <section role="alert" className="border border-amber-400/50 bg-amber-950/40 p-4 text-amber-50">
             <div className="flex items-start gap-3">
@@ -3265,7 +3301,9 @@ export default function ExamsResultsModule({
                       </span>
                     </div>
                     <p className="text-xs text-amber-200/70 mt-1">
-                      {lastSyncTime ? `آخر مزامنة ناجحة مع السيرفر: ${lastSyncTime}` : 'لم يتم الاتصال بالسيرفر بعد، البيانات تحفظ مؤقتاً في المتصفح'}
+                      {lastSyncTime ? `آخر مزامنة ناجحة مع السيرفر: ${lastSyncTime}` : dbSyncStatus === 'success'
+                        ? 'المصدر المركزي متاح؛ لا توجد سجلات امتحانات محفوظة بعد.'
+                        : 'لم تكتمل المزامنة مع المصدر المركزي. أعد المحاولة قبل المتابعة.'}
                     </p>
                   </div>
                 </div>

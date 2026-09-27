@@ -70,6 +70,7 @@ import { operationalEnrollmentAssignmentService } from "./src/modules/student-af
 import { canonicalEnrollmentWorkflowService } from "./src/modules/student-affairs/application/CanonicalEnrollmentWorkflowService.js";
 import { canonicalGraduationService } from "./src/modules/student-affairs/application/CanonicalGraduationService.js";
 import { canonicalExamClassSyncService } from "./src/modules/exams/application/CanonicalExamClassSyncService.js";
+import { buildExamProctorCandidates } from "./src/modules/exams/application/ExamProctorCandidates.js";
 import {
   findScheduleResourceConflicts,
   getExamIntervalDurationMinutes
@@ -11868,6 +11869,27 @@ export async function createApp(options: { cloudflare?: boolean } = {}): Promise
   });
 
   // Exams and Results Database API
+  app.get('/api/exams/proctor-candidates', authenticateRequest, requirePermission(PERMISSIONS.EXAM_READ), resolveStudentReadTenantMiddleware, async (req, res, next) => {
+    try {
+      const identity = (req as any).user;
+      const tenantContext = (req as any).tenantContext;
+      const tenantId = String(identity.tenantId || '').trim();
+      const schoolId = String(identity.schoolId || '').trim();
+      if (!tenantId || !schoolId || tenantContext?.tenantId !== tenantId || tenantContext?.schoolId !== schoolId) {
+        throw new AuthenticationError('سياق المدرسة الموثوق غير مكتمل لقراءة المراقبين.');
+      }
+      const supabase = canonicalTenantReadClient(req);
+      if (!supabase) throw new DatabaseError('مصدر مراقبي الامتحانات غير متاح.');
+      const { data, error } = await supabase.from('hr_database').select('data')
+        .eq('tenant_id', tenantId).eq('school_id', schoolId).limit(1).maybeSingle();
+      if (error) throw error;
+      res.json({ success: true, data: buildExamProctorCandidates(data?.data), meta: { source: 'canonical_hr' } });
+    } catch (error) {
+      next(error instanceof AuthenticationError || error instanceof DatabaseError
+        ? error : new DatabaseError('تعذر تحميل الموظفين النشطين لتكليفات الامتحانات.'));
+    }
+  });
+
   app.get("/api/exams/database", authenticateRequest, requirePermission(PERMISSIONS.EXAM_READ), resolveStudentReadTenantMiddleware, async (req, res, next) => {
     try {
       const identity = (req as any).user;
