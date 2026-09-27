@@ -72,4 +72,36 @@ describe('canonical exam class synchronization', () => {
     );
     expect(JSON.stringify(error.mock.calls)).not.toContain('school-test');
   });
+
+  it('records a bounded, redacted PostgreSQL error detail without logging request data', async () => {
+    const context = {
+      tenantId: 'tenant-test',
+      schoolId: 'school-test',
+      branchId: 'branch-test',
+      academicYear: 'year-test',
+      userId: 'user-test'
+    } as any;
+    vi.spyOn(UnitOfWork, 'hasTransactionDriver').mockReturnValue(true);
+    const databaseError = Object.assign(new Error(
+      'SSL connection failed postgres://db-user:db-pass@example.test:5432/app password=secret token: abcdef eyJabcdefgh.abcdefgh.abcdefgh admin@example.test 11111111-1111-4111-8111-111111111111'
+    ), { code: '58000' });
+    vi.spyOn(UnitOfWork, 'runInTransaction').mockRejectedValue(databaseError);
+    vi.spyOn(EnterpriseLogger, 'info').mockImplementation(() => undefined);
+    const error = vi.spyOn(EnterpriseLogger, 'error').mockImplementation(() => undefined);
+
+    await expect(new CanonicalExamClassSyncService().synchronize(context, { expectedVersion: 0 }))
+      .rejects.toThrow('SSL connection failed');
+
+    const stageFailure = error.mock.calls.find(([message]) => message === 'Canonical exam-class sync stage failed.');
+    expect(stageFailure?.[2]).toEqual(expect.objectContaining({
+      databaseErrorCode: '58000',
+      databaseErrorName: 'Error',
+      databaseErrorMessage: expect.stringContaining('[redacted-connection]')
+    }));
+    const serialized = JSON.stringify(error.mock.calls);
+    for (const secret of ['db-pass', 'password=secret', 'abcdef', 'abcdefgh.abcdefgh.abcdefgh', 'admin@example.test', '11111111-1111-4111-8111-111111111111', 'school-test']) {
+      expect(serialized).not.toContain(secret);
+    }
+    expect((stageFailure?.[2] as Record<string, string>).databaseErrorMessage.length).toBeLessThanOrEqual(240);
+  });
 });
