@@ -31,6 +31,7 @@ import {
   normalizeAssessmentWorkflowState
 } from '../modules/exams/application/AssessmentWorkflowService';
 import { calculateCohortExamResults } from '../modules/exams/domain/ExamResultEngine';
+import { csvEscapeField } from '../modules/exams/application/CsvExportSafety';
 import { getTrustedAccessToken, getTrustedAccessTokenAsync } from '../utils/auth';
 import { authenticatedRequest } from '../utils/authenticatedRequest';
 
@@ -969,16 +970,11 @@ export default function ExamsResultsModule({
 
   // Generic CSV Export Utility (Excel-compatible with UTF-8 BOM for Arabic)
   const handleExportToCSV = (data: any[], headers: string[], filename: string) => {
-    const escapeCsvCell = (value: any): string => {
-      const raw = String(value === undefined || value === null ? "" : value);
-      const formulaSafe = /^[=+\-@]/.test(raw) ? `'${raw}` : raw;
-      return `"${formulaSafe.replace(/"/g, '""')}"`;
-    };
     let csvContent = "\uFEFF"; // UTF-8 BOM to make Excel render Arabic correctly
-    csvContent += headers.map(escapeCsvCell).join(",") + "\n";
+    csvContent += headers.map(csvEscapeField).join(",") + "\n";
 
     data.forEach(row => {
-      const line = row.map(escapeCsvCell).join(",");
+      const line = row.map(csvEscapeField).join(",");
       csvContent += line + "\n";
     });
 
@@ -2422,10 +2418,12 @@ export default function ExamsResultsModule({
   const handlePrintReport = (title: string) => {
     const printWindow = window.open('', '_blank');
     if (!printWindow) return;
+    const schoolName = escapeHtml(selectedSchool?.name || 'المدرسة الحالية');
+    const reportTitle = escapeHtml(title);
     printWindow.document.write(`
       <html dir="rtl" lang="ar">
         <head>
-          <title>${title}</title>
+          <title>${reportTitle}</title>
           <style>
             body { font-family: 'Cairo', sans-serif; padding: 40px; color: #0f172a; }
             table { width: 100%; border-collapse: collapse; margin-top: 20px; }
@@ -2438,8 +2436,8 @@ export default function ExamsResultsModule({
         </head>
         <body>
           <div class="header">
-            <h1>مجمع المدارس النموذجية الأهلية</h1>
-            <h2>تقرير إدارة الامتحانات - ${title}</h2>
+            <h1>${schoolName}</h1>
+            <h2>تقرير إدارة الامتحانات - ${reportTitle}</h2>
             <p>التاريخ: ${new Date().toLocaleDateString('ar-SA')}</p>
           </div>
           <hr/>
@@ -2458,13 +2456,13 @@ export default function ExamsResultsModule({
             <tbody>
               ${processedStudents.map(st => `
                 <tr>
-                  <td>${st.seatNumber}</td>
-                  <td>${st.name}</td>
-                  <td>${st.classroom}</td>
-                  <td>${st.totalEarned} / ${st.totalMax}</td>
-                  <td>${st.percentage}%</td>
-                  <td>${st.gradeSymbol}</td>
-                  <td style="color: ${st.status === 'ناجح' ? 'green' : 'red'}; font-weight: bold;">${st.status}</td>
+                  <td>${escapeHtml(st.seatNumber)}</td>
+                  <td>${escapeHtml(st.name)}</td>
+                  <td>${escapeHtml(st.classroom)}</td>
+                  <td>${escapeHtml(st.totalEarned)} / ${escapeHtml(st.totalMax)}</td>
+                  <td>${escapeHtml(st.percentage)}%</td>
+                  <td>${escapeHtml(st.gradeSymbol)}</td>
+                  <td style="color: ${st.status === 'ناجح' ? 'green' : 'red'}; font-weight: bold;">${escapeHtml(st.status)}</td>
                 </tr>
               `).join('')}
             </tbody>
@@ -2574,7 +2572,7 @@ export default function ExamsResultsModule({
     printWindow.document.write(`
       <html dir="rtl" lang="ar">
         <head>
-          <title>${title}</title>
+          <title>${escapeHtml(title)}</title>
           <style>
             @import url('https://fonts.googleapis.com/css2?family=Cairo:wght@400;600;700;900&display=swap');
             body {
@@ -3884,9 +3882,9 @@ export default function ExamsResultsModule({
                                 <tbody>
                                   ${halls.map(h => `
                                     <tr>
-                                      <td>${h.name}</td>
-                                      <td>${h.capacity}</td>
-                                      <td>${h.location}</td>
+                                      <td>${escapeHtml(h.name)}</td>
+                                      <td>${escapeHtml(h.capacity)}</td>
+                                      <td>${escapeHtml(h.location)}</td>
                                     </tr>
                                   `).join('')}
                                 </tbody>
@@ -4378,9 +4376,9 @@ export default function ExamsResultsModule({
                                 <tbody>
                                   ${proctorAssignments.map(pa => `
                                     <tr>
-                                      <td>${pa.name}</td>
-                                      <td>${halls.find(h => h.id === pa.hallId)?.name || 'غير محدد'}</td>
-                                      <td>${pa.shift}</td>
+                                      <td>${escapeHtml(pa.name)}</td>
+                                      <td>${escapeHtml(halls.find(h => h.id === pa.hallId)?.name || 'غير محدد')}</td>
+                                      <td>${escapeHtml(pa.shift)}</td>
                                     </tr>
                                   `).join('')}
                                 </tbody>
