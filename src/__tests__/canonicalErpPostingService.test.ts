@@ -123,4 +123,19 @@ describe('canonical ERP accounting mappings', () => {
       ]
     })).toThrow('غير متوازن');
   });
+
+  it('posts vendor bill settlement as AP debit against the selected treasury account', () => {
+    const posting = buildCanonicalPosting('vendor_payment', {
+      id: 'vendor-payment:BILL-QA:PAY-QA-1', status: 'posted', amountPaid: 125,
+      paymentDate: '2026-09-26', paymentMethod: 'bank_transfer', billNo: 'BILL-QA',
+      paidFromAccount: '1102'
+    }, new Map([
+      ['inventory.ap', '2101'],
+      ['treasury.bank', '1102']
+    ]));
+
+    expect(posting?.lines.map(line => line.accountCode)).toEqual(['2101', '1102']);
+    expect(posting?.lines.reduce((sum, line) => sum + line.debit, 0)).toBe(125);
+    expect(posting?.lines.reduce((sum, line) => sum + line.credit, 0)).toBe(125);
+  });
 });

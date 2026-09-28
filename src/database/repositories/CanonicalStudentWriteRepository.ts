@@ -139,7 +139,7 @@ async function actorId(context: TenantContext): Promise<string> {
   );
   if (row.rows[0]) return row.rows[0].id;
 
-  // Render keeps the tenant data-plane connection separate from the central
+  // The tenant data-plane connection remains separate from the central
   // identity connection. A user can therefore be fully verified and
   // authorized centrally while the local audit actor row is still missing.
   // Provision only the already-authenticated identity, inside this trusted

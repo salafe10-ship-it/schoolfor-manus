@@ -18,8 +18,6 @@ const serverOutput = path.resolve(workspaceRoot, 'dist', 'server.cjs');
 const buildIdentityPath = path.join(workspaceRoot, 'dist', 'build-identity.json');
 const packageJson = JSON.parse(fs.readFileSync(path.join(workspaceRoot, 'package.json'), 'utf8'));
 const commitFromEnvironment = [
-  'RENDER_GIT_COMMIT',
-  'RENDER_GIT_COMMIT_SHA',
   'GIT_COMMIT_SHA',
   'BUILD_COMMIT_SHA',
 ].map((key) => process.env[key]?.trim()).find(Boolean);

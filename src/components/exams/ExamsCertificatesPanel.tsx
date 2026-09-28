@@ -1,5 +1,6 @@
 import React, { useMemo, useState } from 'react';
 import { Archive, CheckCircle, Download, FileText, Printer, ShieldAlert, ShieldCheck } from 'lucide-react';
+import { createExamPrintDocument } from '../../utils/examPrintDocument';
 import { csvEscapeField } from '../../modules/exams/application/CsvExportSafety';
 
 type NotificationType = 'success' | 'warning' | 'info';
@@ -77,9 +78,13 @@ export default function ExamsCertificatesPanel({
       notify('لا يوجد طلاب مطابقون للطباعة.', 'warning');
       return;
     }
-    const printWindow = window.open('', '_blank');
+    const printWindow = createExamPrintDocument({
+      title: 'إفادات النتائج المعتمدة',
+      onPrintStarted: () => notify(`تم تجهيز ${printStudents.length} إفادة معتمدة؛ اختر الطباعة أو الحفظ بصيغة PDF.`, 'success'),
+      onError: () => notify('تعذر تشغيل أمر طباعة الإفادات.', 'warning')
+    });
     if (!printWindow) {
-      notify('يرجى السماح بالنوافذ المنبثقة لفتح الطباعة.', 'warning');
+      notify('تعذر تجهيز الإفادات للطباعة.', 'warning');
       return;
     }
     const pages = printStudents.map(student => `<section class="certificate">
@@ -95,9 +100,8 @@ export default function ExamsCertificatesPanel({
     </section>`).join('<div class="page-break"></div>');
     printWindow.document.write(`<!doctype html><html dir="rtl" lang="ar"><head><meta charset="utf-8"/><title>إفادات النتائج المعتمدة</title><style>
       @page{size:A4;margin:14mm}body{font-family:Arial,sans-serif;color:#172033}.certificate{border:5px double #9a6a1d;padding:28px;min-height:245mm;box-sizing:border-box}.certificate header,.certificate footer{display:flex;justify-content:space-between;gap:20px;font-size:11px}.certificate h1{text-align:center;color:#7c5417;margin:28px 0}.certificate p{line-height:1.9}table{width:100%;border-collapse:collapse;margin:22px 0;font-size:11px}th,td{border:1px solid #9ca3af;padding:8px;text-align:center}th{background:#fff8e5}.evidence{direction:ltr;text-align:left;overflow-wrap:anywhere;border:1px dashed #9ca3af;background:#f8fafc;padding:10px;font:9px monospace}.certificate footer{margin-top:28px;border-top:1px solid #d1d5db;padding-top:12px}.page-break{page-break-after:always}@media print{.certificate{page-break-inside:avoid}.page-break{page-break-after:always}}
-    </style></head><body>${pages}<script>window.onload=()=>window.print()</script></body></html>`);
+    </style></head><body>${pages}</body></html>`);
     printWindow.document.close();
-    notify(`تم فتح ${printStudents.length} إفادة نتيجة معتمدة للطباعة.`, 'success');
   };
 
   const exportTranscript = (student: any) => {

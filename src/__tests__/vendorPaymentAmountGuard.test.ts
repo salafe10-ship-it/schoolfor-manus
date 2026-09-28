@@ -13,7 +13,7 @@ describe('vendor payment integrity', () => {
     expect(source).toContain('إحالة إلى الخزينة');
     expect(source).not.toContain('الدفع محجوب');
     expect(source).not.toContain('لم تُسجل دفعة');
-    expect(source).not.toContain('VendorPayment');
-    expect(source).not.toContain('paymentNo:');
+    expect(source).toContain('onPayBill');
+    expect(source).toContain('قيمة السداد يجب أن تكون موجبة');
   });
 });

@@ -267,10 +267,22 @@ export function validateInventoryProcurementSnapshot(data: Snapshot, options: { 
     const grandTotal = numberValue(bill.grandTotal, `إجمالي الفاتورة ${id}`, { min: 0 });
     const paid = numberValue(bill.paidAmount, `المدفوع من الفاتورة ${id}`, { min: 0 });
     const remaining = numberValue(bill.remainingAmount, `المتبقي من الفاتورة ${id}`, { min: 0 });
-    if (!closeEnough(grandTotal, subtotal + tax) || !closeEnough(paid, 0) || !closeEnough(remaining, grandTotal) || ['partially_paid', 'paid'].includes(String(bill.status))) throw new ValidationError(`فاتورة المورد ${id} لا يمكن اعتماد سداد أو ترحيل مالي داخل هذه الوحدة.`);
+    if (!closeEnough(grandTotal, subtotal + tax) || paid > grandTotal + 0.01 || remaining > grandTotal + 0.01 || !closeEnough(paid + remaining, grandTotal)) {
+      throw new ValidationError(`أرصدة فاتورة المورد ${id} غير متوازنة مع الإجمالي.`);
+    }
+    if (['partially_paid', 'paid'].includes(String(bill.status)) && !String(bill.glJournalEntryId || bill.journalEntryId || '').trim()) {
+      throw new ValidationError(`فاتورة المورد ${id} لا يمكن اعتبارها مسددة قبل وجود قيد التزام كانوني.`);
+    }
   }
 
-  if (data.vendorPayments.length > 0) throw new ValidationError('مدفوعات الموردين تُدار من وحدة الخزينة ولا تُسجل داخل snapshot المشتريات.');
+  for (const [id, payment] of new Map(data.vendorPayments.map((row: Snapshot) => [String(row.id), row])) as Map<string, Snapshot>) {
+    text(payment.paymentNo, `رقم سداد المورد ${id}`);
+    text(payment.vendorBillId, `فاتورة سداد المورد ${id}`);
+    numberValue(payment.amountPaid, `قيمة سداد المورد ${id}`, { min: 0.01 });
+    if (!['bank_transfer', 'check', 'cash', 'treasury_voucher'].includes(String(payment.paymentMethod))) throw new ValidationError(`وسيلة سداد المورد ${id} غير معتمدة.`);
+    text(payment.referenceNo, `مرجع سداد المورد ${id}`);
+    assertNoJournalReference(payment, `سداد المورد ${id}`, allowCanonicalPostingReferences);
+  }
   for (const [id, movement] of maps.movements) {
     text(movement.itemId, `الصنف في الحركة ${id}`);
     if (!itemReferences.has(String(movement.itemId))) throw new ValidationError(`الحركة ${id} مرتبطة بصنف غير موجود.`);

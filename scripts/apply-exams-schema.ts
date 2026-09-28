@@ -5,6 +5,7 @@ import { readFile } from 'node:fs/promises';
 import { fileURLToPath } from 'node:url';
 import { dirname, resolve } from 'node:path';
 import { Pool } from 'pg';
+import { assertIsolatedStagingDatabase } from './stagingDatabaseSafety.js';
 
 async function main(): Promise<void> {
   if (process.env.NODE_ENV === 'production') {
@@ -12,6 +13,11 @@ async function main(): Promise<void> {
   }
   const connectionString = process.env.DIRECT_URL || process.env.DATABASE_URL;
   if (!connectionString) throw new Error('DIRECT_URL or DATABASE_URL is required.');
+  assertIsolatedStagingDatabase({
+    targetName: process.env.UAT35_TARGET || '',
+    supabaseUrl: process.env.SUPABASE_URL || process.env.VITE_SUPABASE_URL || '',
+    databaseUrl: connectionString,
+  });
 
   const scriptDirectory = dirname(fileURLToPath(import.meta.url));
   const migrationPaths = [

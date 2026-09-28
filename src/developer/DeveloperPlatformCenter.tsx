@@ -341,7 +341,7 @@ CREATE POLICY tenant_isolation_policy ON students
                     />
                   </div>
                   <div className="rounded-lg border border-amber-900/60 bg-amber-950/20 p-3 text-[11px] leading-5 text-amber-200">
-                    مفاتيح الخدمة وقيم الاتصال الخاصة لا تُدخل أو تُخزّن في المتصفح. يتم تشغيل الاتصال من الخادم فقط باستخدام إعدادات بيئة Render المحمية.
+                    مفاتيح الخدمة وقيم الاتصال الخاصة لا تُدخل أو تُخزّن في المتصفح. يتم تشغيل الاتصال من الخادم فقط باستخدام إعدادات البيئة المحمية في Cloudflare.
                   </div>
                   <div className="pt-2">
                     <button

@@ -13,7 +13,7 @@ export const CANONICAL_ERP_TABLES = [
 
 type FinancialRow = Record<string, unknown>;
 type PostingSource = 'student_fee_invoice' | 'student_receipt' | 'payment_voucher' | 'expense_accrual' | 'journal_entry'
-  | 'inventory_receipt' | 'inventory_movement' | 'inventory_stocktake' | 'vendor_bill';
+  | 'inventory_receipt' | 'inventory_movement' | 'inventory_stocktake' | 'vendor_bill' | 'vendor_payment';
 type TransactionLike = Pick<TransactionSession, 'query'>;
 
 export type CanonicalPostingLine = {
@@ -396,6 +396,29 @@ export function buildCanonicalPosting(
     };
   }
 
+  if (sourceType === 'vendor_payment') {
+    if (normalizedStatus(rowValue(input, 'status')) !== 'posted') return null;
+    const amount = positiveAmount(rowValue(input, 'amountPaid', 'amount', 'totalAmount'), 'vendorPayment.amountPaid');
+    const payable = mappingValue(mappings, 'inventory.ap', input, ['payableAccount', 'debitAccount'], '2101');
+    const paymentMethod = textValue(rowValue(input, 'paymentMethod')).toLowerCase();
+    const cashKey = ['bank_transfer', 'check', 'bank'].includes(paymentMethod) ? 'treasury.bank' : 'treasury.cash';
+    const cash = mappingValue(mappings, cashKey, input, ['paidFromAccount', 'accountId', 'creditAccount'], cashKey === 'treasury.bank' ? '1102' : '1101');
+    const lines = [
+      { id: `${sourceId}-AP-D`, accountCode: payable, debit: amount, credit: 0, costCenter: textValue(rowValue(input, 'costCenter', 'costCenterId')) || undefined },
+      { id: `${sourceId}-CASH-C`, accountCode: cash, debit: 0, credit: amount, costCenter: textValue(rowValue(input, 'costCenter', 'costCenterId')) || undefined }
+    ];
+    balanced(lines);
+    return {
+      sourceType,
+      sourceId,
+      date: dateValue(rowValue(input, 'paymentDate', 'date')),
+      description: textValue(rowValue(input, 'description', 'notes'), `سداد فاتورة المورد ${textValue(rowValue(input, 'billNo', 'vendorBillId'), sourceId)}`),
+      fiscalPeriod: fiscalPeriodFor(dateValue(rowValue(input, 'paymentDate', 'date'))),
+      sourcePayload: input,
+      lines
+    };
+  }
+
   if (['inventory_receipt', 'inventory_movement', 'inventory_stocktake', 'vendor_bill'].includes(sourceType)) {
     throw new Error(`مصدر ${sourceType} يتطلب مسار مزامنة المخزون والمشتريات الكانوني.`);
   }
@@ -767,6 +790,10 @@ export class CanonicalErpPostingService {
     }
 
     const mappings = await this.loadMappings(transaction, schoolId);
+    const readiness = await this.getReadiness(transaction, schoolId);
+    if (!readiness.sourceSupport.inventory) {
+      throw new Error(`لا يمكن ترحيل المخزون والمشتريات قبل اعتماد خرائط المخزون: ${[...readiness.missing, ...readiness.invalid].slice(0, 6).join('، ')}`);
+    }
     const settings = payload.settings && typeof payload.settings === 'object' && !Array.isArray(payload.settings) ? payload.settings as FinancialRow : {};
     const procurementSettings = payload.procurementSettings && typeof payload.procurementSettings === 'object' && !Array.isArray(payload.procurementSettings)
       ? payload.procurementSettings as FinancialRow : {};
@@ -830,6 +857,9 @@ export class CanonicalErpPostingService {
       if (normalizedStatus(movement.status) !== 'approved') return;
       const type = textValue(movement.type).toLowerCase();
       if (type === 'transfer') return; // A location transfer has no net GL impact.
+      if (type === 'sale') {
+        throw new Error(`حركة المخزون ${textValue(movement.id)} موسومة كبيع لكنها لا تحمل فاتورة بيع وسعر بيع وحساب إيراد؛ لم يتم إنشاء قيد تكلفة منفرد حتى لا تتشوه المبيعات والأرباح.`);
+      }
       const item = itemById.get(textValue(movement.itemId)) || {};
       const quantity = positiveAmount(movement.quantity, `movement.${textValue(movement.id)}.quantity`);
       const amount = positiveAmount(movement.totalAmount || quantity * Number(item.costPrice || 0), `movement.${textValue(movement.id)}.amount`);
@@ -891,6 +921,17 @@ export class CanonicalErpPostingService {
       throw new Error('المخطط المحاسبي الكانوني غير مثبت؛ طبّق ترحيل ERP المالي قبل التفعيل.');
     }
     const mappings = await this.loadMappings(transaction, schoolId);
+    const readiness = await this.getReadiness(transaction, schoolId);
+    const hasFeeSources = (Array.isArray(payload.invoices) && payload.invoices.length > 0)
+      || (Array.isArray(payload.studentReceiptVouchers) && payload.studentReceiptVouchers.length > 0)
+      || (Array.isArray(payload.receiptVouchers) && payload.receiptVouchers.length > 0);
+    const hasTreasurySources = hasFeeSources
+      || (Array.isArray(payload.paymentVouchers) && payload.paymentVouchers.length > 0)
+      || (Array.isArray(payload.journalEntries) && payload.journalEntries.some((row: any) => String(row?.sourceType || '').toLowerCase() === 'vendor_payment'));
+    const blockers = new Set<string>();
+    if (hasFeeSources && !readiness.sourceSupport.fees) blockers.add('خرائط الرسوم الطلابية');
+    if (hasTreasurySources && !readiness.sourceSupport.treasury) blockers.add('خرائط الخزينة والبنوك');
+    if (blockers.size > 0) throw new Error(`لا يمكن الترحيل قبل اعتماد ${[...blockers].join(' و')}: ${[...readiness.missing, ...readiness.invalid].slice(0, 6).join('، ')}`);
     await this.ensureChartAccounts(transaction, tenantId, schoolId, actorId, payload);
 
     const documents: CanonicalPostingDocument[] = [];
@@ -930,11 +971,12 @@ export class CanonicalErpPostingService {
       const item = row as FinancialRow;
       const sourceType = textValue(item.sourceType).toLowerCase();
       const sourceId = textValue(item.id);
-      const isDerivedSource = ['student_fee_invoice', 'student_receipt', 'payment_voucher', 'expense_accrual'].includes(sourceType)
+      const isDerivedSource = ['student_fee_invoice', 'student_receipt', 'payment_voucher', 'expense_accrual', 'vendor_payment'].includes(sourceType)
         || Boolean(item.receiptVoucherId || item.paymentVoucherId || item.invoiceId || item.expenseAccrualId)
         || sourceJournalIds.has(sourceId)
         || sourceId.startsWith('ERP-JV-');
-      if (!isDerivedSource) add('journal_entry', item);
+      if (sourceType === 'vendor_payment') add('vendor_payment', item);
+      else if (!isDerivedSource) add('journal_entry', item);
     }
 
     let createdJournalCount = 0;

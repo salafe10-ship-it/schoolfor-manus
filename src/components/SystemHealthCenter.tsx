@@ -25,7 +25,7 @@ import SystemAuditTrailTab from './system-health/SystemAuditTrailTab';
 import DatabaseSchemaAuditor from './DatabaseSchemaAuditor';
 import {
   isDiagnosticInvocationAvailable,
-  isStagingDiagnosticHost,
+  isCloudflareStagingHost,
   parseApprovedConnectionIdentity,
   type ApprovedConnectionIdentity
 } from '../security/stagingDiagnosticInvocation';
@@ -73,7 +73,7 @@ export default function SystemHealthCenter({
   const [isSimulatingFailedTx, setIsSimulatingFailedTx] = useState<boolean>(false);
   const [isSimulatingSlowQuery, setIsSimulatingSlowQuery] = useState<boolean>(false);
   const stagingDiagnosticHost = typeof window !== 'undefined'
-    && isStagingDiagnosticHost(window.location.hostname);
+    && isCloudflareStagingHost(window.location.hostname);
   const [stagingDiagnosticAvailable, setStagingDiagnosticAvailable] = useState(false);
   const [stagingDiagnosticIdentity, setStagingDiagnosticIdentity] = useState<ApprovedConnectionIdentity | null>(null);
   const [isLoadingStagingDiagnostic, setIsLoadingStagingDiagnostic] = useState(false);

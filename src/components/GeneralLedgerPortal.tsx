@@ -21,6 +21,7 @@ import { FinancialReportsTab } from '../modules/accounting/presentation/Financia
 import { CalcToolsTab } from '../modules/accounting/presentation/CalcToolsTab';
 import { AccountMappingsTab } from '../modules/accounting/presentation/AccountMappingsTab';
 import { buildAccountingDimensions } from '../modules/accounting/domain/accountingDimensions';
+import { writeXlsxBuffer } from '../utils/ExcelWorkbookUtils';
 export { AccountingContext };
 export type { AccountNode };
 
@@ -371,9 +372,17 @@ export default function GeneralLedgerPortal({
       const priorSignedMovement = isDebitNature
         ? account.priorDebitMovements - account.priorCreditMovements
         : account.priorCreditMovements - account.priorDebitMovements;
+      // Some canonical snapshots contain the chart structure but have not yet
+      // materialized account balances, while the canonical journal already
+      // contains posted movements. Treat a zero persisted balance plus a
+      // non-zero posted movement as an unmaterialized closing balance; without
+      // this fallback the trial balance falsely renders every account as zero.
+      const deriveClosingFromJournal = hasCanonicalBalances
+        && persistedBalance === 0
+        && Math.abs(allSignedMovement) > 0;
       account.openingBalance = hasCostCenterFilter
         ? priorSignedMovement
-        : hasCanonicalBalances
+        : hasCanonicalBalances && !deriveClosingFromJournal
           ? persistedBalance - allSignedMovement
           : 0;
       account.endingBalance = account.openingBalance + periodSignedMovement;
@@ -426,6 +435,17 @@ export default function GeneralLedgerPortal({
       triggerNotification('تعذر حساب التعبير: الصيغة غير صالحة.', 'warning');
     }
   };
+  const isLiquidityAccount = (account: any) => {
+    const code = String(account?.code || account?.accountCode || '').trim();
+    const classification = String(account?.classification || '').trim().toLowerCase();
+    const type = String(account?.type || '').trim().toLowerCase();
+    const isCashOrBankCode = code.startsWith('110') || code.startsWith('111') || code.startsWith('112');
+    const isLeaf = account?.isLeaf !== false && account?.is_leaf !== false;
+    const isAsset = ['أصول', 'asset', 'assets'].includes(classification);
+    const isDetailType = ['فرعي', 'sub', 'subaccount', 'detail'].includes(type);
+    return isCashOrBankCode && isLeaf && (isAsset || isDetailType || (!classification && !type))
+      && (Number(account?.level || 0) >= 3 || ['1101', '1110', '1120'].includes(code));
+  };
   const handleBankTransferSubmit = async (event?: React.FormEvent) => {
     event?.preventDefault();
     if (!canonicalFinancialWriteReady) {
@@ -440,8 +460,9 @@ export default function GeneralLedgerPortal({
     const destinationAccount = accounts.find(account => account.code === destinationAccountCode);
     const sourceBalance = Number(sourceAccount?.balance ?? 0);
 
-    if (!sourceAccount || !destinationAccount || sourceAccountCode === destinationAccountCode) {
-      triggerNotification('اختر حسابي مصدر ومستقبل مختلفين وموثقين في دليل الحسابات.', 'warning');
+    if (!sourceAccount || !destinationAccount || sourceAccountCode === destinationAccountCode
+      || !isLiquidityAccount(sourceAccount) || !isLiquidityAccount(destinationAccount)) {
+      triggerNotification('اختر حسابي نقدية/بنك مصدر ومستقبل مختلفين وموثقين في دليل الحسابات.', 'warning');
       return;
     }
     if (!Number.isFinite(amount) || amount <= 0) {
@@ -1089,8 +1110,10 @@ export default function GeneralLedgerPortal({
   // posted source documents are persisted to the canonical journal and GL.
   type CanonicalFinancialWriteMode = 'snapshot_read_only' | 'snapshot_write' | 'erp_integrated' | 'ledger_ready';
   const [canonicalFinancialWriteMode, setCanonicalFinancialWriteMode] = useState<CanonicalFinancialWriteMode>('snapshot_read_only');
+  const [canonicalMappingsReady, setCanonicalMappingsReady] = useState(false);
   const canonicalFinancialWriteReady = canonicalFinancialStatus === 'ready'
-    && canonicalFinancialWriteMode !== 'snapshot_read_only';
+    && canonicalFinancialWriteMode !== 'snapshot_read_only'
+    && canonicalMappingsReady;
   const canonicalLedgerReady = canonicalFinancialStatus === 'ready'
     && (canonicalFinancialWriteMode === 'ledger_ready' || canonicalFinancialWriteMode === 'erp_integrated');
   const requireCanonicalFinancialWrite = (actionName: string) => {
@@ -1119,6 +1142,16 @@ export default function GeneralLedgerPortal({
         }
 
         const data = result.data || {};
+        let mappingsReady = false;
+        try {
+          const mappingsResponse = await authenticatedRequest('/api/financial/account-mappings', {
+            headers: { Accept: 'application/json' }, cache: 'no-store', signal: controller.signal
+          });
+          const mappingsPayload = await mappingsResponse.json().catch(() => ({}));
+          mappingsReady = mappingsResponse.ok && mappingsPayload?.success === true && mappingsPayload?.data?.ready === true;
+        } catch { mappingsReady = false; }
+        if (!active) return;
+        setCanonicalMappingsReady(mappingsReady);
         const canonicalJournalEntries = Array.isArray(data.journalEntries) ? data.journalEntries : [];
         const canonicalStudentReceiptVouchers = Array.isArray(data.studentReceiptVouchers) ? data.studentReceiptVouchers : [];
         // Student Financials stores student receipts under studentReceiptVouchers,
@@ -1241,6 +1274,7 @@ export default function GeneralLedgerPortal({
         setCanonicalFinancialData({});
         setCanonicalFinancialVersion(0);
         setCanonicalFinancialWriteMode('snapshot_read_only');
+        setCanonicalMappingsReady(false);
         setCanonicalSnapshotHasAccounts(false);
         setAccounts(previous => previous.map(account => ({ ...account, balance: 0 })));
         setCanonicalFinancialStatus('blocked');
@@ -1654,21 +1688,24 @@ export default function GeneralLedgerPortal({
   };
 
   // Global report export Excel/CSV handler
-  const exportReportExcel = (reportName: string, headers: string[], rows: any[][]) => {
+  const exportReportExcel = async (reportName: string, headers: string[], rows: any[][]) => {
     triggerNotification(`📥 جاري إنشاء نسخة عرض من ${reportName}؛ هذه ليست قائمة مالية معتمدة.`, 'info');
-    setTimeout(() => {
-      const csvContent = "\uFEFF" 
-        + [headers.join(','), ...rows.map(e => e.map(cell => `"${String(cell).replace(/"/g, '""')}"`).join(','))].join('\n');
-      const blob = new Blob([csvContent], { type: 'text/csv;charset=utf-8;' });
+    try {
+      const buffer = await writeXlsxBuffer([{ name: 'تقرير', headers, rows }]);
+      const blob = new Blob([buffer], { type: 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet' });
       const url = URL.createObjectURL(blob);
       const link = document.createElement("a");
       link.setAttribute("href", url);
-      link.setAttribute("download", `${reportName.replace(/\s+/g, '_')}_${new Date().toISOString().split('T')[0]}.csv`);
+      link.setAttribute("download", `${reportName.replace(/\s+/g, '_')}_${new Date().toISOString().split('T')[0]}.xlsx`);
       document.body.appendChild(link);
       link.click();
       document.body.removeChild(link);
+      URL.revokeObjectURL(url);
       triggerNotification('تم تنزيل نسخة العرض، ولم تُعتمد كتقرير مالي رسمي.', 'info');
-    }, 300);
+    } catch (error) {
+      console.error('Failed to export accounting report:', error);
+      triggerNotification('تعذر إنشاء ملف Excel للتقرير المحدد.', 'warning');
+    }
   };
 
   const requireCanonicalLedgerAction = (actionName: string) => {
@@ -2756,7 +2793,7 @@ export default function GeneralLedgerPortal({
     {
       title: "الإعدادات والسياسات",
       items: [
-        { id: 'account_mappings', label: 'خرائط الترحيل المحاسبي', targetTab: 'account_mappings', icon: Link2, badge: canonicalFinancialWriteMode === 'snapshot_read_only' ? 'تحقق' : 'جاهز' },
+        { id: 'account_mappings', label: 'خرائط الترحيل المحاسبي', targetTab: 'account_mappings', icon: Link2, badge: canonicalMappingsReady && canonicalFinancialWriteMode !== 'snapshot_read_only' ? 'جاهز' : 'يحتاج استكمالاً' },
         { id: 'governance', label: 'السياسات المالية', targetTab: 'governance', icon: CheckCircle2, badge: 'نشط' },
         { id: 'closing', label: 'إقفال السنة', targetTab: 'closing', icon: LockIcon },
         { id: 'calc_tools', label: 'أدوات الحسبة', targetTab: 'calc_tools', icon: Calculator },
@@ -3593,7 +3630,7 @@ export default function GeneralLedgerPortal({
                       onChange={(e) => setBankTransferForm(prev => ({ ...prev, sourceAccount: e.target.value }))}
                       className="w-full bg-transparent border border-slate-300 rounded-lg p-2.5 font-bold"
                     >
-                      {accounts.filter(a => a.type === 'فرعي').map(a => (
+                      {accounts.filter(isLiquidityAccount).map(a => (
                         <option key={a.code} value={a.code}>{a.code} - {a.name} ({a.balance.toLocaleString()} {currency})</option>
                       ))}
                     </select>
@@ -3607,7 +3644,7 @@ export default function GeneralLedgerPortal({
                       onChange={(e) => setBankTransferForm(prev => ({ ...prev, destinationAccount: e.target.value }))}
                       className="w-full bg-transparent border border-slate-300 rounded-lg p-2.5 font-bold"
                     >
-                      {accounts.filter(a => a.type === 'فرعي').map(a => (
+                      {accounts.filter(isLiquidityAccount).map(a => (
                         <option key={a.code} value={a.code} disabled={a.code === bankTransferForm.sourceAccount}>{a.code} - {a.name}</option>
                       ))}
                     </select>

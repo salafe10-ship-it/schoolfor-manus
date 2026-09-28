@@ -1,6 +1,7 @@
 import 'dotenv/config';
 import pg from 'pg';
 import { CanonicalErpPostingService } from '../src/modules/financial/application/CanonicalErpPostingService.js';
+import { assertIsolatedStagingDatabase } from './stagingDatabaseSafety.js';
 
 const CONFIRMATION = 'SEED_100_EXPENSES_20_ASSETS';
 const schoolId = String(process.env.UAT_FINANCIAL_SEED_SCHOOL_ID || '').trim();
@@ -13,6 +14,11 @@ if (!schoolId || !actorId) throw new Error('UAT_FINANCIAL_SEED_SCHOOL_ID and UAT
 
 const connectionString = process.env.DIRECT_URL || process.env.DATABASE_URL;
 if (!connectionString) throw new Error('DATABASE_URL or DIRECT_URL is required.');
+assertIsolatedStagingDatabase({
+  targetName: process.env.UAT_FINANCIAL_SEED_TARGET || '',
+  supabaseUrl: process.env.SUPABASE_URL || process.env.VITE_SUPABASE_URL || '',
+  databaseUrl: connectionString,
+});
 
 type FinancialRecord = Record<string, any>;
 

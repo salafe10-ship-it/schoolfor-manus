@@ -1,6 +1,7 @@
 import 'dotenv/config';
 import { randomUUID } from 'node:crypto';
 import { Pool, type PoolClient } from 'pg';
+import { assertIsolatedStagingDatabase } from './stagingDatabaseSafety.js';
 
 const MODE = process.argv[2] || 'preflight';
 const TARGET = process.env.UAT35_TARGET || '';
@@ -15,6 +16,11 @@ const REQUIRED_TABLES = [
 
 const connectionString = process.env.DIRECT_URL || process.env.DATABASE_URL;
 if (!connectionString) throw new Error('UAT35_DATABASE_URL_MISSING');
+assertIsolatedStagingDatabase({
+  targetName: TARGET,
+  supabaseUrl: process.env.SUPABASE_URL || process.env.VITE_SUPABASE_URL || '',
+  databaseUrl: connectionString,
+});
 
 const pool = new Pool({
   connectionString,

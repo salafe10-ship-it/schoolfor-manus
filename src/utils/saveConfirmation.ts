@@ -1,7 +1,7 @@
 export const SAVE_SUCCESS_PREFIX = 'تم الحفظ بنجاح';
 
 const SAVE_ACTION_PATTERN = /(حفظ|تأسيس|إنشاء|اعتماد|ترحيل|تسجيل|إضافة|تعديل|تحديث|إقفال|رسملة|تأكيد.*(?:فتح|حفظ|إنشاء))/i;
-const NON_SAVE_ACTION_PATTERN = /(تسجيل الدخول|تسجيل الخروج|تحديث البيانات|تحديث الدليل|تحديث الحوادث|تحديث.*المنصة|نسخ|فتح لوحة|فتح صفحة|إرسال|تصدير|طباعة|تحميل)/i;
+const NON_SAVE_ACTION_PATTERN = /(تسجيل الدخول|تسجيل الخروج|تحديث البيانات|تحديث الدليل|تحديث الحوادث|تحديث.*المنصة|معالجة النتائج|إعادة (?:الحساب|الاحتساب)|تشغيل.*محرك|نسخ|فتح لوحة|فتح صفحة|إرسال|تصدير|طباعة|تحميل)/i;
 
 /** Detect a user intent to persist data from the visible control label. */
 export function isSaveActionLabel(label: string): boolean {

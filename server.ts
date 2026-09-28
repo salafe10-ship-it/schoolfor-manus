@@ -3,6 +3,7 @@ import path from "path";
 import fs from "node:fs";
 import dotenv from "dotenv";
 import helmet from "helmet";
+import { getServerListenHost } from "./server/infrastructure/ServerListenHost.js";
 
 dotenv.config();
 
@@ -69,7 +70,10 @@ import { canonicalGuardianUpdateService } from "./src/modules/student-registrati
 import { operationalEnrollmentAssignmentService } from "./src/modules/student-affairs/application/OperationalEnrollmentAssignmentService.js";
 import { canonicalEnrollmentWorkflowService } from "./src/modules/student-affairs/application/CanonicalEnrollmentWorkflowService.js";
 import { canonicalGraduationService } from "./src/modules/student-affairs/application/CanonicalGraduationService.js";
-import { canonicalExamClassSyncService } from "./src/modules/exams/application/CanonicalExamClassSyncService.js";
+import {
+  canonicalExamClassSyncService,
+  reconcileExamDatabaseClassReferences
+} from "./src/modules/exams/application/CanonicalExamClassSyncService.js";
 import {
   findScheduleResourceConflicts,
   getExamIntervalDurationMinutes
@@ -117,14 +121,13 @@ import {
 type FinancialWriteMode = 'snapshot_read_only' | 'snapshot_write' | 'erp_integrated';
 
 const deploymentEnvironment = String(process.env.EDUPRO_ENVIRONMENT || '').trim().toLowerCase();
-// Render does not guarantee that EDUPRO_ENVIRONMENT is present on every
-// service. Treat its managed runtime as production-like as well, otherwise a
-// missing PLATFORM_ADMIN_DATABASE_URL could silently activate the local
-// DIRECT_URL fallback and force an IPv6-only Supabase connection.
+// Treat explicit staging/production deployments and production Node runtimes
+// as production-like. This prevents a missing platform-admin URL from silently
+// activating a local DIRECT_URL fallback.
 const productionLikeEnvironment = deploymentEnvironment === 'staging'
   || deploymentEnvironment === 'production'
   || process.env.NODE_ENV === 'production'
-  || Boolean(process.env.RENDER_SERVICE_ID);
+  || process.env.EDUPRO_CLOUDFLARE_HYPERDRIVE === 'true';
 const unsafeLocalDatabaseRoleOptIn = process.env.ALLOW_UNSAFE_LOCAL_DATABASE_ROLE === 'true';
 const databaseTargetAlignment = inspectSupabaseDatabaseTargetAlignment({
   supabaseUrl: process.env.SUPABASE_URL || process.env.NEXT_PUBLIC_SUPABASE_URL,
@@ -148,9 +151,7 @@ const supabaseOrigin = (() => {
   }
 })();
 
-// Supabase's managed pooler currently chains to this public root. Render's
-// Node runtime does not include it in its system trust store, so strict TLS
-// verification otherwise fails with SELF_SIGNED_CERT_IN_CHAIN. An explicit
+// Supabase's managed pooler currently chains to this public root. An explicit
 // PGSSL_CA override remains supported for environments using another CA.
 const SUPABASE_ROOT_2021_CA = `-----BEGIN CERTIFICATE-----
 MIIDxDCCAqygAwIBAgIUbLxMod62P2ktCiAkxnKJwtE9VPYwDQYJKoZIhvcNAQEL
@@ -277,7 +278,7 @@ const ensureIdentityJobSchema = async (): Promise<void> => {
 
 // The tenant transaction uses a restricted RLS role.  Some production
 // workspaces were created before the audit actor policy migration reached the
-// database used by the Render service, so the first valid registration could
+// active database, so the first valid registration could
 // be rolled back even though the actor and scope were correct.  Bootstrap only
 // this additive, narrowly scoped policy through the already privileged control
 // plane; no business data is changed and RLS remains enabled.
@@ -402,7 +403,7 @@ const ensureStudentAuditRlsSchema = async (): Promise<void> => {
 };
 
 // Some production workspaces were provisioned before the owner-release
-// migration reached the database used by the Render service.  Keep the
+// migration reached the active database. Keep the
 // tenant workspace read path truthful and self-healing with an additive,
 // idempotent prerequisite; the full migration remains the authoritative
 // definition when it is available.
@@ -476,7 +477,7 @@ if (platformAdminPool) {
 // permission; it never accepts role or scope from a request.
 if (platformAdminPool) {
   // Permission resolution for authenticated school requests must use the
-  // trusted control-plane connection. Render's data-plane database role is
+  // trusted control-plane connection. The data-plane database role is
   // RLS-scoped for application writes and may not be a PostgREST
   // `authenticated` role, which would make a valid assignment appear empty.
   // Scope is still explicit and derived only from the verified identity.
@@ -556,9 +557,8 @@ if (platformAdminPool) {
       });
       return loadTenantPermissionsFromPlatformControl(identity);
     } catch (error) {
-      // Render environments can expose a pooler certificate chain that the
-      // node runtime cannot validate even though the server-only Supabase
-      // control-plane channel is healthy. Fall back to that channel rather
+      // A pooler certificate chain may not validate in every runtime even
+      // though the server-only Supabase control-plane channel is healthy. Fall back to that channel rather
       // than hiding every tenant module behind an empty permission set.
       if (!platformControl) throw error;
       EnterpriseLogger.warn('Tenant role pool resolution failed; using Supabase control-plane fallback.', 'TrustedAuthentication', {
@@ -697,7 +697,7 @@ const platformControl = platformAdminAuth as any;
 const resolveCanonicalTenantActor = async (context: TenantContext): Promise<string> => {
   let controlPlaneActorId: string | null = null;
   // Prefer the canonical Supabase control-plane directory before attempting
-  // any repair through a Render PostgreSQL connection.  Some deployments
+  // any repair through the PostgreSQL data-plane connection. Some deployments
   // temporarily expose a stale/partial PLATFORM_ADMIN_DATABASE_URL; writing
   // the trusted Auth UUID there can then trip fk_users_auth_user even though
   // the authoritative public.users bridge already exists in Supabase.
@@ -776,8 +776,8 @@ const resolveCanonicalTenantActor = async (context: TenantContext): Promise<stri
     if (healed.rows[0]?.id) return healed.rows[0].id;
   }
 
-  // The Render tenant connection and the Supabase control-plane channel may
-  // point at different connection paths.  If the control-plane directory had
+  // The tenant PostgreSQL connection and the Supabase control-plane channel may
+  // point at different connection paths. If the control-plane directory had
   // an actor but the tenant database did not, the audit foreign key/RLS check
   // would still reject the transaction.  Only use the control-plane id after
   // the local privileged pool has had an opportunity to heal its exact scope.
@@ -1286,7 +1286,7 @@ function validateHrSnapshotData(data: Record<string, any>): void {
   }
 }
 
-const INVENTORY_FINANCIAL_COLLECTIONS = ['goodsReceipts', 'vendorBills', 'movements', 'stocktakes'] as const;
+const INVENTORY_FINANCIAL_COLLECTIONS = ['goodsReceipts', 'vendorBills', 'movements', 'stocktakes', 'vendorPayments'] as const;
 
 function validateInventoryPostingMetadata(currentData: Record<string, any>, requestedData: Record<string, any>): void {
   for (const collection of INVENTORY_FINANCIAL_COLLECTIONS) {
@@ -1312,7 +1312,8 @@ function applyInventoryPostingLinks(data: Record<string, any>, sourceLinks: Arra
     inventory_receipt: 'goodsReceipts',
     vendor_bill: 'vendorBills',
     inventory_movement: 'movements',
-    inventory_stocktake: 'stocktakes'
+    inventory_stocktake: 'stocktakes',
+    vendor_payment: 'vendorPayments'
   };
   for (const link of sourceLinks) {
     const collection = sourceCollection[link.sourceType];
@@ -1324,6 +1325,7 @@ function applyInventoryPostingLinks(data: Record<string, any>, sourceLinks: Arra
     if (collection === 'goodsReceipts') row.status = 'posted_to_gl';
     if (collection === 'movements') { row.status = 'posted'; row.statusLabel = `مرحل محاسبياً — ${link.journalEntryId}`; }
     if (collection === 'stocktakes') row.statusLabel = `مرحل محاسبياً — ${link.journalEntryId}`;
+    if (collection === 'vendorPayments') row.glJournalEntryId = link.journalEntryId;
   }
   return next;
 }
@@ -12109,7 +12111,6 @@ export async function createApp(options: { cloudflare?: boolean } = {}): Promise
           ? 'الدور الحالي لا يملك صلاحية تعديل بيانات الامتحانات.'
           : 'اعتماد أو إعادة فتح النتائج والجدول يتطلب دوراً مخولاً للاعتماد.');
       }
-      ExamValidator.validateDatabase(payload);
       if ((payload as any).exams_assessment_state !== undefined) {
         try {
           normalizeAssessmentWorkflowState((payload as any).exams_assessment_state);
@@ -12175,6 +12176,48 @@ export async function createApp(options: { cloudflare?: boolean } = {}): Promise
             }
           });
         }
+        if (operation === 'write') {
+          const academicStructureResult = await transaction.query<{ structure: unknown }>(
+            `SELECT setting_value AS structure
+               FROM public.school_settings
+              WHERE tenant_id = $1
+                AND school_id = $2
+                AND setting_key = 'academic_structure'
+                AND status = 'active'
+                AND deleted_at IS NULL
+              ORDER BY effective_from DESC, created_at DESC
+              LIMIT 1`,
+            [tenantId, schoolId]
+          );
+          const academicStructure = academicStructureResult.rows[0]?.structure;
+          if (academicStructure) {
+            const canonicalReferences = await transaction.query<{ class_reference: string }>(
+              `SELECT DISTINCT btrim(e.class_reference) AS class_reference
+                 FROM public.enrollments e
+                 INNER JOIN public.students s
+                   ON s.tenant_id = e.tenant_id
+                  AND s.school_id = e.school_id
+                  AND s.id = e.student_id
+                  AND s.deleted_at IS NULL
+                WHERE e.tenant_id = $1
+                  AND e.school_id = $2
+                  AND (e.branch_id = $3 OR e.branch_id IS NULL)
+                  AND e.academic_year_id = $4
+                  AND e.enrollment_status = 'active'
+                  AND e.deleted_at IS NULL
+                  AND s.status = 'active'
+                  AND NULLIF(btrim(e.class_reference), '') IS NOT NULL
+                ORDER BY btrim(e.class_reference)`,
+              [tenantId, schoolId, tenantContext.branchId, tenantContext.academicYear]
+            );
+            reconcileExamDatabaseClassReferences(
+              payload as Record<string, any>,
+              academicStructure,
+              canonicalReferences.rows.map(item => item.class_reference)
+            );
+          }
+        }
+        ExamValidator.validateDatabase(payload);
         const currentAttemptIds = new Set(currentAssessmentState.attempts.map(item => item.id));
         const eligibleCandidateIds = new Set(
           (Array.isArray((payload as any).exams_students_enriched) ? (payload as any).exams_students_enriched : [])
@@ -12569,6 +12612,121 @@ export async function createApp(options: { cloudflare?: boolean } = {}): Promise
     } catch (err: any) {
       EnterpriseLogger.error('Canonical payment posting failed', 'FinancialPaymentRoute', { error: err?.message || String(err) });
       next(err instanceof AuthenticationError || err instanceof DatabaseError || err instanceof ValidationError ? err : new DatabaseError('تعذر ترحيل سند الصرف الكانوني.', err?.message));
+    }
+  });
+
+  app.post('/api/financial/vendor-bills/:billId/pay', authenticateRequest, requirePermission(PERMISSIONS.FINANCIAL_WRITE), async (req, res, next) => {
+    try {
+      const identity = (req as any).user;
+      const tenantId = String(identity?.tenantId || '').trim();
+      const schoolId = String(identity?.schoolId || '').trim();
+      const actorId = String(identity?.id || '').trim();
+      const tenantContext = (req as any).tenantContext;
+      const billId = String(req.params.billId || '').trim();
+      const amount = Number(req.body?.amountPaid);
+      const paymentMethod = String(req.body?.paymentMethod || 'cash').trim();
+      const paymentId = String(req.body?.paymentId || req.get('Idempotency-Key') || '').trim();
+      const paidFromAccount = String(req.body?.paidFromAccount || '').trim();
+      if (!tenantId || !schoolId || !actorId || !tenantContext || tenantContext.tenantId !== tenantId || tenantContext.schoolId !== schoolId) {
+        throw new AuthenticationError('السياق المالي الموثوق غير مكتمل.');
+      }
+      if (!billId || !paymentId || !/^[A-Za-z0-9:_-]{8,160}$/.test(paymentId)) throw new ValidationError('معرف سداد المورد أو مفتاح منع التكرار غير صالح.');
+      if (!Number.isFinite(amount) || amount <= 0) throw new ValidationError('قيمة سداد المورد يجب أن تكون أكبر من صفر.');
+      if (!['bank_transfer', 'check', 'cash', 'treasury_voucher'].includes(paymentMethod)) throw new ValidationError('وسيلة سداد المورد غير معتمدة.');
+      if (!transactionDriver) throw new DatabaseError('سداد المورد يتطلب اتصال PostgreSQL.');
+
+      let responseData: { journalId: string; paymentId: string; billId: string; status: string } | null = null;
+      await UnitOfWork.runInTransaction(schoolId, {
+        operationName: `Pay vendor bill ${billId}`,
+        tenantId, userId: actorId, userName: identity.name || 'المستخدم المالي',
+        ipAddress: req.ip || 'unknown', affectedTables: ['inventory_database', 'erp_journal_entries', 'erp_journal_lines', 'erp_general_ledger', 'audit_events']
+      }, async () => {
+        const transaction = UnitOfWork.getActiveContext()?.databaseTransaction;
+        if (!transaction) throw new DatabaseError('المعاملة المالية غير متاحة.');
+        const actor = await transaction.query<{ id: string }>(
+          `SELECT id FROM public.users WHERE tenant_id = $1 AND school_id = $2 AND status = 'active' AND deleted_at IS NULL AND (id = $3 OR auth_user_id = $3) LIMIT 1`,
+          [tenantId, schoolId, actorId]
+        );
+        if (!actor.rows[0]) throw new AuthenticationError('المستخدم المالي غير موجود.');
+        const readiness = await CanonicalErpPostingService.getReadiness(transaction, schoolId);
+        if (!readiness.sourceSupport.inventory || !readiness.sourceSupport.treasury) {
+          throw new ValidationError(`لا يمكن سداد المورد قبل اعتماد خرائط المخزون والخزينة: ${[...readiness.missing, ...readiness.invalid].slice(0, 8).join('، ')}`);
+        }
+        const inventory = await transaction.query<{ data: Record<string, any>; version: number }>(
+          `SELECT data, version FROM public.inventory_database WHERE tenant_id = $1 AND school_id = $2 FOR UPDATE`,
+          [tenantId, schoolId]
+        );
+        const data = inventory.rows[0]?.data || {};
+        const bills = Array.isArray(data.vendorBills) ? data.vendorBills : [];
+        const bill = bills.find((row: any) => String(row?.id || '') === billId);
+        if (!bill) throw new ValidationError('فاتورة المورد غير موجودة في المصدر المركزي.');
+        if (!['approved', 'partially_paid'].includes(String(bill.status))) throw new ValidationError('لا يمكن سداد فاتورة المورد قبل اعتمادها أو بعد إغلاقها.');
+        if (!String(bill.glJournalEntryId || bill.journalEntryId || '').trim()) throw new ValidationError('لا يمكن سداد فاتورة المورد قبل ترحيل قيد الالتزام الكانوني.');
+        const grandTotal = Number(bill.grandTotal);
+        const paidAmount = Number(bill.paidAmount || 0);
+        const remainingAmount = Number(bill.remainingAmount ?? grandTotal - paidAmount);
+        if (!Number.isFinite(grandTotal) || !Number.isFinite(paidAmount) || !Number.isFinite(remainingAmount) || remainingAmount <= 0.01) throw new ValidationError('فاتورة المورد مسددة بالكامل أو تحمل رصيداً غير صالح.');
+        if (amount > remainingAmount + 0.01) throw new ValidationError('قيمة السداد تتجاوز الرصيد المتبقي من فاتورة المورد.');
+
+        const sourceId = `vendor-payment:${billId}:${paymentId}`;
+        const existing = await transaction.query<{ id: string }>(
+          `SELECT id FROM public.erp_journal_entries WHERE tenant_id = $1 AND school_id = $2 AND source_type = 'vendor_payment' AND source_id = $3 LIMIT 1`,
+          [tenantId, schoolId, sourceId]
+        );
+        if (existing.rows[0]?.id) {
+          responseData = { journalId: existing.rows[0].id, paymentId, billId, status: String(bill.status) };
+          return;
+        }
+
+        const payment = {
+          id: sourceId,
+          sourceType: 'vendor_payment',
+          status: 'posted',
+          amountPaid: Number(amount.toFixed(2)),
+          paymentDate: String(req.body?.paymentDate || new Date().toISOString().slice(0, 10)),
+          paymentMethod,
+          paidFromAccount,
+          vendorBillId: billId,
+          billNo: String(bill.billNo || billId),
+          vendorId: String(bill.vendorId || ''),
+          vendorName: String(bill.vendorName || ''),
+          referenceNo: String(req.body?.referenceNo || paymentId),
+          description: `سداد فاتورة المورد ${String(bill.billNo || billId)}`
+        };
+        const sync = await CanonicalErpPostingService.syncSnapshot(transaction, tenantId, schoolId, actor.rows[0].id, {
+          journalEntries: [payment], chartOfAccounts: []
+        });
+        const link = sync.sourceLinks.find(item => item.sourceType === 'vendor_payment' && item.sourceId === sourceId);
+        if (!link) throw new DatabaseError('تم السداد دون إثبات رابط القيد الكانوني.');
+        const nextPaid = Number((paidAmount + amount).toFixed(2));
+        const nextRemaining = Number(Math.max(0, grandTotal - nextPaid).toFixed(2));
+        const nextData = JSON.parse(JSON.stringify(data)) as Record<string, any>;
+        nextData.vendorBills = bills.map((row: any) => String(row?.id || '') === billId ? {
+          ...row, paidAmount: nextPaid, remainingAmount: nextRemaining,
+          status: nextRemaining <= 0.01 ? 'paid' : 'partially_paid', lastPaymentId: sourceId
+        } : row);
+        nextData.vendorPayments = [...(Array.isArray(nextData.vendorPayments) ? nextData.vendorPayments : []), {
+          id: sourceId, schoolId, paymentNo: paymentId, paymentDate: payment.paymentDate,
+          vendorId: payment.vendorId, vendorName: payment.vendorName, vendorBillId: billId,
+          billNo: payment.billNo, amountPaid: payment.amountPaid, paymentMethod,
+          referenceNo: payment.referenceNo, glJournalEntryId: link.journalEntryId, createdAt: new Date().toISOString()
+        }];
+        await transaction.query(
+          `UPDATE public.inventory_database SET data = $3::jsonb, version = version + 1, updated_at = now(), updated_by = $4 WHERE tenant_id = $1 AND school_id = $2`,
+          [tenantId, schoolId, JSON.stringify(nextData), actor.rows[0].id]
+        );
+        await transaction.query(
+          `INSERT INTO public.audit_events (tenant_id, school_id, branch_id, actor_user_id, entity_type, entity_id, action, source, reason, result, metadata)
+           VALUES ($1, $2, $3, $4, 'vendor_bill', $5, 'pay', 'VendorBillPaymentRoute', 'سداد فاتورة مورد وترحيل القيد الكانوني', 'success', $6::jsonb)`,
+          [tenantId, schoolId, identity.branchId || null, actor.rows[0].id, billId, JSON.stringify({ sourceId, journalId: link.journalEntryId, amount, paymentMethod })]
+        );
+        responseData = { journalId: link.journalEntryId, paymentId, billId, status: nextRemaining <= 0.01 ? 'paid' : 'partially_paid' };
+      }, tenantContext);
+      if (!responseData) throw new DatabaseError('تعذر إكمال سداد فاتورة المورد.');
+      res.json({ success: true, data: responseData });
+    } catch (err: any) {
+      EnterpriseLogger.error('Canonical vendor bill payment failed', 'VendorBillPaymentRoute', { error: err?.message || String(err) });
+      next(err instanceof AuthenticationError || err instanceof DatabaseError || err instanceof ValidationError ? err : new DatabaseError('تعذر سداد فاتورة المورد كانونيًا.', err?.message));
     }
   });
 
@@ -15166,7 +15324,7 @@ ${JSON.stringify(snapshot)}
           : 'REQUEST_FAILED';
 
     // Keep the public response safe for non-platform users, but preserve the
-    // real server-side cause for Render diagnostics. Without this entry a
+    // real server-side cause in protected runtime logs. Without this entry a
     // database failure is reduced to the generic Arabic toast and the actual
     // constraint/foreign-key problem cannot be repaired from production logs.
     if (statusCode >= 500) {
@@ -15258,8 +15416,8 @@ ${JSON.stringify(snapshot)}
     });
     app.use(vite.middlewares);
   } else if (!cloudflareMode) {
-    // Resolve the frontend beside the bundled server first. Render can start
-    // the service with a working directory different from the repository
+    // Resolve the frontend beside the bundled server first. A runtime may
+    // start the service with a working directory different from the repository
     // root; using cwd alone then makes every /assets request fall through to
     // index.html and breaks dynamic imports.
     const entryPath = process.argv[1] ? path.resolve(process.argv[1]) : '';
@@ -15430,7 +15588,8 @@ ${JSON.stringify(snapshot)}
   }
 
   // Bind to the dynamic cloud environment port (or fallback to 3000)
-  app.listen(Number(PORT), "0.0.0.0", () => {
+  const listenHost = getServerListenHost(process.env.EDUPRO_LOCAL_STAGING === 'true');
+  app.listen(Number(PORT), listenHost, () => {
     EnterpriseLogger.info(`SchoolForManus server listening on port ${PORT}`, "ServerBootstrap");
   });
 }

@@ -5,8 +5,8 @@ export type ApprovedConnectionIdentity = {
   rolbypassrls: boolean;
 };
 
-export function isStagingDiagnosticHost(hostname: string): boolean {
-  return hostname.trim().toLowerCase() === 'edupro-school-erp-staging.onrender.com';
+export function isCloudflareStagingHost(hostname: string): boolean {
+  return hostname.trim().toLowerCase() === 'schoolfor-manus-staging.salafe10.workers.dev';
 }
 
 const IDENTITY_KEYS = ['current_user', 'session_user', 'rolsuper', 'rolbypassrls'] as const;

@@ -33,8 +33,8 @@ export function getBuildIdentity(): BuildIdentity {
   const artifact = readBuildArtifact();
   return {
     version: firstDefined('APP_VERSION') !== 'unknown' ? firstDefined('APP_VERSION') : compiledBuildIdentity.version || artifact.version || 'unknown',
-    commit: firstDefined('RENDER_GIT_COMMIT', 'RENDER_GIT_COMMIT_SHA', 'GIT_COMMIT_SHA', 'BUILD_COMMIT_SHA') !== 'unknown'
-      ? firstDefined('RENDER_GIT_COMMIT', 'RENDER_GIT_COMMIT_SHA', 'GIT_COMMIT_SHA', 'BUILD_COMMIT_SHA')
+    commit: firstDefined('GIT_COMMIT_SHA', 'BUILD_COMMIT_SHA') !== 'unknown'
+      ? firstDefined('GIT_COMMIT_SHA', 'BUILD_COMMIT_SHA')
       : compiledBuildIdentity.commit || artifact.commit || 'unknown',
     builtAt: firstDefined('BUILD_TIMESTAMP') !== 'unknown' ? firstDefined('BUILD_TIMESTAMP') : compiledBuildIdentity.builtAt || artifact.builtAt || 'unknown',
   };

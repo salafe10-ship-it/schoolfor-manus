@@ -163,6 +163,25 @@ export default function ProcurementManagementPortal({
     notify(`تم اعتماد فاتورة المورد ${bill.billNo} وإنشاء قيد الالتزام الكانوني عند توفر مخطط الحسابات.`, 'success');
   };
 
+  const handlePayBill = async (bill: VendorBill, amount: number, paymentMethod: 'bank_transfer' | 'check' | 'cash' | 'treasury_voucher', referenceNo: string) => {
+    const token = getTrustedAccessToken();
+    if (!token) throw new Error('انتهت جلسة الدخول الموثوقة.');
+    const paymentId = crypto.randomUUID();
+    const response = await fetch(`/api/financial/vendor-bills/${encodeURIComponent(bill.id)}/pay`, {
+      method: 'POST',
+      headers: {
+        Authorization: `Bearer ${token}`,
+        'Content-Type': 'application/json',
+        'Idempotency-Key': paymentId
+      },
+      body: JSON.stringify({ paymentId, amountPaid: amount, paymentMethod, referenceNo })
+    });
+    const payload = await response.json().catch(() => ({}));
+    if (!response.ok || !payload?.success || !payload?.data?.journalId) throw new Error(payload?.message || 'تعذر سداد فاتورة المورد مركزياً.');
+    notify(`تم سداد فاتورة المورد وترحيل القيد ${payload.data.journalId}؛ ستتم إعادة تحميل المصدر المركزي.`, 'success');
+    window.setTimeout(() => window.location.reload(), 250);
+  };
+
   const handleConvertToOrder = async (pr: PurchaseRequest) => {
     const poLines = pr.lines.map(line => {
       const item = database.items.find(candidate => candidate.id === line.itemId || candidate.sku === line.itemCode);
@@ -385,6 +404,7 @@ export default function ProcurementManagementPortal({
             orders={purchaseOrders}
             onSaveBill={handleSaveBill}
             onApproveBill={handleApproveBill}
+            onPayBill={handlePayBill}
             triggerNotification={triggerNotification}
           />
         )}
