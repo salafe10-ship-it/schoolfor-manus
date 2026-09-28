@@ -24,7 +24,6 @@ import ExamsDistributionPanel from './exams/ExamsDistributionPanel';
 import ExamsAssessmentPanel from './exams/ExamsAssessmentPanel';
 import { StudentRepository } from './student-affairs/repository/StudentRepository';
 import { canAssignProctorForWeek } from '../modules/exams/application/ExamSchedulingRules';
-import { escapeExamSpreadsheetFormula } from '../utils/examSpreadsheetSafety';
 import {
   AssessmentGradeProjection,
   AssessmentWorkflowState,
@@ -36,6 +35,7 @@ import { evaluateExamClosureReadiness } from '../modules/exams/domain/ExamClosur
 import { getTrustedAccessToken, getTrustedAccessTokenAsync } from '../utils/auth';
 import { authenticatedRequest } from '../utils/authenticatedRequest';
 import { createExamPrintDocument } from '../utils/examPrintDocument';
+import { csvEscapeField } from '../modules/exams/application/CsvExportSafety';
 import {
   areExamReadinessChecksPassing,
   includeCentralSourceCheck,
@@ -1029,16 +1029,11 @@ export default function ExamsResultsModule({
 
   // Generic CSV Export Utility (Excel-compatible with UTF-8 BOM for Arabic)
   const handleExportToCSV = (data: any[], headers: string[], filename: string) => {
-    const escapeCsvCell = (value: any): string => {
-      const raw = String(value === undefined || value === null ? "" : value);
-      const formulaSafe = escapeExamSpreadsheetFormula(raw);
-      return `"${formulaSafe.replace(/"/g, '""')}"`;
-    };
     let csvContent = "\uFEFF"; // UTF-8 BOM to make Excel render Arabic correctly
-    csvContent += headers.map(escapeCsvCell).join(",") + "\n";
+    csvContent += headers.map(csvEscapeField).join(",") + "\n";
 
     data.forEach(row => {
-      const line = row.map(escapeCsvCell).join(",");
+      const line = row.map(csvEscapeField).join(",");
       csvContent += line + "\n";
     });
 
@@ -2397,6 +2392,11 @@ export default function ExamsResultsModule({
       return;
     }
 
+    if (metrics.missingGradesCount > 0) {
+      triggerNotification(`تعذر الاعتماد: توجد ${metrics.missingGradesCount} درجة غير مرصودة. أكملها أو سجّل حالة الغياب/الإعفاء أولًا.`, 'warning');
+      return;
+    }
+
     if (!approvalReadiness.ready) {
       triggerNotification(`تعذر الاعتماد: ${approvalReadiness.blockers.map(blocker => blocker.message).join(' ')}`, 'warning');
       return;
@@ -2605,8 +2605,10 @@ export default function ExamsResultsModule({
 
   // 9. Print reports from the currently loaded, authorized exam data.
   const handlePrintReport = (title: string) => {
+    const schoolName = escapeHtml(selectedSchool?.name || 'المدرسة الحالية');
+    const reportTitle = escapeHtml(title);
     const printWindow = createExamPrintDocument({
-      title: `تقرير الامتحانات: ${title}`,
+      title: `تقرير الامتحانات: ${reportTitle}`,
       onPrintStarted: () => triggerNotification('تم تجهيز التقرير للطباعة أو الحفظ PDF.', 'success'),
       onError: () => triggerNotification('تعذر تشغيل أمر طباعة التقرير.', 'warning')
     });
@@ -2617,7 +2619,7 @@ export default function ExamsResultsModule({
     printWindow.document.write(`
       <html dir="rtl" lang="ar">
         <head>
-          <title>${escapeHtml(title)}</title>
+          <title>${reportTitle}</title>
           <style>
             body { font-family: 'Cairo', sans-serif; padding: 40px; color: #0f172a; }
             table { width: 100%; border-collapse: collapse; margin-top: 20px; }
@@ -2630,8 +2632,8 @@ export default function ExamsResultsModule({
         </head>
         <body>
           <div class="header">
-            <h1>مجمع المدارس النموذجية الأهلية</h1>
-            <h2>تقرير إدارة الامتحانات - ${escapeHtml(title)}</h2>
+            <h1>${schoolName}</h1>
+            <h2>تقرير إدارة الامتحانات - ${reportTitle}</h2>
             <p>التاريخ: ${new Date().toLocaleDateString('ar-SA')}</p>
           </div>
           <hr/>

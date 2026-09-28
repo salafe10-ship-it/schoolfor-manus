@@ -1,7 +1,7 @@
 import React, { useMemo, useState } from 'react';
 import { Archive, CheckCircle, Download, FileText, Printer, ShieldAlert, ShieldCheck } from 'lucide-react';
 import { createExamPrintDocument } from '../../utils/examPrintDocument';
-import { escapeExamSpreadsheetFormula } from '../../utils/examSpreadsheetSafety';
+import { csvEscapeField } from '../../modules/exams/application/CsvExportSafety';
 
 type NotificationType = 'success' | 'warning' | 'info';
 
@@ -24,8 +24,6 @@ const escapeHtml = (value: unknown): string => String(value ?? '')
   .replaceAll('>', '&gt;')
   .replaceAll('"', '&quot;')
   .replaceAll("'", '&#039;');
-
-const csvCell = (value: unknown): string => `"${escapeExamSpreadsheetFormula(value).replaceAll('"', '""')}"`;
 
 export default function ExamsCertificatesPanel({
   schoolName,
@@ -114,7 +112,7 @@ export default function ExamsCertificatesPanel({
       return [student.id, student.name, student.classroom, subject.name, subject.maxScore, subject.passScore, absent ? 'غائب' : grade ?? 'غير مرصود'];
     });
     const csv = '\uFEFF' + [['معرف الطالب', 'اسم الطالب', 'الصف', 'المادة', 'العظمى', 'درجة النجاح', 'الدرجة'], ...rows]
-      .map(row => row.map(csvCell).join(','))
+      .map(row => row.map(csvEscapeField).join(','))
       .join('\n');
     const url = URL.createObjectURL(new Blob([csv], { type: 'text/csv;charset=utf-8' }));
     const link = document.createElement('a');

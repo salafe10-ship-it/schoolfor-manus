@@ -41,8 +41,8 @@ const openExamTab = async (container: HTMLElement, tabId: string) => {
 
 describe('ExamsResultsModule runtime', () => {
   const tabs = [
-    'control-center', 'exams-guide', 'quality-governance', 'settings', 'classes', 'assessment',
-    'halls', 'distribution', 'seating', 'proctors', 'schedule', 'grades-entry',
+    'control-center', 'exams-guide', 'quality-governance', 'settings', 'classes',
+    'assessment', 'halls', 'distribution', 'seating', 'proctors', 'schedule', 'grades-entry',
     'review', 'processing', 'reports', 'certificates', 'system-settings'
   ];
 
@@ -730,7 +730,8 @@ describe('ExamsResultsModule runtime', () => {
     );
 
     fireEvent.click(await screen.findByRole('button', { name: 'حفظ ومزامنة فورية' }));
-    expect(await screen.findByText('رفض المصدر البيانات — راجع رسالة التحقق')).toBeTruthy();
+    expect(await screen.findByText(/رفض المصدر البيانات — راجع رسالة التحقق/)).toBeTruthy();
+    expect((await screen.findByRole('alert')).textContent).toContain('بيانات الاختبار غير متوافقة.');
     expect(screen.queryByText('فشل طلب المصدر المركزي')).toBeNull();
   });
 

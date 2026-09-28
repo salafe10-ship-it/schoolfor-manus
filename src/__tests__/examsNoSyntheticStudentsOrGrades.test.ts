@@ -7,7 +7,7 @@ describe('exam data integrity', () => {
     const source = fs.readFileSync(
       path.resolve(process.cwd(), 'src/components/ExamsResultsModule.tsx'),
       'utf8'
-    );
+    ).replace(/\r\n/g, '\n');
     expect(source).toContain('return initialStudents.map');
     expect(source).toContain('return {};');
     expect(source).not.toContain('return INITIAL_GRADES_MOCK;');
@@ -17,7 +17,7 @@ describe('exam data integrity', () => {
     const source = fs.readFileSync(
       path.resolve(process.cwd(), 'src/components/ExamsResultsModule.tsx'),
       'utf8'
-    );
+    ).replace(/\r\n/g, '\n');
     expect(source).toContain('const [halls, setHalls] = useState<any[]>(() => {\n    return [];');
     expect(source).toContain('const [subjects, setSubjects] = useState<any[]>(() => {\n    return [];');
     expect(source).toContain('return initialClasses;');

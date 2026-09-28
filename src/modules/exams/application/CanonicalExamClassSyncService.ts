@@ -1,5 +1,6 @@
 import { randomUUID } from 'node:crypto';
 import { UnitOfWork } from '../../../database/UnitOfWork.js';
+import { EnterpriseLogger } from '../../../database/services/EnterpriseLogger.js';
 import type { TransactionSession } from '../../../database/transactions/TransactionContracts.js';
 import type { TenantContext } from '../../../tenant/TenantContext.js';
 import { ConflictError, DatabaseError, ValidationError } from '../../../utils/errors.js';
@@ -32,6 +33,66 @@ type CanonicalClassReference = {
 };
 
 const OPERATION = 'EXAMS_CANONICAL_CLASS_SYNC';
+const DATABASE_STATEMENT_TIMEOUT_MS = 9_000;
+
+function databaseErrorCode(error: unknown): string | undefined {
+  if (!error || typeof error !== 'object') return undefined;
+  const code = (error as { code?: unknown }).code;
+  return typeof code === 'string' && /^[0-9A-Z]{5}$/.test(code) ? code : undefined;
+}
+
+function databaseErrorDiagnostics(error: unknown): Record<string, string> {
+  const code = databaseErrorCode(error);
+  if (!code || !error || typeof error !== 'object') return {};
+
+  const candidate = error as { name?: unknown; message?: unknown };
+  const name = typeof candidate.name === 'string' && /^[A-Za-z0-9_$.-]{1,80}$/.test(candidate.name)
+    ? candidate.name
+    : undefined;
+  // Only capture the opaque PostgreSQL system-error family we are diagnosing.
+  // Constraint and validation messages can echo submitted values.
+  const message = code === '58000' && typeof candidate.message === 'string'
+    ? candidate.message
+      .replace(/(?:postgres(?:ql)?:\/\/)[^\s"'`]+/gi, '[redacted-connection]')
+      .replace(/\b(password|passwd|pwd|token|secret|authorization|api[_-]?key)\b(\s*[:=]\s*)(?:"[^"]*"|'[^']*'|[^\s,;]+)/gi, '$1$2[redacted]')
+      .replace(/\bBearer\s+[A-Za-z0-9._~+/-]+=*/gi, 'Bearer [redacted]')
+      .replace(/\beyJ[a-zA-Z0-9_-]{8,}\.[a-zA-Z0-9_-]{8,}\.[a-zA-Z0-9_-]{8,}\b/g, '[redacted-token]')
+      .replace(/\b[A-Z0-9._%+-]+@[A-Z0-9.-]+\.[A-Z]{2,}\b/gi, '[redacted-email]')
+      .replace(/\b[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}\b/gi, '[redacted-id]')
+      .replace(/[\r\n\t]+/g, ' ')
+      .replace(/\s{2,}/g, ' ')
+      .trim()
+      .slice(0, 240)
+    : '';
+
+  return {
+    ...(name ? { databaseErrorName: name } : {}),
+    ...(message ? { databaseErrorMessage: message } : {})
+  };
+}
+
+async function runSyncStage<T>(requestId: string, stage: string, operation: () => Promise<T>): Promise<T> {
+  const startedAt = Date.now();
+  EnterpriseLogger.info('Canonical exam-class sync stage started.', 'CanonicalExamClassSyncService', { requestId, stage });
+  try {
+    const result = await operation();
+    EnterpriseLogger.info('Canonical exam-class sync stage completed.', 'CanonicalExamClassSyncService', {
+      requestId,
+      stage,
+      durationMs: Date.now() - startedAt
+    });
+    return result;
+  } catch (error) {
+    EnterpriseLogger.error('Canonical exam-class sync stage failed.', 'CanonicalExamClassSyncService', {
+      requestId,
+      stage,
+      durationMs: Date.now() - startedAt,
+      ...(databaseErrorCode(error) ? { databaseErrorCode: databaseErrorCode(error) } : {}),
+      ...databaseErrorDiagnostics(error)
+    });
+    throw error;
+  }
+}
 
 function cleanText(value: unknown): string {
   return typeof value === 'string' ? value.trim() : '';
@@ -242,8 +303,10 @@ export class CanonicalExamClassSyncService {
     }
     const requestId = randomUUID();
     const correlationId = randomUUID();
+    EnterpriseLogger.info('Canonical exam-class synchronization started.', 'CanonicalExamClassSyncService', { requestId });
 
-    return UnitOfWork.runInTransaction(
+    try {
+      const result = await runSyncStage(requestId, 'transaction', () => UnitOfWork.runInTransaction(
       context.schoolId,
       {
         operationName: 'Synchronize canonical exam classes',
@@ -251,11 +314,18 @@ export class CanonicalExamClassSyncService {
         userId: context.userId,
         userName: context.userId,
         ipAddress: cleanText(request.ipAddress) || 'unknown',
-        affectedTables: ['school_settings', 'students', 'enrollments', 'exams_database', 'audit_events']
+        affectedTables: ['school_settings', 'students', 'enrollments', 'exams_database', 'audit_events'],
+        timeoutMs: DATABASE_STATEMENT_TIMEOUT_MS,
+        diagnosticTrace: {
+          mark: stage => EnterpriseLogger.info('Canonical exam-class sync transaction diagnostic.', 'CanonicalExamClassSyncService', {
+            requestId,
+            stage
+          })
+        }
       },
       async () => {
         const db = transaction();
-        const actor = await db.query<{ id: string }>(
+        const actor = await runSyncStage(requestId, 'actor lookup', () => db.query<{ id: string }>(
           `SELECT id
              FROM public.users
             WHERE tenant_id = $1
@@ -264,17 +334,17 @@ export class CanonicalExamClassSyncService {
               AND deleted_at IS NULL
             LIMIT 1`,
           [context.tenantId, context.userId]
-        );
+        ));
         const actorUserId = actor.rows[0]?.id;
         if (!actorUserId) throw new ValidationError('المستخدم الحالي غير مهيأ كسجل مستخدم داخلي نشط.');
 
-        const current = await db.query<CurrentExamsDatabase>(
+        const current = await runSyncStage(requestId, 'exam database lock', () => db.query<CurrentExamsDatabase>(
           `SELECT data, version
              FROM public.exams_database
             WHERE tenant_id = $1 AND school_id = $2
             FOR UPDATE`,
           [context.tenantId, context.schoolId]
-        );
+        ));
         const currentData = current.rows[0]?.data || {};
         const currentVersion = Number(current.rows[0]?.version || 0);
         if (currentVersion !== expectedVersion) {
@@ -284,7 +354,7 @@ export class CanonicalExamClassSyncService {
           });
         }
 
-        const structureResult = await db.query<{ structure: unknown }>(
+        const structureResult = await runSyncStage(requestId, 'academic structure read', () => db.query<{ structure: unknown }>(
           `SELECT setting_value AS structure
              FROM public.school_settings
             WHERE tenant_id = $1
@@ -295,10 +365,10 @@ export class CanonicalExamClassSyncService {
             ORDER BY effective_from DESC, created_at DESC
             LIMIT 1`,
           [context.tenantId, context.schoolId]
-        );
+        ));
         const { classes, byReference } = buildCanonicalExamClassReferenceIndex(structureResult.rows[0]?.structure);
 
-        const canonicalReferences = await db.query<CanonicalClassReference>(
+        const canonicalReferences = await runSyncStage(requestId, 'active enrollment validation', () => db.query<CanonicalClassReference>(
           `SELECT DISTINCT btrim(e.class_reference) AS class_reference
              FROM public.enrollments e
              INNER JOIN public.students s
@@ -316,7 +386,7 @@ export class CanonicalExamClassSyncService {
               AND NULLIF(btrim(e.class_reference), '') IS NOT NULL
             ORDER BY btrim(e.class_reference)`,
           [context.tenantId, context.schoolId, context.branchId, context.academicYear]
-        );
+        ));
         const missingReferences = canonicalReferences.rows
           .map(item => cleanText(item.class_reference))
           .filter(reference => reference && !byReference.has(normalizeClassReference(reference)));
@@ -326,7 +396,7 @@ export class CanonicalExamClassSyncService {
 
         const nextVersion = currentVersion + 1;
         const nextData = { ...currentData, exams_classes_list: classes };
-        await db.query(
+        await runSyncStage(requestId, 'exam database save', () => db.query(
           `INSERT INTO public.exams_database (tenant_id, school_id, data, version, updated_at, updated_by)
            VALUES ($1, $2, $3::jsonb, $4, now(), $5)
            ON CONFLICT (school_id) DO UPDATE
@@ -336,8 +406,8 @@ export class CanonicalExamClassSyncService {
                  updated_by = EXCLUDED.updated_by
            WHERE public.exams_database.tenant_id = EXCLUDED.tenant_id`,
           [context.tenantId, context.schoolId, JSON.stringify(nextData), nextVersion, actorUserId]
-        );
-        await db.query(
+        ));
+        await runSyncStage(requestId, 'audit write', () => db.query(
           `INSERT INTO public.audit_events (
              id, tenant_id, school_id, branch_id, actor_user_id, entity_type, entity_id,
              action, source, reason, result, metadata, request_id, correlation_id
@@ -351,7 +421,7 @@ export class CanonicalExamClassSyncService {
             requestId,
             correlationId
           ]
-        );
+        ));
 
         return {
           classes,
@@ -362,7 +432,22 @@ export class CanonicalExamClassSyncService {
         };
       },
       context
-    );
+      ));
+      EnterpriseLogger.info('Canonical exam-class synchronization completed.', 'CanonicalExamClassSyncService', {
+        requestId,
+        classCount: result.classes.length,
+        matchedStudentClassCount: result.matchedStudentClassCount,
+        version: result.version
+      });
+      return result;
+    } catch (error) {
+      EnterpriseLogger.error('Canonical exam-class synchronization failed.', 'CanonicalExamClassSyncService', {
+        requestId,
+        ...(databaseErrorCode(error) ? { databaseErrorCode: databaseErrorCode(error) } : {}),
+        ...databaseErrorDiagnostics(error)
+      });
+      throw error;
+    }
   }
 }
 
