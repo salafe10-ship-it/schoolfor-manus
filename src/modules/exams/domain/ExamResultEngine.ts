@@ -1,3 +1,5 @@
+import { getExamAttendanceStatus } from './ExamAttendance';
+
 export type ExamResultStatus = 'passed' | 'failed' | 'incomplete';
 
 export type ExamRoundingPolicy =
@@ -22,6 +24,7 @@ export interface ExamResultSubject {
 export interface ExamResultStudent {
   id: string;
   absentSubjects?: string[];
+  examAttendance?: Record<string, 'present' | 'absent'>;
 }
 
 export interface FailedExamSubject {
@@ -77,7 +80,6 @@ export function calculateStudentExamResult(
 ): CalculatedExamResult {
   const passMarkPercent = finitePercentage(settings.passMarkPercent, 50);
   const minFinalMarkPercent = finitePercentage(settings.minFinalMarkPercent, 0);
-  const absentSubjects = new Set(Array.isArray(student.absentSubjects) ? student.absentSubjects : []);
   const studentGrades = gradesMatrix[student.id] || {};
   const failedSubjects: FailedExamSubject[] = [];
   let totalEarned = 0;
@@ -91,10 +93,11 @@ export function calculateStudentExamResult(
     if (!Number.isFinite(maxScore) || maxScore <= 0) continue;
     totalMax += maxScore;
 
-    const isAbsent = absentSubjects.has(subject.id);
+    const attendance = getExamAttendanceStatus(student, subject.id);
+    const isAbsent = attendance === 'absent';
     const rawMark = studentGrades[subject.id];
     const hasRecordedMark = typeof rawMark === 'number' && Number.isFinite(rawMark);
-    if (!hasRecordedMark && !isAbsent) {
+    if (attendance === null || (attendance === 'present' && !hasRecordedMark)) {
       incompleteSubjectsCount += 1;
       continue;
     }

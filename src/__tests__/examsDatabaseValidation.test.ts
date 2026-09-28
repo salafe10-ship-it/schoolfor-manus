@@ -40,6 +40,18 @@ describe('exams database validation', () => {
     expect(() => ExamValidator.validateDatabase(database)).toThrow(/خارج النطاق/);
   });
 
+  it('validates explicit exam attendance statuses and absence-index consistency', () => {
+    const database: any = validDatabase();
+    database.exams_students_enriched[0].examAttendance = { 'subject-1': 'present' };
+    expect(() => ExamValidator.validateDatabase(database)).not.toThrow();
+
+    database.exams_students_enriched[0].examAttendance['subject-1'] = 'unknown';
+    expect(() => ExamValidator.validateDatabase(database)).toThrow(/سجل حضور الطالب.*غير صالح/);
+
+    database.exams_students_enriched[0].examAttendance['subject-1'] = 'absent';
+    expect(() => ExamValidator.validateDatabase(database)).toThrow(/سجل الغياب.*غير متطابق/);
+  });
+
   it('rejects a grade row for an unknown student', () => {
     const database: any = validDatabase();
     database.exams_grades_matrix['unknown-student'] = { 'subject-1': 70 };
