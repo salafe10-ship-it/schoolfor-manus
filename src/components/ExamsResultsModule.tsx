@@ -276,6 +276,8 @@ export default function ExamsResultsModule({
       academicYear: selectedSchool?.academicYear || DEFAULT_EXAM_SETTINGS.academicYear
     };
   });
+  const examSettingsBaselineRef = useRef(examSettings);
+  const hasExamSettingsChanges = JSON.stringify(examSettings) !== JSON.stringify(examSettingsBaselineRef.current);
 
   const [halls, setHalls] = useState<any[]>(() => {
     return [];
@@ -665,7 +667,11 @@ export default function ExamsResultsModule({
         const dbData = rawRes && rawRes.success && rawRes.data ? rawRes.data : rawRes;
         if (dbData && Object.keys(dbData).length > 0) {
           // Found data on server, load it!
-          if (dbData.exams_settings) setExamSettings(dbData.exams_settings);
+          if (dbData.exams_settings) {
+            const canonicalSettings = { ...DEFAULT_EXAM_SETTINGS, ...dbData.exams_settings };
+            examSettingsBaselineRef.current = canonicalSettings;
+            setExamSettings(canonicalSettings);
+          }
           if (dbData.exams_halls) setHalls(dbData.exams_halls);
           if (dbData.exams_subjects) setSubjects(dbData.exams_subjects);
           if (canonicalStudents) setStudentList(mergeCanonicalStudents(canonicalStudents, dbData.exams_students_enriched));
@@ -800,7 +806,11 @@ export default function ExamsResultsModule({
           updateExamsDbVersion(remoteVersion);
           const dbData = rawRes && rawRes.success && rawRes.data ? rawRes.data : rawRes;
           if (dbData && Object.keys(dbData).length > 0) {
-            if (dbData.exams_settings) setExamSettings(dbData.exams_settings);
+            if (dbData.exams_settings) {
+              const canonicalSettings = { ...DEFAULT_EXAM_SETTINGS, ...dbData.exams_settings };
+              examSettingsBaselineRef.current = canonicalSettings;
+              setExamSettings(canonicalSettings);
+            }
             if (dbData.exams_halls) setHalls(dbData.exams_halls);
             if (dbData.exams_subjects) setSubjects(dbData.exams_subjects);
             if (canonicalStudents) setStudentList(mergeCanonicalStudents(canonicalStudents, dbData.exams_students_enriched));
@@ -1122,11 +1132,16 @@ export default function ExamsResultsModule({
   // 1. Settings Handler
   const handleSaveSettings = async (e: React.FormEvent) => {
     e.preventDefault();
+    if (!hasExamSettingsChanges) {
+      triggerNotification('لا توجد تغييرات جديدة في سياسة الامتحانات لحفظها.', 'info');
+      return;
+    }
     const persisted = await saveToServerDb();
     if (!persisted) {
       triggerNotification('تعذر حفظ إعدادات الامتحانات في المصدر المركزي.', 'warning');
       return;
     }
+    examSettingsBaselineRef.current = examSettings;
     triggerNotification('تم حفظ إعدادات وثوابت الامتحانات بنجاح', 'success');
     logAction('تحديث إعدادات الامتحانات والسياسات الأكاديمية', 'إعدادات الامتحانات');
   };
@@ -3579,10 +3594,12 @@ export default function ExamsResultsModule({
               <div className="flex justify-end gap-2 pt-4 border-t border-[#d4af37]/30">
                 <button
                   type="submit"
-                  className="px-5 py-2.5 bg-gradient-to-r from-[#d4af37] via-[#c58a22] to-[#8b6113] hover:brightness-110 text-slate-950 font-black text-xs flex items-center gap-2 cursor-pointer transition-all shadow-lg active:scale-98"
+                  disabled={!hasExamSettingsChanges || isDbSyncing}
+                  className="px-5 py-2.5 bg-gradient-to-r from-[#d4af37] via-[#c58a22] to-[#8b6113] hover:brightness-110 disabled:cursor-not-allowed disabled:opacity-50 text-slate-950 font-black text-xs flex items-center gap-2 cursor-pointer transition-all shadow-lg active:scale-98"
+                  title={hasExamSettingsChanges ? 'حفظ تغييرات سياسة الامتحانات في المصدر المركزي' : 'لا توجد تغييرات جديدة للحفظ'}
                 >
                   <Save className="w-4 h-4" />
-                  حفظ السياسة والبدء بالجدولة
+                  {isDbSyncing ? 'جارٍ الحفظ…' : hasExamSettingsChanges ? 'حفظ السياسة والبدء بالجدولة' : 'لا توجد تغييرات للحفظ'}
                 </button>
               </div>
             </form>
