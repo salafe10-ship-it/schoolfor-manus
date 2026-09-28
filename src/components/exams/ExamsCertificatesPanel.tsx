@@ -2,6 +2,7 @@ import React, { useMemo, useState } from 'react';
 import { Archive, CheckCircle, Download, FileText, Printer, ShieldAlert, ShieldCheck } from 'lucide-react';
 import { createExamPrintDocument } from '../../utils/examPrintDocument';
 import { csvEscapeField } from '../../modules/exams/application/CsvExportSafety';
+import { getExamAttendanceStatus } from '../../modules/exams/domain/ExamAttendance';
 
 type NotificationType = 'success' | 'warning' | 'info';
 
@@ -37,7 +38,9 @@ export default function ExamsCertificatesPanel({
   accessToken,
   notify
 }: ExamsCertificatesPanelProps) {
-  const immutableArchive = closures.find(closure => closure?.isImmutableArchive && /^[0-9a-f]{64}$/i.test(String(closure.signatureHash || '')));
+  const signedArchives = closures.filter(closure => closure?.isImmutableArchive && /^[0-9a-f]{64}$/i.test(String(closure.signatureHash || '')));
+  const immutableArchive = signedArchives.find(closure => closure.attendanceSchemaVersion === 1) || null;
+  const signedArchive = immutableArchive || signedArchives[0] || null;
   const canIssue = Boolean(approvalStatus.approved && immutableArchive);
   const [selectedStudentId, setSelectedStudentId] = useState('');
   const [selectedClass, setSelectedClass] = useState('الكل');
@@ -56,16 +59,17 @@ export default function ExamsCertificatesPanel({
   const certificateCode = (student: any): string => `${immutableArchive?.archiveId || 'unarchived'}:${student.id}`;
 
   const buildStudentRows = (student: any): string => subjects.map(subject => {
-    const isAbsent = student.absentSubjects?.includes(subject.id);
+    const attendance = getExamAttendanceStatus(student, subject.id);
+    const isAbsent = attendance === 'absent';
     const grade = gradesMatrix[student.id]?.[subject.id];
-    const recorded = Number.isFinite(grade);
+    const recorded = attendance === 'present' && Number.isFinite(grade);
     const passed = recorded && grade >= subject.passScore;
     return `<tr>
       <td>${escapeHtml(subject.name)}</td>
       <td>${escapeHtml(subject.maxScore)}</td>
       <td>${escapeHtml(subject.passScore)}</td>
-      <td>${isAbsent ? 'غائب' : recorded ? escapeHtml(grade) : 'غير مرصود'}</td>
-      <td>${isAbsent ? 'غياب موثق' : recorded ? (passed ? 'اجتاز' : 'لم يجتز') : 'غير مكتمل'}</td>
+      <td>${isAbsent ? 'غائب' : attendance !== 'present' ? 'غير مكتمل' : recorded ? escapeHtml(grade) : 'غير مرصود'}</td>
+      <td>${isAbsent ? 'غياب موثق' : attendance !== 'present' || !recorded ? 'غير مكتمل' : (passed ? 'اجتاز' : 'لم يجتز')}</td>
     </tr>`;
   }).join('');
 
@@ -108,8 +112,11 @@ export default function ExamsCertificatesPanel({
     if (!student) return;
     const rows = subjects.map(subject => {
       const grade = gradesMatrix[student.id]?.[subject.id];
-      const absent = student.absentSubjects?.includes(subject.id);
-      return [student.id, student.name, student.classroom, subject.name, subject.maxScore, subject.passScore, absent ? 'غائب' : grade ?? 'غير مرصود'];
+      const attendance = getExamAttendanceStatus(student, subject.id);
+      const result = attendance === 'absent'
+        ? 'غائب'
+        : attendance === 'present' && Number.isFinite(grade) ? grade : 'غير مكتمل';
+      return [student.id, student.name, student.classroom, subject.name, subject.maxScore, subject.passScore, result];
     });
     const csv = '\uFEFF' + [['معرف الطالب', 'اسم الطالب', 'الصف', 'المادة', 'العظمى', 'درجة النجاح', 'الدرجة'], ...rows]
       .map(row => row.map(csvEscapeField).join(','))
@@ -169,7 +176,7 @@ export default function ExamsCertificatesPanel({
         </div>
       </section>
 
-      {!canIssue && <div className="flex items-start gap-3 border border-amber-500/40 bg-amber-950/40 p-4 text-sm text-amber-100"><ShieldAlert className="mt-0.5 h-5 w-5 shrink-0 text-amber-300"/><div><b>لا توجد نتائج مغلقة بأرشيف خادم.</b><p className="mt-1 text-xs text-amber-100/70">يمكن معاينة البيانات وتصدير كشف داخلي، لكن الطباعة المعتمدة والتحقق يظلان محجوبين حتى الاعتماد النهائي.</p></div></div>}
+      {!canIssue && <div className="flex items-start gap-3 border border-amber-500/40 bg-amber-950/40 p-4 text-sm text-amber-100"><ShieldAlert className="mt-0.5 h-5 w-5 shrink-0 text-amber-300"/><div><b>{signedArchive && signedArchive.attendanceSchemaVersion !== 1 ? 'الأرشيف المعتمد سابق ولا يثبت حضور كل طالب لكل مادة.' : 'لا توجد نتائج مغلقة بأرشيف خادم مستوفٍ لشروط الحضور.'}</b><p className="mt-1 text-xs text-amber-100/70">تظل الطباعة المعتمدة والتحقق محجوبين حتى اعتماد دورة موثقة بالحضور والغياب لكل مادة؛ يمكن فقط معاينة كشف داخلي.</p></div></div>}
 
       <div className="grid grid-cols-1 gap-5 lg:grid-cols-3">
         <section className="space-y-4 border border-[#d4af37]/35 bg-[#1c120c] p-5 shadow-xl">
@@ -183,7 +190,7 @@ export default function ExamsCertificatesPanel({
 
         <section className="space-y-4 border border-[#d4af37]/35 bg-[#1c120c] p-5 shadow-xl lg:col-span-2">
           <div className="flex items-center gap-2 border-b border-[#d4af37]/20 pb-3"><FileText className="h-5 w-5 text-[#f7d174]"/><h3 className="text-sm font-black text-[#fce79a]">معاينة كشف الطالب</h3></div>
-          {selectedStudent ? <><div className="grid grid-cols-2 gap-3 text-xs text-amber-50 md:grid-cols-4"><div><span className="block text-amber-100/50">الطالب</span><b>{selectedStudent.name}</b></div><div><span className="block text-amber-100/50">الصف</span><b>{selectedStudent.classroom}</b></div><div><span className="block text-amber-100/50">رقم الجلوس</span><b>{selectedStudent.seatNumber || 'غير مولد'}</b></div><div><span className="block text-amber-100/50">الحالة</span><b>{selectedStudent.status || 'تُحسب من الدرجات'}</b></div></div><div className="overflow-x-auto border border-[#d4af37]/20"><table className="w-full border-collapse text-xs text-amber-50"><thead><tr className="bg-gradient-to-l from-[#9a6a1d] via-[#c58a22] to-[#8b6113] text-[#fff8d6]"><th className="border border-[#d4af37]/25 p-2">المادة</th><th className="border border-[#d4af37]/25 p-2">العظمى</th><th className="border border-[#d4af37]/25 p-2">النجاح</th><th className="border border-[#d4af37]/25 p-2">الدرجة</th></tr></thead><tbody>{subjects.map(subject => { const absent = selectedStudent.absentSubjects?.includes(subject.id); const grade = gradesMatrix[selectedStudent.id]?.[subject.id]; return <tr key={subject.id} className="border-b border-[#d4af37]/15 hover:bg-[#2a1d13]/70"><td className="border border-[#d4af37]/15 p-2 font-bold">{subject.name}</td><td className="border border-[#d4af37]/15 p-2 text-center">{subject.maxScore}</td><td className="border border-[#d4af37]/15 p-2 text-center">{subject.passScore}</td><td className="border border-[#d4af37]/15 p-2 text-center font-black text-[#f7d174]">{absent ? 'غائب' : Number.isFinite(grade) ? grade : 'غير مرصود'}</td></tr>; })}</tbody></table></div>{canIssue && <div className="flex items-start gap-2 border border-emerald-500/40 bg-emerald-950/40 p-3 text-[10px] text-emerald-100"><Archive className="h-4 w-4 shrink-0"/><span className="break-all">رمز التحقق: <b>{certificateCode(selectedStudent)}</b><br/>بصمة الأرشيف: {immutableArchive.signatureHash}</span></div>}</> : <p className="py-16 text-center text-xs font-semibold text-amber-100/50">لا يوجد طلاب لعرض كشف الدرجات.</p>}
+          {selectedStudent ? <><div className="grid grid-cols-2 gap-3 text-xs text-amber-50 md:grid-cols-4"><div><span className="block text-amber-100/50">الطالب</span><b>{selectedStudent.name}</b></div><div><span className="block text-amber-100/50">الصف</span><b>{selectedStudent.classroom}</b></div><div><span className="block text-amber-100/50">رقم الجلوس</span><b>{selectedStudent.seatNumber || 'غير مولد'}</b></div><div><span className="block text-amber-100/50">الحالة</span><b>{selectedStudent.status || 'تُحسب من الدرجات'}</b></div></div><div className="overflow-x-auto border border-[#d4af37]/20"><table className="w-full border-collapse text-xs text-amber-50"><thead><tr className="bg-gradient-to-l from-[#9a6a1d] via-[#c58a22] to-[#8b6113] text-[#fff8d6]"><th className="border border-[#d4af37]/25 p-2">المادة</th><th className="border border-[#d4af37]/25 p-2">العظمى</th><th className="border border-[#d4af37]/25 p-2">النجاح</th><th className="border border-[#d4af37]/25 p-2">الدرجة</th></tr></thead><tbody>{subjects.map(subject => { const attendance = getExamAttendanceStatus(selectedStudent, subject.id); const grade = gradesMatrix[selectedStudent.id]?.[subject.id]; const result = attendance === 'absent' ? 'غائب' : attendance === 'present' && Number.isFinite(grade) ? grade : 'غير مكتمل'; return <tr key={subject.id} className="border-b border-[#d4af37]/15 hover:bg-[#2a1d13]/70"><td className="border border-[#d4af37]/15 p-2 font-bold">{subject.name}</td><td className="border border-[#d4af37]/15 p-2 text-center">{subject.maxScore}</td><td className="border border-[#d4af37]/15 p-2 text-center">{subject.passScore}</td><td className="border border-[#d4af37]/15 p-2 text-center font-black text-[#f7d174]">{result}</td></tr>; })}</tbody></table></div>{canIssue && <div className="flex items-start gap-2 border border-emerald-500/40 bg-emerald-950/40 p-3 text-[10px] text-emerald-100"><Archive className="h-4 w-4 shrink-0"/><span className="break-all">رمز التحقق: <b>{certificateCode(selectedStudent)}</b><br/>بصمة الأرشيف: {immutableArchive.signatureHash}</span></div>}</> : <p className="py-16 text-center text-xs font-semibold text-amber-100/50">لا يوجد طلاب لعرض كشف الدرجات.</p>}
         </section>
       </div>
 

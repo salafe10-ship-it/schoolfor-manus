@@ -3,8 +3,8 @@ import { evaluateExamClosureReadiness } from '../modules/exams/domain/ExamClosur
 
 const readyInput = {
   students: [
-    { id: 'student-1', name: 'طالب أول', hallId: 'hall-1', seatNumber: '1001', absentSubjects: [] },
-    { id: 'student-2', name: 'طالب ثان', hallId: 'hall-1', seatNumber: '1002', absentSubjects: ['science'] }
+    { id: 'student-1', name: 'طالب أول', hallId: 'hall-1', seatNumber: '1001', absentSubjects: [], examAttendance: { arabic: 'present', science: 'present' } },
+    { id: 'student-2', name: 'طالب ثان', hallId: 'hall-1', seatNumber: '1002', absentSubjects: ['science'], examAttendance: { arabic: 'present', science: 'absent' } }
   ],
   subjects: [
     { id: 'arabic', name: 'العربية' },
@@ -25,6 +25,7 @@ describe('exam closure readiness gate', () => {
       ready: true,
       blockers: [],
       missingGradesCount: 0,
+      missingAttendanceCount: 0,
       unassignedStudentsCount: 0,
       duplicateSeatNumbersCount: 0,
       unreviewedSubjectsCount: 0,
@@ -40,9 +41,9 @@ describe('exam closure readiness gate', () => {
   it('returns every blocker instead of stopping at the first defect', () => {
     const report = evaluateExamClosureReadiness({
       students: [
-        { id: 'student-1', hallId: '', seatNumber: '', absentSubjects: [] },
-        { id: 'student-2', hallId: 'hall-1', seatNumber: '1001', absentSubjects: [] },
-        { id: 'student-3', hallId: 'hall-2', seatNumber: '1001', absentSubjects: [] }
+        { id: 'student-1', hallId: '', seatNumber: '', absentSubjects: [], examAttendance: { arabic: 'present', science: 'present' } },
+        { id: 'student-2', hallId: 'hall-1', seatNumber: '1001', absentSubjects: [], examAttendance: { arabic: 'present', science: 'present' } },
+        { id: 'student-3', hallId: 'hall-2', seatNumber: '1001', absentSubjects: [], examAttendance: { arabic: 'present', science: 'present' } }
       ],
       subjects: [{ id: 'arabic' }, { id: 'science' }],
       gradesMatrix: { 'student-2': { arabic: 80 } },
@@ -61,6 +62,21 @@ describe('exam closure readiness gate', () => {
       'open_appeals'
     ]));
     expect(report.missingGradesCount).toBe(5);
+  });
+
+  it('blocks result closure when any student has an unrecorded exam attendance status', () => {
+    const report = evaluateExamClosureReadiness({
+      ...readyInput,
+      students: [
+        { ...readyInput.students[0], examAttendance: { arabic: 'present' } },
+        readyInput.students[1]
+      ]
+    });
+    expect(report.ready).toBe(false);
+    expect(report.missingAttendanceCount).toBe(1);
+    expect(report.blockers).toEqual(expect.arrayContaining([
+      expect.objectContaining({ code: 'missing_attendance', count: 1 })
+    ]));
   });
 
   it('fails closed when the cycle has no students or subjects', () => {
