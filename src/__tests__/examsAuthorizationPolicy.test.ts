@@ -62,14 +62,17 @@ describe('exams authorization and read-scope policy', () => {
   it('uses server-derived permissions for full staff access without trusting a display role', () => {
     const staffPermissions = new Set(['Exam.Write']);
     expect(canWriteExamOperation('employee', staffPermissions)).toBe(true);
-    expect(canViewFullExamDatabase('employee', staffPermissions)).toBe(true);
-    expect(canViewExamAudit('employee', staffPermissions)).toBe(true);
+    expect(canViewFullExamDatabase('employee', staffPermissions)).toBe(false);
+    expect(canViewExamAudit('employee', staffPermissions)).toBe(false);
+    expect(canViewExamAudit('employee', new Set(['Audit.Read']))).toBe(true);
+    expect(canViewFullExamDatabase('employee', new Set(['Audit.Read']))).toBe(false);
+    expect(canViewFullExamDatabase('Teacher', new Set(['Exam.Write']))).toBe(false);
     expect(canWriteExamOperation('student', new Set(['Exam.View']))).toBe(false);
     expect(canViewFullExamDatabase('student', new Set(['Exam.View']))).toBe(false);
   });
 
   it('keeps audit events and the full control-room snapshot away from student-facing roles', () => {
-    expect(canViewExamAudit('Teacher')).toBe(true);
+    expect(canViewExamAudit('Teacher')).toBe(false);
     expect(canViewExamAudit('Parent')).toBe(false);
     expect(canViewFullExamDatabase('Student')).toBe(false);
 
@@ -94,6 +97,40 @@ describe('exams authorization and read-scope policy', () => {
     expect((projected.data.exams_assessment_state as any).attempts).toEqual([]);
     expect((projected.data.exams_assessment_state as any).auditEvents).toEqual([]);
     expect((projected.data.exams_assessment_state as any).questionBank[0].configuration.correctOptionIds).toBeUndefined();
+  });
+
+  it('projects teacher reads to their active employee scope, assigned class sections and subjects', () => {
+    const projected = projectExamDatabaseForRead({
+      exams_settings: { academicYear: '2026/2027', semester: 'الأول', secretConfig: 'hidden' },
+      exams_subjects: [{ id: 'math', name: 'رياضيات', maxScore: 100 }, { id: 'science', name: 'علوم', maxScore: 100 }],
+      exams_classes_list: [{ name: 'أولى متوسط', level: 'middle', sections: ['أ', 'ب'] }],
+      exams_teacher_grade_scopes: [
+        { id: 'scope-a', employeeId: 'employee-a', subjectId: 'math', classroom: 'أولى متوسط', section: 'أ' },
+        { id: 'scope-b', employeeId: 'employee-a', subjectId: 'science', classroom: 'أولى متوسط', section: 'ب' }
+      ],
+      exams_students_enriched: [
+        { id: 'student-a', name: 'أحمد', classroom: 'أولى متوسط', section: 'أ', nationalId: 'private-a', examAttendance: { math: 'present', science: 'absent' } },
+        { id: 'student-b', name: 'بشير', classroom: 'أولى متوسط', section: 'ب', nationalId: 'private-b' }
+      ],
+      exams_grades_matrix: { 'student-a': { math: 80, science: 60 }, 'student-b': { math: 40, science: 90 } },
+      exams_control_closures: [{ id: 'private-close' }]
+    }, 'Teacher', ['Exam.Write'], 'employee-a');
+
+    expect(projected.scope).toBe('grade_scoped');
+    const projectedStudents = projected.data.exams_students_enriched as Array<Record<string, unknown>>;
+    expect(projectedStudents).toEqual([
+      expect.objectContaining({ id: 'student-a', name: 'أحمد', examAttendance: { math: 'present' } }),
+      expect.objectContaining({ id: 'student-b', name: 'بشير' })
+    ]);
+    expect(projectedStudents[0]).not.toHaveProperty('nationalId');
+    expect(projected.data.exams_grades_matrix).toEqual({ 'student-a': { math: 80 }, 'student-b': { science: 90 } });
+    expect(projected.data.exams_subjects).toEqual([
+      { id: 'math', name: 'رياضيات', maxScore: 100 },
+      { id: 'science', name: 'علوم', maxScore: 100 }
+    ]);
+    expect((projected.data.exams_teacher_grade_scopes as any[])).toHaveLength(2);
+    expect(projected.data.exams_settings).not.toHaveProperty('secretConfig');
+    expect(projected.data.exams_control_closures).toBeUndefined();
   });
 
   it('returns the untouched full snapshot to exam staff', () => {
