@@ -706,7 +706,7 @@ describe('ExamsResultsModule runtime', () => {
   it('distinguishes server-side data validation rejection from a connection failure', async () => {
     cleanup();
     localStorage.setItem('exams_active_tab', 'classes');
-    vi.stubGlobal('fetch', vi.fn().mockImplementation(async (input: RequestInfo | URL, init?: RequestInit) => {
+    const fetchMock = vi.fn().mockImplementation(async (input: RequestInfo | URL, init?: RequestInit) => {
       const url = String(input);
       if (url.startsWith('/api/students')) {
         return { ok: true, json: async () => ({ success: true, data: [], meta: { hasNext: false } }) };
@@ -715,7 +715,8 @@ describe('ExamsResultsModule runtime', () => {
         return { ok: false, status: 422, json: async () => ({ message: 'بيانات الاختبار غير متوافقة.' }) };
       }
       return { ok: true, json: async () => ({ success: true, data: {}, meta: { version: 0 } }) };
-    }));
+    });
+    vi.stubGlobal('fetch', fetchMock);
 
     render(
       <ExamsResultsModule
@@ -729,7 +730,12 @@ describe('ExamsResultsModule runtime', () => {
       />,
     );
 
-    fireEvent.click(await screen.findByRole('button', { name: 'حفظ ومزامنة فورية' }));
+    const saveButton = await screen.findByRole('button', { name: 'حفظ ومزامنة فورية' });
+    await waitFor(() => expect((saveButton as HTMLButtonElement).disabled).toBe(false));
+    fireEvent.click(saveButton);
+    await waitFor(() => expect(fetchMock.mock.calls.some(([input, init]) => (
+      String(input) === '/api/exams/database' && init?.method === 'POST'
+    ))).toBe(true));
     expect(await screen.findByText(/رفض المصدر البيانات — راجع رسالة التحقق/)).toBeTruthy();
     expect((await screen.findByRole('alert')).textContent).toContain('بيانات الاختبار غير متوافقة.');
     expect(screen.queryByText('فشل طلب المصدر المركزي')).toBeNull();
