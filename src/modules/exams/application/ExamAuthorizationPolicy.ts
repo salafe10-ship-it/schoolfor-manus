@@ -1,7 +1,7 @@
 import type { AssessmentWorkflowState } from './AssessmentWorkflowService';
 
 export type ExamDatabaseOperation = 'write' | 'approve' | 'reopen' | 'approve_schedule' | 'reopen_schedule';
-export type ExamReadScope = 'full' | 'restricted';
+export type ExamReadScope = 'full' | 'restricted' | 'grade_scoped';
 
 const normalizeRole = (role: unknown): string => String(role ?? '').trim().toLowerCase();
 const normalizePermissions = (permissions: Iterable<unknown> | null | undefined): Set<string> => new Set(
@@ -9,13 +9,8 @@ const normalizePermissions = (permissions: Iterable<unknown> | null | undefined)
 );
 
 const APPROVAL_ROLES = new Set(['admin', 'superadmin', 'schooladmin', 'control']);
-const STAFF_READ_ROLES = new Set(['admin', 'superadmin', 'schooladmin', 'control', 'teacher', 'auditor']);
+const STAFF_READ_ROLES = new Set(['admin', 'superadmin', 'schooladmin', 'control', 'auditor']);
 const WRITE_ROLES = new Set(['admin', 'superadmin', 'schooladmin', 'control', 'teacher']);
-
-const hasStaffPermission = (permissions: Iterable<unknown> | null | undefined): boolean => {
-  const normalized = normalizePermissions(permissions);
-  return normalized.has('*') || normalized.has('exam.write') || normalized.has('audit.read');
-};
 
 /**
  * The API uses this policy after trusted RBAC resolution. It is deliberately
@@ -30,17 +25,27 @@ export function canWriteExamOperation(role: unknown, permissions?: Iterable<unkn
   return canApproveExamOperation(role, 'write') || normalizePermissions(permissions).has('*') || normalizePermissions(permissions).has('exam.write');
 }
 
-export function canViewFullExamDatabase(role: unknown, permissions?: Iterable<unknown> | null): boolean {
-  return STAFF_READ_ROLES.has(normalizeRole(role)) || hasStaffPermission(permissions);
+export function canViewFullExamDatabase(role: unknown, _permissions?: Iterable<unknown> | null): boolean {
+  const normalizedRole = normalizeRole(role);
+  if (normalizedRole === 'teacher') return false;
+  return STAFF_READ_ROLES.has(normalizedRole);
 }
 
 export function canViewExamAudit(role: unknown, permissions?: Iterable<unknown> | null): boolean {
-  return STAFF_READ_ROLES.has(normalizeRole(role)) || hasStaffPermission(permissions);
+  const normalizedRole = normalizeRole(role);
+  const normalized = normalizePermissions(permissions);
+  return APPROVAL_ROLES.has(normalizedRole) || normalizedRole === 'auditor' || normalized.has('*') || normalized.has('audit.read');
+}
+
+export function isExamGradeScopedUser(role: unknown, permissions?: Iterable<unknown> | null): boolean {
+  const normalizedRole = normalizeRole(role);
+  if (APPROVAL_ROLES.has(normalizedRole) || normalizedRole === 'auditor') return false;
+  return normalizedRole === 'teacher' || normalizePermissions(permissions).has('exam.write');
 }
 
 const TEACHER_ALLOWED_FIELDS = new Set([
   'exams_grades_matrix',
-  'exams_re_evaluation_requests',
+  'exams_students_enriched',
   'exams_assessment_state'
 ]);
 
@@ -52,17 +57,15 @@ function stableJson(value: unknown): string {
 }
 
 /**
- * Returns the fields a teacher is allowed to change in the versioned exam
- * document. Missing fields are treated as unchanged because the client sends
- * a complete snapshot on every optimistic-concurrency write.
+ * Returns the fields a teacher is allowed to change in a scoped, partial
+ * versioned-exam patch. Missing fields are intentionally unchanged.
  */
 export function assertTeacherWriteScope(
   currentData: Record<string, unknown>,
   requestedData: Record<string, unknown>
 ): void {
   const changedFields = new Set<string>();
-  const keys = new Set([...Object.keys(currentData), ...Object.keys(requestedData)]);
-  keys.forEach(key => {
+  Object.keys(requestedData).forEach(key => {
     if (stableJson(currentData[key]) !== stableJson(requestedData[key])) changedFields.add(key);
   });
   const unauthorized = [...changedFields].filter(field => !TEACHER_ALLOWED_FIELDS.has(field));
@@ -70,10 +73,12 @@ export function assertTeacherWriteScope(
     throw new Error(`دور المعلم لا يملك صلاحية تعديل حقول الامتحان: ${unauthorized.join(', ')}.`);
   }
 
-  assertTeacherAssessmentStateScope(
-    currentData.exams_assessment_state,
-    requestedData.exams_assessment_state
-  );
+  if (Object.hasOwn(requestedData, 'exams_assessment_state')) {
+    assertTeacherAssessmentStateScope(
+      currentData.exams_assessment_state,
+      requestedData.exams_assessment_state
+    );
+  }
 }
 
 /**
@@ -176,9 +181,100 @@ function publicQuestion(question: Record<string, unknown>): Record<string, unkno
 export function projectExamDatabaseForRead(
   data: Record<string, unknown>,
   role: unknown,
-  permissions?: Iterable<unknown> | null
+  permissions?: Iterable<unknown> | null,
+  employeeId?: unknown
 ): { data: Record<string, unknown>; scope: ExamReadScope } {
   if (canViewFullExamDatabase(role, permissions)) return { data: copy(data), scope: 'full' };
+
+  if (isExamGradeScopedUser(role, permissions)) {
+    const canonicalEmployeeId = String(employeeId ?? '').trim();
+    const ownScopes = (Array.isArray(data.exams_teacher_grade_scopes) ? data.exams_teacher_grade_scopes : [])
+      .filter((scope: any) => canonicalEmployeeId && String(scope?.employeeId ?? '').trim() === canonicalEmployeeId)
+      .map((scope: any) => ({
+        id: String(scope?.id ?? ''),
+        employeeId: canonicalEmployeeId,
+        subjectId: String(scope?.subjectId ?? ''),
+        classroom: String(scope?.classroom ?? ''),
+        section: String(scope?.section ?? '')
+      }));
+    const assignedSubjects = new Set(ownScopes.map((scope: any) => scope.subjectId));
+    const assignedClasses = new Map<string, Set<string>>();
+    const assignedSubjectsByClassSection = new Map<string, Set<string>>();
+    ownScopes.forEach((scope: any) => {
+      if (!assignedClasses.has(scope.classroom)) assignedClasses.set(scope.classroom, new Set());
+      assignedClasses.get(scope.classroom)!.add(scope.section);
+      const classSectionKey = `${scope.classroom}\u0000${scope.section}`;
+      if (!assignedSubjectsByClassSection.has(classSectionKey)) assignedSubjectsByClassSection.set(classSectionKey, new Set());
+      assignedSubjectsByClassSection.get(classSectionKey)!.add(scope.subjectId);
+    });
+    const sourceStudents = Array.isArray(data.exams_students_enriched) ? data.exams_students_enriched as Array<Record<string, any>> : [];
+    const visibleStudents = sourceStudents
+      .filter(student => assignedClasses.get(String(student.classroom ?? ''))?.has(String(student.section ?? '')))
+      .map(student => {
+        const studentAssignedSubjects = assignedSubjectsByClassSection.get(`${String(student.classroom ?? '')}\u0000${String(student.section ?? '')}`) || new Set<string>();
+        const attendance = student.examAttendance && typeof student.examAttendance === 'object' && !Array.isArray(student.examAttendance)
+          ? student.examAttendance as Record<string, unknown>
+          : {};
+        const scopedAttendance = Object.fromEntries(Object.entries(attendance).filter(([subjectId]) => studentAssignedSubjects.has(subjectId)));
+        const safeStudent: Record<string, unknown> = {};
+        for (const key of ['id', 'name', 'classroom', 'section', 'academicYear', 'status', 'studentCode', 'studentNumber', 'seatNumber', 'hallId']) {
+          if (student[key] !== undefined) safeStudent[key] = copy(student[key]);
+        }
+        safeStudent.examAttendance = scopedAttendance;
+        safeStudent.absentSubjects = Object.entries(scopedAttendance)
+          .filter(([, status]) => status === 'absent')
+          .map(([subjectId]) => subjectId);
+        return safeStudent;
+      });
+    const visibleStudentIds = new Set(visibleStudents.map(student => String(student.id ?? '')));
+    const visibleStudentById = new Map(visibleStudents.map(student => [String(student.id ?? ''), student]));
+    const sourceGrades = data.exams_grades_matrix && typeof data.exams_grades_matrix === 'object' && !Array.isArray(data.exams_grades_matrix)
+      ? data.exams_grades_matrix as Record<string, Record<string, unknown>>
+      : {};
+    const gradesMatrix: Record<string, Record<string, unknown>> = {};
+    visibleStudentIds.forEach(studentId => {
+      const grades = sourceGrades[studentId] && typeof sourceGrades[studentId] === 'object' ? sourceGrades[studentId] : {};
+      const student = visibleStudentById.get(studentId);
+      const studentAssignedSubjects = assignedSubjectsByClassSection.get(`${String(student?.classroom ?? '')}\u0000${String(student?.section ?? '')}`) || new Set<string>();
+      const visibleGrades = Object.fromEntries(Object.entries(grades).filter(([subjectId]) => studentAssignedSubjects.has(subjectId)));
+      if (Object.keys(visibleGrades).length) gradesMatrix[studentId] = copy(visibleGrades);
+    });
+    const subjects = (Array.isArray(data.exams_subjects) ? data.exams_subjects : [])
+      .filter((subject: any) => assignedSubjects.has(String(subject?.id ?? '')))
+      .map((subject: any) => {
+        const safeSubject: Record<string, unknown> = {};
+        for (const key of ['id', 'name', 'maxScore', 'passScore']) {
+          if (subject[key] !== undefined) safeSubject[key] = copy(subject[key]);
+        }
+        return safeSubject;
+      });
+    const classes = (Array.isArray(data.exams_classes_list) ? data.exams_classes_list : [])
+      .filter((classroom: any) => assignedClasses.has(String(classroom?.name ?? '')))
+      .map((classroom: any) => ({
+        name: String(classroom.name),
+        ...(classroom.level === undefined ? {} : { level: copy(classroom.level) }),
+        sections: [...(assignedClasses.get(String(classroom.name)) || [])]
+      }));
+    const sourceSettings = data.exams_settings && typeof data.exams_settings === 'object' && !Array.isArray(data.exams_settings)
+      ? data.exams_settings as Record<string, unknown>
+      : {};
+    const settings: Record<string, unknown> = {};
+    for (const key of ['academicYear', 'semester', 'examType', 'passPolicy', 'passMarkPercent', 'minFinalMarkPercent', 'roundingPolicy']) {
+      if (sourceSettings[key] !== undefined) settings[key] = copy(sourceSettings[key]);
+    }
+
+    return {
+      data: {
+        exams_settings: settings,
+        exams_subjects: subjects,
+        exams_classes_list: classes,
+        exams_students_enriched: visibleStudents,
+        exams_grades_matrix: gradesMatrix,
+        exams_teacher_grade_scopes: ownScopes
+      },
+      scope: 'grade_scoped'
+    };
+  }
 
   const rawState = data.exams_assessment_state;
   const state = rawState && typeof rawState === 'object' && !Array.isArray(rawState)

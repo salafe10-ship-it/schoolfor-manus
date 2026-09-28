@@ -44,7 +44,7 @@ describe('versioned exams database contract', () => {
   it('requires explicit privileged transitions, reasons, and server schedule validation', () => {
     expect(server).toContain("operationReason.length < 5");
     expect(server).toContain("operation === 'approve_schedule'");
-    expect(server).toContain('validateScheduleForApproval(payload as Record<string, any>)');
+    expect(server).toContain('validateScheduleForApproval(payload as Record<string, any>, activeProctorIds)');
     expect(server).toContain('تغيير حالة اعتماد النتائج أو الجدول يتطلب عملية اعتماد أو إعادة فتح صريحة');
   });
 });

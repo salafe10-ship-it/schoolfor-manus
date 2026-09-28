@@ -102,10 +102,23 @@ import { normalizeAssessmentWorkflowState } from './src/modules/exams/applicatio
 import {
   assertTeacherWriteScope,
   canApproveExamOperation,
+  canViewFullExamDatabase,
   canViewExamAudit,
   canWriteExamOperation,
+  isExamGradeScopedUser,
   projectExamDatabaseForRead
 } from './src/modules/exams/application/ExamAuthorizationPolicy.js';
+import {
+  assertTeacherStudentAttendanceScope,
+  assertTeacherGradeMatrixScope,
+  hasExamStudentAttendanceChanges,
+  hasExamGradeMatrixChanges,
+  buildTeacherGradeHistoryEntries,
+  mergeTeacherGradeMatrixPatch,
+  mergeTeacherStudentAttendancePatch,
+  validateTeacherGradeScopes
+} from './src/modules/exams/application/ExamTeacherGradeScope.js';
+import { buildExamProctorCandidates } from './src/modules/exams/application/ExamProctorCandidates.js';
 import { calculatePayrollRun } from './src/modules/hr/domain/PayrollCalculation.js';
 import { validateInventoryProcurementSnapshot } from './src/modules/inventory/domain/InventoryProcurementValidation.js';
 import {
@@ -1346,7 +1359,7 @@ function isPurchaseOrderReceiptProgression(current: Record<string, any>, request
     === stableJsonStringify({ ...requested, status: undefined, lines: requestedLines.map(stripProgress) });
 }
 
-function validateScheduleForApproval(payload: Record<string, any>): void {
+function validateScheduleForApproval(payload: Record<string, any>, activeProctorIds: Set<string>): void {
   const schedule = Array.isArray(payload.exams_schedule) ? payload.exams_schedule : [];
   const subjects = Array.isArray(payload.exams_subjects) ? payload.exams_subjects : [];
   const halls = Array.isArray(payload.exams_halls) ? payload.exams_halls : [];
@@ -1426,7 +1439,7 @@ function validateScheduleForApproval(payload: Record<string, any>): void {
     const date = String(item?.date || '').trim();
     const startTime = String(item?.startTime || '').trim();
     const endTime = String(item?.endTime || '').trim();
-    if (!classNames.has(classroom) || !subjectIds.has(subjectId) || !hallIds.has(hallId) || !proctorId) {
+    if (!classNames.has(classroom) || !subjectIds.has(subjectId) || !hallIds.has(hallId) || !proctorId || !activeProctorIds.has(proctorId)) {
       throw new ValidationError('يحتوي الجدول على صف أو مادة أو قاعة أو مراقب غير صالح.');
     }
     if (!/^\d{4}-\d{2}-\d{2}$/.test(date) || !/^\d{2}:\d{2}$/.test(startTime) || !/^\d{2}:\d{2}$/.test(endTime) || startTime >= endTime) {
@@ -11871,6 +11884,35 @@ export async function createApp(options: { cloudflare?: boolean } = {}): Promise
   });
 
   // Exams and Results Database API
+  app.get('/api/exams/proctor-candidates', authenticateRequest, requirePermission(PERMISSIONS.EXAM_READ), resolveStudentReadTenantMiddleware, async (req, res, next) => {
+    try {
+      const identity = (req as any).user;
+      const actorRole = roleResolver.resolveRole(identity);
+      if (!canApproveExamOperation(actorRole, 'approve')) {
+        throw new AuthorizationError('قائمة كادر المراقبة وتكليفات الموظفين متاحة لمدير المدرسة أو الكنترول فقط.');
+      }
+      const tenantContext = (req as any).tenantContext;
+      const tenantId = String(identity.tenantId || '').trim();
+      const schoolId = String(identity.schoolId || '').trim();
+      if (!tenantId || !schoolId || tenantContext?.tenantId !== tenantId || tenantContext?.schoolId !== schoolId) {
+        throw new AuthenticationError('سياق المدرسة الموثوق غير مكتمل لقراءة المراقبين.');
+      }
+      const supabase = canonicalTenantReadClient(req);
+      if (!supabase) throw new DatabaseError('مصدر مراقبي الامتحانات غير متاح.');
+      const { data: snapshot, error } = await supabase.from('hr_database').select('data')
+        .eq('tenant_id', tenantId).eq('school_id', schoolId).limit(1).maybeSingle();
+      if (error) throw error;
+      res.json({
+        success: true,
+        data: buildExamProctorCandidates(snapshot?.data),
+        meta: { source: 'canonical_hr', sourceAvailable: Boolean(snapshot) }
+      });
+    } catch (error) {
+      next(error instanceof AuthenticationError || error instanceof AuthorizationError || error instanceof DatabaseError
+        ? error : new DatabaseError('تعذر تحميل الموظفين النشطين لتكليفات الامتحانات.'));
+    }
+  });
+
   app.get("/api/exams/database", authenticateRequest, requirePermission(PERMISSIONS.EXAM_READ), resolveStudentReadTenantMiddleware, async (req, res, next) => {
     try {
       const identity = (req as any).user;
@@ -11896,7 +11938,21 @@ export async function createApp(options: { cloudflare?: boolean } = {}): Promise
         .maybeSingle();
       if (snapshotError) throw snapshotError;
       const snapshot = snapshotRow || { data: {}, version: 0 };
-      const projection = projectExamDatabaseForRead(snapshot.data || {}, actorRole, actorPermissions);
+      let employeeId = '';
+      if (isExamGradeScopedUser(actorRole, actorPermissions)) {
+        const { data: actor, error: actorError } = await supabase
+          .from('users')
+          .select('employee_id')
+          .eq('tenant_id', tenantId)
+          .eq('auth_user_id', identity.id)
+          .eq('status', 'active')
+          .is('deleted_at', null)
+          .limit(1)
+          .maybeSingle();
+        if (actorError) throw actorError;
+        employeeId = String(actor?.employee_id || '').trim();
+      }
+      const projection = projectExamDatabaseForRead(snapshot.data || {}, actorRole, actorPermissions, employeeId);
       res.json({
         success: true,
         data: projection.data,
@@ -12003,6 +12059,99 @@ export async function createApp(options: { cloudflare?: boolean } = {}): Promise
         error: err?.message || String(err)
       });
       next(err instanceof AuthenticationError || err instanceof AuthorizationError || err instanceof DatabaseError ? err : new DatabaseError('Failed to read exams audit events', err.message));
+    }
+  });
+
+  app.get("/api/exams/result-archives", authenticateRequest, requirePermission(PERMISSIONS.EXAM_READ), resolveStudentReadTenantMiddleware, async (req, res, next) => {
+    try {
+      const identity = (req as any).user;
+      const schoolId = String(identity.schoolId || '').trim();
+      const tenantId = String(identity.tenantId || '').trim();
+      const tenantContext = (req as any).tenantContext;
+      const actorRole = roleResolver.resolveRole(identity);
+      const actorPermissions = roleResolver.getPermissions(identity);
+      if (!schoolId || !tenantId || tenantContext?.tenantId !== tenantId || tenantContext?.schoolId !== schoolId) {
+        throw new AuthenticationError('السياق الموثوق لقراءة أرشيف النتائج غير مكتمل.');
+      }
+      if (!canViewFullExamDatabase(actorRole, actorPermissions)) {
+        throw new AuthorizationError('ملخصات الأرشيف التاريخي متاحة للمستخدمين المخولين في المدرسة فقط.');
+      }
+      const archives = await UnitOfWork.runInTransaction(schoolId, {
+        operationName: 'Read immutable exam archive summaries',
+        tenantId,
+        userId: identity.id,
+        userName: identity.name || 'المستخدم الحالي',
+        ipAddress: req.ip || 'unknown',
+        affectedTables: ['exams_result_archives'],
+        readOnly: true
+      }, async () => {
+        const transaction = UnitOfWork.getActiveContext()?.databaseTransaction;
+        if (!transaction) throw new DatabaseError('معاملة قراءة أرشيف النتائج غير متاحة.');
+        const result = await transaction.query<{
+          id: string;
+          operational_version: number;
+          academic_year: string;
+          semester: string;
+          payload: Record<string, unknown>;
+          signature_hash: string;
+          created_at: string;
+        }>(
+          `SELECT id, operational_version, academic_year, semester, payload, signature_hash, created_at
+             FROM public.exams_result_archives
+            WHERE tenant_id = $1 AND school_id = $2
+            ORDER BY created_at DESC, operational_version DESC
+            LIMIT 50`,
+          [tenantId, schoolId]
+        );
+        return result.rows.map(archive => {
+          const payload = archive.payload && typeof archive.payload === 'object' ? archive.payload : {};
+          const expectedSignature = createHash('sha256').update(stableJsonStringify({
+            tenantId,
+            schoolId,
+            operationalVersion: Number(archive.operational_version),
+            payload
+          })).digest('hex');
+          const signatureValid = expectedSignature === String(archive.signature_hash || '').toLowerCase();
+          const students = Array.isArray(payload.students) ? payload.students as Array<Record<string, unknown>> : [];
+          const subjects = Array.isArray(payload.subjects) ? payload.subjects as Array<Record<string, unknown>> : [];
+          const gradesMatrix = payload.gradesMatrix && typeof payload.gradesMatrix === 'object'
+            ? payload.gradesMatrix as Record<string, Record<string, number>>
+            : {};
+          const calculated = signatureValid && payload.attendanceSchemaVersion === 1
+            ? calculateCohortExamResults(students as any[], subjects as any[], gradesMatrix, (payload.settings || {}) as any)
+            : [];
+          const complete = calculated.filter(result => result.status === 'passed' || result.status === 'failed');
+          const percentages = complete.map(result => result.percentage).filter(Number.isFinite);
+          const average = percentages.length ? percentages.reduce((total, value) => total + value, 0) / percentages.length : null;
+          const variance = average === null ? null : percentages.reduce((total, value) => total + ((value - average) ** 2), 0) / percentages.length;
+          const passedCount = complete.filter(result => result.status === 'passed').length;
+          const failedCount = complete.filter(result => result.status === 'failed').length;
+          const totalStudents = Number.isFinite(Number((payload.resultSummary as any)?.totalStudents))
+            ? Number((payload.resultSummary as any).totalStudents)
+            : students.length;
+          return {
+            archiveId: archive.id,
+            year: String(archive.academic_year || (payload.settings as any)?.academicYear || 'غير محدد'),
+            semester: String(archive.semester || (payload.settings as any)?.semester || 'غير محدد'),
+            archivedAt: archive.created_at,
+            signatureValid,
+            summaryAvailable: signatureValid && payload.attendanceSchemaVersion === 1,
+            totalStudents,
+            completeResults: complete.length,
+            incompleteResults: Math.max(0, totalStudents - complete.length),
+            passedCount,
+            failedCount,
+            overallPassRate: complete.length ? Math.round((passedCount / complete.length) * 100) : null,
+            averageScore: average === null ? null : Math.round(average * 100) / 100,
+            topScore: percentages.length ? percentages.reduce((maximum, value) => Math.max(maximum, value), Number.NEGATIVE_INFINITY) : null,
+            standardDeviation: variance === null ? null : Math.round(Math.sqrt(variance) * 100) / 100
+          };
+        });
+      }, tenantContext);
+      res.json({ success: true, data: archives, meta: { limit: 50, scope: 'school_staff_summaries_only' } });
+    } catch (err: any) {
+      next(err instanceof AuthenticationError || err instanceof AuthorizationError || err instanceof DatabaseError
+        ? err : new DatabaseError('تعذر تحميل ملخصات أرشيف النتائج الرسمي.', err?.message || String(err)));
     }
   });
 
@@ -12152,8 +12301,8 @@ export async function createApp(options: { cloudflare?: boolean } = {}): Promise
       }, async () => {
         const transaction = UnitOfWork.getActiveContext()?.databaseTransaction;
         if (!transaction) throw new DatabaseError('معاملة حفظ الامتحانات غير متاحة.');
-        const actorResult = await transaction.query<{ id: string }>(
-          `SELECT id
+        const actorResult = await transaction.query<{ id: string; employee_id: string | null; display_name: string | null }>(
+          `SELECT id, employee_id, display_name
              FROM public.users
             WHERE tenant_id = $1
               AND auth_user_id = $2
@@ -12166,6 +12315,7 @@ export async function createApp(options: { cloudflare?: boolean } = {}): Promise
         if (!canonicalActorId) {
           throw new AuthenticationError('تعذر ربط هوية الجلسة بسجل المستخدم المؤسسي المعتمد.');
         }
+        const canonicalEmployeeId = String(actorResult.rows[0]?.employee_id || '').trim();
         const current = await transaction.query<{ data: Record<string, unknown>; version: number }>(
           `SELECT data, version FROM public.exams_database WHERE tenant_id = $1 AND school_id = $2 FOR UPDATE`,
           [tenantId, schoolId]
@@ -12175,14 +12325,88 @@ export async function createApp(options: { cloudflare?: boolean } = {}): Promise
           throw new ConflictError('تم تعديل بيانات الامتحانات بواسطة مستخدم آخر. أعد المزامنة قبل الحفظ.', { expectedVersion, actualVersion });
         }
         const currentData = (current.rows[0]?.data || {}) as Record<string, any>;
+        if (!canApproveExamOperation(actorRole, 'approve')) {
+          try {
+            assertTeacherWriteScope(currentData, payload as Record<string, unknown>);
+            if (hasExamGradeMatrixChanges(currentData, payload as Record<string, unknown>)) {
+              assertTeacherGradeMatrixScope(currentData, payload as Record<string, unknown>, canonicalEmployeeId);
+            }
+            if (Object.hasOwn(payload, 'exams_students_enriched')) {
+              assertTeacherStudentAttendanceScope(currentData, payload as Record<string, unknown>, canonicalEmployeeId);
+            }
+            const needsActiveEmployee = hasExamGradeMatrixChanges(currentData, payload as Record<string, unknown>)
+              || hasExamStudentAttendanceChanges(currentData, payload as Record<string, unknown>);
+            if (needsActiveEmployee) {
+              const hrSnapshot = await transaction.query<{ data: Record<string, unknown> }>(
+                `SELECT data FROM public.hr_database WHERE tenant_id = $1 AND school_id = $2 LIMIT 1`,
+                [tenantId, schoolId]
+              );
+              const activeEmployeeIds = new Set(buildExamProctorCandidates(hrSnapshot.rows[0]?.data).map(employee => employee.id));
+              if (!canonicalEmployeeId || !activeEmployeeIds.has(canonicalEmployeeId)) {
+                throw new Error('حساب الموظف غير نشط أو غير مرتبط حالياً بسجل شؤون الموظفين الرسمي.');
+              }
+            }
+            if (Object.hasOwn(payload, 'exams_grades_matrix')) {
+              const gradeHistoryEntries = buildTeacherGradeHistoryEntries(
+                currentData,
+                payload as Record<string, unknown>,
+                {
+                  employeeId: canonicalEmployeeId,
+                  name: String(actorResult.rows[0]?.display_name || (req as any).user.name || '')
+                },
+                { timestamp: new Date().toISOString(), createId: randomUUID }
+              );
+              if (gradeHistoryEntries.length) {
+                const existingGradeHistory = Array.isArray(currentData.exams_grade_history)
+                  ? currentData.exams_grade_history
+                  : [];
+                (payload as any).exams_grade_history = [...gradeHistoryEntries, ...existingGradeHistory];
+              }
+              (payload as any).exams_grades_matrix = mergeTeacherGradeMatrixPatch(currentData, payload as Record<string, unknown>);
+            }
+            if (Object.hasOwn(payload, 'exams_students_enriched')) {
+              (payload as any).exams_students_enriched = mergeTeacherStudentAttendancePatch(currentData, payload as Record<string, unknown>);
+            }
+            // Downstream validation, archival and persistence operate on a
+            // complete canonical document, while the request itself remains
+            // a narrow patch and can never replace another teacher's data.
+            Object.entries(currentData).forEach(([key, value]) => {
+              if (!Object.hasOwn(payload, key)) (payload as any)[key] = value;
+            });
+          } catch (error: any) {
+            throw new AuthorizationError(error?.message || 'الدور الحالي لا يملك نطاقاً موثقاً لتعديل هذه البيانات.');
+          }
+        }
         const currentAssessmentState = normalizeAssessmentWorkflowState(currentData.exams_assessment_state);
         const requestedAssessmentState = normalizeAssessmentWorkflowState((payload as any).exams_assessment_state);
         const assessmentStateChanged = stableJsonStringify(currentAssessmentState) !== stableJsonStringify(requestedAssessmentState);
-        if (actorRole === 'teacher') {
+        const currentTeacherScopes = Array.isArray(currentData.exams_teacher_grade_scopes) ? currentData.exams_teacher_grade_scopes : [];
+        const requestedTeacherScopes = Array.isArray((payload as any).exams_teacher_grade_scopes)
+          ? (payload as any).exams_teacher_grade_scopes
+          : currentTeacherScopes;
+        if (stableJsonStringify(currentTeacherScopes) !== stableJsonStringify(requestedTeacherScopes)) {
+          if (!canApproveExamOperation(actorRole, 'approve')) {
+            throw new AuthorizationError('تعيين نطاقات تصحيح المعلمين يتطلب مدير المدرسة أو مدير الكنترول.');
+          }
+          const hrSnapshot = await transaction.query<{ data: Record<string, unknown> }>(
+            `SELECT data FROM public.hr_database WHERE tenant_id = $1 AND school_id = $2 LIMIT 1`,
+            [tenantId, schoolId]
+          );
+          const activeEmployeeIds = Array.isArray(hrSnapshot.rows[0]?.data?.employees)
+            ? (hrSnapshot.rows[0].data.employees as Array<Record<string, unknown>>)
+              .filter(employee => employee?.status === 'active')
+              .map(employee => String(employee?.id || '').trim())
+              .filter(Boolean)
+            : [];
           try {
-            assertTeacherWriteScope(currentData, payload as Record<string, unknown>);
+            validateTeacherGradeScopes(
+              requestedTeacherScopes,
+              activeEmployeeIds,
+              (Array.isArray((payload as any).exams_subjects) ? (payload as any).exams_subjects : []).map((subject: any) => String(subject?.id || '')),
+              Array.isArray((payload as any).exams_classes_list) ? (payload as any).exams_classes_list : []
+            );
           } catch (error: any) {
-            throw new AuthorizationError(error?.message || 'الدور الحالي لا يملك صلاحية تعديل هذه الحقول.');
+            throw new ValidationError(error?.message || 'نطاقات تصحيح المعلمين لا تطابق بيانات المدرسة الرسمية.');
           }
         }
         if (assessmentStateChanged && actorRole === 'teacher') {
@@ -12326,7 +12550,15 @@ export async function createApp(options: { cloudflare?: boolean } = {}): Promise
           if (currentScheduleApproval || !requestedScheduleApproval) {
             throw new ConflictError('انتقال اعتماد جدول الامتحانات غير صالح أو سبق تنفيذه.');
           }
-          validateScheduleForApproval(payload as Record<string, any>);
+          const hrRoster = await transaction.query<{ data: Record<string, unknown> }>(
+            `SELECT data FROM public.hr_database WHERE tenant_id = $1 AND school_id = $2 LIMIT 1`,
+            [tenantId, schoolId]
+          );
+          const activeProctorIds = new Set(buildExamProctorCandidates(hrRoster.rows[0]?.data).map(candidate => candidate.id));
+          if (activeProctorIds.size === 0) {
+            throw new ValidationError('لا يمكن اعتماد الجدول قبل مزامنة كادر الموظفين النشط من سجل شؤون الموظفين الرسمي.');
+          }
+          validateScheduleForApproval(payload as Record<string, any>, activeProctorIds);
           (payload as any).exams_schedule_approval_status = {
             approved: true,
             approvedBy: (req as any).user.name || 'المستخدم الحالي',
