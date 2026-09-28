@@ -1,5 +1,6 @@
 import 'dotenv/config';
 import pg from 'pg';
+import { assertIsolatedStagingDatabase } from './stagingDatabaseSafety.js';
 
 /**
  * Read-only schema preflight for the controlled 35-school UAT cycle.
@@ -31,6 +32,12 @@ const connectionString = process.env.DIRECT_URL || process.env.DATABASE_URL;
 if (!connectionString) {
   throw new Error('UAT35_PREFLIGHT_DATABASE_URL_MISSING');
 }
+
+assertIsolatedStagingDatabase({
+  targetName: process.env.UAT35_TARGET || '',
+  supabaseUrl: process.env.SUPABASE_URL || process.env.VITE_SUPABASE_URL || '',
+  databaseUrl: connectionString,
+});
 
 const pool = new pg.Pool({
   connectionString,

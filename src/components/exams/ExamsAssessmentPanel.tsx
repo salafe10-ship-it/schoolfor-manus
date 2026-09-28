@@ -1,5 +1,7 @@
 import React, { useEffect, useMemo, useState } from 'react';
 import { AlertTriangle, Archive, Check, CheckCircle, ChevronLeft, Copy, Download, Edit3, FileCheck2, Lock, Play, Plus, Printer, Save, Send, ShieldCheck, Timer, X } from 'lucide-react';
+import { createExamPrintDocument } from '../../utils/examPrintDocument';
+import { escapeExamSpreadsheetFormula } from '../../utils/examSpreadsheetSafety';
 import {
   AssessmentWorkflowError,
   AssessmentWorkflowState,
@@ -145,7 +147,7 @@ export default function ExamsAssessmentPanel({ state, actorId, candidateIds, sub
       ['الأسئلة', 'الإصدار', 'نص السؤال', 'النوع', 'الدرجة', 'المادة', 'الصف'],
       ...questions.map(question => [question.id, String(question.version), question.prompt, assessmentQuestionTypeLabel[question.type], String(question.points), question.classification.subjectId, question.classification.gradeId])
     ];
-    const csv = `\uFEFF${rows.map(row => row.map(value => `"${String(value ?? '').replaceAll('"', '""')}"`).join(',')).join('\r\n')}`;
+    const csv = `\uFEFF${rows.map(row => row.map(value => `"${escapeExamSpreadsheetFormula(value).replaceAll('"', '""')}"`).join(',')).join('\r\n')}`;
     downloadBlob(new Blob([csv], { type: 'text/csv;charset=utf-8' }), `نتائج_الامتحان_${assessment.id}.csv`);
     setMessage({ tone: 'success', text: 'تم تنزيل كشف CSV للامتحان والطلاب والأسئلة.' });
   };
@@ -207,9 +209,13 @@ export default function ExamsAssessmentPanel({ state, actorId, candidateIds, sub
   };
 
   const printAssessmentReport = (assessment: AssessmentWorkflowState['assessments'][number]) => {
-    const printWindow = window.open('', '_blank');
+    const printWindow = createExamPrintDocument({
+      title: `تقرير الامتحان: ${assessment.title}`,
+      onPrintStarted: () => setMessage({ tone: 'success', text: 'تم تجهيز تقرير RTL؛ اختر الطباعة أو الحفظ بصيغة PDF.' }),
+      onError: () => setMessage({ tone: 'error', text: 'تعذر تشغيل أمر طباعة تقرير الامتحان.' })
+    });
     if (!printWindow) {
-      setMessage({ tone: 'error', text: 'تعذر فتح نافذة التقرير؛ اسمح بالنوافذ المنبثقة ثم أعد المحاولة.' });
+      setMessage({ tone: 'error', text: 'تعذر تجهيز تقرير الامتحان للطباعة.' });
       return;
     }
     const { lifecycle, blueprint, questions, attempts } = exportRowsFor(assessment);
@@ -217,9 +223,8 @@ export default function ExamsAssessmentPanel({ state, actorId, candidateIds, sub
       ? attempts.map(attempt => `<tr><td>${escapeHtml(attempt.candidateId)}</td><td>${escapeHtml(attempt.status)}</td><td>${escapeHtml(attempt.recordedTotal)}</td><td>${escapeHtml(attempt.maximumTotal)}</td><td>${attempt.maximumTotal > 0 ? ((attempt.recordedTotal / attempt.maximumTotal) * 100).toFixed(2) : '0'}%</td><td>${attempt.autoSubmitted ? 'نعم' : 'لا'}</td></tr>`).join('')
       : '<tr><td colspan="6">لا توجد نتائج طلاب بعد.</td></tr>';
     const questionRows = questions.map(question => `<tr><td>${escapeHtml(question.id)}</td><td>v${question.version}</td><td>${escapeHtml(question.prompt)}</td><td>${escapeHtml(assessmentQuestionTypeLabel[question.type])}</td><td>${escapeHtml(question.points)}</td></tr>`).join('');
-    printWindow.document.write(`<!doctype html><html dir="rtl" lang="ar"><head><meta charset="utf-8"><title>${escapeHtml(assessment.title)}</title><style>body{font-family:Arial,sans-serif;padding:28px;color:#172033}h1{border-bottom:2px solid #d4af37;padding-bottom:12px}h2{margin-top:28px}table{width:100%;border-collapse:collapse;margin-top:12px;font-size:12px}th,td{border:1px solid #9ca3af;padding:8px;text-align:right}th{background:#fff8e5}@media print{button{display:none}}</style></head><body><h1>${escapeHtml(assessment.title)}</h1><p>الحالة: ${escapeHtml(lifecycle ? assessmentLifecycleLabel[lifecycle.state] : '')} — المدة: ${assessment.durationMinutes} دقيقة — مجموع الدرجات: ${blueprint?.totalPoints || 0}</p><h2>نتائج الطلاب</h2><table><thead><tr><th>الطالب</th><th>الحالة</th><th>الدرجة</th><th>النهاية العظمى</th><th>النسبة</th><th>تلقائي</th></tr></thead><tbody>${resultRows}</tbody></table><h2>كشف الأسئلة</h2><table><thead><tr><th>المعرف</th><th>الإصدار</th><th>السؤال</th><th>النوع</th><th>الدرجة</th></tr></thead><tbody>${questionRows}</tbody></table><script>window.onload=()=>window.print()</script></body></html>`);
+    printWindow.document.write(`<!doctype html><html dir="rtl" lang="ar"><head><meta charset="utf-8"><title>${escapeHtml(assessment.title)}</title><style>body{font-family:Arial,sans-serif;padding:28px;color:#172033}h1{border-bottom:2px solid #d4af37;padding-bottom:12px}h2{margin-top:28px}table{width:100%;border-collapse:collapse;margin-top:12px;font-size:12px}th,td{border:1px solid #9ca3af;padding:8px;text-align:right}th{background:#fff8e5}@media print{button{display:none}}</style></head><body><h1>${escapeHtml(assessment.title)}</h1><p>الحالة: ${escapeHtml(lifecycle ? assessmentLifecycleLabel[lifecycle.state] : '')} — المدة: ${assessment.durationMinutes} دقيقة — مجموع الدرجات: ${blueprint?.totalPoints || 0}</p><h2>نتائج الطلاب</h2><table><thead><tr><th>الطالب</th><th>الحالة</th><th>الدرجة</th><th>النهاية العظمى</th><th>النسبة</th><th>تلقائي</th></tr></thead><tbody>${resultRows}</tbody></table><h2>كشف الأسئلة</h2><table><thead><tr><th>المعرف</th><th>الإصدار</th><th>السؤال</th><th>النوع</th><th>الدرجة</th></tr></thead><tbody>${questionRows}</tbody></table></body></html>`);
     printWindow.document.close();
-    setMessage({ tone: 'success', text: 'تم فتح تقرير RTL؛ اختر الطباعة أو الحفظ بصيغة PDF.' });
   };
 
   const createQuestion = () => {

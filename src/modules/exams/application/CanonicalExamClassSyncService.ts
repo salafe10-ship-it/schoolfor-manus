@@ -114,6 +114,111 @@ export function buildCanonicalExamClassesFromAcademicStructure(structure: unknow
   return classes.sort((left, right) => left.name.localeCompare(right.name, 'ar'));
 }
 
+function normalizeClassReference(value: unknown): string {
+  return cleanText(value).replace(/\s+/g, ' ').toLocaleLowerCase('ar');
+}
+
+export type CanonicalExamClassReferenceIndex = {
+  classes: CanonicalExamClass[];
+  byReference: Map<string, CanonicalExamClass>;
+};
+
+/**
+ * Indexes the canonical class name, id, and code. Enrollment references are
+ * allowed to use any of those stable academic identifiers; exam-facing data
+ * is always normalized back to the canonical display name.
+ */
+export function buildCanonicalExamClassReferenceIndex(structure: unknown): CanonicalExamClassReferenceIndex {
+  const classes = buildCanonicalExamClassesFromAcademicStructure(structure);
+  const record = structure && typeof structure === 'object' && !Array.isArray(structure)
+    ? structure as Record<string, unknown>
+    : null;
+  const canonicalById = new Map(classes.map(item => [item.id, item]));
+  const byReference = new Map<string, CanonicalExamClass>();
+  const rawClasses = Array.isArray(record?.classes) ? record.classes : [];
+
+  rawClasses.forEach(raw => {
+    const item = raw && typeof raw === 'object' && !Array.isArray(raw)
+      ? raw as AcademicStructureClass
+      : null;
+    if (!item || item.isActive === false) return;
+    const canonicalClass = canonicalById.get(cleanText(item.id));
+    if (!canonicalClass) return;
+
+    [item.id, item.code, item.name].forEach(reference => {
+      const key = normalizeClassReference(reference);
+      if (!key) return;
+      const existing = byReference.get(key);
+      if (existing && existing.id !== canonicalClass.id) {
+        throw new ValidationError(`مرجع الصف ${cleanText(reference)} ملتبس في الهيكل الأكاديمي الموثوق.`);
+      }
+      byReference.set(key, canonicalClass);
+    });
+  });
+
+  return { classes, byReference };
+}
+
+/**
+ * Reconciles the exam snapshot with the trusted academic class catalog before
+ * validating a write. Existing exam-only classes are retained (so a saved
+ * schedule/history is not silently discarded), while current canonical
+ * classes are added and student/schedule references are normalized.
+ */
+export function reconcileExamDatabaseClassReferences(
+  database: Record<string, any>,
+  structure: unknown,
+  activeClassReferences: string[] = []
+): void {
+  const { classes, byReference } = buildCanonicalExamClassReferenceIndex(structure);
+  const unresolvedEnrollmentReferences = activeClassReferences
+    .map(cleanText)
+    .filter(reference => reference && !byReference.has(normalizeClassReference(reference)));
+  if (unresolvedEnrollmentReferences.length) {
+    throw new ValidationError(
+      `توجد إحالات صفوف طلاب نشطة غير موجودة في الهيكل الأكاديمي (${unresolvedEnrollmentReferences.join('، ')}). أصلح الصفوف الأكاديمية قبل حفظ دورة الامتحانات.`
+    );
+  }
+
+  const students = Array.isArray(database.exams_students_enriched) ? database.exams_students_enriched : [];
+  students.forEach((student: Record<string, any>) => {
+    const reference = cleanText(student?.classroom);
+    const canonicalClass = byReference.get(normalizeClassReference(reference));
+    if (canonicalClass) {
+      student.classroom = canonicalClass.name;
+      return;
+    }
+    if (['active', 'accepted'].includes(String(student?.status || '').toLowerCase())) {
+      throw new ValidationError(
+        `صف الطالب ${cleanText(student?.name) || 'غير معروف'} (${reference || 'بلا صف'}) غير مطابق للهيكل الأكاديمي. أعد مزامنة بيانات الطلاب والصفوف.`
+      );
+    }
+  });
+
+  const schedule = Array.isArray(database.exams_schedule) ? database.exams_schedule : [];
+  schedule.forEach((item: Record<string, any>) => {
+    const canonicalClass = byReference.get(normalizeClassReference(item?.classroom));
+    if (canonicalClass) item.classroom = canonicalClass.name;
+  });
+
+  const existingClasses = Array.isArray(database.exams_classes_list) ? database.exams_classes_list : [];
+  const normalizedClasses = existingClasses.map((item: Record<string, any>) => {
+    const canonicalClass = byReference.get(normalizeClassReference(item?.name));
+    return canonicalClass ? { ...item, ...canonicalClass } : item;
+  });
+  const presentCanonicalNames = new Set(
+    normalizedClasses
+      .map((item: Record<string, any>) => normalizeClassReference(item?.name))
+      .filter(Boolean)
+  );
+  classes.forEach(canonicalClass => {
+    if (!presentCanonicalNames.has(normalizeClassReference(canonicalClass.name))) {
+      normalizedClasses.push(canonicalClass);
+    }
+  });
+  database.exams_classes_list = normalizedClasses;
+}
+
 export type CanonicalExamClassSyncResult = {
   classes: CanonicalExamClass[];
   version: number;
@@ -191,8 +296,7 @@ export class CanonicalExamClassSyncService {
             LIMIT 1`,
           [context.tenantId, context.schoolId]
         );
-        const classes = buildCanonicalExamClassesFromAcademicStructure(structureResult.rows[0]?.structure);
-        const classNames = new Set(classes.map(item => item.name));
+        const { classes, byReference } = buildCanonicalExamClassReferenceIndex(structureResult.rows[0]?.structure);
 
         const canonicalReferences = await db.query<CanonicalClassReference>(
           `SELECT DISTINCT btrim(e.class_reference) AS class_reference
@@ -215,7 +319,7 @@ export class CanonicalExamClassSyncService {
         );
         const missingReferences = canonicalReferences.rows
           .map(item => cleanText(item.class_reference))
-          .filter(reference => reference && !classNames.has(reference));
+          .filter(reference => reference && !byReference.has(normalizeClassReference(reference)));
         if (missingReferences.length) {
           throw new ValidationError(`صفوف طلاب نشطة غير معرفة في الهيكل الأكاديمي: ${missingReferences.join('، ')}.`);
         }

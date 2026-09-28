@@ -7,6 +7,7 @@ on:
 
 permissions:
   contents: read
+  issues: write
 
 concurrency:
   group: schoolfor-manus-cloudflare-uptime
@@ -16,17 +17,77 @@ jobs:
   probe:
     name: Probe Cloudflare Worker
     runs-on: ubuntu-latest
-    timeout-minutes: 3
+    timeout-minutes: 8
     env:
       PRODUCTION_URL: ${{ vars.CLOUDFLARE_PRODUCTION_URL || 'https://schoolfor-manus.salafe10.workers.dev' }}
     steps:
       - name: Check health, HTML, and first asset
+        id: readiness
         shell: bash
         run: |
-          set -euo pipefail
-          health="$(curl --fail --silent --show-error --location --max-time 20 "$PRODUCTION_URL/api/health")"
-          echo "$health" | jq -e '.success == true and (.data.build.commit | type == "string") and (.data.build.builtAt | type == "string")' >/dev/null
-          index="$(curl --fail --silent --show-error --location --max-time 20 "$PRODUCTION_URL/")"
-          asset="$(printf '%s' "$index" | grep -oE '/assets/[^" ]+\.(js|css)' | head -n 1)"
-          test -n "$asset"
-          curl --fail --silent --show-error --location --head --max-time 20 "$PRODUCTION_URL$asset" >/dev/null
+          set -u
+          state="failed"
+          reason="health endpoint unreachable"
+
+          for attempt in 1 2 3 4 5; do
+            health_status="$(curl --silent --show-error --location --max-time 20 --output "$RUNNER_TEMP/health.json" --write-out '%{http_code}' "$PRODUCTION_URL/api/health" || true)"
+            if [ "$health_status" != "200" ]; then
+              reason="health HTTP ${health_status:-unreachable}"
+            elif ! jq -e '.success == true and (.data.build.commit | type == "string" and test("^[0-9a-fA-F]{40}$")) and (.data.build.builtAt | type == "string" and length > 0)' "$RUNNER_TEMP/health.json" >/dev/null 2>&1; then
+              reason="health payload invalid"
+            else
+              index_status="$(curl --silent --show-error --location --max-time 20 --output "$RUNNER_TEMP/index.html" --write-out '%{http_code}' "$PRODUCTION_URL/" || true)"
+              asset="$(grep -oE '/assets/[^" ]+\.(js|css)' "$RUNNER_TEMP/index.html" 2>/dev/null | head -n 1 || true)"
+              if [ "$index_status" != "200" ]; then
+                reason="index HTTP ${index_status:-unreachable}"
+              elif [ -z "$asset" ]; then
+                reason="index asset reference missing"
+              else
+                asset_status="$(curl --silent --show-error --location --max-time 20 --output /dev/null --write-out '%{http_code}' "$PRODUCTION_URL$asset" || true)"
+                if [ "$asset_status" = "200" ]; then
+                  state="healthy"
+                  reason="health, index, and asset are responding"
+                  break
+                fi
+                reason="asset HTTP ${asset_status:-unreachable}"
+              fi
+            fi
+
+            if [ "$attempt" -lt 5 ]; then sleep 30; fi
+          done
+
+          echo "state=$state" >> "$GITHUB_OUTPUT"
+          echo "reason=$reason" >> "$GITHUB_OUTPUT"
+
+      - name: Open or update production outage alert
+        if: steps.readiness.outputs.state == 'failed'
+        uses: actions/github-script@v7
+        env:
+          FAILURE_REASON: ${{ steps.readiness.outputs.reason }}
+        with:
+          script: |
+            const marker = '<!-- schoolfor-manus-cloudflare-production-uptime -->';
+            const title = 'Cloudflare production readiness check failed';
+            const body = `The production Worker failed its health, HTML, or asset check: \`${process.env.FAILURE_REASON}\`.\n\n${marker}`;
+            const { owner, repo } = context.repo;
+            const { data: issues } = await github.rest.issues.listForRepo({ owner, repo, state: 'open', per_page: 100 });
+            const existing = issues.find((issue) => issue.title === title && issue.body?.includes(marker));
+            if (existing) {
+              await github.rest.issues.createComment({ owner, repo, issue_number: existing.number, body: `Still failing at ${new Date().toISOString()}: \`${process.env.FAILURE_REASON}\`.` });
+            } else {
+              await github.rest.issues.create({ owner, repo, title, body });
+            }
+
+      - name: Close recovered production outage alert
+        if: steps.readiness.outputs.state == 'healthy'
+        uses: actions/github-script@v7
+        with:
+          script: |
+            const marker = '<!-- schoolfor-manus-cloudflare-production-uptime -->';
+            const title = 'Cloudflare production readiness check failed';
+            const { owner, repo } = context.repo;
+            const { data: issues } = await github.rest.issues.listForRepo({ owner, repo, state: 'open', per_page: 100 });
+            for (const issue of issues.filter((item) => item.title === title && item.body?.includes(marker))) {
+              await github.rest.issues.createComment({ owner, repo, issue_number: issue.number, body: `Recovered at ${new Date().toISOString()}.` });
+              await github.rest.issues.update({ owner, repo, issue_number: issue.number, state: 'closed' });
+            }

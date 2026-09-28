@@ -1,5 +1,7 @@
 import React, { useMemo, useState } from 'react';
 import { Download, Printer, RefreshCw, Search, ShieldAlert, Sparkles, UserX, Users } from 'lucide-react';
+import { createExamPrintDocument } from '../../utils/examPrintDocument';
+import { escapeExamSpreadsheetFormula } from '../../utils/examSpreadsheetSafety';
 
 interface ExamsDistributionPanelProps {
   schoolName: string;
@@ -19,10 +21,7 @@ const escapeHtml = (value: unknown): string => String(value ?? '')
   .replaceAll('"', '&quot;')
   .replaceAll("'", '&#039;');
 
-const csvCell = (value: unknown): string => {
-  const raw = String(value ?? '').replaceAll('"', '""');
-  return `"${/^[=+\-@]/.test(raw) ? `'${raw}` : raw}"`;
-};
+const csvCell = (value: unknown): string => `"${escapeExamSpreadsheetFormula(value).replaceAll('"', '""')}"`;
 
 export default function ExamsDistributionPanel({
   schoolName,
@@ -108,13 +107,17 @@ export default function ExamsDistributionPanel({
       notify('لا يوجد طلاب لطباعة كشف التوزيع.', 'warning');
       return;
     }
-    const printWindow = window.open('', '_blank');
+    const printWindow = createExamPrintDocument({
+      title: 'كشف توزيع الطلاب',
+      onPrintStarted: () => notify('تم تجهيز كشف التوزيع؛ اختر الطباعة أو الحفظ بصيغة PDF.', 'success'),
+      onError: () => notify('تعذر تشغيل أمر طباعة كشف التوزيع.', 'warning')
+    });
     if (!printWindow) {
-      notify('يرجى السماح بالنوافذ المنبثقة لفتح الطباعة.', 'warning');
+      notify('تعذر تجهيز كشف التوزيع للطباعة.', 'warning');
       return;
     }
     const rows = students.map((student, index) => `<tr><td>${index + 1}</td><td>${escapeHtml(student.name)}</td><td>${escapeHtml(student.classroom)}</td><td>${escapeHtml(student.section)}</td><td>${escapeHtml(student.seatNumber || 'غير مولد')}</td><td>${escapeHtml(halls.find(hall => hall.id === student.hallId)?.name || 'غير موزع')}</td></tr>`).join('');
-    printWindow.document.write(`<!doctype html><html dir="rtl" lang="ar"><head><meta charset="utf-8"/><title>كشف توزيع الطلاب</title><style>body{font-family:Arial,sans-serif;padding:28px;color:#1f2937}h1{font-size:20px}table{width:100%;border-collapse:collapse;font-size:11px}th,td{border:1px solid #9ca3af;padding:7px;text-align:right}th{background:#fff8e5}</style></head><body><h1>${escapeHtml(schoolName)} — كشف توزيع طلاب الامتحانات</h1><p>هذا الكشف يعكس البيانات المحفوظة في دورة الامتحانات الحالية.</p><table><thead><tr><th>م</th><th>الطالب</th><th>الصف</th><th>الشعبة</th><th>رقم الجلوس</th><th>القاعة</th></tr></thead><tbody>${rows}</tbody></table><script>window.onload=()=>window.print()</script></body></html>`);
+    printWindow.document.write(`<!doctype html><html dir="rtl" lang="ar"><head><meta charset="utf-8"/><title>كشف توزيع الطلاب</title><style>body{font-family:Arial,sans-serif;padding:28px;color:#1f2937}h1{font-size:20px}table{width:100%;border-collapse:collapse;font-size:11px}th,td{border:1px solid #9ca3af;padding:7px;text-align:right}th{background:#fff8e5}</style></head><body><h1>${escapeHtml(schoolName)} — كشف توزيع طلاب الامتحانات</h1><p>هذا الكشف يعكس البيانات المحفوظة في دورة الامتحانات الحالية.</p><table><thead><tr><th>م</th><th>الطالب</th><th>الصف</th><th>الشعبة</th><th>رقم الجلوس</th><th>القاعة</th></tr></thead><tbody>${rows}</tbody></table></body></html>`);
     printWindow.document.close();
   };
 

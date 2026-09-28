@@ -1,5 +1,8 @@
 import ExcelJS from 'exceljs';
 import { readSpreadsheetMatrix } from '../../../utils/ExcelWorkbookUtils';
+import { escapeExamSpreadsheetFormula } from '../../../utils/examSpreadsheetSafety';
+
+export { escapeExamSpreadsheetFormula } from '../../../utils/examSpreadsheetSafety';
 
 export const EXAM_GRADE_XLSX_CONTENT_TYPE = 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet';
 export const EXAM_GRADE_CSV_CONTENT_TYPE = 'text/csv;charset=utf-8';
@@ -231,18 +234,6 @@ for (const [column, aliases] of Object.entries(HEADER_ALIASES) as [ExamSpreadshe
 
 export function normalizeExamSpreadsheetHeader(value: unknown): ExamSpreadsheetImportColumn | null {
   return HEADER_ALIAS_LOOKUP.get(normalizeHeaderToken(value)) ?? null;
-}
-
-/**
- * Prefixes text that spreadsheet programs could interpret as a formula. The
- * protection is applied to every exported text cell and is preserved in CSV.
- */
-export function escapeExamSpreadsheetFormula(value: unknown): string {
-  const text = value === null || value === undefined ? '' : String(value);
-  const detectionValue = text.normalize('NFKC');
-  const startsWithControlCharacter = /^[\u0000-\u001F]/.test(detectionValue);
-  const startsWithFormulaMarker = /^[\u0000-\u0020]*[=+\-@]/.test(detectionValue);
-  return startsWithControlCharacter || startsWithFormulaMarker ? `'${text}` : text;
 }
 
 function requireValidSubject(subject: ExamSpreadsheetSubject): void {

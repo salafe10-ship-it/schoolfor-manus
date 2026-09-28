@@ -2,8 +2,7 @@ name: Staging uptime
 
 on:
   schedule:
-    # Render free instances may cold-start. The probe retries for two minutes
-    # before treating a non-200 response as an outage.
+    # Set EDUPRO_STAGING_HEALTH_URL after the isolated Cloudflare Worker is live.
     - cron: '*/5 * * * *'
   workflow_dispatch:
 
@@ -18,17 +17,25 @@ concurrency:
 jobs:
   probe:
     name: Probe staging readiness
+    if: ${{ vars.EDUPRO_STAGING_HEALTH_URL != '' }}
     runs-on: ubuntu-latest
     timeout-minutes: 6
     steps:
       - name: Probe readiness endpoint with cold-start tolerance
         id: readiness
         env:
-          HEALTH_URL: https://schoolfor-manus-staging.onrender.com/api/ready
+          HEALTH_URL: ${{ vars.EDUPRO_STAGING_HEALTH_URL }}
         shell: bash
         run: |
           set -u
           last_status="unreachable"
+          expected_health_url="https://schoolfor-manus-staging.salafe10.workers.dev/api/health"
+
+          if [ "$HEALTH_URL" != "$expected_health_url" ]; then
+            echo "state=failed" >> "$GITHUB_OUTPUT"
+            echo "http_status=invalid_staging_target" >> "$GITHUB_OUTPUT"
+            exit 0
+          fi
 
           for attempt in 1 2 3 4 5; do
             last_status="$(curl --silent --show-error --location --max-time 20 --output /tmp/health.json --write-out '%{http_code}' "$HEALTH_URL" || true)"

@@ -138,7 +138,7 @@ export default function SchoolUsersPermissionsModule({ selectedSchool, selectedB
     setLoadWarnings([]);
     try {
       // Keep the three control-plane reads in one authenticated sequence.
-      // Firing them concurrently can make a cold Render instance refresh the
+      // Firing them concurrently can make a cold serverless instance refresh the
       // same session three times and contend for the small platform pool,
       // leaving an otherwise valid directory looking empty.
       const requestSequentially = async (request: () => Promise<Response>): Promise<PromiseSettledResult<Response>> => {

@@ -9,7 +9,7 @@ describe('public build identity', () => {
 
   it('exposes only non-secret release metadata and uses unknown when absent', () => {
     vi.stubEnv('APP_VERSION', '2026.09.10');
-    vi.stubEnv('RENDER_GIT_COMMIT', 'abc1234');
+    vi.stubEnv('BUILD_COMMIT_SHA', 'abc1234');
     vi.stubEnv('BUILD_TIMESTAMP', '2026-09-10T08:00:00Z');
 
     expect(getBuildIdentity()).toEqual({
@@ -25,7 +25,7 @@ describe('public build identity', () => {
     fs.writeFileSync(artifactPath, JSON.stringify({ version: '1.0.0', commit: 'a'.repeat(40), builtAt: '2026-09-10T08:00:00.000Z' }));
     vi.stubEnv('BUILD_IDENTITY_PATH', artifactPath);
     vi.stubEnv('APP_VERSION', '');
-    vi.stubEnv('RENDER_GIT_COMMIT', '');
+    vi.stubEnv('BUILD_COMMIT_SHA', '');
     vi.stubEnv('BUILD_TIMESTAMP', '');
 
     expect(getBuildIdentity()).toEqual({
