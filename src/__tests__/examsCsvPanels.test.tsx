@@ -19,6 +19,27 @@ afterEach(() => {
 });
 
 describe('exam CSV screen exports', () => {
+  it('keeps legacy signed archives from issuing official results and hides unconfirmed marks', () => {
+    render(
+      <ExamsCertificatesPanel
+        schoolName="مدرسة اختبار"
+        settings={{ academicYear: 'عام اختبار', semester: 'فصل اختبار' }}
+        students={[{ id: 'legacy-student', name: 'طالب أرشيف قديم', classroom: 'صف اختبار' }]}
+        subjects={[{ id: 'legacy-subject', name: 'مادة اختبار', maxScore: 100, passScore: 50 }]}
+        gradesMatrix={{ 'legacy-student': { 'legacy-subject': 92 }}}
+        approvalStatus={{ approved: true, approvedBy: 'مدير الاختبار', approvedAt: '2025-01-01' }}
+        closures={[{ isImmutableArchive: true, archiveId: 'legacy-archive', signatureHash: 'b'.repeat(64) }]}
+        classes={[]}
+        notify={vi.fn()}
+      />
+    );
+
+    expect(screen.getByText('الأرشيف المعتمد سابق ولا يثبت حضور كل طالب لكل مادة.')).toBeTruthy();
+    expect((screen.getByRole('button', { name: 'طباعة إفادة النتيجة المعتمدة' }) as HTMLButtonElement).disabled).toBe(true);
+    expect(screen.getByText('غير مكتمل')).toBeTruthy();
+    expect(screen.queryByText('92')).toBeNull();
+  });
+
   it('protects distribution exports from normalized formula markers after control characters', async () => {
     const hostileName = '\u00A0\t＝HYPERLINK("https://bad.example")';
     const captured: Blob[] = [];
@@ -93,6 +114,7 @@ describe('exam CSV screen exports', () => {
           approvalStatus={{ approved: true, approvedBy: 'مدير الاختبار', approvedAt: '2026-09-27' }}
           closures={[{
             isImmutableArchive: true,
+            attendanceSchemaVersion: 1,
             archiveId: 'archive-transcript-test',
             signatureHash: 'a'.repeat(64),
             approvedBy: 'مدير الاختبار',

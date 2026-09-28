@@ -97,6 +97,7 @@ import { CANONICAL_ERP_TABLES, CANONICAL_MAPPING_DEFINITIONS, CanonicalErpPostin
 import { ExamValidator } from './src/validation/validators.js';
 import { evaluateExamClosureReadiness } from './src/modules/exams/domain/ExamClosureReadiness.js';
 import { calculateCohortExamResults } from './src/modules/exams/domain/ExamResultEngine.js';
+import { getExamAttendanceStatus } from './src/modules/exams/domain/ExamAttendance.js';
 import { normalizeAssessmentWorkflowState } from './src/modules/exams/application/AssessmentWorkflowService.js';
 import {
   assertTeacherWriteScope,
@@ -12056,13 +12057,30 @@ export async function createApp(options: { cloudflare?: boolean } = {}): Promise
         const signatureValid = expectedSignature === String(archive.signature_hash || '').toLowerCase();
         const students = Array.isArray(payload.students) ? payload.students as Array<Record<string, unknown>> : [];
         const student = students.find(item => String(item?.id || '').trim() === studentId);
+        const subjects = Array.isArray(payload.subjects) ? payload.subjects as Array<Record<string, unknown>> : [];
+        const gradesMatrix = payload.gradesMatrix && typeof payload.gradesMatrix === 'object'
+          ? payload.gradesMatrix as Record<string, Record<string, unknown>>
+          : {};
+        const attendanceComplete = Boolean(
+          payload.attendanceSchemaVersion === 1
+          && student
+          && subjects.length > 0
+          && subjects.every(subject => {
+            const subjectId = String(subject?.id || '').trim();
+            if (!subjectId) return false;
+            const attendance = getExamAttendanceStatus(student, subjectId);
+            if (attendance === 'absent') return true;
+            const grade = gradesMatrix[studentId]?.[subjectId];
+            return attendance === 'present' && typeof grade === 'number' && Number.isFinite(grade);
+          })
+        );
         return {
           archiveId: archive.id,
           studentId,
           studentName: student ? String(student.name || '').trim() : '',
           operationalVersion: Number(archive.operational_version),
           archivedAt: archive.created_at,
-          valid: Boolean(signatureValid && student)
+          valid: Boolean(signatureValid && attendanceComplete)
         };
       }, tenantContext);
 
@@ -12345,6 +12363,7 @@ export async function createApp(options: { cloudflare?: boolean } = {}): Promise
           const failedCount = calculatedResults.filter(result => result.status === 'failed').length;
           const incompleteCount = calculatedResults.filter(result => result.status === 'incomplete').length;
           const archivePayload = {
+            attendanceSchemaVersion: 1,
             settings,
             students: archiveStudents,
             subjects: archiveSubjects,
@@ -12405,6 +12424,7 @@ export async function createApp(options: { cloudflare?: boolean } = {}): Promise
             serverSignedAt,
             operationalVersion: nextVersion,
             signatureHash,
+            attendanceSchemaVersion: 1,
             isImmutableArchive: true
           };
           (payload as any).exams_control_closures = [serverClosure, ...existingClosures];

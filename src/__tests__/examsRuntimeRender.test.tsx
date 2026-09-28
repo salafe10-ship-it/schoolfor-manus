@@ -869,7 +869,9 @@ describe('ExamsResultsModule runtime', () => {
     expect((await screen.findAllByText('غير مكتمل ⏳')).length).toBe(4);
     expect(screen.queryByText('راسب')).toBeNull();
     expect(screen.queryByText('ضعيف')).toBeNull();
-    expect(screen.getAllByRole('button', { name: 'حاضر ✓' }).every(button => (button as HTMLButtonElement).disabled)).toBe(true);
+    const attendanceChoices = screen.getAllByRole('checkbox', { name: /حاضر/ });
+    expect(attendanceChoices).toHaveLength(4);
+    expect(attendanceChoices.every(choice => (choice as HTMLInputElement).disabled && !(choice as HTMLInputElement).checked)).toBe(true);
     expect((screen.getByRole('button', { name: 'حفظ الكشف' }) as HTMLButtonElement).disabled).toBe(true);
     expect((screen.getByRole('button', { name: 'اعتماد الدرجات' }) as HTMLButtonElement).disabled).toBe(true);
   });
@@ -1119,6 +1121,8 @@ describe('ExamsResultsModule runtime', () => {
 
     expect(await screen.findByText('غير مصنف — النتيجة غير مكتملة')).toBeTruthy();
     expect(screen.queryByText('🥇 الأول')).toBeNull();
+    expect(screen.queryByText('0 / 100')).toBeNull();
+    expect(screen.queryByText('0%')).toBeNull();
     const processButton = screen.getByRole('button', { name: 'تحديث ومعالجة النتائج الكلية' });
     expect(processButton.hasAttribute('data-no-save-toast')).toBe(true);
     fireEvent.click(processButton);
@@ -1173,7 +1177,9 @@ describe('ExamsResultsModule runtime', () => {
           if (payload.operation === 'approve' && (
             payload.exams_schedule_approval_status?.approved !== true
             || !payload.exams_students_enriched?.every((student: any) => student.hallId && student.seatNumber)
-            || !payload.exams_students_enriched?.every((student: any) => payload.exams_grades_matrix?.[student.id]?.[payload.exams_subjects?.[0]?.id] !== undefined)
+            || !payload.exams_students_enriched?.every((student: any) => ['present', 'absent'].includes(student.examAttendance?.[payload.exams_subjects?.[0]?.id]))
+            || !payload.exams_students_enriched?.every((student: any) => student.examAttendance?.[payload.exams_subjects?.[0]?.id] === 'absent'
+              || payload.exams_grades_matrix?.[student.id]?.[payload.exams_subjects?.[0]?.id] !== undefined)
           )) {
             return { ok: false, status: 422, json: async () => ({ message: 'test archive rejected incomplete cycle' }) };
           }
@@ -1181,6 +1187,7 @@ describe('ExamsResultsModule runtime', () => {
             const archive = {
               archiveId: 'archive-test-1',
               isImmutableArchive: true,
+              attendanceSchemaVersion: 1,
               signatureHash: 'a'.repeat(64),
               approvedBy: 'مدير اختبار',
               serverSignedAt: '2025-10-06T12:00:00.000Z',
@@ -1306,13 +1313,22 @@ describe('ExamsResultsModule runtime', () => {
     await openExamTab(reloadedView.container, 'grades-entry');
     const gradeInputs = await screen.findAllByPlaceholderText('بانتظار الرصد');
     expect(gradeInputs).toHaveLength(2);
+    expect((gradeInputs[0] as HTMLInputElement).disabled).toBe(true);
+    fireEvent.click(screen.getByRole('checkbox', { name: 'حاضر — طالب اختبار 1 — مادة اختبار 1' }));
+    fireEvent.click(screen.getByRole('checkbox', { name: 'غائب — طالب اختبار 2 — مادة اختبار 1' }));
+    await waitFor(() => {
+      expect((gradeInputs[0] as HTMLInputElement).disabled).toBe(false);
+      expect((gradeInputs[1] as HTMLInputElement).disabled).toBe(true);
+    });
     fireEvent.change(gradeInputs[0], { target: { value: '90' } });
     fireEvent.change(gradeInputs[1], { target: { value: '80' } });
     fireEvent.click(screen.getByRole('button', { name: 'حفظ الكشف' }));
     const savedSubjectId = database.exams_subjects[0].id;
     await waitFor(() => {
       expect(database.exams_grades_matrix['student-test-1']?.[savedSubjectId]).toBe(90);
-      expect(database.exams_grades_matrix['student-test-2']?.[savedSubjectId]).toBe(80);
+      expect(database.exams_grades_matrix['student-test-2']?.[savedSubjectId]).toBeUndefined();
+      expect(database.exams_students_enriched[0].examAttendance?.[savedSubjectId]).toBe('present');
+      expect(database.exams_students_enriched[1].examAttendance?.[savedSubjectId]).toBe('absent');
     });
     expect((await screen.findAllByText('ناجح')).length).toBeGreaterThan(0);
 

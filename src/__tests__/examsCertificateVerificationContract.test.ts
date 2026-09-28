@@ -10,7 +10,9 @@ describe('server-backed exam certificate verification contract', () => {
     expect(server).toContain('/api/exams/result-archives/:archiveId/verify');
     expect(server).toContain('SELECT id, operational_version, payload, signature_hash, created_at');
     expect(server).toContain('expectedSignature === String(archive.signature_hash || \'\').toLowerCase()');
-    expect(server).toContain('valid: Boolean(signatureValid && student)');
+    expect(server).toContain('payload.attendanceSchemaVersion === 1');
+    expect(server).toContain('attendance === \'present\' && typeof grade === \'number\' && Number.isFinite(grade)');
+    expect(server).toContain('valid: Boolean(signatureValid && attendanceComplete)');
   });
 
   it('does not accept a browser-only local match as verification', () => {

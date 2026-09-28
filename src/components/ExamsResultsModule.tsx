@@ -32,6 +32,7 @@ import {
 } from '../modules/exams/application/AssessmentWorkflowService';
 import { calculateCohortExamResults } from '../modules/exams/domain/ExamResultEngine';
 import { evaluateExamClosureReadiness } from '../modules/exams/domain/ExamClosureReadiness';
+import { getExamAttendanceStatus, normalizeExamAttendance, withExamAttendance, type ExamAttendanceStatus } from '../modules/exams/domain/ExamAttendance';
 import { getTrustedAccessToken, getTrustedAccessTokenAsync } from '../utils/auth';
 import { authenticatedRequest } from '../utils/authenticatedRequest';
 import { createExamPrintDocument } from '../utils/examPrintDocument';
@@ -292,7 +293,7 @@ export default function ExamsResultsModule({
 
   const [studentList, setStudentList] = useState<any[]>(() => {
     // لا تُنشأ قوائم امتحان من بيانات تجريبية؛ تُستخدم القائمة المركزية فقط.
-    return initialStudents.map(st => ({ ...st, absentSubjects: [] as string[] }));
+    return initialStudents.map(st => normalizeExamAttendance({ ...st, absentSubjects: (st as any).absentSubjects || [] }));
   });
 
   const [gradesMatrix, setGradesMatrix] = useState<Record<string, Record<string, number>>>(() => {
@@ -414,9 +415,10 @@ export default function ExamsResultsModule({
         ...student,
         seatNumber: examMetadata.seatNumber,
         absentSubjects: Array.isArray(examMetadata.absentSubjects) ? examMetadata.absentSubjects : [],
+        examAttendance: examMetadata.examAttendance,
         hallId: examMetadata.hallId
       };
-    });
+    }).map(student => normalizeExamAttendance(student));
   };
 
   const fetchCanonicalStudents = async (_token: string | null) => {
@@ -673,7 +675,7 @@ export default function ExamsResultsModule({
           if (dbData.exams_halls) setHalls(dbData.exams_halls);
           if (dbData.exams_subjects) setSubjects(dbData.exams_subjects);
           if (canonicalStudents) setStudentList(mergeCanonicalStudents(canonicalStudents, dbData.exams_students_enriched));
-          else if (dbData.exams_students_enriched) setStudentList(dbData.exams_students_enriched);
+          else if (dbData.exams_students_enriched) setStudentList(dbData.exams_students_enriched.map((student: any) => normalizeExamAttendance(student)));
           if (dbData.exams_grades_matrix) setGradesMatrix(dbData.exams_grades_matrix);
           if (dbData.exams_schedule) setSchedule(dbData.exams_schedule);
           if (dbData.exams_proctors) setProctorAssignments(dbData.exams_proctors);
@@ -812,7 +814,7 @@ export default function ExamsResultsModule({
             if (dbData.exams_halls) setHalls(dbData.exams_halls);
             if (dbData.exams_subjects) setSubjects(dbData.exams_subjects);
             if (canonicalStudents) setStudentList(mergeCanonicalStudents(canonicalStudents, dbData.exams_students_enriched));
-            else if (dbData.exams_students_enriched) setStudentList(dbData.exams_students_enriched);
+            else if (dbData.exams_students_enriched) setStudentList(dbData.exams_students_enriched.map((student: any) => normalizeExamAttendance(student)));
             if (dbData.exams_grades_matrix) setGradesMatrix(dbData.exams_grades_matrix);
             if (dbData.exams_schedule) setSchedule(dbData.exams_schedule);
             if (dbData.exams_proctors) setProctorAssignments(dbData.exams_proctors);
@@ -1032,10 +1034,10 @@ export default function ExamsResultsModule({
   const incompleteProcessedStudents = processedStudents.filter(student => student.status === 'غير مكتمل');
   const overallPassRate = completedProcessedStudents.length > 0
     ? Math.round((passedProcessedStudents.length / completedProcessedStudents.length) * 100)
-    : 0;
+    : null;
   const overallAverage = completedProcessedStudents.length > 0
     ? Number((completedProcessedStudents.reduce((total, student) => total + student.percentage, 0) / completedProcessedStudents.length).toFixed(1))
-    : 0;
+    : null;
 
   // Generic CSV Export Utility (Excel-compatible with UTF-8 BOM for Arabic)
   const handleExportToCSV = (data: any[], headers: string[], filename: string) => {
@@ -1710,6 +1712,7 @@ export default function ExamsResultsModule({
   const [selectedGradeLevel, setSelectedGradeLevel] = useState('الكل');
   const [selectedGradeClass, setSelectedGradeClass] = useState('الكل');
   const [selectedGradeSection, setSelectedGradeSection] = useState('الكل');
+  const [selectedGradeHall, setSelectedGradeHall] = useState('الكل');
   const [selectedGradeSubject, setSelectedGradeSubject] = useState(subjects[0]?.id || '');
   const [gradesSearchQuery, setGradesSearchQuery] = useState('');
   const [modifiedGradesKeys, setModifiedGradesKeys] = useState<Set<string>>(new Set());
@@ -1819,7 +1822,7 @@ export default function ExamsResultsModule({
       }
     });
 
-    if (totalChangesCount === 0) {
+    if (totalChangesCount === 0 && modifiedGradesKeys.size === 0) {
       triggerNotification('لم يتم اكتشاف أي تغييرات جديدة لحفظها.', 'info');
       return;
     }
@@ -1846,7 +1849,13 @@ export default function ExamsResultsModule({
     if (success) {
       // Clear draft tracking to indicate save completion
       setBulkDraftGrades({});
-      triggerNotification(`تم حفظ وتدقيق تعديلات الدرجات بنجاح لـ ${totalChangesCount} مادة! 💾`, 'success');
+      setModifiedGradesKeys(new Set());
+      triggerNotification(
+        totalChangesCount > 0
+          ? `تم حفظ التغييرات المعلقة مركزياً، وشملت ${totalChangesCount} تعديل درجة${modifiedGradesKeys.size > 0 ? ' وبيانات الحضور/الغياب المرتبطة' : ''}.`
+          : 'تم حفظ تغييرات الحضور/الغياب في المصدر المركزي بنجاح.',
+        'success'
+      );
     } else {
       // Transaction Rollback!
       setGradesMatrix(backupMatrix);
@@ -1868,7 +1877,8 @@ export default function ExamsResultsModule({
     }
 
     const subjectsHtml = subjects.map(sub => {
-      const isAbsent = student.absentSubjects?.includes(sub.id);
+      const attendance = getExamAttendanceStatus(student, sub.id);
+      const isAbsent = attendance === 'absent';
       const mark = bulkDraftGrades[student.id]?.[sub.id] !== undefined
         ? bulkDraftGrades[student.id][sub.id]
         : (gradesMatrix[student.id]?.[sub.id] ?? 'غير مرصود');
@@ -1878,10 +1888,10 @@ export default function ExamsResultsModule({
           <td style="padding: 10px; text-align: center;">${escapeHtml(sub.maxScore)}</td>
           <td style="padding: 10px; text-align: center;">${escapeHtml(sub.passScore)}</td>
           <td style="padding: 10px; text-align: center; font-weight: 900; color: ${isAbsent ? 'red' : (mark !== 'غير مرصود' && Number(mark) >= sub.passScore ? 'green' : 'red')}">
-            ${isAbsent ? 'غائب' : escapeHtml(mark)}
+            ${attendance === null ? 'الحضور غير مسجل' : isAbsent ? 'غائب' : attendance === 'present' ? escapeHtml(mark) : 'غير مرصود'}
           </td>
           <td style="padding: 10px; text-align: center; font-weight: bold;">
-            ${isAbsent ? 'غياب' : (mark === 'غير مرصود' ? 'معلق' : (Number(mark) >= sub.passScore ? 'اجتاز' : 'لم يجتز'))}
+            ${attendance === null ? 'غير مكتمل' : isAbsent ? 'غياب' : (mark === 'غير مرصود' ? 'معلق' : (Number(mark) >= sub.passScore ? 'اجتاز' : 'لم يجتز'))}
           </td>
         </tr>
       `;
@@ -1931,7 +1941,7 @@ export default function ExamsResultsModule({
             </tr>
             <tr>
               <td><b>رقم الجلوس:</b> ${escapeHtml(student.seatNumber || 'غير محدد')}</td>
-              <td><b>المعدل التراكمي:</b> ${escapeHtml(m.percentage)}%</td>
+              <td><b>المعدل التراكمي:</b> ${!m.isComplete ? 'غير مكتمل' : `${escapeHtml(m.percentage)}%`}</td>
             </tr>
           </table>
 
@@ -1983,6 +1993,10 @@ export default function ExamsResultsModule({
     if (selectedGradeSection !== 'الكل' && s.section !== selectedGradeSection) {
       return false;
     }
+    if (selectedGradeHall === 'unassigned' && (s.hallId || s.seatNumber)) return false;
+    if (selectedGradeHall !== 'الكل' && selectedGradeHall !== 'unassigned' && s.hallId !== selectedGradeHall) {
+      return false;
+    }
     // 4. Filter by Search Query
     if (gradesSearchQuery.trim() !== '') {
       const q = gradesSearchQuery.toLowerCase();
@@ -1999,6 +2013,114 @@ export default function ExamsResultsModule({
     return true;
   });
 
+  const handleExamAttendanceChange = (
+    studentId: string,
+    subjectId: string,
+    requestedStatus: ExamAttendanceStatus | null
+  ) => {
+    if (currentUserRole !== 'admin') {
+      triggerNotification('تسجيل حضور الامتحان أو الغياب يتطلب دور مدير المدرسة أو مدير الكنترول.', 'warning');
+      return;
+    }
+    if (approvalStatus.approved) {
+      triggerNotification('النتائج معتمدة ومقفلة؛ لا يمكن تغيير حضور الامتحان.', 'warning');
+      return;
+    }
+    if (!subjects.some(subject => subject.id === subjectId)) {
+      triggerNotification('حدد مادة امتحانية صحيحة قبل تسجيل الحضور أو الغياب.', 'warning');
+      return;
+    }
+    const student = studentList.find(item => String(item.id) === String(studentId));
+    if (!student) {
+      triggerNotification('تعذر العثور على الطالب في الدورة الحالية؛ لم يتغير سجل الحضور.', 'warning');
+      return;
+    }
+    if (!student.hallId || !student.seatNumber) {
+      triggerNotification('لا يمكن تسجيل حضور الامتحان قبل توزيع الطالب على قاعة وتثبيت رقم جلوسه.', 'warning');
+      return;
+    }
+
+    const currentStatus = getExamAttendanceStatus(student, subjectId);
+    const nextStatus = currentStatus === requestedStatus ? null : requestedStatus;
+    if (currentStatus === nextStatus) return;
+
+    setStudentList(previous => previous.map(item => String(item.id) === String(studentId)
+      ? withExamAttendance(item, subjectId, nextStatus)
+      : item));
+
+    // Never allow a mark entered before an absence to reappear if attendance
+    // is later changed back to present.
+    if (nextStatus === 'absent') {
+      setBulkDraftGrades(previous => {
+        if (!previous[studentId] || previous[studentId][subjectId] === undefined) return previous;
+        const next = { ...previous, [studentId]: { ...previous[studentId] } };
+        delete next[studentId][subjectId];
+        if (Object.keys(next[studentId]).length === 0) delete next[studentId];
+        return next;
+      });
+      const priorGrade = gradesMatrix[studentId]?.[subjectId];
+      if (priorGrade !== undefined) {
+        setGradesMatrix(previous => {
+          const next = structuredClone(previous);
+          if (next[studentId]) {
+            delete next[studentId][subjectId];
+            if (Object.keys(next[studentId]).length === 0) delete next[studentId];
+          }
+          return next;
+        });
+        setGradeHistory(previous => [{
+          id: `gh-attendance-${Date.now()}-${Math.random().toString(36).slice(2, 6)}`,
+          studentName: student.name,
+          classroom: student.classroom,
+          subjectName: subjects.find(subject => subject.id === subjectId)?.name || subjectId,
+          oldGrade: priorGrade,
+          newGrade: null,
+          modifiedBy: trustedActorLabel,
+          reason: 'إثبات غياب الطالب عن الامتحان وإزالة الدرجة السابقة من النتيجة المحتسبة',
+          timestamp: new Date().toISOString().replace('T', ' ').substring(0, 19)
+        }, ...previous]);
+      }
+    }
+
+    setModifiedGradesKeys(previous => new Set([...previous, `${studentId}_${subjectId}`]));
+    const statusLabel = nextStatus === 'present' ? 'حاضر' : nextStatus === 'absent' ? 'غائب' : 'غير مسجل';
+    const subjectName = subjects.find(subject => subject.id === subjectId)?.name || subjectId;
+    logAction(`تسجيل حالة امتحان الطالب ${student.name} في مادة ${subjectName}: ${statusLabel}`, 'الحضور والغياب في الامتحانات');
+    triggerNotification(`حالة ${student.name} في ${subjectName}: ${statusLabel}. احفظ الكشف لإثبات التغيير مركزياً.`, 'info');
+  };
+
+  const renderExamAttendanceOptions = (student: any, subjectId: string) => {
+    const status = getExamAttendanceStatus(student, subjectId);
+    const disabled = currentUserRole !== 'admin' || approvalStatus.approved || !student.hallId || !student.seatNumber || !subjects.some(subject => subject.id === subjectId);
+    const subjectName = subjects.find(subject => subject.id === subjectId)?.name || 'المادة';
+    return (
+      <fieldset className="flex flex-wrap items-center justify-center gap-2" aria-label={`حضور امتحان ${subjectName} للطالب ${student.name}`}>
+        <legend className="sr-only">حالة حضور الطالب في الامتحان</legend>
+        {(['present', 'absent'] as const).map(option => {
+          const isChecked = status === option;
+          const label = option === 'present' ? 'حاضر' : 'غائب';
+          const color = option === 'present'
+            ? isChecked ? 'border-emerald-500 bg-emerald-50 text-emerald-800 ring-1 ring-emerald-500/20' : 'border-emerald-200 bg-white text-emerald-700 hover:bg-emerald-50'
+            : isChecked ? 'border-rose-500 bg-rose-50 text-rose-800 ring-1 ring-rose-500/20' : 'border-rose-200 bg-white text-rose-700 hover:bg-rose-50';
+          return (
+            <label key={option} className={`inline-flex cursor-pointer items-center gap-1.5 rounded-md border px-2 py-1.5 text-[10px] font-black transition ${color} ${disabled ? 'cursor-not-allowed opacity-50' : ''}`}>
+              <input
+                type="checkbox"
+                checked={isChecked}
+                disabled={disabled}
+                aria-label={`${label} — ${student.name} — ${subjectName}`}
+                onChange={event => handleExamAttendanceChange(student.id, subjectId, event.target.checked ? option : null)}
+                className={`h-3.5 w-3.5 ${option === 'present' ? 'accent-emerald-600' : 'accent-rose-600'}`}
+              />
+              <span>{label}</span>
+            </label>
+          );
+        })}
+        {status === null && <span className="w-full text-center text-[9px] font-bold text-amber-700">{currentUserRole !== 'admin' ? 'يتطلب مدير الكنترول' : approvalStatus.approved ? 'الدورة معتمدة ومقفلة' : !student.hallId || !student.seatNumber ? 'وزّع الطالب على قاعة ومقعد أولاً' : !subjects.some(subject => subject.id === subjectId) ? 'اختر مادة امتحانية أولاً' : 'لم يُسجل بعد'}</span>}
+      </fieldset>
+    );
+  };
+
   const handleGradeChange = (studentId: string, subjectId: string, val: string) => {
     if (!subjects.some(subject => subject.id === subjectId)) {
       triggerNotification('اختر مادة امتحانية معتمدة قبل إدخال الدرجات.', 'warning');
@@ -2006,6 +2128,12 @@ export default function ExamsResultsModule({
     }
     if (approvalStatus.approved) {
       triggerNotification('لا يمكن تعديل الدرجات، النتائج معتمدة ومقفلة بالكامل لضمان تجميدها 🔒', 'warning');
+      return;
+    }
+
+    const student = studentList.find(item => String(item.id) === String(studentId));
+    if (getExamAttendanceStatus(student || {}, subjectId) !== 'present') {
+      triggerNotification('سجل حضور الطالب أولاً قبل إدخال درجة هذه المادة؛ سجّل الغياب من خيار «غائب».', 'warning');
       return;
     }
 
@@ -2082,8 +2210,14 @@ export default function ExamsResultsModule({
 
     const updated = { ...gradesMatrix };
     const newKeys = new Set(modifiedGradesKeys);
+    const presentStudents = filteredStudentsForGrades.filter(student => getExamAttendanceStatus(student, subjectId) === 'present');
+    if (presentStudents.length === 0) {
+      triggerNotification('لا يوجد طلاب مسجل حضورهم لهذه المادة ضمن التصفية الحالية؛ لم تُطبق أي درجة.', 'warning');
+      return;
+    }
 
     filteredStudentsForGrades.forEach(st => {
+      if (getExamAttendanceStatus(st, subjectId) !== 'present') return;
       if (!updated[st.id]) updated[st.id] = {};
       updated[st.id][subjectId] = val;
       newKeys.add(`${st.id}_${subjectId}`);
@@ -2091,7 +2225,7 @@ export default function ExamsResultsModule({
 
     setGradesMatrix(updated);
     setModifiedGradesKeys(newKeys);
-    triggerNotification('تم ملء درجات جميع الطلاب المفلترين في هذه المادة بنجاح', 'success');
+    triggerNotification(`طُبقت الدرجة على ${presentStudents.length} طالباً مسجل حضورهم؛ وتُرك ${filteredStudentsForGrades.length - presentStudents.length} بلا درجة لعدم تسجيل الحضور.`, 'info');
   };
 
   // XLSX/CSV import engine. Both formats are normalized to literal cells by
@@ -2136,6 +2270,10 @@ export default function ExamsResultsModule({
 
           const student = studentList.find(s => s.id === studentIdentifier || s.nationalId === studentIdentifier);
           if (student) {
+            if (getExamAttendanceStatus(student, selectedGradeSubject) !== 'present') {
+              validationErrors.push(`الصف ${i + 1}: سجل حضور الطالب لهذه المادة قبل استيراد درجته.`);
+              continue;
+            }
             if (gradeVal > maxScore || gradeVal < 0) {
               validationErrors.push(`الصف ${i + 1}: الدرجة خارج النطاق 0–${maxScore}.`);
               continue;
@@ -2197,7 +2335,8 @@ export default function ExamsResultsModule({
     const subName = subjects.find(s => s.id === selectedGradeSubject)?.name || 'درجات';
     const rows = filteredStudentsForGrades.map((st, idx) => {
       const currentMark = gradesMatrix[st.id]?.[selectedGradeSubject];
-      const isAbsent = st.absentSubjects?.includes(selectedGradeSubject);
+      const attendance = getExamAttendanceStatus(st, selectedGradeSubject);
+      const isAbsent = attendance === 'absent';
 
       // calculate overall metrics
       const studentMarks = gradesMatrix[st.id] || {};
@@ -2205,23 +2344,27 @@ export default function ExamsResultsModule({
       let totalPossibleMax = 0;
       subjects.forEach(sub => {
         const mk = studentMarks[sub.id];
-        if (mk !== undefined) totalScore += mk;
+        const status = getExamAttendanceStatus(st, sub.id);
+        if (status === 'present' && Number.isFinite(mk)) totalScore += mk;
         totalPossibleMax += sub.maxScore;
       });
       const pct = totalPossibleMax > 0 ? parseFloat(((totalScore / totalPossibleMax) * 100).toFixed(1)) : 0;
+      const calculatedResult = processedStudents.find(result => String(result.id) === String(st.id));
 
       let grade = 'بانتظار الرصد';
-      if (totalPossibleMax <= 0) grade = 'بانتظار إعداد المواد';
+      if (calculatedResult?.status === 'غير مكتمل') grade = 'غير مكتمل';
+      else if (totalPossibleMax <= 0) grade = 'بانتظار إعداد المواد';
       else if (pct >= 90) grade = 'ممتاز';
       else if (pct >= 80) grade = 'جيد جداً';
       else if (pct >= 65) grade = 'جيد';
       else if (pct >= 50) grade = 'مقبول';
       else grade = 'ضعيف';
 
-      const isPass = currentMark !== undefined && currentMark >= (subjects.find(s=>s.id===selectedGradeSubject)?.passScore || 50);
-      const resText = totalPossibleMax <= 0 ? 'غير مكتمل' : isAbsent ? 'غياب' : (currentMark === undefined ? 'غير مرصود' : (isPass ? 'ناجح' : 'راسب'));
+      const isPass = attendance === 'present' && currentMark !== undefined && currentMark >= (subjects.find(s=>s.id===selectedGradeSubject)?.passScore || 50);
+      const resText = attendance === null ? 'الحضور غير مسجل' : isAbsent ? 'غياب' : (currentMark === undefined ? 'غير مرصود' : calculatedResult?.status === 'غير مكتمل' ? 'نتيجة غير مكتملة' : (isPass ? 'ناجح' : 'راسب'));
 
-      return [idx + 1, st.nationalId || st.id, st.seatNumber || '', st.name, `${st.classroom} - ${st.section}`, isAbsent ? 0 : (currentMark !== undefined ? currentMark : ''), totalScore, `${pct}%`, grade, resText];
+      const resultIncomplete = calculatedResult?.status === 'غير مكتمل';
+      return [idx + 1, st.nationalId || st.id, st.seatNumber || '', st.name, `${st.classroom} - ${st.section}`, attendance === null ? '' : isAbsent ? 0 : (currentMark !== undefined ? currentMark : ''), resultIncomplete ? '' : totalScore, resultIncomplete ? '' : `${pct}%`, grade, resText];
     });
     handleExportToCSV(rows, ['الرقم التسلسلي', 'رقم الطالب', 'رقم الجلوس', 'اسم الطالب', 'الصف والمجموعة', 'الدرجة', 'المجموع', 'النسبة المئوية', 'التقدير', 'النتيجة'], `تقرير_درجات_${selectedGradeClass}_${subName}`);
   };
@@ -2244,7 +2387,11 @@ export default function ExamsResultsModule({
           studentName: String(student.name || ''),
           classroom: student.classroom,
           section: student.section,
-          grade: student.absentSubjects?.includes(subject.id) ? 0 : gradesMatrix[student.id]?.[subject.id] ?? null
+          grade: getExamAttendanceStatus(student, subject.id) === 'absent'
+            ? 0
+            : getExamAttendanceStatus(student, subject.id) === 'present'
+              ? gradesMatrix[student.id]?.[subject.id] ?? null
+              : null
         }))
       });
       const blob = new Blob([buffer], { type: 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet' });
@@ -2270,6 +2417,7 @@ export default function ExamsResultsModule({
     setSelectedGradeLevel('الكل');
     setSelectedGradeClass('الكل');
     setSelectedGradeSection('الكل');
+    setSelectedGradeHall('الكل');
     setSelectedGradeSubject(subjects[0]?.id || '');
     setGradesSearchQuery('');
     triggerNotification('تم إعادة ضبط فلاتر البحث إلى القيم الافتراضية', 'info');
@@ -2351,7 +2499,8 @@ export default function ExamsResultsModule({
 
     studentList.forEach(st => {
       subjects.forEach(sub => {
-        if (gradesMatrix[st.id]?.[sub.id] === undefined && !st.absentSubjects?.includes(sub.id)) {
+        const attendance = getExamAttendanceStatus(st, sub.id);
+        if (attendance === null || (attendance === 'present' && !Number.isFinite(gradesMatrix[st.id]?.[sub.id]))) {
           missingGradesCount++;
         }
       });
@@ -2408,7 +2557,7 @@ export default function ExamsResultsModule({
     }
 
     if (metrics.missingGradesCount > 0) {
-      triggerNotification(`تعذر الاعتماد: توجد ${metrics.missingGradesCount} درجة غير مرصودة. أكملها أو سجّل حالة الغياب/الإعفاء أولًا.`, 'warning');
+      triggerNotification(`تعذر الاعتماد: توجد ${metrics.missingGradesCount} حالة غير مكتملة؛ سجّل حضور/غياب كل طالب ثم أدخل درجة الحاضر.`, 'warning');
       return;
     }
 
@@ -2670,8 +2819,8 @@ export default function ExamsResultsModule({
                   <td>${escapeHtml(st.seatNumber)}</td>
                   <td>${escapeHtml(st.name)}</td>
                   <td>${escapeHtml(st.classroom)}</td>
-                  <td>${escapeHtml(st.totalEarned)} / ${escapeHtml(st.totalMax)}</td>
-                  <td>${escapeHtml(st.percentage)}%</td>
+                  <td>${st.status === 'غير مكتمل' ? 'غير مكتمل' : `${escapeHtml(st.totalEarned)} / ${escapeHtml(st.totalMax)}`}</td>
+                  <td>${st.status === 'غير مكتمل' ? 'غير مكتمل' : `${escapeHtml(st.percentage)}%`}</td>
                   <td>${escapeHtml(st.gradeSymbol)}</td>
                   <td style="color: ${st.status === 'ناجح' ? 'green' : 'red'}; font-weight: bold;">${escapeHtml(st.status)}</td>
                 </tr>
@@ -2744,7 +2893,7 @@ export default function ExamsResultsModule({
             <div class="step"><strong>2. تعريف الهيكل</strong>أضف المواد والفصول والقاعات بسعات صحيحة. يمنع النظام حذف السجلات المرتبطة بطلاب أو درجات أو جدول.</div>
             <div class="step"><strong>3. التوزيع والجلوس</strong>تحقق أن مجموع سعات القاعات يغطي الطلاب الرسميين، ثم نفّذ التوزيع وتوليد أرقام الجلوس واحفظه مركزياً.</div>
             <div class="step"><strong>4. الجدولة والمراقبة</strong>كوّن الجدول بعد اكتمال المواد والقاعات والمعلمين. عالج التعارضات الحرجة قبل اعتماد الجدول.</div>
-            <div class="step"><strong>5. رصد الدرجات</strong>أدخل درجة كل طالب أو وثّق غيابه عن المادة. الاستيراد يعتمد معرف الطالب الرسمي ولا يعتمد مطابقة الاسم.</div>
+        <div class="step"><strong>5. الحضور ثم رصد الدرجات</strong>اختر المادة والقاعة، وسجّل لكل طالب «حاضر» أو «غائب» صراحةً. لا تُدخل درجة إلا للحاضر؛ الغائب يحتسب بصفر، وغير المسجل يبقى غير مكتمل ولا يظهر ضمن النتائج أو الترتيب. الاستيراد يعتمد معرف الطالب الرسمي ولا يعتمد مطابقة الاسم.</div>
             <div class="step"><strong>6. المراجعة والتظلمات</strong>راجع الدرجات وصدّق المواد. أي تعديل عبر تظلم يحتاج قراراً موثقاً ولا يُسمح به أثناء إغلاق النتائج.</div>
             <div class="step"><strong>7. الاعتماد والإغلاق</strong>لا يعتمد الخادم النتائج مع درجات ناقصة. عند النجاح ينشئ أرشيفاً مستقلاً موقعاً ببصمة SHA-256 لا يملك دور التطبيق تحديثه أو حذفه.</div>
             <div class="step"><strong>8. التقارير والشهادات</strong>اطبع أو صدّر فقط بعد التأكد من المدرسة والسنة وحالة الاعتماد الظاهرة على الشاشة.</div>
@@ -3143,7 +3292,8 @@ export default function ExamsResultsModule({
         {activeTab === 'control-center' && (() => {
           const expectedGrades = visibleStudents.length * subjects.length;
           const recordedGrades = visibleStudents.reduce((total, student) => total + subjects.filter(subject =>
-            Number.isFinite(gradesMatrix[student.id]?.[subject.id]) || student.absentSubjects?.includes(subject.id)
+            getExamAttendanceStatus(student, subject.id) === 'absent'
+              || (getExamAttendanceStatus(student, subject.id) === 'present' && Number.isFinite(gradesMatrix[student.id]?.[subject.id]))
           ).length, 0);
           const gradeCompletion = expectedGrades > 0 ? Math.round((recordedGrades / expectedGrades) * 100) : 0;
           const distributedStudents = visibleStudents.filter(student => student.hallId && student.seatNumber).length;
@@ -3290,7 +3440,7 @@ export default function ExamsResultsModule({
                 ['1', 'الإعداد والهيكل', 'راجع العام والفصل والسياسات، ثم عرّف الصفوف والمواد والقاعات من البيانات الرسمية.'],
                 ['2', 'التوزيع والجلوس', 'وزّع طلاب الدورة على القاعات وولّد أرقام الجلوس، ثم تحقق من عدم وجود طالب بلا مقعد.'],
                 ['3', 'المراقبون والجدول', 'كلّف المراقبين، كوّن الجدول، وعالج التعارضات قبل طلب اعتماد الجدول.'],
-                ['4', 'الدرجات والمعالجة', 'سجّل درجة كل طالب أو حالة الغياب، ثم شغّل المعالجة وراجع النتائج غير المكتملة.'],
+                ['4', 'الحضور والدرجات والمعالجة', 'اختر المادة والقاعة، وسجّل حضور/غياب كل طالب صراحةً. أدخل الدرجة للحاضر فقط؛ ثم عالج النتائج وراجع الحالات غير المكتملة. لا تظهر نتيجة الطالب أو ترتيبه قبل اكتمال الحضور والدرجات.'],
                 ['5', 'الجودة والاعتماد', 'نفّذ فحوص الجاهزية وراجع سجل التغييرات قبل قفل النتائج أو إعادة فتحها بسبب موثق.'],
                 ['6', 'التقارير والشهادات', 'اطبع التقارير والشهادات من البيانات المحفوظة وبعد التحقق من حالة الاعتماد الظاهرة.']
               ].map(([number, title, description]) => (
@@ -6937,10 +7087,13 @@ export default function ExamsResultsModule({
           const totalStudentsCount = filteredStudentsForGrades.length;
           const recordedGradesCount = filteredStudentsForGrades.filter(st => {
             const currentMark = gradesMatrix[st.id]?.[selectedGradeSubject];
-            const isAbsent = st.absentSubjects?.includes(selectedGradeSubject);
-            return currentMark !== undefined || isAbsent;
+            const attendance = getExamAttendanceStatus(st, selectedGradeSubject);
+            return attendance === 'absent' || (attendance === 'present' && Number.isFinite(currentMark));
           }).length;
           const remainingGradesCount = totalStudentsCount - recordedGradesCount;
+          const presentStudentsCount = filteredStudentsForGrades.filter(student => getExamAttendanceStatus(student, selectedGradeSubject) === 'present').length;
+          const absentStudentsCount = filteredStudentsForGrades.filter(student => getExamAttendanceStatus(student, selectedGradeSubject) === 'absent').length;
+          const unmarkedAttendanceCount = Math.max(0, totalStudentsCount - presentStudentsCount - absentStudentsCount);
 
           const subObj = subjects.find(s => s.id === selectedGradeSubject);
           const passScore = subObj?.passScore || 50;
@@ -6948,16 +7101,14 @@ export default function ExamsResultsModule({
 
           const passCount = filteredStudentsForGrades.filter(st => {
             const currentMark = gradesMatrix[st.id]?.[selectedGradeSubject];
-            const isAbsent = st.absentSubjects?.includes(selectedGradeSubject);
-            return !isAbsent && currentMark !== undefined && currentMark >= passScore;
+            return getExamAttendanceStatus(st, selectedGradeSubject) === 'present' && currentMark !== undefined && currentMark >= passScore;
           }).length;
 
-          const passPercent = recordedGradesCount > 0 ? parseFloat(((passCount / recordedGradesCount) * 100).toFixed(1)) : 0;
+          const passPercent = recordedGradesCount > 0 ? parseFloat(((passCount / recordedGradesCount) * 100).toFixed(1)) : null;
 
           const outstandingCount = filteredStudentsForGrades.filter(st => {
             const currentMark = gradesMatrix[st.id]?.[selectedGradeSubject];
-            const isAbsent = st.absentSubjects?.includes(selectedGradeSubject);
-            return !isAbsent && currentMark !== undefined && (currentMark / maxScore) >= 0.9;
+            return getExamAttendanceStatus(st, selectedGradeSubject) === 'present' && currentMark !== undefined && (currentMark / maxScore) >= 0.9;
           }).length;
 
           return (
@@ -7046,24 +7197,24 @@ export default function ExamsResultsModule({
                 </div>
 
                 <div className="p-4 flex flex-col justify-between">
-                  <span className="text-[10px] font-bold text-slate-400">الدرجات المرصودة</span>
+                  <span className="text-[10px] font-bold text-slate-400">حالات الحضور/الغياب المسجلة</span>
                   <div className="flex items-baseline gap-1 mt-2">
-                    <span className="text-2xl font-black text-emerald-600">{recordedGradesCount}</span>
+                    <span className="text-2xl font-black text-emerald-600">{presentStudentsCount + absentStudentsCount}</span>
                     <span className="text-xs text-slate-400 font-bold">من {totalStudentsCount}</span>
                   </div>
                   <div className="w-full bg-slate-100 h-1 mt-3 rounded-full overflow-hidden">
                     <div
                       className="h-full bg-emerald-500 rounded-full transition-all duration-500"
-                      style={{ width: `${totalStudentsCount > 0 ? (recordedGradesCount / totalStudentsCount) * 100 : 0}%` }}
+                      style={{ width: `${totalStudentsCount > 0 ? ((presentStudentsCount + absentStudentsCount) / totalStudentsCount) * 100 : 0}%` }}
                     />
                   </div>
                 </div>
 
                 <div className="p-4 flex flex-col justify-between">
-                  <span className="text-[10px] font-bold text-slate-400">الحقول الشاغرة (المتبقية)</span>
+                  <span className="text-[10px] font-bold text-slate-400">حالات تحتاج استكمالاً</span>
                   <div className="flex items-baseline gap-1 mt-2">
                     <span className={`text-2xl font-black ${remainingGradesCount > 0 ? 'text-amber-500' : 'text-slate-500'}`}>{remainingGradesCount}</span>
-                    <span className="text-xs text-slate-500 font-bold">حقل شاغر</span>
+                    <span className="text-xs text-slate-500 font-bold">حالة/درجة</span>
                   </div>
                   <div className="w-full bg-slate-100 h-1 mt-3 rounded-full overflow-hidden">
                     <div
@@ -7076,13 +7227,13 @@ export default function ExamsResultsModule({
                 <div className="p-4 flex flex-col justify-between">
                   <span className="text-[10px] font-bold text-slate-400">نسبة النجاح الحالية للمادة</span>
                   <div className="flex items-baseline gap-1 mt-2">
-                    <span className="text-2xl font-black text-amber-600">{passPercent}%</span>
+                    <span className="text-2xl font-black text-amber-600">{passPercent === null ? '—' : `${passPercent}%`}</span>
                     <span className="text-xs text-slate-500 font-bold">نسبة النجاح</span>
                   </div>
                   <div className="w-full bg-slate-100 h-1 mt-3 rounded-full overflow-hidden">
                     <div
                       className="h-full bg-amber-500 rounded-full transition-all duration-500"
-                      style={{ width: `${passPercent}%` }}
+                      style={{ width: `${passPercent ?? 0}%` }}
                     />
                   </div>
                 </div>
@@ -7102,6 +7253,16 @@ export default function ExamsResultsModule({
                 </div>
               </div>
 
+              <div className="flex flex-wrap items-center justify-between gap-3 border border-amber-200 bg-amber-50 px-4 py-3 text-[11px]" role="status" aria-live="polite">
+                <div className="font-black text-amber-950">سجل حضور امتحان {subjects.find(subject => subject.id === selectedGradeSubject)?.name || 'المادة'} — اختر حالة كل طالب صراحةً قبل رصد درجته.</div>
+                <div className="flex flex-wrap gap-3 font-bold">
+                  <span className="text-emerald-800">حاضر: {presentStudentsCount}</span>
+                  <span className="text-rose-800">غائب: {absentStudentsCount}</span>
+                  <span className="text-amber-800">غير مسجل: {unmarkedAttendanceCount}</span>
+                  {selectedGradeHall !== 'الكل' && <span className="text-slate-700">القاعة: {halls.find(hall => hall.id === selectedGradeHall)?.name || 'غير معروفة'}</span>}
+                </div>
+              </div>
+
               {/* Filters Panel (لوحة التصفية العلوية) */}
               <div className="p-5 space-y-4">
                 <div className="flex items-center gap-2 border-b pb-2">
@@ -7109,7 +7270,7 @@ export default function ExamsResultsModule({
                   <span className="text-xs font-extrabold text-slate-700">شريط التصفية والفرز الذكي للمجموعات الدراسية</span>
                 </div>
 
-                <div className="grid grid-cols-1 sm:grid-cols-2 md:grid-cols-4 lg:grid-cols-7 gap-3">
+                <div className="grid grid-cols-1 sm:grid-cols-2 md:grid-cols-4 lg:grid-cols-8 gap-3">
                   <div className="space-y-1">
                     <label className="text-[10px] font-black text-slate-500 block">العام الدراسي:</label>
                     <select
@@ -7198,6 +7359,19 @@ export default function ExamsResultsModule({
                       <option value="ب">الشعبة (ب)</option>
                       <option value="علمي أ">علمي أ</option>
                       <option value="أدبي أ">أدبي أ</option>
+                    </select>
+                  </div>
+
+                  <div className="space-y-1">
+                    <label className="text-[10px] font-black text-slate-500 block">قاعة الامتحان:</label>
+                    <select
+                      value={selectedGradeHall}
+                      onChange={event => setSelectedGradeHall(event.target.value)}
+                      className="w-full text-xs font-bold p-2 bg-transparent focus:focus:ring-2 focus:ring-amber-500/20 focus:border-amber-500 outline-none transition-all"
+                    >
+                      <option value="الكل">جميع القاعات</option>
+                      <option value="unassigned">طلاب غير موزعين</option>
+                      {halls.map(hall => <option key={hall.id} value={hall.id}>{hall.name}</option>)}
                     </select>
                   </div>
 
@@ -7450,9 +7624,11 @@ export default function ExamsResultsModule({
                       <tbody className="divide-y divide-amber-900/10 bg-white/60 backdrop-blur-sm rounded-b-2xl">
                         {filteredStudentsForGrades.map((st, idx) => {
                           const currentMark = gradesMatrix[st.id]?.[selectedGradeSubject];
-                          const isAbsent = st.absentSubjects?.includes(selectedGradeSubject);
-                          const isPass = !isAbsent && currentMark !== undefined && currentMark >= passScore;
-                          const isOutstanding = !isAbsent && currentMark !== undefined && (currentMark / maxScore) >= 0.9;
+                          const attendanceStatus = getExamAttendanceStatus(st, selectedGradeSubject);
+                          const isAbsent = attendanceStatus === 'absent';
+                          const isPresent = attendanceStatus === 'present';
+                          const isPass = isPresent && currentMark !== undefined && currentMark >= passScore;
+                          const isOutstanding = isPresent && currentMark !== undefined && (currentMark / maxScore) >= 0.9;
                           const hasUnsavedChanges = modifiedGradesKeys.has(`${st.id}_${selectedGradeSubject}`);
 
                           // calculate student total across all subjects
@@ -7464,14 +7640,16 @@ export default function ExamsResultsModule({
 
                           subjects.forEach(sub => {
                             const mk = studentMarks[sub.id];
-                            if (mk === undefined) {
+                            const subjectAttendance = getExamAttendanceStatus(st, sub.id);
+                            if (subjectAttendance === null || (subjectAttendance === 'present' && !Number.isFinite(mk))) {
                               hasUnfinishedGrade = true;
-                            } else {
+                            }
+                            if (subjectAttendance === 'present' && Number.isFinite(mk)) {
                               totalScore += mk;
                             }
                             totalPossibleMax += sub.maxScore;
 
-                            if (mk !== undefined && mk < sub.passScore) {
+                            if (subjectAttendance === 'present' && Number.isFinite(mk) && mk < sub.passScore) {
                               failedAnySubject = true;
                             }
                           });
@@ -7493,12 +7671,7 @@ export default function ExamsResultsModule({
 
                             resultText = (!failedAnySubject && percentage >= (examSettings.passMarkPercent || 50)) ? 'ناجح' : 'راسب';
                           } else {
-                            if (percentage >= 90) gradeLabel = 'ممتاز (مبدئي)';
-                            else if (percentage >= 80) gradeLabel = 'جيد جداً (مبدئي)';
-                            else if (percentage >= 65) gradeLabel = 'جيد (مبدئي)';
-                            else if (percentage >= 50) gradeLabel = 'مقبول (مبدئي)';
-                            else gradeLabel = 'ضعيف (مبدئي)';
-
+                            gradeLabel = 'غير مكتمل';
                             resultText = 'غير مكتمل ⏳';
                           }
 
@@ -7508,7 +7681,7 @@ export default function ExamsResultsModule({
                             rowBgClass = "bg-slate-100/70 hover:bg-slate-100/90 text-slate-500 transition-colors group";
                           } else if (hasUnsavedChanges) {
                             rowBgClass = "bg-orange-50/60 hover:bg-orange-50/90 transition-colors group";
-                          } else if (currentMark !== undefined && !isPass) {
+                          } else if (isPresent && currentMark !== undefined && !isPass) {
                             rowBgClass = "bg-rose-50/50 hover:bg-rose-100/50 border-rose-100 transition-colors group";
                           } else if (isOutstanding) {
                             rowBgClass = "bg-amber-50/30 hover:bg-amber-50/60 transition-colors group";
@@ -7536,32 +7709,13 @@ export default function ExamsResultsModule({
                                 <div className="flex flex-col">
                                   <span>{st.name}</span>
                                   <span className="text-[9px] text-slate-400 font-semibold">{st.classroom} - الشعبة ({st.section})</span>
+                                  <span className="text-[9px] font-bold text-amber-700">{halls.find(hall => hall.id === st.hallId)?.name || 'غير موزع على قاعة'}</span>
                                 </div>
                               </td>
 
-                              {/* Presence toggle button */}
+                              {/* Explicit, mutually exclusive exam attendance choices */}
                               <td className="p-3 text-center">
-                                <button
-                                  disabled={approvalStatus.approved || !hasSelectedGradeSubject}
-                                  onClick={() => {
-                                    const updatedAbsent = isAbsent
-                                      ? (st.absentSubjects || []).filter((s: string) => s !== selectedGradeSubject)
-                                      : [...(st.absentSubjects || []), selectedGradeSubject];
-
-                                    const updatedList = studentList.map(s => s.id === st.id ? { ...s, absentSubjects: updatedAbsent } : s);
-                                    setStudentList(updatedList);
-                                    setModifiedGradesKeys(previous => new Set([...previous, `${st.id}_${selectedGradeSubject}`]));
-
-                                    triggerNotification(`تم تحديث حالة حضور الطالب ${st.name} إلى ${!isAbsent ? 'غائب' : 'حاضر'}`, 'info');
-                                  }}
-                                  className={`px-3 py-1 rounded-full text-[10px] font-black transition-all ${
-                                    isAbsent
-                                      ? 'bg-rose-100 text-rose-700 border border-rose-200 hover:bg-rose-200'
-                                      : 'bg-emerald-100 text-emerald-700 border border-emerald-200 hover:bg-emerald-200'
-                                  }`}
-                                >
-                                  {isAbsent ? 'غائب ❌' : 'حاضر ✓'}
-                                </button>
+                                {renderExamAttendanceOptions(st, selectedGradeSubject)}
                               </td>
 
                               {/* Direct Grade Cell Input */}
@@ -7569,14 +7723,14 @@ export default function ExamsResultsModule({
                                 <div className="flex items-center gap-1.5 relative">
                                   <input
                                     type="number"
-                                    value={isAbsent ? 0 : (currentMark !== undefined ? currentMark : '')}
-                                    disabled={isAbsent || approvalStatus.approved || !hasSelectedGradeSubject}
+                                    value={isPresent && currentMark !== undefined ? currentMark : isAbsent ? 0 : ''}
+                                    disabled={!isPresent || approvalStatus.approved || !hasSelectedGradeSubject}
                                     onChange={(e) => handleGradeChange(st.id, selectedGradeSubject, e.target.value)}
                                     placeholder="بانتظار الرصد"
                                     className={`w-28 p-2 text-center text-xs font-black border transition-all ${
                                       isAbsent
                                         ? 'bg-slate-100 text-slate-400 border-slate-200 cursor-not-allowed'
-                                        : currentMark === undefined
+                                        : !isPresent || currentMark === undefined
                                           ? 'bg-amber-50/50 text-slate-900 border-amber-200 focus:focus:ring-2 focus:ring-amber-500/20'
                                           : !isPass
                                             ? 'bg-rose-50 text-rose-950 border-rose-300 focus:ring-rose-500/20'
@@ -7593,12 +7747,12 @@ export default function ExamsResultsModule({
 
                               {/* Total score */}
                               <td className="p-3 text-center font-bold text-slate-700 text-xs">
-                                {totalScore}
+                                {hasUnfinishedGrade ? 'غير مكتمل' : totalScore}
                               </td>
 
                               {/* Percentage */}
                               <td className="p-3 text-center font-black text-amber-700 text-xs">
-                                {percentage}%
+                                {hasUnfinishedGrade ? 'غير مكتمل' : `${percentage}%`}
                               </td>
 
                               {/* Grade */}
@@ -7627,8 +7781,9 @@ export default function ExamsResultsModule({
                                   {isAbsent && <span className="bg-red-100 text-red-700 text-[9px] font-black px-1.5 py-0.5 rounded-md border border-red-200">غياب</span>}
                                   {hasUnsavedChanges && <span className="bg-amber-100 text-amber-700 text-[9px] font-black px-1.5 py-0.5 rounded-md border border-amber-200 animate-pulse">تعديل غير محفوظ</span>}
                                   {isOutstanding && <span className="bg-amber-100 text-amber-800 text-[9px] font-black px-1.5 py-0.5 rounded-md border border-amber-200">متفوق 🌟</span>}
-                                  {currentMark === undefined && !isAbsent && <span className="bg-slate-100 text-slate-500 text-[9px] font-black px-1.5 py-0.5 rounded-md border border-slate-200">رصد معلق</span>}
-                                  {percentage >= 95 && <span className="bg-gradient-to-r from-amber-500 to-yellow-500 text-white text-[9px] font-black px-1.5 py-0.5 rounded-md shadow-xs">امتياز مع مرتبة الشرف</span>}
+                                  {attendanceStatus === null && <span className="bg-amber-100 text-amber-800 text-[9px] font-black px-1.5 py-0.5 rounded-md border border-amber-200">الحضور غير مسجل</span>}
+                                  {isPresent && currentMark === undefined && <span className="bg-slate-100 text-slate-500 text-[9px] font-black px-1.5 py-0.5 rounded-md border border-slate-200">بانتظار الدرجة</span>}
+                                  {!hasUnfinishedGrade && percentage >= 95 && <span className="bg-gradient-to-r from-amber-500 to-yellow-500 text-white text-[9px] font-black px-1.5 py-0.5 rounded-md shadow-xs">امتياز مع مرتبة الشرف</span>}
                                 </div>
                               </td>
                             </tr>
@@ -7667,7 +7822,9 @@ export default function ExamsResultsModule({
               {/* REVIEW MODAL (مراجعة تفصيلية للدرجات) */}
               {showReviewGradesModal && (() => {
                 const gradesArray = filteredStudentsForGrades.flatMap(st => {
-                  if (st.absentSubjects?.includes(selectedGradeSubject)) return [0];
+                  const attendance = getExamAttendanceStatus(st, selectedGradeSubject);
+                  if (attendance === 'absent') return [0];
+                  if (attendance !== 'present') return [];
                   const grade = gradesMatrix[st.id]?.[selectedGradeSubject];
                   return grade === undefined ? [] : [grade];
                 });
@@ -7724,10 +7881,10 @@ export default function ExamsResultsModule({
                         <h4 className="text-xs font-black text-slate-900 border-b pb-1">مؤشرات النجاح والرسوب الحالية:</h4>
                         <div className="flex justify-between items-center text-xs">
                           <span className="font-bold text-slate-600">نسبة الاجتياز والاعتماد للمادة:</span>
-                          <span className="font-extrabold text-amber-600">{hasRecordedGrades ? `${passPercent}% (${passCount} طالب ناجح)` : 'بانتظار رصد الدرجات'}</span>
+                          <span className="font-extrabold text-amber-600">{hasRecordedGrades ? `${passPercent ?? 0}% (${passCount} طالب ناجح)` : 'بانتظار رصد الدرجات'}</span>
                         </div>
                         <div className="w-full bg-slate-100 h-2.5 rounded-full overflow-hidden">
-                          <div className="bg-amber-600 h-full rounded-full" style={{ width: `${hasRecordedGrades ? passPercent : 0}%` }} />
+                          <div className="bg-amber-600 h-full rounded-full" style={{ width: `${hasRecordedGrades ? (passPercent ?? 0) : 0}%` }} />
                         </div>
 
                         <div className="flex justify-between items-center text-xs mt-2">
@@ -7818,7 +7975,8 @@ export default function ExamsResultsModule({
                         <tbody>
                           {filteredStudentsForGrades.map((st, idx) => {
                             const currentMark = gradesMatrix[st.id]?.[selectedGradeSubject];
-                            const isAbsent = st.absentSubjects?.includes(selectedGradeSubject);
+            const attendance = getExamAttendanceStatus(st, selectedGradeSubject);
+            const isAbsent = attendance === 'absent';
                             const isPass = !isAbsent && currentMark !== undefined && currentMark >= passScore;
 
                             return (
@@ -7828,10 +7986,10 @@ export default function ExamsResultsModule({
                                 <td className="p-2 border border-slate-950 font-mono">{st.seatNumber}</td>
                                 <td className="p-2 border border-slate-950 font-bold">{st.name}</td>
                                 <td className="p-2 border border-slate-950 text-center font-bold">
-                                  {isAbsent ? 'غياب (0)' : (currentMark !== undefined ? currentMark : 'لم ترصد')}
+                                  {attendance === null ? 'الحضور غير مسجل' : isAbsent ? 'غياب (0)' : (currentMark !== undefined ? currentMark : 'لم ترصد')}
                                 </td>
                                 <td className="p-2 border border-slate-950 text-center font-bold">
-                                  {isAbsent ? 'غائب' : (currentMark === undefined ? 'معلق' : (isPass ? 'ناجح' : 'راسب'))}
+                                  {attendance === null ? 'غير مكتمل' : isAbsent ? 'غائب' : (currentMark === undefined ? 'معلق' : (isPass ? 'ناجح' : 'راسب'))}
                                 </td>
                               </tr>
                             );
@@ -7903,9 +8061,11 @@ export default function ExamsResultsModule({
                 let failedSubjectsCount = 0;
                 let pendingCount = 0;
                 let absentCount = 0;
+                const reviewedStudent = studentList.find(s => String(s.id) === String(studentId));
 
                 subjects.forEach(sub => {
-                  const isAbsent = studentList.find(s => s.id === studentId)?.absentSubjects?.includes(sub.id);
+                  const attendance = getExamAttendanceStatus(reviewedStudent || {}, sub.id);
+                  const isAbsent = attendance === 'absent';
                   let mark = bulkDraftGrades[studentId]?.[sub.id];
                   if (mark === undefined) {
                     mark = gradesMatrix[studentId]?.[sub.id];
@@ -7913,8 +8073,10 @@ export default function ExamsResultsModule({
 
                   if (isAbsent) {
                     absentCount++;
+                    pass = false;
+                    failedSubjectsCount++;
                     mark = 0;
-                  } else if (mark === undefined) {
+                  } else if (attendance === null || mark === undefined) {
                     pendingCount++;
                     mark = 0;
                   }
@@ -7922,22 +8084,23 @@ export default function ExamsResultsModule({
                   totalScore += mark;
                   totalMax += sub.maxScore;
 
-                  if (mark < sub.passScore && !isAbsent && mark !== undefined) {
+                  if (mark < sub.passScore && attendance === 'present' && mark !== undefined) {
                     pass = false;
                     failedSubjectsCount++;
                   }
                 });
 
-                const percentage = totalMax > 0 ? (totalScore / totalMax) * 100 : 0;
-                const formattedPercent = parseFloat(percentage.toFixed(1));
+                const isComplete = subjects.length > 0 && pendingCount === 0;
+                const percentage = isComplete && totalMax > 0 ? (totalScore / totalMax) * 100 : null;
+                const formattedPercent = percentage === null ? null : parseFloat(percentage.toFixed(1));
 
-                let gradeSymbol = 'مقبول';
-                if (formattedPercent >= 90) gradeSymbol = 'ممتاز 🏅';
-                else if (formattedPercent >= 80) gradeSymbol = 'جيد جداً';
-                else if (formattedPercent >= 65) gradeSymbol = 'جيد';
-                else if (formattedPercent < 50) gradeSymbol = 'ضعيف ❌';
+                let gradeSymbol = !isComplete ? 'غير مكتمل' : 'مقبول';
+                if (formattedPercent !== null && formattedPercent >= 90) gradeSymbol = 'ممتاز 🏅';
+                else if (formattedPercent !== null && formattedPercent >= 80) gradeSymbol = 'جيد جداً';
+                else if (formattedPercent !== null && formattedPercent >= 65) gradeSymbol = 'جيد';
+                else if (formattedPercent !== null && formattedPercent < 50) gradeSymbol = 'ضعيف ❌';
 
-                const resultStatus = pass && failedSubjectsCount === 0 && absentCount === 0 ? 'ناجح' : 'راسب';
+                const resultStatus = !isComplete ? 'غير مكتمل' : pass && failedSubjectsCount === 0 && absentCount === 0 ? 'ناجح' : 'راسب';
 
                 return {
                   totalScore,
@@ -7947,6 +8110,7 @@ export default function ExamsResultsModule({
                   resultStatus,
                   failedSubjectsCount,
                   pendingCount,
+                  isComplete,
                   absentCount
                 };
               };
@@ -7954,6 +8118,10 @@ export default function ExamsResultsModule({
               const handleReviewEditGradeChange = (studentId: string, subjectId: string, valueStr: string) => {
                 if (approvalStatus.approved) {
                   triggerNotification('لا يمكن تعديل الدرجات، النتائج معتمدة ومقفلة بالكامل 🔒', 'warning');
+                  return;
+                }
+                if (valueStr.trim() !== '' && getExamAttendanceStatus(studentList.find(student => String(student.id) === String(studentId)) || {}, subjectId) !== 'present') {
+                  triggerNotification('سجل حضور الطالب في المادة قبل إدخال الدرجة؛ أو اختر «غائب» لتوثيق غيابه.', 'warning');
                   return;
                 }
 
@@ -7997,13 +8165,12 @@ export default function ExamsResultsModule({
               let studentDraftChangesCount = 0;
               if (selectedStObj) {
                 const sId = selectedStObj.id;
-                if (bulkDraftGrades[sId]) {
-                  Object.keys(bulkDraftGrades[sId]).forEach(subId => {
-                    if (bulkDraftGrades[sId][subId] !== (gradesMatrix[sId]?.[subId] ?? 0)) {
-                      studentDraftChangesCount++;
-                    }
-                  });
-                }
+                subjects.forEach(subject => {
+                  const hasGradeDraft = bulkDraftGrades[sId]?.[subject.id] !== undefined
+                    && bulkDraftGrades[sId][subject.id] !== (gradesMatrix[sId]?.[subject.id] ?? 0);
+                  const hasUnsavedAttendance = modifiedGradesKeys.has(`${sId}_${subject.id}`);
+                  if (hasGradeDraft || hasUnsavedAttendance) studentDraftChangesCount++;
+                });
               }
 
               return (
@@ -8167,7 +8334,7 @@ export default function ExamsResultsModule({
                                 <span className={`font-black ${
                                   isSelected ? 'text-white' : 'text-amber-700'
                                 }`}>
-                                  {m.percentage}% ({m.resultStatus})
+                                  {m.percentage === null ? 'غير مكتمل' : `${m.percentage}%`} ({m.resultStatus})
                                 </span>
                               </div>
                             </button>
@@ -8212,7 +8379,7 @@ export default function ExamsResultsModule({
                                     ناجح / راسب: {m.resultStatus}
                                   </span>
                                   <span className="px-2.5 py-1 bg-white/10 text-white border border-white/20 text-[10px] font-black">
-                                    المعدل: {m.percentage}%
+                                    المعدل: {m.percentage === null ? 'غير مكتمل' : `${m.percentage}%`}
                                   </span>
                                 </div>
                               </div>
@@ -8228,11 +8395,11 @@ export default function ExamsResultsModule({
                             <div className="grid grid-cols-2 sm:grid-cols-4 gap-3">
                               <div className="p-3.5 text-center space-y-1 shadow-xs">
                                 <p className="text-[9px] text-slate-400 font-bold uppercase">الدرجة الكلية</p>
-                                <p className="text-sm font-black text-slate-800">{m.totalScore} <span className="text-[10px] text-slate-400">/ {m.totalMax}</span></p>
+                                <p className="text-sm font-black text-slate-800">{!m.isComplete ? 'غير مكتمل' : <>{m.totalScore} <span className="text-[10px] text-slate-400">/ {m.totalMax}</span></>}</p>
                               </div>
                               <div className="p-3.5 text-center space-y-1 shadow-xs">
                                 <p className="text-[9px] text-slate-400 font-bold uppercase">النسبة التراكمية</p>
-                                <p className="text-sm font-black text-amber-700">{m.percentage}%</p>
+                                <p className="text-sm font-black text-amber-700">{m.percentage === null ? 'غير مكتمل' : `${m.percentage}%`}</p>
                               </div>
                               <div className="p-3.5 text-center space-y-1 shadow-xs">
                                 <p className="text-[9px] text-slate-400 font-bold uppercase">المواد المتعثرة</p>
@@ -8257,12 +8424,15 @@ export default function ExamsResultsModule({
 
                               <div className="divide-y divide-amber-900/10 bg-white/60 backdrop-blur-sm rounded-b-2xl">
                                 {subjects.map(sub => {
-                                  const isAbsent = selectedStObj.absentSubjects?.includes(sub.id);
-                                  const val = bulkDraftGrades[selectedStObj.id]?.[sub.id] !== undefined
+                                  const attendanceStatus = getExamAttendanceStatus(selectedStObj, sub.id);
+                                  const isAbsent = attendanceStatus === 'absent';
+                                  const isPresent = attendanceStatus === 'present';
+                                  const storedVal = bulkDraftGrades[selectedStObj.id]?.[sub.id] !== undefined
                                     ? bulkDraftGrades[selectedStObj.id][sub.id]
                                     : (gradesMatrix[selectedStObj.id]?.[sub.id] ?? '');
+                                  const val = isPresent ? storedVal : isAbsent ? 0 : '';
                                   const isChanged = bulkDraftGrades[selectedStObj.id]?.[sub.id] !== undefined && bulkDraftGrades[selectedStObj.id][sub.id] !== (gradesMatrix[selectedStObj.id]?.[sub.id] ?? 0);
-                                  const isPass = val !== '' && Number(val) >= sub.passScore;
+                                  const isPass = isPresent && val !== '' && Number(val) >= sub.passScore;
 
                                   return (
                                     <div key={sub.id} className="p-4 hover:bg-transparent/50 transition-colors flex flex-col md:flex-row md:items-center justify-between gap-4">
@@ -8273,37 +8443,9 @@ export default function ExamsResultsModule({
                                         <p className="text-[10px] text-slate-400 font-bold">النهاية العظمى {sub.maxScore} | حد النجاح {sub.passScore}</p>
                                       </div>
 
-                                      {/* Presence Switch */}
-                                      <div className="flex items-center gap-2">
-                                        <button
-                                          disabled={approvalStatus.approved}
-                                          onClick={() => {
-                                            const updatedAbsent = isAbsent
-                                              ? (selectedStObj.absentSubjects || []).filter((s: string) => s !== sub.id)
-                                              : [...(selectedStObj.absentSubjects || []), sub.id];
-
-                                            const updatedList = studentList.map(s => s.id === selectedStObj.id ? { ...s, absentSubjects: updatedAbsent } : s);
-                                            setStudentList(updatedList);
-
-                                            if (!isAbsent) {
-                                              // set draft and matrix to 0
-                                              setBulkDraftGrades(prev => {
-                                                const updated = { ...prev };
-                                                if (!updated[selectedStObj.id]) updated[selectedStObj.id] = {};
-                                                updated[selectedStObj.id][sub.id] = 0;
-                                                return updated;
-                                              });
-                                            }
-                                            triggerNotification(`تغيير حالة حضور مادة ${sub.name} للطالب ${selectedStObj.name}`, 'info');
-                                          }}
-                                          className={`px-3 py-1.5 text-[10px] font-black transition-all ${
-                                            isAbsent
-                                              ? 'bg-rose-100 text-rose-700 border border-rose-200'
-                                              : 'bg-emerald-100 text-emerald-700 border border-emerald-200'
-                                          }`}
-                                        >
-                                          {isAbsent ? 'غائب ❌' : 'حاضر ✓'}
-                                        </button>
+                                      <div className="flex flex-col items-center gap-1">
+                                        <span className="text-[9px] font-bold text-slate-500">الحضور أو الغياب</span>
+                                        {renderExamAttendanceOptions(selectedStObj, sub.id)}
                                       </div>
 
                                       {/* Grade Input */}
@@ -8312,7 +8454,7 @@ export default function ExamsResultsModule({
                                           <input
                                             type="number"
                                             value={isAbsent ? 0 : val}
-                                            disabled={isAbsent || approvalStatus.approved}
+                                            disabled={!isPresent || approvalStatus.approved}
                                             onChange={(e) => handleReviewEditGradeChange(selectedStObj.id, sub.id, e.target.value)}
                                             placeholder="لم ترصد"
                                             className={`w-full p-2 text-center text-xs font-black border transition-all ${
@@ -8320,7 +8462,7 @@ export default function ExamsResultsModule({
                                                 ? 'bg-slate-100 text-slate-400 border-slate-200 cursor-not-allowed'
                                                 : isChanged
                                                   ? 'bg-amber-50 text-amber-950 border-amber-300 ring-2 ring-amber-500/10'
-                                                  : val === ''
+                                              : val === '' || !isPresent
                                                     ? 'bg-transparent text-slate-400 border-slate-200'
                                                     : !isPass
                                                       ? 'bg-rose-50 text-rose-950 border-rose-300'
@@ -8413,7 +8555,13 @@ export default function ExamsResultsModule({
                   mark = gradesMatrix[studentId]?.[sub.id];
                 }
 
-                if (mark === undefined) {
+                const reviewedStudent = studentList.find(student => String(student.id) === String(studentId));
+                const attendance = getExamAttendanceStatus(reviewedStudent || {}, sub.id);
+                if (attendance === 'absent') {
+                  mark = 0;
+                  pass = false;
+                  failedSubjectsCount++;
+                } else if (attendance !== 'present' || mark === undefined || !Number.isFinite(mark)) {
                   pendingCount++;
                   mark = 0;
                 }
@@ -8421,22 +8569,23 @@ export default function ExamsResultsModule({
                 totalScore += mark;
                 totalMax += sub.maxScore;
 
-                if (mark < sub.passScore) {
+                if (attendance === 'present' && mark < sub.passScore) {
                   pass = false;
                   failedSubjectsCount++;
                 }
               });
 
-              const percentage = totalMax > 0 ? (totalScore / totalMax) * 100 : 0;
-              const formattedPercent = parseFloat(percentage.toFixed(1));
+              const isComplete = subjects.length > 0 && pendingCount === 0;
+              const percentage = isComplete && totalMax > 0 ? (totalScore / totalMax) * 100 : null;
+              const formattedPercent = percentage === null ? null : parseFloat(percentage.toFixed(1));
 
-              let gradeSymbol = 'مقبول';
-              if (formattedPercent >= 90) gradeSymbol = 'ممتاز 🏅';
-              else if (formattedPercent >= 80) gradeSymbol = 'جيد جداً';
-              else if (formattedPercent >= 65) gradeSymbol = 'جيد';
-              else if (formattedPercent < 50) gradeSymbol = 'ضعيف ❌';
+              let gradeSymbol = !isComplete ? 'غير مكتمل' : 'مقبول';
+              if (formattedPercent !== null && formattedPercent >= 90) gradeSymbol = 'ممتاز 🏅';
+              else if (formattedPercent !== null && formattedPercent >= 80) gradeSymbol = 'جيد جداً';
+              else if (formattedPercent !== null && formattedPercent >= 65) gradeSymbol = 'جيد';
+              else if (formattedPercent !== null && formattedPercent < 50) gradeSymbol = 'ضعيف ❌';
 
-              const resultStatus = pass ? 'ناجح' : 'راسب';
+              const resultStatus = !isComplete ? 'غير مكتمل' : pass ? 'ناجح' : 'راسب';
 
               return {
                 totalScore,
@@ -8445,7 +8594,8 @@ export default function ExamsResultsModule({
                 gradeSymbol,
                 resultStatus,
                 failedSubjectsCount,
-                pendingCount
+                pendingCount,
+                isComplete
               };
             };
 
@@ -8459,20 +8609,20 @@ export default function ExamsResultsModule({
 
               list.forEach(st => {
                 const m = getStudentReviewMetrics(st.id);
-                if (m.pendingCount > 0) {
+                if (!m.isComplete) {
                   pending++;
                 } else {
                   completed++;
                 }
-                if (m.resultStatus === 'ناجح' && m.pendingCount === 0) {
+                if (m.resultStatus === 'ناجح' && m.isComplete) {
                   passed++;
                 }
-                if (m.percentage >= 90 && m.pendingCount === 0) {
+                if (m.percentage !== null && m.percentage >= 90 && m.isComplete) {
                   outstanding++;
                 }
               });
 
-              const passPercent = completed > 0 ? parseFloat(((passed / completed) * 100).toFixed(1)) : 0;
+              const passPercent = completed > 0 ? parseFloat(((passed / completed) * 100).toFixed(1)) : null;
 
               return {
                 total,
@@ -8497,8 +8647,10 @@ export default function ExamsResultsModule({
               const rows = filteredStudentsForGrades.map((st, idx) => {
                 const m = getStudentReviewMetrics(st.id);
                 const studentSubjectsGrades = subjects.map(sub => {
+                  const attendance = getExamAttendanceStatus(st, sub.id);
                   const val = bulkDraftGrades[st.id]?.[sub.id] !== undefined ? bulkDraftGrades[st.id][sub.id] : (gradesMatrix[st.id]?.[sub.id] ?? '');
-                  return val !== '' ? val : 'لم ترصد';
+                  if (attendance === 'absent') return 'غائب';
+                  return attendance === 'present' && val !== '' ? val : 'غير مكتمل';
                 });
                 const lastMod = gradesLastModified[st.id] || 'لا توجد تعديلات';
                 return [
@@ -8508,8 +8660,8 @@ export default function ExamsResultsModule({
                   `"${st.name}"`,
                   `"${st.classroom} - ${st.section}"`,
                   ...studentSubjectsGrades,
-                  m.totalScore,
-                  `"${m.percentage}%"`,
+                  !m.isComplete ? 'غير مكتمل' : m.totalScore,
+                  `"${m.percentage === null ? 'غير مكتمل' : `${m.percentage}%`}"`,
                   `"${m.gradeSymbol}"`,
                   `"${m.resultStatus}"`,
                   `"${lastMod}"`
@@ -8530,6 +8682,10 @@ export default function ExamsResultsModule({
             const handleReviewEditGradeChange = (studentId: string, subjectId: string, valueStr: string) => {
               if (approvalStatus.approved) {
                 triggerNotification('لا يمكن تعديل الدرجات، النتائج معتمدة ومقفلة بالكامل 🔒', 'warning');
+                return;
+              }
+              if (valueStr.trim() !== '' && getExamAttendanceStatus(studentList.find(student => String(student.id) === String(studentId)) || {}, subjectId) !== 'present') {
+                triggerNotification('سجل حضور الطالب في المادة قبل إدخال الدرجة؛ أو اختر «غائب» لتوثيق غيابه.', 'warning');
                 return;
               }
 
@@ -8625,13 +8781,13 @@ export default function ExamsResultsModule({
                   <div className="p-4 flex flex-col justify-between">
                     <span className="text-[10px] font-bold text-slate-400">نسبة النجاح العامة بالصف</span>
                     <div className="flex items-baseline gap-1 mt-2">
-                      <span className="text-2xl font-black text-amber-600">{reviewEditStats.passPercent}%</span>
+                      <span className="text-2xl font-black text-amber-600">{reviewEditStats.passPercent === null ? '—' : `${reviewEditStats.passPercent}%`}</span>
                       <span className="text-xs text-slate-500 font-bold">للمكتمل رصدهم</span>
                     </div>
                     <div className="w-full bg-slate-100 h-1 mt-3 rounded-full overflow-hidden">
                       <div
                         className="h-full bg-amber-500 rounded-full transition-all duration-500"
-                        style={{ width: `${reviewEditStats.passPercent}%` }}
+                        style={{ width: `${reviewEditStats.passPercent ?? 0}%` }}
                       />
                     </div>
                   </div>
@@ -8909,9 +9065,11 @@ export default function ExamsResultsModule({
 
                                 {/* Subjects Inputs */}
                                 {subjects.map(sub => {
-                                  const val = bulkDraftGrades[st.id]?.[sub.id] !== undefined ? bulkDraftGrades[st.id][sub.id] : (gradesMatrix[st.id]?.[sub.id] ?? '');
+                                  const attendanceStatus = getExamAttendanceStatus(st, sub.id);
+                                  const storedVal = bulkDraftGrades[st.id]?.[sub.id] !== undefined ? bulkDraftGrades[st.id][sub.id] : (gradesMatrix[st.id]?.[sub.id] ?? '');
+                                  const val = attendanceStatus === 'present' ? storedVal : attendanceStatus === 'absent' ? 0 : '';
                                   const isChanged = bulkDraftGrades[st.id]?.[sub.id] !== undefined && bulkDraftGrades[st.id][sub.id] !== (gradesMatrix[st.id]?.[sub.id] ?? 0);
-                                  const isFail = val !== '' && Number(val) < sub.passScore;
+                                  const isFail = attendanceStatus === 'present' && val !== '' && Number(val) < sub.passScore;
 
                                   return (
                                     <td key={sub.id} className="p-2 text-center">
@@ -8919,7 +9077,7 @@ export default function ExamsResultsModule({
                                         <input
                                           type="number"
                                           value={val}
-                                          disabled={approvalStatus.approved}
+                                          disabled={approvalStatus.approved || attendanceStatus !== 'present'}
                                           onChange={(e) => handleReviewEditGradeChange(st.id, sub.id, e.target.value)}
                                           placeholder="لم ترصد"
                                           className={`w-20 p-1.5 text-center text-xs font-black rounded-lg border transition-all ${
@@ -8939,12 +9097,12 @@ export default function ExamsResultsModule({
 
                                 {/* Total score */}
                                 <td className="p-3 text-center font-bold text-slate-700 text-xs">
-                                  {m.totalScore}
+                                  {!m.isComplete ? 'غير مكتمل' : m.totalScore}
                                 </td>
 
                                 {/* Percentage */}
                                 <td className="p-3 text-center font-black text-amber-700 text-xs">
-                                  {m.percentage}%
+                                  {m.percentage === null ? 'غير مكتمل' : `${m.percentage}%`}
                                 </td>
 
                                 {/* Grade */}
@@ -9047,7 +9205,7 @@ export default function ExamsResultsModule({
                       <span className="font-bold">{metrics.totalGradeFields} حقل</span>
                     </div>
                     <div className="flex justify-between">
-                      <span className="text-slate-600 font-bold">الحقول الشاغرة بانتظار الرصد:</span>
+                      <span className="text-slate-600 font-bold">حضور/غياب أو درجات تحتاج استكمالاً:</span>
                       <span className={`font-black ${metrics.missingGradesCount > 0 ? 'text-amber-600' : 'text-emerald-600'}`}>
                         {metrics.missingGradesCount} حقل
                       </span>
@@ -9171,13 +9329,13 @@ export default function ExamsResultsModule({
                       <CheckCircle className="w-5 h-5 text-emerald-600 shrink-0 mt-0.5" />
                     )}
                     <div>
-                      <h4 className="font-bold text-xs text-slate-900">التحقق من رصد درجات المواد الغائبة</h4>
+                      <h4 className="font-bold text-xs text-slate-900">التحقق من الحضور/الغياب والدرجات</h4>
                       <p className="text-[10px] text-slate-500">
                          {!reviewDataReady
                            ? 'لا توجد مواد وطلاب موثقون لإكمال فحص الرصد.'
                            : metrics.missingGradesCount > 0
-                          ? `تنبيه: هناك عدد ${metrics.missingGradesCount} درجة لم يتم رصدها بعد.`
-                          : 'ممتاز: تم رصد وإكمال جميع درجات الطلاب بنجاح.'}
+                          ? `تنبيه: هناك ${metrics.missingGradesCount} حالة حضور/غياب أو درجة لم تكتمل بعد.`
+                          : 'اكتمل تسجيل حضور/غياب الطلاب ودرجات الحاضرين.'}
                       </p>
                     </div>
                   </div>
@@ -9259,8 +9417,8 @@ export default function ExamsResultsModule({
                         <td className="p-3 font-mono font-bold text-amber-700">{st.seatNumber || 'N/A'}</td>
                         <td className="p-3 font-bold text-slate-900">{st.name}</td>
                         <td className="p-3 font-semibold">{st.classroom}</td>
-                        <td className="p-3 font-bold text-slate-800">{st.totalEarned} / {st.totalMax}</td>
-                        <td className="p-3 font-mono font-extrabold text-sm text-amber-700">{st.percentage}%</td>
+                        <td className="p-3 font-bold text-slate-800">{st.status === 'غير مكتمل' ? 'غير مكتمل' : `${st.totalEarned} / ${st.totalMax}`}</td>
+                        <td className="p-3 font-mono font-extrabold text-sm text-amber-700">{st.status === 'غير مكتمل' ? 'غير مكتمل' : `${st.percentage}%`}</td>
                         <td className="p-3 font-black text-slate-900">{st.gradeSymbol}</td>
                         <td className="p-3 font-bold">
                           <span className={`px-2.5 py-0.5 rounded-full text-[10px] ${
@@ -9326,7 +9484,9 @@ export default function ExamsResultsModule({
                       data={subjects.map(sub => {
                         // Calculate average score for this subject
                         const scores = visibleStudents.flatMap(student => {
-                          if (student.absentSubjects?.includes(sub.id)) return [0];
+                          const attendance = getExamAttendanceStatus(student, sub.id);
+                          if (attendance === 'absent') return [0];
+                          if (attendance !== 'present') return [];
                           const value = gradesMatrix[student.id]?.[sub.id];
                           return typeof value === 'number' && Number.isFinite(value) ? [value] : [];
                         });
@@ -9361,7 +9521,7 @@ export default function ExamsResultsModule({
               <div className="p-5 border border-slate-200">
                 <span className="text-xs text-slate-500 font-bold block">نسبة النجاح العامة</span>
                 <p className="text-2xl font-black text-emerald-600 mt-1">
-                  {overallPassRate}%
+                  {overallPassRate === null ? '—' : `${overallPassRate}%`}
                 </p>
                 <p className="text-[10px] text-slate-500 font-bold mt-1">ممن أنهوا الاختبارات بنجاح</p>
               </div>
@@ -9369,7 +9529,7 @@ export default function ExamsResultsModule({
               <div className="p-5 border border-slate-200">
                 <span className="text-xs text-slate-500 font-bold block">المعدل العام للمجموع</span>
                 <p className="text-2xl font-black text-amber-600 mt-1">
-                  {overallAverage}%
+                  {overallAverage === null ? '—' : `${overallAverage}%`}
                 </p>
                 <p className="text-[10px] text-slate-500 font-bold mt-1">للنتائج المكتملة في المدرسة الحالية</p>
               </div>
@@ -9482,7 +9642,8 @@ export default function ExamsResultsModule({
                     let missingGradesCount = 0;
                     studentList.forEach(st => {
                       subjects.forEach(sub => {
-                        if (gradesMatrix[st.id]?.[sub.id] === undefined && !st.absentSubjects?.includes(sub.id)) {
+                        const attendance = getExamAttendanceStatus(st, sub.id);
+                        if (attendance === null || (attendance === 'present' && !Number.isFinite(gradesMatrix[st.id]?.[sub.id]))) {
                           missingGradesCount++;
                         }
                       });
@@ -9517,7 +9678,8 @@ export default function ExamsResultsModule({
                             let missingGradesStg = 0;
                             stdInStg.forEach(st => {
                               subjects.forEach(sub => {
-                                if (gradesMatrix[st.id]?.[sub.id] === undefined && !st.absentSubjects?.includes(sub.id)) {
+                                const attendance = getExamAttendanceStatus(st, sub.id);
+                                if (attendance === null || (attendance === 'present' && !Number.isFinite(gradesMatrix[st.id]?.[sub.id]))) {
                                   missingGradesStg++;
                                 }
                               });
@@ -10378,16 +10540,18 @@ export default function ExamsResultsModule({
 
                         {/* Real-time comparison with current year */}
                         {(() => {
-                          const currentStudents = processedStudents;
+                          const currentStudents = completedProcessedStudents;
                           const currentPassRate = currentStudents.length > 0
                             ? Math.round((currentStudents.filter(s => s.percentage >= 50).length / currentStudents.length) * 100)
-                            : 0;
-                          const diff = currentPassRate - selectedYearObj.overallPassRate;
+                            : null;
+                          const diff = currentPassRate === null ? null : currentPassRate - selectedYearObj.overallPassRate;
                           return (
                             <div className="pt-2 border-t border-amber-100 mt-2 text-[10px]">
                               <span className="font-bold text-slate-700 block">مقارنة التطور مع العام الحالي:</span>
                               <div className="flex items-center gap-1 mt-1 font-extrabold">
-                                {diff > 0 ? (
+                                {diff === null ? (
+                                  <span className="text-slate-600">لا توجد نتائج مكتملة للمقارنة بعد.</span>
+                                ) : diff > 0 ? (
                                   <span className="text-emerald-600">📈 نمو إيجابي بنسبة (+{diff}%) مقارنة بـ {selectedYearObj.year}</span>
                                 ) : diff < 0 ? (
                                   <span className="text-rose-600">📉 تراجع طفيف بنسبة ({diff}%) مقارنة بـ {selectedYearObj.year}</span>
