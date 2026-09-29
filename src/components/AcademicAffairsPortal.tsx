@@ -261,6 +261,7 @@ export default function AcademicAffairsPortal({
 
   // Add Schedule Entry Modal State
   const [isScheduleModalOpen, setIsScheduleModalOpen] = useState<boolean>(false);
+  const [selectedSchedulePeriod, setSelectedSchedulePeriod] = useState<SchedulePeriod | null>(null);
   const [scheduleForm, setScheduleForm] = useState({
     day: 'الأحد' as 'الأحد' | 'الإثنين' | 'الثلاثاء' | 'الأربعاء' | 'الخميس',
     periodNumber: 1,
@@ -447,7 +448,7 @@ export default function AcademicAffairsPortal({
       triggerNotification('يرجى اختيار المادة والمعلم المكلف بشكل صحيح', 'warning');
       return;
     }
-    const duplicateSlot = schedulePeriods.find(period => period.day === scheduleForm.day
+    const duplicateSlot = schedulePeriods.find(period => period.id !== selectedSchedulePeriod?.id && period.day === scheduleForm.day
       && period.periodNumber === Number(scheduleForm.periodNumber)
       && period.className.trim().toLowerCase() === scheduleForm.className.trim().toLowerCase());
     if (duplicateSlot) {
@@ -456,7 +457,7 @@ export default function AcademicAffairsPortal({
     }
 
     const newPeriod: SchedulePeriod = {
-      id: `sched_${Date.now()}`,
+      id: selectedSchedulePeriod?.id || `sched_${Date.now()}`,
       day: scheduleForm.day,
       periodNumber: Number(scheduleForm.periodNumber),
       classId: 'cls_custom',
@@ -468,16 +469,26 @@ export default function AcademicAffairsPortal({
       roomName: scheduleForm.roomName
     };
 
-    setSchedulePeriods([...schedulePeriods, newPeriod]);
-    logAction('ADD_SCHEDULE_PERIOD', `تخصيص حصة دراسية: ${selectedSubj.name} - ${scheduleForm.className}`, 'الشؤون الأكاديمية');
-    triggerNotification(`تم إضافة الحصة الدراسية للجدول بنجاح!`, 'success');
+    setSchedulePeriods(selectedSchedulePeriod
+      ? schedulePeriods.map(period => period.id === selectedSchedulePeriod.id ? newPeriod : period)
+      : [...schedulePeriods, newPeriod]);
+    logAction(selectedSchedulePeriod ? 'UPDATE_SCHEDULE_PERIOD' : 'ADD_SCHEDULE_PERIOD', `${selectedSchedulePeriod ? 'تعديل' : 'تخصيص'} حصة دراسية: ${selectedSubj.name} - ${scheduleForm.className}`, 'الشؤون الأكاديمية');
+    triggerNotification(`${selectedSchedulePeriod ? 'تم تعديل' : 'تم إضافة'} الحصة الدراسية بنجاح.`, 'success');
     setIsScheduleModalOpen(false);
+    setSelectedSchedulePeriod(null);
+  };
+
+  const handleOpenEditSchedulePeriod = (period: SchedulePeriod) => {
+    setSelectedSchedulePeriod(period);
+    setScheduleForm({ day: period.day, periodNumber: period.periodNumber, className: period.className, subjectId: period.subjectId, teacherId: period.teacherId, roomName: period.roomName });
+    setIsScheduleModalOpen(true);
   };
 
   const handleDeleteSchedulePeriod = (period: SchedulePeriod) => {
     if (!guardAcademicMutation('حذف الحصة الدراسية')) return;
     if (!window.confirm(`هل تريد حذف حصة ${period.subjectName} من ${period.className}؟`)) return;
     setSchedulePeriods(previous => previous.filter(item => item.id !== period.id));
+    if (selectedSchedulePeriod?.id === period.id) setSelectedSchedulePeriod(null);
     logAction('DELETE_SCHEDULE_PERIOD', `حذف حصة ${period.subjectName} - ${period.className}`, 'الشؤون الأكاديمية');
     triggerNotification('تم حذف الحصة من الجدول. اضغط اعتماد التهيئة لحفظ التغيير مركزيًا.', 'info');
   };
@@ -1229,7 +1240,7 @@ export default function AcademicAffairsPortal({
             
             <div className="flex items-center gap-2">
               <button 
-                onClick={() => setIsScheduleModalOpen(true)}
+                onClick={() => { setSelectedSchedulePeriod(null); setScheduleForm({ day: 'الأحد', periodNumber: 1, className: '', subjectId: '', teacherId: '', roomName: '' }); setIsScheduleModalOpen(true); }}
                 className="bg-gradient-to-r from-[#9a6a1d] via-[#f7d174] to-[#c58a22] text-slate-950 font-black px-3.5 py-2 text-xs flex items-center gap-1.5 shadow hover:scale-105 cursor-pointer"
               >
                 <Plus className="w-3.5 h-3.5" />
@@ -1289,7 +1300,7 @@ export default function AcademicAffairsPortal({
                               <div className="font-extrabold text-amber-950">{matched.subjectName}</div>
                               <div className="text-[10px] text-slate-600">{matched.teacherName}</div>
                               <div className="text-[9px] font-mono text-amber-800 bg-amber-200/60 rounded px-1">{matched.className} - {matched.roomName}</div>
-                              <button type="button" onClick={() => handleDeleteSchedulePeriod(matched)} className="text-[10px] font-black text-rose-700 hover:underline">حذف الحصة</button>
+                              <div className="flex gap-2"><button type="button" onClick={() => handleOpenEditSchedulePeriod(matched)} className="text-[10px] font-black text-amber-800 hover:underline">تعديل</button><button type="button" onClick={() => handleDeleteSchedulePeriod(matched)} className="text-[10px] font-black text-rose-700 hover:underline">حذف الحصة</button></div>
                             </div>
                           ) : (
                             <div className="p-2 text-slate-300 font-bold border border-dashed border-slate-200 rounded-xl">
@@ -1315,7 +1326,7 @@ export default function AcademicAffairsPortal({
                               <div className="font-extrabold text-amber-950">{matched.subjectName}</div>
                               <div className="text-[10px] text-slate-600">{matched.teacherName}</div>
                               <div className="text-[9px] font-mono text-amber-800 bg-amber-200/60 rounded px-1">{matched.className} - {matched.roomName}</div>
-                              <button type="button" onClick={() => handleDeleteSchedulePeriod(matched)} className="text-[10px] font-black text-rose-700 hover:underline">حذف الحصة</button>
+                              <div className="flex gap-2"><button type="button" onClick={() => handleOpenEditSchedulePeriod(matched)} className="text-[10px] font-black text-amber-800 hover:underline">تعديل</button><button type="button" onClick={() => handleDeleteSchedulePeriod(matched)} className="text-[10px] font-black text-rose-700 hover:underline">حذف الحصة</button></div>
                             </div>
                           ) : (
                             <div className="p-2 text-slate-300 font-bold border border-dashed border-slate-200 rounded-xl">
@@ -1537,7 +1548,7 @@ export default function AcademicAffairsPortal({
             <div className="flex items-center justify-between pb-3 border-b border-amber-900/10">
               <div className="flex items-center gap-2">
                 <Clock className="w-5 h-5 text-amber-700" />
-                <h3 className="font-black text-slate-900 text-sm">تخصيص حصة جديدة في الجدول الدراسي</h3>
+                <h3 className="font-black text-slate-900 text-sm">{selectedSchedulePeriod ? 'تعديل الحصة الدراسية' : 'تخصيص حصة جديدة في الجدول الدراسي'}</h3>
               </div>
               <button onClick={() => setIsScheduleModalOpen(false)} className="text-slate-400 hover:text-slate-600 cursor-pointer">
                 <X className="w-5 h-5" />
@@ -1639,7 +1650,7 @@ export default function AcademicAffairsPortal({
                 onClick={handleSaveSchedulePeriod}
                 className="px-5 py-2 bg-[#2a1a0e] text-amber-300 font-black text-xs border border-[#d4af37]/40 shadow hover:scale-105 cursor-pointer"
               >
-                إضافة للحصة
+                {selectedSchedulePeriod ? 'حفظ تعديل الحصة' : 'إضافة للحصة'}
               </button>
             </div>
           </div>
