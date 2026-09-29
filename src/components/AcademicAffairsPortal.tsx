@@ -204,6 +204,15 @@ export default function AcademicAffairsPortal({
       triggerNotification('هذه الشاشة تعمل مع المصدر الكانوني فقط.', 'warning');
       return;
     }
+    const duplicate = (values: string[]) => new Set(values.map(value => value.trim().toLowerCase()).filter(Boolean)).size !== values.filter(value => value.trim()).length;
+    if (duplicate(academicSetup.stages.map(item => item.code)) || duplicate(academicSetup.grades.map(item => item.code)) || duplicate(academicSetup.classes.map(item => item.code))) {
+      triggerNotification('لا يمكن اعتماد التهيئة: توجد رموز مكررة في المراحل أو الصفوف أو الشعب.', 'warning');
+      return;
+    }
+    if (duplicate(academicSetup.sections)) {
+      triggerNotification('لا يمكن اعتماد التهيئة: توجد شعبة تشغيلية مكررة.', 'warning');
+      return;
+    }
     setAcademicSetupSaving(true);
     try {
       const response = await authenticatedRequest('/api/academic/setup', {
@@ -431,6 +440,10 @@ export default function AcademicAffairsPortal({
   // Delete Subject
   const handleDeleteSubject = (subj: SubjectItem) => {
     if (!guardAcademicMutation('حذف المادة الدراسية')) return;
+    if (schedulePeriods.some(period => period.subjectId === subj.id)) {
+      triggerNotification('لا يمكن حذف المادة لأنها مستخدمة في حصص الجدول. احذف ارتباطاتها أولًا.', 'warning');
+      return;
+    }
     if (window.confirm(`هل أنت تأكد من حذف المادة الدراسية (${subj.name})؟`)) {
       setSubjects(prev => prev.filter(s => s.id !== subj.id));
       logAction('DELETE_SUBJECT', `حذف المادة الدراسية: ${subj.name}`, 'الشؤون الأكاديمية');
@@ -871,7 +884,13 @@ export default function AcademicAffairsPortal({
                 <input value={item.code} onChange={event => updateAcademicSetup('classes', academicSetup.classes.map((current, itemIndex) => itemIndex === index ? { ...current, code: event.target.value } : current))} className="border p-2 text-slate-900" placeholder="PRI1-A" />
                 <input value={item.name} onChange={event => updateAcademicSetup('classes', academicSetup.classes.map((current, itemIndex) => itemIndex === index ? { ...current, name: event.target.value } : current))} className="border p-2 text-slate-900" placeholder="أولى ابتدائي أ" />
                 <input type="number" min={1} max={500} value={item.capacity} onChange={event => updateAcademicSetup('classes', academicSetup.classes.map((current, itemIndex) => itemIndex === index ? { ...current, capacity: Number(event.target.value) } : current))} className="border p-2 text-slate-900" placeholder="السعة" />
-                <button onClick={() => updateAcademicSetup('classes', academicSetup.classes.filter((_, itemIndex) => itemIndex !== index))} className="text-rose-700 font-black text-right">حذف الشعبة</button>
+                <button onClick={() => {
+                  if (schedulePeriods.some(period => period.classId === item.id || period.className.trim().toLowerCase() === item.name.trim().toLowerCase())) {
+                    triggerNotification('لا يمكن حذف الشعبة لأنها مرتبطة بجدول دراسي.', 'warning');
+                    return;
+                  }
+                  updateAcademicSetup('classes', academicSetup.classes.filter((_, itemIndex) => itemIndex !== index));
+                }} className="text-rose-700 font-black text-right">حذف الشعبة</button>
               </div>)}
             </div>
           </div>
