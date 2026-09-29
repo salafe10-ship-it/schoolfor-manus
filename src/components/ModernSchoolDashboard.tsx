@@ -195,7 +195,7 @@ export default function ModernSchoolDashboard({
     { section: 'student_accounts', label: 'الرسوم الدراسية', icon: CreditCard },
     { section: 'ai_assistant', label: 'المساعد الذكي', icon: Mail },
     { section: 'inventory', label: 'المخازن والمشتريات', icon: Container },
-    { section: 'academic', label: 'الجداول الدراسية', icon: Calendar },
+    { section: 'academic_timetable', label: 'الجداول الدراسية', icon: Calendar },
     { section: 'school_transport', label: 'النقل والترحيل', icon: Bus },
     { section: 'school_uniform', label: 'الزي المدرسي', icon: Shirt },
     { section: 'school_users_admin', label: 'المستخدمون والصلاحيات', icon: ShieldCheck },

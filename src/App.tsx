@@ -561,7 +561,10 @@ export default function App() {
   // App General Navigation
   const [isSuperAdminPortalActive, setIsSuperAdminPortalActive] = useState<boolean>(false);
   const [activeSection, setActiveSectionState] = useState<string>('super_dashboard');
+  const [academicInitialTab, setAcademicInitialTab] = useState<'setup' | 'structure' | 'subjects' | 'classes' | 'timetable' | 'analytics' | 'settings'>('setup');
   const setActiveSection = useCallback((sectionId: string) => {
+    if (sectionId === 'academic_timetable') setAcademicInitialTab('timetable');
+    else if (sectionId === 'academic') setAcademicInitialTab('setup');
     setActiveSectionState(canonicalSectionRoute(sectionId, currentPortal));
   }, [currentPortal]);
 
@@ -1922,6 +1925,7 @@ export default function App() {
                 </div>
               }>
                 <AcademicAffairsPortal
+                  initialTab={academicInitialTab}
                   students={students}
                   teachers={teachers}
                   selectedSchool={selectedSchool}

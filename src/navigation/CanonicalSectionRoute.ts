@@ -16,6 +16,8 @@ export function canonicalSectionRoute(sectionId: string, portal: PortalScope): s
       return 'school_transport';
     case 'uniform_management':
       return 'school_uniform';
+    case 'academic_timetable':
+      return 'academic';
     default:
       return sectionId;
   }

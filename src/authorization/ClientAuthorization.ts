@@ -9,6 +9,7 @@ const SECTION_PERMISSIONS: Record<string, string> = {
   ai_assistant: PERMISSIONS.AI_CHAT,
   branches: 'Branches.View',
   academic: PERMISSIONS.STUDENT_READ,
+  academic_timetable: PERMISSIONS.STUDENT_READ,
   students: PERMISSIONS.STUDENT_READ,
   admissions: PERMISSIONS.ADMISSION_READ,
   parents: PERMISSIONS.STUDENT_READ,

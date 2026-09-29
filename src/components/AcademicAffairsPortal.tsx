@@ -24,6 +24,7 @@ interface AcademicAffairsPortalProps {
   setGrades?: React.Dispatch<React.SetStateAction<Grade[]>>;
   academicClasses?: AcademicClass[];
   setAcademicClasses?: React.Dispatch<React.SetStateAction<AcademicClass[]>>;
+  initialTab?: 'setup' | 'structure' | 'subjects' | 'classes' | 'timetable' | 'analytics' | 'settings';
 }
 
 interface SubjectItem {
@@ -95,11 +96,12 @@ export default function AcademicAffairsPortal({
   grades = [],
   setGrades,
   academicClasses = [],
-  setAcademicClasses
+  setAcademicClasses,
+  initialTab = 'setup'
 }: AcademicAffairsPortalProps) {
 
   // Active Sub-Tab State
-  const [activeTab, setActiveTab] = useState<'setup' | 'structure' | 'subjects' | 'classes' | 'timetable' | 'analytics' | 'settings'>('setup');
+  const [activeTab, setActiveTab] = useState<'setup' | 'structure' | 'subjects' | 'classes' | 'timetable' | 'analytics' | 'settings'>(initialTab);
 
   // Year & Term Selection State
   const [selectedAcademicYear, setSelectedAcademicYear] = useState<string>('1447 - 1448 هـ (2026/2027)');

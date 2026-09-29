@@ -28,7 +28,7 @@ describe('Main School Dashboard contract', () => {
 
   it('routes academic and timetable shortcuts to the academic screen', () => {
     expect(source).toContain("{ section: 'academic', label: 'الأكاديمية'");
-    expect(source).toContain("{ section: 'academic', label: 'الجداول الدراسية'");
+    expect(source).toContain("{ section: 'academic_timetable', label: 'الجداول الدراسية'");
   });
 
   it('does not expose duplicate reports or standalone treasury shortcuts on the main dashboard', () => {
