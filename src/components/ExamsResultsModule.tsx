@@ -23,7 +23,7 @@ import ExamsCertificatesPanel from './exams/ExamsCertificatesPanel';
 import ExamsDistributionPanel from './exams/ExamsDistributionPanel';
 import ExamsAssessmentPanel from './exams/ExamsAssessmentPanel';
 import { StudentRepository } from './student-affairs/repository/StudentRepository';
-import { canAssignProctorForWeek } from '../modules/exams/application/ExamSchedulingRules';
+import { canAssignProctorForWeek, canAutoAssignExamProctors } from '../modules/exams/application/ExamSchedulingRules';
 import {
   AssessmentGradeProjection,
   AssessmentWorkflowState,
@@ -1790,8 +1790,13 @@ export default function ExamsResultsModule({
 
   // Automated Proctor Distribution Engine
   const handleAutoAssignProctors = async () => {
-    if (approvalStatus.approved) {
-      triggerNotification('النتائج معتمدة ومغلقة ولا يمكن تعديل المراقبين حالياً', 'warning');
+    if (!canAutoAssignExamProctors(scheduleApprovalStatus.approved, approvalStatus.approved)) {
+      triggerNotification(
+        scheduleApprovalStatus.approved
+          ? 'جدول الامتحانات معتمد ومقفل؛ لا يمكن إعادة توزيع المراقبين قبل إعادة فتحه بسبب موثق.'
+          : 'النتائج معتمدة ومغلقة ولا يمكن تعديل المراقبين حالياً.',
+        'warning'
+      );
       return;
     }
 
@@ -5168,8 +5173,11 @@ export default function ExamsResultsModule({
                   <div className="flex items-center gap-2">
                     <button
                       onClick={handleAutoAssignProctors}
+                      disabled={!canAutoAssignExamProctors(scheduleApprovalStatus.approved, approvalStatus.approved)}
                       className="px-2 py-1 bg-gradient-to-r from-[#d4af37] to-[#9a6a1d] text-slate-950 text-[10px] rounded font-black flex items-center gap-1 cursor-pointer transition-all hover:brightness-110"
-                      title="توزيع الملاحظين تلقائياً على القاعات"
+                      title={scheduleApprovalStatus.approved || approvalStatus.approved
+                        ? 'لا يمكن تعديل تكليفات المراقبين بعد اعتماد الجدول أو إغلاق النتائج'
+                        : 'توزيع الملاحظين تلقائياً على القاعات'}
                     >
                       <Sparkles className="w-3.5 h-3.5 text-slate-950" />
                       توزيع تلقائي ذكي
@@ -6962,7 +6970,7 @@ export default function ExamsResultsModule({
                       <div className="space-y-1">
                         <h5 className="font-black text-amber-950 text-sm">تثبيت وتوثيق اعتماد الجدول من الكنترول</h5>
                         <p className="text-[11px] text-amber-800 font-medium max-w-xl bg-gradient-to-b from-[#fffefc] via-[#fbf8f0] to-[#f5eeea] border-2 border-[#d4af37]/30 rounded-3xl">
-                          باعتماد هذا المخطط، سيتم فوراً قفل أي تعديلات يدوية أو آلية لحماية هيبة الامتحانات، وسيتم إرسال تكليفات المعلمين وتوليد كشوف الحضور والدرجات مطابقة لهذا التوزيع.
+                          باعتماد هذا المخطط، سيتم قفل تعديل الجدول، وتثبيت المراقب المعيّن لكل فترة داخله، وتوليد كشوف الحضور والدرجات المطابقة للتوزيع. لا يرسل هذا الإجراء إشعارات للمعلمين.
                         </p>
                       </div>
 

@@ -10,6 +10,26 @@ const examComponentFiles = [
 ];
 
 describe('exams button wiring', () => {
+  it('blocks automatic proctor assignment after either exam lock and does not promise an unsent notification', () => {
+    const project = new Project({ skipAddingFilesFromTsConfig: true });
+    const source = project.addSourceFileAtPath(resolve(process.cwd(), 'src/components/ExamsResultsModule.tsx'));
+    const autoAssignButton = [
+      ...source.getDescendantsOfKind(SyntaxKind.JsxOpeningElement),
+      ...source.getDescendantsOfKind(SyntaxKind.JsxSelfClosingElement)
+    ].find(element => element.getAttributes().some(attribute =>
+      attribute.isKind(SyntaxKind.JsxAttribute)
+      && attribute.getNameNode().getText() === 'onClick'
+      && attribute.getInitializer()?.getText().includes('handleAutoAssignProctors')
+    ));
+    const disabled = autoAssignButton?.getAttributes().find(attribute =>
+      attribute.isKind(SyntaxKind.JsxAttribute) && attribute.getNameNode().getText() === 'disabled'
+    );
+
+    expect(disabled?.isKind(SyntaxKind.JsxAttribute) ? disabled.getInitializer()?.getText() : '').toContain('canAutoAssignExamProctors');
+    expect(source.getFullText()).toContain('if (!canAutoAssignExamProctors(scheduleApprovalStatus.approved, approvalStatus.approved))');
+    expect(source.getFullText()).toContain('لا يرسل هذا الإجراء إشعارات للمعلمين.');
+  });
+
   it.each(examComponentFiles)('%s has no inert native button', filePath => {
     const project = new Project({ skipAddingFilesFromTsConfig: true });
     const source = project.addSourceFileAtPath(resolve(process.cwd(), filePath));

@@ -19,6 +19,12 @@ export interface ScheduleResourceConflict {
   secondIndex: number;
 }
 
+/** Proctor reassignment mutates the approved schedule, so it is forbidden after either lock. */
+export const canAutoAssignExamProctors = (
+  scheduleApproved: boolean,
+  resultsApproved: boolean
+): boolean => !scheduleApproved && !resultsApproved;
+
 const ISO_DATE_PATTERN = /^\d{4}-\d{2}-\d{2}$/;
 const TIME_PATTERN = /^([01]\d|2[0-3]):[0-5]\d$/;
 
