@@ -349,6 +349,15 @@ export default function AcademicAffairsPortal({
       triggerNotification('يرجى ملء رمز واسم المادة الدراسية بصورة صحيحة', 'warning');
       return;
     }
+    const normalizedCode = subjectForm.code.trim().toLowerCase();
+    const normalizedName = subjectForm.name.trim().toLowerCase();
+    const duplicate = subjects.some(subject => subject.id !== selectedSubject?.id
+      && (subject.code.trim().toLowerCase() === normalizedCode
+        || (subject.name.trim().toLowerCase() === normalizedName && subject.gradeName === subjectForm.gradeName)));
+    if (duplicate) {
+      triggerNotification('رمز المادة أو اسمها مستخدم مسبقًا لنفس الصف.', 'warning');
+      return;
+    }
 
     const assignedTeacher = teachers.find(t => t.id === subjectForm.assignedTeacherId);
     const teacherName = assignedTeacher ? assignedTeacher.name : 'غير محدد';
@@ -438,6 +447,13 @@ export default function AcademicAffairsPortal({
       triggerNotification('يرجى اختيار المادة والمعلم المكلف بشكل صحيح', 'warning');
       return;
     }
+    const duplicateSlot = schedulePeriods.find(period => period.day === scheduleForm.day
+      && period.periodNumber === Number(scheduleForm.periodNumber)
+      && period.className.trim().toLowerCase() === scheduleForm.className.trim().toLowerCase());
+    if (duplicateSlot) {
+      triggerNotification('هذا الفصل لديه حصة مسجلة بالفعل في نفس اليوم والحصة.', 'warning');
+      return;
+    }
 
     const newPeriod: SchedulePeriod = {
       id: `sched_${Date.now()}`,
@@ -456,6 +472,14 @@ export default function AcademicAffairsPortal({
     logAction('ADD_SCHEDULE_PERIOD', `تخصيص حصة دراسية: ${selectedSubj.name} - ${scheduleForm.className}`, 'الشؤون الأكاديمية');
     triggerNotification(`تم إضافة الحصة الدراسية للجدول بنجاح!`, 'success');
     setIsScheduleModalOpen(false);
+  };
+
+  const handleDeleteSchedulePeriod = (period: SchedulePeriod) => {
+    if (!guardAcademicMutation('حذف الحصة الدراسية')) return;
+    if (!window.confirm(`هل تريد حذف حصة ${period.subjectName} من ${period.className}؟`)) return;
+    setSchedulePeriods(previous => previous.filter(item => item.id !== period.id));
+    logAction('DELETE_SCHEDULE_PERIOD', `حذف حصة ${period.subjectName} - ${period.className}`, 'الشؤون الأكاديمية');
+    triggerNotification('تم حذف الحصة من الجدول. اضغط اعتماد التهيئة لحفظ التغيير مركزيًا.', 'info');
   };
 
   // Export CSV
@@ -1265,6 +1289,7 @@ export default function AcademicAffairsPortal({
                               <div className="font-extrabold text-amber-950">{matched.subjectName}</div>
                               <div className="text-[10px] text-slate-600">{matched.teacherName}</div>
                               <div className="text-[9px] font-mono text-amber-800 bg-amber-200/60 rounded px-1">{matched.className} - {matched.roomName}</div>
+                              <button type="button" onClick={() => handleDeleteSchedulePeriod(matched)} className="text-[10px] font-black text-rose-700 hover:underline">حذف الحصة</button>
                             </div>
                           ) : (
                             <div className="p-2 text-slate-300 font-bold border border-dashed border-slate-200 rounded-xl">
@@ -1290,6 +1315,7 @@ export default function AcademicAffairsPortal({
                               <div className="font-extrabold text-amber-950">{matched.subjectName}</div>
                               <div className="text-[10px] text-slate-600">{matched.teacherName}</div>
                               <div className="text-[9px] font-mono text-amber-800 bg-amber-200/60 rounded px-1">{matched.className} - {matched.roomName}</div>
+                              <button type="button" onClick={() => handleDeleteSchedulePeriod(matched)} className="text-[10px] font-black text-rose-700 hover:underline">حذف الحصة</button>
                             </div>
                           ) : (
                             <div className="p-2 text-slate-300 font-bold border border-dashed border-slate-200 rounded-xl">
