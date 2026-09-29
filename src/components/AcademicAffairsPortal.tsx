@@ -63,7 +63,7 @@ type AcademicSetupDraft = {
   grades: Array<{ id: string; stageId: string; code: string; name: string; order: number; isActive: boolean }>;
   classes: Array<{ id: string; gradeId: string; code: string; name: string; capacity: number; isActive: boolean }>;
   sections: string[];
-  catalogue: { subjects: SubjectItem[]; schedulePeriods: SchedulePeriod[] };
+  catalogue: { subjects: SubjectItem[]; schedulePeriods: SchedulePeriod[]; policies: { passingScore: number; maxClassSize: number } };
 };
 
 const emptyAcademicSetup = (): AcademicSetupDraft => ({
@@ -73,7 +73,7 @@ const emptyAcademicSetup = (): AcademicSetupDraft => ({
   grades: [],
   classes: [],
   sections: [],
-  catalogue: { subjects: [], schedulePeriods: [] }
+  catalogue: { subjects: [], schedulePeriods: [], policies: { passingScore: 50, maxClassSize: 35 } }
 });
 
 const escapeHtml = (value: unknown): string => String(value ?? '')
@@ -176,7 +176,11 @@ export default function AcademicAffairsPortal({
           sections: Array.isArray(structure.sections) ? structure.sections.map(String) : [],
           catalogue: {
             subjects: Array.isArray(structure.catalogue?.subjects) ? structure.catalogue.subjects : [],
-            schedulePeriods: Array.isArray(structure.catalogue?.schedulePeriods) ? structure.catalogue.schedulePeriods : []
+            schedulePeriods: Array.isArray(structure.catalogue?.schedulePeriods) ? structure.catalogue.schedulePeriods : [],
+            policies: {
+              passingScore: Number(structure.catalogue?.policies?.passingScore ?? 50),
+              maxClassSize: Number(structure.catalogue?.policies?.maxClassSize ?? 35)
+            }
           }
         });
         setSubjects(Array.isArray(structure.catalogue?.subjects) ? structure.catalogue.subjects : []);
@@ -205,7 +209,7 @@ export default function AcademicAffairsPortal({
       const response = await authenticatedRequest('/api/academic/setup', {
         method: 'PUT',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ year: academicSetup.year, terms: academicSetup.terms, structure: { stages: academicSetup.stages, grades: academicSetup.grades, classes: academicSetup.classes, sections: academicSetup.sections, catalogue: { subjects, schedulePeriods } } })
+        body: JSON.stringify({ year: academicSetup.year, terms: academicSetup.terms, structure: { stages: academicSetup.stages, grades: academicSetup.grades, classes: academicSetup.classes, sections: academicSetup.sections, catalogue: { subjects, schedulePeriods, policies: academicSetup.catalogue.policies } } })
       });
       const payload = await response.json().catch(() => ({}));
       if (!response.ok || !payload?.success) throw new Error(payload?.message || 'تعذر حفظ التهيئة الأكاديمية.');
@@ -286,10 +290,12 @@ export default function AcademicAffairsPortal({
     const conflicts: { type: string; message: string; period: SchedulePeriod }[] = [];
     const teacherMap: { [key: string]: SchedulePeriod } = {};
     const roomMap: { [key: string]: SchedulePeriod } = {};
+    const classMap: { [key: string]: SchedulePeriod } = {};
 
     schedulePeriods.forEach(p => {
       const teacherKey = `${p.day}-${p.periodNumber}-${p.teacherId}`;
       const roomKey = `${p.day}-${p.periodNumber}-${p.roomName}`;
+      const classKey = `${p.day}-${p.periodNumber}-${p.classId || p.className}`;
 
       if (teacherMap[teacherKey]) {
         conflicts.push({
@@ -309,6 +315,16 @@ export default function AcademicAffairsPortal({
         });
       } else {
         roomMap[roomKey] = p;
+      }
+
+      if (classMap[classKey]) {
+        conflicts.push({
+          type: 'class',
+          message: `تعارض الفصل (${p.className}) في ${p.day} الحصة ${p.periodNumber} بين ${p.subjectName} و ${classMap[classKey].subjectName}`,
+          period: p
+        });
+      } else {
+        classMap[classKey] = p;
       }
     });
 
@@ -1161,13 +1177,12 @@ export default function AcademicAffairsPortal({
               <p className="text-[11px] text-slate-500">التحكم بالطاقة القصوى للفصل، الدمج، والتقسيم</p>
             </div>
             <button 
-              onClick={() => {
-                triggerNotification('فحص الكثافة المركزية غير مهيأ؛ لم يتم اعتماد أو تحديث طاقة أي شعبة.', 'warning');
-              }}
+              type="button"
+              onClick={() => setActiveTab('setup')}
               className="bg-[#2a1a0e] text-amber-300 px-3.5 py-2 text-xs font-bold border border-[#d4af37]/40 flex items-center gap-1.5 shadow cursor-pointer"
             >
               <RefreshCw className="w-3.5 h-3.5" />
-              <span>فحص الكثافة الطلابية</span>
+              <span>فتح تهيئة الفصول والسعة</span>
             </button>
           </div>
 
@@ -1313,14 +1328,14 @@ export default function AcademicAffairsPortal({
             <div className="p-4 border border-amber-200 space-y-3">
               <div className="font-black text-slate-900 text-xs">نسبة تغطية المناهج الدراسية حسب المرحلة</div>
               <div className="p-3 bg-amber-50 border border-amber-200 text-xs font-bold text-amber-900">
-                لا توجد بيانات تغطية مناهج مركزية متاحة للتحقق.
+                {academicSetup.grades.length > 0 ? `تم تعريف ${subjects.length} مادة دراسية مقابل ${academicSetup.grades.length} صف دراسي؛ التغطية التفصيلية حسب المرحلة تحتاج ربط المادة بصف مركزي.` : 'لا توجد بيانات تغطية مناهج مركزية متاحة للتحقق.'}
               </div>
             </div>
 
             <div className="p-4 border border-amber-200 space-y-3">
               <div className="font-black text-slate-900 text-xs">توزيع نصاب المعلمين الأسبوعي</div>
               <div className="space-y-2 text-xs font-bold text-slate-700">
-                <div className="p-3 bg-amber-50 border border-amber-200 text-amber-900">لا توجد بيانات نصاب معلمين مركزية متاحة للتحقق.</div>
+                <div className="p-3 bg-amber-50 border border-amber-200 text-amber-900">{schedulePeriods.length > 0 ? `تم تحميل ${schedulePeriods.length} حصة، ويجري احتساب النصاب من الجدول الحالي.` : 'لا توجد حصص جدول مركزية متاحة للتحقق.'}</div>
               </div>
             </div>
           </div>
@@ -1342,13 +1357,13 @@ export default function AcademicAffairsPortal({
           <div className="grid grid-cols-1 md:grid-cols-2 gap-4 text-xs font-bold">
             <div className="p-4 space-y-3">
               <label className="block text-slate-900 font-extrabold">الدرجة الأدنى للنجاح (%)</label>
-              <input type="number" defaultValue={50} className="w-full p-2 border font-mono text-slate-900" />
+              <input type="number" min={0} max={100} value={academicSetup.catalogue.policies.passingScore} onChange={event => updateAcademicSetup('catalogue', { ...academicSetup.catalogue, policies: { ...academicSetup.catalogue.policies, passingScore: Number(event.target.value) } })} className="w-full p-2 border font-mono text-slate-900" />
               <p className="text-[10px] text-slate-500">تطبيق آلي على حاسبة الكنترول والرصد</p>
             </div>
 
             <div className="p-4 space-y-3">
               <label className="block text-slate-900 font-extrabold">الحد الأقصى للطلاب في الشعبة الواحدة</label>
-              <input type="number" defaultValue={35} className="w-full p-2 border font-mono text-slate-900" />
+              <input type="number" min={1} max={500} value={academicSetup.catalogue.policies.maxClassSize} onChange={event => updateAcademicSetup('catalogue', { ...academicSetup.catalogue, policies: { ...academicSetup.catalogue.policies, maxClassSize: Number(event.target.value) } })} className="w-full p-2 border font-mono text-slate-900" />
               <p className="text-[10px] text-slate-500">إطلاق تنبيه عند تجاوز الطاقة الاستيعابية</p>
             </div>
           </div>
@@ -1356,7 +1371,7 @@ export default function AcademicAffairsPortal({
           <button 
             onClick={() => {
               if (!guardAcademicMutation('حفظ السياسات الأكاديمية')) return;
-              triggerNotification('تم حفظ الإعدادات الأكاديمية وتحديث السياسات الحاكمة بنجاح', 'success');
+              void saveAcademicSetup();
               logAction('UPDATE_ACADEMIC_SETTINGS', 'تعديل سياسات الكنترول والكثافة الطلابية', 'الشؤون الأكاديمية');
             }}
             className="px-5 py-2.5 bg-[#2a1a0e] text-amber-300 font-black border border-[#d4af37]/40 shadow hover:scale-105 transition-all cursor-pointer"

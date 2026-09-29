@@ -8343,10 +8343,14 @@ export async function createApp(options: { cloudflare?: boolean } = {}): Promise
     const catalogue = structure.catalogue && typeof structure.catalogue === 'object' ? structure.catalogue : {};
     const subjects = Array.isArray((catalogue as any).subjects) ? (catalogue as any).subjects.slice(0, 2000) : [];
     const schedulePeriods = Array.isArray((catalogue as any).schedulePeriods) ? (catalogue as any).schedulePeriods.slice(0, 20000) : [];
+    const policies = catalogue.policies && typeof catalogue.policies === 'object' ? {
+      passingScore: Math.max(0, Math.min(100, Number((catalogue as any).policies.passingScore ?? 50))),
+      maxClassSize: Math.max(1, Math.min(500, Number((catalogue as any).policies.maxClassSize ?? 35)))
+    } : { passingScore: 50, maxClassSize: 35 };
     return {
       year: { code, name, startsOn, endsOn, isCurrent: year.isCurrent !== false },
       terms,
-      structure: { stages, grades, classes, sections, catalogue: { subjects, schedulePeriods } }
+      structure: { stages, grades, classes, sections, catalogue: { subjects, schedulePeriods, policies } }
     };
   }
 
