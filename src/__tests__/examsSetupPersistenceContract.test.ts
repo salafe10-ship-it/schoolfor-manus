@@ -28,4 +28,15 @@ describe('exams setup persistence contract', () => {
     expect(hallsPanel).not.toContain('لجنة قاعة جديدة ${halls.length + 1}');
     expect(hallsPanel).not.toContain("location: 'مبنى الامتحانات الرئيسي'");
   });
+
+  it('keeps hall row actions from submitting the create-hall form', () => {
+    const source = readFileSync('src/components/ExamsResultsModule.tsx', 'utf8');
+    const hallsStart = source.indexOf("{activeTab === 'halls' && (");
+    const nextPanel = source.indexOf("{activeTab === 'distribution' && (");
+    const hallsPanel = source.slice(hallsStart, nextPanel);
+    expect(hallsPanel).toContain('title="تعديل القاعة"');
+    expect(hallsPanel).toContain('title="طباعة كشف اللجنة"');
+    expect(hallsPanel).toContain('title="حذف القاعة"');
+    expect(hallsPanel.match(/type="button"/g)?.length).toBeGreaterThanOrEqual(5);
+  });
 });

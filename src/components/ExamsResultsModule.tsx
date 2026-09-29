@@ -4788,6 +4788,7 @@ export default function ExamsResultsModule({
                               </div>
                               <div className="flex gap-1.5 justify-end">
                                 <button
+                                  type="button"
                                   onClick={async () => {
                                     const assignedStudentCount = studentList.filter(student => student.hallId === hall.id).length;
                                     if (!String(editingValues.name || '').trim() || editingValues.capacity <= 0 || editingValues.capacity < assignedStudentCount) {
@@ -4807,6 +4808,7 @@ export default function ExamsResultsModule({
                                   حفظ
                                 </button>
                                 <button
+                                  type="button"
                                   onClick={() => setEditingEntityId(null)}
                                   className="px-2 py-1 bg-slate-400 hover:bg-transparent0 text-white text-[10px] rounded font-bold cursor-pointer"
                                 >
@@ -4839,6 +4841,7 @@ export default function ExamsResultsModule({
 
                               <div className="flex items-center gap-2">
                                 <button
+                                  type="button"
                                   onClick={() => {
                                     setEditingEntityId(hall.id);
                                     setEditingValues({ name: hall.name, capacity: hall.capacity, location: hall.location });
@@ -4849,6 +4852,7 @@ export default function ExamsResultsModule({
                                   <Edit3 className="w-4 h-4" />
                                 </button>
                                 <button
+                                  type="button"
                                   onClick={() => {
                                     const list = studentList.filter(s => s.hallId === hall.id);
                                     if (list.length === 0) {
@@ -4864,6 +4868,7 @@ export default function ExamsResultsModule({
                                   كشف اللجنة
                                 </button>
                                 <button
+                                  type="button"
                                   onClick={async () => {
                                     const isReferenced = studentList.some(student => student.hallId === hall.id)
                                       || proctorAssignments.some(proctor => proctor.hallId === hall.id)
