@@ -98,15 +98,18 @@ export const LedgerDashboardTab = () => {
     };
   }, [accounts, getProcessedAccounts]);
 
-  const handleRefreshData = () => {
+  const handleRefreshData = async () => {
     if (canonicalFinancialStatus !== 'ready') {
       triggerNotification('لا يمكن تحديث المؤشرات قبل اتصال المصدر المالي المركزي.', 'warning');
       return;
     }
     setRefreshing(true);
-    refreshCanonicalFinancialData();
-    setRefreshing(false);
-    triggerNotification(`✓ تمت مطالبة المصدر المركزي بإعادة التحميل — الإصدار الحالي ${canonicalFinancialVersion || 'غير محدد'}.`, 'success');
+    try {
+      refreshCanonicalFinancialData();
+      triggerNotification(`✓ تمت مطالبة المصدر المركزي بإعادة التحميل — الإصدار الحالي ${canonicalFinancialVersion || 'غير محدد'}.`, 'success');
+    } finally {
+      setRefreshing(false);
+    }
   };
 
   return (

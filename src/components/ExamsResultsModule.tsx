@@ -22,17 +22,58 @@ import EnterpriseActionToolbar from './shared/EnterpriseActionToolbar';
 import ExamsCertificatesPanel from './exams/ExamsCertificatesPanel';
 import ExamsDistributionPanel from './exams/ExamsDistributionPanel';
 import ExamsAssessmentPanel from './exams/ExamsAssessmentPanel';
-import { canAssignProctorForWeek } from '../modules/exams/application/ExamSchedulingRules';
+import { StudentRepository } from './student-affairs/repository/StudentRepository';
+import { canAssignProctorForWeek, canAutoAssignExamProctors } from '../modules/exams/application/ExamSchedulingRules';
 import {
+  AssessmentGradeProjection,
   AssessmentWorkflowState,
   createEmptyAssessmentWorkflowState,
   normalizeAssessmentWorkflowState
 } from '../modules/exams/application/AssessmentWorkflowService';
 import { calculateCohortExamResults } from '../modules/exams/domain/ExamResultEngine';
-import { getTrustedAccessToken } from '../utils/auth';
+import { evaluateExamClosureReadiness } from '../modules/exams/domain/ExamClosureReadiness';
+import { getExamAttendanceStatus, normalizeExamAttendance, withExamAttendance, type ExamAttendanceStatus } from '../modules/exams/domain/ExamAttendance';
+import { getTrustedAccessToken, getTrustedAccessTokenAsync } from '../utils/auth';
+import { authenticatedRequest } from '../utils/authenticatedRequest';
+import { createExamPrintDocument } from '../utils/examPrintDocument';
+import { csvEscapeField } from '../modules/exams/application/CsvExportSafety';
+import type { ExamProctorCandidate } from '../modules/exams/application/ExamProctorCandidates';
+import type { ExamTeacherGradeScope } from '../modules/exams/application/ExamTeacherGradeScope';
+import {
+  areExamReadinessChecksPassing,
+  includeCentralSourceCheck,
+} from '../utils/examReadinessDiagnostics';
 
 const today = new Date();
 const currentAcademicYearStart = today.getMonth() >= 6 ? today.getFullYear() : today.getFullYear() - 1;
+
+const EXAM_NAVIGATION_SECTIONS = [
+  { id: 'setup', label: '١. البدء والتهيئة' },
+  { id: 'committees', label: '٢. اللجان والجدولة' },
+  { id: 'results', label: '٣. الرصد والنتائج' },
+  { id: 'release', label: '٤. المراجعة والإصدار' },
+  { id: 'admin', label: '٥. الإدارة والمساعدة' }
+] as const;
+
+const EXAM_TAB_NAVIGATION_SECTION: Record<string, typeof EXAM_NAVIGATION_SECTIONS[number]['id']> = {
+  'control-center': 'setup',
+  settings: 'setup',
+  classes: 'setup',
+  assessment: 'setup',
+  halls: 'committees',
+  distribution: 'committees',
+  seating: 'committees',
+  proctors: 'committees',
+  schedule: 'committees',
+  'grades-entry': 'results',
+  processing: 'results',
+  'quality-governance': 'release',
+  review: 'release',
+  reports: 'release',
+  certificates: 'release',
+  'system-settings': 'admin',
+  'exams-guide': 'admin'
+};
 
 // Safe defaults used only until the selected school's canonical settings load.
 const DEFAULT_EXAM_SETTINGS = {
@@ -56,6 +97,48 @@ const normalizeSubjectName = (value: unknown): string => String(value ?? '')
   .trim()
   .replace(/\s+/g, ' ')
   .toLocaleLowerCase('ar');
+
+const EXAMS_SOURCE_REQUEST_TIMEOUT_MS = 15_000;
+type DbSyncStatus = 'idle' | 'success' | 'conflict' | 'rejected' | 'error';
+interface ExamArchiveSummary {
+  archiveId: string;
+  year: string;
+  semester: string;
+  archivedAt: string;
+  signatureValid: boolean;
+  summaryAvailable: boolean;
+  totalStudents: number;
+  completeResults: number;
+  incompleteResults: number;
+  passedCount: number;
+  failedCount: number;
+  overallPassRate: number | null;
+  averageScore: number | null;
+  topScore: number | null;
+  standardDeviation: number | null;
+}
+
+const getDbSyncFailureStatus = (status: number): DbSyncStatus =>
+  status === 409 ? 'conflict' : status === 400 || status === 422 ? 'rejected' : 'error';
+
+const fetchExamsSource = async (input: RequestInfo | URL, init: RequestInit = {}): Promise<Response> => {
+  const controller = new AbortController();
+  const timeoutId = window.setTimeout(() => controller.abort(), EXAMS_SOURCE_REQUEST_TIMEOUT_MS);
+  try {
+    // Keep all exams reads and writes on the same trusted-session transport as
+    // the other canonical modules. It refreshes once and retries on a 401,
+    // which is essential when an already-open production tab outlives its
+    // short-lived access token.
+    return await authenticatedRequest(input, { ...init, signal: controller.signal });
+  } catch (error) {
+    if (error instanceof DOMException && error.name === 'AbortError') {
+      throw new Error('انتهت مهلة الاتصال بالمصدر المركزي. تحقق من الشبكة ثم أعد المحاولة.');
+    }
+    throw error;
+  } finally {
+    window.clearTimeout(timeoutId);
+  }
+};
 
 const getScheduleRulesError = (config: any): string => {
   if (!/^\d{4}-\d{2}-\d{2}$/.test(config?.startDate || '')) return 'حدد تاريخ بداية صالحاً للامتحانات.';
@@ -86,27 +169,76 @@ export default function ExamsResultsModule({
   selectedSchool,
   currentRole
 }: ExamModuleProps) {
-  const availableTeachers = initialTeachers;
+  const mayLoadCanonicalStudentRoster = ['SuperAdmin', 'SchoolAdmin', 'Control'].includes(String(currentRole || ''));
+  const [isGradeScopedExamUser, setIsGradeScopedExamUser] = useState(currentRole === 'Teacher');
+  const [availableTeachers, setAvailableTeachers] = useState<ExamProctorCandidate[]>([]);
+  const [proctorSourceStatus, setProctorSourceStatus] = useState<'loading' | 'ready' | 'unavailable' | 'error' | 'fallback'>('loading');
+  const proctorLoadSequenceRef = useRef(0);
+  const loadProctorCandidates = async () => {
+    const requestSequence = ++proctorLoadSequenceRef.current;
+    setProctorSourceStatus('loading');
+    setAvailableTeachers([]);
+    try {
+      const response = await fetchExamsSource('/api/exams/proctor-candidates');
+      const result = await response.json();
+      if (!response.ok || !result?.success || !Array.isArray(result.data)) throw new Error('Invalid proctor catalogue');
+      if (requestSequence !== proctorLoadSequenceRef.current) return;
+      const canonicalCandidates = result.data.filter((item: any) =>
+        item && typeof item.id === 'string' && typeof item.name === 'string'
+      );
+      const legacyCandidates = initialTeachers
+        .filter(teacher => teacher.status === 'active' && Boolean(teacher.id && teacher.name))
+        .map(teacher => ({ id: teacher.id, name: teacher.name, specialization: teacher.specialization || 'موظف المدرسة' }));
+      if (!canonicalCandidates.length && !result.meta && legacyCandidates.length) {
+        setAvailableTeachers(legacyCandidates);
+        setProctorSourceStatus('fallback');
+      } else {
+        setAvailableTeachers(canonicalCandidates);
+        setProctorSourceStatus(result.meta?.sourceAvailable === false ? 'unavailable' : 'ready');
+      }
+    } catch {
+      if (requestSequence !== proctorLoadSequenceRef.current) return;
+      setAvailableTeachers([]);
+      setProctorSourceStatus('error');
+    }
+  };
+  useEffect(() => {
+    if (!mayLoadCanonicalStudentRoster) {
+      setAvailableTeachers([]);
+      setProctorSourceStatus('unavailable');
+      return () => { proctorLoadSequenceRef.current += 1; };
+    }
+    void loadProctorCandidates();
+    return () => { proctorLoadSequenceRef.current += 1; };
+  }, [currentRole, mayLoadCanonicalStudentRoster, selectedSchool?.id]);
   // Navigation Sidebar
-  const validTabIds = useMemo(() => [
-    'control-center', 'settings', 'classes', 'assessment', 'halls', 'distribution',
-    'seating', 'proctors', 'schedule', 'grades-entry', 'processing',
-    'quality-governance', 'review', 'reports', 'certificates',
-    'system-settings', 'exams-guide'
-  ], []);
+  const validTabIds = useMemo(() => isGradeScopedExamUser || currentRole === 'Teacher'
+    ? ['grades-entry', 'exams-guide']
+    : [
+      'control-center', 'settings', 'classes', 'assessment', 'halls', 'distribution',
+      'seating', 'proctors', 'schedule', 'grades-entry', 'processing',
+      'quality-governance', 'review', 'reports', 'certificates',
+      'system-settings', 'exams-guide'
+    ], [currentRole, isGradeScopedExamUser]);
 
   const [activeTab, setActiveTab] = useState<string>(() => {
+    if (currentRole === 'Teacher') return 'grades-entry';
     const saved = localStorage.getItem('exams_active_tab');
     return (saved && validTabIds.includes(saved)) ? saved : 'control-center';
+  });
+  const [expandedNavigationSection, setExpandedNavigationSection] = useState(() => {
+    if (currentRole === 'Teacher') return 'results';
+    const saved = localStorage.getItem('exams_active_tab') || 'control-center';
+    return EXAM_TAB_NAVIGATION_SECTION[saved] || 'setup';
   });
 
   useEffect(() => {
     if (!validTabIds.includes(activeTab)) {
-      setActiveTab('control-center');
+      setActiveTab(isGradeScopedExamUser || currentRole === 'Teacher' ? 'grades-entry' : 'control-center');
     } else {
       localStorage.setItem('exams_active_tab', activeTab);
     }
-  }, [activeTab, validTabIds]);
+  }, [activeTab, currentRole, isGradeScopedExamUser, validTabIds]);
 
   // Control Committee & Stage isolation (Requirement #1: Multi-stage Control)
   const [controlCommittees, setControlCommittees] = useState<any[]>(() => {
@@ -128,10 +260,46 @@ export default function ExamsResultsModule({
   });
 
   // Requirement #9: Archived years state
-  const [selectedArchivedYear, setSelectedArchivedYear] = useState<string>('');
-
-  // Historical comparison remains empty until canonical archive summaries are exposed by the API.
-  const archivedData: any[] = [];
+  const [selectedArchiveId, setSelectedArchiveId] = useState<string>('');
+  const [archivedData, setArchivedData] = useState<ExamArchiveSummary[]>([]);
+  const [archiveLoadStatus, setArchiveLoadStatus] = useState<'loading' | 'ready' | 'error'>('loading');
+  const archiveLoadSequenceRef = useRef(0);
+  const loadExamArchiveSummaries = async () => {
+    const requestSequence = ++archiveLoadSequenceRef.current;
+    setArchiveLoadStatus('loading');
+    try {
+      const response = await fetchExamsSource('/api/exams/result-archives');
+      const result = await response.json();
+      if (!response.ok || !result?.success || !Array.isArray(result.data)) throw new Error('Invalid archive summaries');
+      if (requestSequence !== archiveLoadSequenceRef.current) return;
+      const isSafeSummaryNumber = (value: unknown): value is number | null =>
+        value === null || (typeof value === 'number' && Number.isFinite(value));
+      const summaries = result.data.filter((item: any): item is ExamArchiveSummary =>
+        item && typeof item.archiveId === 'string' && typeof item.year === 'string'
+        && typeof item.semester === 'string' && typeof item.archivedAt === 'string' && Number.isFinite(Date.parse(item.archivedAt))
+        && typeof item.signatureValid === 'boolean' && typeof item.summaryAvailable === 'boolean'
+        && Number.isSafeInteger(item.totalStudents) && item.totalStudents >= 0
+        && Number.isSafeInteger(item.completeResults) && item.completeResults >= 0
+        && Number.isSafeInteger(item.incompleteResults) && item.incompleteResults >= 0
+        && Number.isSafeInteger(item.passedCount) && item.passedCount >= 0
+        && Number.isSafeInteger(item.failedCount) && item.failedCount >= 0
+        && isSafeSummaryNumber(item.overallPassRate) && isSafeSummaryNumber(item.averageScore)
+        && isSafeSummaryNumber(item.topScore) && isSafeSummaryNumber(item.standardDeviation)
+      );
+      setArchivedData(summaries);
+      setSelectedArchiveId(current => summaries.some(item => item.archiveId === current) ? current : summaries[0]?.archiveId || '');
+      setArchiveLoadStatus('ready');
+    } catch {
+      if (requestSequence !== archiveLoadSequenceRef.current) return;
+      setArchivedData([]);
+      setSelectedArchiveId('');
+      setArchiveLoadStatus('error');
+    }
+  };
+  useEffect(() => {
+    void loadExamArchiveSummaries();
+    return () => { archiveLoadSequenceRef.current += 1; };
+  }, [selectedSchool?.id]);
 
   const [selectedCompareStage, setSelectedCompareStage] = useState<string>('الكل');
   const [selectedCompareClass, setSelectedCompareClass] = useState<string>('الكل');
@@ -208,6 +376,8 @@ export default function ExamsResultsModule({
       academicYear: selectedSchool?.academicYear || DEFAULT_EXAM_SETTINGS.academicYear
     };
   });
+  const examSettingsBaselineRef = useRef(examSettings);
+  const hasExamSettingsChanges = JSON.stringify(examSettings) !== JSON.stringify(examSettingsBaselineRef.current);
 
   const [halls, setHalls] = useState<any[]>(() => {
     return [];
@@ -218,12 +388,14 @@ export default function ExamsResultsModule({
   });
 
   const [classesList, setClassesList] = useState<any[]>(() => {
+    if (!mayLoadCanonicalStudentRoster) return [];
     return initialClasses;
   });
 
   const [studentList, setStudentList] = useState<any[]>(() => {
     // لا تُنشأ قوائم امتحان من بيانات تجريبية؛ تُستخدم القائمة المركزية فقط.
-    return initialStudents.map(st => ({ ...st, absentSubjects: [] as string[] }));
+    if (!mayLoadCanonicalStudentRoster) return [];
+    return initialStudents.map(st => normalizeExamAttendance({ ...st, absentSubjects: (st as any).absentSubjects || [] }));
   });
 
   const [gradesMatrix, setGradesMatrix] = useState<Record<string, Record<string, number>>>(() => {
@@ -237,6 +409,8 @@ export default function ExamsResultsModule({
   const [proctorAssignments, setProctorAssignments] = useState<any[]>(() => {
     return [];
   });
+  const [teacherGradeScopes, setTeacherGradeScopes] = useState<ExamTeacherGradeScope[]>([]);
+  const [newTeacherGradeScope, setNewTeacherGradeScope] = useState({ employeeId: '', subjectId: '', classroom: '', section: '' });
 
   const [approvalStatus, setApprovalStatus] = useState(() => {
     return { approved: false, approvedBy: '', approvedAt: '' };
@@ -295,6 +469,20 @@ export default function ExamsResultsModule({
   const [subjectSearch, setSubjectSearch] = useState('');
   const [classroomSearch, setClassroomSearch] = useState('');
   const [classesSubTab, setClassesSubTab] = useState<'subjects' | 'classrooms'>('subjects');
+  const canManageExamScopes = currentRole === 'SuperAdmin' || currentRole === 'SchoolAdmin' || currentRole === 'Control';
+  const isTeacherGradeScopeAssigned = (student: any, subjectId: string): boolean => teacherGradeScopes.some(scope =>
+    scope.subjectId === String(subjectId)
+    && scope.classroom === String(student?.classroom || '')
+    && scope.section === String(student?.section || '')
+  );
+  const selectedScopeClass = classesList.find(classroom => classroom.name === newTeacherGradeScope.classroom);
+  const selectedScopeSections = Array.isArray(selectedScopeClass?.sections) ? selectedScopeClass.sections : [];
+  const [editingClassroomId, setEditingClassroomId] = useState<string | null>(null);
+  const [editingClassroomValues, setEditingClassroomValues] = useState({ name: '', level: 'middle' as 'kindergarten' | 'primary' | 'middle' | 'high', capacity: 30, sections: '' });
+  const filteredClassrooms = useMemo(
+    () => classesList.filter(cls => String(cls.name || '').toLowerCase().includes(classroomSearch.trim().toLowerCase())),
+    [classesList, classroomSearch]
+  );
   const [newClassroom, setNewClassroom] = useState({ name: '', level: 'middle' as 'kindergarten' | 'primary' | 'middle' | 'high', capacity: 30, sections: '' });
   const [hallSearch, setHallSearch] = useState('');
   const [proctorSearch, setProctorSearch] = useState('');
@@ -307,11 +495,13 @@ export default function ExamsResultsModule({
   // Database Synchronization States
   const [isDbSyncing, setIsDbSyncing] = useState(false);
   const [isCanonicalClassSyncing, setIsCanonicalClassSyncing] = useState(false);
-  const [dbSyncStatus, setDbSyncStatus] = useState<'idle' | 'success' | 'conflict' | 'error'>('idle');
+  const [dbSyncStatus, setDbSyncStatus] = useState<DbSyncStatus>('idle');
   const [lastSyncTime, setLastSyncTime] = useState<string>('');
+  const [lastDbWriteError, setLastDbWriteError] = useState('');
   const [examsDbVersion, setExamsDbVersion] = useState(0);
   const examsDbVersionRef = useRef(0);
   const databaseWriteLockRef = useRef(false);
+  const examReadSequenceRef = useRef(0);
   const updateExamsDbVersion = (value: unknown): boolean => {
     const nextVersion = Number(value);
     if (!Number.isSafeInteger(nextVersion) || nextVersion < 0 || nextVersion < examsDbVersionRef.current) return false;
@@ -338,26 +528,27 @@ export default function ExamsResultsModule({
         ...student,
         seatNumber: examMetadata.seatNumber,
         absentSubjects: Array.isArray(examMetadata.absentSubjects) ? examMetadata.absentSubjects : [],
+        examAttendance: examMetadata.examAttendance,
         hallId: examMetadata.hallId
       };
-    });
+    }).map(student => normalizeExamAttendance(student));
   };
 
-  const fetchCanonicalStudents = async (token: string | null) => {
+  const fetchCanonicalStudents = async (_token: string | null) => {
     const collected: any[] = [];
     let page = 1;
     let hasNext = true;
-    while (hasNext) {
-      const response = await fetch(`/api/students?page=${page}&limit=100&sortBy=name&sortOrder=asc`, {
-        headers: { 'Authorization': token ? `Bearer ${token}` : '' },
-        cache: 'no-store'
-      });
-      if (!response.ok) throw new Error(`Canonical student read failed (${response.status})`);
-      const result = await response.json();
+    while (hasNext && page <= 1000) {
+      // Use the canonical Student Affairs repository so Exams follows the
+      // same trusted-session refresh and bounded retry policy as the source
+      // module, instead of treating one transient read failure as a hard
+      // database disconnect.
+      const result = await StudentRepository.list({ page, limit: 100, sortBy: 'name', sortOrder: 'asc' });
       collected.push(...(Array.isArray(result.data) ? result.data : []));
       hasNext = Boolean(result.meta?.hasNext);
       page += 1;
     }
+    if (hasNext) throw new Error('تعذر إكمال قراءة الطلاب من المصدر المركزي: عدد الصفحات تجاوز الحد الآمن.');
     const normalizeAcademicYear = (value: unknown) => String(value || '').replace(/\D/g, '');
     const targetAcademicYear = normalizeAcademicYear(selectedSchool?.academicYear || examSettings.academicYear);
     const diagnostics = {
@@ -388,7 +579,7 @@ export default function ExamsResultsModule({
   };
 
   const fetchCentralAuditLogs = async (token: string | null) => {
-    const response = await fetch('/api/exams/audit-events', {
+    const response = await fetchExamsSource('/api/exams/audit-events', {
       headers: { 'Authorization': token ? `Bearer ${token}` : '' },
       cache: 'no-store'
     });
@@ -423,6 +614,7 @@ export default function ExamsResultsModule({
       scheduleConfig?: any;
       customProctorUnavailable?: Record<string, string[]>;
       assessmentState?: AssessmentWorkflowState;
+      teacherGradeScopes?: ExamTeacherGradeScope[];
       operationReason?: string;
     } = {}
   ) => {
@@ -433,6 +625,7 @@ export default function ExamsResultsModule({
     databaseWriteLockRef.current = true;
     setIsDbSyncing(true);
     setDbSyncStatus('idle');
+    setLastDbWriteError('');
     try {
       const payload = {
         exams_settings: currentSettings,
@@ -456,17 +649,50 @@ export default function ExamsResultsModule({
         exams_schedule_approval_status: persistenceExtras.scheduleApprovalStatus ?? scheduleApprovalStatus,
         exams_schedule_config: persistenceExtras.scheduleConfig ?? scheduleConfigRef.current,
         exams_custom_proctor_unavailable: persistenceExtras.customProctorUnavailable ?? customProctorUnavailable,
-        exams_assessment_state: persistenceExtras.assessmentState ?? assessmentState
+        exams_assessment_state: persistenceExtras.assessmentState ?? assessmentState,
+        exams_teacher_grade_scopes: persistenceExtras.teacherGradeScopes ?? teacherGradeScopes
       };
-      const token = getTrustedAccessToken();
-      const response = await fetch('/api/exams/database', {
+      const isScopedWriter = currentRole === 'Teacher' || isGradeScopedExamUser;
+      let requestPayload: Record<string, unknown> = payload;
+      if (isScopedWriter) {
+        const gradePatch: Record<string, Record<string, number | null>> = {};
+        const attendancePatch = new Map<string, Record<string, ExamAttendanceStatus | null>>();
+        currentStudentList.forEach(student => {
+          currentSubjects.forEach(subject => {
+            const studentId = String(student.id);
+            const subjectId = String(subject.id);
+            const changeKey = `${studentId}_${subjectId}`;
+            const isAssigned = teacherGradeScopes.some(scope =>
+              scope.subjectId === subjectId
+              && scope.classroom === String(student.classroom || '')
+              && scope.section === String(student.section || '')
+            );
+            if (!isAssigned || !modifiedGradesKeys.has(changeKey)) return;
+            if (!gradePatch[studentId]) gradePatch[studentId] = {};
+            const row = currentGradesMatrix[studentId] || {};
+            gradePatch[studentId][subjectId] = Object.hasOwn(row, subjectId) ? row[subjectId] : null;
+            if (!attendancePatch.has(studentId)) attendancePatch.set(studentId, {});
+            attendancePatch.get(studentId)![subjectId] = getExamAttendanceStatus(student, subjectId);
+          });
+        });
+        if (modifiedGradesKeys.size > 0 && Object.keys(gradePatch).length === 0 && attendancePatch.size === 0) {
+          triggerNotification('لم يُحفظ شيء: لا توجد تعديلات ضمن تكليفك الموثق الحالي.', 'warning');
+          return false;
+        }
+        requestPayload = {
+          exams_grades_matrix: gradePatch,
+          exams_students_enriched: [...attendancePatch.entries()].map(([id, examAttendance]) => ({ id, examAttendance }))
+        };
+      }
+      const token = await getTrustedAccessTokenAsync();
+      const response = await fetchExamsSource('/api/exams/database', {
         method: 'POST',
         headers: {
           'Content-Type': 'application/json',
           'Authorization': token ? `Bearer ${token}` : ''
         },
         body: JSON.stringify({
-          ...payload,
+          ...requestPayload,
           expectedVersion: examsDbVersionRef.current,
           operation,
           operationReason: persistenceExtras.operationReason
@@ -477,6 +703,7 @@ export default function ExamsResultsModule({
         updateExamsDbVersion(Number(result.meta?.version ?? examsDbVersionRef.current + 1));
         setDbSyncStatus('success');
         setLastSyncTime(new Date().toLocaleTimeString('ar-EG'));
+        setLastDbWriteError('');
         void fetchCentralAuditLogs(token).then(setCentralAuditLogs).catch(error => {
           EnterpriseLogger.error('Failed to refresh canonical exams audit log', 'ExamsResultsModule', { error });
         });
@@ -485,6 +712,11 @@ export default function ExamsResultsModule({
           : true;
       } else {
         const result = await response.json().catch(() => ({}));
+        const userMessage = String(result.message || (response.status === 409
+          ? 'تعارض حفظ: أعد المزامنة قبل إعادة المحاولة.'
+          : `تعذر حفظ بيانات الامتحانات (${response.status})`)).trim().slice(0, 240);
+        const traceId = String(result.traceId || '').trim().slice(0, 80);
+        setLastDbWriteError(traceId ? `${userMessage} (مرجع الدعم: ${traceId})` : userMessage);
         const failureDetail = String(result.details || '');
         const failureCategory = /exams_result_archives/i.test(failureDetail)
           ? 'immutable_archive_persistence'
@@ -501,22 +733,64 @@ export default function ExamsResultsModule({
           traceId: result.traceId || null,
           failureCategory
         });
-        setDbSyncStatus(response.status === 409 ? 'conflict' : 'error');
-        triggerNotification(
-          result.message || (response.status === 409
-            ? 'تعارض حفظ: أعد المزامنة قبل إعادة المحاولة.'
-            : `تعذر حفظ بيانات الامتحانات (${response.status})`),
-          'warning'
-        );
+        setDbSyncStatus(getDbSyncFailureStatus(response.status));
+        triggerNotification(userMessage, 'warning');
         return false;
       }
     } catch (err: any) {
       EnterpriseLogger.error("Failed to save exams database to server", "ExamsResultsModule", { error: err });
       setDbSyncStatus('error');
+      setLastDbWriteError('تعذر تأكيد الحفظ من المصدر المركزي؛ تحقق من الاتصال قبل إعادة المحاولة.');
       return false;
     } finally {
       setIsDbSyncing(false);
       databaseWriteLockRef.current = false;
+    }
+  };
+
+  const persistTeacherGradeScopes = async (nextScopes: ExamTeacherGradeScope[]): Promise<boolean> => {
+    const persisted = await saveToServerDb(
+      examSettings, halls, subjects, studentList, gradesMatrix, schedule, proctorAssignments,
+      approvalStatus, auditLogs, classesList, controlClosures, reEvaluationRequests,
+      snapshots, reviewedStagesSubjects, stageApprovalStatus, 'write',
+      { teacherGradeScopes: nextScopes }
+    );
+    if (!persisted) return false;
+    setTeacherGradeScopes(nextScopes);
+    return true;
+  };
+
+  const handleAddTeacherGradeScope = async () => {
+    const scope = {
+      employeeId: newTeacherGradeScope.employeeId.trim(),
+      subjectId: newTeacherGradeScope.subjectId.trim(),
+      classroom: newTeacherGradeScope.classroom.trim(),
+      section: newTeacherGradeScope.section.trim()
+    };
+    if (!scope.employeeId || !scope.subjectId || !scope.classroom || !scope.section) {
+      triggerNotification('حدد الموظف والمادة والصف والشعبة قبل حفظ نطاق الرصد.', 'warning');
+      return;
+    }
+    if (teacherGradeScopes.some(item => item.employeeId === scope.employeeId
+      && item.subjectId === scope.subjectId && item.classroom === scope.classroom && item.section === scope.section)) {
+      triggerNotification('هذا التكليف مسجل بالفعل.', 'info');
+      return;
+    }
+    const nextScopes = [...teacherGradeScopes, {
+      id: `exam-grade-scope-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`,
+      ...scope
+    }];
+    if (await persistTeacherGradeScopes(nextScopes)) {
+      setNewTeacherGradeScope({ employeeId: '', subjectId: '', classroom: '', section: '' });
+      triggerNotification('تم حفظ نطاق رصد الدرجات واعتماده بصلاحيات الخادم.', 'success');
+    }
+  };
+
+  const handleRemoveTeacherGradeScope = async (scopeId: string) => {
+    const nextScopes = teacherGradeScopes.filter(scope => scope.id !== scopeId);
+    if (nextScopes.length === teacherGradeScopes.length) return;
+    if (await persistTeacherGradeScopes(nextScopes)) {
+      triggerNotification('تم إلغاء تكليف رصد الدرجات.', 'success');
     }
   };
 
@@ -557,41 +831,55 @@ export default function ExamsResultsModule({
 
   // Function to manually sync with server-side database
   const handleForceSync = async () => {
+    const requestSequence = ++examReadSequenceRef.current;
     setIsDbSyncing(true);
+    if (mayLoadCanonicalStudentRoster) void loadProctorCandidates();
     try {
+      // authenticatedRequest owns the read-session restore/retry lifecycle;
+      // do not race it with a second explicit restore in this fan-out.
       const token = getTrustedAccessToken();
+      const scopedWriter = !mayLoadCanonicalStudentRoster || isGradeScopedExamUser;
       const [response, canonicalStudents, canonicalAuditEvents] = await Promise.all([
-        fetch('/api/exams/database', {
+        fetchExamsSource('/api/exams/database', {
           headers: {
             'Authorization': token ? `Bearer ${token}` : ''
           }
         }),
-        fetchCanonicalStudents(token).catch(error => {
+        (scopedWriter ? Promise.resolve(null) : fetchCanonicalStudents(token).catch(error => {
           EnterpriseLogger.error('Failed to refresh canonical students for exams', 'ExamsResultsModule', { error });
           return null;
-        }),
-        fetchCentralAuditLogs(token).catch(error => {
+        })),
+        (scopedWriter ? Promise.resolve(null) : fetchCentralAuditLogs(token).catch(error => {
           EnterpriseLogger.error('Failed to refresh canonical exams audit log', 'ExamsResultsModule', { error });
           return null;
-        })
+        }))
       ]);
+      if (requestSequence !== examReadSequenceRef.current) return;
       if (canonicalAuditEvents) setCentralAuditLogs(canonicalAuditEvents);
       if (response.ok) {
         const rawRes = await response.json();
+        const scopedRead = rawRes?.meta?.scope === 'grade_scoped' || currentRole === 'Teacher';
+        setIsGradeScopedExamUser(scopedRead);
         const remoteVersion = Number(rawRes?.meta?.version || 0);
         if (Number.isSafeInteger(remoteVersion) && remoteVersion < examsDbVersionRef.current) return;
         updateExamsDbVersion(remoteVersion);
         const dbData = rawRes && rawRes.success && rawRes.data ? rawRes.data : rawRes;
         if (dbData && Object.keys(dbData).length > 0) {
           // Found data on server, load it!
-          if (dbData.exams_settings) setExamSettings(dbData.exams_settings);
+          if (dbData.exams_settings) {
+            const canonicalSettings = { ...DEFAULT_EXAM_SETTINGS, ...dbData.exams_settings };
+            examSettingsBaselineRef.current = canonicalSettings;
+            setExamSettings(canonicalSettings);
+          }
           if (dbData.exams_halls) setHalls(dbData.exams_halls);
           if (dbData.exams_subjects) setSubjects(dbData.exams_subjects);
-          if (canonicalStudents) setStudentList(mergeCanonicalStudents(canonicalStudents, dbData.exams_students_enriched));
-          else if (dbData.exams_students_enriched) setStudentList(dbData.exams_students_enriched);
+          if (scopedRead && dbData.exams_students_enriched) setStudentList(dbData.exams_students_enriched.map((student: any) => normalizeExamAttendance(student)));
+          else if (canonicalStudents) setStudentList(mergeCanonicalStudents(canonicalStudents, dbData.exams_students_enriched));
+          else if (dbData.exams_students_enriched) setStudentList(dbData.exams_students_enriched.map((student: any) => normalizeExamAttendance(student)));
           if (dbData.exams_grades_matrix) setGradesMatrix(dbData.exams_grades_matrix);
           if (dbData.exams_schedule) setSchedule(dbData.exams_schedule);
           if (dbData.exams_proctors) setProctorAssignments(dbData.exams_proctors);
+          if (Array.isArray(dbData.exams_teacher_grade_scopes)) setTeacherGradeScopes(dbData.exams_teacher_grade_scopes);
           if (dbData.exams_approval_status) setApprovalStatus(dbData.exams_approval_status);
           if (dbData.exams_audit_logs) setAuditLogs(dbData.exams_audit_logs);
           if (dbData.exams_classes_list) setClassesList(dbData.exams_classes_list);
@@ -607,27 +895,39 @@ export default function ExamsResultsModule({
           if (dbData.exams_schedule_config) updateScheduleConfig(dbData.exams_schedule_config);
           if (dbData.exams_custom_proctor_unavailable) setCustomProctorUnavailable(dbData.exams_custom_proctor_unavailable);
           if (dbData.exams_assessment_state) restoreAssessmentState(dbData.exams_assessment_state);
-          setDbSyncStatus('success');
-          setLastSyncTime(new Date().toLocaleTimeString('ar-EG'));
-          triggerNotification('تمت مزامنة واسترجاع كامل البيانات من السيرفر بنجاح', 'success');
+          if (canonicalStudents === null && mayLoadCanonicalStudentRoster && !scopedRead) {
+            setDbSyncStatus('error');
+            triggerNotification('تم استرجاع بيانات الامتحانات، لكن تعذر تحديث الطلاب من المصدر المركزي. أعد التحقق قبل أي تعديل.', 'warning');
+          } else {
+            setDbSyncStatus('success');
+            setLastSyncTime(new Date().toLocaleTimeString('ar-EG'));
+            triggerNotification('تمت مزامنة واسترجاع كامل البيانات من السيرفر بنجاح', 'success');
+          }
           logAction('مزامنة واسترجاع البيانات يدوياً من السيرفر', 'النظام وقاعدة البيانات');
         } else {
           // An empty canonical database is an empty state, not permission to
           // promote browser/demo fixtures into authoritative exam records.
           if (canonicalStudents) setStudentList(mergeCanonicalStudents(canonicalStudents));
-          setDbSyncStatus('success');
-          triggerNotification('المصدر المركزي متاح لكنه لا يحتوي سجلات امتحانات بعد.', 'info');
+          if (canonicalStudents === null && mayLoadCanonicalStudentRoster && !scopedRead) {
+            setDbSyncStatus('error');
+            triggerNotification('المصدر المركزي ردّ بلا سجلات امتحانات، لكن تعذر التحقق من الطلاب. أعد المحاولة.', 'warning');
+          } else {
+            setDbSyncStatus('success');
+            setLastSyncTime(new Date().toLocaleTimeString('ar-EG'));
+            triggerNotification('المصدر المركزي متاح لكنه لا يحتوي سجلات امتحانات بعد.', 'info');
+          }
         }
       } else {
-        setDbSyncStatus('error');
+        setDbSyncStatus(getDbSyncFailureStatus(response.status));
         const errorResult = await response.json().catch(() => ({}));
         triggerNotification(errorResult.message || `فشل استرجاع بيانات الامتحانات (${response.status})`, 'warning');
       }
     } catch (err: any) {
       setDbSyncStatus('error');
-      triggerNotification('حدث خطأ أثناء مزامنة قاعدة البيانات', 'warning');
+      EnterpriseLogger.error('Failed to force-sync exams database', 'ExamsResultsModule', { error: err });
+      triggerNotification('تعذر الاتصال بالمصدر المركزي أثناء المزامنة.', 'warning');
     } finally {
-      setIsDbSyncing(false);
+      if (requestSequence === examReadSequenceRef.current) setIsDbSyncing(false);
     }
   };
 
@@ -635,8 +935,8 @@ export default function ExamsResultsModule({
     if (isCanonicalClassSyncing || isDbSyncing) return;
     setIsCanonicalClassSyncing(true);
     try {
-      const token = getTrustedAccessToken();
-      const response = await fetch('/api/exams/sync-canonical-classes', {
+      const token = await getTrustedAccessTokenAsync();
+      const response = await fetchExamsSource('/api/exams/sync-canonical-classes', {
         method: 'POST',
         headers: {
           'Content-Type': 'application/json',
@@ -646,7 +946,7 @@ export default function ExamsResultsModule({
       });
       const result = await response.json().catch(() => ({}));
       if (!response.ok) {
-        setDbSyncStatus(response.status === 409 ? 'conflict' : 'error');
+        setDbSyncStatus(getDbSyncFailureStatus(response.status));
         triggerNotification(result.message || 'تعذر مطابقة صفوف الامتحانات مع الهيكل الأكاديمي.', 'warning');
         return;
       }
@@ -678,41 +978,82 @@ export default function ExamsResultsModule({
 
   // Load from database on mount
   useEffect(() => {
+    if (mayLoadCanonicalStudentRoster) return;
+    setExamSettings({ ...DEFAULT_EXAM_SETTINGS, academicYear: selectedSchool?.academicYear || DEFAULT_EXAM_SETTINGS.academicYear });
+    examSettingsBaselineRef.current = { ...DEFAULT_EXAM_SETTINGS, academicYear: selectedSchool?.academicYear || DEFAULT_EXAM_SETTINGS.academicYear };
+    setHalls([]);
+    setSubjects([]);
+    setClassesList([]);
+    setStudentList([]);
+    setGradesMatrix({});
+    setSchedule([]);
+    setProctorAssignments([]);
+    setApprovalStatus({ approved: false, approvedBy: '', approvedAt: '' });
+    setTeacherGradeScopes([]);
+    setControlClosures([]);
+    setReEvaluationRequests([]);
+    setSnapshots([]);
+    setReviewedStagesSubjects([]);
+    setStageApprovalStatus({});
+    setApprovalHistory([]);
+    setGradeHistory([]);
+    setControlCommittees([]);
+    setAuditLogs([]);
+    setCentralAuditLogs([]);
+    setScheduleApprovalStatus({ approved: false, approvedBy: '', approvedAt: '', notes: '' });
+    setCustomProctorUnavailable({});
+    setAssessmentState(createEmptyAssessmentWorkflowState());
+  }, [currentRole, mayLoadCanonicalStudentRoster, selectedSchool?.id, selectedSchool?.academicYear]);
+
+  useEffect(() => {
+    const requestSequence = ++examReadSequenceRef.current;
     const fetchDbOnMount = async () => {
       setIsDbSyncing(true);
       try {
+        // authenticatedRequest owns the read-session restore/retry lifecycle;
+        // do not race it with a second explicit restore during mount.
         const token = getTrustedAccessToken();
-        const [response, canonicalStudents, canonicalAuditEvents] = await Promise.all([
-          fetch('/api/exams/database', {
+      const scopedWriter = !mayLoadCanonicalStudentRoster || isGradeScopedExamUser;
+      const [response, canonicalStudents, canonicalAuditEvents] = await Promise.all([
+          fetchExamsSource('/api/exams/database', {
           headers: {
             'Authorization': token ? `Bearer ${token}` : ''
           }
           }),
-          fetchCanonicalStudents(token).catch(error => {
+          (scopedWriter ? Promise.resolve(null) : fetchCanonicalStudents(token).catch(error => {
             EnterpriseLogger.error('Failed to fetch canonical students for exams', 'ExamsResultsModule', { error });
             return null;
-          }),
-          fetchCentralAuditLogs(token).catch(error => {
+          })),
+          (scopedWriter ? Promise.resolve(null) : fetchCentralAuditLogs(token).catch(error => {
             EnterpriseLogger.error('Failed to fetch canonical exams audit log', 'ExamsResultsModule', { error });
             return null;
-          })
+          }))
         ]);
+        if (requestSequence !== examReadSequenceRef.current) return;
         if (canonicalAuditEvents) setCentralAuditLogs(canonicalAuditEvents);
         if (response.ok) {
           const rawRes = await response.json();
+          const scopedRead = rawRes?.meta?.scope === 'grade_scoped' || currentRole === 'Teacher';
+          setIsGradeScopedExamUser(scopedRead);
           const remoteVersion = Number(rawRes?.meta?.version || 0);
           if (Number.isSafeInteger(remoteVersion) && remoteVersion < examsDbVersionRef.current) return;
           updateExamsDbVersion(remoteVersion);
           const dbData = rawRes && rawRes.success && rawRes.data ? rawRes.data : rawRes;
           if (dbData && Object.keys(dbData).length > 0) {
-            if (dbData.exams_settings) setExamSettings(dbData.exams_settings);
+            if (dbData.exams_settings) {
+              const canonicalSettings = { ...DEFAULT_EXAM_SETTINGS, ...dbData.exams_settings };
+              examSettingsBaselineRef.current = canonicalSettings;
+              setExamSettings(canonicalSettings);
+            }
             if (dbData.exams_halls) setHalls(dbData.exams_halls);
             if (dbData.exams_subjects) setSubjects(dbData.exams_subjects);
-            if (canonicalStudents) setStudentList(mergeCanonicalStudents(canonicalStudents, dbData.exams_students_enriched));
-            else if (dbData.exams_students_enriched) setStudentList(dbData.exams_students_enriched);
+            if (scopedRead && dbData.exams_students_enriched) setStudentList(dbData.exams_students_enriched.map((student: any) => normalizeExamAttendance(student)));
+            else if (canonicalStudents) setStudentList(mergeCanonicalStudents(canonicalStudents, dbData.exams_students_enriched));
+            else if (dbData.exams_students_enriched) setStudentList(dbData.exams_students_enriched.map((student: any) => normalizeExamAttendance(student)));
             if (dbData.exams_grades_matrix) setGradesMatrix(dbData.exams_grades_matrix);
             if (dbData.exams_schedule) setSchedule(dbData.exams_schedule);
             if (dbData.exams_proctors) setProctorAssignments(dbData.exams_proctors);
+            if (Array.isArray(dbData.exams_teacher_grade_scopes)) setTeacherGradeScopes(dbData.exams_teacher_grade_scopes);
             if (dbData.exams_approval_status) setApprovalStatus(dbData.exams_approval_status);
             if (dbData.exams_audit_logs) setAuditLogs(dbData.exams_audit_logs);
             if (dbData.exams_classes_list) setClassesList(dbData.exams_classes_list);
@@ -728,26 +1069,42 @@ export default function ExamsResultsModule({
             if (dbData.exams_schedule_config) updateScheduleConfig(dbData.exams_schedule_config);
             if (dbData.exams_custom_proctor_unavailable) setCustomProctorUnavailable(dbData.exams_custom_proctor_unavailable);
             if (dbData.exams_assessment_state) restoreAssessmentState(dbData.exams_assessment_state);
-            setDbSyncStatus('success');
-            setLastSyncTime(new Date().toLocaleTimeString('ar-EG'));
-            triggerNotification('تم الاتصال بقاعدة البيانات واسترجاع كافة السجلات بنجاح', 'success');
+            if (canonicalStudents === null && mayLoadCanonicalStudentRoster && !scopedRead) {
+              setDbSyncStatus('error');
+              triggerNotification('تم تحميل بيانات الامتحانات، لكن تعذر التحقق من الطلاب. أعد التحقق قبل المتابعة.', 'warning');
+            } else {
+              setDbSyncStatus('success');
+              setLastSyncTime(new Date().toLocaleTimeString('ar-EG'));
+              triggerNotification('تم الاتصال بقاعدة البيانات واسترجاع كافة السجلات بنجاح', 'success');
+            }
           } else {
             if (canonicalStudents) setStudentList(mergeCanonicalStudents(canonicalStudents));
-            setDbSyncStatus('success');
-            triggerNotification('المصدر المركزي متاح لكنه لا يحتوي سجلات امتحانات بعد.', 'info');
+            if (canonicalStudents === null && mayLoadCanonicalStudentRoster && !(rawRes?.meta?.scope === 'grade_scoped' || currentRole === 'Teacher')) {
+              setDbSyncStatus('error');
+              triggerNotification('المصدر المركزي متاح، لكن تعذر التحقق من الطلاب. أعد المحاولة قبل إنشاء دورة.', 'warning');
+            } else {
+              setDbSyncStatus('success');
+              setLastSyncTime(new Date().toLocaleTimeString('ar-EG'));
+              triggerNotification('المصدر المركزي متاح لكنه لا يحتوي سجلات امتحانات بعد.', 'info');
+            }
           }
         } else {
-          setDbSyncStatus('error');
+          setDbSyncStatus(getDbSyncFailureStatus(response.status));
+          const errorResult = await response.json().catch(() => ({}));
+          triggerNotification(errorResult.message || `تعذر الاتصال بالمصدر المركزي (${response.status}).`, 'warning');
         }
       } catch (err: any) {
+        if (requestSequence !== examReadSequenceRef.current) return;
         EnterpriseLogger.error("Failed to fetch exams database", "ExamsResultsModule", { error: err });
         setDbSyncStatus('error');
+        triggerNotification('تعذر الاتصال بالمصدر المركزي أثناء تحميل وحدة الامتحانات.', 'warning');
       } finally {
-        setIsDbSyncing(false);
+        if (requestSequence === examReadSequenceRef.current) setIsDbSyncing(false);
       }
     };
     fetchDbOnMount();
-  }, []);
+    return () => { examReadSequenceRef.current += 1; };
+  }, [currentRole, selectedSchool?.id]);
 
   // Automated Test Suite State
   const [testSuiteRunning, setTestSuiteRunning] = useState(false);
@@ -770,20 +1127,20 @@ export default function ExamsResultsModule({
     const isConfigured = subjects.length > 0 && classesList.length > 0 && Boolean(examSettings.academicYear);
     const hasApprovedResults = approvalStatus.approved;
     const hasImmutableArchive = controlClosures.some(closure => closure?.isImmutableArchive && /^[0-9a-f]{64}$/i.test(String(closure.signatureHash || '')));
-    const finalResults = [
+    const finalResults = includeCentralSourceCheck([
       { id: 1, name: 'تهيئة دورة الامتحانات', status: isConfigured ? 'success' : 'warning', desc: isConfigured ? 'السنة والفصول والمواد معرفة' : 'يلزم تعريف السنة والفصول والمواد' },
       { id: 2, name: 'أرقام الجلوس والقاعات', status: studentList.length > 0 && unassignedStudents.length === 0 ? 'success' : 'warning', desc: `${unassignedStudents.length} طالب دون تخصيص مكتمل` },
       { id: 3, name: 'سلامة الجدول واعتماده', status: schedule.length > 0 && duplicateScheduleSlots.length === 0 && scheduleApprovalStatus.approved ? 'success' : 'warning', desc: duplicateScheduleSlots.length > 0 ? `${duplicateScheduleSlots.length} تعارضاً حرجاً مكتشفاً` : schedule.length === 0 ? 'لا يوجد جدول منشور للفحص' : scheduleApprovalStatus.approved ? 'الجدول معتمد ولا توجد تعارضات حرجة' : 'الجدول غير معتمد بعد' },
       { id: 4, name: 'اكتمال الدرجات', status: studentList.length > 0 && subjects.length > 0 && incompleteResults.length === 0 ? 'success' : 'warning', desc: `${incompleteResults.length} نتيجة غير مكتملة` },
       { id: 5, name: 'جاهزية الإفادات والأرشيف', status: hasApprovedResults && incompleteResults.length === 0 && hasImmutableArchive ? 'success' : 'warning', desc: hasApprovedResults && hasImmutableArchive ? 'توجد نتائج معتمدة بأرشيف خادم غير قابل للتعديل' : 'لا يوجد اعتماد نتائج مع أرشيف خادم مكتمل' }
-    ];
+    ], dbSyncStatus);
     const logs = finalResults.map(result => `[${new Date().toLocaleTimeString('ar-EG')}] ${result.status === 'success' ? '✅' : '⚠️'} ${result.name}: ${result.desc}`);
     setTestSuiteLogs(logs);
     setTestSuiteResults(finalResults);
     setTestSuiteRunning(false);
-    const allChecksPassed = finalResults.every(result => result.status === 'success');
-    triggerNotification(allChecksPassed ? 'اكتملت فحوص الجاهزية الفعلية بنجاح.' : 'اكتملت الفحوص وتوجد تنبيهات تحتاج إلى معالجة وتمنع الإغلاق.', allChecksPassed ? 'success' : 'warning');
-    logAction('تشغيل فحوص جاهزية الكنترول المبنية على البيانات الفعلية', 'الاختبارات والفحوصات');
+    const allChecksPassed = areExamReadinessChecksPassing(finalResults);
+    triggerNotification(allChecksPassed ? 'اكتمل الفحص الحالي وتستوفي البيانات المعروضة جميع المؤشرات.' : 'اكتمل الفحص الحالي وتوجد تنبيهات تمنع اعتبار الجاهزية مكتملة.', allChecksPassed ? 'success' : 'warning');
+    logAction('فحص حالة بيانات الكنترول المعروضة', 'الاختبارات والفحوصات');
   };
 
   const [auditLogs, setAuditLogs] = useState<any[]>(() => {
@@ -804,24 +1161,33 @@ export default function ExamsResultsModule({
 
   // Sidebar menu follows the operational lifecycle and is visually grouped by work stage.
   const sidebarMenu = [
-    { id: 'control-center', label: 'مركز عمليات الكنترول الموحد ⚡', icon: Sparkles, section: 'البدء والتهيئة' },
-    { id: 'settings', label: 'إعدادات الامتحانات', icon: Settings, section: 'البدء والتهيئة' },
-    { id: 'classes', label: 'الفصول والمواد', icon: BookOpen, section: 'البدء والتهيئة' },
-    { id: 'assessment', label: 'بنك الأسئلة والامتحان الإلكتروني', icon: FileCheck2, section: 'البدء والتهيئة' },
-    { id: 'halls', label: 'لجان وقاعات الامتحان', icon: Home, section: 'اللجان والجدولة' },
-    { id: 'distribution', label: 'توزيع الطلاب', icon: Users, section: 'اللجان والجدولة' },
-    { id: 'seating', label: 'أرقام الجلوس', icon: IdCard, section: 'اللجان والجدولة' },
-    { id: 'proctors', label: 'المراقبون والملاحظون', icon: UserCheck, section: 'اللجان والجدولة' },
-    { id: 'schedule', label: 'جدول الامتحانات', icon: Calendar, section: 'اللجان والجدولة' },
-    { id: 'grades-entry', label: 'إدراج درجات الطلاب', icon: FileSpreadsheet, section: 'الرصد والنتائج' },
-    { id: 'processing', label: 'معالجة النتائج', icon: Percent, section: 'الرصد والنتائج' },
-    { id: 'quality-governance', label: 'جودة وحوكمة الكنترول 🏆', icon: ShieldCheck, section: 'المراجعة والإصدار' },
-    { id: 'review', label: 'المراجعة والاعتماد', icon: ShieldAlert, section: 'المراجعة والإصدار' },
-    { id: 'reports', label: 'التقارير الإحصائية', icon: FilePieChart, section: 'المراجعة والإصدار' },
-    { id: 'certificates', label: 'الشهادات وكشوف الدرجات', icon: Award, section: 'المراجعة والإصدار' },
-    { id: 'system-settings', label: 'الإعدادات العامة', icon: Sliders, section: 'الإدارة والمساعدة' },
-    { id: 'exams-guide', label: 'دليل الكنترول والنتائج (PDF) 📄', icon: FileText, section: 'الإدارة والمساعدة' }
+    { id: 'control-center', label: 'مركز عمليات الكنترول الموحد ⚡', icon: Sparkles, section: 'setup' },
+    { id: 'settings', label: 'إعدادات الامتحانات', icon: Settings, section: 'setup' },
+    { id: 'classes', label: 'الفصول والمواد', icon: BookOpen, section: 'setup' },
+    { id: 'assessment', label: 'بنك الأسئلة والامتحان الإلكتروني', icon: FileCheck2, section: 'setup' },
+    { id: 'halls', label: 'لجان وقاعات الامتحان', icon: Home, section: 'committees' },
+    { id: 'distribution', label: 'توزيع الطلاب', icon: Users, section: 'committees' },
+    { id: 'seating', label: 'أرقام الجلوس', icon: IdCard, section: 'committees' },
+    { id: 'proctors', label: 'المراقبون والملاحظون', icon: UserCheck, section: 'committees' },
+    { id: 'schedule', label: 'جدول الامتحانات', icon: Calendar, section: 'committees' },
+    { id: 'grades-entry', label: 'إدراج درجات الطلاب', icon: FileSpreadsheet, section: 'results' },
+    { id: 'processing', label: 'معالجة النتائج', icon: Percent, section: 'results' },
+    { id: 'quality-governance', label: 'جودة وحوكمة الكنترول 🏆', icon: ShieldCheck, section: 'release' },
+    { id: 'review', label: 'المراجعة والاعتماد', icon: ShieldAlert, section: 'release' },
+    { id: 'reports', label: 'التقارير الإحصائية', icon: FilePieChart, section: 'release' },
+    { id: 'certificates', label: 'الشهادات وكشوف الدرجات', icon: Award, section: 'release' },
+    { id: 'system-settings', label: 'الإعدادات العامة', icon: Sliders, section: 'admin' },
+    { id: 'exams-guide', label: 'دليل الكنترول والنتائج (PDF) 📄', icon: FileText, section: 'admin' }
   ];
+  const visibleSidebarMenu = sidebarMenu.filter(item => validTabIds.includes(item.id));
+  const visibleNavigationSections = EXAM_NAVIGATION_SECTIONS.filter(section =>
+    visibleSidebarMenu.some(item => item.section === section.id)
+  );
+
+  const activeNavigationSection = EXAM_TAB_NAVIGATION_SECTION[activeTab] || 'setup';
+  useEffect(() => {
+    setExpandedNavigationSection(activeNavigationSection);
+  }, [activeNavigationSection]);
 
   // Stage Level Filtered Students
   const visibleStudents = studentList.filter(st => {
@@ -910,23 +1276,18 @@ export default function ExamsResultsModule({
   const incompleteProcessedStudents = processedStudents.filter(student => student.status === 'غير مكتمل');
   const overallPassRate = completedProcessedStudents.length > 0
     ? Math.round((passedProcessedStudents.length / completedProcessedStudents.length) * 100)
-    : 0;
+    : null;
   const overallAverage = completedProcessedStudents.length > 0
     ? Number((completedProcessedStudents.reduce((total, student) => total + student.percentage, 0) / completedProcessedStudents.length).toFixed(1))
-    : 0;
+    : null;
 
   // Generic CSV Export Utility (Excel-compatible with UTF-8 BOM for Arabic)
   const handleExportToCSV = (data: any[], headers: string[], filename: string) => {
     let csvContent = "\uFEFF"; // UTF-8 BOM to make Excel render Arabic correctly
-    csvContent += headers.join(",") + "\n";
+    csvContent += headers.map(csvEscapeField).join(",") + "\n";
 
     data.forEach(row => {
-      const line = row.map((val: any) => {
-        const raw = String(val === undefined || val === null ? "" : val);
-        const formulaSafe = /^[=+\-@]/.test(raw) ? `'${raw}` : raw;
-        const str = formulaSafe.replace(/"/g, '""');
-        return `"${str}"`;
-      }).join(",");
+      const line = row.map(csvEscapeField).join(",");
       csvContent += line + "\n";
     });
 
@@ -938,7 +1299,31 @@ export default function ExamsResultsModule({
     document.body.appendChild(link);
     link.click();
     document.body.removeChild(link);
-    triggerNotification(`تم تصدير ملف ${filename} بنجاح بصيغة Excel CSV`, 'success');
+    window.setTimeout(() => URL.revokeObjectURL(url), 1000);
+    triggerNotification(`تم تصدير ملف ${filename} بنجاح بصيغة CSV المتوافقة مع Excel`, 'success');
+  };
+
+  const handleExportToXlsx = async (data: readonly (readonly unknown[])[], headers: readonly string[], filename: string) => {
+    try {
+      const { writeXlsxBuffer } = await import('../utils/ExcelWorkbookUtils');
+      const buffer = await writeXlsxBuffer([{ name: filename, headers, rows: data }]);
+      const blob = new Blob([buffer], {
+        type: 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet'
+      });
+      const url = URL.createObjectURL(blob);
+      const link = document.createElement('a');
+      const safeFilename = filename.replace(/[\\/:*?"<>|]+/g, '_').trim() || 'exams-export';
+      link.href = url;
+      link.download = `${safeFilename}.xlsx`;
+      document.body.appendChild(link);
+      link.click();
+      document.body.removeChild(link);
+      window.setTimeout(() => URL.revokeObjectURL(url), 1000);
+      triggerNotification(`تم إنشاء وتنزيل ملف Excel بصيغة XLSX للمحتوى: ${filename}.`, 'success');
+    } catch (error) {
+      EnterpriseLogger.error('Failed to export exam data as XLSX', 'ExamsResultsModule', { error, filename });
+      triggerNotification(`تعذر إنشاء ملف Excel بصيغة XLSX للمحتوى: ${filename}.`, 'warning');
+    }
   };
 
   const handleExportBackup = async () => {
@@ -989,11 +1374,16 @@ export default function ExamsResultsModule({
   // 1. Settings Handler
   const handleSaveSettings = async (e: React.FormEvent) => {
     e.preventDefault();
+    if (!hasExamSettingsChanges) {
+      triggerNotification('لا توجد تغييرات جديدة في سياسة الامتحانات لحفظها.', 'info');
+      return;
+    }
     const persisted = await saveToServerDb();
     if (!persisted) {
       triggerNotification('تعذر حفظ إعدادات الامتحانات في المصدر المركزي.', 'warning');
       return;
     }
+    examSettingsBaselineRef.current = examSettings;
     triggerNotification('تم حفظ إعدادات وثوابت الامتحانات بنجاح', 'success');
     logAction('تحديث إعدادات الامتحانات والسياسات الأكاديمية', 'إعدادات الامتحانات');
   };
@@ -1003,6 +1393,10 @@ export default function ExamsResultsModule({
   const handleAddSubject = async (e: React.FormEvent) => {
     e.preventDefault();
     if (isDbSyncing || isCanonicalClassSyncing) return;
+    if (scheduleApprovalStatus.approved || approvalStatus.approved) {
+      triggerNotification('لا يمكن إضافة مادة بعد اعتماد الجدول أو إغلاق النتائج. أعد فتح الدورة بسبب موثق أولاً.', 'warning');
+      return;
+    }
     const subjectName = String(newSubject.name || '').trim().replace(/\s+/g, ' ');
     if (!subjectName) return;
     if (newSubject.maxScore <= 0 || newSubject.passScore < 0 || newSubject.passScore > newSubject.maxScore) {
@@ -1034,17 +1428,22 @@ export default function ExamsResultsModule({
   const handleAddClassroom = async (e: React.FormEvent) => {
     e.preventDefault();
     if (isDbSyncing || isCanonicalClassSyncing) return;
-    if (!newClassroom.name.trim()) return;
+    const normalizedName = String(newClassroom.name || '').trim().replace(/\s+/g, ' ');
+    if (!normalizedName) return;
     if (newClassroom.capacity <= 0) {
       triggerNotification('يجب أن تكون سعة الصف أكبر من صفر.', 'warning');
       return;
     }
+    if (classesList.some(classroom => normalizeSubjectName(classroom.name) === normalizeSubjectName(normalizedName))) {
+      triggerNotification(`اسم الصف ${normalizedName} موجود بالفعل. اختر اسماً مختلفاً.`, 'warning');
+      return;
+    }
     const sectionsArray = newClassroom.sections
-      ? newClassroom.sections.split(',').map(s => s.trim()).filter(Boolean)
+      ? Array.from(new Set(newClassroom.sections.split(',').map(s => s.trim()).filter(Boolean)))
       : ['أ'];
     const item = {
       id: `cls-${Date.now()}`,
-      name: newClassroom.name,
+      name: normalizedName,
       level: newClassroom.level,
       capacity: Number(newClassroom.capacity),
       sections: sectionsArray
@@ -1061,13 +1460,68 @@ export default function ExamsResultsModule({
     logAction(`إضافة فصل دراسي جديد: ${item.name}`, 'الفصول والمواد');
   };
 
+  const handleUpdateClassroom = async (e: React.FormEvent, classroomId: string) => {
+    e.preventDefault();
+    if (isDbSyncing || isCanonicalClassSyncing) return;
+    const currentClassroom = classesList.find(classroom => classroom.id === classroomId);
+    const normalizedName = String(editingClassroomValues.name || '').trim().replace(/\s+/g, ' ');
+    const capacity = Number(editingClassroomValues.capacity);
+    const sections = editingClassroomValues.sections
+      ? Array.from(new Set(editingClassroomValues.sections.split(',').map(section => section.trim()).filter(Boolean)))
+      : ['أ'];
+
+    if (!currentClassroom || !normalizedName || !Number.isFinite(capacity) || capacity < 1) {
+      triggerNotification('تعذر تعديل الصف: تحقق من الاسم والسعة، ويجب أن تكون السعة أكبر من صفر.', 'warning');
+      return;
+    }
+    if (classesList.some(classroom => classroom.id !== classroomId && normalizeSubjectName(classroom.name) === normalizeSubjectName(normalizedName))) {
+      triggerNotification(`لا يمكن تكرار اسم الصف ${normalizedName}.`, 'warning');
+      return;
+    }
+
+    const studentsInClass = studentList.filter(student => student.classroom === currentClassroom.name);
+    const scheduleInClass = schedule.filter(item => item.classroom === currentClassroom.name);
+    if (normalizedName !== currentClassroom.name && (studentsInClass.length > 0 || scheduleInClass.length > 0)) {
+      triggerNotification('لا يمكن تغيير اسم صف مرتبط بطلاب أو جدول امتحانات؛ عالج المراجع الأكاديمية أولاً.', 'warning');
+      return;
+    }
+    if (capacity < studentsInClass.length) {
+      triggerNotification(`لا يمكن خفض السعة عن عدد الطلاب المسجلين في الصف (${studentsInClass.length}).`, 'warning');
+      return;
+    }
+    const removesAssignedSection = studentsInClass.some(student => student.section && !sections.includes(String(student.section)))
+      || scheduleInClass.some(item => item.section && !sections.includes(String(item.section)));
+    if (removesAssignedSection) {
+      triggerNotification('لا يمكن إزالة شعبة مرتبطة بطالب أو امتحان مجدول.', 'warning');
+      return;
+    }
+
+    const updated = classesList.map(classroom => classroom.id === classroomId
+      ? { ...classroom, name: normalizedName, level: editingClassroomValues.level, capacity, sections }
+      : classroom);
+    const persisted = await saveToServerDb(examSettings, halls, subjects, studentList, gradesMatrix, schedule, proctorAssignments, approvalStatus, auditLogs, updated);
+    if (!persisted) return;
+    setClassesList(updated);
+    setEditingClassroomId(null);
+    triggerNotification(`تم تحديث بيانات صف ${normalizedName} بنجاح`, 'success');
+    logAction(`تعديل صف دراسي: ${normalizedName}`, 'الفصول والمواد');
+  };
+
   // 3. Exam Halls handlers
   const [newHall, setNewHall] = useState({ name: '', capacity: 25, location: '' });
   const handleAddHall = async (e: React.FormEvent) => {
     e.preventDefault();
+    if (scheduleApprovalStatus.approved || approvalStatus.approved) {
+      triggerNotification('لا يمكن إضافة قاعة بعد اعتماد الجدول أو إغلاق النتائج. أعد فتح الدورة بسبب موثق أولاً.', 'warning');
+      return;
+    }
     if (!newHall.name.trim()) return;
     if (newHall.capacity <= 0) {
       triggerNotification('يجب أن تكون سعة القاعة أكبر من صفر.', 'warning');
+      return;
+    }
+    if (halls.some(hall => normalizeSubjectName(hall.name) === normalizeSubjectName(newHall.name))) {
+      triggerNotification('اسم القاعة موجود بالفعل في دورة الامتحانات.', 'warning');
       return;
     }
     const item = {
@@ -1086,6 +1540,80 @@ export default function ExamsResultsModule({
     setNewHall({ name: '', capacity: 25, location: '' });
     triggerNotification(`تم تسجيل قاعة ${item.name} الاستيعابية بنجاح`, 'success');
     logAction(`إضافة قاعة اختبار جديدة: ${item.name}`, 'لجان وقاعات الامتحان');
+  };
+
+  const persistPreparationSubjects = async (updatedSubjects: any[], successMessage = 'تم حفظ تجهيزات المواد في المصدر المركزي.') => {
+    if (databaseWriteLockRef.current) {
+      triggerNotification('جارٍ حفظ تعديل سابق. انتظر اكتماله ثم أعد المحاولة.', 'info');
+      return false;
+    }
+    if (scheduleApprovalStatus.approved || approvalStatus.approved) {
+      triggerNotification('تجهيزات المواد مقفلة بعد الاعتماد. أعد فتح الجدول بسبب موثق قبل تعديلها.', 'warning');
+      return false;
+    }
+    const names = new Set<string>();
+    for (const subject of updatedSubjects) {
+      const name = String(subject?.name || '').trim().replace(/\s+/g, ' ');
+      const maxScore = Number(subject?.maxScore);
+      const passScore = Number(subject?.passScore);
+      const normalizedName = normalizeSubjectName(name);
+      if (!name || !Number.isFinite(maxScore) || maxScore <= 0 || !Number.isFinite(passScore) || passScore < 0 || passScore > maxScore) {
+        triggerNotification('لم تُحفظ التجهيزات: تحقق من اسم المادة والدرجة العظمى ودرجة النجاح.', 'warning');
+        void handleForceSync();
+        return false;
+      }
+      if (names.has(normalizedName)) {
+        triggerNotification(`لم تُحفظ التجهيزات: اسم المادة ${name} مكرر.`, 'warning');
+        void handleForceSync();
+        return false;
+      }
+      names.add(normalizedName);
+    }
+    const persisted = await saveToServerDb(examSettings, halls, updatedSubjects);
+    if (!persisted) {
+      void handleForceSync();
+      return false;
+    }
+    setSubjects(updatedSubjects);
+    triggerNotification(successMessage, 'success');
+    return true;
+  };
+
+  const persistPreparationHalls = async (updatedHalls: any[], successMessage = 'تم حفظ تجهيزات القاعات في المصدر المركزي.') => {
+    if (databaseWriteLockRef.current) {
+      triggerNotification('جارٍ حفظ تعديل سابق. انتظر اكتماله ثم أعد المحاولة.', 'info');
+      return false;
+    }
+    if (scheduleApprovalStatus.approved || approvalStatus.approved) {
+      triggerNotification('تجهيزات القاعات مقفلة بعد الاعتماد. أعد فتح الجدول بسبب موثق قبل تعديلها.', 'warning');
+      return false;
+    }
+    const names = new Set<string>();
+    for (const hall of updatedHalls) {
+      const name = String(hall?.name || '').trim();
+      const capacity = Number(hall?.capacity);
+      const normalizedName = normalizeSubjectName(name);
+      const assignedCount = studentList.filter(student => student.hallId === hall.id).length;
+      if (!name || !Number.isSafeInteger(capacity) || capacity <= 0 || capacity < assignedCount) {
+        triggerNotification(`لم تُحفظ القاعات: تحقق من الاسم والسعة، ويجب ألا تقل سعة ${name || 'القاعة'} عن ${assignedCount} طالباً موزعاً.`, 'warning');
+        void handleForceSync();
+        return false;
+      }
+      if (names.has(normalizedName)) {
+        triggerNotification(`لم تُحفظ القاعات: اسم القاعة ${name} مكرر.`, 'warning');
+        void handleForceSync();
+        return false;
+      }
+      names.add(normalizedName);
+    }
+    const persisted = await saveToServerDb(examSettings, updatedHalls);
+    if (!persisted) {
+      void handleForceSync();
+      return false;
+    }
+    setHalls(updatedHalls);
+    triggerNotification(successMessage, 'success');
+    return true;
   };
 
   // 4. Seating & Distribution Automatic Generators (Smart/Capacity-bounded)
@@ -1262,12 +1790,16 @@ export default function ExamsResultsModule({
 
   // Automated Proctor Distribution Engine
   const handleAutoAssignProctors = async () => {
-    if (approvalStatus.approved) {
-      triggerNotification('النتائج معتمدة ومغلقة ولا يمكن تعديل المراقبين حالياً', 'warning');
+    if (!canAutoAssignExamProctors(scheduleApprovalStatus.approved, approvalStatus.approved)) {
+      triggerNotification(
+        scheduleApprovalStatus.approved
+          ? 'جدول الامتحانات معتمد ومقفل؛ لا يمكن إعادة توزيع المراقبين قبل إعادة فتحه بسبب موثق.'
+          : 'النتائج معتمدة ومغلقة ولا يمكن تعديل المراقبين حالياً.',
+        'warning'
+      );
       return;
     }
 
-    const availableTeachers = initialTeachers;
     if (availableTeachers.length === 0) {
       triggerNotification('تحذير: لا يوجد معلمون مسجلون لتكليفهم!', 'warning');
       return;
@@ -1329,6 +1861,96 @@ export default function ExamsResultsModule({
     logAction('تشغيل محرك التوزيع الآلي للمراقبين على اللجان', 'المراقبون والملاحظون');
   };
 
+  const handlePublishOnlineAssessmentGrades = async (
+    assessmentId: string,
+    projections: AssessmentGradeProjection[]
+  ): Promise<boolean> => {
+    if (approvalStatus.approved) {
+      triggerNotification('لا يمكن ترحيل درجات إلكترونية؛ النتائج العامة معتمدة ومقفلة.', 'warning');
+      return false;
+    }
+    if (dbSyncStatus !== 'success') {
+      triggerNotification('لا يمكن الترحيل قبل اتصال المصدر المركزي والتحقق من الطلاب.', 'warning');
+      return false;
+    }
+    if (!Array.isArray(projections) || projections.length === 0) {
+      triggerNotification('لا توجد نتائج إلكترونية نهائية قابلة للترحيل.', 'warning');
+      return false;
+    }
+
+    const updatedMatrix = structuredClone(gradesMatrix);
+    const updatedGradeHistory = [...gradeHistory];
+    const updatedAuditLogs = [...auditLogs];
+    let changedCount = 0;
+    for (const projection of projections) {
+      const student = studentList.find(item => String(item.id) === projection.candidateId);
+      const subject = subjects.find(item => item.id === projection.subjectId);
+      if (!student || !subject) {
+        triggerNotification(`تعذر ترحيل نتيجة الطالب ${projection.candidateId}: الطالب أو المادة غير موجودة في الدورة الحالية.`, 'warning');
+        return false;
+      }
+      if (projection.score < 0 || projection.score > subject.maxScore) {
+        triggerNotification(`تعذر ترحيل نتيجة ${student.name}: الدرجة خارج نطاق مادة ${subject.name}.`, 'warning');
+        return false;
+      }
+      const oldGrade = updatedMatrix[projection.candidateId]?.[projection.subjectId];
+      if (!updatedMatrix[projection.candidateId]) updatedMatrix[projection.candidateId] = {};
+      updatedMatrix[projection.candidateId][projection.subjectId] = projection.score;
+      if (oldGrade !== projection.score) {
+        updatedGradeHistory.unshift({
+          id: `gh-online-${Date.now()}-${changedCount}`,
+          studentName: student.name,
+          classroom: student.classroom,
+          subjectName: subject.name,
+          oldGrade,
+          newGrade: projection.score,
+          modifiedBy: trustedActorLabel,
+          reason: `ترحيل نتيجة امتحان إلكتروني منشور (${assessmentId}) إلى كشف الدرجات العام`,
+          source: 'online_assessment',
+          assessmentId,
+          timestamp: new Date().toISOString().replace('T', ' ').substring(0, 19)
+        });
+        updatedAuditLogs.unshift({
+          id: `a-online-${Date.now()}-${changedCount}`,
+          timestamp: new Date().toISOString().replace('T', ' ').substring(0, 19),
+          user: trustedActorLabel,
+          action: `ترحيل نتيجة إلكترونية للطالب [${student.name}] في مادة [${subject.name}] من [${oldGrade ?? 'غير مرصود'}] إلى [${projection.score}]`,
+          module: 'الامتحان الإلكتروني والنتائج العامة',
+          source: 'online_assessment',
+          assessmentId
+        });
+        changedCount += 1;
+      }
+    }
+
+    const persisted = await saveToServerDb(
+      examSettings,
+      halls,
+      subjects,
+      studentList,
+      updatedMatrix,
+      schedule,
+      proctorAssignments,
+      approvalStatus,
+      updatedAuditLogs,
+      classesList,
+      controlClosures,
+      reEvaluationRequests,
+      snapshots,
+      reviewedStagesSubjects,
+      stageApprovalStatus,
+      'write',
+      { gradeHistory: updatedGradeHistory, operationReason: `ترحيل نتائج الامتحان الإلكتروني ${assessmentId}` }
+    );
+    if (!persisted) return false;
+    setGradesMatrix(updatedMatrix);
+    setGradeHistory(updatedGradeHistory);
+    setAuditLogs(updatedAuditLogs);
+    triggerNotification(`تم ترحيل ${projections.length} نتيجة إلكترونية إلى كشف الدرجات العام${changedCount === 0 ? ' دون تغييرات جديدة' : ''}.`, 'success');
+    logAction(`ترحيل نتائج الامتحان الإلكتروني ${assessmentId} إلى كشف الدرجات العام`, 'الامتحان الإلكتروني والنتائج العامة');
+    return true;
+  };
+
   // 7. Grades Input System Spreadsheet
   const [selectedGradeYear, setSelectedGradeYear] = useState(examSettings.academicYear);
   const [selectedGradeSemester, setSelectedGradeSemester] = useState(examSettings.semester);
@@ -1336,6 +1958,7 @@ export default function ExamsResultsModule({
   const [selectedGradeLevel, setSelectedGradeLevel] = useState('الكل');
   const [selectedGradeClass, setSelectedGradeClass] = useState('الكل');
   const [selectedGradeSection, setSelectedGradeSection] = useState('الكل');
+  const [selectedGradeHall, setSelectedGradeHall] = useState('الكل');
   const [selectedGradeSubject, setSelectedGradeSubject] = useState(subjects[0]?.id || '');
   const [gradesSearchQuery, setGradesSearchQuery] = useState('');
   const [modifiedGradesKeys, setModifiedGradesKeys] = useState<Set<string>>(new Set());
@@ -1348,6 +1971,7 @@ export default function ExamsResultsModule({
       setSelectedGradeSubject(subjects[0]?.id || '');
     }
   }, [subjects, selectedGradeSubject]);
+  const hasSelectedGradeSubject = subjects.some(subject => subject.id === selectedGradeSubject);
 
   const [gradesSubTab, setGradesSubTab] = useState<'entry' | 'review-edit' | 'student-review-edit'>('entry');
   const [selectedReviewStudentId, setSelectedReviewStudentId] = useState<string>('');
@@ -1444,7 +2068,7 @@ export default function ExamsResultsModule({
       }
     });
 
-    if (totalChangesCount === 0) {
+    if (totalChangesCount === 0 && modifiedGradesKeys.size === 0) {
       triggerNotification('لم يتم اكتشاف أي تغييرات جديدة لحفظها.', 'info');
       return;
     }
@@ -1471,7 +2095,13 @@ export default function ExamsResultsModule({
     if (success) {
       // Clear draft tracking to indicate save completion
       setBulkDraftGrades({});
-      triggerNotification(`تم حفظ وتدقيق تعديلات الدرجات بنجاح لـ ${totalChangesCount} مادة! 💾`, 'success');
+      setModifiedGradesKeys(new Set());
+      triggerNotification(
+        totalChangesCount > 0
+          ? `تم حفظ التغييرات المعلقة مركزياً، وشملت ${totalChangesCount} تعديل درجة${modifiedGradesKeys.size > 0 ? ' وبيانات الحضور/الغياب المرتبطة' : ''}.`
+          : 'تم حفظ تغييرات الحضور/الغياب في المصدر المركزي بنجاح.',
+        'success'
+      );
     } else {
       // Transaction Rollback!
       setGradesMatrix(backupMatrix);
@@ -1482,27 +2112,32 @@ export default function ExamsResultsModule({
   };
 
   const handlePrintSingleStudentGrades = (student: any, m: any) => {
-    const printWindow = window.open('', '_blank');
+    const printWindow = createExamPrintDocument({
+      title: 'بيان درجات الطالب',
+      onPrintStarted: () => triggerNotification('تم تجهيز بيان درجات الطالب للطباعة أو الحفظ PDF.', 'success'),
+      onError: () => triggerNotification('تعذر تشغيل أمر الطباعة في هذا المتصفح.', 'warning')
+    });
     if (!printWindow) {
-      triggerNotification('تنبيه: تم حظر فتح النافذة المنبثقة من المتصفح الخاص بك، يرجى السماح بها لرؤية كارت الطباعة.', 'warning');
+      triggerNotification('تعذر تجهيز مستند الطباعة في هذا المتصفح.', 'warning');
       return;
     }
 
     const subjectsHtml = subjects.map(sub => {
-      const isAbsent = student.absentSubjects?.includes(sub.id);
+      const attendance = getExamAttendanceStatus(student, sub.id);
+      const isAbsent = attendance === 'absent';
       const mark = bulkDraftGrades[student.id]?.[sub.id] !== undefined
         ? bulkDraftGrades[student.id][sub.id]
         : (gradesMatrix[student.id]?.[sub.id] ?? 'غير مرصود');
       return `
         <tr style="border-bottom: 1px solid #ddd;">
           <td style="padding: 10px; font-weight: bold; text-align: right;">${escapeHtml(sub.name)}</td>
-          <td style="padding: 10px; text-align: center;">${sub.maxScore}</td>
-          <td style="padding: 10px; text-align: center;">${sub.passScore}</td>
+          <td style="padding: 10px; text-align: center;">${escapeHtml(sub.maxScore)}</td>
+          <td style="padding: 10px; text-align: center;">${escapeHtml(sub.passScore)}</td>
           <td style="padding: 10px; text-align: center; font-weight: 900; color: ${isAbsent ? 'red' : (mark !== 'غير مرصود' && Number(mark) >= sub.passScore ? 'green' : 'red')}">
-            ${isAbsent ? 'غائب' : escapeHtml(mark)}
+            ${attendance === null ? 'الحضور غير مسجل' : isAbsent ? 'غائب' : attendance === 'present' ? escapeHtml(mark) : 'غير مرصود'}
           </td>
           <td style="padding: 10px; text-align: center; font-weight: bold;">
-            ${isAbsent ? 'غياب' : (mark === 'غير مرصود' ? 'معلق' : (Number(mark) >= sub.passScore ? 'اجتاز' : 'لم يجتز'))}
+            ${attendance === null ? 'غير مكتمل' : isAbsent ? 'غياب' : (mark === 'غير مرصود' ? 'معلق' : (Number(mark) >= sub.passScore ? 'اجتاز' : 'لم يجتز'))}
           </td>
         </tr>
       `;
@@ -1552,7 +2187,7 @@ export default function ExamsResultsModule({
             </tr>
             <tr>
               <td><b>رقم الجلوس:</b> ${escapeHtml(student.seatNumber || 'غير محدد')}</td>
-              <td><b>المعدل التراكمي:</b> ${m.percentage}%</td>
+              <td><b>المعدل التراكمي:</b> ${!m.isComplete ? 'غير مكتمل' : `${escapeHtml(m.percentage)}%`}</td>
             </tr>
           </table>
 
@@ -1579,9 +2214,6 @@ export default function ExamsResultsModule({
             <div>توقيع وختم مدير المدرسة: .....................</div>
           </div>
 
-          <script>
-            window.print();
-          </script>
         </body>
       </html>
     `);
@@ -1589,6 +2221,9 @@ export default function ExamsResultsModule({
   };
 
   const filteredStudentsForGrades = studentList.filter(s => {
+    if ((currentRole === 'Teacher' || isGradeScopedExamUser)
+      && selectedGradeSubject
+      && !isTeacherGradeScopeAssigned(s, selectedGradeSubject)) return false;
     // 0. Filter by active committee stage (Requirement #1: Multi-stage Control)
     if (activeControlStage !== 'all') {
       const clsObj = classesList.find(c => c.name === s.classroom);
@@ -1607,20 +2242,155 @@ export default function ExamsResultsModule({
     if (selectedGradeSection !== 'الكل' && s.section !== selectedGradeSection) {
       return false;
     }
+    if (selectedGradeHall === 'unassigned' && (s.hallId || s.seatNumber)) return false;
+    if (selectedGradeHall !== 'الكل' && selectedGradeHall !== 'unassigned' && s.hallId !== selectedGradeHall) {
+      return false;
+    }
     // 4. Filter by Search Query
     if (gradesSearchQuery.trim() !== '') {
       const q = gradesSearchQuery.toLowerCase();
-      const matchName = s.name.toLowerCase().includes(q);
-      const matchSeat = (s.seatNumber?.toString() || '').includes(q);
-      const matchId = s.id.toLowerCase().includes(q) || (s.nationalId || '').includes(q);
-      if (!matchName && !matchSeat && !matchId) return false;
+      const normalizedQuery = q.trim();
+      const searchableStudentFields = [
+        s.name,
+        s.studentNumber,
+        s.seatNumber,
+        s.id,
+        s.nationalId
+      ].map(value => String(value ?? '').toLocaleLowerCase());
+      if (!searchableStudentFields.some(value => value.includes(normalizedQuery))) return false;
     }
     return true;
   });
 
+  const handleExamAttendanceChange = (
+    studentId: string,
+    subjectId: string,
+    requestedStatus: ExamAttendanceStatus | null
+  ) => {
+    const student = studentList.find(item => String(item.id) === String(studentId));
+    const assignedTeacherAction = (currentRole === 'Teacher' || isGradeScopedExamUser)
+      && isTeacherGradeScopeAssigned(student, subjectId);
+    if (currentUserRole !== 'admin' && !assignedTeacherAction) {
+      triggerNotification('تسجيل حضور الامتحان أو الغياب يتطلب دور مدير المدرسة أو مدير الكنترول.', 'warning');
+      return;
+    }
+    if (approvalStatus.approved) {
+      triggerNotification('النتائج معتمدة ومقفلة؛ لا يمكن تغيير حضور الامتحان.', 'warning');
+      return;
+    }
+    if (!subjects.some(subject => subject.id === subjectId)) {
+      triggerNotification('حدد مادة امتحانية صحيحة قبل تسجيل الحضور أو الغياب.', 'warning');
+      return;
+    }
+    if (!student) {
+      triggerNotification('تعذر العثور على الطالب في الدورة الحالية؛ لم يتغير سجل الحضور.', 'warning');
+      return;
+    }
+    if (!student.hallId || !student.seatNumber) {
+      triggerNotification('لا يمكن تسجيل حضور الامتحان قبل توزيع الطالب على قاعة وتثبيت رقم جلوسه.', 'warning');
+      return;
+    }
+
+    const currentStatus = getExamAttendanceStatus(student, subjectId);
+    const nextStatus = currentStatus === requestedStatus ? null : requestedStatus;
+    if (currentStatus === nextStatus) return;
+
+    setStudentList(previous => previous.map(item => String(item.id) === String(studentId)
+      ? withExamAttendance(item, subjectId, nextStatus)
+      : item));
+
+    // Never allow a mark entered before an absence to reappear if attendance
+    // is later changed back to present.
+    if (nextStatus === 'absent') {
+      setBulkDraftGrades(previous => {
+        if (!previous[studentId] || previous[studentId][subjectId] === undefined) return previous;
+        const next = { ...previous, [studentId]: { ...previous[studentId] } };
+        delete next[studentId][subjectId];
+        if (Object.keys(next[studentId]).length === 0) delete next[studentId];
+        return next;
+      });
+      const priorGrade = gradesMatrix[studentId]?.[subjectId];
+      if (priorGrade !== undefined) {
+        setGradesMatrix(previous => {
+          const next = structuredClone(previous);
+          if (next[studentId]) {
+            delete next[studentId][subjectId];
+            if (Object.keys(next[studentId]).length === 0) delete next[studentId];
+          }
+          return next;
+        });
+        setGradeHistory(previous => [{
+          id: `gh-attendance-${Date.now()}-${Math.random().toString(36).slice(2, 6)}`,
+          studentName: student.name,
+          classroom: student.classroom,
+          subjectName: subjects.find(subject => subject.id === subjectId)?.name || subjectId,
+          oldGrade: priorGrade,
+          newGrade: null,
+          modifiedBy: trustedActorLabel,
+          reason: 'إثبات غياب الطالب عن الامتحان وإزالة الدرجة السابقة من النتيجة المحتسبة',
+          timestamp: new Date().toISOString().replace('T', ' ').substring(0, 19)
+        }, ...previous]);
+      }
+    }
+
+    setModifiedGradesKeys(previous => new Set([...previous, `${studentId}_${subjectId}`]));
+    const statusLabel = nextStatus === 'present' ? 'حاضر' : nextStatus === 'absent' ? 'غائب' : 'غير مسجل';
+    const subjectName = subjects.find(subject => subject.id === subjectId)?.name || subjectId;
+    logAction(`تسجيل حالة امتحان الطالب ${student.name} في مادة ${subjectName}: ${statusLabel}`, 'الحضور والغياب في الامتحانات');
+    triggerNotification(`حالة ${student.name} في ${subjectName}: ${statusLabel}. احفظ الكشف لإثبات التغيير مركزياً.`, 'info');
+  };
+
+  const renderExamAttendanceOptions = (student: any, subjectId: string) => {
+    const status = getExamAttendanceStatus(student, subjectId);
+    const canEditAttendance = currentUserRole === 'admin'
+      || ((currentRole === 'Teacher' || isGradeScopedExamUser) && isTeacherGradeScopeAssigned(student, subjectId));
+    const disabled = !canEditAttendance || approvalStatus.approved || !student.hallId || !student.seatNumber || !subjects.some(subject => subject.id === subjectId);
+    const subjectName = subjects.find(subject => subject.id === subjectId)?.name || 'المادة';
+    return (
+      <fieldset className="flex flex-wrap items-center justify-center gap-2" aria-label={`حضور امتحان ${subjectName} للطالب ${student.name}`}>
+        <legend className="sr-only">حالة حضور الطالب في الامتحان</legend>
+        {(['present', 'absent'] as const).map(option => {
+          const isChecked = status === option;
+          const label = option === 'present' ? 'حاضر' : 'غائب';
+          const color = option === 'present'
+            ? isChecked ? 'border-emerald-500 bg-emerald-50 text-emerald-800 ring-1 ring-emerald-500/20' : 'border-emerald-200 bg-white text-emerald-700 hover:bg-emerald-50'
+            : isChecked ? 'border-rose-500 bg-rose-50 text-rose-800 ring-1 ring-rose-500/20' : 'border-rose-200 bg-white text-rose-700 hover:bg-rose-50';
+          return (
+            <label key={option} className={`inline-flex cursor-pointer items-center gap-1.5 rounded-md border px-2 py-1.5 text-[10px] font-black transition ${color} ${disabled ? 'cursor-not-allowed opacity-50' : ''}`}>
+              <input
+                type="checkbox"
+                checked={isChecked}
+                disabled={disabled}
+                aria-label={`${label} — ${student.name} — ${subjectName}`}
+                onChange={event => handleExamAttendanceChange(student.id, subjectId, event.target.checked ? option : null)}
+                className={`h-3.5 w-3.5 ${option === 'present' ? 'accent-emerald-600' : 'accent-rose-600'}`}
+              />
+              <span>{label}</span>
+            </label>
+          );
+        })}
+        {status === null && <span className="w-full text-center text-[9px] font-bold text-amber-700">{!canEditAttendance ? 'يتطلب تكليفاً موثقاً أو مدير الكنترول' : approvalStatus.approved ? 'الدورة معتمدة ومقفلة' : !student.hallId || !student.seatNumber ? 'وزّع الطالب على قاعة ومقعد أولاً' : !subjects.some(subject => subject.id === subjectId) ? 'اختر مادة امتحانية أولاً' : 'لم يُسجل بعد'}</span>}
+      </fieldset>
+    );
+  };
+
   const handleGradeChange = (studentId: string, subjectId: string, val: string) => {
+    if (!subjects.some(subject => subject.id === subjectId)) {
+      triggerNotification('اختر مادة امتحانية معتمدة قبل إدخال الدرجات.', 'warning');
+      return;
+    }
     if (approvalStatus.approved) {
       triggerNotification('لا يمكن تعديل الدرجات، النتائج معتمدة ومقفلة بالكامل لضمان تجميدها 🔒', 'warning');
+      return;
+    }
+
+    const student = studentList.find(item => String(item.id) === String(studentId));
+    if ((currentRole === 'Teacher' || isGradeScopedExamUser) && !isTeacherGradeScopeAssigned(student, subjectId)) {
+      triggerNotification('لا يمكن تعديل هذه الدرجة خارج تكليفك الموثق للمادة والصف والشعبة.', 'warning');
+      return;
+    }
+    if (getExamAttendanceStatus(student || {}, subjectId) !== 'present') {
+      triggerNotification('سجل حضور الطالب أولاً قبل إدخال درجة هذه المادة؛ سجّل الغياب من خيار «غائب».', 'warning');
       return;
     }
 
@@ -1680,6 +2450,10 @@ export default function ExamsResultsModule({
   };
 
   const handleBulkFillValue = (subjectId: string, val: number) => {
+    if (!subjects.some(subject => subject.id === subjectId)) {
+      triggerNotification('اختر مادة امتحانية معتمدة قبل التعبئة الجماعية.', 'warning');
+      return;
+    }
     if (approvalStatus.approved) return;
     const maxScore = subjects.find(s => s.id === subjectId)?.maxScore || 100;
     if (val > maxScore) {
@@ -1693,8 +2467,14 @@ export default function ExamsResultsModule({
 
     const updated = { ...gradesMatrix };
     const newKeys = new Set(modifiedGradesKeys);
+    const presentStudents = filteredStudentsForGrades.filter(student => getExamAttendanceStatus(student, subjectId) === 'present');
+    if (presentStudents.length === 0) {
+      triggerNotification('لا يوجد طلاب مسجل حضورهم لهذه المادة ضمن التصفية الحالية؛ لم تُطبق أي درجة.', 'warning');
+      return;
+    }
 
     filteredStudentsForGrades.forEach(st => {
+      if (getExamAttendanceStatus(st, subjectId) !== 'present') return;
       if (!updated[st.id]) updated[st.id] = {};
       updated[st.id][subjectId] = val;
       newKeys.add(`${st.id}_${subjectId}`);
@@ -1702,12 +2482,17 @@ export default function ExamsResultsModule({
 
     setGradesMatrix(updated);
     setModifiedGradesKeys(newKeys);
-    triggerNotification('تم ملء درجات جميع الطلاب المفلترين في هذه المادة بنجاح', 'success');
+    triggerNotification(`طُبقت الدرجة على ${presentStudents.length} طالباً مسجل حضورهم؛ وتُرك ${filteredStudentsForGrades.length - presentStudents.length} بلا درجة لعدم تسجيل الحضور.`, 'info');
   };
 
   // XLSX/CSV import engine. Both formats are normalized to literal cells by
   // the shared reader; formulas and cached formula results are never trusted.
   const handleExcelImport = async (e: React.ChangeEvent<HTMLInputElement>) => {
+    if (!hasSelectedGradeSubject) {
+      triggerNotification('أضف مادة امتحانية وحددها قبل استيراد الدرجات.', 'warning');
+      e.target.value = '';
+      return;
+    }
     if (approvalStatus.approved) {
       triggerNotification('النتائج معتمدة ومغلقة ولا يمكن الاستيراد حالياً', 'warning');
       return;
@@ -1742,6 +2527,10 @@ export default function ExamsResultsModule({
 
           const student = studentList.find(s => s.id === studentIdentifier || s.nationalId === studentIdentifier);
           if (student) {
+            if (getExamAttendanceStatus(student, selectedGradeSubject) !== 'present') {
+              validationErrors.push(`الصف ${i + 1}: سجل حضور الطالب لهذه المادة قبل استيراد درجته.`);
+              continue;
+            }
             if (gradeVal > maxScore || gradeVal < 0) {
               validationErrors.push(`الصف ${i + 1}: الدرجة خارج النطاق 0–${maxScore}.`);
               continue;
@@ -1782,30 +2571,29 @@ export default function ExamsResultsModule({
   };
 
   const handleDownloadTemplate = () => {
+    if (!hasSelectedGradeSubject) {
+      triggerNotification('أضف مادة امتحانية وحددها قبل تنزيل قالب الدرجات.', 'warning');
+      return;
+    }
     const subName = subjects.find(s => s.id === selectedGradeSubject)?.name || 'درجات';
     const maxVal = subjects.find(s => s.id === selectedGradeSubject)?.maxScore || 100;
-    const headers = "رقم الطالب,اسم الطالب,رقم الجلوس,المادة,الدرجة العظمى,الدرجة الحالية";
-    const rows = filteredStudentsForGrades.map(st =>
-      `"${st.nationalId || st.id}","${st.name}","${st.seatNumber || ''}","${subName}","${maxVal}",""`
+    handleExportToCSV(
+      filteredStudentsForGrades.map(st => [st.id, st.studentNumber || '', st.nationalId || '', st.seatNumber || '', st.name, st.classroom, st.section, subName, maxVal, '']),
+      ['معرف الطالب', 'رقم الطالب', 'الرقم الوطني', 'رقم الجلوس', 'اسم الطالب', 'الصف', 'الشعبة', 'المادة', 'الدرجة العظمى', 'الدرجة'],
+      `قالب_رصد_${subName}`
     );
-    const csvContent = "\uFEFF" + [headers, ...rows].join("\n");
-    const blob = new Blob([csvContent], { type: 'text/csv;charset=utf-8;' });
-    const url = URL.createObjectURL(blob);
-    const link = document.createElement("a");
-    link.setAttribute("href", url);
-    link.setAttribute("download", `قالب_رصد_${subName}.csv`);
-    document.body.appendChild(link);
-    link.click();
-    document.body.removeChild(link);
-    triggerNotification('تم تنزيل قالب رصد الدرجات المخصص بنجاح!', 'success');
   };
 
   const handleExportExcel = () => {
+    if (!hasSelectedGradeSubject) {
+      triggerNotification('أضف مادة امتحانية وحددها قبل تصدير كشف الدرجات.', 'warning');
+      return;
+    }
     const subName = subjects.find(s => s.id === selectedGradeSubject)?.name || 'درجات';
-    const headers = "الرقم التسلسلي,رقم الطالب,رقم الجلوس,اسم الطالب,الصف والمجموعة,الدرجة,المجموع,النسبة المئوية,التقدير,النتيجة";
     const rows = filteredStudentsForGrades.map((st, idx) => {
       const currentMark = gradesMatrix[st.id]?.[selectedGradeSubject];
-      const isAbsent = st.absentSubjects?.includes(selectedGradeSubject);
+      const attendance = getExamAttendanceStatus(st, selectedGradeSubject);
+      const isAbsent = attendance === 'absent';
 
       // calculate overall metrics
       const studentMarks = gradesMatrix[st.id] || {};
@@ -1813,33 +2601,70 @@ export default function ExamsResultsModule({
       let totalPossibleMax = 0;
       subjects.forEach(sub => {
         const mk = studentMarks[sub.id];
-        if (mk !== undefined) totalScore += mk;
+        const status = getExamAttendanceStatus(st, sub.id);
+        if (status === 'present' && Number.isFinite(mk)) totalScore += mk;
         totalPossibleMax += sub.maxScore;
       });
       const pct = totalPossibleMax > 0 ? parseFloat(((totalScore / totalPossibleMax) * 100).toFixed(1)) : 0;
+      const calculatedResult = processedStudents.find(result => String(result.id) === String(st.id));
 
       let grade = 'بانتظار الرصد';
-      if (pct >= 90) grade = 'ممتاز';
+      if (calculatedResult?.status === 'غير مكتمل') grade = 'غير مكتمل';
+      else if (totalPossibleMax <= 0) grade = 'بانتظار إعداد المواد';
+      else if (pct >= 90) grade = 'ممتاز';
       else if (pct >= 80) grade = 'جيد جداً';
       else if (pct >= 65) grade = 'جيد';
       else if (pct >= 50) grade = 'مقبول';
       else grade = 'ضعيف';
 
-      const isPass = currentMark !== undefined && currentMark >= (subjects.find(s=>s.id===selectedGradeSubject)?.passScore || 50);
-      const resText = isAbsent ? 'غياب' : (currentMark === undefined ? 'غير مرصود' : (isPass ? 'ناجح' : 'راسب'));
+      const isPass = attendance === 'present' && currentMark !== undefined && currentMark >= (subjects.find(s=>s.id===selectedGradeSubject)?.passScore || 50);
+      const resText = attendance === null ? 'الحضور غير مسجل' : isAbsent ? 'غياب' : (currentMark === undefined ? 'غير مرصود' : calculatedResult?.status === 'غير مكتمل' ? 'نتيجة غير مكتملة' : (isPass ? 'ناجح' : 'راسب'));
 
-      return `${idx + 1},"${st.nationalId || st.id}","${st.seatNumber || ''}","${st.name}","${st.classroom} - ${st.section}",${isAbsent ? 0 : (currentMark !== undefined ? currentMark : '')},${totalScore},${pct}%,${grade},"${resText}"`;
+      const resultIncomplete = calculatedResult?.status === 'غير مكتمل';
+      return [idx + 1, st.nationalId || st.id, st.seatNumber || '', st.name, `${st.classroom} - ${st.section}`, attendance === null ? '' : isAbsent ? 0 : (currentMark !== undefined ? currentMark : ''), resultIncomplete ? '' : totalScore, resultIncomplete ? '' : `${pct}%`, grade, resText];
     });
-    const csvContent = "\uFEFF" + [headers, ...rows].join("\n");
-    const blob = new Blob([csvContent], { type: 'text/csv;charset=utf-8;' });
-    const url = URL.createObjectURL(blob);
-    const link = document.createElement("a");
-    link.setAttribute("href", url);
-    link.setAttribute("download", `تقرير_درجات_${selectedGradeClass}_${subName}.csv`);
-    document.body.appendChild(link);
-    link.click();
-    document.body.removeChild(link);
-    triggerNotification('تم تصدير كشف الدرجات المفلتر إلى Excel بنجاح!', 'success');
+    handleExportToCSV(rows, ['الرقم التسلسلي', 'رقم الطالب', 'رقم الجلوس', 'اسم الطالب', 'الصف والمجموعة', 'الدرجة', 'المجموع', 'النسبة المئوية', 'التقدير', 'النتيجة'], `تقرير_درجات_${selectedGradeClass}_${subName}`);
+  };
+
+  const handleExportXlsx = async () => {
+    const subject = subjects.find(item => item.id === selectedGradeSubject);
+    if (!subject) {
+      triggerNotification('حدد مادة دراسية قبل تصدير ملف XLSX.', 'warning');
+      return;
+    }
+    try {
+      const { writeExamGradeXlsx } = await import('../modules/exams/application/ExamSpreadsheetService');
+      const buffer = await writeExamGradeXlsx({
+        subject: { id: String(subject.id), name: String(subject.name), maxScore: Number(subject.maxScore) },
+        rows: filteredStudentsForGrades.map(student => ({
+          studentId: String(student.id),
+          studentNumber: student.studentNumber,
+          nationalId: student.nationalId,
+          seatNumber: student.seatNumber,
+          studentName: String(student.name || ''),
+          classroom: student.classroom,
+          section: student.section,
+          grade: getExamAttendanceStatus(student, subject.id) === 'absent'
+            ? 0
+            : getExamAttendanceStatus(student, subject.id) === 'present'
+              ? gradesMatrix[student.id]?.[subject.id] ?? null
+              : null
+        }))
+      });
+      const blob = new Blob([buffer], { type: 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet' });
+      const url = URL.createObjectURL(blob);
+      const link = document.createElement('a');
+      link.href = url;
+      link.download = `تقرير_درجات_${selectedGradeClass}_${subject.name}.xlsx`;
+      document.body.appendChild(link);
+      link.click();
+      document.body.removeChild(link);
+      window.setTimeout(() => URL.revokeObjectURL(url), 1000);
+      triggerNotification('تم تصدير ملف XLSX حقيقي وآمن لدرجات المادة.', 'success');
+    } catch (error) {
+      EnterpriseLogger.error('Failed to export exam grades as XLSX', 'ExamsResultsModule', { error });
+      triggerNotification('تعذر إنشاء ملف XLSX لدرجات المادة.', 'warning');
+    }
   };
 
   const handleResetFilters = () => {
@@ -1849,12 +2674,17 @@ export default function ExamsResultsModule({
     setSelectedGradeLevel('الكل');
     setSelectedGradeClass('الكل');
     setSelectedGradeSection('الكل');
+    setSelectedGradeHall('الكل');
     setSelectedGradeSubject(subjects[0]?.id || '');
     setGradesSearchQuery('');
     triggerNotification('تم إعادة ضبط فلاتر البحث إلى القيم الافتراضية', 'info');
   };
 
   const handleLoadStudents = async () => {
+    if (!mayLoadCanonicalStudentRoster || isGradeScopedExamUser) {
+      triggerNotification('قائمة طلابك تُحمّل تلقائياً من نطاق التكليف المعتمد؛ لا يمكن توسيعها من شاشة الرصد.', 'warning');
+      return;
+    }
     setIsReloadingStudents(true);
     try {
       const canonicalStudents = await fetchCanonicalStudents(getTrustedAccessToken());
@@ -1884,6 +2714,10 @@ export default function ExamsResultsModule({
   };
 
   const handleSaveCurrentGradeSheet = async () => {
+    if (!hasSelectedGradeSubject) {
+      triggerNotification('أضف مادة امتحانية وحددها قبل حفظ كشف الدرجات.', 'warning');
+      return;
+    }
     if (approvalStatus.approved) {
       triggerNotification('النتائج معتمدة ومغلقة ولا يمكن حفظ تعديلات درجات جديدة.', 'warning');
       return;
@@ -1926,7 +2760,8 @@ export default function ExamsResultsModule({
 
     studentList.forEach(st => {
       subjects.forEach(sub => {
-        if (gradesMatrix[st.id]?.[sub.id] === undefined && !st.absentSubjects?.includes(sub.id)) {
+        const attendance = getExamAttendanceStatus(st, sub.id);
+        if (attendance === null || (attendance === 'present' && !Number.isFinite(gradesMatrix[st.id]?.[sub.id]))) {
           missingGradesCount++;
         }
       });
@@ -1940,6 +2775,32 @@ export default function ExamsResultsModule({
   };
 
   const metrics = getReviewMetrics();
+  const reviewDataReady = studentList.length > 0 && subjects.length > 0;
+  const reviewInvalidGradesCount = studentList.reduce((count, student) => count + subjects.filter(subject => {
+    const grade = gradesMatrix[student.id]?.[subject.id];
+    return grade !== undefined && (!Number.isFinite(grade) || grade < 0 || grade > Number(subject.maxScore));
+  }).length, 0);
+  const reviewDistributionReady = reviewDataReady && studentList.every(student => {
+    const hall = halls.find(item => item.id === student.hallId);
+    return Boolean(hall && student.seatNumber);
+  });
+  const approvalReadiness = evaluateExamClosureReadiness({
+    students: studentList,
+    subjects,
+    gradesMatrix,
+    scheduleApprovalStatus,
+    reviewedSubjects: reviewedStagesSubjects,
+    reEvaluationRequests
+  });
+  const approvalBlockerMessages = [
+    ...approvalReadiness.blockers.map(blocker => blocker.message),
+    ...(dbSyncStatus === 'success' ? [] : ['تحقق من مزامنة المصدر المركزي قبل اعتماد النتائج.']),
+    ...(isDbSyncing ? ['انتظر اكتمال عملية المزامنة الحالية.'] : []),
+    ...(currentUserRole === 'admin' ? [] : ['اعتماد النتائج يتطلب دور مدير الكنترول.']),
+    ...(activeControlStage === 'all' ? [] : ['اعتماد نطاق مرحلة منفردة غير متاح قبل تفعيل أرشفة مرحلية مستقلة.']),
+    ...(resultsApprovalReason.trim().length >= 5 ? [] : ['أدخل سبب اعتماد موثقاً لا يقل عن 5 أحرف.'])
+  ];
+  const canApproveResults = approvalBlockerMessages.length === 0 && !approvalStatus.approved;
 
   const handleApproveAndLock = async () => {
     // Role-Based Access Control
@@ -1948,18 +2809,31 @@ export default function ExamsResultsModule({
       return;
     }
 
-    if (metrics.missingGradesCount > 0) {
-      triggerNotification(`تعذر الاعتماد: توجد ${metrics.missingGradesCount} درجة غير مرصودة. أكملها أو سجّل حالة الغياب/الإعفاء أولًا.`, 'warning');
+    // The canonical archive and approval operation are currently school-wide.
+    // Never let a future committee selector imply a stage-only approval while
+    // the server still creates one immutable archive for the complete cycle.
+    if (activeControlStage !== 'all') {
+      triggerNotification('لا يمكن اعتماد مرحلة منفردة قبل تفعيل مسار أرشفة مرحلي مستقل على الخادم. اختر نطاق كامل المراحل.', 'warning');
       return;
     }
-    if (studentList.length === 0 || subjects.length === 0) {
-      triggerNotification('تعذر الاعتماد: يلزم وجود طلاب ومواد موثقة في دورة الامتحانات.', 'warning');
+
+    if (metrics.missingGradesCount > 0) {
+      triggerNotification(`تعذر الاعتماد: توجد ${metrics.missingGradesCount} حالة غير مكتملة؛ سجّل حضور/غياب كل طالب ثم أدخل درجة الحاضر.`, 'warning');
+      return;
+    }
+
+    if (!approvalReadiness.ready) {
+      triggerNotification(`تعذر الاعتماد: ${approvalReadiness.blockers.map(blocker => blocker.message).join(' ')}`, 'warning');
+      return;
+    }
+    if (dbSyncStatus !== 'success' || isDbSyncing) {
+      triggerNotification('تعذر الاعتماد: تحقق من مزامنة المصدر المركزي وانتظر اكتمال أي عملية جارية.', 'warning');
       return;
     }
 
     const reason = resultsApprovalReason.trim();
-    if (!reason) {
-      triggerNotification('تم إلغاء الاعتماد: السبب الموثق إلزامي.', 'warning');
+    if (reason.length < 5) {
+      triggerNotification('تم إلغاء الاعتماد: أدخل سبباً موثقاً لا يقل عن 5 أحرف.', 'warning');
       return;
     }
 
@@ -2154,14 +3028,23 @@ export default function ExamsResultsModule({
     logAction(`فتح صلاحية تعديل الدرجات والنتائج بعد الإغلاق - السبب: ${reason}`, 'المراجعة والاعتماد');
   };
 
-  // 9. Report Export Simulation
+  // 9. Print reports from the currently loaded, authorized exam data.
   const handlePrintReport = (title: string) => {
-    const printWindow = window.open('', '_blank');
-    if (!printWindow) return;
+    const schoolName = escapeHtml(selectedSchool?.name || 'المدرسة الحالية');
+    const reportTitle = escapeHtml(title);
+    const printWindow = createExamPrintDocument({
+      title: `تقرير الامتحانات: ${reportTitle}`,
+      onPrintStarted: () => triggerNotification('تم تجهيز التقرير للطباعة أو الحفظ PDF.', 'success'),
+      onError: () => triggerNotification('تعذر تشغيل أمر طباعة التقرير.', 'warning')
+    });
+    if (!printWindow) {
+      triggerNotification('تعذر تجهيز مستند التقرير للطباعة.', 'warning');
+      return;
+    }
     printWindow.document.write(`
       <html dir="rtl" lang="ar">
         <head>
-          <title>${title}</title>
+          <title>${reportTitle}</title>
           <style>
             body { font-family: 'Cairo', sans-serif; padding: 40px; color: #0f172a; }
             table { width: 100%; border-collapse: collapse; margin-top: 20px; }
@@ -2174,8 +3057,8 @@ export default function ExamsResultsModule({
         </head>
         <body>
           <div class="header">
-            <h1>مجمع المدارس النموذجية الأهلية</h1>
-            <h2>تقرير إدارة الامتحانات - ${title}</h2>
+            <h1>${schoolName}</h1>
+            <h2>تقرير إدارة الامتحانات - ${reportTitle}</h2>
             <p>التاريخ: ${new Date().toLocaleDateString('ar-SA')}</p>
           </div>
           <hr/>
@@ -2194,13 +3077,13 @@ export default function ExamsResultsModule({
             <tbody>
               ${processedStudents.map(st => `
                 <tr>
-                  <td>${st.seatNumber}</td>
-                  <td>${st.name}</td>
-                  <td>${st.classroom}</td>
-                  <td>${st.totalEarned} / ${st.totalMax}</td>
-                  <td>${st.percentage}%</td>
-                  <td>${st.gradeSymbol}</td>
-                  <td style="color: ${st.status === 'ناجح' ? 'green' : 'red'}; font-weight: bold;">${st.status}</td>
+                  <td>${escapeHtml(st.seatNumber)}</td>
+                  <td>${escapeHtml(st.name)}</td>
+                  <td>${escapeHtml(st.classroom)}</td>
+                  <td>${st.status === 'غير مكتمل' ? 'غير مكتمل' : `${escapeHtml(st.totalEarned)} / ${escapeHtml(st.totalMax)}`}</td>
+                  <td>${st.status === 'غير مكتمل' ? 'غير مكتمل' : `${escapeHtml(st.percentage)}%`}</td>
+                  <td>${escapeHtml(st.gradeSymbol)}</td>
+                  <td style="color: ${st.status === 'ناجح' ? 'green' : 'red'}; font-weight: bold;">${escapeHtml(st.status)}</td>
                 </tr>
               `).join('')}
             </tbody>
@@ -2208,7 +3091,6 @@ export default function ExamsResultsModule({
           <div class="footer">
             <p>توقيع رئيس الكنترول العام: _______________________</p>
           </div>
-          <script>window.print();</script>
         </body>
       </html>
     `);
@@ -2216,9 +3098,16 @@ export default function ExamsResultsModule({
   };
 
   const handlePrintGuidePDF = () => {
-    const printWindow = window.open('', '_blank');
+    const printWindow = createExamPrintDocument({
+      title: 'دليل تشغيل الامتحانات',
+      onPrintStarted: () => {
+        triggerNotification('تم تجهيز دليل التشغيل للطباعة أو الحفظ PDF.', 'success');
+        logAction('فتح دليل التشغيل الفعلي لوحدة الامتحانات', 'الدعم والتوثيق');
+      },
+      onError: () => triggerNotification('تعذر تشغيل أمر طباعة الدليل.', 'warning')
+    });
     if (!printWindow) {
-      triggerNotification('يرجى السماح بالنوافذ المنبثقة لفتح دليل التشغيل والطباعة إلى PDF.', 'warning');
+      triggerNotification('تعذر تجهيز دليل التشغيل للطباعة.', 'warning');
       return;
     }
     const schoolName = escapeHtml(selectedSchool?.name || 'المدرسة الحالية');
@@ -2265,7 +3154,7 @@ export default function ExamsResultsModule({
             <div class="step"><strong>2. تعريف الهيكل</strong>أضف المواد والفصول والقاعات بسعات صحيحة. يمنع النظام حذف السجلات المرتبطة بطلاب أو درجات أو جدول.</div>
             <div class="step"><strong>3. التوزيع والجلوس</strong>تحقق أن مجموع سعات القاعات يغطي الطلاب الرسميين، ثم نفّذ التوزيع وتوليد أرقام الجلوس واحفظه مركزياً.</div>
             <div class="step"><strong>4. الجدولة والمراقبة</strong>كوّن الجدول بعد اكتمال المواد والقاعات والمعلمين. عالج التعارضات الحرجة قبل اعتماد الجدول.</div>
-            <div class="step"><strong>5. رصد الدرجات</strong>أدخل درجة كل طالب أو وثّق غيابه عن المادة. الاستيراد يعتمد معرف الطالب الرسمي ولا يعتمد مطابقة الاسم.</div>
+        <div class="step"><strong>5. الحضور ثم رصد الدرجات</strong>اختر المادة والقاعة، وسجّل لكل طالب «حاضر» أو «غائب» صراحةً. لا تُدخل درجة إلا للحاضر؛ الغائب يحتسب بصفر، وغير المسجل يبقى غير مكتمل ولا يظهر ضمن النتائج أو الترتيب. الاستيراد يعتمد معرف الطالب الرسمي ولا يعتمد مطابقة الاسم.</div>
             <div class="step"><strong>6. المراجعة والتظلمات</strong>راجع الدرجات وصدّق المواد. أي تعديل عبر تظلم يحتاج قراراً موثقاً ولا يُسمح به أثناء إغلاق النتائج.</div>
             <div class="step"><strong>7. الاعتماد والإغلاق</strong>لا يعتمد الخادم النتائج مع درجات ناقصة. عند النجاح ينشئ أرشيفاً مستقلاً موقعاً ببصمة SHA-256 لا يملك دور التطبيق تحديثه أو حذفه.</div>
             <div class="step"><strong>8. التقارير والشهادات</strong>اطبع أو صدّر فقط بعد التأكد من المدرسة والسنة وحالة الاعتماد الظاهرة على الشاشة.</div>
@@ -2285,13 +3174,10 @@ export default function ExamsResultsModule({
           </ul>
 
           <footer>تم إنشاء هذا الدليل من النظام بتاريخ ${generatedAt}. هذا مستند تشغيل داخلي ولا يمثل اعتماداً تنظيمياً خارج المدرسة.</footer>
-          <script>window.onload = () => window.print();</script>
         </body>
       </html>
     `);
     printWindow.document.close();
-    triggerNotification('تم فتح دليل التشغيل الفعلي؛ اختر الطباعة أو الحفظ بصيغة PDF.', 'success');
-    logAction('فتح دليل التشغيل الفعلي لوحدة الامتحانات', 'الدعم والتوثيق');
   };
 
   const handlePrintElementByID = (elementId: string, title = 'طباعة كشف الكنترول المدرسي') => {
@@ -2301,18 +3187,21 @@ export default function ExamsResultsModule({
       return;
     }
 
-    const printWindow = window.open('', '_blank');
+    const printWindow = createExamPrintDocument({
+      title,
+      onPrintStarted: () => triggerNotification('تم تجهيز الكشف للطباعة أو الحفظ PDF.', 'success'),
+      onError: () => triggerNotification('تعذر تشغيل أمر الطباعة.', 'warning')
+    });
     if (!printWindow) {
-      triggerNotification('يرجى السماح بفتح النوافذ المنبثقة (Popups) للطباعة بشكل سليم', 'warning');
+      triggerNotification('تعذر تجهيز مستند الطباعة في هذا المتصفح.', 'warning');
       return;
     }
 
     printWindow.document.write(`
       <html dir="rtl" lang="ar">
         <head>
-          <title>${title}</title>
+          <title>${escapeHtml(title)}</title>
           <style>
-            @import url('https://fonts.googleapis.com/css2?family=Cairo:wght@400;600;700;900&display=swap');
             body {
               font-family: 'Cairo', 'Inter', sans-serif;
               padding: 40px;
@@ -2398,12 +3287,6 @@ export default function ExamsResultsModule({
         </head>
         <body>
           ${element.innerHTML}
-          <script>
-            window.onload = function() {
-              window.print();
-              setTimeout(function() { window.close(); }, 500);
-            };
-          </script>
         </body>
       </html>
     `);
@@ -2502,7 +3385,7 @@ export default function ExamsResultsModule({
             </div>
             <div className="flex justify-between items-center">
               <span className="text-amber-200/60">حالة المصدر:</span>
-              <span className="font-mono text-amber-300 text-[9px]">{dbSyncStatus === 'success' ? 'متصل' : dbSyncStatus === 'conflict' ? 'تعارض يحتاج مزامنة' : dbSyncStatus === 'error' ? 'تعذر الاتصال' : 'جارٍ التحقق'}</span>
+              <span className="font-mono text-amber-300 text-[9px]">{dbSyncStatus === 'success' ? 'متصل' : dbSyncStatus === 'conflict' ? 'تعارض يحتاج مزامنة' : dbSyncStatus === 'rejected' ? 'بيانات مرفوضة' : dbSyncStatus === 'error' ? 'فشل طلب المصدر' : 'جارٍ التحقق'}</span>
             </div>
             <div className="flex justify-between items-center">
               <span className="text-amber-200/60">الاعتماد الأكاديمي:</span>
@@ -2518,49 +3401,61 @@ export default function ExamsResultsModule({
         </div>
 
         {/* Navigation Section */}
-        <nav aria-label="التنقل داخل وحدة الامتحانات" className="flex flex-col gap-2 overflow-y-auto max-h-[500px] scrollbar-thin">
-          {sidebarMenu.map((item, index) => {
-            const IconComponent = item.icon;
-            const isActive = activeTab === item.id;
+        <nav aria-label="التنقل داخل وحدة الامتحانات" className="flex flex-col gap-2">
+          {visibleNavigationSections.map(section => {
+            const isExpanded = expandedNavigationSection === section.id;
+            const sectionItems = visibleSidebarMenu.filter(item => item.section === section.id);
             return (
-              <React.Fragment key={item.id}>
-                {(index === 0 || sidebarMenu[index - 1].section !== item.section) && (
-                  <div
-                    className="px-2 pt-2 pb-0.5 text-[10px] font-black tracking-wide text-[#f7d174]/70"
-                    role="heading"
-                    aria-level={2}
-                  >
-                    {item.section}
-                  </div>
-                )}
+              <section key={section.id} className="border-b border-[#d4af37]/15 pb-1">
                 <button
                   type="button"
-                  id={`exam-tab-btn-${item.id}`}
-                  onClick={() => setActiveTab(item.id)}
-                  aria-current={isActive ? 'page' : undefined}
-                  aria-label={`فتح ${item.label}`}
-                  className={`w-full flex items-center justify-between px-3.5 h-[48px] text-xs font-black text-right transition-all duration-200 border select-none cursor-pointer ${
-                    isActive
-                      ? 'bg-gradient-to-r from-[#9a6a1d] via-[#c58a22] to-[#8b6113] border-[#f7d174] text-[#fff8d6] shadow-[0_4px_16px_rgba(212,175,55,0.25)]'
-                      : 'bg-[#130b04] hover:bg-[#23150a] border-[#d4af37]/20 hover:border-[#d4af37]/50 text-amber-100/80 hover:text-amber-100'
-                  }`}
+                  id={`exam-nav-section-toggle-${section.id}`}
+                  aria-expanded={isExpanded}
+                  aria-controls={`exam-nav-section-${section.id}`}
+                  onClick={() => setExpandedNavigationSection(current => current === section.id ? '' : section.id)}
+                  className="flex min-h-11 w-full items-center justify-between gap-2 px-2 text-right text-[11px] font-black tracking-wide text-[#f7d174] transition hover:bg-[#23150a]"
                 >
-                  <div className="flex items-center gap-2.5">
-                    {item.id === 'review' && metrics.missingGradesCount > 0 && (
-                      <span className={`px-1.5 py-0.5 rounded text-[9px] font-bold animate-bounce ${
-                        isActive
-                          ? 'bg-[#130b04] text-[#f7d174]'
-                          : 'bg-[#d4af37] text-slate-950'
-                      }`}>
-                        {metrics.missingGradesCount}
-                      </span>
-                    )}
-                    <span className="truncate">{item.label}</span>
-                  </div>
-
-                  <IconComponent className={`w-4 h-4 shrink-0 ${isActive ? 'text-[#fce79a]' : 'text-[#d4af37]/60'}`} />
+                  <span>{section.label}</span>
+                  <ChevronDown aria-hidden="true" className={`h-4 w-4 shrink-0 transition-transform ${isExpanded ? 'rotate-180' : ''}`} />
                 </button>
-              </React.Fragment>
+                {isExpanded && (
+                  <div id={`exam-nav-section-${section.id}`} role="group" aria-label={section.label} className="mt-1 flex flex-col gap-2">
+                    {sectionItems.map(item => {
+                      const IconComponent = item.icon;
+                      const isActive = activeTab === item.id;
+                      return (
+                        <button
+                          type="button"
+                          key={item.id}
+                          id={`exam-tab-btn-${item.id}`}
+                          onClick={() => setActiveTab(item.id)}
+                          aria-current={isActive ? 'page' : undefined}
+                          aria-label={`فتح ${item.label}`}
+                          className={`w-full flex items-center justify-between px-3.5 h-[48px] text-xs font-black text-right transition-all duration-200 border select-none cursor-pointer ${
+                            isActive
+                              ? 'bg-gradient-to-r from-[#9a6a1d] via-[#c58a22] to-[#8b6113] border-[#f7d174] text-[#fff8d6] shadow-[0_4px_16px_rgba(212,175,55,0.25)]'
+                              : 'bg-[#130b04] hover:bg-[#23150a] border-[#d4af37]/20 hover:border-[#d4af37]/50 text-amber-100/80 hover:text-amber-100'
+                          }`}
+                        >
+                          <div className="flex items-center gap-2.5">
+                            {item.id === 'review' && metrics.missingGradesCount > 0 && (
+                              <span className={`px-1.5 py-0.5 rounded text-[9px] font-bold animate-bounce ${
+                                isActive
+                                  ? 'bg-[#130b04] text-[#f7d174]'
+                                  : 'bg-[#d4af37] text-slate-950'
+                              }`}>
+                                {metrics.missingGradesCount}
+                              </span>
+                            )}
+                            <span className="truncate">{item.label}</span>
+                          </div>
+                          <IconComponent aria-hidden="true" className={`w-4 h-4 shrink-0 ${isActive ? 'text-[#fce79a]' : 'text-[#d4af37]/60'}`} />
+                        </button>
+                      );
+                    })}
+                  </div>
+                )}
+              </section>
             );
           })}
         </nav>
@@ -2582,7 +3477,7 @@ export default function ExamsResultsModule({
       </aside>
 
       {/* Main Content Area */}
-      <main className="flex-1 p-6 lg:p-8 space-y-6 overflow-y-auto max-h-[850px] bg-[#130b04]" id="exams-module-content">
+      <main className="flex-1 p-6 lg:p-8 space-y-6 bg-[#130b04]" id="exams-module-content">
 
         {/* Top Header Panel - Re-engineered for maximum enterprise prestige and status */}
         <header className="bg-gradient-to-l from-[#1c120c] via-[#2a1d13] to-[#1a1108] p-6 text-white flex flex-col md:flex-row justify-between items-start md:items-center gap-4 border border-[#d4af37]/40 relative overflow-hidden">
@@ -2597,11 +3492,11 @@ export default function ExamsResultsModule({
                 {examSettings.examType}
               </span>
               <span className="text-[10px] bg-[#130b04] text-[#f7d174] border border-[#d4af37]/30 px-2.5 py-0.5 rounded-full font-extrabold font-mono tracking-wider">
-                {dbSyncStatus === 'success' ? 'المصدر المركزي متصل' : dbSyncStatus === 'conflict' ? 'تعارض إصدار — أعد المزامنة' : dbSyncStatus === 'error' ? 'تعذر الاتصال بالمصدر' : 'جارٍ التحقق من المصدر'}
+                {dbSyncStatus === 'success' ? 'المصدر المركزي متصل' : dbSyncStatus === 'conflict' ? 'تعارض إصدار — أعد المزامنة' : dbSyncStatus === 'rejected' ? 'رفض المصدر البيانات — راجع التفاصيل' : dbSyncStatus === 'error' ? 'فشل طلب المصدر المركزي' : 'جارٍ التحقق من المصدر'}
               </span>
             </div>
             <h1 className="text-2xl font-black text-[#fce79a] tracking-tight flex items-center gap-2">
-              <span>{sidebarMenu.find(m => m.id === activeTab)?.label}</span>
+              <span>{visibleSidebarMenu.find(m => m.id === activeTab)?.label}</span>
               <span className="text-[11px] font-bold text-amber-200 bg-[#2a1d13] border border-[#d4af37]/30 px-2.5 py-0.5 rounded-lg">
                 جلسة مستخدم موثقة 🔒
               </span>
@@ -2632,6 +3527,29 @@ export default function ExamsResultsModule({
           </div>
         </header>
 
+        {activeTab === 'grades-entry' && lastDbWriteError && (
+          <section role="alert" aria-live="assertive" className="border border-rose-400/50 bg-rose-950/40 px-4 py-3 text-sm font-bold text-rose-100">
+            <p>لم يثبت حفظ كشف الدرجات في المصدر المركزي: {lastDbWriteError}</p>
+            <p className="mt-1 text-xs font-medium text-rose-100/75">لا تفترض اكتمال الحفظ؛ أعد التحقق من المزامنة قبل متابعة الاعتماد.</p>
+          </section>
+        )}
+
+        {(activeTab === 'proctors' || activeTab === 'schedule') && (
+          <section aria-label="مصدر مراقبي الامتحانات" className="flex flex-wrap items-center justify-between gap-3 rounded-xl border border-amber-400/30 bg-[#1c120c] px-4 py-3 text-amber-50">
+            <p role={proctorSourceStatus === 'error' ? 'alert' : 'status'} className="text-xs font-semibold">
+              {proctorSourceStatus === 'loading' ? 'جارٍ تحميل الموظفين النشطين من سجل شؤون الموظفين…'
+                : proctorSourceStatus === 'error' ? 'تعذر تحميل كادر المراقبة من المصدر الرسمي. أعد المحاولة قبل تكوين الجدول أو إسناد المراقبين.'
+                : proctorSourceStatus === 'fallback' ? `استُخدم كادر التطبيق المتاح مؤقتاً (${availableTeachers.length}) لأن الخادم لا يرسل بيانات المصدر الرسمي؛ لا تعتمد الجدول قبل مزامنة كادر شؤون الموظفين.`
+                : proctorSourceStatus === 'unavailable' ? 'سجل شؤون الموظفين غير مهيأ لهذه المدرسة؛ لا تُستخدم أسماء تجريبية أو غير موثقة.'
+                : availableTeachers.length ? `المراقبون المتاحون من سجل المدرسة النشط: ${availableTeachers.length}.`
+                : 'لا يوجد موظفون نشطون في سجل المدرسة. أضف الموظفين في شؤون العاملين ثم حدّث القائمة.'}
+            </p>
+            <button type="button" disabled={proctorSourceStatus === 'loading'} onClick={() => void loadProctorCandidates()} className="rounded-lg border border-amber-300/40 px-3 py-2 text-[11px] font-black text-amber-100 disabled:cursor-not-allowed disabled:opacity-50">
+              تحديث قائمة المراقبين
+            </button>
+          </section>
+        )}
+
         {examCandidateDiagnostics.totalCanonical > examCandidateDiagnostics.eligible && (
           <section role="alert" className="border border-amber-400/50 bg-amber-950/40 p-4 text-amber-50">
             <div className="flex items-start gap-3">
@@ -2658,7 +3576,8 @@ export default function ExamsResultsModule({
         {activeTab === 'control-center' && (() => {
           const expectedGrades = visibleStudents.length * subjects.length;
           const recordedGrades = visibleStudents.reduce((total, student) => total + subjects.filter(subject =>
-            Number.isFinite(gradesMatrix[student.id]?.[subject.id]) || student.absentSubjects?.includes(subject.id)
+            getExamAttendanceStatus(student, subject.id) === 'absent'
+              || (getExamAttendanceStatus(student, subject.id) === 'present' && Number.isFinite(gradesMatrix[student.id]?.[subject.id]))
           ).length, 0);
           const gradeCompletion = expectedGrades > 0 ? Math.round((recordedGrades / expectedGrades) * 100) : 0;
           const distributedStudents = visibleStudents.filter(student => student.hallId && student.seatNumber).length;
@@ -2691,7 +3610,7 @@ export default function ExamsResultsModule({
                     </div>
                   </div>
                   <div className="grid grid-cols-2 gap-2 text-[11px] font-black sm:grid-cols-4">
-                    <div className="border border-amber-500/25 bg-black/20 px-3 py-2"><span className="block text-amber-200/60">المصدر</span><span className={dbSyncStatus === 'success' ? 'text-emerald-300' : dbSyncStatus === 'conflict' ? 'text-amber-300' : 'text-rose-300'}>{dbSyncStatus === 'success' ? 'متصل' : dbSyncStatus === 'conflict' ? 'تعارض إصدار' : 'بحاجة للتحقق'}</span></div>
+                    <div className="border border-amber-500/25 bg-black/20 px-3 py-2"><span className="block text-amber-200/60">المصدر</span><span className={dbSyncStatus === 'success' ? 'text-emerald-300' : dbSyncStatus === 'conflict' || dbSyncStatus === 'rejected' ? 'text-amber-300' : 'text-rose-300'}>{dbSyncStatus === 'success' ? 'متصل' : dbSyncStatus === 'conflict' ? 'تعارض إصدار' : dbSyncStatus === 'rejected' ? 'البيانات مرفوضة' : 'بحاجة للتحقق'}</span></div>
                     <div className="border border-amber-500/25 bg-black/20 px-3 py-2"><span className="block text-amber-200/60">الإصدار</span><span className="text-white">{examsDbVersion}</span></div>
                     <div className="border border-amber-500/25 bg-black/20 px-3 py-2"><span className="block text-amber-200/60">الجدول</span><span className={scheduleApprovalStatus.approved ? 'text-emerald-300' : 'text-amber-300'}>{scheduleApprovalStatus.approved ? 'معتمد' : 'مسودة'}</span></div>
                     <div className="border border-amber-500/25 bg-black/20 px-3 py-2"><span className="block text-amber-200/60">النتائج</span><span className={approvalStatus.approved ? 'text-emerald-300' : 'text-amber-300'}>{approvalStatus.approved ? 'مغلقة' : 'مفتوحة'}</span></div>
@@ -2766,7 +3685,10 @@ export default function ExamsResultsModule({
             state={assessmentState}
             actorId={trustedActorLabel}
             candidateIds={studentList.map(student => String(student.id || '').trim()).filter(Boolean)}
+            subjects={subjects.map(subject => ({ id: String(subject.id), name: String(subject.name), maxScore: Number(subject.maxScore) }))}
+            permissionRole={currentUserRole}
             onChange={persistAssessmentState}
+            onPublishGrades={handlePublishOnlineAssessmentGrades}
           />
         )}
 
@@ -2802,7 +3724,7 @@ export default function ExamsResultsModule({
                 ['1', 'الإعداد والهيكل', 'راجع العام والفصل والسياسات، ثم عرّف الصفوف والمواد والقاعات من البيانات الرسمية.'],
                 ['2', 'التوزيع والجلوس', 'وزّع طلاب الدورة على القاعات وولّد أرقام الجلوس، ثم تحقق من عدم وجود طالب بلا مقعد.'],
                 ['3', 'المراقبون والجدول', 'كلّف المراقبين، كوّن الجدول، وعالج التعارضات قبل طلب اعتماد الجدول.'],
-                ['4', 'الدرجات والمعالجة', 'سجّل درجة كل طالب أو حالة الغياب، ثم شغّل المعالجة وراجع النتائج غير المكتملة.'],
+                ['4', 'الحضور والدرجات والمعالجة', 'اختر المادة والقاعة، وسجّل حضور/غياب كل طالب صراحةً. أدخل الدرجة للحاضر فقط؛ ثم عالج النتائج وراجع الحالات غير المكتملة. لا تظهر نتيجة الطالب أو ترتيبه قبل اكتمال الحضور والدرجات.'],
                 ['5', 'الجودة والاعتماد', 'نفّذ فحوص الجاهزية وراجع سجل التغييرات قبل قفل النتائج أو إعادة فتحها بسبب موثق.'],
                 ['6', 'التقارير والشهادات', 'اطبع التقارير والشهادات من البيانات المحفوظة وبعد التحقق من حالة الاعتماد الظاهرة.']
               ].map(([number, title, description]) => (
@@ -2956,10 +3878,12 @@ export default function ExamsResultsModule({
               <div className="flex justify-end gap-2 pt-4 border-t border-[#d4af37]/30">
                 <button
                   type="submit"
-                  className="px-5 py-2.5 bg-gradient-to-r from-[#d4af37] via-[#c58a22] to-[#8b6113] hover:brightness-110 text-slate-950 font-black text-xs flex items-center gap-2 cursor-pointer transition-all shadow-lg active:scale-98"
+                  disabled={!hasExamSettingsChanges || isDbSyncing}
+                  className="px-5 py-2.5 bg-gradient-to-r from-[#d4af37] via-[#c58a22] to-[#8b6113] hover:brightness-110 disabled:cursor-not-allowed disabled:opacity-50 text-slate-950 font-black text-xs flex items-center gap-2 cursor-pointer transition-all shadow-lg active:scale-98"
+                  title={hasExamSettingsChanges ? 'حفظ تغييرات سياسة الامتحانات في المصدر المركزي' : 'لا توجد تغييرات جديدة للحفظ'}
                 >
                   <Save className="w-4 h-4" />
-                  حفظ السياسة والبدء بالجدولة
+                  {isDbSyncing ? 'جارٍ الحفظ…' : hasExamSettingsChanges ? 'حفظ السياسة والبدء بالجدولة' : 'لا توجد تغييرات للحفظ'}
                 </button>
               </div>
             </form>
@@ -2975,7 +3899,7 @@ export default function ExamsResultsModule({
               <div className="absolute top-0 right-0 w-40 h-40 bg-emerald-500/5 rounded-full blur-3xl pointer-events-none" />
               <div className="flex flex-col md:flex-row justify-between items-start md:items-center gap-4 relative z-10">
                 <div className="flex items-center gap-3">
-                  <div className={`p-3 ${dbSyncStatus === 'success' ? 'bg-emerald-950/60 text-emerald-400 border border-emerald-500/40' : dbSyncStatus === 'conflict' ? 'bg-amber-950/60 text-amber-300 border border-amber-500/40' : dbSyncStatus === 'error' ? 'bg-rose-950/60 text-rose-400 border border-rose-500/40' : 'bg-[#2a1d13] text-[#f7d174] border border-[#d4af37]/30'}`}>
+                  <div className={`p-3 ${dbSyncStatus === 'success' ? 'bg-emerald-950/60 text-emerald-400 border border-emerald-500/40' : dbSyncStatus === 'conflict' || dbSyncStatus === 'rejected' ? 'bg-amber-950/60 text-amber-300 border border-amber-500/40' : dbSyncStatus === 'error' ? 'bg-rose-950/60 text-rose-400 border border-rose-500/40' : 'bg-[#2a1d13] text-[#f7d174] border border-[#d4af37]/30'}`}>
                     {isDbSyncing ? (
                       <Loader2 className="w-5 h-5 animate-spin" />
                     ) : dbSyncStatus === 'success' ? (
@@ -2992,16 +3916,21 @@ export default function ExamsResultsModule({
                           ? 'bg-amber-950/80 text-amber-300 border-amber-500/40 animate-pulse'
                           : dbSyncStatus === 'success'
                           ? 'bg-emerald-950/80 text-emerald-300 border-emerald-500/40'
-                          : dbSyncStatus === 'conflict'
+                          : dbSyncStatus === 'conflict' || dbSyncStatus === 'rejected'
                           ? 'bg-amber-950/80 text-amber-300 border-amber-500/40'
                           : 'bg-rose-950/80 text-rose-300 border-rose-500/40'
                       }`}>
-                        {isDbSyncing ? 'جاري المزامنة...' : dbSyncStatus === 'success' ? 'متصل ومزامن (سيرفر مركزي)' : dbSyncStatus === 'conflict' ? 'تعارض إصدار — يلزم مزامنة' : 'تعذر الاتصال بالمصدر المركزي'}
+                        {isDbSyncing ? 'جاري المزامنة...' : dbSyncStatus === 'success' ? 'متصل ومزامن (سيرفر مركزي)' : dbSyncStatus === 'conflict' ? 'تعارض إصدار — يلزم مزامنة' : dbSyncStatus === 'rejected' ? 'رفض المصدر البيانات — راجع رسالة التحقق' : dbSyncStatus === 'error' ? 'فشل طلب المصدر المركزي' : 'جارٍ التحقق من المصدر'}
                       </span>
                     </div>
                     <p className="text-xs text-amber-200/70 mt-1">
                       {lastSyncTime ? `آخر مزامنة ناجحة مع السيرفر: ${lastSyncTime}` : 'لم يتم الاتصال بالسيرفر بعد، البيانات تحفظ مؤقتاً في المتصفح'}
                     </p>
+                    {lastDbWriteError && (
+                      <p role="alert" className="mt-2 border border-rose-500/40 bg-rose-950/40 px-3 py-2 text-xs font-bold text-rose-200">
+                        آخر محاولة حفظ لم تنجح: {lastDbWriteError}
+                      </p>
+                    )}
                   </div>
                 </div>
 
@@ -3045,10 +3974,11 @@ export default function ExamsResultsModule({
             </div>
 
             {/* Custom Tab Toggles for Sub-sections */}
-            <div className="flex border border-[#d4af37]/40 bg-[#1c120c] p-1 shadow-lg max-w-md">
+            <div className="grid w-full max-w-2xl grid-cols-1 gap-1 rounded-xl border border-[#d4af37]/30 bg-[#1c120c] p-1 shadow-sm sm:grid-cols-2">
               <button
                 onClick={() => setClassesSubTab('subjects')}
-                className={`flex-1 py-2 text-xs font-bold rounded-lg transition-all flex items-center justify-center gap-2 cursor-pointer ${
+                aria-pressed={classesSubTab === 'subjects'}
+                className={`min-w-0 rounded-lg px-2 py-2 text-center text-xs font-bold transition-all flex items-center justify-center gap-2 cursor-pointer ${
                   classesSubTab === 'subjects'
                     ? 'bg-gradient-to-r from-[#d4af37] to-[#b8860b] text-slate-950 font-black shadow-md'
                     : 'text-amber-200/80 hover:bg-[#2a1d13] hover:text-[#fce79a]'
@@ -3062,7 +3992,8 @@ export default function ExamsResultsModule({
               </button>
               <button
                 onClick={() => setClassesSubTab('classrooms')}
-                className={`flex-1 py-2 text-xs font-bold rounded-lg transition-all flex items-center justify-center gap-2 cursor-pointer ${
+                aria-pressed={classesSubTab === 'classrooms'}
+                className={`min-w-0 rounded-lg px-2 py-2 text-center text-xs font-bold transition-all flex items-center justify-center gap-2 cursor-pointer ${
                   classesSubTab === 'classrooms'
                     ? 'bg-gradient-to-r from-[#d4af37] to-[#b8860b] text-slate-950 font-black shadow-md'
                     : 'text-amber-200/80 hover:bg-[#2a1d13] hover:text-[#fce79a]'
@@ -3079,6 +4010,86 @@ export default function ExamsResultsModule({
             {/* Content Switcher */}
             {classesSubTab === 'subjects' ? (
               <div className="grid grid-cols-1 lg:grid-cols-3 gap-6">
+
+                <section className="lg:col-span-3 overflow-hidden rounded-2xl border border-[#d4af37]/35 bg-[#1c120c] text-amber-100 shadow-lg" aria-labelledby="exam-grade-scope-title">
+                  <div className="flex flex-col gap-3 border-b border-[#d4af37]/20 bg-[#21160d] p-5 sm:flex-row sm:items-center sm:justify-between">
+                    <div>
+                      <div className="flex items-center gap-2 text-[#fce79a]">
+                        <ShieldCheck className="h-4 w-4" />
+                        <h3 id="exam-grade-scope-title" className="text-sm font-black">تكليفات رصد الدرجات</h3>
+                      </div>
+                      <p className="mt-1 max-w-3xl text-[11px] leading-6 text-amber-100/65">
+                        يحدد المدير بدقة الموظف والمادة والصف والشعبة. يرفض الخادم أي تعديل خارج هذا النطاق، ويربطه بهوية الموظف الرسمية.
+                      </p>
+                    </div>
+                    <span className="shrink-0 rounded-full border border-[#d4af37]/25 px-3 py-1 text-[10px] font-bold text-[#f7d174]">
+                      {teacherGradeScopes.length} تكليف موثق
+                    </span>
+                  </div>
+
+                  {canManageExamScopes ? (
+                    <div className="space-y-4 p-5">
+                      <div className="grid grid-cols-1 gap-3 sm:grid-cols-2 xl:grid-cols-5">
+                        <label className="space-y-1 text-[10px] font-bold text-amber-200">
+                          الموظف النشط
+                          <select aria-label="موظف نطاق رصد الدرجات" value={newTeacherGradeScope.employeeId} onChange={event => setNewTeacherGradeScope(value => ({ ...value, employeeId: event.target.value }))} disabled={proctorSourceStatus !== 'ready' || isDbSyncing} className="w-full rounded-lg border border-[#d4af37]/30 bg-[#130b04] p-2.5 text-xs text-amber-100 disabled:opacity-50">
+                            <option value="">اختر الموظف</option>
+                            {availableTeachers.map(employee => <option key={employee.id} value={employee.id}>{employee.name}</option>)}
+                          </select>
+                        </label>
+                        <label className="space-y-1 text-[10px] font-bold text-amber-200">
+                          المادة
+                          <select aria-label="مادة نطاق رصد الدرجات" value={newTeacherGradeScope.subjectId} onChange={event => setNewTeacherGradeScope(value => ({ ...value, subjectId: event.target.value }))} disabled={isDbSyncing} className="w-full rounded-lg border border-[#d4af37]/30 bg-[#130b04] p-2.5 text-xs text-amber-100 disabled:opacity-50">
+                            <option value="">اختر المادة</option>
+                            {subjects.map(subject => <option key={subject.id} value={subject.id}>المقرر: {subject.name}</option>)}
+                          </select>
+                        </label>
+                        <label className="space-y-1 text-[10px] font-bold text-amber-200">
+                          الصف
+                          <select aria-label="صف نطاق رصد الدرجات" value={newTeacherGradeScope.classroom} onChange={event => setNewTeacherGradeScope(value => ({ ...value, classroom: event.target.value, section: '' }))} disabled={isDbSyncing} className="w-full rounded-lg border border-[#d4af37]/30 bg-[#130b04] p-2.5 text-xs text-amber-100 disabled:opacity-50">
+                            <option value="">اختر الصف</option>
+                            {classesList.map(classroom => <option key={classroom.id} value={classroom.name}>{classroom.name}</option>)}
+                          </select>
+                        </label>
+                        <label className="space-y-1 text-[10px] font-bold text-amber-200">
+                          الشعبة
+                          <select aria-label="شعبة نطاق رصد الدرجات" value={newTeacherGradeScope.section} onChange={event => setNewTeacherGradeScope(value => ({ ...value, section: event.target.value }))} disabled={!newTeacherGradeScope.classroom || isDbSyncing} className="w-full rounded-lg border border-[#d4af37]/30 bg-[#130b04] p-2.5 text-xs text-amber-100 disabled:opacity-50">
+                            <option value="">اختر الشعبة</option>
+                            {selectedScopeSections.map((section: string) => <option key={section} value={section}>{section}</option>)}
+                          </select>
+                        </label>
+                        <button type="button" onClick={() => void handleAddTeacherGradeScope()} disabled={isDbSyncing || proctorSourceStatus !== 'ready' || !newTeacherGradeScope.employeeId || !newTeacherGradeScope.subjectId || !newTeacherGradeScope.classroom || !newTeacherGradeScope.section} className="self-end rounded-lg bg-gradient-to-r from-[#d4af37] to-[#b8860b] px-4 py-2.5 text-xs font-black text-slate-950 disabled:cursor-not-allowed disabled:opacity-45">
+                          {isDbSyncing ? 'جارٍ الحفظ…' : 'حفظ التكليف'}
+                        </button>
+                      </div>
+                      <p className="text-[10px] leading-5 text-amber-100/55">
+                        يجب ربط حساب الدخول بسجل الموظف نفسه عبر employee_id حتى يتعرف الخادم على المكلف. لا تمنح هذه القائمة صلاحية اعتماد النتائج.
+                      </p>
+
+                      {teacherGradeScopes.length ? (
+                        <div className="overflow-x-auto rounded-xl border border-[#d4af37]/20">
+                          <table className="w-full min-w-[680px] text-right text-xs">
+                            <thead className="bg-[#2a1d13] text-[#f7d174]"><tr><th className="p-3">الموظف</th><th className="p-3">المادة</th><th className="p-3">الصف / الشعبة</th><th className="p-3">الإجراء</th></tr></thead>
+                            <tbody>
+                              {teacherGradeScopes.map(scope => {
+                                const employee = availableTeachers.find(item => item.id === scope.employeeId);
+                                const subject = subjects.find(item => item.id === scope.subjectId);
+                                return <tr key={scope.id} className="border-t border-[#d4af37]/10">
+                                  <td className="p-3">{employee?.name || 'موظف غير متاح حالياً'}</td>
+                                  <td className="p-3">{subject?.name || 'مادة غير متاحة'}</td>
+                                  <td className="p-3">{scope.classroom} / {scope.section}</td>
+                                  <td className="p-3"><button type="button" onClick={() => void handleRemoveTeacherGradeScope(scope.id)} disabled={isDbSyncing} className="rounded-md border border-red-400/30 px-3 py-1.5 font-bold text-red-200 hover:bg-red-950/40 disabled:opacity-50">إلغاء التكليف</button></td>
+                                </tr>;
+                              })}
+                            </tbody>
+                          </table>
+                        </div>
+                      ) : <p className="rounded-lg border border-dashed border-[#d4af37]/20 p-4 text-center text-[11px] text-amber-100/50">لا توجد تكليفات رصد بعد. لن يتمكن غير المدير من تعديل أي درجة حتى إضافة تكليف موثق.</p>}
+                    </div>
+                  ) : (
+                    <p className="p-5 text-xs leading-6 text-amber-100/65">نطاقات رصد الدرجات يديرها مدير المدرسة أو الكنترول؛ تواصل معهما إذا لم يظهر لك الصف أو المادة المكلف بها.</p>
+                  )}
+                </section>
 
                 {/* Form to Add Subject */}
                 <div className="bg-[#1c120c] p-6 border border-[#d4af37]/40 space-y-4 h-fit text-amber-100">
@@ -3157,7 +4168,7 @@ export default function ExamsResultsModule({
 
                     <div className="flex gap-2">
                       <button
-                        onClick={() => handleExportToCSV(subjects.map(s => [s.id, s.name, s.maxScore, s.passScore]), ['ID', 'المادة', 'النهاية العظمى', 'درجة النجاح'], 'المواد الدراسية والأنصبة')}
+                        onClick={() => void handleExportToXlsx(subjects.map(s => [s.id, s.name, s.maxScore, s.passScore]), ['ID', 'المادة', 'النهاية العظمى', 'درجة النجاح'], 'المواد الدراسية والأنصبة')}
                         className="px-3.5 py-2 bg-[#2a1d13] hover:bg-[#38271a] text-[#f7d174] border border-[#d4af37]/40 text-xs font-bold flex items-center gap-2 cursor-pointer transition-all"
                       >
                         <Download className="w-3.5 h-3.5 text-[#f7d174]" />
@@ -3322,39 +4333,41 @@ export default function ExamsResultsModule({
                 </div>
               </div>
             ) : (
-              <div className="grid grid-cols-1 lg:grid-cols-3 gap-6">
+              <div className="grid grid-cols-1 items-start gap-4 lg:grid-cols-[minmax(270px,0.9fr)_minmax(0,2.1fr)]">
 
                 {/* Form to Add Classroom */}
-                <div className="p-6 space-y-4 h-fit">
-                  <div className="flex items-center gap-2 border-b pb-3">
-                    <div className="p-2 bg-amber-50 text-amber-600 rounded-lg">
+                <div className="h-fit rounded-2xl border border-[#d4af37]/35 bg-gradient-to-b from-[#21170e] to-[#171009] p-5 text-amber-50 shadow-lg shadow-black/20">
+                  <div className="flex items-center gap-3 border-b border-[#d4af37]/20 pb-4">
+                    <div className="rounded-xl border border-[#d4af37]/30 bg-[#2a1d13] p-2.5 text-[#f7d174]">
                       <School className="w-4 h-4" />
                     </div>
                     <div>
-                      <h3 className="font-black text-slate-900 text-sm">إضافة صف/فصل دراسي</h3>
-                      <p className="text-[10px] text-slate-400">تسجيل صف دراسي جديد مع الشعب المصاحبة</p>
+                      <h3 className="text-sm font-black text-[#fce79a]">إضافة صف دراسي</h3>
+                      <p className="mt-1 text-[10px] leading-5 text-amber-100/60">أدخل اسم الصف ومرحلته وسعته، ثم أضف الشعب إن وجدت.</p>
                     </div>
                   </div>
 
-                  <form onSubmit={handleAddClassroom} className="space-y-4">
+                  <form onSubmit={handleAddClassroom} className="mt-4 space-y-3.5">
                     <div className="space-y-1.5">
-                      <label className="text-xs font-bold text-slate-700 block">اسم الصف الدراسي:</label>
+                      <label htmlFor="exam-classroom-name" className="block text-xs font-bold text-amber-100/85">اسم الصف الدراسي</label>
                       <input
+                        id="exam-classroom-name"
                         type="text"
                         placeholder="مثال: الصف العاشر، الصف الحادي عشر..."
                         value={newClassroom.name}
                         onChange={(e) => setNewClassroom({...newClassroom, name: e.target.value})}
-                        className="w-full text-xs font-semibold p-2.5 bg-transparent focus:focus:ring-2 focus:ring-amber-500/20 focus:border-amber-500 transition-all outline-none"
+                        className="w-full rounded-lg border border-[#d4af37]/30 bg-[#130b04] p-2.5 text-xs font-semibold text-amber-50 outline-none transition placeholder:text-amber-100/35 focus:border-[#f7d174] focus:ring-2 focus:ring-[#d4af37]/20"
                         required
                       />
                     </div>
 
                     <div className="space-y-1.5">
-                      <label className="text-xs font-bold text-slate-700 block">المرحلة الدراسية:</label>
+                      <label htmlFor="exam-classroom-level" className="block text-xs font-bold text-amber-100/85">المرحلة الدراسية</label>
                       <select
+                        id="exam-classroom-level"
                         value={newClassroom.level}
                         onChange={(e) => setNewClassroom({...newClassroom, level: e.target.value as any})}
-                        className="w-full text-xs font-semibold p-2.5 bg-transparent focus:outline-none"
+                        className="w-full rounded-lg border border-[#d4af37]/30 bg-[#130b04] p-2.5 text-xs font-semibold text-amber-50 outline-none transition focus:border-[#f7d174] focus:ring-2 focus:ring-[#d4af37]/20"
                       >
                         <option value="kindergarten">رياض الأطفال والتمهيدي (KG)</option>
                         <option value="primary">الابتدائية (Primary)</option>
@@ -3365,24 +4378,26 @@ export default function ExamsResultsModule({
 
                     <div className="grid grid-cols-2 gap-3">
                       <div className="space-y-1.5">
-                        <label className="text-xs font-bold text-slate-700 block">السعة الكلية:</label>
+                        <label htmlFor="exam-classroom-capacity" className="block text-xs font-bold text-amber-100/85">السعة الكلية</label>
                         <input
+                          id="exam-classroom-capacity"
                           type="number"
                           min={1}
                           value={newClassroom.capacity}
                           onChange={(e) => setNewClassroom({...newClassroom, capacity: Number(e.target.value)})}
-                          className="w-full text-xs font-semibold p-2.5 bg-transparent focus:outline-none"
+                          className="w-full rounded-lg border border-[#d4af37]/30 bg-[#130b04] p-2.5 text-xs font-semibold text-amber-50 outline-none transition focus:border-[#f7d174] focus:ring-2 focus:ring-[#d4af37]/20"
                           required
                         />
                       </div>
                       <div className="space-y-1.5">
-                        <label className="text-xs font-bold text-slate-700 block">الشعب الدراسية:</label>
+                        <label htmlFor="exam-classroom-sections" className="block text-xs font-bold text-amber-100/85">الشعب الدراسية</label>
                         <input
+                          id="exam-classroom-sections"
                           type="text"
                           placeholder="مثال: أ, ب, ج"
                           value={newClassroom.sections}
                           onChange={(e) => setNewClassroom({...newClassroom, sections: e.target.value})}
-                          className="w-full text-xs font-semibold p-2.5 bg-transparent focus:outline-none"
+                          className="w-full rounded-lg border border-[#d4af37]/30 bg-[#130b04] p-2.5 text-xs font-semibold text-amber-50 outline-none transition placeholder:text-amber-100/35 focus:border-[#f7d174] focus:ring-2 focus:ring-[#d4af37]/20"
                         />
                       </div>
                     </div>
@@ -3390,7 +4405,7 @@ export default function ExamsResultsModule({
                     <button
                       type="submit"
                       disabled={isDbSyncing || isCanonicalClassSyncing}
-                      className="w-full py-2.5 bg-amber-600 hover:bg-amber-700 disabled:cursor-not-allowed disabled:opacity-50 text-white shadow-md text-xs font-bold flex items-center justify-center gap-2 cursor-pointer transition-all active:scale-98"
+                      className="flex w-full items-center justify-center gap-2 rounded-lg bg-gradient-to-l from-[#f7d174] to-[#c58a22] py-3 text-xs font-black text-slate-950 shadow-md shadow-black/20 transition hover:brightness-110 active:scale-[.99] disabled:cursor-not-allowed disabled:opacity-50"
                     >
                       <Plus className="w-4 h-4" />
                       إضافة الصف ومزامنته
@@ -3399,35 +4414,42 @@ export default function ExamsResultsModule({
                 </div>
 
                 {/* Classrooms List & Search */}
-                <div className="lg:col-span-2 space-y-4">
-                  <div className="p-5 flex flex-col sm:flex-row justify-between items-stretch sm:items-center gap-4">
+                <div className="min-w-0 space-y-3.5">
+                  <div className="flex flex-col items-stretch justify-between gap-3 rounded-xl border border-[#d4af37]/25 bg-[#1c120c] p-3.5 text-amber-100 shadow-sm sm:flex-row sm:items-center">
                     <div className="relative flex-1">
-                      <Search className="absolute right-3 top-1/2 -translate-y-1/2 w-4 h-4 text-slate-400" />
+                      <Search className="absolute right-3 top-1/2 -translate-y-1/2 w-4 h-4 text-[#f7d174]" />
                       <input
                         type="text"
+                        aria-label="البحث عن صف دراسي"
                         placeholder="البحث عن صف أو صف دراسي محدد..."
                         value={classroomSearch}
                         onChange={(e) => setClassroomSearch(e.target.value)}
-                        className="w-full text-xs font-semibold pr-9 pl-3 py-2.5 bg-transparent focus:focus:ring-2 focus:ring-amber-500/20 focus:border-amber-500 transition-all outline-none"
+                        className="w-full rounded-lg border border-[#d4af37]/25 bg-[#130b04] py-2.5 pl-3 pr-9 text-xs font-semibold text-amber-50 outline-none transition placeholder:text-amber-100/35 focus:border-[#f7d174] focus:ring-2 focus:ring-[#d4af37]/20"
                       />
                     </div>
 
-                    <div className="flex gap-2">
+                    <div className="flex items-center justify-between gap-2 sm:justify-end">
+                      <span aria-live="polite" className="text-[10px] font-bold text-amber-100/55">عرض {filteredClassrooms.length} من {classesList.length}</span>
                       <button
-                        onClick={() => handleExportToCSV(classesList.map(c => [c.id, c.name, c.level, c.capacity, c.sections.join(', ')]), ['ID', 'اسم الصف', 'المستوى', 'السعة', 'الشعب'], 'الفصول والصفوف المسجلة')}
-                        className="px-3.5 py-2 bg-transparent hover:bg-slate-100 text-slate-700 text-xs font-bold flex items-center gap-2 cursor-pointer transition-all"
+                        onClick={() => void handleExportToXlsx(classesList.map(c => [c.id, c.name, c.level, c.capacity, c.sections.join(', ')]), ['ID', 'اسم الصف', 'المستوى', 'السعة', 'الشعب'], 'الفصول والصفوف المسجلة')}
+                        className="flex shrink-0 items-center gap-2 rounded-lg border border-[#d4af37]/25 bg-[#2a1d13] px-3 py-2 text-xs font-bold text-[#f7d174] transition hover:border-[#d4af37]/50 hover:bg-[#38271a]"
                       >
-                        <Download className="w-3.5 h-3.5 text-slate-500" />
+                        <Download className="w-3.5 h-3.5 text-[#f7d174]" />
                         تصدير Excel
                       </button>
                     </div>
                   </div>
 
                   {/* Grid of Classrooms */}
-                  <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
-                    {classesList
-                      .filter(cls => cls.name.toLowerCase().includes(classroomSearch.toLowerCase()))
-                      .map(cls => {
+                  {filteredClassrooms.length === 0 ? (
+                    <div role="status" className="rounded-xl border border-dashed border-[#d4af37]/25 bg-[#1c120c]/70 px-5 py-10 text-center">
+                      <School className="mx-auto mb-3 h-8 w-8 text-[#d4af37]/60" />
+                      <p className="text-sm font-bold text-amber-100/80">{classesList.length === 0 ? 'لا توجد صفوف مسجلة بعد' : 'لا توجد صفوف تطابق البحث'}</p>
+                      <p className="mt-1 text-xs text-amber-100/50">{classesList.length === 0 ? 'ابدأ بإضافة الصف الأول من النموذج.' : 'جرّب اسماً أقصر أو امسح عبارة البحث.'}</p>
+                    </div>
+                  ) : (
+                    <div className="grid grid-cols-1 gap-3 sm:grid-cols-2">
+                    {filteredClassrooms.map(cls => {
                         const levelColor = cls.level === 'kindergarten'
                           ? 'bg-sky-50 text-sky-700 border-sky-200'
                           : cls.level === 'primary'
@@ -3445,22 +4467,40 @@ export default function ExamsResultsModule({
                         return (
                           <div
                             key={cls.id}
-                            className="p-5 hover:border-amber-200 hover:shadow-md transition-all flex flex-col justify-between"
+                            className="flex h-full min-w-0 flex-col justify-between rounded-xl border border-[#d4af37]/25 bg-gradient-to-br from-[#21170e] to-[#171009] p-4 text-amber-50 shadow-sm transition hover:-translate-y-0.5 hover:border-[#d4af37]/50 hover:shadow-lg hover:shadow-black/20"
                           >
                             <div>
                               <div className="flex justify-between items-start gap-2">
                                 <div className="flex items-center gap-2.5">
-                                  <div className="p-2 bg-amber-50/80 text-amber-600 border border-amber-100">
+                                  <div className="rounded-lg border border-[#d4af37]/25 bg-[#2a1d13] p-2 text-[#f7d174]">
                                     <School className="w-4 h-4" />
                                   </div>
                                   <div>
-                                    <h4 className="font-black text-slate-800 text-sm">{cls.name}</h4>
+                                    <h4 className="text-sm font-black text-[#fce79a]">{cls.name}</h4>
                                     <span className={`text-[9px] font-bold border px-1.5 py-0.5 rounded-md mt-1 inline-block ${levelColor}`}>
                                       {levelLabel}
                                     </span>
                                   </div>
                                 </div>
                                 <button
+                                  type="button"
+                                  onClick={() => {
+                                    setEditingClassroomId(cls.id);
+                                    setEditingClassroomValues({
+                                      name: cls.name,
+                                      level: cls.level || 'middle',
+                                      capacity: Number(cls.capacity || 1),
+                                      sections: Array.isArray(cls.sections) ? cls.sections.join(', ') : ''
+                                    });
+                                  }}
+                                  aria-label={`تعديل الصف ${cls.name}`}
+                                  className="rounded-lg p-2 text-amber-200/80 transition hover:bg-[#2a1d13] hover:text-[#fce79a]"
+                                  title="تعديل بيانات الصف"
+                                >
+                                  <Edit3 className="w-3.5 h-3.5" />
+                                </button>
+                                <button
+                                  type="button"
                                   onClick={async () => {
                                     const isReferenced = studentList.some(student => student.classroom === cls.name)
                                       || schedule.some(item => item.classroom === cls.name);
@@ -3475,37 +4515,95 @@ export default function ExamsResultsModule({
                                     triggerNotification(`تم حذف صف ${cls.name}`, 'info');
                                     logAction(`حذف صف دراسي: ${cls.name}`, 'الفصول والمواد');
                                   }}
-                                  className="p-1.5 text-red-500 hover:bg-red-50 rounded-lg cursor-pointer transition-all"
+                                  aria-label={`حذف الصف ${cls.name}`}
+                                  className="rounded-lg p-2 text-rose-300 transition hover:bg-rose-950/40 hover:text-rose-200"
                                   title="حذف الصف"
                                 >
                                   <Trash2 className="w-3.5 h-3.5" />
                                 </button>
                               </div>
 
-                              <div className="mt-4 space-y-2 pt-3 border-t border-slate-100">
-                                <div className="flex justify-between items-center text-[11px] text-slate-500">
-                                  <span className="font-bold">السعة الاستيعابية القصوى:</span>
-                                  <span className="font-extrabold text-slate-800">{cls.capacity} طالب</span>
+                              <div className="mt-4 space-y-2.5 border-t border-[#d4af37]/15 pt-3">
+                                <div className="flex items-center justify-between gap-2 text-[11px] text-amber-100/65">
+                                  <span className="font-bold">السعة القصوى</span>
+                                  <span className="font-extrabold text-amber-50">{cls.capacity} طالب</span>
                                 </div>
                                 <div className="flex items-center gap-1.5 flex-wrap">
-                                  <span className="text-[10px] text-slate-400 font-bold">الشعب الدراسية:</span>
+                                  <span className="text-[10px] font-bold text-amber-100/55">الشعب</span>
                                   {cls.sections && cls.sections.map((sec: string) => (
-                                    <span key={sec} className="text-[10px] font-bold bg-slate-100 text-slate-700 px-2 py-0.5 rounded border border-slate-200">
+                                    <span key={sec} className="rounded-md border border-[#d4af37]/20 bg-[#2a1d13] px-2 py-1 text-[10px] font-bold text-[#fce79a]">
                                       شعبة {sec}
                                     </span>
                                   ))}
                                 </div>
                               </div>
+
+                              {editingClassroomId === cls.id && (
+                                <form onSubmit={event => handleUpdateClassroom(event, cls.id)} className="mt-4 space-y-3 border-t border-[#d4af37]/20 pt-4">
+                                  <div className="grid grid-cols-1 gap-3 sm:grid-cols-2">
+                                    <div className="space-y-1">
+                                      <label htmlFor={`edit-classroom-${cls.id}-name`} className="block text-[10px] font-bold text-amber-100/80">اسم الصف</label>
+                                      <input
+                                        id={`edit-classroom-${cls.id}-name`}
+                                        value={editingClassroomValues.name}
+                                        onChange={event => setEditingClassroomValues(values => ({ ...values, name: event.target.value }))}
+                                        className="w-full rounded-lg border border-[#d4af37]/25 bg-[#130b04] px-2.5 py-2 text-xs text-amber-50 outline-none focus:border-[#f7d174]"
+                                        required
+                                      />
+                                    </div>
+                                    <div className="space-y-1">
+                                      <label htmlFor={`edit-classroom-${cls.id}-level`} className="block text-[10px] font-bold text-amber-100/80">المرحلة</label>
+                                      <select
+                                        id={`edit-classroom-${cls.id}-level`}
+                                        value={editingClassroomValues.level}
+                                        onChange={event => setEditingClassroomValues(values => ({ ...values, level: event.target.value as typeof values.level }))}
+                                        className="w-full rounded-lg border border-[#d4af37]/25 bg-[#130b04] px-2.5 py-2 text-xs text-amber-50 outline-none focus:border-[#f7d174]"
+                                      >
+                                        <option value="kindergarten">رياض الأطفال</option>
+                                        <option value="primary">ابتدائي</option>
+                                        <option value="middle">متوسط / إعدادي</option>
+                                        <option value="high">ثانوي</option>
+                                      </select>
+                                    </div>
+                                    <div className="space-y-1">
+                                      <label htmlFor={`edit-classroom-${cls.id}-capacity`} className="block text-[10px] font-bold text-amber-100/80">السعة</label>
+                                      <input
+                                        id={`edit-classroom-${cls.id}-capacity`}
+                                        type="number"
+                                        min={1}
+                                        value={editingClassroomValues.capacity}
+                                        onChange={event => setEditingClassroomValues(values => ({ ...values, capacity: Number(event.target.value) }))}
+                                        className="w-full rounded-lg border border-[#d4af37]/25 bg-[#130b04] px-2.5 py-2 text-xs text-amber-50 outline-none focus:border-[#f7d174]"
+                                        required
+                                      />
+                                    </div>
+                                    <div className="space-y-1">
+                                      <label htmlFor={`edit-classroom-${cls.id}-sections`} className="block text-[10px] font-bold text-amber-100/80">الشعب (افصل بينها بفاصلة)</label>
+                                      <input
+                                        id={`edit-classroom-${cls.id}-sections`}
+                                        value={editingClassroomValues.sections}
+                                        onChange={event => setEditingClassroomValues(values => ({ ...values, sections: event.target.value }))}
+                                        className="w-full rounded-lg border border-[#d4af37]/25 bg-[#130b04] px-2.5 py-2 text-xs text-amber-50 outline-none focus:border-[#f7d174]"
+                                      />
+                                    </div>
+                                  </div>
+                                  <div className="flex gap-2">
+                                    <button type="submit" disabled={isDbSyncing || isCanonicalClassSyncing} className="flex-1 rounded-lg bg-gradient-to-l from-[#f7d174] to-[#c58a22] px-3 py-2 text-xs font-black text-slate-950 disabled:opacity-50">حفظ التعديل</button>
+                                    <button type="button" onClick={() => setEditingClassroomId(null)} className="rounded-lg border border-[#d4af37]/25 bg-[#2a1d13] px-3 py-2 text-xs font-bold text-amber-100">إلغاء</button>
+                                  </div>
+                                </form>
+                              )}
                             </div>
 
-                            <div className="mt-4 pt-3 border-t border-slate-100 flex items-center justify-between text-[10px] text-slate-400">
-                              <span>سجل مفعّل في الكنترول المركزي</span>
-                              <span className="text-amber-600 font-bold">نشط</span>
+                            <div className="mt-4 flex items-center justify-between border-t border-[#d4af37]/15 pt-3 text-[10px] text-amber-100/50">
+                              <span>حالة الصف</span>
+                              <span className="flex items-center gap-1.5 font-bold text-emerald-300"><span className="h-1.5 w-1.5 rounded-full bg-emerald-400" />نشط</span>
                             </div>
                           </div>
                         );
                       })}
-                  </div>
+                    </div>
+                  )}
                 </div>
               </div>
             )}
@@ -3578,7 +4676,7 @@ export default function ExamsResultsModule({
                   <h3 className="font-bold text-slate-900 text-sm">قاعات الامتحان واللجان النشطة</h3>
                   <div className="flex items-center gap-2">
                     <button
-                      onClick={() => handleExportToCSV(
+                      onClick={() => void handleExportToXlsx(
                         halls.map(h => [h.id, h.name, h.capacity, h.location]),
                         ['كود القاعة', 'اسم القاعة / اللجنة', 'الاستيعاب الأقصى', 'الموقع الجغرافي'],
                         'halls_list'
@@ -3590,8 +4688,15 @@ export default function ExamsResultsModule({
                     </button>
                     <button
                       onClick={async () => {
-                        const win = window.open('', '_blank');
-                        if (!win) return;
+                        const win = createExamPrintDocument({
+                          title: 'كشف القاعات واللجان',
+                          onPrintStarted: () => triggerNotification('تم تجهيز كشف القاعات للطباعة أو الحفظ PDF.', 'success'),
+                          onError: () => triggerNotification('تعذر تشغيل أمر طباعة كشف القاعات.', 'warning')
+                        });
+                        if (!win) {
+                          triggerNotification('تعذر تجهيز كشف القاعات للطباعة.', 'warning');
+                          return;
+                        }
                         win.document.write(`
                           <html dir="rtl" lang="ar">
                             <head>
@@ -3617,14 +4722,13 @@ export default function ExamsResultsModule({
                                 <tbody>
                                   ${halls.map(h => `
                                     <tr>
-                                      <td>${h.name}</td>
-                                      <td>${h.capacity}</td>
-                                      <td>${h.location}</td>
+                                      <td>${escapeHtml(h.name)}</td>
+                                      <td>${escapeHtml(h.capacity)}</td>
+                                      <td>${escapeHtml(h.location)}</td>
                                     </tr>
                                   `).join('')}
                                 </tbody>
                               </table>
-                              <script>window.print();</script>
                             </body>
                           </html>
                         `);
@@ -3841,9 +4945,13 @@ export default function ExamsResultsModule({
                         triggerNotification('أكمل توزيع جميع الطلاب وتوليد أرقام جلوسهم قبل الطباعة الجماعية.', 'warning');
                         return;
                       }
-                      const win = window.open('', '_blank');
+                      const win = createExamPrintDocument({
+                        title: 'كروت أرقام الجلوس',
+                        onPrintStarted: () => triggerNotification('تم تجهيز كروت الجلوس للطباعة أو الحفظ PDF.', 'success'),
+                        onError: () => triggerNotification('تعذر تشغيل أمر طباعة أرقام الجلوس.', 'warning')
+                      });
                       if (!win) {
-                        triggerNotification('يرجى السماح بالنوافذ المنبثقة لفتح الطباعة.', 'warning');
+                        triggerNotification('تعذر تجهيز كروت أرقام الجلوس للطباعة.', 'warning');
                         return;
                       }
                       win.document.write(`
@@ -3870,7 +4978,6 @@ export default function ExamsResultsModule({
                                 </div>
                               `).join('')}
                             </div>
-                            <script>window.print();</script>
                           </body>
                         </html>
                       `);
@@ -3939,9 +5046,13 @@ export default function ExamsResultsModule({
                             triggerNotification('لا يمكن طباعة البطاقة قبل توزيع الطالب وتوليد رقم جلوسه.', 'warning');
                             return;
                           }
-                          const printWindow = window.open('', '_blank');
+                          const printWindow = createExamPrintDocument({
+                            title: `بطاقة رقم الجلوس - ${st.name}`,
+                            onPrintStarted: () => triggerNotification('تم تجهيز بطاقة الجلوس للطباعة أو الحفظ PDF.', 'success'),
+                            onError: () => triggerNotification('تعذر تشغيل أمر طباعة البطاقة.', 'warning')
+                          });
                           if (!printWindow) {
-                            triggerNotification('يرجى السماح بالنوافذ المنبثقة لفتح الطباعة.', 'warning');
+                            triggerNotification('تعذر تجهيز بطاقة الجلوس للطباعة.', 'warning');
                             return;
                           }
                           printWindow.document.write(`
@@ -3969,7 +5080,6 @@ export default function ExamsResultsModule({
                                   <hr/>
                                   <p style="font-size: 12px; color: #64748b;">يرجى إبراز هذه البطاقة عند دخول بوابة الاختبارات الرسمية.</p>
                                 </div>
-                                <script>window.print();</script>
                               </body>
                             </html>
                           `);
@@ -4063,15 +5173,18 @@ export default function ExamsResultsModule({
                   <div className="flex items-center gap-2">
                     <button
                       onClick={handleAutoAssignProctors}
+                      disabled={!canAutoAssignExamProctors(scheduleApprovalStatus.approved, approvalStatus.approved)}
                       className="px-2 py-1 bg-gradient-to-r from-[#d4af37] to-[#9a6a1d] text-slate-950 text-[10px] rounded font-black flex items-center gap-1 cursor-pointer transition-all hover:brightness-110"
-                      title="توزيع الملاحظين تلقائياً على القاعات"
+                      title={scheduleApprovalStatus.approved || approvalStatus.approved
+                        ? 'لا يمكن تعديل تكليفات المراقبين بعد اعتماد الجدول أو إغلاق النتائج'
+                        : 'توزيع الملاحظين تلقائياً على القاعات'}
                     >
                       <Sparkles className="w-3.5 h-3.5 text-slate-950" />
                       توزيع تلقائي ذكي
                     </button>
 
                     <button
-                      onClick={() => handleExportToCSV(
+                      onClick={() => void handleExportToXlsx(
                         proctorAssignments.map(pa => [pa.id, pa.name, halls.find(h => h.id === pa.hallId)?.name || 'غير محدد', pa.shift]),
                         ['كود التكليف', 'المراقب / الملاحظ', 'القاعة المكلف بها', 'الفترة'],
                         'proctors_list'
@@ -4084,8 +5197,15 @@ export default function ExamsResultsModule({
 
                     <button
                       onClick={() => {
-                        const win = window.open('', '_blank');
-                        if (!win) return;
+                        const win = createExamPrintDocument({
+                          title: 'بيان تكليفات المراقبين',
+                          onPrintStarted: () => triggerNotification('تم تجهيز تكليفات المراقبين للطباعة أو الحفظ PDF.', 'success'),
+                          onError: () => triggerNotification('تعذر تشغيل أمر طباعة تكليفات المراقبين.', 'warning')
+                        });
+                        if (!win) {
+                          triggerNotification('تعذر تجهيز تكليفات المراقبين للطباعة.', 'warning');
+                          return;
+                        }
                         win.document.write(`
                           <html dir="rtl" lang="ar">
                             <head>
@@ -4111,14 +5231,13 @@ export default function ExamsResultsModule({
                                 <tbody>
                                   ${proctorAssignments.map(pa => `
                                     <tr>
-                                      <td>${pa.name}</td>
-                                      <td>${halls.find(h => h.id === pa.hallId)?.name || 'غير محدد'}</td>
-                                      <td>${pa.shift}</td>
+                                      <td>${escapeHtml(pa.name)}</td>
+                                      <td>${escapeHtml(halls.find(h => h.id === pa.hallId)?.name || 'غير محدد')}</td>
+                                      <td>${escapeHtml(pa.shift)}</td>
                                     </tr>
                                   `).join('')}
                                 </tbody>
                               </table>
-                              <script>window.print();</script>
                             </body>
                           </html>
                         `);
@@ -4256,10 +5375,21 @@ export default function ExamsResultsModule({
         {/* TAB 7: Exam Schedule */}
         {activeTab === 'schedule' && (() => {
           // Calculate stats for overview
-          const scheduledExamsCount = schedule.length;
           const examClasses = classesList.filter(classItem => studentList.some(student => student.classroom === classItem.name));
           const totalSubjectsToSchedule = examClasses.length * subjects.length;
-          const schedulingProgress = totalSubjectsToSchedule > 0 ? Math.round((scheduledExamsCount / totalSubjectsToSchedule) * 100) : 0;
+          const requiredExamKeys = new Set(examClasses.flatMap(classItem =>
+            subjects.map(subject => `${String(classItem.name)}::${String(subject.id)}`)
+          ));
+          const scheduledExamKeys = new Set(schedule
+            .map(exam => `${String(exam.classroom)}::${String(exam.subjectId)}`)
+            .filter(key => requiredExamKeys.has(key)));
+          const scheduledExamsCount = scheduledExamKeys.size;
+          const isScheduleComplete = totalSubjectsToSchedule > 0
+            && scheduledExamsCount === totalSubjectsToSchedule
+            && schedule.length === totalSubjectsToSchedule;
+          const schedulingProgress = totalSubjectsToSchedule > 0
+            ? Math.min(100, Math.round((scheduledExamsCount / totalSubjectsToSchedule) * 100))
+            : 0;
 
           // Identify any active conflicts
           const conflicts = getScheduleConflicts(schedule);
@@ -4277,6 +5407,24 @@ export default function ExamsResultsModule({
             rules: !scheduleRulesError
           };
           const prepProgressScore = Object.values(isPrepComplete).filter(Boolean).length * 20;
+          const scheduleApprovalBlockers = [
+            ...(currentUserRole === 'admin' ? [] : ['اعتماد الجدول يتطلب صلاحية مدير المدرسة أو مدير المنصة.']),
+            ...(dbSyncStatus === 'success' ? [] : ['تحقق من مزامنة المصدر المركزي قبل اعتماد الجدول.']),
+            ...(isDbSyncing ? ['انتظر اكتمال عملية المزامنة الحالية.'] : []),
+            ...(scheduleRulesError ? [scheduleRulesError] : []),
+            ...(isPrepComplete.academic ? [] : ['لا توجد صفوف مرتبطة بطلاب مستهدفين في الدورة.']),
+            ...(isPrepComplete.subjects ? [] : ['أضف مادة امتحانية واحدة على الأقل.']),
+            ...(isPrepComplete.halls ? [] : ['أضف قاعة امتحان نشطة قبل اعتماد الجدول.']),
+            ...(isPrepComplete.proctors ? [] : ['لا يوجد معلم/مراقب متاح للجدولة.']),
+            ...(totalSubjectsToSchedule > 0 ? [] : ['لا توجد اختبارات مستهدفة؛ لا يمكن اعتماد جدول فارغ.']),
+            ...(schedule.length > 0 ? [] : ['لا يوجد جدول لفحصه؛ أضف الفترات المطلوبة أولاً.']),
+            ...(totalSubjectsToSchedule > 0 && !isScheduleComplete
+              ? [`الجدول غير مكتمل: تمت جدولة ${scheduledExamsCount} من ${totalSubjectsToSchedule} اختباراً مطلوباً، ويجب أن يغطي كل صف ومادة مرة واحدة.`]
+              : []),
+            ...(errorConflicts.length > 0 ? [`عالج ${errorConflicts.length} تعارضاً زمنياً حرجاً قبل الاعتماد.`] : []),
+            ...(scheduleApprovalReason.trim().length >= 5 ? [] : ['أدخل سبب اعتماد موثقاً لا يقل عن 5 أحرف.'])
+          ];
+          const canApproveSchedule = scheduleApprovalBlockers.length === 0 && !scheduleApprovalStatus.approved;
 
           // Handler to run automated scheduler
           const handleRunAutoScheduler = async () => {
@@ -4618,18 +5766,10 @@ export default function ExamsResultsModule({
               triggerNotification('اعتماد الجدول يتطلب صلاحية مدير المدرسة أو مدير المنصة.', 'warning');
               return;
             }
-            if (errorConflicts.length > 0) {
-              triggerNotification('لا يمكن اعتماد الجدول قبل معالجة التعارضات الزمنية الحرجة.', 'warning');
-              setScheduleSubTab('approval');
-              return;
-            }
-            if (totalSubjectsToSchedule === 0 || schedule.length !== totalSubjectsToSchedule) {
-              triggerNotification(`لا يمكن اعتماد جدول غير مكتمل: المجدول ${schedule.length} من ${totalSubjectsToSchedule} اختباراً مطلوباً.`, 'warning');
-              return;
-            }
             const reason = scheduleApprovalReason.trim();
-            if (!reason) {
-              triggerNotification('تم إلغاء الاعتماد: السبب الموثق إلزامي.', 'warning');
+            if (scheduleApprovalBlockers.length > 0) {
+              triggerNotification(`تعذر اعتماد الجدول: ${scheduleApprovalBlockers.join(' ')}`, 'warning');
+              setScheduleSubTab('approval');
               return;
             }
             const nextApprovalStatus = {
@@ -4771,7 +5911,9 @@ export default function ExamsResultsModule({
                   ) : (
                     <button
                       onClick={handleApproveSchedule}
-                      className="px-3 py-1.5 bg-gradient-to-r from-[#d4af37] via-[#f7d174] to-[#9a6a1d] text-slate-950 rounded-lg text-xs font-black flex items-center gap-1 transition-all cursor-pointer shadow-md border border-[#fce79a]"
+                      disabled={!canApproveSchedule}
+                      title={scheduleApprovalBlockers.join(' ') || 'اعتماد الجدول'}
+                      className="px-3 py-1.5 bg-gradient-to-r from-[#d4af37] via-[#f7d174] to-[#9a6a1d] text-slate-950 rounded-lg text-xs font-black flex items-center gap-1 transition-all cursor-pointer shadow-md border border-[#fce79a] disabled:cursor-not-allowed disabled:bg-slate-300 disabled:text-slate-600 disabled:shadow-none"
                     >
                       <LockIcon className="w-3.5 h-3.5" />
                       <span>اعتماد الجدول</span>
@@ -4803,7 +5945,9 @@ export default function ExamsResultsModule({
                     <span className="text-[10px] text-[#f7d174] font-extrabold uppercase tracking-wider block">معدل الإنجاز والأتمتة</span>
                     <h3 className="text-xl font-black text-[#fce79a] mt-1">{schedulingProgress}%</h3>
                     <p className="text-[10px] text-amber-200/70 font-medium mt-0.5">
-                      تمت جدولة {scheduledExamsCount} مادة من إجمالي {totalSubjectsToSchedule} مستهدفة بالخطة.
+                      {totalSubjectsToSchedule === 0
+                        ? 'لا توجد مواد وصفوف مرتبطة بطلاب مستهدفين بعد.'
+                        : `تمت جدولة ${scheduledExamsCount} مادة من إجمالي ${totalSubjectsToSchedule} مستهدفة بالخطة.`}
                     </p>
                   </div>
                   <div className="w-full bg-[#130b04] h-1.5 rounded-full overflow-hidden mt-3 border border-[#d4af37]/20">
@@ -4833,6 +5977,16 @@ export default function ExamsResultsModule({
                           <AlertTriangle className="w-5 h-5 animate-bounce" />
                           {errorConflicts.length} تعارض خطير
                         </span>
+                      ) : schedule.length === 0 ? (
+                        <span className="text-amber-300 flex items-center gap-1">
+                          <AlertTriangle className="w-5 h-5" />
+                          لا يوجد جدول لفحصه
+                        </span>
+                      ) : !isScheduleComplete ? (
+                        <span className="text-amber-300 flex items-center gap-1">
+                          <AlertTriangle className="w-5 h-5" />
+                          الجدول غير مكتمل
+                        </span>
                       ) : (
                         <span className="text-emerald-400 flex items-center gap-1">
                           <CheckCircle className="w-5 h-5" />
@@ -4841,11 +5995,17 @@ export default function ExamsResultsModule({
                       )}
                     </h3>
                     <p className="text-[10px] text-amber-200/70 font-semibold mt-0.5">
-                      {warningConflicts.length > 0 ? `توجد ${warningConflicts.length} تنبيهات قابلة للمطابقة والتجاهل.` : 'لا توجد تنبيهات تكرار أو تداخل.'}
+                      {schedule.length === 0
+                        ? 'أنشئ الجدول أولاً؛ لا يمكن التحقق من التعارضات قبل ذلك.'
+                        : !isScheduleComplete
+                          ? `تمت جدولة ${scheduledExamsCount} من ${totalSubjectsToSchedule} اختباراً مطلوباً؛ لا يمكن وصف الجدول بأنه آمن قبل اكتماله.`
+                        : warningConflicts.length > 0
+                          ? `توجد ${warningConflicts.length} تنبيهات قابلة للمطابقة والتجاهل.`
+                          : 'لا توجد تنبيهات تكرار أو تداخل.'}
                     </p>
                   </div>
                   <div className="w-full bg-[#130b04] h-1.5 rounded-full overflow-hidden mt-3 border border-[#d4af37]/20">
-                    <div className={`h-full rounded-full ${errorConflicts.length > 0 ? 'bg-rose-500' : 'bg-emerald-500'}`} style={{ width: '100%' }} />
+                    <div className={`h-full rounded-full ${errorConflicts.length > 0 ? 'bg-rose-500' : !isScheduleComplete ? 'bg-amber-400' : 'bg-emerald-500'}`} style={{ width: `${schedulingProgress}%` }} />
                   </div>
                 </div>
 
@@ -5014,10 +6174,21 @@ export default function ExamsResultsModule({
                     {/* Category: Subjects */}
                     {prepActiveCategory === 'subjects' && (
                       <div className="space-y-6">
-                        <div className="border-b pb-2">
-                          <h4 className="font-black text-slate-900 text-sm">تجهيزات المواد الدراسية وخيارات الامتحانات</h4>
-                          <p className="text-[10px] text-slate-400">تحديد أزمنة الامتحان والدرجات العظمى والصغرى لضبط عمليات القياس والجدولة والتحقق</p>
+                        <div className="border-b pb-2 flex flex-wrap items-center justify-between gap-3">
+                          <div>
+                            <h4 className="font-black text-slate-900 text-sm">تجهيزات المواد الدراسية وخيارات الامتحانات</h4>
+                            <p className="text-[10px] text-slate-400">تحديد أزمنة الامتحان والدرجات العظمى والصغرى لضبط عمليات القياس والجدولة والتحقق</p>
+                          </div>
+                          <button type="button" onClick={() => setActiveTab('classes')} className="px-3 py-2 border border-amber-300 bg-amber-50 text-amber-900 text-xs font-bold">
+                            إضافة مادة المنهج الفعلي
+                          </button>
                         </div>
+
+                        {subjects.length === 0 && (
+                          <p className="border border-amber-200 bg-amber-50 p-3 text-xs font-semibold leading-6 text-amber-900">
+                            لا توجد مواد امتحانية محفوظة لهذه الدورة. أضف أسماء المواد ودرجاتها من شاشة «الفصول والمواد» وفق المنهج المعتمد للمدرسة.
+                          </p>
+                        )}
 
                         <div className="overflow-x-auto border border-slate-200">
                           <table className="w-full text-right text-xs">
@@ -5044,6 +6215,8 @@ export default function ExamsResultsModule({
                                         const updated = subjects.map(s => s.id === sub.id ? { ...s, maxScore: Number(e.target.value) } : s);
                                         setSubjects(updated);
                                       }}
+                                      onBlur={() => { void persistPreparationSubjects(subjects); }}
+                                      min={1}
                                       className="w-20 p-1 border rounded text-xs text-center font-bold"
                                     />
                                   </td>
@@ -5056,6 +6229,9 @@ export default function ExamsResultsModule({
                                         const updated = subjects.map(s => s.id === sub.id ? { ...s, passScore: Number(e.target.value) } : s);
                                         setSubjects(updated);
                                       }}
+                                      onBlur={() => { void persistPreparationSubjects(subjects); }}
+                                      min={0}
+                                      max={sub.maxScore}
                                       className="w-20 p-1 border rounded text-xs text-center font-bold"
                                     />
                                   </td>
@@ -5067,6 +6243,7 @@ export default function ExamsResultsModule({
                                         const updated = subjects.map(s => s.id === sub.id ? { ...s, examDuration: Number(e.target.value) } : s);
                                         setSubjects(updated);
                                       }}
+                                      onBlur={() => { void persistPreparationSubjects(subjects); }}
                                       className="p-1 border rounded text-xs font-bold bg-white"
                                     >
                                       <option value="60">60 دقيقة (ساعة)</option>
@@ -5078,9 +6255,9 @@ export default function ExamsResultsModule({
                                   <td className="p-3 text-center">
                                     <button
                                       disabled={scheduleApprovalStatus.approved}
-                                      onClick={() => {
+                                      onClick={async () => {
                                         const updated = subjects.map(s => s.id === sub.id ? { ...s, isPractical: !s.isPractical } : s);
-                                        setSubjects(updated);
+                                        await persistPreparationSubjects(updated);
                                       }}
                                       className={`px-2.5 py-1 rounded-full text-[10px] font-bold ${
                                         sub.isPractical ? 'bg-amber-100 text-amber-800' : 'bg-yellow-100 text-yellow-800'
@@ -5091,9 +6268,16 @@ export default function ExamsResultsModule({
                                   </td>
                                   <td className="p-3 text-center">
                                     <button
-                                      onClick={() => {
-                                        setSubjects(subjects.filter(s => s.id !== sub.id));
-                                        triggerNotification('تمت إزالة المادة من لوحة الكنترول', 'info');
+                                      disabled={scheduleApprovalStatus.approved || approvalStatus.approved || isDbSyncing}
+                                      onClick={async () => {
+                                        const isReferenced = schedule.some(item => item.subjectId === sub.id)
+                                          || Object.values(gradesMatrix).some((studentGrades: any) => Object.prototype.hasOwnProperty.call(studentGrades || {}, sub.id))
+                                          || reEvaluationRequests.some(request => request.subjectId === sub.id);
+                                        if (isReferenced) {
+                                          triggerNotification(`لا يمكن حذف مادة ${sub.name} لأنها مرتبطة بجدول أو درجات أو تظلم.`, 'warning');
+                                          return;
+                                        }
+                                        await persistPreparationSubjects(subjects.filter(s => s.id !== sub.id), 'تمت إزالة المادة من الدورة وحفظ التعديل مركزياً.');
                                       }}
                                       className="p-1 text-red-500 hover:bg-red-50 rounded"
                                     >
@@ -5119,22 +6303,12 @@ export default function ExamsResultsModule({
 
                           <button
                             disabled={scheduleApprovalStatus.approved}
-                            onClick={async () => {
-                              const newHallId = `hall-${Date.now()}`;
-                              const newHallObj = {
-                                id: newHallId,
-                                name: `لجنة قاعة جديدة ${halls.length + 1}`,
-                                capacity: 30,
-                                location: 'مبنى الامتحانات الرئيسي',
-                                status: 'active'
-                              };
-                              setHalls([...halls, newHallObj]);
-                              triggerNotification('تم إنشاء قاعة لجنة جديدة بنجاح', 'success');
-                            }}
+                            type="button"
+                            onClick={() => setActiveTab('halls')}
                             className="px-3 py-1.5 bg-amber-50 text-amber-700 hover:bg-amber-100 rounded-lg text-xs font-bold cursor-pointer flex items-center gap-1"
                           >
                             <Plus className="w-3.5 h-3.5" />
-                            <span>إضافة لجنة / قاعة</span>
+                            <span>تسجيل قاعة ببياناتها الفعلية</span>
                           </button>
                         </div>
 
@@ -5155,45 +6329,49 @@ export default function ExamsResultsModule({
                                   <td className="p-3">
                                     <input
                                       type="text"
-                                      disabled={scheduleApprovalStatus.approved}
+                                      disabled={scheduleApprovalStatus.approved || approvalStatus.approved || isDbSyncing}
                                       value={hall.name}
                                       onChange={(e) => {
                                         const updated = halls.map(h => h.id === hall.id ? { ...h, name: e.target.value } : h);
                                         setHalls(updated);
                                       }}
+                                      onBlur={() => { void persistPreparationHalls(halls); }}
                                       className="w-full p-1 border rounded text-xs font-bold"
                                     />
                                   </td>
                                   <td className="p-3 text-center">
                                     <input
                                       type="number"
-                                      disabled={scheduleApprovalStatus.approved}
+                                      disabled={scheduleApprovalStatus.approved || approvalStatus.approved || isDbSyncing}
                                       value={hall.capacity}
                                       onChange={(e) => {
                                         const updated = halls.map(h => h.id === hall.id ? { ...h, capacity: Number(e.target.value) } : h);
                                         setHalls(updated);
                                       }}
+                                      onBlur={() => { void persistPreparationHalls(halls); }}
+                                      min={1}
                                       className="w-20 p-1 border rounded text-xs text-center font-bold"
                                     />
                                   </td>
                                   <td className="p-3">
                                     <input
                                       type="text"
-                                      disabled={scheduleApprovalStatus.approved}
+                                      disabled={scheduleApprovalStatus.approved || approvalStatus.approved || isDbSyncing}
                                       value={hall.location}
                                       onChange={(e) => {
                                         const updated = halls.map(h => h.id === hall.id ? { ...h, location: e.target.value } : h);
                                         setHalls(updated);
                                       }}
+                                      onBlur={() => { void persistPreparationHalls(halls); }}
                                       className="w-full p-1 border rounded text-xs font-semibold"
                                     />
                                   </td>
                                   <td className="p-3 text-center">
                                     <button
-                                      disabled={scheduleApprovalStatus.approved}
-                                      onClick={() => {
+                                      disabled={scheduleApprovalStatus.approved || approvalStatus.approved || isDbSyncing}
+                                      onClick={async () => {
                                         const updated = halls.map(h => h.id === hall.id ? { ...h, status: h.status === 'inactive' ? 'active' : 'inactive' } : h);
-                                        setHalls(updated);
+                                        await persistPreparationHalls(updated);
                                       }}
                                       className={`px-2 py-0.5 rounded text-[10px] font-bold ${
                                         hall.status === 'inactive' ? 'bg-rose-100 text-rose-800' : 'bg-emerald-100 text-emerald-800'
@@ -5204,9 +6382,17 @@ export default function ExamsResultsModule({
                                   </td>
                                   <td className="p-3 text-center">
                                     <button
-                                      onClick={() => {
-                                        setHalls(halls.filter(h => h.id !== hall.id));
-                                        triggerNotification('تم حذف اللجنة بنجاح', 'info');
+                                      type="button"
+                                      disabled={scheduleApprovalStatus.approved || approvalStatus.approved || isDbSyncing}
+                                      onClick={async () => {
+                                        const isReferenced = studentList.some(student => student.hallId === hall.id)
+                                          || proctorAssignments.some(proctor => proctor.hallId === hall.id)
+                                          || schedule.some(item => item.hallId === hall.id || (Array.isArray(item.splitHalls) && item.splitHalls.includes(hall.id)));
+                                        if (isReferenced) {
+                                          triggerNotification(`لا يمكن حذف قاعة ${hall.name} لأنها مرتبطة بطلاب أو مراقبين أو جدول امتحانات.`, 'warning');
+                                          return;
+                                        }
+                                        await persistPreparationHalls(halls.filter(h => h.id !== hall.id), 'تم حذف القاعة وحفظ التعديل في المصدر المركزي.');
                                       }}
                                       className="p-1 text-red-500 hover:bg-red-50 rounded"
                                     >
@@ -5632,10 +6818,28 @@ export default function ExamsResultsModule({
 
                                   {!scheduleApprovalStatus.approved && (
                                     <button
-                                      onClick={() => {
+                                      onClick={async () => {
+                                        if (approvalStatus.approved) {
+                                          triggerNotification('النتائج معتمدة ومقفلة؛ لا يمكن حذف فترة من دورة مغلقة.', 'warning');
+                                          return;
+                                        }
                                         const filtered = schedule.filter(s => s.id !== item.id);
+                                        const persisted = await saveToServerDb(
+                                          examSettings,
+                                          halls,
+                                          subjects,
+                                          studentList,
+                                          gradesMatrix,
+                                          filtered,
+                                          proctorAssignments,
+                                          approvalStatus,
+                                          auditLogs,
+                                          classesList
+                                        );
+                                        if (!persisted) return;
                                         setSchedule(filtered);
                                         triggerNotification('تمت إزالة فترة الاختبار بنجاح', 'info');
+                                        logAction(`حذف فترة اختبار: ${subObj?.name || item.id}`, 'جدول الامتحانات');
                                       }}
                                       className="p-1.5 text-rose-500 hover:bg-rose-50 rounded-lg cursor-pointer"
                                       title="حذف فترة الاختبار"
@@ -5697,7 +6901,19 @@ export default function ExamsResultsModule({
                       <div className="p-4  bg-gradient-to-b from-[#fffefc] via-[#fbf8f0] to-[#f5eeea] border-2 border-[#d4af37]/30 hover:border-[#d4af37] rounded-3xl p-4 sm:p-5 shadow-md transition-all duration-300  border border-slate-200/60 space-y-3">
                         <span className="text-xs font-black text-slate-800 block">🔴 التعارضات الحرجة المرصودة بالخوارزمية</span>
 
-                        {errorConflicts.length === 0 ? (
+                        {schedule.length === 0 ? (
+                          <div className="p-8 text-center border border-amber-200 bg-amber-50 flex flex-col items-center justify-center">
+                            <AlertTriangle className="w-10 h-10 text-amber-500" />
+                            <p className="text-xs font-black text-amber-900 mt-2">لا يوجد جدول لفحصه</p>
+                            <p className="text-[10px] text-amber-800/80 mt-1">عدم وجود تعارضات لا يعني جاهزية الجدول؛ أضف الاختبارات المطلوبة أولاً.</p>
+                          </div>
+                        ) : !isScheduleComplete ? (
+                          <div className="p-8 text-center border border-amber-200 bg-amber-50 flex flex-col items-center justify-center">
+                            <AlertTriangle className="w-10 h-10 text-amber-500" />
+                            <p className="text-xs font-black text-amber-900 mt-2">الجدول غير مكتمل</p>
+                            <p className="text-[10px] text-amber-800/80 mt-1">تمت جدولة {scheduledExamsCount} من {totalSubjectsToSchedule} اختباراً مطلوباً؛ لا يمكن اعتباره خالياً من المخاطر قبل استكمال التغطية.</p>
+                          </div>
+                        ) : errorConflicts.length === 0 ? (
                           <div className="p-8 text-center border border-emerald-100 flex flex-col items-center justify-center">
                             <CheckCircle className="w-10 h-10 text-emerald-500" />
                             <p className="text-xs font-black text-emerald-800 mt-2">الجدول آمن وخالٍ من التعارضات تماماً!</p>
@@ -5724,9 +6940,13 @@ export default function ExamsResultsModule({
 
                         {warningConflicts.length === 0 ? (
                           <div className="p-8 text-center border border-slate-100 flex flex-col items-center justify-center">
-                            <CheckCircle className="w-10 h-10 text-amber-500" />
-                            <p className="text-xs font-black text-slate-800 mt-2">لا توجد تنبيهات تكرار أو تباعد</p>
-                            <p className="text-[10px] text-slate-400 mt-1">تم توفير فترات استرخاء كافية بين المواد لجميع الطلاب.</p>
+                            {!isScheduleComplete ? <AlertTriangle className="w-10 h-10 text-amber-500" /> : <CheckCircle className="w-10 h-10 text-amber-500" />}
+                            <p className="text-xs font-black text-slate-800 mt-2">
+                              {!isScheduleComplete ? 'لا يوجد جدول مكتمل لفحص التباعد' : 'لا توجد تنبيهات تكرار أو تباعد'}
+                            </p>
+                            <p className="text-[10px] text-slate-400 mt-1">
+                              {!isScheduleComplete ? 'ستظهر ملاحظات الموازنة بعد استكمال جميع الاختبارات المطلوبة.' : 'تم توفير فترات استرخاء كافية بين المواد لجميع الطلاب.'}
+                            </p>
                           </div>
                         ) : (
                           <div className="space-y-2 max-h-96 overflow-y-auto pr-1">
@@ -5750,7 +6970,7 @@ export default function ExamsResultsModule({
                       <div className="space-y-1">
                         <h5 className="font-black text-amber-950 text-sm">تثبيت وتوثيق اعتماد الجدول من الكنترول</h5>
                         <p className="text-[11px] text-amber-800 font-medium max-w-xl bg-gradient-to-b from-[#fffefc] via-[#fbf8f0] to-[#f5eeea] border-2 border-[#d4af37]/30 rounded-3xl">
-                          باعتماد هذا المخطط، سيتم فوراً قفل أي تعديلات يدوية أو آلية لحماية هيبة الامتحانات، وسيتم إرسال تكليفات المعلمين وتوليد كشوف الحضور والدرجات مطابقة لهذا التوزيع.
+                          باعتماد هذا المخطط، سيتم قفل تعديل الجدول، وتثبيت المراقب المعيّن لكل فترة داخله، وتوليد كشوف الحضور والدرجات المطابقة للتوزيع. لا يرسل هذا الإجراء إشعارات للمعلمين.
                         </p>
                       </div>
 
@@ -5770,9 +6990,26 @@ export default function ExamsResultsModule({
                               className="min-h-16 w-full border border-amber-300 bg-white p-2 text-xs text-slate-800"
                               placeholder="سبب اعتماد الجدول وقفل تعديله (إلزامي)"
                             />
+                            {scheduleApprovalBlockers.length > 0 && (
+                              <div
+                                id="exam-schedule-approval-blockers"
+                                role="status"
+                                aria-label="المتطلبات المتبقية لاعتماد الجدول"
+                                className="border border-amber-300 bg-amber-100/70 p-3 text-[11px] text-amber-950"
+                              >
+                                <p className="mb-1 font-black">الجدول غير جاهز للاعتماد:</p>
+                                <ul className="list-disc space-y-1 pr-5">
+                                  {scheduleApprovalBlockers.map((message, index) => (
+                                    <li key={`${index}-${message}`}>{message}</li>
+                                  ))}
+                                </ul>
+                              </div>
+                            )}
                             <button
                               onClick={handleApproveSchedule}
-                              className="px-6 py-3 bg-amber-600 hover:bg-amber-700 text-white text-xs font-black shadow-md shadow-amber-600/10 transition-all cursor-pointer text-center"
+                              disabled={!canApproveSchedule}
+                              aria-describedby={scheduleApprovalBlockers.length > 0 ? 'exam-schedule-approval-blockers' : undefined}
+                              className="px-6 py-3 bg-amber-600 hover:bg-amber-700 text-white text-xs font-black shadow-md shadow-amber-600/10 transition-all cursor-pointer text-center disabled:cursor-not-allowed disabled:bg-slate-300 disabled:text-slate-600 disabled:shadow-none"
                             >
                               الموافقة واعتماد الجدول نهائياً 🔒
                             </button>
@@ -6217,27 +7454,28 @@ export default function ExamsResultsModule({
           const totalStudentsCount = filteredStudentsForGrades.length;
           const recordedGradesCount = filteredStudentsForGrades.filter(st => {
             const currentMark = gradesMatrix[st.id]?.[selectedGradeSubject];
-            const isAbsent = st.absentSubjects?.includes(selectedGradeSubject);
-            return currentMark !== undefined || isAbsent;
+            const attendance = getExamAttendanceStatus(st, selectedGradeSubject);
+            return attendance === 'absent' || (attendance === 'present' && Number.isFinite(currentMark));
           }).length;
           const remainingGradesCount = totalStudentsCount - recordedGradesCount;
+          const presentStudentsCount = filteredStudentsForGrades.filter(student => getExamAttendanceStatus(student, selectedGradeSubject) === 'present').length;
+          const absentStudentsCount = filteredStudentsForGrades.filter(student => getExamAttendanceStatus(student, selectedGradeSubject) === 'absent').length;
+          const unmarkedAttendanceCount = Math.max(0, totalStudentsCount - presentStudentsCount - absentStudentsCount);
 
           const subObj = subjects.find(s => s.id === selectedGradeSubject);
           const passScore = subObj?.passScore || 50;
-          const maxScore = subObj?.maxScore || 100;
+          const maxScore = subObj?.maxScore || 0;
 
           const passCount = filteredStudentsForGrades.filter(st => {
             const currentMark = gradesMatrix[st.id]?.[selectedGradeSubject];
-            const isAbsent = st.absentSubjects?.includes(selectedGradeSubject);
-            return !isAbsent && currentMark !== undefined && currentMark >= passScore;
+            return getExamAttendanceStatus(st, selectedGradeSubject) === 'present' && currentMark !== undefined && currentMark >= passScore;
           }).length;
 
-          const passPercent = recordedGradesCount > 0 ? parseFloat(((passCount / recordedGradesCount) * 100).toFixed(1)) : 0;
+          const passPercent = recordedGradesCount > 0 ? parseFloat(((passCount / recordedGradesCount) * 100).toFixed(1)) : null;
 
           const outstandingCount = filteredStudentsForGrades.filter(st => {
             const currentMark = gradesMatrix[st.id]?.[selectedGradeSubject];
-            const isAbsent = st.absentSubjects?.includes(selectedGradeSubject);
-            return !isAbsent && currentMark !== undefined && (currentMark / maxScore) >= 0.9;
+            return getExamAttendanceStatus(st, selectedGradeSubject) === 'present' && currentMark !== undefined && (currentMark / maxScore) >= 0.9;
           }).length;
 
           return (
@@ -6326,24 +7564,24 @@ export default function ExamsResultsModule({
                 </div>
 
                 <div className="p-4 flex flex-col justify-between">
-                  <span className="text-[10px] font-bold text-slate-400">الدرجات المرصودة</span>
+                  <span className="text-[10px] font-bold text-slate-400">حالات الحضور/الغياب المسجلة</span>
                   <div className="flex items-baseline gap-1 mt-2">
-                    <span className="text-2xl font-black text-emerald-600">{recordedGradesCount}</span>
+                    <span className="text-2xl font-black text-emerald-600">{presentStudentsCount + absentStudentsCount}</span>
                     <span className="text-xs text-slate-400 font-bold">من {totalStudentsCount}</span>
                   </div>
                   <div className="w-full bg-slate-100 h-1 mt-3 rounded-full overflow-hidden">
                     <div
                       className="h-full bg-emerald-500 rounded-full transition-all duration-500"
-                      style={{ width: `${totalStudentsCount > 0 ? (recordedGradesCount / totalStudentsCount) * 100 : 0}%` }}
+                      style={{ width: `${totalStudentsCount > 0 ? ((presentStudentsCount + absentStudentsCount) / totalStudentsCount) * 100 : 0}%` }}
                     />
                   </div>
                 </div>
 
                 <div className="p-4 flex flex-col justify-between">
-                  <span className="text-[10px] font-bold text-slate-400">الحقول الشاغرة (المتبقية)</span>
+                  <span className="text-[10px] font-bold text-slate-400">حالات تحتاج استكمالاً</span>
                   <div className="flex items-baseline gap-1 mt-2">
                     <span className={`text-2xl font-black ${remainingGradesCount > 0 ? 'text-amber-500' : 'text-slate-500'}`}>{remainingGradesCount}</span>
-                    <span className="text-xs text-slate-500 font-bold">حقل شاغر</span>
+                    <span className="text-xs text-slate-500 font-bold">حالة/درجة</span>
                   </div>
                   <div className="w-full bg-slate-100 h-1 mt-3 rounded-full overflow-hidden">
                     <div
@@ -6356,13 +7594,13 @@ export default function ExamsResultsModule({
                 <div className="p-4 flex flex-col justify-between">
                   <span className="text-[10px] font-bold text-slate-400">نسبة النجاح الحالية للمادة</span>
                   <div className="flex items-baseline gap-1 mt-2">
-                    <span className="text-2xl font-black text-amber-600">{passPercent}%</span>
+                    <span className="text-2xl font-black text-amber-600">{passPercent === null ? '—' : `${passPercent}%`}</span>
                     <span className="text-xs text-slate-500 font-bold">نسبة النجاح</span>
                   </div>
                   <div className="w-full bg-slate-100 h-1 mt-3 rounded-full overflow-hidden">
                     <div
                       className="h-full bg-amber-500 rounded-full transition-all duration-500"
-                      style={{ width: `${passPercent}%` }}
+                      style={{ width: `${passPercent ?? 0}%` }}
                     />
                   </div>
                 </div>
@@ -6382,6 +7620,16 @@ export default function ExamsResultsModule({
                 </div>
               </div>
 
+              <div className="flex flex-wrap items-center justify-between gap-3 border border-amber-200 bg-amber-50 px-4 py-3 text-[11px]" role="status" aria-live="polite">
+                <div className="font-black text-amber-950">سجل حضور امتحان {subjects.find(subject => subject.id === selectedGradeSubject)?.name || 'المادة'} — اختر حالة كل طالب صراحةً قبل رصد درجته.</div>
+                <div className="flex flex-wrap gap-3 font-bold">
+                  <span className="text-emerald-800">حاضر: {presentStudentsCount}</span>
+                  <span className="text-rose-800">غائب: {absentStudentsCount}</span>
+                  <span className="text-amber-800">غير مسجل: {unmarkedAttendanceCount}</span>
+                  {selectedGradeHall !== 'الكل' && <span className="text-slate-700">القاعة: {halls.find(hall => hall.id === selectedGradeHall)?.name || 'غير معروفة'}</span>}
+                </div>
+              </div>
+
               {/* Filters Panel (لوحة التصفية العلوية) */}
               <div className="p-5 space-y-4">
                 <div className="flex items-center gap-2 border-b pb-2">
@@ -6389,7 +7637,7 @@ export default function ExamsResultsModule({
                   <span className="text-xs font-extrabold text-slate-700">شريط التصفية والفرز الذكي للمجموعات الدراسية</span>
                 </div>
 
-                <div className="grid grid-cols-1 sm:grid-cols-2 md:grid-cols-4 lg:grid-cols-7 gap-3">
+                <div className="grid grid-cols-1 sm:grid-cols-2 md:grid-cols-4 lg:grid-cols-8 gap-3">
                   <div className="space-y-1">
                     <label className="text-[10px] font-black text-slate-500 block">العام الدراسي:</label>
                     <select
@@ -6482,6 +7730,19 @@ export default function ExamsResultsModule({
                   </div>
 
                   <div className="space-y-1">
+                    <label className="text-[10px] font-black text-slate-500 block">قاعة الامتحان:</label>
+                    <select
+                      value={selectedGradeHall}
+                      onChange={event => setSelectedGradeHall(event.target.value)}
+                      className="w-full text-xs font-bold p-2 bg-transparent focus:focus:ring-2 focus:ring-amber-500/20 focus:border-amber-500 outline-none transition-all"
+                    >
+                      <option value="الكل">جميع القاعات</option>
+                      <option value="unassigned">طلاب غير موزعين</option>
+                      {halls.map(hall => <option key={hall.id} value={hall.id}>{hall.name}</option>)}
+                    </select>
+                  </div>
+
+                  <div className="space-y-1">
                     <label className="text-[10px] font-black text-amber-600 block">المادة الدراسية:</label>
                     <select
                       value={selectedGradeSubject}
@@ -6511,8 +7772,9 @@ export default function ExamsResultsModule({
 
                   <button
                     onClick={handleLoadStudents}
-                    className="p-2 bg-amber-50 hover:bg-amber-100 text-amber-700 border border-amber-200 text-xs font-bold flex items-center gap-1.5 cursor-pointer transition-all"
-                    title="تحديث وتحميل الطلاب"
+                    disabled={!mayLoadCanonicalStudentRoster || isGradeScopedExamUser || isReloadingStudents}
+                    className="p-2 bg-amber-50 hover:bg-amber-100 text-amber-700 border border-amber-200 text-xs font-bold flex items-center gap-1.5 cursor-pointer transition-all disabled:cursor-not-allowed disabled:opacity-40"
+                    title={mayLoadCanonicalStudentRoster && !isGradeScopedExamUser ? 'تحديث وتحميل الطلاب' : 'يتم تحميل طلاب نطاق التكليف الموثق تلقائياً'}
                   >
                     <RefreshCw className={`w-4 h-4 ${isReloadingStudents ? 'animate-spin' : ''}`} />
                     <span>تحميل الطلاب</span>
@@ -6520,7 +7782,9 @@ export default function ExamsResultsModule({
 
                   <button
                     onClick={() => void handleSaveCurrentGradeSheet()}
-                    className="p-2 bg-amber-600 hover:bg-amber-700 text-white text-xs font-bold flex items-center gap-1.5 cursor-pointer transition-all shadow-md shadow-amber-600/10"
+                    disabled={!hasSelectedGradeSubject || modifiedGradesKeys.size === 0 || approvalStatus.approved}
+                    data-no-save-toast
+                    className="p-2 bg-amber-600 hover:bg-amber-700 text-white text-xs font-bold flex items-center gap-1.5 cursor-pointer transition-all shadow-md shadow-amber-600/10 disabled:cursor-not-allowed disabled:opacity-40"
                     title="تخزين الكشف وحفظه بالكامل"
                   >
                     <Save className="w-4 h-4" />
@@ -6529,7 +7793,8 @@ export default function ExamsResultsModule({
 
                   <button
                     onClick={() => setShowReviewGradesModal(true)}
-                    className="p-2 bg-slate-800 hover:bg-[#2a1d13] text-[#fce79a] text-xs font-bold flex items-center gap-1.5 cursor-pointer transition-all"
+                    disabled={!hasSelectedGradeSubject}
+                    className="p-2 bg-slate-800 hover:bg-[#2a1d13] text-[#fce79a] text-xs font-bold flex items-center gap-1.5 cursor-pointer transition-all disabled:cursor-not-allowed disabled:opacity-40"
                     title="مراجعة شاملة لدرجات الكشف وإحصائياته"
                   >
                     <CheckCircle className="w-4 h-4 text-amber-400" />
@@ -6538,6 +7803,7 @@ export default function ExamsResultsModule({
 
                   <button
                     onClick={handleApproveGrades}
+                    disabled={!approvalStatus.approved && !canApproveResults}
                     className={`p-2 text-xs font-bold flex items-center gap-1.5 cursor-pointer transition-all ${
                       approvalStatus.approved
                         ? 'bg-amber-100 hover:bg-amber-200 text-amber-800 border border-amber-200'
@@ -6563,18 +7829,20 @@ export default function ExamsResultsModule({
                 <div className="flex flex-wrap items-center gap-2">
                   <label className="p-2 bg-emerald-50 hover:bg-emerald-100 text-emerald-800 border border-emerald-200 text-xs font-bold flex items-center gap-1.5 cursor-pointer transition-all">
                     <UploadCloud className="w-4 h-4" />
-                    <span>استيراد Excel</span>
+                    <span>استيراد XLSX / CSV</span>
                     <input
                       type="file"
                       accept=".xlsx, .csv"
                       onChange={event => void handleExcelImport(event)}
+                      disabled={!hasSelectedGradeSubject || approvalStatus.approved}
                       className="hidden"
                     />
                   </label>
 
                   <button
                     onClick={handleDownloadTemplate}
-                    className="p-2 hover:bg-slate-100 text-slate-700 text-xs font-bold flex items-center gap-1.5 cursor-pointer transition-all shadow-xs"
+                    disabled={!hasSelectedGradeSubject}
+                    className="p-2 hover:bg-slate-100 text-slate-700 text-xs font-bold flex items-center gap-1.5 cursor-pointer transition-all shadow-xs disabled:cursor-not-allowed disabled:opacity-40"
                     title="تنزيل قالب إكسل فارغ لملء درجات هذه المادة"
                   >
                     <Download className="w-4 h-4 text-slate-400" />
@@ -6583,7 +7851,8 @@ export default function ExamsResultsModule({
 
                   <button
                     onClick={() => setShowPrintGradesModal(true)}
-                    className="p-2 hover:bg-slate-100 text-slate-700 text-xs font-bold flex items-center gap-1.5 cursor-pointer transition-all shadow-xs"
+                    disabled={!hasSelectedGradeSubject}
+                    className="p-2 hover:bg-slate-100 text-slate-700 text-xs font-bold flex items-center gap-1.5 cursor-pointer transition-all shadow-xs disabled:cursor-not-allowed disabled:opacity-40"
                     title="طباعة الكشف المدرسي الحالي"
                   >
                     <Printer className="w-4 h-4 text-amber-600" />
@@ -6592,21 +7861,34 @@ export default function ExamsResultsModule({
 
                   <button
                     onClick={handleExportExcel}
-                    className="p-2 bg-emerald-600 hover:bg-emerald-700 text-white text-xs font-bold flex items-center gap-1.5 cursor-pointer transition-all shadow-md shadow-emerald-600/10"
-                    title="تصدير جدول الدرجات الحالي إلى ملف Excel"
+                    disabled={!hasSelectedGradeSubject}
+                    className="p-2 bg-emerald-600 hover:bg-emerald-700 text-white text-xs font-bold flex items-center gap-1.5 cursor-pointer transition-all shadow-md shadow-emerald-600/10 disabled:cursor-not-allowed disabled:opacity-40"
+                    title="تصدير كشف الدرجات التفصيلي بصيغة CSV المتوافقة مع Excel"
                   >
                     <FileSpreadsheet className="w-4 h-4" />
-                    <span>تصدير Excel</span>
+                    <span>تصدير CSV تفصيلي</span>
+                  </button>
+
+                  <button
+                    onClick={() => void handleExportXlsx()}
+                    className="p-2 bg-cyan-700 hover:bg-cyan-800 text-white text-xs font-bold flex items-center gap-1.5 cursor-pointer transition-all shadow-md shadow-cyan-700/10"
+                    title="تصدير كشف المادة إلى ملف XLSX حقيقي"
+                  >
+                    <FileSpreadsheet className="w-4 h-4" />
+                    <span>تصدير XLSX</span>
                   </button>
 
                   <button
                     onClick={() => {
-                      triggerNotification('جاري تحويل الكشف المدرسي إلى مستند PDF... سيتم تنزيله فورياً!', 'info');
-                      setTimeout(() => {
-                        window.print();
-                      }, 500);
+                      if (!hasSelectedGradeSubject) {
+                        triggerNotification('أضف مادة امتحانية وحددها قبل تصدير الكشف PDF.', 'warning');
+                        return;
+                      }
+                      const subjectName = subjects.find(subject => subject.id === selectedGradeSubject)?.name || 'المادة';
+                      handlePrintElementByID('exam-current-grade-sheet-print', `كشف درجات ${subjectName}`);
                     }}
-                    className="p-2 bg-rose-500 hover:bg-rose-600 text-white text-xs font-bold flex items-center gap-1.5 cursor-pointer transition-all shadow-md shadow-rose-500/10"
+                    disabled={!hasSelectedGradeSubject}
+                    className="p-2 bg-rose-500 hover:bg-rose-600 text-white text-xs font-bold flex items-center gap-1.5 cursor-pointer transition-all shadow-md shadow-rose-500/10 disabled:cursor-not-allowed disabled:opacity-40"
                     title="تصدير كشف PDF للطباعة الفورية"
                   >
                     <FileText className="w-4 h-4" />
@@ -6648,6 +7930,7 @@ export default function ExamsResultsModule({
                       className="w-28 p-1.5 text-xs text-center font-bold rounded-lg border border-amber-200 bg-white"
                       min="0"
                       max={maxScore}
+                      disabled={!hasSelectedGradeSubject || approvalStatus.approved}
                     />
                     <button
                       onClick={() => {
@@ -6658,7 +7941,8 @@ export default function ExamsResultsModule({
                           triggerNotification('الرجاء إدخال قيمة صالحة أولاً للتعبئة الجماعية', 'warning');
                         }
                       }}
-                      className="px-3.5 py-1.5 bg-amber-600 hover:bg-amber-700 text-white text-xs font-bold rounded-lg cursor-pointer transition-all"
+                      disabled={!hasSelectedGradeSubject || approvalStatus.approved}
+                      className="px-3.5 py-1.5 bg-amber-600 hover:bg-amber-700 text-white text-xs font-bold rounded-lg cursor-pointer transition-all disabled:cursor-not-allowed disabled:opacity-40"
                     >
                       تطبيق
                     </button>
@@ -6689,7 +7973,7 @@ export default function ExamsResultsModule({
                   </div>
                 ) : (
                   <div className="overflow-x-auto max-h-[600px] scrollbar-thin scrollbar-thumb-slate-200">
-                    <table className="w-full text-right text-xs border-collapse relative">
+                    <table id="exam-current-grade-sheet-print" className="w-full text-right text-xs border-collapse relative">
                       <thead>
                         <tr className="bg-gradient-to-r from-[#2a1d13] via-[#3a2719] to-[#2a1d13] text-amber-200 font-extrabold">
                           <th className="p-3 font-black text-[11px] text-center w-12 bg-slate-100 sticky right-0 z-20">الرقم</th>
@@ -6708,28 +7992,32 @@ export default function ExamsResultsModule({
                       <tbody className="divide-y divide-amber-900/10 bg-white/60 backdrop-blur-sm rounded-b-2xl">
                         {filteredStudentsForGrades.map((st, idx) => {
                           const currentMark = gradesMatrix[st.id]?.[selectedGradeSubject];
-                          const isAbsent = st.absentSubjects?.includes(selectedGradeSubject);
-                          const isPass = !isAbsent && currentMark !== undefined && currentMark >= passScore;
-                          const isOutstanding = !isAbsent && currentMark !== undefined && (currentMark / maxScore) >= 0.9;
+                          const attendanceStatus = getExamAttendanceStatus(st, selectedGradeSubject);
+                          const isAbsent = attendanceStatus === 'absent';
+                          const isPresent = attendanceStatus === 'present';
+                          const isPass = isPresent && currentMark !== undefined && currentMark >= passScore;
+                          const isOutstanding = isPresent && currentMark !== undefined && (currentMark / maxScore) >= 0.9;
                           const hasUnsavedChanges = modifiedGradesKeys.has(`${st.id}_${selectedGradeSubject}`);
 
                           // calculate student total across all subjects
                           const studentMarks = gradesMatrix[st.id] || {};
                           let totalScore = 0;
                           let totalPossibleMax = 0;
-                          let hasUnfinishedGrade = false;
+                          let hasUnfinishedGrade = subjects.length === 0;
                           let failedAnySubject = false;
 
                           subjects.forEach(sub => {
                             const mk = studentMarks[sub.id];
-                            if (mk === undefined) {
+                            const subjectAttendance = getExamAttendanceStatus(st, sub.id);
+                            if (subjectAttendance === null || (subjectAttendance === 'present' && !Number.isFinite(mk))) {
                               hasUnfinishedGrade = true;
-                            } else {
+                            }
+                            if (subjectAttendance === 'present' && Number.isFinite(mk)) {
                               totalScore += mk;
                             }
                             totalPossibleMax += sub.maxScore;
 
-                            if (mk !== undefined && mk < sub.passScore) {
+                            if (subjectAttendance === 'present' && Number.isFinite(mk) && mk < sub.passScore) {
                               failedAnySubject = true;
                             }
                           });
@@ -6739,7 +8027,10 @@ export default function ExamsResultsModule({
                           let gradeLabel = 'بانتظار الرصد';
                           let resultText = 'بانتظار الرصد';
 
-                          if (!hasUnfinishedGrade) {
+                          if (totalPossibleMax <= 0) {
+                            gradeLabel = 'بانتظار إعداد المواد';
+                            resultText = 'غير مكتمل ⏳';
+                          } else if (!hasUnfinishedGrade) {
                             if (percentage >= 90) gradeLabel = 'ممتاز 🌟';
                             else if (percentage >= 80) gradeLabel = 'جيد جداً';
                             else if (percentage >= 65) gradeLabel = 'جيد';
@@ -6748,12 +8039,7 @@ export default function ExamsResultsModule({
 
                             resultText = (!failedAnySubject && percentage >= (examSettings.passMarkPercent || 50)) ? 'ناجح' : 'راسب';
                           } else {
-                            if (percentage >= 90) gradeLabel = 'ممتاز (مبدئي)';
-                            else if (percentage >= 80) gradeLabel = 'جيد جداً (مبدئي)';
-                            else if (percentage >= 65) gradeLabel = 'جيد (مبدئي)';
-                            else if (percentage >= 50) gradeLabel = 'مقبول (مبدئي)';
-                            else gradeLabel = 'ضعيف (مبدئي)';
-
+                            gradeLabel = 'غير مكتمل';
                             resultText = 'غير مكتمل ⏳';
                           }
 
@@ -6763,7 +8049,7 @@ export default function ExamsResultsModule({
                             rowBgClass = "bg-slate-100/70 hover:bg-slate-100/90 text-slate-500 transition-colors group";
                           } else if (hasUnsavedChanges) {
                             rowBgClass = "bg-orange-50/60 hover:bg-orange-50/90 transition-colors group";
-                          } else if (currentMark !== undefined && !isPass) {
+                          } else if (isPresent && currentMark !== undefined && !isPass) {
                             rowBgClass = "bg-rose-50/50 hover:bg-rose-100/50 border-rose-100 transition-colors group";
                           } else if (isOutstanding) {
                             rowBgClass = "bg-amber-50/30 hover:bg-amber-50/60 transition-colors group";
@@ -6791,42 +8077,13 @@ export default function ExamsResultsModule({
                                 <div className="flex flex-col">
                                   <span>{st.name}</span>
                                   <span className="text-[9px] text-slate-400 font-semibold">{st.classroom} - الشعبة ({st.section})</span>
+                                  <span className="text-[9px] font-bold text-amber-700">{halls.find(hall => hall.id === st.hallId)?.name || 'غير موزع على قاعة'}</span>
                                 </div>
                               </td>
 
-                              {/* Presence toggle button */}
+                              {/* Explicit, mutually exclusive exam attendance choices */}
                               <td className="p-3 text-center">
-                                <button
-                                  disabled={approvalStatus.approved}
-                                  onClick={() => {
-                                    const updatedAbsent = isAbsent
-                                      ? (st.absentSubjects || []).filter((s: string) => s !== selectedGradeSubject)
-                                      : [...(st.absentSubjects || []), selectedGradeSubject];
-
-                                    const updatedList = studentList.map(s => s.id === st.id ? { ...s, absentSubjects: updatedAbsent } : s);
-                                    setStudentList(updatedList);
-
-                                    // if absent, set grade matrix score to 0
-                                    if (!isAbsent) {
-                                      setGradesMatrix(prev => ({
-                                        ...prev,
-                                        [st.id]: {
-                                          ...(prev[st.id] || {}),
-                                          [selectedGradeSubject]: 0
-                                        }
-                                      }));
-                                    }
-
-                                    triggerNotification(`تم تحديث حالة حضور الطالب ${st.name} إلى ${!isAbsent ? 'غائب' : 'حاضر'}`, 'info');
-                                  }}
-                                  className={`px-3 py-1 rounded-full text-[10px] font-black transition-all ${
-                                    isAbsent
-                                      ? 'bg-rose-100 text-rose-700 border border-rose-200 hover:bg-rose-200'
-                                      : 'bg-emerald-100 text-emerald-700 border border-emerald-200 hover:bg-emerald-200'
-                                  }`}
-                                >
-                                  {isAbsent ? 'غائب ❌' : 'حاضر ✓'}
-                                </button>
+                                {renderExamAttendanceOptions(st, selectedGradeSubject)}
                               </td>
 
                               {/* Direct Grade Cell Input */}
@@ -6834,14 +8091,14 @@ export default function ExamsResultsModule({
                                 <div className="flex items-center gap-1.5 relative">
                                   <input
                                     type="number"
-                                    value={isAbsent ? 0 : (currentMark !== undefined ? currentMark : '')}
-                                    disabled={isAbsent || approvalStatus.approved}
+                                    value={isPresent && currentMark !== undefined ? currentMark : isAbsent ? 0 : ''}
+                                    disabled={!isPresent || approvalStatus.approved || !hasSelectedGradeSubject}
                                     onChange={(e) => handleGradeChange(st.id, selectedGradeSubject, e.target.value)}
                                     placeholder="بانتظار الرصد"
                                     className={`w-28 p-2 text-center text-xs font-black border transition-all ${
                                       isAbsent
                                         ? 'bg-slate-100 text-slate-400 border-slate-200 cursor-not-allowed'
-                                        : currentMark === undefined
+                                        : !isPresent || currentMark === undefined
                                           ? 'bg-amber-50/50 text-slate-900 border-amber-200 focus:focus:ring-2 focus:ring-amber-500/20'
                                           : !isPass
                                             ? 'bg-rose-50 text-rose-950 border-rose-300 focus:ring-rose-500/20'
@@ -6858,12 +8115,12 @@ export default function ExamsResultsModule({
 
                               {/* Total score */}
                               <td className="p-3 text-center font-bold text-slate-700 text-xs">
-                                {totalScore}
+                                {hasUnfinishedGrade ? 'غير مكتمل' : totalScore}
                               </td>
 
                               {/* Percentage */}
                               <td className="p-3 text-center font-black text-amber-700 text-xs">
-                                {percentage}%
+                                {hasUnfinishedGrade ? 'غير مكتمل' : `${percentage}%`}
                               </td>
 
                               {/* Grade */}
@@ -6892,8 +8149,9 @@ export default function ExamsResultsModule({
                                   {isAbsent && <span className="bg-red-100 text-red-700 text-[9px] font-black px-1.5 py-0.5 rounded-md border border-red-200">غياب</span>}
                                   {hasUnsavedChanges && <span className="bg-amber-100 text-amber-700 text-[9px] font-black px-1.5 py-0.5 rounded-md border border-amber-200 animate-pulse">تعديل غير محفوظ</span>}
                                   {isOutstanding && <span className="bg-amber-100 text-amber-800 text-[9px] font-black px-1.5 py-0.5 rounded-md border border-amber-200">متفوق 🌟</span>}
-                                  {currentMark === undefined && !isAbsent && <span className="bg-slate-100 text-slate-500 text-[9px] font-black px-1.5 py-0.5 rounded-md border border-slate-200">رصد معلق</span>}
-                                  {percentage >= 95 && <span className="bg-gradient-to-r from-amber-500 to-yellow-500 text-white text-[9px] font-black px-1.5 py-0.5 rounded-md shadow-xs">امتياز مع مرتبة الشرف</span>}
+                                  {attendanceStatus === null && <span className="bg-amber-100 text-amber-800 text-[9px] font-black px-1.5 py-0.5 rounded-md border border-amber-200">الحضور غير مسجل</span>}
+                                  {isPresent && currentMark === undefined && <span className="bg-slate-100 text-slate-500 text-[9px] font-black px-1.5 py-0.5 rounded-md border border-slate-200">بانتظار الدرجة</span>}
+                                  {!hasUnfinishedGrade && percentage >= 95 && <span className="bg-gradient-to-r from-amber-500 to-yellow-500 text-white text-[9px] font-black px-1.5 py-0.5 rounded-md shadow-xs">امتياز مع مرتبة الشرف</span>}
                                 </div>
                               </td>
                             </tr>
@@ -6910,14 +8168,18 @@ export default function ExamsResultsModule({
                 <span className="text-xs text-slate-500 font-bold">
                   {modifiedGradesKeys.size > 0
                     ? `⚠️ لديك عدد (${modifiedGradesKeys.size}) تعديل غير محفوظ حالياً في هذا الكشف!`
-                    : '✓ جميع التعديلات الحالية محفوظة ومحدثة بالكامل مع قاعدة بيانات الكنترول.'
+                    : dbSyncStatus === 'success'
+                      ? 'لا توجد تعديلات معلقة؛ آخر مزامنة مركزية ناجحة.'
+                      : 'لا توجد تعديلات معلقة؛ حالة المصدر تحتاج إلى تحقق قبل الحفظ.'
                   }
                 </span>
 
                 <div className="flex gap-2">
                   <button
                     onClick={() => void handleSaveCurrentGradeSheet()}
-                    className="px-5 py-2 bg-amber-600 hover:bg-amber-700 text-white text-xs font-black flex items-center gap-2 cursor-pointer shadow-md shadow-amber-600/15"
+                    disabled={!hasSelectedGradeSubject || modifiedGradesKeys.size === 0 || approvalStatus.approved}
+                    data-no-save-toast
+                    className="px-5 py-2 bg-amber-600 hover:bg-amber-700 text-white text-xs font-black flex items-center gap-2 cursor-pointer shadow-md shadow-amber-600/15 disabled:cursor-not-allowed disabled:opacity-40"
                   >
                     <Save className="w-4 h-4" />
                     <span>تأكيد وحفظ الكشف المدرسي الحالي</span>
@@ -6927,13 +8189,18 @@ export default function ExamsResultsModule({
 
               {/* REVIEW MODAL (مراجعة تفصيلية للدرجات) */}
               {showReviewGradesModal && (() => {
-                const gradesArray = filteredStudentsForGrades
-                  .map(st => gradesMatrix[st.id]?.[selectedGradeSubject])
-                  .filter(v => v !== undefined) as number[];
-                const minGrade = gradesArray.length > 0 ? Math.min(...gradesArray) : 0;
-                const maxGrade = gradesArray.length > 0 ? Math.max(...gradesArray) : 0;
+                const gradesArray = filteredStudentsForGrades.flatMap(st => {
+                  const attendance = getExamAttendanceStatus(st, selectedGradeSubject);
+                  if (attendance === 'absent') return [0];
+                  if (attendance !== 'present') return [];
+                  const grade = gradesMatrix[st.id]?.[selectedGradeSubject];
+                  return grade === undefined ? [] : [grade];
+                });
+                const hasRecordedGrades = gradesArray.length > 0;
+                const minGrade = hasRecordedGrades ? Math.min(...gradesArray) : null;
+                const maxGrade = hasRecordedGrades ? Math.max(...gradesArray) : null;
                 const sum = gradesArray.reduce((acc, v) => acc + v, 0);
-                const avgGrade = gradesArray.length > 0 ? parseFloat((sum / gradesArray.length).toFixed(1)) : 0;
+                const avgGrade = hasRecordedGrades ? parseFloat((sum / gradesArray.length).toFixed(1)) : null;
 
                 return (
                   <div className="fixed inset-0 bg-slate-900/50 backdrop-blur-xs flex items-center justify-center z-50 p-4">
@@ -6960,31 +8227,37 @@ export default function ExamsResultsModule({
                       <div className="grid grid-cols-3 gap-4">
                         <div className="bg-transparent p-4 text-center border border-slate-200">
                           <p className="text-[10px] text-slate-500 font-bold">أعلى درجة مرصودة</p>
-                          <p className="text-xl font-black text-emerald-600 mt-1">{maxGrade} / {maxScore}</p>
+                          <p className="text-xl font-black text-emerald-600 mt-1">{hasRecordedGrades ? `${maxGrade} / ${maxScore}` : '—'}</p>
                         </div>
                         <div className="bg-transparent p-4 text-center border border-slate-200">
                           <p className="text-[10px] text-slate-500 font-bold">أقل درجة مرصودة</p>
-                          <p className="text-xl font-black text-rose-600 mt-1">{minGrade} / {maxScore}</p>
+                          <p className="text-xl font-black text-rose-600 mt-1">{hasRecordedGrades ? `${minGrade} / ${maxScore}` : '—'}</p>
                         </div>
                         <div className="bg-amber-50/50 p-4 text-center border border-amber-100">
                           <p className="text-[10px] text-amber-900 font-bold">متوسط درجات الطلاب</p>
-                          <p className="text-xl font-black text-amber-600 mt-1">{avgGrade} / {maxScore}</p>
+                          <p className="text-xl font-black text-amber-600 mt-1">{hasRecordedGrades ? `${avgGrade} / ${maxScore}` : '—'}</p>
                         </div>
                       </div>
+
+                      {!hasRecordedGrades && (
+                        <p role="status" aria-label="حالة رصد الدرجات" className="text-center text-xs font-bold text-amber-800">
+                          لا توجد درجات مرصودة بعد؛ ستظهر الإحصاءات بعد تسجيل أول درجة.
+                        </p>
+                      )}
 
                       <div className="space-y-3">
                         <h4 className="text-xs font-black text-slate-900 border-b pb-1">مؤشرات النجاح والرسوب الحالية:</h4>
                         <div className="flex justify-between items-center text-xs">
                           <span className="font-bold text-slate-600">نسبة الاجتياز والاعتماد للمادة:</span>
-                          <span className="font-extrabold text-amber-600">{passPercent}% ({passCount} طالب ناجح)</span>
+                          <span className="font-extrabold text-amber-600">{hasRecordedGrades ? `${passPercent ?? 0}% (${passCount} طالب ناجح)` : 'بانتظار رصد الدرجات'}</span>
                         </div>
                         <div className="w-full bg-slate-100 h-2.5 rounded-full overflow-hidden">
-                          <div className="bg-amber-600 h-full rounded-full" style={{ width: `${passPercent}%` }} />
+                          <div className="bg-amber-600 h-full rounded-full" style={{ width: `${hasRecordedGrades ? (passPercent ?? 0) : 0}%` }} />
                         </div>
 
                         <div className="flex justify-between items-center text-xs mt-2">
                           <span className="font-bold text-slate-600">الطلاب الذين لم يجتازوا المادة (الراسبون):</span>
-                          <span className="font-extrabold text-rose-600">{recordedGradesCount - passCount} طالب</span>
+                          <span className="font-extrabold text-rose-600">{hasRecordedGrades ? `${recordedGradesCount - passCount} طالب` : '—'}</span>
                         </div>
                       </div>
 
@@ -6994,7 +8267,9 @@ export default function ExamsResultsModule({
                             setShowReviewGradesModal(false);
                             handleApproveGrades();
                           }}
-                          className="px-4 py-2 bg-amber-600 text-white text-xs font-bold"
+                          disabled={!canApproveResults}
+                          title={canApproveResults ? 'اعتماد هذا الكشف نهائياً' : approvalBlockerMessages.join(' ')}
+                          className="px-4 py-2 bg-amber-600 text-white text-xs font-bold disabled:cursor-not-allowed disabled:opacity-40"
                         >
                           اعتماد هذا الكشف نهائياً
                         </button>
@@ -7068,7 +8343,8 @@ export default function ExamsResultsModule({
                         <tbody>
                           {filteredStudentsForGrades.map((st, idx) => {
                             const currentMark = gradesMatrix[st.id]?.[selectedGradeSubject];
-                            const isAbsent = st.absentSubjects?.includes(selectedGradeSubject);
+            const attendance = getExamAttendanceStatus(st, selectedGradeSubject);
+            const isAbsent = attendance === 'absent';
                             const isPass = !isAbsent && currentMark !== undefined && currentMark >= passScore;
 
                             return (
@@ -7078,10 +8354,10 @@ export default function ExamsResultsModule({
                                 <td className="p-2 border border-slate-950 font-mono">{st.seatNumber}</td>
                                 <td className="p-2 border border-slate-950 font-bold">{st.name}</td>
                                 <td className="p-2 border border-slate-950 text-center font-bold">
-                                  {isAbsent ? 'غياب (0)' : (currentMark !== undefined ? currentMark : 'لم ترصد')}
+                                  {attendance === null ? 'الحضور غير مسجل' : isAbsent ? 'غياب (0)' : (currentMark !== undefined ? currentMark : 'لم ترصد')}
                                 </td>
                                 <td className="p-2 border border-slate-950 text-center font-bold">
-                                  {isAbsent ? 'غائب' : (currentMark === undefined ? 'معلق' : (isPass ? 'ناجح' : 'راسب'))}
+                                  {attendance === null ? 'غير مكتمل' : isAbsent ? 'غائب' : (currentMark === undefined ? 'معلق' : (isPass ? 'ناجح' : 'راسب'))}
                                 </td>
                               </tr>
                             );
@@ -7153,9 +8429,11 @@ export default function ExamsResultsModule({
                 let failedSubjectsCount = 0;
                 let pendingCount = 0;
                 let absentCount = 0;
+                const reviewedStudent = studentList.find(s => String(s.id) === String(studentId));
 
                 subjects.forEach(sub => {
-                  const isAbsent = studentList.find(s => s.id === studentId)?.absentSubjects?.includes(sub.id);
+                  const attendance = getExamAttendanceStatus(reviewedStudent || {}, sub.id);
+                  const isAbsent = attendance === 'absent';
                   let mark = bulkDraftGrades[studentId]?.[sub.id];
                   if (mark === undefined) {
                     mark = gradesMatrix[studentId]?.[sub.id];
@@ -7163,8 +8441,10 @@ export default function ExamsResultsModule({
 
                   if (isAbsent) {
                     absentCount++;
+                    pass = false;
+                    failedSubjectsCount++;
                     mark = 0;
-                  } else if (mark === undefined) {
+                  } else if (attendance === null || mark === undefined) {
                     pendingCount++;
                     mark = 0;
                   }
@@ -7172,22 +8452,23 @@ export default function ExamsResultsModule({
                   totalScore += mark;
                   totalMax += sub.maxScore;
 
-                  if (mark < sub.passScore && !isAbsent && mark !== undefined) {
+                  if (mark < sub.passScore && attendance === 'present' && mark !== undefined) {
                     pass = false;
                     failedSubjectsCount++;
                   }
                 });
 
-                const percentage = totalMax > 0 ? (totalScore / totalMax) * 100 : 0;
-                const formattedPercent = parseFloat(percentage.toFixed(1));
+                const isComplete = subjects.length > 0 && pendingCount === 0;
+                const percentage = isComplete && totalMax > 0 ? (totalScore / totalMax) * 100 : null;
+                const formattedPercent = percentage === null ? null : parseFloat(percentage.toFixed(1));
 
-                let gradeSymbol = 'مقبول';
-                if (formattedPercent >= 90) gradeSymbol = 'ممتاز 🏅';
-                else if (formattedPercent >= 80) gradeSymbol = 'جيد جداً';
-                else if (formattedPercent >= 65) gradeSymbol = 'جيد';
-                else if (formattedPercent < 50) gradeSymbol = 'ضعيف ❌';
+                let gradeSymbol = !isComplete ? 'غير مكتمل' : 'مقبول';
+                if (formattedPercent !== null && formattedPercent >= 90) gradeSymbol = 'ممتاز 🏅';
+                else if (formattedPercent !== null && formattedPercent >= 80) gradeSymbol = 'جيد جداً';
+                else if (formattedPercent !== null && formattedPercent >= 65) gradeSymbol = 'جيد';
+                else if (formattedPercent !== null && formattedPercent < 50) gradeSymbol = 'ضعيف ❌';
 
-                const resultStatus = pass && failedSubjectsCount === 0 && absentCount === 0 ? 'ناجح' : 'راسب';
+                const resultStatus = !isComplete ? 'غير مكتمل' : pass && failedSubjectsCount === 0 && absentCount === 0 ? 'ناجح' : 'راسب';
 
                 return {
                   totalScore,
@@ -7197,6 +8478,7 @@ export default function ExamsResultsModule({
                   resultStatus,
                   failedSubjectsCount,
                   pendingCount,
+                  isComplete,
                   absentCount
                 };
               };
@@ -7204,6 +8486,10 @@ export default function ExamsResultsModule({
               const handleReviewEditGradeChange = (studentId: string, subjectId: string, valueStr: string) => {
                 if (approvalStatus.approved) {
                   triggerNotification('لا يمكن تعديل الدرجات، النتائج معتمدة ومقفلة بالكامل 🔒', 'warning');
+                  return;
+                }
+                if (valueStr.trim() !== '' && getExamAttendanceStatus(studentList.find(student => String(student.id) === String(studentId)) || {}, subjectId) !== 'present') {
+                  triggerNotification('سجل حضور الطالب في المادة قبل إدخال الدرجة؛ أو اختر «غائب» لتوثيق غيابه.', 'warning');
                   return;
                 }
 
@@ -7247,13 +8533,12 @@ export default function ExamsResultsModule({
               let studentDraftChangesCount = 0;
               if (selectedStObj) {
                 const sId = selectedStObj.id;
-                if (bulkDraftGrades[sId]) {
-                  Object.keys(bulkDraftGrades[sId]).forEach(subId => {
-                    if (bulkDraftGrades[sId][subId] !== (gradesMatrix[sId]?.[subId] ?? 0)) {
-                      studentDraftChangesCount++;
-                    }
-                  });
-                }
+                subjects.forEach(subject => {
+                  const hasGradeDraft = bulkDraftGrades[sId]?.[subject.id] !== undefined
+                    && bulkDraftGrades[sId][subject.id] !== (gradesMatrix[sId]?.[subject.id] ?? 0);
+                  const hasUnsavedAttendance = modifiedGradesKeys.has(`${sId}_${subject.id}`);
+                  if (hasGradeDraft || hasUnsavedAttendance) studentDraftChangesCount++;
+                });
               }
 
               return (
@@ -7417,7 +8702,7 @@ export default function ExamsResultsModule({
                                 <span className={`font-black ${
                                   isSelected ? 'text-white' : 'text-amber-700'
                                 }`}>
-                                  {m.percentage}% ({m.resultStatus})
+                                  {m.percentage === null ? 'غير مكتمل' : `${m.percentage}%`} ({m.resultStatus})
                                 </span>
                               </div>
                             </button>
@@ -7462,7 +8747,7 @@ export default function ExamsResultsModule({
                                     ناجح / راسب: {m.resultStatus}
                                   </span>
                                   <span className="px-2.5 py-1 bg-white/10 text-white border border-white/20 text-[10px] font-black">
-                                    المعدل: {m.percentage}%
+                                    المعدل: {m.percentage === null ? 'غير مكتمل' : `${m.percentage}%`}
                                   </span>
                                 </div>
                               </div>
@@ -7478,11 +8763,11 @@ export default function ExamsResultsModule({
                             <div className="grid grid-cols-2 sm:grid-cols-4 gap-3">
                               <div className="p-3.5 text-center space-y-1 shadow-xs">
                                 <p className="text-[9px] text-slate-400 font-bold uppercase">الدرجة الكلية</p>
-                                <p className="text-sm font-black text-slate-800">{m.totalScore} <span className="text-[10px] text-slate-400">/ {m.totalMax}</span></p>
+                                <p className="text-sm font-black text-slate-800">{!m.isComplete ? 'غير مكتمل' : <>{m.totalScore} <span className="text-[10px] text-slate-400">/ {m.totalMax}</span></>}</p>
                               </div>
                               <div className="p-3.5 text-center space-y-1 shadow-xs">
                                 <p className="text-[9px] text-slate-400 font-bold uppercase">النسبة التراكمية</p>
-                                <p className="text-sm font-black text-amber-700">{m.percentage}%</p>
+                                <p className="text-sm font-black text-amber-700">{m.percentage === null ? 'غير مكتمل' : `${m.percentage}%`}</p>
                               </div>
                               <div className="p-3.5 text-center space-y-1 shadow-xs">
                                 <p className="text-[9px] text-slate-400 font-bold uppercase">المواد المتعثرة</p>
@@ -7507,12 +8792,15 @@ export default function ExamsResultsModule({
 
                               <div className="divide-y divide-amber-900/10 bg-white/60 backdrop-blur-sm rounded-b-2xl">
                                 {subjects.map(sub => {
-                                  const isAbsent = selectedStObj.absentSubjects?.includes(sub.id);
-                                  const val = bulkDraftGrades[selectedStObj.id]?.[sub.id] !== undefined
+                                  const attendanceStatus = getExamAttendanceStatus(selectedStObj, sub.id);
+                                  const isAbsent = attendanceStatus === 'absent';
+                                  const isPresent = attendanceStatus === 'present';
+                                  const storedVal = bulkDraftGrades[selectedStObj.id]?.[sub.id] !== undefined
                                     ? bulkDraftGrades[selectedStObj.id][sub.id]
                                     : (gradesMatrix[selectedStObj.id]?.[sub.id] ?? '');
+                                  const val = isPresent ? storedVal : isAbsent ? 0 : '';
                                   const isChanged = bulkDraftGrades[selectedStObj.id]?.[sub.id] !== undefined && bulkDraftGrades[selectedStObj.id][sub.id] !== (gradesMatrix[selectedStObj.id]?.[sub.id] ?? 0);
-                                  const isPass = val !== '' && Number(val) >= sub.passScore;
+                                  const isPass = isPresent && val !== '' && Number(val) >= sub.passScore;
 
                                   return (
                                     <div key={sub.id} className="p-4 hover:bg-transparent/50 transition-colors flex flex-col md:flex-row md:items-center justify-between gap-4">
@@ -7523,37 +8811,9 @@ export default function ExamsResultsModule({
                                         <p className="text-[10px] text-slate-400 font-bold">النهاية العظمى {sub.maxScore} | حد النجاح {sub.passScore}</p>
                                       </div>
 
-                                      {/* Presence Switch */}
-                                      <div className="flex items-center gap-2">
-                                        <button
-                                          disabled={approvalStatus.approved}
-                                          onClick={() => {
-                                            const updatedAbsent = isAbsent
-                                              ? (selectedStObj.absentSubjects || []).filter((s: string) => s !== sub.id)
-                                              : [...(selectedStObj.absentSubjects || []), sub.id];
-
-                                            const updatedList = studentList.map(s => s.id === selectedStObj.id ? { ...s, absentSubjects: updatedAbsent } : s);
-                                            setStudentList(updatedList);
-
-                                            if (!isAbsent) {
-                                              // set draft and matrix to 0
-                                              setBulkDraftGrades(prev => {
-                                                const updated = { ...prev };
-                                                if (!updated[selectedStObj.id]) updated[selectedStObj.id] = {};
-                                                updated[selectedStObj.id][sub.id] = 0;
-                                                return updated;
-                                              });
-                                            }
-                                            triggerNotification(`تغيير حالة حضور مادة ${sub.name} للطالب ${selectedStObj.name}`, 'info');
-                                          }}
-                                          className={`px-3 py-1.5 text-[10px] font-black transition-all ${
-                                            isAbsent
-                                              ? 'bg-rose-100 text-rose-700 border border-rose-200'
-                                              : 'bg-emerald-100 text-emerald-700 border border-emerald-200'
-                                          }`}
-                                        >
-                                          {isAbsent ? 'غائب ❌' : 'حاضر ✓'}
-                                        </button>
+                                      <div className="flex flex-col items-center gap-1">
+                                        <span className="text-[9px] font-bold text-slate-500">الحضور أو الغياب</span>
+                                        {renderExamAttendanceOptions(selectedStObj, sub.id)}
                                       </div>
 
                                       {/* Grade Input */}
@@ -7562,7 +8822,7 @@ export default function ExamsResultsModule({
                                           <input
                                             type="number"
                                             value={isAbsent ? 0 : val}
-                                            disabled={isAbsent || approvalStatus.approved}
+                                            disabled={!isPresent || approvalStatus.approved}
                                             onChange={(e) => handleReviewEditGradeChange(selectedStObj.id, sub.id, e.target.value)}
                                             placeholder="لم ترصد"
                                             className={`w-full p-2 text-center text-xs font-black border transition-all ${
@@ -7570,7 +8830,7 @@ export default function ExamsResultsModule({
                                                 ? 'bg-slate-100 text-slate-400 border-slate-200 cursor-not-allowed'
                                                 : isChanged
                                                   ? 'bg-amber-50 text-amber-950 border-amber-300 ring-2 ring-amber-500/10'
-                                                  : val === ''
+                                              : val === '' || !isPresent
                                                     ? 'bg-transparent text-slate-400 border-slate-200'
                                                     : !isPass
                                                       ? 'bg-rose-50 text-rose-950 border-rose-300'
@@ -7663,7 +8923,13 @@ export default function ExamsResultsModule({
                   mark = gradesMatrix[studentId]?.[sub.id];
                 }
 
-                if (mark === undefined) {
+                const reviewedStudent = studentList.find(student => String(student.id) === String(studentId));
+                const attendance = getExamAttendanceStatus(reviewedStudent || {}, sub.id);
+                if (attendance === 'absent') {
+                  mark = 0;
+                  pass = false;
+                  failedSubjectsCount++;
+                } else if (attendance !== 'present' || mark === undefined || !Number.isFinite(mark)) {
                   pendingCount++;
                   mark = 0;
                 }
@@ -7671,22 +8937,23 @@ export default function ExamsResultsModule({
                 totalScore += mark;
                 totalMax += sub.maxScore;
 
-                if (mark < sub.passScore) {
+                if (attendance === 'present' && mark < sub.passScore) {
                   pass = false;
                   failedSubjectsCount++;
                 }
               });
 
-              const percentage = totalMax > 0 ? (totalScore / totalMax) * 100 : 0;
-              const formattedPercent = parseFloat(percentage.toFixed(1));
+              const isComplete = subjects.length > 0 && pendingCount === 0;
+              const percentage = isComplete && totalMax > 0 ? (totalScore / totalMax) * 100 : null;
+              const formattedPercent = percentage === null ? null : parseFloat(percentage.toFixed(1));
 
-              let gradeSymbol = 'مقبول';
-              if (formattedPercent >= 90) gradeSymbol = 'ممتاز 🏅';
-              else if (formattedPercent >= 80) gradeSymbol = 'جيد جداً';
-              else if (formattedPercent >= 65) gradeSymbol = 'جيد';
-              else if (formattedPercent < 50) gradeSymbol = 'ضعيف ❌';
+              let gradeSymbol = !isComplete ? 'غير مكتمل' : 'مقبول';
+              if (formattedPercent !== null && formattedPercent >= 90) gradeSymbol = 'ممتاز 🏅';
+              else if (formattedPercent !== null && formattedPercent >= 80) gradeSymbol = 'جيد جداً';
+              else if (formattedPercent !== null && formattedPercent >= 65) gradeSymbol = 'جيد';
+              else if (formattedPercent !== null && formattedPercent < 50) gradeSymbol = 'ضعيف ❌';
 
-              const resultStatus = pass ? 'ناجح' : 'راسب';
+              const resultStatus = !isComplete ? 'غير مكتمل' : pass ? 'ناجح' : 'راسب';
 
               return {
                 totalScore,
@@ -7695,7 +8962,8 @@ export default function ExamsResultsModule({
                 gradeSymbol,
                 resultStatus,
                 failedSubjectsCount,
-                pendingCount
+                pendingCount,
+                isComplete
               };
             };
 
@@ -7709,20 +8977,20 @@ export default function ExamsResultsModule({
 
               list.forEach(st => {
                 const m = getStudentReviewMetrics(st.id);
-                if (m.pendingCount > 0) {
+                if (!m.isComplete) {
                   pending++;
                 } else {
                   completed++;
                 }
-                if (m.resultStatus === 'ناجح' && m.pendingCount === 0) {
+                if (m.resultStatus === 'ناجح' && m.isComplete) {
                   passed++;
                 }
-                if (m.percentage >= 90 && m.pendingCount === 0) {
+                if (m.percentage !== null && m.percentage >= 90 && m.isComplete) {
                   outstanding++;
                 }
               });
 
-              const passPercent = completed > 0 ? parseFloat(((passed / completed) * 100).toFixed(1)) : 0;
+              const passPercent = completed > 0 ? parseFloat(((passed / completed) * 100).toFixed(1)) : null;
 
               return {
                 total,
@@ -7747,8 +9015,10 @@ export default function ExamsResultsModule({
               const rows = filteredStudentsForGrades.map((st, idx) => {
                 const m = getStudentReviewMetrics(st.id);
                 const studentSubjectsGrades = subjects.map(sub => {
+                  const attendance = getExamAttendanceStatus(st, sub.id);
                   const val = bulkDraftGrades[st.id]?.[sub.id] !== undefined ? bulkDraftGrades[st.id][sub.id] : (gradesMatrix[st.id]?.[sub.id] ?? '');
-                  return val !== '' ? val : 'لم ترصد';
+                  if (attendance === 'absent') return 'غائب';
+                  return attendance === 'present' && val !== '' ? val : 'غير مكتمل';
                 });
                 const lastMod = gradesLastModified[st.id] || 'لا توجد تعديلات';
                 return [
@@ -7758,8 +9028,8 @@ export default function ExamsResultsModule({
                   `"${st.name}"`,
                   `"${st.classroom} - ${st.section}"`,
                   ...studentSubjectsGrades,
-                  m.totalScore,
-                  `"${m.percentage}%"`,
+                  !m.isComplete ? 'غير مكتمل' : m.totalScore,
+                  `"${m.percentage === null ? 'غير مكتمل' : `${m.percentage}%`}"`,
                   `"${m.gradeSymbol}"`,
                   `"${m.resultStatus}"`,
                   `"${lastMod}"`
@@ -7780,6 +9050,10 @@ export default function ExamsResultsModule({
             const handleReviewEditGradeChange = (studentId: string, subjectId: string, valueStr: string) => {
               if (approvalStatus.approved) {
                 triggerNotification('لا يمكن تعديل الدرجات، النتائج معتمدة ومقفلة بالكامل 🔒', 'warning');
+                return;
+              }
+              if (valueStr.trim() !== '' && getExamAttendanceStatus(studentList.find(student => String(student.id) === String(studentId)) || {}, subjectId) !== 'present') {
+                triggerNotification('سجل حضور الطالب في المادة قبل إدخال الدرجة؛ أو اختر «غائب» لتوثيق غيابه.', 'warning');
                 return;
               }
 
@@ -7875,13 +9149,13 @@ export default function ExamsResultsModule({
                   <div className="p-4 flex flex-col justify-between">
                     <span className="text-[10px] font-bold text-slate-400">نسبة النجاح العامة بالصف</span>
                     <div className="flex items-baseline gap-1 mt-2">
-                      <span className="text-2xl font-black text-amber-600">{reviewEditStats.passPercent}%</span>
+                      <span className="text-2xl font-black text-amber-600">{reviewEditStats.passPercent === null ? '—' : `${reviewEditStats.passPercent}%`}</span>
                       <span className="text-xs text-slate-500 font-bold">للمكتمل رصدهم</span>
                     </div>
                     <div className="w-full bg-slate-100 h-1 mt-3 rounded-full overflow-hidden">
                       <div
                         className="h-full bg-amber-500 rounded-full transition-all duration-500"
-                        style={{ width: `${reviewEditStats.passPercent}%` }}
+                        style={{ width: `${reviewEditStats.passPercent ?? 0}%` }}
                       />
                     </div>
                   </div>
@@ -8037,8 +9311,9 @@ export default function ExamsResultsModule({
 
                     <button
                       onClick={handleLoadStudents}
-                      className="p-2 bg-amber-50 hover:bg-amber-100 text-amber-700 border border-amber-200 text-xs font-bold flex items-center gap-1.5 cursor-pointer transition-all"
-                      title="تحديث وتحميل الطلاب"
+                      disabled={!mayLoadCanonicalStudentRoster || isGradeScopedExamUser || isReloadingStudents}
+                      className="p-2 bg-amber-50 hover:bg-amber-100 text-amber-700 border border-amber-200 text-xs font-bold flex items-center gap-1.5 cursor-pointer transition-all disabled:cursor-not-allowed disabled:opacity-40"
+                      title={mayLoadCanonicalStudentRoster && !isGradeScopedExamUser ? 'تحديث وتحميل الطلاب' : 'يتم تحميل طلاب نطاق التكليف الموثق تلقائياً'}
                     >
                       <RefreshCw className={`w-4 h-4 ${isReloadingStudents ? 'animate-spin' : ''}`} />
                       <span>تحميل الطلاب</span>
@@ -8159,9 +9434,11 @@ export default function ExamsResultsModule({
 
                                 {/* Subjects Inputs */}
                                 {subjects.map(sub => {
-                                  const val = bulkDraftGrades[st.id]?.[sub.id] !== undefined ? bulkDraftGrades[st.id][sub.id] : (gradesMatrix[st.id]?.[sub.id] ?? '');
+                                  const attendanceStatus = getExamAttendanceStatus(st, sub.id);
+                                  const storedVal = bulkDraftGrades[st.id]?.[sub.id] !== undefined ? bulkDraftGrades[st.id][sub.id] : (gradesMatrix[st.id]?.[sub.id] ?? '');
+                                  const val = attendanceStatus === 'present' ? storedVal : attendanceStatus === 'absent' ? 0 : '';
                                   const isChanged = bulkDraftGrades[st.id]?.[sub.id] !== undefined && bulkDraftGrades[st.id][sub.id] !== (gradesMatrix[st.id]?.[sub.id] ?? 0);
-                                  const isFail = val !== '' && Number(val) < sub.passScore;
+                                  const isFail = attendanceStatus === 'present' && val !== '' && Number(val) < sub.passScore;
 
                                   return (
                                     <td key={sub.id} className="p-2 text-center">
@@ -8169,7 +9446,7 @@ export default function ExamsResultsModule({
                                         <input
                                           type="number"
                                           value={val}
-                                          disabled={approvalStatus.approved}
+                                          disabled={approvalStatus.approved || attendanceStatus !== 'present'}
                                           onChange={(e) => handleReviewEditGradeChange(st.id, sub.id, e.target.value)}
                                           placeholder="لم ترصد"
                                           className={`w-20 p-1.5 text-center text-xs font-black rounded-lg border transition-all ${
@@ -8189,12 +9466,12 @@ export default function ExamsResultsModule({
 
                                 {/* Total score */}
                                 <td className="p-3 text-center font-bold text-slate-700 text-xs">
-                                  {m.totalScore}
+                                  {!m.isComplete ? 'غير مكتمل' : m.totalScore}
                                 </td>
 
                                 {/* Percentage */}
                                 <td className="p-3 text-center font-black text-amber-700 text-xs">
-                                  {m.percentage}%
+                                  {m.percentage === null ? 'غير مكتمل' : `${m.percentage}%`}
                                 </td>
 
                                 {/* Grade */}
@@ -8238,7 +9515,15 @@ export default function ExamsResultsModule({
                   <span className="text-xs text-slate-500 font-bold">
                     {draftChangesCount > 0
                       ? `⚠️ لديك عدد (${draftChangesCount}) تعديل غير محفوظ حالياً في هذا الكشف!`
-                      : '✓ جميع التعديلات الحالية محفوظة ومحدثة بالكامل مع قاعدة بيانات الكنترول.'
+                      : dbSyncStatus === 'success' && lastSyncTime
+                        ? `✓ لا توجد مسودات درجات معلقة؛ آخر مزامنة ناجحة مع المصدر المركزي ${lastSyncTime}.`
+                        : dbSyncStatus === 'conflict'
+                          ? '⚠️ تعذر تأكيد حفظ الدرجات بسبب تعارض نسخة البيانات. أعد المزامنة قبل المتابعة.'
+                          : dbSyncStatus === 'rejected'
+                            ? '⚠️ رفض المصدر المركزي البيانات؛ لم يُؤكَّد حفظ الدرجات.'
+                            : dbSyncStatus === 'error'
+                              ? '⚠️ تعذر الاتصال بالمصدر المركزي؛ حالة حفظ الدرجات غير مؤكدة.'
+                              : 'حالة حفظ الدرجات غير مؤكدة حتى نجاح المزامنة مع المصدر المركزي.'
                     }
                   </span>
 
@@ -8289,7 +9574,7 @@ export default function ExamsResultsModule({
                       <span className="font-bold">{metrics.totalGradeFields} حقل</span>
                     </div>
                     <div className="flex justify-between">
-                      <span className="text-slate-600 font-bold">الحقول الشاغرة بانتظار الرصد:</span>
+                      <span className="text-slate-600 font-bold">حضور/غياب أو درجات تحتاج استكمالاً:</span>
                       <span className={`font-black ${metrics.missingGradesCount > 0 ? 'text-amber-600' : 'text-emerald-600'}`}>
                         {metrics.missingGradesCount} حقل
                       </span>
@@ -8334,9 +9619,27 @@ export default function ExamsResultsModule({
                         placeholder="سبب اعتماد النتائج وإصدار محضر الإقفال (إلزامي)"
                       />
 
+                      {approvalBlockerMessages.length > 0 && (
+                        <div
+                          id="exam-results-approval-blockers"
+                          role="status"
+                          aria-label="المتطلبات المتبقية لاعتماد النتائج"
+                          className="border border-amber-300 bg-amber-100/70 p-3 text-[11px] text-amber-950"
+                        >
+                          <p className="mb-1 font-black">لا يمكن الاعتماد بعد. أكمل المتطلبات التالية:</p>
+                          <ul className="list-disc space-y-1 pr-5">
+                            {approvalBlockerMessages.map((message, index) => (
+                              <li key={`${index}-${message}`}>{message}</li>
+                            ))}
+                          </ul>
+                        </div>
+                      )}
+
                       <button
                         onClick={handleApproveAndLock}
-                        className="w-full py-2 bg-amber-600 hover:bg-amber-700 text-white rounded-lg text-xs font-black flex items-center justify-center gap-2 cursor-pointer transition-all"
+                        disabled={!canApproveResults}
+                        aria-describedby={approvalBlockerMessages.length > 0 ? 'exam-results-approval-blockers' : undefined}
+                        className="w-full py-2 bg-amber-600 hover:bg-amber-700 text-white rounded-lg text-xs font-black flex items-center justify-center gap-2 cursor-pointer transition-all disabled:cursor-not-allowed disabled:bg-slate-300 disabled:text-slate-600 disabled:shadow-none"
                       >
                         <LockIcon className="w-4 h-4 text-amber-300" />
                         اعتماد النتائج والدرجات وقفل الكنترول
@@ -8353,33 +9656,55 @@ export default function ExamsResultsModule({
 
                 <div className="space-y-3">
                   <div className="flex items-start gap-3 p-3 bg-transparent border border-slate-200">
-                    <CheckCircle className="w-5 h-5 text-emerald-600 shrink-0 mt-0.5" />
+                     {reviewDataReady && reviewInvalidGradesCount === 0 ? (
+                       <CheckCircle className="w-5 h-5 text-emerald-600 shrink-0 mt-0.5" />
+                     ) : (
+                       <AlertTriangle className="w-5 h-5 text-amber-500 shrink-0 mt-0.5" />
+                     )}
                     <div>
                       <h4 className="font-bold text-xs text-slate-900">التحقق من عدم تجاوز النهاية العظمى</h4>
-                      <p className="text-[10px] text-slate-500">تم فحص جميع درجات الطلاب لضمان عدم وجود أي درجة مدخلة تتجاوز الـ 100 درجة.</p>
+                       <p className="text-[10px] text-slate-500">
+                         {!reviewDataReady
+                           ? 'لا توجد مواد وطلاب كافون لإجراء الفحص.'
+                           : reviewInvalidGradesCount > 0
+                             ? `توجد ${reviewInvalidGradesCount} درجة خارج النهاية العظمى وتحتاج إلى تصحيح.`
+                             : 'تم فحص درجات الطلاب ولم تُكتشف درجات تتجاوز النهاية العظمى.'}
+                       </p>
                     </div>
                   </div>
 
                   <div className="flex items-start gap-3 p-3 bg-transparent border border-slate-200">
-                    <CheckCircle className="w-5 h-5 text-emerald-600 shrink-0 mt-0.5" />
+                     {reviewDistributionReady ? (
+                       <CheckCircle className="w-5 h-5 text-emerald-600 shrink-0 mt-0.5" />
+                     ) : (
+                       <AlertTriangle className="w-5 h-5 text-amber-500 shrink-0 mt-0.5" />
+                     )}
                     <div>
                       <h4 className="font-bold text-xs text-slate-900">التحقق من توزيع الطلاب</h4>
-                      <p className="text-[10px] text-slate-500">تم التحقق من توزيع جميع الطلاب النشطين على قاعات اختبار صالحة.</p>
+                       <p className="text-[10px] text-slate-500">
+                         {!reviewDataReady
+                           ? 'لا توجد قائمة طلاب امتحانات مكتملة لفحص التوزيع.'
+                           : reviewDistributionReady
+                             ? 'تم التحقق من توزيع جميع الطلاب على قاعات وأرقام جلوس صالحة.'
+                             : 'لم يكتمل توزيع جميع الطلاب على قاعات وأرقام جلوس صالحة.'}
+                       </p>
                     </div>
                   </div>
 
                   <div className="flex items-start gap-3 p-3 bg-transparent border border-slate-200">
-                    {metrics.missingGradesCount > 0 ? (
+                     {!reviewDataReady || metrics.missingGradesCount > 0 ? (
                       <AlertTriangle className="w-5 h-5 text-amber-500 shrink-0 mt-0.5" />
                     ) : (
                       <CheckCircle className="w-5 h-5 text-emerald-600 shrink-0 mt-0.5" />
                     )}
                     <div>
-                      <h4 className="font-bold text-xs text-slate-900">التحقق من رصد درجات المواد الغائبة</h4>
+                      <h4 className="font-bold text-xs text-slate-900">التحقق من الحضور/الغياب والدرجات</h4>
                       <p className="text-[10px] text-slate-500">
-                        {metrics.missingGradesCount > 0
-                          ? `تنبيه: هناك عدد ${metrics.missingGradesCount} درجة لم يتم رصدها بعد.`
-                          : 'ممتاز: تم رصد وإكمال جميع درجات الطلاب بنجاح.'}
+                         {!reviewDataReady
+                           ? 'لا توجد مواد وطلاب موثقون لإكمال فحص الرصد.'
+                           : metrics.missingGradesCount > 0
+                          ? `تنبيه: هناك ${metrics.missingGradesCount} حالة حضور/غياب أو درجة لم تكتمل بعد.`
+                          : 'اكتمل تسجيل حضور/غياب الطلاب ودرجات الحاضرين.'}
                       </p>
                     </div>
                   </div>
@@ -8402,9 +9727,25 @@ export default function ExamsResultsModule({
 
                 <button
                   onClick={() => {
-                    triggerNotification('تمت معالجة كشوف الدرجات واحتساب المعدلات والأوائل بنجاح', 'success');
+                    if (!reviewDataReady) {
+                      const missingInputs = [
+                        subjects.length === 0 ? 'مادة امتحانية موثقة' : '',
+                        studentList.length === 0 ? 'طلاباً موثقين' : ''
+                      ].filter(Boolean);
+                      triggerNotification(`تعذر معالجة النتائج: يلزم توفير ${missingInputs.join(' و')} أولاً.`, 'warning');
+                      return;
+                    }
+                    if (incompleteProcessedStudents.length > 0) {
+                      triggerNotification(
+                        `احتُسبت النتائج المرصودة، واستُبعد ${incompleteProcessedStudents.length} طالباً غير مكتمل من ترتيب الأوائل. أكمل رصد الدرجات قبل اعتماد النتائج.`,
+                        'warning'
+                      );
+                    } else {
+                      triggerNotification('اكتمل احتساب النتائج وترتيب الطلاب؛ لم تُحفظ أو تُعتمد أي بيانات.', 'info');
+                    }
                     logAction('تشغيل محرك احتساب المعدلات والأوائل', 'معالجة النتائج');
                   }}
+                  data-no-save-toast
                   className="px-4 py-2 bg-amber-600 hover:bg-amber-700 text-white rounded-lg text-xs font-bold flex items-center gap-2 cursor-pointer transition-all"
                 >
                   <RefreshCw className="w-4 h-4" />
@@ -8430,21 +9771,23 @@ export default function ExamsResultsModule({
                     {processedStudents.map((st, idx) => (
                       <tr key={st.id} className="hover:bg-transparent">
                         <td className="p-3 font-bold text-center">
-                          {idx + 1 === 1 ? (
+                          {st.rank === null ? (
+                            <span className="text-slate-500 font-bold">غير مصنف — النتيجة غير مكتملة</span>
+                          ) : st.rank === 1 ? (
                             <span className="bg-amber-100 text-amber-800 px-2.5 py-0.5 rounded-full border border-amber-300 font-extrabold">🥇 الأول</span>
-                          ) : idx + 1 === 2 ? (
+                          ) : st.rank === 2 ? (
                             <span className="bg-slate-200 text-slate-800 px-2.5 py-0.5 rounded-full border border-slate-300 font-extrabold">🥈 الثاني</span>
-                          ) : idx + 1 === 3 ? (
+                          ) : st.rank === 3 ? (
                             <span className="bg-amber-50 text-amber-800 px-2.5 py-0.5 rounded-full border border-amber-200 font-extrabold">🥉 الثالث</span>
                           ) : (
-                            <span className="text-slate-500 font-bold">المرتبة {idx + 1}</span>
+                            <span className="text-slate-500 font-bold">المرتبة {st.rank}</span>
                           )}
                         </td>
                         <td className="p-3 font-mono font-bold text-amber-700">{st.seatNumber || 'N/A'}</td>
                         <td className="p-3 font-bold text-slate-900">{st.name}</td>
                         <td className="p-3 font-semibold">{st.classroom}</td>
-                        <td className="p-3 font-bold text-slate-800">{st.totalEarned} / {st.totalMax}</td>
-                        <td className="p-3 font-mono font-extrabold text-sm text-amber-700">{st.percentage}%</td>
+                        <td className="p-3 font-bold text-slate-800">{st.status === 'غير مكتمل' ? 'غير مكتمل' : `${st.totalEarned} / ${st.totalMax}`}</td>
+                        <td className="p-3 font-mono font-extrabold text-sm text-amber-700">{st.status === 'غير مكتمل' ? 'غير مكتمل' : `${st.percentage}%`}</td>
                         <td className="p-3 font-black text-slate-900">{st.gradeSymbol}</td>
                         <td className="p-3 font-bold">
                           <span className={`px-2.5 py-0.5 rounded-full text-[10px] ${
@@ -8510,7 +9853,9 @@ export default function ExamsResultsModule({
                       data={subjects.map(sub => {
                         // Calculate average score for this subject
                         const scores = visibleStudents.flatMap(student => {
-                          if (student.absentSubjects?.includes(sub.id)) return [0];
+                          const attendance = getExamAttendanceStatus(student, sub.id);
+                          if (attendance === 'absent') return [0];
+                          if (attendance !== 'present') return [];
                           const value = gradesMatrix[student.id]?.[sub.id];
                           return typeof value === 'number' && Number.isFinite(value) ? [value] : [];
                         });
@@ -8545,7 +9890,7 @@ export default function ExamsResultsModule({
               <div className="p-5 border border-slate-200">
                 <span className="text-xs text-slate-500 font-bold block">نسبة النجاح العامة</span>
                 <p className="text-2xl font-black text-emerald-600 mt-1">
-                  {overallPassRate}%
+                  {overallPassRate === null ? '—' : `${overallPassRate}%`}
                 </p>
                 <p className="text-[10px] text-slate-500 font-bold mt-1">ممن أنهوا الاختبارات بنجاح</p>
               </div>
@@ -8553,7 +9898,7 @@ export default function ExamsResultsModule({
               <div className="p-5 border border-slate-200">
                 <span className="text-xs text-slate-500 font-bold block">المعدل العام للمجموع</span>
                 <p className="text-2xl font-black text-amber-600 mt-1">
-                  {overallAverage}%
+                  {overallAverage === null ? '—' : `${overallAverage}%`}
                 </p>
                 <p className="text-[10px] text-slate-500 font-bold mt-1">للنتائج المكتملة في المدرسة الحالية</p>
               </div>
@@ -8592,6 +9937,7 @@ export default function ExamsResultsModule({
             approvalStatus={approvalStatus}
             closures={controlClosures}
             classes={classesList}
+            accessToken={getTrustedAccessToken()}
             notify={triggerNotification}
           />
         )}
@@ -8665,7 +10011,8 @@ export default function ExamsResultsModule({
                     let missingGradesCount = 0;
                     studentList.forEach(st => {
                       subjects.forEach(sub => {
-                        if (gradesMatrix[st.id]?.[sub.id] === undefined && !st.absentSubjects?.includes(sub.id)) {
+                        const attendance = getExamAttendanceStatus(st, sub.id);
+                        if (attendance === null || (attendance === 'present' && !Number.isFinite(gradesMatrix[st.id]?.[sub.id]))) {
                           missingGradesCount++;
                         }
                       });
@@ -8700,7 +10047,8 @@ export default function ExamsResultsModule({
                             let missingGradesStg = 0;
                             stdInStg.forEach(st => {
                               subjects.forEach(sub => {
-                                if (gradesMatrix[st.id]?.[sub.id] === undefined && !st.absentSubjects?.includes(sub.id)) {
+                                const attendance = getExamAttendanceStatus(st, sub.id);
+                                if (attendance === null || (attendance === 'present' && !Number.isFinite(gradesMatrix[st.id]?.[sub.id]))) {
                                   missingGradesStg++;
                                 }
                               });
@@ -8796,6 +10144,7 @@ export default function ExamsResultsModule({
                           }
                         }}
                       >
+                        {subjects.length === 0 && <option value="">لا توجد مواد امتحانية مهيأة</option>}
                         {subjects.map(sub => (
                           <option key={sub.id} value={sub.id}>
                             {sub.name} ({isSubjectReviewed(sub.id) ? '✓ تمت مراجعتها' : '⚠️ بحاجة لمراجعة'})
@@ -8807,7 +10156,10 @@ export default function ExamsResultsModule({
                     <button
                       onClick={async () => {
                         const selectEl = document.getElementById('review-subject-select') as HTMLSelectElement;
-                        if (!selectEl) return;
+                        if (!selectEl || subjects.length === 0) {
+                          triggerNotification('أضف مادة امتحانية وأكمل رصدها قبل توقيع المراجعة الرسمية.', 'warning');
+                          return;
+                        }
                         const subjectId = selectEl.value;
                         const subObj = subjects.find(s => s.id === subjectId);
                         if (!subObj) return;
@@ -8834,7 +10186,8 @@ export default function ExamsResultsModule({
                           logAction(`تصديق وتوقيع مراجعة مادة ${subObj.name}`, 'جودة وحوكمة الكنترول');
                         }
                       }}
-                      className="w-full py-2 bg-emerald-700 hover:bg-emerald-600 text-white text-xs font-black cursor-pointer transition-all flex items-center justify-center gap-1.5 border border-emerald-500/40"
+                      disabled={subjects.length === 0}
+                      className="w-full py-2 bg-emerald-700 hover:bg-emerald-600 text-white text-xs font-black cursor-pointer transition-all flex items-center justify-center gap-1.5 border border-emerald-500/40 disabled:cursor-not-allowed disabled:opacity-40"
                     >
                       <CheckCircle className="w-4 h-4" />
                       توقيع وتصدير مطابقة المادة المحددة رسمياً
@@ -8855,7 +10208,7 @@ export default function ExamsResultsModule({
                       <h3 className="font-extrabold text-[#fce79a] text-sm">محرك الإنذار المبكر الذكي واكتشاف الشذوذ الأكاديمي 🚨</h3>
                     </div>
                     <span className="text-[10px] bg-amber-500/20 text-[#f7d174] border border-amber-500/40 px-2 py-0.5 rounded font-black">
-                      نشط حالياً
+                      {subjects.length === 0 ? 'بانتظار تهيئة المواد' : 'نشط حالياً'}
                     </span>
                   </div>
 
@@ -8865,6 +10218,13 @@ export default function ExamsResultsModule({
 
                   {/* Warning generator list */}
                   {(() => {
+                    if (subjects.length === 0) {
+                      return (
+                        <div className="p-4 bg-amber-950/40 border border-amber-500/40 text-center">
+                          <p className="text-xs text-amber-200 font-bold">لا يمكن إصدار مؤشرات خطر قبل تهيئة مادة امتحانية ورصد النتائج.</p>
+                        </div>
+                      );
+                    }
                     const warnings: any[] = [];
 
                     studentList.forEach(st => {
@@ -9253,9 +10613,13 @@ export default function ExamsResultsModule({
                                 triggerNotification('لا يمكن طباعة هذا المحضر كأرشيف معتمد لعدم وجود توقيع خادم صالح.', 'warning');
                                 return;
                               }
-                              const printWindow = window.open('', '_blank');
+                              const printWindow = createExamPrintDocument({
+                                title: 'محضر إقفال الكنترول',
+                                onPrintStarted: () => triggerNotification('تم تجهيز محضر الإقفال الموثق للطباعة أو الحفظ PDF.', 'success'),
+                                onError: () => triggerNotification('تعذر تشغيل أمر طباعة محضر الإقفال.', 'warning')
+                              });
                               if (!printWindow) {
-                                triggerNotification('يرجى السماح بالنوافذ المنبثقة لفتح الطباعة.', 'warning');
+                                triggerNotification('تعذر تجهيز محضر الإقفال للطباعة.', 'warning');
                                 return;
                               }
                               printWindow.document.write(`
@@ -9299,15 +10663,15 @@ export default function ExamsResultsModule({
                                         </tr>
                                         <tr>
                                           <th>إجمالي عدد الطلاب المتقدمين</th>
-                                          <td style="font-weight: bold;">${closure.totalStudents} طالب</td>
+                                          <td style="font-weight: bold;">${escapeHtml(closure.totalStudents)} طالب</td>
                                           <th>نسبة النجاح العامة</th>
-                                          <td style="font-weight: bold; color: green;">${closure.passRate}%</td>
+                                          <td style="font-weight: bold; color: green;">${escapeHtml(closure.passRate)}%</td>
                                         </tr>
                                         <tr>
                                           <th>عدد الطلاب الناجحين</th>
-                                          <td style="color: green; font-weight: bold;">${closure.passedCount} طالب</td>
+                                          <td style="color: green; font-weight: bold;">${escapeHtml(closure.passedCount)} طالب</td>
                                           <th>عدد الطلاب الراسبين</th>
-                                          <td style="color: red; font-weight: bold;">${closure.failedCount} طالب</td>
+                                          <td style="color: red; font-weight: bold;">${escapeHtml(closure.failedCount)} طالب</td>
                                         </tr>
                                       </table>
 
@@ -9338,12 +10702,10 @@ export default function ExamsResultsModule({
                                         </div>
                                       </div>
                                     </div>
-                                    <script>window.print();</script>
                                   </body>
                                 </html>
                               `);
                               printWindow.document.close();
-                              triggerNotification('جاري تجهيز وتوليد نسخة المحضر للطباعة...', 'success');
                             }}
                             className="px-3 py-1.5 bg-gradient-to-r from-[#d4af37] via-[#c58a22] to-[#8b6113] hover:brightness-110 text-slate-950 rounded-lg text-[10px] font-black cursor-pointer transition-all flex items-center gap-1 shrink-0 shadow-md"
                           >
@@ -9402,10 +10764,10 @@ export default function ExamsResultsModule({
                 <div className="flex flex-col md:flex-row justify-between items-start md:items-center gap-4 relative z-10">
                   <div className="space-y-1">
                     <span className="text-[10px] bg-emerald-500/20 text-emerald-400 border border-emerald-500/30 px-2 py-0.5 rounded font-bold uppercase tracking-wider">
-                      مركز فحص واختبار جودة الكنترول المركزي (Diagnostic Suite)
+                      فحص جاهزية الكنترول — بيانات الشاشة الحالية (Diagnostic Suite)
                     </span>
-                    <h3 className="text-lg font-black text-white">منظومة فحص الكنترول وإجراء الاختبارات التلقائية</h3>
-                    <p className="text-xs text-slate-400">إجراء الفحص الآلي الذاتي ومحاكاة دورة عمل الكنترول للتحقق من سلامة قواعد البيانات والعمليات الحسابية.</p>
+                    <h3 className="text-lg font-black text-white">فحص مؤشرات دورة الكنترول</h3>
+                    <p className="text-xs text-slate-400">يفحص البيانات المعروضة واتصال المصدر المركزي. لا ينشئ بيانات ولا يحل محل المراجعة والاعتماد النهائي أو التحقق من حفظ كل مسودة.</p>
                   </div>
 
                   <button
@@ -9458,7 +10820,7 @@ export default function ExamsResultsModule({
                       </div>
                       <div className="text-left shrink-0">
                         <span className="text-xs bg-emerald-500/20 text-emerald-400 border border-emerald-500/30 px-3 py-1 rounded-full font-bold">
-                          {testSuiteResults.every(result => result.status === 'success') ? 'جاهز للإغلاق' : 'توجد نقاط معلقة'}
+                          {areExamReadinessChecksPassing(testSuiteResults) ? 'الفحوص الحالية مستوفاة' : 'توجد نقاط معلقة'}
                         </span>
                       </div>
                     </div>
@@ -9507,56 +10869,80 @@ export default function ExamsResultsModule({
                   <div className="space-y-1">
                     <label className="text-[10px] font-bold text-slate-700 block">اختر السنة الأرشيفية للمطابقة:</label>
                     <select
-                      value={selectedArchivedYear}
-                      disabled={archivedData.length === 0}
+                      value={selectedArchiveId}
+                      disabled={archiveLoadStatus === 'loading' || archivedData.length === 0}
                       onChange={(e) => {
-                        setSelectedArchivedYear(e.target.value);
-                        triggerNotification(`تم تحميل بيانات العام الأكاديمي: ${e.target.value}`, 'info');
+                        setSelectedArchiveId(e.target.value);
+                        const selected = archivedData.find(item => item.archiveId === e.target.value);
+                        if (selected) triggerNotification(`تم عرض ملخص أرشيف ${selected.year} — ${selected.semester}`, 'info');
                       }}
                       className="w-full bg-transparent text-xs font-bold p-2.5 focus:outline-none focus:ring-2 focus:ring-amber-500 cursor-pointer"
                     >
-                      {archivedData.map(y => (
-                        <option key={y.year} value={y.year}>{y.year}</option>
+                      {archivedData.map(archive => (
+                        <option key={archive.archiveId} value={archive.archiveId}>
+                          {archive.year} — {archive.semester} · {new Date(archive.archivedAt).toLocaleDateString('ar-EG')}{archive.signatureValid ? '' : ' · فشل التحقق'}
+                        </option>
                       ))}
-                      {archivedData.length === 0 && <option value="">لا يوجد أرشيف مركزي متاح</option>}
+                      {archivedData.length === 0 && <option value="">{archiveLoadStatus === 'loading' ? 'جارٍ تحميل الأرشيف…' : 'لا يوجد أرشيف مركزي متاح'}</option>}
                     </select>
                   </div>
 
                   {/* Selected Year Quick Overview */}
                   {(() => {
-                    const selectedYearObj = archivedData.find(y => y.year === selectedArchivedYear) || archivedData[0];
+                    const selectedYearObj = archivedData.find(archive => archive.archiveId === selectedArchiveId) || archivedData[0];
                     if (!selectedYearObj) {
                       return (
                         <div className="p-3 bg-slate-50 border border-slate-200 text-xs text-slate-600 font-semibold">
-                          لا توجد سنوات مؤرشفة في المصدر المركزي لهذه المدرسة حتى الآن.
+                          {archiveLoadStatus === 'error' ? (
+                            <div className="flex flex-wrap items-center justify-between gap-2">
+                              <span>تعذر تحميل الأرشيف الرسمي من الخادم.</span>
+                              <button type="button" onClick={() => void loadExamArchiveSummaries()} className="rounded-md border border-amber-300 px-3 py-1.5 font-bold text-amber-800">إعادة المحاولة</button>
+                            </div>
+                          ) : archiveLoadStatus === 'loading' ? 'جارٍ التحقق من أرشيف النتائج الموقع…' : 'لا توجد سنوات مؤرشفة في المصدر المركزي لهذه المدرسة حتى الآن.'}
                         </div>
                       );
+                    }
+                    if (!selectedYearObj.signatureValid) {
+                      return <div role="alert" className="rounded-xl border border-rose-300 bg-rose-50 p-4 text-xs font-bold leading-6 text-rose-800">
+                        فشل التحقق من بصمة هذا الأرشيف؛ أخفينا إحصاءاته ولا نستخدمه للمقارنة. راجع سجل التدقيق قبل الاعتماد عليه.
+                      </div>;
+                    }
+                    if (!selectedYearObj.summaryAvailable) {
+                      return <div role="alert" className="rounded-xl border border-amber-300 bg-amber-50 p-4 text-xs font-bold leading-6 text-amber-900">
+                        بصمة الأرشيف سليمة، لكن إصدار بياناته غير مدعوم لحساب مقارنة آمنة. لن نعرض أرقاماً تقديرية.
+                      </div>;
                     }
                     return (
                       <div className="p-3 bg-amber-50/50 border border-amber-100 text-xs space-y-2">
                         <div className="flex justify-between items-center">
-                          <span className="font-black text-slate-900">أداء العام {selectedYearObj.year}</span>
-                          <span className="text-[10px] bg-amber-100 text-amber-800 font-black px-2 py-0.5 rounded-md">أرشيف رسمي</span>
+                          <span className="font-black text-slate-900">أداء {selectedYearObj.year} — {selectedYearObj.semester}</span>
+                          <span className="text-[10px] bg-emerald-100 text-emerald-800 font-black px-2 py-0.5 rounded-md">بصمة سليمة</span>
                         </div>
                         <div className="grid grid-cols-2 gap-2 text-[11px] text-slate-600">
-                          <div>عدد الطلاب: <span className="font-extrabold text-slate-900">{selectedYearObj.totalStudents} طالب</span></div>
-                          <div>نسبة النجاح: <span className="font-extrabold text-emerald-600">{selectedYearObj.overallPassRate}%</span></div>
-                          <div className="col-span-2">أعلى معدل طلابي: <span className="font-extrabold text-amber-600">{selectedYearObj.topScore}%</span></div>
-                          <div className="col-span-2">الانحراف المعياري: <span className="font-bold text-slate-700">{selectedYearObj.standardDeviation}</span></div>
+                          <div>طلاب الأرشيف: <span className="font-extrabold text-slate-900">{selectedYearObj.totalStudents}</span></div>
+                          <div>نتائج مكتملة: <span className="font-extrabold text-slate-900">{selectedYearObj.completeResults}</span></div>
+                          <div>نتائج غير مكتملة: <span className="font-extrabold text-amber-700">{selectedYearObj.incompleteResults}</span></div>
+                          <div>نسبة النجاح من المكتمل: <span className="font-extrabold text-emerald-600">{selectedYearObj.overallPassRate === null ? '—' : `${selectedYearObj.overallPassRate}%`}</span></div>
+                          <div>متوسط المكتمل: <span className="font-extrabold text-slate-900">{selectedYearObj.averageScore === null ? '—' : `${selectedYearObj.averageScore}%`}</span></div>
+                          <div>أعلى معدل: <span className="font-extrabold text-amber-600">{selectedYearObj.topScore === null ? '—' : `${selectedYearObj.topScore}%`}</span></div>
+                          <div className="col-span-2">الانحراف المعياري: <span className="font-bold text-slate-700">{selectedYearObj.standardDeviation ?? '—'}</span></div>
                         </div>
 
                         {/* Real-time comparison with current year */}
                         {(() => {
-                          const currentStudents = processedStudents;
+                          const currentStudents = completedProcessedStudents;
                           const currentPassRate = currentStudents.length > 0
-                            ? Math.round((currentStudents.filter(s => s.percentage >= 50).length / currentStudents.length) * 100)
-                            : 0;
-                          const diff = currentPassRate - selectedYearObj.overallPassRate;
+                            ? Math.round((currentStudents.filter(s => s.status === 'ناجح').length / currentStudents.length) * 100)
+                            : null;
+                          const diff = currentPassRate === null || selectedYearObj.overallPassRate === null
+                            ? null : currentPassRate - selectedYearObj.overallPassRate;
                           return (
                             <div className="pt-2 border-t border-amber-100 mt-2 text-[10px]">
                               <span className="font-bold text-slate-700 block">مقارنة التطور مع العام الحالي:</span>
                               <div className="flex items-center gap-1 mt-1 font-extrabold">
-                                {diff > 0 ? (
+                                {diff === null ? (
+                                  <span className="text-slate-600">لا توجد نتائج مكتملة للمقارنة بعد.</span>
+                                ) : diff > 0 ? (
                                   <span className="text-emerald-600">📈 نمو إيجابي بنسبة (+{diff}%) مقارنة بـ {selectedYearObj.year}</span>
                                 ) : diff < 0 ? (
                                   <span className="text-rose-600">📉 تراجع طفيف بنسبة ({diff}%) مقارنة بـ {selectedYearObj.year}</span>

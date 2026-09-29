@@ -13,6 +13,7 @@
   },
   "scripts": {
     "dev": "tsx server.ts",
+    "dev:staging": "tsx scripts/start-staging-local.ts",
     "build": "vite build --configLoader runner && node scripts/build-server.mjs && node scripts/verify-build-artifact.mjs",
     "build:spa": "vite build --configLoader runner",
     "production:gate": "node scripts/production-release-gate.mjs",
@@ -30,6 +31,8 @@
     "lint": "tsc --noEmit",
     "db:migrate": "tsx src/database/scripts/migrate.ts",
     "db:verify-central": "tsx scripts/verify-central-control-plane.ts",
+    "db:verify-identity-governance": "tsx scripts/verify-identity-access-governance.ts",
+    "db:apply-identity-structure": "tsx scripts/apply-identity-structure-migrations.ts",
     "db:apply-owner-workspace": "tsx scripts/apply-owner-workspace-releases.ts",
     "db:bind-owner-school": "tsx scripts/bind-owner-school.ts",
     "db:seed": "tsx src/database/scripts/seed.ts",

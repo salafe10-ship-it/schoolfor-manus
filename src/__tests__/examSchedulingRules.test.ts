@@ -1,12 +1,22 @@
 import { describe, expect, it } from 'vitest';
 import {
   canAssignProctorForWeek,
+  canAutoAssignExamProctors,
   countProctorDutiesInWeek,
   examTimeRangesOverlap,
   findScheduleResourceConflicts,
   getExamIntervalDurationMinutes,
   getSchedulingWeekKey
 } from '../modules/exams/application/ExamSchedulingRules';
+
+describe('approved exam schedule mutation guard', () => {
+  it('allows automatic proctor assignment only while both schedule and results are unlocked', () => {
+    expect(canAutoAssignExamProctors(false, false)).toBe(true);
+    expect(canAutoAssignExamProctors(true, false)).toBe(false);
+    expect(canAutoAssignExamProctors(false, true)).toBe(false);
+    expect(canAutoAssignExamProctors(true, true)).toBe(false);
+  });
+});
 
 describe('exam scheduling proctor duty rules', () => {
   it('counts a proctor duty only in its calendar week', () => {

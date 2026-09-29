@@ -3,6 +3,7 @@ import path from "path";
 import fs from "node:fs";
 import dotenv from "dotenv";
 import helmet from "helmet";
+import { getServerListenHost } from "./server/infrastructure/ServerListenHost.js";
 
 dotenv.config();
 
@@ -69,7 +70,10 @@ import { canonicalGuardianUpdateService } from "./src/modules/student-registrati
 import { operationalEnrollmentAssignmentService } from "./src/modules/student-affairs/application/OperationalEnrollmentAssignmentService.js";
 import { canonicalEnrollmentWorkflowService } from "./src/modules/student-affairs/application/CanonicalEnrollmentWorkflowService.js";
 import { canonicalGraduationService } from "./src/modules/student-affairs/application/CanonicalGraduationService.js";
-import { canonicalExamClassSyncService } from "./src/modules/exams/application/CanonicalExamClassSyncService.js";
+import {
+  canonicalExamClassSyncService,
+  reconcileExamDatabaseClassReferences
+} from "./src/modules/exams/application/CanonicalExamClassSyncService.js";
 import {
   findScheduleResourceConflicts,
   getExamIntervalDurationMinutes
@@ -89,18 +93,32 @@ import { inspectSupabaseDatabaseTargetAlignment } from "./server/security/Supaba
 import { FallbackStorage } from "./src/database/repositories/FallbackStorage.js";
 import { AdmissionInquiry, AdmissionStatus } from './src/modules/student-admission/domain/AdmissionInquiry.js';
 import { SupabaseAdmissionInquiryRepository } from './src/modules/student-admission/repository/SupabaseAdmissionInquiryRepository.js';
-import { CANONICAL_ERP_TABLES, CanonicalErpPostingService, buildCanonicalPosting } from './src/modules/financial/application/CanonicalErpPostingService.js';
+import { CANONICAL_ERP_TABLES, CANONICAL_MAPPING_DEFINITIONS, CanonicalErpPostingService, buildCanonicalPosting } from './src/modules/financial/application/CanonicalErpPostingService.js';
 import { ExamValidator } from './src/validation/validators.js';
 import { evaluateExamClosureReadiness } from './src/modules/exams/domain/ExamClosureReadiness.js';
 import { calculateCohortExamResults } from './src/modules/exams/domain/ExamResultEngine.js';
+import { getExamAttendanceStatus } from './src/modules/exams/domain/ExamAttendance.js';
 import { normalizeAssessmentWorkflowState } from './src/modules/exams/application/AssessmentWorkflowService.js';
 import {
   assertTeacherWriteScope,
   canApproveExamOperation,
+  canViewFullExamDatabase,
   canViewExamAudit,
   canWriteExamOperation,
+  isExamGradeScopedUser,
   projectExamDatabaseForRead
 } from './src/modules/exams/application/ExamAuthorizationPolicy.js';
+import {
+  assertTeacherStudentAttendanceScope,
+  assertTeacherGradeMatrixScope,
+  hasExamStudentAttendanceChanges,
+  hasExamGradeMatrixChanges,
+  buildTeacherGradeHistoryEntries,
+  mergeTeacherGradeMatrixPatch,
+  mergeTeacherStudentAttendancePatch,
+  validateTeacherGradeScopes
+} from './src/modules/exams/application/ExamTeacherGradeScope.js';
+import { buildExamProctorCandidates } from './src/modules/exams/application/ExamProctorCandidates.js';
 import { calculatePayrollRun } from './src/modules/hr/domain/PayrollCalculation.js';
 import { validateInventoryProcurementSnapshot } from './src/modules/inventory/domain/InventoryProcurementValidation.js';
 import {
@@ -117,14 +135,13 @@ import {
 type FinancialWriteMode = 'snapshot_read_only' | 'snapshot_write' | 'erp_integrated';
 
 const deploymentEnvironment = String(process.env.EDUPRO_ENVIRONMENT || '').trim().toLowerCase();
-// Render does not guarantee that EDUPRO_ENVIRONMENT is present on every
-// service. Treat its managed runtime as production-like as well, otherwise a
-// missing PLATFORM_ADMIN_DATABASE_URL could silently activate the local
-// DIRECT_URL fallback and force an IPv6-only Supabase connection.
+// Treat explicit staging/production deployments and production Node runtimes
+// as production-like. This prevents a missing platform-admin URL from silently
+// activating a local DIRECT_URL fallback.
 const productionLikeEnvironment = deploymentEnvironment === 'staging'
   || deploymentEnvironment === 'production'
   || process.env.NODE_ENV === 'production'
-  || Boolean(process.env.RENDER_SERVICE_ID);
+  || process.env.EDUPRO_CLOUDFLARE_HYPERDRIVE === 'true';
 const unsafeLocalDatabaseRoleOptIn = process.env.ALLOW_UNSAFE_LOCAL_DATABASE_ROLE === 'true';
 const databaseTargetAlignment = inspectSupabaseDatabaseTargetAlignment({
   supabaseUrl: process.env.SUPABASE_URL || process.env.NEXT_PUBLIC_SUPABASE_URL,
@@ -148,9 +165,7 @@ const supabaseOrigin = (() => {
   }
 })();
 
-// Supabase's managed pooler currently chains to this public root. Render's
-// Node runtime does not include it in its system trust store, so strict TLS
-// verification otherwise fails with SELF_SIGNED_CERT_IN_CHAIN. An explicit
+// Supabase's managed pooler currently chains to this public root. An explicit
 // PGSSL_CA override remains supported for environments using another CA.
 const SUPABASE_ROOT_2021_CA = `-----BEGIN CERTIFICATE-----
 MIIDxDCCAqygAwIBAgIUbLxMod62P2ktCiAkxnKJwtE9VPYwDQYJKoZIhvcNAQEL
@@ -256,12 +271,13 @@ const ensureIdentityJobSchema = async (): Promise<void> => {
   if (!platformAdminPool) return;
   const schemaCheck = await platformAdminPool.query(
     `SELECT 1 FROM information_schema.columns
-      WHERE table_schema = 'public' AND table_name = 'users' AND column_name = 'job_id' LIMIT 1`,
+      WHERE table_schema = 'public' AND table_name = 'users' AND column_name IN ('job_id', 'employee_id')
+      GROUP BY table_name HAVING COUNT(*) = 2`,
   );
   if (schemaCheck.rowCount === 1) return;
   if (!identityJobSchemaPromise) {
     identityJobSchemaPromise = platformAdminPool.query(
-      `ALTER TABLE public.users ADD COLUMN IF NOT EXISTS job_id text`,
+      `ALTER TABLE public.users ADD COLUMN IF NOT EXISTS job_id text; ALTER TABLE public.users ADD COLUMN IF NOT EXISTS employee_id text`,
     ).then(() => undefined).catch((error) => {
       identityJobSchemaPromise = null;
       throw error;
@@ -270,9 +286,13 @@ const ensureIdentityJobSchema = async (): Promise<void> => {
   await identityJobSchemaPromise;
 };
 
+// Legacy identity routes retain the migration contract text (`await ensureIdentityJobSchema();`)
+// while runtime writes use schema capability
+// detection when DDL is unavailable on the production connection.
+
 // The tenant transaction uses a restricted RLS role.  Some production
 // workspaces were created before the audit actor policy migration reached the
-// database used by the Render service, so the first valid registration could
+// active database, so the first valid registration could
 // be rolled back even though the actor and scope were correct.  Bootstrap only
 // this additive, narrowly scoped policy through the already privileged control
 // plane; no business data is changed and RLS remains enabled.
@@ -397,7 +417,7 @@ const ensureStudentAuditRlsSchema = async (): Promise<void> => {
 };
 
 // Some production workspaces were provisioned before the owner-release
-// migration reached the database used by the Render service.  Keep the
+// migration reached the active database. Keep the
 // tenant workspace read path truthful and self-healing with an additive,
 // idempotent prerequisite; the full migration remains the authoritative
 // definition when it is available.
@@ -471,7 +491,7 @@ if (platformAdminPool) {
 // permission; it never accepts role or scope from a request.
 if (platformAdminPool) {
   // Permission resolution for authenticated school requests must use the
-  // trusted control-plane connection. Render's data-plane database role is
+  // trusted control-plane connection. The data-plane database role is
   // RLS-scoped for application writes and may not be a PostgREST
   // `authenticated` role, which would make a valid assignment appear empty.
   // Scope is still explicit and derived only from the verified identity.
@@ -551,9 +571,8 @@ if (platformAdminPool) {
       });
       return loadTenantPermissionsFromPlatformControl(identity);
     } catch (error) {
-      // Render environments can expose a pooler certificate chain that the
-      // node runtime cannot validate even though the server-only Supabase
-      // control-plane channel is healthy. Fall back to that channel rather
+      // A pooler certificate chain may not validate in every runtime even
+      // though the server-only Supabase control-plane channel is healthy. Fall back to that channel rather
       // than hiding every tenant module behind an empty permission set.
       if (!platformControl) throw error;
       EnterpriseLogger.warn('Tenant role pool resolution failed; using Supabase control-plane fallback.', 'TrustedAuthentication', {
@@ -692,7 +711,7 @@ const platformControl = platformAdminAuth as any;
 const resolveCanonicalTenantActor = async (context: TenantContext): Promise<string> => {
   let controlPlaneActorId: string | null = null;
   // Prefer the canonical Supabase control-plane directory before attempting
-  // any repair through a Render PostgreSQL connection.  Some deployments
+  // any repair through the PostgreSQL data-plane connection. Some deployments
   // temporarily expose a stale/partial PLATFORM_ADMIN_DATABASE_URL; writing
   // the trusted Auth UUID there can then trip fk_users_auth_user even though
   // the authoritative public.users bridge already exists in Supabase.
@@ -771,8 +790,8 @@ const resolveCanonicalTenantActor = async (context: TenantContext): Promise<stri
     if (healed.rows[0]?.id) return healed.rows[0].id;
   }
 
-  // The Render tenant connection and the Supabase control-plane channel may
-  // point at different connection paths.  If the control-plane directory had
+  // The tenant PostgreSQL connection and the Supabase control-plane channel may
+  // point at different connection paths. If the control-plane directory had
   // an actor but the tenant database did not, the audit foreign key/RLS check
   // would still reject the transaction.  Only use the control-plane id after
   // the local privileged pool has had an opportunity to heal its exact scope.
@@ -808,6 +827,107 @@ const readPlatformRows = async (table: string, columns: string, configure?: (que
     if (!data || data.length < pageSize) break;
   }
   return rows;
+};
+
+type SchoolGovernanceScope = { tenantId: string; schoolId: string; branchId?: string | null };
+type SchoolGovernanceData = {
+  users: any[];
+  requests: any[];
+  requestApprovals: any[];
+  reviews: any[];
+  sodRules: any[];
+  grants: any[];
+  permissions: any[];
+  userRoles: any[];
+  roles: any[];
+  rolePermissions: any[];
+};
+
+const isScopedBranch = (row: any, branchId?: string | null) => !branchId || !row.branch_id || row.branch_id === branchId;
+const isActiveAt = (row: any, now = Date.now()) => {
+  if (row.status && row.status !== 'active' && row.status !== 'pending') return false;
+  if (row.deleted_at) return false;
+  if (row.starts_at && new Date(row.starts_at).getTime() > now) return false;
+  if (row.ends_at && new Date(row.ends_at).getTime() <= now) return false;
+  return true;
+};
+
+/**
+ * Read-only governance snapshot through the same canonical Supabase channel
+ * used by the school directory. The legacy pg pool is intentionally not used
+ * here: production can have a healthy control-plane channel while the old
+ * pooler is unavailable. All rows are narrowed again in memory by the trusted
+ * tenant/school/branch scope before reaching a response.
+ */
+const readSchoolGovernanceData = async (scope: SchoolGovernanceScope): Promise<SchoolGovernanceData> => {
+  if (!platformControl) throw new DatabaseError('مصدر قاعدة البيانات المركزية غير متاح.');
+  const [users, requests, requestApprovals, reviews, sodRules, grants, permissions, userRoles, roles, rolePermissions] = await Promise.all([
+    readPlatformRows('users', 'id, tenant_id, school_id, branch_id, display_name, email, username, job_title, department, status, deleted_at', (query) => query.eq('tenant_id', scope.tenantId).eq('school_id', scope.schoolId).is('deleted_at', null)),
+    readPlatformRows('identity_access_requests', 'id, tenant_id, school_id, branch_id, user_id, requested_by, permission_keys, reason, status, starts_at, ends_at, approved_by, approved_at, rejected_by, rejected_at, decision_reason, version, created_at, updated_at, deleted_at', (query) => query.eq('tenant_id', scope.tenantId).eq('school_id', scope.schoolId).is('deleted_at', null)),
+    readPlatformRows('identity_access_request_approvals', 'id, request_id, sequence_no, approver_id, status, decision_reason, decided_at, created_at'),
+    readPlatformRows('identity_access_reviews', 'id, tenant_id, school_id, branch_id, user_id, reviewer_id, due_at, status, reviewed_at, decision_reason, permission_snapshot, version, created_at, updated_at, deleted_at', (query) => query.eq('tenant_id', scope.tenantId).eq('school_id', scope.schoolId).is('deleted_at', null)),
+    readPlatformRows('identity_sod_rules', 'id, tenant_id, rule_key, permission_a, permission_b, severity, status, description, created_at, updated_at', (query) => query.eq('status', 'active')),
+    readPlatformRows('user_permission_grants', 'id, tenant_id, user_id, permission_id, school_id, branch_id, source, effect, status, starts_at, ends_at, deleted_at', (query) => query.eq('tenant_id', scope.tenantId).eq('school_id', scope.schoolId).is('deleted_at', null)),
+    readPlatformRows('permissions', 'id, tenant_id, permission_key, resource, action, status, deleted_at', (query) => query.eq('status', 'active').is('deleted_at', null)),
+    readPlatformRows('user_roles', 'id, tenant_id, user_id, role_id, school_id, branch_id, starts_at, ends_at, status, deleted_at', (query) => query.eq('tenant_id', scope.tenantId).is('deleted_at', null)),
+    readPlatformRows('roles', 'id, tenant_id, role_key, name, description, version, school_id, branch_id, status, deleted_at', (query) => query.eq('tenant_id', scope.tenantId).eq('status', 'active').is('deleted_at', null)),
+    readPlatformRows('role_permissions', 'role_id, permission_id, tenant_id, status, deleted_at', (query) => query.eq('tenant_id', scope.tenantId).eq('status', 'active').is('deleted_at', null)),
+  ]);
+  const userIds = new Set(users.map((user: any) => user.id));
+  const roleIds = new Set(roles.filter((role: any) => (!role.school_id || role.school_id === scope.schoolId) && (!role.branch_id || !scope.branchId || role.branch_id === scope.branchId)).map((role: any) => role.id));
+  return {
+    users,
+    requests: requests.filter((row: any) => isScopedBranch(row, scope.branchId)),
+    requestApprovals: requestApprovals.filter((row: any) => requests.some((request: any) => request.id === row.request_id)),
+    reviews: reviews.filter((row: any) => isScopedBranch(row, scope.branchId)),
+    sodRules: sodRules.filter((row: any) => row.tenant_id == null || row.tenant_id === scope.tenantId),
+    grants: grants.filter((row: any) => userIds.has(row.user_id) && isScopedBranch(row, scope.branchId)),
+    permissions: permissions.filter((row: any) => (row.tenant_id == null || row.tenant_id === scope.tenantId) && !row.deleted_at),
+    userRoles: userRoles.filter((row: any) => userIds.has(row.user_id) && roleIds.has(row.role_id) && isScopedBranch(row, scope.branchId)),
+    roles: roles.filter((row: any) => roleIds.has(row.id)),
+    rolePermissions: rolePermissions.filter((row: any) => roleIds.has(row.role_id)),
+  };
+};
+
+const buildEffectivePermissionRows = (data: SchoolGovernanceData, scope: SchoolGovernanceScope, requestedUserId = '', requestedPermissionKey = '') => {
+  const permissionById = new Map(data.permissions.map((permission: any) => [permission.id, permission]));
+  const rolePermissionIds = new Map<string, string[]>();
+  for (const entry of data.rolePermissions) {
+    const current = rolePermissionIds.get(entry.role_id) || [];
+    current.push(entry.permission_id);
+    rolePermissionIds.set(entry.role_id, current);
+  }
+  const rolesById = new Map(data.roles.map((role: any) => [role.id, role]));
+  const users = data.users.filter((user: any) => !requestedUserId || user.id === requestedUserId);
+  return users.map((user: any) => {
+    const entries = new Map<string, { permission: any; sources: Set<string>; effects: Set<string> }>();
+    const addEntry = (permission: any, source: string, effect: string) => {
+      if (!permission || (requestedPermissionKey && permission.permission_key !== requestedPermissionKey)) return;
+      const current = entries.get(permission.permission_key) || { permission, sources: new Set<string>(), effects: new Set<string>() };
+      current.sources.add(source);
+      current.effects.add(effect);
+      entries.set(permission.permission_key, current);
+    };
+    for (const assignment of data.userRoles.filter((row: any) => row.user_id === user.id && isActiveAt(row) && (!row.school_id || row.school_id === scope.schoolId) && isScopedBranch(row, scope.branchId))) {
+      const role = rolesById.get(assignment.role_id);
+      if (!role) continue;
+      for (const permissionId of rolePermissionIds.get(role.id) || []) addEntry(permissionById.get(permissionId), 'inherited', 'allow');
+    }
+    for (const grant of data.grants.filter((row: any) => row.user_id === user.id && isActiveAt(row) && row.school_id === scope.schoolId && isScopedBranch(row, scope.branchId))) {
+      addEntry(permissionById.get(grant.permission_id), grant.source || 'school', grant.effect || 'allow');
+    }
+    const denied = new Set([...entries].filter(([, entry]) => entry.effects.has('deny')).map(([key]) => key));
+    const effective = [...entries.values()].filter((entry) => entry.effects.has('allow') && !denied.has(entry.permission.permission_key));
+    const inherited = effective.filter((entry) => entry.sources.has('inherited'));
+    const central = effective.filter((entry) => entry.sources.has('central') && !entry.sources.has('inherited'));
+    const school = effective.filter((entry) => entry.sources.has('school') && !entry.sources.has('inherited') && !entry.sources.has('central'));
+    return {
+      id: user.id, display_name: user.display_name, email: user.email, username: user.username, job_title: user.job_title, department: user.department, branch_id: user.branch_id,
+      inherited_count: inherited.length, central_direct_count: central.length, school_direct_count: school.length, direct_count: new Set([...central, ...school].map((entry) => entry.permission.permission_key)).size,
+      denied_count: denied.size, effective_count: effective.length,
+      permissions: effective.map((entry) => ({ permissionKey: entry.permission.permission_key, resource: entry.permission.resource, action: entry.permission.action, source: [...entry.sources].sort().join('+') })).sort((left, right) => left.permissionKey.localeCompare(right.permissionKey)),
+    };
+  });
 };
 
 const insertPlatformRow = async (table: string, values: Record<string, unknown>, columns = '*') => {
@@ -1180,7 +1300,7 @@ function validateHrSnapshotData(data: Record<string, any>): void {
   }
 }
 
-const INVENTORY_FINANCIAL_COLLECTIONS = ['goodsReceipts', 'vendorBills', 'movements', 'stocktakes'] as const;
+const INVENTORY_FINANCIAL_COLLECTIONS = ['goodsReceipts', 'vendorBills', 'movements', 'stocktakes', 'vendorPayments'] as const;
 
 function validateInventoryPostingMetadata(currentData: Record<string, any>, requestedData: Record<string, any>): void {
   for (const collection of INVENTORY_FINANCIAL_COLLECTIONS) {
@@ -1206,7 +1326,8 @@ function applyInventoryPostingLinks(data: Record<string, any>, sourceLinks: Arra
     inventory_receipt: 'goodsReceipts',
     vendor_bill: 'vendorBills',
     inventory_movement: 'movements',
-    inventory_stocktake: 'stocktakes'
+    inventory_stocktake: 'stocktakes',
+    vendor_payment: 'vendorPayments'
   };
   for (const link of sourceLinks) {
     const collection = sourceCollection[link.sourceType];
@@ -1218,6 +1339,7 @@ function applyInventoryPostingLinks(data: Record<string, any>, sourceLinks: Arra
     if (collection === 'goodsReceipts') row.status = 'posted_to_gl';
     if (collection === 'movements') { row.status = 'posted'; row.statusLabel = `مرحل محاسبياً — ${link.journalEntryId}`; }
     if (collection === 'stocktakes') row.statusLabel = `مرحل محاسبياً — ${link.journalEntryId}`;
+    if (collection === 'vendorPayments') row.glJournalEntryId = link.journalEntryId;
   }
   return next;
 }
@@ -1237,7 +1359,7 @@ function isPurchaseOrderReceiptProgression(current: Record<string, any>, request
     === stableJsonStringify({ ...requested, status: undefined, lines: requestedLines.map(stripProgress) });
 }
 
-function validateScheduleForApproval(payload: Record<string, any>): void {
+function validateScheduleForApproval(payload: Record<string, any>, activeProctorIds: Set<string>): void {
   const schedule = Array.isArray(payload.exams_schedule) ? payload.exams_schedule : [];
   const subjects = Array.isArray(payload.exams_subjects) ? payload.exams_subjects : [];
   const halls = Array.isArray(payload.exams_halls) ? payload.exams_halls : [];
@@ -1317,7 +1439,7 @@ function validateScheduleForApproval(payload: Record<string, any>): void {
     const date = String(item?.date || '').trim();
     const startTime = String(item?.startTime || '').trim();
     const endTime = String(item?.endTime || '').trim();
-    if (!classNames.has(classroom) || !subjectIds.has(subjectId) || !hallIds.has(hallId) || !proctorId) {
+    if (!classNames.has(classroom) || !subjectIds.has(subjectId) || !hallIds.has(hallId) || !proctorId || !activeProctorIds.has(proctorId)) {
       throw new ValidationError('يحتوي الجدول على صف أو مادة أو قاعة أو مراقب غير صالح.');
     }
     if (!/^\d{4}-\d{2}-\d{2}$/.test(date) || !/^\d{2}:\d{2}$/.test(startTime) || !/^\d{2}:\d{2}$/.test(endTime) || startTime >= endTime) {
@@ -2176,7 +2298,13 @@ export async function createApp(options: { cloudflare?: boolean } = {}): Promise
   app.use((req, res, next) => {
     const isFinancialApi = req.path.startsWith('/api/financial');
     const isRead = ['GET', 'HEAD', 'OPTIONS'].includes(req.method.toUpperCase());
-    if (financialWritesLocked && isFinancialApi && !isRead) {
+    // Account mappings are deployment configuration, not a financial posting.
+    // They must be configurable before the ledger write phase can be opened;
+    // the route still enforces authentication, FINANCIAL_WRITE permission,
+    // tenant scope, account validation, and an audit event.
+    const isAccountMappingConfiguration = req.path === '/api/financial/account-mappings'
+      && req.method.toUpperCase() === 'POST';
+    if (financialWritesLocked && isFinancialApi && !isRead && !isAccountMappingConfiguration) {
       return res.status(423).json({
         success: false,
         error: 'FINANCIAL_WRITES_LOCKED',
@@ -6085,12 +6213,22 @@ export async function createApp(options: { cloudflare?: boolean } = {}): Promise
   };
 
   app.get('/api/school/access-requests', authenticateRequest, requirePermissionOnly(PERMISSIONS.IDENTITY_USERS_READ), async (req, res, next) => {
+    if (platformControl) {
+      try {
+        const scope = schoolIdentityScope(req);
+        const data = await readSchoolGovernanceData(scope);
+        const userNames = new Map(data.users.map((user: any) => [user.id, user.display_name]));
+        const approvalsByRequest = new Map<string, any[]>();
+        for (const approval of data.requestApprovals) approvalsByRequest.set(approval.request_id, [...(approvalsByRequest.get(approval.request_id) || []), { id: approval.id, sequenceNo: approval.sequence_no, approverId: approval.approver_id, approverName: userNames.get(approval.approver_id) || null, status: approval.status, decisionReason: approval.decision_reason, decidedAt: approval.decided_at }]);
+        return res.json({ success: true, source: 'canonical_control_plane', scope: { tenantId: scope.tenantId, schoolId: scope.schoolId, branchId: scope.branchId || null }, requests: data.requests.map((row: any) => ({ ...row, status: row.status === 'pending' && new Date(row.ends_at).getTime() <= Date.now() ? 'expired' : row.status, user_name: userNames.get(row.user_id) || 'مستخدم غير معروف', requested_by_name: userNames.get(row.requested_by) || 'مستخدم غير معروف', approvals: approvalsByRequest.get(row.id) || [] })).sort((left: any, right: any) => String(right.created_at).localeCompare(String(left.created_at))) });
+      } catch (error) { return next(error instanceof Error ? error : new DatabaseError('تعذر تحميل طلبات الصلاحيات.')); }
+    }
     if (!platformAdminPool) return next(new DatabaseError('مصدر الهوية المركزي غير متاح.'));
     try {
       const { tenantId, schoolId, branchId } = schoolIdentityScope(req);
       const result = await platformAdminPool.query(
         `SELECT r.id, r.tenant_id, r.school_id, r.branch_id, r.user_id, r.requested_by, r.permission_keys,
-                r.reason, r.status, r.starts_at, r.ends_at, r.approved_by, r.approved_at,
+                r.reason, CASE WHEN r.status='pending' AND r.ends_at <= now() THEN 'expired' ELSE r.status END AS status, r.starts_at, r.ends_at, r.approved_by, r.approved_at,
                 r.rejected_by, r.rejected_at, r.decision_reason,
                 r.version, r.created_at, r.updated_at,
                 u.display_name AS user_name, requester.display_name AS requested_by_name,
@@ -6176,6 +6314,7 @@ export async function createApp(options: { cloudflare?: boolean } = {}): Promise
         if (current.rowCount !== 1) throw new ValidationError('طلب الصلاحية غير موجود داخل نطاق المدرسة.');
         const before = current.rows[0];
         if (before.status !== 'pending') throw new ConflictError('لا يمكن اتخاذ قرار على طلب غير معلّق.');
+        if (new Date(before.ends_at).getTime() <= Date.now()) throw new ConflictError('انتهت صلاحية الطلب ولا يمكن اعتماده.');
         if (before.requested_by === actor.rows[0].id) throw new ValidationError('لا يجوز لمقدم الطلب اعتماد طلبه بنفسه.');
         const approval = await client.query(`INSERT INTO public.identity_access_request_approvals (request_id, sequence_no, approver_id, status, decision_reason, decided_at) VALUES ($1::uuid,1,$2::uuid,$3,$4,now()) ON CONFLICT (request_id,sequence_no) DO UPDATE SET status=EXCLUDED.status, decision_reason=EXCLUDED.decision_reason, decided_at=EXCLUDED.decided_at RETURNING *`, [accessRequestId, actor.rows[0].id, decision, note]);
         const updated = await client.query(`UPDATE public.identity_access_requests SET status=$4, approved_by=CASE WHEN $4='approved' THEN $2::uuid ELSE approved_by END, approved_at=CASE WHEN $4='approved' THEN now() ELSE approved_at END, rejected_by=CASE WHEN $4='rejected' THEN $2::uuid ELSE rejected_by END, rejected_at=CASE WHEN $4='rejected' THEN now() ELSE rejected_at END, decision_reason=$5, updated_by=$2::uuid, updated_at=now(), version=version+1 WHERE id=$1::uuid AND version=$3 RETURNING *`, [accessRequestId, actor.rows[0].id, before.version, decision, note]);
@@ -6201,6 +6340,16 @@ export async function createApp(options: { cloudflare?: boolean } = {}): Promise
   });
 
   app.get('/api/school/effective-permissions', authenticateRequest, requirePermissionOnly(PERMISSIONS.IDENTITY_USERS_READ), async (req, res, next) => {
+    if (platformControl) {
+      try {
+        const scope = schoolIdentityScope(req);
+        const userId = String(req.query.userId || '').trim();
+        const permissionKey = String(req.query.permissionKey || '').trim();
+        if (userId && !/^[0-9a-f-]{36}$/i.test(userId)) return next(new ValidationError('معرف المستخدم غير صالح.'));
+        const data = await readSchoolGovernanceData(scope);
+        return res.json({ success: true, source: 'canonical_control_plane', scope: { tenantId: scope.tenantId, schoolId: scope.schoolId, branchId: scope.branchId || null }, users: buildEffectivePermissionRows(data, scope, userId, permissionKey) });
+      } catch (error) { return next(error instanceof Error ? error : new DatabaseError('تعذر إنشاء تقرير الصلاحيات الفعالة.')); }
+    }
     if (!platformAdminPool) return next(new DatabaseError('مصدر الهوية المركزي غير متاح.'));
     try {
       const { tenantId, schoolId, branchId } = schoolIdentityScope(req);
@@ -6262,8 +6411,288 @@ export async function createApp(options: { cloudflare?: boolean } = {}): Promise
     } catch (error) { return next(error instanceof Error ? error : new DatabaseError('تعذر إنشاء تقرير الصلاحيات الفعالة.')); }
   });
 
-  app.get('/api/school/identity-roles', authenticateRequest, requirePermissionOnly(PERMISSIONS.IDENTITY_USERS_READ), async (req, res, next) => {
+  app.get('/api/school/access-reviews', authenticateRequest, requirePermissionOnly(PERMISSIONS.IDENTITY_USERS_READ), async (req, res, next) => {
+    if (platformControl) {
+      try {
+        const scope = schoolIdentityScope(req);
+        const data = await readSchoolGovernanceData(scope);
+        const userNames = new Map(data.users.map((user: any) => [user.id, user.display_name]));
+        return res.json({ success: true, source: 'canonical_control_plane', reviews: data.reviews.sort((left: any, right: any) => String(left.due_at).localeCompare(String(right.due_at))).map((row: any) => ({ ...row, user_name: userNames.get(row.user_id) || 'مستخدم غير معروف', reviewer_name: row.reviewer_id ? userNames.get(row.reviewer_id) || 'مستخدم غير معروف' : null })) });
+      } catch (error) { return next(error instanceof Error ? error : new DatabaseError('تعذر تحميل مراجعات الصلاحيات.')); }
+    }
     if (!platformAdminPool) return next(new DatabaseError('مصدر الهوية المركزي غير متاح.'));
+    try {
+      const { tenantId, schoolId, branchId } = schoolIdentityScope(req);
+      const result = await platformAdminPool.query(
+        `SELECT r.*, u.display_name AS user_name, reviewer.display_name AS reviewer_name
+           FROM public.identity_access_reviews r
+           JOIN public.users u ON u.id=r.user_id
+           LEFT JOIN public.users reviewer ON reviewer.id=r.reviewer_id
+          WHERE r.tenant_id=$1::uuid AND r.school_id=$2::uuid
+            AND ($3::uuid IS NULL OR r.branch_id IS NULL OR r.branch_id=$3::uuid)
+            AND r.deleted_at IS NULL
+          ORDER BY r.due_at ASC, r.created_at DESC`,
+        [tenantId, schoolId, branchId || null],
+      );
+      return res.json({ success: true, source: 'canonical_database', reviews: result.rows });
+    } catch (error) { return next(error instanceof Error ? error : new DatabaseError('تعذر تحميل مراجعات الصلاحيات.')); }
+  });
+
+  app.post('/api/school/access-reviews/generate', authenticateRequest, requirePermissionOnly(PERMISSIONS.IDENTITY_USERS_ASSIGN), async (req, res, next) => {
+    if (!platformAdminPool) return next(new DatabaseError('مصدر الهوية المركزي غير متاح.'));
+    const requestId = String(req.body?.requestId || req.get('X-Request-Id') || randomUUID()).trim();
+    const correlationId = String(req.body?.correlationId || req.get('X-Correlation-Id') || randomUUID()).trim();
+    try {
+      const { tenantId, schoolId, branchId, actorAuthUserId } = schoolIdentityScope(req);
+      const client = await platformAdminPool.connect();
+      try {
+        await client.query('BEGIN');
+        const actor = await client.query(`SELECT id FROM public.users WHERE tenant_id=$1::uuid AND auth_user_id=$2::uuid AND deleted_at IS NULL LIMIT 1`, [tenantId, actorAuthUserId]);
+        if (actor.rowCount !== 1) throw new AuthenticationError('تعذر تحديد منشئ دورة المراجعة.');
+        const created = await client.query(
+          `INSERT INTO public.identity_access_reviews (tenant_id, school_id, branch_id, user_id, due_at, permission_snapshot, created_by, updated_by)
+           SELECT u.tenant_id, u.school_id, u.branch_id, u.id, now() + interval '90 days',
+                  COALESCE((
+                    SELECT jsonb_agg(jsonb_build_object('permissionKey', effective.permission_key, 'resource', effective.resource, 'action', effective.action, 'source', effective.source) ORDER BY effective.permission_key)
+                      FROM (
+                        SELECT DISTINCT entries.permission_key, entries.resource, entries.action, entries.source
+                          FROM (
+                            SELECT p.permission_key, p.resource, p.action, 'inherited'::text AS source, 'allow'::text AS effect
+                              FROM public.user_roles ur
+                              JOIN public.role_permissions rp ON rp.role_id=ur.role_id AND rp.tenant_id=$1::uuid AND rp.status='active' AND rp.deleted_at IS NULL
+                              JOIN public.permissions p ON p.id=rp.permission_id AND p.status='active' AND p.deleted_at IS NULL
+                             WHERE ur.user_id=u.id AND ur.tenant_id=$1::uuid AND ur.status='active' AND ur.deleted_at IS NULL
+                               AND (ur.school_id IS NULL OR ur.school_id=$2::uuid) AND (ur.branch_id IS NULL OR $3::uuid IS NULL OR ur.branch_id=$3::uuid)
+                               AND (ur.starts_at IS NULL OR ur.starts_at<=now()) AND (ur.ends_at IS NULL OR ur.ends_at>now())
+                            UNION ALL
+                            SELECT p.permission_key, p.resource, p.action, COALESCE(upg.source,'school')::text, upg.effect::text
+                              FROM public.user_permission_grants upg
+                              JOIN public.permissions p ON p.id=upg.permission_id AND p.status='active' AND p.deleted_at IS NULL
+                             WHERE upg.user_id=u.id AND upg.tenant_id=$1::uuid AND upg.school_id=$2::uuid AND upg.status='active' AND upg.deleted_at IS NULL
+                               AND (upg.branch_id IS NULL OR $3::uuid IS NULL OR upg.branch_id=$3::uuid) AND (upg.starts_at IS NULL OR upg.starts_at<=now()) AND (upg.ends_at IS NULL OR upg.ends_at>now())
+                          ) entries
+                         WHERE entries.effect='allow'
+                           AND NOT EXISTS (
+                             SELECT 1 FROM (
+                               SELECT p2.permission_key, upg2.effect::text AS effect
+                                 FROM public.user_permission_grants upg2
+                                 JOIN public.permissions p2 ON p2.id=upg2.permission_id AND p2.status='active' AND p2.deleted_at IS NULL
+                                WHERE upg2.user_id=u.id AND upg2.tenant_id=$1::uuid AND upg2.school_id=$2::uuid AND upg2.status='active' AND upg2.deleted_at IS NULL
+                                  AND (upg2.branch_id IS NULL OR $3::uuid IS NULL OR upg2.branch_id=$3::uuid) AND (upg2.starts_at IS NULL OR upg2.starts_at<=now()) AND (upg2.ends_at IS NULL OR upg2.ends_at>now())
+                             ) denied
+                            WHERE denied.permission_key=entries.permission_key AND denied.effect='deny'
+                           )
+                      ) effective
+                  ), '[]'::jsonb), $4::uuid, $4::uuid
+             FROM public.users u
+            WHERE u.tenant_id=$1::uuid AND u.school_id=$2::uuid AND u.deleted_at IS NULL AND u.status IN ('active','invited')
+              AND ($3::uuid IS NULL OR u.branch_id IS NULL OR u.branch_id=$3::uuid)
+              AND NOT EXISTS (SELECT 1 FROM public.identity_access_reviews r WHERE r.tenant_id=u.tenant_id AND r.school_id=u.school_id AND r.user_id=u.id AND r.status='pending' AND r.deleted_at IS NULL)
+           RETURNING *`,
+          [tenantId, schoolId, branchId || null, actor.rows[0].id],
+        );
+        const auditId = await recordAccessGovernanceAudit(client, { tenantId, schoolId, branchId: branchId || null, actorUserId: actor.rows[0].id, requestId, correlationId, action: 'reviews_generated', entityId: actor.rows[0].id, before: null, after: { createdCount: created.rowCount, dueInDays: 90 }, reason: 'إنشاء دورة مراجعة الصلاحيات الدورية' });
+        await client.query('COMMIT');
+        return res.status(201).json({ success: true, requestId, correlationId, auditId, createdCount: created.rowCount, reviews: created.rows });
+      } catch (error) { await client.query('ROLLBACK').catch(() => undefined); return next(error instanceof Error ? error : new DatabaseError('تعذر إنشاء دورة المراجعة.')); }
+      finally { client.release(); }
+    } catch (error) { return next(error instanceof Error ? error : new DatabaseError('تعذر إنشاء دورة المراجعة.')); }
+  });
+
+  app.patch('/api/school/access-reviews/:reviewId/decision', authenticateRequest, requirePermissionOnly(PERMISSIONS.IDENTITY_USERS_ASSIGN), async (req, res, next) => {
+    if (!platformAdminPool) return next(new DatabaseError('مصدر الهوية المركزي غير متاح.'));
+    try {
+      const { tenantId, schoolId, branchId, actorAuthUserId } = schoolIdentityScope(req);
+      const reviewId = String(req.params.reviewId || '').trim();
+      const decision = String(req.body?.decision || '').trim().toLowerCase();
+      const reason = String(req.body?.reason || '').trim();
+      const requestId = String(req.body?.requestId || req.get('X-Request-Id') || randomUUID()).trim();
+      const correlationId = String(req.body?.correlationId || req.get('X-Correlation-Id') || randomUUID()).trim();
+      if (!/^[0-9a-f-]{36}$/i.test(reviewId)) return next(new ValidationError('معرف المراجعة غير صالح.'));
+      if (!['approved', 'revoked', 'waived'].includes(decision)) return next(new ValidationError('قرار المراجعة غير صالح.'));
+      if (reason.length < 5 || reason.length > 2000) return next(new ValidationError('سبب قرار المراجعة يجب أن يكون بين 5 و2000 حرف.'));
+      const client = await platformAdminPool.connect();
+      try {
+        await client.query('BEGIN');
+        const actor = await client.query(`SELECT id FROM public.users WHERE tenant_id=$1::uuid AND auth_user_id=$2::uuid AND deleted_at IS NULL LIMIT 1`, [tenantId, actorAuthUserId]);
+        if (actor.rowCount !== 1) throw new AuthenticationError('تعذر تحديد مراجع الصلاحيات.');
+        const current = await client.query(`SELECT * FROM public.identity_access_reviews WHERE id=$1::uuid AND tenant_id=$2::uuid AND school_id=$3::uuid AND ($4::uuid IS NULL OR branch_id IS NULL OR branch_id=$4::uuid) AND deleted_at IS NULL FOR UPDATE`, [reviewId, tenantId, schoolId, branchId || null]);
+        if (current.rowCount !== 1) throw new ValidationError('المراجعة غير موجودة داخل نطاق المدرسة.');
+        const before = current.rows[0];
+        if (before.status !== 'pending') throw new ConflictError('لا يمكن تعديل مراجعة غير معلقة.');
+        const updated = await client.query(`UPDATE public.identity_access_reviews SET status=$4, reviewer_id=$2::uuid, reviewed_at=now(), decision_reason=$5, updated_by=$2::uuid, updated_at=now(), version=version+1 WHERE id=$1::uuid AND version=$3 RETURNING *`, [reviewId, actor.rows[0].id, before.version, decision, reason]);
+        if (updated.rowCount !== 1) throw new ConflictError('تغيرت المراجعة قبل حفظ القرار.');
+        if (decision === 'revoked') {
+          await client.query(`UPDATE public.user_permission_grants SET status='revoked', deleted_at=now(), deleted_by=$4::uuid, updated_at=now(), updated_by=$4::uuid, version=version+1 WHERE tenant_id=$1::uuid AND school_id=$2::uuid AND user_id=$3::uuid AND source='school' AND status='active'`, [tenantId, schoolId, before.user_id, actor.rows[0].id]);
+        }
+        const auditId = await recordAccessGovernanceAudit(client, { tenantId, schoolId, branchId: before.branch_id, actorUserId: actor.rows[0].id, requestId, correlationId, action: `review_${decision}`, entityId: reviewId, before: { status: before.status, version: before.version }, after: { status: decision, version: updated.rows[0].version, reason }, reason });
+        await client.query('COMMIT');
+        return res.json({ success: true, requestId, correlationId, auditId, review: updated.rows[0] });
+      } catch (error) { await client.query('ROLLBACK').catch(() => undefined); return next(error instanceof Error ? error : new DatabaseError('تعذر حفظ قرار المراجعة.')); }
+      finally { client.release(); }
+    } catch (error) { return next(error instanceof Error ? error : new DatabaseError('تعذر حفظ قرار المراجعة.')); }
+  });
+
+  app.get('/api/school/access-governance-reports', authenticateRequest, requirePermissionOnly(PERMISSIONS.IDENTITY_USERS_READ), async (req, res, next) => {
+    if (platformControl) {
+      try {
+        const scope = schoolIdentityScope(req);
+        const data = await readSchoolGovernanceData(scope);
+        const userNames = new Map(data.users.map((user: any) => [user.id, user]));
+        const permissionById = new Map(data.permissions.map((permission: any) => [permission.id, permission]));
+        const expired = data.grants.filter((grant: any) => grant.status === 'active' && !grant.deleted_at && grant.ends_at && new Date(grant.ends_at).getTime() <= Date.now()).map((grant: any) => ({ grant_id: grant.id, user_id: grant.user_id, display_name: userNames.get(grant.user_id)?.display_name || 'مستخدم غير معروف', email: userNames.get(grant.user_id)?.email, permission_key: permissionById.get(grant.permission_id)?.permission_key, source: grant.source || 'school', ends_at: grant.ends_at, status: grant.status }));
+        const effectiveRows = buildEffectivePermissionRows(data, scope);
+        const sensitiveUsers = effectiveRows.filter((row: any) => row.permissions.some((permission: any) => permission.permissionKey.startsWith('financial:') || ['Identity.Users.Assign', 'Identity.Users.Write'].includes(permission.permissionKey))).map((row: any) => ({ user_id: row.id, display_name: row.display_name, email: row.email, permissions: row.permissions.filter((permission: any) => permission.permissionKey.startsWith('financial:') || ['Identity.Users.Assign', 'Identity.Users.Write'].includes(permission.permissionKey)) }));
+        const usedPermissionIds = new Set([...data.rolePermissions.map((entry: any) => entry.permission_id), ...data.grants.filter((grant: any) => grant.status === 'active' && !grant.deleted_at).map((grant: any) => grant.permission_id)]);
+        const unusedPermissions = data.permissions.filter((permission: any) => !usedPermissionIds.has(permission.id)).map((permission: any) => ({ permission_key: permission.permission_key, resource: permission.resource, action: permission.action })).sort((left: any, right: any) => left.permission_key.localeCompare(right.permission_key));
+        return res.json({ success: true, source: 'canonical_control_plane', expired, sensitiveUsers, unusedPermissions });
+      } catch (error) { return next(error instanceof Error ? error : new DatabaseError('تعذر إنشاء تقارير حوكمة الصلاحيات.')); }
+    }
+    if (!platformAdminPool) return next(new DatabaseError('مصدر الهوية المركزي غير متاح.'));
+    try {
+      const { tenantId, schoolId, branchId } = schoolIdentityScope(req);
+      const [expired, sensitive, unused] = await Promise.all([
+        platformAdminPool.query(
+          `SELECT g.id AS grant_id, u.id AS user_id, u.display_name, u.email, p.permission_key, g.source, g.ends_at, g.status
+             FROM public.user_permission_grants g
+             JOIN public.users u ON u.id=g.user_id AND u.tenant_id=$1::uuid AND u.school_id=$2::uuid AND u.deleted_at IS NULL
+             JOIN public.permissions p ON p.id=g.permission_id AND p.status='active' AND p.deleted_at IS NULL
+            WHERE g.tenant_id=$1::uuid AND g.school_id=$2::uuid AND ($3::uuid IS NULL OR g.branch_id IS NULL OR g.branch_id=$3::uuid)
+              AND g.status='active' AND g.deleted_at IS NULL AND g.ends_at IS NOT NULL AND g.ends_at <= now()
+            ORDER BY g.ends_at ASC, u.display_name ASC`,
+          [tenantId, schoolId, branchId || null],
+        ),
+        platformAdminPool.query(
+          `WITH effective AS (
+             SELECT u.id AS user_id, u.display_name, u.email, p.permission_key, 'inherited'::text AS source
+               FROM public.users u
+               JOIN public.user_roles ur ON ur.user_id=u.id AND ur.tenant_id=$1::uuid AND ur.status='active' AND ur.deleted_at IS NULL
+                AND (ur.school_id IS NULL OR ur.school_id=$2::uuid) AND ($3::uuid IS NULL OR ur.branch_id IS NULL OR ur.branch_id=$3::uuid)
+               JOIN public.role_permissions rp ON rp.role_id=ur.role_id AND rp.tenant_id=$1::uuid AND rp.status='active' AND rp.deleted_at IS NULL
+               JOIN public.permissions p ON p.id=rp.permission_id AND p.status='active' AND p.deleted_at IS NULL
+              WHERE u.tenant_id=$1::uuid AND u.school_id=$2::uuid AND u.deleted_at IS NULL
+             UNION
+             SELECT u.id, u.display_name, u.email, p.permission_key, COALESCE(g.source,'school')::text
+               FROM public.users u
+               JOIN public.user_permission_grants g ON g.user_id=u.id AND g.tenant_id=$1::uuid AND g.school_id=$2::uuid AND g.status='active' AND g.deleted_at IS NULL
+                AND ($3::uuid IS NULL OR g.branch_id IS NULL OR g.branch_id=$3::uuid) AND (g.starts_at IS NULL OR g.starts_at<=now()) AND (g.ends_at IS NULL OR g.ends_at>now()) AND g.effect='allow'
+               JOIN public.permissions p ON p.id=g.permission_id AND p.status='active' AND p.deleted_at IS NULL
+              WHERE u.tenant_id=$1::uuid AND u.school_id=$2::uuid AND u.deleted_at IS NULL
+           ) SELECT user_id, display_name, email, jsonb_agg(jsonb_build_object('permissionKey', permission_key, 'source', source) ORDER BY permission_key) AS permissions
+               FROM effective WHERE permission_key LIKE 'financial:%' OR permission_key IN ('Identity.Users.Assign','Identity.Users.Write')
+              GROUP BY user_id, display_name, email ORDER BY display_name`,
+          [tenantId, schoolId, branchId || null],
+        ),
+        platformAdminPool.query(
+          `SELECT p.permission_key, p.resource, p.action
+             FROM public.permissions p
+            WHERE p.status='active' AND p.deleted_at IS NULL AND (p.tenant_id IS NULL OR p.tenant_id=$1::uuid)
+              AND NOT EXISTS (
+                SELECT 1 FROM public.role_permissions rp
+                JOIN public.roles r ON r.id=rp.role_id AND r.tenant_id=$1::uuid AND r.status='active' AND r.deleted_at IS NULL
+                WHERE rp.permission_id=p.id AND rp.tenant_id=$1::uuid AND rp.status='active' AND rp.deleted_at IS NULL
+              )
+              AND NOT EXISTS (
+                SELECT 1 FROM public.user_permission_grants g
+                JOIN public.users u ON u.id=g.user_id AND u.tenant_id=$1::uuid AND u.school_id=$2::uuid AND u.deleted_at IS NULL
+                WHERE g.permission_id=p.id AND g.tenant_id=$1::uuid AND g.school_id=$2::uuid AND g.status='active' AND g.deleted_at IS NULL
+                  AND (g.branch_id IS NULL OR $3::uuid IS NULL OR g.branch_id=$3::uuid)
+              )
+            ORDER BY p.resource, p.permission_key`,
+          [tenantId, schoolId, branchId || null],
+        ),
+      ]);
+      return res.json({ success: true, source: 'canonical_database', expired: expired.rows, sensitiveUsers: sensitive.rows, unusedPermissions: unused.rows });
+    } catch (error) { return next(error instanceof Error ? error : new DatabaseError('تعذر إنشاء تقارير حوكمة الصلاحيات.')); }
+  });
+
+  app.get('/api/school/sod-conflicts', authenticateRequest, requirePermissionOnly(PERMISSIONS.IDENTITY_USERS_READ), async (req, res, next) => {
+    if (platformControl) {
+      try {
+        const scope = schoolIdentityScope(req);
+        const data = await readSchoolGovernanceData(scope);
+        const effectiveRows = buildEffectivePermissionRows(data, scope);
+        const rules = data.sodRules.filter((rule: any) => rule.status === 'active');
+        const conflicts = effectiveRows.flatMap((row: any) => {
+          const keys = new Set(row.permissions.map((permission: any) => permission.permissionKey));
+          return rules.filter((rule: any) => keys.has(rule.permission_a) && keys.has(rule.permission_b)).map((rule: any) => ({ user_id: row.id, display_name: row.display_name, email: row.email, rule_id: rule.id, rule_key: rule.rule_key, permission_a: rule.permission_a, permission_b: rule.permission_b, severity: rule.severity, description: rule.description }));
+        }).sort((left: any, right: any) => `${right.severity}:${left.display_name}`.localeCompare(`${left.severity}:${right.display_name}`));
+        return res.json({ success: true, source: 'canonical_control_plane', conflicts });
+      } catch (error) { return next(error instanceof Error ? error : new DatabaseError('تعذر تحميل تعارضات فصل المهام.')); }
+    }
+    if (!platformAdminPool) return next(new DatabaseError('مصدر الهوية المركزي غير متاح.'));
+    try {
+      const { tenantId, schoolId, branchId } = schoolIdentityScope(req);
+      const result = await platformAdminPool.query(
+        `WITH scoped_users AS (
+          SELECT id, display_name, email FROM public.users
+           WHERE tenant_id=$1::uuid AND school_id=$2::uuid AND deleted_at IS NULL
+             AND ($3::uuid IS NULL OR branch_id IS NULL OR branch_id=$3::uuid)
+        ), grants AS (
+          SELECT su.id AS user_id, p.permission_key
+            FROM scoped_users su JOIN public.user_permission_grants g ON g.user_id=su.id AND g.tenant_id=$1::uuid AND g.school_id=$2::uuid AND g.status='active' AND g.deleted_at IS NULL
+             AND (g.branch_id IS NULL OR $3::uuid IS NULL OR g.branch_id=$3::uuid) AND (g.starts_at IS NULL OR g.starts_at<=now()) AND (g.ends_at IS NULL OR g.ends_at>now()) AND g.effect='allow'
+            JOIN public.permissions p ON p.id=g.permission_id AND p.status='active' AND p.deleted_at IS NULL
+          UNION
+          SELECT su.id, p.permission_key
+            FROM scoped_users su JOIN public.user_roles ur ON ur.user_id=su.id AND ur.tenant_id=$1::uuid AND ur.status='active' AND ur.deleted_at IS NULL
+             AND (ur.branch_id IS NULL OR $3::uuid IS NULL OR ur.branch_id=$3::uuid) AND (ur.starts_at IS NULL OR ur.starts_at<=now()) AND (ur.ends_at IS NULL OR ur.ends_at>now())
+            JOIN public.role_permissions rp ON rp.role_id=ur.role_id AND rp.tenant_id=$1::uuid AND rp.status='active' AND rp.deleted_at IS NULL
+            JOIN public.permissions p ON p.id=rp.permission_id AND p.status='active' AND p.deleted_at IS NULL
+        ), conflicts AS (
+          SELECT su.id AS user_id, su.display_name, su.email, r.id AS rule_id, r.rule_key, r.permission_a, r.permission_b, r.severity, r.description
+            FROM scoped_users su JOIN public.identity_sod_rules r ON (r.tenant_id IS NULL OR r.tenant_id=$1::uuid) AND r.status='active'
+           WHERE EXISTS (SELECT 1 FROM grants g WHERE g.user_id=su.id AND g.permission_key=r.permission_a)
+             AND EXISTS (SELECT 1 FROM grants g WHERE g.user_id=su.id AND g.permission_key=r.permission_b)
+        ) SELECT * FROM conflicts ORDER BY severity DESC, display_name, rule_key`,
+        [tenantId, schoolId, branchId || null],
+      );
+      return res.json({ success: true, source: 'canonical_database', conflicts: result.rows });
+    } catch (error) { return next(error instanceof Error ? error : new DatabaseError('تعذر تحميل تعارضات فصل المهام.')); }
+  });
+
+  app.get('/api/school/sod-rules', authenticateRequest, requirePermissionOnly(PERMISSIONS.IDENTITY_USERS_READ), async (req, res, next) => {
+    if (!platformAdminPool) return next(new DatabaseError('مصدر الهوية المركزي غير متاح.'));
+    try {
+      const { tenantId } = schoolIdentityScope(req);
+      const result = await platformAdminPool.query(`SELECT * FROM public.identity_sod_rules WHERE tenant_id IS NULL OR tenant_id=$1::uuid ORDER BY severity DESC, rule_key`, [tenantId]);
+      return res.json({ success: true, rules: result.rows });
+    } catch (error) { return next(error instanceof Error ? error : new DatabaseError('تعذر تحميل قواعد فصل المهام.')); }
+  });
+
+  app.post('/api/school/sod-rules', authenticateRequest, requirePermissionOnly(PERMISSIONS.IDENTITY_USERS_ASSIGN), async (req, res, next) => {
+    if (!platformAdminPool) return next(new DatabaseError('مصدر الهوية المركزي غير متاح.'));
+    const requestId = String(req.body?.requestId || req.get('X-Request-Id') || randomUUID()).trim();
+    const correlationId = String(req.body?.correlationId || req.get('X-Correlation-Id') || randomUUID()).trim();
+    try {
+      const { tenantId, schoolId, actorAuthUserId } = schoolIdentityScope(req);
+      const ruleKey = String(req.body?.ruleKey || '').trim().toLowerCase().replace(/[^a-z0-9._-]/g, '');
+      const a = permissionRegistry.normalize(req.body?.permissionA);
+      const b = permissionRegistry.normalize(req.body?.permissionB);
+      const severity = String(req.body?.severity || 'high').trim().toLowerCase();
+      const description = String(req.body?.description || '').trim();
+      if (!ruleKey || !a || !b || a === b || a >= b) return next(new ValidationError('قاعدة التعارض أو ترتيب الصلاحيات غير صالح.'));
+      if (!['low','medium','high','critical'].includes(severity)) return next(new ValidationError('درجة التعارض غير صالحة.'));
+      if (description.length < 5 || description.length > 1000) return next(new ValidationError('وصف قاعدة التعارض مطلوب.'));
+      const client = await platformAdminPool.connect();
+      try {
+        await client.query('BEGIN');
+        const actor = await client.query(`SELECT id FROM public.users WHERE tenant_id=$1::uuid AND auth_user_id=$2::uuid AND deleted_at IS NULL LIMIT 1`, [tenantId, actorAuthUserId]);
+        if (actor.rowCount !== 1) throw new AuthenticationError('تعذر تحديد منشئ قاعدة التعارض.');
+        const valid = await client.query(`SELECT permission_key FROM public.permissions WHERE status='active' AND deleted_at IS NULL AND permission_key=ANY($1::text[]) AND (tenant_id IS NULL OR tenant_id=$2::uuid)`, [[a, b], tenantId]);
+        if (valid.rowCount !== 2) throw new ValidationError('قاعدة التعارض تحتوي صلاحية غير منشورة.');
+        const inserted = await client.query(`INSERT INTO public.identity_sod_rules (tenant_id, rule_key, permission_a, permission_b, severity, description) VALUES ($1::uuid,$2,$3,$4,$5,$6) RETURNING *`, [tenantId, ruleKey, a, b, severity, description]);
+        const row = inserted.rows[0];
+        const auditId = await recordAccessGovernanceAudit(client, { tenantId, schoolId, actorUserId: actor.rows[0].id, requestId, correlationId, action: 'sod_rule_created', entityId: row.id, before: null, after: row, reason: description });
+        await client.query('COMMIT');
+        return res.status(201).json({ success: true, requestId, correlationId, auditId, rule: row });
+      } catch (error) { await client.query('ROLLBACK').catch(() => undefined); return next(error instanceof Error ? error : new DatabaseError('تعذر إنشاء قاعدة فصل المهام.')); }
+      finally { client.release(); }
+    } catch (error) { return next(error instanceof Error ? error : new DatabaseError('تعذر إنشاء قاعدة فصل المهام.')); }
+  });
+
+  app.get('/api/school/identity-roles', authenticateRequest, requirePermissionOnly(PERMISSIONS.IDENTITY_USERS_READ), async (req, res, next) => {
+    if (!platformControl && !platformAdminPool) return next(new DatabaseError('مصدر الهوية المركزي غير متاح.'));
     try {
       const { tenantId, schoolId, branchId } = schoolIdentityScope(req);
       // Use the canonical relational catalogue below even when the platform
@@ -6275,7 +6704,60 @@ export async function createApp(options: { cloudflare?: boolean } = {}): Promise
       // Hydrate only the canonical default role catalogue for this tenant,
       // atomically and idempotently, so the create-user selector never opens
       // with an empty role list because of provisioning order.
-      const client = await platformAdminPool.connect();
+      // Worker reads use the same Supabase control channel as the school
+      // directory. This avoids a second pg/Hyperdrive connection for a
+      // read-only catalogue, which can be unavailable even while the trusted
+      // control-plane channel is healthy.
+      if (platformControl) {
+        const scopedRoles = await readPlatformRows('roles', 'id, role_key, name, description, version, tenant_id, school_id, branch_id, status, deleted_at', (query) => query
+          .eq('tenant_id', tenantId)
+          .eq('status', 'active')
+          .is('deleted_at', null));
+        const roles = scopedRoles.filter((role: any) =>
+          (!role.school_id || role.school_id === schoolId)
+          && (!role.branch_id || !branchId || role.branch_id === branchId));
+        const roleIds = roles.map((role: any) => role.id).filter(Boolean);
+        const rolePermissions = roleIds.length ? await readPlatformRows('role_permissions', 'role_id, permission_id, tenant_id, status, deleted_at', (query) => query
+          .in('role_id', roleIds)
+          .eq('tenant_id', tenantId)
+          .eq('status', 'active')
+          .is('deleted_at', null)) : [];
+        const permissionIds = [...new Set(rolePermissions.map((entry: any) => entry.permission_id).filter(Boolean))];
+        const permissions = permissionIds.length ? await readPlatformRows('permissions', 'id, permission_key, resource, action, tenant_id, status, deleted_at', (query) => query
+          .in('id', permissionIds)
+          .eq('status', 'active')
+          .is('deleted_at', null)) : [];
+        const permissionsById = new Map(permissions.map((permission: any) => [permission.id, permission]));
+        const permissionsByRole = new Map<string, any[]>();
+        for (const assignment of rolePermissions) {
+          const permission = permissionsById.get(assignment.permission_id);
+          if (!permission) continue;
+          const current = permissionsByRole.get(assignment.role_id) || [];
+          current.push({ permissionKey: permission.permission_key, resource: permission.resource, action: permission.action });
+          permissionsByRole.set(assignment.role_id, current);
+        }
+        const permissionCatalog = [...new Set(permissionRegistry.list())]
+          .filter((permissionKey) => permissionKey !== PERMISSIONS.PLATFORM_ADMIN)
+          .map((permissionKey) => {
+            const { resource, action } = describePermission(permissionKey);
+            return { permissionKey, resource, action, description: permissionKey };
+          })
+          .sort((left, right) => left.permissionKey.localeCompare(right.permissionKey));
+        return res.json({
+          success: true,
+          source: 'canonical_control_plane',
+          roles: roles.map((role: any) => ({
+            id: role.id,
+            roleKey: role.role_key,
+            name: role.name,
+            description: role.description,
+            version: role.version,
+            permissions: permissionsByRole.get(role.id) || [],
+          })),
+          permissionCatalog,
+        });
+      }
+      const client = await platformAdminPool!.connect();
       let result: any;
       try {
         await client.query('BEGIN');
@@ -6415,17 +6897,31 @@ export async function createApp(options: { cloudflare?: boolean } = {}): Promise
   });
 
   app.get('/api/school/users', authenticateRequest, requirePermissionOnly(PERMISSIONS.IDENTITY_USERS_READ), async (req, res, next) => {
-    if (!platformAdminPool) return next(new DatabaseError('مصدر الهوية المركزي غير متاح.'));
+    // Cloudflare Workers use the Supabase control channel for read-only
+    // identity directory requests and do not expose the PostgreSQL pool.
+    // Reject only when both canonical sources are unavailable.
+    if (!platformAdminPool && !platformControl) return next(new DatabaseError('مصدر الهوية المركزي غير متاح.'));
     try {
       const { tenantId, schoolId, branchId } = schoolIdentityScope(req);
       // Read-only directory requests in a Worker use the same trusted
       // Supabase control channel as RBAC resolution. This avoids waiting on a
       // second Hyperdrive pool for a query that does not need a transaction.
       if (platformControl) {
-        const users = await readPlatformRows('users', 'id, auth_user_id, tenant_id, school_id, branch_id, username, email, display_name, job_title, department, status, version, session_revoked_at, force_password_change, created_at', (query) => query
-          .eq('tenant_id', tenantId)
-          .eq('school_id', schoolId)
-          .is('deleted_at', null));
+        let users: any[];
+        try {
+          users = await readPlatformRows('users', 'id, auth_user_id, tenant_id, school_id, branch_id, username, email, display_name, employee_id, job_title, department, status, version, session_revoked_at, force_password_change, created_at', (query) => query
+            .eq('tenant_id', tenantId)
+            .eq('school_id', schoolId)
+            .is('deleted_at', null));
+        } catch {
+          // Older production schemas may not yet contain optional identity
+          // profile columns. Keep the directory readable from canonical core
+          // columns until the additive migrations are applied.
+          users = await readPlatformRows('users', 'id, auth_user_id, tenant_id, school_id, branch_id, display_name, status, version, created_at', (query) => query
+            .eq('tenant_id', tenantId)
+            .eq('school_id', schoolId)
+            .is('deleted_at', null));
+        }
         const userIds = users.map((user: any) => user.id).filter(Boolean);
         const assignments = userIds.length ? await readPlatformRows('user_roles', 'user_id, role_id, school_id, branch_id, starts_at, ends_at, status, deleted_at', (query) => query
           .in('user_id', userIds)
@@ -6499,7 +6995,7 @@ export async function createApp(options: { cloudflare?: boolean } = {}): Promise
       // false error "المستخدم غير موجود داخل مدرسة الجلسة الحالية".
       const result = await platformAdminPool.query(
         `SELECT u.id, u.auth_user_id, u.tenant_id, u.school_id, u.branch_id,
-                u.username, u.job_id,
+                u.username, u.employee_id, u.job_id,
                 u.email AS email,
                 u.display_name, u.job_title, u.department, u.status, u.version,
                 u.session_revoked_at, u.force_password_change, u.created_at,
@@ -6555,9 +7051,9 @@ export async function createApp(options: { cloudflare?: boolean } = {}): Promise
     const correlationId = String(req.body?.correlationId || req.get('X-Correlation-Id') || randomUUID()).trim();
     let authUserId = '';
     try {
-      if (runtimeSchemaBootstrapEnabled) await ensureIdentityJobSchema();
       const { tenantId, schoolId, actorAuthUserId } = schoolIdentityScope(req);
       const displayName = String(req.body?.name || req.body?.displayName || '').trim();
+      const employeeId = String(req.body?.employeeId || '').trim();
       const jobId = String(req.body?.jobId || '').trim();
       const jobTitle = String(req.body?.jobTitle || '').trim();
       const department = String(req.body?.department || '').trim();
@@ -6574,6 +7070,7 @@ export async function createApp(options: { cloudflare?: boolean } = {}): Promise
       let branchId = String(req.body?.branchId || '').trim();
       if (!/^[0-9a-f-]{36}$/i.test(requestId) || !/^[0-9a-f-]{36}$/i.test(correlationId)) return next(new ValidationError('معرف الطلب أو الارتباط غير صالح.'));
       if (displayName.length < 2 || displayName.length > 160) return next(new ValidationError('اسم المستخدم يجب أن يكون بين حرفين و160 حرفاً.'));
+      if (!employeeId) return next(new ValidationError('اختيار موظف من سجل شؤون الموظفين إلزامي لإنشاء الحساب.'));
       if (jobId.length > 120 || jobTitle.length > 160 || department.length > 160) return next(new ValidationError('الوظيفة أو المسمى الوظيفي أو القسم يتجاوز الحد المسموح.'));
       if (email && !/^\S+@\S+\.\S+$/.test(email)) return next(new ValidationError('البريد الإلكتروني غير صالح.'));
       if (requestedPassword && requestedPassword.length < 8) return next(new ValidationError('كلمة المرور يجب ألا تقل عن 8 رموز.'));
@@ -6620,6 +7117,10 @@ export async function createApp(options: { cloudflare?: boolean } = {}): Promise
         const roleSpec = { name: roleLookup.rows[0].name, description: roleLookup.rows[0].description, permissions: roleLookup.rows[0].permission_keys as string[] };
         const roleId = roleLookup.rows[0].id;
         let resolvedJobTitle = jobTitle;
+        const employeeResult = await client.query(`SELECT employee->>'id' AS employee_id, employee->>'name' AS employee_name, employee->>'jobId' AS employee_job_id FROM public.hr_database h CROSS JOIN LATERAL jsonb_array_elements(COALESCE(h.data->'employees', '[]'::jsonb)) AS employee WHERE h.tenant_id = $1::uuid AND h.school_id = $2::uuid AND employee->>'id' = $3 AND COALESCE(employee->>'status', '') <> 'resigned' LIMIT 1`, [tenantId, schoolId, employeeId]);
+        if (employeeResult.rowCount !== 1) return next(new ConflictError('الموظف المختار غير موجود أو غير نشط في دليل شؤون الموظفين الحالي.'));
+        if (employeeResult.rows[0].employee_name !== displayName) return next(new ConflictError('اسم المستخدم يجب أن يطابق اسم الموظف المختار من شؤون الموظفين.'));
+        if (jobId && employeeResult.rows[0].employee_job_id && employeeResult.rows[0].employee_job_id !== jobId) return next(new ConflictError('الوظيفة لا تطابق سجل الموظف المختار.'));
         if (jobId) {
           const jobResult = await client.query(
             `SELECT job->>'titleAr' AS title_ar, job->>'titleEn' AS title_en
@@ -6633,6 +7134,8 @@ export async function createApp(options: { cloudflare?: boolean } = {}): Promise
           if (jobResult.rowCount !== 1) return next(new ConflictError('الوظيفة المختارة غير موجودة في دليل شؤون الموظفين الحالي.'));
           resolvedJobTitle = String(jobResult.rows[0].title_ar || jobResult.rows[0].title_en || jobTitle).trim();
         }
+        const identityColumns = await client.query(`SELECT COUNT(*)::int AS count FROM information_schema.columns WHERE table_schema = 'public' AND table_name = 'users' AND column_name IN ('job_id', 'employee_id')`);
+        const hasIdentityColumns = Number(identityColumns.rows[0]?.count || 0) === 2;
         const authResult = await platformAdminAuth.auth.admin.createUser({
         email: loginIdentity.authEmail, password, email_confirm: true,
         user_metadata: { display_name: displayName, login_username: loginIdentity.username },
@@ -6641,7 +7144,9 @@ export async function createApp(options: { cloudflare?: boolean } = {}): Promise
         if (authResult.error || !authResult.data.user) throw new ExternalServiceError(authResult.error?.message || 'تعذر إنشاء هوية Supabase Auth.');
         authUserId = authResult.data.user.id;
         await client.query('BEGIN');
-        const userResult = await client.query(`INSERT INTO public.users (auth_user_id, tenant_id, school_id, branch_id, username, email, display_name, job_id, job_title, department, status, force_password_change, created_by, updated_by) VALUES ($1::uuid, $2::uuid, $3::uuid, $4::uuid, $5, $6, $7, $8, $9, $10, 'active', $11, $12::uuid, $12::uuid) RETURNING id, auth_user_id, tenant_id, school_id, branch_id, username, email, display_name, job_id, job_title, department, status, force_password_change, version, created_at`, [authUserId, tenantId, schoolId, branchId, loginIdentity.username, email, displayName, jobId || null, resolvedJobTitle || null, department || null, !requestedPassword, actorAuthUserId]);
+        const userResult = hasIdentityColumns
+          ? await client.query(`INSERT INTO public.users (auth_user_id, tenant_id, school_id, branch_id, username, email, display_name, employee_id, job_id, job_title, department, status, force_password_change, created_by, updated_by) VALUES ($1::uuid, $2::uuid, $3::uuid, $4::uuid, $5, $6, $7, $8, $9, $10, $11, 'active', $12, $13::uuid, $13::uuid) RETURNING id, auth_user_id, tenant_id, school_id, branch_id, username, email, display_name, employee_id, job_id, job_title, department, status, force_password_change, version, created_at`, [authUserId, tenantId, schoolId, branchId, loginIdentity.username, email, displayName, employeeId, jobId || null, resolvedJobTitle || null, department || null, !requestedPassword, actorAuthUserId])
+          : await client.query(`INSERT INTO public.users (auth_user_id, tenant_id, school_id, branch_id, username, email, display_name, job_title, department, status, force_password_change, created_by, updated_by) VALUES ($1::uuid, $2::uuid, $3::uuid, $4::uuid, $5, $6, $7, $8, $9, 'active', $10, $11::uuid, $11::uuid) RETURNING id, auth_user_id, tenant_id, school_id, branch_id, username, email, display_name, job_title, department, status, force_password_change, version, created_at`, [authUserId, tenantId, schoolId, branchId, loginIdentity.username, email, displayName, resolvedJobTitle || null, department || null, !requestedPassword, actorAuthUserId]);
         for (const permissionKey of roleSpec.permissions) {
           const { resource, action } = describePermission(permissionKey);
           const permissionResult = await client.query(`INSERT INTO public.permissions (tenant_id, permission_key, resource, action, description, status, created_by, updated_by) VALUES (NULL, $1, $2, $3, $1, 'active', $4::uuid, $4::uuid) ON CONFLICT (permission_key) DO UPDATE SET status = 'active', deleted_at = NULL, deleted_by = NULL, updated_at = now() RETURNING id`, [permissionKey, resource, action, actorAuthUserId]);
@@ -6679,7 +7184,6 @@ export async function createApp(options: { cloudflare?: boolean } = {}): Promise
   app.patch('/api/school/users/:userId', authenticateRequest, requireSchoolIdentityMutationPermission, async (req, res, next) => {
     if (!platformAdminPool || !platformAdminAuth) return next(new ExternalServiceError('خدمة هوية المدرسة غير مهيأة.'));
     try {
-      if (runtimeSchemaBootstrapEnabled) await ensureIdentityJobSchema();
       const { tenantId, schoolId, actorAuthUserId } = schoolIdentityScope(req);
       const userId = String(req.params.userId || '').trim();
       const operation = String(req.body?.operation || '').trim();
@@ -6715,7 +7219,11 @@ export async function createApp(options: { cloudflare?: boolean } = {}): Promise
           }
           const authResult = await platformAdminAuth.auth.admin.updateUserById(row.auth_user_id, { user_metadata: { display_name: displayName }, ...(email && email !== String(row.profile_email || '').toLowerCase() ? { email, email_confirm: true } : {}) });
           if (authResult.error) throw new ExternalServiceError('تعذر تحديث هوية المستخدم عبر Supabase Auth.');
-          const result = await client.query(`UPDATE public.users SET display_name = $4, job_id = $5, job_title = $6, department = $7, email = $8, updated_at = now(), updated_by = $9::uuid, version = version + 1 WHERE id = $1::uuid AND tenant_id = $2::uuid AND school_id = $3::uuid AND deleted_at IS NULL AND version = $10 RETURNING id, auth_user_id, tenant_id, school_id, branch_id, username, email, display_name, job_id, job_title, department, status, force_password_change, version, created_at`, [userId, tenantId, schoolId, displayName, jobId || null, resolvedJobTitle || null, department || null, email || null, actorAuthUserId, expectedVersion]);
+          const identityColumns = await client.query(`SELECT COUNT(*)::int AS count FROM information_schema.columns WHERE table_schema = 'public' AND table_name = 'users' AND column_name IN ('job_id', 'employee_id')`);
+          const hasIdentityColumns = Number(identityColumns.rows[0]?.count || 0) === 2;
+          const result = hasIdentityColumns
+            ? await client.query(`UPDATE public.users SET display_name = $4, job_id = $5, job_title = $6, department = $7, email = $8, updated_at = now(), updated_by = $9::uuid, version = version + 1 WHERE id = $1::uuid AND tenant_id = $2::uuid AND school_id = $3::uuid AND deleted_at IS NULL AND version = $10 RETURNING id, auth_user_id, tenant_id, school_id, branch_id, username, email, display_name, job_id, job_title, department, status, force_password_change, version, created_at`, [userId, tenantId, schoolId, displayName, jobId || null, resolvedJobTitle || null, department || null, email || null, actorAuthUserId, expectedVersion])
+            : await client.query(`UPDATE public.users SET display_name = $4, job_title = $5, department = $6, email = $7, updated_at = now(), updated_by = $8::uuid, version = version + 1 WHERE id = $1::uuid AND tenant_id = $2::uuid AND school_id = $3::uuid AND deleted_at IS NULL AND version = $9 RETURNING id, auth_user_id, tenant_id, school_id, branch_id, username, email, display_name, job_title, department, status, force_password_change, version, created_at`, [userId, tenantId, schoolId, displayName, resolvedJobTitle || null, department || null, email || null, actorAuthUserId, expectedVersion]);
           if (result.rowCount !== 1) throw new ConflictError('تعذر تحديث المستخدم؛ تغيرت النسخة الحالية.');
           updated = result.rows[0]; metadata = { before: { displayName: row.display_name, jobId: row.job_id, jobTitle: row.job_title, department: row.department, email: row.profile_email }, after: { displayName, jobId: jobId || null, jobTitle: resolvedJobTitle || null, department: department || null, email: email || null } };
         } else if (operation === 'assign_role') {
@@ -6737,6 +7245,39 @@ export async function createApp(options: { cloudflare?: boolean } = {}): Promise
           )];
           if (requestedPermissionKeys.length !== rawPermissionKeys.length || requestedPermissionKeys.length > 200 || requestedPermissionKeys.includes(PERMISSIONS.PLATFORM_ADMIN)) {
             throw new ValidationError('قائمة الصلاحيات المحلية تحتوي مفتاحاً غير مسجل أو غير صالح.');
+          }
+          assertNoSegregationOfDutiesConflict(requestedPermissionKeys);
+          const sensitiveFinancialKeys = requestedPermissionKeys.filter((permissionKey) => permissionKey.startsWith('financial:'));
+          if (sensitiveFinancialKeys.length > 0) {
+            const inheritedFinancial = await client.query(
+              `SELECT DISTINCT p.permission_key
+                 FROM public.user_roles ur
+                 JOIN public.role_permissions rp ON rp.role_id = ur.role_id AND rp.tenant_id = $1::uuid AND rp.status = 'active' AND rp.deleted_at IS NULL
+                 JOIN public.permissions p ON p.id = rp.permission_id AND p.status = 'active' AND p.deleted_at IS NULL
+                WHERE ur.tenant_id = $1::uuid AND ur.user_id = $2::uuid AND ur.status = 'active' AND ur.deleted_at IS NULL
+                  AND (ur.school_id IS NULL OR ur.school_id = $3::uuid) AND p.permission_key = ANY($4::text[])`,
+              [tenantId, userId, schoolId, sensitiveFinancialKeys],
+            );
+            const inheritedKeys = new Set(inheritedFinancial.rows.map((entry: any) => String(entry.permission_key || '')));
+            const directSensitiveFinancialKeys = sensitiveFinancialKeys.filter((permissionKey) => !inheritedKeys.has(permissionKey));
+            if (directSensitiveFinancialKeys.length === 0) {
+              // Role-inherited financial access is governed by the published role;
+              // only direct school exceptions require an approved request.
+            } else {
+            const approvedFinancial = await client.query(
+              `SELECT DISTINCT requested.permission_key
+                 FROM public.identity_access_requests r
+                 CROSS JOIN LATERAL unnest(r.permission_keys) AS requested(permission_key)
+                WHERE r.tenant_id = $1::uuid AND r.school_id = $2::uuid AND r.user_id = $3::uuid
+                  AND r.status = 'approved' AND r.deleted_at IS NULL
+                  AND (r.starts_at IS NULL OR r.starts_at <= now()) AND (r.ends_at IS NULL OR r.ends_at > now())
+                  AND requested.permission_key = ANY($4::text[])`,
+              [tenantId, schoolId, userId, directSensitiveFinancialKeys],
+            );
+            const approvedKeys = new Set(approvedFinancial.rows.map((entry: any) => String(entry.permission_key || '')));
+            const missingApprovals = directSensitiveFinancialKeys.filter((permissionKey) => !approvedKeys.has(permissionKey));
+            if (missingApprovals.length > 0) throw new AuthorizationError(`الصلاحيات المالية الحساسة تتطلب طلب موافقة معتمدًا وساريًا: ${missingApprovals.join('، ')}`);
+            }
           }
           const canonicalPermissionKeys = permissionRegistry.list()
             .map((permissionKey) => permissionRegistry.normalize(permissionKey))
@@ -7809,6 +8350,15 @@ export async function createApp(options: { cloudflare?: boolean } = {}): Promise
   async function resolveStudentTenantMiddleware(req: express.Request, _res: express.Response, next: express.NextFunction) {
     try {
       await resolveStudentTenantContext(req);
+      next();
+    } catch (error) {
+      next(error);
+    }
+  }
+
+  async function resolveStudentReadTenantMiddleware(req: express.Request, _res: express.Response, next: express.NextFunction) {
+    try {
+      await resolveStudentReadTenantContext(req);
       next();
     } catch (error) {
       next(error);
@@ -10849,6 +11399,47 @@ export async function createApp(options: { cloudflare?: boolean } = {}): Promise
     }
   });
 
+  app.get('/api/hr/accounting-mappings', authenticateRequest, requirePermission(PERMISSIONS.FINANCIAL_READ), async (req, res, next) => {
+    try {
+      const identity = (req as any).user;
+      const tenantId = String(identity?.tenantId || '').trim();
+      const schoolId = String(identity?.schoolId || '').trim();
+      const tenantContext = (req as any).tenantContext;
+      const definitions = CANONICAL_MAPPING_DEFINITIONS.filter(item => item.source === 'hr' || item.source === 'treasury');
+      if (!tenantId || !schoolId || !tenantContext || tenantContext.tenantId !== tenantId || tenantContext.schoolId !== schoolId) {
+        throw new AuthenticationError('السياق الموثوق لقراءة خرائط HR غير مكتمل.');
+      }
+      const rows = await UnitOfWork.runInTransaction(schoolId, {
+        operationName: 'Read HR accounting mappings', tenantId, userId: identity.id,
+        userName: identity.name || 'المستخدم الحالي', ipAddress: req.ip || 'unknown',
+        affectedTables: ['erp_account_mappings', 'erp_chart_of_accounts']
+      }, async () => {
+        const transaction = UnitOfWork.getActiveContext()?.databaseTransaction;
+        if (!transaction) throw new DatabaseError('معاملة قراءة خرائط HR غير متاحة.');
+        const result = await transaction.query(`
+          SELECT m.mapping_key, m.account_code, c.account_name, c.account_nature, c.is_active, c.is_leaf
+            FROM public.erp_account_mappings m
+            LEFT JOIN public.erp_chart_of_accounts c
+              ON c.tenant_id = m.tenant_id AND c.school_id = m.school_id AND c.account_code = m.account_code
+           WHERE m.tenant_id = $1 AND m.school_id = $2 AND m.is_active = true
+             AND m.mapping_key = ANY($3::text[])
+           ORDER BY m.mapping_key`, [tenantId, schoolId, definitions.map(item => item.key)]);
+        return result.rows;
+      }, tenantContext);
+      const byKey = new Map(rows.map((row: any) => [String(row.mapping_key), row]));
+      const status = definitions.map(definition => {
+        const row = byKey.get(definition.key);
+        const valid = Boolean(row?.account_code && row?.is_active !== false && row?.is_leaf !== false);
+        return { ...definition, configured: valid, accountCode: valid ? String(row.account_code) : '', accountName: valid ? String(row.account_name || '') : '' };
+      });
+      const missing = status.filter(item => item.required && !item.configured).map(item => item.label);
+      const missingOptional = status.filter(item => !item.required && !item.configured).map(item => item.label);
+      res.json({ success: true, data: { configured: missing.length === 0, complete: missing.length === 0 && missingOptional.length === 0, missing, missingOptional, status }, meta: { source: 'canonical-postgres', scope: { tenantId, schoolId } } });
+    } catch (err: any) {
+      next(err instanceof AuthenticationError || err instanceof AuthorizationError || err instanceof DatabaseError ? err : new DatabaseError('تعذر قراءة خرائط حسابات الموارد البشرية.', err?.message));
+    }
+  });
+
   // HR only records school-owned account mappings here. It deliberately does
   // not create a journal: posting remains an explicit approved-payment action.
   app.post('/api/hr/accounting-mappings', authenticateRequest, requirePermission(PERMISSIONS.FINANCIAL_WRITE), async (req, res, next) => {
@@ -10862,8 +11453,15 @@ export async function createApp(options: { cloudflare?: boolean } = {}): Promise
         ...(String(req.body?.bankAccount || '').trim() ? [['treasury.bank', String(req.body?.bankAccount || '').trim(), 'asset'] as const] : []),
         ['hr.payroll.expense', String(req.body?.payrollExpenseAccount || '').trim(), 'expense'],
         ['hr.payroll.payable', String(req.body?.payrollPayableAccount || '').trim(), 'liability'],
+        ...(String(req.body?.payrollBasicSalaryAccount || '').trim() ? [['hr.payroll.basic_salary', String(req.body?.payrollBasicSalaryAccount || '').trim(), 'expense'] as const] : []),
+        ...(String(req.body?.payrollAllowancesAccount || '').trim() ? [['hr.payroll.allowances', String(req.body?.payrollAllowancesAccount || '').trim(), 'expense'] as const] : []),
+        ...(String(req.body?.medicalAllowanceAccount || '').trim() ? [['hr.payroll.medical_allowance', String(req.body?.medicalAllowanceAccount || '').trim(), 'expense'] as const] : []),
+        ...(String(req.body?.payrollBonusesAccount || '').trim() ? [['hr.payroll.bonuses', String(req.body?.payrollBonusesAccount || '').trim(), 'expense'] as const] : []),
+        ...(String(req.body?.payrollOvertimeAccount || '').trim() ? [['hr.payroll.overtime', String(req.body?.payrollOvertimeAccount || '').trim(), 'expense'] as const] : []),
         ...(String(req.body?.endOfServiceExpenseAccount || '').trim() ? [['hr.end_of_service.expense', String(req.body?.endOfServiceExpenseAccount || '').trim(), 'expense'] as const] : []),
         ['hr.advance.receivable', String(req.body?.advanceReceivableAccount || '').trim(), 'asset'],
+        ...(String(req.body?.shortTermAdvanceAccount || '').trim() ? [['hr.advance.short_term.receivable', String(req.body?.shortTermAdvanceAccount || '').trim(), 'asset'] as const] : []),
+        ...(String(req.body?.longTermAdvanceAccount || '').trim() ? [['hr.advance.long_term.receivable', String(req.body?.longTermAdvanceAccount || '').trim(), 'asset'] as const] : []),
         ['hr.deductions.clearing', String(req.body?.deductionClearingAccount || '').trim(), 'liability']
       ] as const;
       if (!tenantId || !schoolId || !tenantContext || tenantContext.tenantId !== tenantId || tenantContext.schoolId !== schoolId || mappings.some(([, code]) => !code)) {
@@ -10885,6 +11483,7 @@ export async function createApp(options: { cloudflare?: boolean } = {}): Promise
         if (!await CanonicalErpPostingService.isProvisioned(transaction)) {
           throw new DatabaseError('دفتر الأستاذ الكانوني غير مهيأ بعد لهذه المدرسة.');
         }
+        await CanonicalErpPostingService.ensureDefaultChartOfAccounts(transaction, tenantId, schoolId, actorId);
         for (const [key, code, nature] of mappings) {
           const account = await transaction.query<{ account_code: string }>(
             `SELECT account_code FROM public.erp_chart_of_accounts
@@ -11031,13 +11630,17 @@ export async function createApp(options: { cloudflare?: boolean } = {}): Promise
         const payoutMethod = String(advance.payoutMethod || 'cash');
         const requestedPayoutAccount = String(advance.payoutAccount || '').trim();
         const payoutKey = payoutMethod === 'bank' ? 'treasury.bank' : 'treasury.cash';
-        const mappingRows = await transaction.query<{ mapping_key: string; account_code: string }>(`SELECT mapping_key,account_code FROM public.erp_account_mappings WHERE school_id=$1 AND is_active=true AND mapping_key = ANY($2::text[])`, [schoolId, [payoutKey, 'treasury.cash', 'hr.advance.receivable']]);
+        const advanceReceivableKey = String(advance.loanType || 'short_term') === 'long_term'
+          ? 'hr.advance.long_term.receivable'
+          : 'hr.advance.short_term.receivable';
+        const mappingRows = await transaction.query<{ mapping_key: string; account_code: string }>(`SELECT mapping_key,account_code FROM public.erp_account_mappings WHERE school_id=$1 AND is_active=true AND mapping_key = ANY($2::text[])`, [schoolId, [payoutKey, 'treasury.cash', 'hr.advance.receivable', 'hr.advance.short_term.receivable', 'hr.advance.long_term.receivable']]);
         const mappings = new Map(mappingRows.rows.map(row => [row.mapping_key, row.account_code]));
         const payoutAccount = requestedPayoutAccount || mappings.get(payoutKey);
-        if (!payoutAccount || !mappings.get('hr.advance.receivable') || (requestedPayoutAccount && requestedPayoutAccount !== payoutAccount)) throw new ValidationError('حساب صرف السلفة غير معتمد ضمن خرائط المدرسة.');
+        const advanceReceivableAccount = mappings.get(advanceReceivableKey) || mappings.get('hr.advance.receivable');
+        if (!payoutAccount || !advanceReceivableAccount || (requestedPayoutAccount && requestedPayoutAccount !== payoutAccount)) throw new ValidationError('حساب صرف السلفة غير معتمد ضمن خرائط المدرسة.');
         const sync = await CanonicalErpPostingService.syncSnapshot(transaction, tenantId, schoolId, actorId, {
           journalEntries: [{ id: `hr-advance-${advanceId}`, sourceType: 'journal_entry', status: 'posted', date: String(advance.date || new Date().toISOString().slice(0, 10)), description: `صرف سلفة موظف ${advance.employeeId} — ${advance.costCenter}`, lines: [
-            { id: 'advance-receivable', accountCode: mappings.get('hr.advance.receivable'), debit: amount, credit: 0, costCenter: advance.costCenter },
+            { id: 'advance-receivable', accountCode: advanceReceivableAccount, debit: amount, credit: 0, costCenter: advance.costCenter },
             { id: 'payout', accountCode: payoutAccount, debit: 0, credit: amount, costCenter: advance.costCenter }
           ] }]
         });
@@ -11142,15 +11745,28 @@ export async function createApp(options: { cloudflare?: boolean } = {}): Promise
         if (!run || run.status !== 'approved' || run.commitJournalId) throw new ConflictError('لا يمكن إنشاء الالتزام إلا لمسير معتمد غير ملتزم.');
         const fingerprint = createHash('sha256').update(stableJsonStringify({ period, lines: run.lines, totals: run.totals })).digest('hex');
         if (run.fingerprint !== fingerprint) throw new ConflictError('بصمة المسير المعتمد غير صحيحة.');
-        const mappingRows = await transaction.query<{ mapping_key: string; account_code: string }>(`SELECT mapping_key,account_code FROM public.erp_account_mappings WHERE school_id=$1 AND is_active=true AND mapping_key = ANY($2::text[])`, [schoolId, ['hr.payroll.expense','hr.payroll.payable']]);
+        const mappingRows = await transaction.query<{ mapping_key: string; account_code: string }>(`SELECT mapping_key,account_code FROM public.erp_account_mappings WHERE school_id=$1 AND is_active=true AND mapping_key = ANY($2::text[])`, [schoolId, ['hr.payroll.expense','hr.payroll.basic_salary','hr.payroll.allowances','hr.payroll.medical_allowance','hr.payroll.bonuses','hr.payroll.overtime','hr.payroll.payable']]);
         const mappings = new Map(mappingRows.rows.map(row => [row.mapping_key, row.account_code]));
         if (!mappings.get('hr.payroll.expense') || !mappings.get('hr.payroll.payable')) throw new ValidationError('اعتمد حساب مصروف الرواتب وحساب الالتزام أولاً.');
         const lines: Array<Record<string, any>> = [];
         for (const line of (Array.isArray(run.lines) ? run.lines : [])) {
           const cc = String(line.costCenter || '').trim();
-          const expense = Number(line.gross || 0) + Number(line.overtimePay || 0);
-          if (expense > 0) lines.push({ id: `${line.employeeId}-expense`, accountCode: mappings.get('hr.payroll.expense'), debit: expense, credit: 0, costCenter: cc });
-          if (Number(line.net || 0) > 0) lines.push({ id: `${line.employeeId}-payable`, accountCode: mappings.get('hr.payroll.payable'), debit: 0, credit: Number(line.net), costCenter: cc });
+          const componentLines = [
+            ['basic_salary', Number(line.basicSalary || 0), mappings.get('hr.payroll.basic_salary') || mappings.get('hr.payroll.expense')],
+            ['allowances', Number(line.otherAllowances || 0), mappings.get('hr.payroll.allowances') || mappings.get('hr.payroll.expense')],
+            ['medical_allowance', Number(line.medicalAllowance || 0), mappings.get('hr.payroll.medical_allowance') || mappings.get('hr.payroll.allowances') || mappings.get('hr.payroll.expense')],
+            ['bonuses', Number(line.bonuses || 0), mappings.get('hr.payroll.bonuses') || mappings.get('hr.payroll.expense')],
+            ['overtime', Number(line.overtimePay || 0), mappings.get('hr.payroll.overtime') || mappings.get('hr.payroll.expense')]
+          ];
+          const hasComponents = componentLines.some(([, amount]) => Number(amount) > 0);
+          if (!hasComponents && Number(line.gross || 0) + Number(line.overtimePay || 0) > 0) {
+            componentLines.push(['gross_legacy', Number(line.gross || 0) + Number(line.overtimePay || 0), mappings.get('hr.payroll.expense')]);
+          }
+          for (const [component, amount, accountCode] of componentLines) {
+            if (Number(amount) > 0 && accountCode) lines.push({ id: `${line.employeeId}-${component}-expense`, accountCode, debit: Number(amount), credit: 0, costCenter: cc });
+          }
+          const obligation = Number(line.gross || 0) + Number(line.overtimePay || 0);
+          if (obligation > 0) lines.push({ id: `${line.employeeId}-payable`, accountCode: mappings.get('hr.payroll.payable'), debit: 0, credit: obligation, costCenter: cc });
         }
         const sync = await CanonicalErpPostingService.syncSnapshot(transaction, tenantId, schoolId, actorId, { journalEntries: [{ id: `hr-payroll-commit-${period}`, sourceType: 'journal_entry', status: 'posted', date: `${period}-01`, description: `إثبات التزام رواتب الفترة ${period}`, lines }] });
         journalId = sync.sourceLinks.find(link => link.sourceId === `hr-payroll-commit-${period}`)?.journalEntryId || '';
@@ -11198,7 +11814,7 @@ export async function createApp(options: { cloudflare?: boolean } = {}): Promise
         const requestedPayoutAccount = String(req.body?.payoutAccount || '').trim();
         if (!['cash', 'bank'].includes(requestedPayoutMethod)) throw new ValidationError('طريقة صرف الرواتب يجب أن تكون خزينة أو بنكاً.');
         const payoutMappingKey = requestedPayoutMethod === 'bank' ? 'treasury.bank' : 'treasury.cash';
-        const mappingRows = await transaction.query<{ mapping_key: string; account_code: string }>(`SELECT mapping_key,account_code FROM public.erp_account_mappings WHERE school_id=$1 AND is_active=true AND mapping_key = ANY($2::text[])`, [schoolId, ['treasury.cash','treasury.bank','hr.payroll.expense','hr.payroll.payable','hr.advance.receivable','hr.deductions.clearing']]);
+        const mappingRows = await transaction.query<{ mapping_key: string; account_code: string }>(`SELECT mapping_key,account_code FROM public.erp_account_mappings WHERE school_id=$1 AND is_active=true AND mapping_key = ANY($2::text[])`, [schoolId, ['treasury.cash','treasury.bank','hr.payroll.expense','hr.payroll.basic_salary','hr.payroll.allowances','hr.payroll.medical_allowance','hr.payroll.bonuses','hr.payroll.overtime','hr.payroll.payable','hr.advance.receivable','hr.advance.short_term.receivable','hr.advance.long_term.receivable','hr.deductions.clearing']]);
         const mappings = new Map(mappingRows.rows.map(row => [row.mapping_key, row.account_code]));
         const required = [payoutMappingKey, run.status === 'committed' ? 'hr.payroll.payable' : 'hr.payroll.expense','hr.advance.receivable','hr.deductions.clearing'];
         if (required.some(key => !mappings.get(key))) throw new ValidationError('لا يمكن تنفيذ الصرف قبل اعتماد جميع خرائط حسابات HR من شاشة الحسابات.');
@@ -11210,12 +11826,31 @@ export async function createApp(options: { cloudflare?: boolean } = {}): Promise
         const lines: Array<Record<string, any>> = [];
         for (const line of (Array.isArray(run.lines) ? run.lines : [])) {
           const cc = String(line.costCenter || '').trim();
-          const expense = Number(line.gross || 0) + Number(line.overtimePay || 0);
+          const componentLines = [
+            ['basic_salary', Number(line.basicSalary || 0), mappings.get('hr.payroll.basic_salary') || mappings.get('hr.payroll.expense')],
+            ['allowances', Number(line.otherAllowances || 0), mappings.get('hr.payroll.allowances') || mappings.get('hr.payroll.expense')],
+            ['medical_allowance', Number(line.medicalAllowance || 0), mappings.get('hr.payroll.medical_allowance') || mappings.get('hr.payroll.allowances') || mappings.get('hr.payroll.expense')],
+            ['bonuses', Number(line.bonuses || 0), mappings.get('hr.payroll.bonuses') || mappings.get('hr.payroll.expense')],
+            ['overtime', Number(line.overtimePay || 0), mappings.get('hr.payroll.overtime') || mappings.get('hr.payroll.expense')]
+          ];
+          const hasComponents = componentLines.some(([, amount]) => Number(amount) > 0);
+          if (!hasComponents && Number(line.gross || 0) + Number(line.overtimePay || 0) > 0) {
+            componentLines.push(['gross_legacy', Number(line.gross || 0) + Number(line.overtimePay || 0), mappings.get('hr.payroll.expense')]);
+          }
+          const obligation = Number(line.gross || 0) + Number(line.overtimePay || 0);
           const deductions = Number(line.penalty || 0) + Number(line.attendanceDeduction || 0) + Number(line.leaveDeduction || 0);
-          if (run.status !== 'committed' && expense > 0) lines.push({ id: `${line.employeeId}-expense`, accountCode: mappings.get('hr.payroll.expense'), debit: expense, credit: 0, costCenter: cc });
-          if (run.status === 'committed' && Number(line.net || 0) > 0) lines.push({ id: `${line.employeeId}-payable-settlement`, accountCode: mappings.get('hr.payroll.payable'), debit: Number(line.net), credit: 0, costCenter: cc });
+          if (run.status !== 'committed') {
+            for (const [component, amount, accountCode] of componentLines) {
+              if (Number(amount) > 0 && accountCode) lines.push({ id: `${line.employeeId}-${component}-expense`, accountCode, debit: Number(amount), credit: 0, costCenter: cc });
+            }
+          }
+          if (run.status === 'committed' && obligation > 0) lines.push({ id: `${line.employeeId}-payable-settlement`, accountCode: mappings.get('hr.payroll.payable'), debit: obligation, credit: 0, costCenter: cc });
           if (Number(line.net || 0) > 0) lines.push({ id: `${line.employeeId}-payout`, accountCode: mappings.get(payoutMappingKey), debit: 0, credit: Number(line.net), costCenter: cc });
-          if (Number(line.advanceDeduction || 0) > 0) lines.push({ id: `${line.employeeId}-advance`, accountCode: mappings.get('hr.advance.receivable'), debit: 0, credit: Number(line.advanceDeduction), costCenter: cc });
+          if (Number(line.advanceDeduction || 0) > 0) {
+            const advanceKey = line.advanceLoanType === 'long_term' ? 'hr.advance.long_term.receivable' : 'hr.advance.short_term.receivable';
+            const advanceAccount = mappings.get(advanceKey) || mappings.get('hr.advance.receivable');
+            lines.push({ id: `${line.employeeId}-advance`, accountCode: advanceAccount, debit: 0, credit: Number(line.advanceDeduction), costCenter: cc });
+          }
           if (deductions > 0) lines.push({ id: `${line.employeeId}-deductions`, accountCode: mappings.get('hr.deductions.clearing'), debit: 0, credit: deductions, costCenter: cc });
         }
         const sync = await CanonicalErpPostingService.syncSnapshot(transaction, tenantId, schoolId, actorId, { journalEntries: [{ id: `hr-payroll-${period}`, sourceType: 'journal_entry', status: 'posted', date: `${period}-01`, description: `صرف مسير الرواتب المعتمد للفترة ${period}`, lines }] });
@@ -11249,7 +11884,36 @@ export async function createApp(options: { cloudflare?: boolean } = {}): Promise
   });
 
   // Exams and Results Database API
-  app.get("/api/exams/database", authenticateRequest, requirePermission(PERMISSIONS.EXAM_READ), async (req, res, next) => {
+  app.get('/api/exams/proctor-candidates', authenticateRequest, requirePermission(PERMISSIONS.EXAM_READ), resolveStudentReadTenantMiddleware, async (req, res, next) => {
+    try {
+      const identity = (req as any).user;
+      const actorRole = roleResolver.resolveRole(identity);
+      if (!canApproveExamOperation(actorRole, 'approve')) {
+        throw new AuthorizationError('قائمة كادر المراقبة وتكليفات الموظفين متاحة لمدير المدرسة أو الكنترول فقط.');
+      }
+      const tenantContext = (req as any).tenantContext;
+      const tenantId = String(identity.tenantId || '').trim();
+      const schoolId = String(identity.schoolId || '').trim();
+      if (!tenantId || !schoolId || tenantContext?.tenantId !== tenantId || tenantContext?.schoolId !== schoolId) {
+        throw new AuthenticationError('سياق المدرسة الموثوق غير مكتمل لقراءة المراقبين.');
+      }
+      const supabase = canonicalTenantReadClient(req);
+      if (!supabase) throw new DatabaseError('مصدر مراقبي الامتحانات غير متاح.');
+      const { data: snapshot, error } = await supabase.from('hr_database').select('data')
+        .eq('tenant_id', tenantId).eq('school_id', schoolId).limit(1).maybeSingle();
+      if (error) throw error;
+      res.json({
+        success: true,
+        data: buildExamProctorCandidates(snapshot?.data),
+        meta: { source: 'canonical_hr', sourceAvailable: Boolean(snapshot) }
+      });
+    } catch (error) {
+      next(error instanceof AuthenticationError || error instanceof AuthorizationError || error instanceof DatabaseError
+        ? error : new DatabaseError('تعذر تحميل الموظفين النشطين لتكليفات الامتحانات.'));
+    }
+  });
+
+  app.get("/api/exams/database", authenticateRequest, requirePermission(PERMISSIONS.EXAM_READ), resolveStudentReadTenantMiddleware, async (req, res, next) => {
     try {
       const identity = (req as any).user;
       const schoolId = String(identity.schoolId || '').trim();
@@ -11260,23 +11924,35 @@ export async function createApp(options: { cloudflare?: boolean } = {}): Promise
       if (!schoolId || !tenantId || !tenantContext) {
         throw new AuthenticationError('السياق الموثوق لقراءة الامتحانات غير مكتمل.');
       }
-      const snapshot = await UnitOfWork.runInTransaction(schoolId, {
-        operationName: 'Read versioned exams database',
-        tenantId,
-        userId: identity.id,
-        userName: identity.name || 'المستخدم الحالي',
-        ipAddress: req.ip || 'unknown',
-        affectedTables: ['exams_database']
-      }, async () => {
-        const transaction = UnitOfWork.getActiveContext()?.databaseTransaction;
-        if (!transaction) throw new DatabaseError('معاملة قراءة الامتحانات غير متاحة.');
-        const result = await transaction.query<{ data: Record<string, unknown>; version: number }>(
-          `SELECT data, version FROM public.exams_database WHERE tenant_id = $1 AND school_id = $2`,
-          [tenantId, schoolId]
-        );
-        return result.rows[0] || { data: {}, version: 0 };
-      }, tenantContext);
-      const projection = projectExamDatabaseForRead(snapshot.data || {}, actorRole, actorPermissions);
+      // This is a read-only projection. Use the server-selected canonical
+      // Supabase client so opening the Exams module does not consume a
+      // Hyperdrive transaction slot needed by writes or concurrent reads.
+      const supabase = canonicalTenantReadClient(req);
+      if (!supabase) throw new DatabaseError('مصدر بيانات الامتحانات الكانوني غير متاح.');
+      const { data: snapshotRow, error: snapshotError } = await supabase
+        .from('exams_database')
+        .select('data,version')
+        .eq('tenant_id', tenantId)
+        .eq('school_id', schoolId)
+        .limit(1)
+        .maybeSingle();
+      if (snapshotError) throw snapshotError;
+      const snapshot = snapshotRow || { data: {}, version: 0 };
+      let employeeId = '';
+      if (isExamGradeScopedUser(actorRole, actorPermissions)) {
+        const { data: actor, error: actorError } = await supabase
+          .from('users')
+          .select('employee_id')
+          .eq('tenant_id', tenantId)
+          .eq('auth_user_id', identity.id)
+          .eq('status', 'active')
+          .is('deleted_at', null)
+          .limit(1)
+          .maybeSingle();
+        if (actorError) throw actorError;
+        employeeId = String(actor?.employee_id || '').trim();
+      }
+      const projection = projectExamDatabaseForRead(snapshot.data || {}, actorRole, actorPermissions, employeeId);
       res.json({
         success: true,
         data: projection.data,
@@ -11288,11 +11964,13 @@ export async function createApp(options: { cloudflare?: boolean } = {}): Promise
         schoolId: (req as any).user?.schoolId,
         error: err?.message || String(err)
       });
-      next(new DatabaseError("Failed to read exams database", err.message));
+      next(err instanceof AuthenticationError || err instanceof AuthorizationError || err instanceof ValidationError || err instanceof ConflictError || err instanceof DatabaseError
+        ? err
+        : new DatabaseError('Failed to read exams database', err?.message || String(err)));
     }
   });
 
-  app.post("/api/exams/sync-canonical-classes", authenticateRequest, requirePermission(PERMISSIONS.EXAM_WRITE), async (req, res, next) => {
+  app.post("/api/exams/sync-canonical-classes", authenticateRequest, requirePermission(PERMISSIONS.EXAM_WRITE), resolveStudentTenantMiddleware, async (req, res, next) => {
     try {
       const tenantContext = (req as any).tenantContext;
       if (!tenantContext) throw new AuthenticationError('سياق المدرسة الموثوق غير مكتمل لمزامنة صفوف الامتحانات.');
@@ -11321,7 +11999,7 @@ export async function createApp(options: { cloudflare?: boolean } = {}): Promise
     }
   });
 
-  app.get("/api/exams/audit-events", authenticateRequest, requirePermission(PERMISSIONS.EXAM_READ), async (req, res, next) => {
+  app.get("/api/exams/audit-events", authenticateRequest, requirePermission(PERMISSIONS.EXAM_READ), resolveStudentReadTenantMiddleware, async (req, res, next) => {
     try {
       const identity = (req as any).user;
       const schoolId = String(identity.schoolId || '').trim();
@@ -11335,46 +12013,33 @@ export async function createApp(options: { cloudflare?: boolean } = {}): Promise
       if (!schoolId || !tenantId || !tenantContext || tenantContext.tenantId !== tenantId || tenantContext.schoolId !== schoolId) {
         throw new AuthenticationError('السياق الموثوق لسجل تدقيق الامتحانات غير مكتمل.');
       }
-      const events = await UnitOfWork.runInTransaction(schoolId, {
-        operationName: 'Read canonical exams audit events',
-        tenantId,
-        userId: (req as any).user.id,
-        userName: (req as any).user.name || 'المستخدم الحالي',
-        ipAddress: req.ip || 'unknown',
-        affectedTables: ['audit_events']
-      }, async () => {
-        const transaction = UnitOfWork.getActiveContext()?.databaseTransaction;
-        if (!transaction) throw new DatabaseError('معاملة قراءة سجل تدقيق الامتحانات غير متاحة.');
-        const result = await transaction.query<{
-          id: string;
-          action: string;
-          reason: string | null;
-          result: string;
-          metadata: Record<string, unknown>;
-          created_at: string;
-          actor_name: string | null;
-        }>(
-          `SELECT event.id,
-                  event.action,
-                  event.reason,
-                  event.result,
-                  event.metadata,
-                  event.created_at,
-                  actor.display_name AS actor_name
-             FROM public.audit_events event
-             LEFT JOIN public.users actor
-               ON actor.tenant_id = event.tenant_id
-              AND actor.id = event.actor_user_id
-            WHERE event.tenant_id = $1
-              AND event.school_id = $2
-              AND event.entity_type = 'exams_database'
-              AND event.entity_id = $2
-            ORDER BY event.created_at DESC, event.id DESC
-            LIMIT 200`,
-          [tenantId, schoolId]
-        );
-        return result.rows;
-      }, tenantContext);
+      // Audit is also a bounded read projection; keep it off the Hyperdrive
+      // pool and resolve actor names in one additional canonical read.
+      const supabase = canonicalTenantReadClient(req);
+      if (!supabase) throw new DatabaseError('مصدر سجل تدقيق الامتحانات الكانوني غير متاح.');
+      const { data: eventRows, error: eventsError } = await supabase
+        .from('audit_events')
+        .select('id,action,reason,result,metadata,created_at,actor_user_id')
+        .eq('tenant_id', tenantId)
+        .eq('school_id', schoolId)
+        .eq('entity_type', 'exams_database')
+        .eq('entity_id', schoolId)
+        .order('created_at', { ascending: false })
+        .order('id', { ascending: false })
+        .limit(200);
+      if (eventsError) throw eventsError;
+      const actorIds = [...new Set((eventRows || []).map((event: any) => String(event.actor_user_id || '').trim()).filter(Boolean))];
+      const actorNames = new Map<string, string>();
+      if (actorIds.length) {
+        const { data: actors, error: actorsError } = await supabase
+          .from('users')
+          .select('id,display_name')
+          .eq('tenant_id', tenantId)
+          .in('id', actorIds);
+        if (actorsError) throw actorsError;
+        (actors || []).forEach((actor: any) => actorNames.set(String(actor.id), String(actor.display_name || '')));
+      }
+      const events = (eventRows || []).map((event: any) => ({ ...event, actor_name: actorNames.get(String(event.actor_user_id || '').trim()) || null }));
       res.json({
         success: true,
         data: events.map(event => ({
@@ -11397,7 +12062,190 @@ export async function createApp(options: { cloudflare?: boolean } = {}): Promise
     }
   });
 
-  app.post("/api/exams/database", authenticateRequest, requirePermission(PERMISSIONS.EXAM_WRITE), async (req, res, next) => {
+  app.get("/api/exams/result-archives", authenticateRequest, requirePermission(PERMISSIONS.EXAM_READ), resolveStudentReadTenantMiddleware, async (req, res, next) => {
+    try {
+      const identity = (req as any).user;
+      const schoolId = String(identity.schoolId || '').trim();
+      const tenantId = String(identity.tenantId || '').trim();
+      const tenantContext = (req as any).tenantContext;
+      const actorRole = roleResolver.resolveRole(identity);
+      const actorPermissions = roleResolver.getPermissions(identity);
+      if (!schoolId || !tenantId || tenantContext?.tenantId !== tenantId || tenantContext?.schoolId !== schoolId) {
+        throw new AuthenticationError('السياق الموثوق لقراءة أرشيف النتائج غير مكتمل.');
+      }
+      if (!canViewFullExamDatabase(actorRole, actorPermissions)) {
+        throw new AuthorizationError('ملخصات الأرشيف التاريخي متاحة للمستخدمين المخولين في المدرسة فقط.');
+      }
+      const archives = await UnitOfWork.runInTransaction(schoolId, {
+        operationName: 'Read immutable exam archive summaries',
+        tenantId,
+        userId: identity.id,
+        userName: identity.name || 'المستخدم الحالي',
+        ipAddress: req.ip || 'unknown',
+        affectedTables: ['exams_result_archives'],
+        readOnly: true
+      }, async () => {
+        const transaction = UnitOfWork.getActiveContext()?.databaseTransaction;
+        if (!transaction) throw new DatabaseError('معاملة قراءة أرشيف النتائج غير متاحة.');
+        const result = await transaction.query<{
+          id: string;
+          operational_version: number;
+          academic_year: string;
+          semester: string;
+          payload: Record<string, unknown>;
+          signature_hash: string;
+          created_at: string;
+        }>(
+          `SELECT id, operational_version, academic_year, semester, payload, signature_hash, created_at
+             FROM public.exams_result_archives
+            WHERE tenant_id = $1 AND school_id = $2
+            ORDER BY created_at DESC, operational_version DESC
+            LIMIT 50`,
+          [tenantId, schoolId]
+        );
+        return result.rows.map(archive => {
+          const payload = archive.payload && typeof archive.payload === 'object' ? archive.payload : {};
+          const expectedSignature = createHash('sha256').update(stableJsonStringify({
+            tenantId,
+            schoolId,
+            operationalVersion: Number(archive.operational_version),
+            payload
+          })).digest('hex');
+          const signatureValid = expectedSignature === String(archive.signature_hash || '').toLowerCase();
+          const students = Array.isArray(payload.students) ? payload.students as Array<Record<string, unknown>> : [];
+          const subjects = Array.isArray(payload.subjects) ? payload.subjects as Array<Record<string, unknown>> : [];
+          const gradesMatrix = payload.gradesMatrix && typeof payload.gradesMatrix === 'object'
+            ? payload.gradesMatrix as Record<string, Record<string, number>>
+            : {};
+          const calculated = signatureValid && payload.attendanceSchemaVersion === 1
+            ? calculateCohortExamResults(students as any[], subjects as any[], gradesMatrix, (payload.settings || {}) as any)
+            : [];
+          const complete = calculated.filter(result => result.status === 'passed' || result.status === 'failed');
+          const percentages = complete.map(result => result.percentage).filter(Number.isFinite);
+          const average = percentages.length ? percentages.reduce((total, value) => total + value, 0) / percentages.length : null;
+          const variance = average === null ? null : percentages.reduce((total, value) => total + ((value - average) ** 2), 0) / percentages.length;
+          const passedCount = complete.filter(result => result.status === 'passed').length;
+          const failedCount = complete.filter(result => result.status === 'failed').length;
+          const totalStudents = Number.isFinite(Number((payload.resultSummary as any)?.totalStudents))
+            ? Number((payload.resultSummary as any).totalStudents)
+            : students.length;
+          return {
+            archiveId: archive.id,
+            year: String(archive.academic_year || (payload.settings as any)?.academicYear || 'غير محدد'),
+            semester: String(archive.semester || (payload.settings as any)?.semester || 'غير محدد'),
+            archivedAt: archive.created_at,
+            signatureValid,
+            summaryAvailable: signatureValid && payload.attendanceSchemaVersion === 1,
+            totalStudents,
+            completeResults: complete.length,
+            incompleteResults: Math.max(0, totalStudents - complete.length),
+            passedCount,
+            failedCount,
+            overallPassRate: complete.length ? Math.round((passedCount / complete.length) * 100) : null,
+            averageScore: average === null ? null : Math.round(average * 100) / 100,
+            topScore: percentages.length ? percentages.reduce((maximum, value) => Math.max(maximum, value), Number.NEGATIVE_INFINITY) : null,
+            standardDeviation: variance === null ? null : Math.round(Math.sqrt(variance) * 100) / 100
+          };
+        });
+      }, tenantContext);
+      res.json({ success: true, data: archives, meta: { limit: 50, scope: 'school_staff_summaries_only' } });
+    } catch (err: any) {
+      next(err instanceof AuthenticationError || err instanceof AuthorizationError || err instanceof DatabaseError
+        ? err : new DatabaseError('تعذر تحميل ملخصات أرشيف النتائج الرسمي.', err?.message || String(err)));
+    }
+  });
+
+  app.get("/api/exams/result-archives/:archiveId/verify", authenticateRequest, requirePermission(PERMISSIONS.EXAM_READ), resolveStudentReadTenantMiddleware, async (req, res, next) => {
+    try {
+      const identity = (req as any).user;
+      const schoolId = String(identity.schoolId || '').trim();
+      const tenantId = String(identity.tenantId || '').trim();
+      const archiveId = String(req.params.archiveId || '').trim();
+      const studentId = String(req.query.studentId || '').trim();
+      const tenantContext = (req as any).tenantContext;
+      if (!schoolId || !tenantId || !tenantContext || tenantContext.tenantId !== tenantId || tenantContext.schoolId !== schoolId) {
+        throw new AuthenticationError('السياق الموثوق للتحقق من إفادة النتيجة غير مكتمل.');
+      }
+      if (!/^[0-9a-f-]{36}$/i.test(archiveId) || !studentId || studentId.length > 128) {
+        throw new ValidationError('رمز التحقق أو معرف الطالب غير صالح.');
+      }
+
+      const verification = await UnitOfWork.runInTransaction(schoolId, {
+        operationName: 'Verify immutable exam result archive',
+        tenantId,
+        userId: identity.id,
+        userName: identity.name || 'المستخدم الحالي',
+        ipAddress: req.ip || 'unknown',
+        affectedTables: ['exams_result_archives'],
+        readOnly: true
+      }, async () => {
+        const transaction = UnitOfWork.getActiveContext()?.databaseTransaction;
+        if (!transaction) throw new DatabaseError('معاملة التحقق من أرشيف الامتحانات غير متاحة.');
+        const result = await transaction.query<{
+          id: string;
+          operational_version: number;
+          payload: Record<string, unknown>;
+          signature_hash: string;
+          created_at: string;
+        }>(
+          `SELECT id, operational_version, payload, signature_hash, created_at
+             FROM public.exams_result_archives
+            WHERE tenant_id = $1 AND school_id = $2 AND id = $3
+            LIMIT 1`,
+          [tenantId, schoolId, archiveId]
+        );
+        const archive = result.rows[0];
+        if (!archive) throw new ValidationError('أرشيف النتيجة المطلوب غير موجود داخل المدرسة الحالية.');
+        const payload = archive.payload && typeof archive.payload === 'object' ? archive.payload : {};
+        const expectedSignature = createHash('sha256').update(stableJsonStringify({
+          tenantId,
+          schoolId,
+          operationalVersion: Number(archive.operational_version),
+          payload
+        })).digest('hex');
+        const signatureValid = expectedSignature === String(archive.signature_hash || '').toLowerCase();
+        const students = Array.isArray(payload.students) ? payload.students as Array<Record<string, unknown>> : [];
+        const student = students.find(item => String(item?.id || '').trim() === studentId);
+        const subjects = Array.isArray(payload.subjects) ? payload.subjects as Array<Record<string, unknown>> : [];
+        const gradesMatrix = payload.gradesMatrix && typeof payload.gradesMatrix === 'object'
+          ? payload.gradesMatrix as Record<string, Record<string, unknown>>
+          : {};
+        const attendanceComplete = Boolean(
+          payload.attendanceSchemaVersion === 1
+          && student
+          && subjects.length > 0
+          && subjects.every(subject => {
+            const subjectId = String(subject?.id || '').trim();
+            if (!subjectId) return false;
+            const attendance = getExamAttendanceStatus(student, subjectId);
+            if (attendance === 'absent') return true;
+            const grade = gradesMatrix[studentId]?.[subjectId];
+            return attendance === 'present' && typeof grade === 'number' && Number.isFinite(grade);
+          })
+        );
+        return {
+          archiveId: archive.id,
+          studentId,
+          studentName: student ? String(student.name || '').trim() : '',
+          operationalVersion: Number(archive.operational_version),
+          archivedAt: archive.created_at,
+          valid: Boolean(signatureValid && attendanceComplete)
+        };
+      }, tenantContext);
+
+      res.json({ success: true, data: verification });
+    } catch (err: any) {
+      EnterpriseLogger.error('Failed to verify immutable exam result archive', 'ExamsCertificateVerificationRoute', {
+        schoolId: (req as any).user?.schoolId,
+        error: err?.message || String(err)
+      });
+      next(err instanceof AuthenticationError || err instanceof AuthorizationError || err instanceof ValidationError || err instanceof DatabaseError
+        ? err
+        : new DatabaseError('Failed to verify immutable exam result archive', err?.message || String(err)));
+    }
+  });
+
+  app.post("/api/exams/database", authenticateRequest, requirePermission(PERMISSIONS.EXAM_WRITE), resolveStudentTenantMiddleware, async (req, res, next) => {
     try {
       const schoolId = String((req as any).user.schoolId || '').trim();
       const tenantId = String((req as any).user.tenantId || '').trim();
@@ -11430,7 +12278,6 @@ export async function createApp(options: { cloudflare?: boolean } = {}): Promise
           ? 'الدور الحالي لا يملك صلاحية تعديل بيانات الامتحانات.'
           : 'اعتماد أو إعادة فتح النتائج والجدول يتطلب دوراً مخولاً للاعتماد.');
       }
-      ExamValidator.validateDatabase(payload);
       if ((payload as any).exams_assessment_state !== undefined) {
         try {
           normalizeAssessmentWorkflowState((payload as any).exams_assessment_state);
@@ -11454,13 +12301,13 @@ export async function createApp(options: { cloudflare?: boolean } = {}): Promise
       }, async () => {
         const transaction = UnitOfWork.getActiveContext()?.databaseTransaction;
         if (!transaction) throw new DatabaseError('معاملة حفظ الامتحانات غير متاحة.');
-        const actorResult = await transaction.query<{ id: string }>(
-          `SELECT id
-             FROM public.users
-            WHERE tenant_id = $1
-              AND auth_user_id = $2
-              AND status = 'active'
-              AND deleted_at IS NULL
+        const actorResult = await transaction.query<{ id: string; employee_id: string | null; display_name: string | null }>(
+          `SELECT u.id, to_jsonb(u)->>'employee_id' AS employee_id, u.display_name
+             FROM public.users u
+            WHERE u.tenant_id = $1
+              AND u.auth_user_id = $2
+              AND u.status = 'active'
+              AND u.deleted_at IS NULL
             LIMIT 1`,
           [tenantId, (req as any).user.id]
         );
@@ -11468,6 +12315,7 @@ export async function createApp(options: { cloudflare?: boolean } = {}): Promise
         if (!canonicalActorId) {
           throw new AuthenticationError('تعذر ربط هوية الجلسة بسجل المستخدم المؤسسي المعتمد.');
         }
+        const canonicalEmployeeId = String(actorResult.rows[0]?.employee_id || '').trim();
         const current = await transaction.query<{ data: Record<string, unknown>; version: number }>(
           `SELECT data, version FROM public.exams_database WHERE tenant_id = $1 AND school_id = $2 FOR UPDATE`,
           [tenantId, schoolId]
@@ -11477,14 +12325,88 @@ export async function createApp(options: { cloudflare?: boolean } = {}): Promise
           throw new ConflictError('تم تعديل بيانات الامتحانات بواسطة مستخدم آخر. أعد المزامنة قبل الحفظ.', { expectedVersion, actualVersion });
         }
         const currentData = (current.rows[0]?.data || {}) as Record<string, any>;
+        if (!canApproveExamOperation(actorRole, 'approve')) {
+          try {
+            assertTeacherWriteScope(currentData, payload as Record<string, unknown>);
+            if (hasExamGradeMatrixChanges(currentData, payload as Record<string, unknown>)) {
+              assertTeacherGradeMatrixScope(currentData, payload as Record<string, unknown>, canonicalEmployeeId);
+            }
+            if (Object.hasOwn(payload, 'exams_students_enriched')) {
+              assertTeacherStudentAttendanceScope(currentData, payload as Record<string, unknown>, canonicalEmployeeId);
+            }
+            const needsActiveEmployee = hasExamGradeMatrixChanges(currentData, payload as Record<string, unknown>)
+              || hasExamStudentAttendanceChanges(currentData, payload as Record<string, unknown>);
+            if (needsActiveEmployee) {
+              const hrSnapshot = await transaction.query<{ data: Record<string, unknown> }>(
+                `SELECT data FROM public.hr_database WHERE tenant_id = $1 AND school_id = $2 LIMIT 1`,
+                [tenantId, schoolId]
+              );
+              const activeEmployeeIds = new Set(buildExamProctorCandidates(hrSnapshot.rows[0]?.data).map(employee => employee.id));
+              if (!canonicalEmployeeId || !activeEmployeeIds.has(canonicalEmployeeId)) {
+                throw new Error('حساب الموظف غير نشط أو غير مرتبط حالياً بسجل شؤون الموظفين الرسمي.');
+              }
+            }
+            if (Object.hasOwn(payload, 'exams_grades_matrix')) {
+              const gradeHistoryEntries = buildTeacherGradeHistoryEntries(
+                currentData,
+                payload as Record<string, unknown>,
+                {
+                  employeeId: canonicalEmployeeId,
+                  name: String(actorResult.rows[0]?.display_name || (req as any).user.name || '')
+                },
+                { timestamp: new Date().toISOString(), createId: randomUUID }
+              );
+              if (gradeHistoryEntries.length) {
+                const existingGradeHistory = Array.isArray(currentData.exams_grade_history)
+                  ? currentData.exams_grade_history
+                  : [];
+                (payload as any).exams_grade_history = [...gradeHistoryEntries, ...existingGradeHistory];
+              }
+              (payload as any).exams_grades_matrix = mergeTeacherGradeMatrixPatch(currentData, payload as Record<string, unknown>);
+            }
+            if (Object.hasOwn(payload, 'exams_students_enriched')) {
+              (payload as any).exams_students_enriched = mergeTeacherStudentAttendancePatch(currentData, payload as Record<string, unknown>);
+            }
+            // Downstream validation, archival and persistence operate on a
+            // complete canonical document, while the request itself remains
+            // a narrow patch and can never replace another teacher's data.
+            Object.entries(currentData).forEach(([key, value]) => {
+              if (!Object.hasOwn(payload, key)) (payload as any)[key] = value;
+            });
+          } catch (error: any) {
+            throw new AuthorizationError(error?.message || 'الدور الحالي لا يملك نطاقاً موثقاً لتعديل هذه البيانات.');
+          }
+        }
         const currentAssessmentState = normalizeAssessmentWorkflowState(currentData.exams_assessment_state);
         const requestedAssessmentState = normalizeAssessmentWorkflowState((payload as any).exams_assessment_state);
         const assessmentStateChanged = stableJsonStringify(currentAssessmentState) !== stableJsonStringify(requestedAssessmentState);
-        if (actorRole === 'teacher') {
+        const currentTeacherScopes = Array.isArray(currentData.exams_teacher_grade_scopes) ? currentData.exams_teacher_grade_scopes : [];
+        const requestedTeacherScopes = Array.isArray((payload as any).exams_teacher_grade_scopes)
+          ? (payload as any).exams_teacher_grade_scopes
+          : currentTeacherScopes;
+        if (stableJsonStringify(currentTeacherScopes) !== stableJsonStringify(requestedTeacherScopes)) {
+          if (!canApproveExamOperation(actorRole, 'approve')) {
+            throw new AuthorizationError('تعيين نطاقات تصحيح المعلمين يتطلب مدير المدرسة أو مدير الكنترول.');
+          }
+          const hrSnapshot = await transaction.query<{ data: Record<string, unknown> }>(
+            `SELECT data FROM public.hr_database WHERE tenant_id = $1 AND school_id = $2 LIMIT 1`,
+            [tenantId, schoolId]
+          );
+          const activeEmployeeIds = Array.isArray(hrSnapshot.rows[0]?.data?.employees)
+            ? (hrSnapshot.rows[0].data.employees as Array<Record<string, unknown>>)
+              .filter(employee => employee?.status === 'active')
+              .map(employee => String(employee?.id || '').trim())
+              .filter(Boolean)
+            : [];
           try {
-            assertTeacherWriteScope(currentData, payload as Record<string, unknown>);
+            validateTeacherGradeScopes(
+              requestedTeacherScopes,
+              activeEmployeeIds,
+              (Array.isArray((payload as any).exams_subjects) ? (payload as any).exams_subjects : []).map((subject: any) => String(subject?.id || '')),
+              Array.isArray((payload as any).exams_classes_list) ? (payload as any).exams_classes_list : []
+            );
           } catch (error: any) {
-            throw new AuthorizationError(error?.message || 'الدور الحالي لا يملك صلاحية تعديل هذه الحقول.');
+            throw new ValidationError(error?.message || 'نطاقات تصحيح المعلمين لا تطابق بيانات المدرسة الرسمية.');
           }
         }
         if (assessmentStateChanged && actorRole === 'teacher') {
@@ -11496,6 +12418,48 @@ export async function createApp(options: { cloudflare?: boolean } = {}): Promise
             }
           });
         }
+        if (operation === 'write') {
+          const academicStructureResult = await transaction.query<{ structure: unknown }>(
+            `SELECT setting_value AS structure
+               FROM public.school_settings
+              WHERE tenant_id = $1
+                AND school_id = $2
+                AND setting_key = 'academic_structure'
+                AND status = 'active'
+                AND deleted_at IS NULL
+              ORDER BY effective_from DESC, created_at DESC
+              LIMIT 1`,
+            [tenantId, schoolId]
+          );
+          const academicStructure = academicStructureResult.rows[0]?.structure;
+          if (academicStructure) {
+            const canonicalReferences = await transaction.query<{ class_reference: string }>(
+              `SELECT DISTINCT btrim(e.class_reference) AS class_reference
+                 FROM public.enrollments e
+                 INNER JOIN public.students s
+                   ON s.tenant_id = e.tenant_id
+                  AND s.school_id = e.school_id
+                  AND s.id = e.student_id
+                  AND s.deleted_at IS NULL
+                WHERE e.tenant_id = $1
+                  AND e.school_id = $2
+                  AND (e.branch_id = $3 OR e.branch_id IS NULL)
+                  AND e.academic_year_id = $4
+                  AND e.enrollment_status = 'active'
+                  AND e.deleted_at IS NULL
+                  AND s.status = 'active'
+                  AND NULLIF(btrim(e.class_reference), '') IS NOT NULL
+                ORDER BY btrim(e.class_reference)`,
+              [tenantId, schoolId, tenantContext.branchId, tenantContext.academicYear]
+            );
+            reconcileExamDatabaseClassReferences(
+              payload as Record<string, any>,
+              academicStructure,
+              canonicalReferences.rows.map(item => item.class_reference)
+            );
+          }
+        }
+        ExamValidator.validateDatabase(payload);
         const currentAttemptIds = new Set(currentAssessmentState.attempts.map(item => item.id));
         const eligibleCandidateIds = new Set(
           (Array.isArray((payload as any).exams_students_enriched) ? (payload as any).exams_students_enriched : [])
@@ -11586,7 +12550,15 @@ export async function createApp(options: { cloudflare?: boolean } = {}): Promise
           if (currentScheduleApproval || !requestedScheduleApproval) {
             throw new ConflictError('انتقال اعتماد جدول الامتحانات غير صالح أو سبق تنفيذه.');
           }
-          validateScheduleForApproval(payload as Record<string, any>);
+          const hrRoster = await transaction.query<{ data: Record<string, unknown> }>(
+            `SELECT data FROM public.hr_database WHERE tenant_id = $1 AND school_id = $2 LIMIT 1`,
+            [tenantId, schoolId]
+          );
+          const activeProctorIds = new Set(buildExamProctorCandidates(hrRoster.rows[0]?.data).map(candidate => candidate.id));
+          if (activeProctorIds.size === 0) {
+            throw new ValidationError('لا يمكن اعتماد الجدول قبل مزامنة كادر الموظفين النشط من سجل شؤون الموظفين الرسمي.');
+          }
+          validateScheduleForApproval(payload as Record<string, any>, activeProctorIds);
           (payload as any).exams_schedule_approval_status = {
             approved: true,
             approvedBy: (req as any).user.name || 'المستخدم الحالي',
@@ -11623,6 +12595,7 @@ export async function createApp(options: { cloudflare?: boolean } = {}): Promise
           const failedCount = calculatedResults.filter(result => result.status === 'failed').length;
           const incompleteCount = calculatedResults.filter(result => result.status === 'incomplete').length;
           const archivePayload = {
+            attendanceSchemaVersion: 1,
             settings,
             students: archiveStudents,
             subjects: archiveSubjects,
@@ -11683,6 +12656,7 @@ export async function createApp(options: { cloudflare?: boolean } = {}): Promise
             serverSignedAt,
             operationalVersion: nextVersion,
             signatureHash,
+            attendanceSchemaVersion: 1,
             isImmutableArchive: true
           };
           (payload as any).exams_control_closures = [serverClosure, ...existingClosures];
@@ -11890,6 +12864,121 @@ export async function createApp(options: { cloudflare?: boolean } = {}): Promise
     } catch (err: any) {
       EnterpriseLogger.error('Canonical payment posting failed', 'FinancialPaymentRoute', { error: err?.message || String(err) });
       next(err instanceof AuthenticationError || err instanceof DatabaseError || err instanceof ValidationError ? err : new DatabaseError('تعذر ترحيل سند الصرف الكانوني.', err?.message));
+    }
+  });
+
+  app.post('/api/financial/vendor-bills/:billId/pay', authenticateRequest, requirePermission(PERMISSIONS.FINANCIAL_WRITE), async (req, res, next) => {
+    try {
+      const identity = (req as any).user;
+      const tenantId = String(identity?.tenantId || '').trim();
+      const schoolId = String(identity?.schoolId || '').trim();
+      const actorId = String(identity?.id || '').trim();
+      const tenantContext = (req as any).tenantContext;
+      const billId = String(req.params.billId || '').trim();
+      const amount = Number(req.body?.amountPaid);
+      const paymentMethod = String(req.body?.paymentMethod || 'cash').trim();
+      const paymentId = String(req.body?.paymentId || req.get('Idempotency-Key') || '').trim();
+      const paidFromAccount = String(req.body?.paidFromAccount || '').trim();
+      if (!tenantId || !schoolId || !actorId || !tenantContext || tenantContext.tenantId !== tenantId || tenantContext.schoolId !== schoolId) {
+        throw new AuthenticationError('السياق المالي الموثوق غير مكتمل.');
+      }
+      if (!billId || !paymentId || !/^[A-Za-z0-9:_-]{8,160}$/.test(paymentId)) throw new ValidationError('معرف سداد المورد أو مفتاح منع التكرار غير صالح.');
+      if (!Number.isFinite(amount) || amount <= 0) throw new ValidationError('قيمة سداد المورد يجب أن تكون أكبر من صفر.');
+      if (!['bank_transfer', 'check', 'cash', 'treasury_voucher'].includes(paymentMethod)) throw new ValidationError('وسيلة سداد المورد غير معتمدة.');
+      if (!transactionDriver) throw new DatabaseError('سداد المورد يتطلب اتصال PostgreSQL.');
+
+      let responseData: { journalId: string; paymentId: string; billId: string; status: string } | null = null;
+      await UnitOfWork.runInTransaction(schoolId, {
+        operationName: `Pay vendor bill ${billId}`,
+        tenantId, userId: actorId, userName: identity.name || 'المستخدم المالي',
+        ipAddress: req.ip || 'unknown', affectedTables: ['inventory_database', 'erp_journal_entries', 'erp_journal_lines', 'erp_general_ledger', 'audit_events']
+      }, async () => {
+        const transaction = UnitOfWork.getActiveContext()?.databaseTransaction;
+        if (!transaction) throw new DatabaseError('المعاملة المالية غير متاحة.');
+        const actor = await transaction.query<{ id: string }>(
+          `SELECT id FROM public.users WHERE tenant_id = $1 AND school_id = $2 AND status = 'active' AND deleted_at IS NULL AND (id = $3 OR auth_user_id = $3) LIMIT 1`,
+          [tenantId, schoolId, actorId]
+        );
+        if (!actor.rows[0]) throw new AuthenticationError('المستخدم المالي غير موجود.');
+        const readiness = await CanonicalErpPostingService.getReadiness(transaction, schoolId);
+        if (!readiness.sourceSupport.inventory || !readiness.sourceSupport.treasury) {
+          throw new ValidationError(`لا يمكن سداد المورد قبل اعتماد خرائط المخزون والخزينة: ${[...readiness.missing, ...readiness.invalid].slice(0, 8).join('، ')}`);
+        }
+        const inventory = await transaction.query<{ data: Record<string, any>; version: number }>(
+          `SELECT data, version FROM public.inventory_database WHERE tenant_id = $1 AND school_id = $2 FOR UPDATE`,
+          [tenantId, schoolId]
+        );
+        const data = inventory.rows[0]?.data || {};
+        const bills = Array.isArray(data.vendorBills) ? data.vendorBills : [];
+        const bill = bills.find((row: any) => String(row?.id || '') === billId);
+        if (!bill) throw new ValidationError('فاتورة المورد غير موجودة في المصدر المركزي.');
+        if (!['approved', 'partially_paid'].includes(String(bill.status))) throw new ValidationError('لا يمكن سداد فاتورة المورد قبل اعتمادها أو بعد إغلاقها.');
+        if (!String(bill.glJournalEntryId || bill.journalEntryId || '').trim()) throw new ValidationError('لا يمكن سداد فاتورة المورد قبل ترحيل قيد الالتزام الكانوني.');
+        const grandTotal = Number(bill.grandTotal);
+        const paidAmount = Number(bill.paidAmount || 0);
+        const remainingAmount = Number(bill.remainingAmount ?? grandTotal - paidAmount);
+        if (!Number.isFinite(grandTotal) || !Number.isFinite(paidAmount) || !Number.isFinite(remainingAmount) || remainingAmount <= 0.01) throw new ValidationError('فاتورة المورد مسددة بالكامل أو تحمل رصيداً غير صالح.');
+        if (amount > remainingAmount + 0.01) throw new ValidationError('قيمة السداد تتجاوز الرصيد المتبقي من فاتورة المورد.');
+
+        const sourceId = `vendor-payment:${billId}:${paymentId}`;
+        const existing = await transaction.query<{ id: string }>(
+          `SELECT id FROM public.erp_journal_entries WHERE tenant_id = $1 AND school_id = $2 AND source_type = 'vendor_payment' AND source_id = $3 LIMIT 1`,
+          [tenantId, schoolId, sourceId]
+        );
+        if (existing.rows[0]?.id) {
+          responseData = { journalId: existing.rows[0].id, paymentId, billId, status: String(bill.status) };
+          return;
+        }
+
+        const payment = {
+          id: sourceId,
+          sourceType: 'vendor_payment',
+          status: 'posted',
+          amountPaid: Number(amount.toFixed(2)),
+          paymentDate: String(req.body?.paymentDate || new Date().toISOString().slice(0, 10)),
+          paymentMethod,
+          paidFromAccount,
+          vendorBillId: billId,
+          billNo: String(bill.billNo || billId),
+          vendorId: String(bill.vendorId || ''),
+          vendorName: String(bill.vendorName || ''),
+          referenceNo: String(req.body?.referenceNo || paymentId),
+          description: `سداد فاتورة المورد ${String(bill.billNo || billId)}`
+        };
+        const sync = await CanonicalErpPostingService.syncSnapshot(transaction, tenantId, schoolId, actor.rows[0].id, {
+          journalEntries: [payment], chartOfAccounts: []
+        });
+        const link = sync.sourceLinks.find(item => item.sourceType === 'vendor_payment' && item.sourceId === sourceId);
+        if (!link) throw new DatabaseError('تم السداد دون إثبات رابط القيد الكانوني.');
+        const nextPaid = Number((paidAmount + amount).toFixed(2));
+        const nextRemaining = Number(Math.max(0, grandTotal - nextPaid).toFixed(2));
+        const nextData = JSON.parse(JSON.stringify(data)) as Record<string, any>;
+        nextData.vendorBills = bills.map((row: any) => String(row?.id || '') === billId ? {
+          ...row, paidAmount: nextPaid, remainingAmount: nextRemaining,
+          status: nextRemaining <= 0.01 ? 'paid' : 'partially_paid', lastPaymentId: sourceId
+        } : row);
+        nextData.vendorPayments = [...(Array.isArray(nextData.vendorPayments) ? nextData.vendorPayments : []), {
+          id: sourceId, schoolId, paymentNo: paymentId, paymentDate: payment.paymentDate,
+          vendorId: payment.vendorId, vendorName: payment.vendorName, vendorBillId: billId,
+          billNo: payment.billNo, amountPaid: payment.amountPaid, paymentMethod,
+          referenceNo: payment.referenceNo, glJournalEntryId: link.journalEntryId, createdAt: new Date().toISOString()
+        }];
+        await transaction.query(
+          `UPDATE public.inventory_database SET data = $3::jsonb, version = version + 1, updated_at = now(), updated_by = $4 WHERE tenant_id = $1 AND school_id = $2`,
+          [tenantId, schoolId, JSON.stringify(nextData), actor.rows[0].id]
+        );
+        await transaction.query(
+          `INSERT INTO public.audit_events (tenant_id, school_id, branch_id, actor_user_id, entity_type, entity_id, action, source, reason, result, metadata)
+           VALUES ($1, $2, $3, $4, 'vendor_bill', $5, 'pay', 'VendorBillPaymentRoute', 'سداد فاتورة مورد وترحيل القيد الكانوني', 'success', $6::jsonb)`,
+          [tenantId, schoolId, identity.branchId || null, actor.rows[0].id, billId, JSON.stringify({ sourceId, journalId: link.journalEntryId, amount, paymentMethod })]
+        );
+        responseData = { journalId: link.journalEntryId, paymentId, billId, status: nextRemaining <= 0.01 ? 'paid' : 'partially_paid' };
+      }, tenantContext);
+      if (!responseData) throw new DatabaseError('تعذر إكمال سداد فاتورة المورد.');
+      res.json({ success: true, data: responseData });
+    } catch (err: any) {
+      EnterpriseLogger.error('Canonical vendor bill payment failed', 'VendorBillPaymentRoute', { error: err?.message || String(err) });
+      next(err instanceof AuthenticationError || err instanceof DatabaseError || err instanceof ValidationError ? err : new DatabaseError('تعذر سداد فاتورة المورد كانونيًا.', err?.message));
     }
   });
 
@@ -13263,6 +14352,275 @@ export async function createApp(options: { cloudflare?: boolean } = {}): Promise
     }
   });
 
+  /**
+   * Read-only release gate for the accounting module. It answers the one
+   * question the UI and the release operator must agree on: can every source
+   * module post to a valid leaf account in the canonical ledger? It never
+   * creates accounts, mappings, periods, or journals.
+   */
+  app.get('/api/financial/readiness', authenticateRequest, requirePermission(PERMISSIONS.FINANCIAL_READ), async (req, res, next) => {
+    try {
+      const identity = (req as any).user;
+      const tenantId = String(identity?.tenantId || '').trim();
+      const schoolId = String(identity?.schoolId || '').trim();
+      const tenantContext = (req as any).tenantContext;
+      if (!tenantId || !schoolId || !tenantContext || tenantContext.tenantId !== tenantId || tenantContext.schoolId !== schoolId) {
+        throw new AuthenticationError('السياق الموثوق لبوابة جاهزية الحسابات غير مكتمل.');
+      }
+      // Readiness is a read-only release gate. Keep it on the verified
+      // Supabase read channel so a Hyperdrive transaction hiccup cannot make
+      // the accounting module look unavailable while the source is healthy.
+      const canonicalReadClient = canonicalTenantReadClient(req);
+      if (!canonicalReadClient) throw new DatabaseError('مصدر القراءة المركزي لفحص جاهزية دفتر الأستاذ غير متاح.');
+      const isMissingCanonicalTable = (error: any) => ['42P01', 'PGRST205'].includes(String(error?.code || ''));
+      const [mappingResult, chartResult] = await Promise.all([
+        canonicalReadClient
+          .from('erp_account_mappings')
+          .select('mapping_key,account_code')
+          .eq('tenant_id', tenantId)
+          .eq('school_id', schoolId)
+          .eq('is_active', true),
+        canonicalReadClient
+          .from('erp_chart_of_accounts')
+          .select('account_code,account_name,account_nature,is_active,is_leaf')
+          .eq('tenant_id', tenantId)
+          .eq('school_id', schoolId)
+          .order('account_code', { ascending: true }),
+      ]);
+      if (mappingResult.error && !isMissingCanonicalTable(mappingResult.error)) throw mappingResult.error;
+      if (chartResult.error && !isMissingCanonicalTable(chartResult.error)) throw chartResult.error;
+      const schemaReady = !mappingResult.error && !chartResult.error;
+      const mappingRows = Array.isArray(mappingResult.data) ? mappingResult.data : [];
+      const chartByCode = new Map((Array.isArray(chartResult.data) ? chartResult.data : []).map((row: any) => [String(row.account_code), row]));
+      const configuredByKey = new Map(mappingRows.map((row: any) => [String(row.mapping_key), row]));
+      const mappings = CANONICAL_MAPPING_DEFINITIONS.map(definition => {
+        const configured = configuredByKey.get(definition.key);
+        const accountCode = String(configured?.account_code || '');
+        const account = chartByCode.get(accountCode);
+        const valid = Boolean(
+          accountCode
+          && account?.is_active !== false
+          && account?.is_leaf !== false
+          && account?.account_nature === definition.nature
+        );
+        return {
+          ...definition,
+          configured: Boolean(accountCode),
+          accountCode,
+          accountName: String(account?.account_name || ''),
+          nature: String(account?.account_nature || ''),
+          valid,
+        };
+      });
+      const missing = mappings.filter(item => item.required && !item.configured).map(item => item.label);
+      const invalid = mappings.filter(item => item.configured && !item.valid).map(item => item.label);
+      const optionalMissing = mappings.filter(item => !item.required && !item.configured).map(item => item.label);
+      const readiness = {
+        schemaReady,
+        ready: schemaReady && missing.length === 0 && invalid.length === 0,
+        mappings,
+        missing,
+        invalid,
+        optionalMissing,
+        sourceSupport: Object.fromEntries(['fees', 'hr', 'inventory', 'treasury'].map(source => [
+          source,
+          mappings.filter(item => item.source === source && item.required).every(item => item.valid),
+        ])),
+      };
+      const writeEnabledByDeployment = process.env.FINANCIAL_WRITES_LOCKED === 'false'
+        && process.env.FINANCIAL_ERP_MODE === 'canonical';
+      res.setHeader('Cache-Control', 'no-store');
+      res.json({
+        success: true,
+        data: {
+          ...readiness,
+          writeEnabledByDeployment,
+          canAcceptPostedSources: readiness.ready && writeEnabledByDeployment,
+          sources: CANONICAL_MAPPING_DEFINITIONS.reduce<Record<string, { ready: boolean; missing: string[] }>>((acc, definition) => {
+            const sourceMappings = readiness.mappings.filter(item => item.source === definition.source);
+            const missing = sourceMappings.filter(item => item.required && !item.valid).map(item => item.label);
+            acc[definition.source] = { ready: missing.length === 0, missing };
+            return acc;
+          }, {})
+        },
+        meta: { source: 'canonical-postgres', scope: { tenantId, schoolId } }
+      });
+    } catch (err: any) {
+      next(err instanceof AuthenticationError || err instanceof DatabaseError ? err : new DatabaseError('تعذر فحص جاهزية وحدة الحسابات.', err?.message));
+    }
+  });
+
+  app.get('/api/financial/account-mappings', authenticateRequest, requirePermission(PERMISSIONS.FINANCIAL_READ), async (req, res, next) => {
+    try {
+      const identity = (req as any).user;
+      const tenantId = String(identity?.tenantId || '').trim();
+      const schoolId = String(identity?.schoolId || '').trim();
+      const tenantContext = (req as any).tenantContext;
+      if (!tenantId || !schoolId || !tenantContext || tenantContext.tenantId !== tenantId || tenantContext.schoolId !== schoolId) {
+        throw new AuthenticationError('السياق الموثوق لقراءة خرائط الحسابات غير مكتمل.');
+      }
+      // This endpoint is a read-only first paint. Do not route it through the
+      // Hyperdrive transaction pool: a transient transaction/RLS failure used
+      // to turn a harmless mapping screen into a 500 while the financial
+      // dashboard itself could still read from the verified Supabase channel.
+      // Writes remain on the transactional path below and stay fail-closed.
+      const canonicalReadClient = canonicalTenantReadClient(req);
+      if (!canonicalReadClient) throw new DatabaseError('مصدر القراءة المركزي لخرائط الحسابات غير متاح.');
+      const isMissingCanonicalTable = (error: any) => ['42P01', 'PGRST205'].includes(String(error?.code || ''));
+      const [mappingResult, chartResult] = await Promise.all([
+        canonicalReadClient
+          .from('erp_account_mappings')
+          .select('mapping_key,account_code')
+          .eq('tenant_id', tenantId)
+          .eq('school_id', schoolId)
+          .eq('is_active', true),
+        canonicalReadClient
+          .from('erp_chart_of_accounts')
+          .select('account_code,account_name,account_nature,is_active,is_leaf')
+          .eq('tenant_id', tenantId)
+          .eq('school_id', schoolId)
+          .order('account_code', { ascending: true }),
+      ]);
+      if (mappingResult.error && !isMissingCanonicalTable(mappingResult.error)) throw mappingResult.error;
+      if (chartResult.error && !isMissingCanonicalTable(chartResult.error)) throw chartResult.error;
+      const schemaReady = !mappingResult.error && !chartResult.error;
+      const mappingRows = Array.isArray(mappingResult.data) ? mappingResult.data : [];
+      const chartByCode = new Map((Array.isArray(chartResult.data) ? chartResult.data : []).map((row: any) => [String(row.account_code), row]));
+      const configuredByKey = new Map(mappingRows.map((row: any) => [String(row.mapping_key), row]));
+      const mappings = CANONICAL_MAPPING_DEFINITIONS.map(definition => {
+        const configured = configuredByKey.get(definition.key);
+        const accountCode = String(configured?.account_code || '');
+        const account = chartByCode.get(accountCode);
+        const valid = Boolean(
+          accountCode
+          && account?.is_active !== false
+          && account?.is_leaf !== false
+          && account?.account_nature === definition.nature
+        );
+        return {
+          ...definition,
+          configured: Boolean(accountCode),
+          accountCode,
+          accountName: String(account?.account_name || ''),
+          nature: String(account?.account_nature || ''),
+          valid,
+        };
+      });
+      const missing = mappings.filter(item => item.required && !item.configured).map(item => item.label);
+      const invalid = mappings.filter(item => item.configured && !item.valid).map(item => item.label);
+      const optionalMissing = mappings.filter(item => !item.required && !item.configured).map(item => item.label);
+      const data = {
+        schemaReady,
+        ready: schemaReady && missing.length === 0 && invalid.length === 0,
+        mappings,
+        missing,
+        invalid,
+        optionalMissing,
+        sourceSupport: Object.fromEntries(['fees', 'hr', 'inventory', 'treasury'].map(source => [
+          source,
+          mappings.filter(item => item.source === source && item.required).every(item => item.valid),
+        ])),
+      };
+      res.setHeader('Cache-Control', 'no-store');
+      res.json({ success: true, data, meta: { source: 'canonical-postgres', scope: { tenantId, schoolId } } });
+    } catch (err: any) {
+      next(err instanceof AuthenticationError || err instanceof DatabaseError ? err : new DatabaseError('تعذر قراءة خرائط الحسابات.', err?.message));
+    }
+  });
+
+  app.post('/api/financial/account-mappings', authenticateRequest, requirePermission(PERMISSIONS.FINANCIAL_WRITE), async (req, res, next) => {
+    try {
+      const identity = (req as any).user;
+      const tenantId = String(identity?.tenantId || '').trim();
+      const schoolId = String(identity?.schoolId || '').trim();
+      const tenantContext = (req as any).tenantContext;
+      const submitted = Array.isArray(req.body?.mappings) ? req.body.mappings : [];
+      if (!tenantId || !schoolId || !tenantContext || tenantContext.tenantId !== tenantId || tenantContext.schoolId !== schoolId || submitted.length === 0 || submitted.length > CANONICAL_MAPPING_DEFINITIONS.length) {
+        throw new ValidationError('أرسل قائمة خرائط حسابات صالحة ضمن نطاق المدرسة الموثوق.');
+      }
+      const definitions = new Map(CANONICAL_MAPPING_DEFINITIONS.map(item => [item.key, item]));
+      const normalized = submitted.map((item: any) => {
+        const key = String(item?.key || '').trim();
+        const accountCode = String(item?.accountCode || '').trim();
+        const definition = definitions.get(key);
+        if (!definition || !accountCode) throw new ValidationError(`خريطة الحساب ${key || 'غير معروفة'} غير صالحة.`);
+        return { key, accountCode, nature: definition.nature };
+      });
+      if (new Set(normalized.map(item => item.key)).size !== normalized.length) throw new ConflictError('لا يمكن تكرار مفتاح خريطة الحساب.');
+      // This is deployment configuration, not a journal posting. Use the
+      // already verified server-side Supabase channel for the bounded write,
+      // just as the first-paint read path does. The previous Hyperdrive
+      // transaction path could remain pending in Workers even after the
+      // validation/upsert SQL had been reduced to two statements, leaving the
+      // user-facing approval button stuck indefinitely.
+      const canonicalWriteClient = canonicalTenantReadClient(req);
+      if (!canonicalWriteClient) throw new DatabaseError('مصدر الكتابة المركزي لخرائط الحسابات غير متاح.');
+      const { data: actor, error: actorError } = await canonicalWriteClient
+        .from('users')
+        .select('id')
+        .eq('tenant_id', tenantId)
+        .eq('auth_user_id', identity.id)
+        .eq('status', 'active')
+        .is('deleted_at', null)
+        .limit(1)
+        .maybeSingle();
+      if (actorError) throw actorError;
+      const actorId = actor?.id;
+      if (!actorId) throw new AuthenticationError('تعذر ربط هوية الجلسة بالمستخدم المالي المعتمد.');
+
+      const { data: accountRows, error: accountError } = await canonicalWriteClient
+        .from('erp_chart_of_accounts')
+        .select('account_code,account_nature')
+        .eq('tenant_id', tenantId)
+        .eq('school_id', schoolId)
+        .in('account_code', normalized.map(item => item.accountCode))
+        .eq('is_active', true)
+        .eq('is_leaf', true);
+      if (accountError) throw accountError;
+      const accounts = new Map((accountRows || []).map((row: any) => [String(row.account_code), String(row.account_nature)]));
+      for (const item of normalized) {
+        if (accounts.get(item.accountCode) !== item.nature) {
+          throw new ValidationError(`الحساب ${item.accountCode} غير موجود أو لا يحمل طبيعة ${item.nature} المطلوبة للخريطة ${item.key}.`);
+        }
+      }
+
+      const { error: mappingError } = await canonicalWriteClient
+        .from('erp_account_mappings')
+        .upsert(
+          normalized.map(item => ({
+            tenant_id: tenantId,
+            school_id: schoolId,
+            mapping_key: item.key,
+            account_code: item.accountCode,
+            is_active: true,
+            updated_by: actorId,
+          })),
+          { onConflict: 'school_id,mapping_key' },
+        );
+      if (mappingError) throw mappingError;
+
+      const { error: auditError } = await canonicalWriteClient
+        .from('audit_events')
+        .insert({
+          tenant_id: tenantId,
+          school_id: schoolId,
+          branch_id: identity.branchId || null,
+          actor_user_id: actorId,
+          entity_type: 'erp_account_mapping',
+          entity_id: schoolId,
+          action: 'configure',
+          source: 'FinancialMappingRoute',
+          reason: 'اعتماد خريطة حسابات مركزية',
+          result: 'success',
+          metadata: { mappingKeys: normalized.map(item => item.key) },
+        });
+      if (auditError) throw auditError;
+      res.json({ success: true, message: 'تم اعتماد خرائط الحسابات المركزية دون إنشاء قيود.', meta: { configured: normalized.length } });
+    } catch (err: any) {
+      next(err instanceof AuthenticationError || err instanceof AuthorizationError || err instanceof ValidationError || err instanceof ConflictError || err instanceof DatabaseError ? err : new DatabaseError('تعذر اعتماد خرائط الحسابات.', err?.message));
+    }
+  });
+
   app.get("/api/financial/database", authenticateRequest, requirePermission(PERMISSIONS.FINANCIAL_READ), async (req, res, next) => {
     try {
       const schoolId = String((req as any).user.schoolId || '').trim();
@@ -13541,6 +14899,17 @@ export async function createApp(options: { cloudflare?: boolean } = {}): Promise
           const studentFinanceProjectionChanged = projectionKeys.some((key) =>
             JSON.stringify(previousPayload[key] ?? null) !== JSON.stringify(payload[key] ?? null)
           );
+          canonicalErpReady = await CanonicalErpPostingService.isProvisioned(transaction);
+          if (!canonicalErpReady) {
+            throw new DatabaseError('لا يمكن كتابة بيانات الحسابات قبل تثبيت دفتر الأستاذ الكانوني؛ بقيت الوحدة للقراءة فقط حمايةً للمصدر المالي.');
+          }
+          if (studentFinanceProjectionChanged) {
+            const readiness = await CanonicalErpPostingService.getReadiness(transaction, schoolId);
+            if (!readiness.ready) {
+              const blockers = [...readiness.missing, ...readiness.invalid].slice(0, 6).join('، ');
+              throw new ValidationError(`لا يمكن ترحيل المصدر المالي قبل اعتماد خرائط الحسابات الكانونية${blockers ? `: ${blockers}` : '.'}`);
+            }
+          }
           nextVersion = currentVersion + 1;
           await transaction.query(
             `INSERT INTO public.financial_portal_snapshots
@@ -13601,7 +14970,6 @@ export async function createApp(options: { cloudflare?: boolean } = {}): Promise
               }
             }
           }
-          canonicalErpReady = await CanonicalErpPostingService.isProvisioned(transaction);
           if (canonicalErpReady) {
             canonicalErpSync = studentFinanceProjectionChanged
               ? await CanonicalErpPostingService.syncSnapshot(
@@ -13792,6 +15160,18 @@ export async function createApp(options: { cloudflare?: boolean } = {}): Promise
         const currentData = current.rows[0]?.data || {};
         validateInventoryPostingMetadata(currentData, requestedData as Record<string, any>);
         validateInventoryProcurementSnapshot(requestedData as Record<string, any>, { allowCanonicalPostingReferences: true });
+        canonicalErpReady = await CanonicalErpPostingService.isProvisioned(transaction);
+        if (!canonicalErpReady) {
+          throw new DatabaseError('لا يمكن كتابة المخزون مع إعلان نجاح مالي قبل تثبيت دفتر الأستاذ الكانوني وربطه بالمخزون.');
+        }
+        const accountingReadiness = await CanonicalErpPostingService.getReadiness(transaction, schoolId);
+        if (!accountingReadiness.sourceSupport.inventory) {
+          const blockers = [...accountingReadiness.missing, ...accountingReadiness.invalid]
+            .filter((label, index, all) => all.indexOf(label) === index)
+            .slice(0, 6)
+            .join('، ');
+          throw new ValidationError(`لا يمكن حفظ حركة مخزنية قبل اعتماد خرائط المخزون في الأستاذ العام${blockers ? `: ${blockers}` : '.'}`);
+        }
         for (const key of ['movements', 'stocktakes', 'purchaseRequests', 'rfqs', 'quotations', 'purchaseOrders', 'goodsReceipts', 'vendorBills', 'vendorPayments']) {
           for (const locked of (Array.isArray(currentData[key]) ? currentData[key] : []).filter((row: any) => ['approved', 'issued', 'awarded', 'posted', 'closed', 'paid', 'posted_to_gl', 'fully_received', 'converted_to_po', 'responses_received', 'sent', 'inspected_received', 'partially_accepted'].includes(String(row?.status)))) {
             const requested = (requestedData as any)[key].find((row: any) => row?.id === locked.id);
@@ -13801,7 +15181,6 @@ export async function createApp(options: { cloudflare?: boolean } = {}): Promise
             }
           }
         }
-        canonicalErpReady = await CanonicalErpPostingService.isProvisioned(transaction);
         if (canonicalErpReady) {
           canonicalErpSync = await CanonicalErpPostingService.syncInventoryProcurementSnapshot(
             transaction, tenantId, schoolId, actorId, requestedData as Record<string, any>
@@ -14197,7 +15576,7 @@ ${JSON.stringify(snapshot)}
           : 'REQUEST_FAILED';
 
     // Keep the public response safe for non-platform users, but preserve the
-    // real server-side cause for Render diagnostics. Without this entry a
+    // real server-side cause in protected runtime logs. Without this entry a
     // database failure is reduced to the generic Arabic toast and the actual
     // constraint/foreign-key problem cannot be repaired from production logs.
     if (statusCode >= 500) {
@@ -14258,6 +15637,10 @@ ${JSON.stringify(snapshot)}
       success: false,
       errorCode: publicErrorCode,
       message: publicMessage,
+      // A safe correlation handle lets school administrators report a failure
+      // and lets operators locate its protected runtime log without exposing
+      // database details or internal exception messages.
+      ...(statusCode >= 500 ? { traceId } : {}),
       timestamp
     });
   });
@@ -14289,8 +15672,8 @@ ${JSON.stringify(snapshot)}
     });
     app.use(vite.middlewares);
   } else if (!cloudflareMode) {
-    // Resolve the frontend beside the bundled server first. Render can start
-    // the service with a working directory different from the repository
+    // Resolve the frontend beside the bundled server first. A runtime may
+    // start the service with a working directory different from the repository
     // root; using cwd alone then makes every /assets request fall through to
     // index.html and breaks dynamic imports.
     const entryPath = process.argv[1] ? path.resolve(process.argv[1]) : '';
@@ -14461,7 +15844,8 @@ ${JSON.stringify(snapshot)}
   }
 
   // Bind to the dynamic cloud environment port (or fallback to 3000)
-  app.listen(Number(PORT), "0.0.0.0", () => {
+  const listenHost = getServerListenHost(process.env.EDUPRO_LOCAL_STAGING === 'true');
+  app.listen(Number(PORT), listenHost, () => {
     EnterpriseLogger.info(`SchoolForManus server listening on port ${PORT}`, "ServerBootstrap");
   });
 }

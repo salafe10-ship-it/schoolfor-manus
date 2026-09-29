@@ -164,6 +164,20 @@ export class ExamValidator {
       if (!Array.isArray(absentSubjects) || absentSubjects.some((subjectId: unknown) => !subjectIds.has(String(subjectId)))) {
         throw new ValidationError(`قائمة غياب الطالب ${name} تحتوي مادة غير صالحة.`);
       }
+      if (student?.examAttendance !== undefined) {
+        const examAttendance = student.examAttendance;
+        if (!examAttendance || typeof examAttendance !== 'object' || Array.isArray(examAttendance)) {
+          throw new ValidationError(`سجل حضور الطالب ${name} يجب أن يكون خريطة حالات صالحة.`);
+        }
+        Object.entries(examAttendance).forEach(([subjectId, status]) => {
+          if (!subjectIds.has(subjectId) || !['present', 'absent'].includes(String(status))) {
+            throw new ValidationError(`سجل حضور الطالب ${name} يحتوي مادة أو حالة غير صالحة.`);
+          }
+          if ((status === 'absent') !== absentSubjects.includes(subjectId)) {
+            throw new ValidationError(`سجل الغياب للطالب ${name} غير متطابق مع حالة حضور المادة.`);
+          }
+        });
+      }
       const hallId = String(student?.hallId || '').trim();
       const seatNumber = String(student?.seatNumber || '').trim();
       if ((hallId && !seatNumber) || (!hallId && seatNumber)) {

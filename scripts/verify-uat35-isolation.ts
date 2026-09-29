@@ -1,8 +1,14 @@
 import 'dotenv/config';
 import { Pool, type PoolClient } from 'pg';
+import { assertIsolatedStagingDatabase } from './stagingDatabaseSafety.js';
 
 const connectionString = process.env.DIRECT_URL || process.env.DATABASE_URL;
 if (!connectionString) throw new Error('UAT35_DATABASE_URL_MISSING');
+assertIsolatedStagingDatabase({
+  targetName: process.env.UAT35_TARGET || '',
+  supabaseUrl: process.env.SUPABASE_URL || process.env.VITE_SUPABASE_URL || '',
+  databaseUrl: connectionString,
+});
 const pool = new Pool({ connectionString, max: 1, ssl: { rejectUnauthorized: false } });
 
 const scopes = [

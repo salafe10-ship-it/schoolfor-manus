@@ -1,7 +1,11 @@
 import 'dotenv/config';
 import { createClient } from '@supabase/supabase-js';
+import {
+  assertCloudflareStagingWorkerUrl,
+  assertStagingSupabaseUrl,
+} from './stagingDatabaseSafety.js';
 
-const baseUrl = String(process.env.EDUPRO_LOADTEST_BASE_URL || 'https://schoolfor-manus-staging.onrender.com').replace(/\/$/, '');
+const baseUrl = String(process.env.EDUPRO_LOADTEST_BASE_URL || '').trim().replace(/\/$/, '');
 const adminEmail = String(process.env.EDUPRO_LOADTEST_ADMIN_EMAIL || '').trim().toLowerCase();
 const adminPassword = String(process.env.EDUPRO_LOADTEST_ADMIN_PASSWORD || '');
 const requestedTenantId = String(process.env.EDUPRO_LOADTEST_TENANT_ID || '').trim();
@@ -46,6 +50,7 @@ async function bounded<T, R>(items: T[], concurrency: number, worker: (item: T, 
 }
 
 async function main(): Promise<void> {
+  assertCloudflareStagingWorkerUrl(required(baseUrl, 'EDUPRO_LOADTEST_BASE_URL'));
   assertPositive(schoolCount, 'EDUPRO_LOADTEST_SCHOOLS');
   assertPositive(userCount, 'EDUPRO_LOADTEST_USERS');
   assertPositive(schoolConcurrency, 'EDUPRO_LOADTEST_SCHOOL_CONCURRENCY');
@@ -77,6 +82,7 @@ async function main(): Promise<void> {
   required(adminPassword, 'EDUPRO_LOADTEST_ADMIN_PASSWORD');
 
   const supabaseUrl = required(String(process.env.SUPABASE_URL || process.env.VITE_SUPABASE_URL || '').trim(), 'SUPABASE_URL');
+  assertStagingSupabaseUrl(supabaseUrl);
   const supabaseAnonKey = required(String(process.env.SUPABASE_ANON_KEY || process.env.VITE_SUPABASE_ANON_KEY || '').trim(), 'SUPABASE_ANON_KEY');
   const authClient = createClient(supabaseUrl, supabaseAnonKey, { auth: { autoRefreshToken: false, persistSession: false } });
   const auth = await authClient.auth.signInWithPassword({ email: adminEmail, password: adminPassword });

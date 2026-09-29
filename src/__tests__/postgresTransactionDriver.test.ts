@@ -11,6 +11,36 @@ function createDriverHarness() {
 }
 
 describe('PostgresTransactionDriver trusted context', () => {
+  it('sets the transaction statement timeout before tenant role and context setup', async () => {
+    vi.stubEnv('DATABASE_ROLE_EXPECTED', 'edupro_app');
+    try {
+      const { client, driver } = createDriverHarness();
+      client.query.mockImplementation(async (sql: string) => String(sql).includes('FROM pg_roles')
+        ? { rows: [{ current_user: 'edupro_app', rolsuper: false, rolbypassrls: false, can_use_expected_role: true }], rowCount: 1 }
+        : { rows: [], rowCount: 0 });
+
+      const session = await driver.begin({
+        transactionId: 'tx-timeout-before-tenant-setup',
+        tenantId: 'tenant-a',
+        schoolId: 'school-a',
+        operationName: 'bounded tenant transaction setup',
+        timeoutMs: 9_000,
+        trustedContext: { tenantId: 'tenant-a', schoolId: 'school-a' }
+      });
+
+      const sql = client.query.mock.calls.map(([statement]) => String(statement));
+      expect(sql[0]).toBe('BEGIN');
+      expect(sql[1]).toContain("set_config('statement_timeout', $1, true)");
+      expect(sql[2]).toContain('FROM pg_roles');
+      expect(sql.findIndex(statement => statement.startsWith('SELECT set_config($1, $2, true)'))).toBeGreaterThan(2);
+
+      await session.rollback();
+      await session.release();
+    } finally {
+      vi.unstubAllEnvs();
+    }
+  });
+
   it('combines all present transaction-local settings into one parameterized command', async () => {
     const { client, pool, driver } = createDriverHarness();
 
@@ -60,6 +90,39 @@ describe('PostgresTransactionDriver trusted context', () => {
     })).rejects.toThrow('Trusted tenant context is missing or invalid.');
 
     expect(client.query.mock.calls.filter(([sql]) => String(sql).startsWith('SELECT set_config'))).toHaveLength(0);
+  });
+
+  it('keeps a safe inherited Hyperdrive role instead of forcing an unauthorized role switch', async () => {
+    vi.stubEnv('DATABASE_ROLE_EXPECTED', 'edupro_app');
+    try {
+      const { client, driver } = createDriverHarness();
+      client.query.mockImplementation(async (sql: string) => String(sql).includes('FROM pg_roles')
+        ? {
+            rows: [{
+              current_user: 'edupro_staging_app',
+              rolsuper: false,
+              rolbypassrls: false,
+              can_use_expected_role: true
+            }],
+            rowCount: 1
+          }
+        : { rows: [], rowCount: 0 });
+
+      const session = await driver.begin({
+        transactionId: 'tx-safe-inherited-role',
+        tenantId: 'tenant-a',
+        schoolId: 'school-a',
+        operationName: 'safe inherited role test',
+        trustedContext: { tenantId: 'tenant-a', schoolId: 'school-a' }
+      });
+
+      const sql = client.query.mock.calls.map(([statement]) => String(statement));
+      expect(sql.some(statement => statement.startsWith('SET LOCAL ROLE'))).toBe(false);
+      await session.rollback();
+      await session.release();
+    } finally {
+      vi.unstubAllEnvs();
+    }
   });
 
   it('releases a committed connection without a second transaction command', async () => {
@@ -114,6 +177,51 @@ describe('PostgresTransactionDriver trusted context', () => {
       await session.commit();
       await session.release();
       expect(client.release).toHaveBeenCalledWith();
+    } finally {
+      vi.unstubAllEnvs();
+    }
+  });
+
+  it('creates and closes a request-scoped Hyperdrive pool for each transaction', async () => {
+    vi.stubEnv('EDUPRO_CLOUDFLARE_HYPERDRIVE', 'true');
+    try {
+      const pools: any[] = [];
+      const driver = new PostgresTransactionDriver(null, () => {
+        const client = {
+          query: vi.fn(async () => ({ rows: [], rowCount: 0 })),
+          release: vi.fn()
+        };
+        const pool = {
+          connect: vi.fn(async () => client),
+          end: vi.fn(async () => undefined),
+          on: vi.fn(),
+          totalCount: 1,
+          idleCount: 0,
+          waitingCount: 0
+        };
+        pools.push({ pool, client });
+        return pool as any;
+      });
+      const options = {
+        tenantId: 'tenant-a',
+        schoolId: 'school-a',
+        operationName: 'request scoped Hyperdrive test',
+        trustedContext: { tenantId: 'tenant-a', schoolId: 'school-a' }
+      };
+
+      for (let index = 0; index < 2; index += 1) {
+        const session = await driver.begin({ ...options, transactionId: `tx-request-${index}` });
+        await session.commit();
+        await session.release();
+      }
+
+      expect(pools).toHaveLength(2);
+      expect(pools[0].pool).not.toBe(pools[1].pool);
+      for (const { pool, client } of pools) {
+        expect(pool.connect).toHaveBeenCalledTimes(1);
+        expect(client.release).toHaveBeenCalledTimes(1);
+        expect(pool.end).toHaveBeenCalledTimes(1);
+      }
     } finally {
       vi.unstubAllEnvs();
     }

@@ -1692,6 +1692,29 @@ html:not(.dark) #super-admin-portal button:not(.bg-indigo-600):not(.bg-rose-600)
   filter: brightness(1.08);
 }
 
+/* Keep integration permission keys in the data layer, not in the user-facing directory. */
+.identity-control-surface table tbody td:nth-child(3) > div.mt-2 {
+  display: none;
+}
+
+/* Give account actions a stable, readable layout on narrow and wide screens. */
+.identity-control-surface table tbody td:last-child > div {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(8.5rem, 1fr));
+  gap: 0.5rem;
+}
+
+.identity-control-surface table tbody td:last-child > div > button {
+  min-height: 2.25rem;
+  white-space: nowrap;
+}
+
+@media (min-width: 1280px) {
+  .identity-control-surface table tbody td:last-child > div {
+    grid-template-columns: repeat(3, minmax(8.5rem, 1fr));
+  }
+}
+
 @media (max-width: 640px) {
   .identity-control-surface .identity-metric-grid > .identity-metric-card {
     min-height: 6.5rem;

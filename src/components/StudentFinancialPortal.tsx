@@ -341,9 +341,12 @@ export default function StudentFinancialPortal({
   const [financialPersistence, setFinancialPersistence] = useState<'loading' | 'ready' | 'blocked'>('loading');
   const [financialPersistenceMessage, setFinancialPersistenceMessage] = useState('جارٍ التحقق من مصدر البيانات المالية...');
   const [financialPersistenceVersion, setFinancialPersistenceVersion] = useState(0);
-  // Keep financial mutations locked until the canonical ledger, tenant
-  // isolation, and reporting gates are explicitly approved.
-  const financialWritesLocked = import.meta.env.VITE_FINANCIAL_WRITES_ENABLED !== 'true';
+  type FinancialWriteMode = 'snapshot_read_only' | 'snapshot_write' | 'erp_integrated' | 'ledger_ready';
+  // The server is authoritative. A build-time flag cannot safely unlock a
+  // tenant's finance screen because it cannot prove the school mappings or
+  // the live canonical ledger state.
+  const [financialWriteMode, setFinancialWriteMode] = useState<FinancialWriteMode>('snapshot_read_only');
+  const financialWritesLocked = financialWriteMode === 'snapshot_read_only';
   const [financialOperationalContext, setFinancialOperationalContext] = useState<{
     academicYearId: string;
     academicYearName: string;
@@ -492,6 +495,9 @@ export default function StudentFinancialPortal({
     if (financialPersistence !== 'ready') {
       throw new Error(financialPersistenceMessage || 'الحفظ المالي متوقف حتى يتوفر مصدر قاعدة بيانات موثق.');
     }
+    if (financialWritesLocked) {
+      throw new Error('الكتابة المالية مقفلة من المصدر المركزي حتى يكتمل دفتر الأستاذ وخرائط الحسابات.');
+    }
     const payload = {
       studentReceiptVouchers: updatedStudRvs !== undefined ? updatedStudRvs : studentReceiptVouchers,
       receiptVouchers: updatedRvs !== undefined ? updatedRvs : glRvs,
@@ -603,6 +609,9 @@ export default function StudentFinancialPortal({
         if (!response.ok || !res.success) {
           throw new Error(res.message || `فشل تحميل المصدر المالي (${response.status})`);
         }
+
+        const writeMode = String(res.meta?.writeMode || 'snapshot_read_only') as FinancialWriteMode;
+        setFinancialWriteMode(['snapshot_write', 'erp_integrated', 'ledger_ready'].includes(writeMode) ? writeMode : 'snapshot_read_only');
 
         if (res.data && Object.keys(res.data).length > 0) {
           setFinancialInvoices(res.data.invoices || []);

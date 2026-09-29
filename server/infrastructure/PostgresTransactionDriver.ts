@@ -34,7 +34,8 @@ class PostgresTransactionSession implements TransactionSession {
     private readonly poolSnapshot?: () => PoolSnapshot,
     private readonly recordPoolMetric?: (metric: Perf004PoolMetric) => void,
     private readonly acquiredAtMs = nowMs(),
-    private readonly transactionStarted = true
+    private readonly transactionStarted = true,
+    private readonly closePool?: () => Promise<void>
   ) {}
 
   /**
@@ -92,6 +93,21 @@ class PostgresTransactionSession implements TransactionSession {
   }
 
   public async release(): Promise<void> {
+    if (this.state === "released") return;
+    try {
+      await this.releaseClient();
+    } finally {
+      if (this.closePool) {
+        try {
+          await this.closePool();
+        } catch {
+          this.diagnosticTrace?.mark(`${this.diagnosticPrefix}request_pool_close_failed`);
+        }
+      }
+    }
+  }
+
+  private async releaseClient(): Promise<void> {
     if (this.state === "released") return;
     this.diagnosticTrace?.mark(`${this.diagnosticPrefix}release_started`);
     const releaseStartedAtMs = nowMs();
@@ -207,18 +223,42 @@ class PostgresTransactionSession implements TransactionSession {
 }
 
 export class PostgresTransactionDriver implements TransactionDriver {
-  private poolConnectEvents = 0;
+  private readonly poolConnectEvents = new WeakMap<Pool, number>();
 
-  public constructor(private readonly pool: Pool) {
-    const poolWithEvents = this.pool as Pool & { on?: (event: string, listener: () => void) => void };
+  public constructor(
+    private readonly pool: Pool | null,
+    private readonly poolFactory?: () => Pool
+  ) {
+    if (this.pool) this.observePoolConnections(this.pool);
+  }
+
+  private observePoolConnections(pool: Pool): void {
+    if (this.poolConnectEvents.has(pool)) return;
+    this.poolConnectEvents.set(pool, 0);
+    const poolWithEvents = pool as Pool & { on?: (event: string, listener: () => void) => void };
     poolWithEvents.on?.('connect', () => {
-      this.poolConnectEvents += 1;
+      this.poolConnectEvents.set(pool, (this.poolConnectEvents.get(pool) || 0) + 1);
     });
   }
 
-  private poolSnapshot(): PoolSnapshot {
-    const totalCount = this.pool.totalCount;
-    const idleCount = this.pool.idleCount;
+  private openPool(): { pool: Pool; close: () => Promise<void> } {
+    const pool = this.poolFactory ? this.poolFactory() : this.pool;
+    if (!pool) throw new Error('PostgreSQL transaction pool is not configured.');
+    this.observePoolConnections(pool);
+    let closed = false;
+    return {
+      pool,
+      close: async () => {
+        if (!this.poolFactory || closed) return;
+        closed = true;
+        await pool.end();
+      }
+    };
+  }
+
+  private poolSnapshot(pool: Pool): PoolSnapshot {
+    const totalCount = pool.totalCount;
+    const idleCount = pool.idleCount;
     return {
       totalCount,
       idleCount,
@@ -234,18 +274,23 @@ export class PostgresTransactionDriver implements TransactionDriver {
    */
   public async inspectPoolIdentity(sampleCount: number): Promise<ConnectionIdentity[]> {
     const identities: ConnectionIdentity[] = [];
-    for (let index = 0; index < sampleCount; index += 1) {
-      const client = await this.pool.connect();
-      try {
-        await client.query("BEGIN");
-        identities.push(await readConnectionIdentity(client as any));
-      } finally {
+    const lease = this.openPool();
+    try {
+      for (let index = 0; index < sampleCount; index += 1) {
+        const client = await lease.pool.connect();
         try {
-          await client.query("ROLLBACK");
+          await client.query("BEGIN");
+          identities.push(await readConnectionIdentity(client as any));
         } finally {
-          client.release();
+          try {
+            await client.query("ROLLBACK");
+          } finally {
+            await Promise.resolve(client.release());
+          }
         }
       }
+    } finally {
+      await lease.close();
     }
     return identities;
   }
@@ -290,26 +335,44 @@ export class PostgresTransactionDriver implements TransactionDriver {
 
   public async begin(options: TransactionBeginOptions): Promise<TransactionSession> {
     const diagnosticPrefix = options.diagnosticPrefix || '';
+    const lease = this.openPool();
+    const { pool } = lease;
     const poolRequestedAtMs = nowMs();
-    const poolEventsBefore = this.poolConnectEvents;
+    const poolEventsBefore = this.poolConnectEvents.get(pool) || 0;
     options.diagnosticTrace?.mark(`${diagnosticPrefix}pool_connection_requested`);
-    options.diagnosticTrace?.recordPoolMetric?.({ phase: 'requested', ...this.poolSnapshot() });
-    const client = await this.pool.connect();
+    options.diagnosticTrace?.recordPoolMetric?.({ phase: 'requested', ...this.poolSnapshot(pool) });
+    let client: PoolClient;
+    try {
+      client = await pool.connect();
+    } catch (error) {
+      try { await lease.close(); } catch { /* Preserve the connection acquisition error. */ }
+      throw error;
+    }
     const poolAcquiredAtMs = nowMs();
     options.diagnosticTrace?.mark(`${diagnosticPrefix}pool_connection_acquired`);
     options.diagnosticTrace?.count?.('poolAcquisitions');
     const acquisitionDurationMs = Number((poolAcquiredAtMs - poolRequestedAtMs).toFixed(3));
-    const connectionCreated = this.poolConnectEvents > poolEventsBefore;
+    const connectionCreated = (this.poolConnectEvents.get(pool) || 0) > poolEventsBefore;
     options.diagnosticTrace?.recordPoolMetric?.({
       phase: 'acquired',
-      ...this.poolSnapshot(),
+      ...this.poolSnapshot(pool),
       acquisitionDurationMs,
       waitDurationMs: connectionCreated ? 0 : acquisitionDurationMs,
       connectionCreationDurationMs: connectionCreated ? acquisitionDurationMs : 0
     });
     const transactionId = options.transactionId || randomUUID();
     try {
+      options.diagnosticTrace?.mark(`${diagnosticPrefix}transaction_begin_started`);
       await client.query("BEGIN");
+      options.diagnosticTrace?.mark(`${diagnosticPrefix}transaction_begin_completed`);
+      // Bound role validation and trusted-context setup too. Applying the
+      // transaction-local timeout only after both steps leaves this setup path
+      // able to outlive the caller's request deadline (notably in Workers).
+      if (options.timeoutMs && options.timeoutMs > 0) {
+        options.diagnosticTrace?.mark(`${diagnosticPrefix}transaction_timeout_config_started`);
+        await client.query("SELECT set_config('statement_timeout', $1, true)", [String(options.timeoutMs)]);
+        options.diagnosticTrace?.mark(`${diagnosticPrefix}transaction_timeout_config_completed`);
+      }
       // Tenant RLS policies are intentionally granted to the explicitly
       // provisioned application role (for example edupro_staging_app). A
       // pooler connection may authenticate as a transport role, so enter the
@@ -320,7 +383,44 @@ export class PostgresTransactionDriver implements TransactionDriver {
         if (tenantRole && !/^[A-Za-z_][A-Za-z0-9_]*$/.test(tenantRole)) {
           throw new Error('DATABASE_ROLE_EXPECTED contains an invalid PostgreSQL role name.');
         }
-        if (tenantRole) await client.query(`SET LOCAL ROLE "${tenantRole}"`);
+        if (tenantRole) {
+          // Hyperdrive may already authenticate with a non-superuser role
+          // that inherits the expected application role (for example
+          // edupro_staging_app -> edupro_app). Forcing SET LOCAL ROLE in that
+          // case is both unnecessary and rejected by PostgreSQL when the
+          // connection role does not have SET ROLE privilege. Keep the
+          // existing safe role so its inherited grants and RLS policies stay
+          // active; only switch when the current role is not already an
+          // approved, non-bypass member of the expected role.
+          options.diagnosticTrace?.mark(`${diagnosticPrefix}tenant_role_check_started`);
+          const roleState = await client.query<{
+            current_user: string;
+            rolsuper: boolean;
+            rolbypassrls: boolean;
+            can_use_expected_role: boolean;
+          }>(
+            `SELECT current_user::text AS current_user,
+                    COALESCE(r.rolsuper, false) AS rolsuper,
+                    COALESCE(r.rolbypassrls, false) AS rolbypassrls,
+                    pg_has_role(current_user, $1, 'member') AS can_use_expected_role
+               FROM pg_roles r
+              WHERE r.rolname = current_user`,
+            [tenantRole]
+          );
+          options.diagnosticTrace?.mark(`${diagnosticPrefix}tenant_role_check_completed`);
+          const currentRole = roleState.rows[0];
+          const currentRoleIsSafe = Boolean(
+            currentRole
+            && !currentRole.rolsuper
+            && !currentRole.rolbypassrls
+            && currentRole.can_use_expected_role
+          );
+          if (!currentRoleIsSafe) {
+            options.diagnosticTrace?.mark(`${diagnosticPrefix}tenant_role_switch_started`);
+            await client.query(`SET LOCAL ROLE "${tenantRole}"`);
+            options.diagnosticTrace?.mark(`${diagnosticPrefix}tenant_role_switch_completed`);
+          }
+        }
       }
       options.diagnosticTrace?.count?.('transactions');
       // PostgreSQL's default_transaction_isolation is READ COMMITTED in the
@@ -331,18 +431,17 @@ export class PostgresTransactionDriver implements TransactionDriver {
         await this.applyTrustedContext(client, options.trustedContext, options.diagnosticTrace, diagnosticPrefix);
       }
       options.diagnosticTrace?.mark(`${diagnosticPrefix}transaction_begin_configured`);
-      if (options.timeoutMs && options.timeoutMs > 0) {
-        await client.query("SELECT set_config('statement_timeout', $1, true)", [String(options.timeoutMs)]);
-      }
       return new PostgresTransactionSession(
         transactionId,
         client,
         options.timeoutMs,
         options.diagnosticTrace,
         diagnosticPrefix,
-        () => this.poolSnapshot(),
+        () => this.poolSnapshot(pool),
         options.diagnosticTrace?.recordPoolMetric,
-        poolAcquiredAtMs
+        poolAcquiredAtMs,
+        true,
+        lease.close
       );
     } catch (error) {
       try {
@@ -356,6 +455,7 @@ export class PostgresTransactionDriver implements TransactionDriver {
           // Never replace the begin error with a Hyperdrive cleanup error.
         }
       }
+      try { await lease.close(); } catch { /* Preserve the original begin error. */ }
       throw error;
     }
   }
@@ -369,19 +469,27 @@ export class PostgresTransactionDriver implements TransactionDriver {
    */
   public async beginReadOnly(options: TransactionBeginOptions): Promise<TransactionSession> {
     const diagnosticPrefix = options.diagnosticPrefix || '';
+    const lease = this.openPool();
+    const { pool } = lease;
     const poolRequestedAtMs = nowMs();
-    const poolEventsBefore = this.poolConnectEvents;
+    const poolEventsBefore = this.poolConnectEvents.get(pool) || 0;
     options.diagnosticTrace?.mark(`${diagnosticPrefix}pool_connection_requested`);
-    options.diagnosticTrace?.recordPoolMetric?.({ phase: 'requested', ...this.poolSnapshot() });
-    const client = await this.pool.connect();
+    options.diagnosticTrace?.recordPoolMetric?.({ phase: 'requested', ...this.poolSnapshot(pool) });
+    let client: PoolClient;
+    try {
+      client = await pool.connect();
+    } catch (error) {
+      try { await lease.close(); } catch { /* Preserve the connection acquisition error. */ }
+      throw error;
+    }
     const poolAcquiredAtMs = nowMs();
     options.diagnosticTrace?.mark(`${diagnosticPrefix}pool_connection_acquired`);
     options.diagnosticTrace?.count?.('poolAcquisitions');
     const acquisitionDurationMs = Number((poolAcquiredAtMs - poolRequestedAtMs).toFixed(3));
-    const connectionCreated = this.poolConnectEvents > poolEventsBefore;
+    const connectionCreated = (this.poolConnectEvents.get(pool) || 0) > poolEventsBefore;
     options.diagnosticTrace?.recordPoolMetric?.({
       phase: 'acquired',
-      ...this.poolSnapshot(),
+      ...this.poolSnapshot(pool),
       acquisitionDurationMs,
       waitDurationMs: connectionCreated ? 0 : acquisitionDurationMs,
       connectionCreationDurationMs: connectionCreated ? acquisitionDurationMs : 0
@@ -393,7 +501,30 @@ export class PostgresTransactionDriver implements TransactionDriver {
         if (tenantRole && !/^[A-Za-z_][A-Za-z0-9_]*$/.test(tenantRole)) {
           throw new Error('DATABASE_ROLE_EXPECTED contains an invalid PostgreSQL role name.');
         }
-        if (tenantRole) await client.query(`SET ROLE "${tenantRole}"`);
+        if (tenantRole) {
+          const roleState = await client.query<{
+            current_user: string;
+            rolsuper: boolean;
+            rolbypassrls: boolean;
+            can_use_expected_role: boolean;
+          }>(
+            `SELECT current_user::text AS current_user,
+                    COALESCE(r.rolsuper, false) AS rolsuper,
+                    COALESCE(r.rolbypassrls, false) AS rolbypassrls,
+                    pg_has_role(current_user, $1, 'member') AS can_use_expected_role
+               FROM pg_roles r
+              WHERE r.rolname = current_user`,
+            [tenantRole]
+          );
+          const currentRole = roleState.rows[0];
+          const currentRoleIsSafe = Boolean(
+            currentRole
+            && !currentRole.rolsuper
+            && !currentRole.rolbypassrls
+            && currentRole.can_use_expected_role
+          );
+          if (!currentRoleIsSafe) await client.query(`SET ROLE "${tenantRole}"`);
+        }
       }
       if (options.trustedContext) {
         await this.applyTrustedContext(client, options.trustedContext, options.diagnosticTrace, diagnosticPrefix, false);
@@ -407,10 +538,11 @@ export class PostgresTransactionDriver implements TransactionDriver {
         options.timeoutMs,
         options.diagnosticTrace,
         diagnosticPrefix,
-        () => this.poolSnapshot(),
+        () => this.poolSnapshot(pool),
         options.diagnosticTrace?.recordPoolMetric,
         poolAcquiredAtMs,
-        false
+        false,
+        lease.close
       );
     } catch (error) {
       try {
@@ -418,12 +550,13 @@ export class PostgresTransactionDriver implements TransactionDriver {
       } catch {
         // Preserve the original setup/query error.
       }
+      try { await lease.close(); } catch { /* Preserve the original setup/query error. */ }
       throw error;
     }
   }
 
   public async close(): Promise<void> {
-    await this.pool.end();
+    if (this.pool) await this.pool.end();
   }
 }
 
@@ -436,22 +569,30 @@ export function createPostgresTransactionDriverFromEnvironment(): PostgresTransa
   // A Worker instance is short-lived and Hyperdrive already maintains the
   // origin pool. Matching Hyperdrive's ceiling with a pg pool of 20 per
   // isolate causes connection waits and eventually `timeout exceeded when
-  // trying to connect` during RBAC resolution. Keep the local pool small in
-  // Cloudflare while preserving the existing override for deliberate tuning.
+  // trying to connect` during parallel authenticated reads. Keep the local
+  // pool below Hyperdrive's configured origin ceiling while allowing the
+  // dashboard, canonical students, exams, and audit reads to overlap without
+  // starving one another. Preserve the explicit override for deliberate
+  // tuning.
   const isCloudflareHyperdrive = process.env.EDUPRO_CLOUDFLARE_HYPERDRIVE === 'true';
   const configuredPoolMax = Number(process.env.PG_POOL_MAX);
   const poolMax = Number.isFinite(configuredPoolMax) && configuredPoolMax > 0
     ? configuredPoolMax
-    : (isCloudflareHyperdrive ? 4 : 20);
+    : (isCloudflareHyperdrive ? 8 : 20);
 
-  const pool = new Pool({
+  const createPool = (): Pool => new Pool({
     connectionString,
-    max: poolMax,
+    // Hyperdrive's request-side socket must not survive an invocation. In
+    // Workers, create a one-client pool for each transaction and close it on
+    // release; Hyperdrive continues to own and reuse the origin connection.
+    max: isCloudflareHyperdrive ? 1 : poolMax,
     idleTimeoutMillis: Number(process.env.PG_IDLE_TIMEOUT_MS || 30_000),
     connectionTimeoutMillis: Number(process.env.PG_CONNECTION_TIMEOUT_MS || 5_000),
     allowExitOnIdle: process.env.NODE_ENV !== "production",
     ssl: createPostgresSslConfig(process.env.SUPABASE_URL || process.env.NEXT_PUBLIC_SUPABASE_URL),
   });
 
-  return new PostgresTransactionDriver(pool);
+  return isCloudflareHyperdrive
+    ? new PostgresTransactionDriver(null, createPool)
+    : new PostgresTransactionDriver(createPool());
 }

@@ -2,12 +2,18 @@ import dotenv from 'dotenv';
 dotenv.config();
 
 import { Pool } from 'pg';
+import { assertIsolatedStagingDatabase } from './stagingDatabaseSafety.js';
 
 async function main(): Promise<void> {
   const schoolId = String(process.argv[2] || '').trim();
   if (!/^[0-9a-f-]{36}$/i.test(schoolId)) throw new Error('A valid school UUID is required.');
   const connectionString = process.env.DIRECT_URL || process.env.DATABASE_URL;
   if (!connectionString) throw new Error('DIRECT_URL or DATABASE_URL is required.');
+  assertIsolatedStagingDatabase({
+    targetName: process.env.UAT35_TARGET || '',
+    supabaseUrl: process.env.SUPABASE_URL || process.env.VITE_SUPABASE_URL || '',
+    databaseUrl: connectionString,
+  });
   const pool = new Pool({
     connectionString,
     max: 1,

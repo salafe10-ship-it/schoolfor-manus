@@ -9,6 +9,7 @@ type SchoolUser = {
   email?: string;
   username?: string;
   job_id?: string;
+  employee_id?: string;
   job_title?: string;
   department?: string;
   status: 'invited' | 'active' | 'suspended' | 'disabled' | 'archived';
@@ -43,6 +44,8 @@ type SchoolDepartment = {
   nameEn?: string;
 };
 
+type HREmployee = { id: string; name: string; departmentId?: string; jobId?: string; status?: string };
+
 type PermissionDescriptor = {
   permissionKey: string;
   resource: string;
@@ -59,6 +62,9 @@ type Props = {
   canManage?: boolean;
   /** Trusted server-derived capability for role and direct-permission assignment. */
   canAssign?: boolean;
+  /** Trusted session identity used only to repair the current user's display
+   * when the directory response is temporarily missing its role join. */
+  currentUser?: { id?: string; role?: string; permissions?: string[] } | null;
 };
 
 const statusLabels: Record<SchoolUser['status'], string> = {
@@ -66,15 +72,22 @@ const statusLabels: Record<SchoolUser['status'], string> = {
 };
 
 type StatusFilter = 'all' | SchoolUser['status'];
-type ManagementView = 'users' | 'roles' | 'permissions' | 'report';
+type ManagementView = 'users' | 'roles' | 'permissions' | 'report' | 'governance';
 type PermissionStateFilter = 'all' | 'effective' | 'direct' | 'inherited' | 'unassigned' | 'denied';
-type EffectivePermissionReportRow = { id: string; display_name: string; email?: string; username?: string; job_title?: string; department?: string; inherited_count: number; direct_count: number; denied_count: number; effective_count: number };
+type EffectivePermissionReportRow = { id: string; display_name: string; email?: string; username?: string; job_title?: string; department?: string; inherited_count: number; central_direct_count?: number; school_direct_count?: number; direct_count: number; denied_count: number; effective_count: number };
+type AccessReview = { id: string; user_name?: string; due_at: string; status: string; permission_snapshot?: unknown[]; decision_reason?: string | null };
+type SodConflict = { user_id: string; display_name: string; email?: string; rule_key: string; permission_a: string; permission_b: string; severity: string; description: string };
+type AccessRequest = { id: string; user_name?: string; permission_keys?: string[]; reason: string; status: string; starts_at?: string | null; ends_at?: string | null; approval_status?: string | null; requested_at?: string };
+type ExpiredGrant = { grant_id: string; user_id: string; display_name: string; email?: string; permission_key: string; source: string; ends_at: string; status: string };
+type SensitiveUser = { user_id: string; display_name: string; email?: string; permissions?: Array<{ permissionKey: string; source: string }> };
+type UnusedPermission = { permission_key: string; resource: string; action: string };
 
-export default function SchoolUsersPermissionsModule({ selectedSchool, selectedBranch, triggerNotification, onBackToMainMenu, canManage = false, canAssign = false }: Props) {
+export default function SchoolUsersPermissionsModule({ selectedSchool, selectedBranch, triggerNotification, onBackToMainMenu, canManage = false, canAssign = false, currentUser = null }: Props) {
   const [users, setUsers] = useState<SchoolUser[]>([]);
   const [roles, setRoles] = useState<SchoolRole[]>([]);
   const [jobs, setJobs] = useState<SchoolJob[]>([]);
   const [departments, setDepartments] = useState<SchoolDepartment[]>([]);
+  const [employees, setEmployees] = useState<HREmployee[]>([]);
   const [permissionCatalog, setPermissionCatalog] = useState<PermissionDescriptor[]>([]);
   const [query, setQuery] = useState('');
   const [loading, setLoading] = useState(true);
@@ -90,19 +103,34 @@ export default function SchoolUsersPermissionsModule({ selectedSchool, selectedB
   const [permissionEditing, setPermissionEditing] = useState<SchoolUser | null>(null);
   const [permissionQuery, setPermissionQuery] = useState('');
   const [permissionStateFilter, setPermissionStateFilter] = useState<PermissionStateFilter>('all');
+  const [permissionPresentation, setPermissionPresentation] = useState<'compact' | 'detailed'>('compact');
   const [expandedPermissionModules, setExpandedPermissionModules] = useState<Record<string, boolean>>({});
   const [statusFilter, setStatusFilter] = useState<StatusFilter>('all');
   const [roleFilter, setRoleFilter] = useState('all');
   const [activeView, setActiveView] = useState<ManagementView>('users');
   const [compareRoleKeys, setCompareRoleKeys] = useState({ left: '', right: '' });
   const [serverEffectiveReport, setServerEffectiveReport] = useState<EffectivePermissionReportRow[]>([]);
-  const [form, setForm] = useState({ name: '', email: '', jobId: '', jobTitle: '', department: '', initialRole: '', password: '', branchId: '' });
+  const [accessReviews, setAccessReviews] = useState<AccessReview[]>([]);
+  const [sodConflicts, setSodConflicts] = useState<SodConflict[]>([]);
+  const [accessRequests, setAccessRequests] = useState<AccessRequest[]>([]);
+  const [expiredGrants, setExpiredGrants] = useState<ExpiredGrant[]>([]);
+  const [sensitiveUsers, setSensitiveUsers] = useState<SensitiveUser[]>([]);
+  const [unusedPermissions, setUnusedPermissions] = useState<UnusedPermission[]>([]);
+  const [governanceLoading, setGovernanceLoading] = useState(false);
+  const [showAccessRequestForm, setShowAccessRequestForm] = useState(false);
+  const [accessRequestDraft, setAccessRequestDraft] = useState({ userId: '', permissionKey: '', reason: '', endsAt: '' });
+  const [form, setForm] = useState<Record<string, string>>({ employeeId: '', name: '', email: '', jobId: '', jobTitle: '', department: '', initialRole: '', password: '', branchId: '' });
   const canCreate = canManage && canAssign;
   // Central role templates remain the published baseline. A school manager
   // may make complete, auditable allow/deny decisions for users in this
   // school; central denials still win and platform permissions are protected.
 
-  const notify = (message: string, type: 'info' | 'warning' | 'success' = 'info') => triggerNotification?.(message, type);
+  // Keep the notification callback stable. Governance reads depend on this
+  // callback; recreating it on every render would restart the effect, fire a
+  // new four-request batch, and eventually trip the API limiter.
+  const notify = useCallback((message: string, type: 'info' | 'warning' | 'success' = 'info') => {
+    triggerNotification?.(message, type);
+  }, [triggerNotification]);
 
   const load = useCallback(async () => {
     setLoading(true);
@@ -110,7 +138,7 @@ export default function SchoolUsersPermissionsModule({ selectedSchool, selectedB
     setLoadWarnings([]);
     try {
       // Keep the three control-plane reads in one authenticated sequence.
-      // Firing them concurrently can make a cold Render instance refresh the
+      // Firing them concurrently can make a cold serverless instance refresh the
       // same session three times and contend for the small platform pool,
       // leaving an otherwise valid directory looking empty.
       const requestSequentially = async (request: () => Promise<Response>): Promise<PromiseSettledResult<Response>> => {
@@ -144,7 +172,16 @@ export default function SchoolUsersPermissionsModule({ selectedSchool, selectedB
       ]);
       const warnings = [users, roles, jobs].filter((item) => !item.ok).map((item) => item.message);
       if (users.ok) {
-        const nextUsers = Array.isArray(users.payload.users) ? users.payload.users : [];
+        const rawUsers = Array.isArray(users.payload.users) ? users.payload.users : [];
+        const currentUserId = String(currentUser?.id || '').trim();
+        const currentRoleKey = String(currentUser?.role || '').trim().toLowerCase();
+        const publishedCurrentRole = currentRoleKey ? (Array.isArray(roles.payload?.roles) ? roles.payload.roles : []).find((role: SchoolRole) => role.roleKey.toLowerCase() === currentRoleKey) : undefined;
+        const nextUsers = rawUsers.map((user: SchoolUser) => {
+          if (currentUserId && user.id === currentUserId && (!Array.isArray(user.roles) || user.roles.length === 0) && publishedCurrentRole) {
+            return { ...user, roles: [{ roleKey: publishedCurrentRole.roleKey, name: publishedCurrentRole.name, assignmentBranchId: user.branch_id || null }] };
+          }
+          return user;
+        });
         setUsers(nextUsers);
         setRoleDrafts(Object.fromEntries(nextUsers.map((user: SchoolUser) => [user.id, user.roles?.[0]?.roleKey || ''])));
         setPermissionDrafts(Object.fromEntries(nextUsers.map((user: SchoolUser) => [user.id, (user.directPermissions || []).filter((permission) => permission.effect !== 'deny' && permission.source !== 'central').map((permission) => permission.permissionKey)])));
@@ -158,6 +195,7 @@ export default function SchoolUsersPermissionsModule({ selectedSchool, selectedB
       if (jobs.ok) {
         setDepartments(Array.isArray(jobs.payload.departments) ? jobs.payload.departments : []);
         setJobs(Array.isArray(jobs.payload.jobs) ? jobs.payload.jobs : []);
+        setEmployees(Array.isArray(jobs.payload.employees) ? jobs.payload.employees.filter((employee: HREmployee) => employee.id && employee.name && employee.status !== 'resigned') : []);
       }
       setLoadWarnings(warnings);
       if (warnings.length === 3) throw new Error('تعذر تحميل بيانات وحدة المستخدمين والصلاحيات من المصدر المركزي.');
@@ -167,7 +205,7 @@ export default function SchoolUsersPermissionsModule({ selectedSchool, selectedB
     } finally {
       setLoading(false);
     }
-  }, []);
+  }, [currentUser]);
 
   useEffect(() => { void load(); }, [load]);
 
@@ -185,7 +223,38 @@ export default function SchoolUsersPermissionsModule({ selectedSchool, selectedB
   }, [activeView, notify]);
 
   useEffect(() => {
-    if (editing) setForm((current) => ({ ...current, jobId: editing.job_id || '' }));
+    if (activeView !== 'governance') return;
+    let cancelled = false;
+    setGovernanceLoading(true);
+    Promise.allSettled([
+      authenticatedRequest('/api/school/access-requests', { cache: 'no-store' }),
+      authenticatedRequest('/api/school/access-reviews', { cache: 'no-store' }),
+      authenticatedRequest('/api/school/sod-conflicts', { cache: 'no-store' }),
+      authenticatedRequest('/api/school/access-governance-reports', { cache: 'no-store' }),
+    ]).then(async (results) => {
+      const labels = ['طلبات الصلاحيات', 'مراجعات الصلاحيات', 'تعارضات الصلاحيات', 'تقارير الحوكمة'];
+      const warnings: string[] = [];
+      const payloads = await Promise.all(results.map(async (result, index) => {
+        if (result.status === 'rejected') { warnings.push(`${labels[index]}: تعذر الاتصال بالخدمة.`); return null; }
+        const payload = await result.value.json().catch(() => ({}));
+        if (!result.value.ok || !payload?.success) { warnings.push(`${labels[index]}: ${payload?.message || 'تعذر تحميل البيانات.'}`); return null; }
+        return payload;
+      }));
+      if (!cancelled) {
+        const [requestsPayload, reviewsPayload, conflictsPayload, reportsPayload] = payloads;
+        if (requestsPayload) setAccessRequests(Array.isArray(requestsPayload.requests) ? requestsPayload.requests : []);
+        if (reviewsPayload) setAccessReviews(Array.isArray(reviewsPayload.reviews) ? reviewsPayload.reviews : []);
+        if (conflictsPayload) setSodConflicts(Array.isArray(conflictsPayload.conflicts) ? conflictsPayload.conflicts : []);
+        if (reportsPayload) { setExpiredGrants(Array.isArray(reportsPayload.expired) ? reportsPayload.expired : []); setSensitiveUsers(Array.isArray(reportsPayload.sensitiveUsers) ? reportsPayload.sensitiveUsers : []); setUnusedPermissions(Array.isArray(reportsPayload.unusedPermissions) ? reportsPayload.unusedPermissions : []); }
+        if (warnings.length) notify(`تعذر تحميل بعض أجزاء الحوكمة: ${warnings.join(' • ')}`, 'warning');
+      }
+    })
+      .finally(() => { if (!cancelled) setGovernanceLoading(false); });
+    return () => { cancelled = true; };
+  }, [activeView, notify]);
+
+  useEffect(() => {
+    if (editing) setForm((current) => ({ ...current, employeeId: editing.employee_id || '', jobId: editing.job_id || '' }));
   }, [editing]);
 
   const filteredUsers = useMemo(() => {
@@ -214,7 +283,7 @@ export default function SchoolUsersPermissionsModule({ selectedSchool, selectedB
       const payload = await response.json().catch(() => ({}));
       if (!response.ok || !payload?.success) throw new Error(payload?.message || 'تعذر إنشاء المستخدم.');
       setShowCreate(false);
-      setForm({ name: '', email: '', jobId: '', jobTitle: '', department: '', initialRole: roles[0]?.roleKey || '', password: '', branchId: selectedBranch?.id || '' });
+      setForm({ employeeId: '', name: '', email: '', jobId: '', jobTitle: '', department: '', initialRole: roles[0]?.roleKey || '', password: '', branchId: selectedBranch?.id || '' });
       setTemporaryPassword(payload.temporaryPassword || '');
       setLoginIdentifier(payload.loginIdentifier || payload.user?.email || payload.user?.username || '');
       notify('تم الحفظ بنجاح: أُنشئ المستخدم وربط بالدور وسُجلت العملية في قاعدة البيانات.', 'success');
@@ -268,8 +337,10 @@ export default function SchoolUsersPermissionsModule({ selectedSchool, selectedB
     const centralDenied = new Set<string>((user.directPermissions || []).filter((permission) => permission.effect === 'deny' && permission.source !== 'school').map((permission) => permission.permissionKey));
     const localDenied = new Set<string>((user.directPermissions || []).filter((permission) => permission.effect === 'deny' && permission.source === 'school').map((permission) => permission.permissionKey));
     const localAllowed = new Set<string>((user.directPermissions || []).filter((permission) => permission.effect !== 'deny' && permission.source === 'school').map((permission) => permission.permissionKey));
-    const centralAllowed = new Set<string>((user.directPermissions || []).filter((permission) => permission.effect !== 'deny' && permission.source === 'central').map((permission) => permission.permissionKey));
-    const initialSchoolDecisions = [...new Set<string>([...inheritedKeys, ...centralAllowed, ...localAllowed])]
+    // The draft sent to the school API must contain school-local decisions
+    // only. Role-inherited and centrally granted permissions are effective
+    // baselines, not local grants, and must never be rewritten as school rows.
+    const initialSchoolDecisions = [...localAllowed]
       .filter((permissionKey) => !centralDenied.has(permissionKey) && !localDenied.has(permissionKey))
       .sort();
     setPermissionDrafts((drafts) => ({ ...drafts, [user.id]: initialSchoolDecisions }));
@@ -338,8 +409,10 @@ export default function SchoolUsersPermissionsModule({ selectedSchool, selectedB
     const centrallyGranted = centrallyGrantedPermissionKeys.has(permission.permissionKey);
     const inherited = inheritedPermissionKeys.has(permission.permissionKey);
     const direct = (permissionDrafts[permissionEditing?.id || ''] || []).includes(permission.permissionKey);
-    const baseline = inherited || centrallyGranted;
-    const overridden = direct !== baseline;
+    // A direct decision in this editor means a school-local grant. Central
+    // grants remain visible through the effective state but are not editable
+    // or counted as local overrides.
+    const overridden = direct;
     const effective = !centrallyDenied && (effectivePermissionKeys.has(permission.permissionKey) || centrallyGranted);
     return { centrallyDenied, centrallyGranted, inherited, direct, overridden, effective };
   };
@@ -413,7 +486,7 @@ export default function SchoolUsersPermissionsModule({ selectedSchool, selectedB
       return;
     }
     setEditing(null);
-    setForm({ name: '', email: '', jobId: '', jobTitle: '', department: '', initialRole: roles[0]?.roleKey || '', password: '', branchId: selectedBranch?.id || '' });
+    setForm({ employeeId: '', name: '', email: '', jobId: '', jobTitle: '', department: '', initialRole: roles[0]?.roleKey || '', password: '', branchId: selectedBranch?.id || '' });
     setShowCreate(true);
   };
 
@@ -435,8 +508,74 @@ export default function SchoolUsersPermissionsModule({ selectedSchool, selectedB
     const denied = new Set((user.directPermissions || []).filter((permission) => permission.effect === 'deny').map((permission) => permission.permissionKey));
     const directAllowed = new Set((user.directPermissions || []).filter((permission) => permission.effect !== 'deny').map((permission) => permission.permissionKey));
     const effective = new Set([...inherited, ...directAllowed].filter((permissionKey) => !denied.has(permissionKey)));
-    return { user, inherited: inherited.size, direct: directAllowed.size, denied: denied.size, effective: effective.size };
+    const schoolDirect = new Set((user.directPermissions || []).filter((permission) => permission.source === 'school' && permission.effect !== 'deny').map((permission) => permission.permissionKey));
+    const centralDirect = new Set((user.directPermissions || []).filter((permission) => permission.source === 'central' && permission.effect !== 'deny').map((permission) => permission.permissionKey));
+    return { user, inherited: inherited.size, centralDirect: centralDirect.size, schoolDirect: schoolDirect.size, direct: new Set([...centralDirect, ...schoolDirect]).size, denied: denied.size, effective: effective.size };
   }), [roles, users]);
+
+  const generateAccessReviews = async () => {
+    if (!canAssign) { notify('إنشاء دورة المراجعة يتطلب صلاحية إسناد الصلاحيات.', 'warning'); return; }
+    if (!confirmAction('سيتم إنشاء مراجعة دورية لكل حساب نشط أو مدعو لا يملك مراجعة معلقة. هل تريد المتابعة؟')) return;
+    setGovernanceLoading(true);
+    try {
+      const response = await authenticatedRequest('/api/school/access-reviews/generate', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({}) });
+      const payload = await response.json().catch(() => ({}));
+      if (!response.ok || !payload?.success) throw new Error(payload?.message || 'تعذر إنشاء دورة المراجعة.');
+      setAccessReviews((current) => [...(Array.isArray(payload.reviews) ? payload.reviews : []), ...current]);
+      notify(`تم إنشاء ${Number(payload.createdCount || 0)} مراجعة من قاعدة البيانات وتسجيل العملية.`, 'success');
+    } catch (reviewError) { notify(reviewError instanceof Error ? reviewError.message : 'تعذر إنشاء دورة المراجعة.', 'warning'); }
+    finally { setGovernanceLoading(false); }
+  };
+
+  const decideAccessRequest = async (request: AccessRequest, decision: 'approved' | 'rejected') => {
+    if (!canAssign) { notify('اعتماد طلب الصلاحية يتطلب صلاحية إسناد الصلاحيات.', 'warning'); return; }
+    if (!confirmAction(decision === 'approved' ? 'سيتم تفعيل الصلاحيات المطلوبة حسب تاريخها وتسجيل الموافقة. هل تريد المتابعة؟' : 'سيتم رفض طلب الصلاحية وتسجيل السبب. هل تريد المتابعة؟')) return;
+    const reason = typeof window === 'undefined' ? '' : window.prompt('اكتب سبب القرار (5 أحرف على الأقل):', decision === 'approved' ? 'تمت المراجعة والموافقة ضمن نطاق المدرسة.' : 'لم تستوفِ الصلاحية متطلبات الاعتماد.') || '';
+    if (reason.trim().length < 5) { notify('سبب القرار مطلوب ولا يمكن تركه فارغًا.', 'warning'); return; }
+    setGovernanceLoading(true);
+    try {
+      const response = await authenticatedRequest(`/api/school/access-requests/${encodeURIComponent(request.id)}/decision`, { method: 'PATCH', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ decision, reason }) });
+      const payload = await response.json().catch(() => ({}));
+      if (!response.ok || !payload?.success) throw new Error(payload?.message || 'تعذر حفظ قرار طلب الصلاحية.');
+      setAccessRequests((current) => current.map((item) => item.id === request.id ? { ...item, status: decision, approval_status: decision } : item));
+      notify(decision === 'approved' ? 'تم اعتماد الطلب وتفعيل الصلاحيات المؤقتة إن وجدت.' : 'تم رفض الطلب وتسجيل القرار.', 'success');
+    } catch (decisionError) { notify(decisionError instanceof Error ? decisionError.message : 'تعذر حفظ القرار.', 'warning'); }
+    finally { setGovernanceLoading(false); }
+  };
+
+  const decideAccessReview = async (review: AccessReview, decision: 'approved' | 'revoked' | 'waived') => {
+    if (!canAssign) { notify('قرار المراجعة يتطلب صلاحية إسناد الصلاحيات.', 'warning'); return; }
+    const labels = { approved: 'اعتماد', revoked: 'إلغاء المنح المحلية', waived: 'تجاوز موثق' };
+    if (!confirmAction(`سيتم تنفيذ قرار «${labels[decision]}» للمراجعة وتسجيله. هل تريد المتابعة؟`)) return;
+    const reason = typeof window === 'undefined' ? '' : window.prompt('اكتب سبب قرار المراجعة (5 أحرف على الأقل):', `تمت مراجعة الوصول — ${labels[decision]}.`) || '';
+    if (reason.trim().length < 5) { notify('سبب قرار المراجعة مطلوب.', 'warning'); return; }
+    setGovernanceLoading(true);
+    try {
+      const response = await authenticatedRequest(`/api/school/access-reviews/${encodeURIComponent(review.id)}/decision`, { method: 'PATCH', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ decision, reason }) });
+      const payload = await response.json().catch(() => ({}));
+      if (!response.ok || !payload?.success) throw new Error(payload?.message || 'تعذر حفظ قرار المراجعة.');
+      setAccessReviews((current) => current.map((item) => item.id === review.id ? { ...item, status: decision, decision_reason: reason } : item));
+      notify('تم حفظ قرار المراجعة وتسجيله في Audit.', 'success');
+    } catch (decisionError) { notify(decisionError instanceof Error ? decisionError.message : 'تعذر حفظ قرار المراجعة.', 'warning'); }
+    finally { setGovernanceLoading(false); }
+  };
+
+  const createAccessRequest = async (event: React.FormEvent) => {
+    event.preventDefault();
+    if (!canAssign) { notify('إنشاء طلب صلاحية يتطلب صلاحية إسناد الصلاحيات.', 'warning'); return; }
+    if (!accessRequestDraft.userId || !accessRequestDraft.permissionKey || accessRequestDraft.reason.trim().length < 10 || !accessRequestDraft.endsAt) { notify('أكمل المستخدم والصلاحية والسبب وتاريخ الانتهاء.', 'warning'); return; }
+    setGovernanceLoading(true);
+    try {
+      const response = await authenticatedRequest('/api/school/access-requests', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ userId: accessRequestDraft.userId, permissionKeys: [accessRequestDraft.permissionKey], reason: accessRequestDraft.reason.trim(), endsAt: new Date(accessRequestDraft.endsAt).toISOString() }) });
+      const payload = await response.json().catch(() => ({}));
+      if (!response.ok || !payload?.success) throw new Error(payload?.message || 'تعذر إنشاء طلب الصلاحية.');
+      setAccessRequests((current) => [payload.request, ...current]);
+      setAccessRequestDraft({ userId: '', permissionKey: '', reason: '', endsAt: '' });
+      setShowAccessRequestForm(false);
+      notify('تم إنشاء طلب الصلاحية وتسجيله للموافقة.', 'success');
+    } catch (requestError) { notify(requestError instanceof Error ? requestError.message : 'تعذر إنشاء طلب الصلاحية.', 'warning'); }
+    finally { setGovernanceLoading(false); }
+  };
 
   // The permission editor intentionally owns the whole working surface. This
   // keeps the security decision readable on smaller screens and prevents an
@@ -486,7 +625,20 @@ export default function SchoolUsersPermissionsModule({ selectedSchool, selectedB
               </div>
             </div>
 
-            <div className="bg-slate-50/70 p-3 sm:p-5">
+            <div className="flex items-center gap-2 border-b border-slate-100 bg-white px-4 pt-3" role="tablist" aria-label="نمط عرض الصلاحيات">
+              <button type="button" role="tab" aria-selected={permissionPresentation === 'compact'} onClick={() => setPermissionPresentation('compact')} className={`rounded-t-xl border-b-2 px-4 py-2.5 text-xs font-black ${permissionPresentation === 'compact' ? 'border-amber-600 bg-amber-50 text-amber-900' : 'border-transparent text-slate-500 hover:bg-slate-50'}`}>تقرير الصلاحيات</button>
+              <button type="button" role="tab" aria-selected={permissionPresentation === 'detailed'} onClick={() => setPermissionPresentation('detailed')} className={`rounded-t-xl border-b-2 px-4 py-2.5 text-xs font-black ${permissionPresentation === 'detailed' ? 'border-slate-900 bg-slate-50 text-slate-900' : 'border-transparent text-slate-500 hover:bg-slate-50'}`}>إدارة الصلاحيات التفصيلية</button>
+            </div>
+
+            {permissionPresentation === 'compact' ? <div className="bg-slate-50/70 p-3 sm:p-5">
+              <div className="mb-4 rounded-2xl border border-amber-200 bg-gradient-to-l from-amber-50 to-white p-4"><h3 className="font-black text-slate-900">مركز الوصول المختصر</h3><p className="mt-1 text-xs leading-5 text-slate-600">عرض سريع لاتخاذ القرار: الوحدة، العملية، مصدر الصلاحية، النطاق، والحالة الفعالة. استخدم العرض التفصيلي عند الحاجة إلى مراجعة المفتاح والوصف الكامل.</p></div>
+              <div className="grid gap-4 md:grid-cols-2 xl:grid-cols-3">{visiblePermissionGroups.map((group) => {
+                const allModulePermissions = permissionCatalog.filter((permission) => permission.resource === group.resource);
+                const effective = allModulePermissions.filter((permission) => getPermissionState(permission).effective).length;
+                const direct = allModulePermissions.filter((permission) => getPermissionState(permission).overridden && !getPermissionState(permission).centrallyDenied).length;
+                return <section key={group.resource} className="overflow-hidden rounded-2xl border border-slate-200 bg-white shadow-sm"><div className="flex items-center justify-between bg-slate-950 p-4 text-white"><div><h3 className="font-black">{group.label}</h3><p className="mt-1 text-[10px] text-slate-300">{effective} فعّالة • {direct} محلية • {allModulePermissions.length} إجمالي</p></div><span className="rounded-xl bg-amber-400 px-3 py-1.5 text-xs font-black text-slate-950">{allModulePermissions.length}</span></div><div className="overflow-x-auto"><table className="w-full text-right text-[10px]"><thead className="bg-slate-50 text-slate-500"><tr><th className="p-2.5">العملية</th><th className="p-2.5">المصدر</th><th className="p-2.5">النطاق</th><th className="p-2.5">الحالة</th></tr></thead><tbody className="divide-y divide-slate-100">{group.permissions.map((permission) => { const state = getPermissionState(permission); const source = state.centrallyDenied ? 'منع مركزي' : state.overridden ? 'قرار المدرسة' : state.inherited ? 'الدور' : state.centrallyGranted ? 'منح مركزي' : 'غير ممنوحة'; return <tr key={permission.permissionKey} className={state.effective ? 'bg-emerald-50/40' : state.centrallyDenied ? 'bg-rose-50/60' : ''}><td className="p-2.5 font-bold text-slate-800">{permissionActionLabel(permission.action)}</td><td className="p-2.5"><span className={`rounded-full px-2 py-1 font-black ${state.centrallyDenied ? 'bg-rose-100 text-rose-700' : state.overridden ? 'bg-amber-100 text-amber-800' : state.inherited ? 'bg-sky-100 text-sky-700' : 'bg-slate-100 text-slate-500'}`}>{source}</span></td><td className="p-2.5 text-slate-500">{selectedBranch?.name || 'المدرسة الحالية'}</td><td className="p-2.5 font-black"><span className={state.effective ? 'text-emerald-700' : state.centrallyDenied ? 'text-rose-700' : 'text-slate-400'}>{state.effective ? 'فعّالة' : state.centrallyDenied ? 'محظورة' : 'غير مفعّلة'}</span></td></tr>; })}</tbody></table></div></section>;
+              })}</div>
+            </div> : <div className="bg-slate-50/70 p-3 sm:p-5">
               <div className="mb-3 flex flex-col gap-2 sm:flex-row sm:items-center sm:justify-between"><div><span className="text-xs font-black text-slate-700">الوحدات والصلاحيات التفصيلية</span><p className="mt-1 text-[10px] text-slate-500">كل صندوق قرار قابل للإدارة داخل المدرسة الحالية؛ يمكنك منح أو إيقاف الصلاحية ضمن نطاق المدرسة، بينما يبقى المنع المركزي محميًا.</p></div><div className="flex items-center gap-2"><span className="text-xs font-bold text-slate-500">عرض {visiblePermissionCatalog.length} من {permissionCatalog.length} عبر {visiblePermissionGroups.length} وحدات</span><button type="button" onClick={() => setExpandedPermissionModules(Object.fromEntries(visiblePermissionGroups.map((group) => [group.resource, true])))} className="rounded-lg border border-slate-200 bg-white px-2.5 py-1.5 text-[10px] font-black text-slate-600 hover:border-amber-300">فتح الكل</button><button type="button" onClick={() => setExpandedPermissionModules(Object.fromEntries(visiblePermissionGroups.map((group) => [group.resource, false])))} className="rounded-lg border border-slate-200 bg-white px-2.5 py-1.5 text-[10px] font-black text-slate-600 hover:border-amber-300">طي الكل</button></div></div>
               <div className="space-y-4">{visiblePermissionGroups.map((group) => {
                 const allModulePermissions = permissionCatalog.filter((permission) => permission.resource === group.resource);
@@ -516,7 +668,7 @@ export default function SchoolUsersPermissionsModule({ selectedSchool, selectedB
                 </section>;
               })}</div>
               {visiblePermissionGroups.length === 0 && <div className="rounded-2xl border border-slate-200 bg-white p-14 text-center"><p className="text-sm font-black text-slate-600">لا توجد صلاحيات مطابقة للتصفية الحالية.</p><button type="button" onClick={() => { setPermissionQuery(''); setPermissionStateFilter('all'); }} className="mt-3 text-xs font-black text-amber-700 underline">إظهار كامل الوحدات</button></div>}
-            </div>
+            </div>}
 
             <footer className="flex flex-col-reverse gap-2 border-t border-slate-100 bg-white p-4 sm:flex-row sm:items-center sm:justify-between"><p className="text-[10px] leading-5 text-slate-500">هذه شاشة إدارة محلية ضمن المدرسة. القالب المركزي مرجع افتراضي، والتفويضات المحلية تُسجل وتُطبق داخل نطاق المدرسة.</p><button type="button" onClick={() => setPermissionEditing(null)} className="rounded-xl border border-slate-200 px-5 py-2.5 text-xs font-black">إغلاق</button></footer>
           </div>
@@ -557,6 +709,7 @@ export default function SchoolUsersPermissionsModule({ selectedSchool, selectedB
             ['roles', 'الأدوار المعتمدة'],
             ['permissions', 'مصفوفة الصلاحيات'],
             ['report', 'تقرير الصلاحيات الفعالة'],
+            ['governance', 'الحوكمة والتعارضات'],
           ] as Array<[ManagementView, string]>).map(([view, label]) => (
             <button key={view} type="button" onClick={() => setActiveView(view)} className={`rounded-xl px-4 py-2.5 text-xs font-black transition ${activeView === view ? 'bg-slate-950 text-amber-300 shadow' : 'text-slate-600 hover:bg-amber-50 hover:text-amber-800'}`}>
               {label}
@@ -583,13 +736,27 @@ export default function SchoolUsersPermissionsModule({ selectedSchool, selectedB
 
         {activeView === 'report' && <section className="identity-panel overflow-hidden rounded-3xl border border-slate-200 bg-white shadow-sm" aria-labelledby="effective-report-title">
           <div className="border-b border-slate-100 bg-slate-50 p-5"><h2 id="effective-report-title" className="font-black">تقرير الصلاحيات الفعالة</h2><p className="mt-1 text-xs leading-5 text-slate-500">قراءة موحدة للصلاحيات الموروثة من الدور، والمنح المباشرة، والمنع المسجل لكل مستخدم داخل نطاق المدرسة.</p></div>
-          <div className="overflow-x-auto"><table className="w-full min-w-[820px] text-right text-sm"><thead className="bg-slate-950 text-xs text-amber-200"><tr><th className="p-4">المستخدم</th><th className="p-4">الوظيفة والقسم</th><th className="p-4">موروثة</th><th className="p-4">منح مباشرة</th><th className="p-4">منع</th><th className="p-4">فعالة</th></tr></thead><tbody className="divide-y divide-slate-100">{(serverEffectiveReport.length ? serverEffectiveReport : effectivePermissionReport.map(({ user, inherited, direct, denied, effective }) => ({ id: user.id, display_name: user.display_name, email: user.email, username: user.username, job_title: user.job_title, department: user.department, inherited_count: inherited, direct_count: direct, denied_count: denied, effective_count: effective }))).map((row) => <tr key={row.id}><td className="p-4"><div className="font-black">{row.display_name}</div><div className="text-xs text-slate-500">{row.email || row.username || 'هوية داخلية'}</div></td><td className="p-4">{row.job_title || '—'}<div className="text-xs text-slate-500">{row.department || '—'}</div></td><td className="p-4 font-black text-emerald-700">{row.inherited_count}</td><td className="p-4 font-black text-amber-700">{row.direct_count}</td><td className="p-4 font-black text-rose-700">{row.denied_count}</td><td className="p-4 font-black text-slate-950">{row.effective_count}</td></tr>)}</tbody></table>{(serverEffectiveReport.length || effectivePermissionReport.length) === 0 && <div className="p-12 text-center text-sm font-bold text-slate-500">لا توجد بيانات صلاحيات متاحة.</div>}</div>
+          <div className="overflow-x-auto"><table className="w-full min-w-[980px] text-right text-sm"><thead className="bg-slate-950 text-xs text-amber-200"><tr><th className="p-4">المستخدم</th><th className="p-4">الوظيفة والقسم</th><th className="p-4">موروثة</th><th className="p-4">مباشرة مركزية</th><th className="p-4">مباشرة محلية</th><th className="p-4">منع</th><th className="p-4">فعالة</th></tr></thead><tbody className="divide-y divide-slate-100">{(serverEffectiveReport.length ? serverEffectiveReport : effectivePermissionReport.map(({ user, inherited, centralDirect, schoolDirect, direct, denied, effective }) => ({ id: user.id, display_name: user.display_name, email: user.email, username: user.username, job_title: user.job_title, department: user.department, inherited_count: inherited, central_direct_count: centralDirect, school_direct_count: schoolDirect, direct_count: direct, denied_count: denied, effective_count: effective }))).map((row) => <tr key={row.id}><td className="p-4"><div className="font-black">{row.display_name}</div><div className="text-xs text-slate-500">{row.email || row.username || 'هوية داخلية'}</div></td><td className="p-4">{row.job_title || '—'}<div className="text-xs text-slate-500">{row.department || '—'}</div></td><td className="p-4 font-black text-emerald-700">{row.inherited_count}</td><td className="p-4 font-black text-indigo-700">{row.central_direct_count ?? row.direct_count}</td><td className="p-4 font-black text-amber-700">{row.school_direct_count ?? 0}</td><td className="p-4 font-black text-rose-700">{row.denied_count}</td><td className="p-4 font-black text-slate-950">{row.effective_count}</td></tr>)}</tbody></table>{(serverEffectiveReport.length || effectivePermissionReport.length) === 0 && <div className="p-12 text-center text-sm font-bold text-slate-500">لا توجد بيانات صلاحيات متاحة.</div>}</div>
+        </section>}
+
+        {activeView === 'governance' && <section className="identity-panel space-y-5 overflow-hidden rounded-3xl border border-slate-200 bg-white p-5 shadow-sm" aria-labelledby="governance-screen-title">
+          <div className="flex flex-col gap-3 sm:flex-row sm:items-start sm:justify-between"><div><h2 id="governance-screen-title" className="font-black">حوكمة الوصول ومراجعة التعارضات</h2><p className="mt-1 text-xs leading-5 text-slate-500">قراءة مباشرة من جداول الحوكمة في قاعدة البيانات؛ لا تعرض هذه الشاشة أي بيانات محلية أو افتراضية.</p></div><div className="flex flex-wrap gap-2"><button type="button" disabled={!canAssign || governanceLoading} onClick={() => setShowAccessRequestForm((current) => !current)} className="rounded-xl bg-sky-700 px-4 py-2.5 text-xs font-black text-white shadow disabled:cursor-not-allowed disabled:opacity-50">طلب صلاحية</button><button type="button" disabled={!canAssign || governanceLoading} onClick={() => void generateAccessReviews()} className="rounded-xl bg-amber-600 px-4 py-2.5 text-xs font-black text-white shadow disabled:cursor-not-allowed disabled:opacity-50">إنشاء دورة مراجعة 90 يومًا</button></div></div>
+          {showAccessRequestForm && <form onSubmit={createAccessRequest} className="grid gap-3 rounded-2xl border border-sky-200 bg-sky-50 p-4 sm:grid-cols-2"><label className="text-xs font-bold text-sky-950">المستخدم<select required value={accessRequestDraft.userId} onChange={(event) => setAccessRequestDraft((current) => ({ ...current, userId: event.target.value }))} className="mt-1 w-full rounded-xl border border-sky-200 bg-white p-2.5"><option value="">اختر المستخدم</option>{users.filter((user) => user.status === 'active' || user.status === 'invited').map((user) => <option key={user.id} value={user.id}>{user.display_name}</option>)}</select></label><label className="text-xs font-bold text-sky-950">الصلاحية<select required value={accessRequestDraft.permissionKey} onChange={(event) => setAccessRequestDraft((current) => ({ ...current, permissionKey: event.target.value }))} className="mt-1 w-full rounded-xl border border-sky-200 bg-white p-2.5"><option value="">اختر الصلاحية</option>{permissionCatalog.map((permission) => <option key={permission.permissionKey} value={permission.permissionKey}>{permission.permissionKey}</option>)}</select></label><label className="text-xs font-bold text-sky-950">تاريخ الانتهاء<input required type="datetime-local" value={accessRequestDraft.endsAt} onChange={(event) => setAccessRequestDraft((current) => ({ ...current, endsAt: event.target.value }))} className="mt-1 w-full rounded-xl border border-sky-200 bg-white p-2.5" /></label><label className="text-xs font-bold text-sky-950 sm:col-span-2">سبب الطلب<textarea required minLength={10} value={accessRequestDraft.reason} onChange={(event) => setAccessRequestDraft((current) => ({ ...current, reason: event.target.value }))} className="mt-1 min-h-20 w-full rounded-xl border border-sky-200 bg-white p-2.5" placeholder="اكتب سببًا تشغيليًا واضحًا للطلب" /></label><div className="flex gap-2 sm:col-span-2"><button type="submit" disabled={governanceLoading} className="rounded-xl bg-sky-700 px-4 py-2 text-xs font-black text-white disabled:opacity-50">حفظ الطلب</button><button type="button" onClick={() => setShowAccessRequestForm(false)} className="rounded-xl border border-sky-200 bg-white px-4 py-2 text-xs font-black text-sky-800">إلغاء</button></div></form>}
+          {governanceLoading ? <div className="rounded-2xl bg-slate-50 p-10 text-center text-sm font-bold text-slate-500">جارٍ تحميل سجلات الحوكمة...</div> : <>
+            <div className="grid gap-3 sm:grid-cols-7"><div className="rounded-2xl border border-amber-200 bg-amber-50 p-4"><div className="text-2xl font-black text-amber-900">{accessReviews.filter((review) => review.status === 'pending').length}</div><div className="text-xs font-bold text-amber-800">مراجعات معلقة</div></div><div className="rounded-2xl border border-sky-200 bg-sky-50 p-4"><div className="text-2xl font-black text-sky-900">{accessRequests.filter((request) => request.status === 'pending').length}</div><div className="text-xs font-bold text-sky-800">طلبات وصول معلقة</div></div><div className="rounded-2xl border border-rose-200 bg-rose-50 p-4"><div className="text-2xl font-black text-rose-900">{sodConflicts.length}</div><div className="text-xs font-bold text-rose-800">تعارضات فصل المهام</div></div><div className="rounded-2xl border border-orange-200 bg-orange-50 p-4"><div className="text-2xl font-black text-orange-900">{expiredGrants.length}</div><div className="text-xs font-bold text-orange-800">منح منتهية</div></div><div className="rounded-2xl border border-purple-200 bg-purple-50 p-4"><div className="text-2xl font-black text-purple-900">{sensitiveUsers.length}</div><div className="text-xs font-bold text-purple-800">مستخدمون حساسون</div></div><div className="rounded-2xl border border-cyan-200 bg-cyan-50 p-4"><div className="text-2xl font-black text-cyan-900">{unusedPermissions.length}</div><div className="text-xs font-bold text-cyan-800">صلاحيات غير مستخدمة</div></div><div className="rounded-2xl border border-slate-200 bg-slate-50 p-4"><div className="text-2xl font-black text-slate-900">{accessReviews.length}</div><div className="text-xs font-bold text-slate-700">إجمالي سجلات المراجعة</div></div></div>
+            <div className="overflow-x-auto rounded-2xl border border-sky-200"><table className="w-full min-w-[1020px] text-right text-xs"><thead className="bg-sky-950 text-sky-100"><tr><th className="p-3">المستخدم</th><th className="p-3">الصلاحيات المطلوبة</th><th className="p-3">سبب الطلب</th><th className="p-3">الفترة</th><th className="p-3">الحالة</th><th className="p-3">قرار</th></tr></thead><tbody className="divide-y divide-sky-100">{accessRequests.map((request) => <tr key={request.id}><td className="p-3 font-black">{request.user_name || 'مستخدم'}</td><td className="p-3 font-mono">{Array.isArray(request.permission_keys) ? request.permission_keys.join('، ') : '—'}</td><td className="max-w-xs p-3">{request.reason}</td><td className="p-3">{request.starts_at ? new Date(request.starts_at).toLocaleDateString('ar') : 'فوري'} — {request.ends_at ? new Date(request.ends_at).toLocaleDateString('ar') : 'مفتوح'}</td><td className="p-3"><span className={`rounded-full px-2 py-1 font-black ${request.status === 'pending' ? 'bg-amber-50 text-amber-800' : request.status === 'approved' ? 'bg-emerald-50 text-emerald-700' : 'bg-rose-50 text-rose-700'}`}>{request.status}</span>{request.approval_status && <div className="mt-1 text-[10px] text-slate-500">موافقة: {request.approval_status}</div>}</td><td className="p-3">{request.status === 'pending' ? <div className="flex gap-1"><button type="button" disabled={!canAssign || governanceLoading} onClick={() => void decideAccessRequest(request, 'approved')} className="rounded-lg bg-emerald-600 px-2 py-1.5 text-[10px] font-black text-white disabled:opacity-50">اعتماد</button><button type="button" disabled={!canAssign || governanceLoading} onClick={() => void decideAccessRequest(request, 'rejected')} className="rounded-lg bg-rose-600 px-2 py-1.5 text-[10px] font-black text-white disabled:opacity-50">رفض</button></div> : <span className="text-slate-400">مغلق</span>}</td></tr>)}</tbody></table>{accessRequests.length === 0 && <div className="p-10 text-center text-sm font-bold text-slate-500">لا توجد طلبات صلاحيات مسجلة.</div>}</div>
+            <div className="overflow-x-auto rounded-2xl border border-slate-200"><table className="w-full min-w-[980px] text-right text-xs"><thead className="bg-slate-950 text-amber-200"><tr><th className="p-3">المستخدم</th><th className="p-3">الاستحقاق</th><th className="p-3">الحالة</th><th className="p-3">لقطة الصلاحيات</th><th className="p-3">قرار المراجع</th></tr></thead><tbody className="divide-y divide-slate-100">{accessReviews.map((review) => <tr key={review.id}><td className="p-3 font-black">{review.user_name || 'مستخدم'}</td><td className="p-3">{new Date(review.due_at).toLocaleDateString('ar')}</td><td className="p-3"><span className={`rounded-full px-2 py-1 font-black ${review.status === 'pending' ? 'bg-amber-50 text-amber-800' : review.status === 'revoked' ? 'bg-rose-50 text-rose-700' : 'bg-emerald-50 text-emerald-700'}`}>{review.status}</span></td><td className="p-3 font-black">{Array.isArray(review.permission_snapshot) ? review.permission_snapshot.length : 0} صلاحية</td><td className="p-3">{review.status === 'pending' ? <div className="flex flex-wrap gap-1"><button type="button" disabled={!canAssign || governanceLoading} onClick={() => void decideAccessReview(review, 'approved')} className="rounded-lg bg-emerald-600 px-2 py-1.5 text-[10px] font-black text-white disabled:opacity-50">اعتماد</button><button type="button" disabled={!canAssign || governanceLoading} onClick={() => void decideAccessReview(review, 'revoked')} className="rounded-lg bg-rose-600 px-2 py-1.5 text-[10px] font-black text-white disabled:opacity-50">إلغاء المنح</button><button type="button" disabled={!canAssign || governanceLoading} onClick={() => void decideAccessReview(review, 'waived')} className="rounded-lg bg-slate-600 px-2 py-1.5 text-[10px] font-black text-white disabled:opacity-50">تجاوز موثق</button></div> : <span className="text-[10px] text-slate-500">{review.decision_reason || 'تم اتخاذ القرار'}</span>}</td></tr>)}</tbody></table>{accessReviews.length === 0 && <div className="p-10 text-center text-sm font-bold text-slate-500">لا توجد مراجعات مسجلة حاليًا.</div>}</div>
+            <div className="overflow-x-auto rounded-2xl border border-rose-200"><table className="w-full min-w-[860px] text-right text-xs"><thead className="bg-rose-950 text-rose-100"><tr><th className="p-3">المستخدم</th><th className="p-3">قاعدة التعارض</th><th className="p-3">الصلاحية الأولى</th><th className="p-3">الصلاحية الثانية</th><th className="p-3">الخطورة</th></tr></thead><tbody className="divide-y divide-rose-100">{sodConflicts.map((conflict, index) => <tr key={`${conflict.user_id}-${conflict.rule_key}-${index}`}><td className="p-3 font-black">{conflict.display_name}</td><td className="p-3 font-mono">{conflict.rule_key}</td><td className="p-3 font-mono">{conflict.permission_a}</td><td className="p-3 font-mono">{conflict.permission_b}</td><td className="p-3 font-black text-rose-700">{conflict.severity}</td></tr>)}</tbody></table>{sodConflicts.length === 0 && <div className="p-10 text-center text-sm font-bold text-emerald-700">لا توجد تعارضات فعالة داخل نطاق المدرسة.</div>}</div>
+            <div className="overflow-x-auto rounded-2xl border border-orange-200"><table className="w-full min-w-[760px] text-right text-xs"><thead className="bg-orange-950 text-orange-100"><tr><th className="p-3">المستخدم</th><th className="p-3">الصلاحية</th><th className="p-3">المصدر</th><th className="p-3">انتهت في</th></tr></thead><tbody className="divide-y divide-orange-100">{expiredGrants.map((grant) => <tr key={grant.grant_id}><td className="p-3 font-black">{grant.display_name}</td><td className="p-3 font-mono">{grant.permission_key}</td><td className="p-3">{grant.source}</td><td className="p-3">{new Date(grant.ends_at).toLocaleString('ar')}</td></tr>)}</tbody></table>{expiredGrants.length === 0 && <div className="p-10 text-center text-sm font-bold text-emerald-700">لا توجد منح منتهية.</div>}</div>
+            <div className="overflow-x-auto rounded-2xl border border-purple-200"><table className="w-full min-w-[760px] text-right text-xs"><thead className="bg-purple-950 text-purple-100"><tr><th className="p-3">المستخدم</th><th className="p-3">البريد</th><th className="p-3">الصلاحيات الحساسة</th></tr></thead><tbody className="divide-y divide-purple-100">{sensitiveUsers.map((user) => <tr key={user.user_id}><td className="p-3 font-black">{user.display_name}</td><td className="p-3">{user.email || '—'}</td><td className="p-3 font-mono">{(user.permissions || []).map((permission) => `${permission.permissionKey} (${permission.source})`).join('، ')}</td></tr>)}</tbody></table>{sensitiveUsers.length === 0 && <div className="p-10 text-center text-sm font-bold text-emerald-700">لا يوجد مستخدمون ذوو صلاحيات حساسة.</div>}</div>
+            <div className="overflow-x-auto rounded-2xl border border-cyan-200"><table className="w-full min-w-[680px] text-right text-xs"><thead className="bg-cyan-950 text-cyan-100"><tr><th className="p-3">مفتاح الصلاحية</th><th className="p-3">الوحدة</th><th className="p-3">الفعل</th></tr></thead><tbody className="divide-y divide-cyan-100">{unusedPermissions.map((permission) => <tr key={permission.permission_key}><td className="p-3 font-mono">{permission.permission_key}</td><td className="p-3">{permission.resource}</td><td className="p-3">{permission.action}</td></tr>)}</tbody></table>{unusedPermissions.length === 0 && <div className="p-10 text-center text-sm font-bold text-emerald-700">لا توجد صلاحيات منشورة غير مستخدمة.</div>}</div>
+          </>}
         </section>}
 
         <div className="rounded-2xl border border-amber-200 bg-amber-50 p-4 text-xs leading-6 text-amber-950"><b>سياسة الصلاحيات:</b> المدرسة الأم تنشر القوالب الأساسية، وكل مدرسة تدير مستخدميها وتفويضاتها المحلية داخل نطاقها فقط. لا يمكن منح Platform.Admin أو تجاوز منع مركزي، ولا تنتقل التفويضات المحلية إلى مدرسة أخرى.</div>
       </div>
 
-          {(showCreate || editing) && <div className="fixed inset-0 z-50 flex items-center justify-center bg-slate-950/60 p-4"><form role="dialog" aria-modal="true" aria-label={editing ? 'تحرير بيانات المستخدم' : 'إنشاء مستخدم مدرسة'} onSubmit={editing ? saveEdit : submitCreate} className="w-full max-w-xl space-y-4 rounded-3xl border border-amber-200 bg-white p-6 shadow-2xl" dir="rtl"><div className="flex items-center justify-between"><div><h2 className="text-lg font-black">{editing ? 'تحرير بيانات المستخدم' : 'إنشاء مستخدم مدرسة'}</h2><p className="mt-1 text-[10px] font-bold text-slate-500">{editing ? 'عدّل البيانات ثم احفظ التعديل بأمان.' : 'أدخل بيانات المستخدم ثم احفظه داخل مدارس الأسرة فقط.'}</p></div><div className="flex items-center gap-2"><button type="button" onClick={openNewUser} disabled={!canCreate} className="rounded-xl border border-amber-200 bg-amber-50 px-3 py-2 text-[10px] font-black text-amber-800 hover:bg-amber-100 disabled:cursor-not-allowed disabled:opacity-50"><Plus className="ml-1 inline h-3.5 w-3.5" /> مستخدم جديد</button><button type="button" aria-label="إغلاق نافذة المستخدم" onClick={() => { setShowCreate(false); setEditing(null); }}><X className="h-5 w-5" /></button></div></div><div className="grid gap-3 sm:grid-cols-2"><label className="text-xs font-bold">الاسم الكامل<input required minLength={2} autoComplete="name" value={form.name} onChange={(event) => setForm({ ...form, name: event.target.value })} className="mt-1 w-full rounded-xl border p-2.5" /></label><label className="text-xs font-bold">البريد الإلكتروني <span className="font-normal text-slate-500">(اختياري)</span><input type="email" autoComplete="email" value={form.email} onChange={(event) => setForm({ ...form, email: event.target.value })} placeholder="يمكن تركه فارغاً" className="mt-1 w-full rounded-xl border p-2.5" />{!editing && <span className="mt-1 block text-[10px] font-normal text-slate-500">عند تركه فارغاً سيُنشئ النظام اسم دخول داخلياً آمناً.</span>}</label><label className="text-xs font-bold">المسمى الوظيفي<input value={form.jobTitle} onChange={(event) => setForm({ ...form, jobTitle: event.target.value })} className="mt-1 w-full rounded-xl border p-2.5" /></label><label className="text-xs font-bold">القسم<select value={form.department} onChange={(event) => setForm({ ...form, department: event.target.value })} className="mt-1 w-full rounded-xl border p-2.5"><option value="">غير محدد</option>{departments.map((department) => <option key={department.id} value={department.nameAr || department.nameEn || department.id}>{department.nameAr || department.nameEn || department.id}</option>)}</select><span className="mt-1 block text-[10px] font-normal text-slate-500">القائمة من دليل الأقسام في شؤون الموظفين.</span></label><label className="text-xs font-bold">الوظيفة من دليل شؤون الموظفين<select disabled={jobs.length === 0} value={form.jobId} onChange={(event) => setForm((current) => ({ ...current, jobId: event.target.value }))} className="mt-1 w-full rounded-xl border border-amber-200 bg-amber-50 p-2.5 disabled:cursor-not-allowed disabled:bg-slate-100"><option value="">{jobs.length ? 'مسمى يدوي / غير محدد' : 'لا توجد وظائف منشورة من شؤون الموظفين'}</option>{jobs.map((job) => <option key={job.id} value={job.id}>{job.titleAr}{job.departmentName ? ` — ${job.departmentName}` : ''}</option>)}</select><span className="mt-1 block text-[10px] font-normal text-slate-500">{jobs.length ? 'يُحفظ معرف الوظيفة مع المستخدم، بينما يحدد الدور الأمني صلاحيات الدخول.' : 'أضف الوظائف من وحدة شؤون الموظفين لتظهر هنا تلقائياً؛ يمكنك استخدام المسمى الوظيفي اليدوي مؤقتاً.'}</span></label>{!editing && <><label className="text-xs font-bold">الدور المعتمد<select required disabled={roles.length === 0 || !canAssign} value={form.initialRole} onChange={(event) => setForm({ ...form, initialRole: event.target.value })} className="mt-1 w-full rounded-xl border border-amber-200 bg-amber-50 p-2.5">{roles.length === 0 ? <option value="">لا توجد أدوار معتمدة منشورة</option> : roles.map((role) => <option key={role.roleKey} value={role.roleKey}>{role.name}</option>)}</select>{roles.length === 0 && <span className="mt-1 block text-[10px] font-normal text-rose-600">لا يمكن الحفظ حتى تصل قوالب الأدوار من المدرسة الأم.</span>}</label><label className="text-xs font-bold">كلمة مرور اختيارية<input type="password" minLength={8} maxLength={128} autoComplete="new-password" value={form.password} onChange={(event) => setForm({ ...form, password: event.target.value })} placeholder="اتركها للتوليد الآمن" className="mt-1 w-full rounded-xl border p-2.5" /><span className="mt-1 block text-[10px] font-normal text-slate-500">8 رموز على الأقل. تركها فارغًا يولّد كلمة مؤقتة مع إلزام تغييرها.</span></label></>}</div><div className="rounded-xl bg-slate-50 p-3 text-xs text-slate-600">نطاق الحساب: <b>{selectedBranch?.name || 'الفرع الرئيسي'}</b>. لا يمكن للمستخدم الوصول إلى مدرسة أخرى.</div><div className="flex justify-end gap-2"><button type="button" onClick={() => { setShowCreate(false); setEditing(null); }} className="rounded-xl border px-4 py-2 text-xs font-black">إلغاء</button><button type="submit" disabled={saving || (!editing && (!canCreate || roles.length === 0))} className="rounded-xl bg-amber-600 px-5 py-2 text-xs font-black text-white shadow-lg disabled:opacity-50">{saving ? 'جارٍ الحفظ...' : editing ? 'حفظ التعديل' : 'إنشاء المستخدم'}</button></div></form></div>}
+          {(showCreate || editing) && <div className="fixed inset-0 z-50 flex items-center justify-center bg-slate-950/60 p-4"><form role="dialog" aria-modal="true" aria-label={editing ? 'تحرير بيانات المستخدم' : 'إنشاء مستخدم مدرسة'} onSubmit={editing ? saveEdit : submitCreate} className="w-full max-w-xl space-y-4 rounded-3xl border border-amber-200 bg-white p-6 shadow-2xl" dir="rtl"><div className="flex items-center justify-between"><div><h2 className="text-lg font-black">{editing ? 'تحرير بيانات المستخدم' : 'إنشاء مستخدم مدرسة'}</h2><p className="mt-1 text-[10px] font-bold text-slate-500">{editing ? 'عدّل البيانات ثم احفظ التعديل بأمان.' : 'أدخل بيانات المستخدم ثم احفظه داخل مدارس الأسرة فقط.'}</p></div><div className="flex items-center gap-2"><button type="button" onClick={openNewUser} disabled={!canCreate} className="rounded-xl border border-amber-200 bg-amber-50 px-3 py-2 text-[10px] font-black text-amber-800 hover:bg-amber-100 disabled:cursor-not-allowed disabled:opacity-50"><Plus className="ml-1 inline h-3.5 w-3.5" /> مستخدم جديد</button><button type="button" aria-label="إغلاق نافذة المستخدم" onClick={() => { setShowCreate(false); setEditing(null); }}><X className="h-5 w-5" /></button></div></div><div className="grid gap-3 sm:grid-cols-2"><label className="text-xs font-bold sm:col-span-2">الموظف من سجل الموارد البشرية<select required={!editing} disabled={employees.length === 0} value={form.employeeId} onChange={(event) => { const employee = employees.find((item) => item.id === event.target.value); const job = jobs.find((item) => item.id === employee?.jobId); const department = departments.find((item) => item.id === employee?.departmentId); setForm((current) => ({ ...current, employeeId: event.target.value, name: employee?.name || "", jobId: employee?.jobId || "", jobTitle: job?.titleAr || "", department: department?.nameAr || "" })); }} className="mt-1 w-full rounded-xl border border-amber-200 bg-amber-50 p-2.5 disabled:bg-slate-100"><option value="">{employees.length ? "اختر الموظف من دليل شؤون الموظفين" : "لا يوجد موظفون منشورون من شؤون الموظفين"}</option>{employees.map((employee) => <option key={employee.id} value={employee.id}>{employee.name}</option>)}</select><span className="mt-1 block text-[10px] font-normal text-slate-500">الاسم والوظيفة والقسم تُسحب تلقائيًا من سجل الموظفين ولا تُكتب يدويًا.</span></label><label className="text-xs font-bold">البريد الإلكتروني <span className="font-normal text-slate-500">(اختياري)</span><input type="email" autoComplete="email" value={form.email} onChange={(event) => setForm({ ...form, email: event.target.value })} placeholder="يمكن تركه فارغاً" className="mt-1 w-full rounded-xl border p-2.5" />{!editing && <span className="mt-1 block text-[10px] font-normal text-slate-500">عند تركه فارغاً سيُنشئ النظام اسم دخول داخلياً آمناً.</span>}</label><label className="text-xs font-bold">المسمى الوظيفي<input readOnly value={form.jobTitle} className="mt-1 w-full rounded-xl border p-2.5" /></label><label className="text-xs font-bold">القسم<select disabled value={form.department} className="mt-1 w-full rounded-xl border p-2.5"><option value="">غير محدد</option>{departments.map((department) => <option key={department.id} value={department.nameAr || department.nameEn || department.id}>{department.nameAr || department.nameEn || department.id}</option>)}</select><span className="mt-1 block text-[10px] font-normal text-slate-500">القائمة من دليل الأقسام في شؤون الموظفين.</span></label><label className="text-xs font-bold">الوظيفة من دليل شؤون الموظفين<select disabled={jobs.length === 0} value={form.jobId} onChange={(event) => setForm((current) => ({ ...current, jobId: event.target.value }))} className="mt-1 w-full rounded-xl border border-amber-200 bg-amber-50 p-2.5 disabled:cursor-not-allowed disabled:bg-slate-100"><option value="">{jobs.length ? 'مسمى يدوي / غير محدد' : 'لا توجد وظائف منشورة من شؤون الموظفين'}</option>{jobs.map((job) => <option key={job.id} value={job.id}>{job.titleAr}{job.departmentName ? ` — ${job.departmentName}` : ''}</option>)}</select><span className="mt-1 block text-[10px] font-normal text-slate-500">{jobs.length ? 'يُحفظ معرف الوظيفة مع المستخدم، بينما يحدد الدور الأمني صلاحيات الدخول.' : 'أضف الوظائف من وحدة شؤون الموظفين لتظهر هنا تلقائياً؛ يمكنك استخدام المسمى الوظيفي اليدوي مؤقتاً.'}</span></label>{!editing && <><label className="text-xs font-bold">الدور المعتمد<select required disabled={roles.length === 0 || !canAssign} value={form.initialRole} onChange={(event) => setForm({ ...form, initialRole: event.target.value })} className="mt-1 w-full rounded-xl border border-amber-200 bg-amber-50 p-2.5">{roles.length === 0 ? <option value="">لا توجد أدوار معتمدة منشورة</option> : roles.map((role) => <option key={role.roleKey} value={role.roleKey}>{role.name}</option>)}</select>{roles.length === 0 && <span className="mt-1 block text-[10px] font-normal text-rose-600">لا يمكن الحفظ حتى تصل قوالب الأدوار من المدرسة الأم.</span>}</label><label className="text-xs font-bold">كلمة مرور اختيارية<input type="password" minLength={8} maxLength={128} autoComplete="new-password" value={form.password} onChange={(event) => setForm({ ...form, password: event.target.value })} placeholder="اتركها للتوليد الآمن" className="mt-1 w-full rounded-xl border p-2.5" /><span className="mt-1 block text-[10px] font-normal text-slate-500">8 رموز على الأقل. تركها فارغًا يولّد كلمة مؤقتة مع إلزام تغييرها.</span></label></>}</div><div className="rounded-xl bg-slate-50 p-3 text-xs text-slate-600">نطاق الحساب: <b>{selectedBranch?.name || 'الفرع الرئيسي'}</b>. لا يمكن للمستخدم الوصول إلى مدرسة أخرى.</div><div className="flex justify-end gap-2"><button type="button" onClick={() => { setShowCreate(false); setEditing(null); }} className="rounded-xl border px-4 py-2 text-xs font-black">إلغاء</button><button type="submit" disabled={saving || (!editing && (!canCreate || roles.length === 0))} className="rounded-xl bg-amber-600 px-5 py-2 text-xs font-black text-white shadow-lg disabled:opacity-50">{saving ? 'جارٍ الحفظ...' : editing ? 'حفظ التعديل' : 'إنشاء المستخدم'}</button></div></form></div>}
 
       {permissionEditing && <div className="fixed inset-0 z-50 flex items-center justify-center bg-slate-950/70 p-4"><div role="dialog" aria-modal="true" aria-label={`صلاحيات ${permissionEditing.display_name}`} className="flex max-h-[92vh] w-full max-w-6xl flex-col overflow-hidden rounded-3xl border border-amber-200 bg-white shadow-2xl" dir="rtl"><div className="flex items-start justify-between gap-4 bg-gradient-to-l from-slate-950 to-amber-950 p-6 text-white"><div><div className="mb-1 flex items-center gap-2 text-amber-300"><ShieldCheck className="h-5 w-5" /><span className="text-xs font-black">مصفوفة صلاحيات المستخدم</span></div><h2 className="text-xl font-black">صلاحيات {permissionEditing.display_name}</h2><p className="mt-2 text-xs leading-5 text-amber-100/80">علامة الصح تعني أن الصلاحية فعالة من الدور أو التفويض المباشر. الصلاحية غير المحددة لا تسمح بالوصول، والمنع المركزي مقفل ولا يمكن تجاوزه من المدرسة.</p></div><button type="button" aria-label="إغلاق نافذة الصلاحيات" onClick={() => setPermissionEditing(null)} className="rounded-xl bg-white/10 p-2 hover:bg-white/20"><X className="h-5 w-5" /></button></div><div className="flex flex-col gap-3 border-b border-slate-100 bg-slate-50 p-4 lg:flex-row lg:items-center lg:justify-between"><div className="text-xs font-bold text-slate-600">الفعالة <span className="text-amber-700">{effectivePermissionKeys.size}</span> من أصل {permissionCatalog.length} • المباشرة القابلة للتعديل <span className="text-amber-700">{(permissionDrafts[permissionEditing.id] || []).length}</span>{centrallyDeniedPermissionKeys.size > 0 && <span className="mr-2 text-rose-700">• {centrallyDeniedPermissionKeys.size} ممنوعة مركزيًا</span>}</div><div className="flex flex-wrap items-center gap-2"><div className="relative w-full sm:w-72"><Search className="absolute right-3 top-2.5 h-4 w-4 text-slate-400" /><input aria-label="بحث في الوحدات والأزرار" value={permissionQuery} onChange={(event) => setPermissionQuery(event.target.value)} placeholder="بحث في الوحدات والأزرار" className="w-full rounded-xl border border-slate-200 bg-white py-2 pl-3 pr-9 text-xs outline-none focus:border-amber-400" /></div><button type="button" onClick={() => setPermissionDrafts((drafts) => ({ ...drafts, [permissionEditing.id]: visiblePermissionCatalog.filter((permission) => !centrallyDeniedPermissionKeys.has(permission.permissionKey) && !inheritedPermissionKeys.has(permission.permissionKey)).map((permission) => permission.permissionKey) }))} className="rounded-xl border border-amber-200 bg-white px-3 py-2 text-[10px] font-black text-amber-800">تحديد المباشر الظاهر</button><button type="button" onClick={() => setPermissionDrafts((drafts) => ({ ...drafts, [permissionEditing.id]: [] }))} className="rounded-xl border border-slate-200 bg-white px-3 py-2 text-[10px] font-black text-slate-600">مسح التفويض المباشر</button></div></div><div className="flex-1 overflow-y-auto p-3 sm:p-5"><div className="overflow-hidden rounded-2xl border border-slate-200"><table className="w-full min-w-[860px] text-right text-xs"><thead className="bg-slate-950 text-[10px] font-black text-amber-200"><tr><th className="p-3">الوحدة / الشاشة</th><th className="p-3">الوظيفة / الزر</th><th className="p-3">مفتاح الصلاحية</th><th className="p-3 text-center">من الدور</th><th className="p-3 text-center">تفويض مباشر</th><th className="p-3 text-center">الصلاحية الفعالة</th></tr></thead><tbody className="divide-y divide-slate-100">{visiblePermissionCatalog.map((permission) => { const centrallyDenied = centrallyDeniedPermissionKeys.has(permission.permissionKey); const inherited = inheritedPermissionKeys.has(permission.permissionKey); const direct = (permissionDrafts[permissionEditing.id] || []).includes(permission.permissionKey); const effective = effectivePermissionKeys.has(permission.permissionKey); return <tr key={permission.permissionKey} className={centrallyDenied ? 'bg-rose-50/60' : effective ? 'bg-amber-50/50' : 'bg-white'}><td className="p-3 font-black text-slate-800">{permission.resource}</td><td className="p-3 font-bold text-slate-700">{permissionLabel(permission).split(' — ').slice(1).join(' — ') || permission.action}</td><td className="p-3 font-mono text-[10px] text-slate-500">{permission.permissionKey}</td><td className="p-3 text-center">{inherited ? <span className="rounded-full bg-emerald-50 px-2 py-1 text-[9px] font-black text-emerald-700">نعم</span> : <span className="text-slate-300">—</span>}</td><td className="p-3 text-center">{centrallyDenied ? <Lock className="mx-auto h-4 w-4 text-rose-600" aria-label="ممنوعة مركزيًا" /> : <input type="checkbox" aria-label={`تفويض مباشر ${permission.permissionKey}`} checked={direct} disabled={inherited || !canAssign} onChange={() => togglePermission(permission.permissionKey)} className="h-5 w-5 accent-amber-600 disabled:cursor-not-allowed disabled:opacity-50" />}</td><td className="p-3 text-center"><input type="checkbox" aria-label={`الصلاحية الفعالة ${permission.permissionKey}`} checked={effective} disabled aria-readonly="true" className="h-5 w-5 accent-emerald-600 disabled:cursor-not-allowed disabled:opacity-100" /></td></tr>; })}</tbody></table>{visiblePermissionCatalog.length === 0 && <div className="p-12 text-center text-sm font-bold text-slate-500">لا توجد صلاحيات مطابقة للبحث.</div>}</div></div><div className="flex flex-col-reverse gap-2 border-t border-slate-100 bg-white p-4 sm:flex-row sm:justify-end"><button type="button" onClick={() => setPermissionEditing(null)} className="rounded-xl border border-slate-200 px-5 py-2.5 text-xs font-black">إلغاء</button><button type="button" disabled={saving} onClick={() => void savePermissions()} className="rounded-xl bg-amber-600 px-6 py-2.5 text-xs font-black text-white shadow-lg hover:bg-amber-500 disabled:opacity-50">{saving ? 'جارٍ تطبيق الصلاحيات...' : 'حفظ الصلاحيات وتسجيلها'}</button></div></div></div>}
     </section>

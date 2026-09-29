@@ -1,8 +1,8 @@
 import { createClient, SupabaseClient } from '@supabase/supabase-js';
 import { EnterpriseLogger } from './services/EnterpriseLogger';
 
-// Render cold starts and the first Supabase request can legitimately exceed
-// three seconds.  Aborting that request makes the client look unauthenticated
+// Cold starts and the first Supabase request can legitimately exceed
+// three seconds. Aborting that request makes the client look unauthenticated
 // even though the session is still valid, so keep a bounded but production-safe
 // default and retain the environment override for stricter deployments.
 export const DEFAULT_SUPABASE_REQUEST_TIMEOUT_MS = 10_000;

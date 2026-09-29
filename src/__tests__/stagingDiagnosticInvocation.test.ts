@@ -1,7 +1,7 @@
 import { describe, expect, it } from 'vitest';
 import {
   isDiagnosticInvocationAvailable,
-  isStagingDiagnosticHost,
+  isCloudflareStagingHost,
   parseApprovedConnectionIdentity
 } from '../security/stagingDiagnosticInvocation';
 
@@ -38,10 +38,10 @@ describe('staging diagnostic invocation contract', () => {
     expect(isDiagnosticInvocationAvailable(200, approvedPayload)).toBe(true);
   });
 
-  it('allows only the canonical staging hostname', () => {
-    expect(isStagingDiagnosticHost('edupro-school-erp-staging.onrender.com')).toBe(true);
-    expect(isStagingDiagnosticHost('EDUPRO-SCHOOL-ERP-STAGING.ONRENDER.COM')).toBe(true);
-    expect(isStagingDiagnosticHost('edupro-school-erp.onrender.com')).toBe(false);
-    expect(isStagingDiagnosticHost('localhost')).toBe(false);
+  it('allows only the canonical Cloudflare staging hostname', () => {
+    expect(isCloudflareStagingHost('schoolfor-manus-staging.salafe10.workers.dev')).toBe(true);
+    expect(isCloudflareStagingHost('SCHOOLFOR-MANUS-STAGING.SALAFE10.WORKERS.DEV')).toBe(true);
+    expect(isCloudflareStagingHost('schoolfor-manus.salafe10.workers.dev')).toBe(false);
+    expect(isCloudflareStagingHost('localhost')).toBe(false);
   });
 });

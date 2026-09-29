@@ -16,6 +16,161 @@
   overflow-x: hidden;
 }
 
+/* Keep the HR opening viewport compact without changing the shared toolbar or
+   the spacing of any other module. The table should receive the reclaimed
+   height while labels and action buttons keep their existing safe heights. */
+#hr-portal > .enterprise-action-toolbar {
+  margin-bottom: 0 !important;
+  padding: 0.75rem 1rem !important;
+  gap: 0.5rem;
+  border-radius: 1.1rem !important;
+}
+
+#hr-portal > .hr-hero {
+  padding-block: 0.9rem;
+}
+
+#hr-portal > .hr-hero > .relative {
+  gap: 1rem;
+}
+
+#hr-portal > .hr-content-shell {
+  padding: 0.5rem 0.75rem !important;
+}
+
+/* Keep the HR workspace inside the height supplied by the school shell. The
+   employee list owns the vertical scroll so the page itself never leaves a
+   blank tail or a second scrollbar. */
+#hr-portal .hr-content-shell,
+#hr-portal .hr-portal-grid,
+#hr-portal .hr-workspace {
+  min-height: 0;
+}
+
+#hr-portal .hr-workspace {
+  overflow-y: auto;
+  scrollbar-width: thin;
+  scrollbar-color: var(--hr-gold-dark) transparent;
+}
+
+#hr-portal.hr-employee-mode .hr-workspace {
+  overflow: hidden;
+}
+
+/* The employee directory needs the navigation and the table in the same
+   viewport. Keep the identity hero present, but remove only its secondary
+   action row and tighten its spacing in this focused mode. */
+#hr-portal.hr-employee-mode .hr-hero {
+  padding-block: 0.8rem;
+}
+
+#hr-portal.hr-employee-mode .hr-hero > .relative {
+  gap: 0.65rem;
+}
+
+#hr-portal.hr-employee-mode .hr-hero > .relative.mt-3 {
+  display: none;
+}
+
+#hr-portal.hr-employee-mode .hr-hero .mb-3 {
+  margin-bottom: 0.35rem;
+}
+
+#hr-portal.hr-employee-mode .hr-hero-stat {
+  padding: 0.55rem;
+}
+
+#hr-portal.hr-employee-mode #hr-sidebar-menu {
+  height: 100% !important;
+  min-height: 0;
+}
+
+#hr-portal.hr-employee-mode #hr-sidebar-menu > div:first-child > div:nth-child(2) {
+  max-height: none;
+  min-height: 0;
+}
+
+#hr-portal.hr-employee-mode .hr-employees-table {
+  margin-bottom: 0.6rem;
+  scroll-padding-bottom: 0.6rem;
+}
+
+#hr-portal .hr-employees-screen {
+  min-height: 0;
+  flex: 1 1 0%;
+  height: auto;
+  overflow: hidden;
+}
+
+/* On the compact desktop viewport the legacy md:col-span-12 utilities stack
+   the navigation above the workspace. The employee directory is a focused
+   two-pane screen, so keep both panes in the same row and let only its table
+   consume the remaining height. */
+@media (min-width: 768px) {
+  /* A quiet divider gives the HR workspace its own edge next to the menu
+     without adding another panel or crowding the employee table. */
+  #hr-portal .hr-workspace {
+    border-inline-start: 1px solid rgba(154, 106, 29, 0.2);
+    padding-inline-start: 0.6rem;
+  }
+
+  #hr-portal.hr-employee-mode .hr-portal-grid {
+    grid-template-columns: minmax(220px, 0.3fr) minmax(0, 0.7fr);
+  }
+
+  #hr-portal.hr-employee-mode #hr-sidebar-menu,
+  #hr-portal.hr-employee-mode .hr-workspace {
+    grid-column: span 1 / span 1;
+    min-height: 0;
+    height: 100% !important;
+  }
+
+  #hr-portal.hr-employee-mode .hr-employees-screen {
+    gap: 0.75rem;
+  }
+
+  #hr-portal.hr-employee-mode .hr-employees-analytics {
+    display: none;
+  }
+
+  #hr-portal.hr-employee-mode .hr-employees-toolbar {
+    flex: 0 0 auto;
+    gap: 0.65rem;
+    padding: 0.7rem;
+  }
+}
+
+#hr-portal .hr-employees-table,
+#hr-portal .hr-employees-grid {
+  scrollbar-width: thin;
+  scrollbar-color: var(--hr-gold-dark) rgba(30, 19, 13, 0.18);
+}
+
+#hr-portal .hr-employees-table thead th {
+  position: sticky;
+  top: 0;
+  z-index: 2;
+}
+
+/* Read-only users can still navigate, search, filter and export. Mutation
+   controls inside HR forms are visually and interactively locked so the UI
+   never offers an action that the server must reject later. */
+#hr-portal.hr-read-only .hr-workspace form input,
+#hr-portal.hr-read-only .hr-workspace form select,
+#hr-portal.hr-read-only .hr-workspace form textarea,
+#hr-portal.hr-read-only .hr-workspace form button {
+  pointer-events: none;
+  cursor: not-allowed;
+  opacity: 0.62;
+}
+
+#hr-portal .hr-workspace fieldset:disabled input,
+#hr-portal .hr-workspace fieldset:disabled select,
+#hr-portal .hr-workspace fieldset:disabled textarea,
+#hr-portal .hr-workspace fieldset:disabled button {
+  cursor: not-allowed;
+}
+
 /* Compact, high-contrast opening panel: keep the first viewport focused and
    prevent RTL content from creating a horizontal page scrollbar. */
 #hr-portal .hr-hero {
@@ -288,4 +443,81 @@
 
 @media (max-width: 1023px) {
   #hr-portal #hr-sidebar-menu { border-radius: 1.25rem; }
+}
+
+/* Medium desktop/tablet widths need the navigation to stop consuming the
+   entire first viewport. Keep the established dark/gold identity, but place
+   the five primary HR areas in one compact, clearly grouped row. */
+@media (min-width: 768px) and (max-width: 1279px) {
+  #hr-portal > .enterprise-action-toolbar {
+    padding: 0.75rem 1rem;
+    border-radius: 1.15rem;
+  }
+
+  #hr-portal #hr-sidebar-menu {
+    height: auto !important;
+    padding: 0.9rem !important;
+  }
+
+  #hr-portal #hr-sidebar-menu > div:first-child {
+    display: grid;
+    grid-template-columns: minmax(190px, 0.8fr) minmax(0, 2.2fr);
+    align-items: center;
+    gap: 1rem;
+  }
+
+  #hr-portal #hr-sidebar-menu > div:first-child > div:first-child {
+    height: 100%;
+    display: flex;
+    justify-content: center;
+    border-bottom: 0;
+    border-left: 1px solid rgba(212, 175, 55, 0.28);
+    padding: 0 0 0 1rem;
+  }
+
+  #hr-portal #hr-sidebar-menu > div:first-child > div:nth-child(2) {
+    max-height: none;
+    overflow: visible;
+    padding: 0;
+  }
+
+  #hr-portal #hr-sidebar-menu > div:first-child > div:nth-child(2) > div:first-child > div:last-child {
+    display: grid;
+    grid-template-columns: repeat(5, minmax(0, 1fr));
+    gap: 0.5rem;
+  }
+
+  #hr-portal #hr-sidebar-menu button {
+    min-width: 0;
+    height: 2.75rem;
+    padding-inline: 0.65rem;
+  }
+
+  #hr-portal #hr-sidebar-menu button span:last-child {
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+  }
+}
+
+@media (max-width: 767px) {
+  #hr-portal .hr-subtabs {
+    flex-wrap: nowrap;
+    overflow-x: auto;
+    scrollbar-width: thin;
+  }
+
+  #hr-portal .hr-subtabs > button {
+    flex: 0 0 auto;
+    white-space: nowrap;
+  }
+
+  #hr-portal {
+    padding: 0.5rem;
+    gap: 0.5rem;
+  }
+
+  #hr-portal .hr-content-shell {
+    padding: 0.5rem;
+  }
 }

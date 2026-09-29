@@ -1,5 +1,6 @@
 import { describe, expect, it } from 'vitest';
 import { ExamValidator } from '../validation/validators';
+import { reconcileExamDatabaseClassReferences } from '../modules/exams/application/CanonicalExamClassSyncService';
 
 const validDatabase = () => ({
   exams_settings: { academicYear: '2026/2027' },
@@ -17,10 +18,38 @@ describe('exams database validation', () => {
     expect(() => ExamValidator.validateDatabase(validDatabase())).not.toThrow();
   });
 
+  it('accepts an active student whose canonical class reference is an id after reconciliation', () => {
+    const database: any = validDatabase();
+    database.exams_students_enriched[0].classroom = 'kg-1';
+    database.exams_classes_list = [];
+
+    reconcileExamDatabaseClassReferences(database, {
+      sections: ['أ'],
+      classes: [
+        { id: 'kg-1', code: 'KG1-A', name: 'بستان أ', capacity: 20, isActive: true }
+      ]
+    }, ['kg-1']);
+
+    expect(database.exams_students_enriched[0].classroom).toBe('بستان أ');
+    expect(() => ExamValidator.validateDatabase(database)).not.toThrow();
+  });
+
   it('rejects grades outside the subject range', () => {
     const database = validDatabase();
     database.exams_grades_matrix['student-1']['subject-1'] = 101;
     expect(() => ExamValidator.validateDatabase(database)).toThrow(/خارج النطاق/);
+  });
+
+  it('validates explicit exam attendance statuses and absence-index consistency', () => {
+    const database: any = validDatabase();
+    database.exams_students_enriched[0].examAttendance = { 'subject-1': 'present' };
+    expect(() => ExamValidator.validateDatabase(database)).not.toThrow();
+
+    database.exams_students_enriched[0].examAttendance['subject-1'] = 'unknown';
+    expect(() => ExamValidator.validateDatabase(database)).toThrow(/سجل حضور الطالب.*غير صالح/);
+
+    database.exams_students_enriched[0].examAttendance['subject-1'] = 'absent';
+    expect(() => ExamValidator.validateDatabase(database)).toThrow(/سجل الغياب.*غير متطابق/);
   });
 
   it('rejects a grade row for an unknown student', () => {

@@ -1,9 +1,12 @@
+import { getExamAttendanceStatus } from './ExamAttendance';
+
 export type ExamClosureBlockerCode =
   | 'missing_students'
   | 'missing_subjects'
   | 'schedule_not_approved'
   | 'student_assignment_incomplete'
   | 'duplicate_seat_number'
+  | 'missing_attendance'
   | 'missing_grades'
   | 'subjects_not_reviewed'
   | 'open_appeals';
@@ -21,6 +24,7 @@ export interface ExamClosureReadinessInput {
     hallId?: unknown;
     seatNumber?: unknown;
     absentSubjects?: unknown;
+    examAttendance?: unknown;
   }>;
   subjects: Array<{ id?: unknown; name?: unknown }>;
   gradesMatrix: Record<string, Record<string, unknown>>;
@@ -33,6 +37,7 @@ export interface ExamClosureReadinessReport {
   ready: boolean;
   blockers: ExamClosureBlocker[];
   missingGradesCount: number;
+  missingAttendanceCount: number;
   unassignedStudentsCount: number;
   duplicateSeatNumbersCount: number;
   unreviewedSubjectsCount: number;
@@ -96,14 +101,26 @@ export function evaluateExamClosureReadiness(input: ExamClosureReadinessInput): 
   }
 
   let missingGradesCount = 0;
+  let missingAttendanceCount = 0;
   for (const student of students) {
     const studentId = text(student.id);
-    const absentSubjects = new Set(Array.isArray(student.absentSubjects) ? student.absentSubjects.map(text) : []);
     for (const subject of subjects) {
       const subjectId = text(subject.id);
-      if (!studentId || !subjectId || absentSubjects.has(subjectId)) continue;
-      if (!Number.isFinite(gradesMatrix[studentId]?.[subjectId])) missingGradesCount += 1;
+      if (!studentId || !subjectId) continue;
+      const attendance = getExamAttendanceStatus(student, subjectId);
+      if (attendance === null) {
+        missingAttendanceCount += 1;
+        continue;
+      }
+      if (attendance === 'present' && !Number.isFinite(gradesMatrix[studentId]?.[subjectId])) missingGradesCount += 1;
     }
+  }
+  if (missingAttendanceCount > 0) {
+    blockers.push({
+      code: 'missing_attendance',
+      count: missingAttendanceCount,
+      message: `توجد ${missingAttendanceCount} حالة حضور أو غياب للامتحانات لم تُسجل بعد.`
+    });
   }
   if (missingGradesCount > 0) {
     blockers.push({
@@ -139,6 +156,7 @@ export function evaluateExamClosureReadiness(input: ExamClosureReadinessInput): 
     ready: blockers.length === 0,
     blockers,
     missingGradesCount,
+    missingAttendanceCount,
     unassignedStudentsCount: unassignedStudents.length,
     duplicateSeatNumbersCount,
     unreviewedSubjectsCount,

@@ -402,9 +402,9 @@ export default function EmployeesTab({
   });
 
   return (
-    <div className="space-y-6">
+    <div className="hr-employees-screen flex h-full min-h-0 flex-col gap-4">
       {/* Interactive Employee Analytics Dashboard Panel */}
-      <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-4 bg-slate-900/40 p-5 border border-slate-800">
+      <div className="hr-employees-analytics grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-4 bg-slate-900/40 p-5 border border-slate-800">
         <div className="relative overflow-hidden bg-slate-950/60 p-4.5 border border-slate-800 flex items-center justify-between">
           <div className="absolute top-0 right-0 w-12 h-12 bg-amber-500/5 rounded-full blur-xl" />
           <div className="space-y-1">
@@ -461,7 +461,7 @@ export default function EmployeesTab({
       </div>
 
       {/* Search and Action Bar */}
-      <div className="bg-slate-900/40 p-4 border border-slate-700 flex flex-col md:flex-row items-center justify-between gap-4">
+      <div className="hr-employees-toolbar bg-slate-900/40 p-4 border border-slate-700 flex flex-col md:flex-row items-center justify-between gap-4">
         <div className="flex flex-1 flex-wrap items-center gap-3 w-full">
           {/* Main search */}
           <div className="relative flex-1 min-w-[200px]">
@@ -563,7 +563,7 @@ export default function EmployeesTab({
           </button>
         </div>
       ) : viewMode === 'grid' ? (
-        <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-6">
+        <div className="hr-employees-grid min-h-0 flex-1 overflow-y-auto grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-6">
           {filtered.map(emp => {
             const dept = departments.find(d => d.id === emp.departmentId)?.nameAr || 'غير محدد';
             const job = jobs.find(j => j.id === emp.jobId)?.titleAr || 'غير محدد';
@@ -659,7 +659,7 @@ export default function EmployeesTab({
         </div>
       ) : (
         /* List Mode - Traditional Professional Table */
-        <div className="hr-employees-table bg-slate-900/60 border border-slate-800 overflow-hidden shadow-md">
+        <div className="hr-employees-table min-h-0 flex-1 overflow-auto bg-slate-900/60 border border-slate-800 shadow-md">
           <div className="overflow-x-auto">
             <table className="w-full text-right border-collapse">
               <thead>

@@ -6,6 +6,8 @@ describe('global save confirmation', () => {
     expect(isSaveActionLabel('حفظ مركزي')).toBe(true);
     expect(isSaveActionLabel('تأكيد وفتح المدرسة مركزيًا')).toBe(true);
     expect(isSaveActionLabel('تحديث البيانات')).toBe(false);
+    expect(isSaveActionLabel('تحديث ومعالجة النتائج الكلية')).toBe(false);
+    expect(isSaveActionLabel('إعادة احتساب النتائج')).toBe(false);
     expect(isSaveActionLabel('تسجيل الدخول')).toBe(false);
     expect(isSaveActionLabel('نسخ الرابط')).toBe(false);
   });

@@ -65,11 +65,20 @@ export default function HumanResourcesPortal({ setActiveSection, selectedSchool,
     workingHoursEnd: '15:00',
     weekends: [5, 6],
     lateDeductionRate: 1.0,
-    defaultBankSafeAccount: '1102',
-    defaultSalariesExpenseAccount: '5101',
+    defaultBankSafeAccount: '1101',
+    bankAccount: '1102',
+    defaultSalariesExpenseAccount: '5110',
     payrollPayableAccount: '',
     advanceReceivableAccount: '',
     deductionClearingAccount: '',
+    payrollBasicSalaryAccount: '5110',
+    payrollAllowancesAccount: '5111',
+    medicalAllowanceAccount: '5112',
+    payrollBonusesAccount: '5113',
+    payrollOvertimeAccount: '5114',
+    shortTermAdvanceAccount: '1220',
+    longTermAdvanceAccount: '1221',
+    endOfServiceExpenseAccount: '5115',
     unpaidAbsenceDeduction: false,
     overtimeMultiplier: 0,
     workingHoursPerDay: 8
@@ -112,6 +121,41 @@ export default function HumanResourcesPortal({ setActiveSection, selectedSchool,
     preview.document.write('<!doctype html>' + snapshot.outerHTML);
     preview.document.close();
     preview.document.title = `معاينة شؤون العاملين - ${selectedSchool?.name || 'المدرسة'}`;
+  };
+
+  const downloadCsv = (fileName: string, rows: string[][]) => {
+    const escapeCell = (value: unknown) => {
+      const text = String(value ?? '');
+      return /[",\n]/.test(text) ? `"${text.replace(/"/g, '""')}"` : text;
+    };
+    const csv = `\uFEFF${rows.map(row => row.map(escapeCell).join(',')).join('\r\n')}`;
+    const blob = new Blob([csv], { type: 'text/csv;charset=utf-8' });
+    const url = URL.createObjectURL(blob);
+    const anchor = document.createElement('a');
+    anchor.href = url;
+    anchor.download = fileName;
+    document.body.appendChild(anchor);
+    anchor.click();
+    anchor.remove();
+    window.setTimeout(() => URL.revokeObjectURL(url), 1000);
+  };
+
+  const exportHrExcel = () => {
+    const departmentName = (departmentId: string) => departments.find(item => item.id === departmentId)?.nameAr || '';
+    const jobName = (jobId: string) => jobs.find(item => item.id === jobId)?.titleAr || '';
+    downloadCsv(`hr-directory-${new Date().toISOString().slice(0, 10)}.csv`, [
+      ['كود الموظف', 'الاسم', 'القسم', 'الوظيفة', 'تاريخ التعيين', 'الراتب الأساسي', 'الحالة'],
+      ...employees.map(employee => [employee.id, employee.name, departmentName(employee.departmentId), jobName(employee.jobId), employee.hiringDate, employee.basicSalary, employee.status])
+    ]);
+    triggerNotification('تم تصدير دليل العاملين من السجل الكانوني.', 'success');
+  };
+
+  const downloadHrTemplate = () => {
+    downloadCsv('hr-directory-template.csv', [[
+      'الاسم الكامل', 'الرقم الوطني', 'الهاتف', 'البريد الإلكتروني', 'القسم', 'الوظيفة',
+      'تاريخ التعيين', 'الراتب الأساسي', 'اسم البنك', 'IBAN'
+    ]]);
+    triggerNotification('تم تحميل قالب دليل العاملين الفارغ.', 'success');
   };
 
   const requireHrWrite = () => {
@@ -163,7 +207,15 @@ export default function HumanResourcesPortal({ setActiveSection, selectedSchool,
         headers: { Authorization: `Bearer ${token}`, 'Content-Type': 'application/json' },
         body: JSON.stringify(payload)
       });
-      const result = await response.json();
+      const rawBody = await response.text();
+      let result: any = null;
+      try {
+        result = rawBody ? JSON.parse(rawBody) : null;
+      } catch {
+        throw new Error(response.ok
+          ? 'استجابة تدقيق التقرير غير صالحة؛ لم يتم التصدير.'
+          : `تعذر تدقيق التقرير (HTTP ${response.status})؛ لم يتم التصدير.`);
+      }
       if (!response.ok || !result?.success) throw new Error(result?.message || 'تعذر تدقيق التقرير الكانوني.');
       return true;
     } catch (error: any) {
@@ -663,7 +715,7 @@ export default function HumanResourcesPortal({ setActiveSection, selectedSchool,
   ];
 
   return (
-    <div id="hr-portal" className="w-full min-h-screen text-right font-sans dir-rtl select-none transition-all duration-300 bg-gradient-to-br from-[#f8f5ee] via-[#efe9dc] to-[#e8e0d0] text-slate-900 p-2 sm:p-4 md:p-6 space-y-6" dir="rtl">
+    <div id="hr-portal" className={`w-full h-full min-h-0 overflow-hidden text-right font-sans dir-rtl select-none transition-all duration-300 bg-gradient-to-br from-[#f8f5ee] via-[#efe9dc] to-[#e8e0d0] p-2 sm:p-4 md:p-6 flex flex-col gap-3 ${activeTab === 'employees' ? 'hr-employee-mode' : ''} ${!canManage ? 'hr-read-only' : ''}`} dir="rtl">
       <EnterpriseActionToolbar
         title="شؤون العاملين"
         stats={
@@ -674,9 +726,8 @@ export default function HumanResourcesPortal({ setActiveSection, selectedSchool,
         onExit={setActiveSection ? () => setActiveSection('dashboard') : undefined}
         onPrint={exportHrPdf}
         onExportPdf={exportHrPdf}
-        onExportExcel={() => {}}
-        onImportExcel={() => {}}
-        onDownloadTemplate={() => {}}
+        onExportExcel={exportHrExcel}
+        onDownloadTemplate={downloadHrTemplate}
       />
       <section className="hr-hero relative overflow-hidden rounded-[1.25rem] border border-amber-700/25 bg-[linear-gradient(135deg,#24160d_0%,#4a2b12_52%,#8b641e_100%)] px-4 py-4 text-white shadow-[0_12px_30px_rgba(73,43,18,0.18)] sm:px-6 sm:py-5" aria-labelledby="hr-hero-title">
         <div className="pointer-events-none absolute -left-16 -top-20 h-56 w-56 rounded-full bg-amber-300/10 blur-3xl" />
@@ -685,6 +736,9 @@ export default function HumanResourcesPortal({ setActiveSection, selectedSchool,
             <div className="mb-3 flex flex-wrap items-center gap-2 text-[10px] font-black tracking-wide text-amber-200">
               <span className="rounded-full border border-amber-200/30 bg-white/10 px-2.5 py-1">HRMS • مركز موحد</span>
               <span className="rounded-full border border-emerald-300/30 bg-emerald-400/10 px-2.5 py-1">حماية الصلاحيات مفعّلة</span>
+              <span className="rounded-full border border-sky-200/30 bg-sky-400/10 px-2.5 py-1">
+                {canonicalPersistenceRequired ? 'المصدر: قاعدة البيانات المركزية' : 'وضع تطوير محلي'}
+              </span>
             </div>
             <h1 id="hr-hero-title" className="text-xl font-black leading-tight sm:text-2xl">شؤون العاملين</h1>
             <p className="mt-1 max-w-xl text-[11px] font-semibold leading-5 text-amber-50/80 sm:text-xs">إدارة الكادر والحضور والإجازات والسلف والرواتب والتقارير من مساحة عمل موثقة.</p>
@@ -702,7 +756,7 @@ export default function HumanResourcesPortal({ setActiveSection, selectedSchool,
           <button type="button" onClick={() => { setActiveGroup('reports_group'); setActiveTab('dashboard'); }} className="rounded-lg border border-white/25 bg-white/10 px-3 py-1.5 text-[11px] font-black text-white transition hover:bg-white/20">عرض المؤشرات</button>
         </div>
       </section>
-      <div className="p-3 sm:p-4 text-slate-100 flex-1 flex flex-col">
+      <div className="hr-content-shell p-3 sm:p-4 text-slate-100 flex-1 flex flex-col min-h-0 overflow-hidden">
       
       {/* Real-time Dynamic Notification Toast */}
       {notification && (
@@ -735,12 +789,12 @@ export default function HumanResourcesPortal({ setActiveSection, selectedSchool,
       )}
 
       {/* Internal Grid Router Layout */}
-      <div className="grid grid-cols-1 lg:grid-cols-12 flex-1 p-0 gap-4">
+      <div className="hr-portal-grid grid grid-cols-1 md:grid-cols-12 flex-1 min-h-0 p-0 gap-4 overflow-hidden">
 
         {/* RIGHT SIDEBAR MENU - Refactored to perfectly match the beautiful dark slate & teal theme of the general ledger and financial portals */}
         <div 
           id="hr-sidebar-menu" 
-          className="w-full lg:col-span-3 bg-[#0b0f19] text-slate-100 border border-slate-800/60 p-5 shadow-2xl flex flex-col justify-between shrink-0 h-auto lg:h-[calc(100vh-140px)] lg:sticky lg:top-6 overflow-hidden"
+          className="w-full md:col-span-12 lg:col-span-3 bg-[#0b0f19] text-slate-100 border border-slate-800/60 p-5 shadow-2xl flex flex-col justify-between shrink-0 h-auto lg:h-[calc(100vh-140px)] lg:sticky lg:top-6 overflow-hidden"
         >
           <div className="flex flex-col space-y-4 overflow-hidden">
             {/* Menu Title Header */}
@@ -874,7 +928,7 @@ export default function HumanResourcesPortal({ setActiveSection, selectedSchool,
         </div>
 
         {/* LEFT WORKSPACE SCREEN RENDERING */}
-        <div className="lg:col-span-9 space-y-6">
+        <div className="hr-workspace md:col-span-12 lg:col-span-9 min-h-0 flex flex-col gap-4 overflow-hidden">
           
           {/* Dynamic Sub-tab Bar depending on active high-level Group */}
           {activeGroup === 'employees_group' && (
@@ -1274,6 +1328,7 @@ export default function HumanResourcesPortal({ setActiveSection, selectedSchool,
               triggerNotification={triggerNotification}
               costCenterLabels={costCenterLabels}
               canManage={canManage}
+              canFinancialWrite={canFinancialWrite}
               onPayAdvance={runAdvanceWorkflow}
               onSignContract={runContractSigning}
             />

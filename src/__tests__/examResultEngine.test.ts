@@ -19,7 +19,7 @@ describe('canonical exam result engine', () => {
 
   it('does not rank or award a completed result to a student with a missing mark', () => {
     const result = calculateStudentExamResult(
-      { id: 'student-1', absentSubjects: [] },
+      { id: 'student-1', absentSubjects: [], examAttendance: { arabic: 'present', science: 'present' } },
       subjects,
       { 'student-1': { arabic: 95 } },
       { passMarkPercent: 50, minFinalMarkPercent: 20 }
@@ -30,9 +30,21 @@ describe('canonical exam result engine', () => {
     expect(result.rank).toBeNull();
   });
 
+  it('keeps a fully graded result incomplete until attendance is explicitly recorded', () => {
+    const result = calculateStudentExamResult(
+      { id: 'student-1', examAttendance: {} },
+      subjects,
+      { 'student-1': { arabic: 95, science: 45 } },
+      { passMarkPercent: 50, minFinalMarkPercent: 20 }
+    );
+    expect(result.status).toBe('incomplete');
+    expect(result.incompleteSubjectsCount).toBe(2);
+    expect(result.rank).toBeNull();
+  });
+
   it('treats absence as zero and as an explicit failed subject', () => {
     const result = calculateStudentExamResult(
-      { id: 'student-1', absentSubjects: ['science'] },
+      { id: 'student-1', absentSubjects: ['science'], examAttendance: { arabic: 'present', science: 'absent' } },
       subjects,
       { 'student-1': { arabic: 80 } },
       { passMarkPercent: 50, minFinalMarkPercent: 20 }
@@ -46,7 +58,7 @@ describe('canonical exam result engine', () => {
 
   it('enforces the global pass threshold and the minimum final-exam percentage', () => {
     const belowGlobal = calculateStudentExamResult(
-      { id: 'student-1' },
+      { id: 'student-1', examAttendance: { arabic: 'present', science: 'present' } },
       subjects,
       { 'student-1': { arabic: 60, science: 30 } },
       { passMarkPercent: 70, minFinalMarkPercent: 20, roundingPolicy: 'التقريب لأقرب نصف درجة' }
@@ -55,7 +67,7 @@ describe('canonical exam result engine', () => {
     expect(belowGlobal.status).toBe('failed');
 
     const belowFinalMinimum = calculateStudentExamResult(
-      { id: 'student-2' },
+      { id: 'student-2', examAttendance: { project: 'present' } },
       [{ id: 'project', name: 'المشروع', maxScore: 100, passScore: 10 }],
       { 'student-2': { project: 15 } },
       { passMarkPercent: 10, minFinalMarkPercent: 20 }
@@ -67,10 +79,10 @@ describe('canonical exam result engine', () => {
   it('assigns deterministic competition ranks, including ties, and excludes incomplete students', () => {
     const results = calculateCohortExamResults(
       [
-        { id: 'student-b' },
-        { id: 'student-a' },
-        { id: 'student-c' },
-        { id: 'student-d' }
+        { id: 'student-b', examAttendance: { arabic: 'present', science: 'present' } },
+        { id: 'student-a', examAttendance: { arabic: 'present', science: 'present' } },
+        { id: 'student-c', examAttendance: { arabic: 'present', science: 'present' } },
+        { id: 'student-d', examAttendance: { arabic: 'present', science: 'present' } }
       ],
       subjects,
       {

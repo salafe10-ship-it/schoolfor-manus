@@ -17,9 +17,12 @@ describe('customer response privacy boundary', () => {
   it('makes diagnostics and database controls platform-only and redacts error details for school users', () => {
     const diagnostics = server.slice(server.indexOf('"/api/internal/staging/connection-identity"'), server.indexOf('// GET all Audit Logs'));
     const errorHandler = server.slice(server.indexOf('// UNIFIED CENTRAL ERROR HANDLER MIDDLEWARE'));
+    const publicResponseStart = errorHandler.indexOf('} : {', errorHandler.indexOf('res.status(statusCode).json(isPlatformAdmin ?'));
+    const publicResponse = errorHandler.slice(publicResponseStart);
     expect(diagnostics).toMatch(/requirePermissionOnly\(PERMISSIONS\.PLATFORM_ADMIN\)/);
     expect(errorHandler).toContain('const isPlatformAdmin');
     expect(errorHandler).toContain('errorCode: publicErrorCode');
-    expect(errorHandler).not.toContain('details,\n      traceId,\n      timestamp\n    });');
+    expect(publicResponse).toMatch(/statusCode >= 500 \? \{ traceId \} : \{\}/);
+    expect(publicResponse).not.toMatch(/^\s+details,/m);
   });
 });
