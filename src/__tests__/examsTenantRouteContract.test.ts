@@ -60,6 +60,14 @@ describe('EXAMS-API trusted tenant route contract', () => {
     expect(route).toContain('(payload as any).exams_grade_history = [...gradeHistoryEntries, ...existingGradeHistory]');
   });
 
+  it('keeps admin exam saves compatible with older users schemas without weakening teacher scope checks', () => {
+    const route = serverSource.slice(serverSource.indexOf('app.post("/api/exams/database"'));
+    expect(route).toContain("to_jsonb(u)->>'employee_id' AS employee_id");
+    expect(route).toContain('assertTeacherGradeMatrixScope(currentData, payload as Record<string, unknown>, canonicalEmployeeId)');
+    expect(route).toContain("if (needsActiveEmployee)");
+    expect(route).toContain("if (!canonicalEmployeeId || !activeEmployeeIds.has(canonicalEmployeeId))");
+  });
+
   it('resolves teacher reads to a trusted linked employee before projecting the grade scope', () => {
     const route = serverSource.slice(serverSource.indexOf('app.get("/api/exams/database"'), serverSource.indexOf('app.post("/api/exams/sync-canonical-classes"'));
     expect(route).toContain('isExamGradeScopedUser(actorRole, actorPermissions)');

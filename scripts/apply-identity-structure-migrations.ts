@@ -5,6 +5,8 @@ import { Pool } from 'pg';
 
 const migrations = [
   '202609101200_identity_job_reference.sql',
+  // Adds the canonical HR employee link used to scope teacher exam writes.
+  '202609231000_identity_employee_reference.sql',
   // Required production seed for the central school role templates. This is
   // additive/idempotent and must run before the governance tables are verified
   // so the school Users & Permissions module has a published baseline.
@@ -31,9 +33,10 @@ try {
       const sql = await readFile(resolve(process.cwd(), 'supabase', 'migrations', migration), 'utf8');
       await client.query(sql);
     }
-    const verification = await client.query<{ job_id: boolean; access_requests: boolean; access_request_approvals: boolean; actor_guard: boolean; fee_policy: boolean; institutional_sessions: boolean; institutional_service_accounts: boolean; institutional_api_keys: boolean; canonical_roles: boolean; canonical_role_permissions: boolean }>(`
+    const verification = await client.query<{ job_id: boolean; employee_id: boolean; access_requests: boolean; access_request_approvals: boolean; actor_guard: boolean; fee_policy: boolean; institutional_sessions: boolean; institutional_service_accounts: boolean; institutional_api_keys: boolean; canonical_roles: boolean; canonical_role_permissions: boolean }>(`
     SELECT
         EXISTS (SELECT 1 FROM information_schema.columns WHERE table_schema='public' AND table_name='users' AND column_name='job_id') AS job_id,
+        EXISTS (SELECT 1 FROM information_schema.columns WHERE table_schema='public' AND table_name='users' AND column_name='employee_id') AS employee_id,
         EXISTS (SELECT 1 FROM information_schema.tables WHERE table_schema='public' AND table_name='identity_access_requests') AS access_requests,
         EXISTS (SELECT 1 FROM information_schema.tables WHERE table_schema='public' AND table_name='identity_access_request_approvals') AS access_request_approvals,
         EXISTS (SELECT 1 FROM pg_proc WHERE pronamespace='public'::regnamespace AND proname='dbsec010_audit_actor_allowed') AS actor_guard,
@@ -44,7 +47,7 @@ try {
         (SELECT COUNT(*) >= 4 FROM public.roles WHERE school_id IS NULL AND branch_id IS NULL AND role_key IN ('schooladmin','accountant','teacher','hr') AND status = 'active' AND deleted_at IS NULL) AS canonical_roles,
         (SELECT COUNT(*) > 0 FROM public.role_permissions rp JOIN public.roles r ON r.id = rp.role_id WHERE r.school_id IS NULL AND r.branch_id IS NULL AND r.role_key IN ('schooladmin','accountant','teacher','hr') AND rp.status = 'active' AND rp.deleted_at IS NULL) AS canonical_role_permissions
     `);
-    if (!verification.rows[0]?.job_id || !verification.rows[0]?.access_requests || !verification.rows[0]?.access_request_approvals || !verification.rows[0]?.actor_guard || !verification.rows[0]?.fee_policy || !verification.rows[0]?.institutional_sessions || !verification.rows[0]?.institutional_service_accounts || !verification.rows[0]?.institutional_api_keys || !verification.rows[0]?.canonical_roles || !verification.rows[0]?.canonical_role_permissions) {
+    if (!verification.rows[0]?.job_id || !verification.rows[0]?.employee_id || !verification.rows[0]?.access_requests || !verification.rows[0]?.access_request_approvals || !verification.rows[0]?.actor_guard || !verification.rows[0]?.fee_policy || !verification.rows[0]?.institutional_sessions || !verification.rows[0]?.institutional_service_accounts || !verification.rows[0]?.institutional_api_keys || !verification.rows[0]?.canonical_roles || !verification.rows[0]?.canonical_role_permissions) {
       throw new Error('IDENTITY_STRUCTURE_VERIFICATION_FAILED');
     }
     await client.query('COMMIT');

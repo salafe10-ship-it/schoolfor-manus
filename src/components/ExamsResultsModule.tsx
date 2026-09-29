@@ -3522,6 +3522,13 @@ export default function ExamsResultsModule({
           </div>
         </header>
 
+        {activeTab === 'grades-entry' && lastDbWriteError && (
+          <section role="alert" aria-live="assertive" className="border border-rose-400/50 bg-rose-950/40 px-4 py-3 text-sm font-bold text-rose-100">
+            <p>لم يثبت حفظ كشف الدرجات في المصدر المركزي: {lastDbWriteError}</p>
+            <p className="mt-1 text-xs font-medium text-rose-100/75">لا تفترض اكتمال الحفظ؛ أعد التحقق من المزامنة قبل متابعة الاعتماد.</p>
+          </section>
+        )}
+
         {(activeTab === 'proctors' || activeTab === 'schedule') && (
           <section aria-label="مصدر مراقبي الامتحانات" className="flex flex-wrap items-center justify-between gap-3 rounded-xl border border-amber-400/30 bg-[#1c120c] px-4 py-3 text-amber-50">
             <p role={proctorSourceStatus === 'error' ? 'alert' : 'status'} className="text-xs font-semibold">

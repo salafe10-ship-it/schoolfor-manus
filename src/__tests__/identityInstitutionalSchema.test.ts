@@ -18,6 +18,9 @@ describe('institutional identity foundation schema', () => {
   it('keeps institutional migrations on the explicit platform-admin connection', () => {
     const runner = readFileSync(resolve(process.cwd(), 'scripts/apply-identity-structure-migrations.ts'), 'utf8');
     expect(runner).toContain('202609231300_identity_institutional_foundation.sql');
+    expect(runner).toContain('202609231000_identity_employee_reference.sql');
+    expect(runner).toContain('AS employee_id');
+    expect(runner).toContain('!verification.rows[0]?.employee_id');
     expect(runner).toContain('process.env.PLATFORM_ADMIN_DATABASE_URL');
     expect(runner).not.toContain('process.env.DIRECT_URL');
     expect(runner).not.toContain('process.env.DATABASE_URL');

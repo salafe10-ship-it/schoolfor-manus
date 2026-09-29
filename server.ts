@@ -12302,12 +12302,12 @@ export async function createApp(options: { cloudflare?: boolean } = {}): Promise
         const transaction = UnitOfWork.getActiveContext()?.databaseTransaction;
         if (!transaction) throw new DatabaseError('معاملة حفظ الامتحانات غير متاحة.');
         const actorResult = await transaction.query<{ id: string; employee_id: string | null; display_name: string | null }>(
-          `SELECT id, employee_id, display_name
-             FROM public.users
-            WHERE tenant_id = $1
-              AND auth_user_id = $2
-              AND status = 'active'
-              AND deleted_at IS NULL
+          `SELECT u.id, to_jsonb(u)->>'employee_id' AS employee_id, u.display_name
+             FROM public.users u
+            WHERE u.tenant_id = $1
+              AND u.auth_user_id = $2
+              AND u.status = 'active'
+              AND u.deleted_at IS NULL
             LIMIT 1`,
           [tenantId, (req as any).user.id]
         );
@@ -15637,6 +15637,10 @@ ${JSON.stringify(snapshot)}
       success: false,
       errorCode: publicErrorCode,
       message: publicMessage,
+      // A safe correlation handle lets school administrators report a failure
+      // and lets operators locate its protected runtime log without exposing
+      // database details or internal exception messages.
+      ...(statusCode >= 500 ? { traceId } : {}),
       timestamp
     });
   });
