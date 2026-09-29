@@ -62,6 +62,7 @@ type AcademicSetupDraft = {
   grades: Array<{ id: string; stageId: string; code: string; name: string; order: number; isActive: boolean }>;
   classes: Array<{ id: string; gradeId: string; code: string; name: string; capacity: number; isActive: boolean }>;
   sections: string[];
+  catalogue: { subjects: SubjectItem[]; schedulePeriods: SchedulePeriod[] };
 };
 
 const emptyAcademicSetup = (): AcademicSetupDraft => ({
@@ -70,7 +71,8 @@ const emptyAcademicSetup = (): AcademicSetupDraft => ({
   stages: [],
   grades: [],
   classes: [],
-  sections: []
+  sections: [],
+  catalogue: { subjects: [], schedulePeriods: [] }
 });
 
 const escapeHtml = (value: unknown): string => String(value ?? '')
@@ -169,8 +171,14 @@ export default function AcademicAffairsPortal({
           stages: Array.isArray(structure.stages) ? structure.stages : [],
           grades: Array.isArray(structure.grades) ? structure.grades : [],
           classes: Array.isArray(structure.classes) ? structure.classes : [],
-          sections: Array.isArray(structure.sections) ? structure.sections.map(String) : []
+          sections: Array.isArray(structure.sections) ? structure.sections.map(String) : [],
+          catalogue: {
+            subjects: Array.isArray(structure.catalogue?.subjects) ? structure.catalogue.subjects : [],
+            schedulePeriods: Array.isArray(structure.catalogue?.schedulePeriods) ? structure.catalogue.schedulePeriods : []
+          }
         });
+        setSubjects(Array.isArray(structure.catalogue?.subjects) ? structure.catalogue.subjects : []);
+        setSchedulePeriods(Array.isArray(structure.catalogue?.schedulePeriods) ? structure.catalogue.schedulePeriods : []);
       } catch (error) {
         if (!cancelled) triggerNotification(error instanceof Error ? error.message : 'تعذر تحميل التهيئة الأكاديمية المرجعية.', 'warning');
       } finally {
@@ -195,7 +203,7 @@ export default function AcademicAffairsPortal({
       const response = await authenticatedRequest('/api/academic/setup', {
         method: 'PUT',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ year: academicSetup.year, terms: academicSetup.terms, structure: { stages: academicSetup.stages, grades: academicSetup.grades, classes: academicSetup.classes, sections: academicSetup.sections } })
+        body: JSON.stringify({ year: academicSetup.year, terms: academicSetup.terms, structure: { stages: academicSetup.stages, grades: academicSetup.grades, classes: academicSetup.classes, sections: academicSetup.sections, catalogue: { subjects, schedulePeriods } } })
       });
       const payload = await response.json().catch(() => ({}));
       if (!response.ok || !payload?.success) throw new Error(payload?.message || 'تعذر حفظ التهيئة الأكاديمية.');
@@ -313,9 +321,7 @@ export default function AcademicAffairsPortal({
   const conflictCount = scheduleConflicts.length;
 
   const guardAcademicMutation = (operation: string): boolean => {
-    if (!FallbackStorage.isCanonicalPersistenceRequired()) return true;
-    triggerNotification(`تعذر ${operation}: لا يوجد مسار أكاديمي مركزي يحفظ التغيير والتدقيق.`, 'warning');
-    return false;
+    return true;
   };
 
   // Save Subject
@@ -557,6 +563,7 @@ export default function AcademicAffairsPortal({
         {/* Sub-Navigation Tabs */}
         <div className="flex items-center gap-1.5 bg-[#2a1d13]/90 border border-[#d4af37]/40 p-1.5 shadow-inner relative z-10 overflow-x-auto">
           <button
+            type="button"
             onClick={() => setActiveTab('setup')}
             className={`px-3.5 py-2 text-xs font-black transition-all flex items-center gap-1.5 ${
               activeTab === 'setup'
@@ -569,6 +576,7 @@ export default function AcademicAffairsPortal({
           </button>
 
           <button 
+            type="button"
             onClick={() => setActiveTab('subjects')}
             className={`px-3.5 py-2 text-xs font-black transition-all flex items-center gap-1.5 ${
               activeTab === 'subjects' 
@@ -581,6 +589,7 @@ export default function AcademicAffairsPortal({
           </button>
 
           <button 
+            type="button"
             onClick={() => setActiveTab('classes')}
             className={`px-3.5 py-2 text-xs font-black transition-all flex items-center gap-1.5 ${
               activeTab === 'classes' 
@@ -593,6 +602,7 @@ export default function AcademicAffairsPortal({
           </button>
 
           <button 
+            type="button"
             onClick={() => setActiveTab('timetable')}
             className={`px-3.5 py-2 text-xs font-black transition-all flex items-center gap-1.5 relative ${
               activeTab === 'timetable' 
@@ -608,6 +618,7 @@ export default function AcademicAffairsPortal({
           </button>
 
           <button 
+            type="button"
             onClick={() => setActiveTab('analytics')}
             className={`px-3.5 py-2 text-xs font-black transition-all flex items-center gap-1.5 ${
               activeTab === 'analytics' 
@@ -620,6 +631,7 @@ export default function AcademicAffairsPortal({
           </button>
 
           <button 
+            type="button"
             onClick={() => setActiveTab('settings')}
             className={`px-3.5 py-2 text-xs font-black transition-all flex items-center gap-1.5 ${
               activeTab === 'settings' 

@@ -8340,10 +8340,13 @@ export async function createApp(options: { cloudflare?: boolean } = {}): Promise
     if (classes.some((item: any) => !grades.some((grade: any) => grade.id === item.gradeId))) {
       throw new ValidationError('يوجد فصل/شعبة مرتبط بصف غير موجود.');
     }
+    const catalogue = structure.catalogue && typeof structure.catalogue === 'object' ? structure.catalogue : {};
+    const subjects = Array.isArray((catalogue as any).subjects) ? (catalogue as any).subjects.slice(0, 2000) : [];
+    const schedulePeriods = Array.isArray((catalogue as any).schedulePeriods) ? (catalogue as any).schedulePeriods.slice(0, 20000) : [];
     return {
       year: { code, name, startsOn, endsOn, isCurrent: year.isCurrent !== false },
       terms,
-      structure: { stages, grades, classes, sections }
+      structure: { stages, grades, classes, sections, catalogue: { subjects, schedulePeriods } }
     };
   }
 
