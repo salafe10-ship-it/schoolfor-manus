@@ -891,7 +891,7 @@ export default function SchoolUniformManagement({
           { id: 'kpi_sales', label: 'المبيعات اليومية للطلاب', val: `${stats.salesToday.toLocaleString('ar-EG')} د.ل`, desc: 'تسليم نقدي / ذمم ترحيل', icon: ShoppingBag, color: 'text-emerald-600 bg-emerald-50' },
           { id: 'kpi_turnover', label: 'معدل دوران المخزون', val: `${stats.turnoverRate} %`, desc: 'معدل سحب الملابس الفعلي', icon: TrendingUp, color: 'text-orange-600 bg-orange-50' }
         ].map(card => (
-          <div key={card.id} className="p-5 border border-slate-200/80 flex flex-col justify-between hover:shadow-md transition-all">
+          <div key={card.id} className="p-5 rounded-2xl border border-[#d4af37]/35 bg-gradient-to-b from-[#fffefc] via-[#fbf8f0] to-[#f5eeea] shadow-md flex flex-col justify-between hover:shadow-lg transition-all">
             <div className="flex justify-between items-start">
               <span className="text-[11px] text-slate-500 font-bold leading-tight">{card.label}</span>
               <span className={`p-2 ${card.color}`}><card.icon className="w-4 h-4" /></span>
@@ -933,7 +933,7 @@ export default function SchoolUniformManagement({
           })}
         </div>
 
-        <div className="p-6">
+        <div className="p-6 bg-[#fffdf8]">
           {/* ======================================================== */}
           {/* TAB 1: COCKPIT & RECHARTS GRAPHICS */}
           {/* ======================================================== */}
@@ -1120,7 +1120,7 @@ export default function SchoolUniformManagement({
 
               {/* Sub-Table: Variants & Location Inventory of Selected Item */}
               {selectedItem && (
-                <div className="bg-transparent p-6 space-y-4">
+                <div className="rounded-2xl border border-[#d4af37]/30 bg-gradient-to-b from-[#fffefc] via-[#fbf8f0] to-[#f5eeea] p-6 space-y-4 shadow-sm">
                   <div className="flex justify-between items-center">
                     <div>
                       <h4 className="text-xs font-black text-slate-900">أرصدة المخزون المتوفرة بمختلف المقاسات لـ ({selectedItem.nameAr})</h4>
@@ -1219,7 +1219,7 @@ export default function SchoolUniformManagement({
                     {purchaseOrders.map(po => {
                       const supp = suppliers.find(s => s.id === po.supplierId);
                       return (
-                        <div key={po.id} className="p-4 border hover:bg-transparent transition-all font-semibold flex flex-col md:flex-row justify-between items-start md:items-center gap-4 text-xs text-slate-700">
+                        <div key={po.id} className="p-4 rounded-2xl border border-[#d4af37]/25 bg-[#fffdf8] hover:bg-[#fffaf0] transition-all font-semibold flex flex-col md:flex-row justify-between items-start md:items-center gap-4 text-xs text-slate-700">
                           <div className="space-y-1.5">
                             <div className="flex items-center gap-2">
                               <span className="font-black text-slate-900">{po.code}</span>
@@ -1263,7 +1263,7 @@ export default function SchoolUniformManagement({
 
                   <div className="space-y-3">
                     {filteredSuppliers.map(sup => (
-                      <div key={sup.id} className="p-3 bg-transparent border space-y-1.5 text-[11px] font-bold text-slate-600">
+                      <div key={sup.id} className="p-3 rounded-xl bg-[#fffdf8] border border-[#d4af37]/25 space-y-1.5 text-[11px] font-bold text-slate-600 shadow-sm">
                         <div className="flex justify-between items-center">
                           <span className="text-slate-900 font-black text-xs">{sup.name}</span>
                           <span className="px-1.5 py-0.5 rounded-lg bg-teal-50 text-teal-700 text-[9px] font-black">تصنيف {sup.classification}</span>
@@ -1333,7 +1333,7 @@ export default function SchoolUniformManagement({
                     )}
 
                     {selectedStudent ? (
-                      <div className="p-4 bg-transparent border space-y-3 text-xs text-slate-600 font-bold">
+                      <div className="p-4 rounded-2xl bg-[#fffdf8] border border-[#d4af37]/25 space-y-3 text-xs text-slate-600 font-bold shadow-sm">
                         <div className="flex items-center gap-3">
                           <div className="w-12 h-12 bg-slate-200 rounded-full flex items-center justify-center text-slate-500 font-mono text-xs">
                             IMG
@@ -1413,7 +1413,7 @@ export default function SchoolUniformManagement({
                     </div>
 
                     {/* Active cart review */}
-                    <div className="bg-transparent p-4 border space-y-4 flex flex-col justify-between">
+                    <div className="rounded-2xl bg-[#fffdf8] p-4 border border-[#d4af37]/25 space-y-4 flex flex-col justify-between shadow-sm">
                       <div className="space-y-3">
                         <h4 className="text-[11px] font-black text-slate-500 flex justify-between items-center">
                           <span>سلة المشتريات الفعالة:</span>
@@ -1501,7 +1501,7 @@ export default function SchoolUniformManagement({
                       const stud = students.find(s => s.id === res.studentId);
                       const { item, size } = getVariantDetails(res.variantId);
                       return (
-                        <div key={res.id} className="p-4 bg-transparent border space-y-2 text-xs text-slate-600 font-bold">
+                        <div key={res.id} className="p-4 rounded-2xl bg-[#fffdf8] border border-[#d4af37]/25 space-y-2 text-xs text-slate-600 font-bold shadow-sm">
                           <div className="flex justify-between items-center">
                             <span className="font-black text-slate-950">الطالب: {stud?.name}</span>
                             <span className={`px-2 py-0.5 rounded text-[10px] ${
@@ -1570,7 +1570,7 @@ export default function SchoolUniformManagement({
 
                   <div className="space-y-4">
                     {journals.map(je => (
-                      <div key={je.id} className="p-4 border space-y-3 text-xs font-semibold text-slate-700 bg-transparent/50">
+                      <div key={je.id} className="p-4 rounded-2xl border border-[#d4af37]/25 space-y-3 text-xs font-semibold text-slate-700 bg-[#fffdf8] shadow-sm">
                         <div className="flex justify-between items-center border-b pb-2">
                           <div>
                             <span className="font-black text-slate-900">{je.reference}</span>
