@@ -1,4 +1,5 @@
 import { ValidationError } from '../../../utils/errors.js';
+import { validateWarehouseLocations } from './WarehouseLocationValidation.js';
 
 const COLLECTIONS = [
   'items', 'categories', 'brands', 'units', 'suppliers', 'warehouses', 'movements', 'stocktakes',
@@ -155,7 +156,16 @@ export function validateInventoryProcurementSnapshot(data: Snapshot, options: { 
   for (const [id, category] of categories) text(category.name, `التصنيف ${id}`);
   for (const [id, unit] of units) { text(unit.name, `الوحدة ${id}`); text(unit.symbol, `رمز الوحدة ${id}`); }
   for (const [id, supplier] of suppliers) { text(supplier.name, `المورد ${id}`); text(supplier.phone, `هاتف المورد ${id}`); }
-  for (const [id, warehouse] of warehouses) { text(warehouse.name, `المستودع ${id}`); text(warehouse.location, `موقع المستودع ${id}`); text(warehouse.manager, `أمين المستودع ${id}`); }
+  for (const [id, warehouse] of warehouses) {
+    text(warehouse.name, `المستودع ${id}`);
+    text(warehouse.location, `موقع المستودع ${id}`);
+    text(warehouse.manager, `أمين المستودع ${id}`);
+    try {
+      validateWarehouseLocations(warehouse.locations, `المستودع ${id}`);
+    } catch (error) {
+      throw new ValidationError(error instanceof Error ? error.message : `مواقع المستودع ${id} غير صالحة.`);
+    }
+  }
 
   for (const field of ['managerApprovalLimit', 'boardApprovalLimit', 'requireRfqThreshold']) {
     if (data.procurementSettings[field] !== undefined) numberValue(data.procurementSettings[field], `إعداد ${field}`, { min: 0 });

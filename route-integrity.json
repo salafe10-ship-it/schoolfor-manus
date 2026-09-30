@@ -75,7 +75,8 @@
     "student_affairs",
     "hr",
     "buses",
-    "uniform_management"
+    "uniform_management",
+    "academic_timetable"
   ],
   "componentFiles": {
     "dashboard": "src/components/ModernSchoolDashboard.tsx",

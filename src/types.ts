@@ -550,12 +550,28 @@ export interface InventoryUnit {
   symbol: string;
 }
 
+export type InventoryWarehouseLocationType = 'receiving' | 'storage' | 'picking' | 'dispatch' | 'quarantine';
+
+export interface InventoryWarehouseLocation {
+  id: string;
+  code: string;
+  name: string;
+  type: InventoryWarehouseLocationType;
+  parentId?: string;
+  capacity?: number;
+  blocked?: boolean;
+  blockedReason?: string;
+}
+
 export interface InventoryWarehouse {
   id: string;
   schoolId: string;
   name: string;
   location: string;
   manager: string;
+  code?: string;
+  status?: 'active' | 'inactive';
+  locations?: InventoryWarehouseLocation[];
 }
 
 export interface InventorySupplier {

@@ -50,7 +50,7 @@ export function analyzeRouteIntegrity(root = workspaceRoot) {
     if (retiredRoutes.has(route)) errors.push(`RETIRED_ROUTE_REFERENCED_BY_APP:${route}`);
   }
   for (const route of navigationReferences) {
-    if (!currentSet.has(route)) errors.push(`NAV_ROUTE_NOT_CONTRACTED:${route}`);
+    if (!currentSet.has(route) && !aliases.has(route)) errors.push(`NAV_ROUTE_NOT_CONTRACTED:${route}`);
     if (retiredRoutes.has(route)) errors.push(`RETIRED_ROUTE_REFERENCED_BY_NAVIGATION:${route}`);
   }
   for (const route of currentRoutes) {
