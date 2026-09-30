@@ -29,7 +29,7 @@ export default function InventoryDashboard({ items = [], onNavigateTab }: Invent
   return (
     <div className="space-y-6">
       {/* Top Banner */}
-      <div className="bg-gradient-to-r from-slate-900 via-slate-800 to-amber-950 p-6 text-white shadow-lg border border-slate-700/50 flex flex-col md:flex-row justify-between items-start md:items-center gap-4">
+      <div className="rounded-[22px] bg-gradient-to-r from-[#1c120c] via-[#2d1e12] to-[#1a100a] p-6 text-white shadow-xl border border-[#d4af37]/40 flex flex-col md:flex-row justify-between items-start md:items-center gap-4">
         <div>
           <div className="flex items-center gap-2 mb-2">
             <span className="px-3 py-1 bg-emerald-500/20 text-emerald-300 border border-emerald-500/30 rounded-full text-xs font-bold flex items-center gap-1">
@@ -45,13 +45,13 @@ export default function InventoryDashboard({ items = [], onNavigateTab }: Invent
         <div className="flex gap-3">
           <button 
             onClick={() => onNavigateTab && onNavigateTab('movements')}
-            className="px-4 py-2.5 bg-emerald-600 hover:bg-emerald-500 text-white text-sm font-bold transition flex items-center gap-2"
+            className="rounded-xl px-4 py-2.5 bg-gradient-to-r from-[#9a6a1d] via-[#d4af37] to-[#c58a22] hover:brightness-110 text-slate-950 text-sm font-black transition flex items-center gap-2 shadow-md"
           >
             <ArrowUpRight className="w-4 h-4" /> حركة جديدة
           </button>
           <button 
             onClick={() => onNavigateTab && onNavigateTab('reports')}
-            className="px-4 py-2.5 bg-white/10 hover:bg-white/20 text-white text-sm font-bold backdrop-blur-sm transition flex items-center gap-2"
+            className="rounded-xl px-4 py-2.5 bg-white/10 hover:bg-white/20 text-white text-sm font-black backdrop-blur-sm transition flex items-center gap-2 border border-[#d4af37]/30"
           >
             <Layers className="w-4 h-4" /> تقارير الجرد
           </button>
@@ -60,7 +60,7 @@ export default function InventoryDashboard({ items = [], onNavigateTab }: Invent
 
       {/* KPI Cards Grid */}
       <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 xl:grid-cols-6 gap-4">
-        <div className="p-5 flex items-center space-x-4 space-x-reverse hover:border-slate-300 transition">
+        <div className="min-h-[142px] rounded-[22px] border-[1.5px] border-[#d4af37]/45 bg-gradient-to-b from-[#fffefc] via-[#fbf8f0] to-[#f5eeea] p-5 flex items-center space-x-4 space-x-reverse shadow-[0_6px_18px_rgba(91,61,16,0.12)] hover:shadow-[0_9px_24px_rgba(91,61,16,0.18)] transition">
           <div className="p-3.5 bg-orange-50 text-orange-600">
             <Package className="w-6 h-6" />
           </div>
@@ -71,7 +71,7 @@ export default function InventoryDashboard({ items = [], onNavigateTab }: Invent
           </div>
         </div>
 
-        <div className="p-5 flex items-center space-x-4 space-x-reverse hover:border-slate-300 transition">
+        <div className="min-h-[142px] rounded-[22px] border-[1.5px] border-[#d4af37]/45 bg-gradient-to-b from-[#fffefc] via-[#fbf8f0] to-[#f5eeea] p-5 flex items-center space-x-4 space-x-reverse shadow-[0_6px_18px_rgba(91,61,16,0.12)] hover:shadow-[0_9px_24px_rgba(91,61,16,0.18)] transition">
           <div className="p-3.5 bg-emerald-50 text-emerald-600">
             <DollarSign className="w-6 h-6" />
           </div>
@@ -82,7 +82,7 @@ export default function InventoryDashboard({ items = [], onNavigateTab }: Invent
           </div>
         </div>
 
-        <div className="p-5 border border-amber-200 bg-amber-50/20 flex items-center space-x-4 space-x-reverse">
+        <div className="min-h-[142px] rounded-[22px] border-[1.5px] border-[#d4af37]/45 bg-gradient-to-b from-[#fffefc] via-[#fbf8f0] to-[#f5eeea] p-5 flex items-center space-x-4 space-x-reverse shadow-[0_6px_18px_rgba(91,61,16,0.12)]">
           <div className="p-3.5 bg-amber-100 text-amber-700">
             <AlertTriangle className="w-6 h-6" />
           </div>
@@ -93,7 +93,7 @@ export default function InventoryDashboard({ items = [], onNavigateTab }: Invent
           </div>
         </div>
 
-        <div className="p-5 border border-red-200 bg-red-50/20 flex items-center space-x-4 space-x-reverse">
+        <div className="min-h-[142px] rounded-[22px] border-[1.5px] border-[#d4af37]/45 bg-gradient-to-b from-[#fffefc] via-[#fbf8f0] to-[#f5eeea] p-5 flex items-center space-x-4 space-x-reverse shadow-[0_6px_18px_rgba(91,61,16,0.12)]">
           <div className="p-3.5 bg-red-100 text-red-700">
             <AlertOctagon className="w-6 h-6" />
           </div>
@@ -104,7 +104,7 @@ export default function InventoryDashboard({ items = [], onNavigateTab }: Invent
           </div>
         </div>
 
-        <div className="p-5 flex items-center space-x-4 space-x-reverse">
+        <div className="min-h-[142px] rounded-[22px] border-[1.5px] border-[#d4af37]/45 bg-gradient-to-b from-[#fffefc] via-[#fbf8f0] to-[#f5eeea] p-5 flex items-center space-x-4 space-x-reverse shadow-[0_6px_18px_rgba(91,61,16,0.12)]">
           <div className="p-3.5 bg-amber-50 text-amber-600">
             <Warehouse className="w-6 h-6" />
           </div>
@@ -115,7 +115,7 @@ export default function InventoryDashboard({ items = [], onNavigateTab }: Invent
           </div>
         </div>
 
-        <div className="p-5 flex items-center space-x-4 space-x-reverse">
+        <div className="min-h-[142px] rounded-[22px] border-[1.5px] border-[#d4af37]/45 bg-gradient-to-b from-[#fffefc] via-[#fbf8f0] to-[#f5eeea] p-5 flex items-center space-x-4 space-x-reverse shadow-[0_6px_18px_rgba(91,61,16,0.12)]">
           <div className="p-3.5 bg-slate-100 text-slate-800">
             <Activity className="w-6 h-6" />
           </div>
