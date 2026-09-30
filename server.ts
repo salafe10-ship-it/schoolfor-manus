@@ -8355,6 +8355,35 @@ export async function createApp(options: { cloudflare?: boolean } = {}): Promise
     const catalogue = structure.catalogue && typeof structure.catalogue === 'object' ? structure.catalogue : {};
     const subjects = Array.isArray((catalogue as any).subjects) ? (catalogue as any).subjects.slice(0, 2000) : [];
     const schedulePeriods = Array.isArray((catalogue as any).schedulePeriods) ? (catalogue as any).schedulePeriods.slice(0, 20000) : [];
+    const subjectKeys = new Set<string>();
+    for (const subject of subjects) {
+      const id = String(subject?.id || '').trim().toLowerCase();
+      const code = String(subject?.code || '').trim().toLowerCase();
+      if (!id || !code) throw new ValidationError('كل مادة دراسية يجب أن تحتوي معرفًا ورمزًا صالحين.');
+      if (subjectKeys.has(`id:${id}`) || subjectKeys.has(`code:${code}`)) throw new ValidationError('توجد مادة دراسية مكررة في الكتالوج المركزي.');
+      subjectKeys.add(`id:${id}`);
+      subjectKeys.add(`code:${code}`);
+    }
+    const occupiedTimetableSlots = new Set<string>();
+    const occupiedTeachers = new Set<string>();
+    const occupiedRooms = new Set<string>();
+    for (const period of schedulePeriods) {
+      const day = String(period?.day || '').trim().toLowerCase();
+      const slot = Number(period?.periodNumber);
+      const className = String(period?.className || '').trim().toLowerCase();
+      const teacherId = String(period?.teacherId || '').trim().toLowerCase();
+      const roomName = String(period?.roomName || '').trim().toLowerCase();
+      if (!day || !Number.isInteger(slot) || slot < 1 || slot > 20 || !className || !teacherId || !roomName) {
+        throw new ValidationError('كل حصة في الجدول يجب أن تحتوي اليوم والحصة والفصل والمعلم والقاعة.');
+      }
+      const slotKey = `${day}|${slot}`;
+      if (occupiedTimetableSlots.has(`${slotKey}|class:${className}`)) throw new ValidationError('يوجد تعارض: الفصل لديه أكثر من حصة في نفس الخانة.');
+      if (occupiedTeachers.has(`${slotKey}|teacher:${teacherId}`)) throw new ValidationError('يوجد تعارض: المعلم مرتبط بأكثر من فصل في نفس الخانة.');
+      if (occupiedRooms.has(`${slotKey}|room:${roomName}`)) throw new ValidationError('يوجد تعارض: القاعة مستخدمة أكثر من مرة في نفس الخانة.');
+      occupiedTimetableSlots.add(`${slotKey}|class:${className}`);
+      occupiedTeachers.add(`${slotKey}|teacher:${teacherId}`);
+      occupiedRooms.add(`${slotKey}|room:${roomName}`);
+    }
     const policies = catalogue.policies && typeof catalogue.policies === 'object' ? {
       passingScore: Math.max(0, Math.min(100, Number((catalogue as any).policies.passingScore ?? 50))),
       maxClassSize: Math.max(1, Math.min(500, Number((catalogue as any).policies.maxClassSize ?? 35)))
