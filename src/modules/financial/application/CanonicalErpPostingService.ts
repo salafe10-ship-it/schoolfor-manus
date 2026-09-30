@@ -899,6 +899,8 @@ export class CanonicalErpPostingService {
       const postingLines: CanonicalPostingLine[] = [];
       let revenue = 0;
       let cogs = 0;
+      const cogsByAccount = new Map<string, number>();
+      const stockByAccount = new Map<string, number>();
       for (const [index, rawLine] of lines.entries()) {
         if (!rawLine || typeof rawLine !== 'object' || Array.isArray(rawLine)) continue;
         const line = rawLine as FinancialRow;
@@ -908,6 +910,11 @@ export class CanonicalErpPostingService {
         const unitCost = positiveAmount(line.unitCost ?? item.costPrice, `inventorySale.${textValue(sale.id)}.line.${index}.unitCost`);
         revenue += quantity * unitPrice;
         cogs += quantity * unitCost;
+        const amount = Number((quantity * unitCost).toFixed(2));
+        const cogsCode = cogsAccount(item);
+        const stockCode = inventoryAccount(item);
+        cogsByAccount.set(cogsCode, Number(((cogsByAccount.get(cogsCode) || 0) + amount).toFixed(2)));
+        stockByAccount.set(stockCode, Number(((stockByAccount.get(stockCode) || 0) + amount).toFixed(2)));
       }
       const discount = Number(sale.discount || 0);
       const tax = Number(sale.tax || 0);
@@ -915,8 +922,8 @@ export class CanonicalErpPostingService {
       if (!(revenue > 0) || discount < 0 || tax < 0 || discount > revenue || !(total > 0)) return;
       postingLines.push({ id: `${textValue(sale.id)}-AR`, accountCode: paymentAccount, debit: total, credit: 0 });
       postingLines.push({ id: `${textValue(sale.id)}-REV`, accountCode: revenueAccount, debit: 0, credit: Number((revenue - discount).toFixed(2)) });
-      postingLines.push({ id: `${textValue(sale.id)}-COGS`, accountCode: cogsAccount(itemById.get(textValue((lines[0] as FinancialRow)?.itemId || (lines[0] as FinancialRow)?.itemCode)) || {}), debit: Number(cogs.toFixed(2)), credit: 0 });
-      postingLines.push({ id: `${textValue(sale.id)}-STOCK`, accountCode: inventoryAccount(itemById.get(textValue((lines[0] as FinancialRow)?.itemId || (lines[0] as FinancialRow)?.itemCode)) || {}), debit: 0, credit: Number(cogs.toFixed(2)) });
+      for (const [account, amount] of cogsByAccount) postingLines.push({ id: `${textValue(sale.id)}-COGS-${account}`, accountCode: account, debit: amount, credit: 0 });
+      for (const [account, amount] of stockByAccount) postingLines.push({ id: `${textValue(sale.id)}-STOCK-${account}`, accountCode: account, debit: 0, credit: amount });
       if (tax > 0) postingLines.push({ id: `${textValue(sale.id)}-TAX`, accountCode: taxAccount, debit: 0, credit: Number(tax.toFixed(2)) });
       documents.push({ sourceType: 'inventory_movement', sourceId: textValue(sale.id), date: dateValue(rowValue(sale, 'date', 'saleDate')), description: textValue(sale.notes, `بيع مخزني ${textValue(sale.id)}`), lines: postingLines });
     };
