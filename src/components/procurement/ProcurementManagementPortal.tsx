@@ -14,6 +14,7 @@ import VendorBillPaymentManager from './VendorBillPaymentManager';
 import ProcurementReports from './ProcurementReports';
 import ProcurementSettings from './ProcurementSettings';
 import SupplierManager from '../inventory/SupplierManager';
+import { getItemWarehouseBalances, withUpdatedWarehouseBalances } from '../inventory/inventoryCanonical';
 import { PurchaseRequest, PurchaseOrder, GoodsReceiptNote, VendorBill } from '../../types';
 import type { InventoryCanonicalDatabase } from '../inventory/inventoryCanonical';
 import { getTrustedAccessToken } from '../../utils/auth';
@@ -91,23 +92,32 @@ export default function ProcurementManagementPortal({
 
   const handleSaveReceipt = async (grn: GoodsReceiptNote) => {
     try {
-      const nextReceipts = goodsReceipts.some(item => item.id === grn.id) ? goodsReceipts.map(item => item.id === grn.id ? grn : item) : [grn, ...goodsReceipts];
       const previousReceipt = goodsReceipts.find(item => item.id === grn.id);
-      const acceptedDeltaByItem = new Map<string, number>();
-      for (const line of previousReceipt?.lines || []) {
-        const itemId = canonicalItemId(line.itemId || line.itemCode);
-        acceptedDeltaByItem.set(itemId, (acceptedDeltaByItem.get(itemId) || 0) - Number(line.acceptedQty || 0));
-      }
+      if (previousReceipt) throw new Error('إذن الاستلام غير قابل للاستبدال بعد حفظه؛ أنشئ محضر تصحيح معتمد عند الحاجة.');
+      const nextReceipts = [grn, ...goodsReceipts];
+      const quantityDeltas = new Map<string, Map<string, number>>();
+      const incomingValueByItem = new Map<string, number>();
       for (const line of grn.lines) {
         const itemId = canonicalItemId(line.itemId || line.itemCode);
-        acceptedDeltaByItem.set(itemId, (acceptedDeltaByItem.get(itemId) || 0) + Number(line.acceptedQty || 0));
+        if (!itemId) throw new Error(`بند الاستلام ${line.lineId} غير مربوط بصنف مركزي.`);
+        const byWarehouse = quantityDeltas.get(itemId) || new Map<string, number>();
+        byWarehouse.set(grn.warehouseId, (byWarehouse.get(grn.warehouseId) || 0) + Number(line.acceptedQty || 0));
+        quantityDeltas.set(itemId, byWarehouse);
+        incomingValueByItem.set(itemId, (incomingValueByItem.get(itemId) || 0) + Number(line.totalCost || 0));
       }
       const nextItems = database.items.map(item => {
-        const delta = acceptedDeltaByItem.get(item.id) || 0;
-        if (delta === 0) return item;
-        const quantity = item.quantity + delta;
-        if (quantity < 0) throw new Error(`لا يمكن أن يصبح رصيد الصنف ${item.name} سالباً بعد تصحيح محضر الاستلام.`);
-        return { ...item, quantity };
+        const byWarehouse = quantityDeltas.get(item.id);
+        if (!byWarehouse) return item;
+        const balances = getItemWarehouseBalances(item);
+        for (const [warehouseId, delta] of byWarehouse) balances[warehouseId] = Number(balances[warehouseId] || 0) + delta;
+        const updated = withUpdatedWarehouseBalances(item, balances);
+        if (Object.values(balances).some(quantity => quantity < 0)) throw new Error(`لا يمكن أن يصبح رصيد الصنف ${item.name} سالباً بعد الاستلام.`);
+        const incomingValue = incomingValueByItem.get(item.id) || 0;
+        if (incomingValue > 0 && updated.quantity > 0) {
+          const previousValue = Number(item.quantity || 0) * Number(item.costPrice || 0);
+          updated.costPrice = Number(((previousValue + incomingValue) / updated.quantity).toFixed(4));
+        }
+        return updated;
       });
       const nextOrders = purchaseOrders.map(po => {
         if (po.id !== grn.purchaseOrderId) return po;

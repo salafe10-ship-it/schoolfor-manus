@@ -9,14 +9,14 @@ interface InventorySettingsProps {
 
 export default function InventorySettings({ settings: savedSettings, onSave, triggerNotification }: InventorySettingsProps) {
   const [settings, setSettings] = useState({
-    allowNegativeStock: false,
-    defaultValuationMethod: 'weighted_average',
     enableLowStockAlerts: true,
-    requireApprovalForAdjustments: true,
     inventoryAccountPrefix: '1301',
     cogsAccountPrefix: '5270',
     adjustmentAccountPrefix: '5280',
     ...(savedSettings || {}),
+    allowNegativeStock: false,
+    defaultValuationMethod: 'weighted_average',
+    requireApprovalForAdjustments: true,
     autoPostingToGL: true
   });
 
@@ -48,18 +48,13 @@ export default function InventorySettings({ settings: savedSettings, onSave, tri
           </h4>
 
           <div className="space-y-3 bg-transparent p-4 border border-slate-200">
-            <label className="flex items-center justify-between cursor-pointer">
+            <div className="flex items-center justify-between">
               <div>
-                <span className="font-bold text-slate-800 text-sm block">السماح بالصرف على المكشوف (الرصيد السالب)</span>
-                <span className="text-xs text-slate-500">حظر أي حركة صرف إذا كانت الكمية المتوفرة أقل من الصرف المطلوب لحماية سلامة المخزون</span>
+                <span className="font-bold text-slate-800 text-sm block">منع الرصيد السالب</span>
+                <span className="text-xs text-slate-500">مفعل دائماً؛ لا يسمح النظام باعتماد صرف يتجاوز رصيد المستودع.</span>
               </div>
-              <input 
-                type="checkbox" 
-                checked={settings.allowNegativeStock}
-                onChange={(e) => setSettings({ ...settings, allowNegativeStock: e.target.checked })}
-                className="w-5 h-5 accent-slate-900 rounded"
-              />
-            </label>
+              <input type="checkbox" checked readOnly disabled className="w-5 h-5 accent-emerald-600 rounded" />
+            </div>
 
             <label className="flex items-center justify-between cursor-pointer border-t border-slate-200 pt-3">
               <div>
@@ -77,15 +72,10 @@ export default function InventorySettings({ settings: savedSettings, onSave, tri
 
             <label className="flex items-center justify-between cursor-pointer border-t border-slate-200 pt-3">
               <div>
-                <span className="font-bold text-slate-800 text-sm block">اشتراط اعتماد المدير المالي لتسويات الجرد الفعلي</span>
-                <span className="text-xs text-slate-500">عدم إحالة أي فروقات جرد بالزيادة أو العجز للدفاتر دون موافقة خطية بالصلاحية</span>
+                <span className="font-bold text-slate-800 text-sm block">اشتراط اعتماد التسويات الجردية</span>
+                <span className="text-xs text-slate-500">كل محضر جرد ينتظر الاعتماد قبل تعديل الرصيد أو إنشاء أثر محاسبي.</span>
               </div>
-              <input 
-                type="checkbox" 
-                checked={settings.requireApprovalForAdjustments}
-                onChange={(e) => setSettings({ ...settings, requireApprovalForAdjustments: e.target.checked })}
-                className="w-5 h-5 accent-slate-900 rounded"
-              />
+              <input type="checkbox" checked readOnly disabled className="w-5 h-5 accent-emerald-600 rounded" />
             </label>
           </div>
         </div>
@@ -93,40 +83,9 @@ export default function InventorySettings({ settings: savedSettings, onSave, tri
         {/* Valuation Policy */}
         <div className="space-y-4">
           <h4 className="text-sm font-bold text-slate-900 uppercase tracking-wider border-b border-slate-100 pb-1">طريقة التقييم الافتراضية للمخزون (Inventory Valuation Method)</h4>
-          <div className="grid grid-cols-2 gap-4">
-            <label className={`p-4 border-2 cursor-pointer transition ${
-              settings.defaultValuationMethod === 'weighted_average' ? 'border-slate-900 bg-slate-50' : 'border-slate-200'
-            }`}>
-              <div className="flex items-center gap-2 mb-1">
-                <input 
-                  type="radio" 
-                  name="val_method"
-                  value="weighted_average"
-                  checked={settings.defaultValuationMethod === 'weighted_average'}
-                  onChange={() => setSettings({ ...settings, defaultValuationMethod: 'weighted_average' })}
-                  className="accent-slate-900"
-                />
-                <span className="font-black text-slate-900 text-sm">طريقة المتوسط المرجح (Weighted Average)</span>
-              </div>
-              <p className="text-xs text-slate-500">احتساب تكلفة الصنف عن طريق إعادة احتساب متوسط التكلفة مع كل شحنة توريد جديدة</p>
-            </label>
-
-            <label className={`p-4 border-2 cursor-pointer transition ${
-              settings.defaultValuationMethod === 'fifo' ? 'border-slate-900 bg-slate-50' : 'border-slate-200'
-            }`}>
-              <div className="flex items-center gap-2 mb-1">
-                <input 
-                  type="radio" 
-                  name="val_method"
-                  value="fifo"
-                  checked={settings.defaultValuationMethod === 'fifo'}
-                  onChange={() => setSettings({ ...settings, defaultValuationMethod: 'fifo' })}
-                  className="accent-slate-900"
-                />
-                <span className="font-black text-slate-900 text-sm">طريقة الوارد أولاً يصرف أولاً (FIFO)</span>
-              </div>
-              <p className="text-xs text-slate-500">تسعير المنصرف حسب أقدم التكلفة المتوفرة وتكون التكلفة المتبقية قريبة من أسعار السوق</p>
-            </label>
+          <div className="p-4 border-2 border-emerald-200 bg-emerald-50/60">
+            <span className="font-black text-slate-900 text-sm">المتوسط المرجح — الطريقة المنفذة حالياً</span>
+            <p className="text-xs text-slate-600 mt-1">يعاد احتساب تكلفة الصنف عند الاستلام المقبول. FIFO غير متاح حتى إنشاء طبقات تكلفة ومخزون تاريخية قابلة للتدقيق.</p>
           </div>
         </div>
 

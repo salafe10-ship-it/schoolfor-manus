@@ -17,7 +17,9 @@ interface EnterpriseActionToolbarProps {
   onExportPdf?: () => void;
   exportPdfLabel?: string;
   onExportExcel?: () => void;
+  exportExcelLabel?: string;
   onImportExcel?: () => void;
+  importExcelLabel?: string;
   onDownloadTemplate?: () => void;
   onExit?: () => void;
 
@@ -48,7 +50,9 @@ export default function EnterpriseActionToolbar({
   onExportPdf,
   exportPdfLabel = 'PDF',
   onExportExcel,
+  exportExcelLabel = 'Excel',
   onImportExcel,
+  importExcelLabel = 'استيراد',
   onDownloadTemplate,
   onExit,
   isSaving = false,
@@ -260,7 +264,7 @@ export default function EnterpriseActionToolbar({
               title="تصدير بصيغة Excel"
             >
               <FileSpreadsheet className="w-3.5 h-3.5 shrink-0" />
-              <span>Excel</span>
+              <span>{exportExcelLabel}</span>
             </button>
           )}
           
@@ -278,7 +282,7 @@ export default function EnterpriseActionToolbar({
               title="استيراد بيانات"
             >
               <Upload className="w-3.5 h-3.5 shrink-0" />
-              <span>استيراد</span>
+              <span>{importExcelLabel}</span>
             </button>
           )}
 

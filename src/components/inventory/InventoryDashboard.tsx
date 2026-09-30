@@ -4,27 +4,72 @@ import {
   Warehouse, Activity, ArrowUpRight, ArrowDownLeft, 
   CheckCircle2, Clock, ShieldCheck, Layers, DollarSign 
 } from 'lucide-react';
-import { InventoryItem } from '../../types';
+import { InventoryItem, InventoryWarehouse } from '../../types';
+import { getItemWarehouseQuantity } from './inventoryCanonical';
 
 interface InventoryDashboardProps {
   items?: InventoryItem[];
+  warehouses?: InventoryWarehouse[];
+  movements?: any[];
+  receipts?: any[];
   onNavigateTab?: (tab: string) => void;
 }
 
-export default function InventoryDashboard({ items = [], onNavigateTab }: InventoryDashboardProps) {
+export default function InventoryDashboard({ items = [], warehouses = [], movements = [], receipts = [], onNavigateTab }: InventoryDashboardProps) {
   // لا تُستبدل البيانات الفارغة بأرقام تجريبية؛ المصدر المركزي هو المرجع الوحيد.
-  const totalItemsCount = items.length;
-  const totalQuantity = items.reduce((sum, item) => sum + (item.quantity || 0), 0);
-  const totalValuation = items.reduce((sum, item) => sum + ((item.quantity || 0) * (item.costPrice || 0)), 0);
-  const lowStockItems = items.filter(i => i.quantity <= i.minLevel) || [];
+  const activeItems = items.filter(item => item.status !== 'archived');
+  const totalItemsCount = activeItems.length;
+  const totalQuantity = activeItems.reduce((sum, item) => sum + (item.quantity || 0), 0);
+  const totalValuation = activeItems.reduce((sum, item) => sum + ((item.quantity || 0) * (item.costPrice || 0)), 0);
+  const lowStockItems = activeItems.filter(i => i.quantity <= (i.reorderLevel || i.minLevel || 0));
   const lowStockCount = lowStockItems.length;
-  const outOfStockCount = items.filter(i => i.quantity === 0).length;
-  const warehouseCount = 0;
-  const dailyMovementsCount = 0;
-
-  const recentTransactions: Array<Record<string, string>> = [];
-
-  const warehousesList: Array<{ name: string; code: string; capacity: string; itemsCount: number; value: string; status: string }> = [];
+  const outOfStockCount = activeItems.filter(i => i.quantity === 0).length;
+  const warehouseCount = warehouses.length;
+  const today = new Date();
+  const todayKey = `${today.getFullYear()}-${String(today.getMonth() + 1).padStart(2, '0')}-${String(today.getDate()).padStart(2, '0')}`;
+  const receiptMovements = receipts.filter(receipt => (receipt.isPostedToGL === true || receipt.status === 'posted_to_gl')
+    && Array.isArray(receipt.lines) && receipt.lines.some((line: any) => Number(line.acceptedQty || 0) > 0)).map(receipt => {
+    const acceptedLines = receipt.lines.filter((line: any) => Number(line.acceptedQty || 0) > 0);
+    return {
+      id: receipt.grnNo || receipt.id, date: receipt.grnDate, createdAt: receipt.createdAt, type: 'purchase', typeLabel: 'استلام مشتريات',
+      itemId: acceptedLines.length === 1 ? acceptedLines[0].itemId : '',
+      itemName: acceptedLines.length === 1 ? acceptedLines[0].itemName : `استلام ${acceptedLines.length} بنود`,
+      quantity: acceptedLines.reduce((sum: number, line: any) => sum + Number(line.acceptedQty || 0), 0),
+      warehouseTo: receipt.warehouseId, createdBy: receipt.inspectorName || 'غير مسجل', status: receipt.status,
+      statusLabel: receipt.statusLabel || receipt.status
+    };
+  });
+  const stockActivity = [...movements.filter(movement => ['approved', 'posted'].includes(String(movement.status))), ...receiptMovements];
+  const dailyMovementsCount = stockActivity.filter(movement => String(movement.date || movement.createdAt || '').slice(0, 10) === todayKey).length;
+  const recentTransactions = [...stockActivity]
+    .sort((left, right) => String(right.date || right.createdAt || '').localeCompare(String(left.date || left.createdAt || '')))
+    .slice(0, 5)
+    .map(movement => {
+      const item = items.find(candidate => candidate.id === movement.itemId);
+      const typeLabels: Record<string, string> = {
+        purchase: movement.typeLabel || 'إضافة مخزنية', issue: 'صرف داخلي', sale: 'بيع', transfer: 'تحويل بين مستودعات', adjustment: 'تسوية مخزنية'
+      };
+      const warehouseFrom = warehouses.find(candidate => candidate.id === movement.warehouseFrom)?.name || movement.warehouseFrom;
+      const warehouseTo = warehouses.find(candidate => candidate.id === movement.warehouseTo)?.name || movement.warehouseTo;
+      const warehouse = movement.type === 'transfer' && warehouseFrom && warehouseTo ? `من ${warehouseFrom} إلى ${warehouseTo}`
+        : (movement.type === 'purchase' ? warehouseTo : warehouseFrom) || warehouseTo || 'غير محدد';
+      const signedQuantity = movement.type === 'purchase' || (movement.type === 'adjustment' && movement.direction !== 'decrease') ? `+${movement.quantity}`
+        : movement.type === 'issue' || movement.type === 'sale' || (movement.type === 'adjustment' && movement.direction === 'decrease')
+          ? `-${movement.quantity}` : String(movement.quantity || 0);
+      return {
+        id: String(movement.id || '—'), kind: String(movement.type || ''), item: String(movement.itemName || item?.name || 'صنف غير متاح'),
+        type: typeLabels[String(movement.type)] || 'حركة مخزنية', warehouse,
+        user: String(movement.createdBy || 'غير مسجل'), qty: signedQuantity,
+        status: String(movement.statusLabel || movement.status || 'غير محدد'), date: String(movement.date || movement.createdAt || '').slice(0, 10)
+      };
+    });
+  const warehousesList = warehouses.map(warehouse => {
+    const warehouseItems = activeItems.filter(item => getItemWarehouseQuantity(item, warehouse.id) > 0);
+    const quantity = warehouseItems.reduce((sum, item) => sum + getItemWarehouseQuantity(item, warehouse.id), 0);
+    const value = warehouseItems.reduce((sum, item) => sum + getItemWarehouseQuantity(item, warehouse.id) * (item.costPrice || 0), 0);
+    return { name: warehouse.name, code: warehouse.id, location: warehouse.location, manager: warehouse.manager,
+      itemsCount: warehouseItems.length, quantity, value, status: quantity > 0 ? 'به رصيد' : 'لا يوجد رصيد مسجل' };
+  });
 
   return (
     <div className="space-y-6">
@@ -122,7 +167,7 @@ export default function InventoryDashboard({ items = [], onNavigateTab }: Invent
           <div>
             <p className="text-xs text-slate-500 font-bold">حركات اليوم</p>
             <p className="text-xl font-black text-slate-900 mt-0.5">{dailyMovementsCount}</p>
-            <p className="text-[11px] text-emerald-600 font-semibold">توثيق الحركات غير متحقق</p>
+              <p className="text-[11px] text-emerald-600 font-semibold">مستند حركة محفوظ اليوم</p>
           </div>
         </div>
       </div>
@@ -134,9 +179,9 @@ export default function InventoryDashboard({ items = [], onNavigateTab }: Invent
           <div className="flex justify-between items-center border-b border-slate-100 pb-4">
             <div>
               <h3 className="text-lg font-bold text-slate-900 flex items-center gap-2">
-                <Warehouse className="w-5 h-5 text-amber-600" /> حال المستودعات والمستويات الاستيعابية
+                <Warehouse className="w-5 h-5 text-amber-600" /> أرصدة المستودعات المسجلة
               </h3>
-              <p className="text-xs text-slate-500 mt-0.5">توزيع الكميات والأصناف حسب المستودع المعتمد</p>
+              <p className="text-xs text-slate-500 mt-0.5">كميات وقيم محسوبة من بطاقات الأصناف وأرصدة كل مستودع؛ لا توجد سعة مادية مسجلة</p>
             </div>
             <button 
               onClick={() => onNavigateTab && onNavigateTab('warehouses')}
@@ -147,27 +192,20 @@ export default function InventoryDashboard({ items = [], onNavigateTab }: Invent
           </div>
 
           <div className="space-y-3">
-            {warehousesList.map((wh, index) => (
-              <div key={index} className="p-3.5 bg-transparent border border-slate-100 hover:border-slate-300 transition">
+            {warehousesList.length === 0 && <p className="p-4 text-sm text-slate-500">لا توجد مستودعات مسجلة في المصدر المركزي.</p>}
+            {warehousesList.map((wh) => (
+              <div key={wh.code} className="p-3.5 bg-transparent border border-slate-100 hover:border-slate-300 transition">
                 <div className="flex justify-between items-center mb-1.5">
                   <span className="font-bold text-slate-800 text-sm">{wh.name} ({wh.code})</span>
                   <span className={`px-2 py-0.5 rounded text-xs font-bold ${
-                    wh.status === 'ممتلئ تقريباً' ? 'bg-amber-100 text-amber-800' : 'bg-emerald-100 text-emerald-800'
+                    wh.quantity > 0 ? 'bg-emerald-100 text-emerald-800' : 'bg-slate-100 text-slate-700'
                   }`}>
                     {wh.status}
                   </span>
                 </div>
-                <div className="flex justify-between text-xs text-slate-500 mb-1">
-                  <span>السعة الاستيعابية المستخدمة: {wh.capacity}</span>
-                  <span className="font-bold text-slate-700">القيمة: {wh.value} ({wh.itemsCount} صنف)</span>
-                </div>
-                <div className="w-full bg-slate-200 h-2 rounded-full overflow-hidden">
-                  <div 
-                    className={`h-full rounded-full ${
-                      parseInt(wh.capacity) > 80 ? 'bg-amber-500' : 'bg-amber-600'
-                    }`}
-                    style={{ width: wh.capacity }}
-                  ></div>
+                <div className="flex justify-between text-xs text-slate-500">
+                  <span>{wh.location || 'الموقع غير مسجل'} • أمين المستودع: {wh.manager || 'غير محدد'}</span>
+                  <span className="font-bold text-slate-700">{wh.itemsCount} صنف • {wh.quantity} وحدة • {wh.value.toLocaleString('ar-SA')} د.ل</span>
                 </div>
               </div>
             ))}
@@ -192,22 +230,23 @@ export default function InventoryDashboard({ items = [], onNavigateTab }: Invent
           </div>
 
           <div className="space-y-3">
+            {recentTransactions.length === 0 && <p className="p-4 text-sm text-slate-500">لا توجد حركات مخزنية محفوظة بعد.</p>}
             {recentTransactions.map((tr) => (
               <div key={tr.id} className="p-3.5 bg-transparent border border-slate-100 flex items-center justify-between">
                 <div className="flex items-center gap-3">
                   <div className={`p-2.5 rounded-lg ${
-                    tr.type === 'إضافة مخزنية' ? 'bg-emerald-100 text-emerald-700' :
-                    tr.type === 'صرف مخزني' ? 'bg-orange-100 text-orange-700' :
-                    tr.type === 'تحويل بين مستودعات' ? 'bg-purple-100 text-purple-700' : 'bg-amber-100 text-amber-700'
+                    tr.kind === 'purchase' ? 'bg-emerald-100 text-emerald-700' :
+                    tr.kind === 'issue' || tr.kind === 'sale' ? 'bg-orange-100 text-orange-700' :
+                    tr.kind === 'transfer' ? 'bg-purple-100 text-purple-700' : 'bg-amber-100 text-amber-700'
                   }`}>
-                    {tr.type === 'إضافة مخزنية' ? <ArrowDownLeft className="w-4 h-4" /> : <ArrowUpRight className="w-4 h-4" />}
+                    {tr.kind === 'purchase' ? <ArrowDownLeft className="w-4 h-4" /> : <ArrowUpRight className="w-4 h-4" />}
                   </div>
                   <div>
                     <div className="flex items-center gap-2">
                       <span className="font-bold text-sm text-slate-900">{tr.item}</span>
                       <span className="text-xs font-mono text-slate-400">({tr.id})</span>
                     </div>
-                    <p className="text-xs text-slate-500">{tr.type} • {tr.warehouse} • بواسطة {tr.user}</p>
+                    <p className="text-xs text-slate-500">{tr.date || 'دون تاريخ'} • {tr.type} • {tr.warehouse} • بواسطة {tr.user}</p>
                   </div>
                 </div>
 

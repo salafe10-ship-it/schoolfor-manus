@@ -1,4 +1,4 @@
-import React, { useState } from 'react';
+import React, { useEffect, useRef, useState } from 'react';
 import { 
   Search, Filter, Plus, Edit, Trash2, Eye, 
   Check, X, FileSpreadsheet, AlertTriangle, 
@@ -6,6 +6,7 @@ import {
   ArrowUpDown, Layers, Lock, ShieldCheck, DollarSign
 } from 'lucide-react';
 import { InventoryCategory, InventoryItem, InventorySupplier, InventoryUnit, InventoryWarehouse } from '../../types';
+import { getItemWarehouseQuantity } from './inventoryCanonical';
 
 interface InventoryItemListProps {
   items: InventoryItem[];
@@ -16,6 +17,8 @@ interface InventoryItemListProps {
   onAddItem: (item: Partial<InventoryItem>) => Promise<void>;
   onUpdateItem: (id: string, item: Partial<InventoryItem>) => Promise<void>;
   onDeleteItem: (id: string) => Promise<void>;
+  newItemRequest?: number;
+  searchRequest?: number;
   triggerNotification?: (msg: string, type: 'success' | 'warning' | 'info' | 'danger') => void;
 }
 
@@ -28,6 +31,8 @@ export default function InventoryItemList({
   onAddItem,
   onUpdateItem,
   onDeleteItem,
+  newItemRequest = 0,
+  searchRequest = 0,
   triggerNotification
 }: InventoryItemListProps) {
   const [searchTerm, setSearchTerm] = useState('');
@@ -40,10 +45,22 @@ export default function InventoryItemList({
   const [isViewModalOpen, setIsViewModalOpen] = useState(false);
   const [editingItem, setEditingItem] = useState<Partial<InventoryItem> | null>(null);
   const [viewingItem, setViewingItem] = useState<InventoryItem | null>(null);
+  const searchInputRef = useRef<HTMLInputElement>(null);
 
   const notify = (msg: string, type: 'success' | 'warning' | 'info' | 'danger' = 'info') => {
     if (triggerNotification) triggerNotification(msg, type);
   };
+
+  useEffect(() => {
+    if (newItemRequest > 0) handleOpenNewModal();
+  }, [newItemRequest]);
+
+  useEffect(() => {
+    if (searchRequest > 0) {
+      searchInputRef.current?.focus();
+      searchInputRef.current?.scrollIntoView({ behavior: 'smooth', block: 'center' });
+    }
+  }, [searchRequest]);
 
   // Filtered List
   const filteredItems = items.filter(item => {
@@ -52,12 +69,13 @@ export default function InventoryItemList({
       item.sku.toLowerCase().includes(searchTerm.toLowerCase()) ||
       item.id.toLowerCase().includes(searchTerm.toLowerCase());
     
+    const visibleQuantity = selectedWarehouse === 'ALL' ? item.quantity : getItemWarehouseQuantity(item, selectedWarehouse);
     const matchesCategory = selectedCategory === 'ALL' || item.categoryId === selectedCategory;
-    const matchesWarehouse = selectedWarehouse === 'ALL' || item.warehouseId === selectedWarehouse;
+    const matchesWarehouse = selectedWarehouse === 'ALL' || visibleQuantity > 0;
     const matchesStatus = 
       statusFilter === 'ALL' ? true :
-      statusFilter === 'LOW' ? item.quantity <= item.minLevel :
-      statusFilter === 'ZERO' ? item.quantity === 0 :
+      statusFilter === 'LOW' ? visibleQuantity <= item.minLevel :
+      statusFilter === 'ZERO' ? visibleQuantity === 0 :
       item.status === statusFilter;
 
     return matchesSearch && matchesCategory && matchesWarehouse && matchesStatus;
@@ -78,6 +96,7 @@ export default function InventoryItemList({
       supplierId: suppliers[0].id,
       warehouseId: warehouses[0].id,
       quantity: 0,
+      warehouseBalances: { [warehouses[0].id]: 0 },
       minLevel: 0,
       maxLevel: 0,
       reorderLevel: 0,
@@ -126,12 +145,12 @@ export default function InventoryItemList({
   };
 
   const handleDelete = async (item: InventoryItem) => {
-    if (window.confirm(`هل أنت تأكد من إحالة الصنف (${item.name}) إلى الأرشيف النهائي؟`)) {
+    if (window.confirm(`سيتم أرشفة بطاقة (${item.name}) مع الاحتفاظ بحركتها وأرصدة المستودعات. هل تريد المتابعة؟`)) {
       try {
         await onDeleteItem(item.id);
-        notify(`✓ تم أرشفة/حذف الصنف (${item.name}) من المخزون بنجاح`, 'success');
+        notify(`✓ تمت أرشفة بطاقة الصنف (${item.name}) مع الاحتفاظ بالسجل`, 'success');
       } catch (err: any) {
-        notify(`فشل حذف الصنف: ${err.message}`, 'danger');
+        notify(`تعذرت أرشفة بطاقة الصنف: ${err.message}`, 'danger');
       }
     }
   };
@@ -161,7 +180,7 @@ export default function InventoryItemList({
           <div className="relative">
             <Search className="absolute right-3 top-3 h-4 w-4 text-slate-400" />
             <input 
-              type="text" 
+              type="text"
               value={searchTerm}
               onChange={(e) => setSearchTerm(e.target.value)}
               placeholder="بحث بالكود، الاسم، SKU..." 
@@ -202,6 +221,7 @@ export default function InventoryItemList({
               <option value="LOW">⚠️ أصناف منخفضة (حد الطلب)</option>
               <option value="ZERO">🛑 أصناف صفرية (منتهية)</option>
               <option value="inactive">غير نشط</option>
+              <option value="archived">مؤرشف</option>
             </select>
           </div>
         </div>
@@ -234,8 +254,9 @@ export default function InventoryItemList({
                 </tr>
               ) : (
                 filteredItems.map((item) => {
-                  const isLow = item.quantity <= item.minLevel;
-                  const isZero = item.quantity === 0;
+                  const visibleQuantity = selectedWarehouse === 'ALL' ? item.quantity : getItemWarehouseQuantity(item, selectedWarehouse);
+                  const isLow = visibleQuantity <= item.minLevel;
+                  const isZero = visibleQuantity === 0;
 
                   return (
                     <tr key={item.id} className="hover:bg-slate-50/80 transition">
@@ -259,7 +280,7 @@ export default function InventoryItemList({
                           isLow ? 'bg-amber-100 text-amber-800 border border-amber-200' :
                           'bg-emerald-100 text-emerald-800'
                         }`}>
-                          {item.quantity}
+                          {visibleQuantity}
                         </span>
                       </td>
                       <td className="px-5 py-4 text-center font-bold text-slate-500">
@@ -297,7 +318,7 @@ export default function InventoryItemList({
                           </button>
                           <button 
                             onClick={() => handleDelete(item)}
-                            title="حذف الصنف"
+                            title="أرشفة بطاقة الصنف"
                             className="p-2 text-red-600 hover:bg-red-50 rounded-lg transition"
                           >
                             <Trash2 className="w-4 h-4" />
@@ -337,8 +358,9 @@ export default function InventoryItemList({
                 <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
                   <div>
                     <label className="block text-xs font-bold text-slate-700 mb-1">اسم الصنف باللغة العربية *</label>
-                    <input 
-                      type="text" 
+            <input
+              ref={searchInputRef}
+              type="text"
                       required
                       value={editingItem.name || ''}
                       onChange={(e) => setEditingItem({ ...editingItem, name: e.target.value })}
@@ -373,11 +395,13 @@ export default function InventoryItemList({
                     <label className="block text-xs font-bold text-slate-700 mb-1">المستودع الرئيسي الافتراضي</label>
                     <select 
                       value={editingItem.warehouseId || ''}
+                      disabled={Boolean(editingItem.id && Number(editingItem.quantity || 0) > 0)}
                       onChange={(e) => setEditingItem({ ...editingItem, warehouseId: e.target.value })}
                       className="w-full p-2.5 bg-transparent text-sm font-semibold focus:ring-2 focus:ring-slate-900"
                     >
                       {warehouses.map(warehouse => <option key={warehouse.id} value={warehouse.id}>{warehouse.name}</option>)}
                     </select>
+                    {Boolean(editingItem.id && Number(editingItem.quantity || 0) > 0) && <p className="mt-1 text-[11px] text-amber-700">لا يتغير موقع الرصيد بتغيير بطاقة الصنف؛ استخدم إذن تحويل مخزني.</p>}
                   </div>
                 </div>
               </div>
@@ -387,14 +411,9 @@ export default function InventoryItemList({
                 <h4 className="text-sm font-bold text-amber-700 uppercase tracking-wider border-b border-amber-100 pb-1">الكميات وحدود الأمان المخزني</h4>
                 <div className="grid grid-cols-1 md:grid-cols-4 gap-4">
                   <div>
-                    <label className="block text-xs font-bold text-slate-700 mb-1">الكمية الافتتاحية</label>
-                    <input 
-                      type="number" 
-                      min="0"
-                      value={editingItem.quantity || 0}
-                      onChange={(e) => setEditingItem({ ...editingItem, quantity: parseInt(e.target.value) || 0 })}
-                      className="w-full p-2.5 bg-transparent text-sm font-bold text-center"
-                    />
+                    <label className="block text-xs font-bold text-slate-700 mb-1">الرصيد الإجمالي الحالي</label>
+                    <input type="number" value={editingItem.quantity || 0} readOnly className="w-full p-2.5 bg-slate-100 text-sm font-bold text-center" />
+                    <p className="mt-1 text-[11px] text-slate-500">يُحدّث الرصيد بإذن استلام أو صرف أو تحويل أو جرد معتمد فقط.</p>
                   </div>
 
                   <div>
@@ -443,9 +462,11 @@ export default function InventoryItemList({
                       min="0"
                       step="0.01"
                       value={editingItem.costPrice || 0}
+                      readOnly={Boolean(editingItem.id && Number(editingItem.quantity || 0) > 0)}
                       onChange={(e) => setEditingItem({ ...editingItem, costPrice: parseFloat(e.target.value) || 0 })}
-                      className="w-full p-2.5 bg-transparent text-sm font-bold text-slate-900"
+                      className="w-full p-2.5 bg-transparent text-sm font-bold text-slate-900 read-only:bg-slate-100"
                     />
+                    {Boolean(editingItem.id && Number(editingItem.quantity || 0) > 0) && <p className="mt-1 text-[11px] text-slate-500">تُحدّث تكلفة المتوسط المرجح من مستندات الاستلام ولا تُعدّل يدوياً مع وجود رصيد.</p>}
                   </div>
 
                   <div>

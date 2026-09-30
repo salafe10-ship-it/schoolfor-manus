@@ -49,6 +49,31 @@ export const emptyInventoryCanonicalDatabase = (): InventoryCanonicalDatabase =>
   }
 });
 
+export function getItemWarehouseBalances(item: InventoryItem): Record<string, number> {
+  if (item.warehouseBalances && typeof item.warehouseBalances === 'object' && !Array.isArray(item.warehouseBalances)) {
+    return Object.fromEntries(Object.entries(item.warehouseBalances).map(([warehouseId, quantity]) => [warehouseId, Number(quantity)]));
+  }
+  return item.warehouseId ? { [item.warehouseId]: Number(item.quantity || 0) } : {};
+}
+
+export function getItemWarehouseQuantity(item: InventoryItem, warehouseId: string): number {
+  const balances = getItemWarehouseBalances(item);
+  return Object.prototype.hasOwnProperty.call(balances, warehouseId)
+    ? Number(balances[warehouseId] || 0)
+    : (!item.warehouseBalances && item.warehouseId === warehouseId ? Number(item.quantity || 0) : 0);
+}
+
+export function withUpdatedWarehouseBalances(item: InventoryItem, warehouseBalances: Record<string, number>): InventoryItem {
+  const normalized = Object.fromEntries(Object.entries(warehouseBalances)
+    .filter(([warehouseId]) => Boolean(warehouseId))
+    .map(([warehouseId, quantity]) => [warehouseId, Number(quantity)]));
+  return {
+    ...item,
+    warehouseBalances: normalized,
+    quantity: Number(Object.values(normalized).reduce((sum, quantity) => sum + quantity, 0).toFixed(4))
+  };
+}
+
 const canonicalItemId = (reference: unknown, items: InventoryItem[]) => {
   const normalized = String(reference || '').trim();
   if (!normalized) return '';
@@ -87,7 +112,9 @@ export const normalizeInventoryCanonicalDatabase = (value: unknown): InventoryCa
   const defaults = emptyInventoryCanonicalDatabase();
   const array = <T,>(key: keyof InventoryCanonicalDatabase): T[] => Array.isArray(source[key]) ? source[key] as T[] : [];
   const normalized: InventoryCanonicalDatabase = {
-    items: array('items'), categories: array('categories'), brands: array('brands'), units: array('units'),
+    items: array<InventoryItem>('items').map(item => item.warehouseBalances === undefined
+      ? { ...item, warehouseBalances: item.warehouseId ? { [item.warehouseId]: Number(item.quantity || 0) } : {} }
+      : item), categories: array('categories'), brands: array('brands'), units: array('units'),
     suppliers: array('suppliers'), warehouses: array('warehouses'), movements: array('movements'),
     stocktakes: array('stocktakes'), purchaseRequests: array('purchaseRequests'), rfqs: array('rfqs'),
     quotations: array('quotations'), purchaseOrders: array('purchaseOrders'), goodsReceipts: array('goodsReceipts'),

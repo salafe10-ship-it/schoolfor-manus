@@ -18,7 +18,7 @@ import EnterpriseInventoryQualityAudit from '../../certification/EnterpriseInven
 import { InventoryItem } from '../../types';
 import ProcurementManagementPortal from '../procurement/ProcurementManagementPortal';
 import { getTrustedAccessToken } from '../../utils/auth';
-import { emptyInventoryCanonicalDatabase, InventoryCanonicalDatabase, normalizeInventoryCanonicalDatabase } from './inventoryCanonical';
+import { emptyInventoryCanonicalDatabase, getItemWarehouseBalances, getItemWarehouseQuantity, InventoryCanonicalDatabase, normalizeInventoryCanonicalDatabase, withUpdatedWarehouseBalances } from './inventoryCanonical';
 
 interface InventoryManagementPortalProps {
   selectedSchool?: any;
@@ -26,8 +26,57 @@ interface InventoryManagementPortalProps {
   triggerNotification?: (msg: string, type: 'success' | 'warning' | 'info' | 'danger') => void;
 }
 
+function parseCsvRows(source: string): string[][] {
+  const input = source.replace(/^\uFEFF/, '');
+  const rows: string[][] = [];
+  let row: string[] = [];
+  let cell = '';
+  let quoted = false;
+  for (let index = 0; index < input.length; index += 1) {
+    const character = input[index];
+    if (quoted) {
+      if (character === '"' && input[index + 1] === '"') { cell += '"'; index += 1; }
+      else if (character === '"') quoted = false;
+      else cell += character;
+    } else if (character === '"' && cell.length === 0) quoted = true;
+    else if (character === ',') { row.push(cell); cell = ''; }
+    else if (character === '\n' || character === '\r') {
+      if (character === '\r' && input[index + 1] === '\n') index += 1;
+      row.push(cell); cell = '';
+      if (row.some(value => value.trim())) rows.push(row);
+      row = [];
+    } else cell += character;
+  }
+  if (quoted) throw new Error('ملف CSV يحتوي على حقل نصي غير مغلق بعلامة اقتباس.');
+  if (cell.length > 0 || row.length > 0) {
+    row.push(cell);
+    if (row.some(value => value.trim())) rows.push(row);
+  }
+  if (rows.length < 2) throw new Error('ملف CSV فارغ أو لا يحتوي صفوف أصناف.');
+  return rows;
+}
+
+function downloadCsv(filename: string, rows: unknown[][]): void {
+  const escape = (value: unknown) => {
+    const raw = String(value ?? '');
+    const safe = typeof value === 'string' && /^[\t\r ]*[=+\-@]/.test(raw) ? `'${raw}` : raw;
+    return `"${safe.replace(/"/g, '""')}"`;
+  };
+  const content = `\uFEFF${rows.map(row => row.map(escape).join(',')).join('\r\n')}`;
+  const url = URL.createObjectURL(new Blob([content], { type: 'text/csv;charset=utf-8' }));
+  const link = document.createElement('a');
+  link.href = url;
+  link.download = filename;
+  document.body.appendChild(link);
+  link.click();
+  link.remove();
+  URL.revokeObjectURL(url);
+}
+
 export default function InventoryManagementPortal({ selectedSchool, initialTab = 'dashboard', triggerNotification }: InventoryManagementPortalProps) {
   const [activeTab, setActiveTab] = useState(initialTab);
+  const [newItemRequest, setNewItemRequest] = useState(0);
+  const [searchRequest, setSearchRequest] = useState(0);
   const [database, setDatabase] = useState<InventoryCanonicalDatabase>(emptyInventoryCanonicalDatabase);
   const [isLoading, setIsLoading] = useState(false);
   const versionRef = useRef(0);
@@ -83,7 +132,9 @@ export default function InventoryManagementPortal({ selectedSchool, initialTab =
 
   const handleAddItem = async (newItem: Partial<InventoryItem>) => {
     try {
-      const item = { ...newItem, id: newItem.id || `inv_item_${Date.now()}` } as InventoryItem;
+      if (Number(newItem.quantity || 0) !== 0) throw new Error('تبدأ بطاقة الصنف برصيد صفر؛ أدخل الرصيد بإذن استلام أو حركة مخزنية معتمدة.');
+      const item = { ...newItem, id: newItem.id || crypto.randomUUID(), quantity: 0,
+        warehouseBalances: newItem.warehouseId ? { [newItem.warehouseId]: 0 } : {} } as InventoryItem;
       await updateCollection('items', [...items, item]);
     } catch (err: any) {
       notify(`المخزون متوقف؛ تعذر حفظ الصنف: ${err?.message || 'مصدر البيانات غير متاح'}`, 'warning');
@@ -102,7 +153,7 @@ export default function InventoryManagementPortal({ selectedSchool, initialTab =
 
   const handleDeleteItem = async (id: string) => {
     try {
-      await updateCollection('items', items.filter(item => item.id !== id));
+      await updateCollection('items', items.map(item => item.id === id ? { ...item, status: 'archived' } : item));
     } catch (err: any) {
       notify(`المخزون متوقف؛ تعذر حذف الصنف: ${err?.message || 'مصدر البيانات غير متاح'}`, 'warning');
       throw err;
@@ -116,24 +167,54 @@ export default function InventoryManagementPortal({ selectedSchool, initialTab =
     const quantity = Number(movement.quantity);
     if (!Number.isInteger(quantity) || quantity <= 0) throw new Error('كمية الحركة غير صالحة للاعتماد.');
     const isRetry = movement.status === 'approved';
-    const nextQuantity = !isRetry && movement.type === 'purchase' ? item.quantity + quantity : !isRetry && movement.type === 'sale' ? item.quantity - quantity : item.quantity;
-    if (!isRetry && nextQuantity < 0 && !database.settings.allowNegativeStock) {
-      throw new Error(`لا يمكن اعتماد الصرف؛ رصيد ${item.name} غير كافٍ.`);
+    const balances = getItemWarehouseBalances(item);
+    const transferFrom = String(movement.warehouseFrom || item.warehouseId || '');
+    const transferTo = String(movement.warehouseTo || '');
+    const affectedWarehouse = movement.type === 'purchase' ? String(movement.warehouseTo || item.warehouseId || '') : transferFrom;
+    const nextBalances = { ...balances };
+    if (!isRetry && movement.type === 'purchase') {
+      if (!affectedWarehouse) throw new Error('حدد مستودع الاستلام قبل اعتماد الحركة.');
+      nextBalances[affectedWarehouse] = Number(nextBalances[affectedWarehouse] || 0) + quantity;
+    } else if (!isRetry && ['issue', 'sale', 'adjustment'].includes(String(movement.type))) {
+      if (!affectedWarehouse) throw new Error('حدد مستودع الصرف قبل اعتماد الحركة.');
+      const isDecrease = movement.type === 'issue' || movement.type === 'sale' || movement.direction === 'decrease';
+      const nextWarehouseQuantity = Number(nextBalances[affectedWarehouse] || 0) + (isDecrease ? -quantity : quantity);
+      if (nextWarehouseQuantity < 0 && !database.settings.allowNegativeStock) {
+        throw new Error(`لا يمكن اعتماد الصرف؛ رصيد ${item.name} في المستودع المحدد غير كافٍ.`);
+      }
+      nextBalances[affectedWarehouse] = nextWarehouseQuantity;
+    } else if (!isRetry && movement.type === 'transfer') {
+      if (!transferFrom || !transferTo || transferFrom === transferTo) throw new Error('يتطلب التحويل مستودري مصدر ووجهة مختلفين.');
+      const sourceQuantity = Number(nextBalances[transferFrom] || 0);
+      if (sourceQuantity < quantity && !database.settings.allowNegativeStock) throw new Error(`رصيد ${item.name} في مستودع المصدر لا يكفي للتحويل.`);
+      nextBalances[transferFrom] = sourceQuantity - quantity;
+      nextBalances[transferTo] = Number(nextBalances[transferTo] || 0) + quantity;
+    }
+    const nextItem = isRetry ? item : withUpdatedWarehouseBalances(item, nextBalances);
+    if (!isRetry && nextItem.quantity < 0 && !database.settings.allowNegativeStock) throw new Error(`لا يمكن اعتماد الحركة؛ رصيد ${item.name} غير كافٍ.`);
+    if (!isRetry && movement.type === 'purchase' && quantity > 0) {
+      const oldValue = Number(item.quantity || 0) * Number(item.costPrice || 0);
+      const incomingValue = quantity * Number(movement.unitCost || 0);
+      nextItem.costPrice = Number(((oldValue + incomingValue) / Math.max(1, nextItem.quantity)).toFixed(4));
     }
     const approvedMovement = isRetry ? movement : { ...movement, status: 'approved', statusLabel: movement.type === 'transfer' ? 'معتمد — تحويل داخلي' : 'معتمد — جارٍ ترحيل القيد', approvedAt: new Date().toISOString() };
     await commitDatabase({
       ...database,
-      items: isRetry ? database.items : database.items.map(row => row.id === item.id ? { ...row, quantity: nextQuantity } : row),
+      items: isRetry ? database.items : database.items.map(row => row.id === item.id ? nextItem : row),
       movements: database.movements.map(row => row.id === movement.id ? approvedMovement : row)
     });
-    notify(`تم اعتماد الحركة ${movement.id} وتحديث رصيد المخزون؛ وسيظهر رقم القيد الكانوني عند نجاح الترحيل.`, 'success');
+    notify(movement.type === 'transfer'
+      ? `تم اعتماد التحويل ${movement.id} وتحديث رصيدي المصدر والوجهة. لا ينشأ قيد أستاذ عام للتحويل الداخلي بين مستودعات المدرسة.`
+      : `تم اعتماد الحركة ${movement.id}؛ وحُفظت نتيجة الترحيل الكانوني مع مستند الحركة.`, 'success');
   };
 
   const handleApproveStocktake = async (stocktake: any) => {
     if (stocktake.status !== 'pending_approval') throw new Error('محضر الجرد ليس في حالة انتظار الاعتماد.');
     const item = database.items.find(row => row.id === stocktake.itemId);
     if (!item) throw new Error('الصنف المرتبط بمحضر الجرد غير موجود.');
-    if (Number(item.quantity) !== Number(stocktake.bookQty)) throw new Error('تغير الرصيد الدفتري بعد إنشاء المحضر؛ أعد المطابقة قبل الاعتماد.');
+    const warehouseId = String(stocktake.warehouseId || item.warehouseId || '');
+    const currentWarehouseQuantity = getItemWarehouseQuantity(item, warehouseId);
+    if (Number(currentWarehouseQuantity) !== Number(stocktake.bookQty)) throw new Error('تغير رصيد المستودع الدفتري بعد إنشاء المحضر؛ أعد المطابقة قبل الاعتماد.');
     const approvedStocktake = {
       ...stocktake,
       status: 'approved',
@@ -142,7 +223,11 @@ export default function InventoryManagementPortal({ selectedSchool, initialTab =
     };
     await commitDatabase({
       ...database,
-      items: database.items.map(row => row.id === item.id ? { ...row, quantity: Number(stocktake.actualQty) } : row),
+      items: database.items.map(row => {
+        if (row.id !== item.id) return row;
+        const balances = getItemWarehouseBalances(row);
+        return withUpdatedWarehouseBalances(row, { ...balances, [warehouseId]: Number(stocktake.actualQty) });
+      }),
       stocktakes: database.stocktakes.map(row => row.id === stocktake.id ? approvedStocktake : row)
     });
     notify(`تم اعتماد محضر الجرد ${stocktake.id} وتحديث رصيد الصنف؛ وسيظهر رقم قيد التسوية الكانوني عند نجاح الترحيل.`, 'success');
@@ -150,16 +235,13 @@ export default function InventoryManagementPortal({ selectedSchool, initialTab =
 
   const handleNew = () => {
     setActiveTab('items');
-    notify('تم الانتقال لنموذج إضافة صنف جديد لدليل الأصناف 📦', 'info');
-  };
-
-  const handleSave = () => {
-    notify('الحفظ يتم من نموذج الصنف بعد إدخال بياناته؛ لم يتم تسجيل تغيير من زر الحفظ العام.', 'warning');
+    setNewItemRequest(value => value + 1);
   };
 
   const handleSearch = () => {
     setActiveTab('items');
-    notify('جاري تطبيق تصفية البحث في قائمة الأصناف 🔍', 'info');
+    setSearchRequest(value => value + 1);
+    notify('اكتب رمز الصنف أو اسمه في خانة البحث التي تم فتحها.', 'info');
   };
 
   const auditReport = async (format: 'csv' | 'print') => {
@@ -189,17 +271,11 @@ export default function InventoryManagementPortal({ selectedSchool, initialTab =
       notify(error?.message || 'تعذر تدقيق تقرير المخزون قبل التصدير.', 'danger');
       return;
     }
-    const csvContent = "data:text/csv;charset=utf-8,\uFEFF" + 
-      "كود الصنف,اسم الصنف,الفئة,سعر التكلفة,سعر البيع,الكمية الحالية,المستودع\n" +
-      items.map(i => `${i.sku || i.id},${i.name},${i.categoryId},${i.costPrice},${i.salePrice},${i.quantity},${i.warehouseId}`).join("\n");
-    const encodedUri = encodeURI(csvContent);
-    const link = document.createElement("a");
-    link.setAttribute("href", encodedUri);
-    link.setAttribute("download", `edupro_inventory_export_${Date.now()}.csv`);
-    document.body.appendChild(link);
-    link.click();
-    document.body.removeChild(link);
-    notify('تم تصدير كشف حركة الأصناف لملف CSV بنجاح 📊', 'success');
+    downloadCsv(`edupro_inventory_items_${Date.now()}.csv`, [
+      ['رمز الصنف', 'اسم الصنف', 'معرف التصنيف', 'تكلفة الوحدة', 'سعر البيع', 'الرصيد الإجمالي', 'معرف المستودع الافتراضي'],
+      ...items.map(item => [item.sku || item.id, item.name, item.categoryId, item.costPrice, item.salePrice, item.quantity, item.warehouseId])
+    ]);
+    notify('تم تدقيق دليل الأصناف وتصديره بصيغة CSV.', 'success');
   };
 
   const handleExportPdf = async () => {
@@ -215,28 +291,74 @@ export default function InventoryManagementPortal({ selectedSchool, initialTab =
   const handleImportExcel = () => {
     const fileInput = document.createElement('input');
     fileInput.type = 'file';
-    fileInput.accept = '.csv, .json, .xlsx';
-    fileInput.onchange = (e: any) => {
-      const file = e.target.files[0];
-      if (file) {
-        notify(`تم اختيار الملف "${file.name}"، لكن الاستيراد لم يُنفذ لأن مسار الاستيراد المركزي غير مهيأ بعد.`, 'warning');
-      }
+    fileInput.accept = '.csv,text/csv';
+    fileInput.onchange = () => {
+      const file = fileInput.files?.[0];
+      if (!file) return;
+      void (async () => {
+        try {
+          if (file.size > 10 * 1024 * 1024) throw new Error('حجم الملف يتجاوز الحد الآمن وهو 10 ميغابايت.');
+          const rows = parseCsvRows(await file.text());
+          if (rows.length - 1 > 5000) throw new Error('يسمح باستيراد 5000 صنف كحد أقصى في الدفعة الواحدة.');
+          const aliases: Record<string, string> = {
+            'رمز الصنف': 'sku', 'اسم الصنف': 'name', 'معرف التصنيف': 'categoryid', 'معرف وحدة القياس': 'unitid',
+            'معرف المورد': 'supplierid', 'معرف المستودع': 'warehouseid', 'الحد الأدنى': 'minlevel',
+            'الحد الأعلى': 'maxlevel', 'نقطة إعادة الطلب': 'reorderlevel', 'تكلفة الوحدة': 'costprice',
+            'سعر البيع': 'saleprice', 'الضريبة': 'vatrate', 'الوصف': 'description'
+          };
+          const normalizedHeaders = rows[0].map(value => aliases[value.trim()] || value.trim().toLowerCase());
+          const column = (name: string) => normalizedHeaders.indexOf(name);
+          for (const required of ['sku', 'name', 'categoryid', 'unitid', 'supplierid', 'warehouseid']) {
+            if (column(required) < 0) throw new Error(`عمود إلزامي مفقود من قالب الاستيراد: ${required}`);
+          }
+          const usedSkus = new Set(items.map(item => item.sku.trim().toLowerCase()));
+          const imported: InventoryItem[] = rows.slice(1).map((cells, rowIndex) => {
+            const read = (name: string) => String(cells[column(name)] ?? '').trim();
+            const sku = read('sku');
+            const name = read('name');
+            const categoryId = read('categoryid');
+            const unitId = read('unitid');
+            const supplierId = read('supplierid');
+            const warehouseId = read('warehouseid');
+            if (!sku || !name || !categoryId || !unitId || !supplierId || !warehouseId) throw new Error(`بيانات الصف ${rowIndex + 2} ناقصة في أحد الحقول الإلزامية.`);
+            if (name.length < 2 || name.length > 200 || sku.length > 80) throw new Error(`اسم الصنف أو رمزه غير صالح في الصف ${rowIndex + 2}.`);
+            if (usedSkus.has(sku.toLowerCase())) throw new Error(`رمز الصنف ${sku} مكرر في الملف أو موجود مسبقاً.`);
+            if (!database.categories.some(category => category.id === categoryId) || !database.units.some(unit => unit.id === unitId)
+              || !database.suppliers.some(supplier => supplier.id === supplierId) || !database.warehouses.some(warehouse => warehouse.id === warehouseId)) {
+              throw new Error(`مراجع التصنيف أو الوحدة أو المورد أو المستودع في الصف ${rowIndex + 2} يجب أن تطابق المعرفات المسجلة.`);
+            }
+            usedSkus.add(sku.toLowerCase());
+            const numeric = (field: string, integer = false) => {
+              const raw = read(field);
+              const value = raw === '' ? 0 : Number(raw);
+              if (!Number.isFinite(value) || value < 0 || (integer && !Number.isInteger(value))) throw new Error(`القيمة في عمود ${field} غير صالحة في الصف ${rowIndex + 2}.`);
+              return value;
+            };
+            return {
+              id: crypto.randomUUID(), schoolId: String(selectedSchool?.id || selectedSchool?.school_id || ''), branchId: String(selectedSchool?.branchId || ''),
+              sku, name, categoryId, unitId, supplierId, warehouseId, quantity: 0, warehouseBalances: { [warehouseId]: 0 },
+              minLevel: numeric('minlevel', true), maxLevel: numeric('maxlevel', true), reorderLevel: numeric('reorderlevel', true),
+              costPrice: numeric('costprice'), salePrice: numeric('saleprice'), vatRate: numeric('vatrate'), description: read('description'),
+              status: 'active', inventoryAccountId: '', costOfGoodsAccountId: '', adjustmentAccountId: '', costCenterId: ''
+            };
+          });
+          if (imported.length === 0) throw new Error('لا توجد سجلات أصناف صالحة للاستيراد.');
+          await updateCollection('items', [...items, ...imported]);
+          notify(`تم التحقق وحفظ ${imported.length} بطاقة صنف مركزياً. الكميات تبدأ بصفر ويجب إدخالها بمستند مخزني.`, 'success');
+        } catch (error: any) {
+          notify(error?.message || 'تعذر استيراد ملف الأصناف.', 'danger');
+        }
+      })();
     };
     fileInput.click();
   };
 
   const handleDownloadTemplate = () => {
-    const csvTemplate = "data:text/csv;charset=utf-8,\uFEFF" +
-      "كود_الصنف,اسم_الصنف,الفئة,سعر_التكلفة,سعر_البيع,الكمية_الحالية,المستودع\n" +
-      "ITM-1001,اسم الصنف النموذجي,cat_electronics,10.00,15.00,100,branch_1_1\n";
-    const encodedUri = encodeURI(csvTemplate);
-    const link = document.createElement("a");
-    link.setAttribute("href", encodedUri);
-    link.setAttribute("download", "edupro_inventory_import_template.csv");
-    document.body.appendChild(link);
-    link.click();
-    document.body.removeChild(link);
-    notify('تم تحميل نموذج استيراد الأصناف المعتمد 📑', 'success');
+    downloadCsv('edupro_inventory_import_template.csv', [[
+      'رمز الصنف', 'اسم الصنف', 'معرف التصنيف', 'معرف وحدة القياس', 'معرف المورد', 'معرف المستودع',
+      'الحد الأدنى', 'الحد الأعلى', 'نقطة إعادة الطلب', 'تكلفة الوحدة', 'سعر البيع', 'الضريبة', 'الوصف'
+    ]]);
+    notify('تم تنزيل قالب CSV فارغ؛ استخدم معرفات الأدلة المسجلة. لا يستورد القالب أرصدة افتتاحية.', 'info');
   };
 
   const tabs = [
@@ -258,15 +380,14 @@ export default function InventoryManagementPortal({ selectedSchool, initialTab =
       <EnterpriseActionToolbar 
         title="إدارة المخزون والمستودعات المؤسسية (Inventory & Warehouse Control)"
         onNew={handleNew}
-        onSave={handleSave}
-        onEdit={() => notify('حدد صنفاً من جدول دليل الأصناف للبدء بالتعديل', 'warning')}
-        onDelete={() => notify('تم تحديد العنصر للمسح والإحالة إلى الأرشيف', 'warning')}
         onSearch={handleSearch}
         onPrint={handlePrint}
         onExportExcel={handleExportExcel}
         onExportPdf={handleExportPdf}
         onImportExcel={handleImportExcel}
         onDownloadTemplate={handleDownloadTemplate}
+        exportExcelLabel="CSV"
+        importExcelLabel="استيراد CSV"
         onRefresh={() => { void loadDatabase(); }}
         isLoading={isLoading}
         onExit={() => setActiveTab('dashboard')}
@@ -295,6 +416,9 @@ export default function InventoryManagementPortal({ selectedSchool, initialTab =
           {activeTab === 'dashboard' && (
             <InventoryDashboard 
               items={items} 
+              warehouses={database.warehouses}
+              movements={database.movements}
+              receipts={database.goodsReceipts}
               onNavigateTab={(tab) => setActiveTab(tab)} 
             />
           )}
@@ -309,6 +433,8 @@ export default function InventoryManagementPortal({ selectedSchool, initialTab =
               onAddItem={handleAddItem}
               onUpdateItem={handleUpdateItem}
               onDeleteItem={handleDeleteItem}
+              newItemRequest={newItemRequest}
+              searchRequest={searchRequest}
               triggerNotification={triggerNotification}
             />
           )}
@@ -327,11 +453,11 @@ export default function InventoryManagementPortal({ selectedSchool, initialTab =
           )}
 
           {activeTab === 'movements' && (
-            <StockMovementManager items={items} movements={database.movements} onSave={async movements => updateCollection('movements', movements)} onApproveMovement={handleApproveMovement} triggerNotification={triggerNotification} />
+            <StockMovementManager items={items} warehouses={database.warehouses} movements={database.movements} onSave={async movements => updateCollection('movements', movements)} onApproveMovement={handleApproveMovement} triggerNotification={triggerNotification} />
           )}
 
           {activeTab === 'stocktakes' && (
-            <StockCountManager items={items} stocktakes={database.stocktakes} settings={database.settings}
+            <StockCountManager items={items} warehouses={database.warehouses} stocktakes={database.stocktakes}
               onSave={async stocktakes => updateCollection('stocktakes', stocktakes)} onApproveStocktake={handleApproveStocktake} triggerNotification={triggerNotification} />
           )}
 
@@ -341,7 +467,7 @@ export default function InventoryManagementPortal({ selectedSchool, initialTab =
           )}
 
           {activeTab === 'reports' && (
-            <InventoryReports items={items} canonicalVersion={versionRef.current} triggerNotification={triggerNotification} />
+            <InventoryReports items={items} movements={database.movements} receipts={database.goodsReceipts} stocktakes={database.stocktakes} warehouses={database.warehouses} canonicalVersion={versionRef.current} triggerNotification={triggerNotification} />
           )}
 
           {activeTab === 'audit' && (

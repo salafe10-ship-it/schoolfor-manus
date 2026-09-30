@@ -862,11 +862,18 @@ export class CanonicalErpPostingService {
       }
       const item = itemById.get(textValue(movement.itemId)) || {};
       const quantity = positiveAmount(movement.quantity, `movement.${textValue(movement.id)}.quantity`);
-      const amount = positiveAmount(movement.totalAmount || quantity * Number(item.costPrice || 0), `movement.${textValue(movement.id)}.amount`);
+      const amount = Number(movement.totalAmount ?? quantity * Number(movement.unitCost ?? item.costPrice ?? 0));
+      if (!Number.isFinite(amount) || amount < 0) throw new Error(`قيمة حركة المخزون ${textValue(movement.id)} غير صالحة.`);
+      if (amount === 0) return;
       const stockAccount = inventoryAccount(item);
-      const lines = type === 'sale'
+      const direction = textValue(movement.direction).toLowerCase();
+      const lines: CanonicalPostingLine[] = type === 'issue'
         ? [{ id: `${textValue(movement.id)}-COGS-D`, accountCode: cogsAccount(item), debit: amount, credit: 0 }, { id: `${textValue(movement.id)}-STOCK-C`, accountCode: stockAccount, debit: 0, credit: amount }]
-        : [{ id: `${textValue(movement.id)}-STOCK-D`, accountCode: stockAccount, debit: amount, credit: 0 }, { id: `${textValue(movement.id)}-GRNI-C`, accountCode: grniAccount, debit: 0, credit: amount }];
+        : type === 'adjustment' && direction === 'decrease'
+          ? [{ id: `${textValue(movement.id)}-ADJ-D`, accountCode: adjustmentAccount(item), debit: amount, credit: 0 }, { id: `${textValue(movement.id)}-STOCK-C`, accountCode: stockAccount, debit: 0, credit: amount }]
+          : type === 'adjustment'
+            ? [{ id: `${textValue(movement.id)}-STOCK-D`, accountCode: stockAccount, debit: amount, credit: 0 }, { id: `${textValue(movement.id)}-ADJ-C`, accountCode: adjustmentAccount(item), debit: 0, credit: amount }]
+            : [{ id: `${textValue(movement.id)}-STOCK-D`, accountCode: stockAccount, debit: amount, credit: 0 }, { id: `${textValue(movement.id)}-GRNI-C`, accountCode: grniAccount, debit: 0, credit: amount }];
       documents.push({ sourceType: 'inventory_movement', sourceId: textValue(movement.id), date: dateValue(rowValue(movement, 'date', 'movementDate')), description: textValue(movement.notes, `حركة مخزنية ${textValue(movement.id)}`), lines });
     };
     const addStocktake = (raw: unknown) => {

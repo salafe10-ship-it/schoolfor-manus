@@ -126,9 +126,12 @@ export function validateInventoryProcurementSnapshot(data: Snapshot, options: { 
   const suppliers = maps.suppliers;
   const warehouses = maps.warehouses;
 
+  const skus = new Set<string>();
   for (const [id, item] of items) {
     text(item.name, `الصنف ${id} اسمه`);
-    text(item.sku, `الصنف ${id} رمزه SKU`);
+    const sku = text(item.sku, `الصنف ${id} رمزه SKU`).toLocaleLowerCase();
+    if (skus.has(sku)) throw new ValidationError(`رمز SKU للصنف ${id} مكرر في دليل الأصناف.`);
+    skus.add(sku);
     numberValue(item.quantity, `كمية الصنف ${id}`, { min: 0 });
     for (const field of ['minLevel', 'maxLevel', 'reorderLevel', 'costPrice', 'salePrice']) numberValue(item[field], `${field} للصنف ${id}`, { min: 0 });
     numberValue(item.vatRate, `ضريبة الصنف ${id}`, { min: 0, max: 100 });
@@ -137,6 +140,17 @@ export function validateInventoryProcurementSnapshot(data: Snapshot, options: { 
     if (item.unitId && !units.has(String(item.unitId))) throw new ValidationError(`الصنف ${id} مرتبط بوحدة غير موجودة.`);
     if (item.supplierId && !suppliers.has(String(item.supplierId))) throw new ValidationError(`الصنف ${id} مرتبط بمورد غير موجود.`);
     if (item.warehouseId && !warehouses.has(String(item.warehouseId))) throw new ValidationError(`الصنف ${id} مرتبط بمستودع غير موجود.`);
+    if (item.warehouseBalances !== undefined) {
+      if (!item.warehouseBalances || typeof item.warehouseBalances !== 'object' || Array.isArray(item.warehouseBalances)) {
+        throw new ValidationError(`أرصدة المستودعات للصنف ${id} غير صالحة.`);
+      }
+      let warehouseTotal = 0;
+      for (const [warehouseId, balance] of Object.entries(item.warehouseBalances)) {
+        if (!warehouses.has(warehouseId)) throw new ValidationError(`رصيد الصنف ${id} مرتبط بمستودع غير موجود.`);
+        warehouseTotal += numberValue(balance, `رصيد الصنف ${id} في المستودع ${warehouseId}`, { min: 0 });
+      }
+      if (!closeEnough(warehouseTotal, Number(item.quantity))) throw new ValidationError(`مجموع أرصدة مستودعات الصنف ${id} لا يطابق إجمالي الكمية.`);
+    }
   }
   for (const [id, category] of categories) text(category.name, `التصنيف ${id}`);
   for (const [id, unit] of units) { text(unit.name, `الوحدة ${id}`); text(unit.symbol, `رمز الوحدة ${id}`); }
@@ -286,11 +300,22 @@ export function validateInventoryProcurementSnapshot(data: Snapshot, options: { 
   for (const [id, movement] of maps.movements) {
     text(movement.itemId, `الصنف في الحركة ${id}`);
     if (!itemReferences.has(String(movement.itemId))) throw new ValidationError(`الحركة ${id} مرتبطة بصنف غير موجود.`);
-    if (!['purchase', 'sale', 'transfer', 'adjustment', 'stocktake'].includes(String(movement.type))) throw new ValidationError(`نوع الحركة ${id} غير معتمد.`);
+    if (!['purchase', 'sale', 'issue', 'transfer', 'adjustment', 'stocktake'].includes(String(movement.type))) throw new ValidationError(`نوع الحركة ${id} غير معتمد.`);
     numberValue(movement.quantity, `كمية الحركة ${id}`, { integer: true, min: 1 });
     if (movement.unitCost !== undefined) numberValue(movement.unitCost, `تكلفة الحركة ${id}`, { min: 0 });
     if (movement.totalAmount !== undefined) numberValue(movement.totalAmount, `قيمة الحركة ${id}`, { min: 0 });
     if (movement.status && !['draft', 'pending_approval', 'approved', 'posted'].includes(String(movement.status))) throw new ValidationError(`حالة الحركة ${id} غير معتمدة.`);
+    if (movement.type === 'transfer') {
+      const from = String(movement.warehouseFrom || '').trim();
+      const to = String(movement.warehouseTo || '').trim();
+      if ((from || to) && (!from || !to || !warehouses.has(from) || !warehouses.has(to) || from === to)) {
+        throw new ValidationError(`مستودعا التحويل في الحركة ${id} غير صالحين أو متطابقين.`);
+      }
+    }
+    if (movement.type === 'issue' && movement.direction !== 'decrease') throw new ValidationError(`حركة الصرف ${id} يجب أن تسجل اتجاهاً خافضاً للرصيد.`);
+    if (movement.type === 'adjustment' && movement.direction !== undefined && !['increase', 'decrease'].includes(String(movement.direction))) throw new ValidationError(`اتجاه تسوية المخزون ${id} غير معتمد.`);
+    if (movement.type === 'issue' && movement.warehouseFrom && !warehouses.has(String(movement.warehouseFrom))) throw new ValidationError(`مستودع الصرف في الحركة ${id} غير موجود.`);
+    if (movement.type === 'purchase' && movement.warehouseTo && !warehouses.has(String(movement.warehouseTo))) throw new ValidationError(`مستودع الاستلام في الحركة ${id} غير موجود.`);
     assertNoJournalReference(movement, `الحركة ${id}`, allowCanonicalPostingReferences);
   }
   for (const [id, stocktake] of maps.stocktakes) {
@@ -298,6 +323,7 @@ export function validateInventoryProcurementSnapshot(data: Snapshot, options: { 
     if (!itemReferences.has(String(stocktake.itemId))) throw new ValidationError(`محضر الجرد ${id} مرتبط بصنف غير موجود.`);
     numberValue(stocktake.bookQty, `الرصيد الدفتري في محضر الجرد ${id}`, { min: 0 });
     numberValue(stocktake.actualQty, `الجرد الفعلي في محضر الجرد ${id}`, { integer: true, min: 0 });
+    if (stocktake.warehouseId && !warehouses.has(String(stocktake.warehouseId))) throw new ValidationError(`محضر الجرد ${id} مرتبط بمستودع غير موجود.`);
     if (stocktake.status && !['pending_approval', 'approved'].includes(String(stocktake.status))) throw new ValidationError(`حالة محضر الجرد ${id} غير معتمدة.`);
     assertNoJournalReference(stocktake, `محضر الجرد ${id}`, allowCanonicalPostingReferences);
   }

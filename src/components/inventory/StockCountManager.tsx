@@ -4,22 +4,23 @@ import {
   Calculator, DollarSign, FileSpreadsheet, Plus, 
   ShieldCheck, ArrowRightLeft, Layers 
 } from 'lucide-react';
-import { InventoryItem } from '../../types';
+import { InventoryItem, InventoryWarehouse } from '../../types';
+import { getItemWarehouseQuantity } from './inventoryCanonical';
 
 interface StockCountManagerProps {
   items: InventoryItem[];
+  warehouses?: InventoryWarehouse[];
   stocktakes?: any[];
-  settings?: Record<string, any>;
   onSave?: (stocktakes: any[]) => Promise<void>;
   onApproveStocktake?: (stocktake: any) => Promise<void>;
   triggerNotification?: (msg: string, type: 'success' | 'warning' | 'info' | 'danger') => void;
 }
 
-export default function StockCountManager({ items, stocktakes = [], settings = {}, onSave, onApproveStocktake, triggerNotification }: StockCountManagerProps) {
-  const [valuationPolicy, setValuationPolicy] = useState<'weighted_average' | 'fifo'>(settings.defaultValuationMethod === 'fifo' ? 'fifo' : 'weighted_average');
+export default function StockCountManager({ items, warehouses = [], stocktakes = [], onSave, onApproveStocktake, triggerNotification }: StockCountManagerProps) {
   const [showCountForm, setShowCountForm] = useState(false);
   const [countItemId, setCountItemId] = useState('');
-  const [actualQty, setActualQty] = useState(0);
+  const [countWarehouseId, setCountWarehouseId] = useState('');
+  const [actualQty, setActualQty] = useState('');
   const countAuditRecords = stocktakes;
 
   const notify = (msg: string, type: 'success' | 'warning' | 'info' | 'danger' = 'info') => {
@@ -33,19 +34,23 @@ export default function StockCountManager({ items, stocktakes = [], settings = {
   };
 
   const openStocktake = () => {
-    const item = items[0];
-    if (!item) { notify('لا يمكن بدء الجرد قبل تسجيل صنف مركزي واحد على الأقل.', 'warning'); return; }
-    setCountItemId(item.id); setActualQty(item.quantity); setShowCountForm(true);
+    if (!items.length) { notify('لا يمكن بدء الجرد قبل تسجيل صنف مركزي واحد على الأقل.', 'warning'); return; }
+    if (!warehouses.length) { notify('لا يمكن بدء الجرد قبل تسجيل مستودع مركزي واحد على الأقل.', 'warning'); return; }
+    setCountItemId(''); setCountWarehouseId(''); setActualQty(''); setShowCountForm(true);
   };
 
   const handleCreateStocktake = async (event: React.FormEvent) => {
     event.preventDefault();
     const item = items.find(row => row.id === countItemId);
-    if (!item || !Number.isInteger(actualQty) || actualQty < 0) { notify('اختر الصنف وأدخل كمية فعلية صحيحة غير سالبة.', 'warning'); return; }
-    const discrepancy = actualQty - item.quantity;
-    const record = { id: `STK-${Date.now()}`, itemId: item.id, itemName: item.name, warehouse: item.warehouseId,
-      bookQty: item.quantity, actualQty, discrepancy, financialImpact: discrepancy * item.costPrice,
-      valuationPolicy, status: 'pending_approval', statusLabel: 'قيد اعتماد التسوية', createdAt: new Date().toISOString() };
+    const warehouseId = countWarehouseId || item?.warehouseId || '';
+    const countedQuantity = Number(actualQty);
+    if (!item || !warehouseId || actualQty.trim() === '' || !Number.isInteger(countedQuantity) || countedQuantity < 0) { notify('اختر الصنف والمستودع وأدخل كمية فعلية صحيحة غير سالبة.', 'warning'); return; }
+    const bookQty = getItemWarehouseQuantity(item, warehouseId);
+    const discrepancy = countedQuantity - bookQty;
+    const record = { id: `STK-${crypto.randomUUID()}`, itemId: item.id, itemName: item.name, warehouseId,
+      warehouse: warehouses.find(row => row.id === warehouseId)?.name || warehouseId,
+      bookQty, actualQty: countedQuantity, discrepancy, financialImpact: discrepancy * item.costPrice,
+      valuationPolicy: 'weighted_average', status: 'pending_approval', statusLabel: 'قيد اعتماد التسوية', createdAt: new Date().toISOString() };
     if (!onSave) { notify('حفظ محضر الجرد متوقف حتى يتوفر المصدر المركزي.', 'warning'); return; }
     try { await onSave([record, ...stocktakes]); notify(`تم حفظ محضر الجرد ${record.id} مركزياً.`, 'success'); setShowCountForm(false); }
     catch (error: any) { notify(error?.message || 'تعذر حفظ محضر الجرد مركزياً.', 'danger'); }
@@ -66,42 +71,22 @@ export default function StockCountManager({ items, stocktakes = [], settings = {
           تسجيل نتيجة جرد جديدة
         </button>
 
-        {/* Policy Selector */}
-        <div className="bg-slate-100 p-1.5 flex items-center gap-1 border border-slate-200">
-          <button 
-            onClick={() => {
-              setValuationPolicy('weighted_average');
-              notify('تم تفعيل سياسة تقييم المخزون: المتوسط المرجح (Weighted Average)', 'info');
-            }}
-            className={`px-3 py-1.5 rounded-lg text-xs font-bold transition ${
-              valuationPolicy === 'weighted_average' ? 'bg-gradient-to-r from-[#9a6a1d] via-[#d4af37] to-[#c58a22] text-slate-950 shadow-md' : 'text-slate-600 hover:text-slate-900'
-            }`}
-          >
-            المتوسط المرجح (W.AVG)
-          </button>
-
-          <button 
-            onClick={() => {
-              setValuationPolicy('fifo');
-              notify('تم تفعيل سياسة تقييم المخزون: الوارد أولاً يخرج أولاً (FIFO)', 'info');
-            }}
-            className={`px-3 py-1.5 rounded-lg text-xs font-bold transition ${
-              valuationPolicy === 'fifo' ? 'bg-gradient-to-r from-[#9a6a1d] via-[#d4af37] to-[#c58a22] text-slate-950 shadow-md' : 'text-slate-600 hover:text-slate-900'
-            }`}
-          >
-            FIFO (الأول بدخول الأول بخروج)
-          </button>
-        </div>
+        <span className="px-3 py-2 bg-emerald-50 text-emerald-800 border border-emerald-200 text-xs font-bold">طريقة التكلفة المنفذة: المتوسط المرجح • FIFO غير مفعّل</span>
       </div>
 
       {showCountForm && (
         <div className="fixed inset-0 z-50 bg-slate-900/60 flex items-center justify-center p-4">
           <form onSubmit={handleCreateStocktake} className="bg-white p-6 w-full max-w-lg space-y-4" dir="rtl">
             <h3 className="font-black text-lg">تسجيل نتيجة جرد فعلية</h3>
-            <select required value={countItemId} onChange={event => { const id = event.target.value; setCountItemId(id); setActualQty(items.find(row => row.id === id)?.quantity || 0); }} className="w-full p-2.5 border border-slate-300">
-              {items.map(item => <option key={item.id} value={item.id}>{item.name} — دفتري {item.quantity}</option>)}
+            <select required value={countItemId} onChange={event => { setCountItemId(event.target.value); setActualQty(''); }} className="w-full p-2.5 border border-slate-300">
+              <option value="">اختر الصنف</option>
+              {items.map(item => <option key={item.id} value={item.id}>{item.name}</option>)}
             </select>
-            <input required type="number" min="0" step="1" value={actualQty} onChange={event => setActualQty(Number(event.target.value))} className="w-full p-2.5 border border-slate-300" />
+            <select required value={countWarehouseId} onChange={event => { setCountWarehouseId(event.target.value); setActualQty(''); }} className="w-full p-2.5 border border-slate-300">
+              <option value="">اختر المستودع</option>
+              {warehouses.map(warehouse => <option key={warehouse.id} value={warehouse.id}>{warehouse.name}</option>)}
+            </select>
+            <input required type="number" min="0" step="1" value={actualQty} onChange={event => setActualQty(event.target.value)} className="w-full p-2.5 border border-slate-300" />
             <div className="flex justify-end gap-2"><button type="button" onClick={() => setShowCountForm(false)} className="px-4 py-2 bg-slate-100">إلغاء</button><button type="submit" className="px-4 py-2 bg-slate-900 text-white font-bold">حفظ المحضر</button></div>
           </form>
         </div>
@@ -114,7 +99,7 @@ export default function StockCountManager({ items, stocktakes = [], settings = {
             <Calculator className="w-5 h-5 text-emerald-600" /> نتائج الجرد الفعلي ومطابقة الأرصدة الدفترية
           </h4>
           <span className="px-3 py-1 bg-emerald-50 text-emerald-700 font-bold text-xs rounded-full border border-emerald-200">
-            سياسة التقييم النشطة: {valuationPolicy === 'weighted_average' ? 'المتوسط المرجح' : 'FIFO'}
+            سياسة التقييم المستخدمة: المتوسط المرجح
           </span>
         </div>
 
@@ -137,7 +122,7 @@ export default function StockCountManager({ items, stocktakes = [], settings = {
               {countAuditRecords.map((rec) => (
                 <tr key={rec.id} className="hover:bg-transparent transition">
                   <td className="px-5 py-4 font-mono font-bold text-slate-900">{rec.id}</td>
-                  <td className="px-5 py-4 text-xs font-semibold text-slate-600">{rec.warehouse}</td>
+                  <td className="px-5 py-4 text-xs font-semibold text-slate-600">{warehouses.find(warehouse => warehouse.id === (rec.warehouseId || rec.warehouse))?.name || rec.warehouse || 'غير محدد'}</td>
                   <td className="px-5 py-4 font-bold text-slate-900">{rec.itemName}</td>
                   <td className="px-5 py-4 text-center font-bold text-slate-800">{rec.bookQty}</td>
                   <td className="px-5 py-4 text-center font-bold text-slate-900">{rec.actualQty}</td>

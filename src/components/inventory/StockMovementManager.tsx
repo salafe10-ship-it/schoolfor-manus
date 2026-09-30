@@ -4,23 +4,25 @@ import {
   CheckCircle2, Clock, XCircle, FileText, Printer, 
   Search, Filter, Building2, Package, Calendar, User, ShieldCheck 
 } from 'lucide-react';
-import { InventoryTransaction, InventoryItem } from '../../types';
+import { InventoryItem, InventoryWarehouse } from '../../types';
+import { getItemWarehouseQuantity } from './inventoryCanonical';
 
 interface StockMovementManagerProps {
   items: InventoryItem[];
+  warehouses?: InventoryWarehouse[];
   movements?: any[];
   onSave?: (movements: any[]) => Promise<void>;
   onApproveMovement?: (movement: any) => Promise<void>;
   triggerNotification?: (msg: string, type: 'success' | 'warning' | 'info' | 'danger') => void;
 }
 
-export default function StockMovementManager({ items, movements = [], onSave, onApproveMovement, triggerNotification }: StockMovementManagerProps) {
+export default function StockMovementManager({ items, warehouses = [], movements = [], onSave, onApproveMovement, triggerNotification }: StockMovementManagerProps) {
 
   const [filterType, setFilterType] = useState('ALL');
   const [searchTerm, setSearchTerm] = useState('');
   const [showNewModal, setShowNewModal] = useState(false);
   const [newMovement, setNewMovement] = useState<any>({
-    type: 'purchase',
+    type: 'issue',
     itemId: '',
     warehouseFrom: '',
     warehouseTo: '',
@@ -41,6 +43,20 @@ export default function StockMovementManager({ items, movements = [], onSave, on
       notify('يرجى إدخال الصنف والكمية والتكلفة والمرجع بصورة صحيحة', 'warning');
       return;
     }
+    const affectedWarehouse = newMovement.type === 'purchase' ? newMovement.warehouseTo : newMovement.warehouseFrom;
+    if (newMovement.type === 'transfer' && (!newMovement.warehouseFrom || !newMovement.warehouseTo || newMovement.warehouseFrom === newMovement.warehouseTo)) {
+      notify('اختر مستودري مصدر ووجهة مختلفين للتحويل.', 'warning');
+      return;
+    }
+    if (newMovement.type !== 'transfer' && !affectedWarehouse) {
+      notify('اختر المستودع الذي ستتم عليه الحركة.', 'warning');
+      return;
+    }
+    if ((newMovement.type === 'issue' || newMovement.type === 'transfer')
+      && getItemWarehouseQuantity(selectedItem, newMovement.warehouseFrom) < newMovement.quantity) {
+      notify('رصيد الصنف في مستودع المصدر أقل من الكمية المطلوبة.', 'warning');
+      return;
+    }
     const unitPrice = newMovement.unitCost;
     const totalVal = newMovement.quantity * unitPrice;
 
@@ -49,7 +65,8 @@ export default function StockMovementManager({ items, movements = [], onSave, on
       date: new Date().toISOString().split('T')[0],
       type: newMovement.type,
       typeLabel: newMovement.type === 'purchase' ? 'إضافة مخزنية (استلام)' :
-                 newMovement.type === 'sale' ? 'صرف مخزني' : 'تحويل بين المستودعات',
+                 newMovement.type === 'issue' ? 'صرف داخلي (استهلاك)' : 'تحويل بين المستودعات',
+      ...(newMovement.type === 'issue' ? { direction: 'decrease' } : {}),
       itemId: selectedItem.id,
       itemName: selectedItem.name,
       warehouseFrom: newMovement.warehouseFrom,
@@ -91,7 +108,7 @@ export default function StockMovementManager({ items, movements = [], onSave, on
 
   const filtered = movements.filter(m => {
     const matchType = filterType === 'ALL' || m.type === filterType;
-    const matchSearch = m.itemName.toLowerCase().includes(searchTerm.toLowerCase()) || m.id.toLowerCase().includes(searchTerm.toLowerCase());
+    const matchSearch = String(m.itemName || '').toLowerCase().includes(searchTerm.toLowerCase()) || String(m.id || '').toLowerCase().includes(searchTerm.toLowerCase());
     return matchType && matchSearch;
   });
 
@@ -107,7 +124,10 @@ export default function StockMovementManager({ items, movements = [], onSave, on
         </div>
 
         <button 
-          onClick={() => setShowNewModal(true)}
+          onClick={() => {
+            setNewMovement({ type: 'issue', itemId: '', warehouseFrom: '', warehouseTo: '', quantity: 1, unitCost: 0, notes: '', refNo: '' });
+            setShowNewModal(true);
+          }}
           className="px-5 py-2.5 bg-slate-900 hover:bg-slate-800 text-white font-bold text-sm transition flex items-center gap-2 shadow-sm"
         >
           <Plus className="w-4 h-4" /> إنشاء إذن حركة جديد
@@ -134,7 +154,7 @@ export default function StockMovementManager({ items, movements = [], onSave, on
         >
           <option value="ALL">جميع أنواع الحركات</option>
           <option value="purchase">إضافة مخزنية (استلام)</option>
-          <option value="sale">صرف مخزني</option>
+          <option value="issue">صرف داخلي (استهلاك)</option>
           <option value="transfer">تحويل بين مستودعات</option>
         </select>
       </div>
@@ -163,20 +183,20 @@ export default function StockMovementManager({ items, movements = [], onSave, on
                   <td className="px-5 py-4 font-bold text-slate-800">
                     <span className={`px-2.5 py-1 rounded-lg text-xs ${
                       mv.type === 'purchase' ? 'bg-emerald-100 text-emerald-800' :
-                      mv.type === 'sale' ? 'bg-orange-100 text-orange-800' : 'bg-purple-100 text-purple-800'
+                      mv.type === 'issue' || mv.type === 'sale' ? 'bg-orange-100 text-orange-800' : 'bg-purple-100 text-purple-800'
                     }`}>
-                      {mv.typeLabel}
+                      {mv.typeLabel || (mv.type === 'purchase' ? 'إضافة مخزنية' : mv.type === 'issue' || mv.type === 'sale' ? 'صرف مخزني' : mv.type === 'transfer' ? 'تحويل بين المستودعات' : 'تسوية مخزنية')}
                     </span>
                   </td>
-                  <td className="px-5 py-4 font-bold text-slate-900">{mv.itemName}</td>
+                  <td className="px-5 py-4 font-bold text-slate-900">{mv.itemName || items.find(item => item.id === mv.itemId)?.name || 'صنف غير متاح'}</td>
                   <td className="px-5 py-4 text-center font-black text-slate-900">{mv.quantity}</td>
-                  <td className="px-5 py-4 font-bold text-emerald-700">{mv.totalAmount.toLocaleString('ar-SA')} د.ل</td>
+                  <td className="px-5 py-4 font-bold text-emerald-700">{Number(mv.totalAmount || 0).toLocaleString('ar-SA')} د.ل</td>
                   <td className="px-5 py-4">
                     <span className={`px-2.5 py-1 rounded-lg text-xs font-bold inline-flex items-center gap-1 ${
                       mv.status === 'posted' ? 'bg-emerald-50 text-emerald-700 border border-emerald-200' : 'bg-amber-50 text-amber-700 border border-amber-200'
                     }`}>
                       <CheckCircle2 className="w-3.5 h-3.5" />
-                      {mv.statusLabel}
+                      {mv.statusLabel || mv.status || 'غير محدد'}
                     </span>
                   </td>
                   <td className="px-5 py-4 text-center">
@@ -231,8 +251,8 @@ export default function StockMovementManager({ items, movements = [], onSave, on
                   onChange={(e) => setNewMovement({ ...newMovement, type: e.target.value })}
                   className="w-full p-2.5 bg-transparent text-sm font-bold"
                 >
-                  <option value="purchase">إضافة مخزنية (استلام توريد)</option>
-                  <option value="sale">صرف مخزني (استهلاك/تسليم)</option>
+                  <option value="purchase" disabled>استلام مورد — عبر أمر الشراء وإذن الاستلام (GRN)</option>
+                  <option value="issue">صرف داخلي للاستهلاك</option>
                   <option value="transfer">تحويل بين مستودعين</option>
                 </select>
               </div>
@@ -241,7 +261,12 @@ export default function StockMovementManager({ items, movements = [], onSave, on
                 <label className="block text-xs font-bold text-slate-700 mb-1">الصنف المخزني *</label>
                 <select 
                   value={newMovement.itemId}
-                  onChange={(e) => { const item = items.find(row => row.id === e.target.value); setNewMovement({ ...newMovement, itemId: e.target.value, unitCost: item?.costPrice ?? newMovement.unitCost }); }}
+                  onChange={(e) => {
+                    const item = items.find(row => row.id === e.target.value);
+                    const target = warehouses.find(warehouse => warehouse.id !== item?.warehouseId)?.id || warehouses[0]?.id || '';
+                    setNewMovement({ ...newMovement, itemId: e.target.value, unitCost: item?.costPrice ?? newMovement.unitCost,
+                      warehouseFrom: item?.warehouseId || '', warehouseTo: target });
+                  }}
                   className="w-full p-2.5 bg-transparent text-sm font-bold"
                 >
                   <option value="">اختر الصنف</option>
@@ -250,6 +275,25 @@ export default function StockMovementManager({ items, movements = [], onSave, on
                   ))}
                 </select>
               </div>
+
+              {(newMovement.type === 'purchase' || newMovement.type === 'transfer') && (
+                <div>
+                  <label className="block text-xs font-bold text-slate-700 mb-1">{newMovement.type === 'transfer' ? 'مستودع الوجهة *' : 'مستودع الاستلام *'}</label>
+                  <select required value={newMovement.warehouseTo} onChange={event => setNewMovement({ ...newMovement, warehouseTo: event.target.value })} className="w-full p-2.5 bg-transparent text-sm font-bold">
+                    <option value="">اختر المستودع</option>
+                    {warehouses.map(warehouse => <option key={warehouse.id} value={warehouse.id}>{warehouse.name}</option>)}
+                  </select>
+                </div>
+              )}
+              {(newMovement.type === 'issue' || newMovement.type === 'transfer') && (
+                <div>
+                  <label className="block text-xs font-bold text-slate-700 mb-1">{newMovement.type === 'transfer' ? 'مستودع المصدر *' : 'مستودع الصرف *'}</label>
+                  <select required value={newMovement.warehouseFrom} onChange={event => setNewMovement({ ...newMovement, warehouseFrom: event.target.value })} className="w-full p-2.5 bg-transparent text-sm font-bold">
+                    <option value="">اختر المستودع</option>
+                    {warehouses.map(warehouse => <option key={warehouse.id} value={warehouse.id}>{warehouse.name}</option>)}
+                  </select>
+                </div>
+              )}
 
               <div className="grid grid-cols-2 gap-4">
                 <div>
@@ -283,11 +327,12 @@ export default function StockMovementManager({ items, movements = [], onSave, on
                   min="0"
                   step="0.01"
                   required
+                  readOnly={newMovement.type !== 'purchase'}
                   value={newMovement.unitCost}
                   onChange={(e) => setNewMovement({ ...newMovement, unitCost: Number(e.target.value) })}
-                  className="w-full p-2.5 bg-transparent text-sm font-bold text-center"
+                  className="w-full p-2.5 bg-transparent text-sm font-bold text-center read-only:bg-slate-100"
                 />
-                <p className="text-[11px] text-slate-500 mt-1">تُستخدم القيمة لبناء قيد المخزون/تكلفة الصرف عند اعتماد الحركة.</p>
+                <p className="text-[11px] text-slate-500 mt-1">تُؤخذ تكلفة الصرف من بطاقة الصنف وفق المتوسط المرجح؛ استلام المورد يتم عبر المشتريات وإذن GRN.</p>
               </div>
 
               <div className="flex justify-end gap-3 pt-4 border-t border-slate-100">

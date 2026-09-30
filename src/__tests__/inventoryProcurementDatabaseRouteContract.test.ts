@@ -12,6 +12,9 @@ describe('inventory and procurement canonical database contract', () => {
     expect(server).toContain("'inventory_database', $2, 'write', 'InventoryDatabaseRoute'");
     expect(server).toContain("throw new ConflictError('تم تعديل المخزون أو المشتريات بواسطة مستخدم آخر");
     expect(server).toContain('validateInventoryProcurementSnapshot');
+    expect(server).toContain('validateInventoryQuantityLedger(currentData, requestedData as Record<string, any>)');
+    expect(server).toContain("filter((row: any) => ['approved', 'issued', 'awarded', 'posted', 'closed', 'paid', 'posted_to_gl'");
+    expect(server).toContain('if (!requested || stableJsonStringify(requested) !== stableJsonStringify(locked))');
     expect(server).toContain('syncInventoryProcurementSnapshot');
     expect(server).toContain("erpIntegration: canonicalErpReady ? 'ready' : 'not_provisioned'");
     expect(server).not.toContain('tenantScopedDatabaseFilePath(dataDir, "inventory_database"');

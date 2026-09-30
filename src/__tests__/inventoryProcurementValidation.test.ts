@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest';
 import { validateInventoryProcurementSnapshot } from '../modules/inventory/domain/InventoryProcurementValidation';
-import { normalizeInventoryCanonicalDatabase } from '../components/inventory/inventoryCanonical';
+import { getItemWarehouseBalances, getItemWarehouseQuantity, normalizeInventoryCanonicalDatabase, withUpdatedWarehouseBalances } from '../components/inventory/inventoryCanonical';
 
 const emptySnapshot = (): any => ({
   items: [], categories: [], brands: [], units: [], suppliers: [], warehouses: [],
@@ -11,6 +11,23 @@ const emptySnapshot = (): any => ({
 });
 
 describe('inventory and procurement snapshot validation', () => {
+  it('migrates legacy item balances to the recorded warehouse and keeps totals reconciled', () => {
+    const item: any = { id: 'item-1', name: 'صنف', sku: 'SKU-1', quantity: 7, warehouseId: 'wh-1' };
+    const migrated = normalizeInventoryCanonicalDatabase({ ...emptySnapshot(), warehouses: [{ id: 'wh-1' }], items: [item] }).items[0];
+    expect(getItemWarehouseBalances(migrated)).toEqual({ 'wh-1': 7 });
+    expect(getItemWarehouseQuantity(migrated, 'wh-1')).toBe(7);
+    const transferred = withUpdatedWarehouseBalances(migrated, { 'wh-1': 2, 'wh-2': 5 });
+    expect(transferred.quantity).toBe(7);
+    expect(getItemWarehouseQuantity(transferred, 'wh-2')).toBe(5);
+  });
+
+  it('rejects warehouse-level balances that do not reconcile to the item total', () => {
+    const snapshot = emptySnapshot();
+    snapshot.warehouses.push({ id: 'wh-1', name: 'المستودع الرئيسي', location: 'المقر', manager: 'أمين المستودع' });
+    snapshot.items.push({ id: 'item-1', name: 'صنف تجريبي', sku: 'SKU-1', quantity: 7, warehouseBalances: { 'wh-1': 6 }, minLevel: 0, maxLevel: 10, reorderLevel: 1, costPrice: 10, salePrice: 15, vatRate: 0, status: 'active', categoryId: '', unitId: '', supplierId: '', warehouseId: 'wh-1' });
+    expect(() => validateInventoryProcurementSnapshot(snapshot)).toThrow('لا يطابق إجمالي الكمية');
+  });
+
   it('permits a draft PO to be completed from the canonical procurement screen', () => {
     const snapshot = emptySnapshot();
     snapshot.suppliers.push({ id: 'sup-1', name: 'مورد تجريبي', phone: '000', email: 'supplier@example.test', address: 'الخرطوم' });

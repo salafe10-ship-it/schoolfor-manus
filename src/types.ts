@@ -517,6 +517,8 @@ export interface InventoryItem {
   supplierId: string;
   warehouseId: string;
   quantity: number;
+  /** Per-warehouse on-hand balances; quantity remains the school-wide total. */
+  warehouseBalances?: Record<string, number>;
   minLevel: number;
   maxLevel: number;
   reorderLevel: number;

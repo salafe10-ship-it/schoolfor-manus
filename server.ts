@@ -1320,6 +1320,121 @@ function validateInventoryPostingMetadata(currentData: Record<string, any>, requ
   }
 }
 
+function validateInventoryQuantityLedger(currentData: Record<string, any>, requestedData: Record<string, any>): void {
+  const oldItems = Array.isArray(currentData.items) ? currentData.items : [];
+  const nextItems = Array.isArray(requestedData.items) ? requestedData.items : [];
+  const oldById = new Map(oldItems.map((item: any) => [String(item?.id || ''), item]));
+  const nextById = new Map(nextItems.map((item: any) => [String(item?.id || ''), item]));
+  const references = new Map<string, any>();
+  for (const item of [...oldItems, ...nextItems]) {
+    if (!item || typeof item !== 'object') continue;
+    if (item.id) references.set(String(item.id), item);
+    if (item.sku) references.set(String(item.sku), item);
+  }
+  const expected = new Map<string, number>();
+  const costUpdateAllowed = new Set<string>();
+  const addDelta = (itemReference: unknown, warehouseReference: unknown, quantity: number, document: string) => {
+    if (!Number.isFinite(quantity)) throw new ValidationError(`كمية ${document} غير صالحة.`);
+    if (Math.abs(quantity) < 0.000001) return;
+    const item = references.get(String(itemReference || '').trim());
+    if (!item) throw new ValidationError(`${document} مرتبط بصنف غير موجود.`);
+    const warehouseId = String(warehouseReference || item.warehouseId || '').trim();
+    if (!warehouseId) throw new ValidationError(`${document} لا يحدد المستودع المتأثر.`);
+    const key = `${String(item.id)}\u0000${warehouseId}`;
+    expected.set(key, Number(((expected.get(key) || 0) + quantity).toFixed(4)));
+  };
+  const acceptedByItem = (receipt: any): Map<string, number> => {
+    const result = new Map<string, number>();
+    for (const line of Array.isArray(receipt?.lines) ? receipt.lines : []) {
+      const item = references.get(String(line?.itemId || line?.itemCode || '').trim());
+      if (!item) continue;
+      const key = String(item.id);
+      result.set(key, Number(((result.get(key) || 0) + Number(line?.acceptedQty || 0)).toFixed(4)));
+    }
+    return result;
+  };
+
+  const oldReceipts = new Map((Array.isArray(currentData.goodsReceipts) ? currentData.goodsReceipts : []).map((row: any) => [String(row?.id || ''), row]));
+  const nextReceipts = new Map((Array.isArray(requestedData.goodsReceipts) ? requestedData.goodsReceipts : []).map((row: any) => [String(row?.id || ''), row]));
+  for (const receiptId of new Set([...oldReceipts.keys(), ...nextReceipts.keys()])) {
+    const oldReceipt = oldReceipts.get(receiptId);
+    const nextReceipt = nextReceipts.get(receiptId);
+    for (const [itemId, quantity] of acceptedByItem(oldReceipt)) addDelta(itemId, oldReceipt?.warehouseId, -quantity, `إذن الاستلام ${receiptId}`);
+    for (const [itemId, quantity] of acceptedByItem(nextReceipt)) addDelta(itemId, nextReceipt?.warehouseId, quantity, `إذن الاستلام ${receiptId}`);
+    if (!oldReceipt && nextReceipt) {
+      for (const [itemId, quantity] of acceptedByItem(nextReceipt)) if (quantity > 0) costUpdateAllowed.add(itemId);
+    }
+  }
+
+  const oldMovements = new Map((Array.isArray(currentData.movements) ? currentData.movements : []).map((row: any) => [String(row?.id || ''), row]));
+  for (const movement of Array.isArray(requestedData.movements) ? requestedData.movements : []) {
+    if (!['approved', 'posted'].includes(String(movement?.status || ''))) continue;
+    const previous: any = oldMovements.get(String(movement.id));
+    if (previous && ['approved', 'posted'].includes(String(previous.status || ''))) continue;
+    const quantity = Number(movement.quantity);
+    const type = String(movement.type || '');
+    if (type === 'purchase') {
+      addDelta(movement.itemId, movement.warehouseTo, quantity, `حركة التوريد ${movement.id}`);
+      costUpdateAllowed.add(String(references.get(String(movement.itemId || ''))?.id || movement.itemId));
+    }
+    if (type === 'issue' || type === 'sale') addDelta(movement.itemId, movement.warehouseFrom, -quantity, `حركة الصرف ${movement.id}`);
+    if (type === 'adjustment') addDelta(movement.itemId, movement.warehouseFrom || movement.warehouseTo, movement.direction === 'decrease' ? -quantity : quantity, `حركة التسوية ${movement.id}`);
+    if (type === 'transfer') {
+      if (!movement.warehouseFrom || !movement.warehouseTo || movement.warehouseFrom === movement.warehouseTo) {
+        throw new ValidationError(`تحويل المخزون ${movement.id} يتطلب مستودعي مصدر ووجهة مختلفين.`);
+      }
+      addDelta(movement.itemId, movement.warehouseFrom, -quantity, `تحويل المخزون ${movement.id}`);
+      addDelta(movement.itemId, movement.warehouseTo, quantity, `تحويل المخزون ${movement.id}`);
+    }
+  }
+
+  const oldCounts = new Map((Array.isArray(currentData.stocktakes) ? currentData.stocktakes : []).map((row: any) => [String(row?.id || ''), row]));
+  for (const count of Array.isArray(requestedData.stocktakes) ? requestedData.stocktakes : []) {
+    if (String(count?.status || '') !== 'approved') continue;
+    const previous: any = oldCounts.get(String(count.id));
+    if (previous?.status === 'approved') continue;
+    addDelta(count.itemId, count.warehouseId, Number(count.actualQty) - Number(count.bookQty), `محضر الجرد ${count.id}`);
+  }
+
+  const warehouseBalances = (item: any): Map<string, number> => {
+    if (item?.warehouseBalances && typeof item.warehouseBalances === 'object' && !Array.isArray(item.warehouseBalances)) {
+      return new Map(Object.entries(item.warehouseBalances).map(([id, value]) => [id, Number(value)]));
+    }
+    return item?.warehouseId ? new Map([[String(item.warehouseId), Number(item.quantity || 0)]]) : new Map();
+  };
+  const allItemIds = new Set([...oldById.keys(), ...nextById.keys()]);
+  for (const itemId of allItemIds) {
+    const previous: any = oldById.get(itemId);
+    const next: any = nextById.get(itemId);
+    const oldQuantity = Number(previous?.quantity || 0);
+    const nextQuantity = Number(next?.quantity || 0);
+    if (previous && next && oldQuantity > 0 && nextQuantity > 0
+      && Math.abs(Number(previous.costPrice || 0) - Number(next.costPrice || 0)) > 0.0001 && !costUpdateAllowed.has(itemId)) {
+      throw new ValidationError(`تكلفة الصنف ${itemId} لا يمكن تغييرها يدوياً مع وجود رصيد؛ استخدم مستند استلام معتمداً.`);
+    }
+    let expectedTotal = 0;
+    for (const [key, quantity] of expected) {
+      if (key.startsWith(`${itemId}\u0000`)) expectedTotal += quantity;
+    }
+    if (Math.abs((nextQuantity - oldQuantity) - expectedTotal) > 0.01) {
+      throw new ValidationError(`تغيير كمية الصنف ${itemId} غير مسند إلى استلام أو حركة معتمدة أو محضر جرد.`);
+    }
+    const oldBalances = warehouseBalances(previous);
+    const nextBalances = warehouseBalances(next);
+    const warehouseIds = new Set([...oldBalances.keys(), ...nextBalances.keys()]);
+    for (const key of expected.keys()) {
+      if (key.startsWith(`${itemId}\u0000`)) warehouseIds.add(key.slice(itemId.length + 1));
+    }
+    for (const warehouseId of warehouseIds) {
+      const key = `${itemId}\u0000${warehouseId}`;
+      const actualDelta = Number(nextBalances.get(warehouseId) || 0) - Number(oldBalances.get(warehouseId) || 0);
+      if (Math.abs(actualDelta - Number(expected.get(key) || 0)) > 0.01) {
+        throw new ValidationError(`تغيير رصيد الصنف ${itemId} في مستودع ${warehouseId} لا يطابق مستنداً مخزنياً معتمداً.`);
+      }
+    }
+  }
+}
+
 function applyInventoryPostingLinks(data: Record<string, any>, sourceLinks: Array<{ sourceType: string; sourceId: string; journalEntryId: string }>): Record<string, any> {
   const next = JSON.parse(JSON.stringify(data)) as Record<string, any>;
   const sourceCollection: Record<string, string> = {
@@ -15226,6 +15341,7 @@ export async function createApp(options: { cloudflare?: boolean } = {}): Promise
         const currentData = current.rows[0]?.data || {};
         validateInventoryPostingMetadata(currentData, requestedData as Record<string, any>);
         validateInventoryProcurementSnapshot(requestedData as Record<string, any>, { allowCanonicalPostingReferences: true });
+        validateInventoryQuantityLedger(currentData, requestedData as Record<string, any>);
         canonicalErpReady = await CanonicalErpPostingService.isProvisioned(transaction);
         if (!canonicalErpReady) {
           throw new DatabaseError('لا يمكن كتابة المخزون مع إعلان نجاح مالي قبل تثبيت دفتر الأستاذ الكانوني وربطه بالمخزون.');
@@ -15307,7 +15423,7 @@ export async function createApp(options: { cloudflare?: boolean } = {}): Promise
       const reportType = String(req.body?.reportType || '').trim();
       const format = String(req.body?.format || '').trim().toLowerCase();
       const expectedVersion = Number(req.body?.expectedVersion);
-      if (!tenantId || !schoolId || !tenantContext || !['valuation', 'reorder', 'turnover', 'procurement'].includes(reportType)
+      if (!tenantId || !schoolId || !tenantContext || !['valuation', 'reorder', 'turnover', 'variances', 'procurement'].includes(reportType)
         || !['csv', 'print'].includes(format) || !Number.isInteger(expectedVersion) || expectedVersion < 0) {
         throw new ValidationError('طلب تدقيق تقرير المخزون غير صالح.');
       }
@@ -15324,7 +15440,32 @@ export async function createApp(options: { cloudflare?: boolean } = {}): Promise
         const actualVersion = Number(snapshot.rows[0]?.version || 0);
         if (actualVersion !== expectedVersion) throw new ConflictError('تغير مصدر التقرير. أعد تحميل الوحدة قبل التصدير.', { expectedVersion, actualVersion });
         const data = snapshot.rows[0]?.data || {};
-        const rowCount = reportType === 'procurement' ? (data.purchaseOrders || []).length : (data.items || []).length;
+        const itemRows = Array.isArray(data.items) ? data.items : [];
+        const activeItemRows = itemRows.filter((item: any) => item?.status !== 'archived');
+        const valuationRowCount = activeItemRows.reduce((total: number, item: any) => {
+          const balances = item?.warehouseBalances && typeof item.warehouseBalances === 'object' && !Array.isArray(item.warehouseBalances)
+            ? Object.keys(item.warehouseBalances).length : 0;
+          return total + Math.max(1, balances);
+        }, 0);
+        const turnoverItemIds = new Set<string>();
+        const cutoff = Date.now() - 90 * 24 * 60 * 60 * 1000;
+        for (const movement of Array.isArray(data.movements) ? data.movements : []) {
+          const movementDate = Date.parse(String(movement.date || movement.createdAt || ''));
+          if (['approved', 'posted'].includes(String(movement.status)) && Number.isFinite(movementDate) && movementDate >= cutoff && movement.type !== 'transfer' && movement.itemId) {
+            turnoverItemIds.add(String(movement.itemId));
+          }
+        }
+        for (const receipt of Array.isArray(data.goodsReceipts) ? data.goodsReceipts : []) {
+          const receiptDate = Date.parse(String(receipt.grnDate || receipt.createdAt || ''));
+          if ((!receipt.isPostedToGL && receipt.status !== 'posted_to_gl') || !Number.isFinite(receiptDate) || receiptDate < cutoff) continue;
+          for (const line of Array.isArray(receipt.lines) ? receipt.lines : []) {
+            if (Number(line.acceptedQty || 0) > 0 && (line.itemId || line.itemCode)) turnoverItemIds.add(String(line.itemId || line.itemCode));
+          }
+        }
+        const rowCount = reportType === 'procurement' ? (Array.isArray(data.purchaseOrders) ? data.purchaseOrders.length : 0)
+          : reportType === 'reorder' ? activeItemRows.filter((item: any) => Number(item.quantity || 0) <= Number(item.reorderLevel || item.minLevel || 0)).length
+            : reportType === 'turnover' ? turnoverItemIds.size
+              : reportType === 'variances' ? (Array.isArray(data.stocktakes) ? data.stocktakes.length : 0) : valuationRowCount;
         const hash = createHash('sha256').update(stableJsonStringify(data)).digest('hex');
         await transaction.query(
           `INSERT INTO public.audit_events (tenant_id, school_id, branch_id, actor_user_id, entity_type, entity_id, action, source, reason, result, metadata)
