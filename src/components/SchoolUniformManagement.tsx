@@ -891,7 +891,7 @@ export default function SchoolUniformManagement({
           { id: 'kpi_sales', label: 'المبيعات اليومية للطلاب', val: `${stats.salesToday.toLocaleString('ar-EG')} د.ل`, desc: 'تسليم نقدي / ذمم ترحيل', icon: ShoppingBag, color: 'text-emerald-600 bg-emerald-50' },
           { id: 'kpi_turnover', label: 'معدل دوران المخزون', val: `${stats.turnoverRate} %`, desc: 'معدل سحب الملابس الفعلي', icon: TrendingUp, color: 'text-orange-600 bg-orange-50' }
         ].map(card => (
-          <div key={card.id} className="p-5 rounded-2xl border border-[#d4af37]/35 bg-gradient-to-b from-[#fffefc] via-[#fbf8f0] to-[#f5eeea] shadow-md flex flex-col justify-between hover:shadow-lg transition-all">
+          <div key={card.id} className="min-h-[142px] p-5 rounded-[22px] border-[1.5px] border-[#d4af37]/45 bg-gradient-to-b from-[#fffefc] via-[#fbf8f0] to-[#f5eeea] shadow-[0_6px_18px_rgba(91,61,16,0.12)] flex flex-col justify-between hover:shadow-[0_9px_24px_rgba(91,61,16,0.18)] transition-all overflow-hidden">
             <div className="flex justify-between items-start">
               <span className="text-[11px] text-slate-500 font-bold leading-tight">{card.label}</span>
               <span className={`p-2 ${card.color}`}><card.icon className="w-4 h-4" /></span>
