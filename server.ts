@@ -8296,6 +8296,11 @@ export async function createApp(options: { cloudflare?: boolean } = {}): Promise
       status: term?.status === 'planned' ? 'planned' : 'active'
     })) : [];
     if (terms.length === 0) throw new ValidationError('يجب تعريف فترة دراسية واحدة على الأقل.');
+    const assertUnique = (values: string[], label: string) => {
+      const normalized = values.map(value => value.trim().toLowerCase());
+      if (new Set(normalized).size !== normalized.length) throw new ValidationError(`توجد رموز مكررة في ${label}.`);
+    };
+    assertUnique(terms.map(term => term.code), 'الفترات الدراسية');
     for (const term of terms) {
       if (!/^\d{4}-\d{2}-\d{2}$/.test(term.startsOn) || !/^\d{4}-\d{2}-\d{2}$/.test(term.endsOn) || term.startsOn >= term.endsOn) {
         throw new ValidationError(`تواريخ الفترة ${term.name} غير صالحة.`);
@@ -8334,6 +8339,13 @@ export async function createApp(options: { cloudflare?: boolean } = {}): Promise
     if (!stages.length || !grades.length || !classes.length || !sections.length) {
       throw new ValidationError('يجب تعريف مرحلة وصف وشعبة وفصل واحد على الأقل قبل اعتماد الهيكل الأكاديمي.');
     }
+    assertUnique(stages.map((stage: any) => stage.id), 'معرفات المراحل');
+    assertUnique(stages.map((stage: any) => stage.code), 'رموز المراحل');
+    assertUnique(grades.map((grade: any) => grade.id), 'معرفات الصفوف');
+    assertUnique(grades.map((grade: any) => grade.code), 'رموز الصفوف');
+    assertUnique(classes.map((item: any) => item.id), 'معرفات الفصول');
+    assertUnique(classes.map((item: any) => item.code), 'رموز الفصول');
+    assertUnique(sections.map(section => String(section)), 'الشعب التشغيلية');
     if (grades.some((grade: any) => !stages.some((stage: any) => stage.id === grade.stageId))) {
       throw new ValidationError('يوجد صف مرتبط بمرحلة غير موجودة.');
     }

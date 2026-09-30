@@ -461,25 +461,44 @@ export default function AcademicAffairsPortal({
       triggerNotification('يرجى اختيار المادة والمعلم المكلف بشكل صحيح', 'warning');
       return;
     }
+    const normalizedClassName = scheduleForm.className.trim().toLowerCase();
+    const normalizedRoomName = scheduleForm.roomName.trim().toLowerCase();
+    const periodNumber = Number(scheduleForm.periodNumber);
+    if (!normalizedClassName || !normalizedRoomName || !Number.isInteger(periodNumber) || periodNumber < 1) {
+      triggerNotification('يرجى إدخال الفصل والقاعة ورقم حصة صحيح.', 'warning');
+      return;
+    }
     const duplicateSlot = schedulePeriods.find(period => period.id !== selectedSchedulePeriod?.id && period.day === scheduleForm.day
-      && period.periodNumber === Number(scheduleForm.periodNumber)
-      && period.className.trim().toLowerCase() === scheduleForm.className.trim().toLowerCase());
+      && period.periodNumber === periodNumber
+      && period.className.trim().toLowerCase() === normalizedClassName);
     if (duplicateSlot) {
       triggerNotification('هذا الفصل لديه حصة مسجلة بالفعل في نفس اليوم والحصة.', 'warning');
+      return;
+    }
+    const teacherConflict = schedulePeriods.find(period => period.id !== selectedSchedulePeriod?.id && period.day === scheduleForm.day
+      && period.periodNumber === periodNumber && period.teacherId === selectedTeach.id);
+    if (teacherConflict) {
+      triggerNotification(`المعلم ${selectedTeach.name} مرتبط بحصة أخرى في نفس اليوم والحصة.`, 'warning');
+      return;
+    }
+    const roomConflict = schedulePeriods.find(period => period.id !== selectedSchedulePeriod?.id && period.day === scheduleForm.day
+      && period.periodNumber === periodNumber && period.roomName.trim().toLowerCase() === normalizedRoomName);
+    if (roomConflict) {
+      triggerNotification(`القاعة ${scheduleForm.roomName.trim()} مستخدمة في حصة أخرى في نفس اليوم والحصة.`, 'warning');
       return;
     }
 
     const newPeriod: SchedulePeriod = {
       id: selectedSchedulePeriod?.id || `sched_${Date.now()}`,
       day: scheduleForm.day,
-      periodNumber: Number(scheduleForm.periodNumber),
+      periodNumber,
       classId: 'cls_custom',
-      className: scheduleForm.className,
+      className: scheduleForm.className.trim(),
       subjectId: selectedSubj.id,
       subjectName: selectedSubj.name,
       teacherId: selectedTeach.id,
       teacherName: selectedTeach.name,
-      roomName: scheduleForm.roomName
+      roomName: scheduleForm.roomName.trim()
     };
 
     setSchedulePeriods(selectedSchedulePeriod
