@@ -906,7 +906,7 @@ export default function SchoolUniformManagement({
 
       {/* PRIMARY TABULAR CONTROLLER */}
       <div className="rounded-3xl overflow-hidden">
-        <div className="flex border-b border-slate-100 bg-transparent overflow-x-auto">
+        <div className="flex items-center gap-1.5 bg-[#2a1d13]/95 border border-[#d4af37]/40 p-1.5 shadow-inner relative z-10 overflow-x-auto">
           {[
             { id: 'dashboard', label: 'ال cockpit والتحليلات', icon: TrendingUp },
             { id: 'items', label: 'دليل المنتجات والتسعير', icon: Shirt },
@@ -920,10 +920,10 @@ export default function SchoolUniformManagement({
               <button
                 key={tab.id}
                 onClick={() => setActiveTab(tab.id as any)}
-                className={`px-6 py-4 text-xs font-black flex items-center gap-2 border-b-2 transition-all whitespace-nowrap cursor-pointer ${
+                className={`px-3.5 py-2 text-xs font-black flex items-center gap-1.5 transition-all whitespace-nowrap cursor-pointer ${
                   isActive 
-                    ? 'border-emerald-600 text-emerald-700 bg-white' 
-                    : 'border-transparent text-slate-600 hover:text-slate-900 hover:bg-slate-100'
+                    ? 'bg-gradient-to-r from-[#9a6a1d] via-[#d4af37] to-[#c58a22] text-slate-950 shadow-md'
+                    : 'text-amber-200/80 hover:text-white hover:bg-white/5'
                 }`}
               >
                 <tab.icon className="w-4 h-4" />

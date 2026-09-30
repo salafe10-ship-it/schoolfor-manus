@@ -273,15 +273,15 @@ export default function InventoryManagementPortal({ selectedSchool, initialTab =
       />
       
       <div className="flex flex-1 overflow-hidden" id="inventory-content">
-        <nav className="w-64 border-l border-slate-200 overflow-y-auto" id="inventory-sidebar">
+        <nav className="w-64 shrink-0 border border-[#d4af37]/40 bg-[#2a1d13]/95 p-1.5 shadow-inner overflow-y-auto" id="inventory-sidebar">
           {tabs.map((tab) => (
             <button
               key={tab.id}
               onClick={() => setActiveTab(tab.id)}
-              className={`w-full flex items-center px-6 py-3.5 text-sm font-semibold transition-all duration-200 ${
+              className={`w-full flex items-center rounded-xl px-3.5 py-2.5 text-xs font-black transition-all duration-200 ${
                 activeTab === tab.id 
-                  ? 'bg-[#2a1d13] text-[#fce79a]' 
-                  : 'text-amber-900/70 hover:text-amber-950 hover:bg-amber-100/50 hover:text-slate-900'
+                  ? 'bg-gradient-to-r from-[#9a6a1d] via-[#d4af37] to-[#c58a22] text-slate-950 shadow-md' 
+                  : 'text-amber-200/80 hover:text-white hover:bg-white/5'
               }`}
               id={`tab-${tab.id}`}
             >
