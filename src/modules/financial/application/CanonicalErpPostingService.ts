@@ -885,8 +885,45 @@ export class CanonicalErpPostingService {
       documents.push({ sourceType: 'inventory_stocktake', sourceId: textValue(stocktake.id), date: dateValue(stocktakeDate), description: textValue(stocktake.notes, `تسوية جرد مخزني ${textValue(stocktake.id)}`), lines });
     };
 
+    // Retail-like stock sales (including school uniforms) must use the same
+    // inventory posting bridge as procurement and stock movements. The source
+    // module remains responsible for its operational sale record; this service
+    // is the only accounting boundary.
+    const addInventorySale = (raw: unknown) => {
+      if (!raw || typeof raw !== 'object' || Array.isArray(raw)) return;
+      const sale = raw as FinancialRow;
+      const lines = Array.isArray(sale.lines) ? sale.lines : [];
+      const paymentAccount = textValue(sale.paymentAccount) || '1101';
+      const revenueAccount = textValue(sale.revenueAccount) || '4101';
+      const taxAccount = textValue(sale.taxAccount) || '2101';
+      const postingLines: CanonicalPostingLine[] = [];
+      let revenue = 0;
+      let cogs = 0;
+      for (const [index, rawLine] of lines.entries()) {
+        if (!rawLine || typeof rawLine !== 'object' || Array.isArray(rawLine)) continue;
+        const line = rawLine as FinancialRow;
+        const item = itemById.get(textValue(line.itemId || line.itemCode)) || {};
+        const quantity = positiveAmount(line.quantity, `inventorySale.${textValue(sale.id)}.line.${index}.quantity`);
+        const unitPrice = positiveAmount(line.unitPrice, `inventorySale.${textValue(sale.id)}.line.${index}.unitPrice`);
+        const unitCost = positiveAmount(line.unitCost ?? item.costPrice, `inventorySale.${textValue(sale.id)}.line.${index}.unitCost`);
+        revenue += quantity * unitPrice;
+        cogs += quantity * unitCost;
+      }
+      const discount = Number(sale.discount || 0);
+      const tax = Number(sale.tax || 0);
+      const total = Number((revenue - discount + tax).toFixed(2));
+      if (!(revenue > 0) || discount < 0 || tax < 0 || discount > revenue || !(total > 0)) return;
+      postingLines.push({ id: `${textValue(sale.id)}-AR`, accountCode: paymentAccount, debit: total, credit: 0 });
+      postingLines.push({ id: `${textValue(sale.id)}-REV`, accountCode: revenueAccount, debit: 0, credit: Number((revenue - discount).toFixed(2)) });
+      postingLines.push({ id: `${textValue(sale.id)}-COGS`, accountCode: cogsAccount(itemById.get(textValue((lines[0] as FinancialRow)?.itemId || (lines[0] as FinancialRow)?.itemCode)) || {}), debit: Number(cogs.toFixed(2)), credit: 0 });
+      postingLines.push({ id: `${textValue(sale.id)}-STOCK`, accountCode: inventoryAccount(itemById.get(textValue((lines[0] as FinancialRow)?.itemId || (lines[0] as FinancialRow)?.itemCode)) || {}), debit: 0, credit: Number(cogs.toFixed(2)) });
+      if (tax > 0) postingLines.push({ id: `${textValue(sale.id)}-TAX`, accountCode: taxAccount, debit: 0, credit: Number(tax.toFixed(2)) });
+      documents.push({ sourceType: 'inventory_movement', sourceId: textValue(sale.id), date: dateValue(rowValue(sale, 'date', 'saleDate')), description: textValue(sale.notes, `بيع مخزني ${textValue(sale.id)}`), lines: postingLines });
+    };
+
     for (const row of Array.isArray(payload.goodsReceipts) ? payload.goodsReceipts : []) addReceipt(row);
     for (const row of Array.isArray(payload.vendorBills) ? payload.vendorBills : []) addBill(row);
+    for (const row of Array.isArray(payload.inventorySales) ? payload.inventorySales : []) addInventorySale(row);
     for (const row of Array.isArray(payload.movements) ? payload.movements : []) addMovement(row);
     for (const row of Array.isArray(payload.stocktakes) ? payload.stocktakes : []) addStocktake(row);
 
