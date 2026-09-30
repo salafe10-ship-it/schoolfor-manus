@@ -2666,10 +2666,42 @@ html:not(.dark) #super-admin-portal button:not(.bg-indigo-600):not(.bg-rose-600)
   #financial-sidebar-menu,
   #ledger-sidebar-menu,
   #hr-sidebar-menu,
-  #inventory-sidebar,
   #sa-sidebar {
     width: 100% !important;
     max-height: none;
+  }
+}
+
+/* Inventory keeps its two-pane workspace on tablet widths. The shared
+   sidebar rule above used to force the sidebar to 100% while leaving the
+   workspace in a row, collapsing the content pane to only a few pixels. */
+@media (max-width: 639px) {
+  #inventory-content {
+    flex-direction: column;
+    overflow: visible;
+    gap: 0.75rem;
+  }
+
+  #inventory-sidebar {
+    display: flex;
+    flex: 0 0 auto;
+    width: 100% !important;
+    max-height: none;
+    overflow-x: auto;
+    overflow-y: hidden;
+  }
+
+  #inventory-sidebar button {
+    flex: 0 0 auto;
+    width: auto;
+    min-width: max-content;
+    white-space: nowrap;
+  }
+
+  #inventory-main {
+    width: 100%;
+    min-width: 0;
+    padding: 1rem;
   }
 }
 
