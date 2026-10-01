@@ -36,6 +36,16 @@ describe('route integrity contract', () => {
     expect(analyzeRouteIntegrity(sourceRoot)).toMatchObject({ success: true, errors: [] });
   });
 
+  it('accepts a declared navigation alias that resolves to a current route', () => {
+    const root = createFixture((fixtureRoot) => {
+      const dashboardPath = path.join(fixtureRoot, 'src/components/ModernSchoolDashboard.tsx');
+      fs.appendFileSync(dashboardPath, "\nconst compatibilityShortcut = { section: 'academic_timetable' };\n");
+    });
+    const errors = analyzeRouteIntegrity(root).errors;
+    expect(errors).not.toContain('NAV_ROUTE_NOT_CONTRACTED:academic_timetable');
+    expect(errors).not.toContain('REDIRECT_TARGET_NOT_CURRENT:academic');
+  });
+
   it('rejects a retired route added back to the active contract', () => {
     const root = createFixture((fixtureRoot) => {
       const contractPath = path.join(fixtureRoot, 'route-integrity.json');
