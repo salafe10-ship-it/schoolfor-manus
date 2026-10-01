@@ -1,4 +1,4 @@
-import React, { useState } from 'react';
+import React, { useRef, useState } from 'react';
 import { 
   ShoppingBag, FileText, ArrowRightLeft, Truck, 
   DollarSign, FileSpreadsheet, Settings, Users, 
@@ -18,6 +18,7 @@ import { getItemWarehouseBalances, withUpdatedWarehouseBalances } from '../inven
 import { PurchaseRequest, PurchaseOrder, GoodsReceiptNote, VendorBill } from '../../types';
 import type { InventoryCanonicalDatabase } from '../inventory/inventoryCanonical';
 import { getTrustedAccessToken } from '../../utils/auth';
+import { canApproveInventoryAmount, type InventoryCapabilities } from '../inventory/inventoryUiPolicy';
 
 interface ProcurementManagementPortalProps {
   selectedSchool?: any;
@@ -26,6 +27,9 @@ interface ProcurementManagementPortalProps {
   database: InventoryCanonicalDatabase;
   onCommit: (database: InventoryCanonicalDatabase, successMessage?: string) => Promise<void>;
   canonicalVersion: number;
+  onRefresh?: () => Promise<void>;
+  isLoading?: boolean;
+  capabilities?: InventoryCapabilities;
 }
 
 export default function ProcurementManagementPortal({
@@ -34,9 +38,14 @@ export default function ProcurementManagementPortal({
   triggerNotification,
   database,
   onCommit,
-  canonicalVersion
+  canonicalVersion,
+  onRefresh,
+  isLoading = false,
+  capabilities = {}
 }: ProcurementManagementPortalProps) {
   const [activeTab, setActiveTab] = useState<string>('dashboard');
+  const paymentAttempt = useRef<{ id: string; billId: string; amount: number; method: string; reference: string } | null>(null);
+  const paymentBusy = useRef(false);
   const { purchaseRequests, purchaseOrders, goodsReceipts, vendorBills } = database;
   const commitPatch = async (patch: Partial<InventoryCanonicalDatabase>, message?: string) => onCommit({ ...database, ...patch }, message);
 
@@ -63,6 +72,7 @@ export default function ProcurementManagementPortal({
   // Handlers for persistence updates
   const handleSaveRequest = async (pr: PurchaseRequest) => {
     try {
+      if (['approved', 'rejected'].includes(pr.status) && !canApproveInventoryAmount(pr.totalEstimatedAmount, capabilities, database.procurementSettings)) throw new Error('صلاحيات اعتماد الطلب غير متاحة.');
       const next = purchaseRequests.some(item => item.id === pr.id) ? purchaseRequests.map(item => item.id === pr.id ? pr : item) : [pr, ...purchaseRequests];
       await commitPatch({ purchaseRequests: next });
     } catch (error: any) {
@@ -82,6 +92,7 @@ export default function ProcurementManagementPortal({
 
   const handleSaveOrder = async (po: PurchaseOrder) => {
     try {
+      if (po.status === 'approved' && !canApproveInventoryAmount(po.grandTotal, capabilities, database.procurementSettings)) throw new Error('صلاحيات اعتماد أمر الشراء غير متاحة.');
       const next = purchaseOrders.some(item => item.id === po.id) ? purchaseOrders.map(item => item.id === po.id ? po : item) : [po, ...purchaseOrders];
       await commitPatch({ purchaseOrders: next });
     } catch (error: any) {
@@ -125,7 +136,7 @@ export default function ProcurementManagementPortal({
         const nextLines = po.lines.map(orderLine => {
           const itemId = canonicalItemId(orderLine.itemId || orderLine.itemCode);
           const received = orderReceipts.reduce((sum, receipt) => sum + receipt.lines
-            .filter(line => canonicalItemId(line.itemId || line.itemCode) === itemId)
+            .filter(line => line.purchaseOrderLineId ? line.purchaseOrderLineId === orderLine.id : canonicalItemId(line.itemId || line.itemCode) === itemId)
             .reduce((lineSum, line) => lineSum + Number(line.acceptedQty || 0), 0), 0);
           return { ...orderLine, itemId, quantityReceived: received };
         });
@@ -152,6 +163,7 @@ export default function ProcurementManagementPortal({
   };
 
   const handleApproveBill = async (bill: VendorBill) => {
+    if (!canApproveInventoryAmount(bill.grandTotal, capabilities, database.procurementSettings) || (bill.grandTotal > 0 && !capabilities.financialWrite)) throw new Error('صلاحيات اعتماد الفاتورة والترحيل غير متاحة.');
     if (bill.status !== 'pending_matching') throw new Error('فاتورة المورد ليست في حالة انتظار المطابقة.');
     const receipt = goodsReceipts.find(item => item.id === bill.grnId);
     const order = receipt ? purchaseOrders.find(item => item.id === receipt.purchaseOrderId) : undefined;
@@ -174,9 +186,15 @@ export default function ProcurementManagementPortal({
   };
 
   const handlePayBill = async (bill: VendorBill, amount: number, paymentMethod: 'bank_transfer' | 'check' | 'cash' | 'treasury_voucher', referenceNo: string) => {
+    if (!capabilities.financialWrite) throw new Error('لا تتوفر صلاحية السداد المالي.');
+    if (paymentBusy.current) throw new Error('جارٍ تنفيذ عملية السداد.');
     const token = getTrustedAccessToken();
     if (!token) throw new Error('انتهت جلسة الدخول الموثوقة.');
-    const paymentId = crypto.randomUUID();
+    if (paymentAttempt.current && (paymentAttempt.current.billId !== bill.id || paymentAttempt.current.amount !== amount || paymentAttempt.current.method !== paymentMethod || paymentAttempt.current.reference !== referenceNo)) throw new Error('نتيجة السداد السابق غير محسومة؛ تحقق من المصدر قبل تغيير بيانات العملية.');
+    if (!paymentAttempt.current) paymentAttempt.current = { id: crypto.randomUUID(), billId: bill.id, amount, method: paymentMethod, reference: referenceNo };
+    const paymentId = paymentAttempt.current.id;
+    paymentBusy.current = true;
+    try {
     const response = await fetch(`/api/financial/vendor-bills/${encodeURIComponent(bill.id)}/pay`, {
       method: 'POST',
       headers: {
@@ -188,15 +206,19 @@ export default function ProcurementManagementPortal({
     });
     const payload = await response.json().catch(() => ({}));
     if (!response.ok || !payload?.success || !payload?.data?.journalId) throw new Error(payload?.message || 'تعذر سداد فاتورة المورد مركزياً.');
+    paymentAttempt.current = null;
     notify(`تم سداد فاتورة المورد وترحيل القيد ${payload.data.journalId}؛ ستتم إعادة تحميل المصدر المركزي.`, 'success');
-    window.setTimeout(() => window.location.reload(), 250);
+    await onRefresh?.();
+    } finally { paymentBusy.current = false; }
   };
 
   const handleConvertToOrder = async (pr: PurchaseRequest) => {
-    const poLines = pr.lines.map(line => {
+    if (!capabilities.approve) throw new Error('لا تتوفر صلاحية تحويل الطلب المعتمد.');
+    const poLines = pr.lines.filter(line => (line.quantityApproved ?? line.quantityRequested) > 0).map(line => {
       const item = database.items.find(candidate => candidate.id === line.itemId || candidate.sku === line.itemCode);
       if (!item) throw new Error(`لا يمكن تحويل الطلب؛ البند ${line.itemCode} غير مربوط بصنف في دليل المخزون.`);
-      const quantity = line.quantityApproved || line.quantityRequested;
+      if (item.status === 'archived') throw new Error('لا يمكن تحويل طلب لصنف مؤرشف.');
+      const quantity = line.quantityApproved ?? line.quantityRequested;
       return {
         ...line,
         itemId: item.id,
@@ -208,10 +230,11 @@ export default function ProcurementManagementPortal({
         totalAmount: quantity * line.estimatedUnitPrice
       };
     });
+    if (!poLines.length) throw new Error('لا توجد كميات معتمدة موجبة للتحويل.');
     const newPO: PurchaseOrder = {
-      id: `po_${Date.now()}`,
+      id: `po_pr_${pr.id}`,
       schoolId: pr.schoolId || '',
-      poNo: `PO-${Date.now()}`,
+      poNo: `PO-${pr.requestNo}`,
       poDate: new Date().toISOString().split('T')[0],
       expectedDeliveryDate: new Date(Date.now() + 10 * 86400000).toISOString().split('T')[0],
       purchaseRequestId: pr.id,
@@ -244,23 +267,28 @@ export default function ProcurementManagementPortal({
     const quotation = database.quotations.find(item => item.rfqId === rfqId && item.vendorId === vendorId);
     if (!quotation) throw new Error('لا يمكن ترسية عرض غير موجود في المصدر المركزي.');
     if (quotation.status === 'rejected') throw new Error('لا يمكن ترسية عرض مرفوض.');
+    if (!canApproveInventoryAmount(quotation.grandTotal, capabilities, database.procurementSettings)) throw new Error('صلاحيات ترسية العرض غير متاحة.');
     if (Math.abs(Number(quotation.grandTotal) - Number(totalAmount)) > 0.01) throw new Error('تغير إجمالي العرض قبل الترسية؛ أعد تحميل مصفوفة العروض.');
     const warehouseId = database.warehouses[0]?.id;
     if (!warehouseId) throw new Error('يلزم مستودع مركزي معتمد قبل إنشاء أمر الشراء.');
     const poLines = quotation.lines.map((line, index) => {
       const item = database.items.find(candidate => candidate.id === line.itemId || candidate.sku === line.itemId);
       if (!item) throw new Error(`لا يمكن ترسية العرض؛ البند ${line.itemId || index + 1} غير مربوط بدليل المخزون.`);
+      if (item.status === 'archived') throw new Error('لا يمكن ترسية عرض لصنف مؤرشف.');
       return {
-        id: `pol_${Date.now()}_${index}`, itemId: item.id, itemCode: item.sku, itemName: item.name,
+        id: `pol_${quotation.id}_${index}`, itemId: item.id, itemCode: item.sku, itemName: item.name,
         unit: 'وحدة', quantityRequested: line.quantity, quantityOrdered: line.quantity, quantityReceived: 0,
         estimatedUnitPrice: line.unitPrice, actualUnitPrice: line.unitPrice, discountAmount: line.discountAmount, taxAmount: line.taxAmount,
         totalAmount: line.quantity * line.unitPrice - line.discountAmount
       };
     });
     const newPO: PurchaseOrder = {
-      id: `po_rfq_${Date.now()}`,
+      id: `po_rfq_${rfq.id}_${quotation.id}`,
+      rfqId: rfq.id,
+      quotationId: quotation.id,
+      purchaseRequestId: rfq.purchaseRequestId,
       schoolId: '',
-      poNo: `PO-RFQ-${Date.now()}`,
+      poNo: `PO-${rfq.rfqNo}`,
       poDate: new Date().toISOString().split('T')[0],
       expectedDeliveryDate: new Date(Date.now() + 14 * 86400000).toISOString().split('T')[0],
       vendorId,
@@ -272,7 +300,7 @@ export default function ProcurementManagementPortal({
       lines: poLines,
       subtotal: quotation.lines.reduce((sum, line) => sum + line.quantity * line.unitPrice - line.discountAmount, 0),
       taxAmount: quotation.lines.reduce((sum, line) => sum + line.taxAmount, 0),
-      discountAmount: quotation.lines.reduce((sum, line) => sum + line.discountAmount, 0),
+      discountAmount: 0,
       grandTotal: quotation.lines.reduce((sum, line) => sum + line.quantity * line.unitPrice - line.discountAmount + line.taxAmount, 0),
       createdAt: new Date().toISOString(),
       updatedAt: new Date().toISOString()
@@ -299,23 +327,8 @@ export default function ProcurementManagementPortal({
       {/* Enterprise Unified Action Toolbar */}
       <EnterpriseActionToolbar
         title="منظومة المشتريات والتوريدات الحوكمية (Procurement ERP)"
-        onRefresh={() => {
-          notify('البيانات المعروضة متزامنة مع snapshot المركزي الحالي.', 'info');
-        }}
-        onPrint={async () => { try { await auditReport('print'); window.print(); } catch (error: any) { notify(error?.message || 'تعذر طباعة التقرير.', 'danger'); } }}
-        onExportExcel={async () => {
-          try { await auditReport('csv'); } catch (error: any) { notify(error?.message || 'تعذر تصدير التقرير.', 'danger'); return; }
-          const csv = "data:text/csv;charset=utf-8,\uFEFF" +
-            "رقم الفاتورة,المورد,الإجمالي,المدفوع,المتبقي,الحالة\n" +
-            vendorBills.map(bill => `${bill.billNo},"${bill.vendorName}",${bill.grandTotal},${bill.paidAmount},${bill.remainingAmount},${bill.status}`).join("\n");
-          const link = document.createElement('a');
-          link.href = encodeURI(csv);
-          link.download = `edupro_procurement_bills_${Date.now()}.csv`;
-          document.body.appendChild(link);
-          link.click();
-          document.body.removeChild(link);
-          notify('تم تصدير فواتير الموردين إلى ملف CSV بنجاح.', 'success');
-        }}
+        onRefresh={onRefresh ? () => { void onRefresh().catch(error => notify(error.message, 'danger')); } : undefined}
+        isLoading={isLoading}
       />
 
       {/* Navigation Sub-Header */}
@@ -363,6 +376,7 @@ export default function ProcurementManagementPortal({
           <PurchaseRequestManager 
             requests={purchaseRequests}
             items={database.items}
+            capabilities={capabilities} approvalSettings={database.procurementSettings}
             onSaveRequest={handleSaveRequest}
             onDeleteRequest={handleDeleteRequest}
             onConvertToOrder={handleConvertToOrder}
@@ -376,6 +390,7 @@ export default function ProcurementManagementPortal({
             rfqs={database.rfqs}
             quotations={database.quotations}
             suppliers={database.suppliers}
+            capabilities={capabilities} approvalSettings={database.procurementSettings}
             onSaveRfq={async rfq => commitPatch({ rfqs: [rfq, ...database.rfqs] })}
             onSaveQuotation={async (quotation, rfq) => commitPatch({
               quotations: [quotation, ...database.quotations],
@@ -393,6 +408,7 @@ export default function ProcurementManagementPortal({
             onReceiveItems={(po) => setActiveTab('receipts')}
             suppliers={database.suppliers}
             warehouses={database.warehouses}
+            capabilities={capabilities} approvalSettings={database.procurementSettings}
             triggerNotification={triggerNotification}
           />
         )}
@@ -403,6 +419,7 @@ export default function ProcurementManagementPortal({
             orders={purchaseOrders}
             items={database.items}
             onSaveReceipt={handleSaveReceipt}
+            capabilities={capabilities}
             triggerNotification={triggerNotification}
           />
         )}
@@ -415,6 +432,7 @@ export default function ProcurementManagementPortal({
             onSaveBill={handleSaveBill}
             onApproveBill={handleApproveBill}
             onPayBill={handlePayBill}
+            capabilities={capabilities} approvalSettings={database.procurementSettings}
             triggerNotification={triggerNotification}
           />
         )}
@@ -429,11 +447,12 @@ export default function ProcurementManagementPortal({
             receipts={goodsReceipts}
             vendorBills={vendorBills}
             onAuditReport={auditReport}
+            triggerNotification={triggerNotification}
           />
         )}
 
         {activeTab === 'settings' && (
-          <ProcurementSettings settings={database.procurementSettings} onSave={async procurementSettings => commitPatch({ procurementSettings })} triggerNotification={triggerNotification} />
+          <ProcurementSettings settings={database.procurementSettings} canEdit={capabilities.settings === true} onSave={async procurementSettings => commitPatch({ procurementSettings })} triggerNotification={triggerNotification} />
         )}
       </div>
     </div>

@@ -1,4 +1,4 @@
-import React, { useState, useEffect, useRef } from 'react';
+import React, { useState, useEffect } from 'react';
 import { 
   ArrowLeftRight, Barcode, ClipboardCheck, FileSpreadsheet, 
   FileText, LayoutDashboard, Package, Ruler, Settings, 
@@ -18,11 +18,15 @@ import EnterpriseInventoryQualityAudit from '../../certification/EnterpriseInven
 import { InventoryItem } from '../../types';
 import ProcurementManagementPortal from '../procurement/ProcurementManagementPortal';
 import { getTrustedAccessToken } from '../../utils/auth';
-import { emptyInventoryCanonicalDatabase, getItemWarehouseBalances, getItemWarehouseQuantity, InventoryCanonicalDatabase, normalizeInventoryCanonicalDatabase, withUpdatedWarehouseBalances } from './inventoryCanonical';
+import { getItemWarehouseBalances, getItemWarehouseQuantity, InventoryCanonicalDatabase, withUpdatedWarehouseBalances } from './inventoryCanonical';
+import { useInventorySnapshot } from './useInventorySnapshot';
+import InventoryPrintProvider from './InventoryPrintProvider';
+import { canApproveInventoryAmount, roundInventoryMoney } from './inventoryUiPolicy';
 
 interface InventoryManagementPortalProps {
   selectedSchool?: any;
   initialTab?: string;
+  onExit?: () => void;
   triggerNotification?: (msg: string, type: 'success' | 'warning' | 'info' | 'danger') => void;
 }
 
@@ -73,13 +77,15 @@ function downloadCsv(filename: string, rows: unknown[][]): void {
   URL.revokeObjectURL(url);
 }
 
-export default function InventoryManagementPortal({ selectedSchool, initialTab = 'dashboard', triggerNotification }: InventoryManagementPortalProps) {
+export default function InventoryManagementPortal({ selectedSchool, initialTab = 'dashboard', triggerNotification, onExit }: InventoryManagementPortalProps) {
   const [activeTab, setActiveTab] = useState(initialTab);
   const [newItemRequest, setNewItemRequest] = useState(0);
   const [searchRequest, setSearchRequest] = useState(0);
-  const [database, setDatabase] = useState<InventoryCanonicalDatabase>(emptyInventoryCanonicalDatabase);
-  const [isLoading, setIsLoading] = useState(false);
-  const versionRef = useRef(0);
+  const snapshot = useInventorySnapshot();
+  const { database, version, capabilities, isLoading, isSaving, checkedAt } = snapshot;
+  const versionRef = { current: version ?? 0 };
+  const [itemStatusFilter, setItemStatusFilter] = useState('ALL');
+  const [formEpoch, setFormEpoch] = useState(0);
   const items = database.items;
 
   const notify = (msg: string, type: 'success' | 'warning' | 'info' | 'danger' = 'info') => {
@@ -92,37 +98,21 @@ export default function InventoryManagementPortal({ selectedSchool, initialTab =
 
   const loadDatabase = async () => {
     try {
-      setIsLoading(true);
-      const token = getTrustedAccessToken();
-      if (!token) throw new Error('انتهت جلسة الدخول الموثوقة.');
-      const response = await fetch('/api/inventory/database', { headers: { Authorization: `Bearer ${token}` }, cache: 'no-store' });
-      const payload = await response.json();
-      if (!response.ok || !payload?.success) throw new Error(payload?.message || 'تعذر تحميل المخزون والمشتريات.');
-      versionRef.current = Number(payload?.meta?.version || 0);
-      setDatabase(normalizeInventoryCanonicalDatabase(payload.data));
+      await snapshot.refresh();
     } catch (err: any) {
       notify(`خطأ في تحميل المخزون والمشتريات: ${err.message}`, 'danger');
-    } finally {
-      setIsLoading(false);
+      throw err;
     }
   };
 
   useEffect(() => {
-    void loadDatabase();
+    snapshot.reset();
+    setFormEpoch(value => value + 1);
+    void loadDatabase().catch(() => undefined);
   }, [selectedSchool?.id, selectedSchool?.school_id]);
 
   const commitDatabase = async (nextDatabase: InventoryCanonicalDatabase, successMessage?: string) => {
-    const token = getTrustedAccessToken();
-    if (!token) throw new Error('انتهت جلسة الدخول الموثوقة.');
-    const response = await fetch('/api/inventory/database', {
-      method: 'POST',
-      headers: { Authorization: `Bearer ${token}`, 'Content-Type': 'application/json' },
-      body: JSON.stringify({ expectedVersion: versionRef.current, data: nextDatabase })
-    });
-    const payload = await response.json();
-    if (!response.ok || !payload?.success) throw new Error(payload?.message || 'تعذر حفظ المخزون والمشتريات.');
-    versionRef.current = Number(payload?.meta?.version || versionRef.current + 1);
-    setDatabase(normalizeInventoryCanonicalDatabase(payload.data || nextDatabase));
+    await snapshot.commit(nextDatabase);
     if (successMessage) notify(successMessage, 'success');
   };
 
@@ -164,9 +154,14 @@ export default function InventoryManagementPortal({ selectedSchool, initialTab =
     if (!['pending_approval', 'approved'].includes(String(movement.status))) throw new Error('الحركة ليست في حالة اعتماد أو إعادة ترحيل.');
     const item = database.items.find(row => row.id === movement.itemId);
     if (!item) throw new Error('الصنف المرتبط بالحركة غير موجود.');
+    if (item.status === 'archived') throw new Error('لا يمكن اعتماد حركة لصنف مؤرشف.');
     const quantity = Number(movement.quantity);
     if (!Number.isInteger(quantity) || quantity <= 0) throw new Error('كمية الحركة غير صالحة للاعتماد.');
     const isRetry = movement.status === 'approved';
+    const unitCost = ['issue', 'sale', 'adjustment'].includes(movement.type) ? Number(item.costPrice) : Number(movement.unitCost || 0);
+    const totalAmount = roundInventoryMoney(quantity * unitCost);
+    if (!canApproveInventoryAmount(totalAmount, capabilities, database.procurementSettings)
+      || (movement.type !== 'transfer' && totalAmount > 0 && !capabilities.financialWrite)) throw new Error('صلاحيات الاعتماد أو الترحيل المالي غير متاحة لهذه الحركة.');
     const balances = getItemWarehouseBalances(item);
     const transferFrom = String(movement.warehouseFrom || item.warehouseId || '');
     const transferTo = String(movement.warehouseTo || '');
@@ -197,7 +192,7 @@ export default function InventoryManagementPortal({ selectedSchool, initialTab =
       const incomingValue = quantity * Number(movement.unitCost || 0);
       nextItem.costPrice = Number(((oldValue + incomingValue) / Math.max(1, nextItem.quantity)).toFixed(4));
     }
-    const approvedMovement = isRetry ? movement : { ...movement, status: 'approved', statusLabel: movement.type === 'transfer' ? 'معتمد — تحويل داخلي' : 'معتمد — جارٍ ترحيل القيد', approvedAt: new Date().toISOString() };
+    const approvedMovement = isRetry ? movement : { ...movement, unitCost, totalAmount, status: 'approved', statusLabel: movement.type === 'transfer' ? 'معتمد — تحويل داخلي' : 'معتمد — جارٍ ترحيل القيد' };
     await commitDatabase({
       ...database,
       items: isRetry ? database.items : database.items.map(row => row.id === item.id ? nextItem : row),
@@ -212,14 +207,19 @@ export default function InventoryManagementPortal({ selectedSchool, initialTab =
     if (stocktake.status !== 'pending_approval') throw new Error('محضر الجرد ليس في حالة انتظار الاعتماد.');
     const item = database.items.find(row => row.id === stocktake.itemId);
     if (!item) throw new Error('الصنف المرتبط بمحضر الجرد غير موجود.');
+    if (item.status === 'archived') throw new Error('لا يمكن اعتماد جرد لصنف مؤرشف.');
     const warehouseId = String(stocktake.warehouseId || item.warehouseId || '');
     const currentWarehouseQuantity = getItemWarehouseQuantity(item, warehouseId);
     if (Number(currentWarehouseQuantity) !== Number(stocktake.bookQty)) throw new Error('تغير رصيد المستودع الدفتري بعد إنشاء المحضر؛ أعد المطابقة قبل الاعتماد.');
+    const discrepancy = Number(stocktake.actualQty) - Number(stocktake.bookQty);
+    const financialImpact = roundInventoryMoney(discrepancy * Number(item.costPrice));
+    if (!canApproveInventoryAmount(Math.abs(financialImpact), capabilities, database.procurementSettings)
+      || (financialImpact !== 0 && !capabilities.financialWrite)) throw new Error('صلاحيات اعتماد الجرد أو الترحيل المالي غير متاحة.');
     const approvedStocktake = {
       ...stocktake,
+      discrepancy, financialImpact, valuationUnitCost: Number(item.costPrice),
       status: 'approved',
-      statusLabel: Number(stocktake.discrepancy) === 0 ? 'معتمد — لا أثر مالي' : 'معتمد — جارٍ ترحيل التسوية',
-      approvedAt: new Date().toISOString()
+      statusLabel: discrepancy === 0 ? 'معتمد — لا أثر مالي' : 'معتمد — جارٍ ترحيل التسوية'
     };
     await commitDatabase({
       ...database,
@@ -234,14 +234,11 @@ export default function InventoryManagementPortal({ selectedSchool, initialTab =
   };
 
   const handleNew = () => {
-    setActiveTab('items');
     setNewItemRequest(value => value + 1);
   };
 
   const handleSearch = () => {
-    setActiveTab('items');
     setSearchRequest(value => value + 1);
-    notify('اكتب رمز الصنف أو اسمه في خانة البحث التي تم فتحها.', 'info');
   };
 
   const auditReport = async (format: 'csv' | 'print') => {
@@ -256,36 +253,16 @@ export default function InventoryManagementPortal({ selectedSchool, initialTab =
     if (!response.ok || !payload?.success) throw new Error(payload?.message || 'تعذر تدقيق تقرير المخزون.');
   };
 
-  const handlePrint = async () => {
-    try {
-      await auditReport('print');
-      window.print();
-      notify('تم تدقيق جرد أصناف المستودعات وإرساله إلى الطباعة 🖨️', 'info');
-    } catch (error: any) {
-      notify(error?.message || 'تعذر تدقيق تقرير المخزون قبل الطباعة.', 'danger');
-    }
-  };
-
-  const handleExportExcel = async () => {
+  const handleExportExcel = async (filteredItems: InventoryItem[]) => {
     try { await auditReport('csv'); } catch (error: any) {
       notify(error?.message || 'تعذر تدقيق تقرير المخزون قبل التصدير.', 'danger');
       return;
     }
     downloadCsv(`edupro_inventory_items_${Date.now()}.csv`, [
-      ['رمز الصنف', 'اسم الصنف', 'معرف التصنيف', 'تكلفة الوحدة', 'سعر البيع', 'الرصيد الإجمالي', 'معرف المستودع الافتراضي'],
-      ...items.map(item => [item.sku || item.id, item.name, item.categoryId, item.costPrice, item.salePrice, item.quantity, item.warehouseId])
+      ['رمز الصنف', 'اسم الصنف', 'معرف التصنيف', 'معرف وحدة القياس', 'معرف المورد', 'معرف المستودع', 'الحد الأدنى', 'الحد الأعلى', 'نقطة إعادة الطلب', 'تكلفة الوحدة', 'سعر البيع', 'الضريبة', 'الوصف'],
+      ...filteredItems.map(item => [item.sku, item.name, item.categoryId, item.unitId, item.supplierId, item.warehouseId, item.minLevel, item.maxLevel, item.reorderLevel, item.costPrice, item.salePrice, item.vatRate, item.description])
     ]);
     notify('تم تدقيق دليل الأصناف وتصديره بصيغة CSV.', 'success');
-  };
-
-  const handleExportPdf = async () => {
-    try {
-      await auditReport('print');
-      window.print();
-      notify('تم تدقيق وتجهيز تقرير جرد المستودعات للطباعة / PDF 📄', 'success');
-    } catch (error: any) {
-      notify(error?.message || 'تعذر تدقيق تقرير المخزون قبل تجهيز PDF.', 'danger');
-    }
   };
 
   const handleImportExcel = () => {
@@ -376,22 +353,25 @@ export default function InventoryManagementPortal({ selectedSchool, initialTab =
   ];
 
   return (
+    <InventoryPrintProvider schoolName={selectedSchool?.name || selectedSchool?.school_name || ''} version={checkedAt ? version : null} notify={notify}>
     <div className="w-full min-h-screen text-right font-sans dir-rtl select-none transition-all duration-300 bg-gradient-to-br from-[#f8f5ee] via-[#efe9dc] to-[#e8e0d0] text-slate-900 p-2 sm:p-4 md:p-6 space-y-6" id="inventory-portal">
       <EnterpriseActionToolbar 
         title="إدارة المخزون والمستودعات المؤسسية (Inventory & Warehouse Control)"
-        onNew={handleNew}
-        onSearch={handleSearch}
-        onPrint={handlePrint}
-        onExportExcel={handleExportExcel}
-        onExportPdf={handleExportPdf}
-        onImportExcel={handleImportExcel}
-        onDownloadTemplate={handleDownloadTemplate}
+        onNew={activeTab === 'items' ? handleNew : undefined}
+        onSearch={activeTab === 'items' ? handleSearch : undefined}
+        onImportExcel={activeTab === 'items' ? handleImportExcel : undefined}
+        onDownloadTemplate={activeTab === 'items' ? handleDownloadTemplate : undefined}
         exportExcelLabel="CSV"
         importExcelLabel="استيراد CSV"
-        onRefresh={() => { void loadDatabase(); }}
-        isLoading={isLoading}
-        onExit={() => setActiveTab('dashboard')}
+        onRefresh={() => { void loadDatabase().catch(() => undefined); }}
+        isLoading={isLoading || isSaving}
+        onExit={onExit}
       />
+      {!checkedAt && <p role="alert">الكتابة متوقفة حتى ينجح تحميل المصدر المركزي.</p>}
+      {snapshot.unknownSave && <div role="alert" className="p-4 bg-amber-50">نتيجة الحفظ غير محسومة؛ احتُفظ بالنموذج ومعرف العملية.
+        <button disabled={isLoading || isSaving} onClick={() => { void snapshot.recover().then(() => setFormEpoch(value => value + 1)).catch(error => notify(error.message, 'warning')); }}>التحقق من نتيجة الحفظ</button>
+        <button disabled={isLoading || isSaving} onClick={() => { void snapshot.retryPending().then(() => setFormEpoch(value => value + 1)).catch(error => notify(error.message, 'warning')); }}>إعادة محاولة العملية نفسها</button>
+      </div>}
       
       <div className="flex flex-1 overflow-hidden" id="inventory-content">
         <nav className="w-64 shrink-0 border border-[#d4af37]/40 bg-[#2a1d13]/95 p-1.5 shadow-inner overflow-y-auto" id="inventory-sidebar">
@@ -413,13 +393,14 @@ export default function InventoryManagementPortal({ selectedSchool, initialTab =
         </nav>
         
         <main className="flex-1 overflow-y-auto p-8" id="inventory-main">
+          <fieldset key={formEpoch} disabled={isLoading || isSaving || snapshot.unknownSave || !checkedAt} className="min-w-0">
           {activeTab === 'dashboard' && (
             <InventoryDashboard 
               items={items} 
               warehouses={database.warehouses}
               movements={database.movements}
               receipts={database.goodsReceipts}
-              onNavigateTab={(tab) => setActiveTab(tab)} 
+              onNavigateTab={(tab, filter) => { setItemStatusFilter(filter || 'ALL'); setActiveTab(tab); }}
             />
           )}
 
@@ -435,6 +416,10 @@ export default function InventoryManagementPortal({ selectedSchool, initialTab =
               onDeleteItem={handleDeleteItem}
               newItemRequest={newItemRequest}
               searchRequest={searchRequest}
+              onNewRequestHandled={() => setNewItemRequest(0)}
+              onSearchRequestHandled={() => setSearchRequest(0)}
+              initialStatusFilter={itemStatusFilter}
+              onExportCSV={handleExportExcel}
               triggerNotification={triggerNotification}
             />
           )}
@@ -453,17 +438,17 @@ export default function InventoryManagementPortal({ selectedSchool, initialTab =
           )}
 
           {activeTab === 'movements' && (
-            <StockMovementManager items={items} warehouses={database.warehouses} movements={database.movements} onSave={async movements => updateCollection('movements', movements)} onApproveMovement={handleApproveMovement} triggerNotification={triggerNotification} />
+            <StockMovementManager items={items} warehouses={database.warehouses} movements={database.movements} onSave={async movements => updateCollection('movements', movements)} onApproveMovement={handleApproveMovement} capabilities={capabilities} approvalSettings={database.procurementSettings} triggerNotification={triggerNotification} />
           )}
 
           {activeTab === 'stocktakes' && (
             <StockCountManager items={items} warehouses={database.warehouses} stocktakes={database.stocktakes}
-              onSave={async stocktakes => updateCollection('stocktakes', stocktakes)} onApproveStocktake={handleApproveStocktake} triggerNotification={triggerNotification} />
+              onSave={async stocktakes => updateCollection('stocktakes', stocktakes)} onApproveStocktake={handleApproveStocktake} capabilities={capabilities} approvalSettings={database.procurementSettings} triggerNotification={triggerNotification} />
           )}
 
           {activeTab === 'procurement' && (
             <ProcurementManagementPortal selectedSchool={selectedSchool} triggerNotification={triggerNotification}
-              database={database} canonicalVersion={versionRef.current} onCommit={commitDatabase} />
+              database={database} canonicalVersion={versionRef.current} onCommit={commitDatabase} onRefresh={loadDatabase} isLoading={isLoading || isSaving} capabilities={capabilities} />
           )}
 
           {activeTab === 'reports' && (
@@ -471,14 +456,16 @@ export default function InventoryManagementPortal({ selectedSchool, initialTab =
           )}
 
           {activeTab === 'audit' && (
-            <EnterpriseInventoryQualityAudit />
+            <EnterpriseInventoryQualityAudit checkedAt={checkedAt} version={version} schoolName={selectedSchool?.name} />
           )}
 
           {activeTab === 'settings' && (
-            <InventorySettings settings={database.settings} onSave={async settings => updateCollection('settings', settings)} triggerNotification={triggerNotification} />
+            <InventorySettings settings={database.settings} canEdit={capabilities.settings === true} onSave={async settings => updateCollection('settings', settings)} triggerNotification={triggerNotification} />
           )}
+          </fieldset>
         </main>
       </div>
     </div>
+    </InventoryPrintProvider>
   );
 }

@@ -41,6 +41,7 @@ export const PERMISSIONS = {
   FINANCIAL_EXPORT: 'Financial.Export',
   INVENTORY_READ: 'Inventory.View',
   INVENTORY_WRITE: 'Inventory.Write',
+  INVENTORY_BOARD_APPROVE: 'Inventory.BoardApprove',
   ADMISSION_READ: 'Admission.Read',
   ADMISSION_WRITE: 'Admission.Write',
   AI_FORECAST: 'Ai.Forecast',

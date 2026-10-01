@@ -2027,6 +2027,7 @@ export default function App() {
             {/* ========================================================== */}
             {activeSection === 'inventory' && (
               <InventoryManagementPortal
+                onExit={() => setActiveSection('dashboard')}
                 selectedSchool={selectedSchool}
                 triggerNotification={triggerNotification}
               />
@@ -2037,6 +2038,7 @@ export default function App() {
             {/* ========================================================== */}
             {activeSection === 'procurement' && (
               <InventoryManagementPortal
+                onExit={() => setActiveSection('dashboard')}
                 selectedSchool={selectedSchool}
                 initialTab="procurement"
                 triggerNotification={triggerNotification}

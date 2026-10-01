@@ -6,6 +6,8 @@ import {
 import { InventoryItem, InventoryWarehouse } from '../../types';
 import { getTrustedAccessToken } from '../../utils/auth';
 import { getItemWarehouseBalances } from './inventoryCanonical';
+import { inventoryReorderThreshold } from './inventoryUiPolicy';
+import { useInventoryPrint } from './InventoryPrintProvider';
 
 interface InventoryReportsProps {
   items: InventoryItem[];
@@ -19,8 +21,9 @@ interface InventoryReportsProps {
 
 export default function InventoryReports({ items, movements = [], receipts = [], stocktakes = [], warehouses = [], canonicalVersion, triggerNotification }: InventoryReportsProps) {
   const [activeReport, setActiveReport] = useState<'valuation' | 'reorder' | 'turnover' | 'variances'>('valuation');
+  const print = useInventoryPrint();
   const activeItems = items.filter(item => item.status !== 'archived');
-  const reorderItems = activeItems.filter(item => item.quantity <= (item.reorderLevel || item.minLevel || 0));
+  const reorderItems = activeItems.filter(item => item.quantity <= inventoryReorderThreshold(item));
   const valuationRows = activeItems.flatMap(item => {
     const balances = getItemWarehouseBalances(item);
     const locations = Object.entries(balances);
@@ -89,7 +92,7 @@ export default function InventoryReports({ items, movements = [], receipts = [],
           warehouses.find(warehouse => warehouse.id === warehouseId)?.name || warehouseId || 'غير محدد'])]
       : activeReport === 'reorder'
         ? [['رمز الصنف', 'اسم الصنف', 'الرصيد', 'نقطة إعادة الطلب', 'الحد الأعلى'],
-          ...reorderItems.map(item => [item.sku, item.name, item.quantity, item.reorderLevel || item.minLevel, item.maxLevel])]
+           ...reorderItems.map(item => [item.sku, item.name, item.quantity, inventoryReorderThreshold(item), item.maxLevel])]
         : activeReport === 'turnover'
           ? [['رمز الصنف', 'اسم الصنف', 'الوارد المرصود خلال 90 يوماً', 'الصرف المرصود خلال 90 يوماً', 'عدد المستندات'],
             ...turnoverRows.map(row => [row.item?.sku, row.item?.name, row.received, row.issued, row.docs])]
@@ -111,9 +114,16 @@ export default function InventoryReports({ items, movements = [], receipts = [],
   };
 
   const handlePrint = async () => {
-    try { await auditReport('print'); } catch (error: any) { notify(error?.message || 'تعذر طباعة التقرير.', 'danger'); return; }
-    window.print();
-    notify('تم تجهيز التقرير وإرساله للطباعة 🖨️', 'info');
+    if (!print) { notify('مسار الطباعة غير متاح.', 'warning'); return; }
+    const model = activeReport === 'valuation'
+      ? { title: 'تقييم المخزون حسب المستودع', columns: ['الكود', 'الصنف', 'المستودع', 'الرصيد', 'تكلفة الوحدة', 'القيمة'],
+          rows: valuationRows.map(({ item, warehouseId, quantity }) => [item.sku, item.name, warehouses.find(row => row.id === warehouseId)?.name || warehouseId, quantity, item.costPrice, quantity * item.costPrice]) }
+      : activeReport === 'reorder'
+        ? { title: 'أصناف إعادة الطلب', columns: ['الكود', 'الصنف', 'الرصيد', 'نقطة إعادة الطلب', 'الحد الأعلى'], rows: reorderItems.map(item => [item.sku, item.name, item.quantity, inventoryReorderThreshold(item), item.maxLevel]) }
+        : activeReport === 'turnover'
+          ? { title: 'حركة المخزون خلال 90 يوماً', columns: ['الكود', 'الصنف', 'الوارد', 'الصرف', 'عدد المستندات'], rows: turnoverRows.map(row => [row.item?.sku, row.item?.name, row.received, row.issued, row.docs]) }
+          : { title: 'فروق الجرد', columns: ['المحضر', 'الصنف', 'المستودع', 'الدفتري', 'الفعلي', 'الفرق', 'الأثر المالي', 'الحالة'], rows: stocktakes.map(row => [row.id, row.itemName, row.warehouse, row.bookQty, row.actualQty, row.discrepancy, row.financialImpact, row.statusLabel || row.status]) };
+    await print({ ...model, reportType: activeReport });
   };
 
   return (
@@ -138,7 +148,7 @@ export default function InventoryReports({ items, movements = [], receipts = [],
             onClick={handlePrint}
             className="px-4 py-2 bg-slate-900 hover:bg-slate-800 text-white font-bold text-xs flex items-center gap-2 transition"
           >
-            <Printer className="w-4 h-4" /> طباعة / PDF
+            <Printer className="w-4 h-4" /> طباعة / حفظ PDF
           </button>
         </div>
       </div>

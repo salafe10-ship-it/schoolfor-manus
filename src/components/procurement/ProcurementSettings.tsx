@@ -1,13 +1,15 @@
-import React, { useState } from 'react';
+import React, { useEffect, useState } from 'react';
 import { Settings, ShieldCheck, DollarSign, Layers, Save, CheckCircle2 } from 'lucide-react';
 
 interface ProcurementSettingsProps {
   settings?: Record<string, any>;
+  canEdit?: boolean;
   onSave?: (settings: Record<string, any>) => Promise<void>;
   triggerNotification?: (msg: string, type: 'success' | 'warning' | 'info' | 'danger') => void;
 }
 
-export default function ProcurementSettings({ settings = {}, onSave, triggerNotification }: ProcurementSettingsProps) {
+export default function ProcurementSettings({ settings = {}, onSave, triggerNotification, canEdit = false }: ProcurementSettingsProps) {
+  const [dirty, setDirty] = useState(false);
   const [managerApprovalLimit, setManagerApprovalLimit] = useState<number>(Number(settings.managerApprovalLimit || 0));
   const [boardApprovalLimit, setBoardApprovalLimit] = useState<number>(Number(settings.boardApprovalLimit || 0));
   const [requireRfqThreshold, setRequireRfqThreshold] = useState<number>(Number(settings.requireRfqThreshold || 0));
@@ -15,12 +17,19 @@ export default function ProcurementSettings({ settings = {}, onSave, triggerNoti
   const [grniGlAccount, setGrniGlAccount] = useState<string>(String(settings.grniGlAccount || ''));
   const [inputVatGlAccount, setInputVatGlAccount] = useState<string>(String(settings.inputVatGlAccount || ''));
   const [purchaseExpenseAccount, setPurchaseExpenseAccount] = useState<string>(String(settings.purchaseExpenseAccount || ''));
+  useEffect(() => {
+    if (dirty) return;
+    setManagerApprovalLimit(Number(settings.managerApprovalLimit || 0)); setBoardApprovalLimit(Number(settings.boardApprovalLimit || 0)); setRequireRfqThreshold(Number(settings.requireRfqThreshold || 0));
+    setApGlAccount(String(settings.apGlAccount || '')); setGrniGlAccount(String(settings.grniGlAccount || '')); setInputVatGlAccount(String(settings.inputVatGlAccount || '')); setPurchaseExpenseAccount(String(settings.purchaseExpenseAccount || ''));
+  }, [settings, dirty]);
 
   const handleSaveSettings = async (e: React.FormEvent) => {
     e.preventDefault();
+    if (!canEdit) { triggerNotification?.('لا تتوفر صلاحية تعديل الإعدادات.', 'warning'); return; }
     if (!onSave) { triggerNotification?.('حفظ إعدادات المشتريات متوقف حتى يتوفر المصدر المركزي.', 'warning'); return; }
     try {
       await onSave({ managerApprovalLimit, boardApprovalLimit, requireRfqThreshold, apGlAccount, grniGlAccount, inputVatGlAccount, purchaseExpenseAccount });
+      setDirty(false);
       triggerNotification?.('✓ تم حفظ إعدادات وسقوف المشتريات مركزياً', 'success');
     } catch (error: any) { triggerNotification?.(error?.message || 'تعذر حفظ إعدادات المشتريات مركزياً', 'danger'); }
   };
@@ -37,7 +46,9 @@ export default function ProcurementSettings({ settings = {}, onSave, triggerNoti
         </div>
       </div>
 
-      <form onSubmit={handleSaveSettings} className="space-y-6">
+      {dirty && <p role="status">التعديلات المحلية محفوظة في النموذج أثناء التحديث.</p>}
+      <form onSubmit={handleSaveSettings} onChange={() => setDirty(true)} className="space-y-6">
+        <fieldset disabled={!canEdit} className="space-y-6">
         {/* Approval Thresholds Card */}
         <div className="p-6 space-y-4">
           <h4 className="font-black text-slate-900 text-base border-b border-slate-100 pb-3 flex items-center gap-2">
@@ -134,6 +145,7 @@ export default function ProcurementSettings({ settings = {}, onSave, triggerNoti
             <Save className="w-4 h-4" /> حفظ الإعدادات وقواعد التوجيه
           </button>
         </div>
+        </fieldset>
       </form>
     </div>
   );

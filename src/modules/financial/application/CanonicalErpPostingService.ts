@@ -862,7 +862,9 @@ export class CanonicalErpPostingService {
       }
       const item = itemById.get(textValue(movement.itemId)) || {};
       const quantity = positiveAmount(movement.quantity, `movement.${textValue(movement.id)}.quantity`);
-      const amount = Number(movement.totalAmount ?? quantity * Number(movement.unitCost ?? item.costPrice ?? 0));
+      const unitCost = Number(movement.unitCost ?? item.costPrice ?? 0);
+      const amount = Number((quantity * unitCost).toFixed(2));
+      if (!Number.isFinite(unitCost) || unitCost < 0 || (movement.totalAmount !== undefined && Math.abs(Number(movement.totalAmount) - amount) > 0.01)) throw new Error(`قيمة حركة المخزون ${textValue(movement.id)} لا تطابق الكمية والتكلفة.`);
       if (!Number.isFinite(amount) || amount < 0) throw new Error(`قيمة حركة المخزون ${textValue(movement.id)} غير صالحة.`);
       if (amount === 0) return;
       const stockAccount = inventoryAccount(item);
@@ -883,7 +885,8 @@ export class CanonicalErpPostingService {
       const item = itemById.get(textValue(stocktake.itemId)) || {};
       const delta = Number(stocktake.actualQty) - Number(stocktake.bookQty);
       if (!Number.isFinite(delta) || delta === 0) return;
-      const amount = positiveAmount(Math.abs(delta) * Number(item.costPrice || 0), `stocktake.${textValue(stocktake.id)}.amount`);
+      const valuationUnitCost = Number(stocktake.valuationUnitCost ?? item.costPrice ?? 0);
+      const amount = positiveAmount(Number((Math.abs(delta) * valuationUnitCost).toFixed(2)), `stocktake.${textValue(stocktake.id)}.amount`);
       const stockAccount = inventoryAccount(item);
       const lines = delta > 0
         ? [{ id: `${textValue(stocktake.id)}-STOCK-D`, accountCode: stockAccount, debit: amount, credit: 0 }, { id: `${textValue(stocktake.id)}-ADJ-C`, accountCode: adjustmentAccount(item), debit: 0, credit: amount }]

@@ -4,12 +4,16 @@ import {
   Search, FileText, ArrowUpRight, DollarSign, Check, XCircle 
 } from 'lucide-react';
 import { GoodsReceiptNote, GoodsReceiptStatus, InventoryItem, PurchaseOrder } from '../../types';
+import { useInventoryDraftIdentity } from '../inventory/useInventoryDraftIdentity';
+import { roundInventoryMoney, type InventoryCapabilities } from '../inventory/inventoryUiPolicy';
+import { useInventoryPrint } from '../inventory/InventoryPrintProvider';
 
 interface GoodsReceiptManagerProps {
   receipts: GoodsReceiptNote[];
   orders: PurchaseOrder[];
   items: InventoryItem[];
   onSaveReceipt: (grn: GoodsReceiptNote) => Promise<void>;
+  capabilities?: InventoryCapabilities;
   triggerNotification?: (msg: string, type: 'success' | 'warning' | 'info' | 'danger') => void;
 }
 
@@ -18,9 +22,12 @@ export default function GoodsReceiptManager({
   orders,
   items,
   onSaveReceipt,
+  capabilities = {},
   triggerNotification
 }: GoodsReceiptManagerProps) {
   const [searchTerm, setSearchTerm] = useState('');
+  const draft = useInventoryDraftIdentity('grn');
+  const print = useInventoryPrint();
   const [showModal, setShowModal] = useState(false);
   const [selectedPoId, setSelectedPoId] = useState<string>('');
   const [inspectorName, setInspectorName] = useState<string>('المستخدم الحالي');
@@ -30,7 +37,8 @@ export default function GoodsReceiptManager({
   const [rejectedQuantities, setRejectedQuantities] = useState<Record<string, number>>({});
   const [rejectionReason, setRejectionReason] = useState<string>('');
 
-  const eligibleOrders = orders.filter(order => ['approved', 'issued', 'partially_received'].includes(order.status));
+  const eligibleOrders = orders.filter(order => ['approved', 'issued', 'partially_received', 'fully_received'].includes(order.status)
+    && order.lines.some(line => Number(line.quantityReceived || 0) < Number(line.quantityOrdered ?? line.quantityRequested ?? 0)));
   const selectedPO = eligibleOrders.find(o => o.id === selectedPoId);
   const selectedSourceLines = selectedPO?.lines || [];
   const lineKey = (line: any, index: number) => String(line.id || line.itemId || line.itemCode || index);
@@ -39,14 +47,17 @@ export default function GoodsReceiptManager({
     const itemId = line.itemId || line.itemCode;
     const ordered = Number(line.quantityOrdered ?? line.quantityRequested ?? 0);
     const received = selectedPO ? receipts.filter(receipt => receipt.purchaseOrderId === selectedPO.id).reduce((sum, receipt) => sum + receipt.lines
-      .filter(receiptLine => (receiptLine.itemId || receiptLine.itemCode) === itemId)
-      .reduce((lineSum, receiptLine) => lineSum + Number(receiptLine.receivedQty || 0), 0), 0) : 0;
+      .filter(receiptLine => receiptLine.purchaseOrderLineId ? receiptLine.purchaseOrderLineId === line.id
+        : (receiptLine.itemId || receiptLine.itemCode) === itemId || items.some(item => (item.id === itemId || item.sku === itemId)
+          && (receiptLine.itemId === item.id || receiptLine.itemCode === item.sku)))
+      .reduce((lineSum, receiptLine) => lineSum + Number(receiptLine.acceptedQty || 0), 0), 0) : 0;
     result[key] = Math.max(0, ordered - received);
     return result;
   }, {});
   const remainingQty = Object.values(remainingByLine).reduce((sum, quantity) => sum + quantity, 0);
 
   const handleOpenNew = () => {
+    draft.reset();
     if (eligibleOrders.length === 0) {
       triggerNotification?.('لا يوجد أمر شراء معتمد ومفتوح للاستلام حالياً.', 'warning');
       return;
@@ -60,6 +71,7 @@ export default function GoodsReceiptManager({
 
   const handleCreateGRN = async (e: React.FormEvent) => {
     e.preventDefault();
+    if (!capabilities.approve) { triggerNotification?.('لا تتوفر صلاحية اعتماد الاستلام.', 'warning'); return; }
     if (!selectedPO) {
       triggerNotification?.('اختر أمراً معتمداً ومفتوحاً للاستلام.', 'warning');
       return;
@@ -76,6 +88,11 @@ export default function GoodsReceiptManager({
         || !Number.isInteger(rejected) || rejected < 0 || rejected > received;
     });
     const hasReceivedLine = selectedSourceLines.some((line, index) => Number(receivedQuantities[lineKey(line, index)] || 0) > 0);
+    const hasRejectedLine = inspectionResult === 'failed' || selectedSourceLines.some((line, index) => Number(rejectedQuantities[lineKey(line, index)] || 0) > 0);
+    if (hasRejectedLine && !rejectionReason.trim()) { triggerNotification?.('سبب رفض الكمية مطلوب.', 'warning'); return; }
+    if (selectedSourceLines.some(line => items.some(item => item.status === 'archived' && (item.id === line.itemId || item.sku === line.itemCode)))) {
+      triggerNotification?.('لا يمكن استلام صنف مؤرشف.', 'warning'); return;
+    }
     if (!deliveryNoteNo.trim() || !inspectorName.trim() || !hasReceivedLine || invalidLine) {
       triggerNotification?.('أدخل كمية واردة لبند واحد على الأقل، ولا تتجاوز المتبقي، مع ضبط الكمية المرفوضة ضمن الواردة.', 'warning');
       return;
@@ -85,11 +102,13 @@ export default function GoodsReceiptManager({
       const received = Number(receivedQuantities[key] || 0);
       const rejected = Number(rejectedQuantities[key] || 0);
       const inventoryItem = items.find(item => item.id === sourceLine.itemId || item.sku === sourceLine.itemId || item.sku === sourceLine.itemCode || item.id === sourceLine.itemCode);
-      const unitCost = Number(sourceLine.actualUnitPrice ?? sourceLine.estimatedUnitPrice ?? 0);
+      const ordered = Number(sourceLine.quantityOrdered ?? sourceLine.quantityRequested ?? 0);
+      const unitCost = ordered > 0 ? Number(sourceLine.totalAmount) / ordered : 0;
       const accepted = inspectionResult === 'failed' ? 0 : received - rejected;
       const effectiveRejected = inspectionResult === 'failed' ? received : rejected;
       return {
-        lineId: `grnl_${Date.now()}_${index}`,
+        lineId: `${draft.identity().id}_${index}`,
+        purchaseOrderLineId: sourceLine.id,
         itemId: inventoryItem?.id || sourceLine.itemId || sourceLine.itemCode,
         itemCode: inventoryItem?.sku || sourceLine.itemCode,
         itemName: inventoryItem?.name || sourceLine.itemName,
@@ -99,15 +118,16 @@ export default function GoodsReceiptManager({
         rejectedQty: effectiveRejected,
         rejectionReason: inspectionResult === 'failed' ? (rejectionReason.trim() || 'رفض كامل بعد الفحص الفني') : rejectionReason.trim(),
         unitCost,
-        totalCost: accepted * unitCost
+        totalCost: roundInventoryMoney(accepted * unitCost)
       };
     }).filter(line => line.receivedQty > 0);
     const totalValue = grnLines.reduce((sum, line) => sum + line.totalCost, 0);
+    if (totalValue > 0 && !capabilities.financialWrite) { triggerNotification?.('لا تتوفر صلاحية الترحيل المالي للاستلام.', 'warning'); return; }
 
     const newGRN: GoodsReceiptNote = {
-      id: `grn_${Date.now()}`,
+      id: draft.identity().id,
       schoolId: '',
-      grnNo: `GRN-${Date.now()}`,
+      grnNo: draft.identity().id.toUpperCase(),
       grnDate: new Date().toISOString().split('T')[0],
       purchaseOrderId: selectedPO.id,
       poNo: selectedPO.poNo,
@@ -122,7 +142,7 @@ export default function GoodsReceiptManager({
       totalReceivedValue: totalValue,
       isPostedToGL: false,
       notes: 'تم فحص الشحنة وحفظ محضر الاستلام؛ أضيفت الكمية المقبولة فقط، ويُنشئ الخادم قيد الاستلام الكانوني عند جاهزية دفتر الأستاذ.',
-      createdAt: new Date().toISOString()
+      createdAt: draft.identity().createdAt
     };
 
     try {
@@ -151,6 +171,7 @@ export default function GoodsReceiptManager({
 
         <button 
           onClick={handleOpenNew}
+          disabled={!capabilities.approve}
           className="px-5 py-2.5 bg-slate-900 hover:bg-slate-800 text-white font-bold text-sm transition flex items-center gap-2"
         >
           <Plus className="w-4 h-4" /> تسجيل إذن استلام وفحص جديد (GRN)
@@ -204,6 +225,8 @@ export default function GoodsReceiptManager({
                     <span className="px-2.5 py-1 bg-amber-100 text-amber-900 text-xs font-bold rounded-md">
                       {grn.isPostedToGL && grn.glJournalEntryId ? `مرحل: ${grn.glJournalEntryId}` : 'بانتظار جاهزية دفتر الأستاذ'}
                     </span>
+                    {print && <button type="button" onClick={() => { void print({ title: 'محضر فحص واستلام', number: grn.grnNo, date: grn.grnDate, status: grn.status, reportType: 'procurement',
+                      columns: ['الصنف', 'الوارد', 'المقبول', 'المرفوض', 'سبب الرفض', 'صافي تكلفة الوحدة', 'قيمة المقبول'], rows: grn.lines.map(line => [line.itemName, line.receivedQty, line.acceptedQty, line.rejectedQty, line.rejectionReason, line.unitCost, line.totalCost]), summary: `المورد: ${grn.vendorName} | أمر الشراء: ${grn.poNo} | إجمالي الاستلام: ${grn.totalReceivedValue}` }); }}>طباعة / حفظ PDF</button>}
                   </td>
                 </tr>
               ))}

@@ -1,13 +1,15 @@
-import React, { useState } from 'react';
+import React, { useEffect, useState } from 'react';
 import { Settings, ShieldCheck, CheckCircle2, Lock, Save, Sliders } from 'lucide-react';
 
 interface InventorySettingsProps {
   settings?: Record<string, any>;
+  canEdit?: boolean;
   onSave?: (settings: Record<string, any>) => Promise<void>;
   triggerNotification?: (msg: string, type: 'success' | 'warning' | 'info' | 'danger') => void;
 }
 
-export default function InventorySettings({ settings: savedSettings, onSave, triggerNotification }: InventorySettingsProps) {
+export default function InventorySettings({ settings: savedSettings, onSave, triggerNotification, canEdit = false }: InventorySettingsProps) {
+  const [dirty, setDirty] = useState(false);
   const [settings, setSettings] = useState({
     enableLowStockAlerts: true,
     inventoryAccountPrefix: '1301',
@@ -19,6 +21,9 @@ export default function InventorySettings({ settings: savedSettings, onSave, tri
     requireApprovalForAdjustments: true,
     autoPostingToGL: true
   });
+  useEffect(() => {
+    if (!dirty && savedSettings) setSettings(previous => ({ ...previous, ...savedSettings, allowNegativeStock: false, defaultValuationMethod: 'weighted_average', requireApprovalForAdjustments: true, autoPostingToGL: true }));
+  }, [savedSettings, dirty]);
 
   const notify = (msg: string, type: 'success' | 'warning' | 'info' | 'danger' = 'info') => {
     if (triggerNotification) triggerNotification(msg, type);
@@ -26,8 +31,9 @@ export default function InventorySettings({ settings: savedSettings, onSave, tri
 
   const handleSave = async (e: React.FormEvent) => {
     e.preventDefault();
+    if (!canEdit) { notify('لا تتوفر صلاحية تعديل الإعدادات.', 'warning'); return; }
     if (!onSave) { notify('حفظ الإعدادات متوقف حتى يتوفر المصدر المركزي.', 'warning'); return; }
-    try { await onSave(settings); notify('✓ تم حفظ إعدادات وسياسات إدارة المخزون مركزياً', 'success'); }
+    try { await onSave(settings); setDirty(false); notify('✓ تم حفظ إعدادات وسياسات إدارة المخزون مركزياً', 'success'); }
     catch (error: any) { notify(error?.message || 'تعذر حفظ إعدادات المخزون مركزياً', 'danger'); }
   };
 
@@ -40,7 +46,9 @@ export default function InventorySettings({ settings: savedSettings, onSave, tri
         <p className="text-xs text-slate-500 mt-0.5">تحديد القواعد التشغيلية والربط الدفتري مع دليل الحسابات الأستاذ العام</p>
       </div>
 
-      <form onSubmit={handleSave} className="space-y-6">
+      {dirty && <p role="status">التعديلات المحلية محفوظة في النموذج أثناء التحديث.</p>}
+      <form onSubmit={handleSave} onChange={() => setDirty(true)} className="space-y-6">
+        <fieldset disabled={!canEdit} className="space-y-6">
         {/* Operational Rules */}
         <div className="space-y-4">
           <h4 className="text-sm font-bold text-slate-900 uppercase tracking-wider flex items-center gap-2 border-b border-slate-100 pb-1">
@@ -133,6 +141,7 @@ export default function InventorySettings({ settings: savedSettings, onSave, tri
             <Save className="w-4 h-4" /> حفظ السياسات والإعدادات
           </button>
         </div>
+        </fieldset>
       </form>
     </div>
   );

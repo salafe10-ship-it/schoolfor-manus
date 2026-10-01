@@ -4,11 +4,15 @@ import {
   CreditCard, Coins, Calendar, ArrowUpRight, Search, Plus 
 } from 'lucide-react';
 import { VendorBill, GoodsReceiptNote, PurchaseOrder } from '../../types';
+import { canApproveInventoryAmount, type InventoryCapabilities } from '../inventory/inventoryUiPolicy';
+import { useInventoryDraftIdentity } from '../inventory/useInventoryDraftIdentity';
 
 interface VendorBillPaymentManagerProps {
   vendorBills: VendorBill[];
   receipts: GoodsReceiptNote[];
   orders: PurchaseOrder[];
+  capabilities?: InventoryCapabilities;
+  approvalSettings?: Record<string, any>;
   onSaveBill: (bill: VendorBill) => Promise<void>;
   onApproveBill?: (bill: VendorBill) => Promise<void>;
   onPayBill?: (bill: VendorBill, amount: number, paymentMethod: VendorPaymentMethod, referenceNo: string) => Promise<void>;
@@ -21,12 +25,15 @@ export default function VendorBillPaymentManager({
   vendorBills,
   receipts,
   orders,
+  capabilities = {},
+  approvalSettings = {},
   onSaveBill,
   onApproveBill,
   onPayBill,
   triggerNotification
 }: VendorBillPaymentManagerProps) {
   const [searchTerm, setSearchTerm] = useState('');
+  const draft = useInventoryDraftIdentity('bill');
   const [showBillForm, setShowBillForm] = useState(false);
   const [billReceiptId, setBillReceiptId] = useState('');
   const [vendorInvoiceNo, setVendorInvoiceNo] = useState('');
@@ -42,6 +49,7 @@ export default function VendorBillPaymentManager({
   );
 
   const openBillForm = () => {
+    draft.reset();
     const receipt = billableReceipts.find(item => !vendorBills.some(bill => bill.grnId === item.id));
     if (!receipt) { triggerNotification?.('لا يوجد إذن استلام غير مفوتر لإنشاء فاتورة مورد.', 'warning'); return; }
     setBillReceiptId(receipt.id); setVendorInvoiceNo(''); setShowBillForm(true);
@@ -57,11 +65,11 @@ export default function VendorBillPaymentManager({
     if (!invoiceNo) { triggerNotification?.('رقم فاتورة المورد مطلوب.', 'warning'); return; }
     const amount = receipt.totalReceivedValue;
     const bill: VendorBill = {
-      id: `bill_${Date.now()}`, schoolId: '', billNo: `BILL-${Date.now()}`, vendorInvoiceNo: invoiceNo.trim(),
+      id: draft.identity().id, schoolId: '', billNo: draft.identity().id.toUpperCase(), vendorInvoiceNo: invoiceNo.trim(),
       billDate: new Date().toISOString().split('T')[0], dueDate: new Date(Date.now() + 30 * 86400000).toISOString().split('T')[0],
       vendorId: receipt.vendorId, vendorName: receipt.vendorName, purchaseOrderId: po.id, grnId: receipt.id,
       subtotal: amount, taxAmount: 0, grandTotal: amount, paidAmount: 0, remainingAmount: amount,
-      status: 'pending_matching', notes: 'بانتظار المطابقة الثلاثية والاعتماد المالي.', createdAt: new Date().toISOString()
+      status: 'pending_matching', notes: 'بانتظار المطابقة الثلاثية والاعتماد المالي.', createdAt: draft.identity().createdAt
     };
     try { await onSaveBill(bill); triggerNotification?.(`تم حفظ فاتورة المورد ${bill.billNo} مركزياً بحالة انتظار المطابقة.`, 'success'); setShowBillForm(false); }
     catch (error: any) { triggerNotification?.(error?.message || 'تعذر حفظ فاتورة المورد', 'danger'); }
@@ -190,6 +198,7 @@ export default function VendorBillPaymentManager({
                     {bill.status === 'pending_matching' ? (
                       <button
                         onClick={() => { void handleApproveBill(bill); }}
+                        disabled={!canApproveInventoryAmount(bill.grandTotal, capabilities, approvalSettings) || (bill.grandTotal > 0 && !capabilities.financialWrite)}
                         className="px-3 py-1.5 bg-purple-700 text-white font-bold text-xs inline-flex items-center gap-1"
                       >
                         <FileCheck className="w-3.5 h-3.5" /> مطابقة واعتماد وترحيل
@@ -197,6 +206,7 @@ export default function VendorBillPaymentManager({
                     ) : bill.remainingAmount > 0 ? (
                       <button
                         onClick={() => onPayBill ? openPaymentForm(bill) : triggerNotification?.('لا يتوفر مسار سداد مركزي لفاتورة المورد.', 'warning')}
+                        disabled={!capabilities.financialWrite}
                         className="px-3 py-1.5 bg-amber-100 text-amber-900 font-bold text-xs inline-flex items-center gap-1"
                       >
                         <Coins className="w-3.5 h-3.5" /> إحالة إلى الخزينة

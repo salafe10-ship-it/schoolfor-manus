@@ -236,6 +236,7 @@ export function validateInventoryProcurementSnapshot(data: Snapshot, options: { 
     const tax = numberValue(order.taxAmount, `ضريبة أمر الشراء ${id}`, { min: 0 });
     const discount = numberValue(order.discountAmount, `خصم أمر الشراء ${id}`, { min: 0 });
     const grandTotal = numberValue(order.grandTotal, `إجمالي أمر الشراء ${id}`, { min: 0 });
+    if (!closeEnough(subtotal, lines.reduce((sum, line) => sum + Number(line.totalAmount), 0))) throw new ValidationError(`إجمالي أمر الشراء ${id} لا يطابق صافي بنوده.`);
     if (!closeEnough(grandTotal, subtotal + tax - discount)) throw new ValidationError(`إجمالي أمر الشراء ${id} لا يطابق ملخصه المالي.`);
   }
 
@@ -249,8 +250,8 @@ export function validateInventoryProcurementSnapshot(data: Snapshot, options: { 
     if (String(receipt.vendorId) !== String(order.vendorId) || String(receipt.warehouseId) !== String(order.warehouseId)) throw new ValidationError(`بيانات المورد أو المستودع في إذن الاستلام ${id} لا تطابق أمر الشراء.`);
     if (!GRN_STATUSES.includes(String(receipt.status))) throw new ValidationError(`حالة إذن الاستلام ${id} غير معتمدة.`);
     assertNoJournalReference(receipt, `إذن الاستلام ${id}`, allowCanonicalPostingReferences);
-    if (receipt.inspectionResult === 'failed' && receipt.lines.some((line: Snapshot) => Number(line.acceptedQty) !== 0)) throw new ValidationError(`إذن الاستلام المرفوض ${id} لا يمكن أن يحتوي كمية مقبولة.`);
     const lines = lineRows(receipt, `إذن الاستلام ${id}`);
+    if (receipt.inspectionResult === 'failed' && lines.some((line: Snapshot) => Number(line.acceptedQty) !== 0)) throw new ValidationError(`إذن الاستلام المرفوض ${id} لا يمكن أن يحتوي كمية مقبولة.`);
     let total = 0;
     for (const [index, line] of lines.entries()) {
       const received = numberValue(line.receivedQty, `إذن الاستلام ${id} الكمية الواردة ${index + 1}`, { integer: true, min: 0 });
@@ -261,15 +262,19 @@ export function validateInventoryProcurementSnapshot(data: Snapshot, options: { 
       const lineTotal = numberValue(line.totalCost, `قيمة إذن الاستلام ${id} البند ${index + 1}`, { min: 0 });
       if (!closeEnough(lineTotal, accepted * cost)) throw new ValidationError(`قيمة إذن الاستلام ${id} لا تطابق الكمية المقبولة.`);
       const receiptItem = itemReferences.get(String(line.itemId || line.itemCode));
-      const orderLine = (order.lines || []).find((candidate: Snapshot) => {
+      const matchingLines = (order.lines || []).filter((candidate: Snapshot) => {
         const candidateItem = itemReferences.get(String(candidate.itemId || candidate.itemCode));
-        return (receiptItem && candidateItem && String(receiptItem.id) === String(candidateItem.id))
+        const matchesItem = (receiptItem && candidateItem && String(receiptItem.id) === String(candidateItem.id))
           || String(candidate.itemId || candidate.itemCode) === String(line.itemId || line.itemCode);
+        return matchesItem && (!line.purchaseOrderLineId || String(candidate.id) === String(line.purchaseOrderLineId));
       });
+      if (matchingLines.length > 1) throw new ValidationError(`بند إذن الاستلام ${id} ملتبس؛ حدد مرجع بند أمر الشراء.`);
+      const orderLine = matchingLines[0];
       if (!orderLine) throw new ValidationError(`بند إذن الاستلام ${id} غير موجود في أمر الشراء.`);
       if (!itemReferences.has(String(line.itemId || line.itemCode))) throw new ValidationError(`بند إذن الاستلام ${id} غير مربوط ببطاقة صنف مركزية.`);
-      const lineKey = `${order.id}:${String(line.itemId || line.itemCode)}`;
-      receivedByOrderLine.set(lineKey, (receivedByOrderLine.get(lineKey) || 0) + received);
+      const lineKey = `${order.id}:${String(orderLine.id)}`;
+      receivedByOrderLine.set(lineKey, (receivedByOrderLine.get(lineKey) || 0) + accepted);
+      if (received > Number(orderLine.quantityOrdered ?? orderLine.quantityRequested)) throw new ValidationError(`إذن الاستلام ${id} يتجاوز كمية أمر الشراء.`);
       if ((receivedByOrderLine.get(lineKey) || 0) > Number(orderLine.quantityOrdered ?? orderLine.quantityRequested)) throw new ValidationError(`إذن الاستلام ${id} يتجاوز كمية أمر الشراء.`);
       total += lineTotal;
     }
@@ -287,6 +292,10 @@ export function validateInventoryProcurementSnapshot(data: Snapshot, options: { 
     billedReceipts.add(String(bill.grnId));
     if (String(bill.vendorId) !== String(receipt.vendorId)) throw new ValidationError(`مورد فاتورة ${id} لا يطابق إذن الاستلام.`);
     const subtotal = numberValue(bill.subtotal, `إجمالي الفاتورة قبل الضريبة ${id}`, { min: 0 });
+    if (['approved', 'partially_paid', 'paid'].includes(String(bill.status))) {
+      if (!closeEnough(subtotal, Number(receipt.totalReceivedValue)) || (bill.purchaseOrderId && bill.purchaseOrderId !== receipt.purchaseOrderId)) throw new ValidationError(`فاتورة المورد ${id} لا تطابق قيمة الاستلام وأمر الشراء.`);
+      if (!String(receipt.glJournalEntryId || '').trim()) throw new ValidationError(`فاتورة المورد ${id} تتطلب إذن استلام مرحلاً إلى دفتر الأستاذ.`);
+    }
     const tax = numberValue(bill.taxAmount, `ضريبة الفاتورة ${id}`, { min: 0 });
     const grandTotal = numberValue(bill.grandTotal, `إجمالي الفاتورة ${id}`, { min: 0 });
     const paid = numberValue(bill.paidAmount, `المدفوع من الفاتورة ${id}`, { min: 0 });

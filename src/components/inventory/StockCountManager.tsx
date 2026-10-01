@@ -6,6 +6,9 @@ import {
 } from 'lucide-react';
 import { InventoryItem, InventoryWarehouse } from '../../types';
 import { getItemWarehouseQuantity } from './inventoryCanonical';
+import { useInventoryDraftIdentity } from './useInventoryDraftIdentity';
+import { useInventoryPrint } from './InventoryPrintProvider';
+import { canApproveInventoryAmount, roundInventoryMoney, type InventoryCapabilities } from './inventoryUiPolicy';
 
 interface StockCountManagerProps {
   items: InventoryItem[];
@@ -13,10 +16,19 @@ interface StockCountManagerProps {
   stocktakes?: any[];
   onSave?: (stocktakes: any[]) => Promise<void>;
   onApproveStocktake?: (stocktake: any) => Promise<void>;
+  capabilities?: InventoryCapabilities;
+  approvalSettings?: Record<string, any>;
   triggerNotification?: (msg: string, type: 'success' | 'warning' | 'info' | 'danger') => void;
 }
 
-export default function StockCountManager({ items, warehouses = [], stocktakes = [], onSave, onApproveStocktake, triggerNotification }: StockCountManagerProps) {
+export default function StockCountManager({ items, warehouses = [], stocktakes = [], onSave, onApproveStocktake, triggerNotification, capabilities = {}, approvalSettings = {} }: StockCountManagerProps) {
+  const draft = useInventoryDraftIdentity('STK');
+  const print = useInventoryPrint();
+  const canApprove = (record: any) => {
+    const item = items.find(row => row.id === record.itemId);
+    const value = Math.abs(roundInventoryMoney((Number(record.actualQty) - Number(record.bookQty)) * Number(item?.costPrice || 0)));
+    return item?.status !== 'archived' && canApproveInventoryAmount(value, capabilities, approvalSettings) && (value === 0 || capabilities.financialWrite === true);
+  };
   const [showCountForm, setShowCountForm] = useState(false);
   const [countItemId, setCountItemId] = useState('');
   const [countWarehouseId, setCountWarehouseId] = useState('');
@@ -34,6 +46,7 @@ export default function StockCountManager({ items, warehouses = [], stocktakes =
   };
 
   const openStocktake = () => {
+    draft.reset();
     if (!items.length) { notify('لا يمكن بدء الجرد قبل تسجيل صنف مركزي واحد على الأقل.', 'warning'); return; }
     if (!warehouses.length) { notify('لا يمكن بدء الجرد قبل تسجيل مستودع مركزي واحد على الأقل.', 'warning'); return; }
     setCountItemId(''); setCountWarehouseId(''); setActualQty(''); setShowCountForm(true);
@@ -42,15 +55,16 @@ export default function StockCountManager({ items, warehouses = [], stocktakes =
   const handleCreateStocktake = async (event: React.FormEvent) => {
     event.preventDefault();
     const item = items.find(row => row.id === countItemId);
+    if (item?.status === 'archived') { notify('لا يمكن جرد صنف مؤرشف.', 'warning'); return; }
     const warehouseId = countWarehouseId || item?.warehouseId || '';
     const countedQuantity = Number(actualQty);
     if (!item || !warehouseId || actualQty.trim() === '' || !Number.isInteger(countedQuantity) || countedQuantity < 0) { notify('اختر الصنف والمستودع وأدخل كمية فعلية صحيحة غير سالبة.', 'warning'); return; }
     const bookQty = getItemWarehouseQuantity(item, warehouseId);
     const discrepancy = countedQuantity - bookQty;
-    const record = { id: `STK-${crypto.randomUUID()}`, itemId: item.id, itemName: item.name, warehouseId,
+    const record = { id: draft.identity().id, itemId: item.id, itemName: item.name, warehouseId,
       warehouse: warehouses.find(row => row.id === warehouseId)?.name || warehouseId,
-      bookQty, actualQty: countedQuantity, discrepancy, financialImpact: discrepancy * item.costPrice,
-      valuationPolicy: 'weighted_average', status: 'pending_approval', statusLabel: 'قيد اعتماد التسوية', createdAt: new Date().toISOString() };
+      bookQty, actualQty: countedQuantity, discrepancy, financialImpact: roundInventoryMoney(discrepancy * item.costPrice), valuationUnitCost: item.costPrice,
+      valuationPolicy: 'weighted_average', status: 'pending_approval', statusLabel: 'قيد اعتماد التسوية', createdAt: draft.identity().createdAt };
     if (!onSave) { notify('حفظ محضر الجرد متوقف حتى يتوفر المصدر المركزي.', 'warning'); return; }
     try { await onSave([record, ...stocktakes]); notify(`تم حفظ محضر الجرد ${record.id} مركزياً.`, 'success'); setShowCountForm(false); }
     catch (error: any) { notify(error?.message || 'تعذر حفظ محضر الجرد مركزياً.', 'danger'); }
@@ -80,7 +94,7 @@ export default function StockCountManager({ items, warehouses = [], stocktakes =
             <h3 className="font-black text-lg">تسجيل نتيجة جرد فعلية</h3>
             <select required value={countItemId} onChange={event => { setCountItemId(event.target.value); setActualQty(''); }} className="w-full p-2.5 border border-slate-300">
               <option value="">اختر الصنف</option>
-              {items.map(item => <option key={item.id} value={item.id}>{item.name}</option>)}
+              {items.filter(item => item.status !== 'archived').map(item => <option key={item.id} value={item.id}>{item.name}</option>)}
             </select>
             <select required value={countWarehouseId} onChange={event => { setCountWarehouseId(event.target.value); setActualQty(''); }} className="w-full p-2.5 border border-slate-300">
               <option value="">اختر المستودع</option>
@@ -146,7 +160,7 @@ export default function StockCountManager({ items, warehouses = [], stocktakes =
                     </span>
                   </td>
                   <td className="px-5 py-4 text-center">
-                    {rec.status === 'pending_approval' && (
+                    {rec.status === 'pending_approval' && canApprove(rec) && (
                       <button 
                         onClick={() => { void handleApproveDiscrepancy(rec); }}
                         className="px-3 py-1.5 bg-slate-900 hover:bg-slate-800 text-white font-bold text-xs transition"
@@ -154,6 +168,8 @@ export default function StockCountManager({ items, warehouses = [], stocktakes =
                         اعتماد وترحيل التسوية
                       </button>
                     )}
+                    {print && <button type="button" onClick={() => { void print({ title: 'محضر جرد', number: rec.id, date: rec.createdAt?.slice(0, 10), status: rec.statusLabel || rec.status, reportType: 'variances',
+                      columns: ['الصنف', 'المستودع', 'الدفتري', 'الفعلي', 'الفرق', 'تكلفة التقييم', 'الأثر المالي'], rows: [[rec.itemName, rec.warehouse, rec.bookQty, rec.actualQty, rec.discrepancy, rec.valuationUnitCost, rec.financialImpact]] }); }}>طباعة / حفظ PDF</button>}
                   </td>
                 </tr>
               ))}
