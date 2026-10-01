@@ -121,6 +121,7 @@ import {
 import { buildExamProctorCandidates } from './src/modules/exams/application/ExamProctorCandidates.js';
 import { calculatePayrollRun } from './src/modules/hr/domain/PayrollCalculation.js';
 import { validateInventoryProcurementSnapshot } from './src/modules/inventory/domain/InventoryProcurementValidation.js';
+import { inventoryStableJson, isInventoryWorkflowProgression, validateInventoryValuationTransition, validateInventoryWriteAuthority, inventoryPostingCandidates, inventoryHasFinancialEffect } from './src/modules/inventory/domain/InventoryWritePolicy.js';
 import {
   assertMoney,
   buildInstallmentSchedule,
@@ -1321,6 +1322,7 @@ function validateInventoryPostingMetadata(currentData: Record<string, any>, requ
 }
 
 function validateInventoryQuantityLedger(currentData: Record<string, any>, requestedData: Record<string, any>): void {
+  validateInventoryValuationTransition(currentData, requestedData);
   const oldItems = Array.isArray(currentData.items) ? currentData.items : [];
   const nextItems = Array.isArray(requestedData.items) ? requestedData.items : [];
   const oldById = new Map(oldItems.map((item: any) => [String(item?.id || ''), item]));
@@ -15245,6 +15247,9 @@ export async function createApp(options: { cloudflare?: boolean } = {}): Promise
       if (!tenantId || !schoolId || !tenantContext || tenantContext.tenantId !== tenantId || tenantContext.schoolId !== schoolId) {
         throw new AuthenticationError('السياق الموثوق لقراءة المخزون والمشتريات غير مكتمل.');
       }
+      const operationId = String(req.query.operationId || '').trim();
+      if (operationId && !/^[a-zA-Z0-9_-]{16,100}$/.test(operationId)) throw new ValidationError('معرف عملية المخزون غير صالح.');
+      let operation: Record<string, any> | null = null;
       const snapshot = await UnitOfWork.runInTransaction(schoolId, {
         operationName: 'Read versioned inventory database', tenantId, userId: identity.id,
         userName: identity.name || 'المستخدم الحالي', ipAddress: req.ip || 'unknown',
@@ -15252,6 +15257,16 @@ export async function createApp(options: { cloudflare?: boolean } = {}): Promise
       }, async () => {
         const transaction = UnitOfWork.getActiveContext()?.databaseTransaction;
         if (!transaction) throw new DatabaseError('معاملة قراءة المخزون والمشتريات غير متاحة.');
+        if (operationId) {
+          const receipt = await transaction.query<{ operation: Record<string, any> }>(
+            `SELECT a.metadata->'operation' AS operation FROM public.audit_events a
+             JOIN public.users u ON u.id = a.actor_user_id AND u.tenant_id = a.tenant_id
+             WHERE a.tenant_id = $1 AND a.school_id = $2 AND u.auth_user_id = $3
+               AND a.entity_type = 'inventory_database' AND a.source = 'InventoryDatabaseRoute' AND a.result = 'success'
+               AND a.metadata->'operation'->>'id' = $4 LIMIT 1`, [tenantId, schoolId, identity.id, operationId]
+          );
+          operation = receipt.rows[0]?.operation || null;
+        }
         const result = await transaction.query<{ data: Record<string, unknown>; version: number }>(
           `SELECT data, version FROM public.inventory_database WHERE tenant_id = $1 AND school_id = $2`,
           [tenantId, schoolId]
@@ -15262,9 +15277,12 @@ export async function createApp(options: { cloudflare?: boolean } = {}): Promise
         };
       }, tenantContext);
       res.setHeader('Cache-Control', 'no-store');
-      res.json({ success: true, data: snapshot.data, meta: { version: Number(snapshot.version || 0) }, message: "Inventory database retrieved successfully." });
+      res.json({ success: true, data: snapshot.data, meta: { version: Number(snapshot.version || 0), operation, capabilities: {
+        approve: authorizationEngine.can(identity, PERMISSIONS.FINANCIAL_APPROVE), settings: authorizationEngine.can(identity, 'Settings.Edit'),
+        boardApprove: authorizationEngine.can(identity, PERMISSIONS.INVENTORY_BOARD_APPROVE), financialWrite: authorizationEngine.can(identity, PERMISSIONS.FINANCIAL_WRITE)
+      } }, message: 'تم تحميل المخزون والمشتريات.' });
     } catch (err: any) {
-      next(err instanceof AuthenticationError || err instanceof AuthorizationError || err instanceof DatabaseError
+      next(err instanceof AuthenticationError || err instanceof AuthorizationError || err instanceof ValidationError || err instanceof DatabaseError
         ? err : new DatabaseError("Failed to read inventory database", err.message));
     }
   });
@@ -15277,7 +15295,12 @@ export async function createApp(options: { cloudflare?: boolean } = {}): Promise
       const tenantContext = (req as any).tenantContext;
       const expectedVersion = Number(req.body?.expectedVersion);
       const requestedData = req.body?.data;
+      const operationId = String(req.body?.operationId || '').trim();
+      if (operationId && !/^[a-zA-Z0-9_-]{16,100}$/.test(operationId)) throw new ValidationError('معرف عملية الحفظ غير صالح.');
+      const payloadHash = createHash('sha256').update(inventoryStableJson(requestedData) || '').digest('hex');
+      let operation: Record<string, any> | null = null;
       const expectedArrays = ['items', 'categories', 'brands', 'units', 'suppliers', 'warehouses', 'movements', 'stocktakes', 'purchaseRequests', 'rfqs', 'quotations', 'purchaseOrders', 'goodsReceipts', 'vendorBills', 'vendorPayments'];
+      const allowedKeys = new Set([...expectedArrays, 'settings', 'procurementSettings']);
       if (!tenantId || !schoolId || !tenantContext || tenantContext.tenantId !== tenantId || tenantContext.schoolId !== schoolId
         || !Number.isInteger(expectedVersion) || expectedVersion < 0) {
         throw new ValidationError('حفظ المخزون والمشتريات يتطلب نطاق مدرسة موثوقاً ورقم إصدار صالحاً.');
@@ -15285,6 +15308,7 @@ export async function createApp(options: { cloudflare?: boolean } = {}): Promise
       if (!requestedData || typeof requestedData !== 'object' || Array.isArray(requestedData)) {
         throw new ValidationError('بيانات المخزون والمشتريات يجب أن تكون كائناً صالحاً.');
       }
+      if (Object.keys(requestedData).some(key => !allowedKeys.has(key))) throw new ValidationError('حفظ المخزون يتضمن حقولاً غير معتمدة.');
       for (const collection of expectedArrays) {
         if (!Array.isArray((requestedData as Record<string, unknown>)[collection])) {
           throw new ValidationError(`حقل ${collection} يجب أن يكون قائمة.`);
@@ -15337,35 +15361,60 @@ export async function createApp(options: { cloudflare?: boolean } = {}): Promise
           [tenantId, schoolId]
         );
         const actualVersion = Number(current.rows[0]?.version || 0);
+        if (operationId) {
+          const receipt = await transaction.query<{ operation: Record<string, any> }>(
+            `SELECT metadata->'operation' AS operation FROM public.audit_events
+             WHERE tenant_id = $1 AND school_id = $2 AND actor_user_id = $3
+               AND entity_type = 'inventory_database' AND source = 'InventoryDatabaseRoute' AND result = 'success'
+               AND metadata->'operation'->>'id' = $4 LIMIT 1`, [tenantId, schoolId, actorId, operationId]
+          );
+          operation = receipt.rows[0]?.operation || null;
+          if (operation) {
+            if (operation.payloadHash !== payloadHash || Number(operation.expectedVersion) !== expectedVersion) throw new ConflictError('لا يمكن إعادة استخدام معرف العملية لمحتوى أو إصدار مختلف.');
+            persistedData = current.rows[0]?.data || {};
+            nextVersion = actualVersion;
+            return; // Confirm committed operation; never post or increment the version twice.
+          }
+        }
         if (actualVersion !== expectedVersion) throw new ConflictError('تم تعديل المخزون أو المشتريات بواسطة مستخدم آخر. أعد المزامنة.', { expectedVersion, actualVersion });
         const currentData = current.rows[0]?.data || {};
+        validateInventoryWriteAuthority(currentData, requestedData, {
+          actorId, actorName: identity.name || actorId, now: new Date().toISOString(),
+          approve: authorizationEngine.can(identity, PERMISSIONS.FINANCIAL_APPROVE), settings: authorizationEngine.can(identity, 'Settings.Edit'),
+          boardApprove: authorizationEngine.can(identity, PERMISSIONS.INVENTORY_BOARD_APPROVE), financialWrite: authorizationEngine.can(identity, PERMISSIONS.FINANCIAL_WRITE)
+        });
         validateInventoryPostingMetadata(currentData, requestedData as Record<string, any>);
         validateInventoryProcurementSnapshot(requestedData as Record<string, any>, { allowCanonicalPostingReferences: true });
         validateInventoryQuantityLedger(currentData, requestedData as Record<string, any>);
+        const postingCandidates = inventoryPostingCandidates(currentData, requestedData);
+        const financialEffect = inventoryHasFinancialEffect(postingCandidates);
+        if (financialEffect && !authorizationEngine.can(identity, PERMISSIONS.FINANCIAL_WRITE)) throw new AuthorizationError('ترحيل الأثر المالي للمخزون يتطلب صلاحية Financial.Write.');
         canonicalErpReady = await CanonicalErpPostingService.isProvisioned(transaction);
-        if (!canonicalErpReady) {
+        if (financialEffect && !canonicalErpReady) {
           throw new DatabaseError('لا يمكن كتابة المخزون مع إعلان نجاح مالي قبل تثبيت دفتر الأستاذ الكانوني وربطه بالمخزون.');
         }
-        const accountingReadiness = await CanonicalErpPostingService.getReadiness(transaction, schoolId);
-        if (!accountingReadiness.sourceSupport.inventory) {
-          const blockers = [...accountingReadiness.missing, ...accountingReadiness.invalid]
+        const accountingReadiness = canonicalErpReady ? await CanonicalErpPostingService.getReadiness(transaction, schoolId) : null;
+        if (financialEffect && !accountingReadiness?.sourceSupport.inventory) {
+          const blockers = [...(accountingReadiness?.missing || []), ...(accountingReadiness?.invalid || [])]
             .filter((label, index, all) => all.indexOf(label) === index)
             .slice(0, 6)
             .join('، ');
           throw new ValidationError(`لا يمكن حفظ حركة مخزنية قبل اعتماد خرائط المخزون في الأستاذ العام${blockers ? `: ${blockers}` : '.'}`);
         }
+        canonicalErpReady = Boolean(accountingReadiness?.sourceSupport.inventory);
         for (const key of ['movements', 'stocktakes', 'purchaseRequests', 'rfqs', 'quotations', 'purchaseOrders', 'goodsReceipts', 'vendorBills', 'vendorPayments']) {
           for (const locked of (Array.isArray(currentData[key]) ? currentData[key] : []).filter((row: any) => ['approved', 'issued', 'awarded', 'posted', 'closed', 'paid', 'posted_to_gl', 'fully_received', 'converted_to_po', 'responses_received', 'sent', 'inspected_received', 'partially_accepted'].includes(String(row?.status)))) {
             const requested = (requestedData as any)[key].find((row: any) => row?.id === locked.id);
             if (key === 'purchaseOrders' && requested && isPurchaseOrderReceiptProgression(locked, requested)) continue;
+            if (requested && isInventoryWorkflowProgression(key, locked, requested, currentData, requestedData)) continue;
             if (!requested || stableJsonStringify(requested) !== stableJsonStringify(locked)) {
               throw new ConflictError(`السجل ${locked.id} في ${key} محمي بعد الاعتماد ولا يقبل تعديلاً عاماً.`);
             }
           }
         }
-        if (canonicalErpReady) {
+        if (canonicalErpReady && financialEffect) {
           canonicalErpSync = await CanonicalErpPostingService.syncInventoryProcurementSnapshot(
-            transaction, tenantId, schoolId, actorId, requestedData as Record<string, any>
+            transaction, tenantId, schoolId, actorId, postingCandidates
           );
           persistedData = applyInventoryPostingLinks(requestedData as Record<string, any>, canonicalErpSync.sourceLinks);
         }
@@ -15373,6 +15422,7 @@ export async function createApp(options: { cloudflare?: boolean } = {}): Promise
           stableJsonStringify(currentData[key] ?? (expectedArrays.includes(key) ? [] : {})) !== stableJsonStringify((requestedData as any)[key])
         );
         nextVersion = actualVersion + 1;
+        operation = operationId ? { id: operationId, actorId, payloadHash, expectedVersion, committedVersion: nextVersion } : null;
         await transaction.query(
           `INSERT INTO public.inventory_database (tenant_id, school_id, data, version, updated_at, updated_by)
            VALUES ($1, $2, $3::jsonb, $4, now(), $5)
@@ -15385,7 +15435,7 @@ export async function createApp(options: { cloudflare?: boolean } = {}): Promise
           `INSERT INTO public.audit_events
              (tenant_id, school_id, branch_id, actor_user_id, entity_type, entity_id, action, source, reason, result, metadata)
            VALUES ($1, $2, $3, $4, 'inventory_database', $2, 'write', 'InventoryDatabaseRoute', 'حفظ المخزون والمشتريات', 'success', $5::jsonb)`,
-          [tenantId, schoolId, identity.branchId || null, actorId, JSON.stringify({ expectedVersion, actualVersion, nextVersion, changedCollections,
+          [tenantId, schoolId, identity.branchId || null, actorId, JSON.stringify({ expectedVersion, actualVersion, nextVersion, changedCollections, operation,
             previousSnapshotHash: createHash('sha256').update(stableJsonStringify(currentData)).digest('hex'),
             nextSnapshotHash: createHash('sha256').update(stableJsonStringify(persistedData)).digest('hex'),
             accounting: canonicalErpSync ? {
@@ -15398,6 +15448,11 @@ export async function createApp(options: { cloudflare?: boolean } = {}): Promise
       }, tenantContext);
       res.json({ success: true, data: persistedData, meta: {
         version: nextVersion,
+        operation,
+        capabilities: {
+          approve: authorizationEngine.can(identity, PERMISSIONS.FINANCIAL_APPROVE), settings: authorizationEngine.can(identity, 'Settings.Edit'),
+          boardApprove: authorizationEngine.can(identity, PERMISSIONS.INVENTORY_BOARD_APPROVE), financialWrite: authorizationEngine.can(identity, PERMISSIONS.FINANCIAL_WRITE)
+        },
         erpIntegration: canonicalErpReady ? 'ready' : 'not_provisioned',
         erpSync: canonicalErpSync ? {
           createdJournalCount: canonicalErpSync.createdJournalCount,
@@ -15405,9 +15460,7 @@ export async function createApp(options: { cloudflare?: boolean } = {}): Promise
           ledgerLineCount: canonicalErpSync.ledgerLineCount,
           sourceLinks: canonicalErpSync.sourceLinks
         } : null
-      }, message: canonicalErpReady
-        ? "Inventory database saved and synchronized with the canonical ledger."
-        : "Inventory database saved; canonical ledger integration is not provisioned for this school." });
+      }, message: canonicalErpSync ? 'تم حفظ المخزون وترحيل الأثر المالي إلى دفتر الأستاذ.' : 'تم حفظ المخزون؛ لم ينشأ قيد مالي جديد في هذه العملية.' });
     } catch (err: any) {
       next(err instanceof AuthenticationError || err instanceof AuthorizationError || err instanceof ConflictError || err instanceof ValidationError || err instanceof DatabaseError
         ? err : new DatabaseError("Failed to save inventory database", err.message));

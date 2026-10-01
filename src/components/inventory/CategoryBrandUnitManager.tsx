@@ -1,6 +1,7 @@
 import React, { useState } from 'react';
 import { Tag, Tags, Ruler, Plus, Edit, Trash2, CheckCircle2 } from 'lucide-react';
 import { InventoryCategory, InventoryUnit } from '../../types';
+import { useInventoryDraftIdentity } from './useInventoryDraftIdentity';
 
 interface CategoryBrandUnitManagerProps {
   categories: InventoryCategory[];
@@ -14,6 +15,7 @@ export default function CategoryBrandUnitManager({ categories, brands, units, on
   const [activeSubTab, setActiveSubTab] = useState<'categories' | 'brands' | 'units'>('categories');
   const [newName, setNewName] = useState('');
   const [showCreateForm, setShowCreateForm] = useState(false);
+  const draft = useInventoryDraftIdentity('directory');
 
   const notify = (msg: string, type: 'success' | 'warning' | 'info' | 'danger' = 'info') => {
     if (triggerNotification) triggerNotification(msg, type);
@@ -24,15 +26,16 @@ export default function CategoryBrandUnitManager({ categories, brands, units, on
     const name = newName.trim();
     if (!name) { notify('الاسم مطلوب.', 'warning'); return; }
     try {
-      if (activeSubTab === 'categories') await onSave({ categories: [...categories, { id: `cat_${Date.now()}`, schoolId: '', name, description: '' }] });
-      if (activeSubTab === 'brands') await onSave({ brands: [...brands, { id: `brand_${Date.now()}`, name, origin: '' }] });
-      if (activeSubTab === 'units') await onSave({ units: [...units, { id: `unit_${Date.now()}`, schoolId: '', name, symbol: name }] });
+      const { id } = draft.identity();
+      if (activeSubTab === 'categories') await onSave({ categories: [...categories, { id, schoolId: '', name, description: '' }] });
+      if (activeSubTab === 'brands') await onSave({ brands: [...brands, { id, name, origin: '' }] });
+      if (activeSubTab === 'units') await onSave({ units: [...units, { id, schoolId: '', name, symbol: name }] });
       notify(`✓ تم حفظ (${name}) مركزياً`, 'success');
       setNewName(''); setShowCreateForm(false);
     } catch (error: any) { notify(error?.message || 'تعذر الحفظ المركزي', 'danger'); }
   };
 
-  const openCreateForm = () => { setNewName(''); setShowCreateForm(true); };
+  const openCreateForm = () => { draft.reset(); setNewName(''); setShowCreateForm(true); };
 
   return (
     <div className="space-y-6">

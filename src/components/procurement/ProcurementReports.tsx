@@ -4,6 +4,7 @@ import {
   ShoppingBag, DollarSign, Users, ShieldCheck, CheckCircle2 
 } from 'lucide-react';
 import { PurchaseOrder, GoodsReceiptNote, VendorBill } from '../../types';
+import { useInventoryPrint } from '../inventory/InventoryPrintProvider';
 
 interface ProcurementReportsProps {
   orders: PurchaseOrder[];
@@ -20,6 +21,7 @@ export default function ProcurementReports({
   onAuditReport,
   triggerNotification
 }: ProcurementReportsProps) {
+  const print = useInventoryPrint();
 
   const totalSpend = orders.reduce((s, po) => s + po.grandTotal, 0);
   const totalReceived = receipts.reduce((s, r) => s + r.totalReceivedValue, 0);
@@ -33,12 +35,17 @@ export default function ProcurementReports({
   const csvCell = (value: unknown) => `"${String(value ?? '').replace(/"/g, '""')}"`;
 
   const handlePrint = async () => {
-    try {
-      await onAuditReport?.('print');
-      window.print();
-    } catch (error: any) {
-      notify(error?.message || 'تعذر تدقيق التقرير قبل الطباعة.', 'danger');
-    }
+    if (!print) { notify('مسار الطباعة غير متاح.', 'warning'); return; }
+    await print({ title: 'تقرير المشتريات والتوريدات حسب المورد', reportType: 'procurement',
+      columns: ['المورد', 'عدد الأوامر', 'قيمة الأوامر', 'قيمة الاستلام', 'الفواتير', 'المتبقي'],
+      rows: vendorIds.map(vendorId => {
+        const po = orders.filter(row => row.vendorId === vendorId);
+        const grn = receipts.filter(row => row.vendorId === vendorId);
+        const bills = billsForVendor(vendorId);
+        return [po[0]?.vendorName || grn[0]?.vendorName || bills[0]?.vendorName || vendorId, po.length,
+          po.reduce((sum, row) => sum + row.grandTotal, 0), grn.reduce((sum, row) => sum + row.totalReceivedValue, 0),
+          bills.reduce((sum, row) => sum + row.grandTotal, 0), bills.reduce((sum, row) => sum + row.remainingAmount, 0)];
+      }) });
   };
 
   const handleExport = async () => {
@@ -90,13 +97,13 @@ export default function ProcurementReports({
             onClick={handlePrint}
             className="px-4 py-2 bg-slate-100 hover:bg-slate-200 text-slate-800 text-xs font-bold transition flex items-center gap-1.5"
           >
-            <Printer className="w-4 h-4" /> طباعة التقارير
+            <Printer className="w-4 h-4" /> طباعة / حفظ PDF
           </button>
           <button 
             onClick={handleExport}
             className="px-4 py-2 bg-slate-900 hover:bg-slate-800 text-white text-xs font-bold transition flex items-center gap-1.5 shadow-sm"
           >
-            <Download className="w-4 h-4" /> تصدير Excel
+            <Download className="w-4 h-4" /> تصدير CSV
           </button>
         </div>
       </div>

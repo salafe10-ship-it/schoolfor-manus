@@ -4,12 +4,16 @@ import {
   Clock, Plus, ShieldCheck, DollarSign, Star, FileCheck 
 } from 'lucide-react';
 import { RequestForQuotation, VendorQuotation, PurchaseRequest, InventorySupplier } from '../../types';
+import { canApproveInventoryAmount, type InventoryCapabilities } from '../inventory/inventoryUiPolicy';
+import { useInventoryDraftIdentity } from '../inventory/useInventoryDraftIdentity';
 
 interface QuotationComparisonManagerProps {
   requests: PurchaseRequest[];
   rfqs: RequestForQuotation[];
   quotations: VendorQuotation[];
   suppliers: InventorySupplier[];
+  capabilities?: InventoryCapabilities;
+  approvalSettings?: Record<string, any>;
   onSaveRfq: (rfq: RequestForQuotation) => Promise<void>;
   onSaveQuotation: (quotation: VendorQuotation, rfq: RequestForQuotation) => Promise<void>;
   onAwardVendor: (rfqId: string, vendorId: string, totalAmount: number) => Promise<void>;
@@ -21,12 +25,16 @@ export default function QuotationComparisonManager({
   rfqs,
   quotations,
   suppliers,
+  capabilities = {},
+  approvalSettings = {},
   onSaveRfq,
   onSaveQuotation,
   onAwardVendor,
   triggerNotification
 }: QuotationComparisonManagerProps) {
   const [activeRfqId, setActiveRfqId] = useState<string>('');
+  const rfqDraft = useInventoryDraftIdentity('rfq');
+  const quotationDraft = useInventoryDraftIdentity('quotation');
   const [showQuoteForm, setShowQuoteForm] = useState(false);
   const [quoteNo, setQuoteNo] = useState('');
   const [vendorId, setVendorId] = useState('');
@@ -35,6 +43,7 @@ export default function QuotationComparisonManager({
   const [unitPrices, setUnitPrices] = useState<Record<string, number>>({});
 
   const handleAward = async (vq: VendorQuotation) => {
+    if (!canApproveInventoryAmount(vq.grandTotal, capabilities, approvalSettings)) return;
     try {
       await onAwardVendor(vq.rfqId, vq.vendorId, vq.grandTotal);
       triggerNotification?.(`✓ تم ترسية العرض على المورد (${vq.vendorName}) وحفظ أمر الشراء مركزياً`, 'success');
@@ -48,12 +57,12 @@ export default function QuotationComparisonManager({
     const request = requests.find(item => item.status === 'approved');
     if (!request) { triggerNotification?.('يلزم طلب شراء معتمد قبل إنشاء RFQ.', 'warning'); return; }
     const rfq: RequestForQuotation = {
-      id: `rfq_${Date.now()}`, schoolId: '', rfqNo: `RFQ-${Date.now()}`, purchaseRequestId: request.id,
+      id: rfqDraft.identity().id, schoolId: '', rfqNo: rfqDraft.identity().id.toUpperCase(), purchaseRequestId: request.id,
       title: request.purpose, issueDate: new Date().toISOString().split('T')[0],
       deadlineDate: new Date(Date.now() + 7 * 86400000).toISOString().split('T')[0], vendorIds: [],
       items: request.lines, status: 'draft', createdAt: new Date().toISOString()
     };
-    try { await onSaveRfq(rfq); setActiveRfqId(rfq.id); triggerNotification?.(`تم حفظ طلب العروض ${rfq.rfqNo} مركزياً.`, 'success'); }
+    try { await onSaveRfq(rfq); rfqDraft.reset(); setActiveRfqId(rfq.id); triggerNotification?.(`تم حفظ طلب العروض ${rfq.rfqNo} مركزياً.`, 'success'); }
     catch (error: any) { triggerNotification?.(error?.message || 'تعذر حفظ طلب العروض', 'danger'); }
   };
 
@@ -76,7 +85,7 @@ export default function QuotationComparisonManager({
       totalAmount: item.quantityRequested * unitPrices[item.id],
     }));
     const quotation: VendorQuotation = {
-      id: `quotation_${Date.now()}`,
+      id: quotationDraft.identity().id,
       rfqId: selectedRfq.id,
       vendorId: supplier.id,
       vendorName: supplier.name,
@@ -135,7 +144,7 @@ export default function QuotationComparisonManager({
 
             <div className="flex items-center gap-3">
               <span className="text-xs text-slate-500 font-bold">الموعد النهائي: <strong className="text-slate-900">{selectedRfq.deadlineDate}</strong></span>
-              <button onClick={() => setShowQuoteForm(true)} className="px-3 py-2 bg-amber-700 text-white text-xs font-bold">تسجيل عرض مورد</button>
+              <button onClick={() => { quotationDraft.reset(); setShowQuoteForm(true); }} className="px-3 py-2 bg-amber-700 text-white text-xs font-bold">تسجيل عرض مورد</button>
             </div>
           </div>
 
@@ -201,6 +210,7 @@ export default function QuotationComparisonManager({
                 <div className="mt-6 pt-4 border-t border-slate-100 flex gap-2">
                   <button 
                     onClick={() => handleAward(vq)}
+                    disabled={!canApproveInventoryAmount(vq.grandTotal, capabilities, approvalSettings)}
                     className="w-full py-2.5 bg-slate-900 hover:bg-slate-800 text-white font-bold text-xs transition flex items-center justify-center gap-1 shadow-sm"
                   >
                     <Award className="w-4 h-4 text-amber-400" /> اعتماد وترسية أمر الشراء PO

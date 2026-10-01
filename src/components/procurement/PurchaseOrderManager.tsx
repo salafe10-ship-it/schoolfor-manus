@@ -5,6 +5,9 @@ import {
   AlertCircle, ShieldCheck, FileCheck, Layers 
 } from 'lucide-react';
 import { InventorySupplier, InventoryWarehouse, PurchaseOrder, ProcurementItemLine, PurchaseOrderStatus } from '../../types';
+import { canApproveInventoryAmount, type InventoryCapabilities } from '../inventory/inventoryUiPolicy';
+import { useInventoryDraftIdentity } from '../inventory/useInventoryDraftIdentity';
+import { useInventoryPrint } from '../inventory/InventoryPrintProvider';
 
 interface PurchaseOrderManagerProps {
   orders: PurchaseOrder[];
@@ -12,6 +15,8 @@ interface PurchaseOrderManagerProps {
   onReceiveItems: (po: PurchaseOrder) => void;
   suppliers: InventorySupplier[];
   warehouses: InventoryWarehouse[];
+  capabilities?: InventoryCapabilities;
+  approvalSettings?: Record<string, any>;
   triggerNotification?: (msg: string, type: 'success' | 'warning' | 'info' | 'danger') => void;
 }
 
@@ -21,9 +26,13 @@ export default function PurchaseOrderManager({
   onReceiveItems,
   suppliers,
   warehouses,
+  capabilities = {},
+  approvalSettings = {},
   triggerNotification
 }: PurchaseOrderManagerProps) {
   const [searchTerm, setSearchTerm] = useState('');
+  const draft = useInventoryDraftIdentity('po');
+  const print = useInventoryPrint();
   const [filterStatus, setFilterStatus] = useState<string>('ALL');
   const [showModal, setShowModal] = useState(false);
   const [editingPO, setEditingPO] = useState<Partial<PurchaseOrder> | null>(null);
@@ -33,6 +42,7 @@ export default function PurchaseOrderManager({
   };
 
   const handleOpenNew = () => {
+    draft.reset();
     setEditingPO({
       poNo: '',
       poDate: new Date().toISOString().split('T')[0],
@@ -64,7 +74,8 @@ export default function PurchaseOrderManager({
     }
 
     const poToSave: PurchaseOrder = {
-      id: editingPO.id || `po_${Date.now()}`,
+      ...editingPO,
+      id: editingPO.id || draft.identity().id,
       schoolId: '',
       poNo: editingPO.poNo,
       poDate: editingPO.poDate || new Date().toISOString().split('T')[0],
@@ -80,7 +91,7 @@ export default function PurchaseOrderManager({
       taxAmount: editingPO.taxAmount ?? 0,
       discountAmount: editingPO.discountAmount ?? 0,
       grandTotal: editingPO.grandTotal ?? 0,
-      createdAt: editingPO.createdAt || new Date().toISOString(),
+      createdAt: editingPO.createdAt || draft.identity().createdAt,
       updatedAt: new Date().toISOString()
     };
 
@@ -100,8 +111,9 @@ export default function PurchaseOrderManager({
   });
 
   const handleApproveOrder = async (po: PurchaseOrder) => {
+    if (!canApproveInventoryAmount(po.grandTotal, capabilities, approvalSettings)) return;
     try {
-      await onSaveOrder({ ...po, status: 'approved', approvedBy: 'المستخدم الحالي', approvalDate: new Date().toISOString().split('T')[0], updatedAt: new Date().toISOString() });
+      await onSaveOrder({ ...po, status: 'approved' });
       notify(`تم اعتماد أمر الشراء ${po.poNo} مركزياً.`, 'success');
     } catch (error: any) { notify(error?.message || 'تعذر اعتماد أمر الشراء', 'danger'); }
   };
@@ -200,7 +212,7 @@ export default function PurchaseOrderManager({
                           <button onClick={() => handleEditDraft(po)} className="px-3 py-1.5 bg-slate-100 text-slate-800 font-bold text-xs">
                             استكمال الأمر
                           </button>
-                          <button onClick={() => handleApproveOrder(po)} className="px-3 py-1.5 bg-amber-600 text-white font-bold text-xs">
+                          <button disabled={!canApproveInventoryAmount(po.grandTotal, capabilities, approvalSettings)} onClick={() => handleApproveOrder(po)} className="px-3 py-1.5 bg-amber-600 text-white font-bold text-xs">
                             اعتماد أمر الشراء
                           </button>
                         </>
@@ -214,7 +226,9 @@ export default function PurchaseOrderManager({
                       </button>
 
                       <button 
-                        onClick={() => window.print()}
+                         onClick={() => { void print?.({ title: 'أمر شراء', number: po.poNo, date: po.poDate, status: po.status, reportType: 'procurement',
+                           columns: ['الكود', 'الصنف', 'الوحدة', 'الكمية', 'السعر', 'الخصم', 'صافي البند'], rows: po.lines.map(line => [line.itemCode, line.itemName, line.unit, line.quantityOrdered ?? line.quantityRequested, line.actualUnitPrice ?? line.estimatedUnitPrice, line.discountAmount || 0, line.totalAmount]),
+                           summary: `المورد: ${po.vendorName} | الصافي: ${po.subtotal} | الضريبة: ${po.taxAmount} | الإجمالي: ${po.grandTotal}` }); }}
                         className="p-1.5 text-amber-900/70 hover:text-amber-950 hover:bg-amber-100/50 rounded-lg transition"
                         title="طباعة أمر الشراء"
                       >

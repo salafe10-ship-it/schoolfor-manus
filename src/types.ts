@@ -2420,6 +2420,8 @@ export interface PurchaseOrder {
   poDate: string;
   expectedDeliveryDate: string;
   purchaseRequestId?: string;
+  rfqId?: string;
+  quotationId?: string;
   vendorId: string;
   vendorName: string;
   vendorContact?: string;
@@ -2457,6 +2459,7 @@ export interface GoodsReceiptNote {
   status: GoodsReceiptStatus;
   lines: {
     lineId: string;
+    purchaseOrderLineId?: string;
     itemId: string;
     itemCode: string;
     itemName: string;

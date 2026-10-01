@@ -94,7 +94,7 @@ export const reconcilePurchaseOrderReceiptProgress = (database: InventoryCanonic
     const lines = order.lines.map(orderLine => {
       const itemId = canonicalItemId(orderLine.itemId || orderLine.itemCode, database.items);
       const quantityReceived = orderReceipts.reduce((sum, receipt) => sum + receipt.lines
-        .filter(line => canonicalItemId(line.itemId || line.itemCode, database.items) === itemId)
+        .filter(line => line.purchaseOrderLineId ? line.purchaseOrderLineId === orderLine.id : canonicalItemId(line.itemId || line.itemCode, database.items) === itemId)
         .reduce((lineSum, line) => lineSum + Number(line.acceptedQty || 0), 0), 0);
       return { ...orderLine, itemId, quantityReceived };
     });

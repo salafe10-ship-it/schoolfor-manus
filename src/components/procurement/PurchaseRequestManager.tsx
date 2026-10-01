@@ -5,6 +5,9 @@ import {
   Printer, AlertCircle, ShieldCheck, User 
 } from 'lucide-react';
 import { InventoryItem, PurchaseRequest, ProcurementItemLine, PurchaseRequestStatus } from '../../types';
+import { canApproveInventoryAmount, type InventoryCapabilities } from '../inventory/inventoryUiPolicy';
+import { useInventoryDraftIdentity } from '../inventory/useInventoryDraftIdentity';
+import { useInventoryPrint } from '../inventory/InventoryPrintProvider';
 
 interface PurchaseRequestManagerProps {
   requests: PurchaseRequest[];
@@ -12,6 +15,8 @@ interface PurchaseRequestManagerProps {
   onDeleteRequest: (id: string) => Promise<void>;
   onConvertToOrder: (pr: PurchaseRequest) => Promise<void>;
   items: InventoryItem[];
+  capabilities?: InventoryCapabilities;
+  approvalSettings?: Record<string, any>;
   triggerNotification?: (msg: string, type: 'success' | 'warning' | 'info' | 'danger') => void;
 }
 
@@ -21,9 +26,14 @@ export default function PurchaseRequestManager({
   onDeleteRequest,
   onConvertToOrder,
   items,
+  capabilities = {},
+  approvalSettings = {},
   triggerNotification
 }: PurchaseRequestManagerProps) {
   const [searchTerm, setSearchTerm] = useState('');
+  const draft = useInventoryDraftIdentity('pr');
+  const print = useInventoryPrint();
+  const operationalItems = items.filter(item => item.status !== 'archived');
   const [filterStatus, setFilterStatus] = useState<string>('ALL');
   const [showModal, setShowModal] = useState(false);
   const [editingPR, setEditingPR] = useState<Partial<PurchaseRequest> | null>(null);
@@ -36,7 +46,8 @@ export default function PurchaseRequestManager({
   const editableStatuses = ['draft', 'pending_approval', 'rejected'];
 
   const handleOpenNew = () => {
-    if (!items.length) { notify('سجل صنفاً في دليل المخزون قبل إنشاء طلب شراء مرتبط محاسبياً.', 'warning'); return; }
+    draft.reset();
+    if (!operationalItems.length) { notify('سجل صنفاً في دليل المخزون قبل إنشاء طلب شراء مرتبط محاسبياً.', 'warning'); return; }
     setEditingPR({
       requestNo: '',
       requestDate: new Date().toISOString().split('T')[0],
@@ -56,7 +67,8 @@ export default function PurchaseRequestManager({
     if (!editingPR) return;
     if (!items.length) { notify('لا يمكن إضافة بند قبل تسجيل أصناف المخزون.', 'warning'); return; }
     const lines = editingPR.lines || [];
-    const item = items[0];
+    const item = operationalItems[0];
+    if (!item) return;
     const newLine: ProcurementItemLine = {
       id: `line_${Date.now()}`,
       itemId: item.id,
@@ -75,7 +87,7 @@ export default function PurchaseRequestManager({
   const handleSelectItem = (index: number, itemId: string) => {
     if (!editingPR?.lines) return;
     const item = items.find(row => row.id === itemId);
-    if (!item) return;
+    if (!item || item.status === 'archived') return;
     const updatedLines = [...editingPR.lines];
     updatedLines[index] = { ...updatedLines[index], itemId: item.id, itemCode: item.sku, itemName: item.name, unit: 'وحدة', estimatedUnitPrice: item.costPrice, totalAmount: updatedLines[index].quantityRequested * item.costPrice };
     setEditingPR({ ...editingPR, lines: updatedLines, totalEstimatedAmount: updatedLines.reduce((sum, line) => sum + line.totalAmount, 0) });
@@ -116,7 +128,8 @@ export default function PurchaseRequestManager({
     }
 
     const prToSave: PurchaseRequest = {
-      id: editingPR.id || `pr_${Date.now()}`,
+      ...editingPR,
+      id: editingPR.id || draft.identity().id,
       schoolId: '',
       requestNo: editingPR.requestNo,
       requestDate: editingPR.requestDate || new Date().toISOString().split('T')[0],
@@ -128,7 +141,7 @@ export default function PurchaseRequestManager({
       status: editingPR.status as PurchaseRequestStatus || 'pending_approval',
       lines: editingPR.lines || [],
       totalEstimatedAmount: editingPR.totalEstimatedAmount || 0,
-      createdAt: editingPR.createdAt || new Date().toISOString(),
+      createdAt: editingPR.createdAt || draft.identity().createdAt,
       updatedAt: new Date().toISOString()
     };
 
@@ -141,11 +154,10 @@ export default function PurchaseRequestManager({
   };
 
   const handleApprove = async (pr: PurchaseRequest) => {
+    if (!canApproveInventoryAmount(pr.totalEstimatedAmount, capabilities, approvalSettings)) return;
     const updated: PurchaseRequest = {
       ...pr,
-      status: 'approved',
-      approvedBy: 'المستخدم الحالي',
-      approvalDate: new Date().toISOString().split('T')[0]
+      status: 'approved'
     };
     try { await onSaveRequest(updated); notify(`✓ تم اعتماد طلب الشراء رقم (${pr.requestNo}) مركزياً`, 'success'); }
     catch (error: any) { notify(error?.message || 'تعذر اعتماد طلب الشراء', 'danger'); }
@@ -267,7 +279,7 @@ export default function PurchaseRequestManager({
                   </td>
                   <td className="px-4 py-4 text-center">
                     <div className="flex justify-center items-center gap-1">
-                      {r.status === 'pending_approval' && (
+                      {r.status === 'pending_approval' && canApproveInventoryAmount(r.totalEstimatedAmount, capabilities, approvalSettings) && (
                         <>
                           <button 
                             onClick={() => handleApprove(r)}
@@ -284,7 +296,7 @@ export default function PurchaseRequestManager({
                         </>
                       )}
 
-                      {r.status === 'approved' && (
+                      {r.status === 'approved' && capabilities.approve && (
                         <button 
                           onClick={async () => { try { await onConvertToOrder(r); } catch (error: any) { notify(error?.message || 'تعذر تحويل الطلب إلى أمر شراء', 'danger'); } }}
                           className="px-2.5 py-1 bg-amber-600 hover:bg-amber-700 text-white font-bold text-xs rounded-lg transition flex items-center gap-1"
@@ -299,7 +311,7 @@ export default function PurchaseRequestManager({
                             notify('طلب الشراء محمي بعد الاعتماد أو التحويل.', 'warning');
                             return;
                           }
-                          setEditingPR(r);
+                          draft.reset(); setEditingPR(r);
                           setShowModal(true);
                         }}
                         disabled={!editableStatuses.includes(String(r.status))}
@@ -408,7 +420,7 @@ export default function PurchaseRequestManager({
                           className="w-full p-1.5 rounded-md font-mono font-bold"
                         >
                           <option value="">اختر الصنف</option>
-                          {items.map(item => <option key={item.id} value={item.id}>{item.sku}</option>)}
+                          {operationalItems.map(item => <option key={item.id} value={item.id}>{item.sku}</option>)}
                         </select>
                       </div>
 

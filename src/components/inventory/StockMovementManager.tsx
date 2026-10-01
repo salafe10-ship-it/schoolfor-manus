@@ -6,6 +6,9 @@ import {
 } from 'lucide-react';
 import { InventoryItem, InventoryWarehouse } from '../../types';
 import { getItemWarehouseQuantity } from './inventoryCanonical';
+import { useInventoryDraftIdentity } from './useInventoryDraftIdentity';
+import { useInventoryPrint } from './InventoryPrintProvider';
+import { canApproveInventoryAmount, type InventoryCapabilities } from './inventoryUiPolicy';
 
 interface StockMovementManagerProps {
   items: InventoryItem[];
@@ -13,10 +16,19 @@ interface StockMovementManagerProps {
   movements?: any[];
   onSave?: (movements: any[]) => Promise<void>;
   onApproveMovement?: (movement: any) => Promise<void>;
+  capabilities?: InventoryCapabilities;
+  approvalSettings?: Record<string, any>;
   triggerNotification?: (msg: string, type: 'success' | 'warning' | 'info' | 'danger') => void;
 }
 
-export default function StockMovementManager({ items, warehouses = [], movements = [], onSave, onApproveMovement, triggerNotification }: StockMovementManagerProps) {
+export default function StockMovementManager({ items, warehouses = [], movements = [], onSave, onApproveMovement, triggerNotification, capabilities = {}, approvalSettings = {} }: StockMovementManagerProps) {
+  const draft = useInventoryDraftIdentity('MV');
+  const print = useInventoryPrint();
+  const canApprove = (movement: any) => {
+    const item = items.find(row => row.id === movement.itemId);
+    const value = Number(movement.quantity) * Number(item?.costPrice || 0);
+    return item?.status !== 'archived' && canApproveInventoryAmount(value, capabilities, approvalSettings) && (movement.type === 'transfer' || value === 0 || capabilities.financialWrite === true);
+  };
 
   const [filterType, setFilterType] = useState('ALL');
   const [searchTerm, setSearchTerm] = useState('');
@@ -39,6 +51,7 @@ export default function StockMovementManager({ items, warehouses = [], movements
   const handleCreateMovement = async (e: React.FormEvent) => {
     e.preventDefault();
     const selectedItem = items.find(i => i.id === newMovement.itemId);
+    if (selectedItem?.status === 'archived') { notify('لا يمكن إنشاء حركة لصنف مؤرشف.', 'warning'); return; }
     if (!selectedItem || !Number.isInteger(newMovement.quantity) || newMovement.quantity <= 0 || !Number.isFinite(newMovement.unitCost) || newMovement.unitCost < 0 || !newMovement.refNo) {
       notify('يرجى إدخال الصنف والكمية والتكلفة والمرجع بصورة صحيحة', 'warning');
       return;
@@ -61,7 +74,7 @@ export default function StockMovementManager({ items, warehouses = [], movements
     const totalVal = newMovement.quantity * unitPrice;
 
     const created: any = {
-      id: `MV-${Date.now()}`,
+      id: draft.identity().id,
       date: new Date().toISOString().split('T')[0],
       type: newMovement.type,
       typeLabel: newMovement.type === 'purchase' ? 'إضافة مخزنية (استلام)' :
@@ -76,7 +89,6 @@ export default function StockMovementManager({ items, warehouses = [], movements
       totalAmount: totalVal,
       status: 'pending_approval',
       statusLabel: 'قيد المراجعة والاعتماد',
-      createdBy: 'المستخدم الحالي',
       refNo: newMovement.refNo
     };
 
@@ -125,6 +137,7 @@ export default function StockMovementManager({ items, warehouses = [], movements
 
         <button 
           onClick={() => {
+            draft.reset();
             setNewMovement({ type: 'issue', itemId: '', warehouseFrom: '', warehouseTo: '', quantity: 1, unitCost: 0, notes: '', refNo: '' });
             setShowNewModal(true);
           }}
@@ -201,7 +214,7 @@ export default function StockMovementManager({ items, warehouses = [], movements
                   </td>
                   <td className="px-5 py-4 text-center">
                     <div className="flex justify-center items-center gap-2">
-                      {mv.status === 'pending_approval' && (
+                      {mv.status === 'pending_approval' && canApprove(mv) && (
                         <button 
                           onClick={() => { void handleApprove(mv); }}
                           className="px-3 py-1 bg-emerald-600 hover:bg-emerald-700 text-white font-bold text-xs rounded-lg transition"
@@ -209,7 +222,7 @@ export default function StockMovementManager({ items, warehouses = [], movements
                           اعتماد وترحيل
                         </button>
                       )}
-                      {mv.status === 'approved' && mv.type !== 'transfer' && (
+                      {mv.status === 'approved' && mv.type !== 'transfer' && canApprove(mv) && (
                         <button
                           onClick={() => { void handlePostMovement(mv); }}
                           className="px-3 py-1 bg-amber-600 hover:bg-amber-700 text-white font-bold text-xs rounded-lg transition"
@@ -219,8 +232,10 @@ export default function StockMovementManager({ items, warehouses = [], movements
                       )}
                       <button 
                         onClick={() => {
-                          window.print();
-                          notify(`تم إرسال إذن الحركة (${mv.id}) للطباعة الرسمية`, 'info');
+                          void print?.({ title: mv.typeLabel || 'إذن حركة مخزنية', number: mv.id, date: mv.date, status: mv.statusLabel || mv.status, reportType: 'turnover',
+                            columns: ['الصنف', 'المصدر', 'الوجهة', 'الكمية', 'تكلفة الوحدة', 'القيمة', 'المرجع'], rows: [[mv.itemName,
+                              warehouses.find(row => row.id === mv.warehouseFrom)?.name || mv.warehouseFrom,
+                              warehouses.find(row => row.id === mv.warehouseTo)?.name || mv.warehouseTo, mv.quantity, mv.unitCost, mv.totalAmount, mv.refNo]], summary: mv.notes });
                         }}
                         className="p-1.5 text-amber-900/70 hover:text-amber-950 hover:bg-amber-100/50 rounded-lg transition"
                       >
@@ -270,7 +285,7 @@ export default function StockMovementManager({ items, warehouses = [], movements
                   className="w-full p-2.5 bg-transparent text-sm font-bold"
                 >
                   <option value="">اختر الصنف</option>
-                  {items.map(i => (
+                  {items.filter(item => item.status !== 'archived').map(i => (
                     <option key={i.id} value={i.id}>{i.name} (الكمية المتاحة: {i.quantity})</option>
                   ))}
                 </select>

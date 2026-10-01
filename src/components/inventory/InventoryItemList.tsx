@@ -7,6 +7,8 @@ import {
 } from 'lucide-react';
 import { InventoryCategory, InventoryItem, InventorySupplier, InventoryUnit, InventoryWarehouse } from '../../types';
 import { getItemWarehouseQuantity } from './inventoryCanonical';
+import { inventoryReorderThreshold, itemBelongsToWarehouse } from './inventoryUiPolicy';
+import { useInventoryPrint } from './InventoryPrintProvider';
 
 interface InventoryItemListProps {
   items: InventoryItem[];
@@ -19,6 +21,10 @@ interface InventoryItemListProps {
   onDeleteItem: (id: string) => Promise<void>;
   newItemRequest?: number;
   searchRequest?: number;
+  onNewRequestHandled?: () => void;
+  onSearchRequestHandled?: () => void;
+  initialStatusFilter?: string;
+  onExportCSV?: (items: InventoryItem[]) => Promise<void>;
   triggerNotification?: (msg: string, type: 'success' | 'warning' | 'info' | 'danger') => void;
 }
 
@@ -33,12 +39,20 @@ export default function InventoryItemList({
   onDeleteItem,
   newItemRequest = 0,
   searchRequest = 0,
+  onNewRequestHandled,
+  onSearchRequestHandled,
+  initialStatusFilter = 'ALL',
+  onExportCSV,
   triggerNotification
 }: InventoryItemListProps) {
   const [searchTerm, setSearchTerm] = useState('');
   const [selectedCategory, setSelectedCategory] = useState('ALL');
   const [selectedWarehouse, setSelectedWarehouse] = useState('ALL');
-  const [statusFilter, setStatusFilter] = useState('ALL');
+  const [statusFilter, setStatusFilter] = useState(initialStatusFilter);
+  const [isNewItem, setIsNewItem] = useState(false);
+  const [saving, setSaving] = useState(false);
+  const saveGuard = useRef(false);
+  const print = useInventoryPrint();
   
   // Modal state
   const [isModalOpen, setIsModalOpen] = useState(false);
@@ -52,13 +66,14 @@ export default function InventoryItemList({
   };
 
   useEffect(() => {
-    if (newItemRequest > 0) handleOpenNewModal();
+    if (newItemRequest > 0) { handleOpenNewModal(); onNewRequestHandled?.(); }
   }, [newItemRequest]);
 
   useEffect(() => {
     if (searchRequest > 0) {
       searchInputRef.current?.focus();
       searchInputRef.current?.scrollIntoView({ behavior: 'smooth', block: 'center' });
+      onSearchRequestHandled?.();
     }
   }, [searchRequest]);
 
@@ -71,10 +86,10 @@ export default function InventoryItemList({
     
     const visibleQuantity = selectedWarehouse === 'ALL' ? item.quantity : getItemWarehouseQuantity(item, selectedWarehouse);
     const matchesCategory = selectedCategory === 'ALL' || item.categoryId === selectedCategory;
-    const matchesWarehouse = selectedWarehouse === 'ALL' || visibleQuantity > 0;
+    const matchesWarehouse = selectedWarehouse === 'ALL' || itemBelongsToWarehouse(item, selectedWarehouse);
     const matchesStatus = 
       statusFilter === 'ALL' ? true :
-      statusFilter === 'LOW' ? visibleQuantity <= item.minLevel :
+      statusFilter === 'LOW' ? item.status !== 'archived' && visibleQuantity <= inventoryReorderThreshold(item) :
       statusFilter === 'ZERO' ? visibleQuantity === 0 :
       item.status === statusFilter;
 
@@ -87,13 +102,14 @@ export default function InventoryItemList({
       return;
     }
     setEditingItem({
+      id: crypto.randomUUID(),
       schoolId: '',
       branchId: '',
       sku: `SKU-${Math.floor(1000 + Math.random() * 9000)}`,
       name: '',
       categoryId: categories[0].id,
-      unitId: units[0].id,
-      supplierId: suppliers[0].id,
+      unitId: '',
+      supplierId: '',
       warehouseId: warehouses[0].id,
       quantity: 0,
       warehouseBalances: { [warehouses[0].id]: 0 },
@@ -109,10 +125,12 @@ export default function InventoryItemList({
       adjustmentAccountId: '',
       costCenterId: ''
     });
+    setIsNewItem(true);
     setIsModalOpen(true);
   };
 
   const handleOpenEditModal = (item: InventoryItem) => {
+    setIsNewItem(false);
     setEditingItem({ ...item });
     setIsModalOpen(true);
   };
@@ -124,13 +142,18 @@ export default function InventoryItemList({
 
   const handleSaveForm = async (e: React.FormEvent) => {
     e.preventDefault();
+    if (saveGuard.current) return;
     if (!editingItem || !editingItem.name || editingItem.name.trim().length < 2) {
       notify('يرجى إدخال اسم صنف فاخر وصحيح لا يقل عن حرفين', 'warning');
       return;
     }
 
+    if (!units.some(unit => unit.id === editingItem.unitId) || !suppliers.some(supplier => supplier.id === editingItem.supplierId)) {
+      notify('اختر وحدة قياس ومورداً مسجلين للصنف.', 'warning'); return;
+    }
+    saveGuard.current = true; setSaving(true);
     try {
-      if (editingItem.id) {
+      if (!isNewItem && editingItem.id) {
         await onUpdateItem(editingItem.id, editingItem);
         notify(`✓ تم تحديث الصنف (${editingItem.name}) بنجاح`, 'success');
       } else {
@@ -141,7 +164,7 @@ export default function InventoryItemList({
       setEditingItem(null);
     } catch (err: any) {
       notify(`خطأ في حفظ الصنف: ${err.message}`, 'danger');
-    }
+    } finally { saveGuard.current = false; setSaving(false); }
   };
 
   const handleDelete = async (item: InventoryItem) => {
@@ -173,6 +196,12 @@ export default function InventoryItemList({
           >
             <Plus className="w-4 h-4" /> إضافة صنف جديد
           </button>
+          {onExportCSV && <button type="button" onClick={() => { void onExportCSV(filteredItems); }}>تصدير CSV الحالي</button>}
+          {print && <button type="button" onClick={() => { void print({ title: 'دليل الأصناف — النطاق الحالي', reportType: 'valuation',
+            columns: ['الكود', 'الصنف', 'الوحدة', 'المورد', 'الرصيد', 'نقطة إعادة الطلب'],
+            rows: filteredItems.map(item => [item.sku, item.name, units.find(unit => unit.id === item.unitId)?.name || item.unitId,
+              suppliers.find(supplier => supplier.id === item.supplierId)?.name || item.supplierId,
+              selectedWarehouse === 'ALL' ? item.quantity : getItemWarehouseQuantity(item, selectedWarehouse), inventoryReorderThreshold(item)]) }); }}>طباعة / حفظ PDF</button>}
         </div>
 
         {/* Search & Filters Grid */}
@@ -180,6 +209,7 @@ export default function InventoryItemList({
           <div className="relative">
             <Search className="absolute right-3 top-3 h-4 w-4 text-slate-400" />
             <input 
+              ref={searchInputRef}
               type="text"
               value={searchTerm}
               onChange={(e) => setSearchTerm(e.target.value)}
@@ -359,7 +389,6 @@ export default function InventoryItemList({
                   <div>
                     <label className="block text-xs font-bold text-slate-700 mb-1">اسم الصنف باللغة العربية *</label>
             <input
-              ref={searchInputRef}
               type="text"
                       required
                       value={editingItem.name || ''}
@@ -406,6 +435,14 @@ export default function InventoryItemList({
                 </div>
               </div>
 
+              <div className="grid grid-cols-2 gap-4">
+                <label>وحدة القياس *<select required aria-label="وحدة القياس" value={editingItem.unitId || ''} onChange={event => setEditingItem({ ...editingItem, unitId: event.target.value })} className="w-full p-2.5">
+                  <option value="">اختر وحدة القياس</option>{units.map(unit => <option key={unit.id} value={unit.id}>{unit.name}</option>)}
+                </select></label>
+                <label>المورد *<select required aria-label="المورد" value={editingItem.supplierId || ''} onChange={event => setEditingItem({ ...editingItem, supplierId: event.target.value })} className="w-full p-2.5">
+                  <option value="">اختر المورد</option>{suppliers.map(supplier => <option key={supplier.id} value={supplier.id}>{supplier.name}</option>)}
+                </select></label>
+              </div>
               {/* Section 2: Quantities & Thresholds */}
               <div className="space-y-4">
                 <h4 className="text-sm font-bold text-amber-700 uppercase tracking-wider border-b border-amber-100 pb-1">الكميات وحدود الأمان المخزني</h4>
@@ -538,6 +575,7 @@ export default function InventoryItemList({
                 </button>
                 <button 
                   type="submit"
+                  disabled={saving}
                   className="px-6 py-2.5 bg-slate-900 hover:bg-slate-800 text-white font-bold text-sm transition flex items-center gap-2"
                 >
                   <Check className="w-4 h-4" /> حفظ الصنف بالمخزون

@@ -1,6 +1,7 @@
 import React, { useState } from 'react';
 import { Truck, Phone, Mail, MapPin, Plus, Edit, Trash2, CheckCircle2 } from 'lucide-react';
 import { InventorySupplier } from '../../types';
+import { useInventoryDraftIdentity } from './useInventoryDraftIdentity';
 
 interface SupplierManagerProps {
   suppliers?: InventorySupplier[];
@@ -11,6 +12,7 @@ interface SupplierManagerProps {
 export default function SupplierManager({ suppliers = [], onSave, triggerNotification }: SupplierManagerProps) {
 
   const [showAddModal, setShowAddModal] = useState(false);
+  const draft = useInventoryDraftIdentity('sup');
   const [newSup, setNewSup] = useState<Partial<InventorySupplier>>({
     name: '', phone: '', email: '', address: ''
   });
@@ -27,7 +29,7 @@ export default function SupplierManager({ suppliers = [], onSave, triggerNotific
     }
 
     const created: InventorySupplier = {
-      id: `sup_${Date.now()}`,
+      id: draft.identity().id,
       schoolId: '',
       name: newSup.name.trim(),
       phone: newSup.phone.trim(),
@@ -55,7 +57,7 @@ export default function SupplierManager({ suppliers = [], onSave, triggerNotific
         </div>
 
         <button 
-          onClick={() => setShowAddModal(true)}
+          onClick={() => { draft.reset(); setShowAddModal(true); }}
           className="px-5 py-2.5 bg-slate-900 hover:bg-slate-800 text-white font-bold text-sm transition flex items-center gap-2"
         >
           <Plus className="w-4 h-4" /> إضافة مورد جديد

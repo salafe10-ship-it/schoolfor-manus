@@ -6,13 +6,14 @@ import {
 } from 'lucide-react';
 import { InventoryItem, InventoryWarehouse } from '../../types';
 import { getItemWarehouseQuantity } from './inventoryCanonical';
+import { inventoryReorderThreshold } from './inventoryUiPolicy';
 
 interface InventoryDashboardProps {
   items?: InventoryItem[];
   warehouses?: InventoryWarehouse[];
   movements?: any[];
   receipts?: any[];
-  onNavigateTab?: (tab: string) => void;
+  onNavigateTab?: (tab: string, statusFilter?: string) => void;
 }
 
 export default function InventoryDashboard({ items = [], warehouses = [], movements = [], receipts = [], onNavigateTab }: InventoryDashboardProps) {
@@ -21,7 +22,7 @@ export default function InventoryDashboard({ items = [], warehouses = [], moveme
   const totalItemsCount = activeItems.length;
   const totalQuantity = activeItems.reduce((sum, item) => sum + (item.quantity || 0), 0);
   const totalValuation = activeItems.reduce((sum, item) => sum + ((item.quantity || 0) * (item.costPrice || 0)), 0);
-  const lowStockItems = activeItems.filter(i => i.quantity <= (i.reorderLevel || i.minLevel || 0));
+  const lowStockItems = activeItems.filter(i => i.quantity <= inventoryReorderThreshold(i));
   const lowStockCount = lowStockItems.length;
   const outOfStockCount = activeItems.filter(i => i.quantity === 0).length;
   const warehouseCount = warehouses.length;
@@ -278,7 +279,7 @@ export default function InventoryDashboard({ items = [], warehouses = [], moveme
           </div>
         </div>
         <button 
-          onClick={() => onNavigateTab && onNavigateTab('items')}
+          onClick={() => onNavigateTab && onNavigateTab('items', 'LOW')}
           className="px-4 py-2 bg-amber-800 hover:bg-amber-900 text-white text-xs font-bold transition whitespace-nowrap"
         >
           عرض أصناف إعادة الطلب

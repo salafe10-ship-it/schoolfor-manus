@@ -593,7 +593,27 @@ body {
 }
 
 /* Print-optimized media query to hide background noise and print only the active voucher/document */
+.inventory-print-host { display: none; }
 @media print {
+  @page { size: A4; margin: 12mm; }
+  body[data-inventory-print] > #root { display: none !important; }
+  body[data-inventory-print] > .inventory-print-host {
+    display: block !important;
+    visibility: visible !important;
+    padding: 0 !important;
+    font-family: "Cairo", "Tahoma", sans-serif;
+    direction: rtl;
+    text-align: right;
+    font-size: 10pt;
+  }
+  .inventory-print-host header { margin-bottom: 6mm; }
+  .inventory-print-host h1 { font-size: 18pt; }
+  .inventory-print-host h2 { font-size: 14pt; }
+  .inventory-print-host table { width: 100%; border-collapse: collapse; table-layout: auto; }
+  .inventory-print-host thead { display: table-header-group; }
+  .inventory-print-host tr { break-inside: avoid; }
+  .inventory-print-host th, .inventory-print-host td { border: 1px solid #444; padding: 2mm; overflow-wrap: anywhere; }
+  .inventory-print-host footer { display: flex; justify-content: space-between; gap: 8mm; margin-top: 12mm; break-inside: avoid; }
   html, body {
     background-color: #ffffff !important;
     background: #ffffff !important;
