@@ -452,7 +452,7 @@ export default function InventoryManagementPortal({ selectedSchool, initialTab =
           )}
 
           {activeTab === 'reports' && (
-            <InventoryReports items={items} movements={database.movements} receipts={database.goodsReceipts} stocktakes={database.stocktakes} warehouses={database.warehouses} canonicalVersion={versionRef.current} triggerNotification={triggerNotification} />
+            <InventoryReports items={items} movements={database.movements} receipts={database.goodsReceipts} stocktakes={database.stocktakes} warehouses={database.warehouses} units={database.units} canonicalVersion={versionRef.current} triggerNotification={triggerNotification} />
           )}
 
           {activeTab === 'audit' && (

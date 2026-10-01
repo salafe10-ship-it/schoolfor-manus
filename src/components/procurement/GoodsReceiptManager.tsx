@@ -204,7 +204,8 @@ export default function GoodsReceiptManager({
                 <th className="px-4 py-4">المورد</th>
                 <th className="px-4 py-4">نتيجة الفحص الفني</th>
                 <th className="px-4 py-4">القيمة الاستلامية</th>
-                <th className="px-4 py-4">حالة التكامل المحاسبي</th>
+                <th className="px-4 py-4">حالة الاستلام</th>
+                <th className="px-4 py-4">رقم قيد اليومية</th>
               </tr>
             </thead>
             <tbody className="divide-y divide-amber-900/10 bg-white/60 backdrop-blur-sm rounded-b-2xl">
@@ -223,10 +224,16 @@ export default function GoodsReceiptManager({
                   <td className="px-4 py-4 font-black text-emerald-700">{grn.totalReceivedValue.toLocaleString('ar-SA')} د.ل</td>
                   <td className="px-4 py-4">
                     <span className="px-2.5 py-1 bg-amber-100 text-amber-900 text-xs font-bold rounded-md">
-                      {grn.isPostedToGL && grn.glJournalEntryId ? `مرحل: ${grn.glJournalEntryId}` : 'بانتظار جاهزية دفتر الأستاذ'}
+                      {grn.status || 'غير محدد'}
                     </span>
+                  </td>
+                  <td className="max-w-64 break-all px-4 py-4 font-mono text-[10px]">
+                    {grn.glJournalEntryId
+                      ? <bdi dir="ltr">{grn.glJournalEntryId}</bdi>
+                      : Number(grn.totalReceivedValue || 0) > 0 ? <span className="font-sans font-bold text-red-700">لا يوجد مرجع قيد</span>
+                        : <span className="font-sans text-slate-500">لا أثر مالي</span>}
                     {print && <button type="button" onClick={() => { void print({ title: 'محضر فحص واستلام', number: grn.grnNo, date: grn.grnDate, status: grn.status, reportType: 'procurement',
-                      columns: ['الصنف', 'الوارد', 'المقبول', 'المرفوض', 'سبب الرفض', 'صافي تكلفة الوحدة', 'قيمة المقبول'], rows: grn.lines.map(line => [line.itemName, line.receivedQty, line.acceptedQty, line.rejectedQty, line.rejectionReason, line.unitCost, line.totalCost]), summary: `المورد: ${grn.vendorName} | أمر الشراء: ${grn.poNo} | إجمالي الاستلام: ${grn.totalReceivedValue}` }); }}>طباعة / حفظ PDF</button>}
+                      columns: ['رقم إذن الاستلام', 'رقم قيد اليومية', 'الصنف', 'الوارد', 'المقبول', 'المرفوض', 'سبب الرفض', 'صافي تكلفة الوحدة', 'قيمة المقبول'], rows: grn.lines.map(line => [grn.grnNo, grn.glJournalEntryId || 'لا يوجد قيد مالي', line.itemName, line.receivedQty, line.acceptedQty, line.rejectedQty, line.rejectionReason, line.unitCost, line.totalCost]), summary: `المورد: ${grn.vendorName} | أمر الشراء: ${grn.poNo} | إجمالي الاستلام: ${grn.totalReceivedValue}` }); }}>طباعة / حفظ PDF</button>}
                   </td>
                 </tr>
               ))}

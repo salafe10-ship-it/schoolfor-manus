@@ -184,7 +184,8 @@ export default function StockMovementManager({ items, warehouses = [], movements
                 <th className="px-5 py-4">الصنف المخزني</th>
                 <th className="px-5 py-4 text-center">الكمية</th>
                 <th className="px-5 py-4">إجمالي القيمة</th>
-                <th className="px-5 py-4">الحالة والترحيل</th>
+                <th className="px-5 py-4">الحالة</th>
+                <th className="px-5 py-4">رقم قيد اليومية</th>
                 <th className="px-5 py-4 text-center">العمليات</th>
               </tr>
             </thead>
@@ -212,6 +213,13 @@ export default function StockMovementManager({ items, warehouses = [], movements
                       {mv.statusLabel || mv.status || 'غير محدد'}
                     </span>
                   </td>
+                  <td className="max-w-64 break-all px-5 py-4 font-mono text-[10px]">
+                    {mv.glJournalEntryId || mv.journalEntryId
+                      ? <bdi dir="ltr">{mv.glJournalEntryId || mv.journalEntryId}</bdi>
+                      : mv.type === 'transfer' ? <span className="font-sans text-slate-500">تحويل داخلي بلا أثر مالي</span>
+                        : mv.status === 'pending_approval' ? <span className="font-sans text-amber-700">ينشأ بعد الاعتماد</span>
+                          : <span className="font-sans text-red-700">لا يوجد مرجع قيد</span>}
+                  </td>
                   <td className="px-5 py-4 text-center">
                     <div className="flex justify-center items-center gap-2">
                       {mv.status === 'pending_approval' && canApprove(mv) && (
@@ -233,7 +241,8 @@ export default function StockMovementManager({ items, warehouses = [], movements
                       <button 
                         onClick={() => {
                           void print?.({ title: mv.typeLabel || 'إذن حركة مخزنية', number: mv.id, date: mv.date, status: mv.statusLabel || mv.status, reportType: 'turnover',
-                            columns: ['الصنف', 'المصدر', 'الوجهة', 'الكمية', 'تكلفة الوحدة', 'القيمة', 'المرجع'], rows: [[mv.itemName,
+                            columns: ['رقم العملية المخزنية', 'رقم قيد اليومية', 'الصنف', 'المصدر', 'الوجهة', 'الكمية', 'تكلفة الوحدة', 'القيمة', 'المرجع'], rows: [[mv.id,
+                              mv.glJournalEntryId || mv.journalEntryId || (mv.type === 'transfer' ? 'تحويل داخلي بلا قيد مالي' : 'لا يوجد مرجع قيد'), mv.itemName,
                               warehouses.find(row => row.id === mv.warehouseFrom)?.name || mv.warehouseFrom,
                               warehouses.find(row => row.id === mv.warehouseTo)?.name || mv.warehouseTo, mv.quantity, mv.unitCost, mv.totalAmount, mv.refNo]], summary: mv.notes });
                         }}

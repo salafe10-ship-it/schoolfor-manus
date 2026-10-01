@@ -129,6 +129,7 @@ export default function StockCountManager({ items, warehouses = [], stocktakes =
                 <th className="px-5 py-4 text-center">الفارق (عجز / زيادة)</th>
                 <th className="px-5 py-4">الأثر المالي</th>
                 <th className="px-5 py-4">الحالة</th>
+                <th className="px-5 py-4">رقم قيد اليومية</th>
                 <th className="px-5 py-4 text-center">الإجراء</th>
               </tr>
             </thead>
@@ -159,6 +160,12 @@ export default function StockCountManager({ items, warehouses = [], stocktakes =
                       {rec.statusLabel}{rec.glJournalEntryId ? ` — قيد ${rec.glJournalEntryId}` : ''}
                     </span>
                   </td>
+                  <td className="max-w-64 break-all px-5 py-4 font-mono text-[10px]">
+                    {rec.glJournalEntryId || rec.journalEntryId
+                      ? <bdi dir="ltr">{rec.glJournalEntryId || rec.journalEntryId}</bdi>
+                      : rec.status === 'pending_approval' ? <span className="font-sans text-amber-700">ينشأ عند وجود أثر مالي واعتماد التسوية</span>
+                        : <span className="font-sans text-slate-500">لا يوجد قيد مالي</span>}
+                  </td>
                   <td className="px-5 py-4 text-center">
                     {rec.status === 'pending_approval' && canApprove(rec) && (
                       <button 
@@ -169,7 +176,7 @@ export default function StockCountManager({ items, warehouses = [], stocktakes =
                       </button>
                     )}
                     {print && <button type="button" onClick={() => { void print({ title: 'محضر جرد', number: rec.id, date: rec.createdAt?.slice(0, 10), status: rec.statusLabel || rec.status, reportType: 'variances',
-                      columns: ['الصنف', 'المستودع', 'الدفتري', 'الفعلي', 'الفرق', 'تكلفة التقييم', 'الأثر المالي'], rows: [[rec.itemName, rec.warehouse, rec.bookQty, rec.actualQty, rec.discrepancy, rec.valuationUnitCost, rec.financialImpact]] }); }}>طباعة / حفظ PDF</button>}
+                      columns: ['رقم العملية المخزنية', 'رقم قيد اليومية', 'الصنف', 'المستودع', 'الدفتري', 'الفعلي', 'الفرق', 'تكلفة التقييم', 'الأثر المالي'], rows: [[rec.id, rec.glJournalEntryId || rec.journalEntryId || 'لا يوجد قيد مالي', rec.itemName, rec.warehouse, rec.bookQty, rec.actualQty, rec.discrepancy, rec.valuationUnitCost, rec.financialImpact]] }); }}>طباعة / حفظ PDF</button>}
                   </td>
                 </tr>
               ))}
