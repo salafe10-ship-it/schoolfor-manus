@@ -121,6 +121,7 @@ import {
 import { buildExamProctorCandidates } from './src/modules/exams/application/ExamProctorCandidates.js';
 import { calculatePayrollRun } from './src/modules/hr/domain/PayrollCalculation.js';
 import { validateInventoryProcurementSnapshot } from './src/modules/inventory/domain/InventoryProcurementValidation.js';
+import { buildInventoryStockCard } from './src/modules/inventory/domain/InventoryStockCard.js';
 import { inventoryStableJson, isInventoryWorkflowProgression, validateInventoryValuationTransition, validateInventoryWriteAuthority, inventoryPostingCandidates, inventoryHasFinancialEffect } from './src/modules/inventory/domain/InventoryWritePolicy.js';
 import {
   assertMoney,
@@ -15476,7 +15477,7 @@ export async function createApp(options: { cloudflare?: boolean } = {}): Promise
       const reportType = String(req.body?.reportType || '').trim();
       const format = String(req.body?.format || '').trim().toLowerCase();
       const expectedVersion = Number(req.body?.expectedVersion);
-      if (!tenantId || !schoolId || !tenantContext || !['valuation', 'reorder', 'turnover', 'variances', 'procurement'].includes(reportType)
+      if (!tenantId || !schoolId || !tenantContext || !['valuation', 'reorder', 'turnover', 'variances', 'procurement', 'stock-card'].includes(reportType)
         || !['csv', 'print'].includes(format) || !Number.isInteger(expectedVersion) || expectedVersion < 0) {
         throw new ValidationError('طلب تدقيق تقرير المخزون غير صالح.');
       }
@@ -15495,6 +15496,25 @@ export async function createApp(options: { cloudflare?: boolean } = {}): Promise
         const data = snapshot.rows[0]?.data || {};
         const itemRows = Array.isArray(data.items) ? data.items : [];
         const activeItemRows = itemRows.filter((item: any) => item?.status !== 'archived');
+        let stockCardFilters: { fromDate: string; toDate: string; itemId: string; warehouseId: string } | null = null;
+        let stockCardAudit: ReturnType<typeof buildInventoryStockCard> | null = null;
+        if (reportType === 'stock-card') {
+          const requestedFilters = req.body?.filters;
+          if (!requestedFilters || typeof requestedFilters !== 'object' || Array.isArray(requestedFilters)) throw new ValidationError('بطاقة حركة المخزون تتطلب مرشحات صالحة.');
+          const fromDate = String(requestedFilters.fromDate || '').trim();
+          const toDate = String(requestedFilters.toDate || '').trim();
+          const itemId = String(requestedFilters.itemId || '').trim();
+          const warehouseId = String(requestedFilters.warehouseId || '').trim();
+          if (!/^\d{4}-\d{2}-\d{2}$/.test(fromDate) || !/^\d{4}-\d{2}-\d{2}$/.test(toDate)
+            || itemId.length > 200 || warehouseId.length > 200) throw new ValidationError('تواريخ أو مراجع بطاقة حركة المخزون غير صالحة.');
+          if (itemId && !itemRows.some((item: any) => String(item?.id || '') === itemId)) throw new ValidationError('الصنف المحدد غير موجود في مصدر المدرسة الحالي.');
+          const warehouseRows = Array.isArray(data.warehouses) ? data.warehouses : [];
+          if (warehouseId && !warehouseRows.some((warehouse: any) => String(warehouse?.id || '') === warehouseId)) throw new ValidationError('المستودع المحدد غير موجود في مصدر المدرسة الحالي.');
+          stockCardFilters = { fromDate, toDate, itemId, warehouseId };
+          stockCardAudit = buildInventoryStockCard({ items: itemRows, movements: data.movements, receipts: data.goodsReceipts,
+            stocktakes: data.stocktakes, units: data.units, warehouses: warehouseRows, filters: stockCardFilters });
+          if (!stockCardAudit.validDateRange) throw new ValidationError('فترة بطاقة حركة المخزون غير صحيحة.');
+        }
         const valuationRowCount = activeItemRows.reduce((total: number, item: any) => {
           const balances = item?.warehouseBalances && typeof item.warehouseBalances === 'object' && !Array.isArray(item.warehouseBalances)
             ? Object.keys(item.warehouseBalances).length : 0;
@@ -15515,7 +15535,8 @@ export async function createApp(options: { cloudflare?: boolean } = {}): Promise
             if (Number(line.acceptedQty || 0) > 0 && (line.itemId || line.itemCode)) turnoverItemIds.add(String(line.itemId || line.itemCode));
           }
         }
-        const rowCount = reportType === 'procurement' ? (Array.isArray(data.purchaseOrders) ? data.purchaseOrders.length : 0)
+        const rowCount = reportType === 'stock-card' ? (stockCardFilters?.itemId ? stockCardAudit?.events.length || 0 : stockCardAudit?.summaryRows.length || 0)
+          : reportType === 'procurement' ? (Array.isArray(data.purchaseOrders) ? data.purchaseOrders.length : 0)
           : reportType === 'reorder' ? activeItemRows.filter((item: any) => Number(item.quantity || 0) <= Number(item.reorderLevel || item.minLevel || 0)).length
             : reportType === 'turnover' ? turnoverItemIds.size
               : reportType === 'variances' ? (Array.isArray(data.stocktakes) ? data.stocktakes.length : 0) : valuationRowCount;
@@ -15523,7 +15544,9 @@ export async function createApp(options: { cloudflare?: boolean } = {}): Promise
         await transaction.query(
           `INSERT INTO public.audit_events (tenant_id, school_id, branch_id, actor_user_id, entity_type, entity_id, action, source, reason, result, metadata)
            VALUES ($1, $2, $3, $4, 'inventory_report', $2, 'export', 'InventoryReportRoute', 'تصدير تقرير مخزون أو مشتريات', 'success', $5::jsonb)`,
-          [tenantId, schoolId, identity.branchId || null, actorId, JSON.stringify({ reportType, format, version: actualVersion, rowCount, snapshotHash: hash })]
+          [tenantId, schoolId, identity.branchId || null, actorId, JSON.stringify({ reportType, format, version: actualVersion, rowCount, snapshotHash: hash,
+            reportFilters: stockCardFilters, stockCardWarnings: stockCardAudit ? { missingJournalCount: stockCardAudit.missingJournalCount,
+              undatedOperationCount: stockCardAudit.undatedOperationCount, inconsistentItemBalanceCount: stockCardAudit.inconsistentItemBalanceCount } : undefined })]
         );
         return { rowCount, snapshotHash: hash };
       }, tenantContext);

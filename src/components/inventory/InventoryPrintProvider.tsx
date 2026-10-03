@@ -9,7 +9,8 @@ export interface InventoryPrintModel {
   status?: string;
   columns: string[];
   rows: React.ReactNode[][];
-  reportType: 'valuation' | 'reorder' | 'turnover' | 'variances' | 'procurement';
+  reportType: 'valuation' | 'reorder' | 'turnover' | 'variances' | 'procurement' | 'stock-card';
+  reportFilters?: Record<string, string>;
   summary?: string;
 }
 const PrintContext = createContext<((model: InventoryPrintModel) => Promise<void>) | null>(null);
@@ -36,7 +37,7 @@ export default function InventoryPrintProvider({ children, schoolName, version, 
       const response = await fetch('/api/inventory/reports/audit', { method: 'POST',
         headers: { Authorization: `Bearer ${token}`, 'Content-Type': 'application/json' },
         body: JSON.stringify({ reportType: documentModel.reportType, format: 'print', expectedVersion: version,
-          documentId: documentModel.number, documentTitle: documentModel.title }) });
+          documentId: documentModel.number, documentTitle: documentModel.title, filters: documentModel.reportFilters }) });
       const result = await response.json();
       if (!response.ok || !result?.success) throw new Error(result?.message || 'تعذر تدقيق المصدر قبل الطباعة.');
       flushSync(() => setModel(documentModel));

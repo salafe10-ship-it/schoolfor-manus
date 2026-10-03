@@ -1,13 +1,14 @@
 import React, { useState } from 'react';
 import { 
   FileSpreadsheet, Printer, Download, Search, 
-  TrendingUp, AlertTriangle, Package, Layers, BarChart3 
+  TrendingUp, AlertTriangle, Package, Layers, BarChart3, BookOpen, CalendarDays, FilterX
 } from 'lucide-react';
-import { InventoryItem, InventoryWarehouse } from '../../types';
+import { InventoryItem, InventoryUnit, InventoryWarehouse } from '../../types';
 import { getTrustedAccessToken } from '../../utils/auth';
 import { getItemWarehouseBalances } from './inventoryCanonical';
 import { inventoryReorderThreshold } from './inventoryUiPolicy';
 import { useInventoryPrint } from './InventoryPrintProvider';
+import { buildInventoryStockCard } from '../../modules/inventory/domain/InventoryStockCard';
 
 interface InventoryReportsProps {
   items: InventoryItem[];
@@ -15,13 +16,22 @@ interface InventoryReportsProps {
   receipts?: any[];
   stocktakes?: any[];
   warehouses?: InventoryWarehouse[];
+  units?: InventoryUnit[];
   canonicalVersion: number;
   triggerNotification?: (msg: string, type: 'success' | 'warning' | 'info' | 'danger') => void;
 }
 
-export default function InventoryReports({ items, movements = [], receipts = [], stocktakes = [], warehouses = [], canonicalVersion, triggerNotification }: InventoryReportsProps) {
-  const [activeReport, setActiveReport] = useState<'valuation' | 'reorder' | 'turnover' | 'variances'>('valuation');
+const localDate = (date = new Date()) => new Date(date.getTime() - date.getTimezoneOffset() * 60_000).toISOString().slice(0, 10);
+const displayNumber = (value: number) => Number(value || 0).toLocaleString('ar-LY', { maximumFractionDigits: 4 });
+
+export default function InventoryReports({ items, movements = [], receipts = [], stocktakes = [], warehouses = [], units = [], canonicalVersion, triggerNotification }: InventoryReportsProps) {
+  const [activeReport, setActiveReport] = useState<'valuation' | 'reorder' | 'turnover' | 'variances' | 'stock-card'>('valuation');
+  const [stockCardFilters, setStockCardFilters] = useState(() => {
+    const today = localDate();
+    return { fromDate: `${today.slice(0, 8)}01`, toDate: today, itemId: '', warehouseId: '' };
+  });
   const print = useInventoryPrint();
+  const stockCard = buildInventoryStockCard({ items, movements, receipts, stocktakes, warehouses, units, filters: stockCardFilters });
   const activeItems = items.filter(item => item.status !== 'archived');
   const reorderItems = activeItems.filter(item => item.quantity <= inventoryReorderThreshold(item));
   const valuationRows = activeItems.flatMap(item => {
@@ -73,19 +83,19 @@ export default function InventoryReports({ items, movements = [], receipts = [],
     if (triggerNotification) triggerNotification(msg, type);
   };
 
-  const auditReport = async (format: 'csv' | 'print') => {
+  const auditReport = async (format: 'csv' | 'print', filters?: typeof stockCardFilters) => {
     const token = getTrustedAccessToken();
     if (!token) throw new Error('انتهت جلسة الدخول الموثوقة.');
     const response = await fetch('/api/inventory/reports/audit', {
       method: 'POST', headers: { Authorization: `Bearer ${token}`, 'Content-Type': 'application/json' },
-      body: JSON.stringify({ reportType: activeReport, format, expectedVersion: canonicalVersion })
+      body: JSON.stringify({ reportType: activeReport, format, expectedVersion: canonicalVersion, ...(filters ? { filters } : {}) })
     });
     const payload = await response.json();
     if (!response.ok || !payload?.success) throw new Error(payload?.message || 'تعذر تدقيق مصدر التقرير.');
   };
 
   const handleExportCSV = async () => {
-    try { await auditReport('csv'); } catch (error: any) { notify(error?.message || 'تعذر تصدير التقرير.', 'danger'); return; }
+    try { await auditReport('csv', activeReport === 'stock-card' ? stockCardFilters : undefined); } catch (error: any) { notify(error?.message || 'تعذر تصدير التقرير.', 'danger'); return; }
     const rows: unknown[][] = activeReport === 'valuation'
       ? [['رمز الصنف', 'اسم الصنف', 'الفئة', 'الرصيد بالمستودع', 'تكلفة الوحدة', 'إجمالي التقييم', 'المستودع'],
         ...valuationRows.map(({ item, warehouseId, quantity }) => [item.sku || item.id, item.name, item.categoryId, quantity, item.costPrice, quantity * item.costPrice,
@@ -96,9 +106,19 @@ export default function InventoryReports({ items, movements = [], receipts = [],
         : activeReport === 'turnover'
           ? [['رمز الصنف', 'اسم الصنف', 'الوارد المرصود خلال 90 يوماً', 'الصرف المرصود خلال 90 يوماً', 'عدد المستندات'],
             ...turnoverRows.map(row => [row.item?.sku, row.item?.name, row.received, row.issued, row.docs])]
-          : [['رقم محضر الجرد', 'الصنف', 'المستودع', 'الرصيد الدفتري', 'الفعلي', 'الفارق', 'الأثر المالي', 'الحالة'],
+          : activeReport === 'variances'
+            ? [['رقم محضر الجرد', 'الصنف', 'المستودع', 'الرصيد الدفتري', 'الفعلي', 'الفارق', 'الأثر المالي', 'الحالة'],
             ...stocktakes.map(row => [row.id, row.itemName, warehouses.find(warehouse => warehouse.id === (row.warehouseId || row.warehouse))?.name || row.warehouse,
-              row.bookQty, row.actualQty, row.discrepancy, row.financialImpact, row.statusLabel || row.status])];
+              row.bookQty, row.actualQty, row.discrepancy, row.financialImpact, row.statusLabel || row.status])]
+            : stockCardFilters.itemId
+              ? [['التاريخ', 'رقم العملية المخزنية', 'النوع', 'المستودع', 'الوارد', 'المنصرف', 'تحويل داخلي', 'الرصيد بعد الحركة', 'قيمة الحركة', 'رقم قيد اليومية', 'حالة الربط'],
+                ...stockCard.events.map(event => [event.date, event.operationNo, event.typeLabel,
+                  event.type === 'transfer' ? `${warehouses.find(row => row.id === event.warehouseFromId)?.name || event.warehouseFromId} ← ${warehouses.find(row => row.id === event.warehouseToId)?.name || event.warehouseToId}` : warehouses.find(row => row.id === event.warehouseId)?.name || event.warehouseId || 'غير محدد',
+                  event.incoming, event.outgoing, event.transfer, event.balanceAfter, event.amount, event.journalEntryId || '', event.postingStatus])]
+              : [['رمز الصنف', 'اسم الصنف', 'الوحدة', 'النطاق', 'رصيد أول المدة', 'الوارد', 'المنصرف', 'التحويلات الداخلية', 'رصيد آخر المدة', 'الرصيد الحالي', 'التقييم الحالي'],
+                ...stockCard.summaryRows.map(row => [row.sku, row.itemName, row.unitName,
+                  stockCardFilters.warehouseId ? warehouses.find(value => value.id === stockCardFilters.warehouseId)?.name : 'كل المستودعات',
+                  row.openingBalance, row.incoming, row.outgoing, row.transfer, row.closingBalance, row.currentBalance, row.currentValuation])];
     const escape = (value: unknown) => {
       const raw = String(value ?? '');
       const safe = typeof value === 'string' && /^[\t\r ]*[=+\-@]/.test(raw) ? `'${raw}` : raw;
@@ -115,6 +135,20 @@ export default function InventoryReports({ items, movements = [], receipts = [],
 
   const handlePrint = async () => {
     if (!print) { notify('مسار الطباعة غير متاح.', 'warning'); return; }
+    if (activeReport === 'stock-card') {
+      const detailed = Boolean(stockCardFilters.itemId);
+      await print({ title: detailed ? 'بطاقة حركة صنف مخزني' : 'ملخص حركة المخزون',
+        number: detailed ? stockCardFilters.itemId : undefined, date: `${stockCardFilters.fromDate} — ${stockCardFilters.toDate}`,
+        status: 'بيانات من السجل المخزني المركزي', reportType: 'stock-card', reportFilters: stockCardFilters,
+        columns: detailed ? ['التاريخ', 'رقم العملية المخزنية', 'النوع', 'المستودع / التحويل', 'الوارد', 'المنصرف', 'التحويل', 'الرصيد بعد الحركة', 'قيمة الحركة', 'رقم قيد اليومية']
+          : ['SKU', 'الصنف', 'الوحدة', 'رصيد أول المدة', 'الوارد', 'المنصرف', 'التحويلات', 'رصيد آخر المدة'],
+        rows: detailed ? stockCard.events.map(event => [event.date, event.operationNo, event.typeLabel,
+          event.type === 'transfer' ? `${warehouses.find(row => row.id === event.warehouseFromId)?.name || event.warehouseFromId} ← ${warehouses.find(row => row.id === event.warehouseToId)?.name || event.warehouseToId}` : warehouses.find(row => row.id === event.warehouseId)?.name || event.warehouseId || 'غير محدد',
+          event.incoming, event.outgoing, event.transfer, event.balanceAfter, `${event.amount.toLocaleString('ar-LY')} د.ل`, event.journalEntryId || (event.postingStatus === 'not_required' ? 'لا يتطلب قيداً مالياً' : 'قيد غير مربوط')])
+          : stockCard.summaryRows.map(row => [row.sku, row.itemName, row.unitName, row.openingBalance, row.incoming, row.outgoing, row.transfer, row.closingBalance]),
+        summary: `${stockCardFilters.fromDate} إلى ${stockCardFilters.toDate} • ${stockCardFilters.warehouseId ? warehouses.find(row => row.id === stockCardFilters.warehouseId)?.name || 'المستودع المحدد' : 'كل المستودعات'}` });
+      return;
+    }
     const model = activeReport === 'valuation'
       ? { title: 'تقييم المخزون حسب المستودع', columns: ['الكود', 'الصنف', 'المستودع', 'الرصيد', 'تكلفة الوحدة', 'القيمة'],
           rows: valuationRows.map(({ item, warehouseId, quantity }) => [item.sku, item.name, warehouses.find(row => row.id === warehouseId)?.name || warehouseId, quantity, item.costPrice, quantity * item.costPrice]) }
@@ -189,7 +223,147 @@ export default function InventoryReports({ items, movements = [], receipts = [],
         >
           <AlertTriangle className="w-4 h-4" /> فروقات الجرد
         </button>
+        <button
+          onClick={() => setActiveReport('stock-card')}
+          className={`px-5 py-2.5 font-bold text-sm transition flex items-center gap-2 ${
+            activeReport === 'stock-card' ? 'bg-gradient-to-r from-[#9a6a1d] via-[#d4af37] to-[#c58a22] text-slate-950 shadow-md' : 'bg-transparent text-amber-900/70 hover:text-amber-950 hover:bg-amber-100/50'
+          }`}
+        >
+          <BookOpen className="w-4 h-4" /> بطاقة الصنف وحركة المخزون
+        </button>
       </div>
+
+      {activeReport === 'stock-card' && (
+        <section className="overflow-hidden rounded-2xl border border-amber-900/15 bg-white/70 shadow-sm" dir="rtl" aria-label="بطاقة الصنف وحركة المخزون">
+          <header className="flex flex-col gap-2 border-b border-amber-900/10 bg-gradient-to-l from-[#2a1d13] to-[#4a321d] p-5 text-amber-50 md:flex-row md:items-center md:justify-between">
+            <div className="flex items-center gap-3">
+              <span className="rounded-xl bg-amber-300/15 p-3 text-amber-200"><BookOpen className="h-5 w-5" /></span>
+              <div><h4 className="text-base font-black">بطاقة حركة الصنف والأرصدة حسب الفترة</h4>
+                <p className="mt-1 text-xs text-amber-100/75">اختر فترة وصنفاً ومستودعاً، أو اعرض ملخص المخزون بالكامل.</p></div>
+            </div>
+            <div className="flex items-center gap-2 text-xs text-amber-100/80"><CalendarDays className="h-4 w-4" />
+              <span>{stockCardFilters.fromDate} — {stockCardFilters.toDate}</span></div>
+          </header>
+
+          <div className="grid gap-3 border-b border-slate-200 p-4 sm:grid-cols-2 xl:grid-cols-[1fr_1fr_1fr_1fr_auto]">
+            <label className="text-xs font-bold text-slate-700">من تاريخ
+              <input aria-label="من تاريخ" type="date" value={stockCardFilters.fromDate} onChange={event => setStockCardFilters(current => ({ ...current, fromDate: event.target.value }))}
+                className="mt-1.5 w-full rounded-lg border border-slate-300 bg-white px-3 py-2 text-sm" />
+            </label>
+            <label className="text-xs font-bold text-slate-700">إلى تاريخ
+              <input aria-label="إلى تاريخ" type="date" value={stockCardFilters.toDate} onChange={event => setStockCardFilters(current => ({ ...current, toDate: event.target.value }))}
+                className="mt-1.5 w-full rounded-lg border border-slate-300 bg-white px-3 py-2 text-sm" />
+            </label>
+            <label className="text-xs font-bold text-slate-700">الصنف
+              <select aria-label="الصنف" value={stockCardFilters.itemId} onChange={event => setStockCardFilters(current => ({ ...current, itemId: event.target.value }))}
+                className="mt-1.5 w-full rounded-lg border border-slate-300 bg-white px-3 py-2 text-sm">
+                <option value="">كل الأصناف</option>
+                {items.map(item => <option key={item.id} value={item.id}>{item.sku ? `${item.sku} — ` : ''}{item.name}{item.status === 'archived' ? ' (مؤرشف)' : ''}</option>)}
+              </select>
+            </label>
+            <label className="text-xs font-bold text-slate-700">المستودع
+              <select aria-label="المستودع" value={stockCardFilters.warehouseId} onChange={event => setStockCardFilters(current => ({ ...current, warehouseId: event.target.value }))}
+                className="mt-1.5 w-full rounded-lg border border-slate-300 bg-white px-3 py-2 text-sm">
+                <option value="">كل المستودعات</option>
+                {warehouses.map(warehouse => <option key={warehouse.id} value={warehouse.id}>{warehouse.name}</option>)}
+              </select>
+            </label>
+            <button type="button" onClick={() => {
+              const today = localDate();
+              setStockCardFilters({ fromDate: `${today.slice(0, 8)}01`, toDate: today, itemId: '', warehouseId: '' });
+            }} className="mt-auto inline-flex items-center justify-center gap-2 rounded-lg border border-slate-300 px-3 py-2 text-xs font-bold text-slate-700 hover:bg-slate-50">
+              <FilterX className="h-4 w-4" /> إعادة الضبط
+            </button>
+          </div>
+
+          {!stockCard.validDateRange && <p role="alert" className="m-4 rounded-lg border border-red-200 bg-red-50 p-3 text-sm font-bold text-red-800">تحقق من تاريخ البداية والنهاية؛ نطاق الفترة غير صالح.</p>}
+          {stockCard.missingJournalCount > 0 && <p role="alert" className="mx-4 mt-4 rounded-lg border border-red-200 bg-red-50 p-3 text-sm font-bold text-red-800">
+            توجد {stockCard.missingJournalCount} حركة ذات قيمة مالية بلا مرجع قيد يومية؛ هذه تحتاج مراجعة قبل اعتماد التقرير المالي.
+          </p>}
+          {(stockCard.undatedOperationCount > 0 || stockCard.inconsistentItemBalanceCount > 0) && <p role="alert" className="mx-4 mt-4 rounded-lg border border-amber-200 bg-amber-50 p-3 text-xs font-bold text-amber-900">
+            تحقق من جودة المصدر: {stockCard.undatedOperationCount > 0 ? `${stockCard.undatedOperationCount} مستند بلا تاريخ صالح. ` : ''}
+            {stockCard.inconsistentItemBalanceCount > 0 ? `${stockCard.inconsistentItemBalanceCount} بطاقة لا يطابق إجماليها مجموع أرصدة المستودعات.` : ''}
+          </p>}
+
+          {stockCard.validDateRange && <>
+          <div className="grid gap-3 p-4 sm:grid-cols-2 xl:grid-cols-4">
+            {[
+              ['رصيد أول المدة', stockCard.totals.openingBalance, 'text-slate-900'],
+              ['الوارد خلال الفترة', stockCard.totals.incoming, 'text-emerald-700'],
+              ['المنصرف خلال الفترة', stockCard.totals.outgoing, 'text-rose-700'],
+              ['رصيد آخر المدة', stockCard.totals.closingBalance, 'text-amber-800']
+            ].map(([label, value, color]) => <div key={String(label)} className="rounded-xl border border-slate-200 bg-white p-4">
+              <p className="text-xs font-bold text-slate-500">{label}</p><p className={`mt-2 text-2xl font-black ${color}`}>{displayNumber(Number(value))}</p>
+              <p className="mt-1 text-[10px] text-slate-400">وحدة مخزنية</p>
+            </div>)}
+          </div>
+
+          <p className="mx-4 rounded-lg bg-slate-50 p-3 text-[11px] leading-6 text-slate-600">
+            رصيد أول المدة يُعاد بناؤه من الرصيد المركزي مطروحاً منه صافي الحركات المسجلة من تاريخ البداية فصاعداً. رقم قيد اليومية هو مرجع القيد الكانوني نفسه الظاهر في الأستاذ العام؛ التحويل بين مستودعين لا ينشئ قيداً لأنه لا يغيّر إجمالي المخزون.
+          </p>
+
+          {stockCardFilters.itemId ? (
+            <div className="space-y-3 p-4">
+              <div className="flex flex-wrap items-center justify-between gap-2 border-b border-slate-200 pb-3">
+                <div><h5 className="font-black text-slate-900">{items.find(item => item.id === stockCardFilters.itemId)?.name || 'بطاقة الصنف'}</h5>
+                  <p className="mt-1 font-mono text-xs text-slate-500">{items.find(item => item.id === stockCardFilters.itemId)?.sku || stockCardFilters.itemId}</p></div>
+                <span className="rounded-full bg-amber-50 px-3 py-1 text-xs font-bold text-amber-900">{stockCard.events.length} حركة مسجلة • {stockCardFilters.warehouseId ? warehouses.find(row => row.id === stockCardFilters.warehouseId)?.name || 'المستودع المحدد' : 'كل المستودعات'}</span>
+              </div>
+              <div className="overflow-x-auto rounded-xl border border-slate-200">
+                <table className="w-full min-w-[1100px] text-right text-xs">
+                  <thead className="bg-[#2a1d13] text-[#fce79a]"><tr>
+                    <th className="px-3 py-3">التاريخ</th><th className="px-3 py-3">رقم العملية المخزنية</th><th className="px-3 py-3">نوع الحركة</th>
+                    <th className="px-3 py-3">المستودع / المسار</th><th className="px-3 py-3">الوارد</th><th className="px-3 py-3">المنصرف</th>
+                    <th className="px-3 py-3">تحويل داخلي</th><th className="px-3 py-3">الرصيد بعد الحركة</th><th className="px-3 py-3">القيمة</th><th className="px-3 py-3">رقم قيد اليومية</th>
+                  </tr></thead>
+                  <tbody className="divide-y divide-slate-100 bg-white">
+                    {stockCard.events.map(event => <tr key={event.id} className="align-top hover:bg-amber-50/40">
+                      <td className="px-3 py-3 whitespace-nowrap">{event.date}</td>
+                      <td className="px-3 py-3"><bdi className="font-mono font-bold text-slate-900">{event.operationNo}</bdi>{event.referenceNo && <small className="block mt-1 text-slate-500">مرجع: {event.referenceNo}</small>}</td>
+                      <td className="px-3 py-3 font-bold">{event.typeLabel}</td>
+                      <td className="px-3 py-3">{event.type === 'transfer'
+                        ? `${warehouses.find(row => row.id === event.warehouseFromId)?.name || event.warehouseFromId} ← ${warehouses.find(row => row.id === event.warehouseToId)?.name || event.warehouseToId}`
+                        : warehouses.find(row => row.id === event.warehouseId)?.name || event.warehouseId || 'غير محدد'}</td>
+                      <td className="px-3 py-3 font-bold text-emerald-700">{event.incoming ? displayNumber(event.incoming) : '—'}</td>
+                      <td className="px-3 py-3 font-bold text-rose-700">{event.outgoing ? displayNumber(event.outgoing) : '—'}</td>
+                      <td className="px-3 py-3 text-indigo-700">{event.transfer ? displayNumber(event.transfer) : '—'}</td>
+                      <td className="px-3 py-3 font-black">{displayNumber(Number(event.balanceAfter || 0))}</td>
+                      <td className="px-3 py-3 whitespace-nowrap">{displayNumber(event.amount)} د.ل</td>
+                      <td className="max-w-64 break-all px-3 py-3 font-mono text-[10px]">{event.journalEntryId
+                        ? <span dir="ltr">{event.journalEntryId}</span>
+                        : event.postingStatus === 'not_required' ? <span className="font-sans text-slate-500">لا يتطلب قيداً مالياً</span>
+                          : <span className="font-sans font-bold text-red-700">قيد غير مربوط</span>}</td>
+                    </tr>)}
+                    {stockCard.events.length === 0 && <tr><td colSpan={10} className="py-10 text-center text-slate-500">لا توجد حركات معتمدة ضمن هذه الفترة والنطاق.</td></tr>}
+                  </tbody>
+                </table>
+              </div>
+            </div>
+          ) : (
+            <div className="overflow-x-auto p-4">
+              <table className="w-full min-w-[850px] text-right text-sm">
+                <thead className="bg-[#2a1d13] text-[#fce79a]"><tr>
+                  <th className="px-3 py-3">SKU</th><th className="px-3 py-3">الصنف</th><th className="px-3 py-3">الوحدة</th><th className="px-3 py-3">النطاق</th>
+                  <th className="px-3 py-3">رصيد أول المدة</th><th className="px-3 py-3">الوارد</th><th className="px-3 py-3">المنصرف</th><th className="px-3 py-3">التحويل</th><th className="px-3 py-3">رصيد آخر المدة</th><th className="px-3 py-3">فتح البطاقة</th>
+                </tr></thead>
+                <tbody className="divide-y divide-slate-100 bg-white">
+                  {stockCard.summaryRows.map(row => <tr key={`${row.itemId}:${row.warehouseId || '*'}`}>
+                    <td className="px-3 py-3 font-mono">{row.sku}</td><td className="px-3 py-3 font-bold">{row.itemName}</td><td className="px-3 py-3">{row.unitName || '—'}</td>
+                    <td className="px-3 py-3">{stockCardFilters.warehouseId ? warehouses.find(value => value.id === stockCardFilters.warehouseId)?.name || stockCardFilters.warehouseId : 'كل المستودعات'}</td>
+                    <td className="px-3 py-3">{displayNumber(row.openingBalance)}</td><td className="px-3 py-3 text-emerald-700">{displayNumber(row.incoming)}</td>
+                    <td className="px-3 py-3 text-rose-700">{displayNumber(row.outgoing)}</td><td className="px-3 py-3 text-indigo-700">{displayNumber(row.transfer)}</td>
+                    <td className="px-3 py-3 font-black">{displayNumber(row.closingBalance)}</td>
+                    <td className="px-3 py-3"><button type="button" onClick={() => setStockCardFilters(current => ({ ...current, itemId: row.itemId }))}
+                      className="rounded-lg bg-amber-100 px-3 py-1.5 text-xs font-black text-amber-950 hover:bg-amber-200">عرض الحركات</button></td>
+                  </tr>)}
+                  {stockCard.summaryRows.length === 0 && <tr><td colSpan={10} className="py-10 text-center text-slate-500">لا توجد أصناف في النطاق المحدد.</td></tr>}
+                </tbody>
+              </table>
+            </div>
+          )}
+          </>}
+        </section>
+      )}
 
       {/* Valuation Report View */}
       {activeReport === 'valuation' && (
