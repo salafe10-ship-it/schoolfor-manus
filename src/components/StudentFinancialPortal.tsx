@@ -2229,23 +2229,33 @@ export default function StudentFinancialPortal({
             body {
               font-family: 'Inter', system-ui, -apple-system, sans-serif;
               width: 210mm;
+              height: 297mm;
               min-height: 297mm;
+              max-height: 297mm;
               margin: 0;
               padding: 0;
               color: #0f172a;
               background-color: #ffffff;
               font-size: 10px;
               line-height: 1.35;
+              overflow: hidden;
             }
             .receipt-copy {
               width: 190mm;
-              min-height: 280mm;
-              margin: 8mm auto;
-              padding: 7mm 8mm 6mm;
+              height: 139mm;
+              min-height: 139mm;
+              max-height: 139mm;
+              margin: 4mm auto 0;
+              padding: 4mm 6mm 3mm;
               border: 1px solid #0f172a;
               position: relative;
               overflow: hidden;
-              page-break-after: always;
+              page-break-after: auto;
+              page-break-inside: avoid;
+              break-inside: avoid;
+            }
+            .receipt-copy + .receipt-copy {
+              margin-top: 4mm;
             }
             .copy-label {
               position: absolute;
@@ -2276,8 +2286,8 @@ export default function StudentFinancialPortal({
               min-width: 185px;
             }
             .school-logo {
-              width: 22mm;
-              height: 22mm;
+              width: 15mm;
+              height: 15mm;
               object-fit: contain;
               border: 1px solid #cbd5e1;
               border-radius: 8px;
@@ -2288,13 +2298,13 @@ export default function StudentFinancialPortal({
               display: flex;
               align-items: center;
               justify-content: center;
-              font-size: 22px;
+              font-size: 16px;
             }
             .doc-title {
               text-align: center;
             }
             .doc-title h1 {
-              font-size: 13px;
+              font-size: 11px;
               font-weight: 900;
               border: 2px solid #0f172a;
               padding: 4px 12px;
@@ -2316,14 +2326,14 @@ export default function StudentFinancialPortal({
             .voucher-body {
               border: 1px solid #0f172a;
               border-radius: 8px;
-              padding: 7px 10px;
-              margin-bottom: 9px;
+              padding: 4px 8px;
+              margin-bottom: 5px;
               background-color: #fafafa;
             }
             .field-row {
               display: flex;
               border-bottom: 1px dashed #cbd5e1;
-              padding: 4px 0;
+              padding: 2px 0;
               align-items: center;
             }
             .field-row:last-child {
@@ -2342,9 +2352,9 @@ export default function StudentFinancialPortal({
             .amount-box {
               display: inline-block;
               border: 2px solid #0f172a;
-              padding: 4px 9px;
+              padding: 2px 7px;
               font-family: monospace;
-              font-size: 12px;
+              font-size: 11px;
               font-weight: 900;
               background-color: #f1f5f9;
               border-radius: 6px;
@@ -2354,23 +2364,23 @@ export default function StudentFinancialPortal({
               grid-template-columns: repeat(3, 1fr);
               gap: 10px;
               text-align: center;
-              margin-top: 12px;
+              margin-top: 6px;
               font-size: 8px;
               font-weight: bold;
             }
             .sig-space {
-              height: 22px;
+              height: 12px;
             }
             .system-tag {
               text-align: center;
               font-size: 9px;
               color: #94a3b8;
-              margin-top: 8px;
+              margin-top: 4px;
               border-top: 1px solid #e2e8f0;
-              padding-top: 10px;
+              padding-top: 4px;
             }
             @media print {
-              body { width: 210mm; min-height: 297mm; }
+              body { width: 210mm; height: 297mm; min-height: 297mm; max-height: 297mm; overflow: hidden; }
               .receipt-copy { break-inside: avoid; page-break-inside: avoid; }
               .voucher-body { background-color: transparent; }
               .amount-box { background-color: #f1f5f9 !important; -webkit-print-color-adjust: exact; print-color-adjust: exact; }
@@ -5894,12 +5904,14 @@ export default function StudentFinancialPortal({
                           <div className="space-y-1">
                             <span className="text-white font-extrabold block">🖨️ تعليمات المعاينة والطباعة الفورية</span>
                             <p className="text-[10px] text-slate-400 leading-relaxed font-medium">
-                              تم برمجة نمط طباعة ذكي للورقة. الضغط على زر الطباعة سيخفي شريط الأوامر والقوائم الجانبية تلقائياً ويطبع السند فقط بحجم صفحة A4 قياسي مع ختم الإدارة.
+                              تم تجهيز نسختين متطابقتين من السند داخل صفحة A4 واحدة، كل نسخة في نصف الصفحة، مع إخفاء شريط الأوامر والقوائم الجانبية تلقائياً.
                             </p>
                           </div>
                           <button
                             type="button"
-                            onClick={() => window.print()}
+                            onClick={() => {
+                              if (selectedStudRv) handlePrintSingleVoucher(selectedStudRv);
+                            }}
                             className="bg-amber-400 hover:bg-amber-500 text-slate-950 font-black px-4 py-2 shrink-0 flex items-center gap-1.5 cursor-pointer shadow border border-amber-300"
                           >
                             <Printer className="w-4 h-4" />

@@ -2589,39 +2589,6 @@ html:not(.dark) #super-admin-portal button:not(.bg-indigo-600):not(.bg-rose-600)
   font-weight: 900;
 }
 
-/* Unified identity: match the approved Student Affairs control-room surface
-   while keeping the financial sidebar and all module controls functional. */
-#student-financial-portal.financial-identity-unified {
-  background:
-    radial-gradient(circle at 8% 0%, rgba(212, 175, 55, 0.12), transparent 26rem),
-    linear-gradient(135deg, #f8f5ee 0%, #efe9dc 58%, #e8e0d0 100%) !important;
-  color: #172033 !important;
-}
-
-#student-financial-portal.financial-identity-unified .financial-module-header {
-  background: linear-gradient(110deg, #fffefb 0%, #fbf8f0 100%) !important;
-  color: #172033 !important;
-  border-color: rgba(154, 106, 29, 0.32) !important;
-  box-shadow: 0 14px 30px rgba(29, 19, 11, 0.10) !important;
-}
-
-#student-financial-portal.financial-identity-unified .financial-module-header .text-white,
-#student-financial-portal.financial-identity-unified .financial-module-header .text-slate-300 {
-  color: #172033 !important;
-}
-
-#student-financial-portal.financial-identity-unified .enterprise-action-toolbar {
-  background: rgba(255, 254, 251, 0.92) !important;
-  border-color: rgba(154, 106, 29, 0.22) !important;
-  box-shadow: 0 8px 20px rgba(29, 19, 11, 0.06) !important;
-}
-
-#student-financial-portal.financial-identity-unified .financial-workspace-layout {
-  background: rgba(255, 254, 251, 0.62);
-  border-color: rgba(154, 106, 29, 0.22);
-  box-shadow: 0 18px 40px rgba(29, 19, 11, 0.08);
-}
-
 /* Shared identity standard: the Student Affairs header is the visual source
    of truth for module-owned headers and sidebars. Presentation only. */
 .edupro-identity-header,
@@ -3128,4 +3095,243 @@ html:not(.dark) #super-admin-portal button:not(.bg-indigo-600):not(.bg-rose-600)
 #hr-portal button:not(:disabled) {
   transition: background-color 0.2s ease, border-color 0.2s ease,
     color 0.2s ease, box-shadow 0.2s ease;
+}
+
+/* --------------------------------------------------------------------------
+   Student fees identity lock
+   Keep all seven tuition views on the existing EduPro luxury token family.
+   This is intentionally scoped to the fees portal: no behavior, data flow,
+   inventory surface, or receipt-print rules are changed here.
+   -------------------------------------------------------------------------- */
+#student-financial-portal.financial-identity-unified {
+  --fees-mahogany-950: var(--ui-brand-950);
+  --fees-mahogany-900: var(--ui-brand-900);
+  --fees-mahogany-800: var(--ui-brand-800);
+  --fees-mahogany-700: var(--ui-brand-700);
+  --fees-gold-500: var(--ui-gold-500);
+  --fees-gold-300: var(--ui-gold-300);
+  --fees-cream: var(--ui-surface);
+  --fees-cream-muted: var(--ui-surface-muted);
+  --fees-border: var(--ui-border);
+  --fees-ink: var(--ui-text);
+  --fees-muted: var(--ui-muted);
+  background:
+    radial-gradient(circle at 8% 0%, rgba(212, 175, 55, 0.12), transparent 26rem),
+    linear-gradient(135deg, #f8f5ee 0%, #efe9dc 58%, #e8e0d0 100%) !important;
+  color: var(--fees-ink) !important;
+}
+
+#student-financial-portal.financial-identity-unified .financial-module-header,
+#student-financial-portal.financial-identity-unified.financial-reference-management .financial-module-header,
+#student-financial-portal.financial-identity-unified .financial-fee-module-header {
+  background: linear-gradient(115deg, var(--fees-mahogany-900) 0%, var(--fees-mahogany-800) 54%, var(--fees-mahogany-950) 100%) !important;
+  color: #fff6d2 !important;
+  border: 1px solid rgba(212, 175, 55, 0.62) !important;
+  border-radius: 1.35rem !important;
+  box-shadow: 0 16px 42px rgba(42, 29, 19, 0.24) !important;
+}
+
+#student-financial-portal.financial-identity-unified .financial-module-header h1,
+#student-financial-portal.financial-identity-unified .financial-module-header .text-white,
+#student-financial-portal.financial-identity-unified .financial-module-header .text-slate-300,
+#student-financial-portal.financial-identity-unified .financial-module-header .text-amber-100,
+#student-financial-portal.financial-identity-unified .financial-module-header .text-amber-200\/80,
+#student-financial-portal.financial-identity-unified .financial-module-header .text-amber-300\/80 {
+  color: #fff6d2 !important;
+  -webkit-text-fill-color: #fff6d2 !important;
+}
+
+#student-financial-portal.financial-identity-unified .financial-module-header h1 {
+  color: #fff0ad !important;
+  -webkit-text-fill-color: #fff0ad !important;
+}
+
+#student-financial-portal.financial-identity-unified .financial-module-tabs,
+#student-financial-portal.financial-identity-unified.financial-reference-management .financial-module-tabs {
+  background: rgba(42, 29, 19, 0.96) !important;
+  border-color: rgba(212, 175, 55, 0.62) !important;
+  opacity: 1 !important;
+}
+
+#student-financial-portal.financial-identity-unified .financial-module-tabs > button,
+#student-financial-portal.financial-identity-unified.financial-reference-management .financial-module-tabs > button {
+  color: var(--fees-gold-300) !important;
+  -webkit-text-fill-color: var(--fees-gold-300) !important;
+  opacity: 1 !important;
+}
+
+#student-financial-portal.financial-identity-unified .financial-module-tabs > button.bg-gradient-to-r {
+  background: linear-gradient(110deg, #9a6a1d, var(--fees-gold-500), #c58a22) !important;
+  color: var(--fees-mahogany-950) !important;
+  -webkit-text-fill-color: var(--fees-mahogany-950) !important;
+}
+
+#student-financial-portal.financial-identity-unified .enterprise-action-toolbar,
+#student-financial-portal.financial-identity-unified.financial-reference-management .enterprise-action-toolbar,
+#student-financial-portal.financial-identity-unified .financial-receipts-toolbar {
+  background: linear-gradient(115deg, var(--fees-mahogany-900) 0%, var(--fees-mahogany-800) 54%, var(--fees-mahogany-950) 100%) !important;
+  color: #fff6d2 !important;
+  border: 1px solid rgba(212, 175, 55, 0.52) !important;
+  border-radius: 1.15rem !important;
+  box-shadow: 0 14px 32px rgba(42, 29, 19, 0.2) !important;
+}
+
+#student-financial-portal.financial-identity-unified .enterprise-action-toolbar button:not(:disabled),
+#student-financial-portal.financial-identity-unified .financial-receipts-toolbar .financial-receipts-action:not(:disabled),
+#student-financial-portal.financial-identity-unified .financial-fee-module-action:not(:disabled),
+#student-financial-portal.financial-identity-unified .management-reference-screen button:not(:disabled) {
+  border-color: rgba(247, 209, 116, 0.62) !important;
+  box-shadow: 0 6px 14px rgba(95, 58, 8, 0.18) !important;
+}
+
+#student-financial-portal.financial-identity-unified.financial-reference-management .enterprise-action-toolbar button:not(:disabled) {
+  background: linear-gradient(135deg, var(--fees-mahogany-900), var(--fees-mahogany-800)) !important;
+  color: #fff8e7 !important;
+  border-color: rgba(247, 209, 116, 0.72) !important;
+}
+
+#student-financial-portal.financial-identity-unified .financial-workspace-layout {
+  background: rgba(255, 254, 251, 0.62) !important;
+  border-color: var(--fees-border) !important;
+  box-shadow: 0 18px 40px rgba(29, 19, 11, 0.08) !important;
+}
+
+#student-financial-portal.financial-identity-unified .financial-content-viewport,
+#student-financial-portal.financial-identity-unified.financial-reference-management .financial-content-viewport {
+  background: linear-gradient(180deg, var(--fees-cream) 0%, var(--fees-cream-muted) 100%) !important;
+  color: var(--fees-ink) !important;
+  border-color: rgba(212, 175, 55, 0.34) !important;
+  border-radius: 1.25rem !important;
+  box-shadow: 0 14px 32px rgba(42, 29, 19, 0.08) !important;
+}
+
+/* Remove the light-reference treatment from smart management while keeping
+   its paper-like inner content and responsive layout. */
+#student-financial-portal.financial-identity-unified.financial-reference-management {
+  background:
+    radial-gradient(circle at 8% 0%, rgba(212, 175, 55, 0.12), transparent 26rem),
+    linear-gradient(135deg, #f8f5ee 0%, #efe9dc 58%, #e8e0d0 100%) !important;
+  border: 0 !important;
+  border-radius: 0 !important;
+  padding: 0.65rem !important;
+  box-shadow: none !important;
+}
+
+#student-financial-portal.financial-identity-unified .management-reference-screen,
+#student-financial-portal.financial-identity-unified .fee-management-form-panel {
+  color: var(--fees-ink) !important;
+  background: rgba(255, 254, 251, 0.68) !important;
+  border-color: rgba(154, 106, 29, 0.22) !important;
+}
+
+#student-financial-portal.financial-identity-unified .fee-management-kpi-card {
+  border-color: rgba(154, 106, 29, 0.3) !important;
+  background: linear-gradient(180deg, #fffefa 0%, #f6efe2 100%) !important;
+  box-shadow: 0 10px 22px rgba(42, 29, 19, 0.09) !important;
+}
+
+#student-financial-portal.financial-identity-unified .fee-management-kpi-card::before,
+#student-financial-portal.financial-identity-unified .fee-management-kpi-card-paid::before,
+#student-financial-portal.financial-identity-unified .fee-management-kpi-card-remaining::before {
+  background: linear-gradient(90deg, #8d6216, var(--fees-gold-300), #8d6216) !important;
+}
+
+#student-financial-portal.financial-identity-unified .fee-management-kpi-card span,
+#student-financial-portal.financial-identity-unified .fee-management-kpi-card > div,
+#student-financial-portal.financial-identity-unified .fee-management-kpi-card-paid > div,
+#student-financial-portal.financial-identity-unified .fee-management-kpi-card-remaining > div {
+  color: var(--fees-mahogany-700) !important;
+}
+
+#student-financial-portal.financial-identity-unified .fee-management-primary-action,
+#student-financial-portal.financial-identity-unified .fee-management-utility-pdf,
+#student-financial-portal.financial-identity-unified .financial-fee-module-navy,
+#student-financial-portal.financial-identity-unified .financial-receipts-navy {
+  background: linear-gradient(135deg, var(--fees-mahogany-900), var(--fees-mahogany-800)) !important;
+  color: #fff8e7 !important;
+}
+
+#student-financial-portal.financial-identity-unified .fee-management-collect-action,
+#student-financial-portal.financial-identity-unified .fee-management-inline-action,
+#student-financial-portal.financial-identity-unified .fee-management-add-action,
+#student-financial-portal.financial-identity-unified .financial-fee-module-gold,
+#student-financial-portal.financial-identity-unified .financial-receipts-gold {
+  background: linear-gradient(135deg, #9a6a1d, var(--fees-gold-500), #c58a22) !important;
+  color: var(--fees-mahogany-950) !important;
+  border-color: #b27c1f !important;
+}
+
+#student-financial-portal.financial-identity-unified .fee-management-secondary-action,
+#student-financial-portal.financial-identity-unified .fee-management-utility-print,
+#student-financial-portal.financial-identity-unified .financial-fee-module-paper,
+#student-financial-portal.financial-identity-unified .financial-receipts-paper {
+  background: var(--fees-cream) !important;
+  color: var(--fees-mahogany-700) !important;
+  border-color: rgba(154, 106, 29, 0.38) !important;
+}
+
+#student-financial-portal.financial-identity-unified .fee-management-danger-action,
+#student-financial-portal.financial-identity-unified .financial-receipts-danger {
+  background: #fff7f2 !important;
+  color: #7f3323 !important;
+  border-color: #c98f78 !important;
+}
+
+#student-financial-portal.financial-identity-unified .fee-management-table-header,
+#student-financial-portal.financial-identity-unified .financial-fee-module-table-header {
+  background: linear-gradient(110deg, var(--fees-mahogany-900), var(--fees-mahogany-800)) !important;
+  color: var(--fees-gold-300) !important;
+  border-color: rgba(247, 209, 116, 0.28) !important;
+}
+
+#student-financial-portal.financial-identity-unified table thead tr,
+#student-financial-portal.financial-identity-unified table thead th,
+#student-financial-portal.financial-identity-unified .fee-management-table-header,
+#student-financial-portal.financial-identity-unified .financial-fee-module-table-header {
+  background: linear-gradient(110deg, var(--fees-mahogany-900), var(--fees-mahogany-800)) !important;
+  color: var(--fees-gold-300) !important;
+  border-color: rgba(247, 209, 116, 0.28) !important;
+}
+
+#student-financial-portal.financial-identity-unified :is(input, select, textarea) {
+  border-color: rgba(154, 106, 29, 0.36) !important;
+  background: #fffefa !important;
+  color: var(--fees-ink) !important;
+}
+
+#student-financial-portal.financial-identity-unified :is(input, select, textarea):focus {
+  border-color: var(--fees-gold-500) !important;
+  box-shadow: 0 0 0 3px rgba(212, 175, 55, 0.24) !important;
+  outline: 3px solid #7f5a15 !important;
+  outline-offset: 2px !important;
+}
+
+#student-financial-portal.financial-identity-unified :is(button, input, select, textarea):disabled {
+  opacity: 0.58;
+  filter: saturate(0.7);
+}
+
+#student-financial-portal.financial-identity-unified :is(button, input, select, textarea):focus-visible {
+  outline: 3px solid #7f5a15 !important;
+  outline-offset: 2px !important;
+}
+
+@media (max-width: 640px) {
+  #student-financial-portal.financial-identity-unified {
+    padding: 0.35rem !important;
+  }
+
+  #student-financial-portal.financial-identity-unified.financial-reference-management {
+    padding: 0.35rem !important;
+  }
+
+  #student-financial-portal.financial-identity-unified .financial-module-header,
+  #student-financial-portal.financial-identity-unified .enterprise-action-toolbar,
+  #student-financial-portal.financial-identity-unified .financial-content-viewport {
+    border-radius: 1rem !important;
+  }
+
+  #student-financial-portal.financial-identity-unified .financial-module-tabs {
+    max-width: 100%;
+  }
 }
