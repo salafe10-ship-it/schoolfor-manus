@@ -10,7 +10,7 @@ const PURCHASE_REQUEST_STATUSES = ['draft', 'pending_approval', 'approved', 'rej
 const PURCHASE_ORDER_STATUSES = ['draft', 'pending_approval', 'approved', 'issued', 'partially_received', 'fully_received', 'closed', 'cancelled'];
 const RFQ_STATUSES = ['draft', 'sent', 'responses_received', 'awarded', 'closed'];
 const QUOTATION_STATUSES = ['received', 'under_review', 'accepted', 'rejected'];
-const GRN_STATUSES = ['inspected_received', 'partially_accepted', 'rejected', 'posted_to_gl'];
+const GRN_STATUSES = ['pending_approval', 'inspected_received', 'partially_accepted', 'rejected', 'posted_to_gl'];
 const BILL_STATUSES = ['draft', 'pending_matching', 'approved', 'partially_paid', 'paid', 'voided'];
 
 type Snapshot = Record<string, any>;

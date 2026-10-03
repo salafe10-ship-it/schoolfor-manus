@@ -20,8 +20,10 @@ function conversion() {
   return { before, after };
 }
 function issue() {
-  const before = fixture(); const after = clone(before);
-  after.movements = [{ id: 'm', itemId: 'i', type: 'issue', direction: 'decrease', quantity: 2, unitCost: 10, totalAmount: 20, warehouseFrom: 'w', status: 'approved' }];
+  const before = fixture();
+  before.movements = [{ id: 'm', itemId: 'i', type: 'issue', direction: 'decrease', quantity: 2, unitCost: 10, totalAmount: 20, warehouseFrom: 'w', status: 'pending_approval', createdByUserId: 'requester' }];
+  const after = clone(before);
+  after.movements[0].status = 'approved';
   after.items[0].quantity = 3; after.items[0].warehouseBalances.w = 3;
   return { before, after };
 }
@@ -34,9 +36,10 @@ function count() {
 function receipt() {
   const before = fixture();
   before.purchaseOrders = [{ id: 'po', status: 'approved', poNo: 'PO', poDate: '2026-10-01', expectedDeliveryDate: '2026-10-02', vendorId: 'v', vendorName: 'مورد', warehouseId: 'w', lines: [{ ...line(), actualUnitPrice: 20, estimatedUnitPrice: 20, totalAmount: 40 }], subtotal: 40, taxAmount: 0, discountAmount: 0, grandTotal: 40 }];
-  const after = clone(before);
-  after.goodsReceipts = [{ id: 'grn', grnNo: 'GRN', grnDate: '2026-10-01', purchaseOrderId: 'po', vendorId: 'v', warehouseId: 'w', inspectorName: 'فاحص', inspectionResult: 'passed', status: 'inspected_received', totalReceivedValue: 40,
+  before.goodsReceipts = [{ id: 'grn', grnNo: 'GRN', grnDate: '2026-10-01', purchaseOrderId: 'po', vendorId: 'v', warehouseId: 'w', inspectorName: 'فاحص', inspectionResult: 'passed', status: 'pending_approval', createdByUserId: 'requester', totalReceivedValue: 40,
     lines: [{ lineId: 'r', purchaseOrderLineId: 'l', itemId: 'i', itemCode: 'S', receivedQty: 2, acceptedQty: 2, rejectedQty: 0, unitCost: 20, totalCost: 40 }] }];
+  const after = clone(before);
+  after.goodsReceipts[0].status = 'inspected_received';
   after.items[0].quantity = 7; after.items[0].warehouseBalances.w = 7; after.items[0].costPrice = 12.8571;
   after.purchaseOrders[0].status = 'fully_received'; after.purchaseOrders[0].lines[0].quantityReceived = 2;
   return { before, after };
@@ -70,7 +73,7 @@ describe('inventory closure server policy', () => {
     expect(isInventoryWorkflowProgression('rfqs', before.rfqs[0], after.rfqs[0], before, after)).toBe(false);
   });
   it('allows award only with matching immutable quotation/PO provenance', () => {
-    const before = fixture(); before.rfqs = [{ id: 'rfq', status: 'sent', vendorIds: ['v'], items: [line()] }];
+    const before = fixture(); before.rfqs = [{ id: 'rfq', status: 'sent', createdByUserId: 'requester', vendorIds: ['v'], items: [line()] }];
     before.quotations = [{ id: 'q', rfqId: 'rfq', vendorId: 'v', status: 'received', grandTotal: 20, lines: [{ itemId: 'i', quantity: 2, unitPrice: 10, discountAmount: 0, taxAmount: 0 }] }];
     const after = clone(before); after.rfqs[0] = { ...after.rfqs[0], status: 'awarded', awardedVendorId: 'v' };
     after.purchaseOrders = [{ id: 'po', rfqId: 'rfq', quotationId: 'q', vendorId: 'v', status: 'pending_approval', grandTotal: 20, lines: [line()] }];
@@ -96,6 +99,20 @@ describe('inventory closure server policy', () => {
     validateInventoryWriteAuthority(before, after, authority); validateInventoryProcurementSnapshot(after, { allowCanonicalPostingReferences: true });
     after.items[0].costPrice = 999;
     expect(() => validateInventoryValuationTransition(before, after)).toThrow('متوسط تكلفة');
+  });
+  it('keeps a new receipt pending without stock or financial effect until separate approval', () => {
+    const { before, after } = receipt();
+    const pending = clone(before);
+    expect(inventoryPostingCandidates(fixture(), pending).goodsReceipts).toEqual([]);
+    expect(inventoryHasFinancialEffect(inventoryPostingCandidates(fixture(), pending))).toBe(false);
+    expect(pending.items[0].quantity).toBe(5);
+    expect(() => validateInventoryWriteAuthority(fixture(), after, authority)).toThrow();
+  });
+  it('rejects self-approval and prevents changing receipt details during approval', () => {
+    const { before, after } = receipt();
+    expect(() => validateInventoryWriteAuthority(before, after, { ...authority, actorId: 'requester' })).toThrow('فصل الواجبات');
+    const altered = clone(after); altered.goodsReceipts[0].lines[0].acceptedQty = 1;
+    expect(isInventoryWorkflowProgression('goodsReceipts', before.goodsReceipts[0], altered.goodsReceipts[0], before, altered)).toBe(false);
   });
   it('rejects unapproved PO receipts and altered purchase prices', () => {
     const { before, after } = receipt(); before.purchaseOrders[0].status = 'draft';
@@ -143,19 +160,20 @@ describe('inventory closure server policy', () => {
   it('stamps trusted actor/time and rejects tampering with existing attribution', () => {
     const { before, after } = issue(); after.movements[0].approvedBy = 'forged';
     validateInventoryWriteAuthority(before, after, authority);
-    expect(after.movements[0]).toMatchObject({ createdByUserId: 'trusted-user', approvedByUserId: 'trusted-user', approvedBy: 'معتمد', approvedAt: authority.now });
+    expect(after.movements[0]).toMatchObject({ createdByUserId: 'requester', approvedByUserId: 'trusted-user', approvedBy: 'معتمد', approvedAt: authority.now });
     const forged = clone(after); forged.movements[0].approvedByUserId = 'another';
     expect(() => validateInventoryWriteAuthority(after, forged, authority)).toThrow('هوية');
   });
   it('evaluates approval ceilings from previous settings, not same-request overrides', () => {
     const before = fixture(); before.procurementSettings = { managerApprovalLimit: 10, boardApprovalLimit: 100 };
+    before.purchaseRequests = [{ id: 'pr', status: 'pending_approval', createdByUserId: 'requester', totalEstimatedAmount: 20, lines: [line()] }];
     const after = clone(before); after.procurementSettings.managerApprovalLimit = 100;
-    after.purchaseRequests = [{ id: 'pr', status: 'approved', totalEstimatedAmount: 20, lines: [line()] }];
-    expect(() => validateInventoryWriteAuthority(before, after, authority)).toThrow('Inventory.BoardApprove');
-    after.procurementSettings.managerApprovalLimit = 10;
-    expect(() => validateInventoryWriteAuthority(before, after, { ...authority, boardApprove: true })).not.toThrow();
-    after.purchaseRequests[0].totalEstimatedAmount = 101;
-    expect(() => validateInventoryWriteAuthority(before, after, { ...authority, boardApprove: true })).toThrow('سقف اعتماد مجلس');
+    after.purchaseRequests[0].status = 'approved';
+    expect(() => validateInventoryWriteAuthority(before, clone(after), authority)).toThrow('Inventory.BoardApprove');
+    const authorized = clone(before); authorized.procurementSettings.managerApprovalLimit = 10; authorized.purchaseRequests[0].status = 'approved';
+    expect(() => validateInventoryWriteAuthority(before, authorized, { ...authority, boardApprove: true })).not.toThrow();
+    const tooHigh = clone(before); tooHigh.procurementSettings.managerApprovalLimit = 10; tooHigh.purchaseRequests[0].status = 'approved'; tooHigh.purchaseRequests[0].totalEstimatedAmount = 101;
+    expect(() => validateInventoryWriteAuthority(before, tooHigh, { ...authority, boardApprove: true })).toThrow('سقف اعتماد مجلس');
   });
   it('enforces enabled three-quote policy instead of allowing direct conversion', () => {
     const { before, after } = conversion(); before.procurementSettings.requireRfqThreshold = 10; after.procurementSettings.requireRfqThreshold = 10;

@@ -2325,7 +2325,7 @@ export interface AIUsageLog {
 
 export type PurchaseRequestStatus = 'draft' | 'pending_approval' | 'approved' | 'rejected' | 'converted_to_po' | 'cancelled';
 export type PurchaseOrderStatus = 'draft' | 'pending_approval' | 'approved' | 'issued' | 'partially_received' | 'fully_received' | 'closed' | 'cancelled';
-export type GoodsReceiptStatus = 'inspected_received' | 'partially_accepted' | 'rejected' | 'posted_to_gl';
+export type GoodsReceiptStatus = 'pending_approval' | 'inspected_received' | 'partially_accepted' | 'rejected' | 'posted_to_gl';
 export type VendorBillStatus = 'draft' | 'pending_matching' | 'approved' | 'partially_paid' | 'paid' | 'voided';
 
 export interface ProcurementItemLine {

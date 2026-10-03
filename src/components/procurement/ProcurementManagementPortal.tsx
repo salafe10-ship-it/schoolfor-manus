@@ -105,49 +105,67 @@ export default function ProcurementManagementPortal({
     try {
       const previousReceipt = goodsReceipts.find(item => item.id === grn.id);
       if (previousReceipt) throw new Error('إذن الاستلام غير قابل للاستبدال بعد حفظه؛ أنشئ محضر تصحيح معتمد عند الحاجة.');
-      const nextReceipts = [grn, ...goodsReceipts];
-      const quantityDeltas = new Map<string, Map<string, number>>();
-      const incomingValueByItem = new Map<string, number>();
-      for (const line of grn.lines) {
-        const itemId = canonicalItemId(line.itemId || line.itemCode);
-        if (!itemId) throw new Error(`بند الاستلام ${line.lineId} غير مربوط بصنف مركزي.`);
-        const byWarehouse = quantityDeltas.get(itemId) || new Map<string, number>();
-        byWarehouse.set(grn.warehouseId, (byWarehouse.get(grn.warehouseId) || 0) + Number(line.acceptedQty || 0));
-        quantityDeltas.set(itemId, byWarehouse);
-        incomingValueByItem.set(itemId, (incomingValueByItem.get(itemId) || 0) + Number(line.totalCost || 0));
-      }
-      const nextItems = database.items.map(item => {
-        const byWarehouse = quantityDeltas.get(item.id);
-        if (!byWarehouse) return item;
-        const balances = getItemWarehouseBalances(item);
-        for (const [warehouseId, delta] of byWarehouse) balances[warehouseId] = Number(balances[warehouseId] || 0) + delta;
-        const updated = withUpdatedWarehouseBalances(item, balances);
-        if (Object.values(balances).some(quantity => quantity < 0)) throw new Error(`لا يمكن أن يصبح رصيد الصنف ${item.name} سالباً بعد الاستلام.`);
-        const incomingValue = incomingValueByItem.get(item.id) || 0;
-        if (incomingValue > 0 && updated.quantity > 0) {
-          const previousValue = Number(item.quantity || 0) * Number(item.costPrice || 0);
-          updated.costPrice = Number(((previousValue + incomingValue) / updated.quantity).toFixed(4));
-        }
-        return updated;
-      });
-      const nextOrders = purchaseOrders.map(po => {
-        if (po.id !== grn.purchaseOrderId) return po;
-        const orderReceipts = nextReceipts.filter(receipt => receipt.purchaseOrderId === po.id);
-        const nextLines = po.lines.map(orderLine => {
-          const itemId = canonicalItemId(orderLine.itemId || orderLine.itemCode);
-          const received = orderReceipts.reduce((sum, receipt) => sum + receipt.lines
-            .filter(line => line.purchaseOrderLineId ? line.purchaseOrderLineId === orderLine.id : canonicalItemId(line.itemId || line.itemCode) === itemId)
-            .reduce((lineSum, line) => lineSum + Number(line.acceptedQty || 0), 0), 0);
-          return { ...orderLine, itemId, quantityReceived: received };
-        });
-        const ordered = nextLines.reduce((sum, line) => sum + Number(line.quantityOrdered ?? line.quantityRequested ?? 0), 0);
-        const accepted = nextLines.reduce((sum, line) => sum + Number(line.quantityReceived || 0), 0);
-        const status = accepted >= ordered && ordered > 0 ? 'fully_received' as const : accepted > 0 ? 'partially_received' as const : po.status;
-        return { ...po, lines: nextLines, status };
-      });
-      await commitPatch({ goodsReceipts: nextReceipts, purchaseOrders: nextOrders, items: nextItems });
+      if (grn.status !== 'pending_approval') throw new Error('يجب حفظ إذن الاستلام قيد الاعتماد قبل تنفيذ الاعتماد المستقل.');
+      await commitPatch({ goodsReceipts: [grn, ...goodsReceipts] });
     } catch (error: any) {
       notify(error?.message || 'المشتريات متوقفة؛ تعذر حفظ محضر الاستلام.', 'warning');
+      throw error;
+    }
+  };
+
+  const handleApproveReceipt = async (receipt: GoodsReceiptNote) => {
+    if (receipt.status !== 'pending_approval') throw new Error('إذن الاستلام ليس قيد الاعتماد.');
+    if (!canApproveInventoryAmount(Number(receipt.totalReceivedValue || 0), capabilities, database.procurementSettings)
+      || (Number(receipt.totalReceivedValue || 0) > 0 && !capabilities.financialWrite)) throw new Error('صلاحيات اعتماد الاستلام أو الترحيل المالي غير متاحة.');
+    const finalStatus = receipt.inspectionResult === 'failed' ? 'rejected'
+      : receipt.inspectionResult === 'conditional_pass' ? 'partially_accepted' : 'inspected_received';
+    const approvedReceipt: GoodsReceiptNote = { ...receipt, status: finalStatus };
+    const nextReceipts = goodsReceipts.map(item => item.id === receipt.id ? approvedReceipt : item);
+    const quantityDeltas = new Map<string, Map<string, number>>();
+    const incomingValueByItem = new Map<string, number>();
+    for (const line of approvedReceipt.lines) {
+      const itemId = canonicalItemId(line.itemId || line.itemCode);
+      if (!itemId) throw new Error(`بند الاستلام ${line.lineId} غير مربوط بصنف مركزي.`);
+      const byWarehouse = quantityDeltas.get(itemId) || new Map<string, number>();
+      byWarehouse.set(approvedReceipt.warehouseId, (byWarehouse.get(approvedReceipt.warehouseId) || 0) + Number(line.acceptedQty || 0));
+      quantityDeltas.set(itemId, byWarehouse);
+      incomingValueByItem.set(itemId, (incomingValueByItem.get(itemId) || 0) + Number(line.totalCost || 0));
+    }
+    const nextItems = database.items.map(item => {
+      const byWarehouse = quantityDeltas.get(item.id);
+      if (!byWarehouse) return item;
+      const balances = getItemWarehouseBalances(item);
+      for (const [warehouseId, delta] of byWarehouse) balances[warehouseId] = Number(balances[warehouseId] || 0) + delta;
+      const updated = withUpdatedWarehouseBalances(item, balances);
+      if (Object.values(balances).some(quantity => quantity < 0)) throw new Error(`لا يمكن أن يصبح رصيد الصنف ${item.name} سالباً بعد الاستلام.`);
+      const incomingValue = incomingValueByItem.get(item.id) || 0;
+      if (incomingValue > 0 && updated.quantity > 0) {
+        const previousValue = Number(item.quantity || 0) * Number(item.costPrice || 0);
+        updated.costPrice = Number(((previousValue + incomingValue) / updated.quantity).toFixed(4));
+      }
+      return updated;
+    });
+    const nextOrders = purchaseOrders.map(order => {
+      if (order.id !== approvedReceipt.purchaseOrderId) return order;
+      const orderReceipts = nextReceipts.filter(candidate => candidate.purchaseOrderId === order.id
+        && ['inspected_received', 'partially_accepted', 'rejected', 'posted_to_gl'].includes(String(candidate.status)));
+      const nextLines = order.lines.map(orderLine => {
+        const itemId = canonicalItemId(orderLine.itemId || orderLine.itemCode);
+        const received = orderReceipts.reduce((sum, candidate) => sum + candidate.lines
+          .filter(line => line.purchaseOrderLineId ? line.purchaseOrderLineId === orderLine.id : canonicalItemId(line.itemId || line.itemCode) === itemId)
+          .reduce((lineSum, line) => lineSum + Number(line.acceptedQty || 0), 0), 0);
+        return { ...orderLine, itemId, quantityReceived: received };
+      });
+      const ordered = nextLines.reduce((sum, line) => sum + Number(line.quantityOrdered ?? line.quantityRequested ?? 0), 0);
+      const accepted = nextLines.reduce((sum, line) => sum + Number(line.quantityReceived || 0), 0);
+      const status = accepted >= ordered && ordered > 0 ? 'fully_received' as const : accepted > 0 ? 'partially_received' as const : order.status;
+      return { ...order, lines: nextLines, status };
+    });
+    try {
+      await commitPatch({ goodsReceipts: nextReceipts, purchaseOrders: nextOrders, items: nextItems });
+      notify(`تم اعتماد إذن الاستلام ${receipt.grnNo} بواسطة مستخدم مستقل؛ وحُدّث الرصيد والترحيل الكانوني.`, 'success');
+    } catch (error: any) {
+      notify(error?.message || 'تعذر اعتماد إذن الاستلام وترحيله.', 'warning');
       throw error;
     }
   };
@@ -419,6 +437,7 @@ export default function ProcurementManagementPortal({
             orders={purchaseOrders}
             items={database.items}
             onSaveReceipt={handleSaveReceipt}
+            onApproveReceipt={handleApproveReceipt}
             capabilities={capabilities}
             triggerNotification={triggerNotification}
           />

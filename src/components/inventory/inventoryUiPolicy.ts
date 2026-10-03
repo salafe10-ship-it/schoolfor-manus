@@ -2,6 +2,7 @@ import type { InventoryItem } from '../../types';
 import { getItemWarehouseBalances } from './inventoryCanonical';
 
 export interface InventoryCapabilities {
+  write?: boolean;
   approve?: boolean;
   settings?: boolean;
   boardApprove?: boolean;

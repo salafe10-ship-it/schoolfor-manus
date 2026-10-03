@@ -88,7 +88,8 @@ const canonicalItemId = (reference: unknown, items: InventoryItem[]) => {
  */
 export const reconcilePurchaseOrderReceiptProgress = (database: InventoryCanonicalDatabase): InventoryCanonicalDatabase => {
   const purchaseOrders = database.purchaseOrders.map(order => {
-    const orderReceipts = database.goodsReceipts.filter(receipt => receipt.purchaseOrderId === order.id);
+    const orderReceipts = database.goodsReceipts.filter(receipt => receipt.purchaseOrderId === order.id
+      && ['inspected_received', 'partially_accepted', 'rejected', 'posted_to_gl'].includes(String(receipt.status)));
     if (orderReceipts.length === 0 || order.status === 'closed' || order.status === 'cancelled') return order;
 
     const lines = order.lines.map(orderLine => {

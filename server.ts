@@ -1359,12 +1359,13 @@ function validateInventoryQuantityLedger(currentData: Record<string, any>, reque
 
   const oldReceipts = new Map((Array.isArray(currentData.goodsReceipts) ? currentData.goodsReceipts : []).map((row: any) => [String(row?.id || ''), row]));
   const nextReceipts = new Map((Array.isArray(requestedData.goodsReceipts) ? requestedData.goodsReceipts : []).map((row: any) => [String(row?.id || ''), row]));
+  const receiptAffectsStock = (receipt: any) => receipt && ['inspected_received', 'partially_accepted', 'posted_to_gl'].includes(String(receipt.status || ''));
   for (const receiptId of new Set([...oldReceipts.keys(), ...nextReceipts.keys()])) {
     const oldReceipt = oldReceipts.get(receiptId);
     const nextReceipt = nextReceipts.get(receiptId);
-    for (const [itemId, quantity] of acceptedByItem(oldReceipt)) addDelta(itemId, oldReceipt?.warehouseId, -quantity, `إذن الاستلام ${receiptId}`);
-    for (const [itemId, quantity] of acceptedByItem(nextReceipt)) addDelta(itemId, nextReceipt?.warehouseId, quantity, `إذن الاستلام ${receiptId}`);
-    if (!oldReceipt && nextReceipt) {
+    if (receiptAffectsStock(oldReceipt)) for (const [itemId, quantity] of acceptedByItem(oldReceipt)) addDelta(itemId, oldReceipt?.warehouseId, -quantity, `إذن الاستلام ${receiptId}`);
+    if (receiptAffectsStock(nextReceipt)) for (const [itemId, quantity] of acceptedByItem(nextReceipt)) addDelta(itemId, nextReceipt?.warehouseId, quantity, `إذن الاستلام ${receiptId}`);
+    if (!receiptAffectsStock(oldReceipt) && receiptAffectsStock(nextReceipt)) {
       for (const [itemId, quantity] of acceptedByItem(nextReceipt)) if (quantity > 0) costUpdateAllowed.add(itemId);
     }
   }
@@ -15279,7 +15280,7 @@ export async function createApp(options: { cloudflare?: boolean } = {}): Promise
       }, tenantContext);
       res.setHeader('Cache-Control', 'no-store');
       res.json({ success: true, data: snapshot.data, meta: { version: Number(snapshot.version || 0), operation, capabilities: {
-        approve: authorizationEngine.can(identity, PERMISSIONS.FINANCIAL_APPROVE), settings: authorizationEngine.can(identity, 'Settings.Edit'),
+        write: authorizationEngine.can(identity, PERMISSIONS.INVENTORY_WRITE), approve: authorizationEngine.can(identity, PERMISSIONS.FINANCIAL_APPROVE), settings: authorizationEngine.can(identity, 'Settings.Edit'),
         boardApprove: authorizationEngine.can(identity, PERMISSIONS.INVENTORY_BOARD_APPROVE), financialWrite: authorizationEngine.can(identity, PERMISSIONS.FINANCIAL_WRITE)
       } }, message: 'تم تحميل المخزون والمشتريات.' });
     } catch (err: any) {
@@ -15404,7 +15405,7 @@ export async function createApp(options: { cloudflare?: boolean } = {}): Promise
         }
         canonicalErpReady = Boolean(accountingReadiness?.sourceSupport.inventory);
         for (const key of ['movements', 'stocktakes', 'purchaseRequests', 'rfqs', 'quotations', 'purchaseOrders', 'goodsReceipts', 'vendorBills', 'vendorPayments']) {
-          for (const locked of (Array.isArray(currentData[key]) ? currentData[key] : []).filter((row: any) => ['approved', 'issued', 'awarded', 'posted', 'closed', 'paid', 'posted_to_gl', 'fully_received', 'converted_to_po', 'responses_received', 'sent', 'inspected_received', 'partially_accepted'].includes(String(row?.status)))) {
+          for (const locked of (Array.isArray(currentData[key]) ? currentData[key] : []).filter((row: any) => ['approved', 'issued', 'awarded', 'posted', 'closed', 'paid', 'posted_to_gl', 'fully_received', 'converted_to_po', 'responses_received', 'sent', 'inspected_received', 'partially_accepted', 'rejected'].includes(String(row?.status)) || (key === 'goodsReceipts' && row?.status === 'pending_approval'))) {
             const requested = (requestedData as any)[key].find((row: any) => row?.id === locked.id);
             if (key === 'purchaseOrders' && requested && isPurchaseOrderReceiptProgression(locked, requested)) continue;
             if (requested && isInventoryWorkflowProgression(key, locked, requested, currentData, requestedData)) continue;
@@ -15451,7 +15452,7 @@ export async function createApp(options: { cloudflare?: boolean } = {}): Promise
         version: nextVersion,
         operation,
         capabilities: {
-          approve: authorizationEngine.can(identity, PERMISSIONS.FINANCIAL_APPROVE), settings: authorizationEngine.can(identity, 'Settings.Edit'),
+          write: authorizationEngine.can(identity, PERMISSIONS.INVENTORY_WRITE), approve: authorizationEngine.can(identity, PERMISSIONS.FINANCIAL_APPROVE), settings: authorizationEngine.can(identity, 'Settings.Edit'),
           boardApprove: authorizationEngine.can(identity, PERMISSIONS.INVENTORY_BOARD_APPROVE), financialWrite: authorizationEngine.can(identity, PERMISSIONS.FINANCIAL_WRITE)
         },
         erpIntegration: canonicalErpReady ? 'ready' : 'not_provisioned',

@@ -16,12 +16,17 @@ const sameExcept = (a: Row, b: Row, excluded: string[]) => {
 const money = (value: number) => Number(value.toFixed(2));
 const near = (a: number, b: number, tolerance = 0.01) => Number.isFinite(a) && Number.isFinite(b) && Math.abs(a - b) <= tolerance + 1e-9;
 const approved = (row?: Row) => row && ['approved', 'posted', 'posted_to_gl', 'issued', 'partially_received', 'fully_received', 'closed', 'paid', 'partially_paid'].includes(String(row.status));
+const isFinalReceipt = (row?: Row) => row && ['inspected_received', 'partially_accepted', 'rejected', 'posted_to_gl'].includes(String(row.status));
+const receiptAffectsStock = (row?: Row) => row && ['inspected_received', 'partially_accepted', 'posted_to_gl'].includes(String(row.status));
 const itemFor = (data: Row, reference: any) => rows(data, 'items').find(item => String(item.id) === String(reference) || String(item.sku) === String(reference));
 const itemKey = (data: Row, line: Row) => String(itemFor(data, line.itemId || line.itemCode)?.id || line.itemId || line.itemCode);
 const balances = (item: Row) => item.warehouseBalances && typeof item.warehouseBalances === 'object' ? item.warehouseBalances : item.warehouseId ? { [item.warehouseId]: Number(item.quantity || 0) } : {};
 
 /** Only these transitions may pass the approved-record lock. No business field is unlocked. */
 export function isInventoryWorkflowProgression(key: string, current: Row, next: Row, before: Row, after: Row): boolean {
+  if (key === 'goodsReceipts' && current.status === 'pending_approval' && isFinalReceipt(next)) {
+    return sameExcept(current, next, ['status', 'approvedByUserId', 'approvedBy', 'approvalDate', 'approvedAt']);
+  }
   if (key === 'purchaseRequests' && current.status === 'approved' && next.status === 'converted_to_po') {
     if (!sameExcept(current, next, ['status'])) return false;
     const orders = rows(after, 'purchaseOrders').filter(order => order.purchaseRequestId === current.id);
@@ -81,7 +86,8 @@ export function validateInventoryValuationTransition(before: Row, after: Row): v
   };
   const oldReceipts = byId(before, 'goodsReceipts');
   for (const receipt of rows(after, 'goodsReceipts')) {
-    if (oldReceipts.has(String(receipt.id))) continue;
+    const previousReceipt = oldReceipts.get(String(receipt.id));
+    if (!isFinalReceipt(receipt) || isFinalReceipt(previousReceipt)) continue;
     const order = rows(before, 'purchaseOrders').find(row => row.id === receipt.purchaseOrderId);
     if (!order || !['approved', 'issued', 'partially_received'].includes(String(order.status))) throw new ValidationError('إذن الاستلام يتطلب أمر شراء معتمداً ومفتوحاً مسبقاً.');
     for (const line of receipt.lines || []) {
@@ -172,9 +178,16 @@ export function validateInventoryWriteAuthority(before: Row, after: Row, authori
       const old = previous.get(String(row.id));
       if (!old) row.createdByUserId = authority.actorId;
       else if (row.createdByUserId !== old.createdByUserId || row.approvedByUserId !== old.approvedByUserId) throw new ValidationError('هوية منشئ المستند والمعتمد لا تقبل التعديل من المتصفح.');
-      const isApproval = (!approved(old) && approved(row)) || (key === 'rfqs' && old?.status !== 'awarded' && row.status === 'awarded') || (key === 'goodsReceipts' && !old);
+      const isReceiptApproval = key === 'goodsReceipts' && isFinalReceipt(row) && !isFinalReceipt(old);
+      if (key === 'goodsReceipts' && !old && isFinalReceipt(row)) {
+        throw new ConflictError('يجب حفظ إذن الاستلام قيد الاعتماد أولاً، ثم اعتماده بواسطة مستخدم آخر.');
+      }
+      const isApproval = (!approved(old) && approved(row)) || (key === 'rfqs' && old?.status !== 'awarded' && row.status === 'awarded') || isReceiptApproval;
       if (isApproval) {
         if (!authority.approve) throw new AuthorizationError('اعتماد المستند أو ترسية العرض يتطلب صلاحية Financial.Approve.');
+        if (!old || !old.createdByUserId || old.createdByUserId === authority.actorId) {
+          throw new AuthorizationError('فصل الواجبات مطلوب: لا يجوز لمنشئ المستند اعتماده.');
+        }
         row.approvedByUserId = authority.actorId;
         row.approvedBy = authority.actorName;
         row.approvalDate = authority.now.slice(0, 10);
@@ -213,7 +226,7 @@ export function validateInventoryWriteAuthority(before: Row, after: Row, authori
     }
     if (old && inventoryStableJson((old.lines || []).map((line: Row) => line.quantityReceived || 0)) === inventoryStableJson((order.lines || []).map((line: Row) => line.quantityReceived || 0)) && old.status === order.status) continue;
     if (['partially_received', 'fully_received'].includes(String(order.status))) {
-      const receipts = rows(after, 'goodsReceipts').filter(row => row.purchaseOrderId === order.id);
+      const receipts = rows(after, 'goodsReceipts').filter(row => row.purchaseOrderId === order.id && receiptAffectsStock(row));
       const quantities = (order.lines || []).map((line: Row) => receipts.reduce((sum, receipt) => sum + (receipt.lines || []).filter((entry: Row) => entry.purchaseOrderLineId ? entry.purchaseOrderLineId === line.id : itemKey(after, entry) === itemKey(after, line)).reduce((subtotal: number, entry: Row) => subtotal + Number(entry.acceptedQty || 0), 0), 0));
       if (!(quantities.some((qty: number) => qty > 0)) || !quantities.every((qty: number, index: number) => near(qty, Number(order.lines[index].quantityReceived), 0.0001))
         || (order.status === 'fully_received') !== quantities.every((qty: number, index: number) => near(qty, Number(order.lines[index].quantityOrdered), 0.0001))) throw new ValidationError('تقدم استلام أمر الشراء لا يطابق الكميات المقبولة في أذونات الاستلام.');
@@ -248,13 +261,14 @@ export function inventoryPostingCandidates(before: Row, after: Row): Row {
     const previous = byId(before, key);
     result[key] = rows(after, key).filter(row => {
       const old = previous.get(String(row.id));
+      if (key === 'goodsReceipts') return ['inspected_received', 'partially_accepted', 'posted_to_gl'].includes(String(row.status)) && !isFinalReceipt(old);
       return !old || (!approved(old) && approved(row));
     });
   }
   return result;
 }
 export function inventoryHasFinancialEffect(candidates: Row): boolean {
-  return rows(candidates, 'goodsReceipts').some(row => Number(row.totalReceivedValue) > 0)
+  return rows(candidates, 'goodsReceipts').some(row => isFinalReceipt(row) && Number(row.totalReceivedValue) > 0)
     || rows(candidates, 'vendorBills').some(row => approved(row) && Number(row.grandTotal) > 0)
     || rows(candidates, 'movements').some(row => approved(row) && row.type !== 'transfer' && Number(row.totalAmount ?? Number(row.quantity) * Number(row.unitCost || 0)) > 0)
     || rows(candidates, 'stocktakes').some(row => row.status === 'approved' && Number(row.financialImpact) !== 0);

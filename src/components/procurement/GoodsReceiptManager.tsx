@@ -13,6 +13,7 @@ interface GoodsReceiptManagerProps {
   orders: PurchaseOrder[];
   items: InventoryItem[];
   onSaveReceipt: (grn: GoodsReceiptNote) => Promise<void>;
+  onApproveReceipt: (grn: GoodsReceiptNote) => Promise<void>;
   capabilities?: InventoryCapabilities;
   triggerNotification?: (msg: string, type: 'success' | 'warning' | 'info' | 'danger') => void;
 }
@@ -22,6 +23,7 @@ export default function GoodsReceiptManager({
   orders,
   items,
   onSaveReceipt,
+  onApproveReceipt,
   capabilities = {},
   triggerNotification
 }: GoodsReceiptManagerProps) {
@@ -71,7 +73,7 @@ export default function GoodsReceiptManager({
 
   const handleCreateGRN = async (e: React.FormEvent) => {
     e.preventDefault();
-    if (!capabilities.approve) { triggerNotification?.('لا تتوفر صلاحية اعتماد الاستلام.', 'warning'); return; }
+    if (!capabilities.write) { triggerNotification?.('لا تتوفر صلاحية تسجيل إذن الاستلام.', 'warning'); return; }
     if (!selectedPO) {
       triggerNotification?.('اختر أمراً معتمداً ومفتوحاً للاستلام.', 'warning');
       return;
@@ -122,8 +124,6 @@ export default function GoodsReceiptManager({
       };
     }).filter(line => line.receivedQty > 0);
     const totalValue = grnLines.reduce((sum, line) => sum + line.totalCost, 0);
-    if (totalValue > 0 && !capabilities.financialWrite) { triggerNotification?.('لا تتوفر صلاحية الترحيل المالي للاستلام.', 'warning'); return; }
-
     const newGRN: GoodsReceiptNote = {
       id: draft.identity().id,
       schoolId: '',
@@ -137,17 +137,17 @@ export default function GoodsReceiptManager({
       warehouseId: selectedPO.warehouseId,
       inspectorName,
       inspectionResult,
-      status: inspectionResult === 'failed' ? 'rejected' : inspectionResult === 'conditional_pass' ? 'partially_accepted' : 'inspected_received',
+      status: 'pending_approval',
       lines: grnLines,
       totalReceivedValue: totalValue,
       isPostedToGL: false,
-      notes: 'تم فحص الشحنة وحفظ محضر الاستلام؛ أضيفت الكمية المقبولة فقط، ويُنشئ الخادم قيد الاستلام الكانوني عند جاهزية دفتر الأستاذ.',
+      notes: 'حُفظ محضر الفحص بانتظار اعتماد مستخدم مستقل؛ لا يضاف الرصيد ولا ينشأ قيد حتى الاعتماد.',
       createdAt: draft.identity().createdAt
     };
 
     try {
       await onSaveReceipt(newGRN);
-      triggerNotification?.(`✓ تم حفظ إذن الاستلام والفحص (${newGRN.grnNo}) مركزياً وإحالته إلى الترحيل الكانوني.`, 'success');
+      triggerNotification?.(`تم حفظ إذن الاستلام ${newGRN.grnNo} قيد الاعتماد؛ لم يتغير الرصيد بعد.`, 'success');
       setShowModal(false);
     } catch (error: any) { triggerNotification?.(error?.message || 'تعذر حفظ محضر الاستلام مركزياً', 'danger'); }
   };
@@ -171,8 +171,8 @@ export default function GoodsReceiptManager({
 
         <button 
           onClick={handleOpenNew}
-          disabled={!capabilities.approve}
-          className="px-5 py-2.5 bg-slate-900 hover:bg-slate-800 text-white font-bold text-sm transition flex items-center gap-2"
+          disabled={!capabilities.write}
+          className="px-5 py-2.5 bg-slate-900 hover:bg-slate-800 text-white font-bold text-sm transition flex items-center gap-2 disabled:cursor-not-allowed disabled:opacity-50"
         >
           <Plus className="w-4 h-4" /> تسجيل إذن استلام وفحص جديد (GRN)
         </button>
@@ -224,7 +224,7 @@ export default function GoodsReceiptManager({
                   <td className="px-4 py-4 font-black text-emerald-700">{grn.totalReceivedValue.toLocaleString('ar-SA')} د.ل</td>
                   <td className="px-4 py-4">
                     <span className="px-2.5 py-1 bg-amber-100 text-amber-900 text-xs font-bold rounded-md">
-                      {grn.status || 'غير محدد'}
+                      {grn.status === 'pending_approval' ? 'بانتظار اعتماد مستقل' : grn.status || 'غير محدد'}
                     </span>
                   </td>
                   <td className="max-w-64 break-all px-4 py-4 font-mono text-[10px]">
@@ -234,6 +234,7 @@ export default function GoodsReceiptManager({
                         : <span className="font-sans text-slate-500">لا أثر مالي</span>}
                     {print && <button type="button" onClick={() => { void print({ title: 'محضر فحص واستلام', number: grn.grnNo, date: grn.grnDate, status: grn.status, reportType: 'procurement',
                       columns: ['رقم إذن الاستلام', 'رقم قيد اليومية', 'الصنف', 'الوارد', 'المقبول', 'المرفوض', 'سبب الرفض', 'صافي تكلفة الوحدة', 'قيمة المقبول'], rows: grn.lines.map(line => [grn.grnNo, grn.glJournalEntryId || 'لا يوجد قيد مالي', line.itemName, line.receivedQty, line.acceptedQty, line.rejectedQty, line.rejectionReason, line.unitCost, line.totalCost]), summary: `المورد: ${grn.vendorName} | أمر الشراء: ${grn.poNo} | إجمالي الاستلام: ${grn.totalReceivedValue}` }); }}>طباعة / حفظ PDF</button>}
+                    {grn.status === 'pending_approval' && capabilities.approve && (Number(grn.totalReceivedValue || 0) === 0 || capabilities.financialWrite) && <button type="button" onClick={() => { void onApproveReceipt(grn).catch(error => triggerNotification?.(error?.message || 'تعذر اعتماد إذن الاستلام.', 'danger')); }} className="mr-2 rounded bg-emerald-700 px-3 py-1 text-xs font-bold text-white">اعتماد الاستلام</button>}
                   </td>
                 </tr>
               ))}
