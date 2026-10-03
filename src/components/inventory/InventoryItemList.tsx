@@ -285,7 +285,8 @@ export default function InventoryItemList({
               ) : (
                 filteredItems.map((item) => {
                   const visibleQuantity = selectedWarehouse === 'ALL' ? item.quantity : getItemWarehouseQuantity(item, selectedWarehouse);
-                  const isLow = visibleQuantity <= item.minLevel;
+                  const reorderThreshold = inventoryReorderThreshold(item);
+                  const isLow = visibleQuantity <= reorderThreshold;
                   const isZero = visibleQuantity === 0;
 
                   return (
@@ -314,7 +315,7 @@ export default function InventoryItemList({
                         </span>
                       </td>
                       <td className="px-5 py-4 text-center font-bold text-slate-500">
-                        {item.minLevel}
+                        {reorderThreshold}
                       </td>
                       <td className="px-5 py-4 font-bold text-slate-800">
                         {item.costPrice.toLocaleString('ar-SA')} د.ل
@@ -371,7 +372,7 @@ export default function InventoryItemList({
             <div className="p-6 bg-[#2a1d13] text-[#fce79a] flex justify-between items-center rounded-t-2xl">
               <h3 className="text-lg font-bold flex items-center gap-2">
                 <Package className="w-5 h-5 text-emerald-400" />
-                {editingItem.id ? 'تعديل بيانات بطاقة الصنف' : 'إنشاء وتأكيد بطاقة صنف جديدة'}
+                {isNewItem ? 'إنشاء وتأكيد بطاقة صنف جديدة' : 'تعديل بيانات بطاقة الصنف'}
               </h3>
               <button 
                 onClick={() => setIsModalOpen(false)}
@@ -606,8 +607,8 @@ export default function InventoryItemList({
                 <span className="font-black text-slate-900 text-base">{viewingItem.quantity} قطعة</span>
               </div>
               <div>
-                <span className="text-xs text-slate-400 block font-bold">حد الطلب الأدنى:</span>
-                <span className="font-bold text-amber-700 text-base">{viewingItem.minLevel}</span>
+                <span className="text-xs text-slate-400 block font-bold">نقطة إعادة الطلب:</span>
+                <span className="font-bold text-amber-700 text-base">{inventoryReorderThreshold(viewingItem)}</span>
               </div>
               <div>
                 <span className="text-xs text-slate-400 block font-bold">سعر التكلفة الفردية:</span>

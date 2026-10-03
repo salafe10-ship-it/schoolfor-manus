@@ -374,11 +374,18 @@ export default function InventoryManagementPortal({ selectedSchool, initialTab =
       </div>}
       
       <div className="flex flex-1 overflow-hidden" id="inventory-content">
-        <nav className="w-64 shrink-0 border border-[#d4af37]/40 bg-[#2a1d13]/95 p-1.5 shadow-inner overflow-y-auto" id="inventory-sidebar">
+        <nav
+          className="w-64 shrink-0 border border-[#d4af37]/40 bg-[#2a1d13]/95 p-1.5 shadow-inner overflow-y-auto"
+          id="inventory-sidebar"
+          aria-label="أقسام وحدة المخزون"
+          role="tablist"
+        >
           {tabs.map((tab) => (
             <button
               key={tab.id}
               onClick={() => setActiveTab(tab.id)}
+              role="tab"
+              aria-selected={activeTab === tab.id}
               className={`w-full flex items-center rounded-xl px-3.5 py-2.5 text-xs font-black transition-all duration-200 ${
                 activeTab === tab.id 
                   ? 'bg-gradient-to-r from-[#9a6a1d] via-[#d4af37] to-[#c58a22] text-slate-950 shadow-md' 

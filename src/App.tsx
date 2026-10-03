@@ -1787,7 +1787,17 @@ export default function App() {
                 </div>
               )}
 
-          <React.Suspense fallback={<div className="flex h-[400px] items-center justify-center text-slate-500 font-bold">جاري تحميل واجهة الوحدة السحابية... 🚀</div>}>
+          <React.Suspense fallback={(
+            <div
+              role="status"
+              aria-live="polite"
+              className="flex min-h-[400px] flex-col items-center justify-center gap-3 rounded-3xl border border-[#d4af37]/30 bg-[#fffefc] p-8 text-center text-slate-600 shadow-sm"
+            >
+              <Loader2 className="h-8 w-8 animate-spin text-amber-700" aria-hidden="true" />
+              <span className="font-black">جاري تحميل واجهة الوحدة...</span>
+              <span className="text-xs text-slate-500">يتم تجهيز بيانات الوحدة والواجهة التشغيلية</span>
+            </div>
+          )}>
             {activeSection === 'dashboard' && (
               <ModernSchoolDashboard
                 students={students}

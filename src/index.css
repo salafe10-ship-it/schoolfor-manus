@@ -2707,15 +2707,20 @@ html:not(.dark) #super-admin-portal button:not(.bg-indigo-600):not(.bg-rose-600)
     flex: 0 0 auto;
     width: 100% !important;
     max-height: none;
-    overflow-x: auto;
+    flex-wrap: wrap;
+    overflow-x: visible;
     overflow-y: hidden;
+    gap: 0.35rem;
   }
 
   #inventory-sidebar button {
-    flex: 0 0 auto;
+    flex: 1 1 10rem;
     width: auto;
-    min-width: max-content;
-    white-space: nowrap;
+    min-width: min(10rem, 100%);
+    white-space: normal;
+    justify-content: center;
+    text-align: center;
+    min-height: 2.75rem;
   }
 
   #inventory-main {

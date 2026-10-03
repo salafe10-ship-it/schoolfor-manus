@@ -422,7 +422,7 @@ export default function InventoryReports({ items, movements = [], receipts = [],
                 <tr>
                   <th className="px-4 py-3">اسم الصنف</th>
                   <th className="px-4 py-3 text-center">الكمية الحالية</th>
-                  <th className="px-4 py-3 text-center">الحد الأدنى</th>
+                  <th className="px-4 py-3 text-center">نقطة إعادة الطلب</th>
                   <th className="px-4 py-3 text-center">الكمية المقترحة للطلب</th>
                   <th className="px-4 py-3">الحالة</th>
                 </tr>
@@ -439,7 +439,7 @@ export default function InventoryReports({ items, movements = [], receipts = [],
                     <tr key={item.id} className="hover:bg-slate-50">
                       <td className="px-4 py-3 font-bold text-slate-900">{item.name}</td>
                       <td className="px-4 py-3 text-center font-black text-red-600">{item.quantity}</td>
-                      <td className="px-4 py-3 text-center font-bold text-slate-700">{item.minLevel}</td>
+                      <td className="px-4 py-3 text-center font-bold text-slate-700">{inventoryReorderThreshold(item)}</td>
                       <td className="px-4 py-3 text-center font-black text-emerald-700">{item.maxLevel > 0 ? Math.max(0, item.maxLevel - item.quantity) : 'غير محدد'}</td>
                       <td className="px-4 py-3">
                         <span className="px-2.5 py-1 bg-red-100 text-red-800 rounded-lg text-xs font-bold">
