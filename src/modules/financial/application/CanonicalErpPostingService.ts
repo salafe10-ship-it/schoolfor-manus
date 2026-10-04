@@ -1039,6 +1039,10 @@ export class CanonicalErpPostingService {
     let expenseAccrualCount = 0;
     const sourceLinks: CanonicalErpSyncResult['sourceLinks'] = [];
     for (const document of documents) {
+      // Keep canonical fee and receipt posting aligned with inventory posting:
+      // provision the document month before postDocument validates that it is
+      // open, so an approved receipt cannot remain stuck before journal creation.
+      await this.ensureOpenPeriod(transaction, tenantId, schoolId, actorId, document.date);
       await this.ensureExpenseAccrual(transaction, tenantId, schoolId, actorId, document);
       if (document.expenseAccrual) expenseAccrualCount += 1;
       const result = await this.postDocument(transaction, tenantId, schoolId, actorId, document);
