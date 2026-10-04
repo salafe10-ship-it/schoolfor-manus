@@ -17,6 +17,13 @@ describe('financial API server-side write lock', () => {
     expect(gate).toContain('FINANCIAL_WRITES_LOCKED');
   });
 
+  it('does not advertise write capability while the deployment lock is enabled', () => {
+    const resolverStart = server.indexOf('function resolveFinancialWriteMode');
+    const resolverEnd = server.indexOf('\n}\n', resolverStart) + 3;
+    const resolver = server.slice(resolverStart, resolverEnd);
+    expect(resolver).toContain("if (process.env.FINANCIAL_WRITES_LOCKED !== 'false') return 'snapshot_read_only';");
+  });
+
   it('keeps mapping configuration bounded and separate from chart provisioning', () => {
     const start = server.indexOf("app.post('/api/financial/account-mappings'");
     const end = server.indexOf("app.get(\"/api/financial/database\"", start);

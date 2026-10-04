@@ -457,9 +457,16 @@ export default function StudentFinancialPortal({
   const getReceiptAccountLabel = (accountCode: unknown) => {
     const normalizedCode = String(accountCode || '').trim();
     const configured = receiptAccountOptions.find(account => account.code === normalizedCode);
+    const isCashAccount = /^(1101|1110|1120)/.test(normalizedCode);
+    const isBankAccount = /^1102/.test(normalizedCode);
+    if (isCashAccount) {
+      // A legacy chart row may carry a bank label under a cash leaf code.
+      // The account hierarchy is authoritative for the visible classification.
+      if (configured?.name && !/(مصرف|بنك|bank)/i.test(configured.name)) return configured.name;
+      return 'الخزينة / النقدية';
+    }
+    if (isBankAccount) return configured?.name || 'الحساب المصرفي';
     if (configured?.name) return configured.name;
-    if (/^(1101|1110|1120)/.test(normalizedCode)) return 'الخزينة / النقدية';
-    if (/^1102/.test(normalizedCode)) return 'الحساب المصرفي';
     return 'حساب قبض غير معرّف';
   };
 

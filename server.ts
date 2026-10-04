@@ -1684,6 +1684,11 @@ async function recordHrBankDisbursement(
  * not prove a write into the canonical general_ledger/journal tables.
  */
 function resolveFinancialWriteMode(req: express.Request): FinancialWriteMode {
+  // The deployment-level fail-closed switch is authoritative for the UI
+  // capability advertised in the read model as well as for mutation routing.
+  // Without this check, a canonical ERP flag could make the browser render
+  // enabled posting controls while the middleware rejects the same request.
+  if (process.env.FINANCIAL_WRITES_LOCKED !== 'false') return 'snapshot_read_only';
   const configuredForWrite = (process.env.NODE_ENV !== 'production'
     && process.env.FINANCIAL_SNAPSHOT_WRITE_MODE === 'snapshot_write')
     || process.env.FINANCIAL_ERP_MODE === 'canonical';
