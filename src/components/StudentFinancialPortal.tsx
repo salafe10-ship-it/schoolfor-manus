@@ -145,6 +145,10 @@ export default function StudentFinancialPortal({
   };
   // Sub-navigation state inside Student Financial Portal (Rethought according to the image)
   const [activeSubSec, setActiveSubSec] = useState<string>('analytics');
+  const [installmentPlanPrintPreview, setInstallmentPlanPrintPreview] = useState<{
+    plan: InstallmentPlanView;
+    student: Student | undefined;
+  } | null>(null);
   const [refreshing, setRefreshing] = useState<boolean>(false);
   const refreshInFlightRef = React.useRef(false);
   const [selectedStudent, setSelectedStudent] = useState<Student | null>(null);
@@ -3361,31 +3365,7 @@ export default function StudentFinancialPortal({
 
   const handlePrintInstallmentPlan = (plan: InstallmentPlanView) => {
     const student = selectableStudents.find(item => item.id === plan.studentId) || students.find(item => item.id === plan.studentId);
-    const printWindow = window.open('', '_blank');
-    if (!printWindow) {
-      triggerNotification('تعذر فتح نسخة الطباعة؛ اسمح بالنوافذ المنبثقة ثم أعد المحاولة.', 'warning');
-      return;
-    }
-    const escapeHtml = (value: unknown) => String(value ?? '').replace(/[&<>"']/g, char => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#039;' }[char] || char));
-    const frequencyLabel = plan.frequency === 'monthly' ? 'شهري' : plan.frequency === 'quarterly' ? 'فصلي' : 'سنوي';
-    const scheduleRows = plan.schedules.map(schedule => `
-      <tr>
-        <td>${escapeHtml(schedule.installmentNumber)}</td>
-        <td>${escapeHtml(String(schedule.dueDate || '').slice(0, 10))}</td>
-        <td>${escapeHtml(formatLD(Number(schedule.amount || 0)))}</td>
-        <td>${escapeHtml(formatLD(Number(schedule.paidAmount || 0)))}</td>
-        <td>${escapeHtml(['paid'].includes(String(schedule.status).toLowerCase()) ? 'مدفوع' : Number(schedule.paidAmount || 0) > 0 ? 'مسدد جزئيًا' : 'مستحق')}</td>
-      </tr>`).join('');
-    printWindow.document.write(`<!doctype html><html dir="rtl"><head><meta charset="utf-8"><title>خطة أقساط ولي الأمر</title><style>
-      @page{size:A4;margin:14mm}body{font-family:Arial,Tahoma,sans-serif;color:#172033;line-height:1.7;font-size:12px}h1{margin:0;color:#5b3b12;font-size:22px}h2{font-size:15px;margin:18px 0 8px;color:#7a5217}.header{display:flex;justify-content:space-between;gap:20px;border-bottom:3px solid #d4af37;padding-bottom:12px}.meta{display:grid;grid-template-columns:1fr 1fr;gap:8px;margin:16px 0;background:#fffaf0;border:1px solid #dfc98e;border-radius:8px;padding:12px}.meta strong{display:block;color:#7a5217;font-size:10px}.meta span{font-weight:bold}.note{margin-top:18px;border:1px solid #cbd5e1;background:#f8fafc;border-radius:8px;padding:12px}table{width:100%;border-collapse:collapse;margin-top:10px}th{background:#172033;color:#fef3c7;padding:8px;text-align:right}td{border:1px solid #d7dee9;padding:8px}tfoot td{font-weight:bold;background:#fff8df}.signatures{display:grid;grid-template-columns:1fr 1fr;gap:40px;margin-top:42px}.signature{border-top:1px solid #64748b;padding-top:6px;text-align:center}.muted{color:#64748b;font-size:10px}@media print{button{display:none}}
-    </style></head><body>
-      <div class="header"><div><h1>خطة أقساط الطالب</h1><div class="muted">نسخة ولي الأمر — مستند إرشادي مرتبط بالمطالبة المالية</div></div><div class="muted">${escapeHtml(new Date().toLocaleDateString('ar-LY'))}</div></div>
-      <div class="meta"><div><strong>الطالب</strong><span>${escapeHtml(student?.name || plan.studentId)}</span></div><div><strong>المطالبة</strong><span>${escapeHtml(plan.invoiceId)}</span></div><div><strong>رقم الخطة</strong><span>${escapeHtml(plan.planId)}</span></div><div><strong>الدورية</strong><span>${escapeHtml(frequencyLabel)} — ${escapeHtml(plan.installmentCount)} أقساط</span></div><div><strong>إجمالي الخطة</strong><span>${escapeHtml(formatLD(plan.totalAmount))}</span></div><div><strong>العام الدراسي</strong><span>${escapeHtml(financialOperationalContext?.academicYearName || selectedSchool?.academicYear || 'غير محدد')}</span></div></div>
-      <h2>جدول الاستحقاقات</h2><table><thead><tr><th>القسط</th><th>تاريخ الاستحقاق</th><th>المبلغ</th><th>المسدد</th><th>الحالة</th></tr></thead><tbody>${scheduleRows}</tbody><tfoot><tr><td colspan="2">الإجمالي</td><td>${escapeHtml(formatLD(plan.totalAmount))}</td><td>${escapeHtml(formatLD(plan.schedules.reduce((sum, item) => sum + Number(item.paidAmount || 0), 0)))} </td><td>—</td></tr></tfoot></table>
-      <div class="note"><strong>تنبيه لولي الأمر:</strong> يوضح هذا الكشف مواعيد ومبالغ الأقساط المرتبطة بالمطالبة. عند السداد، يرجى استخدام سند قبض مستقل وذكر رقم القسط في البيان. لا يُعد هذا الكشف إثبات سداد إلا بعد اعتماد سند القبض وترحيله محاسبيًا.</div>
-      <div class="signatures"><div class="signature">توقيع ولي الأمر</div><div class="signature">ختم/اعتماد المدرسة</div></div>
-      <script>window.onload=()=>window.print()</script></body></html>`);
-    printWindow.document.close();
+    setInstallmentPlanPrintPreview({ plan, student });
     logAction('PRINT_STUDENT_INSTALLMENT_PLAN', `طباعة خطة الأقساط ${plan.planId} للطالب ${student?.name || plan.studentId}`, 'حسابات الطلاب');
   };
 
@@ -6422,6 +6402,56 @@ export default function StudentFinancialPortal({
       </div>
 
       {/* Unified Active Saving Request Lock Screen Indicator */}
+      {installmentPlanPrintPreview && (
+        <div
+          className="student-installment-print-preview-overlay fixed inset-0 z-[10000] flex items-center justify-center overflow-y-auto bg-slate-950/70 p-3 sm:p-6"
+          role="dialog"
+          aria-modal="true"
+          aria-label="معاينة طباعة خطة الأقساط"
+        >
+          <style>{`@page{size:A4;margin:14mm}@media print{body *{visibility:hidden!important}.student-installment-print-preview-overlay,.student-installment-print-preview-overlay *{visibility:visible!important}.student-installment-print-preview-overlay{position:static!important;display:block!important;overflow:visible!important;background:#fff!important;padding:0!important}.student-installment-print-sheet{max-width:none!important;min-height:0!important;border:0!important;box-shadow:none!important}.student-installment-print-preview-actions{display:none!important}}`}</style>
+          <div className="student-installment-print-sheet w-full max-w-4xl rounded-2xl bg-white p-5 text-right text-slate-900 shadow-2xl sm:p-8" dir="rtl">
+            <div className="flex items-start justify-between gap-4 border-b-2 border-amber-500 pb-4">
+              <div>
+                <h2 className="text-2xl font-black text-amber-900">خطة أقساط الطالب</h2>
+                <p className="mt-1 text-xs font-bold text-slate-500">معاينة نسخة ولي الأمر — مستند إرشادي مرتبط بالمطالبة المالية</p>
+              </div>
+              <span className="text-xs font-bold text-slate-500">{new Date().toLocaleDateString('ar-LY')}</span>
+            </div>
+
+            <div className="mt-5 grid grid-cols-1 gap-3 rounded-xl border border-amber-200 bg-amber-50 p-4 text-xs sm:grid-cols-2">
+              <div><strong className="block text-[10px] text-amber-800">الطالب</strong><span className="font-black">{installmentPlanPrintPreview.student?.name || installmentPlanPrintPreview.plan.studentId}</span></div>
+              <div><strong className="block text-[10px] text-amber-800">المطالبة</strong><span className="font-mono font-black">{installmentPlanPrintPreview.plan.invoiceId}</span></div>
+              <div><strong className="block text-[10px] text-amber-800">رقم الخطة</strong><span className="font-mono font-black">{installmentPlanPrintPreview.plan.planId}</span></div>
+              <div><strong className="block text-[10px] text-amber-800">الدورية</strong><span className="font-black">{installmentPlanPrintPreview.plan.frequency === 'monthly' ? 'شهري' : installmentPlanPrintPreview.plan.frequency === 'quarterly' ? 'فصلي' : 'سنوي'} — {installmentPlanPrintPreview.plan.installmentCount} أقساط</span></div>
+              <div><strong className="block text-[10px] text-amber-800">إجمالي الخطة</strong><span className="font-mono font-black">{formatLD(installmentPlanPrintPreview.plan.totalAmount)}</span></div>
+              <div><strong className="block text-[10px] text-amber-800">العام الدراسي</strong><span className="font-black">{financialOperationalContext?.academicYearName || selectedSchool?.academicYear || 'غير محدد'}</span></div>
+            </div>
+
+            <h3 className="mt-6 text-base font-black text-amber-900">جدول الاستحقاقات</h3>
+            <div className="mt-2 overflow-hidden rounded-xl border border-slate-200">
+              <table className="w-full text-right text-xs">
+                <thead className="bg-slate-900 text-amber-100"><tr><th className="px-3 py-2">القسط</th><th className="px-3 py-2">تاريخ الاستحقاق</th><th className="px-3 py-2">المبلغ</th><th className="px-3 py-2">المسدد</th><th className="px-3 py-2">الحالة</th></tr></thead>
+                <tbody>
+                  {installmentPlanPrintPreview.plan.schedules.map(schedule => (
+                    <tr key={schedule.scheduleId} className="border-t border-slate-200"><td className="px-3 py-2 font-black">{schedule.installmentNumber}</td><td className="px-3 py-2 font-mono">{String(schedule.dueDate || '').slice(0, 10)}</td><td className="px-3 py-2 font-mono font-black">{formatLD(Number(schedule.amount || 0))}</td><td className="px-3 py-2 font-mono">{formatLD(Number(schedule.paidAmount || 0))}</td><td className="px-3 py-2 font-bold">{String(schedule.status).toLowerCase() === 'paid' ? 'مدفوع' : Number(schedule.paidAmount || 0) > 0 ? 'مسدد جزئيًا' : 'مستحق'}</td></tr>
+                  ))}
+                </tbody>
+                <tfoot className="border-t-2 border-amber-300 bg-amber-50"><tr><td colSpan={2} className="px-3 py-2 font-black">الإجمالي</td><td className="px-3 py-2 font-mono font-black">{formatLD(installmentPlanPrintPreview.plan.totalAmount)}</td><td className="px-3 py-2 font-mono">{formatLD(installmentPlanPrintPreview.plan.schedules.reduce((sum, item) => sum + Number(item.paidAmount || 0), 0))}</td><td className="px-3 py-2">—</td></tr></tfoot>
+              </table>
+            </div>
+
+            <div className="mt-5 rounded-xl border border-slate-200 bg-slate-50 p-3 text-xs font-bold leading-6 text-slate-700"><strong>تنبيه لولي الأمر:</strong> يوضح هذا الكشف مواعيد ومبالغ الأقساط المرتبطة بالمطالبة. عند السداد يرجى استخدام سند قبض مستقل وذكر رقم القسط في البيان. لا يُعد هذا الكشف إثبات سداد إلا بعد اعتماد سند القبض وترحيله محاسبيًا.</div>
+            <div className="mt-10 grid grid-cols-2 gap-10 text-center text-xs font-bold"><div className="border-t border-slate-400 pt-2">توقيع ولي الأمر</div><div className="border-t border-slate-400 pt-2">ختم/اعتماد المدرسة</div></div>
+
+            <div className="student-installment-print-preview-actions mt-6 flex flex-wrap justify-end gap-2 border-t border-slate-200 pt-4">
+              <button type="button" onClick={() => window.print()} className="inline-flex items-center gap-2 rounded-xl bg-amber-500 px-5 py-2.5 text-xs font-black text-slate-950 hover:bg-amber-400"><Printer className="h-4 w-4" />طباعة هذه المعاينة</button>
+              <button type="button" onClick={() => setInstallmentPlanPrintPreview(null)} className="rounded-xl border border-slate-300 bg-white px-5 py-2.5 text-xs font-black text-slate-700 hover:bg-slate-50">إغلاق المعاينة</button>
+            </div>
+          </div>
+        </div>
+      )}
+
       {activeSaving && (
         <div className="fixed inset-0 bg-slate-900/50 backdrop-blur-sm flex items-center justify-center z-[9999] transition-opacity duration-300">
           <div className="border-2 border-amber-500 shadow-2xl p-6 max-w-sm mx-auto flex flex-col items-center gap-4 text-center animate-pulse">
