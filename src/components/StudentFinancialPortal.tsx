@@ -347,6 +347,7 @@ export default function StudentFinancialPortal({
   // the live canonical ledger state.
   const [financialWriteMode, setFinancialWriteMode] = useState<FinancialWriteMode>('snapshot_read_only');
   const financialWritesLocked = financialWriteMode === 'snapshot_read_only';
+  const financialMutationDisabled = financialWritesLocked || financialPersistence !== 'ready';
   const [financialOperationalContext, setFinancialOperationalContext] = useState<{
     academicYearId: string;
     academicYearName: string;
@@ -449,6 +450,18 @@ export default function StudentFinancialPortal({
     })
     .filter(account => account.code && (account.isCash || account.isBank))
     .sort((a, b) => a.code.localeCompare(b.code)), [chartOfAccounts]);
+
+  // Keep the visible account identity tied to the canonical chart of accounts.
+  // The old binary 1101/"otherwise bank" check mislabeled every cash leaf
+  // account (for example 110101) as a bank account on exports and receipts.
+  const getReceiptAccountLabel = (accountCode: unknown) => {
+    const normalizedCode = String(accountCode || '').trim();
+    const configured = receiptAccountOptions.find(account => account.code === normalizedCode);
+    if (configured?.name) return configured.name;
+    if (/^(1101|1110|1120)/.test(normalizedCode)) return 'الخزينة / النقدية';
+    if (/^1102/.test(normalizedCode)) return 'الحساب المصرفي';
+    return 'حساب قبض غير معرّف';
+  };
 
   const feeRevenueAccountOptions = useMemo(() => {
     const accounts = chartOfAccounts
@@ -1295,7 +1308,7 @@ export default function StudentFinancialPortal({
       }
 
       const debitAccountCode = selectedStudRv.receivingAccount;
-      const debitAccountName = debitAccountCode === '1101' ? 'صندوق الخزينة الرئيسي (كاش)' : 'حساب مصرف الوحدة الجاري';
+      const debitAccountName = getReceiptAccountLabel(debitAccountCode);
       const stageLabel = selectedStudRv.stage;
       const costCenter = selectedStudRv.costCenter;
       const amount = selectedStudRv.amount;
@@ -1788,7 +1801,7 @@ export default function StudentFinancialPortal({
       'رقم الطالب الأكاديمي': v.studentId,
       'القيمة': v.amount,
       'طريقة الدفع': v.paymentMethod,
-      'الحساب المدين': v.receivingAccount === '1101' ? 'الخزينة (كاش)' : 'البنك الجاري',
+      'الحساب المدين': getReceiptAccountLabel(v.receivingAccount),
       'حالة السند': voucherStatusLabel(v.status),
       'البيان ومصوغ القبض': v.against || ''
     }));
@@ -1891,47 +1904,55 @@ export default function StudentFinancialPortal({
     }
 
     const schoolName = selectedSchool?.name || 'اسم المدرسة';
-    const dateText = new Date().toLocaleDateString('ar-SA');
+    const authorityName = selectedSchool?.educationAuthority || selectedSchool?.educationDepartment || 'الإدارة التعليمية';
+    const academicYearLabel = financialOperationalContext?.academicYearName || selectedSchool?.academicYear || 'غير محدد';
+    const dateText = new Date().toLocaleDateString('ar-LY');
+    const escapePrintHtml = (value: unknown) => String(value ?? '').replace(/[&<>"']/g, char => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[char] || char));
     
-    // Compile table rows
-    let rowsHtml = '';
-    
-    // Dynamic invoices
+    // Build the statement from both canonical invoices and posted receipts.
+    // Paid invoice status is not itself a receipt row; treating it as one used
+    // to hide the original debit and could produce an incorrect running balance.
     const studentInvoices = financialInvoices.filter(inv => inv.studentId === selectedStudent.id);
-    let runningBal = 0;
-    
-    studentInvoices.forEach(inv => {
-      const isCancelled = inv.status === 'Cancelled' || inv.status === 'Void';
-      const isReceipt = inv.status === 'paid' || inv.status === 'Paid' || inv.id.startsWith('receipt_');
-      const debit = isReceipt ? 0 : inv.totalAmount || inv.amount;
-      const credit = isReceipt ? inv.totalAmount || inv.amount : 0;
-      
-      if (!isCancelled) {
-        if (isReceipt) {
-          runningBal -= credit;
-        } else {
-          runningBal += debit;
-        }
-      }
+    const postedReceipts = studentReceiptVouchers.filter(voucher => (
+      voucher.studentId === selectedStudent.id && String(voucher.status || '').toLowerCase() === 'posted'
+    ));
+    const ledgerRows = [
+      ...studentInvoices.map(invoice => ({
+        date: invoice.invoiceDate || invoice.dueDate || '',
+        description: invoice.item || 'مطالبة رسوم',
+        debit: Number(invoice.totalAmount ?? Number(invoice.amount || 0) + Number(invoice.taxAmount || 0)),
+        credit: 0,
+        isReceipt: false,
+        isCancelled: ['cancelled', 'void'].includes(String(invoice.status || '').toLowerCase())
+      })),
+      ...postedReceipts.map(voucher => ({
+        date: voucher.date || voucher.receiptDate || '',
+        description: `سند قبض مرحّل ${voucher.id}${voucher.against ? ` — ${voucher.against}` : ''}`,
+        debit: 0,
+        credit: Number(voucher.amount || 0),
+        isReceipt: true,
+        isCancelled: false
+      }))
+    ].sort((a, b) => `${a.date}|${a.isReceipt ? '1' : '0'}`.localeCompare(`${b.date}|${b.isReceipt ? '1' : '0'}`));
 
+    let runningBal = 0;
+    let rowsHtml = '';
+    ledgerRows.forEach(row => {
+      if (!row.isCancelled) runningBal += row.debit - row.credit;
       rowsHtml += `
-        <tr class="${isReceipt ? 'receipt-row' : ''} ${isCancelled ? 'cancelled-row' : ''}" style="${isCancelled ? 'text-decoration: line-through; opacity: 0.5; color: #94a3b8;' : ''}">
-          <td>${inv.invoiceDate || inv.dueDate}</td>
-          <td>${inv.item} ${isCancelled ? '(ملغاة 🚫)' : ''}</td>
-          <td class="amount">${debit > 0 ? debit.toLocaleString(undefined, {minimumFractionDigits: 2}) : '0.00'}</td>
-          <td class="amount">${credit > 0 ? credit.toLocaleString(undefined, {minimumFractionDigits: 2}) : '0.00'}</td>
-          <td class="amount font-bold">${isCancelled ? '---' : runningBal.toLocaleString(undefined, {minimumFractionDigits: 2})}</td>
+        <tr class="${row.isReceipt ? 'receipt-row' : ''} ${row.isCancelled ? 'cancelled-row' : ''}" style="${row.isCancelled ? 'text-decoration: line-through; opacity: 0.5; color: #94a3b8;' : ''}">
+          <td>${escapePrintHtml(row.date)}</td>
+          <td>${escapePrintHtml(row.description)} ${row.isCancelled ? '(ملغاة 🚫)' : ''}</td>
+          <td class="amount">${row.debit > 0 ? row.debit.toLocaleString(undefined, {minimumFractionDigits: 2}) : '0.00'}</td>
+          <td class="amount">${row.credit > 0 ? row.credit.toLocaleString(undefined, {minimumFractionDigits: 2}) : '0.00'}</td>
+          <td class="amount font-bold">${row.isCancelled ? '---' : runningBal.toLocaleString(undefined, {minimumFractionDigits: 2})}</td>
         </tr>
       `;
     });
 
-    const totalInvoiced = studentInvoices
-      .filter(i => i.status !== 'paid' && i.status !== 'Paid' && i.status !== 'Cancelled' && i.status !== 'Void' && !i.id.startsWith('receipt_'))
-      .reduce((acc, curr) => acc + Number(curr.totalAmount || curr.amount || 0), 0);
-    const totalPaid = studentInvoices
-      .filter(i => (i.status === 'paid' || i.status === 'Paid' || i.id.startsWith('receipt_')) && i.status !== 'Cancelled' && i.status !== 'Void')
-      .reduce((acc, curr) => acc + Number(curr.totalAmount || curr.amount || 0), 0);
-    const remainingVal = runningBal;
+    const totalInvoiced = ledgerRows.filter(row => !row.isReceipt && !row.isCancelled).reduce((sum, row) => sum + row.debit, 0);
+    const totalPaid = ledgerRows.filter(row => row.isReceipt).reduce((sum, row) => sum + row.credit, 0);
+    const remainingVal = Math.max(0, totalInvoiced - totalPaid);
 
     printWindow.document.write(`
       <html dir="rtl">
@@ -2092,8 +2113,8 @@ export default function StudentFinancialPortal({
         <body>
           <div class="header">
             <div class="school-info">
-              <div>${schoolName}</div>
-              <div>وزارة التعليم - الإدارة العامة للتعليم الخاص</div>
+              <div>${escapePrintHtml(schoolName)}</div>
+              <div>${escapePrintHtml(authorityName)}</div>
               <div>قسم الإدارة المالية والتحصيل السحابي</div>
             </div>
             <div class="doc-title">
@@ -2102,7 +2123,7 @@ export default function StudentFinancialPortal({
             </div>
             <div class="meta-info">
               <div>الرقم المرجعي: ACC-${selectedStudent.id.toUpperCase()}</div>
-              <div>حالة الحساب: ${selectedStudent.feesRemaining > 0 ? 'مستحق الدفع' : 'مخلص بالكامل'}</div>
+              <div>حالة الحساب: ${remainingVal > 0 ? 'مستحق الدفع' : 'مخلص بالكامل'}</div>
             </div>
           </div>
 
@@ -2121,7 +2142,7 @@ export default function StudentFinancialPortal({
             </div>
             <div class="student-card-item">
               <span class="student-card-label">السنة الدراسية:</span>
-              <span class="student-card-value">${selectedStudent.academicYear || '1447-1448 هـ'}</span>
+              <span class="student-card-value">${escapePrintHtml(academicYearLabel)}</span>
             </div>
             <div class="student-card-item">
               <span class="student-card-label">رقم الهوية الوطنية / الإقامة:</span>
@@ -2207,7 +2228,9 @@ export default function StudentFinancialPortal({
       return;
     }
 
-    const schoolName = selectedSchool?.name || "مدارس الأسرة الحديثة الموحد الرياضية";
+    const schoolName = selectedSchool?.name || 'اسم المدرسة';
+    const authorityName = selectedSchool?.educationAuthority || selectedSchool?.educationDepartment || 'الإدارة التعليمية';
+    const academicYearLabel = financialOperationalContext?.academicYearName || selectedSchool?.academicYear || 'غير محدد';
     const titleText = "سـنـد قـبـض مـالـي (طـلاب)";
     const receiptNumber = v.receiptVoucherId || v.id;
     const journalNumber = v.journalEntryId || 'غير مرحل';
@@ -2394,8 +2417,8 @@ export default function StudentFinancialPortal({
             <div class="school-brand">
               ${logoMarkup}
               <div class="school-info">
-                <p>المملكة العربية السعودية</p>
-                <p>وزارة التعليم</p>
+                <p>${escapePrintHtml(selectedSchool?.countryName || 'الجهة التعليمية')}</p>
+                <p>${escapePrintHtml(authorityName)}</p>
                 <p style="color: #4f46e5; font-weight: 900;">${escapePrintHtml(schoolName)}</p>
                 <p>قسم الإدارة والتحصيل المالي الموحد</p>
               </div>
@@ -2406,7 +2429,7 @@ export default function StudentFinancialPortal({
             </div>
             <div class="meta-info">
               <p>تاريخ السند: <strong>${v.date}</strong></p>
-              <p>العام الأكاديمي: <strong>1447-1448 هـ</strong></p>
+              <p>العام الأكاديمي: <strong>${escapePrintHtml(academicYearLabel)}</strong></p>
               <p>المستند المرجعي: <strong>سند ترحيل سحابي</strong></p>
             </div>
           </div>
@@ -2432,7 +2455,7 @@ export default function StudentFinancialPortal({
             </div>
             <div class="field-row">
               <div class="field-label">الحساب المدين:</div>
-              <div class="field-value">${v.receivingAccount === '1101' ? 'صندوق الخزينة الرئيسي (كاش)' : 'حساب مصرف الوحدة الجاري'} (رمز الحساب: ${v.receivingAccount})</div>
+              <div class="field-value">${escapePrintHtml(getReceiptAccountLabel(v.receivingAccount))} (رمز الحساب: ${escapePrintHtml(v.receivingAccount)})</div>
             </div>
             <div class="field-row">
               <div class="field-label">رقم قيد اليومية:</div>
@@ -2458,7 +2481,7 @@ export default function StudentFinancialPortal({
                   مُعتَمَد ماليّاً
                 </div>
               </div>
-              <p>مدارس الأسرة الحديثة</p>
+              <p>${escapePrintHtml(schoolName)}</p>
             </div>
           </div>
 
@@ -2485,6 +2508,9 @@ export default function StudentFinancialPortal({
 
   // 9. Toolbar - EXPORT PDF
   const handleExportPdf = () => {
+    const schoolName = selectedSchool?.name || 'اسم المدرسة';
+    const authorityName = selectedSchool?.educationAuthority || selectedSchool?.educationDepartment || 'الإدارة التعليمية';
+    const escapePrintHtml = (value: unknown) => String(value ?? '').replace(/[&<>"']/g, char => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[char] || char));
     if (!selectedStudRv) {
       if (filteredReceiptVouchers.length === 0) {
         triggerNotification('⚠️ لا توجد سجلات في الكشف المصفى لإصدار تقرير PDF.', 'warning');
@@ -2539,13 +2565,13 @@ export default function StudentFinancialPortal({
             <body>
               <div class="school-header">
                 <div class="school-title">
-                  <p>المملكة العربية السعودية</p>
-                  <p>وزارة التعليم</p>
-                  <p style="color: #4f46e5; font-weight: 900;">مدارس الأسرة الحديثة الموحد الرياضية</p>
+                  <p>${escapePrintHtml(selectedSchool?.countryName || 'الجهة التعليمية')}</p>
+                  <p>${escapePrintHtml(authorityName)}</p>
+                  <p style="color: #4f46e5; font-weight: 900;">${escapePrintHtml(schoolName)}</p>
                 </div>
                 <div style="text-align: left; font-size: 10px; font-weight: bold;">
-                  <p>تاريخ استخراج الكشف: ${new Date().toLocaleDateString('ar-SA')}</p>
-                  <p>المستخدم النشط: ${auditActor}</p>
+                  <p>تاريخ استخراج الكشف: ${new Date().toLocaleDateString('ar-LY')}</p>
+                  <p>المستخدم النشط: ${escapePrintHtml(auditActor)}</p>
                   <p>نوع الكشف: تقرير السندات المفلترة</p>
                 </div>
               </div>
@@ -3517,12 +3543,16 @@ export default function StudentFinancialPortal({
 
       <EnterpriseActionToolbar minimal={true}
         title="الرسوم والأقساط المدرسية"
-        status={financialPersistence !== 'ready' ? (
+        status={financialMutationDisabled ? (
           <div className={`financial-toolbar-status-content ${financialPersistence === 'blocked' ? 'financial-toolbar-status-blocked' : 'financial-toolbar-status-warning'}`}>
             <AlertTriangle className="w-4 h-4 shrink-0" />
             <div className="min-w-0">
               <p className="text-[11px] font-black leading-tight">الحركات المالية متوقفة للحماية</p>
-              <p className="text-[10px] font-bold leading-tight opacity-90">{financialPersistenceMessage}</p>
+              <p className="text-[10px] font-bold leading-tight opacity-90">
+                {financialWritesLocked
+                  ? 'المصدر المالي في وضع القراءة فقط؛ الحفظ والترحيل والإلغاء والحذف مقفلة.'
+                  : financialPersistenceMessage}
+              </p>
             </div>
           </div>
         ) : undefined}
@@ -3546,7 +3576,7 @@ export default function StudentFinancialPortal({
         onDownloadTemplate={portalOnDownloadTemplate}
         isSaving={false}
         isLoading={false}
-        disabled={financialWritesLocked || financialPersistence !== 'ready'}
+        disabled={financialMutationDisabled}
         selectedId={portalSelectedId}
         isEditing={portalIsEditing}
         userRole={currentRole || 'SuperAdmin'}
@@ -3812,6 +3842,7 @@ export default function StudentFinancialPortal({
                       placeholder="مثال: ايراد الرسوم الدراسية"
                       value={currFeeType}
                       onChange={(e) => setCurrFeeType(e.target.value)}
+                      disabled={financialMutationDisabled}
                       className="w-full bg-transparent rounded p-2 text-xs font-bold focus:ring-1 focus:ring-orange-500 focus:outline-none focus:text-right"
                     />
                   </div>
@@ -3823,6 +3854,7 @@ export default function StudentFinancialPortal({
                       <select
                         value={currFeeAccount}
                         onChange={(e) => setCurrFeeAccount(e.target.value)}
+                        disabled={financialMutationDisabled}
                         className="w-full bg-transparent rounded p-2 text-xs font-bold focus:ring-1 focus:ring-orange-500 focus:outline-none focus:text-right"
                       >
                         <option value="">اختر حساب إيراد من الدليل</option>
@@ -3836,6 +3868,7 @@ export default function StudentFinancialPortal({
                         placeholder="مثال: 4101"
                         value={currFeeAccount}
                         onChange={(e) => setCurrFeeAccount(e.target.value)}
+                        disabled={financialMutationDisabled}
                         className="w-full bg-transparent rounded p-2 text-xs font-bold focus:ring-1 focus:ring-orange-500 focus:outline-none focus:text-right"
                       />
                     )}
@@ -3852,6 +3885,7 @@ export default function StudentFinancialPortal({
                       placeholder="0.00"
                       value={currFeeAmount}
                       onChange={(e) => setCurrFeeAmount(Number(e.target.value))}
+                      disabled={financialMutationDisabled}
                       className="w-full bg-transparent rounded p-2 text-xs font-bold focus:ring-1 focus:ring-orange-500 focus:outline-none focus:text-right"
                     />
                   </div>
@@ -3864,6 +3898,7 @@ export default function StudentFinancialPortal({
                       placeholder="مثال: 1"
                       value={currFeeOrderNumber}
                       onChange={(e) => setCurrFeeOrderNumber(e.target.value)}
+                      disabled={financialMutationDisabled}
                       className="w-full bg-transparent rounded p-2 text-xs font-bold focus:ring-1 focus:ring-orange-500 focus:outline-none focus:text-right"
                     />
                   </div>
@@ -3878,6 +3913,7 @@ export default function StudentFinancialPortal({
                   placeholder="أدخل قائمة الأنشطة المشمولة أو الأوصاف المطلوبة لبند الرسوم..."
                   value={currFeeActivities}
                   onChange={(e) => setCurrFeeActivities(e.target.value)}
+                  disabled={financialMutationDisabled}
                   className="w-full bg-transparent rounded p-2 text-xs font-medium focus:ring-1 focus:ring-orange-500 focus:outline-none focus:text-right"
                 />
               </div>
@@ -3945,6 +3981,7 @@ export default function StudentFinancialPortal({
                   setCurrFeeActivities('');
                   triggerNotification('تم تهيئة الحقول لإدخال بند رسوم جديد', 'info');
                 }}
+                    disabled={financialMutationDisabled}
                     className="financial-fee-module-action financial-fee-module-gold text-xs font-bold px-5 py-2.5 rounded flex items-center gap-1.5 transition-colors cursor-pointer"
               >
                 <Plus className="w-4 h-4" />
@@ -3955,6 +3992,7 @@ export default function StudentFinancialPortal({
               <button
                 type="button"
                 onClick={() => { void portalOnSave?.(); }}
+                disabled={financialMutationDisabled}
                 className="financial-fee-module-action financial-fee-module-navy text-xs font-bold px-5 py-2.5 rounded flex items-center gap-1.5 transition-colors cursor-pointer"
               >
                 <Save className="w-4 h-4" />
@@ -3973,6 +4011,7 @@ export default function StudentFinancialPortal({
                   if (ipt) ipt.focus();
                   triggerNotification('الحقول جاهزة الآن للتعديل، اضغط على حفظ لاعتماد التغييرات', 'info');
                 }}
+                disabled={financialMutationDisabled || !currFeeId}
                 className="financial-fee-module-action financial-fee-module-paper text-xs font-bold px-5 py-2.5 rounded flex items-center gap-1.5 transition-colors cursor-pointer"
               >
                 <Pencil className="w-4 h-4" />
@@ -3983,7 +4022,7 @@ export default function StudentFinancialPortal({
               <button
                 type="button"
                 onClick={() => { void portalOnDelete?.(); }}
-                disabled={!currFeeId}
+                disabled={financialMutationDisabled || !currFeeId}
                 title={currFeeId ? 'حذف بند الرسوم المحدد من قاعدة البيانات' : 'اختر بند رسوم أولاً'}
                 className="financial-fee-module-action bg-rose-700 text-white text-xs font-bold px-5 py-2.5 rounded flex items-center gap-1.5 transition-colors cursor-pointer hover:bg-rose-800 disabled:cursor-not-allowed disabled:opacity-50"
               >
@@ -4440,7 +4479,7 @@ export default function StudentFinancialPortal({
                         <div className="flex items-center gap-2">
                           <span className="rounded-md bg-emerald-100 px-2 py-1 text-[10px] font-black text-emerald-700">{plan.status === 'approved' ? 'معتمدة' : plan.status}</span>
                           <button type="button" onClick={() => { void handleLoadInstallmentPlanHistory(plan.planId); }} className="rounded-md border border-slate-200 bg-white px-2 py-1 text-[10px] font-black text-slate-600 hover:bg-slate-50">سجل الخطة</button>
-                          <button type="button" onClick={() => { void handleCancelInstallmentPlan(plan); }} disabled={plan.schedules.some(schedule => Number(schedule.paidAmount || 0) > 0)} className="rounded-md border border-rose-200 bg-rose-50 px-2 py-1 text-[10px] font-black text-rose-700 disabled:cursor-not-allowed disabled:opacity-40">إلغاء الخطة</button>
+                  <button type="button" onClick={() => { void handleCancelInstallmentPlan(plan); }} disabled={financialMutationDisabled || plan.schedules.some(schedule => Number(schedule.paidAmount || 0) > 0)} className="rounded-md border border-rose-200 bg-rose-50 px-2 py-1 text-[10px] font-black text-rose-700 disabled:cursor-not-allowed disabled:opacity-40">إلغاء الخطة</button>
                         </div>
                       </div>
                       <p className="mt-1 text-[10px] font-bold text-slate-500">{plan.installmentCount} أقساط • {plan.frequency === 'monthly' ? 'شهري' : plan.frequency === 'quarterly' ? 'فصلي' : 'سنوي'} • الإجمالي {formatLD(plan.totalAmount)}</p>
@@ -4540,11 +4579,13 @@ export default function StudentFinancialPortal({
                             if (val > 0) setHasSiblingsDetected(true);
                             else setHasSiblingsDetected(false);
                           }}
+                          disabled={financialMutationDisabled}
                           className="w-12 bg-transparent text-xs text-center font-bold font-mono rounded py-0.5"
                         />
                         <button 
                           type="button"
                           onClick={() => { void handleSaveSiblingDiscount(); }}
+                          disabled={financialMutationDisabled}
                           className="fee-management-inline-action text-[10px] font-extrabold px-2.5 py-1 rounded"
                         >
                           تطبيق وحفظ
@@ -4649,6 +4690,7 @@ export default function StudentFinancialPortal({
                                 const val = e.target.value;
                                 setFeeRows(feeRows.map(f => f.id === row.id ? { ...f, type: val } : f));
                               }}
+                              disabled={financialMutationDisabled}
                               className="w-full bg-transparent p-1 text-xs font-bold text-slate-800 focus:ring-1 focus:ring-[#9a6a1d] focus:border-[#9a6a1d] focus:outline-none"
                             >
                               {feeTypeOptions.map(option => (
@@ -4666,6 +4708,7 @@ export default function StudentFinancialPortal({
                                 const val = Number(e.target.value);
                                 setFeeRows(feeRows.map(f => f.id === row.id ? { ...f, amount: val } : f));
                               }}
+                              disabled={financialMutationDisabled}
                               className="w-full bg-transparent p-1.5 font-bold text-slate-900 focus:ring-1 focus:ring-[#9a6a1d] focus:border-[#9a6a1d] focus:outline-none text-right"
                             />
                           </td>
@@ -4679,6 +4722,7 @@ export default function StudentFinancialPortal({
                                 const val = e.target.value;
                                 setFeeRows(feeRows.map(f => f.id === row.id ? { ...f, remarks: val } : f));
                               }}
+                              disabled={financialMutationDisabled}
                               className="w-full bg-transparent p-1.5 focus:ring-1 focus:ring-[#9a6a1d] focus:border-[#9a6a1d] focus:outline-none"
                             />
                           </td>
@@ -4689,6 +4733,7 @@ export default function StudentFinancialPortal({
                               onClick={() => {
                                 setFeeRows(feeRows.filter(f => f.id !== row.id));
                               }}
+                              disabled={financialMutationDisabled}
                               className="text-rose-500 hover:text-rose-700 p-1.5 hover:bg-rose-50 transition-colors"
                               title="حذف هذا البند"
                             >
@@ -4940,6 +4985,7 @@ export default function StudentFinancialPortal({
                                     <button
                                       type="button"
                                       onClick={() => handleVoidInvoice(inv.id)}
+                                      disabled={financialMutationDisabled}
                                       className="bg-rose-50 text-rose-600 hover:bg-rose-100 hover:text-rose-800 border border-rose-200 text-[8px] font-extrabold px-1.5 py-0.5 rounded transition-all cursor-pointer"
                                       title="إلغاء الفاتورة / إجراء تسوية عكسية"
                                     >
@@ -5624,10 +5670,11 @@ export default function StudentFinancialPortal({
                       <button
                         type="button"
                         onClick={handleSaveStudRv}
-                        className="bg-emerald-600 hover:bg-emerald-500 text-white px-6 py-2.5 font-black flex items-center gap-1.5 cursor-pointer"
+                        disabled={financialMutationDisabled}
+                        className="bg-emerald-600 hover:bg-emerald-500 text-white px-6 py-2.5 font-black flex items-center gap-1.5 cursor-pointer disabled:cursor-not-allowed disabled:opacity-50"
                       >
                         <Save className="w-4 h-4" />
-                        <span>حفظ واعتماد المسودة</span>
+                        <span>حفظ المسودة</span>
                       </button>
                     </div>
 
@@ -5725,7 +5772,7 @@ export default function StudentFinancialPortal({
                               <div className="flex items-center gap-1 text-slate-900">
                                 <span className="font-mono font-black text-yellow-650">({selectedStudRv.receivingAccount})</span>
                                 <span className="font-bold">
-                                  {selectedStudRv.receivingAccount === '1101' ? 'صندوق الخزينة الرئيسي (كاش)' : 'حساب مصرف الوحدة الجاري'}
+                                  {getReceiptAccountLabel(selectedStudRv.receivingAccount)}
                                 </span>
                               </div>
                             </div>
@@ -5811,7 +5858,7 @@ export default function StudentFinancialPortal({
                                   <tbody>
                                     <tr>
                                       <td className="p-1.5 border border-purple-100 text-right font-bold">
-                                        {selectedStudRv.receivingAccount === '1101' ? 'صندوق الخزينة الرئيسي (كاش)' : 'حساب مصرف الوحدة الجاري'}
+                                        {getReceiptAccountLabel(selectedStudRv.receivingAccount)}
                                       </td>
                                       <td className="p-1.5 border border-purple-100 text-right font-mono text-purple-900">{selectedStudRv.receivingAccount}</td>
                                       <td className="p-1.5 border border-purple-100 font-mono font-bold text-emerald-650">+{selectedStudRv.amount.toLocaleString()}</td>

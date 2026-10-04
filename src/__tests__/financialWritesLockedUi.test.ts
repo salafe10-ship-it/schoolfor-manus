@@ -18,4 +18,11 @@ describe('financial write lock is visible and enforced in the student finance UI
     const posting = source.slice(source.indexOf('onClick={handlePostStudRv}'));
     expect(posting).toContain('disabled={financialWritesLocked || financialPersistence !== \'ready\'');
   });
+
+  it('keeps nested fee mutations disabled in read-only mode', () => {
+    expect(source).toContain("const financialMutationDisabled = financialWritesLocked || financialPersistence !== 'ready';");
+    expect(source).toContain('disabled={financialMutationDisabled}');
+    expect(source).toContain('disabled={financialMutationDisabled || !currFeeId}');
+    expect(source).toContain('الحفظ والترحيل والإلغاء والحذف مقفلة');
+  });
 });
