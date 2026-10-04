@@ -32,7 +32,7 @@ import {
   Wallet, 
   XCircle 
 } from 'lucide-react';
-import React, { useState, useEffect } from 'react';
+import React, { useMemo, useState, useEffect } from 'react';
 import { 
   TreasuryAccount, 
   TreasuryTransaction, 
@@ -54,11 +54,13 @@ import { AuditRepository } from '../database/repositories/AuditRepository';
 import { PostingEngine } from '../database/services/PostingEngine';
 import { useCurrency } from '../utils/currency';
 import EnterpriseActionToolbar from './shared/EnterpriseActionToolbar';
+import { buildCanonicalTreasuryProjection } from '../modules/accounting/domain/canonicalTreasuryProjection';
 
 interface TreasuryPlatformPortalProps {
   selectedSchool: { id: string; name: string };
   triggerNotification: (text: string, type: 'info' | 'warning' | 'success') => void;
   logAction: (action: string, details: string, module: string) => void;
+  canonicalFinancialData?: Record<string, any>;
   setActiveSection?: (section: string) => void;
 }
 
@@ -115,11 +117,22 @@ export default function TreasuryPlatformPortal({
   selectedSchool, 
   triggerNotification, 
   logAction,
+  canonicalFinancialData,
   setActiveSection
 }: TreasuryPlatformPortalProps) {
   
   const { format: formatCurrency } = useCurrency();
   const schoolId = selectedSchool.id;
+  const canonicalTreasuryProjection = useMemo(
+    () => buildCanonicalTreasuryProjection(canonicalFinancialData, schoolId),
+    [canonicalFinancialData, schoolId]
+  );
+  const canonicalTreasuryReadOnly = canonicalTreasuryProjection !== null;
+  const requireCanonicalTreasuryWrite = () => {
+    if (!canonicalTreasuryReadOnly) return true;
+    triggerNotification('الخزينة موحّدة مع دفتر الأستاذ الكانوني؛ نفّذ الحركة من شاشة السند المالي المركزية حتى تُسجّل مرة واحدة.', 'warning');
+    return false;
+  };
 
   // Primary Domain State
   const [accounts, setAccounts] = useState<TreasuryAccount[]>([]);
@@ -212,6 +225,14 @@ export default function TreasuryPlatformPortal({
   const loadData = async () => {
     setIsRefreshing(true);
     try {
+      if (canonicalTreasuryProjection) {
+        setAccounts(canonicalTreasuryProjection.accounts);
+        setTransactions(canonicalTreasuryProjection.transactions);
+        setTransfers([]);
+        setInstruments([]);
+        setAuditLogs([]);
+        return;
+      }
       const accList = await TreasuryRepository.getAllAccounts(schoolId);
       const txList = await TreasuryRepository.getAllTransactions(schoolId);
       const trsfList = await TreasuryTransferRepository.getAll(schoolId);
@@ -243,12 +264,13 @@ export default function TreasuryPlatformPortal({
   };
 
   useEffect(() => {
-    loadData();
-  }, [schoolId]);
+    void loadData();
+  }, [schoolId, canonicalTreasuryProjection]);
 
   // Create New Account (Chest / Bank)
   const handleCreateAccount = async (e: React.FormEvent) => {
     e.preventDefault();
+    if (!requireCanonicalTreasuryWrite()) return;
     try {
       if (newAccountForm.type === 'Bank Account') {
         await BankAccountService.registerBankAccount(schoolId, newAccountForm);
@@ -276,6 +298,7 @@ export default function TreasuryPlatformPortal({
   // Create Receipt Voucher (سند قبض)
   const handleCreateReceiptVoucher = async (e: React.FormEvent) => {
     e.preventDefault();
+    if (!requireCanonicalTreasuryWrite()) return;
     try {
       if (receiptVoucherForm.amount <= 0) {
         triggerNotification('يرجى إدخال مبلغ صحيح لسند القبض', 'warning');
@@ -330,6 +353,7 @@ export default function TreasuryPlatformPortal({
   // Create Disbursement Voucher (سند صرف)
   const handleCreateDisbursementVoucher = async (e: React.FormEvent) => {
     e.preventDefault();
+    if (!requireCanonicalTreasuryWrite()) return;
     try {
       if (disbursementVoucherForm.amount <= 0) {
         triggerNotification('يرجى إدخال مبلغ صحيح لسند الصرف', 'warning');
@@ -384,6 +408,7 @@ export default function TreasuryPlatformPortal({
   // Create Inter-Chest / Bank Transfer
   const handleCreateTransfer = async (e: React.FormEvent) => {
     e.preventDefault();
+    if (!requireCanonicalTreasuryWrite()) return;
     try {
       if (transferForm.sourceAccountId === transferForm.destinationAccountId) {
         triggerNotification('لا يمكن التحويل لنفس الحساب المصدر والمستهدف', 'warning');
@@ -433,6 +458,7 @@ export default function TreasuryPlatformPortal({
 
   // Toggle Payment Instrument Status
   const handleToggleInstrument = async (instrument: PaymentInstrumentType, currentStatus: boolean) => {
+    if (!requireCanonicalTreasuryWrite()) return;
     try {
       await PaymentInstrumentService.configureInstrument(instrument, !currentStatus, 'تحديث عبر لوحة إدارة الخزينة');
       triggerNotification(`✓ تم تحديث حالة وسيلة الدفع (${instrument}) بنجاح.`, 'success');
@@ -445,6 +471,7 @@ export default function TreasuryPlatformPortal({
 
   // Process Transaction Lifecycle Transition
   const handleLifecycleTransition = async (txId: string, status: TreasuryTransactionStatus) => {
+    if (!requireCanonicalTreasuryWrite()) return;
     try {
       const updated = await TreasuryEngine.processTransition(schoolId, txId, status, {
         userId: 'admin_treasury',
@@ -463,6 +490,7 @@ export default function TreasuryPlatformPortal({
 
   // Process Transfer Lifecycle Transition
   const handleTransferTransition = async (transferId: string, action: 'submit' | 'approve' | 'execute' | 'cancel') => {
+    if (!requireCanonicalTreasuryWrite()) return;
     try {
       const operator = { userId: 'admin_treasury', userName: 'المدير المالي المعتمد', userRole: 'Accountant', ipAddress: '127.0.0.1' };
       if (action === 'submit') {
@@ -495,6 +523,7 @@ export default function TreasuryPlatformPortal({
 
   // Confirm Physical Cash Inventory
   const handleConfirmCashAudit = async () => {
+    if (!requireCanonicalTreasuryWrite()) return;
     if (!selectedChestAccount) return;
     try {
       if (cashDiscrepancy !== 0) {
@@ -569,6 +598,7 @@ export default function TreasuryPlatformPortal({
 
   // Finalize Bank Reconciliation
   const handleFinalizeBankReconciliation = async () => {
+    if (!requireCanonicalTreasuryWrite()) return;
     if (!selectedBankAccount) return;
     try {
       for (const id of clearedTxIds) {
@@ -609,6 +639,7 @@ export default function TreasuryPlatformPortal({
       {/* 1. Header & Action Toolbar */}
       <EnterpriseActionToolbar
         title="إدارة الخزائن والمدفوعات والمطابقات البنكية"
+        status={canonicalTreasuryReadOnly ? 'المصدر: دفتر الأستاذ الكانوني — قراءة موحّدة' : undefined}
         stats={
           <div className="flex flex-wrap items-center gap-x-4 gap-y-1 text-xs">
             <span className="text-slate-300 font-bold">الحسابات النشطة: <span className="text-amber-400 font-mono font-black">{accounts.length}</span></span>
@@ -616,7 +647,7 @@ export default function TreasuryPlatformPortal({
             <span className="text-slate-300 font-bold">صافي السيولة النقدية: <span className="text-emerald-400 font-mono font-black">{formatCurrency(accounts.reduce((sum, a) => sum + a.balance, 0), true)}</span></span>
           </div>
         }
-        onNew={() => setShowAddAccountModal(true)}
+        onNew={canonicalTreasuryReadOnly ? undefined : () => setShowAddAccountModal(true)}
         onRefresh={loadData}
         onPrint={() => window.print()}
         onExportPdf={() => {}}
@@ -626,6 +657,12 @@ export default function TreasuryPlatformPortal({
         onExit={setActiveSection ? () => setActiveSection('dashboard') : undefined}
       />
 
+      {canonicalTreasuryReadOnly && (
+        <div role="status" className="rounded-2xl border border-emerald-200 bg-emerald-50 px-4 py-3 text-xs font-black text-emerald-900 shadow-sm">
+          الخزينة والسيولة تُعرضان الآن من دفتر الأستاذ الكانوني مباشرة. الحركات الظاهرة مرتبطة بأرقام قيودها، ولا تُنشأ نسخة خزينة منفصلة أو رصيد موازٍ.
+        </div>
+      )}
+
       <div className="p-4 sm:p-6 space-y-6">
         
         {/* Quick Helper Action Buttons */}
@@ -634,6 +671,7 @@ export default function TreasuryPlatformPortal({
             <button 
               type="button"
               onClick={() => setShowReceiptVoucherModal(true)}
+              disabled={canonicalTreasuryReadOnly}
               className="bg-emerald-600 hover:bg-emerald-700 text-white font-bold text-xs px-4 py-2 rounded-lg flex items-center gap-1.5 transition-all cursor-pointer"
             >
               <Plus className="w-4 h-4" />
@@ -642,6 +680,7 @@ export default function TreasuryPlatformPortal({
             <button 
               type="button"
               onClick={() => setShowDisbursementVoucherModal(true)}
+              disabled={canonicalTreasuryReadOnly}
               className="bg-rose-600 hover:bg-rose-700 text-white font-bold text-xs px-4 py-2 rounded-lg flex items-center gap-1.5 transition-all cursor-pointer"
             >
               <Plus className="w-4 h-4" />
@@ -650,6 +689,7 @@ export default function TreasuryPlatformPortal({
             <button 
               type="button"
               onClick={() => setShowAddTransferModal(true)}
+              disabled={canonicalTreasuryReadOnly}
               className="bg-[#c58a22] hover:bg-amber-700 text-white font-bold text-xs px-4 py-2 rounded-lg flex items-center gap-1.5 transition-all cursor-pointer"
             >
               <ArrowRightLeft className="w-4 h-4" />
@@ -660,6 +700,7 @@ export default function TreasuryPlatformPortal({
           <button 
             type="button"
             onClick={() => setShowAddAccountModal(true)}
+            disabled={canonicalTreasuryReadOnly}
             className="bg-slate-900 hover:bg-slate-800 text-white font-bold text-xs px-4 py-2 rounded-lg flex items-center gap-1.5 transition-colors cursor-pointer"
           >
             <Building className="w-4 h-4 text-yellow-400" />

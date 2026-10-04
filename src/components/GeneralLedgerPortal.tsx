@@ -3589,6 +3589,7 @@ export default function GeneralLedgerPortal({
               selectedSchool={selectedSchool}
               triggerNotification={triggerNotification}
               logAction={logAction}
+              canonicalFinancialData={canonicalFinancialData}
               setActiveSection={() => {
                 setActiveTab('dashboard');
                 setActiveSidebarItem('dashboard');

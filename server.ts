@@ -14926,7 +14926,20 @@ export async function createApp(options: { cloudflare?: boolean } = {}): Promise
       // missing. This keeps the UI mode aligned with the reviewed deployment
       // without weakening write-time schema validation.
       canonicalErpReady = process.env.FINANCIAL_ERP_MODE === 'canonical';
-      canonicalErpModel = null;
+      if (canonicalErpReady && transactionDriver) {
+        await UnitOfWork.runInTransaction(schoolId, {
+          operationName: 'Read canonical ERP financial model',
+          tenantId,
+          userId: String((req as any).user?.id || ''),
+          userName: String((req as any).user?.name || 'المستخدم المالي'),
+          ipAddress: req.ip || 'unknown',
+          affectedTables: ['erp_journal_entries', 'erp_journal_lines', 'erp_general_ledger', 'erp_chart_of_accounts']
+        }, async () => {
+          const transaction = UnitOfWork.getActiveContext()?.databaseTransaction;
+          if (!transaction) throw new DatabaseError('معاملة قراءة دفتر الأستاذ الكانوني غير متاحة.');
+          canonicalErpModel = await CanonicalErpPostingService.readModel(transaction, schoolId, true);
+        }, tenantContext);
+      }
       (req as any).financialErpReady = canonicalErpReady;
       const snapshotData = snapshot?.data || {};
       let responseData: Record<string, any> = {
