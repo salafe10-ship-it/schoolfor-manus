@@ -65,6 +65,15 @@ describe('ACC-001-IMPLEMENTATION-003 accounting hardening', () => {
     expect(payment).toContain("status: 'مسودة'");
   });
 
+  it('keeps receipt voucher rendering safe for partial canonical records', () => {
+    const receipt = read('src/modules/accounting/presentation/ReceiptVoucherTab.tsx');
+
+    expect(receipt).toContain('String(voucher?.receivedFrom ?? voucher?.received_from ?? \'\').trim()');
+    expect(receipt).toContain('String(voucher?.against ?? voucher?.description ?? \'\').trim()');
+    expect(receipt).toContain("String(receiptSearch ?? '').trim().toLowerCase()");
+    expect(receipt).toContain('getReceiptAmount(v).toLocaleString()');
+  });
+
   it('keeps read-only report and closing claims explicitly unverified', () => {
     const reports = read('src/modules/accounting/presentation/FinancialReportsTab.tsx');
     const closing = read('src/modules/accounting/presentation/ClosingTab.tsx');

@@ -18,6 +18,17 @@ const getReceiptStageKey = (voucher: any): string => {
   return RECEIPT_STAGE_LABELS[costCenter] ? costCenter : '';
 };
 
+const getReceiptReceivedFrom = (voucher: any): string =>
+  String(voucher?.receivedFrom ?? voucher?.received_from ?? '').trim();
+
+const getReceiptAgainst = (voucher: any): string =>
+  String(voucher?.against ?? voucher?.description ?? '').trim();
+
+const getReceiptAmount = (voucher: any): number => {
+  const amount = Number(voucher?.amount ?? voucher?.totalAmount ?? 0);
+  return Number.isFinite(amount) ? amount : 0;
+};
+
 export const ReceiptVoucherTab = () => {
   const receiptFormRef = React.useRef<HTMLFormElement>(null);
   const receiptAttachmentFileRef = React.useRef<File | null>(null);
@@ -634,22 +645,22 @@ const handlePrintRV = (rv: any) => {
             <div class="info-item" style="grid-column: span 2; border-top: 1px solid #e2e8f0; padding-top: 10px; margin-top: 5px;">
               <b>قبضنا من السيد / ولي الأمر:</b>
               <div style="font-weight: bold; font-size: 12px; background-color: #ffffff; border: 1px solid #cbd5e1; padding: 6px 12px; border-radius: 6px; margin-top: 5px;">
-                ${rv.receivedFrom}
+                ${getReceiptReceivedFrom(rv)}
               </div>
             </div>
             <div class="info-item" style="grid-column: span 2; border-top: 1px solid #e2e8f0; padding-top: 10px;">
               <b>لقاء ما يلي (شرح المعاملة):</b>
-              <span style="font-weight: bold;">${rv.against}</span>
+              <span style="font-weight: bold;">${getReceiptAgainst(rv)}</span>
             </div>
           </div>
 
           ${studentSection}
 
           <div class="amount-box">
-            <div class="amount-val">${rv.amount?.toLocaleString()} د.ل</div>
+            <div class="amount-val">${getReceiptAmount(rv).toLocaleString()} د.ل</div>
             <div class="amount-words">
               <span style="font-size: 9px; color: #64748b; display: block; font-weight: normal; margin-bottom: 2px;">التفقيط المالي الرسمي (الأبجدي):</span>
-              فقط مبلغه ${rv.amount?.toLocaleString()} دينار ليبي لا غير.
+              فقط مبلغه ${getReceiptAmount(rv).toLocaleString()} دينار ليبي لا غير.
             </div>
           </div>
 
@@ -667,14 +678,14 @@ const handlePrintRV = (rv: any) => {
               <tr>
                 <td style="font-family: monospace; color: #4338ca; font-weight: bold;">${accountCode}</td>
                 <td>${accountName}</td>
-                <td style="text-align: center; font-family: monospace; color: #059669; font-weight: bold;">${rv.amount?.toLocaleString()} د.ل</td>
+                <td style="text-align: center; font-family: monospace; color: #059669; font-weight: bold;">${getReceiptAmount(rv).toLocaleString()} د.ل</td>
                 <td style="text-align: center; font-family: monospace; color: #94a3b8;">0.00</td>
               </tr>
               <tr>
                 <td style="font-family: monospace; color: #4338ca; font-weight: bold;">${revenueAccountCode}</td>
                 <td>${revenueAccountName}</td>
                 <td style="text-align: center; font-family: monospace; color: #94a3b8;">0.00</td>
-                <td style="text-align: center; font-family: monospace; color: #dc2626; font-weight: bold;">${rv.amount?.toLocaleString()} د.ل</td>
+                <td style="text-align: center; font-family: monospace; color: #dc2626; font-weight: bold;">${getReceiptAmount(rv).toLocaleString()} د.ل</td>
               </tr>
             </tbody>
           </table>
@@ -1256,8 +1267,9 @@ const handlePrintRV = (rv: any) => {
                     {receiptVouchers
                       .filter(v => {
                         const matchesCC = receiptCostCenterFilter === 'all' || getReceiptStageKey(v) === receiptCostCenterFilter;
-                        const matchesSearch = v.receivedFrom.toLowerCase().includes(receiptSearch.toLowerCase()) || 
-                                              v.against.toLowerCase().includes(receiptSearch.toLowerCase());
+                        const normalizedSearch = String(receiptSearch ?? '').trim().toLowerCase();
+                        const matchesSearch = getReceiptReceivedFrom(v).toLowerCase().includes(normalizedSearch) ||
+                                              getReceiptAgainst(v).toLowerCase().includes(normalizedSearch);
                         return matchesCC && matchesSearch;
                       })
                       .map(v => (
@@ -1265,8 +1277,8 @@ const handlePrintRV = (rv: any) => {
                           <td className="px-6 py-3.5 font-mono font-black text-emerald-700">{v.id}</td>
                           <td className="px-6 py-3.5 font-mono text-slate-500">{v.date}</td>
                           <td className="px-6 py-3.5 font-bold text-slate-900">
-                            {v.receivedFrom}
-                            <span className="block text-[9px] text-slate-400 font-medium font-sans mt-0.5">{v.against}</span>
+                            {getReceiptReceivedFrom(v)}
+                            <span className="block text-[9px] text-slate-400 font-medium font-sans mt-0.5">{getReceiptAgainst(v)}</span>
                           </td>
                           <td className="px-6 py-3.5 text-slate-700">
                             <span className="p-1 px-2 bg-slate-100 rounded text-[9px] font-black border border-slate-200">
@@ -1274,7 +1286,7 @@ const handlePrintRV = (rv: any) => {
                             </span>
                           </td>
                           <td className="px-6 py-3.5 font-mono font-black text-emerald-600 text-sm" dir="ltr">
-                            {v.amount.toLocaleString()} {currency}
+                            {getReceiptAmount(v).toLocaleString()} {currency}
                           </td>
                           <td className="px-6 py-3.5 font-mono text-slate-600 font-bold">
                             {v.receivingAccount === '1101' ? '1101 - الخزينة' : '1102 - بنك الوحدة'}
