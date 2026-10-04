@@ -407,7 +407,12 @@ export default function GeneralLedgerPortal({
       ].filter((child, index, list) => list.findIndex(item => item.code === child.code) === index);
 
       children.forEach(child => aggregate(child, nextVisited));
-      if (children.length > 0) {
+      // The canonical chart's isLeaf flag is authoritative. A leaf may have
+      // code-prefix descendants in legacy charts (for example 1101 with
+      // 110101/110102/110103), but its own posted balance must not be replaced
+      // by those descendants. Only non-leaf accounts are roll-up nodes.
+      const isLeafAccount = account.isLeaf === true || account.is_leaf === true;
+      if (children.length > 0 && !isLeafAccount) {
         account.openingBalance = children.reduce((sum, child) => sum + child.openingBalance, 0);
         account.debitMovements = children.reduce((sum, child) => sum + child.debitMovements, 0);
         account.creditMovements = children.reduce((sum, child) => sum + child.creditMovements, 0);
