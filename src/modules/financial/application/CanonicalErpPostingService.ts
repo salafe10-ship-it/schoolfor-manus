@@ -1270,11 +1270,14 @@ export class CanonicalErpPostingService {
     }
 
     const lineMap = new Map<string, any[]>();
+    const costCenterByLine = new Map<string, string | undefined>();
     for (const line of lines.rows) {
+      const costCenter = line.cost_center || deriveCostCenterFromClassReference(studentClassByJournal.get(line.journal_entry_id));
       const list = lineMap.get(line.journal_entry_id) || [];
       list.push({ id: line.id, accountCode: line.account_code, accountName: line.account_name,
         debit: Number(line.debit), credit: Number(line.credit),
-        costCenter: line.cost_center || deriveCostCenterFromClassReference(studentClassByJournal.get(line.journal_entry_id)) });
+        costCenter });
+      costCenterByLine.set(`${line.journal_entry_id}:${line.id}`, costCenter);
       lineMap.set(line.journal_entry_id, list);
     }
     const journalEntries = journals.rows.map(row => ({
@@ -1333,7 +1336,14 @@ export class CanonicalErpPostingService {
     });
     return {
       journalEntries,
-      ledgerEntries: ledger.rows.map(row => ({ ...row, debit: Number(row.debit), credit: Number(row.credit), balanceAfter: Number(row.balance_after), costCenter: row.cost_center || deriveCostCenterFromClassReference(studentClassByJournal.get(row.journal_entry_id)) })),
+      ledgerEntries: ledger.rows.map(row => ({
+        ...row,
+        debit: Number(row.debit),
+        credit: Number(row.credit),
+        balanceAfter: Number(row.balance_after),
+        costCenter: costCenterByLine.get(`${row.journal_entry_id}:${row.journal_line_id}`)
+          || deriveCostCenterFromClassReference(studentClassByJournal.get(row.journal_entry_id))
+      })),
       chartOfAccounts,
       expenseAccruals: accruals.rows.map(row => ({ ...row, amount: Number(row.amount) })),
       accountGroups,
