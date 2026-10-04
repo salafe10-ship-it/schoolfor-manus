@@ -413,10 +413,24 @@ export default function GeneralLedgerPortal({
       // by those descendants. Only non-leaf accounts are roll-up nodes.
       const isLeafAccount = account.isLeaf === true || account.is_leaf === true;
       if (children.length > 0 && !isLeafAccount) {
-        account.openingBalance = children.reduce((sum, child) => sum + child.openingBalance, 0);
-        account.debitMovements = children.reduce((sum, child) => sum + child.debitMovements, 0);
-        account.creditMovements = children.reduce((sum, child) => sum + child.creditMovements, 0);
-        account.endingBalance = children.reduce((sum, child) => sum + child.endingBalance, 0);
+        // Legacy charts can contain a direct posted line on a code that later
+        // became a roll-up node. Preserve that real movement once, then add
+        // child balances; do not reuse a persisted parent total when there is
+        // no direct movement, because that total may already include children.
+        const hasDirectMovement = Math.abs(account.allDebitMovements)
+          + Math.abs(account.allCreditMovements) > 0;
+        const directOpeningBalance = hasDirectMovement ? account.openingBalance : 0;
+        const directDebitMovements = hasDirectMovement ? account.debitMovements : 0;
+        const directCreditMovements = hasDirectMovement ? account.creditMovements : 0;
+        const directEndingBalance = hasDirectMovement ? account.endingBalance : 0;
+        account.openingBalance = directOpeningBalance
+          + children.reduce((sum, child) => sum + child.openingBalance, 0);
+        account.debitMovements = directDebitMovements
+          + children.reduce((sum, child) => sum + child.debitMovements, 0);
+        account.creditMovements = directCreditMovements
+          + children.reduce((sum, child) => sum + child.creditMovements, 0);
+        account.endingBalance = directEndingBalance
+          + children.reduce((sum, child) => sum + child.endingBalance, 0);
       }
       return account;
     };
