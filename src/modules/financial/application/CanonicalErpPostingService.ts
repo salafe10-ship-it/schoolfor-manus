@@ -1229,7 +1229,7 @@ export class CanonicalErpPostingService {
     }
     const ledger = await db(transaction).query<any>(
         `SELECT id, journal_entry_id, journal_line_id, account_code, entry_date, debit, credit,
-                balance_after, source_type, source_id, description, cost_center, created_at
+        balance_after, source_type, source_id, description, created_at
            FROM public.erp_general_ledger WHERE school_id = $1 ORDER BY entry_date DESC, created_at DESC`, [schoolId]
       );
     const accounts = await db(transaction).query<any>(
