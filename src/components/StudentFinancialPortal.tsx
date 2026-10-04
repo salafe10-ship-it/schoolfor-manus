@@ -2308,7 +2308,7 @@ export default function StudentFinancialPortal({
               border: 1px solid #0f172a;
               position: relative;
               overflow: hidden;
-              page-break-after: auto;
+              page-break-after: avoid;
               page-break-inside: avoid;
               break-inside: avoid;
             }
@@ -2439,6 +2439,7 @@ export default function StudentFinancialPortal({
             }
             @media print {
               body { width: 210mm; height: 297mm; min-height: 297mm; max-height: 297mm; overflow: hidden; }
+              .receipt-copy { width: 190mm; height: 139mm; min-height: 139mm; max-height: 139mm; margin: 4mm auto 0; }
               .receipt-copy { break-inside: avoid; page-break-inside: avoid; }
               .voucher-body { background-color: transparent; }
               .amount-box { background-color: #f1f5f9 !important; -webkit-print-color-adjust: exact; print-color-adjust: exact; }
@@ -2447,7 +2448,7 @@ export default function StudentFinancialPortal({
         </head>
         <body>
           <section class="receipt-copy">
-          <div class="copy-label">نسخة العميل</div>
+          <div class="copy-label">نسخة ولي الأمر</div>
           <div class="header">
             <div class="school-brand">
               ${logoMarkup}
@@ -2520,7 +2521,7 @@ export default function StudentFinancialPortal({
             </div>
           </div>
 
-          <div class="system-tag">صورة العميل • تم الترحيل عبر نظام ERP • المستخدم: ${auditActor} • ${new Date().toLocaleString('ar-LY')}</div>
+          <div class="system-tag">نسخة ولي الأمر • تم الترحيل عبر نظام ERP • المستخدم: ${auditActor} • ${new Date().toLocaleString('ar-LY')}</div>
           </section>
 
           <script>
@@ -2529,7 +2530,7 @@ export default function StudentFinancialPortal({
               if (customerCopy) {
                 const accountingCopy = customerCopy.cloneNode(true);
                 accountingCopy.querySelector('.copy-label').textContent = 'نسخة الحسابات العامة';
-                accountingCopy.querySelector('.system-tag').textContent = 'نسخة الحسابات • تحفظ مع المستندات المالية • رقم السند: ${escapePrintHtml(receiptNumber)} • القيد: ${escapePrintHtml(journalNumber)}';
+                accountingCopy.querySelector('.system-tag').textContent = 'نسخة الحسابات العامة • تحفظ مع المستندات المالية • رقم السند: ${escapePrintHtml(receiptNumber)} • القيد: ${escapePrintHtml(journalNumber)}';
                 document.body.appendChild(accountingCopy);
               }
               window.print();
