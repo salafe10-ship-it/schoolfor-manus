@@ -8,7 +8,7 @@
   "vars": {
     "DATABASE_ROLE_EXPECTED": "edupro_app",
     "EDUPRO_ENVIRONMENT": "production",
-    "FINANCIAL_WRITES_LOCKED": "true",
+    "FINANCIAL_WRITES_LOCKED": "false",
     "FINANCIAL_ERP_MODE": "canonical",
     "PGSSL_REJECT_UNAUTHORIZED": "true",
     "PUBLIC_APP_URL": "https://schoolfor-manus.salafe10.workers.dev"
