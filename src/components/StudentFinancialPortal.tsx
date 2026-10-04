@@ -3325,6 +3325,70 @@ export default function StudentFinancialPortal({
     }
   };
 
+  const handlePrepareInstallmentReceipt = (plan: InstallmentPlanView, schedule: InstallmentScheduleView) => {
+    const student = selectableStudents.find(item => item.id === plan.studentId) || students.find(item => item.id === plan.studentId);
+    const remainingAmount = Number((Number(schedule.amount || 0) - Number(schedule.paidAmount || 0)).toFixed(2));
+    if (!student) {
+      triggerNotification('تعذر فتح سند القسط لأن الطالب غير متاح في النطاق الحالي.', 'warning');
+      return;
+    }
+    if (remainingAmount <= 0 || ['paid', 'cancelled', 'written_off'].includes(String(schedule.status || '').toLowerCase())) {
+      triggerNotification('هذا القسط مسدد أو غير قابل للتحصيل.', 'info');
+      return;
+    }
+
+    const draftId = createFinancialReference('DRAFT-INSTALLMENT');
+    setSelectedStudent(student);
+    setSelectedStudRv(null);
+    setStudRvMode('create');
+    handleStudentSelectInForm(student.id);
+    setStudRvForm(prev => ({
+      ...prev,
+      id: draftId,
+      date: new Date().toISOString().split('T')[0],
+      studentId: student.id,
+      studentName: student.name,
+      amount: remainingAmount,
+      receivingAccounts: [{ accountCode: '1101', amount: remainingAmount, paymentMethod: prev.paymentMethod || 'نقدي' }],
+      against: `سداد القسط رقم ${schedule.installmentNumber} — خطة الأقساط ${plan.planId} — المطالبة ${plan.invoiceId}`,
+      installmentScheduleId: schedule.scheduleId,
+      status: 'draft'
+    }));
+    setReceiptInstallmentScheduleId(schedule.scheduleId);
+    setActiveSubSec('receipts');
+    triggerNotification(`تم تجهيز مسودة سند للقسط رقم ${schedule.installmentNumber} بمبلغ ${formatLD(remainingAmount)}؛ راجعها ثم احفظها.`, 'info');
+  };
+
+  const handlePrintInstallmentPlan = (plan: InstallmentPlanView) => {
+    const student = selectableStudents.find(item => item.id === plan.studentId) || students.find(item => item.id === plan.studentId);
+    const printWindow = window.open('', '_blank');
+    if (!printWindow) {
+      triggerNotification('تعذر فتح نسخة الطباعة؛ اسمح بالنوافذ المنبثقة ثم أعد المحاولة.', 'warning');
+      return;
+    }
+    const escapeHtml = (value: unknown) => String(value ?? '').replace(/[&<>"']/g, char => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#039;' }[char] || char));
+    const frequencyLabel = plan.frequency === 'monthly' ? 'شهري' : plan.frequency === 'quarterly' ? 'فصلي' : 'سنوي';
+    const scheduleRows = plan.schedules.map(schedule => `
+      <tr>
+        <td>${escapeHtml(schedule.installmentNumber)}</td>
+        <td>${escapeHtml(String(schedule.dueDate || '').slice(0, 10))}</td>
+        <td>${escapeHtml(formatLD(Number(schedule.amount || 0)))}</td>
+        <td>${escapeHtml(formatLD(Number(schedule.paidAmount || 0)))}</td>
+        <td>${escapeHtml(['paid'].includes(String(schedule.status).toLowerCase()) ? 'مدفوع' : Number(schedule.paidAmount || 0) > 0 ? 'مسدد جزئيًا' : 'مستحق')}</td>
+      </tr>`).join('');
+    printWindow.document.write(`<!doctype html><html dir="rtl"><head><meta charset="utf-8"><title>خطة أقساط ولي الأمر</title><style>
+      @page{size:A4;margin:14mm}body{font-family:Arial,Tahoma,sans-serif;color:#172033;line-height:1.7;font-size:12px}h1{margin:0;color:#5b3b12;font-size:22px}h2{font-size:15px;margin:18px 0 8px;color:#7a5217}.header{display:flex;justify-content:space-between;gap:20px;border-bottom:3px solid #d4af37;padding-bottom:12px}.meta{display:grid;grid-template-columns:1fr 1fr;gap:8px;margin:16px 0;background:#fffaf0;border:1px solid #dfc98e;border-radius:8px;padding:12px}.meta strong{display:block;color:#7a5217;font-size:10px}.meta span{font-weight:bold}.note{margin-top:18px;border:1px solid #cbd5e1;background:#f8fafc;border-radius:8px;padding:12px}table{width:100%;border-collapse:collapse;margin-top:10px}th{background:#172033;color:#fef3c7;padding:8px;text-align:right}td{border:1px solid #d7dee9;padding:8px}tfoot td{font-weight:bold;background:#fff8df}.signatures{display:grid;grid-template-columns:1fr 1fr;gap:40px;margin-top:42px}.signature{border-top:1px solid #64748b;padding-top:6px;text-align:center}.muted{color:#64748b;font-size:10px}@media print{button{display:none}}
+    </style></head><body>
+      <div class="header"><div><h1>خطة أقساط الطالب</h1><div class="muted">نسخة ولي الأمر — مستند إرشادي مرتبط بالمطالبة المالية</div></div><div class="muted">${escapeHtml(new Date().toLocaleDateString('ar-LY'))}</div></div>
+      <div class="meta"><div><strong>الطالب</strong><span>${escapeHtml(student?.name || plan.studentId)}</span></div><div><strong>المطالبة</strong><span>${escapeHtml(plan.invoiceId)}</span></div><div><strong>رقم الخطة</strong><span>${escapeHtml(plan.planId)}</span></div><div><strong>الدورية</strong><span>${escapeHtml(frequencyLabel)} — ${escapeHtml(plan.installmentCount)} أقساط</span></div><div><strong>إجمالي الخطة</strong><span>${escapeHtml(formatLD(plan.totalAmount))}</span></div><div><strong>العام الدراسي</strong><span>${escapeHtml(financialOperationalContext?.academicYearName || selectedSchool?.academicYear || 'غير محدد')}</span></div></div>
+      <h2>جدول الاستحقاقات</h2><table><thead><tr><th>القسط</th><th>تاريخ الاستحقاق</th><th>المبلغ</th><th>المسدد</th><th>الحالة</th></tr></thead><tbody>${scheduleRows}</tbody><tfoot><tr><td colspan="2">الإجمالي</td><td>${escapeHtml(formatLD(plan.totalAmount))}</td><td>${escapeHtml(formatLD(plan.schedules.reduce((sum, item) => sum + Number(item.paidAmount || 0), 0)))} </td><td>—</td></tr></tfoot></table>
+      <div class="note"><strong>تنبيه لولي الأمر:</strong> يوضح هذا الكشف مواعيد ومبالغ الأقساط المرتبطة بالمطالبة. عند السداد، يرجى استخدام سند قبض مستقل وذكر رقم القسط في البيان. لا يُعد هذا الكشف إثبات سداد إلا بعد اعتماد سند القبض وترحيله محاسبيًا.</div>
+      <div class="signatures"><div class="signature">توقيع ولي الأمر</div><div class="signature">ختم/اعتماد المدرسة</div></div>
+      <script>window.onload=()=>window.print()</script></body></html>`);
+    printWindow.document.close();
+    logAction('PRINT_STUDENT_INSTALLMENT_PLAN', `طباعة خطة الأقساط ${plan.planId} للطالب ${student?.name || plan.studentId}`, 'حسابات الطلاب');
+  };
+
   // Format Libyan Dinar
   const formatLD = (val: number) => {
     return val.toLocaleString(undefined, { minimumFractionDigits: 2, maximumFractionDigits: 2 });
@@ -4539,14 +4603,19 @@ export default function StudentFinancialPortal({
                         <strong className="text-xs font-black text-slate-900">{plan.item || 'خطة رسوم دراسية'}</strong>
                         <div className="flex items-center gap-2">
                           <span className="rounded-md bg-emerald-100 px-2 py-1 text-[10px] font-black text-emerald-700">{plan.status === 'approved' ? 'معتمدة' : plan.status}</span>
+                          <button type="button" onClick={() => handlePrintInstallmentPlan(plan)} title="طباعة نسخة ولي الأمر" className="rounded-md border border-sky-200 bg-sky-50 px-2 py-1 text-[10px] font-black text-sky-800 hover:bg-sky-100"><Printer className="inline-block h-3.5 w-3.5 ml-1" />طباعة الخطة</button>
                           <button type="button" onClick={() => { void handleLoadInstallmentPlanHistory(plan.planId); }} className="rounded-md border border-slate-200 bg-white px-2 py-1 text-[10px] font-black text-slate-600 hover:bg-slate-50">سجل الخطة</button>
                   <button type="button" onClick={() => { void handleCancelInstallmentPlan(plan); }} disabled={financialMutationDisabled || plan.schedules.some(schedule => Number(schedule.paidAmount || 0) > 0)} className="rounded-md border border-rose-200 bg-rose-50 px-2 py-1 text-[10px] font-black text-rose-700 disabled:cursor-not-allowed disabled:opacity-40">إلغاء الخطة</button>
                         </div>
                       </div>
                       <p className="mt-1 text-[10px] font-bold text-slate-500">{plan.installmentCount} أقساط • {plan.frequency === 'monthly' ? 'شهري' : plan.frequency === 'quarterly' ? 'فصلي' : 'سنوي'} • الإجمالي {formatLD(plan.totalAmount)}</p>
                       <div className="mt-3 overflow-x-auto rounded-lg border border-amber-100 bg-white">
-                        <table className="w-full text-right text-[10px]"><thead><tr><th className="px-2 py-1.5">القسط</th><th className="px-2 py-1.5">الاستحقاق</th><th className="px-2 py-1.5">المبلغ</th><th className="px-2 py-1.5">المسدد</th><th className="px-2 py-1.5">الحالة</th></tr></thead><tbody>
-                          {plan.schedules.map(schedule => <tr key={schedule.scheduleId} className="border-t border-slate-100"><td className="px-2 py-1.5 font-black">{schedule.installmentNumber}</td><td className="px-2 py-1.5 font-mono">{schedule.dueDate}</td><td className="px-2 py-1.5 font-mono">{formatLD(schedule.amount)}</td><td className="px-2 py-1.5 font-mono text-emerald-700">{formatLD(schedule.paidAmount)}</td><td className="px-2 py-1.5 font-bold">{schedule.status === 'paid' ? 'مدفوع' : schedule.status === 'partially_paid' ? 'جزئي' : 'مجدول'}</td></tr>)}
+                        <table className="w-full min-w-[650px] text-right text-[10px]"><thead><tr><th className="px-2 py-1.5">القسط</th><th className="px-2 py-1.5">الاستحقاق</th><th className="px-2 py-1.5">المبلغ</th><th className="px-2 py-1.5">المسدد</th><th className="px-2 py-1.5">الحالة</th><th className="px-2 py-1.5">إجراء</th></tr></thead><tbody>
+                          {plan.schedules.map(schedule => {
+                            const scheduleRemaining = Number(schedule.amount || 0) - Number(schedule.paidAmount || 0);
+                            const scheduleClosed = scheduleRemaining <= 0.001 || ['paid', 'cancelled', 'written_off'].includes(String(schedule.status || '').toLowerCase());
+                            return <tr key={schedule.scheduleId} className="border-t border-slate-100"><td className="px-2 py-1.5 font-black">{schedule.installmentNumber}</td><td className="px-2 py-1.5 font-mono">{String(schedule.dueDate || '').slice(0, 10)}</td><td className="px-2 py-1.5 font-mono">{formatLD(schedule.amount)}</td><td className="px-2 py-1.5 font-mono text-emerald-700">{formatLD(schedule.paidAmount)}</td><td className="px-2 py-1.5 font-bold">{schedule.status === 'paid' ? 'مدفوع' : schedule.status === 'partially_paid' ? 'جزئي' : 'مجدول'}</td><td className="px-2 py-1.5"><button type="button" disabled={scheduleClosed} onClick={() => handlePrepareInstallmentReceipt(plan, schedule)} title={scheduleClosed ? 'القسط مغلق أو مسدد' : `فتح سند سداد القسط رقم ${schedule.installmentNumber}`} className="inline-flex items-center rounded-md border border-emerald-200 bg-emerald-50 px-2 py-1 font-black text-emerald-800 hover:bg-emerald-100 disabled:cursor-not-allowed disabled:opacity-40"><Coins className="ml-1 h-3.5 w-3.5" />{scheduleClosed ? 'مغلق' : 'سند قبض'}</button></td></tr>;
+                          })}
                         </tbody></table>
                       </div>
                       {installmentPlanHistory[plan.planId]?.length > 0 && (
