@@ -132,6 +132,25 @@ export default {
       if (!apiHandler.fetch) throw new Error("Cloudflare Node HTTP handler is unavailable.");
       return apiHandler.fetch(request, rawBindings, ctx);
     }
-    return rawBindings.ASSETS.fetch(request);
+
+    // The SPA entry point must always resolve the latest hashed asset manifest.
+    // Cloudflare can otherwise serve an older cached index.html after a
+    // successful Worker deployment, leaving users on a previous UI release.
+    const isHtmlEntryPoint = url.pathname === "/" || url.pathname.endsWith(".html");
+    const assetRequest = isHtmlEntryPoint
+      ? new Request(request, { cf: { cacheTtl: -1, cacheEverything: false } })
+      : request;
+    const assetResponse = await rawBindings.ASSETS.fetch(assetRequest);
+    if (!isHtmlEntryPoint) return assetResponse;
+
+    const headers = new Headers(assetResponse.headers);
+    headers.set("Cache-Control", "no-store, no-cache, must-revalidate, proxy-revalidate");
+    headers.set("Pragma", "no-cache");
+    headers.set("Expires", "0");
+    return new Response(assetResponse.body, {
+      status: assetResponse.status,
+      statusText: assetResponse.statusText,
+      headers,
+    });
   },
 };

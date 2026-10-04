@@ -10,6 +10,13 @@ describe('Cloudflare API routing contract', () => {
     expect(wrangler).toContain('"run_worker_first": ["/api/*"]');
   });
 
+  it('prevents stale SPA entry-point HTML after a deployment', () => {
+    const worker = read('cloudflare-worker.ts');
+    expect(worker).toContain('cacheTtl: -1');
+    expect(worker).toContain('Cache-Control", "no-store, no-cache');
+    expect(worker).toContain('url.pathname === "/" || url.pathname.endsWith(".html")');
+  });
+
   it('keeps the tenant and control-plane Hyperdrive bindings available', () => {
     const wrangler = read('wrangler.jsonc');
     const worker = read('cloudflare-worker.ts');
