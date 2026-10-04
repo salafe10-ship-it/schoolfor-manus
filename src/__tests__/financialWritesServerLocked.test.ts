@@ -19,7 +19,7 @@ describe('financial API server-side write lock', () => {
 
   it('does not advertise write capability while the deployment lock is enabled', () => {
     const resolverStart = server.indexOf('function resolveFinancialWriteMode');
-    const resolverEnd = server.indexOf('\n}\n', resolverStart) + 3;
+    const resolverEnd = server.indexOf('\n}', resolverStart) + 2;
     const resolver = server.slice(resolverStart, resolverEnd);
     expect(resolver).toContain("if (process.env.FINANCIAL_WRITES_LOCKED !== 'false') return 'snapshot_read_only';");
   });
