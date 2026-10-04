@@ -14853,7 +14853,7 @@ export async function createApp(options: { cloudflare?: boolean } = {}): Promise
           .order('created_at', { ascending: false }),
         canonicalReadClient
           .from('student_fee_receipts')
-          .select('id,student_id,student_name,receipt_date,amount,payment_method,receiving_account,operational_type,against_text,status,journal_entry_id,receipt_voucher_id,source_payload')
+          .select('id,student_id,student_name,receipt_date,amount,payment_method,receiving_account,operational_type,against_text,status,journal_entry_id,receipt_voucher_id,source_payload,created_at,updated_at,updated_by')
           .eq('tenant_id', tenantId)
           .eq('school_id', schoolId)
           .order('receipt_date', { ascending: false })
@@ -14905,6 +14905,9 @@ export async function createApp(options: { cloudflare?: boolean } = {}): Promise
         journalEntryId: row.journal_entry_id,
         receiptVoucherId: row.receipt_voucher_id,
         sourcePayload: row.source_payload,
+        createdAt: row.created_at,
+        updatedAt: row.updated_at,
+        updatedBy: row.updated_by,
       }));
       const canonicalChartOfAccounts = (chartResult.data || []).map((row: any) => ({
         id: row.account_code,

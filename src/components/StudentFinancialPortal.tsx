@@ -150,6 +150,7 @@ export default function StudentFinancialPortal({
   const [selectedStudent, setSelectedStudent] = useState<Student | null>(null);
   const [reportSearch, setReportSearch] = useState<string>('');
   const [reportStatusFilter, setReportStatusFilter] = useState<string>('all');
+  const [reportCostCenterFilter, setReportCostCenterFilter] = useState<string>('all');
   const [reportStartDate, setReportStartDate] = useState<string>('');
   const [reportEndDate, setReportEndDate] = useState<string>('');
   
@@ -899,9 +900,12 @@ export default function StudentFinancialPortal({
   // Populate form when selection changes
   React.useEffect(() => {
     if (selectedStudRv && studRvMode === 'view') {
+      const receiptPayload = typeof selectedStudRv.sourcePayload === 'string'
+        ? (() => { try { return JSON.parse(selectedStudRv.sourcePayload); } catch { return {}; } })()
+        : selectedStudRv.sourcePayload || {};
       setStudRvForm({
         id: selectedStudRv.id,
-        date: selectedStudRv.date,
+        date: selectedStudRv.date || selectedStudRv.receiptDate || selectedStudRv.createdAt || '',
         studentId: selectedStudRv.studentId,
         studentName: selectedStudRv.studentName,
         amount: selectedStudRv.amount,
@@ -911,7 +915,7 @@ export default function StudentFinancialPortal({
         operationalType: selectedStudRv.operationalType,
         against: selectedStudRv.against,
         stage: selectedStudRv.stage,
-        costCenter: selectedStudRv.costCenter,
+        costCenter: selectedStudRv.costCenter || receiptPayload.costCenter || '',
         status: selectedStudRv.status,
         notes: selectedStudRv.notes || '',
         attachmentName: selectedStudRv.attachmentName || '',
@@ -1652,25 +1656,42 @@ export default function StudentFinancialPortal({
     return normalized || 'draft';
   };
 
+  const normalizeStudentCostCenter = (value: unknown) => String(value || '').trim().toLowerCase().replace(/^cc[_-]/, '');
+  const studentCostCenterLabel = (value: unknown) => {
+    const key = normalizeStudentCostCenter(value);
+    return STUDENT_COST_CENTER_LABELS[key] || (key ? String(value) : 'غير محدد');
+  };
+  const receiptCostCenter = (record: any) => {
+    const payload = typeof record?.sourcePayload === 'string'
+      ? (() => { try { return JSON.parse(record.sourcePayload); } catch { return {}; } })()
+      : record?.sourcePayload || {};
+    return record?.costCenter || payload.costCenter || record?.academicStageCode || record?.stage || '';
+  };
+  const normalizeFinancialRecordDate = (record: any) => String(
+    record?.date || record?.receiptDate || record?.invoiceDate || record?.dueDate || record?.createdAt || ''
+  ).slice(0, 10);
+
   const financialReportRows = useMemo(() => {
     const rows = [
       ...financialInvoices.map(invoice => ({
         recordType: 'مطالبة مالية',
         id: invoice.id,
-        date: invoice.invoiceDate || invoice.dueDate || '',
+        date: normalizeFinancialRecordDate(invoice),
         studentId: invoice.studentId,
         student: invoice.studentName,
         description: invoice.item,
+        costCenter: normalizeStudentCostCenter(invoice.costCenter || invoice.academicStageCode || invoice.stage),
         status: normalizeFinancialRecordStatus(invoice.status, Number(invoice.remainingAmount ?? invoice.amount ?? invoice.totalAmount ?? 0), 'invoice'),
         amount: Number(invoice.amount || invoice.totalAmount || 0)
       })),
       ...studentReceiptVouchers.map(voucher => ({
         recordType: 'سند قبض',
         id: voucher.id,
-        date: voucher.date || '',
+        date: normalizeFinancialRecordDate(voucher),
         studentId: voucher.studentId,
         student: voucher.studentName,
         description: voucher.against || '',
+        costCenter: normalizeStudentCostCenter(receiptCostCenter(voucher)),
         status: normalizeFinancialRecordStatus(voucher.status, 0, 'receipt'),
         amount: Number(voucher.amount || 0)
       }))
@@ -1683,11 +1704,12 @@ export default function StudentFinancialPortal({
       const matchesStatus = reportStatusFilter === 'all'
         || normalizedStatus === reportStatusFilter
         || (reportStatusFilter === 'draft' && !['posted', 'approved', 'paid', 'cancelled', 'void'].includes(normalizedStatus));
+      const matchesCostCenter = reportCostCenterFilter === 'all' || row.costCenter === reportCostCenterFilter;
       const matchesStart = !reportStartDate || row.date >= reportStartDate;
       const matchesEnd = !reportEndDate || row.date <= reportEndDate;
-      return matchesSearch && matchesStatus && matchesStart && matchesEnd;
+      return matchesSearch && matchesStatus && matchesCostCenter && matchesStart && matchesEnd;
     });
-  }, [financialInvoices, studentReceiptVouchers, reportSearch, reportStatusFilter, reportStartDate, reportEndDate]);
+  }, [financialInvoices, studentReceiptVouchers, reportSearch, reportStatusFilter, reportCostCenterFilter, reportStartDate, reportEndDate]);
 
   const downloadFile = (blob: Blob, fileName: string) => {
     const url = URL.createObjectURL(blob);
@@ -1840,6 +1862,7 @@ export default function StudentFinancialPortal({
       'المرجع': row.id,
       'التاريخ': row.date,
       'الطالب': row.student,
+      'مركز التكلفة': studentCostCenterLabel(row.costCenter),
       'البيان': row.description,
       'الحالة': financialStatusLabel(row.status),
       'القيمة': row.amount
@@ -1883,6 +1906,7 @@ export default function StudentFinancialPortal({
       id: row.id,
       date: row.date,
       student: row.student,
+      costCenter: studentCostCenterLabel(row.costCenter),
       description: row.description,
       status: financialStatusLabel(row.status),
       amount: row.amount
@@ -1891,7 +1915,7 @@ export default function StudentFinancialPortal({
       body{font-family:Arial,sans-serif;color:#13213d;padding:28px;line-height:1.6}h1{color:#0b1733;border-bottom:3px solid #c8922e;padding-bottom:10px} .meta{display:flex;gap:24px;flex-wrap:wrap;background:#fbf8f0;border:1px solid #d8bd80;padding:12px;margin:16px 0;font-weight:bold}table{width:100%;border-collapse:collapse;font-size:11px}th{background:#0b1733;color:#fff;padding:8px}td{border:1px solid #d8bd80;padding:7px} .amount{font-family:monospace;text-align:left}@media print{button{display:none}}
     </style></head><body><h1>تقرير رسوم الطلاب والحركات المالية</h1>
       <div class="meta"><span>المطالبات: ${escapeHtml(financialInvoices.length)}</span><span>السندات: ${escapeHtml(studentReceiptVouchers.length)}</span><span>المفوتر: ${escapeHtml(formatLD(stats.totalDebts))}</span><span>المسدد المرحل: ${escapeHtml(formatLD(stats.totalPaid))}</span><span>المتبقي: ${escapeHtml(formatLD(stats.totalRemaining))}</span></div>
-      <table><thead><tr><th>النوع</th><th>المرجع</th><th>التاريخ</th><th>الطالب</th><th>البيان</th><th>الحالة</th><th>القيمة</th></tr></thead><tbody>${rows.map(row => `<tr><td>${escapeHtml(row.type)}</td><td>${escapeHtml(row.id)}</td><td>${escapeHtml(row.date)}</td><td>${escapeHtml(row.student)}</td><td>${escapeHtml(row.description)}</td><td>${escapeHtml(row.status)}</td><td class="amount">${escapeHtml(formatLD(Number(row.amount || 0)))}</td></tr>`).join('')}</tbody></table>
+      <table><thead><tr><th>النوع</th><th>المرجع</th><th>التاريخ</th><th>الطالب</th><th>مركز التكلفة</th><th>البيان</th><th>الحالة</th><th>القيمة</th></tr></thead><tbody>${rows.map(row => `<tr><td>${escapeHtml(row.type)}</td><td>${escapeHtml(row.id)}</td><td>${escapeHtml(row.date)}</td><td>${escapeHtml(row.student)}</td><td>${escapeHtml(row.costCenter)}</td><td>${escapeHtml(row.description)}</td><td>${escapeHtml(row.status)}</td><td class="amount">${escapeHtml(formatLD(Number(row.amount || 0)))}</td></tr>`).join('')}</tbody></table>
       <p>تاريخ الاستخراج: ${escapeHtml(new Date().toLocaleString('ar-LY'))} — المستخدم: ${escapeHtml(auditActor)}</p><script>window.onload=()=>window.print()</script></body></html>`);
     printWindow.document.close();
     logAction('PRINT_FINANCIAL_REPORT', `طباعة تقرير رسوم الطلاب المصفى بعدد ${rows.length} حركة`, 'حسابات الطلاب');
@@ -2793,8 +2817,8 @@ export default function StudentFinancialPortal({
       { key: '90+', label: 'أكثر من 90 يوم', amount: 0, count: 0 }
     ];
 
-    datedRows.forEach(row => {
-      const daysPastDue = Math.floor((todayTimestamp - (row.dueTimestamp as number)) / 86400000);
+    const addToBucket = (daysPastDue: number, amount: number, count = 1) => {
+      if (amount <= 0) return;
       const bucket = daysPastDue <= 0
         ? buckets[0]
         : daysPastDue <= 30
@@ -2804,18 +2828,48 @@ export default function StudentFinancialPortal({
             : daysPastDue <= 90
               ? buckets[3]
               : buckets[4];
-      bucket.amount += row.outstandingAmount;
-      bucket.count += 1;
+      bucket.amount += amount;
+      bucket.count += count;
+    };
+
+    // When installment data is available, use its due dates for the overdue
+    // portion of an invoice. This prevents the dashboard from saying that no
+    // amount is overdue while the canonical installment report has overdue
+    // schedules for the same invoice.
+    const scheduleRows = overdueInstallmentSummary.asOf ? overdueInstallmentSummary.rows : [];
+    const overdueByInvoice = new Map<string, any[]>();
+    scheduleRows.forEach((schedule: any) => {
+      const invoiceId = String(schedule.invoiceId || '').trim();
+      if (!invoiceId) return;
+      const list = overdueByInvoice.get(invoiceId) || [];
+      list.push(schedule);
+      overdueByInvoice.set(invoiceId, list);
+    });
+
+    datedRows.forEach(row => {
+      const invoiceSchedules = overdueByInvoice.get(String(row.id)) || [];
+      if (invoiceSchedules.length === 0) {
+        const daysPastDue = Math.floor((todayTimestamp - (row.dueTimestamp as number)) / 86400000);
+        addToBucket(daysPastDue, row.outstandingAmount);
+        return;
+      }
+
+      let scheduleBudget = row.outstandingAmount;
+      invoiceSchedules.forEach((schedule: any) => {
+        const scheduleAmount = Math.min(scheduleBudget, Math.max(0, Number(schedule.remainingAmount || 0)));
+        scheduleBudget = Math.max(0, scheduleBudget - scheduleAmount);
+        const daysLate = Math.max(1, Number(schedule.daysLate || 0));
+        addToBucket(daysLate, scheduleAmount);
+      });
+      addToBucket(0, scheduleBudget);
     });
 
     return {
       buckets,
       total: datedRows.reduce((sum, row) => sum + row.outstandingAmount, 0),
-      overdue: datedRows
-        .filter(row => (row.dueTimestamp as number) < todayTimestamp)
-        .reduce((sum, row) => sum + row.outstandingAmount, 0)
+      overdue: buckets.slice(1).reduce((sum, bucket) => sum + bucket.amount, 0)
     };
-  }, [outstandingInvoiceRows]);
+  }, [outstandingInvoiceRows, overdueInstallmentSummary]);
 
   const nextMonthForecast = useMemo(() => {
     const datedRows = outstandingInvoiceRows.filter(row => row.dueTimestamp !== null);
@@ -4462,8 +4516,8 @@ export default function StudentFinancialPortal({
               </div>
               {overdueInstallmentSummary.rows.length > 0 && (
                 <div className="mt-4 overflow-x-auto rounded-xl border border-rose-100 bg-white">
-                  <table className="w-full min-w-[720px] text-right text-[10px]"><thead><tr className="bg-rose-50"><th className="px-2 py-2">الطالب</th><th className="px-2 py-2">القسط</th><th className="px-2 py-2">الاستحقاق</th><th className="px-2 py-2">المتأخر</th><th className="px-2 py-2">أيام التأخر</th><th className="px-2 py-2">إجراء</th></tr></thead><tbody>
-                    {overdueInstallmentSummary.rows.slice(0, 20).map((row: any) => <tr key={row.scheduleId} className="border-t border-rose-100"><td className="px-2 py-2 font-black">{row.studentName}</td><td className="px-2 py-2 font-black">{row.installmentNumber}</td><td className="px-2 py-2 font-mono">{row.dueDate}</td><td className="px-2 py-2 font-mono font-black text-rose-700">{formatLD(row.remainingAmount)}</td><td className="px-2 py-2 font-black">{row.daysLate}</td><td className="px-2 py-2"><button type="button" onClick={() => { const student = selectableStudents.find(item => item.id === row.studentId); if (student) { setSelectedStudent(student); setActiveSubSec('installments'); } }} className="rounded-md border border-amber-200 bg-amber-50 px-2 py-1 font-black text-amber-800">فتح الخطة</button></td></tr>)}
+                  <table className="w-full min-w-[980px] text-right text-[10px]"><thead><tr className="bg-rose-50"><th className="px-2 py-2">الطالب</th><th className="px-2 py-2">المطالبة</th><th className="px-2 py-2">الخطة</th><th className="px-2 py-2">القسط</th><th className="px-2 py-2">الاستحقاق</th><th className="px-2 py-2">المتأخر</th><th className="px-2 py-2">أيام التأخر</th><th className="px-2 py-2">إجراء</th></tr></thead><tbody>
+                    {overdueInstallmentSummary.rows.slice(0, 20).map((row: any) => <tr key={row.scheduleId} className="border-t border-rose-100"><td className="px-2 py-2 font-black">{row.studentName}</td><td className="px-2 py-2 font-mono text-[9px]">{row.invoiceId}</td><td className="px-2 py-2 font-mono text-[9px]">{row.planId}</td><td className="px-2 py-2 font-black">{row.installmentNumber}</td><td className="px-2 py-2 font-mono">{String(row.dueDate || '').slice(0, 10)}</td><td className="px-2 py-2 font-mono font-black text-rose-700">{formatLD(row.remainingAmount)}</td><td className="px-2 py-2 font-black">{row.daysLate}</td><td className="px-2 py-2"><button type="button" onClick={() => { const student = selectableStudents.find(item => item.id === row.studentId); if (student) { setSelectedStudent(student); setActiveSubSec('installments'); } }} className="rounded-md border border-amber-200 bg-amber-50 px-2 py-1 font-black text-amber-800">فتح الخطة</button></td></tr>)}
                   </tbody></table>
                 </div>
               )}
@@ -5740,7 +5794,7 @@ export default function StudentFinancialPortal({
                               </div>
                               <div className="text-[10px] text-slate-500 font-bold text-right space-y-1">
                                 <div>تاريخ المعاملة:</div>
-                                <div className="font-mono text-slate-900 text-xs font-black">{selectedStudRv.date}</div>
+                                <div className="font-mono text-slate-900 text-xs font-black">{selectedStudRv.date || selectedStudRv.receiptDate || selectedStudRv.createdAt || 'غير متاح'}</div>
                                 <div className="no-print">
                                   <span className={`px-2 py-0.5 rounded-full font-black text-[9px] inline-block ${
                                     selectedStudRv.status === 'posted' ? 'bg-emerald-100 text-emerald-800 border border-emerald-300' :
@@ -5798,13 +5852,13 @@ export default function StudentFinancialPortal({
                               <div className="flex items-center gap-1 font-bold">
                                 <span className="text-slate-900">مرحلة {selectedStudRv.stage}</span>
                                 <span className="text-slate-300">•</span>
-                                <span className="font-mono text-amber-650 font-black">{STUDENT_COST_CENTER_LABELS[selectedStudRv.costCenter] || selectedStudRv.costCenter}</span>
+                                <span className="font-mono text-amber-650 font-black">{studentCostCenterLabel(selectedStudRv.costCenter || receiptCostCenter(selectedStudRv))}</span>
                               </div>
                             </div>
 
                             <div className="space-y-1.5 border-b border-slate-100 pb-2">
-                              <span className="text-[10px] text-slate-400 font-extrabold block">المستلم المالي المخول:</span>
-                              <span className="font-bold text-slate-900">{auditActor}</span>
+                              <span className="text-[10px] text-slate-400 font-extrabold block">المسجل المالي المخول:</span>
+                              <span className="font-bold text-slate-900">{selectedStudRv.updatedBy || auditActor}</span>
                             </div>
 
                           </div>
@@ -5938,13 +5992,13 @@ export default function StudentFinancialPortal({
                             </div>
                             <div>
                               <span>اعتمد بواسطة:</span>
-                              <span className="text-slate-800 block mt-0.5">{selectedStudRv.approvedBy || '—'}</span>
-                              <span className="text-slate-400 block font-mono mt-0.5">{selectedStudRv.approvedAt || '—'}</span>
+                              <span className="text-slate-800 block mt-0.5">{selectedStudRv.approvedBy || (selectedStudRv.status === 'posted' ? selectedStudRv.updatedBy || auditActor : '—')}</span>
+                              <span className="text-slate-400 block font-mono mt-0.5">{selectedStudRv.approvedAt || (selectedStudRv.status === 'posted' ? selectedStudRv.updatedAt || '—' : '—')}</span>
                             </div>
                             <div>
                               <span>رُحّل بواسطة:</span>
-                              <span className="text-slate-800 block mt-0.5">{selectedStudRv.postedBy || '—'}</span>
-                              <span className="text-slate-400 block font-mono mt-0.5">{selectedStudRv.postedAt || '—'}</span>
+                              <span className="text-slate-800 block mt-0.5">{selectedStudRv.postedBy || (selectedStudRv.status === 'posted' ? selectedStudRv.updatedBy || auditActor : '—')}</span>
+                              <span className="text-slate-400 block font-mono mt-0.5">{selectedStudRv.postedAt || (selectedStudRv.status === 'posted' ? selectedStudRv.updatedAt || '—' : '—')}</span>
                             </div>
                             <div>
                               <span>الختم والتوقيع الرقمي:</span>
@@ -6087,7 +6141,7 @@ export default function StudentFinancialPortal({
                 </span>
               </div>
 
-              <div className="grid grid-cols-1 md:grid-cols-2 xl:grid-cols-5 gap-3 items-end">
+              <div className="grid grid-cols-1 md:grid-cols-2 xl:grid-cols-6 gap-3 items-end">
                 <label className="text-[10px] font-black text-slate-700">
                   بحث
                   <input
@@ -6126,6 +6180,17 @@ export default function StudentFinancialPortal({
                   />
                 </label>
                 <label className="text-[10px] font-black text-slate-700">
+                  مركز التكلفة
+                  <select
+                    value={reportCostCenterFilter}
+                    onChange={(e) => setReportCostCenterFilter(e.target.value)}
+                    className="mt-1 w-full border border-slate-200 rounded-lg px-3 py-2 text-xs font-bold bg-white focus:outline-none focus:ring-2 focus:ring-amber-300"
+                  >
+                    <option value="all">كل المراكز</option>
+                    {Object.entries(STUDENT_COST_CENTER_LABELS).map(([value, label]) => <option key={value} value={value}>{label}</option>)}
+                  </select>
+                </label>
+                <label className="text-[10px] font-black text-slate-700">
                   إلى تاريخ
                   <input
                     type="date"
@@ -6139,6 +6204,7 @@ export default function StudentFinancialPortal({
                   onClick={() => {
                     setReportSearch('');
                     setReportStatusFilter('all');
+                    setReportCostCenterFilter('all');
                     setReportStartDate('');
                     setReportEndDate('');
                   }}
@@ -6149,13 +6215,14 @@ export default function StudentFinancialPortal({
               </div>
 
               <div className="overflow-x-auto border border-slate-100 rounded-xl">
-                <table className="w-full min-w-[760px] text-right text-[10px]">
+                <table className="w-full min-w-[900px] text-right text-[10px]">
                   <thead className="bg-slate-900 text-amber-100 font-black">
                     <tr>
                       <th className="p-2">النوع</th>
                       <th className="p-2">المرجع</th>
                       <th className="p-2">التاريخ</th>
                       <th className="p-2">الطالب</th>
+                      <th className="p-2">مركز التكلفة</th>
                       <th className="p-2">الحالة</th>
                       <th className="p-2 text-left">القيمة</th>
                       <th className="p-2">إجراء</th>
@@ -6168,6 +6235,7 @@ export default function StudentFinancialPortal({
                         <td className="p-2 font-mono text-slate-500">{row.id}</td>
                         <td className="p-2 font-mono text-slate-500">{row.date || 'غير متاح'}</td>
                         <td className="p-2 font-bold text-slate-800">{row.student || 'غير محدد'}</td>
+                        <td className="p-2 font-bold text-slate-700">{studentCostCenterLabel(row.costCenter)}</td>
                         <td className="p-2 text-slate-600">{financialStatusLabel(row.status)}</td>
                         <td className="p-2 text-left font-mono font-black text-emerald-700">{formatLD(row.amount)}</td>
                         <td className="p-2">
@@ -6195,7 +6263,7 @@ export default function StudentFinancialPortal({
                     ))}
                     {financialReportRows.length === 0 && (
                       <tr>
-                        <td colSpan={7} className="p-8 text-center text-slate-400 font-bold">لا توجد حركات مطابقة للفلاتر الحالية.</td>
+                        <td colSpan={8} className="p-8 text-center text-slate-400 font-bold">لا توجد حركات مطابقة للفلاتر الحالية.</td>
                       </tr>
                     )}
                   </tbody>
