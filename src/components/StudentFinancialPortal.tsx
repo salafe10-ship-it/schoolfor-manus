@@ -5082,7 +5082,11 @@ export default function StudentFinancialPortal({
                   <Coins className="w-5 h-5 text-amber-500" />
                   <span>👑 بوابـة سندات القبض الماليـة للطلاب</span>
                 </h3>
-                <p className="text-xs text-slate-500 font-semibold mt-1">عرض وإدارة وطباعة إيصالات الدفع والتحصيل، مع ترحيل متوقف حتى اعتماد دفتر الأستاذ الكانوني وعزل كامل للبيانات</p>
+                <p className="text-xs text-slate-500 font-semibold mt-1">
+                  عرض وإدارة وطباعة إيصالات الدفع والتحصيل، {financialMutationDisabled
+                    ? 'مع بقاء الحفظ والترحيل مقفلين حتى اعتماد دفتر الأستاذ الكانوني والتحقق من عزل البيانات.'
+                    : 'مع اعتماد السند قبل الترحيل المحاسبي وربطه بدفتر الأستاذ الكانوني.'}
+                </p>
               </div>
               <div className="flex items-center gap-2">
                 <span className={`text-[11px] font-black px-3 py-1.5 flex items-center gap-1 ${financialWritesLocked ? 'bg-amber-50 text-amber-800' : financialPersistence === 'ready' ? 'bg-emerald-50 text-emerald-800' : financialPersistence === 'loading' ? 'bg-amber-50 text-amber-800' : 'bg-rose-50 text-rose-800'}`}>
