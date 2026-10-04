@@ -2725,7 +2725,7 @@ export default function StudentFinancialPortal({
     const collectionRate = totalSum > 0 ? (totalPaid / totalSum) * 100 : null;
     const today = new Date().toISOString().split('T')[0];
     const todayCollected = studentReceiptVouchers
-      .filter(v => v.date === today && String(v.status).toLowerCase() === 'posted')
+      .filter(v => String(v.date || v.receiptDate || '').slice(0, 10) === today && String(v.status).toLowerCase() === 'posted')
       .reduce((sum, v) => sum + Number(v.amount || 0), 0);
 
     return {
