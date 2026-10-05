@@ -2666,6 +2666,7 @@ export async function createApp(options: { cloudflare?: boolean } = {}): Promise
           token: session.access_token,
           refreshToken: session.refresh_token,
           expiresAt: session.expires_at,
+          serverTime: Math.floor(Date.now() / 1000),
           user: {
             id: identity.id,
             school_id: identity.schoolId || null,
@@ -2802,6 +2803,7 @@ export async function createApp(options: { cloudflare?: boolean } = {}): Promise
           token: session.access_token,
           refreshToken: session.refresh_token,
           expiresAt: session.expires_at,
+          serverTime: Math.floor(Date.now() / 1000),
           user: {
             id: identity.id,
             school_id: identity.schoolId || null,
@@ -2863,7 +2865,7 @@ export async function createApp(options: { cloudflare?: boolean } = {}): Promise
     const supabase = await getSupabaseClientReady();
     if (!supabase) {
       if (authTrace) authTrace.rejectionStage = 'supabase_client';
-      return next(new AuthenticationError("خدمة المصادقة غير مهيأة."));
+      return next(new ExternalServiceError("خدمة المصادقة غير مهيأة."));
     }
 
     let identity;
@@ -2911,7 +2913,7 @@ export async function createApp(options: { cloudflare?: boolean } = {}): Promise
         return next(new AuthenticationError("غير مصرح به. الهوية غير صالحة."));
       }
       EnterpriseLogger.error("Supabase Auth verification failed", "ServerBootstrap", { error: err?.message || err });
-      return next(new AuthenticationError("فشل التحقق من الهوية عبر Supabase Auth."));
+      return next(new ExternalServiceError("تعذر التحقق من الهوية مؤقتًا. أعد المحاولة."));
     }
 
     // Identity is derived only from the verified Supabase user, never from request claims.

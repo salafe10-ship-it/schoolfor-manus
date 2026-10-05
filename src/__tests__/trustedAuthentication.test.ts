@@ -40,6 +40,39 @@ const usernameClient = (row: Record<string, unknown> | null, options: { user?: S
   return { client, rpc };
 };
 describe('Wave 1A trusted authentication foundation', () => {
+  it.each([408, 429, 500, 502, 503, 504])('does not classify provider HTTP %i as invalid credentials', async (status) => {
+    const client = fakeClient({ loginError: { status, message: 'unavailable' } });
+    const expected = { errorCode: 'EXTERNAL_SERVICE_ERROR', statusCode: 502 };
+    await expect(authenticateTrustedUser(client, 'user@example.com', 'correct')).rejects.toMatchObject(expected);
+    await expect(refreshTrustedSession(client, 'valid-refresh')).rejects.toMatchObject(expected);
+    await expect(verifyTrustedSession(client, 'valid-token')).rejects.toMatchObject(expected);
+  });
+
+  it('keeps actual invalid credentials rejected and transient fetch errors recoverable', async () => {
+    await expect(verifyTrustedSession(fakeClient({ loginError: { status: 401, code: 'bad_jwt' } }), 'invalid-token'))
+      .rejects.toMatchObject({ code: 'INVALID_CREDENTIALS' });
+    await expect(refreshTrustedSession(fakeClient({ loginError: { name: 'AuthRetryableFetchError', status: 0 } }), 'valid-refresh'))
+      .rejects.toMatchObject({ errorCode: 'EXTERNAL_SERVICE_ERROR' });
+  });
+
+  it('does not treat a failed tenant lookup as an invalid identity', async () => {
+    const client = fakeClient();
+    client.rpc.mockResolvedValue({ data: null, error: { code: 'PGRST000' } });
+    await expect(verifyTrustedSession(client, 'valid-token')).rejects.toMatchObject({ errorCode: 'EXTERNAL_SERVICE_ERROR' });
+  });
+
+  it.each(['schoolError', 'branchError'])('keeps %s distinct from a missing school or branch', async (key) => {
+    await expect(verifyTrustedSession(fakeClient({ [key]: { code: 'PGRST000' } }), 'valid-token'))
+      .rejects.toMatchObject({ errorCode: 'EXTERNAL_SERVICE_ERROR' });
+  });
+
+  it('reports an unavailable username lookup without attempting password authentication', async () => {
+    const client = fakeClient();
+    client.rpc.mockResolvedValue({ data: null, error: { code: 'PGRST000' } });
+    await expect(authenticateTrustedUser(client, 'schooladmin', 'correct')).rejects.toMatchObject({ errorCode: 'EXTERNAL_SERVICE_ERROR' });
+    expect(client.auth.signInWithPassword).not.toHaveBeenCalled();
+  });
+
   it('normalizes only supported application roles', () => {
     expect(normalizeTrustedRole('admin')).toBe('SchoolAdmin');
     expect(normalizeTrustedRole('school-admin')).toBe('SchoolAdmin');
@@ -161,7 +194,7 @@ describe('Login identifier resolution', () => {
   });
 
   it('fails closed for an unknown username without attempting Supabase Auth', async () => {
-    const { client } = usernameClient(null);
+    const { client } = usernameClient(null, {}, 'missing-user');
     await expect(resolveTrustedLoginIdentifier(client, 'missing-user')).rejects.toMatchObject({ code: 'INVALID_CREDENTIALS' });
     expect(client.auth.signInWithPassword).not.toHaveBeenCalled();
   });

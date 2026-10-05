@@ -20,6 +20,8 @@ export type TrustedSessionUser = {
 
 export type SessionResponse = {
   ok: boolean;
+  status?: number;
+  headers?: Pick<Headers, 'get'>;
   json: () => Promise<unknown>;
 };
 
@@ -38,6 +40,7 @@ export class TrustedSessionError extends Error {
 const ACCESS_TOKEN_KEY = 'edupro_token';
 const REFRESH_TOKEN_KEY = 'edupro_refresh_token';
 const EXPIRES_AT_KEY = 'edupro_session_expires_at';
+const CLOCK_OFFSET_KEY = 'edupro_session_clock_offset_seconds';
 const ACCESS_TOKEN_EXPIRY_SKEW_SECONDS = 30;
 const SESSION_REQUEST_TIMEOUT_MS = 10_000;
 
@@ -112,6 +115,18 @@ function responseSession(value: unknown): { user: TrustedSessionUser; token: str
   return { user: normalizeUser(body.data.user), token, refreshToken, expiresAt };
 }
 
+function isTransientHttpStatus(status: number | undefined): boolean {
+  return typeof status === 'number' && (status === 408 || status === 425 || status === 429 || status >= 500);
+}
+
+function responseServerTime(response: SessionResponse, payload: unknown): number | undefined {
+  const headerDate = response.headers?.get('date');
+  const headerTime = headerDate ? Date.parse(headerDate) / 1000 : NaN;
+  const bodyTime = isRecord(payload) && isRecord(payload.data) ? payload.data.serverTime : undefined;
+  if (Number.isFinite(headerTime)) return headerTime;
+  return typeof bodyTime === 'number' && Number.isFinite(bodyTime) && bodyTime > 0 ? bodyTime : undefined;
+}
+
 export class TrustedSessionManager {
   private restoreFlight: Promise<TrustedSessionUser> | null = null;
   private refreshFlight: Promise<TrustedSessionUser> | null = null;
@@ -179,18 +194,26 @@ export class TrustedSessionManager {
 
   isAccessTokenExpiringSoon(now = Math.floor(Date.now() / 1000)): boolean {
     const expiresAt = this.getExpiresAt();
-    return typeof expiresAt === 'number' && now + ACCESS_TOKEN_EXPIRY_SKEW_SECONDS >= expiresAt;
+    const rawOffset = this.storage.getItem(CLOCK_OFFSET_KEY);
+    const offset = rawOffset ? Number(rawOffset) : 0;
+    const serverNow = now - (Number.isFinite(offset) ? offset : 0);
+    return typeof expiresAt === 'number' && serverNow + ACCESS_TOKEN_EXPIRY_SKEW_SECONDS >= expiresAt;
   }
 
-  private saveSession(token: string, refreshToken: string | undefined, expiresAt: number | undefined, version: number): void {
+  private saveSession(token: string, refreshToken: string | undefined, expiresAt: number | undefined, version: number, serverTime?: number): void {
     if (version !== this.lifecycleVersion) throw new TrustedSessionError('LOGGED_OUT');
     if (!token.trim()) throw new TrustedSessionError('INVALID_SESSION');
     this.storage.setItem(ACCESS_TOKEN_KEY, token);
     if (refreshToken) this.storage.setItem(REFRESH_TOKEN_KEY, refreshToken);
     if (typeof expiresAt === 'number') this.storage.setItem(EXPIRES_AT_KEY, String(expiresAt));
+    // Supabase expiry is server-based. A fast/slow device clock must not make
+    // every newly issued session look expired and create a refresh loop.
+    if (typeof serverTime === 'number') {
+      this.storage.setItem(CLOCK_OFFSET_KEY, String(Math.floor(Date.now() / 1000) - serverTime));
+    }
   }
 
-  private async postJson(path: string, body: Record<string, unknown>): Promise<unknown> {
+  private async postJson(path: string, body: Record<string, unknown>): Promise<{ payload: unknown; serverTime?: number }> {
     let response: SessionResponse;
     try {
       response = await this.requestWithTimeout(path, {
@@ -201,6 +224,9 @@ export class TrustedSessionManager {
     } catch {
       throw new TrustedSessionError('REQUEST_FAILED');
     }
+    if (!response.ok && isTransientHttpStatus(response.status)) {
+      throw new TrustedSessionError('REQUEST_FAILED', 'خدمة المصادقة غير متاحة مؤقتًا.');
+    }
     let payload: unknown;
     try {
       payload = await response.json();
@@ -210,7 +236,7 @@ export class TrustedSessionManager {
     if (!response.ok) {
       throw new TrustedSessionError(path === '/api/auth/refresh' ? 'INVALID_REFRESH' : 'INVALID_SESSION');
     }
-    return payload;
+    return { payload, serverTime: responseServerTime(response, payload) };
   }
 
   private async getSession(token: string): Promise<TrustedSessionUser> {
@@ -220,13 +246,18 @@ export class TrustedSessionManager {
     } catch {
       throw new TrustedSessionError('REQUEST_FAILED');
     }
+    if (!response.ok && isTransientHttpStatus(response.status)) {
+      throw new TrustedSessionError('REQUEST_FAILED', 'خدمة المصادقة غير متاحة مؤقتًا.');
+    }
     let payload: unknown;
     try {
       payload = await response.json();
     } catch {
       throw new TrustedSessionError('INVALID_SESSION');
     }
-    if (!response.ok) throw new TrustedSessionError('INVALID_SESSION');
+    if (!response.ok) {
+      throw new TrustedSessionError('INVALID_SESSION');
+    }
     return responseUser(payload);
   }
 
@@ -236,13 +267,13 @@ export class TrustedSessionManager {
     clearTrustedSession(rememberMe ? this.transientStorage : this.persistentStorage);
     const version = this.lifecycleVersion;
     const normalizedSchoolContext = typeof schoolContext === 'string' ? schoolContext.trim() : '';
-    const payload = await this.postJson('/api/auth/login', {
+    const { payload, serverTime } = await this.postJson('/api/auth/login', {
       identifier,
       password,
       ...(normalizedSchoolContext ? { schoolContext: normalizedSchoolContext } : {}),
     });
     const session = responseSession(payload);
-    this.saveSession(session.token, session.refreshToken, session.expiresAt, version);
+    this.saveSession(session.token, session.refreshToken, session.expiresAt, version, serverTime);
     return session.user;
   }
 
@@ -252,17 +283,25 @@ export class TrustedSessionManager {
       clearTrustedSession(this.storage);
       throw new TrustedSessionError('INVALID_REFRESH');
     }
-    const payload = await this.postJson('/api/auth/refresh', { refreshToken });
+    const { payload, serverTime } = await this.postJson('/api/auth/refresh', { refreshToken });
     const session = responseSession(payload);
-    this.saveSession(session.token, session.refreshToken, session.expiresAt, version);
+    this.saveSession(session.token, session.refreshToken, session.expiresAt, version, serverTime);
     return session.user;
   }
 
   private async refreshForVersion(version: number): Promise<TrustedSessionUser> {
     if (this.refreshFlight) return this.refreshFlight;
     this.refreshFlight = this.refreshInternal(version).catch(error => {
-      clearTrustedSession(this.storage);
-      throw error instanceof TrustedSessionError ? error : new TrustedSessionError('INVALID_REFRESH');
+      const normalizedError = error instanceof TrustedSessionError
+        ? error
+        : new TrustedSessionError('INVALID_REFRESH');
+      // A timeout or transport failure does not prove that the refresh token
+      // is invalid. Preserve the local session so a later request can retry
+      // instead of logging the user out and blanking every module.
+      if (normalizedError.code !== 'REQUEST_FAILED' && normalizedError.code !== 'LOGGED_OUT') {
+        clearTrustedSession(this.storage);
+      }
+      throw normalizedError;
     }).finally(() => {
       this.refreshFlight = null;
     });
@@ -270,6 +309,8 @@ export class TrustedSessionManager {
   }
 
   async refresh(): Promise<TrustedSessionUser> {
+    // Resolve the selected storage before a direct refresh without restore.
+    this.getAccessToken();
     return this.refreshForVersion(this.lifecycleVersion);
   }
 
@@ -289,7 +330,8 @@ export class TrustedSessionManager {
       if (error instanceof TrustedSessionError && (error.code === 'REQUEST_FAILED' || error.code === 'LOGGED_OUT')) throw error;
       try {
         return await this.refreshForVersion(version);
-      } catch {
+      } catch (refreshError) {
+        if (refreshError instanceof TrustedSessionError && (refreshError.code === 'REQUEST_FAILED' || refreshError.code === 'LOGGED_OUT')) throw refreshError;
         clearTrustedSession(this.storage);
         throw new TrustedSessionError('SESSION_EXPIRED');
       }
@@ -300,7 +342,7 @@ export class TrustedSessionManager {
     if (this.restoreFlight) return this.restoreFlight;
     const version = this.lifecycleVersion;
     this.restoreFlight = this.restoreInternal(version).catch(error => {
-      if (error instanceof TrustedSessionError && error.code !== 'REQUEST_FAILED') {
+      if (version === this.lifecycleVersion && error instanceof TrustedSessionError && error.code !== 'REQUEST_FAILED' && error.code !== 'LOGGED_OUT') {
         clearTrustedSession(this.storage);
       }
       throw error instanceof TrustedSessionError ? error : new TrustedSessionError('INVALID_SESSION');
@@ -321,5 +363,6 @@ export class TrustedSessionManager {
 export const trustedSessionStorageKeys = {
   accessToken: ACCESS_TOKEN_KEY,
   refreshToken: REFRESH_TOKEN_KEY,
-  expiresAt: EXPIRES_AT_KEY
+  expiresAt: EXPIRES_AT_KEY,
+  clockOffset: CLOCK_OFFSET_KEY
 } as const;

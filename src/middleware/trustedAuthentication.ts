@@ -9,6 +9,7 @@ import {
 import { roleResolver } from '../authorization/RoleResolver';
 import { EnterpriseLogger } from '../database/services/EnterpriseLogger';
 import { getSupabaseClientForAccessToken } from '../database/client';
+import { ExternalServiceError } from '../utils/errors';
 
 export type TrustedIdentity = {
   id: string;
@@ -78,6 +79,17 @@ export function normalizeTrustedRole(value: unknown): UserRole | null {
 
 const EMAIL_IDENTIFIER_PATTERN = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
 
+function rejectUnavailableAuthService(error: unknown): void {
+  if (!error || typeof error !== 'object') return;
+  const providerError = error as { status?: number; name?: string; code?: string };
+  const status = providerError.status;
+  if (status === 0 || status === 408 || status === 425 || status === 429 || (typeof status === 'number' && status >= 500)
+    || ['AuthRetryableFetchError', 'AbortError', 'TimeoutError'].includes(providerError.name || '')
+    || ['ECONNRESET', 'ECONNREFUSED', 'ETIMEDOUT', 'ENOTFOUND'].includes(providerError.code || '')) {
+    throw new ExternalServiceError('خدمة التحقق من الهوية غير متاحة مؤقتًا. أعد المحاولة.');
+  }
+}
+
 export function isEmailIdentifier(value: string): boolean {
   return EMAIL_IDENTIFIER_PATTERN.test(value.trim());
 }
@@ -112,13 +124,15 @@ export async function resolveTrustedLoginIdentifier(
   // An email-shaped identifier may still be a valid Auth email even when it
   // has no public.users username row (for example, a platform administrator).
   if (isEmailIdentifier(normalized)) return { email: normalized.toLowerCase() };
+  if (error) throw new ExternalServiceError('تعذر الاتصال بمصدر أسماء المستخدمين مؤقتًا.');
   throw new TrustedAuthenticationError('INVALID_CREDENTIALS');
 }
 
 async function resolveTrustedTenantId(supabase: SupabaseClient): Promise<string> {
   const { data, error } = await supabase.rpc('dbsec004_current_tenant_id');
   const tenantId = typeof data === 'string' ? data.trim() : '';
-  if (error || !tenantId) {
+  if (error) throw new ExternalServiceError('تعذر التحقق من نطاق المدرسة مؤقتًا.');
+  if (!tenantId) {
     throw new TrustedAuthenticationError('INVALID_IDENTITY', 'المستأجر الموثوق غير متاح لهذه الجلسة.');
   }
   return tenantId;
@@ -142,6 +156,7 @@ export function clearTrustedSession(storage: Pick<Storage, 'removeItem'>): void 
   storage.removeItem('edupro_session_username');
   storage.removeItem('edupro_session_branch_id');
   storage.removeItem('edupro_session_expires_at');
+  storage.removeItem('edupro_session_clock_offset_seconds');
 }
 
 function isDisabledUser(user: SupabaseUser): boolean {
@@ -243,7 +258,7 @@ async function attachTrustedPasswordPolicy(
     .limit(1)
     .maybeSingle();
   if (error) {
-    throw new TrustedAuthenticationError('INVALID_IDENTITY', 'سياسة كلمة مرور الهوية غير متاحة.');
+    throw new ExternalServiceError('تعذر قراءة سياسة كلمة مرور الهوية مؤقتًا.');
   }
   return { ...identity, forcePasswordChange: Boolean(data?.force_password_change) };
 }
@@ -313,6 +328,7 @@ export async function authenticateTrustedUser(
     password
   });
   if (error || !data.user || !data.session) {
+    rejectUnavailableAuthService(error);
     throw new TrustedAuthenticationError('INVALID_CREDENTIALS');
   }
 
@@ -358,6 +374,7 @@ export async function refreshTrustedSession(
   }
   const { data, error } = await supabase.auth.refreshSession({ refresh_token: refreshToken.trim() });
   if (error || !data.user || !data.session) {
+    rejectUnavailableAuthService(error);
     throw new TrustedAuthenticationError('INVALID_CREDENTIALS');
   }
   const identity = extractTrustedIdentity(data.user);
@@ -379,7 +396,10 @@ export async function verifyTrustedSession(
   // appear to have no modules after a page reload.
   const authenticatedSupabase = getSupabaseClientForAccessToken(token) || supabase;
   const { data: { user }, error } = await authenticatedSupabase.auth.getUser(token);
-  if (error || !user) throw new TrustedAuthenticationError('INVALID_CREDENTIALS');
+  if (error || !user) {
+    rejectUnavailableAuthService(error);
+    throw new TrustedAuthenticationError('INVALID_CREDENTIALS');
+  }
   const identity = extractTrustedIdentity(user);
   const tenantId = identity.schoolId ? await resolveTrustedTenantId(authenticatedSupabase) : undefined;
   return finalizeTrustedIdentity(authenticatedSupabase, identity, tenantId);

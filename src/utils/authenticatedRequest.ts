@@ -51,6 +51,12 @@ export async function authenticatedRequest(
 
   token = await auth.refreshTrustedAccessToken();
   if (!token) {
+    // A failed refresh can be a temporary network/edge failure. Do not tear
+    // down the whole application shell while the trusted session is still
+    // stored; the next request can retry the refresh.
+    if (typeof (auth as any).hasStoredTrustedSession === 'function' && (auth as any).hasStoredTrustedSession()) {
+      throw new AuthenticationRequestError('تعذر التحقق من جلسة المدرسة مؤقتًا؛ لم يتم تسجيل الخروج.');
+    }
     notifyAuthenticationExpired();
     throw new AuthenticationRequestError();
   }

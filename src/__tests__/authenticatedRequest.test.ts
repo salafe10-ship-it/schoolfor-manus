@@ -83,4 +83,16 @@ describe('authenticatedRequest', () => {
     expect(fetchMock).toHaveBeenCalledTimes(1);
     expect(authMock.refreshTrustedAccessToken).toHaveBeenCalledTimes(1);
   });
+
+  it('keeps the shell when a 401 refresh fails but the stored session is still present', async () => {
+    authMock.getTrustedAccessTokenAsync.mockResolvedValue('current-token');
+    authMock.refreshTrustedAccessToken.mockResolvedValue('');
+    authMock.hasStoredTrustedSession.mockReturnValue(true);
+    const fetchMock = vi.mocked(fetch).mockResolvedValueOnce(response(401));
+    const dispatchSpy = vi.spyOn(window, 'dispatchEvent');
+
+    await expect(authenticatedRequest('/api/dashboard/metrics')).rejects.toThrow('تعذر التحقق من جلسة المدرسة مؤقتًا');
+    expect(fetchMock).toHaveBeenCalledTimes(1);
+    expect(dispatchSpy).not.toHaveBeenCalled();
+  });
 });

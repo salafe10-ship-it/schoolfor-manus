@@ -1,4 +1,5 @@
 import type { SupabaseClient } from '@supabase/supabase-js';
+import { ExternalServiceError } from '../utils/errors';
 
 /**
  * Server-resolved presentation data for the trusted school scope.
@@ -93,7 +94,8 @@ export async function resolveTrustedSchoolPresentation(
     .eq('id', trustedSchoolId)
     .maybeSingle();
 
-  if (error || !data) return null;
+  if (error) throw new ExternalServiceError('تعذر التحقق من بيانات المدرسة مؤقتًا.');
+  if (!data) return null;
   const school = toTrustedSchoolPresentation(data as SchoolRecord);
   const { data: academicYear } = await supabase
     .from('academic_years')
@@ -148,7 +150,8 @@ export async function resolveTrustedBranchPresentation(
     .eq('status', 'active')
     .is('deleted_at', null)
     .maybeSingle();
-  if (error || !data) return null;
+  if (error) throw new ExternalServiceError('تعذر التحقق من بيانات فرع المدرسة مؤقتًا.');
+  if (!data) return null;
   const branch = toTrustedBranchPresentation(data as BranchRecord);
   return branch.id === trustedBranchId && branch.schoolId === trustedSchoolId ? branch : null;
 }
