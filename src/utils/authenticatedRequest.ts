@@ -39,6 +39,9 @@ export async function authenticatedRequest(
   }
   let token = locallySafeToken || await auth.getTrustedAccessTokenAsync();
   if (!token) {
+    if (typeof (auth as any).hasStoredTrustedSession === 'function' && (auth as any).hasStoredTrustedSession()) {
+      throw new AuthenticationRequestError('تعذر التحقق من جلسة المدرسة مؤقتًا؛ لم يتم تسجيل الخروج.');
+    }
     notifyAuthenticationExpired();
     throw new AuthenticationRequestError();
   }

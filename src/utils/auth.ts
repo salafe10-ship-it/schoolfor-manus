@@ -23,6 +23,11 @@ export function getTrustedAccessToken(): string {
   return token;
 }
 
+/** Keep a transient network failure from being mistaken for an expired session. */
+export function hasStoredTrustedSession(): boolean {
+  return Boolean(getTrustedSessionManager()?.getAccessToken());
+}
+
 /**
  * Restores the official trusted session before an API request. The session
  * manager performs expiry-aware validation and refreshes through the existing

@@ -1,8 +1,10 @@
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 
 const authMock = vi.hoisted(() => ({
+  getTrustedAccessToken: vi.fn(),
   getTrustedAccessTokenAsync: vi.fn(),
-  refreshTrustedAccessToken: vi.fn()
+  refreshTrustedAccessToken: vi.fn(),
+  hasStoredTrustedSession: vi.fn()
 }));
 
 vi.mock('../utils/auth', () => authMock);
@@ -16,6 +18,7 @@ function response(status: number): Response {
 describe('authenticatedRequest', () => {
   beforeEach(() => {
     vi.clearAllMocks();
+    authMock.hasStoredTrustedSession.mockReturnValue(false);
     vi.stubGlobal('fetch', vi.fn());
   });
 
@@ -60,6 +63,15 @@ describe('authenticatedRequest', () => {
 
     await expect(authenticatedRequest('/api/students')).rejects.toBeInstanceOf(AuthenticationRequestError);
     expect(fetchMock).not.toHaveBeenCalled();
+  });
+
+  it('does not redirect to login during temporary session validation failure', async () => {
+    authMock.getTrustedAccessTokenAsync.mockResolvedValue('');
+    authMock.hasStoredTrustedSession.mockReturnValue(true);
+    const dispatchSpy = vi.spyOn(window, 'dispatchEvent');
+
+    await expect(authenticatedRequest('/api/students')).rejects.toThrow('تعذر التحقق من جلسة المدرسة مؤقتًا');
+    expect(dispatchSpy).not.toHaveBeenCalled();
   });
 
   it('does not retry or send a request when refresh fails after 401', async () => {
