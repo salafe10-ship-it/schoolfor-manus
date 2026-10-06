@@ -287,7 +287,7 @@ export default function Topbar({
 
       {/* Center: Live Clock & Date Info + Quick Smart Search (Hidden in Client Mode for maximum simplicity) */}
       {!isClientMode && (
-        <div className="hidden md:flex items-center gap-4 flex-1 max-w-xl justify-center mx-4 bg-gradient-to-b from-[#fffefc] via-[#fbf8f0] to-[#f5eeea] border-2 border-[#d4af37]/30 hover:border-[#d4af37] rounded-3xl p-4 sm:p-5 shadow-md transition-all duration-300">
+        <div className="top-navigation-search hidden md:flex items-center gap-4 flex-1 max-w-xl justify-center mx-4 bg-gradient-to-b from-[#fffefc] via-[#fbf8f0] to-[#f5eeea] border-2 border-[#d4af37]/30 hover:border-[#d4af37] rounded-3xl p-4 sm:p-5 shadow-md transition-all duration-300">
           
           {/* Ticking Arabic Clock Widget */}
           <div className="hidden xl:flex items-center gap-2 px-3 py-1.5 bg-transparent dark:bg-slate-900/40 border border-slate-200/60 dark:border-slate-800/80 select-none shrink-0">
