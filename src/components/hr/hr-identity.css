@@ -360,8 +360,28 @@
 
 /* عرض الموظفين: جدول إداري واضح بحدود متناسقة مع هوية HR */
 #hr-portal .hr-employees-table {
+  min-width: 0;
+  max-width: 100%;
   border: 1px solid rgba(223, 181, 90, 0.28);
   background: rgba(38, 24, 15, 0.72);
+}
+
+#hr-portal .hr-employees-table .overflow-x-auto {
+  max-width: 100%;
+  overscroll-behavior-inline: contain;
+}
+
+#hr-portal .hr-employees-table::-webkit-scrollbar,
+#hr-portal .hr-employees-table .overflow-x-auto::-webkit-scrollbar {
+  display: block;
+  width: 6px;
+  height: 6px;
+}
+
+#hr-portal .hr-employees-table::-webkit-scrollbar-thumb,
+#hr-portal .hr-employees-table .overflow-x-auto::-webkit-scrollbar-thumb {
+  background: var(--hr-gold-dark);
+  border-radius: 999px;
 }
 
 #hr-portal .hr-employees-table table {
