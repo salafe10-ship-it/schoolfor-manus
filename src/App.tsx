@@ -461,6 +461,7 @@ export default function App() {
       id: trustedSchool.id,
       name: trustedSchool.name,
       logo: trustedSchool.logo,
+      stageLogos: trustedSchool.stageLogos || {},
       type: trustedSchool.type,
       licenseNumber: trustedSchool.licenseNumber,
       address: trustedSchool.address,

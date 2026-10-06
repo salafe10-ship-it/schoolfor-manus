@@ -7,6 +7,8 @@ export interface School {
   id: string;
   name: string;
   logo: string;
+  /** Trusted, school-scoped logos used for reports from each active stage. */
+  stageLogos?: Record<string, string>;
   type: 'government' | 'private' | 'international' | 'model';
   licenseNumber: string;
   address: string;

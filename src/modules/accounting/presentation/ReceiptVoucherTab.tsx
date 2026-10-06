@@ -3,6 +3,8 @@ import React from 'react';
 import { AccountingContext } from '../../../components/GeneralLedgerPortal';
 import { EnterpriseAuditLogger } from '../../../utils/EnterpriseAuditLogger';
 import { authenticatedRequest } from '../../../utils/authenticatedRequest';
+import { openPrintWindow } from '../../../utils/openPrintWindow';
+import { resolveCostCenterStageLogoKey } from '../../../utils/schoolBranding';
 
 const RECEIPT_STAGE_LABELS: Record<string, string> = {
   kindergarten: 'الروضة',
@@ -37,7 +39,7 @@ export const ReceiptVoucherTab = () => {
   const [editingReceiptVoucherId, setEditingReceiptVoucherId] = React.useState<string | null>(null);
   const {
   activeTab, setActiveTab, activeSidebarItem, setActiveSidebarItem,
-  refreshing, setRefreshing, currency, setCurrency, activeSaving, setActiveSaving,
+  refreshing, setRefreshing, currency, setCurrency, selectedSchool, activeSaving, setActiveSaving,
   stages, costCenters, students,
   simAmount, setSimAmount, simCostCenter, setSimCostCenter, isStrictEnforcement, setIsStrictEnforcement,
   accounts, setAccounts, suppliers, setSuppliers, journalEntries, setJournalEntries,
@@ -436,7 +438,7 @@ export const ReceiptVoucherTab = () => {
 
 
 const handlePrintRV = (rv: any) => {
-    const printWindow = window.open('', '_blank');
+    const printWindow = openPrintWindow();
     if (!printWindow) {
       triggerNotification('❌ عذراً، تم حظر فتح نافذة الطباعة التلقائية بواسطة متصفحك. يرجى تفعيل النوافذ المنبثقة للرابط الحالي.', 'warning');
       return;
@@ -449,8 +451,16 @@ const handlePrintRV = (rv: any) => {
                                rv.operationType === 'رسوم أنشطة' ? 'إيرادات الأنشطة الطلابية والرحلات' :
                                rv.operationType === 'أخرى' ? 'إيرادات وتبرعات تعليمية طارئة' : 'إيرادات الرسوم الدراسية الموحدة';
 
-    const stageLabel = rv.stage || 'الابتدائي';
-    const costCenterCode = rv.costCenter?.toUpperCase() || 'GENERAL';
+    const stageLabel = RECEIPT_STAGE_LABELS[getReceiptStageKey(rv)] || rv.stage || 'غير محدد';
+    const costCenterCode = String(rv.costCenter || 'GENERAL').toUpperCase().replace(/^CC[_-]/, '');
+    const stageLogoKey = resolveCostCenterStageLogoKey(rv.costCenter || rv.schoolStage || rv.stageKey || rv.stage, costCenters?.length ? costCenters : undefined);
+    const rawSchoolLogo = String((stageLogoKey && selectedSchool?.stageLogos?.[stageLogoKey]) || selectedSchool?.logo || '').trim();
+    const schoolLogoSource = /^(https:\/\/|data:image\/(?:png|jpeg|webp);base64,[a-z0-9+/=\s]+$)/i.test(rawSchoolLogo) ? rawSchoolLogo : '';
+    const schoolName = String(selectedSchool?.name || rv.school || 'المدرسة');
+    const escapePrintValue = (value: unknown) => String(value ?? '—').replace(/[&<>"']/g, char => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[char] || char));
+    const schoolLogoMarkup = schoolLogoSource
+      ? `<img class="school-logo" src="${escapePrintValue(schoolLogoSource)}" alt="شعار ${escapePrintValue(schoolName)}" onerror="this.hidden=true;this.nextElementSibling.hidden=false" /><span class="school-logo-fallback" hidden>🏫</span>`
+      : '<span class="school-logo-fallback">🏫</span>';
 
     let studentSection = '';
     if (rv.studentPaymentId) {
@@ -458,12 +468,12 @@ const handlePrintRV = (rv: any) => {
         <div style="background-color: #f0f9ff; border: 1px solid #bae6fd; border-radius: 8px; padding: 15px; margin-bottom: 20px;">
           <h4 style="color: #0369a1; font-size: 11px; font-weight: 900; margin: 0 0 10px 0;">بيانات تكامل حسابات الطلاب والترحيل التلقائي الموحد</h4>
           <div style="display: grid; grid-template-columns: 1fr 1fr; gap: 10px; font-size: 10px; line-height: 1.5;">
-            <div><b>رقم معاملة سداد الطلاب:</b> <span style="font-family: monospace;">${rv.studentPaymentId}</span></div>
-            <div><b>معرف الطالب:</b> <span style="font-family: monospace;">${rv.studentId}</span></div>
-            <div><b>اسم الطالب الرباعي:</b> <span>${rv.studentName}</span></div>
-            <div><b>رقم سند القبض المحاسبي:</b> <span style="font-family: monospace;">${rv.receiptVoucherId}</span></div>
-            <div><b>رقم قيد اليومية المزدوج:</b> <span style="font-family: monospace;">${rv.journalEntryId}</span></div>
-            <div><b>الفترة المالية الفعالة:</b> <span>${rv.financialPeriod || 'السنة المالية 2026'}</span></div>
+            <div><b>رقم معاملة سداد الطلاب:</b> <span style="font-family: monospace;">${escapePrintValue(rv.studentPaymentId)}</span></div>
+            <div><b>معرف الطالب:</b> <span style="font-family: monospace;">${escapePrintValue(rv.studentId)}</span></div>
+            <div><b>اسم الطالب الرباعي:</b> <span>${escapePrintValue(rv.studentName)}</span></div>
+            <div><b>رقم سند القبض المحاسبي:</b> <span style="font-family: monospace;">${escapePrintValue(rv.receiptVoucherId)}</span></div>
+            <div><b>رقم قيد اليومية المزدوج:</b> <span style="font-family: monospace;">${escapePrintValue(rv.journalEntryId)}</span></div>
+            <div><b>الفترة المالية الفعالة:</b> <span>${escapePrintValue(rv.financialPeriod || 'السنة المالية 2026')}</span></div>
           </div>
         </div>
       `;
@@ -472,7 +482,8 @@ const handlePrintRV = (rv: any) => {
     printWindow.document.write(`
       <html dir="rtl">
         <head>
-          <title>سند قبض رقم ${rv.id}</title>
+          <meta charset="utf-8" />
+          <title>سند قبض رقم ${escapePrintValue(rv.id)}</title>
           <style>
             body {
               font-family: 'Inter', system-ui, sans-serif;
@@ -486,14 +497,42 @@ const handlePrintRV = (rv: any) => {
             }
             .header-container {
               display: flex;
-              justify-content: justify;
+              justify-content: space-between;
               align-items: center;
+              gap: 14px;
               border-bottom: 2px solid #059669;
               padding-bottom: 8px;
               margin-bottom: 10px;
             }
             .school-info {
               flex-grow: 1;
+              min-width: 0;
+            }
+            .school-identity {
+              display: flex;
+              align-items: center;
+              gap: 12px;
+              min-width: 0;
+            }
+            .school-logo {
+              width: 62px;
+              height: 62px;
+              flex: 0 0 62px;
+              object-fit: contain;
+            }
+            .school-logo-fallback {
+              display: inline-grid;
+              width: 62px;
+              height: 62px;
+              flex: 0 0 62px;
+              place-items: center;
+              border: 1px solid #cbd5e1;
+              border-radius: 50%;
+              background: #fff;
+              font-size: 28px;
+            }
+            .school-logo-fallback[hidden] {
+              display: none;
             }
             .school-title {
               font-size: 15px;
@@ -623,14 +662,17 @@ const handlePrintRV = (rv: any) => {
         </head>
         <body>
           <div class="header-container">
-            <div class="school-info">
-              <h2 class="school-title">مجموعة مدارس الأسرة الحديثة التعليمية</h2>
-              <p class="school-subtitle">فرع طرابلس الرئيسي - ترخيص وزارة التعليم رقم (٢٢١ / ٢٠٢٤)</p>
-              <p class="school-meta">الرقم الضريبي الموحد: 400182811 | طرابلس، ليبيا</p>
+            <div class="school-identity">
+              ${schoolLogoMarkup}
+              <div class="school-info">
+                <h2 class="school-title">${escapePrintValue(schoolName)}</h2>
+                <p class="school-subtitle">نظام الإدارة المالية المدرسية - ترخيص: ${escapePrintValue(selectedSchool?.licenseNumber || 'غير محدد')}</p>
+                <p class="school-meta">مركز التكلفة: ${escapePrintValue(stageLabel)} (CC_${escapePrintValue(costCenterCode)})</p>
+              </div>
             </div>
             <div class="voucher-meta">
-              <div class="voucher-id">سند قبض رقم: ${rv.id}</div>
-              <div style="margin-top: 5px;">التاريخ: ${rv.date}</div>
+              <div class="voucher-id">سند قبض رقم: ${escapePrintValue(rv.id)}</div>
+              <div style="margin-top: 5px;">التاريخ: ${escapePrintValue(rv.date)}</div>
             </div>
           </div>
 
@@ -640,17 +682,17 @@ const handlePrintRV = (rv: any) => {
           </div>
 
           <div class="info-grid">
-            <div class="info-item"><b>المدرسة المستلمة:</b> <span>${rv.school || 'مدرسة الأسرة الحديثة'}</span></div>
-            <div class="info-item"><b>المرحلة التعليمية ومركز التكلفة:</b> <span style="color: #4338ca; font-weight: bold;">${stageLabel} (مركز: CC_${costCenterCode})</span></div>
+            <div class="info-item"><b>المدرسة المستلمة:</b> <span>${escapePrintValue(schoolName)}</span></div>
+            <div class="info-item"><b>المرحلة التعليمية ومركز التكلفة:</b> <span style="color: #4338ca; font-weight: bold;">${escapePrintValue(stageLabel)} (مركز: CC_${escapePrintValue(costCenterCode)})</span></div>
             <div class="info-item" style="grid-column: span 2; border-top: 1px solid #e2e8f0; padding-top: 10px; margin-top: 5px;">
               <b>قبضنا من السيد / ولي الأمر:</b>
               <div style="font-weight: bold; font-size: 12px; background-color: #ffffff; border: 1px solid #cbd5e1; padding: 6px 12px; border-radius: 6px; margin-top: 5px;">
-                ${getReceiptReceivedFrom(rv)}
+                ${escapePrintValue(getReceiptReceivedFrom(rv))}
               </div>
             </div>
             <div class="info-item" style="grid-column: span 2; border-top: 1px solid #e2e8f0; padding-top: 10px;">
               <b>لقاء ما يلي (شرح المعاملة):</b>
-              <span style="font-weight: bold;">${getReceiptAgainst(rv)}</span>
+              <span style="font-weight: bold;">${escapePrintValue(getReceiptAgainst(rv))}</span>
             </div>
           </div>
 
@@ -676,14 +718,14 @@ const handlePrintRV = (rv: any) => {
             </thead>
             <tbody>
               <tr>
-                <td style="font-family: monospace; color: #4338ca; font-weight: bold;">${accountCode}</td>
-                <td>${accountName}</td>
+                <td style="font-family: monospace; color: #4338ca; font-weight: bold;">${escapePrintValue(accountCode)}</td>
+                <td>${escapePrintValue(accountName)}</td>
                 <td style="text-align: center; font-family: monospace; color: #059669; font-weight: bold;">${getReceiptAmount(rv).toLocaleString()} د.ل</td>
                 <td style="text-align: center; font-family: monospace; color: #94a3b8;">0.00</td>
               </tr>
               <tr>
-                <td style="font-family: monospace; color: #4338ca; font-weight: bold;">${revenueAccountCode}</td>
-                <td>${revenueAccountName}</td>
+                <td style="font-family: monospace; color: #4338ca; font-weight: bold;">${escapePrintValue(revenueAccountCode)}</td>
+                <td>${escapePrintValue(revenueAccountName)}</td>
                 <td style="text-align: center; font-family: monospace; color: #94a3b8;">0.00</td>
                 <td style="text-align: center; font-family: monospace; color: #dc2626; font-weight: bold;">${getReceiptAmount(rv).toLocaleString()} د.ل</td>
               </tr>
@@ -693,7 +735,7 @@ const handlePrintRV = (rv: any) => {
           <div class="signatures-grid">
             <div class="signature-box">
               <div class="signature-title">أمين الصندوق (المحصل)</div>
-              <div style="font-family: monospace; font-size: 10px; color: #475569;">سليمان غازي</div>
+              <div style="font-family: monospace; font-size: 10px; color: #475569;">${escapePrintValue(rv.user || '—')}</div>
             </div>
             <div class="signature-box">
               <div class="signature-title">المحاسب المالي للفرع</div>
@@ -706,7 +748,7 @@ const handlePrintRV = (rv: any) => {
           </div>
 
           <p style="text-align: center; font-size: 9px; color: #94a3b8; margin-top: 60px; border-top: 1px solid #e2e8f0; padding-top: 10px;">
-            تم التصدير والطباعة تلقائياً من نظام الإدارة المدرسية الموحد - مجمع مدارس الأسرة الحديثة الموحد
+            تم التصدير والطباعة تلقائياً من نظام الإدارة المدرسية الموحد - ${escapePrintValue(schoolName)}
           </p>
 
           <script>

@@ -1,6 +1,8 @@
 import { ArrowLeft, ArrowRightLeft, ArrowUpRight, Calculator, ChevronLeft, Coins, Download, FileSpreadsheet, FileText, Layers, Percent, Printer, RefreshCw, Settings, TrendingUp } from 'lucide-react';
 import React, { useState, Fragment } from 'react';
 import { AccountingContext } from '../../../components/GeneralLedgerPortal';
+import { resolveCostCenterStageLogoKey } from '../../../utils/schoolBranding';
+import { openPrintWindow } from '../../../utils/openPrintWindow';
 
 export const FinancialReportsTab = () => {
   const {
@@ -64,16 +66,67 @@ export const FinancialReportsTab = () => {
   findOriginalDocument, isAccountOrDescendant, getProcessedAccounts,
   formatCurrency, triggerNotification, logAction, addJvAuditEvent, costCenters: liveCostCenters,
   refreshCanonicalFinancialData, canonicalFinancialStatus, canonicalFinancialWriteMode,
+  selectedSchool, stages: activeStagesSource,
   currentUserIdentity
 } = React.useContext(AccountingContext);
 
 const configuredCostCenters = (Array.isArray(liveCostCenters) ? liveCostCenters : [])
   .filter((center: any) => center?.isActive !== false)
-  .map((center: any) => ({
-    id: center.id,
-    name: center.name || center.nameAr || center.code || center.id,
-    code: center.code || center.id
-  }));
+  .map((center: any) => {
+    const aliases = [center.id, center.code, center.costCenterId].map(value => String(value || '').trim().toLowerCase().replace(/^cc[_-]/, '').replace(/^stage[_-]/, ''));
+    const linkedStage = (Array.isArray(activeStagesSource) ? activeStagesSource : [])
+      .filter((stage: any) => stage?.isActive !== false)
+      .find((stage: any) => String(stage?.id || '') === String(center.stageId || '')
+        || [stage?.id, stage?.code, stage?.costCenterId].some((value: unknown) => aliases.includes(String(value || '').trim().toLowerCase().replace(/^cc[_-]/, '').replace(/^stage[_-]/, ''))));
+    return {
+      ...center,
+      type: center.type || linkedStage?.type,
+      name: center.name || center.nameAr || center.code || center.id,
+      code: center.code || center.id
+    };
+  });
+const normalizeCostCenterAlias = (value: unknown) => String(value ?? '')
+  .trim()
+  .toLocaleLowerCase()
+  .replace(/^cc[_-]/, '')
+  .replace(/^stage[_-]/, '');
+const getCostCenterAliases = (center: any) => [
+  center?.id,
+  center?.code,
+  center?.costCenterId,
+  center?.type,
+  center?.name,
+  center?.nameAr
+].map(normalizeCostCenterAlias).filter(Boolean);
+const escapeHtml = (value: unknown) => String(value ?? '').replace(/[&<>"']/g, character => {
+  if (character === '&') return '&amp;';
+  if (character === '<') return '&lt;';
+  if (character === '>') return '&gt;';
+  if (character === '"') return '&quot;';
+  return '&#39;';
+});
+const getSafeSchoolLogoSource = (value: unknown): string => {
+  const source = String(value || '').trim();
+  if (!source || source === '🏫') return '';
+  if (/^data:image\/(?:png|jpeg|webp);base64,[a-z0-9+/=\s]+$/i.test(source)) return source;
+  try {
+    const parsed = new URL(source, window.location.origin);
+    return parsed.protocol === 'https:' && !parsed.username && !parsed.password ? parsed.href : '';
+  } catch {
+    return '';
+  }
+};
+const getPrintableSchoolIdentity = (costCenter: unknown) => {
+  const stageLogoKey = resolveCostCenterStageLogoKey(costCenter, configuredCostCenters);
+  const logoSource = getSafeSchoolLogoSource(
+    (stageLogoKey && selectedSchool?.stageLogos?.[stageLogoKey]) || selectedSchool?.logo
+  );
+  const schoolName = escapeHtml(selectedSchool?.name || 'المدرسة');
+  const logoMarkup = logoSource
+    ? `<img class="print-school-logo" src="${escapeHtml(logoSource)}" alt="شعار ${schoolName}" onerror="this.hidden=true;this.nextElementSibling.hidden=false" /><span class="print-school-logo-fallback" hidden>🏫</span>`
+    : '<span class="print-school-logo-fallback">🏫</span>';
+  return { schoolName, logoMarkup };
+};
 const hasUnclassifiedPostings = getNormalizedJournalEntries().some((entry: any) =>
   Array.isArray(entry.lines) && entry.lines.some((line: any) => !String(line.costCenter || '').trim())
 );
@@ -368,7 +421,7 @@ const handleDrillDownToOriginalDocument = (jv: any) => {
 
           // Advanced customized print PDF handler
           const printReportPdf = (title: string, subTitle: string, tableHeaders: string[], tableRowsHtml: string, summaryHtml?: string) => {
-            const printWindow = window.open('', '_blank');
+            const printWindow = openPrintWindow();
             if (!printWindow) {
               triggerNotification('تعذر فتح نسخة PDF المنفصلة؛ سيتم استخدام طباعة التقرير الحالي مباشرة.', 'warning');
               window.print();
@@ -381,50 +434,101 @@ const handleDrillDownToOriginalDocument = (jv: any) => {
                 ? 'نسخة عرض UAT من snapshot — غير معتمدة للرقابة أو الإقفال'
                 : 'نسخة عرض غير معتمدة — snapshot للقراءة فقط';
 
-            const activeCostCenterLabel = filterCostCenter === 'all' ? 'جميع الأقسام والفروع' : (activeCostCenters.find(c => c.id === filterCostCenter)?.name || filterCostCenter);
+            const normalizedFilterCostCenter = normalizeCostCenterAlias(filterCostCenter);
+            const selectedCostCenter = filterCostCenter === 'all'
+              ? null
+              : configuredCostCenters.find(center => getCostCenterAliases(center).includes(normalizedFilterCostCenter)) || null;
+            const activeCostCenterLabel = filterCostCenter === 'all'
+              ? 'جميع الأقسام والفروع'
+              : selectedCostCenter?.name || filterCostCenter;
+            const stageLogoKey = filterCostCenter === 'all' || !selectedCostCenter
+              ? null
+              : resolveCostCenterStageLogoKey(filterCostCenter, configuredCostCenters);
+            const logoSource = getSafeSchoolLogoSource(
+              (stageLogoKey && selectedSchool?.stageLogos?.[stageLogoKey]) || selectedSchool?.logo
+            );
+            const schoolDisplayName = String(selectedSchool?.name || 'المدرسة');
+            const reportTitleText = escapeHtml(title);
+            const reportSubtitleText = escapeHtml(subTitle);
+            const certificationText = escapeHtml(reportCertificationLabel);
+            const schoolNameText = escapeHtml(schoolDisplayName);
+            const costCenterText = escapeHtml(activeCostCenterLabel);
+            const extractionDate = escapeHtml(new Date().toLocaleDateString('ar-SA'));
+            const reportPeriodText = escapeHtml(`من ${filterFromDate} إلى ${filterToDate}`);
+            const logoMarkup = logoSource
+              ? `<div class="masthead-logo-frame"><img class="masthead-logo" src="${escapeHtml(logoSource)}" alt="شعار ${schoolNameText}" onerror="this.hidden=true;this.nextElementSibling.hidden=false" /><span class="masthead-logo-fallback" hidden aria-label="لا يوجد شعار مرفوع">🏫</span></div>`
+              : '<div class="masthead-logo-frame"><span class="masthead-logo-fallback" aria-label="لا يوجد شعار مرفوع">🏫</span></div>';
 
             printWindow.document.write(`
               <html dir="rtl">
                 <head>
-                  <title>${title} - ERP Financials</title>
+                  <meta charset="utf-8" />
+                  <meta name="viewport" content="width=device-width, initial-scale=1" />
+                  <title>${reportTitleText} - ${schoolNameText}</title>
                   <style>
-                    @import url('https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700;800&display=swap');
-                    body { font-family: 'Inter', system-ui, sans-serif; padding: 40px; color: #0f172a; background-color: #ffffff; }
-                    .header { display: flex; justify-content: space-between; align-items: center; border-b: 2px solid #0f172a; padding-bottom: 15px; margin-bottom: 25px; }
-                    h1 { font-size: 18px; font-weight: 900; margin: 0; color: #1e3a8a; }
-                    h2 { font-size: 12px; color: #475569; margin: 0; margin-top: 5px; font-weight: bold; }
+                    @page { size: A4 landscape; margin: 12mm; }
+                    * { box-sizing: border-box; }
+                    body { margin: 0; padding: 12px; color: #10243b; background: #fff; font-family: Tahoma, Arial, sans-serif; }
+                    .masthead { display: grid; grid-template-columns: minmax(0, 1fr) minmax(0, 1.18fr) minmax(0, 1fr); align-items: stretch; gap: 18px; padding: 16px 18px; border: 1px solid #e7dfcf; border-top: 4px solid #b48a45; border-radius: 10px; background: #fffefa; box-shadow: 0 2px 8px rgba(16, 36, 59, .06); }
+                    .masthead-school, .masthead-title, .masthead-meta { min-width: 0; overflow-wrap: anywhere; }
+                    .masthead-school { display: flex; align-items: center; gap: 12px; }
+                    .masthead-logo-frame { display: grid; flex: 0 0 68px; width: 68px; height: 68px; place-items: center; }
+                    .masthead-logo { display: block; grid-area: 1 / 1; width: 100%; height: 100%; object-fit: contain; }
+                    .masthead-logo-fallback { grid-area: 1 / 1; width: 100%; height: 100%; place-items: center; border: 1px solid #e7dfcf; border-radius: 50%; background: #f8f2e6; color: #8a6a35; font-size: 28px; }
+                    .masthead-logo-fallback:not([hidden]) { display: grid; }
+                    .masthead-school-copy { min-width: 0; }
+                    .masthead-kicker { margin: 0 0 5px; color: #8a6a35; font-size: 9px; font-weight: 800; letter-spacing: .02em; }
+                    .masthead-school-name { margin: 0; color: #10243b; font-size: 15px; line-height: 1.55; font-weight: 900; overflow-wrap: anywhere; }
+                    .masthead-title { display: flex; flex-direction: column; align-items: center; justify-content: center; padding: 4px 14px; text-align: center; border-inline: 1px solid #ece6da; }
+                    .masthead-title h1 { margin: 0; color: #10243b; font-size: 17px; line-height: 1.55; font-weight: 900; overflow-wrap: anywhere; }
+                    .masthead-title p { margin: 5px 0 0; color: #596a7d; font-size: 10px; line-height: 1.7; font-weight: 600; overflow-wrap: anywhere; }
+                    .masthead-meta { display: grid; align-content: center; gap: 6px; margin: 0; padding: 0; list-style: none; color: #33465b; font-size: 9px; line-height: 1.55; }
+                    .masthead-meta li { min-width: 0; overflow-wrap: anywhere; }
+                    .masthead-meta strong { color: #10243b; }
+                    .certification { display: inline-block; max-width: 100%; padding: 3px 7px; border: 1px solid #d8c59f; border-radius: 999px; background: #f8f2e6; color: #73572b; font-size: 8px; line-height: 1.5; white-space: normal; }
+                    @media (max-width: 760px) {
+                      body { padding: 8px; }
+                      .masthead { grid-template-columns: minmax(0, 1fr); gap: 10px; padding: 13px; }
+                      .masthead-title { padding: 10px 0; border-inline: 0; border-block: 1px solid #ece6da; }
+                      .masthead-title h1 { font-size: 15px; }
+                      .masthead-meta { grid-template-columns: repeat(2, minmax(0, 1fr)); }
+                    }
+                    @media print {
+                      body { padding: 0; -webkit-print-color-adjust: exact; print-color-adjust: exact; }
+                      .masthead { break-inside: avoid; box-shadow: none; }
+                    }
                     table { width: 100%; border-collapse: collapse; font-size: 11px; margin-top: 15px; }
                     th { background-color: #f1f5f9; padding: 10px; border: 1px solid #cbd5e1; font-weight: bold; text-align: right; }
                     td { padding: 8px; border: 1px solid #e2e8f0; }
                     .totals-row { font-weight: bold; background-color: #f8fafc; border-top: 2px solid #0f172a; }
                     .system-tag { text-align: center; font-size: 9px; color: #94a3b8; margin-top: 60px; border-top: 1px solid #e2e8f0; padding-top: 10px; }
-                    .tag-badge { background-color: #eff6ff; color: #1e40af; border: 1px solid #bfdbfe; border-radius: 4px; padding: 3px 6px; font-size: 9px; font-weight: bold; }
                   </style>
                 </head>
                 <body>
-                  <div class="header">
-                    <div>
-                      <p style="font-size: 11px; font-weight: bold; margin: 0; color: #64748b;">الجمهورية الليبية / وزارة التعليم</p>
-                      <h1>مجمع المدارس التعليمي الموحد</h1>
-                      <h2>نظام الإدارة المالية الشامل والتدقيق المحاسبي ERP</h2>
-                    </div>
-                    <div style="text-align: left; font-size: 10px; font-weight: bold; line-height: 1.5;">
-                      <p>المستند: <span class="tag-badge">${reportCertificationLabel}</span></p>
-                      <p>تاريخ الاستخراج: ${new Date().toLocaleDateString('ar-SA')}</p>
-                      <p>الفترة المالية: من ${filterFromDate} إلى ${filterToDate}</p>
-                      <p>مركز التكلفة: ${activeCostCenterLabel}</p>
-                    </div>
-                  </div>
-                  
-                  <div style="text-align: center; margin-bottom: 25px;">
-                    <h2 style="font-size: 16px; font-weight: 900; color: #0f172a; margin: 0;">${title}</h2>
-                    <p style="font-size: 11px; color: #475569; margin: 5px 0 0 0;">${subTitle}</p>
-                  </div>
+                  <header class="masthead">
+                    <section class="masthead-school" aria-label="هوية المدرسة">
+                      ${logoMarkup}
+                      <div class="masthead-school-copy">
+                        <p class="masthead-kicker">التقرير المالي</p>
+                        <p class="masthead-school-name">${schoolNameText}</p>
+                      </div>
+                    </section>
+                    <section class="masthead-title" aria-label="عنوان التقرير">
+                      <h1>${reportTitleText}</h1>
+                      <p>${reportSubtitleText}</p>
+                    </section>
+                    <ul class="masthead-meta" aria-label="بيانات التقرير">
+                      <li><strong>التصنيف:</strong> <span class="certification">${certificationText}</span></li>
+                      <li><strong>تاريخ الاستخراج:</strong> ${extractionDate}</li>
+                      <li><strong>الفترة المالية:</strong> ${reportPeriodText}</li>
+                      <li><strong>مركز التكلفة:</strong> ${costCenterText}</li>
+                    </ul>
+                  </header>
 
                   <table>
                     <thead>
                       <tr>
-                        ${tableHeaders.map(h => `<th>${h}</th>`).join('')}
+                        ${tableHeaders.map(h => `<th>${escapeHtml(h)}</th>`).join('')}
                       </tr>
                     </thead>
                     <tbody>
@@ -1112,8 +1216,8 @@ const handleDrillDownToOriginalDocument = (jv: any) => {
                             </div>
                             <div className="bg-slate-50 border border-slate-200 p-4 rounded-xl shadow-sm hover:border-slate-300 transition-all">
                               <span className="text-[10px] text-slate-400 block mb-1 font-black">اسم المستخدم والمنشئ:</span>
-                              <span className="text-xs font-black text-slate-900 block truncate" title={jv.createdByUser || 'سليمان غازي'}>
-                                {jv.createdByUser || 'سليمان غازي'}
+                              <span className="text-xs font-black text-slate-900 block truncate" title={jv.createdByUser || '—'}>
+                                {jv.createdByUser || '—'}
                               </span>
                               <span className="inline-block mt-1.5 text-[9px] text-emerald-750 font-extrabold bg-emerald-50 border border-emerald-150 px-2 py-0.5 rounded-md">
                                 {reportsAreCanonical ? 'مراجع ومعتمد بالصلاحيات' : 'معروض من snapshot — غير معتمد'}
@@ -1211,11 +1315,11 @@ const handleDrillDownToOriginalDocument = (jv: any) => {
                               onClick={() => {
                                 const tableRows = jv.lines.map((l: any) => `
                                   <tr>
-                                    <td style="padding: 10px; border: 1px solid #ddd; font-family: monospace;">${l.accountCode}</td>
-                                    <td style="padding: 10px; border: 1px solid #ddd; font-weight: bold;">${l.accountName}</td>
+                                    <td style="padding: 10px; border: 1px solid #ddd; font-family: monospace;">${escapeHtml(l.accountCode)}</td>
+                                    <td style="padding: 10px; border: 1px solid #ddd; font-weight: bold;">${escapeHtml(l.accountName)}</td>
                                     <td style="padding: 10px; border: 1px solid #ddd; text-align: left; font-family: monospace;">${l.debit > 0 ? l.debit.toLocaleString() : '-'}</td>
                                     <td style="padding: 10px; border: 1px solid #ddd; text-align: left; font-family: monospace;">${l.credit > 0 ? l.credit.toLocaleString() : '-'}</td>
-                                    <td style="padding: 10px; border: 1px solid #ddd; color: #555;">${l.description || jv.description}</td>
+                                    <td style="padding: 10px; border: 1px solid #ddd; color: #555;">${escapeHtml(l.description || jv.description)}</td>
                                   </tr>
                                 `).join('');
                                 
@@ -1226,8 +1330,8 @@ const handleDrillDownToOriginalDocument = (jv: any) => {
                                   tableRows,
                                   `
                                     <div style="margin-top: 20px; font-weight: bold;">
-                                      <p>البيان العام للقيد: ${jv.description}</p>
-                                      <p>المحاسب المسؤول: ${jv.createdByUser || 'سليمان غازي'}</p>
+                                      <p>البيان العام للقيد: ${escapeHtml(jv.description)}</p>
+                                      <p>المحاسب المسؤول: ${escapeHtml(jv.createdByUser || '—')}</p>
                                       <p>حالة الترحيل بالأستاذ: ${reportsAreCanonical ? 'مرحل ترحيلاً معتمداً نهائياً ✓' : 'حالة تاريخية معروضة من snapshot — لا يمكن إثبات ترحيل كانوني جديد'}</p>
                                     </div>
                                   `
@@ -1273,6 +1377,10 @@ const handleDrillDownToOriginalDocument = (jv: any) => {
                             </div>
                           );
                         }
+                        const receiptStageLogoKey = resolveCostCenterStageLogoKey(rv.costCenter || rv.stage, configuredCostCenters);
+                        const receiptLogoSource = getSafeSchoolLogoSource(
+                          (receiptStageLogoKey && selectedSchool?.stageLogos?.[receiptStageLogoKey]) || selectedSchool?.logo
+                        );
 
                         return (
                           <div className="space-y-6 animate-fade-in">
@@ -1293,10 +1401,15 @@ const handleDrillDownToOriginalDocument = (jv: any) => {
                             <div className="bg-amber-50/15 border-4 border-double border-amber-200 rounded-3xl p-8 max-w-2xl mx-auto shadow-sm space-y-6 text-slate-800">
                               {/* Top Header of the Voucher */}
                               <div className="flex justify-between items-start border-b border-amber-200/50 pb-5">
-                                <div className="text-right space-y-1">
-                                  <h4 className="font-black text-slate-900 text-sm">مجمع المدارس الموحد</h4>
-                                  <p className="text-[10px] text-slate-500">منظومة ERP للحسابات العامة والرسوم الدراسية</p>
-                                  <p className="text-[9px] text-slate-400 font-semibold">مركز التكلفة: {activeCostCenters.find(c => c.id === rv.costCenter)?.name || rv.costCenter}</p>
+                                <div className="flex min-w-0 items-center gap-3 text-right">
+                                  {receiptLogoSource
+                                    ? <img src={receiptLogoSource} alt={`شعار ${selectedSchool?.name || 'المدرسة'}`} className="h-14 w-14 shrink-0 rounded-lg border border-amber-200 bg-white p-1 object-contain" />
+                                    : <span aria-label="شعار المدرسة" className="grid h-14 w-14 shrink-0 place-items-center rounded-full border border-amber-200 bg-white text-2xl">🏫</span>}
+                                  <div className="min-w-0 space-y-1">
+                                    <h4 className="break-words font-black text-slate-900 text-sm">{selectedSchool?.name || 'المدرسة'}</h4>
+                                    <p className="text-[10px] text-slate-500">منظومة ERP للحسابات العامة والرسوم الدراسية</p>
+                                    <p className="text-[9px] text-slate-400 font-semibold">مركز التكلفة: {activeCostCenters.find(c => c.id === rv.costCenter)?.name || rv.costCenter || rv.stage || 'غير محدد'}</p>
+                                  </div>
                                 </div>
                                 <div className="text-center bg-amber-500/10 border border-amber-500/20 px-5 py-2.5 rounded-xl">
                                   <span className="text-[11px] font-black text-amber-800 block">سند قبض نقدي / بنكي</span>
@@ -1350,12 +1463,12 @@ const handleDrillDownToOriginalDocument = (jv: any) => {
                                 </div>
                                 <div>
                                   <span>{reportsAreCanonical ? 'المحاسب المعتمد' : 'المستخدم المسجل'}</span>
-                                  <span className="block mt-4 font-black text-slate-800">{rv.user || 'سليمان غازي'}</span>
+                                  <span className="block mt-4 font-black text-slate-800">{rv.user || '—'}</span>
                                 </div>
                                 <div>
                                   <span>الختم الرسمي للمؤسسة</span>
                                   <div className="w-16 h-16 rounded-full border border-dashed border-amber-300 mx-auto mt-2 flex items-center justify-center text-[8px] text-amber-500 font-bold rotate-12">
-                                    مجمع المدارس
+                                    ختم المدرسة
                                   </div>
                                 </div>
                               </div>
@@ -1365,48 +1478,65 @@ const handleDrillDownToOriginalDocument = (jv: any) => {
                             <div className="flex justify-center gap-2">
                               <button
                                 onClick={() => {
-                                  const printWindow = window.open('', '_blank');
-                                  if (!printWindow) return;
+                                  const printWindow = openPrintWindow();
+                                  if (!printWindow) {
+                                    triggerNotification('تعذر فتح نافذة الطباعة؛ اسمح بالنوافذ المنبثقة ثم أعد المحاولة.', 'warning');
+                                    return;
+                                  }
+                                  const schoolIdentity = getPrintableSchoolIdentity(rv.costCenter || rv.stage);
+                                  const receiptCostCenter = activeCostCenters.find(center => center.id === rv.costCenter)?.name || rv.costCenter || rv.stage || 'غير محدد';
                                   printWindow.document.write(`
                                     <html dir="rtl">
                                       <head>
-                                        <title>سند قبض رقم ${rv.id}</title>
+                                        <meta charset="utf-8" />
+                                        <title>سند قبض رقم ${escapeHtml(rv.id)}</title>
                                         <style>
-                                          body { font-family: system-ui, sans-serif; padding: 40px; text-align: right; }
-                                          .receipt { border: 5px double #f59e0b; padding: 30px; border-radius: 20px; background-color: #fffbeb; }
-                                          .header { display: flex; justify-content: space-between; border-b: 2px solid #f59e0b; padding-bottom: 20px; }
-                                          .row { display: flex; border-b: 1px dashed #ccc; padding: 12px 0; font-size: 14px; }
+                                          @page { size: A4 portrait; margin: 12mm; }
+                                          * { box-sizing: border-box; }
+                                          body { margin: 0; font-family: Tahoma, Arial, sans-serif; text-align: right; color: #172033; }
+                                          .receipt { border: 4px double #f59e0b; padding: 22px; border-radius: 16px; background: #fffbeb; }
+                                          .header { display: flex; align-items: center; justify-content: space-between; gap: 18px; border-bottom: 2px solid #f59e0b; padding-bottom: 16px; }
+                                          .school-identity { display: flex; align-items: center; gap: 12px; min-width: 0; }
+                                          .print-school-logo { width: 58px; height: 58px; object-fit: contain; border: 1px solid #ead7ae; border-radius: 10px; background: #fff; }
+                                          .print-school-logo-fallback { display: inline-grid; width: 58px; height: 58px; place-items: center; border: 1px solid #ead7ae; border-radius: 50%; background: #fff; font-size: 26px; }
+                                          .print-school-logo-fallback[hidden] { display: none; }
+                                          .school-name { margin: 0; font-size: 17px; font-weight: 900; overflow-wrap: anywhere; }
+                                          .doc-meta { text-align: left; font-size: 11px; line-height: 1.7; }
+                                          .row { display: flex; border-bottom: 1px dashed #ccc; padding: 12px 0; font-size: 14px; }
                                           .label { width: 150px; color: #666; font-weight: bold; }
                                           .val { font-weight: bold; color: #111; }
                                           .foot { display: flex; justify-content: space-between; margin-top: 40px; font-size: 12px; }
+                                          @media print { .receipt { break-inside: avoid; -webkit-print-color-adjust: exact; print-color-adjust: exact; } }
                                         </style>
                                       </head>
                                       <body>
                                         <div class="receipt">
                                           <div class="header">
-                                            <div>
-                                              <h3>مجمع المدارس الموحد</h3>
-                                            <p>${reportsAreCanonical ? 'سند قبض مالي رسمي معتمد' : 'نسخة عرض لسند قبض — غير معتمدة'} رقم: ${rv.id}</p>
+                                            <div class="school-identity">
+                                              ${schoolIdentity.logoMarkup}
+                                              <div><h3 class="school-name">${schoolIdentity.schoolName}</h3>
+                                              <p>${reportsAreCanonical ? 'سند قبض مالي رسمي معتمد' : 'نسخة عرض لسند قبض — غير معتمدة'} رقم: ${escapeHtml(rv.id)}</p></div>
                                             </div>
-                                            <div>
-                                              <p>التاريخ: ${rv.date}</p>
-                                              <p>طريقة الدفع: ${rv.paymentMethod}</p>
+                                            <div class="doc-meta">
+                                              <p>التاريخ: ${escapeHtml(rv.date)}</p>
+                                              <p>طريقة الدفع: ${escapeHtml(rv.paymentMethod)}</p>
                                             </div>
                                           </div>
-                                          <div class="row"><div class="label">استلمنا من السيد/ة:</div><div class="val">${rv.receivedFrom}</div></div>
-                                          <div class="row"><div class="label">مبلغا وقدره:</div><div class="val" style="color: green; font-size: 16px;">${rv.amount.toLocaleString()} د.ل</div></div>
-                                          <div class="row"><div class="label">وذلك مقابل:</div><div class="val">${rv.against}</div></div>
-                                          <div class="row"><div class="label">مركز التكلفة:</div><div class="val">${rv.stage}</div></div>
+                                          <div class="row"><div class="label">استلمنا من السيد/ة:</div><div class="val">${escapeHtml(rv.receivedFrom)}</div></div>
+                                          <div class="row"><div class="label">مبلغا وقدره:</div><div class="val" style="color: green; font-size: 16px;">${escapeHtml(Number(rv.amount || 0).toLocaleString('ar-SA'))} ${escapeHtml(currency)}</div></div>
+                                          <div class="row"><div class="label">وذلك مقابل:</div><div class="val">${escapeHtml(rv.against)}</div></div>
+                                          <div class="row"><div class="label">مركز التكلفة:</div><div class="val">${escapeHtml(receiptCostCenter)}</div></div>
                                           <div class="foot">
                                             <div>توقيع المستلم</div>
-                                            <div>المحاسب المسؤول: ${rv.user || 'سليمان غازي'}</div>
+                                            <div>المحاسب المسؤول: ${escapeHtml(rv.user || '—')}</div>
                                             <div>الختم الرسمي</div>
                                           </div>
                                         </div>
+                                        <script>window.onload=function(){window.focus();window.print();};</script>
                                       </body>
                                     </html>
                                   `);
-                                  printWindow.print();
+                                  printWindow.document.close();
                                 }}
                                 className="bg-amber-600 hover:bg-amber-700 text-white font-extrabold px-6 py-2.5 rounded-xl text-xs flex items-center gap-1.5 cursor-pointer shadow transition-all active:scale-95"
                               >
@@ -1429,6 +1559,10 @@ const handleDrillDownToOriginalDocument = (jv: any) => {
                             </div>
                           );
                         }
+                        const paymentStageLogoKey = resolveCostCenterStageLogoKey(pv.costCenter || pv.stage, configuredCostCenters);
+                        const paymentLogoSource = getSafeSchoolLogoSource(
+                          (paymentStageLogoKey && selectedSchool?.stageLogos?.[paymentStageLogoKey]) || selectedSchool?.logo
+                        );
 
                         return (
                           <div className="space-y-6 animate-fade-in">
@@ -1449,10 +1583,15 @@ const handleDrillDownToOriginalDocument = (jv: any) => {
                             <div className="bg-indigo-50/15 border-4 border-double border-indigo-200 rounded-3xl p-8 max-w-2xl mx-auto shadow-sm space-y-6 text-slate-800">
                               {/* Top Header of the Voucher */}
                               <div className="flex justify-between items-start border-b border-indigo-200/50 pb-5">
-                                <div className="text-right space-y-1">
-                                  <h4 className="font-black text-slate-900 text-sm">مجمع المدارس الموحد</h4>
-                                  <p className="text-[10px] text-slate-500">منظومة ERP للحسابات العامة والرسوم الدراسية</p>
-                                  <p className="text-[9px] text-slate-400 font-semibold">مركز التكلفة: {activeCostCenters.find(c => c.id === pv.costCenter)?.name || pv.costCenter}</p>
+                                <div className="flex min-w-0 items-center gap-3 text-right">
+                                  {paymentLogoSource
+                                    ? <img src={paymentLogoSource} alt={`شعار ${selectedSchool?.name || 'المدرسة'}`} className="h-14 w-14 shrink-0 rounded-lg border border-indigo-200 bg-white p-1 object-contain" />
+                                    : <span aria-label="شعار المدرسة" className="grid h-14 w-14 shrink-0 place-items-center rounded-full border border-indigo-200 bg-white text-2xl">🏫</span>}
+                                  <div className="min-w-0 space-y-1">
+                                    <h4 className="break-words font-black text-slate-900 text-sm">{selectedSchool?.name || 'المدرسة'}</h4>
+                                    <p className="text-[10px] text-slate-500">منظومة ERP للحسابات العامة والرسوم الدراسية</p>
+                                    <p className="text-[9px] text-slate-400 font-semibold">مركز التكلفة: {activeCostCenters.find(c => c.id === pv.costCenter)?.name || pv.costCenter || pv.stage || 'غير محدد'}</p>
+                                  </div>
                                 </div>
                                 <div className="text-center bg-indigo-500/10 border border-indigo-500/20 px-5 py-2.5 rounded-xl">
                                   <span className="text-[11px] font-black text-indigo-800 block">{reportsAreCanonical ? 'سند صرف مالي رسمي معتمد' : 'نسخة عرض لسند صرف'}</span>
@@ -1508,12 +1647,12 @@ const handleDrillDownToOriginalDocument = (jv: any) => {
                                 </div>
                                 <div>
                                   <span>المدير المالي</span>
-                                  <span className="block mt-4 font-black text-slate-800">سليمان غازي</span>
+                                  <span className="block mt-4 font-black text-slate-800">{pv.user || '—'}</span>
                                 </div>
                                 <div>
                                   <span>الختم الرسمي للمجمع</span>
                                   <div className="w-16 h-16 rounded-full border border-dashed border-indigo-300 mx-auto mt-2 flex items-center justify-center text-[8px] text-indigo-500 font-bold -rotate-12">
-                                    مجمع المدارس
+                                    ختم المدرسة
                                   </div>
                                 </div>
                               </div>
@@ -1523,47 +1662,64 @@ const handleDrillDownToOriginalDocument = (jv: any) => {
                             <div className="flex justify-center gap-2">
                               <button
                                 onClick={() => {
-                                  const printWindow = window.open('', '_blank');
-                                  if (!printWindow) return;
+                                  const printWindow = openPrintWindow();
+                                  if (!printWindow) {
+                                    triggerNotification('تعذر فتح نافذة الطباعة؛ اسمح بالنوافذ المنبثقة ثم أعد المحاولة.', 'warning');
+                                    return;
+                                  }
+                                  const schoolIdentity = getPrintableSchoolIdentity(pv.costCenter || pv.stage);
+                                  const paymentCostCenter = activeCostCenters.find(center => center.id === pv.costCenter)?.name || pv.costCenter || pv.stage || 'غير محدد';
                                   printWindow.document.write(`
                                     <html dir="rtl">
                                       <head>
-                                        <title>سند صرف رقم ${pv.id}</title>
+                                        <meta charset="utf-8" />
+                                        <title>سند صرف رقم ${escapeHtml(pv.id)}</title>
                                         <style>
-                                          body { font-family: system-ui, sans-serif; padding: 40px; text-align: right; }
-                                          .receipt { border: 5px double #4f46e5; padding: 30px; border-radius: 20px; background-color: #faf5ff; }
-                                          .header { display: flex; justify-content: space-between; border-b: 2px solid #4f46e5; padding-bottom: 20px; }
-                                          .row { display: flex; border-b: 1px dashed #ccc; padding: 12px 0; font-size: 14px; }
+                                          @page { size: A4 portrait; margin: 12mm; }
+                                          * { box-sizing: border-box; }
+                                          body { margin: 0; font-family: Tahoma, Arial, sans-serif; text-align: right; color: #172033; }
+                                          .receipt { border: 4px double #4f46e5; padding: 22px; border-radius: 16px; background: #faf5ff; }
+                                          .header { display: flex; align-items: center; justify-content: space-between; gap: 18px; border-bottom: 2px solid #4f46e5; padding-bottom: 16px; }
+                                          .school-identity { display: flex; align-items: center; gap: 12px; min-width: 0; }
+                                          .print-school-logo { width: 58px; height: 58px; object-fit: contain; border: 1px solid #c7c5f4; border-radius: 10px; background: #fff; }
+                                          .print-school-logo-fallback { display: inline-grid; width: 58px; height: 58px; place-items: center; border: 1px solid #c7c5f4; border-radius: 50%; background: #fff; font-size: 26px; }
+                                          .print-school-logo-fallback[hidden] { display: none; }
+                                          .school-name { margin: 0; font-size: 17px; font-weight: 900; overflow-wrap: anywhere; }
+                                          .doc-meta { text-align: left; font-size: 11px; line-height: 1.7; }
+                                          .row { display: flex; border-bottom: 1px dashed #ccc; padding: 12px 0; font-size: 14px; }
                                           .label { width: 150px; color: #666; font-weight: bold; }
                                           .val { font-weight: bold; color: #111; }
                                           .foot { display: flex; justify-content: space-between; margin-top: 40px; font-size: 12px; }
+                                          @media print { .receipt { break-inside: avoid; -webkit-print-color-adjust: exact; print-color-adjust: exact; } }
                                         </style>
                                       </head>
                                       <body>
                                         <div class="receipt">
                                           <div class="header">
-                                            <div>
-                                              <h3>مجمع المدارس الموحد</h3>
-                                            <p>${reportsAreCanonical ? 'سند صرف مالي رسمي معتمد' : 'نسخة عرض لسند صرف — غير معتمدة'} رقم: ${pv.id}</p>
+                                            <div class="school-identity">
+                                              ${schoolIdentity.logoMarkup}
+                                              <div><h3 class="school-name">${schoolIdentity.schoolName}</h3>
+                                              <p>${reportsAreCanonical ? 'سند صرف مالي رسمي معتمد' : 'نسخة عرض لسند صرف — غير معتمدة'} رقم: ${escapeHtml(pv.id)}</p></div>
                                             </div>
-                                            <div>
-                                              <p>التاريخ: ${pv.date}</p>
-                                              <p>مركز التكلفة: ${pv.costCenter}</p>
+                                            <div class="doc-meta">
+                                              <p>التاريخ: ${escapeHtml(pv.date)}</p>
+                                              <p>مركز التكلفة: ${escapeHtml(paymentCostCenter)}</p>
                                             </div>
                                           </div>
-                                          <div class="row"><div class="label">صرفنا إلى السيد/ة:</div><div class="val">${pv.beneficiary}</div></div>
-                                          <div class="row"><div class="label">مبلغا وقدره:</div><div class="val" style="color: red; font-size: 16px;">${pv.amount.toLocaleString()} د.ل</div></div>
-                                          <div class="row"><div class="label">وذلك مقابل:</div><div class="val">${pv.against}</div></div>
+                                          <div class="row"><div class="label">صرفنا إلى السيد/ة:</div><div class="val">${escapeHtml(pv.beneficiary)}</div></div>
+                                          <div class="row"><div class="label">مبلغا وقدره:</div><div class="val" style="color: red; font-size: 16px;">${escapeHtml(Number(pv.amount || 0).toLocaleString('ar-SA'))} ${escapeHtml(currency)}</div></div>
+                                          <div class="row"><div class="label">وذلك مقابل:</div><div class="val">${escapeHtml(pv.against)}</div></div>
                                           <div class="foot">
                                             <div>توقيع المستلم</div>
-                                            <div>المدير المالي: سليمان غازي</div>
+                                            <div>المدير المالي</div>
                                             <div>الختم المالي</div>
                                           </div>
                                         </div>
+                                        <script>window.onload=function(){window.focus();window.print();};</script>
                                       </body>
                                     </html>
                                   `);
-                                  printWindow.print();
+                                  printWindow.document.close();
                                 }}
                                 className="bg-indigo-600 hover:bg-indigo-700 text-white font-extrabold px-6 py-2.5 rounded-xl text-xs flex items-center gap-1.5 cursor-pointer shadow transition-all active:scale-95"
                               >
@@ -1932,7 +2088,7 @@ const handleDrillDownToOriginalDocument = (jv: any) => {
                                   </tr>
                                 `;
                               });
-                              printReportPdf('ميزان المراجعة الموسع بالأرصدة والحركات (6 أعمدة)', 'تقرير قانوني لمطابقة الأرصدة والحركات والتدويرات الدفترية لمجمع المدارس.', ['رمز', 'اسم الحساب المحاسبي', 'افتتاحي مدين', 'افتتاحي دائن', 'حركة مدين', 'حركة دائن', 'ختامي مدين', 'ختامي دائن'], rowsHtml);
+                              printReportPdf('ميزان المراجعة الموسع بالأرصدة والحركات (6 أعمدة)', 'تقرير قانوني لمطابقة الأرصدة والحركات والتدويرات الدفترية للمدرسة ومراكز تكلفتها.', ['رمز', 'اسم الحساب المحاسبي', 'افتتاحي مدين', 'افتتاحي دائن', 'حركة مدين', 'حركة دائن', 'ختامي مدين', 'ختامي دائن'], rowsHtml);
                             }
                           }}
                           className="bg-indigo-650 hover:bg-indigo-700 text-white font-bold text-[11px] px-3 py-1.5 rounded-lg flex items-center gap-1.5 cursor-pointer"

@@ -22,6 +22,8 @@ import { CalcToolsTab } from '../modules/accounting/presentation/CalcToolsTab';
 import { AccountMappingsTab } from '../modules/accounting/presentation/AccountMappingsTab';
 import { buildAccountingDimensions } from '../modules/accounting/domain/accountingDimensions';
 import { writeXlsxBuffer } from '../utils/ExcelWorkbookUtils';
+import { resolveCostCenterStageLogoKey } from '../utils/schoolBranding';
+import { openPrintWindow } from '../utils/openPrintWindow';
 export { AccountingContext };
 export type { AccountNode };
 
@@ -218,22 +220,44 @@ export default function GeneralLedgerPortal({
       triggerNotification('تعذر الطباعة: السند المحدد غير موثق.', 'warning');
       return;
     }
-    const printWindow = window.open('', '_blank', 'noopener,noreferrer');
+    const printWindow = openPrintWindow();
     if (!printWindow) {
       triggerNotification('تعذر فتح نافذة الطباعة. اسمح بالنوافذ المنبثقة للموقع ثم أعد المحاولة.', 'warning');
       return;
     }
     const safe = (value: unknown) => String(value ?? '—').replace(/[&<>"']/g, char => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[char] || char));
-    const stageKey = String(voucher.costCenter || voucher.stage || '').trim().toLowerCase().replace(/^cc[_-]/, '');
-    const configuredLogo = String(selectedSchool?.stageLogos?.[stageKey] || (['primary', 'middle', 'secondary'].includes(stageKey) ? `${window.location.origin}/branding/stages/${stageKey}.png` : '') || selectedSchool?.logo || '').trim();
-    const logoMarkup = /^(https:\/\/|data:image\/)/i.test(configuredLogo)
-      ? `<img class="school-logo" src="${safe(configuredLogo)}" alt="شعار المدرسة" onerror="this.style.display='none'" />`
-      : `<div class="school-logo school-logo-fallback">${safe(configuredLogo || '🏫')}</div>`;
-    printWindow.document.write(`<!doctype html><html dir="rtl"><head><meta charset="utf-8"><title>${safe(title)} ${safe(voucher.id)}</title><style>body{font-family:Arial,sans-serif;padding:32px;color:#172033}.print-header{display:flex;align-items:center;gap:12px;border-bottom:2px solid #d4af37;padding-bottom:12px}.school-logo{width:62px;height:62px;object-fit:contain;border:1px solid #ccd3df;border-radius:10px;background:#fff}.school-logo-fallback{display:flex;align-items:center;justify-content:center;font-size:28px}.school-name{font-size:18px;font-weight:900}h1{border-bottom:2px solid #d4af37;padding-bottom:12px}table{width:100%;border-collapse:collapse;margin-top:24px}td{border:1px solid #ccd3df;padding:10px}td:first-child{font-weight:bold;background:#f8f5ee;width:35%}@media print{button{display:none}}</style></head><body><div class="print-header">${logoMarkup}<div class="school-name">${safe(selectedSchool?.name || 'المدرسة')}</div></div><h1>${safe(title)}</h1><table><tr><td>رقم السند</td><td>${safe(voucher.id)}</td></tr><tr><td>التاريخ</td><td>${safe(voucher.date)}</td></tr><tr><td>المبلغ</td><td>${safe(voucher.amount)} ${safe(currency)}</td></tr><tr><td>البيان</td><td>${safe(voucher.against)}</td></tr><tr><td>الحساب</td><td>${safe(voucher.receivingAccount || voucher.paidFromAccount || voucher.paidToAccount)}</td></tr><tr><td>الحالة</td><td>${safe(voucher.status)}</td></tr></table><script>window.onload=()=>window.print();</script></body></html>`);
+    const voucherStageLogoKey = resolveCostCenterStageLogoKey(
+      voucher.costCenter || voucher.stage,
+      costCenters?.length ? costCenters : undefined
+    );
+    const configuredLogo = String((voucherStageLogoKey && selectedSchool?.stageLogos?.[voucherStageLogoKey]) || selectedSchool?.logo || '').trim();
+    const safeLogo = /^(https:\/\/|data:image\/(?:png|jpeg|webp);base64,[a-z0-9+/=\s]+$)/i.test(configuredLogo) ? configuredLogo : '';
+    const logoMarkup = safeLogo
+      ? `<img class="school-logo" src="${safe(safeLogo)}" alt="شعار المدرسة" onerror="this.style.display='none'" />`
+      : '<div class="school-logo school-logo-fallback">🏫</div>';
+    const costCenterCode = String(voucher.costCenter || '').replace(/^CC[_-]/i, '');
+    const costCenterLabel = costCenters?.find((center: any) => [center.id, center.code, center.costCenterId].some((value: unknown) => String(value ?? '').toLowerCase() === String(voucher.costCenter || '').toLowerCase()))?.name || voucher.stage || costCenterCode || 'غير محدد';
+    printWindow.document.write(`<!doctype html><html dir="rtl" lang="ar"><head><meta charset="utf-8"><title>${safe(title)} ${safe(voucher.id)}</title><style>body{font-family:Arial,sans-serif;padding:32px;color:#172033}.print-header{display:flex;align-items:center;gap:12px;border-bottom:2px solid #d4af37;padding-bottom:12px}.school-logo{width:62px;height:62px;object-fit:contain;border:1px solid #ccd3df;border-radius:10px;background:#fff}.school-logo-fallback{display:flex;align-items:center;justify-content:center;font-size:28px}.school-name{font-size:18px;font-weight:900}.school-meta{color:#64748b;font-size:11px;margin-top:5px}h1{border-bottom:2px solid #d4af37;padding-bottom:12px}table{width:100%;border-collapse:collapse;margin-top:24px}td{border:1px solid #ccd3df;padding:10px}td:first-child{font-weight:bold;background:#f8f5ee;width:35%}@media print{button{display:none}}</style></head><body><div class="print-header">${logoMarkup}<div><div class="school-name">${safe(selectedSchool?.name || 'المدرسة')}</div><div class="school-meta">${safe(selectedSchool?.licenseNumber || 'غير محدد')} · مركز التكلفة: ${safe(costCenterLabel)}${costCenterCode ? ` (CC_${safe(costCenterCode)})` : ''}</div></div></div><h1>${safe(title)}</h1><table><tr><td>رقم السند</td><td>${safe(voucher.id)}</td></tr><tr><td>التاريخ</td><td>${safe(voucher.date)}</td></tr><tr><td>المبلغ</td><td>${safe(voucher.amount)} ${safe(currency)}</td></tr><tr><td>البيان</td><td>${safe(voucher.against)}</td></tr><tr><td>الحساب</td><td>${safe(voucher.receivingAccount || voucher.paidFromAccount || voucher.paidToAccount)}</td></tr><tr><td>الحالة</td><td>${safe(voucher.status)}</td></tr></table><script>window.onload=()=>window.print();</script></body></html>`);
     printWindow.document.close();
   };
   const handlePrintReceiptDirect = (voucher: any) => printVoucherDirect(voucher, 'سند قبض موثق');
   const handlePrintPaymentDirect = (voucher: any) => printVoucherDirect(voucher, 'سند صرف موثق');
+  const getVoucherBranding = (voucher: any) => {
+    const logoKey = resolveCostCenterStageLogoKey(voucher?.costCenter || voucher?.schoolStage || voucher?.stageKey || voucher?.stage, costCenters?.length ? costCenters : undefined);
+    const rawLogo = String((logoKey && selectedSchool?.stageLogos?.[logoKey]) || selectedSchool?.logo || '').trim();
+    const logo = /^(https:\/\/|data:image\/(?:png|jpeg|webp);base64,[a-z0-9+/=\s]+$)/i.test(rawLogo) ? rawLogo : '';
+    const centerKey = String(voucher?.costCenter || '').replace(/^CC[_-]/i, '');
+    const center = costCenters?.find((item: any) => [item.id, item.code, item.costCenterId].some((value: unknown) => String(value ?? '').toLowerCase() === String(voucher?.costCenter || '').toLowerCase()));
+    return {
+      schoolName: selectedSchool?.name || voucher?.school || 'المدرسة',
+      licenseNumber: selectedSchool?.licenseNumber || 'غير محدد',
+      costCenterLabel: center?.name || voucher?.stage || centerKey || 'غير محدد',
+      costCenterCode: centerKey,
+      logo
+    };
+  };
+  const activeJournalCostCenters = [...new Set((activeJvState?.lines || []).map((line: any) => String(line?.costCenter || '').trim()).filter(Boolean))];
+  const journalPreviewBranding = getVoucherBranding({ costCenter: activeJournalCostCenters.length === 1 ? activeJournalCostCenters[0] : '' });
 
   const handlePrintDepreciationSchedule = (assetId?: string) => {
     if (!canonicalFinancialStatus || canonicalFinancialStatus !== 'ready') {
@@ -1961,10 +1985,19 @@ export default function GeneralLedgerPortal({
 
   // Print Tree Layout helper
   const handlePrintCoaTree = () => {
-    const printWindow = window.open('', '_blank');
+    const printWindow = openPrintWindow();
     if (!printWindow) return;
 
     const orderedAccounts = getOrderedAccounts();
+    const safeHtml = (value: unknown) => String(value ?? '—').replace(/[&<>"']/g, char => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[char] || char));
+    const schoolName = String(selectedSchool?.name || 'المدرسة');
+    const rawSchoolLogo = String(selectedSchool?.logo || '').trim();
+    const safeSchoolLogo = /^(https:\/\/|data:image\/(?:png|jpeg|webp);base64,[a-z0-9+/=\s]+$)/i.test(rawSchoolLogo)
+      ? rawSchoolLogo
+      : '';
+    const schoolLogoMarkup = safeSchoolLogo
+      ? `<img class="school-logo" src="${safeHtml(safeSchoolLogo)}" alt="شعار ${safeHtml(schoolName)}" onerror="this.hidden=true;this.nextElementSibling.hidden=false" /><span class="school-logo-fallback" hidden>🏫</span>`
+      : '<span class="school-logo-fallback">🏫</span>';
 
     const rowsHtml = orderedAccounts.map(acc => {
       const levelClass = acc.level === 1 ? 'level-1' : acc.level === 2 ? 'level-2' : 'level-3';
@@ -1975,11 +2008,11 @@ export default function GeneralLedgerPortal({
       
       return `
         <tr class="${levelClass}">
-          <td style="font-family: monospace; color: #4f46e5;">${acc.code}</td>
-          <td style="${indentStyle}">${acc.nameAr}</td>
-          <td><span class="type-badge ${typeClass}">${acc.type}</span></td>
-          <td>${nature}</td>
-          <td class="balance">${balanceFormatted}</td>
+          <td style="font-family: monospace; color: #4f46e5;">${safeHtml(acc.code)}</td>
+          <td style="${indentStyle}">${safeHtml(acc.nameAr)}</td>
+          <td><span class="type-badge ${typeClass}">${safeHtml(acc.type)}</span></td>
+          <td>${safeHtml(nature)}</td>
+          <td class="balance">${safeHtml(balanceFormatted)}</td>
         </tr>
       `;
     }).join('\n');
@@ -1987,11 +2020,18 @@ export default function GeneralLedgerPortal({
     printWindow.document.write(`
       <html dir="rtl">
         <head>
-          <title>دليل شجرة الحسابات الموحدة - مجمع المدارس الحديثة</title>
+          <meta charset="utf-8" />
+          <title>دليل شجرة الحسابات الموحدة - ${safeHtml(schoolName)}</title>
           <style>
-            body { font-family: 'Inter', system-ui, sans-serif; padding: 40px; color: #1e293b; }
-            h1 { text-align: center; font-size: 20px; font-weight: bold; margin-bottom: 5px; }
-            h2 { text-align: center; font-size: 14px; color: #64748b; margin-bottom: 30px; font-weight: normal; }
+            @page { size: A4 landscape; margin: 12mm; }
+            * { box-sizing: border-box; }
+            body { font-family: Tahoma, Arial, sans-serif; margin: 0; color: #1e293b; }
+            .school-heading { display: flex; align-items: center; gap: 14px; border-bottom: 2px solid #c5a15d; padding: 0 0 14px; }
+            .school-logo { width: 60px; height: 60px; object-fit: contain; }
+            .school-logo-fallback { display: inline-grid; width: 60px; height: 60px; place-items: center; border: 1px solid #ddd2bb; border-radius: 50%; background: #faf7f0; font-size: 28px; }
+            .school-logo-fallback[hidden] { display: none; }
+            h1 { font-size: 20px; font-weight: 900; margin: 0 0 5px; overflow-wrap: anywhere; }
+            h2 { font-size: 13px; color: #64748b; margin: 0; font-weight: normal; }
             table { width: 100%; border-collapse: collapse; margin-top: 20px; font-size: 12px; }
             th { background-color: #f1f5f9; padding: 12px 10px; text-align: right; border-bottom: 2px solid #cbd5e1; font-weight: bold; }
             td { padding: 10px; border-bottom: 1px solid #e2e8f0; }
@@ -2006,8 +2046,10 @@ export default function GeneralLedgerPortal({
           </style>
         </head>
         <body>
-          <h1>مجمع المدارس التعليمي الموحد</h1>
-          <h2>تقرير الدليل العام لشجرة الحسابات ومراكز التكلفة للفروع</h2>
+          <header class="school-heading">
+            ${schoolLogoMarkup}
+            <div><h1>${safeHtml(schoolName)}</h1><h2>تقرير الدليل العام لشجرة الحسابات ومراكز التكلفة للفروع</h2></div>
+          </header>
           <hr />
           <table>
             <thead>
@@ -2024,15 +2066,15 @@ export default function GeneralLedgerPortal({
             </tbody>
           </table>
           <p style="text-align: center; font-size: 10px; color: #94a3b8; margin-top: 50px;">تم التصدير والطباعة تلقائياً من نظام الإدارة المدرسية الموحد</p>
+          <script>window.onload=function(){window.focus();window.print();};</script>
         </body>
       </html>
     `);
     printWindow.document.close();
-    printWindow.print();
   };
 
   const handlePrintJvDirect = (jv: any, template: string) => {
-    const printWindow = window.open('', '_blank');
+    const printWindow = openPrintWindow();
     if (!printWindow) {
       triggerNotification('❌ عذراً، تم حظر فتح نافذة الطباعة التلقائية بواسطة متصفحك. يرجى تفعيل النوافذ المنبثقة للرابط الحالي.', 'warning');
       return;
@@ -2042,10 +2084,27 @@ export default function GeneralLedgerPortal({
       ? 'سند حركة مستندي (سرية وحجب المبالغ)' 
       : 'سند قيد تسوية وقيد يومية مركّب ومعدل';
     const safePrintValue = (value: unknown) => String(value ?? '—').replace(/[&<>"']/g, char => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[char] || char));
-    const configuredLogo = String(selectedSchool?.logo || '').trim();
-    const logoMarkup = /^(https:\/\/|data:image\/)/i.test(configuredLogo)
-      ? `<img class="school-logo" src="${safePrintValue(configuredLogo)}" alt="شعار المدرسة" onerror="this.style.display='none'" />`
-      : `<div class="school-logo school-logo-fallback" aria-label="شعار المدرسة">${safePrintValue(configuredLogo || '🏫')}</div>`;
+    const journalLines = Array.isArray(jv?.lines) ? jv.lines : [];
+    const journalCostCenters = [...new Set(journalLines
+      .map((line: any) => String(line?.costCenter || '').trim())
+      .filter(Boolean))];
+    const singleJournalCostCenter = journalLines.length > 0
+      && journalCostCenters.length === 1
+      && journalLines.every((line: any) => String(line?.costCenter || '').trim() === journalCostCenters[0])
+      ? journalCostCenters[0]
+      : '';
+    const journalStageLogoKey = singleJournalCostCenter
+      ? resolveCostCenterStageLogoKey(singleJournalCostCenter, costCenters?.length ? costCenters : undefined)
+      : null;
+    const configuredLogo = String((journalStageLogoKey && selectedSchool?.stageLogos?.[journalStageLogoKey]) || selectedSchool?.logo || '').trim();
+    const journalCostCenterLabel = singleJournalCostCenter
+      ? costCenters?.find((center: any) => [center.id, center.code, center.costCenterId].some((value: unknown) => String(value ?? '').trim().toLowerCase() === String(singleJournalCostCenter).toLowerCase()))?.name
+        || singleJournalCostCenter
+      : journalCostCenters.length > 1 ? 'مراكز تكلفة متعددة' : 'غير محدد';
+    const safeJournalLogo = /^(https:\/\/|data:image\/(?:png|jpeg|webp);base64,[a-z0-9+/=\s]+$)/i.test(configuredLogo) ? configuredLogo : '';
+    const logoMarkup = safeJournalLogo
+      ? `<img class="school-logo" src="${safePrintValue(safeJournalLogo)}" alt="شعار المدرسة" onerror="this.style.display='none'" />`
+      : '<div class="school-logo school-logo-fallback" aria-label="شعار المدرسة">🏫</div>';
 
     const renderRows = () => {
       if (template === 'no_price') {
@@ -2058,21 +2117,24 @@ export default function GeneralLedgerPortal({
         `;
       }
 
-      return jv.lines.map((l: any, i: number) => {
-        const costCenterLabel = l.costCenter === 'kindergarten' ? 'مرحلة الروضة' : 
-                               l.costCenter === 'primary' ? 'التعليم الأساسي' : 
-                               l.costCenter === 'middle' ? 'التعليم المتوسط' : 'التعليم الثانوي';
-        const debitText = l.debit > 0 ? l.debit.toLocaleString(undefined, { minimumFractionDigits: 2 }) + ' د.ل' : '-';
-        const creditText = l.credit > 0 ? l.credit.toLocaleString(undefined, { minimumFractionDigits: 2 }) + ' د.ل' : '-';
+      return journalLines.map((l: any, i: number) => {
+        const mappedCenter = costCenters?.find((center: any) => [center.id, center.code, center.costCenterId].some((value: unknown) => String(value ?? '').toLowerCase() === String(l.costCenter || '').toLowerCase()));
+        const costCenterLabel = mappedCenter?.name || (l.costCenter === 'kindergarten' ? 'مرحلة الروضة' :
+                               l.costCenter === 'primary' ? 'التعليم الأساسي' :
+                               l.costCenter === 'middle' ? 'التعليم المتوسط' : l.costCenter || 'غير محدد');
+        const debit = Number(l.debit || 0);
+        const credit = Number(l.credit || 0);
+        const debitText = debit > 0 ? debit.toLocaleString(undefined, { minimumFractionDigits: 2 }) + ' د.ل' : '-';
+        const creditText = credit > 0 ? credit.toLocaleString(undefined, { minimumFractionDigits: 2 }) + ' د.ل' : '-';
         return `
           <tr>
             <td style="text-align: center; border: 1px solid #000; padding: 8px; font-family: monospace;">${i + 1}</td>
-            <td style="font-family: monospace; font-weight: bold; border: 1px solid #000; padding: 8px;">${l.accountCode}</td>
-            <td style="font-weight: bold; border: 1px solid #000; padding: 8px;">${l.accountName}</td>
-            <td style="color: #475569; border: 1px solid #000; padding: 8px;">${l.description || jv.description || ''}</td>
+            <td style="font-family: monospace; font-weight: bold; border: 1px solid #000; padding: 8px;">${safePrintValue(l.accountCode)}</td>
+            <td style="font-weight: bold; border: 1px solid #000; padding: 8px;">${safePrintValue(l.accountName)}</td>
+            <td style="color: #475569; border: 1px solid #000; padding: 8px;">${safePrintValue(l.description || jv.description || '')}</td>
             <td style="text-align: center; font-family: monospace; font-weight: bold; border: 1px solid #000; padding: 8px; background-color: #f0fdf4;">${debitText}</td>
             <td style="text-align: center; font-family: monospace; font-weight: bold; border: 1px solid #000; padding: 8px; background-color: #f5f3ff;">${creditText}</td>
-            <td style="text-align: center; font-size: 11px; border: 1px solid #000; padding: 8px;">${costCenterLabel}</td>
+            <td style="text-align: center; font-size: 11px; border: 1px solid #000; padding: 8px;">${safePrintValue(costCenterLabel)}</td>
           </tr>
         `;
       }).join('\n');
@@ -2084,10 +2146,10 @@ export default function GeneralLedgerPortal({
         <tr style="font-weight: bold; background-color: #f1f5f9;">
           <td colspan="4" style="text-align: center; border: 1px solid #000; padding: 10px;">المجموع المتوازن والمطابق للمعادلة المحاسبية المزدوجة</td>
           <td style="text-align: center; font-family: monospace; border: 1px solid #000; padding: 10px; background-color: #dcfce7; color: #166534;">
-            ${jv.debitTotal.toLocaleString(undefined, { minimumFractionDigits: 2 })} د.ل
+            ${Number(jv.debitTotal || 0).toLocaleString(undefined, { minimumFractionDigits: 2 })} د.ل
           </td>
           <td style="text-align: center; font-family: monospace; border: 1px solid #000; padding: 10px; background-color: #ede9fe; color: #3730a3;">
-            ${jv.creditTotal.toLocaleString(undefined, { minimumFractionDigits: 2 })} د.ل
+            ${Number(jv.creditTotal || 0).toLocaleString(undefined, { minimumFractionDigits: 2 })} د.ل
           </td>
           <td style="border: 1px solid #000; padding: 10px; background-color: #e2e8f0;"></td>
         </tr>
@@ -2097,7 +2159,8 @@ export default function GeneralLedgerPortal({
     printWindow.document.write(`
       <html dir="rtl">
         <head>
-          <title>قيد يومية رقم ${jv.id || 'Draft'}</title>
+          <meta charset="utf-8" />
+          <title>قيد يومية رقم ${safePrintValue(jv.id || 'Draft')}</title>
           <style>
             body {
               font-family: 'Inter', system-ui, -apple-system, sans-serif;
@@ -2108,7 +2171,7 @@ export default function GeneralLedgerPortal({
             }
             .header-container {
               display: flex;
-              justify-content: justify;
+              justify-content: space-between;
               align-items: center;
               border-bottom: 2px solid #000000;
               padding-bottom: 15px;
@@ -2255,28 +2318,28 @@ export default function GeneralLedgerPortal({
               <div class="school-info">
                 <h2 class="school-title">${safePrintValue(selectedSchool?.name || 'المدرسة')}</h2>
                 <p class="school-subtitle">المكتب المحاسبي المركزي - الحسابات المركزية الموحدة</p>
-                <p class="school-meta">سجل المدرسة: ${safePrintValue(selectedSchool?.licenseNumber || 'غير محدد')} | مستند محاسبي موثق</p>
+                <p class="school-meta">سجل المدرسة: ${safePrintValue(selectedSchool?.licenseNumber || 'غير محدد')} | مركز التكلفة: ${safePrintValue(journalCostCenterLabel)}</p>
               </div>
             </div>
             <div class="barcode-container">
               <div class="barcode-box"></div>
-              <span class="barcode-label">*${jv.id || 'JV-DRAFT'}*</span>
+              <span class="barcode-label">*${safePrintValue(jv.id || 'JV-DRAFT')}*</span>
             </div>
           </div>
 
           <div class="title-section">
             <h1 class="title-main">${titleText}</h1>
-            <p class="title-sub">تاريخ القيد المعتمد بدفاتر الأستاذ العام: ${jv.date}</p>
+            <p class="title-sub">تاريخ القيد المعتمد بدفاتر الأستاذ العام: ${safePrintValue(jv.date)}</p>
           </div>
 
           <div class="metadata-grid">
             <div class="metadata-item">
-              <div><b>رقم القيد المستندي:</b> <span style="font-family: monospace; color: #4338ca; font-weight: bold;">${jv.id || 'قيد مسودة غير مثبت'}</span></div>
-              <div style="margin-top: 5px;"><b>حالة التثبيت المحاسبي:</b> <span style="font-weight: bold; color: ${jv.status === 'معتمد' ? '#4338ca' : '#047857'}">${jv.status}</span></div>
+              <div><b>رقم القيد المستندي:</b> <span style="font-family: monospace; color: #4338ca; font-weight: bold;">${safePrintValue(jv.id || 'قيد مسودة غير مثبت')}</span></div>
+              <div style="margin-top: 5px;"><b>حالة التثبيت المحاسبي:</b> <span style="font-weight: bold; color: ${jv.status === 'معتمد' ? '#4338ca' : '#047857'}">${safePrintValue(jv.status)}</span></div>
             </div>
             <div class="metadata-item">
-              <div><b>البيان العام للقيد (الشرح):</b> <span style="font-weight: bold;">${jv.description || 'قيود تسوية دورية مدمجة لحسابات المدرسة الموحدة'}</span></div>
-              <div style="margin-top: 5px;"><b>مسؤول التثبيت والإنشاء:</b> <span style="font-weight: bold;">${jv.createdByUser} (النظام المالي الموحد)</span></div>
+              <div><b>البيان العام للقيد (الشرح):</b> <span style="font-weight: bold;">${safePrintValue(jv.description || 'قيود تسوية دورية مدمجة')}</span></div>
+              <div style="margin-top: 5px;"><b>مسؤول التثبيت والإنشاء:</b> <span style="font-weight: bold;">${safePrintValue(jv.createdByUser)} (النظام المالي الموحد)</span></div>
             </div>
           </div>
 
@@ -2301,7 +2364,7 @@ export default function GeneralLedgerPortal({
           <div class="signatures-grid">
             <div class="signature-box">
               <div class="signature-title">مُعِدّ ومراجع القيد</div>
-              <div class="signature-name">${jv.createdByUser}</div>
+              <div class="signature-name">${safePrintValue(jv.createdByUser)}</div>
               <p style="font-size: 8px; color: #64748b; margin-top: 15px;">توقيع المسؤول المالي المباشر</p>
             </div>
             <div class="signature-box">
@@ -2317,7 +2380,7 @@ export default function GeneralLedgerPortal({
           </div>
 
           <p style="text-align: center; font-size: 10px; color: #94a3b8; margin-top: 60px; border-top: 1px solid #e2e8f0; padding-top: 10px;">
-            تم التصدير والطباعة تلقائياً من نظام الإدارة المدرسية الموحد - مجمع مدارس الأسرة الحديثة الموحد
+            تم التصدير والطباعة تلقائياً من نظام الإدارة المدرسية الموحد - ${safePrintValue(selectedSchool?.name || 'المدرسة')}
           </p>
 
           <script>
@@ -3789,7 +3852,7 @@ export default function GeneralLedgerPortal({
           {/* Menu Title Header */}
           <div className="text-center pb-3.5 border-b border-slate-200">
             <h3 className="text-sm font-black text-slate-900 tracking-wide">المدير المالي ERP</h3>
-            <p className="text-[10px] text-slate-500 font-semibold mt-0.5">مجمع مدارس الأسرة الحديثة</p>
+            <p className="text-[10px] text-slate-500 font-semibold mt-0.5">{selectedSchool?.name || 'المدرسة'}</p>
             <div className="w-10 h-0.5 mx-auto bg-[#c58a22] rounded mt-1.5" />
           </div>
 
@@ -3957,17 +4020,20 @@ export default function GeneralLedgerPortal({
             {/* Stamp decoration */}
             <div className="absolute top-20 left-12 w-28 h-28 border-4 border-dashed border-emerald-600/30 rounded-full flex items-center justify-center rotate-12 pointer-events-none select-none">
               <div className="text-center text-emerald-600/30 font-black text-[10px] uppercase leading-none">
-                مدارس الأسرة<br />الحديثة<br />
+                {selectedSchool?.name || 'المدرسة'}<br />
                 <span className="text-[7px]">الحسابات العامة</span>
               </div>
             </div>
 
             {/* Print Header */}
             <div className="flex justify-between items-start border-b-2 border-slate-200 pb-4">
-              <div className="space-y-1">
-                <h3 className="font-black text-sm text-[#020817]">مجموعة مدارس الأسرة الحديثة التعليمية</h3>
-                <p className="text-[10px] text-slate-500 font-bold">فرع طرابلس الرئيسي - ترخيص وزارة التعليم رقم (٢٢١ / ٢٠٢٤)</p>
-                <p className="text-[9px] text-slate-400 font-mono font-bold">الرقم الضريبي الموحد: 400182811</p>
+              <div className="flex min-w-0 items-center gap-3">
+                {getVoucherBranding(selectedReceiptVoucher).logo ? <img className="h-14 w-14 shrink-0 object-contain" src={getVoucherBranding(selectedReceiptVoucher).logo} alt={`شعار ${getVoucherBranding(selectedReceiptVoucher).schoolName}`} /> : <span className="grid h-14 w-14 shrink-0 place-items-center rounded-full border border-slate-300 bg-white text-2xl">🏫</span>}
+                <div className="space-y-1">
+                  <h3 className="font-black text-sm text-[#020817]">{getVoucherBranding(selectedReceiptVoucher).schoolName}</h3>
+                  <p className="text-[10px] text-slate-500 font-bold">ترخيص المدرسة: {getVoucherBranding(selectedReceiptVoucher).licenseNumber}</p>
+                  <p className="text-[9px] text-slate-400 font-mono font-bold">مركز التكلفة: {getVoucherBranding(selectedReceiptVoucher).costCenterLabel}</p>
+                </div>
               </div>
               <div className="text-left font-mono text-[10px] font-black text-slate-700 bg-transparent p-2 rounded-lg border border-slate-200">
                 <div className="text-emerald-700">سند قبض رقم: {selectedReceiptVoucher.id}</div>
@@ -3985,12 +4051,12 @@ export default function GeneralLedgerPortal({
             <div className="grid grid-cols-2 gap-4 bg-transparent p-4 border border-slate-200">
               <div>
                 <span className="text-slate-500 font-bold block mb-0.5">المدرسة المستلمة:</span>
-                <span className="text-slate-900 font-black">{selectedReceiptVoucher.school || 'مدرسة الأسرة الحديثة'}</span>
+                <span className="text-slate-900 font-black">{getVoucherBranding(selectedReceiptVoucher).schoolName}</span>
               </div>
               <div>
                 <span className="text-slate-500 font-bold block mb-0.5">المرحلة التعليمية ومركز التكلفة:</span>
                 <span className="text-amber-700 font-black">
-                  {selectedReceiptVoucher.stage || 'الابتدائي'} (مركز: CC_{selectedReceiptVoucher.costCenter?.toUpperCase()})
+                  {getVoucherBranding(selectedReceiptVoucher).costCenterLabel} {getVoucherBranding(selectedReceiptVoucher).costCenterCode ? `(مركز: CC_${getVoucherBranding(selectedReceiptVoucher).costCenterCode.toUpperCase()})` : ''}
                 </span>
               </div>
               <div className="col-span-2 border-t border-slate-100 pt-2 mt-1">
@@ -4176,17 +4242,20 @@ export default function GeneralLedgerPortal({
             {/* Stamp decoration */}
             <div className="absolute top-20 left-12 w-28 h-28 border-4 border-dashed border-rose-600/30 rounded-full flex items-center justify-center -rotate-12 pointer-events-none select-none">
               <div className="text-center text-rose-600/30 font-black text-[10px] uppercase leading-none">
-                مدارس الأسرة<br />الحديثة<br />
+                {selectedSchool?.name || 'المدرسة'}<br />
                 <span className="text-[7px]">الرقابة المالية</span>
               </div>
             </div>
 
             {/* Print Header */}
             <div className="flex justify-between items-start border-b-2 border-slate-200 pb-4">
-              <div className="space-y-1">
-                <h3 className="font-black text-sm text-[#020817]">مجموعة مدارس الأسرة الحديثة التعليمية</h3>
-                <p className="text-[10px] text-slate-500 font-bold">فرع طرابلس الرئيسي - ترخيص وزارة التعليم رقم (٢٢١ / ٢٠٢٤)</p>
-                <p className="text-[9px] text-slate-400 font-mono font-bold">الرقم الضريبي الموحد: 400182811</p>
+              <div className="flex min-w-0 items-center gap-3">
+                {getVoucherBranding(selectedPaymentVoucher).logo ? <img className="h-14 w-14 shrink-0 object-contain" src={getVoucherBranding(selectedPaymentVoucher).logo} alt={`شعار ${getVoucherBranding(selectedPaymentVoucher).schoolName}`} /> : <span className="grid h-14 w-14 shrink-0 place-items-center rounded-full border border-slate-300 bg-white text-2xl">🏫</span>}
+                <div className="space-y-1">
+                  <h3 className="font-black text-sm text-[#020817]">{getVoucherBranding(selectedPaymentVoucher).schoolName}</h3>
+                  <p className="text-[10px] text-slate-500 font-bold">ترخيص المدرسة: {getVoucherBranding(selectedPaymentVoucher).licenseNumber}</p>
+                  <p className="text-[9px] text-slate-400 font-mono font-bold">مركز التكلفة: {getVoucherBranding(selectedPaymentVoucher).costCenterLabel}</p>
+                </div>
               </div>
               <div className="text-left font-mono text-[10px] font-black text-slate-700 bg-transparent p-2 rounded-lg border border-slate-200">
                 <div className="text-rose-700">سند صرف رقم: {selectedPaymentVoucher.id}</div>
@@ -4204,14 +4273,12 @@ export default function GeneralLedgerPortal({
             <div className="grid grid-cols-2 gap-4 bg-transparent p-4 border border-slate-200">
               <div>
                 <span className="text-slate-500 font-bold block mb-0.5">فرع الصرف والمدرسة:</span>
-                <span className="text-slate-900 font-black">مدرسة الأسرة الحديثة - طرابلس</span>
+                <span className="text-slate-900 font-black">{getVoucherBranding(selectedPaymentVoucher).schoolName}</span>
               </div>
               <div>
                 <span className="text-slate-500 font-bold block mb-0.5">مركز التكلفة المدين بالنفقة:</span>
                 <span className="text-rose-700 font-black">
-                  {selectedPaymentVoucher.costCenter === 'kindergarten' ? 'الروضة' :
-                   selectedPaymentVoucher.costCenter === 'primary' ? 'الابتدائي' :
-                   selectedPaymentVoucher.costCenter === 'middle' ? 'المتوسط' : 'الثانوي'} (مركز: CC_{selectedPaymentVoucher.costCenter?.toUpperCase()})
+                  {getVoucherBranding(selectedPaymentVoucher).costCenterLabel} {getVoucherBranding(selectedPaymentVoucher).costCenterCode ? `(مركز: CC_${getVoucherBranding(selectedPaymentVoucher).costCenterCode.toUpperCase()})` : ''}
                 </span>
               </div>
               <div className="col-span-2 border-t border-slate-100 pt-2 mt-1">
@@ -4560,10 +4627,13 @@ export default function GeneralLedgerPortal({
                 {/* Upper Letterhead section */}
                 <div>
                   <div className="flex items-center justify-between border-b-2 border-slate-950 pb-4">
-                    <div>
-                      <h2 className="text-sm font-black text-slate-900">مجمع مدارس الأسرة الحديثة للتعليم المتميز والدمج</h2>
-                      <p className="text-[9px] text-slate-600 font-bold mt-1">المكتب المحاسبي المركزي - الحسابات المركزية الموحدة</p>
-                      <p className="text-[8px] text-slate-400">سجل تجاري رقم: 91102-طرابلس | هاتف: 021-360-1444 | طرابلس، ليبيا</p>
+                    <div className="flex min-w-0 items-center gap-3">
+                      {journalPreviewBranding.logo ? <img className="h-14 w-14 shrink-0 object-contain" src={journalPreviewBranding.logo} alt={`شعار ${journalPreviewBranding.schoolName}`} /> : <span className="grid h-14 w-14 shrink-0 place-items-center rounded-full border border-slate-300 text-2xl">🏫</span>}
+                      <div>
+                      <h2 className="text-sm font-black text-slate-900">{journalPreviewBranding.schoolName}</h2>
+                      <p className="text-[9px] text-slate-600 font-bold mt-1">ترخيص المدرسة: {journalPreviewBranding.licenseNumber}</p>
+                      <p className="text-[8px] text-slate-400">مركز التكلفة: {activeJournalCostCenters.length > 1 ? 'مراكز متعددة' : journalPreviewBranding.costCenterLabel}</p>
+                      </div>
                     </div>
                     
                     {/* Barcode representation */}
@@ -4690,7 +4760,7 @@ export default function GeneralLedgerPortal({
 
                       <div>
                         <p className="font-bold text-slate-700 text-[9px]">أرشفة رقمية مشفرة مؤمنة بالكامل</p>
-                        <p className="text-[8px]">المنظومة المحاسبية الموحدة لمجموعة مدارس الأسرة الحديثة</p>
+                        <p className="text-[8px]">المنظومة المحاسبية الموحدة - {selectedSchool?.name || 'المدرسة'}</p>
                         <p className="font-mono text-[7px] text-slate-400">UUID: {activeJvState.id || 'JV-DRAFT-PREVIEW'}</p>
                       </div>
                     </div>

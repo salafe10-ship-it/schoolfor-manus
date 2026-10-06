@@ -53,4 +53,26 @@ describe('IDMAP-001 trusted school identity mapping', () => {
       status: 'active'
     })).toThrow();
   });
+
+  it('restores only supported stage logos from the trusted school branding metadata', () => {
+    const primaryLogo = 'data:image/png;base64,AAAA';
+    const middleLogo = 'data:image/webp;base64,BBBB';
+    const school = toTrustedSchoolPresentation({
+      id: 'school-with-stage-branding',
+      display_name: 'School with stage branding',
+      status: 'active',
+      central_metadata: {
+        branding: {
+          stageLogos: {
+            primary: primaryLogo,
+            middle: middleLogo,
+            secondary: 'https://untrusted.example/logo.png',
+            kindergarten: 'data:image/png;base64,CCCC'
+          }
+        }
+      }
+    });
+
+    expect(school.stageLogos).toEqual({ primary: primaryLogo, middle: middleLogo });
+  });
 });

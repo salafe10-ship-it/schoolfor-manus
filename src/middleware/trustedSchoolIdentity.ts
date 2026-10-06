@@ -10,6 +10,7 @@ export type TrustedSchoolPresentation = {
   id: string;
   name: string;
   logo: string;
+  stageLogos: Record<string, string>;
   type: 'government' | 'private' | 'international' | 'model';
   licenseNumber: string;
   address: string;
@@ -63,11 +64,23 @@ export function toTrustedSchoolPresentation(record: SchoolRecord): TrustedSchool
   const logo = /^(https:\/\/|data:image\/(?:png|jpeg|webp);base64,)/i.test(configuredLogo)
     ? configuredLogo
     : '🏫';
+  const rawStageLogos = branding.stageLogos && typeof branding.stageLogos === 'object' && !Array.isArray(branding.stageLogos)
+    ? branding.stageLogos as Record<string, unknown>
+    : {};
+  const stageLogos = Object.fromEntries(
+    (['primary', 'middle', 'secondary'] as const).flatMap((stage) => {
+      const stageLogo = String(rawStageLogos[stage] || '').trim();
+      return stageLogo.length <= 700_000 && /^data:image\/(?:png|jpeg|webp);base64,[a-z0-9+/=\s]+$/i.test(stageLogo)
+        ? [[stage, stageLogo]]
+        : [];
+    })
+  );
 
   return {
     id,
     name,
     logo,
+    stageLogos,
     type: 'private',
     licenseNumber: String(record.school_code || '').trim(),
     address: '',

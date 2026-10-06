@@ -2492,6 +2492,9 @@ export async function createApp(options: { cloudflare?: boolean } = {}): Promise
 
     let rawBody = '';
     let settled = false;
+    const requestBodyLimitBytes = req.method === 'PUT' && req.path === '/api/school/branding'
+      ? 3 * 1024 * 1024
+      : 2 * 1024 * 1024;
     const fail = (error: unknown) => {
       if (settled) return;
       settled = true;
@@ -2501,8 +2504,8 @@ export async function createApp(options: { cloudflare?: boolean } = {}): Promise
     req.setEncoding('utf8');
     req.on('data', (chunk: string) => {
       rawBody += chunk;
-      if (Buffer.byteLength(rawBody, 'utf8') > 2 * 1024 * 1024) {
-        fail(new Error('Request body exceeds the 2mb limit.'));
+      if (Buffer.byteLength(rawBody, 'utf8') > requestBodyLimitBytes) {
+        fail(new Error(`Request body exceeds the ${requestBodyLimitBytes === 3 * 1024 * 1024 ? '3mb' : '2mb'} limit.`));
       }
     });
     req.on('error', fail);
@@ -8965,6 +8968,7 @@ export async function createApp(options: { cloudflare?: boolean } = {}): Promise
       const requestedStageLogos = readObject(req.body?.stageLogos);
       const stageLogos: Record<string, string | null> = {};
       for (const stage of ['primary', 'middle', 'secondary']) {
+        if (!Object.prototype.hasOwnProperty.call(requestedStageLogos, stage)) continue;
         const value = String(requestedStageLogos[stage] || '').trim();
         if (value && value.length > 700_000) throw new ValidationError(`شعار مرحلة ${stage} يتجاوز الحد الآمن المسموح به.`);
         if (value && !/^data:image\/(?:png|jpeg|webp);base64,[a-z0-9+/=\s]+$/i.test(value)) throw new ValidationError(`صيغة شعار مرحلة ${stage} غير مدعومة.`);
@@ -8984,6 +8988,15 @@ export async function createApp(options: { cloudflare?: boolean } = {}): Promise
       if (!current?.data) throw new AuthorizationError('المدرسة غير موجودة داخل نطاق الجلسة الموثوق.');
       const metadata = readObject(current.data.central_metadata);
       const currentBranding = readObject(metadata.branding);
+      const currentStageLogos = readObject(currentBranding.stageLogos);
+      for (const stage of ['primary', 'middle', 'secondary']) {
+        if (Object.prototype.hasOwnProperty.call(stageLogos, stage)) continue;
+        const existingLogo = String(currentStageLogos[stage] || '').trim();
+        stageLogos[stage] = existingLogo.length <= 700_000
+          && /^data:image\/(?:png|jpeg|webp);base64,[a-z0-9+/=\s]+$/i.test(existingLogo)
+          ? existingLogo
+          : null;
+      }
       const nextMetadata = {
         ...metadata,
         branding: {

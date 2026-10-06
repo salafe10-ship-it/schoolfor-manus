@@ -2,11 +2,13 @@ import { Activity, AlertTriangle, ArrowLeftRight, Barcode, Building2, Calculator
 import React, { useState, useEffect, useMemo } from 'react';
 import { AccountingContext } from '../../../components/GeneralLedgerPortal';
 import { triggerNotification } from '../../../lib/notifications';
+import { openPrintWindow } from '../../../utils/openPrintWindow';
+import { resolveCostCenterStageLogoKey } from '../../../utils/schoolBranding';
 
 export const FixedAssetsTab = () => {
   const {
   activeTab, setActiveTab, activeSidebarItem, setActiveSidebarItem,
-  refreshing, setRefreshing, currency, setCurrency, activeSaving, setActiveSaving,
+  refreshing, setRefreshing, currency, setCurrency, selectedSchool, costCenters, activeSaving, setActiveSaving,
   simAmount, setSimAmount, simCostCenter, setSimCostCenter, isStrictEnforcement, setIsStrictEnforcement,
   accounts, setAccounts, suppliers, setSuppliers, journalEntries, setJournalEntries,
   showAddAccountModal, setShowAddAccountModal, newAccount, setNewAccount,
@@ -74,6 +76,11 @@ export const FixedAssetsTab = () => {
   const fixedAssetWritesAreCanonical = canonicalFinancialStatus === 'ready'
     && (canonicalFinancialWriteMode === 'ledger_ready' || canonicalFinancialWriteMode === 'erp_integrated');
   const fixedAssetWritesAvailable = canonicalFinancialStatus === 'ready' && canonicalFinancialWriteMode !== 'snapshot_read_only';
+  const assetLogoKey = resolveCostCenterStageLogoKey(assetForm.costCenter || assetForm.costCenterId || assetForm.costCenterName, costCenters?.length ? costCenters : undefined);
+  const rawAssetSchoolLogo = String((assetLogoKey && selectedSchool?.stageLogos?.[assetLogoKey]) || selectedSchool?.logo || '').trim();
+  const assetSchoolLogo = /^(https:\/\/|data:image\/(?:png|jpeg|webp);base64,[a-z0-9+/=\s]+$)/i.test(rawAssetSchoolLogo) ? rawAssetSchoolLogo : '';
+  const assetSchoolName = String(selectedSchool?.name || 'المدرسة');
+  const escapeAssetPrintValue = (value: unknown) => String(value ?? '—').replace(/[&<>"']/g, char => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[char] || char));
   
   const [assetActionModal, setAssetActionModal] = useState<'none' | 'maintenance' | 'transfer' | 'sale' | 'discard' | 'print_card' | 'print_schedule'>('none');
   const [selectedAssetsForAction, setSelectedAssetsForAction] = useState<string>('all_assets');
@@ -2058,14 +2065,17 @@ export const FixedAssetsTab = () => {
                           
                           {/* Card Header */}
                           <div className="flex justify-between items-start border-b border-slate-200 pb-3 mb-4">
-                            <div>
-                              <span className="text-[9px] text-slate-400 block font-bold">مدرسة الأسرة الحديثة - نظام الأصول</span>
+                            <div className="flex min-w-0 items-center gap-3">
+                              {assetSchoolLogo ? <img src={assetSchoolLogo} alt={`شعار ${assetSchoolName}`} className="h-12 w-12 shrink-0 object-contain" style={{ width: 48, height: 48, flexShrink: 0, objectFit: 'contain' }} /> : <span className="grid h-12 w-12 shrink-0 place-items-center rounded-full border border-slate-300 text-xl" style={{ display: 'inline-grid', width: 48, height: 48, flexShrink: 0, placeItems: 'center', border: '1px solid #cbd5e1', borderRadius: '50%' }}>🏫</span>}
+                              <div>
+                              <span className="text-[9px] text-slate-400 block font-bold">{assetSchoolName} - نظام الأصول</span>
                               <h4 className="font-extrabold text-slate-900 text-sm mt-0.5">{assetForm.name || 'أصل ثابت'}</h4>
                               <span className="font-mono text-[9px] text-indigo-600 font-extrabold bg-indigo-50 px-2 py-0.5 rounded-full mt-1.5 inline-block">
                                 {assetForm.id} | {assetForm.code}
                               </span>
+                              </div>
                             </div>
-                            <span className="text-2xl">🏢</span>
+                            <span className="text-2xl" aria-hidden="true">🏢</span>
                           </div>
 
                           {/* Card Grid Details */}
@@ -2119,18 +2129,20 @@ export const FixedAssetsTab = () => {
                               const cardElement = document.getElementById('printable-asset-card');
                               if (cardElement) {
                                 const printContent = cardElement.innerHTML;
-                                const printWindow = window.open('', '_blank');
+                                const printWindow = openPrintWindow();
                                 if (printWindow) {
+                                  printWindow.onload = () => setTimeout(() => { printWindow.focus(); printWindow.print(); }, 250);
                                   printWindow.document.write(`
                                     <html dir="rtl" lang="ar">
                                       <head>
-                                        <title>بطاقة الأصل - ${assetForm.name}</title>
+                                        <meta charset="utf-8" />
+                                        <title>بطاقة الأصل - ${escapeAssetPrintValue(assetForm.name)}</title>
                                         <style>
                                           body { font-family: 'Inter', system-ui, sans-serif; display: flex; align-items: center; justify-content: center; height: 100vh; margin: 0; background: #fff; }
                                           .print-box { border: 2px solid #000; padding: 25px; border-radius: 12px; max-width: 350px; width: 100%; text-align: right; }
                                           .flex { display: flex; justify-content: space-between; align-items: flex-start; }
                                           .border-b { border-bottom: 1px solid #ddd; padding-bottom: 10px; margin-bottom: 15px; }
-                                          .grid { display: grid; grid-template-cols: 1fr 1fr; gap: 10px; font-size: 11px; }
+                                          .grid { display: grid; grid-template-columns: 1fr 1fr; gap: 10px; font-size: 11px; }
                                           .col-span-2 { grid-column: span 2; }
                                           .text-center { text-align: center; }
                                           .mt-5 { margin-top: 20px; }
@@ -2144,11 +2156,8 @@ export const FixedAssetsTab = () => {
                                     </html>
                                   `);
                                   printWindow.document.close();
-                                  printWindow.focus();
-                                  printWindow.print();
-                                  printWindow.close();
                                 } else {
-                                  window.print();
+                                  triggerNotification('تعذر فتح نافذة الطباعة؛ اسمح بالنوافذ المنبثقة ثم أعد المحاولة.', 'warning');
                                 }
                               }
                             }}
@@ -2172,6 +2181,13 @@ export const FixedAssetsTab = () => {
                     {assetActionModal === 'print_schedule' && (
                       <div className="space-y-6">
                         <div id="printable-asset-schedule" className="bg-white p-2 text-right">
+                          <div className="mb-4 flex items-center gap-3 border-b-2 border-amber-500 pb-3">
+                            {assetSchoolLogo ? <img src={assetSchoolLogo} alt={`شعار ${assetSchoolName}`} className="h-14 w-14 shrink-0 object-contain" style={{ width: 56, height: 56, flexShrink: 0, objectFit: 'contain' }} /> : <span className="grid h-14 w-14 shrink-0 place-items-center rounded-full border border-slate-300 text-2xl" style={{ display: 'inline-grid', width: 56, height: 56, flexShrink: 0, placeItems: 'center', border: '1px solid #cbd5e1', borderRadius: '50%' }}>🏫</span>}
+                            <div>
+                              <h3 className="font-black text-slate-900">{assetSchoolName}</h3>
+                              <p className="text-[10px] text-slate-500">ترخيص المدرسة: {selectedSchool?.licenseNumber || 'غير محدد'}</p>
+                            </div>
+                          </div>
                           <div className="border border-slate-200 rounded-xl p-5 space-y-4">
                             <div className="flex justify-between items-start border-b border-slate-100 pb-4">
                               <div>
@@ -2254,18 +2270,20 @@ export const FixedAssetsTab = () => {
                               const scheduleElement = document.getElementById('printable-asset-schedule');
                               if (scheduleElement) {
                                 const printContent = scheduleElement.innerHTML;
-                                const printWindow = window.open('', '_blank');
+                                const printWindow = openPrintWindow();
                                 if (printWindow) {
+                                  printWindow.onload = () => setTimeout(() => { printWindow.focus(); printWindow.print(); }, 250);
                                   printWindow.document.write(`
                                     <html dir="rtl" lang="ar">
                                       <head>
-                                        <title>جدول استهلاك وإهلاك الأصل - ${assetForm.name}</title>
+                                        <meta charset="utf-8" />
+                                        <title>جدول استهلاك وإهلاك الأصل - ${escapeAssetPrintValue(assetForm.name)}</title>
                                         <style>
                                           body { font-family: 'Inter', system-ui, sans-serif; padding: 40px; color: #1e293b; background: #fff; }
                                           .border { border: 1px solid #ddd; padding: 25px; border-radius: 12px; }
                                           .flex { display: flex; justify-content: space-between; align-items: flex-start; }
                                           .border-b { border-bottom: 1px solid #ddd; padding-bottom: 10px; margin-bottom: 15px; }
-                                          .grid { display: grid; grid-template-cols: repeat(4, 1fr); gap: 15px; background: #f8fafc; padding: 15px; border-radius: 8px; font-size: 11px; margin-bottom: 20px; }
+                                          .grid { display: grid; grid-template-columns: repeat(4, 1fr); gap: 15px; background: #f8fafc; padding: 15px; border-radius: 8px; font-size: 11px; margin-bottom: 20px; }
                                           table { width: 100%; border-collapse: collapse; margin-top: 15px; font-size: 11px; }
                                           th { background: #f1f5f9; padding: 10px; text-align: center; border-bottom: 2px solid #ddd; }
                                           td { padding: 10px; border-bottom: 1px solid #eee; text-align: center; }
@@ -2279,11 +2297,8 @@ export const FixedAssetsTab = () => {
                                     </html>
                                   `);
                                   printWindow.document.close();
-                                  printWindow.focus();
-                                  printWindow.print();
-                                  printWindow.close();
                                 } else {
-                                  window.print();
+                                  triggerNotification('تعذر فتح نافذة الطباعة؛ اسمح بالنوافذ المنبثقة ثم أعد المحاولة.', 'warning');
                                 }
                               }
                             }}

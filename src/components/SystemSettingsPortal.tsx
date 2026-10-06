@@ -6,6 +6,7 @@ import {
   FileText, Globe, Clock, Lock, Server, Key, Sliders, Check
 } from 'lucide-react';
 import { authenticatedRequest } from '../utils/authenticatedRequest';
+import { compressBrandingImage } from '../utils/brandingImages';
 
 interface SystemSettingsPortalProps {
   formatCurrency: (amount: number, showSymbol?: boolean) => string;
@@ -60,9 +61,13 @@ export default function SystemSettingsPortal({
       triggerNotification('اختر صورة PNG أو JPEG أو WebP لا تتجاوز 5 ميجابايت.', 'warning');
       return;
     }
-    const source = await new Promise<string>((resolve, reject) => { const reader = new FileReader(); reader.onload = () => resolve(String(reader.result || '')); reader.onerror = () => reject(new Error('تعذر قراءة شعار المرحلة.')); reader.readAsDataURL(file); });
-    setStageBrandingLogos((current) => ({ ...current, [stage]: source }));
-    triggerNotification(`تم تجهيز شعار مرحلة ${stage}. اضغط حفظ الهوية لاعتماده.`, 'info');
+    try {
+      const compressed = await compressBrandingImage(file);
+      setStageBrandingLogos((current) => ({ ...current, [stage]: compressed }));
+      triggerNotification(`تم ضغط شعار مرحلة ${stage} ومعاينته. اضغط حفظ الهوية لاعتماده.`, 'info');
+    } catch (error) {
+      triggerNotification(error instanceof Error ? error.message : 'تعذر تجهيز شعار المرحلة.', 'warning');
+    }
   };
 
   const handleBrandingFile = async (file: File | undefined) => {
@@ -76,36 +81,8 @@ export default function SystemSettingsPortal({
       return;
     }
     try {
-      const source = await new Promise<string>((resolve, reject) => {
-        const reader = new FileReader();
-        reader.onload = () => resolve(String(reader.result || ''));
-        reader.onerror = () => reject(new Error('تعذر قراءة ملف الشعار.'));
-        reader.readAsDataURL(file);
-      });
-      const image = await new Promise<HTMLImageElement>((resolve, reject) => {
-        const candidate = new Image();
-        candidate.onload = () => resolve(candidate);
-        candidate.onerror = () => reject(new Error('تعذر تجهيز صورة الشعار.'));
-        candidate.src = source;
-      });
-      const maxSide = 720;
-      const scale = Math.min(1, maxSide / Math.max(image.naturalWidth || image.width, image.naturalHeight || image.height));
-      const canvas = document.createElement('canvas');
-      canvas.width = Math.max(1, Math.round((image.naturalWidth || image.width) * scale));
-      canvas.height = Math.max(1, Math.round((image.naturalHeight || image.height) * scale));
-      const context = canvas.getContext('2d');
-      if (!context) throw new Error('تعذر تجهيز مساحة معاينة الشعار.');
-      context.clearRect(0, 0, canvas.width, canvas.height);
-      context.drawImage(image, 0, 0, canvas.width, canvas.height);
-      const preferredType = file.type === 'image/png' ? 'image/png' : 'image/jpeg';
-      const compressed = canvas.toDataURL(preferredType, preferredType === 'image/jpeg' ? 0.86 : undefined);
-      if (compressed.length > 700_000) {
-        const smaller = canvas.toDataURL('image/jpeg', 0.72);
-        if (smaller.length > 700_000) throw new Error('تعذر ضغط الشعار إلى الحجم الآمن. اختر صورة أبسط.');
-        setBrandingLogo(smaller);
-      } else {
-        setBrandingLogo(compressed);
-      }
+      const compressed = await compressBrandingImage(file);
+      setBrandingLogo(compressed);
       triggerNotification('تم تجهيز الشعار ومعاينته. اضغط حفظ الهوية لاعتماده في المستندات.', 'info');
     } catch (error) {
       triggerNotification(error instanceof Error ? error.message : 'تعذر تجهيز الشعار.', 'warning');
@@ -127,8 +104,13 @@ export default function SystemSettingsPortal({
       const payload = await response.json().catch(() => ({}));
       if (!response.ok || !payload?.success) throw new Error(payload?.message || 'تعذر حفظ شعار المدرسة.');
       const savedLogo = String(payload?.data?.logo || brandingLogo || '🏫');
+      const stageLogoResponse = payload?.data?.stageLogos || stageBrandingLogos;
+      const savedStageLogos = Object.fromEntries(
+        Object.entries(stageLogoResponse).filter(([, value]) => typeof value === 'string' && Boolean(value))
+      ) as Record<string, string>;
       onSchoolLogoUpdated?.(savedLogo);
-      onSchoolStageLogosUpdated?.(payload?.data?.stageLogos || stageBrandingLogos);
+      setStageBrandingLogos(savedStageLogos);
+      onSchoolStageLogosUpdated?.(savedStageLogos);
       logAction('SCHOOL_BRANDING_UPDATED', brandingLogo ? 'تم رفع شعار المدرسة واعتماده للمستندات والتقارير.' : 'تمت إزالة شعار المدرسة والعودة إلى الافتراضي.', 'هوية المدرسة');
       triggerNotification('تم حفظ الشعار مركزيًا وسيظهر في سندات القبض والقيود والتقارير بعد إعادة تحميل الشاشة.', 'success');
     } catch (error) {

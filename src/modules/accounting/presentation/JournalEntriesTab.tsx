@@ -1,10 +1,11 @@
 import { AlertTriangle, ArrowDownLeft, ArrowUpRight, BookOpen, Calculator, Check, CheckCircle2, ChevronLeft, ChevronRight, Copy, CornerUpLeft, Download, Edit, Edit3, Eye, FileDown, FileSpreadsheet, FileText, Filter, Layers, List, Lock as LockIcon, LogOut, Maximize2, Minimize2, Paperclip, Play, Plus, Printer, Save, Search, Settings2, Share2, Table, Trash2, Upload, X } from 'lucide-react';
 import React from 'react';
 import { AccountingContext } from '../../../components/GeneralLedgerPortal';
+import { resolveCostCenterStageLogoKey } from '../../../utils/schoolBranding';
 export const JournalEntriesTab = () => {
   const {
   activeTab, setActiveTab, activeSidebarItem, setActiveSidebarItem,
-  refreshing, setRefreshing, currency, setCurrency, activeSaving, setActiveSaving,
+  refreshing, setRefreshing, currency, setCurrency, selectedSchool, activeSaving, setActiveSaving,
   stages, costCenters,
   simAmount, setSimAmount, simCostCenter, setSimCostCenter, isStrictEnforcement, setIsStrictEnforcement,
   accounts, setAccounts, suppliers, setSuppliers, journalEntries, setJournalEntries,
@@ -396,18 +397,29 @@ const handleExportJv = async (format: string, jvToExport: any = activeJvState) =
       URL.revokeObjectURL(url);
       triggerNotification('✓ تم تصدير القيد بصيغة XLSX حقيقية وآمنة بنجاح', 'success');
     } else if (format === 'doc') {
+      const escapeDocHtml = (value: unknown) => String(value ?? '—').replace(/[&<>"']/g, char => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[char] || char));
+      const exportedCostCenters = [...new Set((jvToExport.lines || []).map((line: any) => String(line?.costCenter || '').trim()).filter(Boolean))];
+      const exportLogoKey = exportedCostCenters.length === 1
+        ? resolveCostCenterStageLogoKey(exportedCostCenters[0], costCenters?.length ? costCenters : undefined)
+        : null;
+      const rawExportLogo = String((exportLogoKey && selectedSchool?.stageLogos?.[exportLogoKey]) || selectedSchool?.logo || '').trim();
+      const exportLogo = /^(https:\/\/|data:image\/(?:png|jpeg|webp);base64,[a-z0-9+/=\s]+$)/i.test(rawExportLogo) ? rawExportLogo : '';
+      const schoolName = String(selectedSchool?.name || 'المدرسة');
+      const logoMarkup = exportLogo
+        ? `<img src="${escapeDocHtml(exportLogo)}" alt="شعار ${escapeDocHtml(schoolName)}" style="width:64px;height:64px;object-fit:contain" />`
+        : '<span style="display:inline-grid;width:64px;height:64px;place-items:center;border:1px solid #cbd5e1;border-radius:50%;font-size:28px">🏫</span>';
       const html = `
-        <html>
+        <html dir="rtl" lang="ar">
         <head><meta charset="utf-8" /></head>
         <body style="direction: rtl; font-family: Times New Roman, serif; padding: 20px;">
-          <h1 style="text-align: center;">مجموعة مدارس الأسرة الحديثة التعليمية</h1>
+          <div style="display:flex;align-items:center;gap:14px;border-bottom:2px solid #c5a15d;padding-bottom:12px">${logoMarkup}<div><h1 style="margin:0 0 6px;text-align:right">${escapeDocHtml(schoolName)}</h1><div>ترخيص المدرسة: ${escapeDocHtml(selectedSchool?.licenseNumber || 'غير محدد')}</div><div>مركز التكلفة: ${escapeDocHtml(exportedCostCenters.length === 1 ? exportedCostCenters[0] : exportedCostCenters.length ? 'مراكز تكلفة متعددة' : 'غير محدد')}</div></div></div>
           <h2 style="text-align: center; color: #4f46e5;">سند قيد اليومية العامة الموحد</h2>
           <hr />
-          <p><b>رقم القيد المعتمد:</b> ${jvToExport.id}</p>
-          <p><b>التاريخ مالي:</b> ${jvToExport.date}</p>
-          <p><b>البيان العام:</b> ${jvToExport.description}</p>
-          <p><b>الحالة والمركز:</b> ${jvToExport.status}</p>
-          <p><b>منشئ المستخلص:</b> ${jvToExport.createdByUser}</p>
+          <p><b>رقم القيد المعتمد:</b> ${escapeDocHtml(jvToExport.id)}</p>
+          <p><b>التاريخ مالي:</b> ${escapeDocHtml(jvToExport.date)}</p>
+          <p><b>البيان العام:</b> ${escapeDocHtml(jvToExport.description)}</p>
+          <p><b>الحالة والمركز:</b> ${escapeDocHtml(jvToExport.status)}</p>
+          <p><b>منشئ المستخلص:</b> ${escapeDocHtml(jvToExport.createdByUser)}</p>
           <br />
           <table border="1" cellpadding="5" style="width: 100%; border-collapse: collapse; text-align: right;">
             <thead>
@@ -423,12 +435,12 @@ const handleExportJv = async (format: string, jvToExport: any = activeJvState) =
             <tbody>
               ${jvToExport.lines.map((l: any) => `
                 <tr>
-                  <td>${l.accountCode}</td>
-                  <td>${l.accountName}</td>
-                  <td>${l.description || jvToExport.description}</td>
-                  <td>${l.debit.toLocaleString()} د.ل</td>
-                  <td>${l.credit.toLocaleString()} د.ل</td>
-                  <td>${l.costCenter}</td>
+                  <td>${escapeDocHtml(l.accountCode)}</td>
+                  <td>${escapeDocHtml(l.accountName)}</td>
+                  <td>${escapeDocHtml(l.description || jvToExport.description)}</td>
+                  <td>${Number(l.debit || 0).toLocaleString()} د.ل</td>
+                  <td>${Number(l.credit || 0).toLocaleString()} د.ل</td>
+                  <td>${escapeDocHtml(l.costCenter)}</td>
                 </tr>
               `).join('')}
               <tr style="background-color: #e5e7eb; font-weight: bold;">
@@ -807,7 +819,7 @@ const handleImportJvLinesFromCSV = (csvText: string) => {
                     <div className="flex items-center gap-2">
                       <span className="font-extrabold text-slate-500">المدرسة:</span>
                       <span className="bg-indigo-50 text-indigo-700 border border-indigo-200 px-3 py-1.5 rounded-lg text-xs font-extrabold">
-                        مجمع المدارس الموحد
+                        {selectedSchool?.name || 'المدرسة'}
                       </span>
                     </div>
                   </div>
