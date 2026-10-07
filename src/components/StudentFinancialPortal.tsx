@@ -195,24 +195,33 @@ export default function StudentFinancialPortal({
   // States for Mass Distribution
   const [massStageId, setMassStageId] = useState<string>('');
   const [massClassroom, setMassClassroom] = useState<string>('الصف الأول ابتدائي');
-  const [massFeeType, setMassFeeType] = useState<string>('');
+  const [massFeeConfigId, setMassFeeConfigId] = useState<string>('');
   const [massDueDate, setMassDueDate] = useState<string>(() => new Date(Date.now() + 30 * 24 * 60 * 60 * 1000).toISOString().split('T')[0]);
   const [selectedStudentIds, setSelectedStudentIds] = useState<Record<string, boolean>>({});
 
   const selectedMassFeeConfig = useMemo(
-    () => feeConfigs.find(config => config.type === massFeeType) || null,
-    [feeConfigs, massFeeType]
+    () => feeConfigs.find(config => config.id === massFeeConfigId) || null,
+    [feeConfigs, massFeeConfigId]
   );
+  const massFeeType = selectedMassFeeConfig?.type || '';
 
   React.useEffect(() => {
     if (feeConfigs.length === 0) {
-      if (massFeeType) setMassFeeType('');
+      if (massFeeConfigId) setMassFeeConfigId('');
       return;
     }
-    if (!feeConfigs.some(config => config.type === massFeeType)) {
-      setMassFeeType(feeConfigs[0].type);
+    if (!feeConfigs.some(config => config.id === massFeeConfigId)) {
+      setMassFeeConfigId(feeConfigs[0].id);
     }
-  }, [feeConfigs, massFeeType]);
+  }, [feeConfigs, massFeeConfigId]);
+
+  React.useLayoutEffect(() => {
+    if (activeSubSec !== 'receipts') return;
+    const workspace = document.querySelector<HTMLElement>('.workspace-main');
+    const portal = document.getElementById('student-financial-portal');
+    if (workspace) workspace.scrollTop = 0;
+    if (portal) portal.scrollTop = 0;
+  }, [activeSubSec]);
 
   const activeMassStages = useMemo(
     () => [...(stages || [])]
@@ -2971,7 +2980,7 @@ export default function StudentFinancialPortal({
   const handleMassDistribution = async (e?: React.FormEvent) => {
     if (e) e.preventDefault();
     if (!ensureFinancialWriteReady()) return;
-    const selectedFeeConfig = feeConfigs.find(config => config.type === massFeeType);
+    const selectedFeeConfig = feeConfigs.find(config => config.id === massFeeConfigId);
     const distributionAmount = Number(selectedFeeConfig?.amount);
     if (!selectedFeeConfig || !Number.isFinite(distributionAmount) || distributionAmount <= 0) {
       triggerNotification('اختر بند رسوم محفوظًا بمبلغ موجب قبل تنفيذ التوزيع.', 'warning');
@@ -3057,7 +3066,7 @@ export default function StudentFinancialPortal({
         source: 'portal_bulk_distribution',
         issueInvoices: true,
         currency: selectedSchool?.currencyCode || 'LYD',
-        idempotencyPrefix: `bulk:${canonicalTemplateId}:${invoiceDate}:${dueDate}`
+        idempotencyPrefix: `bulk:${canonicalTemplateId}:${selectedFeeConfig.id}:${invoiceDate}:${dueDate}`
       })
     });
     const result = await response.json().catch(() => ({}));
@@ -3716,7 +3725,7 @@ export default function StudentFinancialPortal({
        <div id="student-financial-portal-layout" className="financial-workspace-layout grid grid-cols-1 lg:grid-cols-[minmax(0,1fr)_16.5rem] gap-4 w-full p-3 sm:p-4 text-right">
       
       {/* LEFT AREA: Content Window based on nested state */}
-      <div id="financial-content-viewport" className="financial-content-viewport flex-1 bg-gradient-to-b from-[#fffefc] via-[#fbf8f0] to-[#f5eeea] border-2 border-[#d4af37]/30 hover:border-[#d4af37] rounded-3xl p-4 sm:p-5 shadow-md transition-all duration-300 overflow-hidden min-h-[550px] p-6">
+      <div id="financial-content-viewport" className="financial-content-viewport flex-1 bg-gradient-to-b from-[#fffefc] via-[#fbf8f0] to-[#f5eeea] border-2 border-[#d4af37]/30 hover:border-[#d4af37] rounded-3xl p-4 sm:p-5 shadow-md transition-colors duration-200 overflow-hidden min-h-[550px] p-6">
         
         {/* VIEW 1: لوحة التحكم المالية والتحليلات */}
         {activeSubSec === 'analytics' && (
@@ -4333,12 +4342,14 @@ export default function StudentFinancialPortal({
               <div>
                 <label className="block text-xs font-bold text-slate-800 mb-1">نوع الرسوم</label>
                 <select
-                  value={massFeeType}
-                  onChange={(e) => setMassFeeType(e.target.value)}
+                  value={massFeeConfigId}
+                  onChange={(e) => setMassFeeConfigId(e.target.value)}
                   className="w-full bg-transparent rounded p-2 text-xs font-bold focus:ring-1 focus:ring-orange-500 focus:outline-none"
                 >
                   {feeConfigs.map(config => (
-                    <option key={config.id} value={config.type}>{config.type}</option>
+                    <option key={config.id} value={config.id}>
+                      {config.type} — {formatLD(Number(config.amount))} {config.orderNumber ? `(رقم ${config.orderNumber})` : ''}
+                    </option>
                   ))}
                 </select>
               </div>
@@ -5199,7 +5210,7 @@ export default function StudentFinancialPortal({
 
         {/* VIEW 6: سندات القبض الملكية */}
         {activeSubSec === 'receipts' && (
-          <div className="space-y-6 animate-fadeIn text-right" dir="rtl">
+          <div className="space-y-6 text-right" dir="rtl">
             <div className="pb-4 border-b border-slate-200 flex flex-col md:flex-row md:items-center md:justify-between gap-4 no-print">
               <div>
                 <h3 className="text-base font-extrabold text-slate-900 flex items-center gap-2">
@@ -5415,7 +5426,7 @@ export default function StudentFinancialPortal({
             <div className="grid grid-cols-1 xl:grid-cols-3 gap-6 items-start">
               
               {/* LEFT COLUMN: Sidebar Vouchers List & Quick Filter Tabs */}
-              <div className="no-print xl:col-span-1 p-4 space-y-4 bg-gradient-to-b from-[#fffefc] via-[#fbf8f0] to-[#f5eeea] border-2 border-[#d4af37]/30 hover:border-[#d4af37] rounded-3xl p-4 sm:p-5 shadow-md transition-all duration-300">
+              <div className="no-print xl:col-span-1 p-4 space-y-4 bg-gradient-to-b from-[#fffefc] via-[#fbf8f0] to-[#f5eeea] border-2 border-[#d4af37]/30 hover:border-[#d4af37] rounded-3xl p-4 sm:p-5 shadow-md transition-colors duration-200">
                 
                 {/* Search field */}
                 <div className="relative">
@@ -5516,7 +5527,7 @@ export default function StudentFinancialPortal({
                 
                 {/* A) Form Mode: Create or Edit */}
                 {(studRvMode === 'create' || studRvMode === 'edit') ? (
-                  <div className="p-6 space-y-6 bg-gradient-to-b from-[#fffefc] via-[#fbf8f0] to-[#f5eeea] border-2 border-[#d4af37]/30 hover:border-[#d4af37] rounded-3xl p-4 sm:p-5 shadow-md transition-all duration-300">
+                  <div className="p-6 space-y-6 bg-gradient-to-b from-[#fffefc] via-[#fbf8f0] to-[#f5eeea] border-2 border-[#d4af37]/30 hover:border-[#d4af37] rounded-3xl p-4 sm:p-5 shadow-md transition-colors duration-200">
                     <div className="border-b border-slate-100 pb-3 flex justify-between items-center">
                       <h4 className="text-sm font-black text-slate-900">
                         {studRvMode === 'create' ? '📋 نموذج تحرير سند قبض مالي جديد' : `📝 تعديل بيانات سند القبض ${studRvForm.id}`}
@@ -6129,7 +6140,7 @@ export default function StudentFinancialPortal({
             <div className="grid grid-cols-1 xl:grid-cols-2 gap-6">
               
               {/* Detailed statement table of receipts log */}
-              <div className="p-5 space-y-4 bg-gradient-to-b from-[#fffefc] via-[#fbf8f0] to-[#f5eeea] border-2 border-[#d4af37]/30 hover:border-[#d4af37] rounded-3xl p-4 sm:p-5 shadow-md transition-all duration-300">
+              <div className="p-5 space-y-4 bg-gradient-to-b from-[#fffefc] via-[#fbf8f0] to-[#f5eeea] border-2 border-[#d4af37]/30 hover:border-[#d4af37] rounded-3xl p-4 sm:p-5 shadow-md transition-colors duration-200">
                 <h4 className="text-xs font-black text-slate-900 border-b border-slate-100 pb-2">📈 ملخص الأرباح والخسائر والتدفق الفصلي</h4>
                 
                 <div className="space-y-3 text-xs">
@@ -6496,4 +6507,3 @@ export default function StudentFinancialPortal({
     </div>
   );
 }
-

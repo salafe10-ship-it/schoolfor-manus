@@ -118,6 +118,10 @@ body {
   overscroll-behavior: contain;
 }
 
+.workspace-main:has(#student-financial-portal) {
+  overflow-anchor: none;
+}
+
 /* Unified application identity: the reference screen uses a warm paper
    workspace beneath a dark coffee/gold navigation system. Keep module-owned
    layouts intact while giving every screen the same neutral canvas, ink, and
