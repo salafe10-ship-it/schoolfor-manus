@@ -113,8 +113,13 @@ body {
 .workspace-main {
   overflow-x: auto;
   overflow-y: auto;
+  scrollbar-gutter: stable;
   scroll-padding-block: 1rem 5rem;
   overscroll-behavior: contain;
+}
+
+.workspace-main:has(#student-financial-portal) {
+  overflow-anchor: none;
 }
 
 /* Unified application identity: the reference screen uses a warm paper

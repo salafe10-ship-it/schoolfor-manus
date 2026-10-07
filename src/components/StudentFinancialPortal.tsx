@@ -16,6 +16,7 @@ import { EnterpriseAuditLogger } from '../utils/EnterpriseAuditLogger';
 import { StudentAffairsValidationFramework } from '../validation/StudentAffairsValidationFramework';
 import { getTrustedAccessToken } from '../utils/auth';
 import { authenticatedRequest } from '../utils/authenticatedRequest';
+import { feeConfigMatchesStudent, isStudentTuitionFee, resolveStudentFeeContext } from '../utils/studentFeeMatching';
 
 interface StudentFinancialPortalProps {
   students: Student[];
@@ -151,6 +152,7 @@ export default function StudentFinancialPortal({
   } | null>(null);
   const [refreshing, setRefreshing] = useState<boolean>(false);
   const refreshInFlightRef = React.useRef(false);
+  const receiptEntryScrollResetPendingRef = React.useRef(false);
   const [selectedStudent, setSelectedStudent] = useState<Student | null>(null);
   const [reportSearch, setReportSearch] = useState<string>('');
   const [reportStatusFilter, setReportStatusFilter] = useState<string>('all');
@@ -195,10 +197,49 @@ export default function StudentFinancialPortal({
   // States for Mass Distribution
   const [massStageId, setMassStageId] = useState<string>('');
   const [massClassroom, setMassClassroom] = useState<string>('الصف الأول ابتدائي');
-  const [massFeeType, setMassFeeType] = useState<string>('التسجيل العام والتمدرس السنوي');
-  const [massFeeAmount, setMassFeeAmount] = useState<number>(0);
+  const [massFeeConfigId, setMassFeeConfigId] = useState<string>('');
   const [massDueDate, setMassDueDate] = useState<string>(() => new Date(Date.now() + 30 * 24 * 60 * 60 * 1000).toISOString().split('T')[0]);
   const [selectedStudentIds, setSelectedStudentIds] = useState<Record<string, boolean>>({});
+
+  const selectedMassFeeConfig = useMemo(
+    () => feeConfigs.find(config => config.id === massFeeConfigId) || null,
+    [feeConfigs, massFeeConfigId]
+  );
+  const massFeeType = selectedMassFeeConfig?.type || '';
+
+  React.useEffect(() => {
+    if (feeConfigs.length === 0) {
+      if (massFeeConfigId) setMassFeeConfigId('');
+      return;
+    }
+    if (!feeConfigs.some(config => config.id === massFeeConfigId)) {
+      setMassFeeConfigId(feeConfigs[0].id);
+    }
+  }, [feeConfigs, massFeeConfigId]);
+
+  React.useLayoutEffect(() => {
+    if (activeSubSec !== 'receipts') {
+      receiptEntryScrollResetPendingRef.current = false;
+      return;
+    }
+    receiptEntryScrollResetPendingRef.current = true;
+    const resetScroll = () => {
+      const workspace = document.querySelector<HTMLElement>('.workspace-main');
+      const portal = document.getElementById('student-financial-portal');
+      if (workspace) workspace.scrollTop = 0;
+      if (portal) portal.scrollTop = 0;
+    };
+    resetScroll();
+    let secondFrame = 0;
+    const firstFrame = window.requestAnimationFrame(() => {
+      resetScroll();
+      secondFrame = window.requestAnimationFrame(resetScroll);
+    });
+    return () => {
+      window.cancelAnimationFrame(firstFrame);
+      if (secondFrame) window.cancelAnimationFrame(secondFrame);
+    };
+  }, [activeSubSec]);
 
   const activeMassStages = useMemo(
     () => [...(stages || [])]
@@ -395,17 +436,42 @@ export default function StudentFinancialPortal({
     { value: 'أنشطة رحلات وثقافية', label: 'أنشطة ورحلات ثقافية مميزة' }
   ];
   const feeTypeOptions = useMemo(() => {
+    const studentFeeContext = selectedStudent
+      ? resolveStudentFeeContext(selectedStudent, stages || [], grades || [], academicClasses || [], costCenters || [])
+      : null;
+    const canOfferTuition = !selectedStudent || Boolean(studentFeeContext);
+    const matchesStudent = (type: string, amount = 0) => {
+      const item = { type, amount };
+      const isTuition = isStudentTuitionFee(type);
+      return !selectedStudent || (isTuition
+        ? canOfferTuition && Boolean(studentFeeContext && feeConfigMatchesStudent(item, studentFeeContext))
+        : true);
+    };
     const configured = feeConfigs
       .map(config => ({ value: config.type.trim(), label: config.type.trim() }))
-      .filter(option => option.value);
-    const merged = [...configured, ...defaultFeeTypeOptions];
+      .filter(option => option.value && matchesStudent(option.value, feeConfigs.find(item => item.type.trim() === option.value)?.amount || 0));
+    const defaults = defaultFeeTypeOptions.filter(option => matchesStudent(option.value));
+    const merged = [...configured, ...defaults];
     // Configured items take precedence over defaults. Deduplicate by both
     // value and visible label so a configured label cannot appear twice in
     // the user-facing select when its legacy default value differs.
     return merged.filter((option, index, all) => all.findIndex(item => (
       item.value === option.value || item.label === option.label
     )) === index);
-  }, [feeConfigs]);
+  }, [feeConfigs, selectedStudent, stages, grades, academicClasses, costCenters]);
+
+  const selectedStudentFeeContext = useMemo(
+    () => selectedStudent
+      ? resolveStudentFeeContext(selectedStudent, stages || [], grades || [], academicClasses || [], costCenters || [])
+      : null,
+    [selectedStudent, stages, grades, academicClasses, costCenters]
+  );
+
+  React.useEffect(() => {
+    // Never carry a fee row across students: stage-specific tariffs and cost
+    // centers belong to the selected student's academic record.
+    setFeeRows([]);
+  }, [selectedStudent?.id]);
 
   // Keep a portal-local copy of the canonical invoice stream. The parent shell
   // may remount module state while the portal hydrates from Supabase; this copy
@@ -900,6 +966,29 @@ export default function StudentFinancialPortal({
       setSelectedStudRv(studentReceiptVouchers[0]);
     }
   }, [studentReceiptVouchers, selectedStudRv]);
+
+  React.useLayoutEffect(() => {
+    if (activeSubSec !== 'receipts' || !receiptEntryScrollResetPendingRef.current || !selectedStudRv) return;
+    const resetScroll = () => {
+      const workspace = document.querySelector<HTMLElement>('.workspace-main');
+      const portal = document.getElementById('student-financial-portal');
+      if (workspace) workspace.scrollTop = 0;
+      if (portal) portal.scrollTop = 0;
+    };
+    resetScroll();
+    let secondFrame = 0;
+    const firstFrame = window.requestAnimationFrame(() => {
+      resetScroll();
+      secondFrame = window.requestAnimationFrame(() => {
+        resetScroll();
+        receiptEntryScrollResetPendingRef.current = false;
+      });
+    });
+    return () => {
+      window.cancelAnimationFrame(firstFrame);
+      if (secondFrame) window.cancelAnimationFrame(secondFrame);
+    };
+  }, [activeSubSec, selectedStudRv?.id]);
 
   // Populate form when selection changes
   React.useEffect(() => {
@@ -2674,8 +2763,10 @@ export default function StudentFinancialPortal({
   // Filter and search vouchers list
   const filteredReceiptVouchers = useMemo(() => {
     return studentReceiptVouchers.filter(v => {
-      const matchesSearch = v.studentName.includes(rvSearch) || v.id.includes(rvSearch) || (v.against && v.against.includes(rvSearch));
-      const matchesStatus = rvStatusFilter === 'all' || v.status === rvStatusFilter;
+      const search = rvSearch.trim().toLocaleLowerCase();
+      const matchesSearch = !search || [v.studentName, v.id, v.against]
+        .some(value => String(value || '').toLocaleLowerCase().includes(search));
+      const matchesStatus = rvStatusFilter === 'all' || String(v.status || '').toLocaleLowerCase() === rvStatusFilter;
       return matchesSearch && matchesStatus;
     });
   }, [studentReceiptVouchers, rvSearch, rvStatusFilter]);
@@ -2957,8 +3048,10 @@ export default function StudentFinancialPortal({
   const handleMassDistribution = async (e?: React.FormEvent) => {
     if (e) e.preventDefault();
     if (!ensureFinancialWriteReady()) return;
-    if (massFeeAmount <= 0) {
-      triggerNotification('الرجاء إدخال مبلغ صحيح للتوزيع جماعياً', 'warning');
+    const selectedFeeConfig = feeConfigs.find(config => config.id === massFeeConfigId);
+    const distributionAmount = Number(selectedFeeConfig?.amount);
+    if (!selectedFeeConfig || !Number.isFinite(distributionAmount) || distributionAmount <= 0) {
+      triggerNotification('اختر بند رسوم محفوظًا بمبلغ موجب قبل تنفيذ التوزيع.', 'warning');
       return;
     }
     if (!financialOperationalContext?.academicYearId || !financialOperationalContext?.academicPeriodId) {
@@ -2977,7 +3070,6 @@ export default function StudentFinancialPortal({
     }
 
     const invoiceDate = new Date().toISOString().split('T')[0];
-    const selectedFeeConfig = feeConfigs.find(config => config.type === massFeeType);
     const revenueAccount = String(selectedFeeConfig?.account || '').trim();
     const revenueAccountError = validateFeeRevenueAccount(revenueAccount);
     if (revenueAccountError) {
@@ -2998,7 +3090,9 @@ export default function StudentFinancialPortal({
     const templateListResponse = await authenticatedRequest('/api/financial/fee-templates', { headers: templateHeaders });
     const templateList = await templateListResponse.json().catch(() => ({}));
     const existingTemplate = Array.isArray(templateList.data)
-      ? templateList.data.find((template: any) => String(template.id) === canonicalTemplateId || String(template.code) === massFeeType)
+      ? templateList.data.find((template: any) => String(template.code) === massFeeType
+        && String(template.academicYearId) === currentAcademicYear
+        && String(template.financialPeriod) === String(financialOperationalContext.financialPeriod || ''))
       : null;
     if (existingTemplate) {
       canonicalTemplateId = String(existingTemplate.id);
@@ -3009,7 +3103,7 @@ export default function StudentFinancialPortal({
           code: massFeeType,
           name: massFeeType,
           category: 'school_fee',
-          amount: massFeeAmount,
+          amount: distributionAmount,
           currency: selectedSchool?.currencyCode || 'LYD',
           revenueAccount,
           academicYearId: currentAcademicYear,
@@ -3031,16 +3125,16 @@ export default function StudentFinancialPortal({
       },
       body: JSON.stringify({
         templateId: canonicalTemplateId,
+        feeConfigId: selectedFeeConfig.id,
         studentIds: studentsToUpdate.map(student => student.id),
         academicYearId: currentAcademicYear,
         academicPeriodId: currentAcademicPeriod,
         dueDate,
-        amount: massFeeAmount,
         description: `رسوم ${massFeeType}`,
         source: 'portal_bulk_distribution',
         issueInvoices: true,
         currency: selectedSchool?.currencyCode || 'LYD',
-        idempotencyPrefix: `bulk:${canonicalTemplateId}:${invoiceDate}:${dueDate}`
+        idempotencyPrefix: `bulk:${canonicalTemplateId}:${selectedFeeConfig.id}:${invoiceDate}:${dueDate}`
       })
     });
     const result = await response.json().catch(() => ({}));
@@ -3063,7 +3157,7 @@ export default function StudentFinancialPortal({
     setInvoices(updatedInvoices);
 
     const selectedStageName = activeMassStages.find(stage => String(stage.id) === massStageId)?.name || 'المرحلة غير محددة';
-    logAction('MASS_FEE_DISTRIBUTION', `تم ترحيل وتوطين رسوم جماعية (${massFeeType}) بقيمة ${massFeeAmount} على ${selectedStageName} / ${massClassroom} وعددهم ${studentsToUpdate.length} طالباً.`, 'حسابات الطلاب');
+    logAction('MASS_FEE_DISTRIBUTION', `تم ترحيل وتوطين رسوم جماعية (${massFeeType}) بقيمة ${distributionAmount} على ${selectedStageName} / ${massClassroom} وعددهم ${studentsToUpdate.length} طالباً.`, 'حسابات الطلاب');
     triggerNotification(`تم بنجاح تطبيق وتوزيع الرسوم الكانونية على ${studentsToUpdate.length} طالبًا — ${selectedStageName} / ${massClassroom}`, 'success');
   };
 
@@ -3073,6 +3167,10 @@ export default function StudentFinancialPortal({
       triggerNotification('الرجاء اختيار طالب موثق أولاً.', 'warning');
       return;
     }
+    if (!selectedStudentFeeContext?.stageType || !selectedStudentFeeContext.costCenter) {
+      triggerNotification('تعذر تحديد مرحلة الطالب ومركز تكلفته من بيانات التسجيل؛ راجع المرحلة ومركز التكلفة في ملف الطالب قبل إصدار المطالبة.', 'warning');
+      return;
+    }
     if (!financialOperationalContext?.academicYearId || !financialOperationalContext?.academicPeriodId) {
       triggerNotification('لا يمكن إصدار المطالبة قبل حسم السنة والفترة الدراسية النشطتين.', 'warning');
       return;
@@ -3080,6 +3178,15 @@ export default function StudentFinancialPortal({
     const positiveRows = feeRows.filter(row => Number.isFinite(Number(row.amount)) && Number(row.amount) > 0);
     if (positiveRows.length === 0) {
       triggerNotification('أضف بند رسوم موجبًا قبل إصدار المطالبة.', 'warning');
+      return;
+    }
+    const invalidTuitionRow = positiveRows.find(row => {
+      const config = feeConfigs.find(item => item.type === row.type);
+      return isStudentTuitionFee(row.type)
+        && (!config || !feeConfigMatchesStudent(config, selectedStudentFeeContext));
+    });
+    if (invalidTuitionRow) {
+      triggerNotification(`بند «${invalidTuitionRow.type}» لا يطابق مرحلة/صف الطالب؛ اختر بند الرسوم المعروض لمرحلته.`, 'warning');
       return;
     }
     const siblingRate = Math.max(0, Math.min(100, Number(siblingDiscountPercent || 0)));
@@ -3118,6 +3225,8 @@ export default function StudentFinancialPortal({
             financialPeriod: financialOperationalContext.financialPeriod,
             revenueAccount,
             receivableAccount: STUDENT_RECEIVABLE_ACCOUNT,
+            costCenter: selectedStudentFeeContext.costCenter,
+            academicStageCode: selectedStudentFeeContext.stageId || selectedStudentFeeContext.stageType,
             branchId: financialOperationalContext.branchId,
             idempotencyKey: `manual:${selectedStudent.id}:${row.id}:${financialOperationalContext.academicYearId}`
           })
@@ -3137,6 +3246,10 @@ export default function StudentFinancialPortal({
           totalAmount: Number(invoice.amount || netAmount) + Number(invoice.tax_amount || invoice.taxAmount || 0),
           paidAmount: Number(invoice.paid_amount || invoice.paidAmount || 0),
           remainingAmount: Number(invoice.remaining_amount || invoice.remainingAmount || netAmount),
+          costCenter: selectedStudentFeeContext.costCenter,
+          costCenterId: selectedStudentFeeContext.costCenter,
+          stageId: selectedStudentFeeContext.stageId || undefined,
+          academicStageCode: selectedStudentFeeContext.stageId || selectedStudentFeeContext.stageType,
           invoiceDate: String(invoice.invoice_date || invoice.invoiceDate || voucherDate),
           dueDate: String(invoice.due_date || invoice.dueDate || massDueDate),
           status: String(invoice.status || 'issued') as any,
@@ -3434,6 +3547,7 @@ export default function StudentFinancialPortal({
       triggerNotification('تم تهيئة الحقول لإدخال بند رسوم جديد', 'info');
     };
     portalOnSave = async () => {
+      try {
       if (!ensureFinancialWriteReady()) return;
       if (!currFeeType) {
         triggerNotification('الرجاء إدخال نوع الرسوم أولاً', 'warning');
@@ -3492,12 +3606,23 @@ export default function StudentFinancialPortal({
           activities: currFeeActivities
         };
         const updatedFeeConfigs = [...feeConfigs, newItem];
-        await saveToServerDb(undefined, undefined, undefined, undefined, undefined, updatedFeeConfigs);
+        const createResponse = await authenticatedRequest('/api/financial/fee-configurations', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ ...newItem, expectedVersion: financialPersistenceVersion })
+        });
+        const createResult = await createResponse.json().catch(() => ({}));
+        if (!createResponse.ok || !createResult.success || createResult.meta?.readBackVerified !== true) {
+          throw new Error(createResult.message || 'تعذر إثبات إنشاء بند الرسوم في قاعدة البيانات.');
+        }
         const readBack = await readBackFeeConfig(newId, newItem);
         setFeeConfigs(readBack.data.feeConfigs || updatedFeeConfigs);
         setCurrFeeId(newId);
         logAction('CREATE_FEE_CONFIG', `إضافة بند رسوم جديد: ${currFeeType}`, 'الإعدادات المالية');
         triggerNotification('تم إضافة وحفظ بند الرسوم الجديد بنجاح', 'success');
+      }
+      } catch (error: any) {
+        triggerNotification(error?.message || 'تعذر حفظ بند الرسوم. لم يتم اعتماد التغيير.', 'warning');
       }
     };
     portalOnEdit = currFeeId ? () => {
@@ -3548,7 +3673,7 @@ export default function StudentFinancialPortal({
   }
 
   return (
-    <div id="student-financial-portal" className={`financial-luxury-shell financial-identity-unified w-full min-h-screen text-right font-sans dir-rtl select-none transition-all duration-300 p-2 sm:p-4 md:p-6 space-y-6 ${activeSubSec === 'analytics' ? 'financial-analytics-density' : ''} ${activeSubSec === 'management' ? 'financial-reference-management' : ''} ${isFocusMode ? 'portal-focus-mode' : ''}`} dir="rtl">
+    <div id="student-financial-portal" className={`financial-luxury-shell financial-identity-unified w-full min-h-screen text-right font-sans dir-rtl select-none p-2 sm:p-4 md:p-6 space-y-6 ${activeSubSec === 'analytics' ? 'financial-analytics-density' : ''} ${activeSubSec === 'management' ? 'financial-reference-management' : ''} ${isFocusMode ? 'portal-focus-mode' : ''}`} dir="rtl">
 
       {/* ==========================================
           LUXURY GOLD METALLIC TOP HEADER
@@ -3699,7 +3824,7 @@ export default function StudentFinancialPortal({
        <div id="student-financial-portal-layout" className="financial-workspace-layout grid grid-cols-1 lg:grid-cols-[minmax(0,1fr)_16.5rem] gap-4 w-full p-3 sm:p-4 text-right">
       
       {/* LEFT AREA: Content Window based on nested state */}
-      <div id="financial-content-viewport" className="financial-content-viewport flex-1 bg-gradient-to-b from-[#fffefc] via-[#fbf8f0] to-[#f5eeea] border-2 border-[#d4af37]/30 hover:border-[#d4af37] rounded-3xl p-4 sm:p-5 shadow-md transition-all duration-300 overflow-hidden min-h-[550px] p-6">
+      <div id="financial-content-viewport" className="financial-content-viewport flex-1 bg-gradient-to-b from-[#fffefc] via-[#fbf8f0] to-[#f5eeea] border-2 border-[#d4af37]/30 hover:border-[#d4af37] rounded-3xl p-4 sm:p-5 shadow-md transition-colors duration-200 overflow-hidden min-h-[550px] p-6">
         
         {/* VIEW 1: لوحة التحكم المالية والتحليلات */}
         {activeSubSec === 'analytics' && (
@@ -4316,12 +4441,14 @@ export default function StudentFinancialPortal({
               <div>
                 <label className="block text-xs font-bold text-slate-800 mb-1">نوع الرسوم</label>
                 <select
-                  value={massFeeType}
-                  onChange={(e) => setMassFeeType(e.target.value)}
+                  value={massFeeConfigId}
+                  onChange={(e) => setMassFeeConfigId(e.target.value)}
                   className="w-full bg-transparent rounded p-2 text-xs font-bold focus:ring-1 focus:ring-orange-500 focus:outline-none"
                 >
                   {feeConfigs.map(config => (
-                    <option key={config.id} value={config.type}>{config.type}</option>
+                    <option key={config.id} value={config.id}>
+                      {config.type} — {formatLD(Number(config.amount))} {config.orderNumber ? `(رقم ${config.orderNumber})` : ''}
+                    </option>
                   ))}
                 </select>
               </div>
@@ -4331,10 +4458,13 @@ export default function StudentFinancialPortal({
                 <label className="block text-xs font-bold text-slate-800 mb-1">المبلغ الموحد</label>
                 <input
                   type="number"
-                  value={massFeeAmount}
-                  onChange={(e) => setMassFeeAmount(Number(e.target.value))}
+                  value={selectedMassFeeConfig ? Number(selectedMassFeeConfig.amount) : 0}
+                  readOnly
+                  aria-readonly="true"
+                  title="يُجلب المبلغ تلقائيًا من بند الرسوم المحفوظ"
                   className="w-full bg-transparent rounded p-2 text-xs font-bold focus:ring-1 focus:ring-orange-500 focus:outline-none"
                 />
+                <p className="mt-1 text-[10px] font-semibold text-slate-500">المبلغ مرتبط بالبند المحفوظ في إعدادات الرسوم.</p>
               </div>
 
               {/* Due Date Input */}
@@ -4424,7 +4554,7 @@ export default function StudentFinancialPortal({
               
               <button
                 onClick={() => handleMassDistribution()}
-                disabled={financialWritesLocked || financialPersistence !== 'ready' || massTargetStudents.filter(student => selectedStudentIds[student.id] !== false).length === 0 || massFeeAmount <= 0}
+                disabled={financialWritesLocked || financialPersistence !== 'ready' || massTargetStudents.filter(student => selectedStudentIds[student.id] !== false).length === 0 || !selectedMassFeeConfig || Number(selectedMassFeeConfig.amount) <= 0}
                 className="financial-fee-module-action financial-fee-module-navy text-sm font-bold px-8 py-4 rounded shadow-md flex items-center gap-2 transition-colors cursor-pointer disabled:cursor-not-allowed disabled:opacity-50"
               >
                 <CheckCircle2 className="w-5 h-5" />
@@ -4769,7 +4899,9 @@ export default function StudentFinancialPortal({
                     type="button"
                     onClick={() => {
                       const newId = `row_${Date.now()}`;
-                      setFeeRows([...feeRows, { id: newId, type: feeTypeOptions[0]?.value || 'زي مدرسي', amount: 0, remarks: '' }]);
+                      const defaultType = feeTypeOptions[0]?.value || 'زي مدرسي';
+                      const defaultConfig = feeConfigs.find(config => config.type.trim() === defaultType);
+                      setFeeRows([...feeRows, { id: newId, type: defaultType, amount: Number(defaultConfig?.amount || 0), remarks: '' }]);
                     }}
                     disabled={financialWritesLocked || financialPersistence !== 'ready' || !selectedStudent}
                     className="fee-management-add-action text-[11px] font-black px-3.5 py-1.5 flex items-center gap-1 transition-all transform active:scale-95 cursor-pointer shadow-sm disabled:cursor-not-allowed disabled:opacity-50"
@@ -4778,6 +4910,15 @@ export default function StudentFinancialPortal({
                     <span>إضافة بند رسوم جديد</span>
                   </button>
                 </div>
+
+                {selectedStudent && (
+                  <div className="mt-2 flex flex-wrap items-center gap-2 rounded-xl border border-indigo-100 bg-indigo-50/70 px-3 py-2 text-[11px] font-bold text-indigo-900">
+                    <span>المرحلة: {selectedStudentFeeContext?.stageType === 'primary' ? 'الابتدائي' : selectedStudentFeeContext?.stageType === 'middle' ? 'المتوسط' : selectedStudentFeeContext?.stageType === 'secondary' ? 'الثانوي' : selectedStudentFeeContext?.stageType === 'kindergarten' ? 'الروضة' : 'غير محددة'}</span>
+                    <span className="text-indigo-300">|</span>
+                    <span>مركز التكلفة: {selectedStudentFeeContext?.costCenter || 'غير محدد'}</span>
+                    {selectedStudentFeeContext?.gradeText && <><span className="text-indigo-300">|</span><span>الصف: {selectedStudentFeeContext.gradeText}</span></>}
+                  </div>
+                )}
 
                 {/* Primary Editable Fee Items Table */}
                 <div className="overflow-hidden shadow-xs">
@@ -4799,7 +4940,8 @@ export default function StudentFinancialPortal({
                               value={row.type}
                               onChange={(e) => {
                                 const val = e.target.value;
-                                setFeeRows(feeRows.map(f => f.id === row.id ? { ...f, type: val } : f));
+                                const selectedConfig = feeConfigs.find(config => config.type.trim() === val);
+                                setFeeRows(feeRows.map(f => f.id === row.id ? { ...f, type: val, amount: Number(selectedConfig?.amount || 0) } : f));
                               }}
                               disabled={financialMutationDisabled}
                               className="w-full bg-transparent p-1 text-xs font-bold text-slate-800 focus:ring-1 focus:ring-[#9a6a1d] focus:border-[#9a6a1d] focus:outline-none"
@@ -5179,7 +5321,7 @@ export default function StudentFinancialPortal({
 
         {/* VIEW 6: سندات القبض الملكية */}
         {activeSubSec === 'receipts' && (
-          <div className="space-y-6 animate-fadeIn text-right" dir="rtl">
+          <div className="space-y-6 text-right" dir="rtl">
             <div className="pb-4 border-b border-slate-200 flex flex-col md:flex-row md:items-center md:justify-between gap-4 no-print">
               <div>
                 <h3 className="text-base font-extrabold text-slate-900 flex items-center gap-2">
@@ -5395,7 +5537,7 @@ export default function StudentFinancialPortal({
             <div className="grid grid-cols-1 xl:grid-cols-3 gap-6 items-start">
               
               {/* LEFT COLUMN: Sidebar Vouchers List & Quick Filter Tabs */}
-              <div className="no-print xl:col-span-1 p-4 space-y-4 bg-gradient-to-b from-[#fffefc] via-[#fbf8f0] to-[#f5eeea] border-2 border-[#d4af37]/30 hover:border-[#d4af37] rounded-3xl p-4 sm:p-5 shadow-md transition-all duration-300">
+              <div className="no-print xl:col-span-1 p-4 space-y-4 bg-gradient-to-b from-[#fffefc] via-[#fbf8f0] to-[#f5eeea] border-2 border-[#d4af37]/30 hover:border-[#d4af37] rounded-3xl p-4 sm:p-5 shadow-md transition-colors duration-200">
                 
                 {/* Search field */}
                 <div className="relative">
@@ -5414,7 +5556,7 @@ export default function StudentFinancialPortal({
                 {/* Status Tab Filters */}
                 <div>
                   <label className="text-[10px] font-extrabold text-slate-400 block mb-1.5">تصفية حسب حالة السند:</label>
-                  <div className="grid grid-cols-3 gap-1 bg-slate-100 p-1 rounded-lg">
+                  <div className="grid grid-cols-3 gap-1.5 rounded-xl border border-slate-200 bg-slate-100/80 p-1.5 shadow-inner" role="group" aria-label="تصفية سندات القبض حسب الحالة">
                     {[
                       { id: 'all', label: 'الكل' },
                       { id: 'draft', label: 'مسودة' },
@@ -5425,11 +5567,13 @@ export default function StudentFinancialPortal({
                     ].map(tab => (
                       <button
                         key={tab.id}
+                        type="button"
+                        aria-pressed={rvStatusFilter === tab.id}
                         onClick={() => setRvStatusFilter(tab.id)}
-                        className={`text-[10px] font-bold py-1 px-1.5 rounded transition-all cursor-pointer ${
+                        className={`min-h-9 rounded-lg border px-2 py-1.5 text-xs font-bold transition-all duration-150 cursor-pointer focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[#9a6a1d] focus-visible:ring-offset-1 ${
                           rvStatusFilter === tab.id
-                            ? 'text-slate-900 shadow-sm'
-                            : 'text-slate-500 hover:text-slate-900'
+                            ? 'border-[#b8892d] bg-white text-[#543b12] shadow-sm ring-1 ring-[#d4af37]/25'
+                            : 'border-transparent bg-transparent text-slate-600 hover:border-slate-300 hover:bg-white/80 hover:text-slate-900'
                         }`}
                       >
                         {tab.label}
@@ -5496,7 +5640,7 @@ export default function StudentFinancialPortal({
                 
                 {/* A) Form Mode: Create or Edit */}
                 {(studRvMode === 'create' || studRvMode === 'edit') ? (
-                  <div className="p-6 space-y-6 bg-gradient-to-b from-[#fffefc] via-[#fbf8f0] to-[#f5eeea] border-2 border-[#d4af37]/30 hover:border-[#d4af37] rounded-3xl p-4 sm:p-5 shadow-md transition-all duration-300">
+                  <div className="p-6 space-y-6 bg-gradient-to-b from-[#fffefc] via-[#fbf8f0] to-[#f5eeea] border-2 border-[#d4af37]/30 hover:border-[#d4af37] rounded-3xl p-4 sm:p-5 shadow-md transition-colors duration-200">
                     <div className="border-b border-slate-100 pb-3 flex justify-between items-center">
                       <h4 className="text-sm font-black text-slate-900">
                         {studRvMode === 'create' ? '📋 نموذج تحرير سند قبض مالي جديد' : `📝 تعديل بيانات سند القبض ${studRvForm.id}`}
@@ -6109,7 +6253,7 @@ export default function StudentFinancialPortal({
             <div className="grid grid-cols-1 xl:grid-cols-2 gap-6">
               
               {/* Detailed statement table of receipts log */}
-              <div className="p-5 space-y-4 bg-gradient-to-b from-[#fffefc] via-[#fbf8f0] to-[#f5eeea] border-2 border-[#d4af37]/30 hover:border-[#d4af37] rounded-3xl p-4 sm:p-5 shadow-md transition-all duration-300">
+              <div className="p-5 space-y-4 bg-gradient-to-b from-[#fffefc] via-[#fbf8f0] to-[#f5eeea] border-2 border-[#d4af37]/30 hover:border-[#d4af37] rounded-3xl p-4 sm:p-5 shadow-md transition-colors duration-200">
                 <h4 className="text-xs font-black text-slate-900 border-b border-slate-100 pb-2">📈 ملخص الأرباح والخسائر والتدفق الفصلي</h4>
                 
                 <div className="space-y-3 text-xs">
@@ -6476,4 +6620,3 @@ export default function StudentFinancialPortal({
     </div>
   );
 }
-

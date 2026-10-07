@@ -40,6 +40,15 @@ describe('student fees integrity contract', () => {
     expect(financialPortalSource).toContain('readBackVerified');
   });
 
+  it('creates fee configurations transactionally in the canonical source and reports save errors', () => {
+    expect(serverSource).toContain('app.post("/api/financial/fee-configurations"');
+    expect(serverSource).toContain("operationName: 'Create canonical student fee configuration'");
+    expect(serverSource).toContain("VALUES ($1,$2,'create','student_fee_configuration'");
+    expect(financialPortalSource).toContain("authenticatedRequest('/api/financial/fee-configurations'");
+    expect(financialPortalSource).toContain("method: 'POST'");
+    expect(financialPortalSource).toContain("تعذر حفظ بند الرسوم. لم يتم اعتماد التغيير.");
+  });
+
   it('keeps mass fee distribution stage-first and school-scoped', () => {
     expect(financialPortalSource).toContain('const [massStageId, setMassStageId]');
     expect(financialPortalSource).toContain('المرحلة الدراسية');
