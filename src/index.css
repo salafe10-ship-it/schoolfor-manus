@@ -113,6 +113,7 @@ body {
 .workspace-main {
   overflow-x: auto;
   overflow-y: auto;
+  scrollbar-gutter: stable;
   scroll-padding-block: 1rem 5rem;
   overscroll-behavior: contain;
 }

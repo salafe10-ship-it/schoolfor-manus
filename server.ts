@@ -13675,14 +13675,13 @@ export async function createApp(options: { cloudflare?: boolean } = {}): Promise
       const { tenantId, schoolId, actorId, tenantContext } = canonicalFeeContext(req);
       const body = req.body && typeof req.body === 'object' ? req.body as Record<string, any> : {};
       const templateId = String(body.templateId || '').trim();
+      const feeConfigId = String(body.feeConfigId || '').trim();
       const academicYearId = String(body.academicYearId || '').trim();
       const academicPeriodId = String(body.academicPeriodId || '').trim();
       const dueDate = String(body.dueDate || '').slice(0, 10);
       const studentIds = Array.isArray(body.studentIds) ? [...new Set(body.studentIds.map((id: unknown) => String(id).trim()).filter(canonicalFeeUuid))] : [];
-      if (!templateId || !academicYearId || !academicPeriodId || !/^\d{4}-\d{2}-\d{2}$/.test(dueDate) || studentIds.length === 0) throw new ValidationError('القالب والفترة وتاريخ الاستحقاق وقائمة الطلاب حقول مطلوبة للتوزيع الجماعي.');
-      const grossAmount = assertMoney(body.amount, 'قيمة التوزيع الجماعي');
+      if (!templateId || !feeConfigId || !academicYearId || !academicPeriodId || !/^\d{4}-\d{2}-\d{2}$/.test(dueDate) || studentIds.length === 0) throw new ValidationError('بند الرسوم والقالب والفترة وتاريخ الاستحقاق وقائمة الطلاب حقول مطلوبة للتوزيع الجماعي.');
       const discountAmount = assertMoney(body.discountAmount || 0, 'الخصم', true);
-      if (discountAmount > grossAmount) throw new ValidationError('الخصم لا يمكن أن يتجاوز قيمة الرسم.');
       const results: any[] = [];
       const invoicesToPost: Array<Record<string, unknown>> = [];
       await UnitOfWork.runInTransaction(schoolId, {
@@ -13692,6 +13691,32 @@ export async function createApp(options: { cloudflare?: boolean } = {}): Promise
         const transaction = UnitOfWork.getActiveContext()?.databaseTransaction;
         if (!transaction) throw new DatabaseError('تعذر فتح المعاملة المالية.');
         const databaseActorId = await resolveCanonicalFeeActor(transaction, tenantId, schoolId, actorId);
+        const feeConfigResult = await transaction.query(
+          `SELECT fee_type AS "type", amount, revenue_account AS "revenueAccount"
+             FROM public.student_fee_configurations
+            WHERE tenant_id = $1 AND school_id = $2 AND id = $3
+            FOR SHARE`,
+          [tenantId, schoolId, feeConfigId]
+        );
+        const feeConfig = feeConfigResult.rows[0];
+        if (!feeConfig || !String(feeConfig.type || '').trim()) {
+          throw new ValidationError('بند الرسوم المحدد غير موجود في إعدادات المدرسة الحالية. احفظ الإعدادات ثم أعد المحاولة.');
+        }
+        const grossAmount = assertMoney(feeConfig.amount, 'المبلغ المعتمد في إعدادات الرسوم');
+        if (discountAmount > grossAmount) throw new ValidationError('الخصم لا يمكن أن يتجاوز قيمة الرسم المعتمد في الإعدادات.');
+        const templateResult = await transaction.query(
+          `SELECT code, academic_year_id AS "academicYearId"
+             FROM public.student_fee_templates
+            WHERE tenant_id = $1 AND school_id = $2 AND id = $3
+            FOR SHARE`,
+          [tenantId, schoolId, templateId]
+        );
+        const template = templateResult.rows[0];
+        if (!template
+          || String(template.code || '') !== String(feeConfig.type)
+          || String(template.academicYearId || '') !== academicYearId) {
+          throw new ValidationError('قالب الرسم لا يطابق بند الرسوم أو السنة الدراسية المحددة. أعد تحميل الإعدادات وحاول مجددًا.');
+        }
         const students = await transaction.query(`SELECT id, preferred_name, legal_first_name, legal_middle_name, legal_last_name FROM public.students WHERE tenant_id = $1 AND school_id = $2 AND id = ANY($3::uuid[]) AND deleted_at IS NULL AND status IN ('active','admitted','applicant')`, [tenantId, schoolId, studentIds]);
         const valid = new Map(students.rows.map((row: any) => [String(row.id), row]));
         const source = String(body.source || 'bulk_distribution');
@@ -13719,7 +13744,7 @@ export async function createApp(options: { cloudflare?: boolean } = {}): Promise
                VALUES ($1,$2,$3,$4,$5,$6,$7,0,0,$7,CURRENT_DATE,$8,'issued',$9::jsonb,$10,$11,$12,$13,$14,$15,1)
                ON CONFLICT (school_id, idempotency_key) DO UPDATE SET idempotency_key = EXCLUDED.idempotency_key
                RETURNING id, student_id AS "studentId", student_name AS "studentName", amount, remaining_amount AS "remainingAmount", due_date AS "dueDate", status`,
-              [tenantId, schoolId, invoiceId, studentId, studentName, String(body.description || body.item || `رسوم ${templateId}`), Number((grossAmount - discountAmount).toFixed(2)), dueDate, JSON.stringify({ source, assignmentId: row.rows[0].id, idempotencyKey: invoiceKey }), databaseActorId, templateId, academicYearId, academicPeriodId, String(body.currency || 'SAR'), invoiceKey]);
+              [tenantId, schoolId, invoiceId, studentId, studentName, String(body.description || body.item || `رسوم ${templateId}`), Number((grossAmount - discountAmount).toFixed(2)), dueDate, JSON.stringify({ source, feeConfigId, assignmentId: row.rows[0].id, idempotencyKey: invoiceKey }), databaseActorId, templateId, academicYearId, academicPeriodId, String(body.currency || 'SAR'), invoiceKey]);
             results[results.length - 1] = { ...results[results.length - 1], invoice: invoice.rows[0] };
             invoicesToPost.push({
               id: invoiceId,
@@ -13731,7 +13756,7 @@ export async function createApp(options: { cloudflare?: boolean } = {}): Promise
               invoiceDate: new Date().toISOString().slice(0, 10),
               status: 'issued',
               item: String(body.description || body.item || `رسوم ${templateId}`),
-              revenueAccount: String(body.revenueAccount || ''),
+              revenueAccount: String(feeConfig.revenueAccount || ''),
               receivableAccount: String(body.receivableAccount || '1201'),
               discountAccount: String(body.discountAccount || ''),
               costCenter: String(body.costCenter || ''),

@@ -195,10 +195,24 @@ export default function StudentFinancialPortal({
   // States for Mass Distribution
   const [massStageId, setMassStageId] = useState<string>('');
   const [massClassroom, setMassClassroom] = useState<string>('الصف الأول ابتدائي');
-  const [massFeeType, setMassFeeType] = useState<string>('التسجيل العام والتمدرس السنوي');
-  const [massFeeAmount, setMassFeeAmount] = useState<number>(0);
+  const [massFeeType, setMassFeeType] = useState<string>('');
   const [massDueDate, setMassDueDate] = useState<string>(() => new Date(Date.now() + 30 * 24 * 60 * 60 * 1000).toISOString().split('T')[0]);
   const [selectedStudentIds, setSelectedStudentIds] = useState<Record<string, boolean>>({});
+
+  const selectedMassFeeConfig = useMemo(
+    () => feeConfigs.find(config => config.type === massFeeType) || null,
+    [feeConfigs, massFeeType]
+  );
+
+  React.useEffect(() => {
+    if (feeConfigs.length === 0) {
+      if (massFeeType) setMassFeeType('');
+      return;
+    }
+    if (!feeConfigs.some(config => config.type === massFeeType)) {
+      setMassFeeType(feeConfigs[0].type);
+    }
+  }, [feeConfigs, massFeeType]);
 
   const activeMassStages = useMemo(
     () => [...(stages || [])]
@@ -2957,8 +2971,10 @@ export default function StudentFinancialPortal({
   const handleMassDistribution = async (e?: React.FormEvent) => {
     if (e) e.preventDefault();
     if (!ensureFinancialWriteReady()) return;
-    if (massFeeAmount <= 0) {
-      triggerNotification('الرجاء إدخال مبلغ صحيح للتوزيع جماعياً', 'warning');
+    const selectedFeeConfig = feeConfigs.find(config => config.type === massFeeType);
+    const distributionAmount = Number(selectedFeeConfig?.amount);
+    if (!selectedFeeConfig || !Number.isFinite(distributionAmount) || distributionAmount <= 0) {
+      triggerNotification('اختر بند رسوم محفوظًا بمبلغ موجب قبل تنفيذ التوزيع.', 'warning');
       return;
     }
     if (!financialOperationalContext?.academicYearId || !financialOperationalContext?.academicPeriodId) {
@@ -2977,7 +2993,6 @@ export default function StudentFinancialPortal({
     }
 
     const invoiceDate = new Date().toISOString().split('T')[0];
-    const selectedFeeConfig = feeConfigs.find(config => config.type === massFeeType);
     const revenueAccount = String(selectedFeeConfig?.account || '').trim();
     const revenueAccountError = validateFeeRevenueAccount(revenueAccount);
     if (revenueAccountError) {
@@ -2998,7 +3013,9 @@ export default function StudentFinancialPortal({
     const templateListResponse = await authenticatedRequest('/api/financial/fee-templates', { headers: templateHeaders });
     const templateList = await templateListResponse.json().catch(() => ({}));
     const existingTemplate = Array.isArray(templateList.data)
-      ? templateList.data.find((template: any) => String(template.id) === canonicalTemplateId || String(template.code) === massFeeType)
+      ? templateList.data.find((template: any) => String(template.code) === massFeeType
+        && String(template.academicYearId) === currentAcademicYear
+        && String(template.financialPeriod) === String(financialOperationalContext.financialPeriod || ''))
       : null;
     if (existingTemplate) {
       canonicalTemplateId = String(existingTemplate.id);
@@ -3009,7 +3026,7 @@ export default function StudentFinancialPortal({
           code: massFeeType,
           name: massFeeType,
           category: 'school_fee',
-          amount: massFeeAmount,
+          amount: distributionAmount,
           currency: selectedSchool?.currencyCode || 'LYD',
           revenueAccount,
           academicYearId: currentAcademicYear,
@@ -3031,11 +3048,11 @@ export default function StudentFinancialPortal({
       },
       body: JSON.stringify({
         templateId: canonicalTemplateId,
+        feeConfigId: selectedFeeConfig.id,
         studentIds: studentsToUpdate.map(student => student.id),
         academicYearId: currentAcademicYear,
         academicPeriodId: currentAcademicPeriod,
         dueDate,
-        amount: massFeeAmount,
         description: `رسوم ${massFeeType}`,
         source: 'portal_bulk_distribution',
         issueInvoices: true,
@@ -3063,7 +3080,7 @@ export default function StudentFinancialPortal({
     setInvoices(updatedInvoices);
 
     const selectedStageName = activeMassStages.find(stage => String(stage.id) === massStageId)?.name || 'المرحلة غير محددة';
-    logAction('MASS_FEE_DISTRIBUTION', `تم ترحيل وتوطين رسوم جماعية (${massFeeType}) بقيمة ${massFeeAmount} على ${selectedStageName} / ${massClassroom} وعددهم ${studentsToUpdate.length} طالباً.`, 'حسابات الطلاب');
+    logAction('MASS_FEE_DISTRIBUTION', `تم ترحيل وتوطين رسوم جماعية (${massFeeType}) بقيمة ${distributionAmount} على ${selectedStageName} / ${massClassroom} وعددهم ${studentsToUpdate.length} طالباً.`, 'حسابات الطلاب');
     triggerNotification(`تم بنجاح تطبيق وتوزيع الرسوم الكانونية على ${studentsToUpdate.length} طالبًا — ${selectedStageName} / ${massClassroom}`, 'success');
   };
 
@@ -3548,7 +3565,7 @@ export default function StudentFinancialPortal({
   }
 
   return (
-    <div id="student-financial-portal" className={`financial-luxury-shell financial-identity-unified w-full min-h-screen text-right font-sans dir-rtl select-none transition-all duration-300 p-2 sm:p-4 md:p-6 space-y-6 ${activeSubSec === 'analytics' ? 'financial-analytics-density' : ''} ${activeSubSec === 'management' ? 'financial-reference-management' : ''} ${isFocusMode ? 'portal-focus-mode' : ''}`} dir="rtl">
+    <div id="student-financial-portal" className={`financial-luxury-shell financial-identity-unified w-full min-h-screen text-right font-sans dir-rtl select-none p-2 sm:p-4 md:p-6 space-y-6 ${activeSubSec === 'analytics' ? 'financial-analytics-density' : ''} ${activeSubSec === 'management' ? 'financial-reference-management' : ''} ${isFocusMode ? 'portal-focus-mode' : ''}`} dir="rtl">
 
       {/* ==========================================
           LUXURY GOLD METALLIC TOP HEADER
@@ -4331,10 +4348,13 @@ export default function StudentFinancialPortal({
                 <label className="block text-xs font-bold text-slate-800 mb-1">المبلغ الموحد</label>
                 <input
                   type="number"
-                  value={massFeeAmount}
-                  onChange={(e) => setMassFeeAmount(Number(e.target.value))}
+                  value={selectedMassFeeConfig ? Number(selectedMassFeeConfig.amount) : 0}
+                  readOnly
+                  aria-readonly="true"
+                  title="يُجلب المبلغ تلقائيًا من بند الرسوم المحفوظ"
                   className="w-full bg-transparent rounded p-2 text-xs font-bold focus:ring-1 focus:ring-orange-500 focus:outline-none"
                 />
+                <p className="mt-1 text-[10px] font-semibold text-slate-500">المبلغ مرتبط بالبند المحفوظ في إعدادات الرسوم.</p>
               </div>
 
               {/* Due Date Input */}
@@ -4424,7 +4444,7 @@ export default function StudentFinancialPortal({
               
               <button
                 onClick={() => handleMassDistribution()}
-                disabled={financialWritesLocked || financialPersistence !== 'ready' || massTargetStudents.filter(student => selectedStudentIds[student.id] !== false).length === 0 || massFeeAmount <= 0}
+                disabled={financialWritesLocked || financialPersistence !== 'ready' || massTargetStudents.filter(student => selectedStudentIds[student.id] !== false).length === 0 || !selectedMassFeeConfig || Number(selectedMassFeeConfig.amount) <= 0}
                 className="financial-fee-module-action financial-fee-module-navy text-sm font-bold px-8 py-4 rounded shadow-md flex items-center gap-2 transition-colors cursor-pointer disabled:cursor-not-allowed disabled:opacity-50"
               >
                 <CheckCircle2 className="w-5 h-5" />
