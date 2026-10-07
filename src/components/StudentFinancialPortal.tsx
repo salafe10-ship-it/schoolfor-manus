@@ -3502,6 +3502,7 @@ export default function StudentFinancialPortal({
       triggerNotification('تم تهيئة الحقول لإدخال بند رسوم جديد', 'info');
     };
     portalOnSave = async () => {
+      try {
       if (!ensureFinancialWriteReady()) return;
       if (!currFeeType) {
         triggerNotification('الرجاء إدخال نوع الرسوم أولاً', 'warning');
@@ -3560,12 +3561,23 @@ export default function StudentFinancialPortal({
           activities: currFeeActivities
         };
         const updatedFeeConfigs = [...feeConfigs, newItem];
-        await saveToServerDb(undefined, undefined, undefined, undefined, undefined, updatedFeeConfigs);
+        const createResponse = await authenticatedRequest('/api/financial/fee-configurations', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ ...newItem, expectedVersion: financialPersistenceVersion })
+        });
+        const createResult = await createResponse.json().catch(() => ({}));
+        if (!createResponse.ok || !createResult.success || createResult.meta?.readBackVerified !== true) {
+          throw new Error(createResult.message || 'تعذر إثبات إنشاء بند الرسوم في قاعدة البيانات.');
+        }
         const readBack = await readBackFeeConfig(newId, newItem);
         setFeeConfigs(readBack.data.feeConfigs || updatedFeeConfigs);
         setCurrFeeId(newId);
         logAction('CREATE_FEE_CONFIG', `إضافة بند رسوم جديد: ${currFeeType}`, 'الإعدادات المالية');
         triggerNotification('تم إضافة وحفظ بند الرسوم الجديد بنجاح', 'success');
+      }
+      } catch (error: any) {
+        triggerNotification(error?.message || 'تعذر حفظ بند الرسوم. لم يتم اعتماد التغيير.', 'warning');
       }
     };
     portalOnEdit = currFeeId ? () => {
