@@ -16,6 +16,7 @@ import { EnterpriseAuditLogger } from '../utils/EnterpriseAuditLogger';
 import { StudentAffairsValidationFramework } from '../validation/StudentAffairsValidationFramework';
 import { getTrustedAccessToken } from '../utils/auth';
 import { authenticatedRequest } from '../utils/authenticatedRequest';
+import { feeConfigMatchesStudent, isStudentTuitionFee, resolveStudentFeeContext } from '../utils/studentFeeMatching';
 
 interface StudentFinancialPortalProps {
   students: Student[];
@@ -435,17 +436,42 @@ export default function StudentFinancialPortal({
     { value: 'أنشطة رحلات وثقافية', label: 'أنشطة ورحلات ثقافية مميزة' }
   ];
   const feeTypeOptions = useMemo(() => {
+    const studentFeeContext = selectedStudent
+      ? resolveStudentFeeContext(selectedStudent, stages || [], grades || [], academicClasses || [], costCenters || [])
+      : null;
+    const canOfferTuition = !selectedStudent || Boolean(studentFeeContext);
+    const matchesStudent = (type: string, amount = 0) => {
+      const item = { type, amount };
+      const isTuition = isStudentTuitionFee(type);
+      return !selectedStudent || (isTuition
+        ? canOfferTuition && Boolean(studentFeeContext && feeConfigMatchesStudent(item, studentFeeContext))
+        : true);
+    };
     const configured = feeConfigs
       .map(config => ({ value: config.type.trim(), label: config.type.trim() }))
-      .filter(option => option.value);
-    const merged = [...configured, ...defaultFeeTypeOptions];
+      .filter(option => option.value && matchesStudent(option.value, feeConfigs.find(item => item.type.trim() === option.value)?.amount || 0));
+    const defaults = defaultFeeTypeOptions.filter(option => matchesStudent(option.value));
+    const merged = [...configured, ...defaults];
     // Configured items take precedence over defaults. Deduplicate by both
     // value and visible label so a configured label cannot appear twice in
     // the user-facing select when its legacy default value differs.
     return merged.filter((option, index, all) => all.findIndex(item => (
       item.value === option.value || item.label === option.label
     )) === index);
-  }, [feeConfigs]);
+  }, [feeConfigs, selectedStudent, stages, grades, academicClasses, costCenters]);
+
+  const selectedStudentFeeContext = useMemo(
+    () => selectedStudent
+      ? resolveStudentFeeContext(selectedStudent, stages || [], grades || [], academicClasses || [], costCenters || [])
+      : null,
+    [selectedStudent, stages, grades, academicClasses, costCenters]
+  );
+
+  React.useEffect(() => {
+    // Never carry a fee row across students: stage-specific tariffs and cost
+    // centers belong to the selected student's academic record.
+    setFeeRows([]);
+  }, [selectedStudent?.id]);
 
   // Keep a portal-local copy of the canonical invoice stream. The parent shell
   // may remount module state while the portal hydrates from Supabase; this copy
@@ -3141,6 +3167,10 @@ export default function StudentFinancialPortal({
       triggerNotification('الرجاء اختيار طالب موثق أولاً.', 'warning');
       return;
     }
+    if (!selectedStudentFeeContext?.stageType || !selectedStudentFeeContext.costCenter) {
+      triggerNotification('تعذر تحديد مرحلة الطالب ومركز تكلفته من بيانات التسجيل؛ راجع المرحلة ومركز التكلفة في ملف الطالب قبل إصدار المطالبة.', 'warning');
+      return;
+    }
     if (!financialOperationalContext?.academicYearId || !financialOperationalContext?.academicPeriodId) {
       triggerNotification('لا يمكن إصدار المطالبة قبل حسم السنة والفترة الدراسية النشطتين.', 'warning');
       return;
@@ -3148,6 +3178,15 @@ export default function StudentFinancialPortal({
     const positiveRows = feeRows.filter(row => Number.isFinite(Number(row.amount)) && Number(row.amount) > 0);
     if (positiveRows.length === 0) {
       triggerNotification('أضف بند رسوم موجبًا قبل إصدار المطالبة.', 'warning');
+      return;
+    }
+    const invalidTuitionRow = positiveRows.find(row => {
+      const config = feeConfigs.find(item => item.type === row.type);
+      return isStudentTuitionFee(row.type)
+        && (!config || !feeConfigMatchesStudent(config, selectedStudentFeeContext));
+    });
+    if (invalidTuitionRow) {
+      triggerNotification(`بند «${invalidTuitionRow.type}» لا يطابق مرحلة/صف الطالب؛ اختر بند الرسوم المعروض لمرحلته.`, 'warning');
       return;
     }
     const siblingRate = Math.max(0, Math.min(100, Number(siblingDiscountPercent || 0)));
@@ -3186,6 +3225,8 @@ export default function StudentFinancialPortal({
             financialPeriod: financialOperationalContext.financialPeriod,
             revenueAccount,
             receivableAccount: STUDENT_RECEIVABLE_ACCOUNT,
+            costCenter: selectedStudentFeeContext.costCenter,
+            academicStageCode: selectedStudentFeeContext.stageId || selectedStudentFeeContext.stageType,
             branchId: financialOperationalContext.branchId,
             idempotencyKey: `manual:${selectedStudent.id}:${row.id}:${financialOperationalContext.academicYearId}`
           })
@@ -3205,6 +3246,10 @@ export default function StudentFinancialPortal({
           totalAmount: Number(invoice.amount || netAmount) + Number(invoice.tax_amount || invoice.taxAmount || 0),
           paidAmount: Number(invoice.paid_amount || invoice.paidAmount || 0),
           remainingAmount: Number(invoice.remaining_amount || invoice.remainingAmount || netAmount),
+          costCenter: selectedStudentFeeContext.costCenter,
+          costCenterId: selectedStudentFeeContext.costCenter,
+          stageId: selectedStudentFeeContext.stageId || undefined,
+          academicStageCode: selectedStudentFeeContext.stageId || selectedStudentFeeContext.stageType,
           invoiceDate: String(invoice.invoice_date || invoice.invoiceDate || voucherDate),
           dueDate: String(invoice.due_date || invoice.dueDate || massDueDate),
           status: String(invoice.status || 'issued') as any,
@@ -4854,7 +4899,9 @@ export default function StudentFinancialPortal({
                     type="button"
                     onClick={() => {
                       const newId = `row_${Date.now()}`;
-                      setFeeRows([...feeRows, { id: newId, type: feeTypeOptions[0]?.value || 'زي مدرسي', amount: 0, remarks: '' }]);
+                      const defaultType = feeTypeOptions[0]?.value || 'زي مدرسي';
+                      const defaultConfig = feeConfigs.find(config => config.type.trim() === defaultType);
+                      setFeeRows([...feeRows, { id: newId, type: defaultType, amount: Number(defaultConfig?.amount || 0), remarks: '' }]);
                     }}
                     disabled={financialWritesLocked || financialPersistence !== 'ready' || !selectedStudent}
                     className="fee-management-add-action text-[11px] font-black px-3.5 py-1.5 flex items-center gap-1 transition-all transform active:scale-95 cursor-pointer shadow-sm disabled:cursor-not-allowed disabled:opacity-50"
@@ -4863,6 +4910,15 @@ export default function StudentFinancialPortal({
                     <span>إضافة بند رسوم جديد</span>
                   </button>
                 </div>
+
+                {selectedStudent && (
+                  <div className="mt-2 flex flex-wrap items-center gap-2 rounded-xl border border-indigo-100 bg-indigo-50/70 px-3 py-2 text-[11px] font-bold text-indigo-900">
+                    <span>المرحلة: {selectedStudentFeeContext?.stageType === 'primary' ? 'الابتدائي' : selectedStudentFeeContext?.stageType === 'middle' ? 'المتوسط' : selectedStudentFeeContext?.stageType === 'secondary' ? 'الثانوي' : selectedStudentFeeContext?.stageType === 'kindergarten' ? 'الروضة' : 'غير محددة'}</span>
+                    <span className="text-indigo-300">|</span>
+                    <span>مركز التكلفة: {selectedStudentFeeContext?.costCenter || 'غير محدد'}</span>
+                    {selectedStudentFeeContext?.gradeText && <><span className="text-indigo-300">|</span><span>الصف: {selectedStudentFeeContext.gradeText}</span></>}
+                  </div>
+                )}
 
                 {/* Primary Editable Fee Items Table */}
                 <div className="overflow-hidden shadow-xs">
@@ -4884,7 +4940,8 @@ export default function StudentFinancialPortal({
                               value={row.type}
                               onChange={(e) => {
                                 const val = e.target.value;
-                                setFeeRows(feeRows.map(f => f.id === row.id ? { ...f, type: val } : f));
+                                const selectedConfig = feeConfigs.find(config => config.type.trim() === val);
+                                setFeeRows(feeRows.map(f => f.id === row.id ? { ...f, type: val, amount: Number(selectedConfig?.amount || 0) } : f));
                               }}
                               disabled={financialMutationDisabled}
                               className="w-full bg-transparent p-1 text-xs font-bold text-slate-800 focus:ring-1 focus:ring-[#9a6a1d] focus:border-[#9a6a1d] focus:outline-none"

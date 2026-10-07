@@ -14649,7 +14649,16 @@ export async function createApp(options: { cloudflare?: boolean } = {}): Promise
         if (!transaction) throw new DatabaseError('تعذر فتح المعاملة المالية.');
         const student = await transaction.query(`SELECT id, preferred_name, legal_first_name, legal_middle_name, legal_last_name FROM public.students WHERE tenant_id = $1 AND school_id = $2 AND id = $3 AND deleted_at IS NULL`, [tenantId, schoolId, studentId]);
         if (!student.rows[0]) throw new ValidationError('الطالب غير موجود في المدرسة الحالية.');
-        const invoices = await transaction.query(`SELECT id, student_id AS "studentId", student_name AS "studentName", item, amount, tax_amount AS "taxAmount", paid_amount AS "paidAmount", remaining_amount AS "remainingAmount", invoice_date AS "invoiceDate", due_date AS "dueDate", status, currency FROM public.student_fee_invoices WHERE tenant_id = $1 AND school_id = $2 AND student_id = $3 ORDER BY due_date DESC NULLS LAST, invoice_date DESC NULLS LAST`, [tenantId, schoolId, studentId]);
+        const invoices = await transaction.query(`SELECT id, student_id AS "studentId", student_name AS "studentName", item, amount, tax_amount AS "taxAmount", paid_amount AS "paidAmount", remaining_amount AS "remainingAmount", invoice_date AS "invoiceDate", due_date AS "dueDate", status, currency, source_payload AS "sourcePayload" FROM public.student_fee_invoices WHERE tenant_id = $1 AND school_id = $2 AND student_id = $3 ORDER BY due_date DESC NULLS LAST, invoice_date DESC NULLS LAST`, [tenantId, schoolId, studentId]);
+        for (const invoice of invoices.rows) {
+          const payload = typeof invoice.sourcePayload === 'string'
+            ? (() => { try { return JSON.parse(invoice.sourcePayload); } catch { return {}; } })()
+            : invoice.sourcePayload || {};
+          invoice.costCenter = String(payload.costCenter || '');
+          invoice.costCenterId = String(payload.costCenter || '');
+          invoice.academicStageCode = String(payload.academicStageCode || '');
+          invoice.stageId = String(payload.academicStageCode || '');
+        }
         const receipts = await transaction.query(`SELECT id, student_id AS "studentId", receipt_date AS "receiptDate", amount, payment_method AS "paymentMethod", status FROM public.student_fee_receipts WHERE tenant_id = $1 AND school_id = $2 AND student_id = $3 ORDER BY receipt_date DESC NULLS LAST`, [tenantId, schoolId, studentId]);
         account = {
           student: student.rows[0],
@@ -14972,7 +14981,7 @@ export async function createApp(options: { cloudflare?: boolean } = {}): Promise
           .maybeSingle(),
         canonicalReadClient
           .from('student_fee_invoices')
-          .select('id,student_id,student_name,item,amount,tax_amount,paid_amount,remaining_amount,invoice_date,due_date,status,journal_entry_id,template_id,academic_year_id,academic_period_id,currency,idempotency_key,version')
+          .select('id,student_id,student_name,item,amount,tax_amount,paid_amount,remaining_amount,invoice_date,due_date,status,journal_entry_id,template_id,academic_year_id,academic_period_id,currency,idempotency_key,version,source_payload')
           .eq('tenant_id', tenantId)
           .eq('school_id', schoolId)
           .order('invoice_date', { ascending: false })
@@ -14997,26 +15006,35 @@ export async function createApp(options: { cloudflare?: boolean } = {}): Promise
       if (receiptResult.error && !isMissingCanonicalTable(receiptResult.error)) throw receiptResult.error;
       if (chartResult.error && !isMissingCanonicalTable(chartResult.error)) throw chartResult.error;
       snapshot = snapshotResult.data || null;
-      canonicalFeeInvoices = (invoiceResult.data || []).map((row: any) => ({
-        id: row.id,
-        studentId: row.student_id,
-        studentName: row.student_name,
-        item: row.item,
-        amount: row.amount,
-        taxAmount: row.tax_amount,
-        paidAmount: row.paid_amount,
-        remainingAmount: row.remaining_amount,
-        invoiceDate: row.invoice_date,
-        dueDate: row.due_date,
-        status: row.status,
-        journalEntryId: row.journal_entry_id,
-        templateId: row.template_id,
-        academicYearId: row.academic_year_id,
-        academicPeriodId: row.academic_period_id,
-        currency: row.currency,
-        idempotencyKey: row.idempotency_key,
-        version: row.version,
-      }));
+      canonicalFeeInvoices = (invoiceResult.data || []).map((row: any) => {
+        const sourcePayload = typeof row.source_payload === 'string'
+          ? (() => { try { return JSON.parse(row.source_payload); } catch { return {}; } })()
+          : row.source_payload || {};
+        return {
+          id: row.id,
+          studentId: row.student_id,
+          studentName: row.student_name,
+          item: row.item,
+          amount: row.amount,
+          taxAmount: row.tax_amount,
+          paidAmount: row.paid_amount,
+          remainingAmount: row.remaining_amount,
+          invoiceDate: row.invoice_date,
+          dueDate: row.due_date,
+          status: row.status,
+          journalEntryId: row.journal_entry_id,
+          templateId: row.template_id,
+          academicYearId: row.academic_year_id,
+          academicPeriodId: row.academic_period_id,
+          currency: row.currency,
+          costCenter: String(sourcePayload.costCenter || ''),
+          costCenterId: String(sourcePayload.costCenter || ''),
+          academicStageCode: String(sourcePayload.academicStageCode || ''),
+          stageId: String(sourcePayload.academicStageCode || ''),
+          idempotencyKey: row.idempotency_key,
+          version: row.version,
+        };
+      });
       canonicalFeeReceipts = (receiptResult.data || []).map((row: any) => ({
         id: row.id,
         studentId: row.student_id,
