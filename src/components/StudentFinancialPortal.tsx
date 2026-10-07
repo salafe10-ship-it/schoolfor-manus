@@ -222,10 +222,22 @@ export default function StudentFinancialPortal({
       return;
     }
     receiptEntryScrollResetPendingRef.current = true;
-    const workspace = document.querySelector<HTMLElement>('.workspace-main');
-    const portal = document.getElementById('student-financial-portal');
-    if (workspace) workspace.scrollTop = 0;
-    if (portal) portal.scrollTop = 0;
+    const resetScroll = () => {
+      const workspace = document.querySelector<HTMLElement>('.workspace-main');
+      const portal = document.getElementById('student-financial-portal');
+      if (workspace) workspace.scrollTop = 0;
+      if (portal) portal.scrollTop = 0;
+    };
+    resetScroll();
+    let secondFrame = 0;
+    const firstFrame = window.requestAnimationFrame(() => {
+      resetScroll();
+      secondFrame = window.requestAnimationFrame(resetScroll);
+    });
+    return () => {
+      window.cancelAnimationFrame(firstFrame);
+      if (secondFrame) window.cancelAnimationFrame(secondFrame);
+    };
   }, [activeSubSec]);
 
   const activeMassStages = useMemo(
@@ -931,11 +943,25 @@ export default function StudentFinancialPortal({
 
   React.useLayoutEffect(() => {
     if (activeSubSec !== 'receipts' || !receiptEntryScrollResetPendingRef.current || !selectedStudRv) return;
-    const workspace = document.querySelector<HTMLElement>('.workspace-main');
-    const portal = document.getElementById('student-financial-portal');
-    if (workspace) workspace.scrollTop = 0;
-    if (portal) portal.scrollTop = 0;
-    receiptEntryScrollResetPendingRef.current = false;
+    const resetScroll = () => {
+      const workspace = document.querySelector<HTMLElement>('.workspace-main');
+      const portal = document.getElementById('student-financial-portal');
+      if (workspace) workspace.scrollTop = 0;
+      if (portal) portal.scrollTop = 0;
+    };
+    resetScroll();
+    let secondFrame = 0;
+    const firstFrame = window.requestAnimationFrame(() => {
+      resetScroll();
+      secondFrame = window.requestAnimationFrame(() => {
+        resetScroll();
+        receiptEntryScrollResetPendingRef.current = false;
+      });
+    });
+    return () => {
+      window.cancelAnimationFrame(firstFrame);
+      if (secondFrame) window.cancelAnimationFrame(secondFrame);
+    };
   }, [activeSubSec, selectedStudRv?.id]);
 
   // Populate form when selection changes
@@ -2711,8 +2737,10 @@ export default function StudentFinancialPortal({
   // Filter and search vouchers list
   const filteredReceiptVouchers = useMemo(() => {
     return studentReceiptVouchers.filter(v => {
-      const matchesSearch = v.studentName.includes(rvSearch) || v.id.includes(rvSearch) || (v.against && v.against.includes(rvSearch));
-      const matchesStatus = rvStatusFilter === 'all' || v.status === rvStatusFilter;
+      const search = rvSearch.trim().toLocaleLowerCase();
+      const matchesSearch = !search || [v.studentName, v.id, v.against]
+        .some(value => String(value || '').toLocaleLowerCase().includes(search));
+      const matchesStatus = rvStatusFilter === 'all' || String(v.status || '').toLocaleLowerCase() === rvStatusFilter;
       return matchesSearch && matchesStatus;
     });
   }, [studentReceiptVouchers, rvSearch, rvStatusFilter]);
@@ -5459,7 +5487,7 @@ export default function StudentFinancialPortal({
                 {/* Status Tab Filters */}
                 <div>
                   <label className="text-[10px] font-extrabold text-slate-400 block mb-1.5">تصفية حسب حالة السند:</label>
-                  <div className="grid grid-cols-3 gap-1 bg-slate-100 p-1 rounded-lg">
+                  <div className="grid grid-cols-3 gap-1.5 rounded-xl border border-slate-200 bg-slate-100/80 p-1.5 shadow-inner" role="group" aria-label="تصفية سندات القبض حسب الحالة">
                     {[
                       { id: 'all', label: 'الكل' },
                       { id: 'draft', label: 'مسودة' },
@@ -5470,11 +5498,13 @@ export default function StudentFinancialPortal({
                     ].map(tab => (
                       <button
                         key={tab.id}
+                        type="button"
+                        aria-pressed={rvStatusFilter === tab.id}
                         onClick={() => setRvStatusFilter(tab.id)}
-                        className={`text-[10px] font-bold py-1 px-1.5 rounded transition-all cursor-pointer ${
+                        className={`min-h-9 rounded-lg border px-2 py-1.5 text-xs font-bold transition-all duration-150 cursor-pointer focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[#9a6a1d] focus-visible:ring-offset-1 ${
                           rvStatusFilter === tab.id
-                            ? 'text-slate-900 shadow-sm'
-                            : 'text-slate-500 hover:text-slate-900'
+                            ? 'border-[#b8892d] bg-white text-[#543b12] shadow-sm ring-1 ring-[#d4af37]/25'
+                            : 'border-transparent bg-transparent text-slate-600 hover:border-slate-300 hover:bg-white/80 hover:text-slate-900'
                         }`}
                       >
                         {tab.label}
