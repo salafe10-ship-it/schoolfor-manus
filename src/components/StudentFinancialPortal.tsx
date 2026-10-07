@@ -151,6 +151,7 @@ export default function StudentFinancialPortal({
   } | null>(null);
   const [refreshing, setRefreshing] = useState<boolean>(false);
   const refreshInFlightRef = React.useRef(false);
+  const receiptEntryScrollResetPendingRef = React.useRef(false);
   const [selectedStudent, setSelectedStudent] = useState<Student | null>(null);
   const [reportSearch, setReportSearch] = useState<string>('');
   const [reportStatusFilter, setReportStatusFilter] = useState<string>('all');
@@ -216,7 +217,11 @@ export default function StudentFinancialPortal({
   }, [feeConfigs, massFeeConfigId]);
 
   React.useLayoutEffect(() => {
-    if (activeSubSec !== 'receipts') return;
+    if (activeSubSec !== 'receipts') {
+      receiptEntryScrollResetPendingRef.current = false;
+      return;
+    }
+    receiptEntryScrollResetPendingRef.current = true;
     const workspace = document.querySelector<HTMLElement>('.workspace-main');
     const portal = document.getElementById('student-financial-portal');
     if (workspace) workspace.scrollTop = 0;
@@ -923,6 +928,15 @@ export default function StudentFinancialPortal({
       setSelectedStudRv(studentReceiptVouchers[0]);
     }
   }, [studentReceiptVouchers, selectedStudRv]);
+
+  React.useLayoutEffect(() => {
+    if (activeSubSec !== 'receipts' || !receiptEntryScrollResetPendingRef.current || !selectedStudRv) return;
+    const workspace = document.querySelector<HTMLElement>('.workspace-main');
+    const portal = document.getElementById('student-financial-portal');
+    if (workspace) workspace.scrollTop = 0;
+    if (portal) portal.scrollTop = 0;
+    receiptEntryScrollResetPendingRef.current = false;
+  }, [activeSubSec, selectedStudRv?.id]);
 
   // Populate form when selection changes
   React.useEffect(() => {
