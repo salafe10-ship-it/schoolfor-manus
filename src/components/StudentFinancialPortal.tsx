@@ -4151,16 +4151,16 @@ export default function StudentFinancialPortal({
             </div>
 
             {/* Fee Config List Table */}
-            <div className="overflow-hidden shadow-sm">
-              <table className="w-full text-right border-collapse">
+            <div className="financial-fee-config-table-wrap overflow-x-auto shadow-sm">
+              <table className="financial-fee-config-table w-full text-right border-separate border-spacing-0">
                 <thead>
                   <tr className="financial-fee-module-table-header text-xs text-white">
                     {/* RTL Table Header Cells from right to left */}
-                    <th className="p-3 bg-[#0284c7] border-l border-white/10 font-bold text-center w-1/4">نوع الرسوم</th>
-                    <th className="p-3 bg-slate-800 border-l border-white/10 font-bold text-center">المبلغ</th>
-                    <th className="p-3 bg-slate-800 border-l border-white/10 font-bold text-center">حساب الإيراد</th>
-                    <th className="p-3 bg-slate-800 border-l border-white/10 font-bold text-center">رقم الإيراد</th>
-                    <th className="p-3 bg-slate-800 font-bold text-center w-1/4">الأنشطة المطلوبة</th>
+                    <th className="financial-fee-config-table-heading font-bold text-center w-1/4">نوع الرسوم</th>
+                    <th className="financial-fee-config-table-heading font-bold text-center">المبلغ</th>
+                    <th className="financial-fee-config-table-heading font-bold text-center">حساب الإيراد</th>
+                    <th className="financial-fee-config-table-heading font-bold text-center">رقم الإيراد</th>
+                    <th className="financial-fee-config-table-heading font-bold text-center w-1/4">الأنشطة المطلوبة</th>
                   </tr>
                 </thead>
                 <tbody className="divide-y divide-amber-900/10 bg-slate-50/60 backdrop-blur-sm rounded-b-2xl">
@@ -4176,20 +4176,20 @@ export default function StudentFinancialPortal({
                         setCurrFeeActivities(item.activities);
                         triggerNotification(`تم اختيار بند: ${item.type}`, 'info');
                       }}
-                      className={`hover:bg-transparent transition-colors cursor-pointer ${currFeeId === item.id ? 'bg-yellow-50/50' : ''}`}
+                      className={`financial-fee-config-table-row transition-colors cursor-pointer ${currFeeId === item.id ? 'financial-fee-config-table-row-selected' : ''}`}
                     >
-                      <td className="p-3 text-[#0070c0] font-bold text-center border-l border-slate-100">{item.type}</td>
-                      <td className="p-3 font-bold text-center border-l border-slate-100 text-slate-700">
+                      <td className="financial-fee-config-table-cell financial-fee-config-table-type font-bold text-center">{item.type}</td>
+                      <td className="financial-fee-config-table-cell font-bold text-center text-slate-700">
                         {item.amount.toLocaleString(undefined, { minimumFractionDigits: 0 })}
                       </td>
-                      <td className="p-3 text-center border-l border-slate-100 text-slate-700">{item.account}</td>
-                      <td className="p-3 text-center border-l border-slate-100 text-slate-700">{item.orderNumber}</td>
-                      <td className="p-3 text-right text-slate-500 max-w-xs truncate">{item.activities || '—'}</td>
+                      <td className="financial-fee-config-table-cell text-center text-slate-700">{item.account}</td>
+                      <td className="financial-fee-config-table-cell text-center text-slate-700">{item.orderNumber}</td>
+                      <td className="financial-fee-config-table-cell financial-fee-config-table-activities text-right text-slate-500 max-w-xs truncate">{item.activities || '—'}</td>
                     </tr>
                   ))}
                   {feeConfigs.length === 0 && (
                     <tr>
-                      <td colSpan={5} className="p-8 text-center text-slate-400 font-medium font-sans">
+                      <td colSpan={5} className="financial-fee-config-table-empty text-center text-slate-400 font-medium font-sans">
                         لا يوجد بنود رسوم مصممة حالياً. اضغط على "جديد" للبدء.
                       </td>
                     </tr>
