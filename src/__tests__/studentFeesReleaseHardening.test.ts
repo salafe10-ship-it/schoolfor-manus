@@ -81,5 +81,9 @@ describe('student-fees release hardening', () => {
     expect(stagingUat).toContain('manual-settle');
     expect(stagingUat).toContain('cross-student allocation was unexpectedly accepted');
     expect(stagingUat).toContain('reversal migration is not installed');
+    expect(stagingUat).toContain('ssl: { rejectUnauthorized: true }');
+    expect(stagingUat).not.toContain('rejectUnauthorized: false');
+    expect(stagingUat).toContain('let writesStarted = false;');
+    expect(stagingUat).toContain('if (writesStarted) {');
   });
 });

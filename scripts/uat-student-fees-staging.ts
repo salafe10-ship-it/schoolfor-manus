@@ -76,7 +76,7 @@ function addDays(days: number) { const date = new Date(); date.setUTCDate(date.g
 
 async function main() {
   requireEnvironment();
-  const pool = new Pool({ connectionString: databaseUrl, max: 1, connectionTimeoutMillis: 10_000, ssl: { rejectUnauthorized: false }, application_name: 'edupro-student-fees-staging-uat-readonly' });
+  const pool = new Pool({ connectionString: databaseUrl, max: 1, connectionTimeoutMillis: 10_000, ssl: { rejectUnauthorized: true }, application_name: 'edupro-student-fees-staging-uat-readonly' });
   const runId = randomUUID();
   const receiptIds = [
     `UATRCPT-${runId}-P`,
@@ -90,6 +90,7 @@ async function main() {
   let cancelInvoiceId = '';
   let bulkInvoiceId = '';
   const completed: string[] = [];
+  let writesStarted = false;
 
   async function studentAccount(studentId: string) {
     const { body } = await requireApi(`/api/financial/students/${encodeURIComponent(studentId)}/account`);
@@ -163,6 +164,7 @@ async function main() {
         financialPeriod: context.financialPeriod, revenueAccount: REVENUE_ACCOUNT, receivableAccount: '1201', costCenter: COST_CENTER,
         currency: template.currency || 'SAR', idempotencyKey: `${issuePrefix}:cancel` },
     ];
+    writesStarted = true;
     const firstIssue = await requireApi('/api/financial/invoices/issue-batch', { method: 'POST', body: JSON.stringify({ invoices: batch }) });
     const secondIssue = await requireApi('/api/financial/invoices/issue-batch', { method: 'POST', body: JSON.stringify({ invoices: batch }) });
     const issued = firstIssue.body.data.invoices;
@@ -283,29 +285,31 @@ async function main() {
     // Best-effort compensating cleanup preserves staging balances even when a
     // later assertion fails. Reversals and voids are intentionally idempotent.
     const cleanupErrors: string[] = [];
-    for (const receiptId of receiptIds) {
-      try {
-        const receipt = await api(`/api/financial/receipts/${encodeURIComponent(receiptId)}/reverse`, {
-          method: 'POST', body: JSON.stringify({ reason: `UAT cleanup ${runId}` }),
-        });
-        if (!receipt.response.ok && receipt.response.status !== 404 && receipt.response.status !== 409) cleanupErrors.push(`receipt:${receiptId}:${receipt.response.status}`);
-      } catch { cleanupErrors.push(`receipt:${receiptId}:unreachable`); }
-    }
-    try {
-      const finance = await api('/api/financial/database');
-      const candidateInvoices = (finance.body?.data?.invoices || []).filter((invoice: any) =>
-        String(invoice.idempotencyKey || '').includes(runId) || String(invoice.id || '') === primaryInvoiceId || String(invoice.id || '') === cancelInvoiceId || String(invoice.id || '') === bulkInvoiceId
-      );
-      for (const invoice of candidateInvoices) {
-        if (Number(invoice.paidAmount || 0) > 0 || ['cancelled', 'void', 'refunded', 'written_off'].includes(String(invoice.status || '').toLowerCase())) continue;
+    if (writesStarted) {
+      for (const receiptId of receiptIds) {
         try {
-          const response = await api(`/api/financial/invoices/${encodeURIComponent(invoice.id)}/void`, {
+          const receipt = await api(`/api/financial/receipts/${encodeURIComponent(receiptId)}/reverse`, {
             method: 'POST', body: JSON.stringify({ reason: `UAT cleanup ${runId}` }),
           });
-          if (!response.response.ok && response.response.status !== 404 && response.response.status !== 409) cleanupErrors.push(`invoice:${invoice.id}:${response.response.status}`);
-        } catch { cleanupErrors.push(`invoice:${invoice.id}:unreachable`); }
+          if (!receipt.response.ok && receipt.response.status !== 404 && receipt.response.status !== 409) cleanupErrors.push(`receipt:${receiptId}:${receipt.response.status}`);
+        } catch { cleanupErrors.push(`receipt:${receiptId}:unreachable`); }
       }
-    } catch { cleanupErrors.push('invoice-discovery:unreachable'); }
+      try {
+        const finance = await api('/api/financial/database');
+        const candidateInvoices = (finance.body?.data?.invoices || []).filter((invoice: any) =>
+          String(invoice.idempotencyKey || '').includes(runId) || String(invoice.id || '') === primaryInvoiceId || String(invoice.id || '') === cancelInvoiceId || String(invoice.id || '') === bulkInvoiceId
+        );
+        for (const invoice of candidateInvoices) {
+          if (Number(invoice.paidAmount || 0) > 0 || ['cancelled', 'void', 'refunded', 'written_off'].includes(String(invoice.status || '').toLowerCase())) continue;
+          try {
+            const response = await api(`/api/financial/invoices/${encodeURIComponent(invoice.id)}/void`, {
+              method: 'POST', body: JSON.stringify({ reason: `UAT cleanup ${runId}` }),
+            });
+            if (!response.response.ok && response.response.status !== 404 && response.response.status !== 409) cleanupErrors.push(`invoice:${invoice.id}:${response.response.status}`);
+          } catch { cleanupErrors.push(`invoice:${invoice.id}:unreachable`); }
+        }
+      } catch { cleanupErrors.push('invoice-discovery:unreachable'); }
+    }
     const errorMessage = error instanceof Error ? error.message : 'unknown';
     console.error(JSON.stringify({ success: false, target: 'isolated staging', runId, completed, error: errorMessage, cleanupErrors }, null, 2));
     process.exitCode = 1;
