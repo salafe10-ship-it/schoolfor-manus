@@ -1387,7 +1387,71 @@ export default function StudentFinancialPortal({
       return;
     }
     if (selectedStudRv.status === 'posted') {
-      triggerNotification('السند المرحل لا يُعكس من الواجهة القديمة؛ يلزم مسار تسوية خادمي يعيد التخصيص والرصيد والقيد معًا.', 'warning');
+      const cancelReason = window.prompt('أدخل سبب عكس سند القبض لتوثيقه محاسبيًا:');
+      if (!cancelReason || !cancelReason.trim()) {
+        triggerNotification('يجب تحديد سبب عكس السند.', 'warning');
+        return;
+      }
+      if (!window.confirm('سيُعكس قيد اليومية وتخصيصات السند وأرصدة الفواتير والأقساط في معاملة واحدة. هل تريد المتابعة؟')) return;
+      try {
+        const response = await authenticatedRequest(`/api/financial/receipts/${encodeURIComponent(selectedStudRv.id)}/reverse`, {
+          method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ reason: cancelReason.trim() })
+        });
+        const result = await response.json().catch(() => ({}));
+        if (!response.ok || !result.success || !result.data?.reversalJournalId) {
+          throw new Error(result?.error || result?.message || 'تعذر عكس السند في المصدر المالي الكانوني.');
+        }
+        const cancelledVoucher = {
+          ...selectedStudRv,
+          status: 'cancelled',
+          voidReason: cancelReason.trim(),
+          cancelledAt: new Date().toLocaleString('ar-LY'),
+          reversalJournalEntryId: String(result.data.reversalJournalId),
+          notes: `تم عكس التخصيصات والأرصدة والقيد ذريًا. السبب: ${cancelReason.trim()}`
+        };
+        setStudentReceiptVouchers(previous => previous.map(voucher => voucher.id === cancelledVoucher.id ? cancelledVoucher : voucher));
+        setSelectedStudRv(cancelledVoucher);
+        const invoiceUpdates = Array.isArray(result.data.invoiceUpdates) ? result.data.invoiceUpdates : [];
+        if (invoiceUpdates.length > 0) {
+          const current = new Map<string, Invoice>(financialInvoices.map(invoice => [invoice.id, invoice] as [string, Invoice]));
+          const nextInvoices = [...current.values()];
+          for (const update of invoiceUpdates) {
+            const existingInvoice = current.get(String(update.id));
+            const nextInvoice = {
+              ...(existingInvoice || {}),
+              ...update,
+              id: String(update.id),
+              studentId: String(update.studentId || selectedStudRv.studentId),
+              studentName: existingInvoice?.studentName || selectedStudRv.studentName,
+              totalAmount: Number(update.amount || 0) + Number(update.taxAmount || 0),
+              amount: Number(update.amount || 0),
+              taxAmount: Number(update.taxAmount || 0),
+              paidAmount: Number(update.paidAmount || 0),
+              remainingAmount: Number(update.remainingAmount || 0),
+              status: String(update.status || 'issued')
+            } as Invoice;
+            if (existingInvoice) {
+              const index = nextInvoices.findIndex(invoice => invoice.id === nextInvoice.id);
+              if (index >= 0) nextInvoices[index] = nextInvoice;
+            } else nextInvoices.push(nextInvoice);
+          }
+          setFinancialInvoices(nextInvoices);
+          setInvoices(nextInvoices);
+        }
+        if (result.data.studentTotals) {
+          setStudents(previous => previous.map(student => student.id === selectedStudRv.studentId
+            ? { ...student, feesPaid: Number(result.data.studentTotals.paidAmount || 0), feesRemaining: Number(result.data.studentTotals.remainingAmount || 0) }
+            : student));
+        }
+        EnterpriseAuditLogger.log({
+          action: 'إلغاء اعتماد', oldValue: selectedStudRv, newValue: cancelledVoucher,
+          userName: auditActor, userRole: 'Manager', module: 'حسابات الطلاب', device: 'المصدر المالي الكانوني'
+        });
+        triggerNotification(`تم عكس السند وتخصيصاته والفواتير والأقساط ذريًا. رقم القيد العكسي: ${result.data.reversalJournalId}`, 'success');
+        logAction('REVERSE_STUDENT_RECEIPT', `عكس سند القبض ${selectedStudRv.id} بقيمة ${selectedStudRv.amount}. السبب: ${cancelReason.trim()}`, 'حسابات الطلاب');
+      } catch (error: any) {
+        triggerNotification(error?.message || 'تعذر عكس السند المرحل.', 'warning');
+      }
       return;
     }
 
@@ -1650,7 +1714,7 @@ export default function StudentFinancialPortal({
     const inv = financialInvoices.find(i => i.id === invoiceId);
     if (!inv) return;
 
-    if (inv.status === 'Cancelled' || inv.status === 'Void') {
+    if (['cancelled', 'void'].includes(String(inv.status || '').toLowerCase())) {
       triggerNotification('⚠️ هذه الفاتورة ملغاة بالفعل.', 'warning');
       return;
     }
@@ -1665,50 +1729,34 @@ export default function StudentFinancialPortal({
       return;
     }
 
-    const voidedAt = new Date().toLocaleDateString('ar-LY') + ' ' + new Date().toLocaleTimeString('ar-LY');
-
+    let result: any;
+    try {
+      const response = await authenticatedRequest(`/api/financial/invoices/${encodeURIComponent(invoiceId)}/void`, {
+        method: 'POST', headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ reason: cancelReason })
+      });
+      result = await response.json().catch(() => ({}));
+      if (!response.ok || !result.success || !result.data?.invoice) {
+        throw new Error(result?.error || result?.message || 'فشل إلغاء المطالبة وعكس قيدها في معاملة واحدة.');
+      }
+    } catch (error: any) {
+      triggerNotification(error?.message || 'تعذر تنفيذ الإلغاء الكانوني للفاتورة.', 'warning');
+      return;
+    }
     const cancelledInvoice = {
       ...inv,
-      status: 'Cancelled' as const,
+      status: 'cancelled' as const,
+      remainingAmount: 0,
+      reversalJournalEntryId: String(result.data.reversalJournalId || ''),
       voidReason: cancelReason,
       voidedBy: auditActor,
-      voidedAt,
-      notes: `تم الإلغاء وعكس الأثر المالي - سبب الإلغاء: ${cancelReason}`
+      voidedAt: new Date().toLocaleString('ar-LY'),
+      notes: `تم الإلغاء وعكس الأثر المالي ذريًا - سبب الإلغاء: ${cancelReason}`
     };
     const updatedInvoices = financialInvoices.map(item => item.id === invoiceId ? cancelledInvoice : item);
 
-    let canonicalReversalId = '';
-    if (inv.journalEntryId) {
-      try {
-        const response = await authenticatedRequest(`/api/financial/journals/${encodeURIComponent(inv.journalEntryId)}/reverse`, {
-          method: 'POST', headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({ reason: cancelReason })
-        });
-        const result = await response.json().catch(() => ({}));
-        if (!response.ok || !result.success) throw new Error(result?.error || result?.message || 'فشل العكس الكانوني.');
-        canonicalReversalId = String(result.data?.reversalId || '');
-      } catch (error: any) {
-        triggerNotification(error?.message || 'تعذر تنفيذ العكس الكانوني للفاتورة.', 'warning');
-        return;
-      }
-    }
-
-    // Keep the snapshot as a compatibility projection; the reversal itself is canonical.
-    let reversalJvId = '';
-    reversalJvId = canonicalReversalId;
-
-    const updatedJvs = glJvs;
-    const updatedAccounts = chartOfAccounts;
-
-    try {
-      await saveToServerDb(undefined, undefined, updatedJvs, updatedAccounts, updatedInvoices);
-    } catch (error: any) {
-      triggerNotification(error?.message || 'تعذر حفظ إلغاء الفاتورة في المصدر المالي.', 'warning');
-      return;
-    }
-
     const student = students.find(s => s.id === inv.studentId);
-    const remainingToRelease = inv.status !== 'paid' && inv.status !== 'Paid'
+    const remainingToRelease = !result.meta?.idempotentReplay && inv.status !== 'paid' && inv.status !== 'Paid'
       ? Number(inv.remainingAmount ?? inv.amount)
       : 0;
     if (student && remainingToRelease > 0) {
@@ -1718,8 +1766,6 @@ export default function StudentFinancialPortal({
     }
     setFinancialInvoices(updatedInvoices);
     setInvoices(updatedInvoices);
-    setGlJvs(updatedJvs);
-    setChartOfAccounts(updatedAccounts);
 
     // Log in unified EnterpriseAuditLogger
     EnterpriseAuditLogger.log({
@@ -1732,7 +1778,7 @@ export default function StudentFinancialPortal({
       ipAddress: auditIpAddress
     });
 
-    triggerNotification(`✓ تم إلغاء الفاتورة ${inv.id} وعكس أثرها المالي بالكامل بنجاح.`, 'success');
+    triggerNotification(`✓ تم إلغاء الفاتورة ${inv.id} وعكس أثرها المالي ذريًا. رقم القيد العكسي: ${result.data.reversalJournalId || 'مسجل'}`, 'success');
     logAction('VOID_STUDENT_INVOICE', `تم إلغاء الفاتورة ${inv.id} للطالب ${inv.studentName} بقيمة ${inv.amount}. سبب الإلغاء: ${cancelReason}`, 'حسابات الطلاب');
   };
 
@@ -3193,7 +3239,7 @@ export default function StudentFinancialPortal({
     const grossTotal = positiveRows.reduce((sum, row) => sum + Number(row.amount), 0);
     const totalDiscount = Math.min(grossTotal, (grossTotal * siblingRate) / 100 + Math.max(0, Number(manualDiscountAmount || 0)));
     let remainingDiscount = Number(totalDiscount.toFixed(2));
-    const issuedInvoices: Invoice[] = [];
+    const invoiceCommands: Array<Record<string, unknown>> = [];
 
     try {
       for (const [index, row] of positiveRows.entries()) {
@@ -3208,55 +3254,61 @@ export default function StudentFinancialPortal({
         const netAmount = Number((Number(row.amount) - rowDiscount).toFixed(2));
         if (netAmount <= 0) continue;
         const templateId = String(config?.id || '').trim();
-        const response = await authenticatedRequest('/api/financial/invoices/issue', {
-          method: 'POST',
-          headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({
-            studentId: selectedStudent.id,
-            ...(/^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i.test(templateId) ? { templateId } : {}),
-            description: row.remarks.trim() ? `${row.type} — ${row.remarks.trim()}` : row.type,
-            amount: netAmount,
-            taxAmount: 0,
-            currency: selectedSchool?.currencyCode || 'LYD',
-            dueDate: massDueDate,
-            invoiceDate: voucherDate,
-            academicYearId: financialOperationalContext.academicYearId,
-            academicPeriodId: financialOperationalContext.academicPeriodId,
-            financialPeriod: financialOperationalContext.financialPeriod,
-            revenueAccount,
-            receivableAccount: STUDENT_RECEIVABLE_ACCOUNT,
-            costCenter: selectedStudentFeeContext.costCenter,
-            academicStageCode: selectedStudentFeeContext.stageId || selectedStudentFeeContext.stageType,
-            branchId: financialOperationalContext.branchId,
-            idempotencyKey: `manual:${selectedStudent.id}:${row.id}:${financialOperationalContext.academicYearId}`
-          })
+        invoiceCommands.push({
+          studentId: selectedStudent.id,
+          ...(/^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i.test(templateId) ? { templateId } : {}),
+          description: row.remarks.trim() ? `${row.type} — ${row.remarks.trim()}` : row.type,
+          amount: netAmount,
+          grossAmount: Number(row.amount),
+          discountAmount: rowDiscount,
+          taxAmount: 0,
+          currency: selectedSchool?.currencyCode || 'LYD',
+          dueDate: massDueDate,
+          invoiceDate: voucherDate,
+          academicYearId: financialOperationalContext.academicYearId,
+          academicPeriodId: financialOperationalContext.academicPeriodId,
+          financialPeriod: financialOperationalContext.financialPeriod,
+          revenueAccount,
+          receivableAccount: STUDENT_RECEIVABLE_ACCOUNT,
+          costCenter: selectedStudentFeeContext.costCenter,
+          academicStageCode: selectedStudentFeeContext.stageId || selectedStudentFeeContext.stageType,
+          branchId: financialOperationalContext.branchId,
+          idempotencyKey: `manual:${selectedStudent.id}:${row.id}:${financialOperationalContext.academicYearId}`
         });
-        const result = await response.json().catch(() => ({}));
-        if (!response.ok || !result.success || !result.data?.invoice) {
-          throw new Error(result.message || `تعذر إصدار مطالبة البند «${row.type}».`);
-        }
-        const invoice = result.data.invoice;
-        issuedInvoices.push({
+      }
+      if (invoiceCommands.length === 0) throw new Error('أصبحت قيمة المطالبة صفرًا بعد الخصومات؛ راجع القيم.');
+      const response = await authenticatedRequest('/api/financial/invoices/issue-batch', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ invoices: invoiceCommands })
+      });
+      const result = await response.json().catch(() => ({}));
+      const createdRows = Array.isArray(result.data?.invoices) ? result.data.invoices : [];
+      if (!response.ok || !result.success || createdRows.length !== invoiceCommands.length) {
+        throw new Error(result.message || result.error || 'تعذر إصدار جميع المطالبات؛ لم تُحفظ أي مطالبة من العملية.');
+      }
+      const issuedInvoices: Invoice[] = createdRows.map((invoice: any, index: number) => {
+        const command = invoiceCommands[index] as any;
+        return {
           id: String(invoice.id),
           studentId: String(invoice.student_id || invoice.studentId || selectedStudent.id),
           studentName: String(invoice.student_name || invoice.studentName || selectedStudent.name),
-          item: String(invoice.item || row.type),
-          amount: Number(invoice.amount || netAmount),
+          item: String(invoice.item || command.description),
+          amount: Number(invoice.amount || command.amount),
           taxAmount: Number(invoice.tax_amount || invoice.taxAmount || 0),
-          totalAmount: Number(invoice.amount || netAmount) + Number(invoice.tax_amount || invoice.taxAmount || 0),
+          totalAmount: Number(invoice.amount || command.amount) + Number(invoice.tax_amount || invoice.taxAmount || 0),
           paidAmount: Number(invoice.paid_amount || invoice.paidAmount || 0),
-          remainingAmount: Number(invoice.remaining_amount || invoice.remainingAmount || netAmount),
+          remainingAmount: Number(invoice.remaining_amount || invoice.remainingAmount || (Number(command.amount) + Number(command.taxAmount || 0))),
           costCenter: selectedStudentFeeContext.costCenter,
           costCenterId: selectedStudentFeeContext.costCenter,
           stageId: selectedStudentFeeContext.stageId || undefined,
           academicStageCode: selectedStudentFeeContext.stageId || selectedStudentFeeContext.stageType,
-          invoiceDate: String(invoice.invoice_date || invoice.invoiceDate || voucherDate),
-          dueDate: String(invoice.due_date || invoice.dueDate || massDueDate),
+          invoiceDate: String(invoice.invoice_date || invoice.invoiceDate || command.invoiceDate),
+          dueDate: String(invoice.due_date || invoice.dueDate || command.dueDate),
           status: String(invoice.status || 'issued') as any,
-          currency: String(invoice.currency || selectedSchool?.currencyCode || 'LYD')
-        } as Invoice);
-      }
-      if (issuedInvoices.length === 0) throw new Error('أصبحت قيمة المطالبة صفرًا بعد الخصومات؛ راجع القيم.');
+          currency: String(invoice.currency || command.currency || selectedSchool?.currencyCode || 'LYD')
+        } as Invoice;
+      });
       const merged = new Map(financialInvoices.map(invoice => [invoice.id, invoice]));
       issuedInvoices.forEach(invoice => merged.set(invoice.id, invoice));
       const nextInvoices = [...merged.values()];
@@ -5450,7 +5502,7 @@ export default function StudentFinancialPortal({
               <button
                 type="button"
                 onClick={handleCancelStudRv}
-                disabled={financialWritesLocked || financialPersistence !== 'ready' || studRvMode !== 'view' || !selectedStudRv || selectedStudRv.status === 'cancelled' || selectedStudRv.status === 'posted'}
+                disabled={financialWritesLocked || financialPersistence !== 'ready' || studRvMode !== 'view' || !selectedStudRv || selectedStudRv.status === 'cancelled'}
                 className={`financial-receipts-action financial-receipts-danger text-xs font-bold px-3 py-2 flex items-center gap-1.5 transition-colors cursor-pointer ${
                   studRvMode === 'view' && selectedStudRv && selectedStudRv.status !== 'cancelled'
                     ? 'bg-rose-600 hover:bg-rose-500 text-white'
