@@ -5,6 +5,9 @@ const server = readFileSync('server.ts', 'utf8');
 const portal = readFileSync('src/components/StudentFinancialPortal.tsx', 'utf8');
 const reversalMigration = readFileSync('supabase/migrations/202610131000_student_fee_receipt_reversal_audit.sql', 'utf8');
 const stagingUat = readFileSync('scripts/uat-student-fees-staging.ts', 'utf8');
+const stagingEnvExample = readFileSync('docs/student-fees-staging-uat.env.example', 'utf8');
+const studentFeesOperations = readFileSync('docs/STUDENT_FEES_CANONICAL_OPERATIONS.md', 'utf8');
+const gitignore = readFileSync('.gitignore', 'utf8');
 
 function section(source: string, start: string, end: string) {
   const startAt = source.indexOf(start);
@@ -101,5 +104,19 @@ describe('student-fees release hardening', () => {
     expect(reverse).toContain("'student_fee_receipt',$6,'reverse'");
     expect(reverse).toMatch(/databaseActorId,\s+auditId,\s+reason,/);
     expect(reverse).toContain('JSON.stringify({ receiptId, journalId, reversalJournalId');
+  });
+
+  it('provides disabled staging UAT placeholders without committing secrets', () => {
+    const uatVariables = [
+      'UAT_STUDENT_FEES_STAGING_CONFIRM', 'SUPABASE_URL', 'DATABASE_URL', 'UAT_FINANCIAL_BEARER_TOKEN',
+      'UAT_FINANCIAL_STUDENT_ID', 'UAT_FINANCIAL_SECOND_STUDENT_ID', 'UAT_FINANCIAL_FEE_CONFIG_ID',
+      'UAT_FINANCIAL_FEE_TEMPLATE_ID', 'UAT_FINANCIAL_RECEIPT_ACCOUNT', 'UAT_FINANCIAL_REVENUE_ACCOUNT',
+    ];
+    for (const name of uatVariables) expect(stagingEnvExample).toMatch(new RegExp(`^${name}=$`, 'm'));
+    expect(stagingEnvExample).toContain('UAT35_TARGET=schoolfor-manus-staging');
+    expect(stagingEnvExample).toContain('UAT_FINANCIAL_BASE_URL=https://schoolfor-manus-staging.salafe10.workers.dev');
+    expect(gitignore).toContain('.env*');
+    expect(studentFeesOperations).toContain('نجاح Vitest أو فحص GitHub Actions لا يعني نجاح UAT المالي');
+    expect(studentFeesOperations).toContain('pnpm uat:student-fees:staging');
   });
 });
