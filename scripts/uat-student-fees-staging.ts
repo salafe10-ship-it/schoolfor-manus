@@ -131,6 +131,12 @@ async function main() {
     tenantId = String(readiness.meta?.scope?.tenantId || '');
     schoolId = String(readiness.meta?.scope?.schoolId || '');
     assert(tenantId && schoolId, 'authenticated staging scope was not returned');
+    const existingUatReceipts = await pool.query(
+      `SELECT id FROM public.student_fee_receipts
+        WHERE tenant_id = $1 AND school_id = $2 AND id = ANY($3::text[])`,
+      [tenantId, schoolId, receiptIds],
+    );
+    assert(existingUatReceipts.rows.length === 0, 'generated UAT receipt ids already exist; no test data was created');
     const { body: operational } = await requireApi('/api/financial/operational-context');
     const context = operational.data;
     assert(context?.academicYearId && context?.academicPeriodId && context?.financialPeriod, 'active academic year/term context is missing');
@@ -176,13 +182,21 @@ async function main() {
     cancelInvoiceId = String(issued[1].id);
     completed.push('issue: two invoices in one server transaction and repeated batch with stable identities');
 
-    const badBatch = [{ ...batch[0], idempotencyKey: `${issuePrefix}:atomic-good` },
-      { ...batch[0], description: `UAT invalid revenue ${runId}`, idempotencyKey: `${issuePrefix}:atomic-invalid`, revenueAccount: `INVALID-${runId}` }];
+    const atomicInvoiceId = randomUUID();
+    const atomicKeys = [`${issuePrefix}:atomic-first`, `${issuePrefix}:atomic-conflict`];
+    const badBatch = [
+      { ...batch[0], id: atomicInvoiceId, idempotencyKey: atomicKeys[0] },
+      { ...batch[0], id: atomicInvoiceId, description: `UAT duplicate invoice id ${runId}`, idempotencyKey: atomicKeys[1] },
+    ];
     const badBatchResult = await api('/api/financial/invoices/issue-batch', { method: 'POST', body: JSON.stringify({ invoices: badBatch }) });
-    assert(!badBatchResult.response.ok, 'invalid revenue account unexpectedly allowed the batch');
-    const afterAtomicFailure = await studentAccount(STUDENT_ID);
-    assert(!(afterAtomicFailure.invoices || []).some((invoice: any) => String(invoice.idempotencyKey || '').startsWith(`${issuePrefix}:atomic-`)), 'failed batch left a partial invoice behind');
-    completed.push('atomicity: invalid multi-row batch left no partial invoice');
+    assert(!badBatchResult.response.ok, 'duplicate invoice id unexpectedly allowed the batch');
+    const atomicRows = await pool.query(
+      `SELECT id, idempotency_key FROM public.student_fee_invoices
+        WHERE tenant_id = $1 AND school_id = $2 AND idempotency_key = ANY($3::text[])`,
+      [tenantId, schoolId, atomicKeys],
+    );
+    assert(atomicRows.rows.length === 0, 'failed multi-row batch left an invoice after an earlier row had been inserted');
+    completed.push('atomicity: second-row database conflict rolled back the first inserted invoice');
 
     await requireApi(`/api/financial/invoices/${encodeURIComponent(primaryInvoiceId)}/installment-plan`, {
       method: 'POST', body: JSON.stringify({ frequency: 'monthly', count: 2, startDueDate: addDays(3) }),
@@ -286,26 +300,65 @@ async function main() {
     // later assertion fails. Reversals and voids are intentionally idempotent.
     const cleanupErrors: string[] = [];
     if (writesStarted) {
-      for (const receiptId of receiptIds) {
-        try {
-          const receipt = await api(`/api/financial/receipts/${encodeURIComponent(receiptId)}/reverse`, {
-            method: 'POST', body: JSON.stringify({ reason: `UAT cleanup ${runId}` }),
-          });
-          if (!receipt.response.ok && receipt.response.status !== 404 && receipt.response.status !== 409) cleanupErrors.push(`receipt:${receiptId}:${receipt.response.status}`);
-        } catch { cleanupErrors.push(`receipt:${receiptId}:unreachable`); }
-      }
+      try {
+        // Discover by the run's collision-checked IDs so a lost HTTP response
+        // after commit is still compensated, without treating conflicts as success.
+        const receipts = await pool.query<{ id: string; status: string; reversalJournalId: string | null }>(
+          `SELECT id, status, source_payload->>'reversalJournalId' AS "reversalJournalId"
+             FROM public.student_fee_receipts
+            WHERE tenant_id = $1 AND school_id = $2 AND id = ANY($3::text[])`,
+          [tenantId, schoolId, receiptIds],
+        );
+        for (const receiptRow of receipts.rows) {
+          const receiptId = String(receiptRow.id);
+          if (String(receiptRow.status).toLowerCase() === 'cancelled' && receiptRow.reversalJournalId) continue;
+          if (String(receiptRow.status).toLowerCase() !== 'posted') {
+            cleanupErrors.push(`receipt:${receiptId}:unexpected-status:${receiptRow.status}`);
+            continue;
+          }
+          try {
+            const reversal = await api(`/api/financial/receipts/${encodeURIComponent(receiptId)}/reverse`, {
+              method: 'POST', body: JSON.stringify({ reason: `UAT cleanup ${runId}` }),
+            });
+            if (!reversal.response.ok) {
+              cleanupErrors.push(`receipt:${receiptId}:reverse:${reversal.response.status}`);
+              continue;
+            }
+            const verified = await pool.query<{ status: string; reversalJournalId: string | null }>(
+              `SELECT status, source_payload->>'reversalJournalId' AS "reversalJournalId"
+                 FROM public.student_fee_receipts
+                WHERE tenant_id = $1 AND school_id = $2 AND id = $3`,
+              [tenantId, schoolId, receiptId],
+            );
+            if (String(verified.rows[0]?.status).toLowerCase() !== 'cancelled' || !verified.rows[0]?.reversalJournalId) {
+              cleanupErrors.push(`receipt:${receiptId}:reversal-not-persisted`);
+            }
+          } catch { cleanupErrors.push(`receipt:${receiptId}:unreachable`); }
+        }
+      } catch { cleanupErrors.push('receipt-discovery:unreachable'); }
       try {
         const finance = await api('/api/financial/database');
         const candidateInvoices = (finance.body?.data?.invoices || []).filter((invoice: any) =>
           String(invoice.idempotencyKey || '').includes(runId) || String(invoice.id || '') === primaryInvoiceId || String(invoice.id || '') === cancelInvoiceId || String(invoice.id || '') === bulkInvoiceId
         );
         for (const invoice of candidateInvoices) {
-          if (Number(invoice.paidAmount || 0) > 0 || ['cancelled', 'void', 'refunded', 'written_off'].includes(String(invoice.status || '').toLowerCase())) continue;
+          const status = String(invoice.status || '').toLowerCase();
+          if (['cancelled', 'void', 'refunded', 'written_off'].includes(status)) continue;
+          if (Number(invoice.paidAmount || 0) > 0) {
+            cleanupErrors.push(`invoice:${invoice.id}:still-paid`);
+            continue;
+          }
           try {
             const response = await api(`/api/financial/invoices/${encodeURIComponent(invoice.id)}/void`, {
               method: 'POST', body: JSON.stringify({ reason: `UAT cleanup ${runId}` }),
             });
-            if (!response.response.ok && response.response.status !== 404 && response.response.status !== 409) cleanupErrors.push(`invoice:${invoice.id}:${response.response.status}`);
+            if (!response.response.ok || !response.body?.success) {
+              cleanupErrors.push(`invoice:${invoice.id}:void:${response.response.status}`);
+              continue;
+            }
+            if (String(response.body.data?.invoice?.status || '').toLowerCase() !== 'cancelled') {
+              cleanupErrors.push(`invoice:${invoice.id}:cancellation-not-persisted`);
+            }
           } catch { cleanupErrors.push(`invoice:${invoice.id}:unreachable`); }
         }
       } catch { cleanupErrors.push('invoice-discovery:unreachable'); }

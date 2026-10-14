@@ -81,9 +81,25 @@ describe('student-fees release hardening', () => {
     expect(stagingUat).toContain('manual-settle');
     expect(stagingUat).toContain('cross-student allocation was unexpectedly accepted');
     expect(stagingUat).toContain('reversal migration is not installed');
+    expect(stagingUat).toContain('duplicate invoice id unexpectedly allowed the batch');
+    expect(stagingUat).toContain('idempotency_key = ANY($3::text[])');
+    expect(stagingUat).not.toContain('afterAtomicFailure.invoices');
     expect(stagingUat).toContain('ssl: { rejectUnauthorized: true }');
     expect(stagingUat).not.toContain('rejectUnauthorized: false');
     expect(stagingUat).toContain('let writesStarted = false;');
+    expect(stagingUat).toContain('unexpected-status');
+    expect(stagingUat).toContain('reversal-not-persisted');
+    expect(stagingUat).not.toContain('receipt.response.status !== 409');
+    expect(stagingUat).toContain('invoice:${invoice.id}:still-paid');
+    expect(stagingUat).toContain('cancellation-not-persisted');
+    expect(stagingUat).not.toContain('response.response.status !== 409');
     expect(stagingUat).toContain('if (writesStarted) {');
+  });
+
+  it('keeps receipt reversal audit IDs UUID-compatible and records the receipt in metadata', () => {
+    const reverse = section(server, 'app.post("/api/financial/receipts/:receiptId/reverse"', 'app.get("/api/financial/students/:studentId/account"');
+    expect(reverse).toContain("'student_fee_receipt',$6,'reverse'");
+    expect(reverse).toMatch(/databaseActorId,\s+auditId,\s+reason,/);
+    expect(reverse).toContain('JSON.stringify({ receiptId, journalId, reversalJournalId');
   });
 });
