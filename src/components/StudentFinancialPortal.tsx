@@ -302,6 +302,24 @@ export default function StudentFinancialPortal({
     return false;
   };
 
+  const massStudentMatchesClassroom = (student: Student, classroom: string) => {
+    if (classroom === 'الفصل غير محدد') {
+      return !String(student.classroom || '').trim();
+    }
+
+    // Academic grades are the canonical selector. A student's classroom may
+    // contain a section label (for example, "أولى ابتدائي أ"), so comparing
+    // it only with the normalized grade name would incorrectly hide students
+    // who are registered in the selected grade.
+    const selectedGrade = (grades || []).find(grade => grade?.isActive !== false
+      && String(grade.name || '').trim() === classroom);
+    if (selectedGrade && String(student.gradeId || '').trim() === String(selectedGrade.id)) {
+      return true;
+    }
+
+    return String(student.classroom || '').trim() === classroom;
+  };
+
   React.useEffect(() => {
     if (massStageId || activeMassStages.length === 0) return;
     const normalizedCurrentClassroom = normalizeMassAcademicLabel(massClassroom);
@@ -348,9 +366,7 @@ export default function StudentFinancialPortal({
     () => students
       .filter(student => !student.isDeleted && (!selectedSchool?.id || student.schoolId === selectedSchool.id))
       .filter(student => massStudentMatchesStage(student, massStageId))
-      .filter(student => massClassroom === 'الفصل غير محدد'
-        ? !String(student.classroom || '').trim()
-        : student.classroom === massClassroom),
+      .filter(student => massStudentMatchesClassroom(student, massClassroom)),
     [activeMassStages, grades, massClassroom, massStageId, selectedSchool?.id, students]
   );
 
