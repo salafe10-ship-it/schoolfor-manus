@@ -63,6 +63,20 @@ const studentImportAliases: Record<string, string[]> = {
   guardianRelation: ['guardianrelation', 'parentrelation', 'relationship', 'صلة القرابة', 'العلاقة']
 };
 
+const studentImportTemplateColumns = [
+  { header: 'الاسم الكامل', field: 'name', required: true, width: 28, help: 'إلزامي: الاسم الكامل للطالب.' },
+  { header: 'تاريخ الميلاد', field: 'dateOfBirth', required: true, width: 18, help: 'إلزامي: أدخل التاريخ بصيغة ISO: yyyy-mm-dd، مثل 2015-09-23.' },
+  { header: 'اسم ولي الأمر', field: 'parentName', required: true, width: 26, help: 'إلزامي: اسم ولي الأمر.' },
+  { header: 'هاتف ولي الأمر', field: 'parentPhone', required: true, width: 22, help: 'إلزامي: رقم هاتف ولي الأمر مع رمز الدولة عند الحاجة.' },
+  { header: 'رقم الطالب', field: 'studentNumber', required: false, width: 18, help: 'يولّد النظام رقم الطالب تلقائيًا عند اعتماد الاستيراد. اترك هذه الخانة فارغة؛ لا تكتب رقمًا يدويًا.' },
+  { header: 'الاسم المفضل', field: 'preferredName', required: false, width: 20, help: 'اختياري: الاسم المفضل للطالب.' },
+  { header: 'الجنس', field: 'gender', required: false, width: 14, help: 'اختياري: الجنس وفق خيارات النظام.' },
+  { header: 'الجنسية', field: 'nationality', required: false, width: 18, help: 'اختياري: جنسية الطالب.' },
+  { header: 'رقم الهوية', field: 'nationalId', required: false, width: 22, help: 'اختياري: رقم الهوية الوطنية.' },
+  { header: 'بريد ولي الأمر', field: 'parentEmail', required: false, width: 28, help: 'اختياري: بريد ولي الأمر الإلكتروني.' },
+  { header: 'صلة القرابة', field: 'guardianRelation', required: false, width: 18, help: 'اختياري: صلة ولي الأمر بالطالب.' }
+] as const;
+
 const STUDENT_STATUS_LABELS: Record<string, string> = {
   applicant: 'متقدم',
   accepted: 'مقبول',
@@ -395,6 +409,7 @@ export default function StudentAffairsPortal({
     motherName: '',
     motherPhone: '',
     motherWhatsapp: '',
+    motherOccupation: '',
     academicPreviousSchool: '',
     academicPreviousGrade: '',
     academicPreviousYear: '',
@@ -960,6 +975,7 @@ export default function StudentAffairsPortal({
       motherName: '',
       motherPhone: '',
       motherWhatsapp: '',
+      motherOccupation: '',
       academicPreviousSchool: '',
       academicPreviousGrade: '',
       academicPreviousYear: '',
@@ -1021,6 +1037,7 @@ export default function StudentAffairsPortal({
       motherName: (student as any).motherName || '',
       motherPhone: (student as any).motherPhone || '',
       motherWhatsapp: (student as any).motherWhatsapp || '',
+      motherOccupation: (student as any).motherOccupation || '',
       academicPreviousSchool: (student as any).academicPreviousSchool || '',
       academicPreviousGrade: (student as any).academicPreviousGrade || '',
       academicPreviousYear: (student as any).academicPreviousYear || '',
@@ -1135,7 +1152,8 @@ export default function StudentAffairsPortal({
         parentEducationLevel: formData.parentEducationLevel,
         motherName: formData.motherName,
         motherPhone: formData.motherPhone,
-        motherWhatsapp: formData.motherWhatsapp
+        motherWhatsapp: formData.motherWhatsapp,
+        motherOccupation: formData.motherOccupation
       });
     }
 
@@ -1151,7 +1169,8 @@ export default function StudentAffairsPortal({
           || ((selectedStudent as any).educationLevel || '') !== formData.parentEducationLevel
           || ((selectedStudent as any).motherName || '') !== formData.motherName
           || ((selectedStudent as any).motherPhone || '') !== formData.motherPhone
-          || ((selectedStudent as any).motherWhatsapp || '') !== formData.motherWhatsapp;
+          || ((selectedStudent as any).motherWhatsapp || '') !== formData.motherWhatsapp
+          || ((selectedStudent as any).motherOccupation || '') !== formData.motherOccupation;
         const unsupportedGuardianChanged = ((selectedStudent as any).parentNationalId || '') !== formData.parentNationalId;
         if (unsupportedGuardianChanged) {
           throw new Error('رقم الهوية الوطنية لولي الأمر ليس ضمن عقد التعديل الكانوني الحالي؛ لم يتم حفظ أي تغيير.');
@@ -1181,7 +1200,8 @@ export default function StudentAffairsPortal({
             educationLevel: formData.parentEducationLevel,
             motherName: formData.motherName,
             motherPhone: formData.motherPhone,
-            motherWhatsapp: formData.motherWhatsapp
+            motherWhatsapp: formData.motherWhatsapp,
+            motherOccupation: formData.motherOccupation
           });
           guardianPersisted = true;
         }
@@ -1260,7 +1280,8 @@ export default function StudentAffairsPortal({
           educationLevel: formData.parentEducationLevel,
           motherName: formData.motherName,
           motherPhone: formData.motherPhone,
-          motherWhatsapp: formData.motherWhatsapp
+          motherWhatsapp: formData.motherWhatsapp,
+          motherOccupation: formData.motherOccupation
         } : persistedStudent;
         setStudents(current => current.map(student => student.id === selectedStudent.id ? mergedStudent : student));
         setStudentRefreshToken(value => value + 1);
@@ -1310,6 +1331,7 @@ export default function StudentAffairsPortal({
             motherName: '',
             motherPhone: '',
             motherWhatsapp: '',
+            motherOccupation: '',
             academicPreviousSchool: '',
             academicPreviousGrade: '',
             academicPreviousYear: '',
@@ -1510,6 +1532,105 @@ export default function StudentAffairsPortal({
   const handleSelectStudentImportFile = () => {
     if (!canWriteStudents || isImportingStudents) return;
     importFileInputRef.current?.click();
+  };
+
+  const handleDownloadStudentImportTemplate = async () => {
+    try {
+      const { writeXlsxBuffer } = await import('../utils/ExcelWorkbookUtils');
+      const templateBuffer = await writeXlsxBuffer([{
+        name: 'قالب الطلاب',
+        headers: studentImportTemplateColumns.map(column => column.header),
+        rows: [],
+        columnWidths: studentImportTemplateColumns.map(column => column.width)
+      }]);
+      const ExcelJSModule = await import('exceljs');
+      const workbook = new ExcelJSModule.default.Workbook();
+      await workbook.xlsx.load(templateBuffer as unknown as Buffer);
+      const worksheet = workbook.worksheets[0];
+      if (!worksheet) throw new Error('تعذر تجهيز ورقة قالب الطلاب.');
+
+      const templateRowCount = 200;
+      const lastTemplateRow = templateRowCount + 1;
+      worksheet.views = [{ state: 'frozen', ySplit: 1, rightToLeft: true, showGridLines: false }];
+      worksheet.autoFilter = { from: 'A1', to: `${String.fromCharCode(64 + studentImportTemplateColumns.length)}${lastTemplateRow}` };
+      worksheet.getRow(1).height = 34;
+      worksheet.getRow(1).eachCell((cell, columnNumber) => {
+        const column = studentImportTemplateColumns[columnNumber - 1];
+        cell.font = { name: 'Arial', size: 11, bold: true, color: { argb: 'FFFFF4D6' } };
+        cell.fill = { type: 'pattern', pattern: 'solid', fgColor: { argb: column?.required ? 'FF5A3517' : 'FF76521F' } };
+        cell.alignment = { horizontal: 'right', vertical: 'middle', wrapText: true };
+        cell.border = {
+          top: { style: 'thin', color: { argb: 'FFD4AF37' } },
+          bottom: { style: 'medium', color: { argb: 'FFD4AF37' } },
+          left: { style: 'thin', color: { argb: 'FFD4AF37' } },
+          right: { style: 'thin', color: { argb: 'FFD4AF37' } }
+        };
+        if (column) cell.note = column.help;
+      });
+      worksheet.getColumn(2).numFmt = 'yyyy-mm-dd';
+      [4, 5, 9].forEach(columnNumber => {
+        worksheet.getColumn(columnNumber).numFmt = '@';
+      });
+
+      worksheet.addRows(Array.from({ length: templateRowCount }, () => studentImportTemplateColumns.map(() => '')));
+      for (let rowNumber = 2; rowNumber <= lastTemplateRow; rowNumber += 1) {
+        const row = worksheet.getRow(rowNumber);
+        row.height = 22;
+        row.eachCell({ includeEmpty: true }, cell => {
+          cell.fill = {
+            type: 'pattern',
+            pattern: 'solid',
+            fgColor: { argb: rowNumber % 2 === 0 ? 'FFFFFCF4' : 'FFF8F3E8' }
+          };
+          cell.font = { name: 'Arial', size: 10, color: { argb: 'FF332719' } };
+          cell.alignment = { horizontal: 'right', vertical: 'middle' };
+          cell.border = { bottom: { style: 'hair', color: { argb: 'FFE6DCC5' } } };
+        });
+      }
+
+      const guide = workbook.addWorksheet('إرشادات');
+      guide.views = [{ rightToLeft: true, showGridLines: false }];
+      guide.columns = [{ width: 27 }, { width: 88 }];
+      guide.mergeCells('A1:B1');
+      guide.getCell('A1').value = 'طريقة تعبئة قالب الطلاب';
+      guide.getCell('A1').font = { name: 'Arial', size: 14, bold: true, color: { argb: 'FFFFF4D6' } };
+      guide.getCell('A1').fill = { type: 'pattern', pattern: 'solid', fgColor: { argb: 'FF5A3517' } };
+      guide.getCell('A1').alignment = { horizontal: 'right', vertical: 'middle' };
+      guide.getRow(1).height = 32;
+      const guideRows = [
+        ['خطوة 1', 'أدخل بيانات كل طالب في صف مستقل في ورقة «قالب الطلاب». لا تغيّر أسماء الأعمدة أو ترتيبها.'],
+        ['الحقول المطلوبة', 'الاسم الكامل، تاريخ الميلاد بصيغة yyyy-mm-dd، اسم ولي الأمر، وهاتف ولي الأمر.'],
+        ['نسخ الأسماء', 'انسخ خلايا الأسماء فقط. في القالب استخدم «لصق القيم فقط» (123) حتى يبقى تنسيق القالب كما هو. لا تلصق تنسيق الملف المصدر ولا تنسخ ورقة العمل كاملة.'],
+        ['رقم الطالب', 'اترك العمود فارغًا. ينشئ النظام رقمًا فريدًا عند اعتماد الاستيراد، ولا يحجز رقمًا عند تنزيل القالب.'],
+        ['الاستيراد', 'احفظ الملف بصيغة XLSX، ثم اختر «استيراد قالب». ستظهر معاينة قبل الحفظ، ولا تُكتب البيانات إلا بعد اعتمادك.'],
+        ['حد الدفعة', 'يدعم القالب حتى 200 طالب في الدفعة الواحدة. إذا زاد العدد، استورد الملف على دفعات منفصلة.']
+      ];
+      guideRows.forEach(([label, text], index) => {
+        const row = guide.addRow([label, text]);
+        row.height = index === 2 ? 48 : 34;
+        row.eachCell((cell, columnNumber) => {
+          cell.font = { name: 'Arial', size: 10, bold: columnNumber === 1, color: { argb: 'FF332719' } };
+          cell.alignment = { horizontal: 'right', vertical: 'middle', wrapText: true };
+          cell.fill = { type: 'pattern', pattern: 'solid', fgColor: { argb: index % 2 === 0 ? 'FFFFFCF4' : 'FFF8F3E8' } };
+          cell.border = { bottom: { style: 'thin', color: { argb: 'FFE6DCC5' } } };
+        });
+      });
+
+      const output = await workbook.xlsx.writeBuffer();
+      const downloadUrl = URL.createObjectURL(new Blob([output as BlobPart], {
+        type: 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet'
+      }));
+      const link = document.createElement('a');
+      link.href = downloadUrl;
+      link.download = `قالب-استيراد-الطلاب-${new Date().toISOString().slice(0, 10)}.xlsx`;
+      document.body.appendChild(link);
+      link.click();
+      document.body.removeChild(link);
+      window.setTimeout(() => URL.revokeObjectURL(downloadUrl), 1000);
+      triggerNotification('تم تنزيل قالب الطلاب المنسق. اترك خانة رقم الطالب فارغة ليولّد النظام الرقم عند اعتماد الاستيراد؛ الحقول المطلوبة موضحة بملاحظات الأعمدة.', 'success');
+    } catch (error: any) {
+      triggerNotification(error?.message || 'تعذر إنشاء قالب استيراد الطلاب.', 'warning');
+    }
   };
 
   const handleStudentImportFileChange = async (event: React.ChangeEvent<HTMLInputElement>) => {
@@ -2061,18 +2182,33 @@ export default function StudentAffairsPortal({
                   className="hidden"
                   aria-label="ملف استيراد الطلاب"
                 />
-                <button
-                  type="button"
-                  onClick={handleSelectStudentImportFile}
-                  disabled={!canWriteStudents || isImportingStudents}
-                  aria-disabled={!canWriteStudents}
-                  aria-busy={isImportingStudents}
-                  title="قراءة XLSX/CSV ثم معاينة واعتماد دفعة ذرية داخل المدرسة الحالية"
-                  className="w-full py-2 bg-[#2a1a0e] text-amber-200 rounded-xl text-xs font-black flex items-center justify-center gap-2 border border-amber-500/40 hover:bg-[#3a2719] disabled:cursor-not-allowed disabled:opacity-50"
-                >
-                  <Upload className="w-4 h-4 text-amber-300" />
-                  <span>استيراد Excel / CSV</span>
-                </button>
+                <div className="grid grid-cols-1 gap-2 sm:grid-cols-2">
+                  <button
+                    type="button"
+                    onClick={() => void handleDownloadStudentImportTemplate()}
+                    title="تنزيل قالب XLSX منسق بالحقول التي يدعمها استيراد الطلاب"
+                    className="w-full min-w-0 py-2 bg-[#2a1a0e] text-amber-200 rounded-xl text-xs font-black flex items-center justify-center gap-2 border border-amber-500/40 hover:bg-[#3a2719] focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-amber-400"
+                  >
+                    <Download className="w-4 h-4 shrink-0 text-amber-300" />
+                    <span>تصدير قالب</span>
+                  </button>
+                  <button
+                    type="button"
+                    onClick={handleSelectStudentImportFile}
+                    disabled={!canWriteStudents || isImportingStudents}
+                    aria-disabled={!canWriteStudents}
+                    aria-busy={isImportingStudents}
+                    aria-label="استيراد Excel / CSV"
+                    title="قراءة XLSX/CSV ثم معاينة واعتماد دفعة ذرية داخل المدرسة الحالية؛ اختيار الملف لا يحفظه"
+                    className="w-full min-w-0 py-2 bg-[#2a1a0e] text-amber-200 rounded-xl text-xs font-black flex items-center justify-center gap-2 border border-amber-500/40 hover:bg-[#3a2719] disabled:cursor-not-allowed disabled:opacity-50 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-amber-400"
+                  >
+                    <Upload className="w-4 h-4 shrink-0 text-amber-300" />
+                    <span>استيراد قالب</span>
+                  </button>
+                </div>
+                <p className="px-1 text-[10px] leading-4 text-slate-600" role="note">
+                  اترك خانة رقم الطالب فارغة؛ سيولّد النظام الرقم تلقائيًا عند اعتماد الاستيراد، ولا يُحجز رقم عند تنزيل القالب.
+                </p>
                 {studentImportPreview && (
                   <div className="rounded-xl border border-emerald-300 bg-emerald-50 p-3 space-y-2" aria-label="معاينة استيراد الطلاب">
                     <p className="text-[11px] font-black text-emerald-950">معاينة جاهزة: {studentImportPreview.length} طالبًا</p>
@@ -2419,6 +2555,7 @@ export default function StudentAffairsPortal({
                     <span>الوظيفة: <strong className="text-slate-900">{(st as any).guardianOccupation || 'غير محددة'}</strong></span>
                     <span>المستوى التعليمي: <strong className="text-slate-900">{(st as any).educationLevel || 'غير محدد'}</strong></span>
                     <span>الأم: <strong className="text-slate-900">{(st as any).motherName || 'غير محدد'}</strong></span>
+                    <span>وظيفة الأم: <strong className="text-slate-900">{(st as any).motherOccupation || 'غير محددة'}</strong></span>
                     <span>هاتف الأم: <strong className="text-slate-900">{(st as any).motherPhone || 'غير محدد'}</strong></span>
                     <span>واتساب الأم: <strong className="text-slate-900">{(st as any).motherWhatsapp || 'غير محدد'}</strong></span>
                   </div>
@@ -2904,6 +3041,16 @@ export default function StudentAffairsPortal({
                           value={formData.motherName}
                           onChange={e => setFormData(current => ({ ...current, motherName: e.target.value }))}
                           placeholder="الاسم الكامل للأم"
+                          className="w-full bg-white border border-slate-300 rounded-xl p-2.5 text-xs font-bold text-slate-900 outline-none shadow-xs"
+                        />
+                      </div>
+                      <div>
+                        <label className="block text-slate-800 font-extrabold mb-1">وظيفة الأم <span className="text-slate-500">(اختياري)</span></label>
+                        <input
+                          type="text"
+                          value={formData.motherOccupation}
+                          onChange={e => setFormData(current => ({ ...current, motherOccupation: e.target.value }))}
+                          placeholder="مثال: معلمة / طبيبة / ربة منزل"
                           className="w-full bg-white border border-slate-300 rounded-xl p-2.5 text-xs font-bold text-slate-900 outline-none shadow-xs"
                         />
                       </div>

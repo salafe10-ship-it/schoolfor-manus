@@ -183,6 +183,7 @@ function guardianInput(value: unknown): GuardianInput {
     motherName: stringValue(input.motherName, 'guardian.motherName') || undefined,
     motherPhone: stringValue(input.motherPhone, 'guardian.motherPhone') || undefined,
     motherWhatsapp: stringValue(input.motherWhatsapp, 'guardian.motherWhatsapp') || undefined,
+    motherOccupation: stringValue(input.motherOccupation, 'guardian.motherOccupation') || undefined,
     addressLine1: stringValue(input.addressLine1, 'guardian.addressLine1') || undefined,
     addressLine2: stringValue(input.addressLine2, 'guardian.addressLine2') || undefined,
     city: stringValue(input.city, 'guardian.city') || undefined,
