@@ -76,6 +76,7 @@ type CanonicalStudentRow = {
   mother_name: string | null;
   mother_phone: string | null;
   mother_whatsapp: string | null;
+  mother_occupation: string | null;
   guardian_relation: string | null;
   class_reference: string | null;
   section_reference: string | null;
@@ -199,6 +200,7 @@ export function mapCanonicalStudentRow(row: CanonicalStudentRow): Record<string,
     motherName: row.mother_name || '',
     motherPhone: row.mother_phone || '',
     motherWhatsapp: row.mother_whatsapp || '',
+    motherOccupation: row.mother_occupation || '',
     guardianRelation: row.guardian_relation || '',
     guardianId: row.guardian_id || undefined,
     guardianVersion: row.guardian_version || undefined,
@@ -319,7 +321,7 @@ async function queryCanonicalStudents(
       guardian.guardian_relationship_id, guardian.guardian_relationship_version,
       guardian.parent_name, guardian.parent_phone, guardian.guardian_relation,
       guardian.guardian_occupation, guardian.guardian_education_level,
-      guardian.mother_name, guardian.mother_phone, guardian.mother_whatsapp,
+      guardian.mother_name, guardian.mother_phone, guardian.mother_whatsapp, guardian.mother_occupation,
       COUNT(*) OVER()::integer AS total_count
     FROM public.students AS s
     LEFT JOIN LATERAL (
@@ -378,6 +380,7 @@ async function queryCanonicalStudents(
         g.mother_name,
         g.mother_phone,
         g.mother_whatsapp,
+        g.mother_occupation,
         sg.relationship_type AS guardian_relation
       FROM public.student_guardians AS sg
       INNER JOIN public.guardians AS g
@@ -577,7 +580,7 @@ async function queryCanonicalStudentsFromSupabase(
   if (guardianIds.length) {
     const { data, error } = await supabase
       .from('guardians')
-      .select('id,version,tenant_id,school_id,branch_id,legal_first_name,legal_middle_name,legal_last_name,phone,occupation,education_level,mother_name,mother_phone,mother_whatsapp,status,deleted_at')
+      .select('id,version,tenant_id,school_id,branch_id,legal_first_name,legal_middle_name,legal_last_name,phone,occupation,education_level,mother_name,mother_phone,mother_whatsapp,mother_occupation,status,deleted_at')
       .eq('tenant_id', context.tenantId)
       .eq('school_id', context.schoolId)
       .in('id', guardianIds)
@@ -608,6 +611,7 @@ async function queryCanonicalStudentsFromSupabase(
       mother_name: guardian?.mother_name || null,
       mother_phone: guardian?.mother_phone || null,
       mother_whatsapp: guardian?.mother_whatsapp || null,
+      mother_occupation: guardian?.mother_occupation || null,
       guardian_relation: link?.relationship_type || null,
       class_reference: enrollment?.class_reference || null,
       section_reference: enrollment?.section_reference || null,

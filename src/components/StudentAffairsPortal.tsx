@@ -409,6 +409,7 @@ export default function StudentAffairsPortal({
     motherName: '',
     motherPhone: '',
     motherWhatsapp: '',
+    motherOccupation: '',
     academicPreviousSchool: '',
     academicPreviousGrade: '',
     academicPreviousYear: '',
@@ -974,6 +975,7 @@ export default function StudentAffairsPortal({
       motherName: '',
       motherPhone: '',
       motherWhatsapp: '',
+      motherOccupation: '',
       academicPreviousSchool: '',
       academicPreviousGrade: '',
       academicPreviousYear: '',
@@ -1035,6 +1037,7 @@ export default function StudentAffairsPortal({
       motherName: (student as any).motherName || '',
       motherPhone: (student as any).motherPhone || '',
       motherWhatsapp: (student as any).motherWhatsapp || '',
+      motherOccupation: (student as any).motherOccupation || '',
       academicPreviousSchool: (student as any).academicPreviousSchool || '',
       academicPreviousGrade: (student as any).academicPreviousGrade || '',
       academicPreviousYear: (student as any).academicPreviousYear || '',
@@ -1149,7 +1152,8 @@ export default function StudentAffairsPortal({
         parentEducationLevel: formData.parentEducationLevel,
         motherName: formData.motherName,
         motherPhone: formData.motherPhone,
-        motherWhatsapp: formData.motherWhatsapp
+        motherWhatsapp: formData.motherWhatsapp,
+        motherOccupation: formData.motherOccupation
       });
     }
 
@@ -1165,7 +1169,8 @@ export default function StudentAffairsPortal({
           || ((selectedStudent as any).educationLevel || '') !== formData.parentEducationLevel
           || ((selectedStudent as any).motherName || '') !== formData.motherName
           || ((selectedStudent as any).motherPhone || '') !== formData.motherPhone
-          || ((selectedStudent as any).motherWhatsapp || '') !== formData.motherWhatsapp;
+          || ((selectedStudent as any).motherWhatsapp || '') !== formData.motherWhatsapp
+          || ((selectedStudent as any).motherOccupation || '') !== formData.motherOccupation;
         const unsupportedGuardianChanged = ((selectedStudent as any).parentNationalId || '') !== formData.parentNationalId;
         if (unsupportedGuardianChanged) {
           throw new Error('رقم الهوية الوطنية لولي الأمر ليس ضمن عقد التعديل الكانوني الحالي؛ لم يتم حفظ أي تغيير.');
@@ -1195,7 +1200,8 @@ export default function StudentAffairsPortal({
             educationLevel: formData.parentEducationLevel,
             motherName: formData.motherName,
             motherPhone: formData.motherPhone,
-            motherWhatsapp: formData.motherWhatsapp
+            motherWhatsapp: formData.motherWhatsapp,
+            motherOccupation: formData.motherOccupation
           });
           guardianPersisted = true;
         }
@@ -1274,7 +1280,8 @@ export default function StudentAffairsPortal({
           educationLevel: formData.parentEducationLevel,
           motherName: formData.motherName,
           motherPhone: formData.motherPhone,
-          motherWhatsapp: formData.motherWhatsapp
+          motherWhatsapp: formData.motherWhatsapp,
+          motherOccupation: formData.motherOccupation
         } : persistedStudent;
         setStudents(current => current.map(student => student.id === selectedStudent.id ? mergedStudent : student));
         setStudentRefreshToken(value => value + 1);
@@ -1324,6 +1331,7 @@ export default function StudentAffairsPortal({
             motherName: '',
             motherPhone: '',
             motherWhatsapp: '',
+            motherOccupation: '',
             academicPreviousSchool: '',
             academicPreviousGrade: '',
             academicPreviousYear: '',
@@ -2546,6 +2554,7 @@ export default function StudentAffairsPortal({
                     <span>الوظيفة: <strong className="text-slate-900">{(st as any).guardianOccupation || 'غير محددة'}</strong></span>
                     <span>المستوى التعليمي: <strong className="text-slate-900">{(st as any).educationLevel || 'غير محدد'}</strong></span>
                     <span>الأم: <strong className="text-slate-900">{(st as any).motherName || 'غير محدد'}</strong></span>
+                    <span>وظيفة الأم: <strong className="text-slate-900">{(st as any).motherOccupation || 'غير محددة'}</strong></span>
                     <span>هاتف الأم: <strong className="text-slate-900">{(st as any).motherPhone || 'غير محدد'}</strong></span>
                     <span>واتساب الأم: <strong className="text-slate-900">{(st as any).motherWhatsapp || 'غير محدد'}</strong></span>
                   </div>
@@ -3031,6 +3040,16 @@ export default function StudentAffairsPortal({
                           value={formData.motherName}
                           onChange={e => setFormData(current => ({ ...current, motherName: e.target.value }))}
                           placeholder="الاسم الكامل للأم"
+                          className="w-full bg-white border border-slate-300 rounded-xl p-2.5 text-xs font-bold text-slate-900 outline-none shadow-xs"
+                        />
+                      </div>
+                      <div>
+                        <label className="block text-slate-800 font-extrabold mb-1">وظيفة الأم <span className="text-slate-500">(اختياري)</span></label>
+                        <input
+                          type="text"
+                          value={formData.motherOccupation}
+                          onChange={e => setFormData(current => ({ ...current, motherOccupation: e.target.value }))}
+                          placeholder="مثال: معلمة / طبيبة / ربة منزل"
                           className="w-full bg-white border border-slate-300 rounded-xl p-2.5 text-xs font-bold text-slate-900 outline-none shadow-xs"
                         />
                       </div>

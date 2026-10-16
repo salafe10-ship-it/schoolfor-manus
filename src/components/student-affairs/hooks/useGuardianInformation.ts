@@ -48,7 +48,7 @@ export function useGuardianInformation() {
       fatherNationalId: father?.nid || '',
       motherName: student.motherName || '',
       motherPhone: student.motherPhone || '',
-      motherJob: '',
+      motherJob: student.motherOccupation || '',
       motherWorkPlace: '',
       homeAddress: student.address || '',
       emergencyPhone: father?.phone || student.parentPhone || '',

@@ -150,6 +150,7 @@ export interface Student {
   motherName?: string;
   motherPhone?: string;
   motherWhatsapp?: string;
+  motherOccupation?: string;
   educationLevel?: string;
   guardianRelation?: string;
 

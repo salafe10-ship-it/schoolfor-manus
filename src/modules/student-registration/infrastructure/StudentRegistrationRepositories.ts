@@ -271,6 +271,7 @@ export type GuardianInput = {
   motherName?: string;
   motherPhone?: string;
   motherWhatsapp?: string;
+  motherOccupation?: string;
   addressLine1?: string;
   addressLine2?: string;
   city?: string;
@@ -337,18 +338,18 @@ export async function resolveGuardian(
     `INSERT INTO guardians (
        id, tenant_id, school_id, branch_id, guardian_number,
        legal_first_name, legal_middle_name, legal_last_name,
-       phone, email, occupation, education_level, mother_name, mother_phone, mother_whatsapp,
+       phone, email, occupation, education_level, mother_name, mother_phone, mother_whatsapp, mother_occupation,
        address_line1, address_line2, city, country_code,
        verification_status, status, version, created_by, updated_by,
        audit_id, request_id, correlation_id
-     ) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16, $17, $18, $19,
-               'unverified', 'active', 1, $20, $20, $21, $22, $23)`,
-    [
+     ) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16, $17, $18, $19, $20,
+               'unverified', 'active', 1, $21, $21, $22, $23, $24)`,
+     [
       generatedId, context.tenantId, context.schoolId, context.branchId, guardianNumber,
       input.legalFirstName, input.legalMiddleName || null, input.legalLastName,
       input.phone || null, input.email || null, input.occupation || null,
-      input.educationLevel || null, input.motherName || null, input.motherPhone || null,
-      input.motherWhatsapp || null, input.addressLine1 || null, input.addressLine2 || null,
+       input.educationLevel || null, input.motherName || null, input.motherPhone || null,
+       input.motherWhatsapp || null, input.motherOccupation || null, input.addressLine1 || null, input.addressLine2 || null,
       input.city || null, input.countryCode || null, context.userId, auditId, requestId, correlationId
     ],
     { id: generatedId, guardianNumber }

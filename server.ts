@@ -8887,6 +8887,7 @@ export async function createApp(options: { cloudflare?: boolean } = {}): Promise
         motherName: studentData.motherName,
         motherPhone: studentData.motherPhone,
         motherWhatsapp: studentData.motherWhatsapp,
+        motherOccupation: studentData.motherOccupation,
         relationshipType: studentData.guardianRelation || "parent",
         isPrimary: true,
         isEmergencyContact: true,
@@ -8932,7 +8933,7 @@ export async function createApp(options: { cloudflare?: boolean } = {}): Promise
 
   const guardianUpdateFields = [
     "parentName", "parentPhone", "parentEmail", "parentNationalId", "parentRelation", "parentJob",
-    "guardianOccupation", "parentEducationLevel", "educationLevel", "motherName", "motherPhone", "motherWhatsapp",
+    "guardianOccupation", "parentEducationLevel", "educationLevel", "motherName", "motherPhone", "motherWhatsapp", "motherOccupation",
     "guardianId", "guardianNumber", "guardianRelation", "guardianEmail", "relationshipType",
     "expectedGuardianVersion", "expectedRelationshipVersion"
   ] as const;
