@@ -2198,6 +2198,7 @@ export default function StudentAffairsPortal({
                     disabled={!canWriteStudents || isImportingStudents}
                     aria-disabled={!canWriteStudents}
                     aria-busy={isImportingStudents}
+                    aria-label="استيراد Excel / CSV"
                     title="قراءة XLSX/CSV ثم معاينة واعتماد دفعة ذرية داخل المدرسة الحالية؛ اختيار الملف لا يحفظه"
                     className="w-full min-w-0 py-2 bg-[#2a1a0e] text-amber-200 rounded-xl text-xs font-black flex items-center justify-center gap-2 border border-amber-500/40 hover:bg-[#3a2719] disabled:cursor-not-allowed disabled:opacity-50 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-amber-400"
                   >
