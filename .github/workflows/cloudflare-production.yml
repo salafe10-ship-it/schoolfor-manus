@@ -43,6 +43,9 @@ jobs:
       - name: Verify identity governance database contract
         run: npm run db:verify-identity-governance
 
+      - name: Verify production application schema contract
+        run: npm run db:verify-production-schema
+
   deploy:
     name: Validate and deploy Cloudflare Worker
     needs: verify-identity-governance
