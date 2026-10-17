@@ -76,16 +76,16 @@ function MetricCard({
     <button
       type="button"
       onClick={onClick}
-      className="group flex min-h-[110px] flex-col justify-between rounded-2xl border-2 border-[#d4af37]/30 bg-gradient-to-b from-[#fffefc] via-[#fbf8f0] to-[#f5eeea] p-3 text-right shadow-md transition-all hover:-translate-y-0.5 hover:border-[#d4af37] hover:shadow-xl focus:outline-none focus:ring-2 focus:ring-[#8b6508]/50"
+      className="group flex min-h-[96px] flex-col justify-between rounded-xl border-2 border-[#d4af37]/30 bg-gradient-to-b from-[#fffefc] via-[#fbf8f0] to-[#f5eeea] p-2.5 text-right shadow-md transition-all hover:-translate-y-0.5 hover:border-[#d4af37] hover:shadow-xl focus:outline-none focus:ring-2 focus:ring-[#8b6508]/50"
     >
       <span className="flex items-center justify-between gap-2">
         <span className="text-[11px] font-black text-slate-700">{label}</span>
-        <span className="flex h-9 w-9 shrink-0 items-center justify-center rounded-xl bg-[#2a1a0e] text-amber-300 shadow-sm transition-transform group-hover:scale-105">
-          <Icon className="h-[18px] w-[18px]" aria-hidden="true" />
+        <span className="flex h-8 w-8 shrink-0 items-center justify-center rounded-lg bg-[#2a1a0e] text-amber-300 shadow-sm transition-transform group-hover:scale-105">
+          <Icon className="h-4 w-4" aria-hidden="true" />
         </span>
       </span>
       <span className="mt-1 block text-right">
-        <span className="block text-2xl font-black tracking-tight text-slate-900">{value}</span>
+        <span className="block text-xl font-black tracking-tight text-slate-900">{value}</span>
         <span className="mt-0.5 block text-[10px] font-bold text-slate-500">{detail}</span>
       </span>
     </button>
@@ -205,59 +205,59 @@ export default function ModernSchoolDashboard({
   return (
     <div
       id="schoolformanus-dashboard"
-      className="w-full min-h-full space-y-4 bg-gradient-to-br from-[#f8f5ee] via-[#efe9dc] to-[#e8e0d0] p-2 text-right font-sans text-slate-900 transition-all duration-300 sm:p-3 md:p-4"
+      className="w-full min-h-full space-y-3 bg-gradient-to-br from-[#f8f5ee] via-[#efe9dc] to-[#e8e0d0] p-2 text-right font-sans text-slate-900 transition-all duration-300 sm:p-3"
       dir="rtl"
     >
-      <header className="relative flex flex-wrap items-center justify-between gap-4 overflow-hidden rounded-3xl border-2 border-[#d4af37]/40 bg-gradient-to-r from-[#1c120c] via-[#2d1e12] to-[#1a100a] p-3 text-white shadow-2xl sm:p-4">
-        <div className="relative z-10 flex items-center gap-3">
-          <div className="flex h-12 w-12 shrink-0 items-center justify-center rounded-2xl border border-[#f7d174]/40 bg-[#120a04] text-xl font-black text-amber-300 shadow-lg">SF</div>
+      <header className="relative -mt-1 grid grid-cols-1 items-center gap-2.5 overflow-hidden rounded-xl border border-[#d4af37]/35 bg-[#fffdf8]/95 p-2.5 text-slate-900 shadow-md sm:p-3 lg:grid-cols-[auto_minmax(0,1fr)_auto] lg:gap-3">
+        <div className="relative z-10 flex items-center gap-2.5 lg:min-w-[188px]">
+          <div className="flex h-9 w-9 shrink-0 items-center justify-center rounded-xl border border-[#d4af37]/40 bg-[#2a1a0e] text-sm font-black text-amber-300 shadow">SF</div>
           <div>
-            <h1 className="bg-gradient-to-r from-[#ffe5a3] via-[#fce79a] to-[#d4af37] bg-clip-text text-xl font-black text-transparent sm:text-2xl">SchoolForManus</h1>
-            <p className="text-[11px] font-bold tracking-wide text-amber-200/80">مركز القيادة وإدارة المدارس</p>
+            <h1 className="text-base font-black text-slate-900 sm:text-lg">لوحة القيادة</h1>
+            <p className="text-[11px] font-bold tracking-wide text-slate-500">مركز القيادة وإدارة المدارس</p>
           </div>
         </div>
 
-        <div className="relative z-10 hidden items-center gap-3 lg:flex">
-          <div className="flex items-center gap-2 rounded-2xl border border-[#d4af37]/30 bg-[#2a1d13]/90 px-4 py-2 text-xs font-bold text-amber-100 shadow-inner">
-            <Calendar className="h-4 w-4 text-amber-400" aria-hidden="true" />
+        <div className="relative z-10 flex min-w-0 flex-wrap items-center justify-center gap-1.5 sm:gap-2 lg:justify-start">
+          <div className="flex items-center gap-1.5 rounded-xl border border-[#d4af37]/25 bg-[#f7f0df] px-2.5 py-1.5 text-xs font-bold text-slate-800 shadow-inner">
+            <Calendar className="h-3.5 w-3.5 shrink-0 text-[#8b6508]" aria-hidden="true" />
             <span>{selectedSchool.academicYear || 'غير محدد'}</span>
-            <span className="text-[10px] text-amber-300/70">العام الدراسي</span>
+            <span className="text-[10px] text-slate-500">العام الدراسي</span>
           </div>
-          <div className="flex items-center gap-2 rounded-2xl border border-[#d4af37]/30 bg-[#2a1d13]/90 px-4 py-2 text-xs font-bold text-amber-100 shadow-inner">
-            <Building2 className="h-4 w-4 text-amber-400" aria-hidden="true" />
+          <div className="flex min-w-0 items-center gap-1.5 rounded-xl border border-[#d4af37]/25 bg-[#f7f0df] px-2.5 py-1.5 text-xs font-bold text-slate-800 shadow-inner">
+            <Building2 className="h-3.5 w-3.5 shrink-0 text-[#8b6508]" aria-hidden="true" />
             <span>{selectedSchool.name || 'المدرسة الحالية'}</span>
-            <span className="text-[10px] text-amber-300/70">{selectedBranch?.name || 'الفرع الموثوق'}</span>
+            <span className="truncate text-[10px] text-slate-500">{selectedBranch?.name || 'الفرع الموثوق'}</span>
           </div>
-          <div className="flex items-center gap-2 rounded-2xl border border-[#d4af37]/30 bg-[#2a1d13]/90 px-4 py-2 text-xs font-bold text-amber-100 shadow-inner">
-            <Clock className="h-4 w-4 text-amber-400" aria-hidden="true" />
+          <div className="flex items-center gap-1.5 rounded-xl border border-[#d4af37]/25 bg-[#f7f0df] px-2.5 py-1.5 text-xs font-bold text-slate-800 shadow-inner">
+            <Clock className="h-3.5 w-3.5 shrink-0 text-[#8b6508]" aria-hidden="true" />
             <span>{dateString}</span>
-            <span className="font-mono text-amber-400">{timeString}</span>
+            <span className="font-mono text-[10px] text-[#8b6508]">{timeString}</span>
           </div>
         </div>
 
-        <div className="relative z-10 flex items-center gap-2 sm:gap-3">
+        <div className="relative z-10 flex items-center justify-end gap-1.5 sm:gap-2 lg:min-w-[188px]">
           <button
             type="button"
             onClick={() => handleNav('students')}
             disabled={!canAccessSection('students')}
             aria-disabled={!canAccessSection('students')}
-            className="flex h-10 w-10 items-center justify-center rounded-2xl border border-[#d4af37]/30 bg-[#2a1d13] text-amber-300 shadow transition-all hover:scale-105 hover:border-[#f7d174] focus:outline-none focus:ring-2 focus:ring-amber-300/60"
+            className="flex h-9 w-9 items-center justify-center rounded-xl border border-[#d4af37]/40 bg-[#2a1a0e] text-[#8b6508] shadow transition-all hover:scale-105 hover:border-[#8b6508] focus:outline-none focus:ring-2 focus:ring-[#8b6508]/50"
             title="البحث في شؤون الطلاب"
             aria-label="البحث في شؤون الطلاب"
           >
             <Search className="h-4 w-4" aria-hidden="true" />
           </button>
-          <div className="flex items-center gap-2 rounded-2xl border border-[#d4af37]/40 bg-gradient-to-r from-[#2a1d13] to-[#1e130a] px-3 py-1.5 shadow-md">
-            <div className="flex h-8 w-8 shrink-0 items-center justify-center rounded-xl bg-gradient-to-tr from-[#d4af37] to-[#fce79a] text-xs font-black text-[#2a1d0f]">{userName.slice(0, 2)}</div>
+          <div className="flex items-center gap-1.5 rounded-xl border border-[#d4af37]/40 bg-[#f7f0df] px-2.5 py-1 shadow-md">
+            <div className="flex h-7 w-7 shrink-0 items-center justify-center rounded-lg bg-gradient-to-tr from-[#d4af37] to-[#fce79a] text-[11px] font-black text-[#2a1d0f]">{userName.slice(0, 2)}</div>
             <div className="hidden text-right sm:block">
-              <span className="block text-xs font-black leading-tight text-amber-100">{userName}</span>
-              <span className="block text-[9.5px] font-bold text-amber-300/80">{roleInfo.label}</span>
+              <span className="block text-xs font-black leading-tight text-slate-900">{userName}</span>
+              <span className="block text-[10px] font-bold text-slate-500">{roleInfo.label}</span>
             </div>
           </div>
         </div>
       </header>
 
-      <section aria-label="مؤشرات لوحة المدرسة" className="grid grid-cols-2 gap-2.5 sm:grid-cols-3 sm:gap-3 md:grid-cols-5">
+      <section aria-label="مؤشرات لوحة المدرسة" className="grid grid-cols-2 gap-2 sm:grid-cols-3 sm:gap-2.5 md:grid-cols-5">
         <MetricCard label="نسبة الحضور اليوم" value={formatMetric(metrics?.attendance)} detail={describeMetric(metrics?.attendance)} icon={UserCheck} onClick={() => handleNav('attendance')} />
         <MetricCard label="إجمالي المصروفات" value={formatMetric(expenseMetric)} detail={describeMetric(expenseMetric)} icon={Wallet} onClick={() => handleNav('accounts')} />
         <MetricCard label="إجمالي الإيرادات" value={formatMetric(revenueMetric)} detail={describeMetric(revenueMetric)} icon={Coins} onClick={() => handleNav('student_accounts')} />
@@ -266,7 +266,7 @@ export default function ModernSchoolDashboard({
       </section>
 
       <section className="grid grid-cols-1 gap-3 lg:grid-cols-12">
-        <div className="rounded-3xl border-2 border-[#d4af37]/30 bg-gradient-to-b from-[#fffefc] to-[#f8f3ea] p-3 shadow-lg lg:col-span-3">
+        <div className="rounded-2xl border-2 border-[#d4af37]/30 bg-gradient-to-b from-[#fffefc] to-[#f8f3ea] p-2.5 shadow-lg lg:col-span-3">
           <div className="mb-2 flex items-center gap-2 border-b border-amber-900/10 pb-2">
             <div className="flex h-7 w-7 items-center justify-center rounded-xl bg-[#2a1a0e] text-amber-400"><ShieldCheck className="h-3.5 w-3.5" aria-hidden="true" /></div>
             <h3 className="text-sm font-black text-slate-900">تنبيهات اليوم</h3>
@@ -274,7 +274,7 @@ export default function ModernSchoolDashboard({
           <EmptyPanel title="لا توجد تنبيهات موثقة" description={isCustomerProductionPortal ? 'لا توجد تنبيهات تستدعي المتابعة اليوم.' : 'لم يتم تمرير مصدر Notifications حي إلى Dashboard، لذلك لا تُعرض أرقام أو تنبيهات ثابتة.'} />
         </div>
 
-        <div className="rounded-3xl border-2 border-[#d4af37]/30 bg-gradient-to-b from-[#fffefc] to-[#f8f3ea] p-4 shadow-lg lg:col-span-9">
+        <div className="rounded-2xl border-2 border-[#d4af37]/30 bg-gradient-to-b from-[#fffefc] to-[#f8f3ea] p-3 shadow-lg lg:col-span-9">
           <div className="mb-3 flex items-center gap-2 border-b border-amber-900/10 pb-2">
             <div className="flex h-7 w-7 items-center justify-center rounded-xl bg-[#2a1a0e] text-amber-400"><Grid2X2 className="h-3.5 w-3.5" aria-hidden="true" /></div>
             <h3 className="text-sm font-black text-slate-900">الوحدات الرئيسية</h3>
@@ -285,17 +285,17 @@ export default function ModernSchoolDashboard({
                 key={`${section}-${label}`}
                 type="button"
                 onClick={() => handleNav(section)}
-                className="flex h-[86px] flex-col items-center justify-center gap-1.5 rounded-2xl border-2 border-[#d4af37]/30 bg-gradient-to-b from-white to-[#fbf8f0] p-2.5 text-center transition-all hover:-translate-y-1 hover:border-[#d4af37] hover:shadow-lg focus:outline-none focus:ring-2 focus:ring-[#8b6508]/50"
+                className="flex h-[78px] flex-col items-center justify-center gap-1 rounded-xl border-2 border-[#d4af37]/30 bg-gradient-to-b from-white to-[#fbf8f0] p-2 text-center transition-all hover:-translate-y-1 hover:border-[#d4af37] hover:shadow-lg focus:outline-none focus:ring-2 focus:ring-[#8b6508]/50"
               >
-                <span className="flex h-9 w-9 items-center justify-center rounded-xl bg-[#2a1a0e] text-amber-300"><Icon className="h-[18px] w-[18px]" aria-hidden="true" /></span>
-                <span className="text-[11px] font-black text-slate-800">{label}</span>
+                <span className="flex h-8 w-8 items-center justify-center rounded-lg bg-[#2a1a0e] text-amber-300"><Icon className="h-4 w-4" aria-hidden="true" /></span>
+                <span className="text-[10px] font-black text-slate-800">{label}</span>
               </button>
             ))}
           </div>
         </div>
       </section>
 
-      {canAccessSection('ai_assistant') && <section className="flex flex-wrap items-center justify-between gap-4 rounded-3xl border-2 border-[#d4af37]/50 bg-gradient-to-r from-[#1c120c] via-[#2d1e12] to-[#1a100a] p-4 text-white shadow-2xl">
+      {canAccessSection('ai_assistant') && <section className="flex flex-wrap items-center justify-between gap-3 rounded-2xl border-2 border-[#d4af37]/50 bg-gradient-to-r from-[#1c120c] via-[#2d1e12] to-[#1a100a] p-3 text-white shadow-2xl">
         <div className="flex items-center gap-3">
           <div className="flex h-11 w-11 items-center justify-center rounded-2xl bg-[#2a1a0e] text-amber-300"><Sparkles className="h-6 w-6" aria-hidden="true" /></div>
           <div><h4 className="flex items-center gap-1.5 text-sm font-black text-amber-200">المساعد الذكي SchoolForManus</h4><p className="mt-0.5 text-xs font-bold text-amber-100/80">يفتح المسار المخصص للمساعد دون ادعاء تنفيذ تحليل غير مربوط بمصدر.</p></div>

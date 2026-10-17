@@ -169,14 +169,14 @@ export default function Topbar({
   };
 
   return (
-    <header id="top-navigation-bar" className="bg-[#1a1108]/90 backdrop-blur-md border-b-2 border-[#d4af37]/40 h-16 flex items-center justify-between px-6 shrink-0 relative z-40 text-amber-100 transition-colors duration-300" dir="rtl">
+    <header id="top-navigation-bar" className="bg-[#1a1108] backdrop-blur-md border-b border-[#d4af37]/35 min-h-14 flex flex-wrap items-center justify-between gap-3 px-4 py-2 shrink-0 relative z-40 text-amber-100 transition-colors duration-300 lg:flex-nowrap" dir="rtl">
       
       {/* Right side: School Logo and Multi-Tenant inputs */}
-      <div className="flex items-center gap-4 text-right">
+      <div className="flex min-w-0 items-center gap-3 text-right">
         
         {/* School Premium Logo Emblem */}
         <div className="flex items-center gap-3 select-none">
-          <div className="w-10 h-10 bg-gradient-to-tr from-[#9a6a1d] via-[#f7d174] to-[#c58a22] p-0.5 shadow-md shadow-[#d4af37]/20 flex items-center justify-center shrink-0 border border-[#f7d174]/40">
+          <div className="w-9 h-9 bg-gradient-to-tr from-[#9a6a1d] via-[#f7d174] to-[#c58a22] p-0.5 shadow-md shadow-[#d4af37]/20 flex items-center justify-center shrink-0 border border-[#f7d174]/40">
             <div className="w-full h-full bg-[#130a04] rounded-[10px] flex items-center justify-center font-black text-amber-300 text-sm shadow-inner tracking-tight">
               <Trophy className="w-5 h-5 text-[#fce79a]" />
             </div>
@@ -192,7 +192,7 @@ export default function Topbar({
           </div>
         </div>
 
-        <div className="w-px h-8 bg-[#d4af37]/30 hidden md:block" />
+        <div className="w-px h-7 bg-[#d4af37]/30 hidden md:block" />
 
         {/* Tenant Selection Dropdown (Select Active School) */}
         <div className="flex items-center gap-1.5">
@@ -206,7 +206,8 @@ export default function Topbar({
                     const s = schools.find(sh => sh.id === e.target.value);
                     if (s) onSchoolChange(s);
                   }}
-                  className="appearance-none bg-[#2a1d13] border border-[#d4af37]/30 text-amber-100 text-xs font-black pr-8 pl-8 py-2 focus:outline-none focus:ring-2 focus:ring-[#d4af37]/40 cursor-pointer text-right transition-all hover:bg-[#38271a]"
+                  aria-label="اختيار المدرسة"
+                  className="appearance-none bg-[#2a1d13] border border-[#d4af37]/30 text-amber-100 text-[11px] font-black pr-8 pl-8 py-1.5 focus:outline-none focus:ring-2 focus:ring-[#f7d174]/70 cursor-pointer text-right transition-all hover:bg-[#38271a]"
                 >
                   {schools.map((school) => (
                     <option key={school.id} value={school.id} className="bg-[#1c120c] text-amber-100">
@@ -222,7 +223,7 @@ export default function Topbar({
                 </div>
               </>
             ) : (
-              <div className="flex items-center gap-2 bg-[#2a1d13] border border-[#d4af37]/30 px-4 py-2 text-xs font-black text-amber-100 select-none shadow-2xs">
+              <div className="flex items-center gap-2 bg-[#2a1d13] border border-[#d4af37]/30 px-3 py-1.5 text-[11px] font-black text-amber-100 select-none shadow-2xs">
                 <Building className="w-3.5 h-3.5 text-amber-400" />
                 <span>{selectedSchool.name}</span>
                 <span className="text-[9px] text-emerald-300 bg-emerald-950/60 px-2 py-0.5 rounded border border-emerald-800 font-black mr-1.5">{isCustomerProductionPortal ? 'حساب المدرسة' : 'بيئة معزولة ✅'}</span>
@@ -246,7 +247,8 @@ export default function Topbar({
                     if (b) onBranchChange(b);
                   }
                 }}
-                className="appearance-none bg-[#2a1d13] border border-[#d4af37]/30 text-amber-100 text-xs font-bold pr-8 pl-8 py-2 focus:outline-none focus:ring-2 focus:ring-[#d4af37]/40 cursor-pointer text-right transition-all hover:bg-[#38271a]"
+                aria-label="اختيار الفرع"
+                className="appearance-none bg-[#2a1d13] border border-[#d4af37]/30 text-amber-100 text-[11px] font-bold pr-8 pl-8 py-1.5 focus:outline-none focus:ring-2 focus:ring-[#f7d174]/70 cursor-pointer text-right transition-all hover:bg-[#38271a]"
               >
                 <option value="all" className="bg-[#1c120c] text-amber-100">📍 كل فروع المدرسة</option>
                 {branches.map((b) => (
@@ -263,7 +265,7 @@ export default function Topbar({
               </div>
             </div>
           ) : (
-            <div id="trusted-branch-display" className="flex items-center gap-2 bg-[#2a1d13] border border-[#d4af37]/30 px-4 py-2 text-xs font-black text-amber-100 select-none shadow-2xs">
+            <div id="trusted-branch-display" className="flex items-center gap-2 bg-[#2a1d13] border border-[#d4af37]/30 px-3 py-1.5 text-[11px] font-black text-amber-100 select-none shadow-2xs">
               <Layers className="w-3.5 h-3.5 text-amber-400" />
               <span>{selectedBranch?.name || 'الفرع غير محدد'}</span>
                 <span className={`text-[9px] px-2 py-0.5 rounded border font-black mr-1.5 ${trustedScopeReady ? 'text-emerald-300 bg-emerald-950/60 border-emerald-800' : 'text-amber-300 bg-amber-950/60 border-amber-800'}`}>
@@ -277,7 +279,7 @@ export default function Topbar({
 
         {/* Academic year is a trusted identity attribute, not a client-side filter. */}
         <div className="hidden sm:flex items-center gap-1.5">
-          <div id="trusted-academic-year-display" className="flex items-center gap-2 bg-[#2a1d13] border border-[#d4af37]/30 px-4 py-2 text-xs font-black text-amber-100 select-none shadow-2xs">
+          <div id="trusted-academic-year-display" className="flex items-center gap-2 bg-[#2a1d13] border border-[#d4af37]/30 px-3 py-1.5 text-[11px] font-black text-amber-100 select-none shadow-2xs">
             <Calendar className="w-3.5 h-3.5 text-amber-400" />
             <span dir="ltr" className="whitespace-nowrap">{selectedSchool.academicYear || (isCustomerProductionPortal ? 'العام الدراسي غير محدد' : 'السنة غير محددة في السجل الموثوق')}</span>
             <span className="text-[9px] text-amber-300/70">{isCustomerProductionPortal ? 'العام الدراسي' : 'من الهوية الموثوقة'}</span>
@@ -287,14 +289,14 @@ export default function Topbar({
 
       {/* Center: Live Clock & Date Info + Quick Smart Search (Hidden in Client Mode for maximum simplicity) */}
       {!isClientMode && (
-        <div className="top-navigation-search hidden md:flex items-center gap-4 flex-1 max-w-xl justify-center mx-4 bg-gradient-to-b from-[#fffefc] via-[#fbf8f0] to-[#f5eeea] border-2 border-[#d4af37]/30 hover:border-[#d4af37] rounded-3xl p-4 sm:p-5 shadow-md transition-all duration-300">
+        <div className="top-navigation-search hidden md:flex min-w-0 flex-1 items-center gap-2.5 max-w-lg justify-center mx-2 bg-[#24170e]/90 border border-[#d4af37]/35 hover:border-[#f7d174]/70 rounded-2xl p-1.5 sm:p-2 shadow-inner transition-all duration-300">
           
           {/* Ticking Arabic Clock Widget */}
-          <div className="hidden xl:flex items-center gap-2 px-3 py-1.5 bg-transparent dark:bg-slate-900/40 border border-slate-200/60 dark:border-slate-800/80 select-none shrink-0">
+          <div className="hidden xl:flex items-center gap-2 px-2 py-1 bg-[#2d1e12] border border-[#d4af37]/20 rounded-xl select-none shrink-0">
             <div className="w-2 h-2 rounded-full bg-[#dfb55a] animate-pulse" />
             <div className="text-right leading-none">
-              <p className="text-[10px] font-bold text-slate-500 dark:text-slate-400">{dateString}</p>
-              <p className="text-xs font-black text-slate-800 dark:text-slate-100 font-mono tracking-tight mt-0.5">{timeString}</p>
+              <p className="text-[9px] font-bold text-amber-200/70">{dateString}</p>
+              <p className="text-[11px] font-black text-amber-100 font-mono tracking-tight mt-0.5">{timeString}</p>
             </div>
           </div>
 
@@ -307,12 +309,13 @@ export default function Topbar({
                 onChange={handleSearchChange}
                 onFocus={() => searchQuery.trim() && setShowSearchResults(true)}
                 placeholder="البحث الذكي عن الطلاب... 🔍"
-                className="w-full bg-transparent dark:hover:bg-slate-100 dark:hover:bg-slate-900 dark:border-slate-800 focus:border-amber-500 focus:dark:focus:bg-slate-950 text-xs font-bold text-slate-800 dark:text-slate-200 pr-9 pl-10 py-2 focus:outline-none transition-all shadow-inner text-right"
+                aria-label="البحث الذكي عن الطلاب"
+                className="w-full bg-[#1b1009]/70 hover:bg-[#302015] border border-transparent focus:border-[#f7d174]/70 text-[11px] font-bold text-amber-50 placeholder:text-amber-200/60 pr-9 pl-10 py-1.5 rounded-xl focus:outline-none transition-all shadow-inner text-right"
               />
               <div className="absolute inset-y-0 right-3 flex items-center pointer-events-none">
                 <Search className="w-3.5 h-3.5 text-slate-400" />
               </div>
-              <div className="absolute inset-y-0 left-3 flex items-center gap-1 bg-slate-200 dark:bg-slate-800 px-1.5 py-0.5 rounded-lg my-1.5 text-[9px] font-black text-slate-500 dark:text-slate-400 leading-none pointer-events-none">
+              <div className="absolute inset-y-0 left-3 flex items-center gap-1 bg-[#3b2818] px-1.5 py-0.5 rounded-lg my-1 text-[9px] font-black text-amber-200/70 leading-none pointer-events-none">
                 <Command className="w-2.5 h-2.5" />
                 <span>K</span>
               </div>
@@ -371,7 +374,7 @@ export default function Topbar({
       )}
 
       {/* Left side: Role impersonation, Notifications, Settings Gear, User Profile, Logout */}
-      <div className="flex items-center gap-3">
+      <div className="flex shrink-0 items-center gap-2">
 
         {/* Central Admin Portal Button (Always accessible for SuperAdmin or if handler provided) */}
         {onOpenSuperAdminPortal && !isClientMode && (
@@ -403,7 +406,8 @@ export default function Topbar({
               setShowNotifications(!showNotifications);
               setShowRoleMenu(false);
             }}
-            className="p-1.5 text-slate-500 dark:text-slate-400 hover:bg-slate-100 dark:hover:bg-slate-900 rounded-lg cursor-pointer relative transition-colors dark:border-slate-800"
+            aria-label="فتح التنبيهات"
+            className="min-h-9 min-w-9 p-1.5 text-amber-200/80 hover:bg-[#3a2719] rounded-lg cursor-pointer relative transition-colors focus:outline-none focus:ring-2 focus:ring-[#f7d174]/70"
           >
             <Bell className="w-4 h-4" />
             {notifications.length > 0 && (
@@ -446,7 +450,8 @@ export default function Topbar({
         {onSettingsClick && !isClientMode && (
           <button
             onClick={onSettingsClick}
-            className="p-1.5 text-slate-500 dark:text-slate-400 hover:bg-slate-100 dark:hover:bg-slate-900 rounded-lg cursor-pointer transition-colors dark:border-slate-800"
+            aria-label="فتح الإعدادات"
+            className="min-h-9 min-w-9 p-1.5 text-amber-200/80 hover:bg-[#3a2719] rounded-lg cursor-pointer transition-colors focus:outline-none focus:ring-2 focus:ring-[#f7d174]/70"
             title="الإعدادات العامة والربط البرمجي"
           >
             <Settings className="w-4 h-4" />
@@ -457,7 +462,8 @@ export default function Topbar({
         <button
           id="theme-mode-toggle"
           onClick={onThemeToggle}
-          className="p-1.5 text-slate-500 dark:text-slate-400 hover:bg-slate-100 dark:hover:bg-slate-900 rounded-lg cursor-pointer transition-all duration-300 dark:border-slate-800 flex items-center justify-center relative"
+          aria-label={theme === 'dark' ? 'التبديل للوضع الفاتح' : 'التبديل للوضع الداكن'}
+          className="min-h-9 min-w-9 p-1.5 text-amber-200/80 hover:bg-[#3a2719] rounded-lg cursor-pointer transition-all duration-300 flex items-center justify-center relative focus:outline-none focus:ring-2 focus:ring-[#f7d174]/70"
           title={theme === 'dark' ? "التبديل للوضع الفاتح" : "التبديل للوضع الداكن"}
         >
           {theme === 'dark' ? (
@@ -468,7 +474,7 @@ export default function Topbar({
           <span className="sr-only">تبديل المظهر</span>
         </button>
 
-        <div className="w-px h-6 bg-slate-200 dark:bg-slate-800" />
+        <div className="w-px h-6 bg-[#d4af37]/25" />
 
         {/* User Badge Details */}
         <div className="flex items-center gap-2">
@@ -486,7 +492,8 @@ export default function Topbar({
           <button 
             type="button"
             onClick={onLogout}
-            className="p-1.5 hover:bg-red-50 dark:hover:bg-red-950/40 text-red-600 dark:text-red-400 bg-red-50/30 dark:bg-red-950/20 rounded-lg flex items-center gap-1 border border-red-100/60 dark:border-red-950/40 transition-all shadow-2xs cursor-pointer font-extrabold text-[11px]"
+            aria-label="تسجيل الخروج"
+            className="p-1.5 hover:bg-red-950/50 text-red-300 bg-red-950/20 rounded-lg flex items-center gap-1 border border-red-900/50 transition-all shadow-2xs cursor-pointer font-extrabold text-[11px] focus:outline-none focus:ring-2 focus:ring-red-300/70"
             title="تسجيل الخروج والعودة لبوابة المداخل"
           >
             <LogOut className="w-3.5 h-3.5 text-red-500 dark:text-red-400" />
