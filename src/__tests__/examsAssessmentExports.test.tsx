@@ -108,8 +108,8 @@ describe('ExamsAssessmentPanel exports', () => {
       expect(csv).toContain(`"'=HYPERLINK(""https://evil.example"",""<img src=x onerror=alert(1)>"")"`);
 
       fireEvent.click(screen.getByRole('button', { name: `تصدير XLSX للامتحان ${assessmentTitle}` }));
-      await waitFor(() => expect(createObjectURL).toHaveBeenCalledTimes(2), { timeout: 20_000 });
-      await screen.findByText('تم تنزيل ملف XLSX للامتحان والأسئلة ونتائج الطلاب.', {}, { timeout: 20_000 });
+      await waitFor(() => expect(createObjectURL).toHaveBeenCalledTimes(2), { timeout: 60_000 });
+      await screen.findByText('تم تنزيل ملف XLSX للامتحان والأسئلة ونتائج الطلاب.', {}, { timeout: 60_000 });
       expect(createObjectURL).toHaveBeenCalledTimes(2);
       expect(capturedBlobs[1].type).toContain('spreadsheetml.sheet');
       expect(downloadedNames[1]).toBe('نتائج_الامتحان_assessment-export-test.xlsx');

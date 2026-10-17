@@ -18,6 +18,7 @@
     "build:spa": "vite build --configLoader runner",
     "production:gate": "node scripts/production-release-gate.mjs",
     "uat:student-fees:staging": "tsx scripts/uat-student-fees-staging.ts",
+    "uat:student-affairs:staging": "tsx scripts/uat-student-affairs-staging.ts",
     "route-integrity": "node scripts/route-integrity.mjs",
     "verify:artifact": "node scripts/verify-build-artifact.mjs",
     "smoke:production": "node scripts/production-smoke.mjs",

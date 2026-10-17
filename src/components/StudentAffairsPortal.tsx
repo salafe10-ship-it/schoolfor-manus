@@ -230,6 +230,7 @@ export default function StudentAffairsPortal({
   // View Profile & ID Card Modal State
   const [viewStudent, setViewStudent] = useState<Student | null>(null);
   const [showIdCardPrint, setShowIdCardPrint] = useState<boolean>(false);
+  const [certificatePreview, setCertificatePreview] = useState<{ issued: any; certificate: any; student: Student } | null>(null);
   const [timelineStudent, setTimelineStudent] = useState<Student | null>(null);
   const [timelineEvents, setTimelineEvents] = useState<StudentTimelineEvent[]>([]);
   const [timelineStatus, setTimelineStatus] = useState<'idle' | 'loading' | 'success' | 'empty' | 'error'>('idle');
@@ -852,13 +853,25 @@ export default function StudentAffairsPortal({
   };
 
   const handleOpenViewStudent = (student: Student) => {
-    setViewStudent(student);
+    const academicContext = resolveStudentAcademicContext(student);
+    const stageRecord = stages.find(stage => String(stage?.id || '').trim() === academicContext.stageId);
+    const gradeRecord = grades.find(grade => String(grade?.id || '').trim() === academicContext.gradeId);
+    setViewStudent({
+      ...student,
+      stage: String((student as any).stage || stageRecord?.name || stageRecord?.code || '').trim(),
+      grade: String((student as any).grade || gradeRecord?.name || gradeRecord?.code || '').trim(),
+      classroom: academicContext.className || academicContext.classCode || student.classroom,
+      section: academicContext.section || student.section
+    });
     setStudent360Data(null);
     setStudent360Status('idle');
     setTimelineStudent(null);
     setTimelineEvents([]);
     setTimelineStatus('idle');
     setTimelineError('');
+    void loadStudentPhoto(student.id).then(url => {
+      if (url) setViewStudent(current => current?.id === student.id ? { ...current, avatarUrl: url } : current);
+    });
   };
 
   const loadStudent360 = async (student: Student) => {
@@ -896,15 +909,17 @@ export default function StudentAffairsPortal({
       return;
     }
     try {
-      const response = await authenticatedRequest(`/api/students/${encodeURIComponent(student.id)}/certificates/enrollment`, { method: 'GET', headers: { Accept: 'application/json' } });
+      const response = await authenticatedRequest(`/api/students/${encodeURIComponent(student.id)}/certificates/enrollment/issue`, {
+        method: 'POST',
+        headers: { Accept: 'application/json', 'Content-Type': 'application/json', 'Idempotency-Key': `student-enrollment-certificate-${student.id}-${crypto.randomUUID()}` },
+        body: JSON.stringify({ reason: 'إصدار شهادة قيد رسمية من السجل الكانوني.' })
+      });
       const payload = await response.json().catch(() => null) as { data?: any; message?: string; error?: string } | null;
       if (!response.ok) throw new Error(payload?.message || payload?.error || 'تعذر إصدار شهادة القيد.');
-      const certificate = payload?.data;
-      const printWindow = window.open('', '_blank', 'noopener,noreferrer,width=900,height=700');
-      if (!printWindow) throw new Error('يرجى السماح بالنوافذ المنبثقة لطباعة الشهادة.');
-      const escapeHtml = (value: unknown) => String(value ?? '').replace(/[&<>"']/g, char => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[char] || char));
-      printWindow.document.write(`<html dir="rtl"><head><title>شهادة قيد الطالب</title><style>body{font-family:Arial;padding:48px;color:#1c120c}h1{text-align:center;color:#8b641f}table{width:100%;border-collapse:collapse;margin-top:28px}td{border:1px solid #d8c7a0;padding:12px}small{color:#7c6b56}</style></head><body><h1>شهادة قيد طالب</h1><p>تشهد المدرسة بأن الطالب/ة <strong>${escapeHtml(certificate?.student?.student_name || student.name)}</strong> مقيد/ة بسجلاتها.</p><table><tr><td>رقم الطالب</td><td>${escapeHtml(certificate?.student?.student_number || student.studentCode || '')}</td></tr><tr><td>الصف/${sectionTerm}</td><td>${escapeHtml(certificate?.student?.class_reference || 'غير محدد')} / ${escapeHtml(displaySectionValue(certificate?.student?.section_reference || 'غير محددة'))}</td></tr><tr><td>الحالة</td><td>${escapeHtml(studentStatusLabel(certificate?.student?.academic_status || certificate?.student?.status))}</td></tr><tr><td>رقم التحقق</td><td>${escapeHtml(certificate?.reference || '')}</td></tr></table><p><small>حالة التوقيع الإلكتروني: ${escapeHtml(certificate?.signatureStatus === 'pending_provider' ? 'بانتظار مزود التوقيع المعتمد' : 'معتمد')}</small></p><script>window.print();</script></body></html>`);
-      printWindow.document.close();
+      const issued = payload?.data || {};
+      const certificate = issued?.certificate_payload || issued?.certificatePayload || issued;
+      setCertificatePreview({ issued, certificate, student });
+      triggerNotification('تم إصدار شهادة القيد الكانونية بنجاح، وهي جاهزة للمعاينة والطباعة.', 'success');
     } catch (error: any) {
       triggerNotification(error?.message || 'تعذر إصدار شهادة القيد.', 'warning');
     }
@@ -1845,19 +1860,19 @@ export default function StudentAffairsPortal({
   return (
     <div 
       id="student-affairs-master-command-center"
-      className={`student-affairs-command-center w-full min-h-full text-right font-sans dir-rtl select-none transition-all duration-300 bg-[radial-gradient(circle_at_top_right,_rgba(212,175,55,0.14),_transparent_32%),linear-gradient(135deg,#f8f5ee_0%,#efe9dc_52%,#e5dccd_100%)] text-slate-900 p-1 sm:p-2 md:p-3 space-y-3 ${isFocusMode ? 'portal-focus-mode' : ''}`}
+      className={`student-affairs-command-center w-full min-h-full text-right font-sans dir-rtl select-none transition-all duration-300 bg-[radial-gradient(circle_at_top_right,_rgba(212,175,55,0.14),_transparent_32%),linear-gradient(135deg,#f8f5ee_0%,#efe9dc_52%,#e5dccd_100%)] text-slate-900 p-1 sm:p-2 md:p-3 space-y-2.5 ${isFocusMode ? 'portal-focus-mode' : ''}`}
       dir="rtl"
     >
 
       {/* ==========================================
           LUXURY GOLD METALLIC TOP HEADER
          ========================================== */}
-      <div className="edupro-identity-header bg-gradient-to-r from-[#1c120c] via-[#2d1e12] to-[#1a100a] text-white rounded-[24px] p-3 sm:p-3.5 border border-[#d4af37]/45 shadow-[0_16px_42px_rgba(42,29,19,0.24)] flex flex-wrap items-center justify-between gap-3 relative overflow-hidden">
+      <div className="edupro-identity-header bg-gradient-to-r from-[#1c120c] via-[#2d1e12] to-[#1a100a] text-white rounded-[24px] p-2.5 sm:p-3 border border-[#d4af37]/45 shadow-[0_16px_42px_rgba(42,29,19,0.24)] flex flex-wrap items-center justify-between gap-2.5 relative overflow-hidden">
         <div className="absolute top-0 right-1/4 w-80 h-16 bg-[#d4af37]/10 blur-3xl pointer-events-none" />
         
         {/* Module Title & Breadcrumbs */}
-        <div className="flex items-center gap-2.5 relative z-10">
-          <div className="w-10 h-10 rounded-2xl bg-gradient-to-tr from-[#9a6a1d] via-[#f7d174] to-[#c58a22] p-[2px] shadow-lg shadow-[#d4af37]/20 flex-shrink-0">
+        <div className="flex items-center gap-2 relative z-10">
+          <div className="w-9 h-9 rounded-xl bg-gradient-to-tr from-[#9a6a1d] via-[#f7d174] to-[#c58a22] p-[2px] shadow-lg shadow-[#d4af37]/20 flex-shrink-0">
             <div className="w-full h-full rounded-[12px] bg-[#2a1b10] flex items-center justify-center text-amber-300 font-black">
               <GraduationCap className="w-5 h-5" />
             </div>
@@ -1872,7 +1887,7 @@ export default function StudentAffairsPortal({
               <h1 className="text-lg sm:text-xl font-black tracking-tight bg-gradient-to-r from-[#ffe5a3] via-[#fce79a] to-[#d4af37] bg-clip-text text-transparent">
               منظومة شؤون الطلاب والأنشطة الأكاديمية
               </h1>
-              <span className="inline-flex items-center gap-1 rounded-full border border-emerald-300/30 bg-emerald-300/10 px-2.5 py-1 text-[10px] font-black text-emerald-200">
+              <span className="inline-flex items-center gap-1 rounded-full border border-emerald-300/30 bg-emerald-300/10 px-2 py-0.5 text-[10px] font-black text-emerald-200">
                 <CheckCircle2 className="h-3.5 w-3.5" />
                 جاهز للعمل
               </span>
@@ -1882,10 +1897,10 @@ export default function StudentAffairsPortal({
         </div>
 
         {/* Center Sub-Navigation Tabs */}
-        <div className="flex items-center gap-1 bg-[#2a1d13]/90 border border-[#d4af37]/40 p-1 rounded-2xl shadow-inner relative z-10 overflow-x-auto">
+        <div className="flex items-center gap-1 bg-[#2a1d13]/90 border border-[#d4af37]/40 p-0.5 rounded-2xl shadow-inner relative z-10 overflow-x-auto">
           <button 
             onClick={() => setActiveTab('student_data')}
-            className={`px-3 py-1.5 rounded-xl text-[11px] font-black transition-all flex items-center gap-1 ${
+            className={`px-2.5 py-1.5 rounded-xl text-[11px] font-black transition-all flex items-center gap-1 ${
               activeTab === 'student_data' 
                 ? 'bg-gradient-to-r from-[#9a6a1d] via-[#d4af37] to-[#c58a22] text-slate-950 shadow-md' 
                 : 'text-amber-200/80 hover:text-white hover:bg-white/5'
@@ -1897,7 +1912,7 @@ export default function StudentAffairsPortal({
 
           <button 
             onClick={() => setActiveTab('guardians')}
-            className={`px-3 py-1.5 rounded-xl text-[11px] font-black transition-all flex items-center gap-1 ${
+            className={`px-2.5 py-1.5 rounded-xl text-[11px] font-black transition-all flex items-center gap-1 ${
               activeTab === 'guardians' 
                 ? 'bg-gradient-to-r from-[#9a6a1d] via-[#d4af37] to-[#c58a22] text-slate-950 shadow-md' 
                 : 'text-amber-200/80 hover:text-white hover:bg-white/5'
@@ -1909,7 +1924,7 @@ export default function StudentAffairsPortal({
 
           <button 
             onClick={() => setActiveTab('documents')}
-            className={`px-3 py-1.5 rounded-xl text-[11px] font-black transition-all flex items-center gap-1 ${
+            className={`px-2.5 py-1.5 rounded-xl text-[11px] font-black transition-all flex items-center gap-1 ${
               activeTab === 'documents' 
                 ? 'bg-gradient-to-r from-[#9a6a1d] via-[#d4af37] to-[#c58a22] text-slate-950 shadow-md' 
                 : 'text-amber-200/80 hover:text-white hover:bg-white/5'
@@ -1921,7 +1936,7 @@ export default function StudentAffairsPortal({
 
           <button 
             onClick={() => setActiveTab('reports')}
-            className={`px-3 py-1.5 rounded-xl text-[11px] font-black transition-all flex items-center gap-1 ${
+            className={`px-2.5 py-1.5 rounded-xl text-[11px] font-black transition-all flex items-center gap-1 ${
               activeTab === 'reports' 
                 ? 'bg-gradient-to-r from-[#9a6a1d] via-[#d4af37] to-[#c58a22] text-slate-950 shadow-md' 
                 : 'text-amber-200/80 hover:text-white hover:bg-white/5'
@@ -1933,7 +1948,7 @@ export default function StudentAffairsPortal({
 
           <button 
             onClick={() => setActiveTab('settings')}
-            className={`px-3 py-1.5 rounded-xl text-[11px] font-black transition-all flex items-center gap-1 ${
+            className={`px-2.5 py-1.5 rounded-xl text-[11px] font-black transition-all flex items-center gap-1 ${
               activeTab === 'settings' 
                 ? 'bg-gradient-to-r from-[#9a6a1d] via-[#d4af37] to-[#c58a22] text-slate-950 shadow-md' 
                 : 'text-amber-200/80 hover:text-white hover:bg-white/5'
@@ -1945,12 +1960,13 @@ export default function StudentAffairsPortal({
         </div>
 
         {/* Quick Action Buttons */}
-        <div className="flex items-center gap-1.5 relative z-10">
+        <div className="flex items-center gap-1 relative z-10">
           <button 
             onClick={handleExportExcel}
             disabled={isExportingStudents || !canExportStudents}
             aria-disabled={!canExportStudents}
             aria-busy={isExportingStudents}
+            aria-label={isExportingStudents ? 'جاري تصدير بيانات الطلاب' : 'تصدير بيانات الطلاب إلى ملف XLSX'}
             className="bg-[#2a1d13] border border-[#d4af37]/40 hover:border-[#f7d174] text-amber-200 px-2.5 py-1.5 rounded-xl text-[11px] font-bold flex items-center gap-1 hover:scale-105 transition-all shadow cursor-pointer"
             title="تصدير بيانات الطلاب إلى ملف XLSX حقيقي"
           >
@@ -1961,6 +1977,7 @@ export default function StudentAffairsPortal({
           <button 
             type="button"
             onClick={() => handlePrintList(false)}
+            aria-label="طباعة كشف الطلاب"
             className="bg-[#2a1d13] border border-[#d4af37]/40 hover:border-[#f7d174] text-amber-200 px-2.5 py-1.5 rounded-xl text-[11px] font-bold flex items-center gap-1 hover:scale-105 transition-all shadow cursor-pointer"
             title="طباعة الكشف المعاين"
           >
@@ -1982,6 +1999,7 @@ export default function StudentAffairsPortal({
             type="button"
             onClick={() => setIsFocusMode(current => !current)}
             aria-pressed={isFocusMode}
+            aria-label={isFocusMode ? 'الرجوع إلى العرض الحالي' : 'عرض وحدة شؤون الطلاب كاملة'}
             title={isFocusMode ? 'الرجوع إلى العرض الحالي' : 'عرض الوحدة كاملة'}
             className="bg-[#2a1d13] border border-[#d4af37]/40 hover:border-[#f7d174] text-amber-200 px-2.5 py-1.5 rounded-xl text-[11px] font-bold flex items-center gap-1 transition-all shadow cursor-pointer"
           >
@@ -1995,10 +2013,10 @@ export default function StudentAffairsPortal({
       {/* ==========================================
           STATISTICS & KPI CARDS ROW (5 Metallic Cards)
          ========================================== */}
-      <div className="grid grid-cols-2 sm:grid-cols-3 md:grid-cols-5 gap-2 sm:gap-3">
+      <div className="grid grid-cols-2 sm:grid-cols-3 md:grid-cols-5 gap-2">
         
         {/* KPI 1: Total Students */}
-        <div className="bg-gradient-to-b from-[#fffefc] via-[#fbf8f0] to-[#f5eeea] border border-[#d4af37]/35 hover:border-[#d4af37] hover:-translate-y-1 hover:shadow-xl rounded-2xl p-3 shadow-md transition-all duration-300 flex items-center justify-between group">
+        <div className="bg-gradient-to-b from-[#fffefc] via-[#fbf8f0] to-[#f5eeea] border border-[#d4af37]/35 hover:border-[#d4af37] hover:-translate-y-1 hover:shadow-xl rounded-2xl p-2.5 shadow-md transition-all duration-300 flex items-center justify-between group">
           <div>
             <span className="text-[11px] font-black text-slate-700 block">إجمالي الطلاب المسجلين</span>
             <span className="text-xl font-black text-slate-900 font-mono tracking-tight block mt-0.5">{totalCount.toLocaleString('ar-EG')}</span>
@@ -2010,7 +2028,7 @@ export default function StudentAffairsPortal({
         </div>
 
         {/* KPI 2: Active Students */}
-        <div className="bg-gradient-to-b from-[#fffefc] via-[#fbf8f0] to-[#f5eeea] border border-[#d4af37]/35 hover:border-[#d4af37] hover:-translate-y-1 hover:shadow-xl rounded-2xl p-3 shadow-md transition-all duration-300 flex items-center justify-between group">
+        <div className="bg-gradient-to-b from-[#fffefc] via-[#fbf8f0] to-[#f5eeea] border border-[#d4af37]/35 hover:border-[#d4af37] hover:-translate-y-1 hover:shadow-xl rounded-2xl p-2.5 shadow-md transition-all duration-300 flex items-center justify-between group">
           <div>
             <span className="text-[11px] font-black text-slate-700 block">الطلاب النشطون</span>
             <span className="text-xl font-black text-slate-900 font-mono tracking-tight block mt-0.5">{activeCount.toLocaleString('ar-EG')}</span>
@@ -2022,7 +2040,7 @@ export default function StudentAffairsPortal({
         </div>
 
         {/* KPI 3: New Registered */}
-        <div className="bg-gradient-to-b from-[#fffefc] via-[#fbf8f0] to-[#f5eeea] border border-[#d4af37]/35 hover:border-[#d4af37] hover:-translate-y-1 hover:shadow-xl rounded-2xl p-3 shadow-md transition-all duration-300 flex items-center justify-between group">
+        <div className="bg-gradient-to-b from-[#fffefc] via-[#fbf8f0] to-[#f5eeea] border border-[#d4af37]/35 hover:border-[#d4af37] hover:-translate-y-1 hover:shadow-xl rounded-2xl p-2.5 shadow-md transition-all duration-300 flex items-center justify-between group">
           <div>
             <span className="text-[11px] font-black text-slate-700 block">الطلاب الجدد (هذا العام)</span>
             <span className="text-xl font-black text-slate-900 font-mono tracking-tight block mt-0.5">{newCount.toLocaleString('ar-EG')}</span>
@@ -2034,7 +2052,7 @@ export default function StudentAffairsPortal({
         </div>
 
         {/* KPI 4: Suspended / Inactive */}
-        <div className="bg-gradient-to-b from-[#fffefc] via-[#fbf8f0] to-[#f5eeea] border border-[#d4af37]/35 hover:border-[#d4af37] hover:-translate-y-1 hover:shadow-xl rounded-2xl p-3 shadow-md transition-all duration-300 flex items-center justify-between group">
+        <div className="bg-gradient-to-b from-[#fffefc] via-[#fbf8f0] to-[#f5eeea] border border-[#d4af37]/35 hover:border-[#d4af37] hover:-translate-y-1 hover:shadow-xl rounded-2xl p-2.5 shadow-md transition-all duration-300 flex items-center justify-between group">
           <div>
             <span className="text-[11px] font-black text-slate-700 block">الموقوفون والمنسحبون</span>
             <span className="text-xl font-black text-slate-900 font-mono tracking-tight block mt-0.5">{suspendedCount.toLocaleString('ar-EG')}</span>
@@ -2046,7 +2064,7 @@ export default function StudentAffairsPortal({
         </div>
 
         {/* KPI 5: Pending Documents */}
-        <div className="bg-gradient-to-b from-[#fffefc] via-[#fbf8f0] to-[#f5eeea] border border-[#d4af37]/35 hover:border-[#d4af37] hover:-translate-y-1 hover:shadow-xl rounded-2xl p-3 shadow-md transition-all duration-300 flex items-center justify-between group">
+        <div className="bg-gradient-to-b from-[#fffefc] via-[#fbf8f0] to-[#f5eeea] border border-[#d4af37]/35 hover:border-[#d4af37] hover:-translate-y-1 hover:shadow-xl rounded-2xl p-2.5 shadow-md transition-all duration-300 flex items-center justify-between group">
           <div>
             <span className="text-[11px] font-black text-slate-700 block">مستندات غير مكتملة</span>
             <span className="text-xl font-black text-amber-700 font-mono tracking-tight block mt-0.5">{pendingDocsCount.toLocaleString('ar-EG')}</span>
@@ -3531,6 +3549,44 @@ export default function StudentAffairsPortal({
                 <button type="button" onClick={() => window.print()} className="rounded-xl bg-[#d4af37] px-5 py-2 text-xs font-black">طباعة</button>
                 <button type="button" onClick={() => setShowIdCardPrint(false)} className="rounded-xl border border-slate-300 px-5 py-2 text-xs font-black">إغلاق</button>
               </div>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {certificatePreview && (
+        <div className="fixed inset-0 z-[70] bg-black/70 flex items-center justify-center p-4" role="dialog" aria-modal="true" aria-label="معاينة شهادة القيد">
+          <div className="bg-white text-slate-900 w-full max-w-2xl rounded-2xl border-2 border-[#d4af37] shadow-2xl overflow-hidden">
+            <div className="no-print bg-[#2a1d13] text-white px-5 py-4 flex items-center justify-between">
+              <h3 className="font-black text-amber-200">معاينة شهادة القيد الرسمية</h3>
+              <button type="button" aria-label="إغلاق معاينة شهادة القيد" onClick={() => setCertificatePreview(null)} className="text-white/80 hover:text-white"><X className="w-5 h-5" /></button>
+            </div>
+            <div className="p-6 space-y-4" dir="rtl">
+              {(() => {
+                const certificate = certificatePreview.certificate || {};
+                const issued = certificatePreview.issued || {};
+                const placement = certificate?.enrollment?.placement || {};
+                return (
+                  <>
+                    <h2 className="text-center text-xl font-black text-[#8b641f]">شهادة قيد طالب رسمية</h2>
+                    <p className="text-sm leading-7">تشهد المدرسة بأن الطالب/ة <strong>{certificate?.student?.name || certificatePreview.student.name}</strong> مقيد/ة بسجلاتها.</p>
+                    <table className="w-full border-collapse text-sm">
+                      <tbody>
+                        <tr><td className="border border-[#d8c7a0] p-3 font-bold">رقم الطالب</td><td className="border border-[#d8c7a0] p-3">{certificate?.student?.studentNumber || certificatePreview.student.studentCode || '—'}</td></tr>
+                        <tr><td className="border border-[#d8c7a0] p-3 font-bold">المرحلة / الصف / {sectionTerm}</td><td className="border border-[#d8c7a0] p-3">{placement?.stageName || 'غير محددة'} / {placement?.gradeName || certificate?.enrollment?.classReference || 'غير محدد'} / {displaySectionValue(certificate?.enrollment?.sectionReference || 'غير محددة')}</td></tr>
+                        <tr><td className="border border-[#d8c7a0] p-3 font-bold">السنة الدراسية</td><td className="border border-[#d8c7a0] p-3">{certificate?.enrollment?.academicYearName || '—'}</td></tr>
+                        <tr><td className="border border-[#d8c7a0] p-3 font-bold">رقم الشهادة</td><td className="border border-[#d8c7a0] p-3">{issued?.certificate_number || issued?.certificateNumber || certificate?.certificateNumber || '—'}</td></tr>
+                        <tr><td className="border border-[#d8c7a0] p-3 font-bold">مرجع التحقق</td><td className="border border-[#d8c7a0] p-3">{issued?.certificate_reference || issued?.certificateReference || certificate?.certificateReference || '—'}</td></tr>
+                      </tbody>
+                    </table>
+                    <p className="text-xs text-slate-600">حالة التوقيع الإلكتروني: معتمد خادميًا — HMAC-SHA256.</p>
+                    <div className="no-print flex justify-end gap-2">
+                      <button type="button" onClick={() => window.print()} className="rounded-xl bg-[#d4af37] px-5 py-2 text-xs font-black">طباعة</button>
+                      <button type="button" onClick={() => setCertificatePreview(null)} className="rounded-xl border border-slate-300 px-5 py-2 text-xs font-black">إغلاق</button>
+                    </div>
+                  </>
+                );
+              })()}
             </div>
           </div>
         </div>

@@ -70,6 +70,7 @@ import { canonicalGuardianUpdateService } from "./src/modules/student-registrati
 import { operationalEnrollmentAssignmentService } from "./src/modules/student-affairs/application/OperationalEnrollmentAssignmentService.js";
 import { canonicalEnrollmentWorkflowService } from "./src/modules/student-affairs/application/CanonicalEnrollmentWorkflowService.js";
 import { canonicalGraduationService } from "./src/modules/student-affairs/application/CanonicalGraduationService.js";
+import { canonicalEnrollmentCertificateService } from "./src/modules/student-affairs/application/CanonicalEnrollmentCertificateService.js";
 import {
   canonicalExamClassSyncService,
   reconcileExamDatabaseClassReferences
@@ -11222,6 +11223,20 @@ export async function createApp(options: { cloudflare?: boolean } = {}): Promise
       }, context);
       return res.json({ success: true, data: certificate, meta: { printable: true, signed: false } });
     } catch (error) { return next(error); }
+  });
+
+  app.post("/api/students/:id/certificates/enrollment/issue", authenticateRequest, requirePermission(PERMISSIONS.STUDENT_WRITE), resolveStudentTenantMiddleware, async (req, res, next) => {
+    try {
+      const identity = (req as any).user;
+      const context = (req as any).tenantContext || await resolveStudentTenantContext(req);
+      const result = await canonicalEnrollmentCertificateService.issue(
+        { ...context, userId: identity?.id || context.userId, requestId: randomUUID(), correlationId: randomUUID(), ipAddress: req.ip || 'unknown' },
+        req.params.id,
+        req.get('Idempotency-Key') || '',
+        typeof req.body?.reason === 'string' ? req.body.reason : 'إصدار شهادة قيد رسمية من السجل الكانوني.'
+      );
+      res.status(result.idempotent ? 200 : 201).json({ success: true, data: result, meta: { printable: true, signed: true, source: 'canonical-postgres', signatureAlgorithm: 'hmac-sha256' } });
+    } catch (error) { next(error); }
   });
 
   app.get("/api/students/:id/timeline", authenticateRequest, requirePermission(PERMISSIONS.STUDENT_READ), resolveStudentTenantMiddleware, async (req, res, next) => {

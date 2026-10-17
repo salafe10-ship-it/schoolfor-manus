@@ -1,0 +1,31 @@
+{
+  "$schema": "node_modules/wrangler/config-schema.json",
+  "name": "schoolfor-manus-staging",
+  "main": "./cloudflare-worker.ts",
+  "compatibility_date": "2026-09-16",
+  "compatibility_flags": ["nodejs_compat"],
+  "workers_dev": true,
+  "vars": {
+    "DATABASE_ROLE_EXPECTED": "edupro_staging_app",
+    "EDUPRO_ENVIRONMENT": "staging",
+    "FINANCIAL_WRITES_LOCKED": "true",
+    "FINANCIAL_ERP_MODE": "canonical",
+    "PGSSL_REJECT_UNAUTHORIZED": "true",
+    "PUBLIC_APP_URL": "https://schoolfor-manus-staging.salafe10.workers.dev",
+    "UAT35_TARGET": "schoolfor-manus-staging",
+    "ALLOW_IFRAME_EMBEDDING": "false",
+    "EDUPRO_AI_FORECAST_ENABLED": "false"
+  },
+  "alias": {
+    "body-parser": "./cloudflare/body-parser-shim.js"
+  },
+  "assets": {
+    "directory": "./dist",
+    "binding": "ASSETS",
+    "not_found_handling": "single-page-application",
+    "run_worker_first": ["/api/*"]
+  },
+  "observability": {
+    "enabled": true
+  }
+}

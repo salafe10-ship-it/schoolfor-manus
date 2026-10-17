@@ -151,25 +151,25 @@ export default function TopNavigation({
   };
 
   return (
-    <nav id="top-navigation-panel" className="bg-slate-900 text-slate-200 border-b border-slate-800 flex flex-col w-full shadow-lg shrink-0 transition-all duration-300 z-30">
+    <nav id="top-navigation-panel" className="flex w-full shrink-0 flex-col border-b border-[#d4af37]/25 bg-[#1c120c] text-slate-200 shadow-lg transition-all duration-300 z-30">
       
       {/* Tier 1: Brand Info, Portal Switches, and Status Badges */}
-      <div className="px-6 py-3 border-b border-slate-800/80 bg-slate-950 flex flex-col md:flex-row justify-between items-center gap-4">
+      <div className="flex flex-col items-center justify-between gap-2.5 border-b border-[#d4af37]/20 bg-transparent px-4 py-2.5 md:flex-row">
         
         {/* Brand identity on the right */}
-        <div className="flex items-center gap-3">
-          <div className="w-10 h-10 bg-gradient-to-tr from-yellow-500 to-amber-600 flex items-center justify-center text-xl shadow-md cursor-pointer group hover:rotate-6 transition-all">
+        <div className="flex items-center gap-2.5">
+          <div className="flex h-9 w-9 cursor-pointer items-center justify-center bg-gradient-to-tr from-yellow-500 to-amber-600 text-lg shadow-md transition-all group hover:rotate-6">
             {activeSchool.logo}
           </div>
           <div>
             <div className="flex items-center gap-2">
-              <span className="text-[10px] text-yellow-400 font-bold tracking-wide flex items-center gap-1">
-                <Globe2 className="w-3.5 h-3.5 animate-pulse" />
+              <span className="flex items-center gap-1 text-[9px] font-bold tracking-wide text-yellow-400">
+                <Globe2 className="h-3 w-3 animate-pulse" />
                 نظام سحاب السحابي
               </span>
-              <span className="text-[9px] text-slate-500 font-semibold bg-slate-900 border border-slate-800 px-1.5 py-0.5 rounded">v4.2</span>
+              <span className="rounded border border-[#d4af37]/20 bg-[#130b04]/60 px-1.5 py-0.5 text-[8px] font-semibold text-slate-500">v4.2</span>
             </div>
-            <h1 className="text-sm font-bold text-white truncate max-w-[200px]" title={activeSchool.name}>
+            <h1 className="max-w-[200px] truncate text-sm font-bold text-white" title={activeSchool.name}>
               {activeSchool.name}
             </h1>
           </div>
@@ -177,13 +177,13 @@ export default function TopNavigation({
 
         {/* Portal Switching for SuperAdmins (Middle Area) */}
         {currentRole === 'SuperAdmin' && (
-          <div className="flex items-center bg-slate-900 p-1 border border-slate-800 shrink-0">
+          <div className="flex shrink-0 items-center border border-[#d4af37]/25 bg-[#130b04]/45 p-0.5">
             <button
               onClick={() => {
                 setIsSuperAdminPortalActive(true);
                 setActiveSection('super_stats');
               }}
-              className={`py-1.5 px-4 rounded-lg text-xs font-black transition-all flex items-center gap-1.5 ${
+              className={`flex items-center gap-1.5 rounded-md px-3 py-1 text-xs font-black transition-all ${
                 isSuperAdminPortalActive 
                   ? 'bg-yellow-600 text-white shadow-md font-bold' 
                   : 'text-slate-400 hover:text-white hover:bg-slate-800/50'
@@ -196,7 +196,7 @@ export default function TopNavigation({
                 setIsSuperAdminPortalActive(false);
                 setActiveSection('dashboard');
               }}
-              className={`py-1.5 px-4 rounded-lg text-xs font-black transition-all flex items-center gap-1.5 ${
+              className={`flex items-center gap-1.5 rounded-md px-3 py-1 text-xs font-black transition-all ${
                 !isSuperAdminPortalActive 
                   ? 'bg-yellow-600 text-white shadow-md font-bold' 
                   : 'text-slate-400 hover:text-white hover:bg-slate-800/50'
@@ -208,10 +208,10 @@ export default function TopNavigation({
         )}
 
         {/* Status Indicators & Impersonation on the left */}
-        <div className="flex items-center gap-3.5">
+        <div className="flex items-center gap-2.5">
           {/* Impersonation Indicator */}
-          <div className="flex items-center gap-2 bg-slate-900 border border-slate-850 px-3 py-1.5 rounded-lg">
-            <span className="text-[11px] text-slate-400 font-medium">النمط:</span>
+          <div className="flex items-center gap-1.5 rounded-lg border border-[#d4af37]/20 bg-[#130b04]/45 px-2.5 py-1">
+            <span className="text-[10px] font-medium text-slate-400">النمط:</span>
             <span className={`px-2 py-0.5 rounded-full text-[10px] font-black border ${getRoleBadgeColor(currentRole)}`}>
               {currentRole}
             </span>
@@ -220,7 +220,7 @@ export default function TopNavigation({
 
           {/* Cloud Connection (Only shown in central Super Admin/SaaS portal view) */}
           {isSuperAdminPortalActive && (
-            <div className="flex items-center gap-2 bg-slate-900 border border-slate-850 px-3 py-1.5 rounded-lg text-[11px]">
+            <div className="flex items-center gap-2 rounded-lg border border-[#d4af37]/20 bg-[#130b04]/45 px-2.5 py-1 text-[10px]">
               <span className={`w-2 h-2 rounded-full ${isSupabaseConnected ? 'bg-emerald-500 animate-pulse' : 'bg-rose-500'}`} />
               <span className="text-slate-300 font-medium">
                 {isSupabaseConnected ? 'متصل سحابياً بـ Supabase' : 'غير متصل بالبيانات'}
@@ -231,17 +231,17 @@ export default function TopNavigation({
       </div>
 
       {/* Tier 2: Inline Horizontal Categories with Divider Strips & Seamless Scroll */}
-      <div className="px-6 py-2 bg-[#1c120c] border-b border-[#d4af37]/30 flex items-center gap-6 overflow-x-auto whitespace-nowrap scrollbar-none scroll-smooth">
+      <div className="flex items-center gap-4 overflow-x-auto whitespace-nowrap border-b border-[#d4af37]/25 bg-transparent px-4 py-1.5 scrollbar-none scroll-smooth">
         {activeNavGroups.map((group, groupIdx) => (
-          <div key={group.title} className="flex items-center gap-2 shrink-0">
+          <div key={group.title} className="flex shrink-0 items-center gap-1.5">
             
             {/* Category header inside the line */}
-            <span className="text-[11px] font-black text-[#d4af37] px-2 py-1 rounded bg-[#130b04] border border-[#d4af37]/30 uppercase select-none tracking-wider font-mono">
+            <span className="select-none px-1.5 py-0.5 text-[10px] font-black uppercase tracking-wide text-[#e3b94f]">
               {group.title}
             </span>
 
             {/* Icons list for this category */}
-            <div className="flex items-center gap-1.5">
+            <div className="flex items-center gap-1">
               {group.items.map((item) => {
                 const Icon = item.icon;
                 const isActive = activeSection === item.id;
@@ -249,7 +249,7 @@ export default function TopNavigation({
                   <button
                     key={item.id}
                     onClick={() => setActiveSection(item.id)}
-                    className={`flex items-center gap-2 px-3 py-2 rounded-lg text-xs font-semibold text-right transition-all group ${
+                    className={`flex min-h-9 items-center gap-1.5 rounded-lg px-2.5 py-1.5 text-right text-xs font-semibold transition-all group ${
                       isActive 
                         ? 'bg-gradient-to-r from-[#9a6a1d] via-[#c58a22] to-[#8b6113] text-[#fff8d6] font-bold shadow-md hover:scale-[1.01] border border-[#f7d174]/40' 
                         : 'text-amber-100/70 hover:bg-[#2e1f13] hover:text-[#fce79a]'
@@ -266,7 +266,7 @@ export default function TopNavigation({
 
             {/* Separator between categories */}
             {groupIdx < activeNavGroups.length - 1 && (
-              <div className="h-5 w-px bg-[#d4af37]/20 mx-1 select-none" />
+              <div className="mx-1 h-4 w-px select-none bg-[#d4af37]/20" />
             )}
           </div>
         ))}
