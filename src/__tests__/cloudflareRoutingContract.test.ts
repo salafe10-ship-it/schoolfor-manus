@@ -1,10 +1,21 @@
 import { describe, expect, it } from 'vitest';
-import { readFileSync } from 'node:fs';
+import { existsSync, readFileSync } from 'node:fs';
 import { resolve } from 'node:path';
 
 const read = (relativePath: string): string => readFileSync(resolve(process.cwd(), relativePath), 'utf8');
 
 describe('Cloudflare API routing contract', () => {
+  it('uses the Pages Function for API proxying without an incompatible Worker assets redirect', () => {
+    const pagesProxy = read('functions/api/[[path]].ts');
+    expect(pagesProxy).toContain('export const onRequest');
+    expect(pagesProxy).toContain('https://schoolfor-manus.salafe10.workers.dev');
+    const redirectsPath = resolve(process.cwd(), 'public/_redirects');
+    if (existsSync(redirectsPath)) {
+      const redirects = readFileSync(redirectsPath, 'utf8');
+      expect(redirects).not.toMatch(/^\/api\/\*\s+https?:\/\/\S+\s+200\s*$/m);
+    }
+  });
+
   it('runs the Worker before the SPA fallback for every API route', () => {
     const wrangler = read('wrangler.jsonc');
     expect(wrangler).toContain('"run_worker_first": ["/api/*"]');

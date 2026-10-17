@@ -1,4 +1,0 @@
-# Keep the Pages hostname as the browser origin while forwarding API calls
-# server-side to the existing Cloudflare Worker. The Worker remains the
-# canonical API/data plane; this proxy does not expose secrets or change data.
-/api/* https://schoolfor-manus.salafe10.workers.dev/api/:splat 200
