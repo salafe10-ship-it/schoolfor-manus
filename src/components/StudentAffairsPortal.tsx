@@ -12,6 +12,7 @@ import {
 import { Student, School, UserRole } from '../types';
 import { PERMISSIONS } from '../authorization/PermissionRegistry';
 import { StudentRepository } from './student-affairs/repository/StudentRepository';
+import { resolveStudentAcademicContext } from './student-affairs/academicContext';
 import { MODERN_FAMILY_SCHOOL_ID, sectionPresentationOptions, sectionTermForSchool } from './student-affairs/sectionPresentation';
 import { authenticatedRequest } from '../utils/authenticatedRequest';
 import StudentDocumentsPortal from '../modules/student-documents/presentation/StudentDocumentsPortal';
@@ -293,6 +294,7 @@ export default function StudentAffairsPortal({
     suspendedCount: 0,
     pendingDocsCount: 0
   });
+  const [canonicalSchoolStudentCount, setCanonicalSchoolStudentCount] = useState<number | null>(null);
   const [academicContextError, setAcademicContextError] = useState<string | null>(null);
   const [isAcademicContextLoading, setIsAcademicContextLoading] = useState(false);
   const [canonicalSections, setCanonicalSections] = useState<string[]>([]);
@@ -715,12 +717,31 @@ export default function StudentAffairsPortal({
     }).length,
     [currentSchoolStudents]
   );
-  const totalCount = studentMetrics.totalCount;
+  const totalCount = canonicalSchoolStudentCount;
   const visibleQueryCount = studentQueryMeta.totalCount;
   const activeCount = studentMetrics.activeCount;
   const newCount = studentMetrics.newCount;
   const suspendedCount = studentMetrics.suspendedCount;
   const pendingDocsCount = studentMetrics.pendingDocsCount;
+
+  useEffect(() => {
+    let cancelled = false;
+    const controller = new AbortController();
+    setCanonicalSchoolStudentCount(null);
+    StudentRepository.list({ page: 1, limit: 1 }, controller.signal)
+      .then(response => {
+        if (cancelled) return;
+        const count = response?.meta?.totalCount;
+        setCanonicalSchoolStudentCount(Number.isInteger(count) && count >= 0 ? count : null);
+      })
+      .catch(() => {
+        if (!cancelled) setCanonicalSchoolStudentCount(null);
+      });
+    return () => {
+      cancelled = true;
+      controller.abort();
+    };
+  }, [selectedSchool.id, studentRefreshToken]);
 
   useEffect(() => {
     const controller = new AbortController();
@@ -835,31 +856,14 @@ export default function StudentAffairsPortal({
     return isModernFamilySchool ? `${sectionTerm} ${displaySectionValue(raw)}` : `شعبة ${raw}`;
   };
 
-  const resolveStudentAcademicContext = (student: Student) => {
-    const rawStudent = student as Student & Record<string, unknown>;
-    const classValue = String(rawStudent.classId || rawStudent.classroom || '').trim();
-    const classRecord = academicClasses.find(academicClass => [academicClass?.id, academicClass?.code, academicClass?.name].some(value => String(value || '').trim() === classValue));
-    const gradeId = String(rawStudent.gradeId || classRecord?.gradeId || '').trim();
-    const gradeRecord = grades.find(grade => String(grade?.id || '').trim() === gradeId || String(grade?.name || '').trim() === String(rawStudent.grade || '').trim());
-    return {
-      stageId: String(rawStudent.stageId || gradeRecord?.stageId || '').trim(),
-      gradeId,
-      classId: String(rawStudent.classId || classRecord?.id || '').trim(),
-      classroom: String(rawStudent.classroom || '').trim(),
-      classCode: String(classRecord?.code || '').trim(),
-      className: String(classRecord?.name || '').trim(),
-      section: String(student.section || '').trim()
-    };
-  };
-
   const handleOpenViewStudent = (student: Student) => {
-    const academicContext = resolveStudentAcademicContext(student);
+    const academicContext = resolveStudentAcademicContext(student as Student & Record<string, unknown>, academicClasses, grades);
     const stageRecord = stages.find(stage => String(stage?.id || '').trim() === academicContext.stageId);
-    const gradeRecord = grades.find(grade => String(grade?.id || '').trim() === academicContext.gradeId);
+    const gradeRecord = academicContext.gradeRecord;
     setViewStudent({
       ...student,
-      stage: String((student as any).stage || stageRecord?.name || stageRecord?.code || '').trim(),
-      grade: String((student as any).grade || gradeRecord?.name || gradeRecord?.code || '').trim(),
+      stage: String(stageRecord?.name || stageRecord?.code || (student as any).stage || '').trim(),
+      grade: String(gradeRecord?.name || gradeRecord?.code || (student as any).grade || '').trim(),
       classroom: academicContext.className || academicContext.classCode || student.classroom,
       section: academicContext.section || student.section
     });
@@ -1781,7 +1785,7 @@ export default function StudentAffairsPortal({
       const selectedIds = new Set(selectedStudentIds);
       const printableStudents = sourceStudents.filter(student => {
         if (printOnlySelected && !selectedIds.has(student.id)) return false;
-        const context = resolveStudentAcademicContext(student);
+        const context = resolveStudentAcademicContext(student as Student & Record<string, unknown>, academicClasses, grades);
         if (printFilterStage !== 'all' && context.stageId !== printFilterStage) return false;
         if (printFilterGrade !== 'all' && context.gradeId !== printFilterGrade) return false;
         if (printFilterClass !== 'all' && ![context.classId, context.classroom, context.classCode, context.className].includes(printFilterClass)) return false;
@@ -1826,7 +1830,7 @@ export default function StudentAffairsPortal({
       return;
     }
     const rows = printPreviewStudents.map((student, index) => {
-      const context = resolveStudentAcademicContext(student);
+      const context = resolveStudentAcademicContext(student as Student & Record<string, unknown>, academicClasses, grades);
       return `<tr><td>${index + 1}</td><td>${printableText(student.studentCode || student.academicId || '—')}</td><td>${printableText(student.name)}</td><td>${printableText(context.className || context.classroom || 'غير محدد')} (${printableText(displaySectionValue(context.section || 'غير محددة'))})</td><td>${printableText(student.guardianName || 'غير مرتبط')}</td><td>${printableText(student.status || 'نشط')}</td></tr>`;
     }).join('');
     const htmlSectionLabel = isModernFamilySchool ? sectionTerm : 'الشعبة';
@@ -2019,7 +2023,7 @@ export default function StudentAffairsPortal({
         <div className="bg-gradient-to-b from-[#fffefc] via-[#fbf8f0] to-[#f5eeea] border border-[#d4af37]/35 hover:border-[#d4af37] hover:-translate-y-1 hover:shadow-xl rounded-2xl p-2.5 shadow-md transition-all duration-300 flex items-center justify-between group">
           <div>
             <span className="text-[11px] font-black text-slate-700 block">إجمالي الطلاب المسجلين</span>
-            <span className="text-xl font-black text-slate-900 font-mono tracking-tight block mt-0.5">{totalCount.toLocaleString('ar-EG')}</span>
+            <span className="text-xl font-black text-slate-900 font-mono tracking-tight block mt-0.5">{totalCount === null ? '—' : totalCount.toLocaleString('ar-EG')}</span>
             <span className="text-[10px] font-bold text-emerald-700 bg-emerald-50 px-2 py-0.5 rounded-full inline-block mt-1">منتظمون بالدراسة</span>
           </div>
           <div className="w-9 h-9 rounded-xl bg-[#2a1a0e] text-amber-300 flex items-center justify-center border border-[#d4af37]/40 shadow-sm shrink-0">
@@ -2263,7 +2267,7 @@ export default function StudentAffairsPortal({
             <div className="flex flex-wrap items-center justify-between gap-3 pb-3 border-b border-amber-900/10">
               <div className="flex items-center gap-3">
                 <span className="text-xs font-black text-slate-900">
-                  سجل الطلاب ({totalCount.toLocaleString('ar-EG')} طالب)
+                  سجل الطلاب ({visibleQueryCount.toLocaleString('ar-EG')} طالب)
                 </span>
                 
                 {selectedStudentIds.length > 0 && (

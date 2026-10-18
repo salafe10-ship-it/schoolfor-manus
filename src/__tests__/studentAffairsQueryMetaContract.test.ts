@@ -10,4 +10,10 @@ describe('Student Affairs query/meta contract', () => {
     expect(source).toContain("visibleQueryCount === 0 && !searchKeyword.trim()");
     expect(source).toContain('Math.min(studentQueryMeta.page * studentQueryMeta.limit, visibleQueryCount)');
   });
+
+  it('uses the canonical unfiltered list count for the dashboard total and filtered meta for the table heading', () => {
+    expect(source).toContain('StudentRepository.list({ page: 1, limit: 1 }, controller.signal)');
+    expect(source).toContain("{totalCount === null ? '—' : totalCount.toLocaleString('ar-EG')}");
+    expect(source).toContain('سجل الطلاب ({visibleQueryCount.toLocaleString(\'ar-EG\')} طالب)');
+  });
 });
