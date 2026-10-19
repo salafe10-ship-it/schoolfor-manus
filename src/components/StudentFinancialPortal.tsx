@@ -3773,6 +3773,7 @@ export default function StudentFinancialPortal({
           </div>
         </div>
 
+        <div className="financial-header-controls">
         {activeSubSec === 'analytics' && (
           <button
             type="button"
@@ -3843,6 +3844,7 @@ export default function StudentFinancialPortal({
             <span>التقارير المالية</span>
           </button>
         </div>
+        </div>
       </div>
 
       <EnterpriseActionToolbar minimal={true}
@@ -3905,7 +3907,7 @@ export default function StudentFinancialPortal({
           <div className="space-y-6 animate-fadeIn financial-analytics-view">
             
             {/* Blue Banner matching the uploaded screenshot */}
-            <div className="bg-[#2a1d13] text-[#fce79a] p-6 relative overflow-hidden shadow-md">
+            <div className="financial-analytics-hero bg-[#2a1d13] text-[#fce79a] p-6 relative overflow-hidden shadow-md">
               <div className="absolute inset-0 bg-gradient-to-r from-[#1c120c] to-[#2d1e12] opacity-90" />
               <div className="relative z-10 flex flex-col sm:flex-row justify-between items-start sm:items-center gap-4">
                 <div>
@@ -3974,13 +3976,13 @@ export default function StudentFinancialPortal({
             </div>
 
             {/* Bottom layout: Tables and charts matching screenshot */}
-            <div className="grid grid-cols-1 xl:grid-cols-3 gap-6">
+            <div className="financial-analytics-widget-grid grid grid-cols-1 xl:grid-cols-3 gap-6">
               
               {/* Column 1: الطلاب الأكثر مديونية */}
-              <div className="xl:col-span-1 p-5 flex flex-col justify-between bg-gradient-to-b from-[#fffefc] via-[#fbf8f0] to-[#f5eeea] border-2 border-[#d4af37]/30 hover:border-[#d4af37] rounded-3xl p-4 sm:p-5 shadow-md transition-all duration-300">
+              <div className="financial-analytics-widget xl:col-span-1 p-5 flex flex-col justify-between bg-gradient-to-b from-[#fffefc] via-[#fbf8f0] to-[#f5eeea] border-2 border-[#d4af37]/30 hover:border-[#d4af37] rounded-3xl p-4 sm:p-5 shadow-md transition-all duration-300">
                 <div>
-                  <div className="flex justify-between items-center pb-3 border-b border-slate-100 mb-3">
-                    <h4 className="text-xs font-black text-slate-900">⚠️ الطلاب الأكثر مديونية</h4>
+                  <div className="financial-analytics-widget-header flex justify-between items-center pb-3 border-b border-slate-100 mb-3">
+                    <h4 className="text-xs font-black text-slate-900"><AlertTriangle className="financial-inline-icon" aria-hidden="true" />الطلاب الأكثر مديونية</h4>
                     <span className="text-[9px] bg-red-50 text-red-600 border border-red-100 px-2 py-0.5 rounded-full font-bold">تنبيه المتابعة</span>
                   </div>
                   <div className="space-y-3">
@@ -3989,7 +3991,7 @@ export default function StudentFinancialPortal({
                         لا توجد مديونيات موثقة للطلاب المحددين حالياً.
                       </div>
                     ) : debtorStudents.map(student => (
-                      <div key={student.id} className="flex justify-between items-center bg-transparent p-2.5 border border-slate-100">
+                      <div key={student.id} className="financial-debtor-row flex justify-between items-center bg-transparent p-2.5 border border-slate-100">
                         <div>
                           <p className="text-xs font-extrabold text-slate-950">{student.name}</p>
                           <span className="text-[10px] text-slate-500">{student.classroom || 'الفصل غير محدد'}</span>
@@ -4010,10 +4012,10 @@ export default function StudentFinancialPortal({
               </div>
 
               {/* Column 2: تحليل أعمار المديونيات */}
-              <div className="xl:col-span-1 p-5 flex flex-col justify-between bg-gradient-to-b from-[#fffefc] via-[#fbf8f0] to-[#f5eeea] border-2 border-[#d4af37]/30 hover:border-[#d4af37] rounded-3xl p-4 sm:p-5 shadow-md transition-all duration-300">
+              <div className="financial-analytics-widget xl:col-span-1 p-5 flex flex-col justify-between bg-gradient-to-b from-[#fffefc] via-[#fbf8f0] to-[#f5eeea] border-2 border-[#d4af37]/30 hover:border-[#d4af37] rounded-3xl p-4 sm:p-5 shadow-md transition-all duration-300">
                 <div>
-                  <div className="flex justify-between items-center pb-3 border-b border-slate-100 mb-3">
-                    <h4 className="text-xs font-black text-slate-900">⏳ تحليل أعمار المديونيات</h4>
+                  <div className="financial-analytics-widget-header flex justify-between items-center pb-3 border-b border-slate-100 mb-3">
+                    <h4 className="text-xs font-black text-slate-900"><CalendarRange className="financial-inline-icon" aria-hidden="true" />تحليل أعمار المديونيات</h4>
                     <span className="bg-gradient-to-r from-[#2a1d13] via-[#3a2719] to-[#2a1d13] text-amber-200 font-extrabold">تقرير أعمار المديونيات</span>
                   </div>
                   
@@ -4047,10 +4049,10 @@ export default function StudentFinancialPortal({
               </div>
 
               {/* Column 3: كفاءة التحصيل */}
-              <div className="xl:col-span-1 p-5 flex flex-col justify-between items-center text-center bg-gradient-to-b from-[#fffefc] via-[#fbf8f0] to-[#f5eeea] border-2 border-[#d4af37]/30 hover:border-[#d4af37] rounded-3xl p-4 sm:p-5 shadow-md transition-all duration-300">
+              <div className="financial-analytics-widget xl:col-span-1 p-5 flex flex-col justify-between items-center text-center bg-gradient-to-b from-[#fffefc] via-[#fbf8f0] to-[#f5eeea] border-2 border-[#d4af37]/30 hover:border-[#d4af37] rounded-3xl p-4 sm:p-5 shadow-md transition-all duration-300">
                 <div className="w-full">
-                  <div className="flex justify-between items-center pb-3 border-b border-slate-100 mb-3">
-                    <h4 className="text-xs font-black text-slate-900">🎯 كفاءة التحصيل السنوية</h4>
+                  <div className="financial-analytics-widget-header flex justify-between items-center pb-3 border-b border-slate-100 mb-3">
+                    <h4 className="text-xs font-black text-slate-900"><TrendingUp className="financial-inline-icon" aria-hidden="true" />كفاءة التحصيل السنوية</h4>
                     <span className="text-[9px] bg-emerald-50 text-emerald-600 border border-emerald-150 px-2 py-0.5 rounded-full font-bold">مؤشر جودة</span>
                   </div>
                 </div>

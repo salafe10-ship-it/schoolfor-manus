@@ -4159,3 +4159,270 @@ html:not(.dark) #super-admin-portal button:not(.bg-indigo-600):not(.bg-rose-600)
 #student-financial-portal.financial-identity-unified .financial-command-shell > .enterprise-action-toolbar .enterprise-action-toolbar-status {
   margin: 0 !important;
 }
+
+/* --------------------------------------------------------------------------
+   Fees dashboard refinement
+   Presentation-only layer for the student-fees shell. It intentionally leaves
+   the sidebar sizing/collapse rules and all financial controls untouched.
+   -------------------------------------------------------------------------- */
+#student-financial-portal.financial-identity-unified .financial-module-header {
+  display: grid !important;
+  grid-template-columns: minmax(0, 1fr) !important;
+  align-items: stretch;
+  gap: 0.85rem !important;
+  padding: 1rem 1.1rem 0.9rem !important;
+}
+
+#student-financial-portal.financial-identity-unified .financial-header-identity {
+  grid-column: 1;
+  width: 100%;
+  align-items: center;
+  min-height: 3.15rem;
+}
+
+#student-financial-portal.financial-identity-unified .financial-header-identity > div:last-child {
+  min-width: 0;
+}
+
+#student-financial-portal.financial-identity-unified .financial-header-identity h1 {
+  max-width: 100%;
+  font-size: clamp(1.15rem, 1.9vw, 1.7rem) !important;
+  line-height: 1.35 !important;
+  font-weight: 900 !important;
+  letter-spacing: -0.015em;
+  overflow-wrap: anywhere;
+  text-shadow: 0 2px 0 rgba(0, 0, 0, 0.32) !important;
+}
+
+#student-financial-portal.financial-identity-unified .financial-header-controls {
+  grid-column: 1;
+  display: flex;
+  align-items: center;
+  justify-content: flex-start;
+  flex-wrap: wrap;
+  gap: 0.65rem;
+  min-width: 0;
+  width: 100%;
+  padding-top: 0.75rem;
+  border-top: 1px solid rgba(247, 209, 116, 0.22);
+}
+
+#student-financial-portal.financial-identity-unified .financial-header-controls .financial-module-tabs {
+  order: 1;
+  flex: 1 1 34rem;
+  min-width: min(100%, 20rem);
+  max-width: none;
+  justify-content: flex-start;
+  overflow-x: auto;
+  scrollbar-width: thin;
+}
+
+#student-financial-portal.financial-identity-unified .financial-header-controls .financial-module-tabs button {
+  min-height: 2.75rem;
+  padding-inline: 0.85rem;
+}
+
+#student-financial-portal.financial-identity-unified .financial-header-controls .financial-header-refresh,
+#student-financial-portal.financial-identity-unified .financial-header-controls .financial-header-focus {
+  flex: 0 0 auto;
+  order: 2;
+  min-height: 2.75rem;
+}
+
+#student-financial-portal.financial-identity-unified .financial-header-controls .financial-header-focus {
+  order: 3;
+}
+
+#student-financial-portal.financial-identity-unified .financial-analytics-hero {
+  min-height: 6.5rem;
+  display: flex;
+  align-items: center;
+  border: 1px solid rgba(247, 209, 116, 0.3);
+  border-radius: 1rem;
+  box-shadow: 0 12px 26px rgba(42, 27, 16, 0.12);
+}
+
+#student-financial-portal.financial-identity-unified .financial-analytics-hero h2 {
+  color: #fff0ad !important;
+  font-size: clamp(1.1rem, 1.9vw, 1.55rem);
+  line-height: 1.45;
+  text-shadow: 0 2px 0 rgba(0, 0, 0, 0.34);
+}
+
+#student-financial-portal.financial-identity-unified .financial-analytics-hero p {
+  color: #fff7df !important;
+  line-height: 1.7;
+}
+
+#student-financial-portal.financial-identity-unified .financial-analytics-counter-card {
+  display: flex;
+  flex-direction: column;
+  justify-content: center;
+  min-width: 0;
+  min-height: 8.25rem;
+  overflow: hidden;
+  border-width: 1px !important;
+  border-radius: 1rem !important;
+  box-shadow: 0 8px 18px rgba(55, 35, 19, 0.07) !important;
+}
+
+#student-financial-portal.financial-identity-unified .financial-analytics-counter-card > div {
+  min-width: 0;
+  overflow-wrap: anywhere;
+}
+
+#student-financial-portal.financial-identity-unified .financial-analytics-counter-card .text-xl {
+  margin-top: 0.2rem;
+  font-size: clamp(1.2rem, 2vw, 1.7rem);
+  line-height: 1.25;
+}
+
+#student-financial-portal.financial-identity-unified .financial-analytics-widget {
+  min-width: 0;
+  overflow: hidden;
+  border-width: 1px !important;
+  border-radius: 1rem !important;
+  box-shadow: 0 8px 18px rgba(55, 35, 19, 0.07) !important;
+}
+
+#student-financial-portal.financial-identity-unified .financial-analytics-widget > div:first-child,
+#student-financial-portal.financial-identity-unified .financial-analytics-widget-header,
+#student-financial-portal.financial-identity-unified .financial-analytics-widget-header h4 {
+  min-width: 0;
+}
+
+#student-financial-portal.financial-identity-unified .financial-analytics-widget-header {
+  align-items: flex-start;
+  gap: 0.65rem;
+}
+
+#student-financial-portal.financial-identity-unified .financial-analytics-widget-header h4 {
+  display: flex;
+  align-items: flex-start;
+  gap: 0.4rem;
+  flex: 1 1 auto;
+  line-height: 1.55;
+  overflow-wrap: anywhere;
+}
+
+#student-financial-portal.financial-identity-unified .financial-inline-icon {
+  flex: 0 0 auto;
+  width: 1rem;
+  height: 1rem;
+  margin-top: 0.1rem;
+  color: var(--fees-gold-deep);
+}
+
+#student-financial-portal.financial-identity-unified .financial-analytics-widget-header > span {
+  flex: 0 1 auto;
+  max-width: 100%;
+  min-width: 0;
+  padding: 0.25rem 0.5rem;
+  border-radius: 999px;
+  white-space: normal;
+  overflow: visible;
+  text-overflow: clip;
+  overflow-wrap: normal;
+  line-height: 1.4;
+  text-align: center;
+}
+
+#student-financial-portal.financial-identity-unified .financial-analytics-widget .space-y-3 > div,
+#student-financial-portal.financial-identity-unified .financial-analytics-widget .grid {
+  min-width: 0;
+}
+
+/* Keep monetary values readable as a single numeric token. The tabular
+   feature makes columns scan consistently without changing the value itself. */
+#student-financial-portal.financial-identity-unified .financial-analytics-view [dir="ltr"] {
+  direction: ltr;
+  unicode-bidi: isolate;
+  white-space: nowrap;
+  word-break: normal;
+  overflow-wrap: normal;
+  font-variant-numeric: tabular-nums lining-nums;
+  font-feature-settings: "tnum" 1, "lnum" 1;
+}
+
+@media (min-width: 1024px) and (max-width: 1440px) {
+  #student-financial-portal.financial-identity-unified .financial-analytics-widget-grid {
+    grid-template-columns: repeat(2, minmax(0, 1fr)) !important;
+    gap: 0.85rem !important;
+  }
+
+  #student-financial-portal.financial-identity-unified .financial-analytics-widget-grid > .financial-analytics-widget:nth-child(3) {
+    grid-column: 1 / -1;
+  }
+
+  #student-financial-portal.financial-identity-unified .financial-analytics-widget {
+    padding: 0.9rem !important;
+  }
+
+  #student-financial-portal.financial-identity-unified .financial-analytics-widget-header {
+    flex-direction: column;
+    align-items: stretch;
+    gap: 0.45rem;
+  }
+
+  #student-financial-portal.financial-identity-unified .financial-analytics-widget-header h4 {
+    max-width: 100%;
+  }
+
+  #student-financial-portal.financial-identity-unified .financial-analytics-widget-header > span {
+    align-self: flex-start;
+    max-width: 100%;
+  }
+
+  #student-financial-portal.financial-identity-unified .financial-analytics-counter-card .text-xl {
+    font-size: clamp(1.05rem, 1.55vw, 1.45rem);
+    letter-spacing: -0.025em;
+  }
+}
+
+/* Student debt rows keep names flexible while reserving a stable, unwrapped
+   amount column. This prevents clipping when the dashboard is in the
+   two-column desktop layout above. */
+#student-financial-portal.financial-identity-unified .financial-debtor-row {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) max-content;
+  align-items: center;
+  gap: 0.65rem;
+  min-width: 0;
+}
+
+#student-financial-portal.financial-identity-unified .financial-debtor-row > div {
+  min-width: 0;
+}
+
+#student-financial-portal.financial-identity-unified .financial-debtor-row p,
+#student-financial-portal.financial-identity-unified .financial-debtor-row span {
+  min-width: 0;
+  overflow-wrap: anywhere;
+}
+
+#student-financial-portal.financial-identity-unified .financial-debtor-row > span {
+  white-space: nowrap;
+  word-break: normal;
+  overflow-wrap: normal;
+  font-variant-numeric: tabular-nums lining-nums;
+  font-feature-settings: "tnum" 1, "lnum" 1;
+}
+
+@media (max-width: 720px) {
+  #student-financial-portal.financial-identity-unified .financial-header-controls {
+    align-items: stretch;
+  }
+
+  #student-financial-portal.financial-identity-unified .financial-header-controls .financial-module-tabs {
+    flex-basis: 100%;
+    min-width: 0;
+  }
+
+  #student-financial-portal.financial-identity-unified .financial-header-controls .financial-header-refresh {
+    flex: 1 1 auto;
+  }
+
+  #student-financial-portal.financial-identity-unified .financial-analytics-widget-header > span {
+    max-width: 100%;
+  }
+}
