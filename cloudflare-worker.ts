@@ -51,6 +51,10 @@ const runtimeEnvKeys = [
   "PGSSL_REJECT_UNAUTHORIZED", "JWT_SECRET", "PUBLIC_APP_URL",
   "ALLOW_IFRAME_EMBEDDING", "EDUPRO_AI_FORECAST_ENABLED", "GEMINI_API_KEY",
   "OPENAI_API_KEY",
+  // Payment webhooks are verified in server.ts against the raw JSON bytes.
+  // Secrets live in the Worker environment and must be copied into the
+  // Node-compat process environment before the API module is initialized.
+  "PAYMENT_WEBHOOK_SECRET",
   // Financial write-phase controls must be copied into the Node compatibility
   // environment before server.ts initializes. Without these bindings the
   // fail-closed server gate correctly remains locked even when the

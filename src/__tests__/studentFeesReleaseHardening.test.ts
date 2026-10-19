@@ -7,6 +7,7 @@ const reversalMigration = readFileSync('supabase/migrations/202610131000_student
 const stagingUat = readFileSync('scripts/uat-student-fees-staging.ts', 'utf8');
 const stagingEnvExample = readFileSync('docs/student-fees-staging-uat.env.example', 'utf8');
 const studentFeesOperations = readFileSync('docs/STUDENT_FEES_CANONICAL_OPERATIONS.md', 'utf8');
+const cloudflareWorker = readFileSync('cloudflare-worker.ts', 'utf8');
 const gitignore = readFileSync('.gitignore', 'utf8');
 
 function section(source: string, start: string, end: string) {
@@ -87,6 +88,11 @@ describe('student-fees release hardening', () => {
     expect(webhook).toContain('timingSafeEqual');
     expect(webhook).toContain('provider = $3 AND provider_reference = $4');
     expect(webhook).not.toContain('body.signature');
+  });
+
+  it('passes the webhook secret into the Cloudflare Node runtime', () => {
+    expect(cloudflareWorker).toContain('"PAYMENT_WEBHOOK_SECRET"');
+    expect(cloudflareWorker).toContain('const runtimeEnvKeys = [');
   });
 
   it('does not replay a posted manual receipt for a different settlement command', () => {
