@@ -3750,12 +3750,13 @@ export default function StudentFinancialPortal({
       {/* ==========================================
           LUXURY GOLD METALLIC TOP HEADER
          ========================================== */}
+      <div className="financial-command-shell">
       <div className="financial-module-header bg-gradient-to-r from-[#1c120c] via-[#2d1e12] to-[#1a100a] text-white rounded-3xl p-4 sm:p-5 border-2 border-[#d4af37]/40 shadow-2xl flex flex-wrap items-center justify-between gap-4 relative overflow-hidden">
         <div className="absolute top-0 right-1/4 w-96 h-20 bg-[#d4af37]/10 blur-3xl pointer-events-none" />
         
         {/* Module Title & Breadcrumbs */}
-        <div className="flex items-center gap-3 relative z-10">
-          <div className="w-12 h-12 rounded-2xl bg-gradient-to-tr from-[#9a6a1d] via-[#f7d174] to-[#c58a22] p-[2px] shadow-lg shadow-[#d4af37]/20 flex-shrink-0">
+        <div className="financial-header-identity flex items-center gap-3 relative z-10">
+          <div className="financial-header-icon w-12 h-12 rounded-2xl bg-gradient-to-tr from-[#9a6a1d] via-[#f7d174] to-[#c58a22] p-[2px] shadow-lg shadow-[#d4af37]/20 flex-shrink-0">
             <div className="w-full h-full rounded-[14px] bg-[#2a1b10] flex items-center justify-center text-amber-300 font-black">
               <Coins className="w-6 h-6" />
             </div>
@@ -3789,7 +3790,7 @@ export default function StudentFinancialPortal({
           onClick={() => setIsFocusMode(current => !current)}
           aria-pressed={isFocusMode}
           title={isFocusMode ? 'الرجوع إلى العرض الحالي' : 'عرض الوحدة كاملة'}
-          className="relative z-10 inline-flex items-center gap-2 rounded-xl border border-amber-300/70 bg-[#2a1d13] px-3 py-2 text-xs font-black text-amber-200 shadow-lg transition-all hover:bg-[#3b2718]"
+          className="financial-header-focus relative z-10 inline-flex items-center gap-2 rounded-xl border border-amber-300/70 bg-[#2a1d13] px-3 py-2 text-xs font-black text-amber-200 shadow-lg transition-all hover:bg-[#3b2718]"
         >
           {isFocusMode ? <Minimize2 className="w-4 h-4" /> : <Maximize2 className="w-4 h-4" />}
           <span className="hidden sm:inline">{isFocusMode ? 'العرض الحالي' : 'عرض كامل'}</span>
@@ -3885,6 +3886,7 @@ export default function StudentFinancialPortal({
         userRole={currentRole || 'SuperAdmin'}
         onExit={setActiveSection ? () => setActiveSection('dashboard') : undefined}
       />
+      </div>
       <input
         ref={feeImportInputRef}
         type="file"

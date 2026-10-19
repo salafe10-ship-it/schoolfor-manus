@@ -3881,6 +3881,231 @@ html:not(.dark) #super-admin-portal button:not(.bg-indigo-600):not(.bg-rose-600)
   border-color: rgba(154, 106, 29, 0.25) !important;
 }
 
+/* --------------------------------------------------------------------------
+   Unified fees command shell
+   The module identity and enterprise actions share one contiguous surface.
+   The toolbar remains the same component so all existing controls, handlers,
+   permissions, and status semantics stay unchanged.
+   -------------------------------------------------------------------------- */
+#student-financial-portal .financial-command-shell {
+  position: relative;
+  z-index: 2;
+  isolation: isolate;
+  display: flex;
+  flex-direction: column;
+  min-height: 9.1rem;
+  min-width: 0;
+  overflow: hidden;
+  border: 1px solid rgba(247, 209, 116, 0.48);
+  border-radius: 1.35rem;
+  background: linear-gradient(112deg, #1b120c 0%, #2a1b10 54%, #1a100a 100%);
+  box-shadow: 0 18px 42px rgba(3, 8, 20, 0.28), inset 0 1px 0 rgba(255, 239, 190, 0.12);
+}
+
+#student-financial-portal .financial-command-shell::before {
+  content: "";
+  position: absolute;
+  inset: 0;
+  z-index: -1;
+  pointer-events: none;
+  background: linear-gradient(90deg, transparent 0%, rgba(247, 209, 116, 0.08) 48%, transparent 100%);
+}
+
+#student-financial-portal .financial-command-shell .financial-module-header,
+#student-financial-portal .financial-command-shell .enterprise-action-toolbar {
+  width: 100%;
+  min-width: 0;
+  margin: 0 !important;
+  border: 0 !important;
+  border-radius: 0 !important;
+  background: transparent !important;
+  box-shadow: none !important;
+}
+
+#student-financial-portal .financial-command-shell .financial-module-header {
+  display: grid;
+  grid-template-columns: minmax(14rem, 1fr) minmax(0, auto) auto auto;
+  align-items: center;
+  gap: 0.55rem 0.75rem;
+  padding: 0.7rem 0.85rem 0.62rem !important;
+  border-bottom: 1px solid rgba(247, 209, 116, 0.26) !important;
+}
+
+#student-financial-portal .financial-command-shell .financial-header-identity {
+  min-width: 0;
+}
+
+#student-financial-portal .financial-command-shell .financial-header-icon {
+  width: 2.7rem;
+  height: 2.7rem;
+  border-radius: 0.9rem;
+}
+
+#student-financial-portal .financial-command-shell .financial-header-identity h1 {
+  min-width: 0;
+  font-size: clamp(1rem, 1.45vw, 1.35rem);
+  line-height: 1.25;
+}
+
+#student-financial-portal .financial-command-shell .financial-module-tabs {
+  grid-column: 2;
+  grid-row: 1;
+  min-width: 0;
+  max-width: 100%;
+  padding: 0.25rem !important;
+  border-radius: 0.8rem;
+  gap: 0.2rem;
+}
+
+#student-financial-portal .financial-command-shell .financial-module-tabs button {
+  min-height: 2.55rem;
+  padding-inline: 0.75rem;
+  border-radius: 0.6rem;
+  white-space: nowrap;
+}
+
+#student-financial-portal .financial-command-shell .financial-header-refresh {
+  grid-column: 3;
+  grid-row: 1;
+  min-height: 2.65rem;
+  padding-inline: 0.8rem;
+  white-space: nowrap;
+}
+
+#student-financial-portal .financial-command-shell .financial-header-focus {
+  grid-column: 4;
+  grid-row: 1;
+  min-height: 2.65rem;
+  padding-inline: 0.75rem;
+  white-space: nowrap;
+}
+
+#student-financial-portal .financial-command-shell .enterprise-action-toolbar {
+  display: flex;
+  align-items: center;
+  gap: 0.55rem !important;
+  padding: 0.62rem 0.85rem 0.7rem !important;
+}
+
+#student-financial-portal .financial-command-shell .enterprise-action-toolbar-actions {
+  flex: 1 1 auto;
+  width: auto !important;
+  min-width: 0;
+  gap: 0.45rem;
+}
+
+#student-financial-portal .financial-command-shell .enterprise-action-toolbar-actions > div:first-child {
+  min-width: 0;
+  padding: 0.25rem;
+  border-radius: 0.72rem;
+  background: rgba(19, 11, 4, 0.68);
+  border-color: rgba(247, 209, 116, 0.34);
+}
+
+#student-financial-portal .financial-command-shell .enterprise-action-toolbar-actions > div:first-child button,
+#student-financial-portal .financial-command-shell .enterprise-action-toolbar-actions > button,
+#student-financial-portal .financial-command-shell .enterprise-action-toolbar-status {
+  min-height: 2.6rem;
+}
+
+#student-financial-portal .financial-command-shell .enterprise-action-toolbar-actions > div:first-child button,
+#student-financial-portal .financial-command-shell .enterprise-action-toolbar-actions > button {
+  white-space: nowrap;
+}
+
+#student-financial-portal .financial-command-shell .enterprise-action-toolbar-status {
+  flex: 0 1 auto;
+  min-width: 0;
+  order: 3;
+}
+
+#student-financial-portal .financial-command-shell + #student-financial-portal-layout {
+  margin-top: 0.9rem !important;
+}
+
+#student-financial-portal.portal-focus-mode .financial-command-shell {
+  border-radius: 1.15rem;
+}
+
+@media (max-width: 1120px) {
+  #student-financial-portal .financial-command-shell .financial-module-header {
+    grid-template-columns: minmax(0, 1fr) auto auto;
+  }
+
+  #student-financial-portal .financial-command-shell .financial-module-tabs {
+    grid-column: 1 / -1;
+    grid-row: 2;
+    justify-self: stretch;
+    overflow-x: auto;
+  }
+
+  #student-financial-portal .financial-command-shell .financial-header-refresh {
+    grid-column: 2;
+  }
+
+  #student-financial-portal .financial-command-shell .financial-header-focus {
+    grid-column: 3;
+  }
+}
+
+@media (max-width: 720px) {
+  #student-financial-portal .financial-command-shell {
+    min-height: 0;
+    border-radius: 1rem;
+  }
+
+  #student-financial-portal .financial-command-shell .financial-module-header {
+    grid-template-columns: minmax(0, 1fr) auto;
+    padding: 0.65rem !important;
+  }
+
+  #student-financial-portal .financial-command-shell .financial-header-identity {
+    grid-column: 1 / -1;
+  }
+
+  #student-financial-portal .financial-command-shell .financial-module-tabs {
+    grid-column: 1 / -1;
+    grid-row: 2;
+  }
+
+  #student-financial-portal .financial-command-shell .financial-header-refresh {
+    grid-column: 1;
+    grid-row: 3;
+    justify-self: stretch;
+  }
+
+  #student-financial-portal .financial-command-shell .financial-header-focus {
+    grid-column: 2;
+    grid-row: 3;
+  }
+
+  #student-financial-portal .financial-command-shell .enterprise-action-toolbar {
+    align-items: stretch;
+    flex-wrap: wrap;
+    padding: 0.55rem 0.65rem 0.65rem !important;
+  }
+
+  #student-financial-portal .financial-command-shell .enterprise-action-toolbar-actions {
+    flex-basis: 100%;
+    order: 1;
+  }
+
+  #student-financial-portal .financial-command-shell .enterprise-action-toolbar-actions > div:first-child {
+    width: 100%;
+    overflow-x: auto;
+    flex-wrap: nowrap;
+  }
+
+  #student-financial-portal .financial-command-shell .enterprise-action-toolbar-actions > div:first-child button {
+    flex: 0 0 auto;
+  }
+
+  #student-financial-portal .financial-command-shell .enterprise-action-toolbar-status {
+    flex-basis: 100%;
+    order: 2;
+  }
+}
+
 @media (max-width: 1023px) {
   #student-financial-portal.financial-identity-unified .financial-sidebar-menu {
     border-radius: 1.1rem !important;
@@ -3903,4 +4128,34 @@ html:not(.dark) #super-admin-portal button:not(.bg-indigo-600):not(.bg-rose-600)
   #student-financial-portal.financial-identity-unified .financial-sidebar-button {
     min-height: 2.75rem;
   }
+}
+
+/* Final cascade guard: the shell owns the only header surface. */
+#student-financial-portal.financial-identity-unified .financial-command-shell > .financial-module-header,
+#student-financial-portal.financial-identity-unified .financial-command-shell > .enterprise-action-toolbar {
+  margin: 0 !important;
+  border: 0 !important;
+  border-radius: 0 !important;
+  background: transparent !important;
+  box-shadow: none !important;
+}
+
+#student-financial-portal.financial-identity-unified .financial-command-shell > .financial-module-header {
+  padding: 0.7rem 0.85rem 0.58rem !important;
+  border-bottom: 1px solid rgba(247, 209, 116, 0.24) !important;
+}
+
+#student-financial-portal.financial-identity-unified .financial-command-shell > .enterprise-action-toolbar {
+  gap: 0.4rem !important;
+  padding: 0.42rem 0.85rem 0.62rem !important;
+}
+
+#student-financial-portal.financial-identity-unified .financial-command-shell > .enterprise-action-toolbar .enterprise-action-toolbar-actions {
+  margin: 0 !important;
+  padding: 0 !important;
+  gap: 0.4rem !important;
+}
+
+#student-financial-portal.financial-identity-unified .financial-command-shell > .enterprise-action-toolbar .enterprise-action-toolbar-status {
+  margin: 0 !important;
 }
