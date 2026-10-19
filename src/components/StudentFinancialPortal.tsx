@@ -3845,49 +3845,49 @@ export default function StudentFinancialPortal({
           </button>
         </div>
         </div>
-      </div>
 
-      <EnterpriseActionToolbar minimal={true}
-        title="الرسوم والأقساط المدرسية"
-        status={financialMutationDisabled ? (
-          <div className={`financial-toolbar-status-content ${financialPersistence === 'blocked' ? 'financial-toolbar-status-blocked' : 'financial-toolbar-status-warning'}`}>
-            <AlertTriangle className="w-4 h-4 shrink-0" />
-            <div className="min-w-0">
-              <p className="text-[11px] font-black leading-tight">الحركات المالية متوقفة للحماية</p>
-              <p className="text-[10px] font-bold leading-tight opacity-90">
-                {financialWritesLocked
-                  ? 'المصدر المالي في وضع القراءة فقط؛ الحفظ والترحيل والإلغاء والحذف مقفلة.'
-                  : financialPersistenceMessage}
-              </p>
+        <EnterpriseActionToolbar minimal={true}
+          title="الرسوم والأقساط المدرسية"
+          status={financialMutationDisabled ? (
+            <div className={`financial-toolbar-status-content ${financialPersistence === 'blocked' ? 'financial-toolbar-status-blocked' : 'financial-toolbar-status-warning'}`}>
+              <AlertTriangle className="w-4 h-4 shrink-0" />
+              <div className="min-w-0">
+                <p className="text-[11px] font-black leading-tight">الحركات المالية متوقفة للحماية</p>
+                <p className="text-[10px] font-bold leading-tight opacity-90">
+                  {financialWritesLocked
+                    ? 'المصدر المالي في وضع القراءة فقط؛ الحفظ والترحيل والإلغاء والحذف مقفلة.'
+                    : financialPersistenceMessage}
+                </p>
+              </div>
             </div>
-          </div>
-        ) : undefined}
-        stats={
-          <div className="flex flex-wrap items-center gap-x-2.5 gap-y-1 text-[10px] sm:text-xs">
-            <span className="text-slate-300 font-bold">إجمالي سجلات المطالبات المركزية: <span className="text-amber-400 font-mono">{financialInvoices.length}</span> مطالبة موثقة</span>
-          </div>
-        }
-        onNew={portalOnNew}
-        onSave={portalOnSave}
-        onEdit={portalOnEdit}
-        onDelete={portalOnDelete}
-        onCancel={portalOnCancel}
-        onRefresh={portalOnRefresh}
-        onSearch={portalOnSearch}
-        onPrint={portalOnPrint}
-        onExportPdf={portalOnExportPdf}
-        exportPdfLabel={portalExportPdfLabel}
-        onExportExcel={portalOnExportExcel}
-        onImportExcel={portalOnImportExcel}
-        onDownloadTemplate={portalOnDownloadTemplate}
-        isSaving={false}
-        isLoading={false}
-        disabled={financialMutationDisabled}
-        selectedId={portalSelectedId}
-        isEditing={portalIsEditing}
-        userRole={currentRole || 'SuperAdmin'}
-        onExit={setActiveSection ? () => setActiveSection('dashboard') : undefined}
-      />
+          ) : undefined}
+          stats={
+            <div className="flex flex-wrap items-center gap-x-2.5 gap-y-1 text-[10px] sm:text-xs">
+              <span className="text-slate-300 font-bold">إجمالي سجلات المطالبات المركزية: <span className="text-amber-400 font-mono">{financialInvoices.length}</span> مطالبة موثقة</span>
+            </div>
+          }
+          onNew={portalOnNew}
+          onSave={portalOnSave}
+          onEdit={portalOnEdit}
+          onDelete={portalOnDelete}
+          onCancel={portalOnCancel}
+          onRefresh={portalOnRefresh}
+          onSearch={portalOnSearch}
+          onPrint={portalOnPrint}
+          onExportPdf={portalOnExportPdf}
+          exportPdfLabel={portalExportPdfLabel}
+          onExportExcel={portalOnExportExcel}
+          onImportExcel={portalOnImportExcel}
+          onDownloadTemplate={portalOnDownloadTemplate}
+          isSaving={false}
+          isLoading={false}
+          disabled={financialMutationDisabled}
+          selectedId={portalSelectedId}
+          isEditing={portalIsEditing}
+          userRole={currentRole || 'SuperAdmin'}
+          onExit={setActiveSection ? () => setActiveSection('dashboard') : undefined}
+        />
+      </div>
       </div>
       <input
         ref={feeImportInputRef}

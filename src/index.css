@@ -4426,3 +4426,79 @@ html:not(.dark) #super-admin-portal button:not(.bg-indigo-600):not(.bg-rose-600)
     max-width: 100%;
   }
 }
+
+/* The enterprise controls are part of the financial header surface. Keeping
+   the existing toolbar component here preserves its handlers and permission
+   rules while preventing a second, visually detached toolbar below it. */
+#student-financial-portal.financial-identity-unified .financial-module-header > .enterprise-action-toolbar {
+  grid-column: 1;
+  width: 100%;
+  min-width: 0;
+  margin: 0 !important;
+  padding: 0.72rem 0 0 !important;
+  border: 0 !important;
+  border-top: 1px solid rgba(247, 209, 116, 0.22) !important;
+  border-radius: 0 !important;
+  background: transparent !important;
+  box-shadow: none !important;
+}
+
+#student-financial-portal.financial-identity-unified .financial-module-header > .enterprise-action-toolbar .enterprise-action-toolbar-actions {
+  flex: 1 1 auto;
+  width: auto !important;
+  min-width: 0;
+  margin: 0 !important;
+  gap: 0.4rem;
+}
+
+#student-financial-portal.financial-identity-unified .financial-module-header > .enterprise-action-toolbar .enterprise-action-toolbar-actions > div:first-child {
+  min-width: 0;
+  padding: 0.25rem;
+  border-radius: 0.72rem;
+  background: rgba(19, 11, 4, 0.68);
+  border-color: rgba(247, 209, 116, 0.34);
+}
+
+#student-financial-portal.financial-identity-unified .financial-module-header > .enterprise-action-toolbar .enterprise-action-toolbar-actions > div:first-child button,
+#student-financial-portal.financial-identity-unified .financial-module-header > .enterprise-action-toolbar .enterprise-action-toolbar-actions > button,
+#student-financial-portal.financial-identity-unified .financial-module-header > .enterprise-action-toolbar .enterprise-action-toolbar-status {
+  min-height: 2.6rem;
+}
+
+#student-financial-portal.financial-identity-unified .financial-module-header > .enterprise-action-toolbar .enterprise-action-toolbar-actions > div:first-child button,
+#student-financial-portal.financial-identity-unified .financial-module-header > .enterprise-action-toolbar .enterprise-action-toolbar-actions > button {
+  white-space: nowrap;
+}
+
+#student-financial-portal.financial-identity-unified .financial-module-header > .enterprise-action-toolbar .enterprise-action-toolbar-status {
+  flex: 0 1 auto;
+  min-width: 0;
+}
+
+@media (max-width: 720px) {
+  #student-financial-portal.financial-identity-unified .financial-module-header > .enterprise-action-toolbar {
+    align-items: stretch;
+    flex-wrap: wrap;
+    padding-top: 0.6rem !important;
+  }
+
+  #student-financial-portal.financial-identity-unified .financial-module-header > .enterprise-action-toolbar .enterprise-action-toolbar-actions {
+    flex-basis: 100%;
+    order: 1;
+  }
+
+  #student-financial-portal.financial-identity-unified .financial-module-header > .enterprise-action-toolbar .enterprise-action-toolbar-actions > div:first-child {
+    width: 100%;
+    overflow-x: auto;
+    flex-wrap: nowrap;
+  }
+
+  #student-financial-portal.financial-identity-unified .financial-module-header > .enterprise-action-toolbar .enterprise-action-toolbar-actions > div:first-child button {
+    flex: 0 0 auto;
+  }
+
+  #student-financial-portal.financial-identity-unified .financial-module-header > .enterprise-action-toolbar .enterprise-action-toolbar-status {
+    flex-basis: 100%;
+    order: 2;
+  }
+}
