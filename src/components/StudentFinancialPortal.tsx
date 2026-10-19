@@ -201,6 +201,10 @@ export default function StudentFinancialPortal({
   const [massDueDate, setMassDueDate] = useState<string>(() => new Date(Date.now() + 30 * 24 * 60 * 60 * 1000).toISOString().split('T')[0]);
   const [selectedStudentIds, setSelectedStudentIds] = useState<Record<string, boolean>>({});
 
+  React.useEffect(() => {
+    setSelectedStudentIds({});
+  }, [massStageId, massClassroom]);
+
   const selectedMassFeeConfig = useMemo(
     () => feeConfigs.find(config => config.id === massFeeConfigId) || null,
     [feeConfigs, massFeeConfigId]
@@ -3125,7 +3129,7 @@ export default function StudentFinancialPortal({
       return;
     }
 
-    const studentsToUpdate = massTargetStudents.filter(s => selectedStudentIds[s.id] !== false);
+    const studentsToUpdate = massTargetStudents.filter(s => selectedStudentIds[s.id] === true);
     if (studentsToUpdate.length === 0) {
       triggerNotification(`الرجاء تحديد طالب واحد على الأقل من المرحلة والفصل المحددين (${massClassroom})`, 'warning');
       return;
@@ -4567,7 +4571,7 @@ export default function StudentFinancialPortal({
                   <input 
                     type="checkbox" 
                     className="w-4 h-4 text-emerald-600 focus:ring-emerald-500 rounded border-slate-300 pointer-events-auto"
-                    checked={massTargetStudents.length > 0 && massTargetStudents.every(s => selectedStudentIds[s.id] !== false)}
+                    checked={massTargetStudents.length > 0 && massTargetStudents.every(s => selectedStudentIds[s.id] === true)}
                     onChange={(e) => {
                       const updatedIds = { ...selectedStudentIds };
                       massTargetStudents.forEach(s => {
@@ -4596,7 +4600,7 @@ export default function StudentFinancialPortal({
                           <input 
                             type="checkbox" 
                             className="w-4 h-4 text-emerald-600 focus:ring-emerald-500 rounded border-slate-300 cursor-pointer"
-                            checked={selectedStudentIds[student.id] !== false} 
+                            checked={selectedStudentIds[student.id] === true}
                             onChange={(e) => {
                               setSelectedStudentIds(prev => ({
                                 ...prev,
@@ -4617,12 +4621,12 @@ export default function StudentFinancialPortal({
             {/* Footer Summary & Action */}
             <div className="flex justify-between items-center gap-4">
               <p className="text-xs font-bold text-slate-700">
-                تم تحديد {massTargetStudents.filter(s => selectedStudentIds[s.id] !== false).length} من أصل {massTargetStudents.length} طالب جاهز للتوزيع.
+                تم تحديد {massTargetStudents.filter(s => selectedStudentIds[s.id] === true).length} من أصل {massTargetStudents.length} طالب جاهز للتوزيع.
               </p>
               
               <button
                 onClick={() => handleMassDistribution()}
-                disabled={financialWritesLocked || financialPersistence !== 'ready' || massTargetStudents.filter(student => selectedStudentIds[student.id] !== false).length === 0 || !selectedMassFeeConfig || Number(selectedMassFeeConfig.amount) <= 0}
+                disabled={financialWritesLocked || financialPersistence !== 'ready' || massTargetStudents.filter(student => selectedStudentIds[student.id] === true).length === 0 || !selectedMassFeeConfig || Number(selectedMassFeeConfig.amount) <= 0}
                 className="financial-fee-module-action financial-fee-module-navy text-sm font-bold px-8 py-4 rounded shadow-md flex items-center gap-2 transition-colors cursor-pointer disabled:cursor-not-allowed disabled:opacity-50"
               >
                 <CheckCircle2 className="w-5 h-5" />

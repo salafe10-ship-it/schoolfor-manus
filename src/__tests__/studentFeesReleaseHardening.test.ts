@@ -68,6 +68,48 @@ describe('student-fees release hardening', () => {
     expect(approve).not.toContain("SET status = 'approved'");
   });
 
+  it('fails closed on online-payment settlement until receipt, allocation, and journal posting are atomic', () => {
+    const settle = section(server, 'app.post("/api/financial/payment-attempts/:attemptId/settle"', 'app.post("/api/financial/payment-webhooks/:provider"');
+    const allocate = section(server, 'app.post("/api/financial/receipts/:receiptId/allocate"', 'app.post("/api/financial/receipts/:receiptId/reverse"');
+    expect(settle).toContain('ONLINE_PAYMENT_LEDGER_NOT_READY');
+    expect(settle).toContain('res.status(409)');
+    expect(allocate).toContain("String(receipt.rows[0].status).toLowerCase() !== 'posted'");
+    expect(allocate).toContain('!receipt.rows[0].journalEntryId');
+  });
+
+  it('binds payment idempotency to the full request and signs webhooks over raw bytes', () => {
+    const intent = section(server, 'app.post("/api/financial/payment-intents"', 'app.post("/api/financial/payment-attempts/:attemptId/settle"');
+    const webhook = section(server, 'app.post("/api/financial/payment-webhooks/:provider"', 'app.post("/api/financial/receipts/manual-settle"');
+    expect(intent).toContain('ON CONFLICT (school_id, idempotency_key) DO NOTHING');
+    expect(intent).toContain('metadata = $8::jsonb');
+    expect(intent).toContain('مفتاح محاولة الدفع مستخدم لطلب مختلف');
+    expect(webhook).toContain('createHmac(\'sha256\', secret).update(rawBody');
+    expect(webhook).toContain('timingSafeEqual');
+    expect(webhook).toContain('provider = $3 AND provider_reference = $4');
+    expect(webhook).not.toContain('body.signature');
+  });
+
+  it('does not replay a posted manual receipt for a different settlement command', () => {
+    const settle = section(server, 'app.post("/api/financial/receipts/manual-settle"', 'app.post("/api/financial/receipts/:receiptId/allocate"');
+    expect(settle).toContain('معرف السند مرحّل بطلب مختلف');
+    expect(settle).toContain('JSON.stringify(storedAccounts) !== JSON.stringify(requestAccounts)');
+    expect(settle).toContain("storedCommand.command !== 'manual_settle'");
+  });
+
+  it('lets an empty canonical fee result replace stale snapshot rows and blocks missing tables in canonical mode', () => {
+    const read = section(server, 'app.get("/api/financial/database"', 'app.post("/api/financial/database"');
+    expect(read).toContain('canonicalFeeInvoicesAvailable ? { invoices: canonicalFeeInvoices }');
+    expect(read).toContain('canonicalFeeReceiptsAvailable ? { studentReceiptVouchers: canonicalFeeReceipts');
+    expect(read).toContain('canonicalChartOfAccountsAvailable ? { chartOfAccounts: canonicalChartOfAccounts }');
+    expect(read).toContain('جداول الرسوم والحسابات الكانونية غير مكتملة');
+  });
+
+  it('requires deliberate selection before bulk posting and clears selection when its target changes', () => {
+    expect(portal).toContain('massTargetStudents.filter(s => selectedStudentIds[s.id] === true)');
+    expect(portal).toContain('checked={selectedStudentIds[student.id] === true}');
+    expect(portal).toContain('setSelectedStudentIds({});');
+  });
+
   it('routes the portal through atomic batch issue, canonical cancellation, and canonical receipt reversal', () => {
     expect(portal).toContain("authenticatedRequest('/api/financial/invoices/issue-batch'");
     expect(portal).toContain('/api/financial/receipts/${encodeURIComponent(selectedStudRv.id)}/reverse');

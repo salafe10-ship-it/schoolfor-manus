@@ -61,7 +61,7 @@ import {
   readConnectionIdentity,
   type ConnectionIdentity,
 } from "./server/infrastructure/StagingConnectionDiagnostics.js";
-import { createHash, randomBytes, randomUUID } from "node:crypto";
+import { createHash, createHmac, randomBytes, randomUUID, timingSafeEqual } from "node:crypto";
 import { Pool } from "pg";
 import { createClient } from '@supabase/supabase-js';
 import { studentRegistrationService } from "./src/modules/student-registration/application/StudentRegistrationService.js";
@@ -2518,6 +2518,7 @@ export async function createApp(options: { cloudflare?: boolean } = {}): Promise
         return next();
       }
       try {
+        (req as express.Request & { rawBody?: string }).rawBody = rawBody;
         (req as express.Request & { body?: unknown }).body = JSON.parse(rawBody);
         return next();
       } catch {
@@ -14607,9 +14608,12 @@ export async function createApp(options: { cloudflare?: boolean } = {}): Promise
       const body = req.body && typeof req.body === 'object' ? req.body as Record<string, any> : {};
       const studentId = String(body.studentId || '').trim();
       const provider = String(body.provider || '').trim().toLowerCase();
+      const currency = String(body.currency || 'SAR').trim().toUpperCase();
       const idempotencyKey = normalizeIdempotencyKey(body.idempotencyKey, 'إنشاء محاولة الدفع');
       const amount = assertMoney(body.amount, 'مبلغ الدفع');
-      if (!canonicalFeeUuid(studentId) || !provider) throw new ValidationError('الطالب ومزود الدفع حقول مطلوبة.');
+      const metadata = body.metadata && typeof body.metadata === 'object' && !Array.isArray(body.metadata) ? body.metadata : {};
+      const requestedProviderReference = String(body.providerReference || '').trim();
+      if (!canonicalFeeUuid(studentId) || !/^[a-z0-9_-]{2,40}$/.test(provider) || !/^[A-Z]{3}$/.test(currency)) throw new ValidationError('الطالب ومزود الدفع والعملة حقول مطلوبة بصيغة صحيحة.');
       let attempt: any = null;
       await UnitOfWork.runInTransaction(schoolId, {
         operationName: 'Create student fee payment intent', tenantId, userId: actorId,
@@ -14620,50 +14624,38 @@ export async function createApp(options: { cloudflare?: boolean } = {}): Promise
         const result = await transaction.query(
           `INSERT INTO public.student_fee_payment_attempts (tenant_id, school_id, student_id, amount, currency, provider, provider_reference, idempotency_key, status, metadata)
            VALUES ($1,$2,$3,$4,$5,$6,$7,$8,'created',$9::jsonb)
-           ON CONFLICT (school_id, idempotency_key) DO UPDATE SET idempotency_key = EXCLUDED.idempotency_key
+           ON CONFLICT (school_id, idempotency_key) DO NOTHING
            RETURNING id, student_id AS "studentId", amount, currency, provider, provider_reference AS "providerReference", idempotency_key AS "idempotencyKey", status, metadata`,
-          [tenantId, schoolId, studentId, amount, String(body.currency || 'SAR'), provider, String(body.providerReference || makePaymentAttemptId()), idempotencyKey, JSON.stringify(body.metadata || {})]);
+          [tenantId, schoolId, studentId, amount, currency, provider, requestedProviderReference || makePaymentAttemptId(), idempotencyKey, JSON.stringify(metadata)]);
         attempt = result.rows[0];
+        if (!attempt) {
+          const replay = await transaction.query(
+            `SELECT id, student_id AS "studentId", amount, currency, provider, provider_reference AS "providerReference", idempotency_key AS "idempotencyKey", status, metadata
+               FROM public.student_fee_payment_attempts
+              WHERE tenant_id = $1 AND school_id = $2 AND idempotency_key = $3
+                AND student_id = $4 AND amount = $5 AND currency = $6 AND provider = $7
+                AND metadata = $8::jsonb AND ($9::text IS NULL OR provider_reference = $9)
+              FOR UPDATE`,
+            [tenantId, schoolId, idempotencyKey, studentId, amount, currency, provider, JSON.stringify(metadata), requestedProviderReference || null]
+          );
+          if (!replay.rows[0]) throw new ConflictError('مفتاح محاولة الدفع مستخدم لطلب مختلف؛ أنشئ مفتاحًا جديدًا.');
+          attempt = replay.rows[0];
+        }
       }, tenantContext);
       res.status(201).json({ success: true, data: attempt, meta: { source: 'canonical_postgres', providerAdapterRequired: true } });
     } catch (err: any) {
-      next(err instanceof AuthenticationError || err instanceof ValidationError || err instanceof DatabaseError ? err : new DatabaseError('تعذر إنشاء محاولة الدفع.', err?.message));
+      next(err instanceof AuthenticationError || err instanceof ValidationError || err instanceof ConflictError || err instanceof DatabaseError ? err : new DatabaseError('تعذر إنشاء محاولة الدفع.', err?.message));
     }
   });
 
   app.post("/api/financial/payment-attempts/:attemptId/settle", authenticateRequest, requirePermission(PERMISSIONS.FINANCIAL_WRITE), async (req, res, next) => {
     try {
-      const { tenantId, schoolId, actorId, tenantContext } = canonicalFeeContext(req);
-      const attemptId = String(req.params.attemptId || '').trim();
-      if (!canonicalFeeUuid(attemptId)) throw new ValidationError('معرف محاولة الدفع غير صالح.');
-      let receipt: any = null;
-      await UnitOfWork.runInTransaction(schoolId, {
-        operationName: 'Settle successful student fee payment', tenantId, userId: actorId,
-        userName: String((req as any).user.name || 'المحاسب'), ipAddress: req.ip || 'unknown', affectedTables: ['student_fee_payment_attempts', 'student_fee_receipts', 'audit_events']
-      }, async () => {
-        const transaction = UnitOfWork.getActiveContext()?.databaseTransaction;
-        if (!transaction) throw new DatabaseError('تعذر فتح معاملة تسوية الدفع.');
-        const databaseActorId = await resolveCanonicalFeeActor(transaction, tenantId, schoolId, actorId);
-        const attempt = await transaction.query(`SELECT id, student_id, amount, currency, provider, status, receipt_id FROM public.student_fee_payment_attempts WHERE tenant_id = $1 AND school_id = $2 AND id = $3 FOR UPDATE`, [tenantId, schoolId, attemptId]);
-        if (!attempt.rows[0] || attempt.rows[0].status !== 'succeeded') throw new ConflictError('لا يمكن تسوية محاولة دفع غير ناجحة أو غير مؤكدة.');
-        if (attempt.rows[0].receipt_id) {
-          const existing = await transaction.query(`SELECT id, student_id AS "studentId", amount, status FROM public.student_fee_receipts WHERE tenant_id = $1 AND school_id = $2 AND id = $3`, [tenantId, schoolId, attempt.rows[0].receipt_id]);
-          receipt = existing.rows[0];
-          return;
-        }
-        const receiptId = String(req.body?.receiptId || makeReceiptId());
-        const result = await transaction.query(
-          `INSERT INTO public.student_fee_receipts
-            (tenant_id, school_id, id, student_id, student_name, receipt_date, amount, payment_method,
-             receiving_account, operational_type, against_text, status, source_payload, updated_by)
-           VALUES ($1,$2,$3,$4,'',CURRENT_DATE,$5,$6,$7,'student_fee','بوابة الدفع','approved',$8::jsonb,$9)
-           RETURNING id, student_id AS "studentId", amount, payment_method AS "paymentMethod", status`,
-          [tenantId, schoolId, receiptId, attempt.rows[0].student_id, attempt.rows[0].amount, attempt.rows[0].provider, String(req.body?.receivingAccount || 'gateway'), JSON.stringify({ paymentAttemptId: attemptId, provider: attempt.rows[0].provider }), databaseActorId]);
-        receipt = result.rows[0];
-        await transaction.query(`UPDATE public.student_fee_payment_attempts SET receipt_id = $4, updated_at = now() WHERE tenant_id = $1 AND school_id = $2 AND id = $3`, [tenantId, schoolId, attemptId, receiptId]);
-        await transaction.query(`INSERT INTO public.audit_events (id, tenant_id, school_id, actor_user_id, entity_type, entity_id, action, source, result, metadata) VALUES ($1,$2,$3,$4,'student_fee_payment_attempt',$5,'settle','CanonicalStudentFeeRoute','success',$6::jsonb)`, [randomUUID(), tenantId, schoolId, databaseActorId, attemptId, JSON.stringify({ receiptId, amount: attempt.rows[0].amount })]);
-      }, tenantContext);
-      res.status(201).json({ success: true, data: receipt, meta: { source: 'canonical_postgres', allocationRequired: true } });
+      canonicalFeeContext(req);
+      res.status(409).json({
+        success: false,
+        error: 'ONLINE_PAYMENT_LEDGER_NOT_READY',
+        message: 'تسوية الدفع الإلكتروني معطّلة حتى يُنفّذ التحصيل وتخصيص الفاتورة والقيد المحاسبي في معاملة واحدة.'
+      });
     } catch (err: any) {
       next(err instanceof AuthenticationError || err instanceof ValidationError || err instanceof ConflictError || err instanceof DatabaseError ? err : new DatabaseError('تعذر تسوية محاولة الدفع.', err?.message));
     }
@@ -14677,12 +14669,14 @@ export async function createApp(options: { cloudflare?: boolean } = {}): Promise
       const eventType = String(body.eventType || body.type || '').trim();
       const tenantId = String(body.tenantId || '').trim();
       const schoolId = String(body.schoolId || '').trim();
-      const signature = String(req.header('x-payment-signature') || body.signature || '').trim();
+      const signature = String(req.header('x-payment-signature') || '').trim().replace(/^sha256=/i, '');
       const secret = String(process.env.PAYMENT_WEBHOOK_SECRET || '').trim();
       if (!provider || !eventId || !eventType || !canonicalFeeUuid(tenantId) || !canonicalFeeUuid(schoolId)) throw new ValidationError('بيانات Webhook الدفع غير مكتملة.');
-      if (!secret && productionLikeEnvironment) throw new DatabaseError('لم يتم إعداد سر Webhook الدفع في البيئة الإنتاجية.');
-      const expectedSignature = createHash('sha256').update(`${secret}.${JSON.stringify(body.payload || body)}`).digest('hex');
-      if (secret && signature !== expectedSignature) throw new AuthenticationError('توقيع Webhook الدفع غير صالح.');
+      if (!secret) throw new DatabaseError('لم يتم إعداد سر Webhook الدفع؛ رُفض الطلب دون معالجة.');
+      const rawBody = String((req as express.Request & { rawBody?: string }).rawBody || '');
+      const suppliedSignature = Buffer.from(signature, 'hex');
+      const expectedSignature = createHmac('sha256', secret).update(rawBody, 'utf8').digest();
+      if (!/^[a-f0-9]{64}$/i.test(signature) || suppliedSignature.length !== expectedSignature.length || !timingSafeEqual(suppliedSignature, expectedSignature)) throw new AuthenticationError('توقيع Webhook الدفع غير صالح.');
       if (!transactionDriver) throw new DatabaseError('تحتاج معالجة Webhook إلى اتصال PostgreSQL.');
       let status = 'received';
       await UnitOfWork.runInTransaction(schoolId, {
@@ -14695,12 +14689,12 @@ export async function createApp(options: { cloudflare?: boolean } = {}): Promise
           `INSERT INTO public.student_fee_payment_webhooks (tenant_id, school_id, provider, event_id, event_type, signature_hash, payload)
            VALUES ($1,$2,$3,$4,$5,$6,$7::jsonb)
            ON CONFLICT (school_id, provider, event_id) DO NOTHING
-           RETURNING id`, [tenantId, schoolId, provider, eventId, eventType, expectedSignature, JSON.stringify(body.payload || body)]);
+           RETURNING id`, [tenantId, schoolId, provider, eventId, eventType, expectedSignature.toString('hex'), JSON.stringify(body.payload || body)]);
         if (!inserted.rows[0]) { status = 'ignored'; return; }
         const providerReference = String(body.providerReference || body.paymentId || body.data?.providerReference || '').trim();
         const eventStatus = String(body.status || body.data?.status || '').toLowerCase();
         const mappedStatus = ['succeeded', 'paid', 'success', 'completed'].includes(eventStatus) ? 'succeeded' : ['failed', 'declined'].includes(eventStatus) ? 'failed' : 'pending';
-        const attempt = providerReference ? await transaction.query(`UPDATE public.student_fee_payment_attempts SET status = $4, provider_reference = COALESCE(provider_reference, $3), updated_at = now(), failure_code = $5, failure_message = $6 WHERE tenant_id = $1 AND school_id = $2 AND provider_reference = $3 RETURNING id, student_id, amount, currency`, [tenantId, schoolId, providerReference, mappedStatus, body.failureCode || null, body.failureMessage || null]) : { rows: [] };
+        const attempt = providerReference ? await transaction.query(`UPDATE public.student_fee_payment_attempts SET status = $5, provider_reference = COALESCE(provider_reference, $4), updated_at = now(), failure_code = $6, failure_message = $7 WHERE tenant_id = $1 AND school_id = $2 AND provider = $3 AND provider_reference = $4 RETURNING id, student_id, amount, currency`, [tenantId, schoolId, provider, providerReference, mappedStatus, body.failureCode || null, body.failureMessage || null]) : { rows: [] };
         // A webhook is deliberately limited to marking the provider attempt.
         // Receipt creation and ledger posting require an authenticated school
         // actor and are performed by the settlement command, so a provider
@@ -14809,7 +14803,8 @@ export async function createApp(options: { cloudflare?: boolean } = {}): Promise
         const studentName = [student.preferred_name, student.legal_first_name, student.legal_middle_name, student.legal_last_name].filter(Boolean).join(' ');
 
         const existingResult = await transaction.query(
-          `SELECT id, student_id, amount, status, journal_entry_id, receipt_voucher_id
+          `SELECT id, student_id, amount, status, journal_entry_id, receipt_voucher_id,
+                  receipt_date, payment_method, receiving_account, operational_type, against_text, source_payload
              FROM public.student_fee_receipts
             WHERE tenant_id = $1 AND school_id = $2 AND id = $3
             FOR UPDATE`,
@@ -14823,6 +14818,22 @@ export async function createApp(options: { cloudflare?: boolean } = {}): Promise
           throw new ConflictError('هذا السند أُعكس أو أُلغي سابقًا؛ استخدم معرف سند جديدًا ولا تعِد تفعيله.');
         }
         if (existing && String(existing.status).toLowerCase() === 'posted') {
+          const storedCommand = typeof existing.source_payload === 'string'
+            ? (() => { try { return JSON.parse(existing.source_payload); } catch { return {}; } })()
+            : existing.source_payload || {};
+          const requestAccounts = receivingAccounts.map((item: any) => ({ accountCode: item.accountCode, amount: item.amount, paymentMethod: item.paymentMethod }));
+          const storedAccounts = Array.isArray(storedCommand.receivingAccounts) ? storedCommand.receivingAccounts : [];
+          if (String(existing.receipt_date || '').slice(0, 10) !== receiptDate
+            || String(existing.payment_method || '') !== effectivePaymentMethod
+            || String(existing.receiving_account || '') !== primaryReceivingAccount
+            || String(existing.operational_type || '') !== operationalType
+            || String(existing.against_text || '') !== against
+            || storedCommand.command !== 'manual_settle'
+            || String(storedCommand.costCenter || '') !== costCenter
+            || String(storedCommand.installmentScheduleId || '') !== String(requestedInstallmentScheduleId || '')
+            || JSON.stringify(storedAccounts) !== JSON.stringify(requestAccounts)) {
+            throw new ConflictError('معرف السند مرحّل بطلب مختلف؛ لم نُعد استخدامه ولم نُغيّر القيد السابق.');
+          }
           const previousAllocations = await transaction.query(
             `SELECT receipt_id AS "receiptId", invoice_id AS "invoiceId", installment_schedule_id AS "installmentScheduleId", amount
                FROM public.student_fee_allocations
@@ -15035,8 +15046,10 @@ export async function createApp(options: { cloudflare?: boolean } = {}): Promise
         const transaction = UnitOfWork.getActiveContext()?.databaseTransaction;
         if (!transaction) throw new DatabaseError('تعذر فتح المعاملة المالية.');
         const databaseActorId = await resolveCanonicalFeeActor(transaction, tenantId, schoolId, actorId);
-        const receipt = await transaction.query(`SELECT id, student_id AS "studentId", amount, status FROM public.student_fee_receipts WHERE tenant_id = $1 AND school_id = $2 AND id = $3 FOR UPDATE`, [tenantId, schoolId, receiptId]);
-        if (!receipt.rows[0] || !['approved', 'posted'].includes(String(receipt.rows[0].status).toLowerCase())) throw new ValidationError('السند غير موجود أو غير معتمد للتخصيص.');
+        const receipt = await transaction.query(`SELECT id, student_id AS "studentId", amount, status, journal_entry_id AS "journalEntryId", source_payload AS "sourcePayload" FROM public.student_fee_receipts WHERE tenant_id = $1 AND school_id = $2 AND id = $3 FOR UPDATE`, [tenantId, schoolId, receiptId]);
+        if (!receipt.rows[0] || String(receipt.rows[0].status).toLowerCase() !== 'posted' || !receipt.rows[0].journalEntryId) {
+          throw new ConflictError('لا يمكن تخصيص سند غير مرحّل ومربوط بقيد محاسبي؛ استخدم مسار التسوية المحاسبية الذرية.');
+        }
         const invoice = await transaction.query(`SELECT id, student_id AS "studentId", amount, tax_amount, paid_amount, remaining_amount, status FROM public.student_fee_invoices WHERE tenant_id = $1 AND school_id = $2 AND id = $3 FOR UPDATE`, [tenantId, schoolId, invoiceId]);
         if (!invoice.rows[0]) throw new ValidationError('الفاتورة غير موجودة.');
         if (String(receipt.rows[0].studentId) !== String(invoice.rows[0].studentId)) throw new ConflictError('لا يمكن تخصيص سند طالب على فاتورة طالب آخر.');
@@ -15583,7 +15596,7 @@ export async function createApp(options: { cloudflare?: boolean } = {}): Promise
       }
 
       let snapshot: { data: Record<string, unknown>; version: number; updated_at: string } | null = null;
-      let canonicalErpReady = false;
+      let canonicalErpReady = process.env.FINANCIAL_ERP_MODE === 'canonical';
       let canonicalErpModel: Awaited<ReturnType<typeof CanonicalErpPostingService.readModel>> | null = null;
       let canonicalFeeInvoices: any[] = [];
       let canonicalFeeReceipts: any[] = [];
@@ -15624,6 +15637,12 @@ export async function createApp(options: { cloudflare?: boolean } = {}): Promise
       if (invoiceResult.error && !isMissingCanonicalTable(invoiceResult.error)) throw invoiceResult.error;
       if (receiptResult.error && !isMissingCanonicalTable(receiptResult.error)) throw receiptResult.error;
       if (chartResult.error && !isMissingCanonicalTable(chartResult.error)) throw chartResult.error;
+      if (canonicalErpReady && (invoiceResult.error || receiptResult.error || chartResult.error)) {
+        throw new DatabaseError('جداول الرسوم والحسابات الكانونية غير مكتملة؛ أُوقف العرض المالي بدل إظهار لقطة قديمة على أنها بيانات حالية.');
+      }
+      const canonicalFeeInvoicesAvailable = !invoiceResult.error;
+      const canonicalFeeReceiptsAvailable = !receiptResult.error;
+      const canonicalChartOfAccountsAvailable = !chartResult.error;
       snapshot = snapshotResult.data || null;
       canonicalFeeInvoices = (invoiceResult.data || []).map((row: any) => {
         const sourcePayload = typeof row.source_payload === 'string'
@@ -15691,7 +15710,6 @@ export async function createApp(options: { cloudflare?: boolean } = {}): Promise
       // PostgreSQL transaction and fails closed if the canonical schema is
       // missing. This keeps the UI mode aligned with the reviewed deployment
       // without weakening write-time schema validation.
-      canonicalErpReady = process.env.FINANCIAL_ERP_MODE === 'canonical';
       if (canonicalErpReady && transactionDriver) {
         await UnitOfWork.runInTransaction(schoolId, {
           operationName: 'Read canonical ERP financial model',
@@ -15713,9 +15731,9 @@ export async function createApp(options: { cloudflare?: boolean } = {}): Promise
         // Canonical fee rows supersede the legacy snapshot projection. This
         // keeps existing screens compatible while new commands never write a
         // second authoritative copy.
-        ...(canonicalFeeInvoices.length > 0 ? { invoices: canonicalFeeInvoices } : {}),
-        ...(canonicalFeeReceipts.length > 0 ? { studentReceiptVouchers: canonicalFeeReceipts, receiptVouchers: canonicalFeeReceipts } : {}),
-        ...(canonicalChartOfAccounts.length > 0 ? { chartOfAccounts: canonicalChartOfAccounts } : {}),
+        ...(canonicalFeeInvoicesAvailable ? { invoices: canonicalFeeInvoices } : {}),
+        ...(canonicalFeeReceiptsAvailable ? { studentReceiptVouchers: canonicalFeeReceipts, receiptVouchers: canonicalFeeReceipts } : {}),
+        ...(canonicalChartOfAccountsAvailable ? { chartOfAccounts: canonicalChartOfAccounts } : {}),
       };
       if (canonicalErpReady && canonicalErpModel) {
         const sourceLinks = new Map(
