@@ -4,6 +4,8 @@ import fs from "node:fs";
 import dotenv from "dotenv";
 import helmet from "helmet";
 import { getServerListenHost } from "./server/infrastructure/ServerListenHost.js";
+import { resolveSchoolPortal } from "./server/infrastructure/SchoolPortalDirectory.js";
+import { getSchoolSubdomainFromHostname } from "./src/utils/EnterpriseDomainUtils.js";
 
 dotenv.config();
 
@@ -2644,6 +2646,22 @@ export async function createApp(options: { cloudflare?: boolean } = {}): Promise
       startupReadiness.markFailed('Database initialization failed.');
     });
 
+  app.get('/api/public/school-portal', authLimiter, async (req, res, next) => {
+    try {
+      const context = getSchoolSubdomainFromHostname(req.hostname)
+        || (typeof req.query.school === 'string' ? req.query.school.trim() : '');
+      if (!context) return res.status(404).json({ success: false });
+      if (!platformAdminPool) throw new ExternalServiceError('دليل المدارس غير متاح مؤقتًا.');
+      const school = await resolveSchoolPortal(platformAdminPool, context);
+      disableAuthCaching(res);
+      if (!school) return res.status(404).json({ success: false });
+      // The public login page receives only the school's public name and ID.
+      return res.json({ success: true, school });
+    } catch (error) {
+      next(error);
+    }
+  });
+
   // Trusted authentication: credentials are verified by Supabase Auth.
   // The client is never allowed to select the identity, school, role, or session claims.
   app.post("/api/auth/login", authLimiter, async (req, res, next) => {
@@ -2701,22 +2719,13 @@ export async function createApp(options: { cloudflare?: boolean } = {}): Promise
       // check a platform administrator could be silently redirected into the
       // central console from a customer school URL.
       let expectedSchoolId: string | undefined;
-      const requestedSchoolContext = typeof schoolContext === 'string' ? schoolContext.trim() : '';
+      const requestedSchoolContext = getSchoolSubdomainFromHostname(req.hostname)
+        || (typeof schoolContext === 'string' ? schoolContext.trim() : '');
       if (requestedSchoolContext) {
         if (isUuid(requestedSchoolContext)) {
           expectedSchoolId = requestedSchoolContext;
         } else if (platformAdminPool) {
-          const schoolResult = await platformAdminPool.query<{ id: string }>(
-            `SELECT id
-               FROM public.schools
-              WHERE deleted_at IS NULL
-                AND status = 'active'
-                AND (lower(COALESCE(central_metadata->>'subdomain', '')) = lower($1)
-                  OR lower(school_code) = lower($1))
-              LIMIT 1`,
-            [requestedSchoolContext],
-          );
-          expectedSchoolId = schoolResult.rows[0]?.id;
+          expectedSchoolId = (await resolveSchoolPortal(platformAdminPool, requestedSchoolContext))?.id;
         }
         if (!expectedSchoolId) throw new TrustedAuthenticationError('INVALID_SCHOOL');
       }

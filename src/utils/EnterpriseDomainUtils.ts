@@ -27,13 +27,33 @@ export interface SSLCertificateInfo {
   statusText: string;
 }
 
+export const SCHOOL_PORTAL_ROOT_DOMAIN = 'abdalsalamsoft.com';
+
+export function getSchoolSubdomainFromHostname(hostname: string): string {
+  const normalizedHost = String(hostname || '').trim().toLowerCase().replace(/\.$/, '');
+  const suffix = `.${SCHOOL_PORTAL_ROOT_DOMAIN}`;
+  if (!normalizedHost.endsWith(suffix)) return '';
+
+  const subdomain = normalizedHost.slice(0, -suffix.length);
+  if (!/^[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?$/.test(subdomain)
+    || ['www', 'api', 'admin', 'app', 'portal'].includes(subdomain)) return '';
+  return subdomain;
+}
+
+export function getSchoolPortalContext(hostname: string, search: string): string {
+  const subdomain = getSchoolSubdomainFromHostname(hostname);
+  if (subdomain) return subdomain;
+  const params = new URLSearchParams(search);
+  return (params.get('school') || params.get('tenant') || params.get('schoolId') || '').trim();
+}
+
 /**
  * Normalizes and builds a 100% trusted public production HTTPS URL for any school/tenant.
- * Ensures that copying link ALWAYS returns clean production public URLs (e.g. https://alnoor.erpcloud.com)
+ * Ensures that copying a link returns the school's production public URL.
  * and never exposes internal development URLs (run.app, localhost, aistudio.google.com, etc.).
  */
 export function getTrustedSchoolUrl(school: SchoolDomainInfo): string {
-  if (!school) return 'https://erpcloud.com';
+  if (!school) return `https://${SCHOOL_PORTAL_ROOT_DOMAIN}`;
 
   const rawSubdomain = (school.subdomain || school.id || 'main').trim().toLowerCase().replace(/[^a-z0-9-]/g, '');
   const rawCustomDomain = (school.customDomain || school.domain || '').trim().toLowerCase();
@@ -52,21 +72,13 @@ export function getTrustedSchoolUrl(school: SchoolDomainInfo): string {
     return `https://${cleanCustom}`;
   }
 
-  // Cloudflare Workers is the deployed public gateway. Until wildcard DNS for
-  // *.erpcloud.com is configured, route the school through the live gateway
-  // with its canonical school id instead of returning an unreachable vanity
-  // hostname. This keeps the link usable and preserves tenant resolution.
-  const hostedGateway = typeof window !== 'undefined' && window.location &&
-    (window.location.hostname.endsWith('.workers.dev') ||
-      window.location.hostname.endsWith('.run.app') ||
+  const isLocal = typeof window !== 'undefined' && window.location &&
+    (window.location.hostname.endsWith('.run.app') ||
       window.location.hostname === 'localhost' ||
-      window.location.hostname === '127.0.0.1')
-    ? window.location.origin
-    : null;
-  if (hostedGateway) return `${hostedGateway}/?school=${encodeURIComponent(school.id || rawSubdomain)}`;
+      window.location.hostname === '127.0.0.1');
+  if (isLocal) return `${window.location.origin}/?school=${encodeURIComponent(school.id || rawSubdomain)}`;
 
-  // Always return clean production public URL format
-  return `https://${rawSubdomain}.erpcloud.com`;
+  return `https://${rawSubdomain}.${SCHOOL_PORTAL_ROOT_DOMAIN}`;
 }
 
 /**
@@ -98,22 +110,7 @@ export function getSSLCertificateStatus(domainName: string): SSLCertificateInfo 
  * to display the school login screen instantly without requiring Google Sign In.
  */
 export function openTrustedSchoolPortal(school: SchoolDomainInfo): Window | null {
-  const rawSubdomain = (school?.subdomain || school?.id || 'main').trim().toLowerCase().replace(/[^a-z0-9-]/g, '');
-  
-  const isDev = typeof window !== 'undefined' && window.location && (
-    window.location.hostname.includes('run.app') || 
-    window.location.hostname.includes('localhost') || 
-    window.location.hostname.includes('127.0.0.1') ||
-    window.location.hostname.includes('aistudio.google.com')
-  );
-
-  const isHostedGateway = typeof window !== 'undefined' && window.location &&
-    (window.location.hostname.endsWith('.workers.dev') || window.location.hostname.endsWith('.run.app'));
-
-  const url = (isDev || isHostedGateway) && typeof window !== 'undefined' && window.location
-    ? `${window.location.origin}/?school=${rawSubdomain}`
-    : `https://${rawSubdomain}.erpcloud.com`;
-
+  const url = getTrustedSchoolUrl(school);
   if (typeof window !== 'undefined') {
     return window.open(url, '_blank', 'noopener,noreferrer');
   }
