@@ -22,6 +22,7 @@ import { School } from '../types';
 
 interface SchoolClientLoginProps {
   selectedSchool: School;
+  portalName?: string;
   onSchoolLogin: (username: string, password: string, rememberMe: boolean) => boolean | void | Promise<boolean | void>;
   onForgotPassword?: (identifier: string) => boolean | Promise<boolean>;
   triggerNotification: (msg: string, type: 'success' | 'warning' | 'info') => void;
@@ -31,6 +32,7 @@ interface SchoolClientLoginProps {
 
 export default function SchoolClientLogin({
   selectedSchool,
+  portalName,
   onSchoolLogin,
   onForgotPassword,
   triggerNotification,
@@ -234,7 +236,7 @@ export default function SchoolClientLogin({
           <h1 className={`text-2xl sm:text-3xl font-black mt-3 tracking-tight ${
             isDark ? 'text-white' : 'text-[#2d1e0c]'
           }`}>
-            SchoolForManus
+            {portalName || 'SchoolForManus'}
           </h1>
           <div className="text-xs font-black text-[#8b6508] dark:text-amber-400 tracking-widest mt-0.5 uppercase">
             School Management System
