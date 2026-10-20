@@ -91,6 +91,8 @@ import { useCurrency } from './utils/currency';
 import { TrustedSessionError, TrustedSessionManager, TrustedSessionUser } from './middleware/trustedSessionManager';
 import { canAccessSection } from './authorization/ClientAuthorization';
 import { canonicalSectionRoute } from './navigation/CanonicalSectionRoute';
+import { getSchoolPortalContext } from './utils/EnterpriseDomainUtils';
+import { loadPublicSchoolPortal, type PublicSchoolPortal } from './utils/publicSchoolPortal';
 import { PERMISSIONS } from './authorization/PermissionRegistry';
 import { authenticatedRequest } from './utils/authenticatedRequest';
 import {
@@ -241,9 +243,22 @@ export default function App() {
   // Client Mode isolation detector
   const schoolPortalContext = useMemo(() => {
     if (typeof window === 'undefined') return '';
-    const params = new URLSearchParams(window.location.search);
-    return (params.get('school') || params.get('tenant') || params.get('schoolId') || '').trim();
+    return getSchoolPortalContext(window.location.hostname, window.location.search);
   }, []);
+
+  const [publicSchoolPortal, setPublicSchoolPortal] = useState<PublicSchoolPortal | null>(null);
+  const getPublicSchoolPortal = useMemo(() => {
+    let request: Promise<PublicSchoolPortal | null> | undefined;
+    return () => request ||= schoolPortalContext ? loadPublicSchoolPortal(schoolPortalContext) : Promise.resolve(null);
+  }, [schoolPortalContext]);
+
+  useEffect(() => {
+    let active = true;
+    getPublicSchoolPortal().then(portal => {
+      if (active) setPublicSchoolPortal(portal);
+    }).catch(() => { /* Keep the school login available during a directory outage. */ });
+    return () => { active = false; };
+  }, [getPublicSchoolPortal]);
 
   const isClientMode = useMemo(() => (
     currentPortal === 'school' || Boolean(schoolPortalContext)
@@ -428,12 +443,7 @@ export default function App() {
   // Login flow state is intentionally limited to the portal mode. Identity,
   // role, school, and branch are all supplied by the trusted server session.
   const [loginPortalMode, setLoginPortalMode] = useState<'school' | 'gateway'>(() => (
-    typeof window !== 'undefined' && (() => {
-      const params = new URLSearchParams(window.location.search);
-      return Boolean(params.get('school') || params.get('tenant') || params.get('schoolId'));
-    })()
-      ? 'school'
-      : 'gateway'
+    schoolPortalContext ? 'school' : 'gateway'
   ));
   
   useEffect(() => {
@@ -507,12 +517,21 @@ export default function App() {
     setSessionRestoreState('restoring');
 
     restoreTrustedSessionWithRetry(sessionManager)
-      .then(user => {
+      .then(async user => {
         if (!isActive) return;
         // Reload a school URL without discarding a valid session for that
         // exact school. A session from any other school still fails closed.
         if (schoolPortalContext && !canRestoreSchoolPortalSession(schoolPortalContext, user.schoolId)) {
-          throw new Error('Stored session belongs to another school portal.');
+          let portal: PublicSchoolPortal | null;
+          try {
+            portal = await getPublicSchoolPortal();
+          } catch {
+            throw new TrustedSessionError('REQUEST_FAILED');
+          }
+          if (!isActive) return;
+          if (!portal || !canRestoreSchoolPortalSession(portal.id, user.schoolId)) {
+            throw new Error('Stored session belongs to another school portal.');
+          }
         }
         if (user.forcePasswordChange) {
           const accessToken = sessionManager.getAccessToken();
@@ -546,7 +565,7 @@ export default function App() {
     return () => {
       isActive = false;
     };
-  }, [applyTrustedSessionUser, schoolPortalContext, sessionManager]);
+  }, [applyTrustedSessionUser, getPublicSchoolPortal, schoolPortalContext, sessionManager]);
 
   // Any later attempt to open a protected portal without a token fails closed,
   // but it does not start a second restore request.
@@ -1525,6 +1544,7 @@ export default function App() {
       return (
         <SchoolClientLogin
           selectedSchool={selectedSchool}
+          portalName={publicSchoolPortal?.name}
           onSchoolLogin={handleSchoolLogin}
           onForgotPassword={handleForgotPassword}
           triggerNotification={triggerNotification}

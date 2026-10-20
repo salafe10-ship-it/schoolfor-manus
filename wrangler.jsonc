@@ -11,8 +11,18 @@
     "FINANCIAL_WRITES_LOCKED": "false",
     "FINANCIAL_ERP_MODE": "canonical",
     "PGSSL_REJECT_UNAUTHORIZED": "true",
-    "PUBLIC_APP_URL": "https://schoolfor-manus.salafe10.workers.dev"
+    "PUBLIC_APP_URL": "https://abdalsalamsoft.com"
   },
+  "routes": [
+    {
+      "pattern": "abdalsalamsoft.com",
+      "custom_domain": true
+    },
+    {
+      "pattern": "*.abdalsalamsoft.com/*",
+      "zone_name": "abdalsalamsoft.com"
+    }
+  ],
   "hyperdrive": [
     {
       "binding": "HYPERDRIVE",
