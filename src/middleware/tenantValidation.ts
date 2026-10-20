@@ -4,6 +4,10 @@ import { runWithTenantContext } from '../tenant/TenantContext';
 import { recordTenantDenial } from '../tenant/TenantAuditHooks';
 import { TenantIsolationError, tenantEngine } from '../tenant/TenantEngine';
 import type { Perf004TraceLike } from '../performance/Perf004LatencyDiagnostics';
+import {
+  isLocalStudentAffairsTestMode,
+  isLocalStudentAffairsTestToken,
+} from '../../server/infrastructure/LocalStudentAffairsTestMode.js';
 
 function valueFromRequest(value: unknown): string | undefined {
   if (Array.isArray(value)) return value.length ? String(value[0]) : undefined;
@@ -24,6 +28,19 @@ export function createTenantValidationMiddleware() {
     const identity = (req as any).user as TrustedIdentity | undefined;
     const target = requestTarget(req);
     try {
+      // The loopback harness has no tenant database by design. Its login
+      // middleware already attaches a fixed, non-production tenant context;
+      // reuse that context instead of asking TenantEngine to resolve it from
+      // Supabase. This is limited to the explicit local test token and can
+      // never activate in development, staging, or production.
+      if (isLocalStudentAffairsTestMode()
+        && isLocalStudentAffairsTestToken((req as any).trustedAccessToken)
+        && (req as any).tenantContext) {
+        const context = (req as any).tenantContext;
+        tenantEngine.assertRequestTarget(context, target);
+        runWithTenantContext(context, () => next());
+        return;
+      }
       const diagnosticTrace = (req as any).perf004Trace as Perf004TraceLike | undefined;
       const context = tenantEngine.validate(await tenantEngine.resolve(identity, (req as any).trustedAccessToken, diagnosticTrace));
       tenantEngine.assertRequestTarget(context, target);

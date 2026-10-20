@@ -3823,7 +3823,8 @@ export default function StudentFinancialPortal({
 
   // Format Libyan Dinar
   const formatLD = (val: number) => {
-    return val.toLocaleString(undefined, { minimumFractionDigits: 2, maximumFractionDigits: 2 });
+    const safeValue = Number.isFinite(Number(val)) ? Number(val) : 0;
+    return safeValue.toLocaleString(undefined, { minimumFractionDigits: 2, maximumFractionDigits: 2 });
   };
 
   // Nav side panel menu matching the uploaded image exactly
@@ -4555,7 +4556,7 @@ export default function StudentFinancialPortal({
                     >
                       <td className="financial-fee-config-table-cell financial-fee-config-table-type font-bold text-center">{item.type}</td>
                       <td className="financial-fee-config-table-cell font-bold text-center text-slate-700">
-                        {formatActiveCurrencyAmount(item.amount)}
+                        {formatActiveCurrencyAmount(Number(item.amount ?? 0))}
                       </td>
                       <td className="financial-fee-config-table-cell text-center text-slate-700">{item.account}</td>
                       <td className="financial-fee-config-table-cell text-center text-slate-700">{item.orderNumber}</td>
@@ -4737,7 +4738,7 @@ export default function StudentFinancialPortal({
                             ${feeConfigs.map(item => `
                               <tr>
                                 <td style="font-weight: bold; color: #0284c7;">${escapePrintHtml(item.type)}</td>
-                                <td style="font-weight: bold; color: #1e293b;">${escapePrintHtml(formatLD(item.amount))} ${escapePrintHtml(activeCurrencySymbol)}</td>
+                                <td style="font-weight: bold; color: #1e293b;">${escapePrintHtml(formatLD(Number(item.amount ?? 0)))} ${escapePrintHtml(activeCurrencySymbol)}</td>
                                 <td>${escapePrintHtml(item.account)}</td>
                                 <td>${escapePrintHtml(item.orderNumber)}</td>
                                 <td>${escapePrintHtml(item.activities || '—')}</td>
@@ -6047,7 +6048,7 @@ export default function StudentFinancialPortal({
                       >
                         <div className="flex justify-between font-bold text-slate-900 mb-1">
                           <span className="truncate max-w-[150px]">{voucher.studentName}</span>
-                          <span className="font-mono text-emerald-600" dir="ltr">+{voucher.amount.toLocaleString()}</span>
+                          <span className="font-mono text-emerald-600" dir="ltr">+{Number(voucher.amount ?? 0).toLocaleString()}</span>
                         </div>
                         <div className="flex justify-between items-center text-[10px] text-slate-500">
                           <span
@@ -6499,7 +6500,7 @@ export default function StudentFinancialPortal({
                                 {getReceiptTenders(selectedStudRv).map(tender => (
                                   <div key={`${tender.accountCode}-${tender.paymentMethod}`} className="flex flex-wrap items-center justify-between gap-x-2 gap-y-0.5 rounded bg-slate-50 px-2 py-1 text-[11px]">
                                     <span className="font-bold">{getReceiptAccountLabel(tender.accountCode)} <span className="font-mono text-slate-500">({tender.accountCode})</span></span>
-                                    <span className="font-mono font-black">{Number(tender.amount).toLocaleString(undefined, { minimumFractionDigits: 2, maximumFractionDigits: 2 })} {getReceiptCurrencyConfig(selectedStudRv).symbol}</span>
+                                    <span className="font-mono font-black">{Number(tender.amount ?? 0).toLocaleString(undefined, { minimumFractionDigits: 2, maximumFractionDigits: 2 })} {getReceiptCurrencyConfig(selectedStudRv).symbol}</span>
                                   </div>
                                 ))}
                               </div>
@@ -6531,12 +6532,12 @@ export default function StudentFinancialPortal({
                             <div className="space-y-1.5 text-center md:text-right">
                               <span className="text-[10px] text-slate-400 font-extrabold block">المبلغ المقبوض كتابة بالحروف:</span>
                               <p className="font-black text-slate-800 text-xs">
-                                {convertNumberToArabicWords(selectedStudRv.amount, String(selectedStudRv.currency || activeCurrencyCode))}
+                                {convertNumberToArabicWords(Number(selectedStudRv.amount ?? 0), String(selectedStudRv.currency || activeCurrencyCode))}
                               </p>
                             </div>
                             <div className="bg-emerald-50 border border-emerald-200 text-emerald-800 px-6 py-2.5 text-center shrink-0">
                               <span className="text-[10px] font-black uppercase block text-emerald-600">المبلغ الإجمالي</span>
-                              <span className="font-mono font-black text-lg">{selectedStudRv.amount.toLocaleString(undefined, { minimumFractionDigits: 2 })} {getReceiptCurrencyConfig(selectedStudRv).symbol}</span>
+                              <span className="font-mono font-black text-lg">{Number(selectedStudRv.amount ?? 0).toLocaleString(undefined, { minimumFractionDigits: 2 })} {getReceiptCurrencyConfig(selectedStudRv).symbol}</span>
                             </div>
                           </div>
 
@@ -6590,7 +6591,7 @@ export default function StudentFinancialPortal({
                                           {getReceiptAccountLabel(tender.accountCode)} <span className="font-normal text-slate-500">({RECEIPT_PAYMENT_METHODS.find(method => method.value === tender.paymentMethod)?.label || tender.paymentMethod})</span>
                                         </td>
                                         <td className="p-1.5 border border-purple-100 text-right font-mono text-purple-900">{tender.accountCode}</td>
-                                        <td className="p-1.5 border border-purple-100 font-mono font-bold text-emerald-650">+{Number(tender.amount).toLocaleString()} {getReceiptCurrencyConfig(selectedStudRv).symbol}</td>
+                                        <td className="p-1.5 border border-purple-100 font-mono font-bold text-emerald-650">+{Number(tender.amount ?? 0).toLocaleString()} {getReceiptCurrencyConfig(selectedStudRv).symbol}</td>
                                         <td className="p-1.5 border border-purple-100 font-mono text-slate-400">0.00</td>
                                       </tr>
                                     ))}
@@ -6598,7 +6599,7 @@ export default function StudentFinancialPortal({
                                       <td className="p-1.5 border border-purple-100 text-right font-bold">ذمم الطلاب المدينة</td>
                                       <td className="p-1.5 border border-purple-100 text-right font-mono text-purple-900">{STUDENT_RECEIVABLE_ACCOUNT}</td>
                                       <td className="p-1.5 border border-purple-100 font-mono text-slate-400">0.00</td>
-                                      <td className="p-1.5 border border-purple-100 font-mono font-bold text-amber-650">+{selectedStudRv.amount.toLocaleString()} {getReceiptCurrencyConfig(selectedStudRv).symbol}</td>
+                                      <td className="p-1.5 border border-purple-100 font-mono font-bold text-amber-650">+{Number(selectedStudRv.amount ?? 0).toLocaleString()} {getReceiptCurrencyConfig(selectedStudRv).symbol}</td>
                                     </tr>
                                   </tbody>
                                 </table>
