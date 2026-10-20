@@ -10,6 +10,8 @@ describe('global save confirmation', () => {
     expect(isSaveActionLabel('إعادة احتساب النتائج')).toBe(false);
     expect(isSaveActionLabel('تسجيل الدخول')).toBe(false);
     expect(isSaveActionLabel('نسخ الرابط')).toBe(false);
+    expect(isSaveActionLabel('تحديث')).toBe(false);
+    expect(isSaveActionLabel('تحديث بند الرسوم')).toBe(true);
   });
 
   it('uses one explicit Arabic success prefix without duplicating it', () => {
