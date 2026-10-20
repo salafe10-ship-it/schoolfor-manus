@@ -14,6 +14,7 @@
   "scripts": {
     "dev": "tsx server.ts",
     "dev:staging": "tsx scripts/start-staging-local.ts",
+    "test:student-affairs:exhausted": "tsx scripts/start-student-affairs-test.ts",
     "build": "vite build --configLoader runner && node scripts/build-server.mjs && node scripts/verify-build-artifact.mjs",
     "build:spa": "vite build --configLoader runner",
     "production:gate": "node scripts/production-release-gate.mjs",

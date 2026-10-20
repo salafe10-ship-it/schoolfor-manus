@@ -134,6 +134,18 @@ import {
   normalizeIdempotencyKey,
   type InstallmentFrequency,
 } from './src/modules/financial/application/CanonicalStudentFeeOperations.js';
+import {
+  isLocalStudentAffairsTestMode,
+  isLocalStudentAffairsTestToken,
+  localStudentAffairsTestFailurePayload,
+  localStudentAffairsTestFinancialContext,
+  localStudentAffairsTestFinancialSnapshot,
+  localStudentAffairsTestIdentity,
+  LOCAL_STUDENT_AFFAIRS_TEST_PASSWORD,
+  LOCAL_STUDENT_AFFAIRS_TEST_TOKEN,
+  LOCAL_STUDENT_AFFAIRS_TEST_USERNAME,
+  shouldSimulateSupabaseExhaustion,
+} from './server/infrastructure/LocalStudentAffairsTestMode.js';
 
 type FinancialWriteMode = 'snapshot_read_only' | 'snapshot_write' | 'erp_integrated';
 
@@ -2550,6 +2562,18 @@ export async function createApp(options: { cloudflare?: boolean } = {}): Promise
     next();
   });
 
+  // Deterministic local fault injection for the Student Affairs UAT harness.
+  // It is intentionally placed before authentication/route handlers so the
+  // simulated resource exhaustion cannot open a real database connection or
+  // mutate school data. The mode is impossible to enable in staging or prod.
+  app.use((req, res, next) => {
+    if (!shouldSimulateSupabaseExhaustion(req)) return next();
+    res.setHeader('Cache-Control', 'no-store');
+    res.setHeader('Retry-After', '1');
+    res.setHeader('X-EduPro-Test-Fault', 'supabase-database-exhausted');
+    return res.status(503).json(localStudentAffairsTestFailurePayload());
+  });
+
   const transactionDriver = createPostgresTransactionDriverFromEnvironment();
   if (transactionDriver) {
     UnitOfWork.configureTransactionDriver(transactionDriver);
@@ -2630,6 +2654,42 @@ export async function createApp(options: { cloudflare?: boolean } = {}): Promise
       if (typeof identifier !== 'string' || !identifier.trim() || typeof password !== 'string' || !password) {
         return next(new AuthenticationError("بيانات الدخول غير صحيحة"));
       }
+
+      // This branch exists only for the loopback-only Student Affairs fault
+      // harness. It never runs in development, staging, production, or when
+      // a database/provider credential is present.
+      if (isLocalStudentAffairsTestMode()) {
+        if (identifier !== LOCAL_STUDENT_AFFAIRS_TEST_USERNAME || password !== LOCAL_STUDENT_AFFAIRS_TEST_PASSWORD) {
+          return next(new AuthenticationError('بيانات دخول بيئة الاختبار غير صحيحة.'));
+        }
+        const identity = localStudentAffairsTestIdentity();
+        disableAuthCaching(res);
+        return res.json({
+          success: true,
+          data: {
+            token: LOCAL_STUDENT_AFFAIRS_TEST_TOKEN,
+            refreshToken: LOCAL_STUDENT_AFFAIRS_TEST_TOKEN,
+            expiresAt: Math.floor(Date.now() / 1000) + 3600,
+            serverTime: Math.floor(Date.now() / 1000),
+            user: {
+              id: identity.id,
+              school_id: identity.schoolId,
+              role: identity.role,
+              permissions: identity.permissions,
+              platform_permissions: identity.platformPermissions,
+              name: identity.name,
+              email: identity.email,
+              school: identity.school,
+              branch: identity.branch,
+              branch_id: identity.branchId,
+              academic_year: identity.academicYear,
+              force_password_change: false,
+            },
+          },
+          message: 'تم إنشاء جلسة اختبار محلية معزولة.',
+        });
+      }
+
       const supabase = await getSupabaseClientReady();
       if (!supabase) {
         return next(new ExternalServiceError("خدمة المصادقة غير مهيأة. لا يمكن إنشاء جلسة آمنة."));
@@ -2795,6 +2855,34 @@ export async function createApp(options: { cloudflare?: boolean } = {}): Promise
       if (typeof req.body?.refreshToken !== 'string' || !req.body.refreshToken.trim()) {
         return next(new AuthenticationError("تعذر تجديد الجلسة"));
       }
+      if (isLocalStudentAffairsTestMode() && isLocalStudentAffairsTestToken(req.body.refreshToken)) {
+        const identity = localStudentAffairsTestIdentity();
+        disableAuthCaching(res);
+        return res.json({
+          success: true,
+          data: {
+            token: LOCAL_STUDENT_AFFAIRS_TEST_TOKEN,
+            refreshToken: LOCAL_STUDENT_AFFAIRS_TEST_TOKEN,
+            expiresAt: Math.floor(Date.now() / 1000) + 3600,
+            serverTime: Math.floor(Date.now() / 1000),
+            user: {
+              id: identity.id,
+              school_id: identity.schoolId,
+              role: identity.role,
+              permissions: identity.permissions,
+              platform_permissions: identity.platformPermissions,
+              name: identity.name,
+              email: identity.email,
+              school: identity.school,
+              branch: identity.branch,
+              branch_id: identity.branchId,
+              academic_year: identity.academicYear,
+              force_password_change: false,
+            },
+          },
+          message: 'تم تجديد جلسة الاختبار المحلية المعزولة.',
+        });
+      }
       const supabase = await getSupabaseClientReady();
       if (!supabase) {
         return next(new ExternalServiceError("خدمة المصادقة غير مهيأة. لا يمكن تجديد الجلسة."));
@@ -2866,6 +2954,32 @@ export async function createApp(options: { cloudflare?: boolean } = {}): Promise
     if (!token) {
       return next(new AuthenticationError("غير مصرح به. يرجى إرسال التوكن للتحقق من الصلاحية (Authorization Bearer Token missing)."));
     }
+
+    if (isLocalStudentAffairsTestToken(token)) {
+      const identity = localStudentAffairsTestIdentity();
+      (req as any).user = identity;
+      (req as any).trustedAccessToken = token;
+      // The loopback harness intentionally has no Supabase/tenant database.
+      // Still attach the same verified scope shape expected by read-only
+      // financial routes so the isolated snapshot can be exercised normally.
+      (req as any).tenantContext = {
+        tenantId: identity.tenantId,
+        schoolId: identity.schoolId,
+        branchId: identity.branchId,
+        academicYear: identity.academicYear,
+        userId: identity.id,
+        role: identity.role,
+      };
+      if (authTrace) {
+        authTrace.supabaseVerification = 'SUCCESS';
+        authTrace.userIdPresent = 'YES';
+        authTrace.trustedIdentity = 'SUCCESS';
+        authTrace.schoolContext = 'SUCCESS';
+        authTrace.branchContext = 'SUCCESS';
+      }
+      return next();
+    }
+
     // Verify signature, expiration, and identity using Supabase Auth.
     const supabase = await getSupabaseClientReady();
     if (!supabase) {
@@ -10172,6 +10286,23 @@ export async function createApp(options: { cloudflare?: boolean } = {}): Promise
     });
   });
 
+  if (isLocalStudentAffairsTestMode()) {
+    app.get('/api/test/student-affairs/status', (_req, res) => {
+      res.setHeader('Cache-Control', 'no-store');
+      res.json({
+        success: true,
+        data: {
+          environment: 'local-test',
+          bind: '127.0.0.1:4180',
+          scenario: 'supabase-database-exhausted',
+          credentialsLoaded: false,
+          schoolDataTouched: false,
+          faultPaths: String(process.env.EDUPRO_TEST_FAULT_PATHS || '').split(',').filter(Boolean),
+        },
+      });
+    });
+  }
+
   app.get("/api/ready", (_req, res) => {
     const readiness = startupReadiness.snapshot();
     res.setHeader("Cache-Control", "no-store, no-cache, must-revalidate, private");
@@ -13228,6 +13359,14 @@ export async function createApp(options: { cloudflare?: boolean } = {}): Promise
 
   app.get("/api/financial/operational-context", authenticateRequest, requirePermission(PERMISSIONS.FINANCIAL_READ), async (req, res, next) => {
     try {
+      if (isLocalStudentAffairsTestMode()) {
+        res.setHeader('Cache-Control', 'no-store');
+        return res.json({
+          success: true,
+          data: localStudentAffairsTestFinancialContext(),
+          meta: { source: 'local_isolated_test', readOnly: true },
+        });
+      }
       const { tenantId, schoolId, tenantContext } = canonicalFeeContext(req, false);
       const supabase = canonicalTenantReadClient(req);
       if (!supabase) throw new DatabaseError('مصدر السياق التشغيلي المالي غير متاح.');
@@ -15580,6 +15719,20 @@ export async function createApp(options: { cloudflare?: boolean } = {}): Promise
 
   app.get("/api/financial/database", authenticateRequest, requirePermission(PERMISSIONS.FINANCIAL_READ), async (req, res, next) => {
     try {
+      if (isLocalStudentAffairsTestMode()) {
+        res.setHeader('Cache-Control', 'no-store');
+        return res.json({
+          success: true,
+          data: localStudentAffairsTestFinancialSnapshot(),
+          meta: {
+            source: 'local_isolated_test',
+            version: 0,
+            writeMode: 'snapshot_read_only',
+            readOnly: true,
+          },
+          message: 'تم تحميل لقطة مالية فارغة من بيئة الاختبار المعزولة.',
+        });
+      }
       const schoolId = String((req as any).user.schoolId || '').trim();
       const tenantId = String((req as any).user.tenantId || '').trim();
       if (!schoolId || !tenantId) throw new AuthenticationError("الهوية الموثوقة لا تحتوي على نطاق مالي صالح.");

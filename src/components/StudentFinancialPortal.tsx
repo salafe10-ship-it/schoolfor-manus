@@ -3557,7 +3557,8 @@ export default function StudentFinancialPortal({
 
   // Format Libyan Dinar
   const formatLD = (val: number) => {
-    return val.toLocaleString(undefined, { minimumFractionDigits: 2, maximumFractionDigits: 2 });
+    const safeValue = Number.isFinite(Number(val)) ? Number(val) : 0;
+    return safeValue.toLocaleString(undefined, { minimumFractionDigits: 2, maximumFractionDigits: 2 });
   };
 
   // Nav side panel menu matching the uploaded image exactly
@@ -4256,7 +4257,7 @@ export default function StudentFinancialPortal({
                     >
                       <td className="financial-fee-config-table-cell financial-fee-config-table-type font-bold text-center">{item.type}</td>
                       <td className="financial-fee-config-table-cell font-bold text-center text-slate-700">
-                        {item.amount.toLocaleString(undefined, { minimumFractionDigits: 0 })}
+                        {Number(item.amount ?? 0).toLocaleString(undefined, { minimumFractionDigits: 0 })}
                       </td>
                       <td className="financial-fee-config-table-cell text-center text-slate-700">{item.account}</td>
                       <td className="financial-fee-config-table-cell text-center text-slate-700">{item.orderNumber}</td>
@@ -4433,7 +4434,7 @@ export default function StudentFinancialPortal({
                             ${feeConfigs.map(item => `
                               <tr>
                                 <td style="font-weight: bold; color: #0284c7;">${item.type}</td>
-                                <td style="font-weight: bold; color: #1e293b;">${item.amount.toLocaleString(undefined, { minimumFractionDigits: 1 })}</td>
+                                <td style="font-weight: bold; color: #1e293b;">${Number(item.amount ?? 0).toLocaleString(undefined, { minimumFractionDigits: 1 })}</td>
                                 <td>${item.account}</td>
                                 <td>${item.orderNumber}</td>
                                 <td>${item.activities || '—'}</td>
@@ -5294,10 +5295,10 @@ export default function StudentFinancialPortal({
                                   )}
                                 </td>
                                 <td className={`px-1.5 py-2 text-center text-slate-850 ${isCancelled ? 'line-through text-slate-300' : ''}`}>
-                                  {!isReceipt ? inv.amount.toLocaleString() : '0.00'}
+                                  {!isReceipt ? Number(inv.amount ?? 0).toLocaleString() : '0.00'}
                                 </td>
                                 <td className={`px-1.5 py-2 text-center text-emerald-650 font-bold ${isCancelled ? 'line-through text-slate-300' : ''}`}>
-                                  {isReceipt ? `-${inv.amount.toLocaleString()}` : '0.00'}
+                                  {isReceipt ? `-${Number(inv.amount ?? 0).toLocaleString()}` : '0.00'}
                                 </td>
                                 <td className="px-1.5 py-2 text-center text-orange-950 font-black">
                                   ---
@@ -5684,7 +5685,7 @@ export default function StudentFinancialPortal({
                       >
                         <div className="flex justify-between font-bold text-slate-900 mb-1">
                           <span className="truncate max-w-[150px]">{voucher.studentName}</span>
-                          <span className="font-mono text-emerald-600" dir="ltr">+{voucher.amount.toLocaleString()}</span>
+                          <span className="font-mono text-emerald-600" dir="ltr">+{Number(voucher.amount ?? 0).toLocaleString()}</span>
                         </div>
                         <div className="flex justify-between items-center text-[10px] text-slate-500">
                           <span className="font-mono font-bold text-slate-700">{voucher.id}</span>
@@ -6138,12 +6139,12 @@ export default function StudentFinancialPortal({
                             <div className="space-y-1.5 text-center md:text-right">
                               <span className="text-[10px] text-slate-400 font-extrabold block">المبلغ المقبوض كتابة بالحروف:</span>
                               <p className="font-black text-slate-800 text-xs">
-                                {convertNumberToArabicWords(selectedStudRv.amount)}
+                                {convertNumberToArabicWords(Number(selectedStudRv.amount ?? 0))}
                               </p>
                             </div>
                             <div className="bg-emerald-50 border border-emerald-200 text-emerald-800 px-6 py-2.5 text-center shrink-0">
                               <span className="text-[10px] font-black uppercase block text-emerald-600">المبلغ الإجمالي</span>
-                              <span className="font-mono font-black text-lg">{selectedStudRv.amount.toLocaleString(undefined, { minimumFractionDigits: 2 })}</span>
+                              <span className="font-mono font-black text-lg">{Number(selectedStudRv.amount ?? 0).toLocaleString(undefined, { minimumFractionDigits: 2 })}</span>
                             </div>
                           </div>
 
@@ -6196,14 +6197,14 @@ export default function StudentFinancialPortal({
                                         {getReceiptAccountLabel(selectedStudRv.receivingAccount)}
                                       </td>
                                       <td className="p-1.5 border border-purple-100 text-right font-mono text-purple-900">{selectedStudRv.receivingAccount}</td>
-                                      <td className="p-1.5 border border-purple-100 font-mono font-bold text-emerald-650">+{selectedStudRv.amount.toLocaleString()}</td>
+                                      <td className="p-1.5 border border-purple-100 font-mono font-bold text-emerald-650">+{Number(selectedStudRv.amount ?? 0).toLocaleString()}</td>
                                       <td className="p-1.5 border border-purple-100 font-mono text-slate-400">0.00</td>
                                     </tr>
                                     <tr>
                                       <td className="p-1.5 border border-purple-100 text-right font-bold">ذمم الطلاب المدينة</td>
                                       <td className="p-1.5 border border-purple-100 text-right font-mono text-purple-900">{STUDENT_RECEIVABLE_ACCOUNT}</td>
                                       <td className="p-1.5 border border-purple-100 font-mono text-slate-400">0.00</td>
-                                      <td className="p-1.5 border border-purple-100 font-mono font-bold text-amber-650">+{selectedStudRv.amount.toLocaleString()}</td>
+                                      <td className="p-1.5 border border-purple-100 font-mono font-bold text-amber-650">+{Number(selectedStudRv.amount ?? 0).toLocaleString()}</td>
                                     </tr>
                                   </tbody>
                                 </table>
