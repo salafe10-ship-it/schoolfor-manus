@@ -1,0 +1,5 @@
+# Node server bundles and source maps are never public website assets.
+/server.cjs
+/server.cjs.map
+**/*.map
+.env*

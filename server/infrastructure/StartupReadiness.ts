@@ -14,6 +14,8 @@ export interface StartupReadinessSnapshot {
 
 export function createStartupReadiness() {
   const startedAt = new Date().toISOString();
+  let notifyCompleted!: () => void;
+  const completed = new Promise<void>((resolve) => { notifyCompleted = resolve; });
   let snapshot: StartupReadinessSnapshot = {
     state: 'INITIALIZING',
     database: 'PENDING',
@@ -45,6 +47,7 @@ export function createStartupReadiness() {
       completedAt: new Date().toISOString(),
       reason,
     };
+    notifyCompleted();
   };
 
   return {
@@ -67,5 +70,18 @@ export function createStartupReadiness() {
     markDatabaseUnavailable: (reason: string) => complete('DEGRADED', 'UNAVAILABLE', 'UNAVAILABLE', reason),
     markFailed: (reason: string) => complete('FAILED', 'FAILED', 'UNAVAILABLE', reason),
     snapshot: (): StartupReadinessSnapshot => ({ ...snapshot }),
+    waitUntilSettled: async (timeoutMs = 2000): Promise<StartupReadinessSnapshot> => {
+      if (snapshot.state !== 'INITIALIZING') return { ...snapshot };
+      let timeout: ReturnType<typeof setTimeout> | undefined;
+      try {
+        await Promise.race([
+          completed,
+          new Promise<void>((resolve) => { timeout = setTimeout(resolve, timeoutMs); }),
+        ]);
+      } finally {
+        if (timeout !== undefined) clearTimeout(timeout);
+      }
+      return { ...snapshot };
+    },
   };
 }

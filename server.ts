@@ -2424,7 +2424,7 @@ async function recordStudentExportAudit(
   );
 }
 
-export async function createApp(options: { cloudflare?: boolean } = {}): Promise<express.Express | undefined> {
+export async function createApp(options: { cloudflare?: boolean; waitUntil?: (task: Promise<unknown>) => void } = {}): Promise<express.Express | undefined> {
   const cloudflareMode = options.cloudflare === true;
   const app = express();
   const PORT = process.env.PORT || 3000;
@@ -2620,7 +2620,7 @@ export async function createApp(options: { cloudflare?: boolean } = {}): Promise
     ? transactionDriver?.inspectPoolIdentity(2) || Promise.reject(new Error('Restricted transaction driver is unavailable.'))
     : Promise.resolve([]);
 
-  void Promise.all([DatabaseService.initialize(), identityProbe])
+  const startupInitialization = Promise.all([DatabaseService.initialize(), identityProbe])
     .then(([result, identities]) => {
       if (result.supabaseConnected) {
         if (restrictedDataPlaneRequired && !cloudflareHyperdriveRuntime) {
@@ -2654,6 +2654,9 @@ export async function createApp(options: { cloudflare?: boolean } = {}): Promise
       });
       startupReadiness.markFailed('Database initialization failed.');
     });
+  // Workers may discard unfinished background work when the response ends.
+  // Keep startup attached to the first request without delaying liveness.
+  options.waitUntil?.(startupInitialization);
 
   app.get('/api/public/school-portal', authLimiter, async (req, res, next) => {
     try {
@@ -10351,8 +10354,8 @@ export async function createApp(options: { cloudflare?: boolean } = {}): Promise
     });
   }
 
-  app.get("/api/ready", (_req, res) => {
-    const readiness = startupReadiness.snapshot();
+  app.get("/api/ready", async (_req, res) => {
+    const readiness = await startupReadiness.waitUntilSettled();
     res.setHeader("Cache-Control", "no-store, no-cache, must-revalidate, private");
     res.status(readiness.ready ? 200 : 503).json({
       success: readiness.ready,
