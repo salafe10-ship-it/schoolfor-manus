@@ -103,7 +103,7 @@ function configureProcessEnvironment(bindings: CloudflareBindings): void {
 
 let apiHandlerPromise: Promise<ExportedHandler> | undefined;
 
-async function getApiHandler(bindings: CloudflareBindings): Promise<ExportedHandler> {
+async function getApiHandler(bindings: CloudflareBindings, ctx: ExecutionContext): Promise<ExportedHandler> {
   if (!apiHandlerPromise) {
     apiHandlerPromise = (async () => {
       configureProcessEnvironment(bindings);
@@ -119,7 +119,7 @@ async function getApiHandler(bindings: CloudflareBindings): Promise<ExportedHand
         __EDUPRO_ASYNC_LOCAL_STORAGE__?: typeof AsyncLocalStorage;
       }).__EDUPRO_ASYNC_LOCAL_STORAGE__ = AsyncLocalStorage;
       const { createApp } = await import("./server.ts");
-      const app = await createApp({ cloudflare: true });
+      const app = await createApp({ cloudflare: true, waitUntil: (task) => ctx.waitUntil(task) });
       if (!app) throw new Error("Cloudflare application initialization returned no Express app.");
       app.listen(3000);
       return httpServerHandler({ port: 3000 });
@@ -132,7 +132,7 @@ export default {
   async fetch(request: WorkerRequest, rawBindings: CloudflareBindings, ctx: ExecutionContext): Promise<Response> {
     const url = new URL(request.url);
     if (url.pathname === "/api" || url.pathname.startsWith("/api/")) {
-      const apiHandler = await getApiHandler(rawBindings);
+      const apiHandler = await getApiHandler(rawBindings, ctx);
       if (!apiHandler.fetch) throw new Error("Cloudflare Node HTTP handler is unavailable.");
       return apiHandler.fetch(request, rawBindings, ctx);
     }
