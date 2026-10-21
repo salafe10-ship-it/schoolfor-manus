@@ -3,7 +3,7 @@ import React, { useState, useEffect } from 'react';
 import { PieChart, Pie, Cell, ResponsiveContainer, Tooltip } from 'recharts';
 import { motion, AnimatePresence } from 'motion/react';
 import { copyTextToClipboard } from '../SuperAdminView';
-import { getTrustedSchoolUrl, openTrustedSchoolPortal } from '../../utils/EnterpriseDomainUtils';
+import { getTrustedSchoolUrl, openTrustedSchoolPortal, SCHOOL_PORTAL_ROOT_DOMAIN } from '../../utils/EnterpriseDomainUtils';
 import { authenticatedRequest } from '../../utils/authenticatedRequest';
 import { toDisplayPlan, updateCanonicalTenantStatus, updateCanonicalTenantSubscription } from '../../utils/centralTenantSubscription';
 
@@ -1093,17 +1093,17 @@ export default function SuperAdminOperationsCenter({
                                   required
                                   type="text"
                                   value={newSubdomain}
-                                  onChange={(e) => setNewSubdomain(e.target.value.replace(/[^a-zA-Z0-9-]/g, ''))}
+                                  onChange={(e) => setNewSubdomain(e.target.value.toLowerCase().replace(/[^a-z0-9-]/g, ''))}
                                   className="bg-transparent text-slate-900 dark:text-white border-0 p-0 focus:ring-0 w-full font-mono font-bold text-right outline-none"
                                 />
-                                <span className="text-slate-400 ml-1">.erpcloud.com</span>
+                                <span className="text-slate-400 ml-1">.{SCHOOL_PORTAL_ROOT_DOMAIN}</span>
                               </div>
                             </div>
 
                             <div>
                               <label className="text-[10px] font-bold text-slate-400 dark:text-slate-500 block mb-1">الرابط السحابي الكامل</label>
                               <div className="bg-slate-100 dark:bg-slate-900/60 p-3 border border-slate-200/55 dark:border-slate-850 text-slate-500 dark:text-slate-400 font-mono text-[10px] overflow-hidden truncate" dir="ltr">
-                                https://{newSubdomain || '...'}.erpcloud.com
+                                https://{newSubdomain || '...'}.{SCHOOL_PORTAL_ROOT_DOMAIN}
                               </div>
                             </div>
                           </div>
