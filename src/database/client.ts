@@ -44,6 +44,18 @@ export function createSupabaseTimeoutFetch(timeoutMs: number): typeof fetch {
   };
 }
 
+export async function probeSupabaseAuthReachability(supabaseUrl: string, supabaseKey: string): Promise<void> {
+  // getSession() only inspects local session state; with no session it can
+  // succeed without making any network request. Probe the public Auth health
+  // endpoint instead, without querying tenant tables or bypassing RLS.
+  const healthUrl = `${supabaseUrl.trim().replace(/\/+$/, '')}/auth/v1/health`;
+  const response = await createSupabaseTimeoutFetch(Math.min(getSupabaseRequestTimeoutMs(), 5000))(
+    healthUrl,
+    { method: 'GET', headers: { apikey: supabaseKey }, cache: 'no-store' },
+  );
+  if (!response.ok) throw new Error(`Supabase Auth health check failed (HTTP ${response.status}).`);
+}
+
 export interface ConnectionMetrics {
   connectionCount: number;
   connectionTime: number; // in ms
@@ -109,8 +121,8 @@ export class DatabaseConnectionManager {
     this.isInitializing = true;
     this.metrics.status = 'CONNECTING';
 
-    const supabaseUrl = process.env.SUPABASE_URL;
-    const supabaseKey = process.env.SUPABASE_ANON_KEY;
+    const supabaseUrl = process.env.SUPABASE_URL?.trim();
+    const supabaseKey = process.env.SUPABASE_ANON_KEY?.trim();
 
     const isUrlValid = (url: string | undefined): boolean => {
       if (!url) return false;
@@ -148,10 +160,7 @@ export class DatabaseConnectionManager {
 
         // Verify Supabase/Auth reachability without querying a protected table.
         // Anonymous readiness probes must not depend on RLS-scoped data rows.
-        const { error } = await tempClient.auth.getSession();
-        if (error) {
-          throw error;
-        }
+        await probeSupabaseAuthReachability(supabaseUrl, supabaseKey);
 
         // Success!
         const endTime = Date.now();

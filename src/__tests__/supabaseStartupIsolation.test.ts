@@ -5,6 +5,7 @@ import {
   createSupabaseTimeoutFetch,
   DEFAULT_SUPABASE_REQUEST_TIMEOUT_MS,
   getSupabaseRequestTimeoutMs,
+  probeSupabaseAuthReachability,
 } from '../database/client';
 
 describe('Supabase startup readiness isolation', () => {
@@ -16,8 +17,23 @@ describe('Supabase startup readiness isolation', () => {
 
   it('does not use an anonymous SELECT on an RLS-protected table for readiness', () => {
     const source = readFileSync(resolve(process.cwd(), 'src/database/client.ts'), 'utf8');
-    expect(source).toContain('tempClient.auth.getSession()');
+    expect(source).toContain('probeSupabaseAuthReachability(supabaseUrl, supabaseKey)');
     expect(source).not.toContain("tempClient.from('schools').select('id').limit(1)");
+  });
+
+  it('makes a real Auth health request without selecting tenant data', async () => {
+    const fetchMock = vi.fn(async () => new Response('{}', { status: 200 }));
+    vi.stubGlobal('fetch', fetchMock);
+    await probeSupabaseAuthReachability('https://project.supabase.co/', 'public-test-key');
+    expect(fetchMock).toHaveBeenCalledWith('https://project.supabase.co/auth/v1/health', expect.objectContaining({
+      method: 'GET', headers: { apikey: 'public-test-key' }, signal: expect.any(AbortSignal),
+    }));
+  });
+
+  it('rejects an unhealthy Auth endpoint without including credentials in the error', async () => {
+    vi.stubGlobal('fetch', vi.fn(async () => new Response('{}', { status: 503 })));
+    await expect(probeSupabaseAuthReachability('https://project.supabase.co', 'private-test-value'))
+      .rejects.toThrow('Supabase Auth health check failed (HTTP 503).');
   });
 
   it('uses a finite default timeout and accepts a positive override', () => {

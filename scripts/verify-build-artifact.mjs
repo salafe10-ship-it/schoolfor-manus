@@ -8,6 +8,15 @@ const indexPath = path.join(dist, 'index.html');
 const identityPath = path.join(dist, 'build-identity.json');
 const failures = [];
 
+const assetIgnorePath = path.join(dist, '.assetsignore');
+const ignoredAssets = fs.existsSync(assetIgnorePath)
+  ? fs.readFileSync(assetIgnorePath, 'utf8').split(/\r?\n/).map((line) => line.trim())
+  : [];
+if (fs.existsSync(path.join(dist, 'server.cjs'))
+  && !['/server.cjs', '/server.cjs.map'].every((rule) => ignoredAssets.includes(rule))) {
+  failures.push('SERVER_BUNDLE_NOT_EXCLUDED_FROM_PUBLIC_ASSETS');
+}
+
 if (!fs.existsSync(indexPath)) failures.push('DIST_INDEX_MISSING');
 const index = fs.existsSync(indexPath) ? fs.readFileSync(indexPath, 'utf8') : '';
 const references = [
