@@ -68,7 +68,7 @@ export default function SchoolClientLogin({
     try {
       const authenticated = await onSchoolLogin(username, password, rememberMe);
       if (authenticated === false) {
-        setLoginError('بيانات الدخول غير صحيحة أو أن الحساب غير متاح');
+        setLoginError('تعذر إكمال تسجيل الدخول. تحقق من البيانات أو أعد المحاولة لاحقاً.');
       }
     } finally {
       setIsLoggingIn(false);

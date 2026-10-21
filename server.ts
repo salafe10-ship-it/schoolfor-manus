@@ -5,7 +5,7 @@ import dotenv from "dotenv";
 import helmet from "helmet";
 import { getServerListenHost } from "./server/infrastructure/ServerListenHost.js";
 import { resolveSchoolPortal } from "./server/infrastructure/SchoolPortalDirectory.js";
-import { getSchoolSubdomainFromHostname } from "./src/utils/EnterpriseDomainUtils.js";
+import { getSchoolSubdomainFromHostname, slugifySchoolName } from "./src/utils/EnterpriseDomainUtils.js";
 
 dotenv.config();
 
@@ -5163,7 +5163,7 @@ export async function createApp(options: { cloudflare?: boolean } = {}): Promise
       const locale = String(req.body?.locale || 'ar').trim();
       const centralMetadata = {
         portal_profile: 'customer_production', shortName: String(req.body?.shortName || '').trim(),
-        subdomain: String(req.body?.subdomain || '').trim().toLowerCase(), city: String(req.body?.city || '').trim(),
+        subdomain: String(req.body?.subdomain || slugifySchoolName(name) || `school-${randomUUID().slice(0, 8)}`).trim().toLowerCase(), city: String(req.body?.city || '').trim(),
         address: String(req.body?.address || '').trim(), phone: String(req.body?.phone || '').trim(),
         email: String(req.body?.email || '').trim().toLowerCase(), managerName: String(req.body?.managerName || '').trim(),
         managerEmail: String(req.body?.managerEmail || '').trim().toLowerCase(), mainBranchId: '',
@@ -5248,7 +5248,7 @@ export async function createApp(options: { cloudflare?: boolean } = {}): Promise
       // is consumed only through the server-resolved trusted school session.
       portal_profile: 'customer_production',
       shortName: String(req.body?.shortName || '').trim(),
-      subdomain: String(req.body?.subdomain || '').trim().toLowerCase(),
+      subdomain: String(req.body?.subdomain || slugifySchoolName(name) || `school-${randomUUID().slice(0, 8)}`).trim().toLowerCase(),
       city: String(req.body?.city || '').trim(),
       address: String(req.body?.address || '').trim(),
       phone: String(req.body?.phone || '').trim(),

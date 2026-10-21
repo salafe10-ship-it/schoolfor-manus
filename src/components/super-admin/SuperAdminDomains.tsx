@@ -1,6 +1,6 @@
 import { AlertTriangle, CheckCircle, Copy, Database, Edit2, ExternalLink, Globe, Link, Plus, RefreshCw, Search, ShieldCheck, Trash2, Lock, ShieldAlert } from 'lucide-react';
 import React, { useState } from 'react';
-import { getTrustedSchoolUrl, openTrustedSchoolPortal } from '../../utils/EnterpriseDomainUtils';
+import { getTrustedSchoolUrl, openTrustedSchoolPortal, SCHOOL_PORTAL_ROOT_DOMAIN } from '../../utils/EnterpriseDomainUtils';
 import { authenticatedRequest } from '../../utils/authenticatedRequest';
 
 interface SuperAdminDomainsProps {
@@ -102,11 +102,11 @@ export default function SuperAdminDomains({
 
     logAction(
       'UPDATE_SUBDOMAIN',
-      `تحديث النطاق الفرعي لـ ${selectedSchool.name} ليصبح: ${subdomain}.erpcloud.com`,
+      `تحديث النطاق الفرعي لـ ${selectedSchool.name} ليصبح: ${subdomain}.${SCHOOL_PORTAL_ROOT_DOMAIN}`,
       'إدارة أسماء النطاقات والروابط'
     );
 
-    triggerNotification(`تم حفظ النطاق الفرعي في الإدارة المركزية: https://${subdomain}.erpcloud.com 🔗`, 'success');
+    triggerNotification(`تم حفظ النطاق الفرعي في الإدارة المركزية: https://${subdomain}.${SCHOOL_PORTAL_ROOT_DOMAIN} 🔗`, 'success');
     setShowSubdomainModal(false);
     setSubdomain('');
   };
@@ -409,7 +409,7 @@ export default function SuperAdminDomains({
                     onChange={(e) => setSubdomain(e.target.value.toLowerCase())}
                     className="flex-1 bg-transparent text-slate-100 p-2 text-xs font-mono focus:outline-hidden"
                   />
-                  <span className="text-slate-500 font-mono text-xs select-none px-2">.erpcloud.com</span>
+                  <span className="text-slate-500 font-mono text-xs select-none px-2">.{SCHOOL_PORTAL_ROOT_DOMAIN}</span>
                 </div>
                 <p className="text-[8px] text-slate-500 mt-1">حروف صغيرة وأرقام وعلامة الشرطة (-) فقط.</p>
               </div>
