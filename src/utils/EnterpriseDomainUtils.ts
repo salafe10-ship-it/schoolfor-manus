@@ -29,6 +29,39 @@ export interface SSLCertificateInfo {
 
 export const SCHOOL_PORTAL_ROOT_DOMAIN = 'abdalsalamsoft.com';
 
+const ARABIC_LATIN: Record<string, string> = {
+  ا: 'a', أ: 'a', إ: 'i', آ: 'a', ٱ: 'a', ب: 'b', ت: 't', ث: 'th', ج: 'j', ح: 'h', خ: 'kh',
+  د: 'd', ذ: 'dh', ر: 'r', ز: 'z', س: 's', ش: 'sh', ص: 's', ض: 'd', ط: 't', ظ: 'z',
+  ع: 'a', غ: 'gh', ف: 'f', ق: 'q', ك: 'k', ل: 'l', م: 'm', ن: 'n', ه: 'h', ة: 'h',
+  و: 'w', ؤ: 'w', ي: 'y', ى: 'a', ئ: 'y', ء: '',
+};
+
+/** Builds a DNS-safe school slug, including a simple Arabic transliteration. */
+export function slugifySchoolName(name: string): string {
+  const latinized = Array.from(String(name || '').toLowerCase(), (character) => ARABIC_LATIN[character] ?? character).join('');
+  const slug = latinized
+    .normalize('NFKD')
+    .replace(/[\u0300-\u036f]/g, '')
+    .replace(/[^a-z0-9]+/g, '-')
+    .replace(/^-+|-+$/g, '')
+    .slice(0, 63)
+    .replace(/-+$/g, '');
+  return slug.length >= 3 ? slug : '';
+}
+
+export function suggestUniqueSchoolSubdomain(name: string, existing: string[] = []): string {
+  const base = slugifySchoolName(name);
+  if (!base) return '';
+  const taken = new Set(existing.map((value) => String(value || '').trim().toLowerCase()));
+  if (!taken.has(base)) return base;
+  for (let suffix = 2; suffix < 10000; suffix += 1) {
+    const tail = `-${suffix}`;
+    const candidate = `${base.slice(0, 63 - tail.length).replace(/-+$/g, '')}${tail}`;
+    if (!taken.has(candidate)) return candidate;
+  }
+  return `${base.slice(0, 54)}-${Date.now().toString(36)}`;
+}
+
 export function getSchoolSubdomainFromHostname(hostname: string): string {
   const normalizedHost = String(hostname || '').trim().toLowerCase().replace(/\.$/, '');
   const suffix = `.${SCHOOL_PORTAL_ROOT_DOMAIN}`;
@@ -85,8 +118,9 @@ export function getTrustedSchoolUrl(school: SchoolDomainInfo): string {
  * Returns complete SSL Certificate status & health metrics for a domain.
  */
 export function getSSLCertificateStatus(domainName: string): SSLCertificateInfo {
-  const cleanDomain = (domainName || 'main.edupro.cloud').replace(/^https?:\/\//, '');
-  const isCustom = !cleanDomain.includes('erpcloud.com') && !cleanDomain.includes('yourdomain.com');
+  const cleanDomain = (domainName || SCHOOL_PORTAL_ROOT_DOMAIN).replace(/^https?:\/\//, '');
+  const isPlatformDomain = cleanDomain === SCHOOL_PORTAL_ROOT_DOMAIN || cleanDomain.endsWith(`.${SCHOOL_PORTAL_ROOT_DOMAIN}`);
+  const isCustom = !isPlatformDomain && !cleanDomain.includes('yourdomain.com');
 
   return {
     domain: cleanDomain,
