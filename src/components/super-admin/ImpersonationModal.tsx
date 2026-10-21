@@ -1,5 +1,6 @@
 import React, { useState } from 'react';
 import { ShieldAlert, Key, X, CheckCircle2, Lock, AlertTriangle, FileText } from 'lucide-react';
+import { SCHOOL_PORTAL_ROOT_DOMAIN } from '../../utils/EnterpriseDomainUtils';
 
 interface ImpersonationModalProps {
   isOpen: boolean;
@@ -87,7 +88,7 @@ export default function ImpersonationModal({
             <div>
               <span className="text-slate-500 text-[10px] block">رمز المستأجر والنطاق:</span>
               <span className="font-mono text-amber-400 font-bold" dir="ltr">
-                {school.subdomain}.erpcloud.com
+                {school.subdomain}.{SCHOOL_PORTAL_ROOT_DOMAIN}
               </span>
             </div>
             <div className="text-left">

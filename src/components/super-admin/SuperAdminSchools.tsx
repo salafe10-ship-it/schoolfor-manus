@@ -1,6 +1,6 @@
 import { Archive, Ban, Calendar, CheckCircle, Copy, Edit2, ExternalLink, FileSpreadsheet, Globe, HardDrive, Key, Layers, Lock as LockIcon, Plus, RefreshCw, RotateCcw, Search, ShieldAlert, ShieldCheck, Sliders, Sparkles, Trash2, Users, X } from 'lucide-react';
 import React, { useEffect, useState } from 'react';
-import { getTrustedSchoolUrl, openTrustedSchoolPortal } from '../../utils/EnterpriseDomainUtils';
+import { getTrustedSchoolUrl, openTrustedSchoolPortal, SCHOOL_PORTAL_ROOT_DOMAIN, suggestUniqueSchoolSubdomain } from '../../utils/EnterpriseDomainUtils';
 import { authenticatedRequest } from '../../utils/authenticatedRequest';
 import { toDisplayPlan, updateCanonicalTenantSubscription } from '../../utils/centralTenantSubscription';
 import ImpersonationModal from './ImpersonationModal';
@@ -205,6 +205,15 @@ export default function SuperAdminSchools({
       return;
     }
 
+    const requestedSubdomain = newSchool.subdomain || suggestUniqueSchoolSubdomain(
+      newSchool.name,
+      schools.map((school) => school.subdomain || school.central_metadata?.subdomain),
+    );
+    if (!requestedSubdomain) {
+      triggerNotification('اسم المدرسة لا ينتج نطاقاً صالحاً؛ أدخل نطاقاً فرعياً لاتينياً يدوياً.', 'warning');
+      return;
+    }
+
     if (newSchool.schoolCode && schools.some(s => String(s.schoolCode || '').toUpperCase() === newSchool.schoolCode.toUpperCase())) {
       triggerNotification('رمز المدرسة مستخدم مسبقاً داخل الدليل المركزي.', 'danger');
       return;
@@ -220,7 +229,7 @@ export default function SuperAdminSchools({
           name: newSchool.name,
           schoolCode: newSchool.schoolCode || undefined,
           shortName: newSchool.schoolShortName,
-          subdomain: newSchool.subdomain,
+          subdomain: requestedSubdomain,
           city: newSchool.city,
           address: newSchool.address,
           phone: newSchool.phone,
@@ -966,7 +975,13 @@ export default function SuperAdminSchools({
                     required
                     placeholder="مثال: مدارس شروق المعرفة الأهلية"
                     value={newSchool.name}
-                    onChange={(e) => setNewSchool({...newSchool, name: e.target.value})}
+                    onChange={(e) => setNewSchool((current) => ({
+                      ...current,
+                      name: e.target.value,
+                      subdomain: !current.subdomain || current.subdomain === suggestUniqueSchoolSubdomain(current.name, schools.map((school) => school.subdomain || school.central_metadata?.subdomain))
+                        ? suggestUniqueSchoolSubdomain(e.target.value, schools.map((school) => school.subdomain || school.central_metadata?.subdomain))
+                        : current.subdomain,
+                    }))}
                     className="w-full bg-slate-950 border border-slate-800 focus:border-amber-500 rounded-lg px-3 py-2 text-xs text-white focus:outline-none"
                   />
                 </div>
@@ -977,19 +992,21 @@ export default function SuperAdminSchools({
                   <div dir="ltr" className="flex bg-slate-950 border border-slate-800 rounded-lg overflow-hidden focus-within:border-amber-500">
                     <input
                       type="text"
+                      required
                       placeholder="shorooq"
+                      pattern="[a-z0-9][a-z0-9-]{1,61}[a-z0-9]"
                       value={newSchool.subdomain}
-                      onChange={(e) => setNewSchool({...newSchool, subdomain: e.target.value.toLowerCase().replace(/[^a-z0-9]/g, '')})}
+                      onChange={(e) => setNewSchool({...newSchool, subdomain: e.target.value.toLowerCase().replace(/[^a-z0-9-]/g, '').replace(/-{2,}/g, '-')})}
                       className="min-w-0 flex-1 bg-transparent border-0 px-3 py-2 text-xs text-white focus:outline-none font-mono text-left"
                       dir="ltr"
                     />
                     <span className="shrink-0 bg-slate-900 border-l border-slate-800 px-3 py-2 text-slate-500 font-mono text-[10px] select-none">
-                      .erpcloud.com
+                      .{SCHOOL_PORTAL_ROOT_DOMAIN}
                     </span>
                   </div>
                   <div className="mt-1 flex items-center justify-between gap-2 rounded-lg border border-slate-800/80 bg-slate-950/60 px-3 py-1.5 text-[10px] font-bold text-slate-500">
                     <span>العنوان الذي سيُحفظ</span>
-                    <code dir="ltr" className="font-mono text-amber-300">{newSchool.subdomain ? `${newSchool.subdomain}.erpcloud.com` : 'اكتب النطاق الفرعي أولاً'}</code>
+                    <code dir="ltr" className="font-mono text-amber-300">{newSchool.subdomain ? `${newSchool.subdomain}.${SCHOOL_PORTAL_ROOT_DOMAIN}` : 'أدخل اسم المدرسة لإنشاء رابطها تلقائياً'}</code>
                   </div>
                 </div>
 
