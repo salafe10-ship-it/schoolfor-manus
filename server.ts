@@ -11175,7 +11175,7 @@ export async function createApp(options: { cloudflare?: boolean } = {}): Promise
                       COUNT(*) FILTER (WHERE ar.attendance_status='late') AS late
                  FROM public.attendance_records ar
                 WHERE ar.tenant_id=s.tenant_id AND ar.school_id=s.school_id
-                  AND (ar.branch_id=s.branch_id OR ar.branch_id IS NULL) AND ar.student_id=s.id AND ar.deleted_at IS NULL
+                  AND (ar.branch_id=s.branch_id OR ar.branch_id IS NULL) AND ar.student_id=s.id
              ) attendance ON true
             WHERE s.tenant_id=$1 AND s.school_id=$2 AND s.id=$3
               AND (s.branch_id=$4 OR s.branch_id IS NULL)`,

@@ -44,4 +44,14 @@ describe('Student Affairs closure contract', () => {
     expect(uat).toContain('current_user');
     expect(uat).toContain('rolbypassrls');
   });
+  it('does not query a nonexistent soft-delete column on immutable attendance records in the 360 snapshot', () => {
+    const attendanceMigration = readFileSync(resolve(process.cwd(), 'supabase/migrations/202608111200_attend_schema_001.sql'), 'utf8');
+    const table = attendanceMigration.split('CREATE TABLE attendance_records (')[1].split('CONSTRAINT pk_attendance_records')[0];
+    expect(table).not.toContain('deleted_at');
+    const snapshot = server.split('app.get("/api/students/:id/360"')[1].split('return result.rows[0]')[0];
+    expect(snapshot).toContain('ar.student_id=s.id');
+    expect(snapshot).toContain('ar.tenant_id=s.tenant_id AND ar.school_id=s.school_id');
+    expect(snapshot).not.toContain('ar.deleted_at');
+  });
+
 });
