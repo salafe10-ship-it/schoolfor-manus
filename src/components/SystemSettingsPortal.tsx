@@ -7,6 +7,7 @@ import {
 } from 'lucide-react';
 import { authenticatedRequest } from '../utils/authenticatedRequest';
 import { compressBrandingImage } from '../utils/brandingImages';
+import { CURRENCY_OPTIONS, getCurrencyConfig, saveCurrencyConfig } from '../utils/currency';
 
 interface SystemSettingsPortalProps {
   formatCurrency: (amount: number, showSymbol?: boolean) => string;
@@ -144,6 +145,7 @@ export default function SystemSettingsPortal({
     defaultBankAcc: '102 - مصرف الجمهورية / الراجحي',
     roundingPolicy: 'التقرب لأقرب جزء عشري قياسي'
   });
+  const [selectedCurrencyCode, setSelectedCurrencyCode] = useState(() => getCurrencyConfig().code || 'LYD');
 
   // Exam Settings
   const [examSettings, setExamSettings] = useState({
@@ -188,6 +190,25 @@ export default function SystemSettingsPortal({
 
   const handleSaveSection = (sectionName: string) => {
     triggerNotification(`خدمة حفظ الإعدادات المركزية غير متاحة؛ لم يُحفظ قسم ${sectionName}.`, 'warning');
+  };
+
+  const handleSaveCurrency = () => {
+    const selectedCurrency = CURRENCY_OPTIONS.find((currency) => currency.code === selectedCurrencyCode);
+    if (!selectedCurrency) {
+      triggerNotification('اختر عملة معروفة قبل الحفظ.', 'warning');
+      return;
+    }
+    saveCurrencyConfig({
+      code: selectedCurrency.code,
+      name: selectedCurrency.name,
+      symbol: selectedCurrency.symbol,
+      fractionName: selectedCurrency.fractionName,
+      decimalPlaces: selectedCurrency.decimalPlaces,
+      symbolPosition: selectedCurrency.symbolPosition,
+      showSymbolInReports: true
+    });
+    logAction('FINANCIAL_CURRENCY_UPDATED', `تم تعيين ${selectedCurrency.name} (${selectedCurrency.code})، الوحدة الصغرى: ${selectedCurrency.fractionName}.`, 'الإعدادات المالية');
+    triggerNotification(`تم حفظ العملة ${selectedCurrency.name} (${selectedCurrency.code}) ووحدتها ${selectedCurrency.fractionName}.`, 'success');
   };
 
   return (
@@ -407,6 +428,22 @@ export default function SystemSettingsPortal({
               ))}
             </div>
           </div>
+          <div className="border-t border-slate-800 pt-5 grid grid-cols-1 md:grid-cols-[1fr_auto] gap-4 items-end">
+            <div>
+              <label className="block text-slate-300 font-bold mb-2" htmlFor="school-branding-currency">عملة السندات والقيود والتقارير</label>
+              <select
+                id="school-branding-currency"
+                aria-label="عملة السندات والقيود والتقارير"
+                value={selectedCurrencyCode}
+                onChange={(e) => setSelectedCurrencyCode(e.target.value)}
+                className="w-full bg-slate-950 border border-slate-700 p-3 text-white font-bold"
+              >
+                {CURRENCY_OPTIONS.map((currency) => <option key={currency.code} value={currency.code}>{currency.name} ({currency.code})</option>)}
+              </select>
+              <p className="text-slate-400 mt-2 text-xs">الوحدة الصغرى: {CURRENCY_OPTIONS.find((currency) => currency.code === selectedCurrencyCode)?.fractionName || 'جزء'} • الدقة: {CURRENCY_OPTIONS.find((currency) => currency.code === selectedCurrencyCode)?.decimalPlaces ?? 2} منازل عشرية</p>
+            </div>
+            <button type="button" onClick={handleSaveCurrency} className="bg-[#dfb55a] hover:bg-[#c99f48] text-slate-950 rounded-xl px-5 py-3 text-xs font-black">حفظ العملة ووحدتها</button>
+          </div>
         </div>
       )}
 
@@ -557,12 +594,19 @@ export default function SystemSettingsPortal({
           <div className="grid grid-cols-1 md:grid-cols-2 gap-6 text-xs">
             <div>
               <label className="block text-slate-300 font-bold mb-2">العملة الافتراضية الرئيسية:</label>
-              <input
-                type="text"
-                value={financialSettings.defaultCurrency}
-                onChange={(e) => setFinancialSettings({ ...financialSettings, defaultCurrency: e.target.value })}
+              <select
+                aria-label="العملة الافتراضية الرئيسية"
+                value={selectedCurrencyCode}
+                onChange={(e) => setSelectedCurrencyCode(e.target.value)}
                 className="w-full bg-slate-950 border border-slate-700 p-3 text-white font-bold"
-              />
+              >
+                {CURRENCY_OPTIONS.map((currency) => (
+                  <option key={currency.code} value={currency.code}>
+                    {currency.name} ({currency.code})
+                  </option>
+                ))}
+              </select>
+              <p className="text-slate-400 mt-2">الوحدة الصغرى: {CURRENCY_OPTIONS.find((currency) => currency.code === selectedCurrencyCode)?.fractionName || 'جزء'} • الدقة: {CURRENCY_OPTIONS.find((currency) => currency.code === selectedCurrencyCode)?.decimalPlaces ?? 2} منازل عشرية</p>
             </div>
             <div>
               <label className="block text-slate-300 font-bold mb-2">سياسة التقريب المحاسبي:</label>
@@ -595,7 +639,7 @@ export default function SystemSettingsPortal({
 
           <div className="flex justify-end pt-4 border-t border-slate-800">
             <button
-              onClick={() => handleSaveSection('الإعدادات المالية')}
+              onClick={handleSaveCurrency}
               className="bg-[#dfb55a] hover:bg-[#c99f48] text-slate-950 font-black text-xs px-6 py-3 flex items-center gap-2 shadow"
             >
               <Save className="w-4 h-4" />

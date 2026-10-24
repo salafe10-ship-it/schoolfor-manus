@@ -3,7 +3,7 @@ import React, { useState, useEffect, useMemo } from 'react';
 import { AccountingContext } from '../../../components/GeneralLedgerPortal';
 import { triggerNotification } from '../../../lib/notifications';
 import { openPrintWindow } from '../../../utils/openPrintWindow';
-import { resolveCostCenterStageLogoKey } from '../../../utils/schoolBranding';
+import { resolveCostCenterStageLogoKey, resolveSchoolStageLogoSource } from '../../../utils/schoolBranding';
 
 export const FixedAssetsTab = () => {
   const {
@@ -77,8 +77,7 @@ export const FixedAssetsTab = () => {
     && (canonicalFinancialWriteMode === 'ledger_ready' || canonicalFinancialWriteMode === 'erp_integrated');
   const fixedAssetWritesAvailable = canonicalFinancialStatus === 'ready' && canonicalFinancialWriteMode !== 'snapshot_read_only';
   const assetLogoKey = resolveCostCenterStageLogoKey(assetForm.costCenter || assetForm.costCenterId || assetForm.costCenterName, costCenters?.length ? costCenters : undefined);
-  const rawAssetSchoolLogo = String((assetLogoKey && selectedSchool?.stageLogos?.[assetLogoKey]) || selectedSchool?.logo || '').trim();
-  const assetSchoolLogo = /^(https:\/\/|data:image\/(?:png|jpeg|webp);base64,[a-z0-9+/=\s]+$)/i.test(rawAssetSchoolLogo) ? rawAssetSchoolLogo : '';
+  const assetSchoolLogo = resolveSchoolStageLogoSource(assetLogoKey, selectedSchool?.stageLogos, selectedSchool?.logo);
   const assetSchoolName = String(selectedSchool?.name || 'المدرسة');
   const escapeAssetPrintValue = (value: unknown) => String(value ?? '—').replace(/[&<>"']/g, char => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[char] || char));
   

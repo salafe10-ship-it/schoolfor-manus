@@ -33,6 +33,8 @@ interface EnterpriseActionToolbarProps {
   userRole?: string;
   minimal?: boolean;
   disabled?: boolean;
+  // Lock data-changing actions while keeping verified reports available.
+  mutationsDisabled?: boolean;
 }
 
 export default function EnterpriseActionToolbar({
@@ -61,7 +63,8 @@ export default function EnterpriseActionToolbar({
   isEditing = false,
   userRole = 'SuperAdmin',
   minimal = true,
-  disabled = false
+  disabled = false,
+  mutationsDisabled = false
 }: EnterpriseActionToolbarProps) {
   
   // Permissions matching the organizational rules
@@ -120,7 +123,7 @@ export default function EnterpriseActionToolbar({
             <button
               type="button"
               onClick={onNew}
-              disabled={disabled || isLoading || isEditing || !canEdit}
+              disabled={disabled || mutationsDisabled || isLoading || isEditing || !canEdit}
               className={`${commonStyles} bg-gradient-to-r from-[#9a6a1d] to-[#c58a22] text-amber-950 hover:from-[#b07d25] hover:to-[#da9f2c] border-[#fce79a]/50`}
               title="إضافة سجل جديد"
             >
@@ -134,7 +137,7 @@ export default function EnterpriseActionToolbar({
             <button
               type="button"
               onClick={onEdit}
-              disabled={disabled || isLoading || !canEdit || !selectedId}
+              disabled={disabled || mutationsDisabled || isLoading || !canEdit || !selectedId}
               className={commonStyles}
               title="تعديل السجل المحدد"
             >
@@ -148,7 +151,7 @@ export default function EnterpriseActionToolbar({
             <button
               type="button"
               onClick={onDelete}
-              disabled={disabled || isLoading || !canDelete || !selectedId}
+              disabled={disabled || mutationsDisabled || isLoading || !canDelete || !selectedId}
               className={`${commonStyles} hover:text-rose-300 hover:border-rose-600/50 hover:bg-rose-950/40`}
               title="حذف السجل المحدد"
             >
@@ -162,7 +165,7 @@ export default function EnterpriseActionToolbar({
             <button
               type="button"
               onClick={onSave}
-              disabled={disabled || isLoading || isSaving}
+              disabled={disabled || mutationsDisabled || isLoading || isSaving}
               className={`${commonStyles} bg-gradient-to-r from-[#d4af37] to-[#f7d174] text-slate-950 border-[#fce79a] hover:brightness-110`}
               title="حفظ التغييرات"
             >
@@ -277,7 +280,7 @@ export default function EnterpriseActionToolbar({
             <button
               type="button"
               onClick={onImportExcel}
-              disabled={disabled || isLoading}
+              disabled={disabled || mutationsDisabled || isLoading}
               className={commonStyles}
               title="استيراد بيانات"
             >

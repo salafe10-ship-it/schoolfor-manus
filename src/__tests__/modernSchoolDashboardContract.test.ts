@@ -22,8 +22,12 @@ describe('Main School Dashboard contract', () => {
 
   it('uses explicit empty-state semantics where no live query is wired', () => {
     expect(source).toContain('جار التحقق من المصدر الحي');
-    expect(source).toContain('لا يوجد مصدر مالي حي');
-    expect(source).toContain('مصدر Audit حي مطلوب');
+    expect(source).toContain("metric?.status === 'unavailable'");
+    expect(source).toContain('البيانات غير متاحة حالياً.');
+    expect(source).toContain('collectionRateMetric?.message');
+    const serverSource = readFileSync(resolve(process.cwd(), 'server.ts'), 'utf8');
+    expect(serverSource).toContain('تعذر قراءة المطالبات المالية الموثقة.');
+    expect(serverSource).toContain('لا توجد مطالبات مالية نشطة لاحتساب نسبة التحصيل.');
   });
 
   it('routes academic and timetable shortcuts to the academic screen', () => {

@@ -16,6 +16,7 @@ export type DashboardMetrics = {
   finance: DashboardMetric;
   revenue?: DashboardMetric;
   expenses?: DashboardMetric;
+  collectionRate?: DashboardMetric;
   exams: DashboardMetric;
   notifications: DashboardMetric;
   activities: DashboardMetric;

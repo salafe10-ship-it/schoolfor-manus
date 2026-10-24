@@ -138,6 +138,23 @@ export const currencySeed: CurrencyMaster[] = [
     updatedAt: '2026-01-01T00:00:00.000Z'
   },
   {
+    id: 'cur_sdg_011',
+    isoCode: 'SDG',
+    currencyCode: 'SDG',
+    currencyName: 'Sudanese Pound',
+    nativeName: 'جنيه سوداني',
+    currencySymbol: 'ج.س',
+    decimalPrecision: 2,
+    minorUnit: 'qirsh',
+    symbolPosition: 'Right',
+    thousandsSeparator: ',',
+    decimalSeparator: '.',
+    negativeNumberFormat: 'minus',
+    status: 'active',
+    createdAt: '2026-01-01T00:00:00.000Z',
+    updatedAt: '2026-01-01T00:00:00.000Z'
+  },
+  {
     id: 'cur_aed_009',
     isoCode: 'AED',
     currencyCode: 'AED',

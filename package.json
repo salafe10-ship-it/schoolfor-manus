@@ -46,6 +46,10 @@
     "financial:seed-uat-review": "tsx scripts/seed-uat-accounting-review.ts",
     "provisioning:platform-admin": "tsx scripts/provisioning-platform-admin.ts",
     "test": "vitest --configLoader runner",
+    "test:isolated": "node scripts/run-isolated-tests.mjs",
+    "test:isolated:fees": "node scripts/run-isolated-tests.mjs --fees",
+    "test:isolated:typecheck": "node scripts/run-isolated-tests.mjs --typecheck",
+    "test:isolated:build": "node scripts/run-isolated-tests.mjs --build",
     "test:coverage": "vitest run --coverage"
   },
   "dependencies": {

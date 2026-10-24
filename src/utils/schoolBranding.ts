@@ -1,5 +1,27 @@
 export type SchoolStageLogoKey = 'primary' | 'middle' | 'secondary';
 
+/** Public, versioned fallback logo shipped with the app for each school stage. */
+export const getDefaultStageLogoPath = (stage: SchoolStageLogoKey | null | undefined): string | null =>
+  stage ? `/branding/stages/${stage}.png` : null;
+
+/** Prefer a tenant's stage logo, then the bundled stage asset, then its general logo. */
+export const resolveSchoolStageLogoSource = (
+  stage: SchoolStageLogoKey | null | undefined,
+  stageLogos?: Record<string, unknown> | null,
+  schoolLogo?: unknown
+): string => {
+  const isSafeLogoSource = (source: string) =>
+    /^(?:https:\/\/|\/(?!\/)|data:image\/(?:png|jpeg|webp);base64,[a-z0-9+/=\s]+$)/i.test(source);
+  const configuredStageLogo = String((stage && stageLogos?.[stage]) || '').trim();
+  if (isSafeLogoSource(configuredStageLogo)) return configuredStageLogo;
+
+  const defaultStageLogo = getDefaultStageLogoPath(stage) || '';
+  if (isSafeLogoSource(defaultStageLogo)) return defaultStageLogo;
+
+  const generalSchoolLogo = String(schoolLogo || '').trim();
+  return isSafeLogoSource(generalSchoolLogo) ? generalSchoolLogo : '';
+};
+
 type CostCenterLike = {
   id?: unknown;
   code?: unknown;

@@ -20,6 +20,13 @@ describe('student receipt print layout', () => {
     expect(handler).toContain('cloneNode');
     expect(handler).toContain('نسخة الحسابات العامة');
     expect(handler).toContain('window.onload = function()');
-    expect(handler).toContain('window.print();');
+    expect(handler).toContain('setReceiptPrintPreviewHtml(`');
+    expect(handler).toContain('voucherStudentContext?.costCenter || receiptStudent?.stageId || receiptStudent?.name');
+    expect(handler).toContain('شعار مرحلة ${STUDENT_COST_CENTER_LABELS[stageLogoKey] || stageLogoKey}');
+    expect(handler).not.toContain('window.open(');
+    expect(handler).not.toContain('window.print();');
+    expect(source).toContain('aria-label="معاينة سند القبض قبل الطباعة"');
+    expect(source).toContain('printFrame.print();');
+    expect(source).toContain('طباعة الآن');
   });
 });

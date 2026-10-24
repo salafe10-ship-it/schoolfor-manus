@@ -1497,6 +1497,12 @@ html:not(.dark) #super-admin-portal button:not(.bg-indigo-600):not(.bg-rose-600)
   box-shadow: 0 18px 42px rgba(9, 17, 33, 0.18), inset 0 1px 0 rgba(255, 255, 255, 0.82) !important;
 }
 
+@media (max-width: 1024px) {
+  #ai_assistant_floating_root {
+    left: 0.5rem !important;
+  }
+}
+
 #student-financial-portal h1,
 #student-financial-portal h2,
 #student-financial-portal h3,
@@ -3749,6 +3755,11 @@ html:not(.dark) #super-admin-portal button:not(.bg-indigo-600):not(.bg-rose-600)
 
 #student-financial-portal.financial-identity-unified .financial-content-viewport :is(h2, h3, h4) {
   color: var(--fees-ink);
+}
+
+#student-financial-portal.financial-identity-unified .financial-content-viewport .financial-fee-module-header :is(h2, h3, h4) {
+  color: #fff6d2 !important;
+  -webkit-text-fill-color: #fff6d2 !important;
 }
 
 #student-financial-portal.financial-identity-unified .financial-content-viewport :is(.text-slate-400, .text-slate-500, .text-slate-600) {

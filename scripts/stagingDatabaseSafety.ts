@@ -7,6 +7,36 @@ export const CLOUDFLARE_STAGING_WORKER_URL = 'https://schoolfor-manus-staging.sa
 export const STAGING_SUPABASE_PROJECT_REF = 'vjcjscqgmijgzagshsca';
 export const STAGING_TARGET_NAME = 'schoolfor-manus-staging';
 
+export function applyOnlyStagingEnvironmentValues(
+  environment: Record<string, string | undefined>,
+  stagingValues: Record<string, string>,
+  keys: readonly string[],
+): void {
+  for (const key of keys) {
+    if (Object.hasOwn(stagingValues, key)) environment[key] = stagingValues[key];
+    else delete environment[key];
+  }
+}
+
+export function isConfirmedLoopbackFinancialUat(input: {
+  allowLocalStaging: string | undefined;
+  confirmation: string | undefined;
+  baseUrl: string | undefined;
+}): boolean {
+  if (input.allowLocalStaging !== 'true' || input.confirmation !== 'RUN_STUDENT_FEES_STAGING_UAT') return false;
+  try {
+    const url = new URL(String(input.baseUrl || ''));
+    return url.protocol === 'http:'
+      && ['127.0.0.1', 'localhost'].includes(url.hostname)
+      && url.port === '4179'
+      && url.pathname === '/'
+      && !url.search
+      && !url.hash;
+  } catch {
+    return false;
+  }
+}
+
 export function assertCloudflareStagingWorkerUrl(value: string): void {
   let target: URL;
   try {
