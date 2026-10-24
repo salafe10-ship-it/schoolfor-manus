@@ -17,12 +17,13 @@ concurrency:
 jobs:
   probe:
     name: Probe staging readiness
-    if: ${{ vars.EDUPRO_STAGING_HEALTH_URL != '' }}
+    environment: staging
     runs-on: ubuntu-latest
     timeout-minutes: 6
     steps:
       - name: Probe readiness endpoint with cold-start tolerance
         id: readiness
+        if: ${{ vars.EDUPRO_STAGING_HEALTH_URL != '' }}
         env:
           HEALTH_URL: ${{ vars.EDUPRO_STAGING_HEALTH_URL }}
         shell: bash

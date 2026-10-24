@@ -8,6 +8,7 @@
 - قائمة Hyperdrive في حساب Cloudflare احتوت إعدادين فقط: `schoolfor-manus-db` و`schoolfor-manus-admin-db`. إعداد `schoolfor-manus-db` متصل بمضيف Supabase مختلف عن مشروع Staging. لم يظهر إعداد Hyperdrive مستقل للاختبار.
 - قائمة Workers لم تحتوِ عاملًا مستقلًا باسم `schoolfor-manus-staging`. يوجد ملف إعداد محلي `wrangler.staging.jsonc`، لكنه لا يضم Hyperdrive binding؛ وجود الملف لا يثبت وجود عامل منشور أو اتصال قاعدة.
 - فحص بيئة GitHub السابقة لم يجد أسرار Staging. إعداد `production-database-migrations` خاص بالإنتاج، ولا يجوز إعادة استعمال أسراره في الاختبار.
+- أُنشئت بيئة GitHub Actions باسم `staging`، وقُيّد استخدامها بفرع `master`. لا تحتوي حاليًا على أسرار أو متغيرات؛ سير العمل الدوري يقرأ عنوان الفحص من هذه البيئة عند إضافته بعد نشر عامل Staging.
 - ملف `.env.staging` المحلي كان موجودًا، لكن مفاتيح الاتصال والمصادقة اللازمة فارغة. لم تُقرأ قيم أسرار الإنتاج ولم تُستخدم.
 
 لم تُجرَ أي كتابة أو ترحيل على قاعدة Staging خلال هذا الفحص. Hyperdrive وWorkers الإنتاجية لم تُعدّل.
