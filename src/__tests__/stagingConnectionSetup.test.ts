@@ -1,8 +1,11 @@
 // @vitest-environment node
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import http from 'node:http';
+import fs from 'node:fs';
+import os from 'node:os';
+import path from 'node:path';
 import type { AddressInfo } from 'node:net';
-import { createStagingSetupServer } from '../../scripts/staging-connection-setup.js';
+import { createStagingSetupServer, loadStagingCaCertificate } from '../../scripts/staging-connection-setup.js';
 
 const servers: http.Server[] = [];
 afterEach(async () => { for (const server of servers.splice(0)) await new Promise<void>((resolve) => server.close(() => resolve())); });
@@ -22,6 +25,15 @@ async function start(configure = vi.fn(async () => {})) {
 }
 
 describe('owner-operated local Staging connection setup', () => {
+  it('requires a valid Supabase CA certificate before attempting a database connection', () => {
+    const directory = fs.mkdtempSync(path.join(os.tmpdir(), 'staging-ca-'));
+    const missing = path.join(directory, 'missing.crt');
+    expect(() => loadStagingCaCertificate(missing)).toThrow('STAGING_CA_CERTIFICATE_MISSING');
+    const invalid = path.join(directory, 'invalid.crt');
+    fs.writeFileSync(invalid, 'not a certificate');
+    expect(() => loadStagingCaCertificate(invalid)).toThrow('STAGING_CA_CERTIFICATE_INVALID');
+    fs.rmSync(directory, { recursive: true, force: true });
+  });
   it('rejects foreign hosts and cross-site writes before touching a database', async () => {
     const f = await start();
     expect((await f.request('GET', '/', { Host: 'malicious.example' })).status).toBe(403);
@@ -51,6 +63,16 @@ describe('owner-operated local Staging connection setup', () => {
       Cookie: page.cookie![0].split(';')[0], 'Content-Type': 'application/json' }, '{}');
     expect(result.status).toBe(400);
     expect(result.body).toContain('STAGING_DATABASE_AUTH_OR_TLS_FAILED');
+    expect(result.body).not.toContain('synthetic-private-password');
+  });
+  it('returns a safe credential category without exposing PostgreSQL details', async () => {
+    const failure = Object.assign(new Error('password synthetic-private-password failed'), { code: '28P01' });
+    const f = await start(vi.fn(async () => { throw failure; }));
+    const page = await f.request('GET', '/');
+    const result = await f.request('POST', '/configure', { Origin: 'http://127.0.0.1:4182',
+      Cookie: page.cookie![0].split(';')[0], 'Content-Type': 'application/json' }, '{}');
+    expect(result.status).toBe(400);
+    expect(result.body).toContain('STAGING_DATABASE_CREDENTIALS_REJECTED');
     expect(result.body).not.toContain('synthetic-private-password');
   });
 });

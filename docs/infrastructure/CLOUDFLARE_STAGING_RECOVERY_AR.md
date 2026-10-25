@@ -49,6 +49,12 @@ npm run staging:verify
 
 مخزن DPAPI محمي بحساب Windows الحالي على هذا الجهاز؛ لا يصلح وحده لاستعادة الأسرار على جهاز آخر أو حساب Windows آخر. قبل الانتقال إلى جهاز جديد، أعد تدوير مفاتيح Staging واحفظها في مدير أسرار معتمد. بيئة GitHub `staging` مقيّدة بفرع `codex/fees-module-repair`، لكنها ما زالت بلا أسرار، ولا تُستخدم كنسخة استعادة حتى تُضف إليها القيم اللازمة دون إدخالها إلى Git.
 
+### شهادة TLS لاتصال PostgreSQL
+
+يستخدم نموذج الاتصال شهادة CA الرسمية من إعدادات قاعدة Supabase. نزّل `Download certificate` من `Database Settings → SSL configuration` واحفظها بالاسم `prod-ca-2021.crt` داخل `%LOCALAPPDATA%\EduPro\schoolfor-manus\staging\`. يرفض الإعداد الشهادة المفقودة أو غير الصالحة، ويتصل باستخدام `rejectUnauthorized: true` مع شهادة CA؛ لا تستخدم `rejectUnauthorized: false` أو `sslmode=require` بدل التحقق من هوية الخادم.
+
+في 2026-10-25 أثبت الفحص أن DNS وTCP إلى مجمّع Staging يعملان، وأن فشل النموذج الأول كان بسبب `SELF_SIGNED_CERT_IN_CHAIN`. بعد تنزيل شهادة Supabase الرسمية والتحقق محليًا من كونها CA، اكتمل تفاوض TLS مع بقاء التحقق الصارم. لم يصل فشل TLS إلى استعلام قاعدة البيانات، لذلك لم يغيّر كلمة مرور الدور ولم يحفظ بيانات الاتصال. يلزم إعادة إرسال النموذج بعد تحديث خادم الإعداد.
+
 ## إنشاء الربط المعزول في Cloudflare
 
 إعداد `wrangler.staging.jsonc` يبقي `workers_dev=false` و`preview_urls=false` حتى يثبت تطبيق سياسة Cloudflare Access على حركة Worker كلها. بعد إنشاء Worker المستقل، فعّل Access من تبويب Worker واختر سياسة حساب Cloudflare للمالك، ثم وثّق التحقق في `docs/infrastructure/staging-resource-identity.json`. أداة النشر ترفض كشف hostname قبل هذا التحقق.

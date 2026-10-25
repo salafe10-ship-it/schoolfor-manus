@@ -1,12 +1,12 @@
 import http from 'node:http';
-import { randomBytes } from 'node:crypto';
+import { randomBytes, X509Certificate } from 'node:crypto';
 import fs from 'node:fs';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import dotenv from 'dotenv';
 import { Pool } from 'pg';
 import { restrictFilePermissions, validateStagingEnvironmentValues } from './prepare-staging-env.js';
-import { saveStagingSecrets } from './staging-secret-store.js';
+import { defaultStagingVaultDirectory, saveStagingSecrets } from './staging-secret-store.js';
 
 const root = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..');
 const origin = 'http://127.0.0.1:4182';
@@ -14,6 +14,48 @@ const host = '127.0.0.1:4182';
 const projectRef = 'vjcjscqgmijgzagshsca';
 const poolerHost = 'aws-1-eu-west-1.pooler.supabase.com';
 const confirmation = 'SET_STAGING_APP_PASSWORD_AND_SAVE';
+
+export function loadStagingCaCertificate(caPath = path.join(defaultStagingVaultDirectory(), 'prod-ca-2021.crt')): string {
+  if (!fs.existsSync(caPath)) throw new Error('STAGING_CA_CERTIFICATE_MISSING');
+  const ca = fs.readFileSync(caPath, 'utf8');
+  try {
+    if (!new X509Certificate(ca).ca) throw new Error('not-a-ca');
+  } catch {
+    throw new Error('STAGING_CA_CERTIFICATE_INVALID');
+  }
+  return ca;
+}
+
+function publicSetupError(error: unknown): string {
+  const message = error instanceof Error ? error.message : '';
+  if (/^STAGING_[A-Z_]+$/.test(message)) return message;
+  const code = error && typeof error === 'object' && 'code' in error ? String(error.code) : '';
+  if (['SELF_SIGNED_CERT_IN_CHAIN', 'UNABLE_TO_VERIFY_LEAF_SIGNATURE', 'CERT_HAS_EXPIRED',
+    'ERR_TLS_CERT_ALTNAME_INVALID', 'DEPTH_ZERO_SELF_SIGNED_CERT'].includes(code)) {
+    return 'STAGING_DATABASE_TLS_VALIDATION_FAILED';
+  }
+  if (code === '28P01' || code === '28000') return 'STAGING_DATABASE_CREDENTIALS_REJECTED';
+  if (['ENOTFOUND', 'EHOSTUNREACH', 'ECONNREFUSED', 'ETIMEDOUT', 'ECONNRESET'].includes(code)) {
+    return 'STAGING_DATABASE_NETWORK_UNAVAILABLE';
+  }
+  return 'STAGING_DATABASE_AUTH_OR_TLS_FAILED';
+}
+
+function connectionFailure(error: unknown, credential: 'postgres' | 'app'): Error {
+  const code = error && typeof error === 'object' && 'code' in error ? String(error.code) : '';
+  if (code === '28P01' || code === '28000') {
+    return new Error(credential === 'postgres'
+      ? 'STAGING_POSTGRES_PASSWORD_REJECTED' : 'STAGING_APP_ROLE_CREDENTIALS_REJECTED');
+  }
+  if (['SELF_SIGNED_CERT_IN_CHAIN', 'UNABLE_TO_VERIFY_LEAF_SIGNATURE', 'CERT_HAS_EXPIRED',
+    'ERR_TLS_CERT_ALTNAME_INVALID', 'DEPTH_ZERO_SELF_SIGNED_CERT'].includes(code)) {
+    return new Error('STAGING_DATABASE_TLS_VALIDATION_FAILED');
+  }
+  if (['ENOTFOUND', 'EHOSTUNREACH', 'ECONNREFUSED', 'ETIMEDOUT', 'ECONNRESET'].includes(code)) {
+    return new Error('STAGING_DATABASE_NETWORK_UNAVAILABLE');
+  }
+  return new Error('STAGING_DATABASE_AUTH_OR_TLS_FAILED');
+}
 
 export async function configureStagingConnection(input: Record<string, unknown>): Promise<void> {
   if (input.confirmation !== confirmation || typeof input.adminPassword !== 'string'
@@ -42,14 +84,20 @@ export async function configureStagingConnection(input: Record<string, unknown>)
     AUTO_MIGRATE: 'false', AUTO_SEED: 'false', RUNTIME_SCHEMA_BOOTSTRAP: 'false',
     FINANCIAL_WRITES_LOCKED: 'true', FINANCIAL_ERP_MODE: 'read_only' };
   validateStagingEnvironmentValues(next);
+  // Supabase database connections use the project root CA for strict TLS
+  // verification. Never downgrade to rejectUnauthorized:false.
+  const ssl = { rejectUnauthorized: true as const, ca: loadStagingCaCertificate() };
   const admin = new Pool({ connectionString: next.PLATFORM_ADMIN_DATABASE_URL, max: 1,
-    connectionTimeoutMillis: 12_000, statement_timeout: 12_000, ssl: { rejectUnauthorized: true },
+    connectionTimeoutMillis: 12_000, statement_timeout: 12_000, ssl,
     application_name: 'edupro-staging-owner-connection-setup' });
   try {
-    const identity = await admin.query(`SELECT current_user, current_database(), rolcanlogin, rolsuper, rolbypassrls,
-      EXISTS (SELECT 1 FROM pg_roles elevated WHERE (elevated.rolsuper OR elevated.rolbypassrls)
-        AND pg_has_role('edupro_staging_app', elevated.oid, 'MEMBER')) AS elevated_membership
-      FROM pg_roles WHERE rolname='edupro_staging_app'`);
+    let identity;
+    try {
+      identity = await admin.query(`SELECT current_user, current_database(), rolcanlogin, rolsuper, rolbypassrls,
+        EXISTS (SELECT 1 FROM pg_roles elevated WHERE (elevated.rolsuper OR elevated.rolbypassrls)
+          AND pg_has_role('edupro_staging_app', elevated.oid, 'MEMBER')) AS elevated_membership
+        FROM pg_roles WHERE rolname='edupro_staging_app'`);
+    } catch (error) { throw connectionFailure(error, 'postgres'); }
     const role = identity.rows[0];
     if (!role || role.current_user !== 'postgres' || role.current_database !== 'postgres'
       || !role.rolcanlogin || role.rolsuper || role.rolbypassrls || role.elevated_membership) throw new Error('STAGING_DATABASE_ROLE_NOT_RESTRICTED');
@@ -60,9 +108,11 @@ export async function configureStagingConnection(input: Record<string, unknown>)
     await admin.query(statement.rows[0].command);
     statement.rows[0].command = '';
     const app = new Pool({ connectionString: next.DATABASE_URL, max: 1, connectionTimeoutMillis: 12_000,
-      ssl: { rejectUnauthorized: true }, application_name: 'edupro-staging-role-verification' });
+      ssl, application_name: 'edupro-staging-role-verification' });
     try {
-      const actual = await app.query('SELECT current_user, rolsuper, rolbypassrls FROM pg_roles WHERE rolname=current_user');
+      let actual;
+      try { actual = await app.query('SELECT current_user, rolsuper, rolbypassrls FROM pg_roles WHERE rolname=current_user'); }
+      catch (error) { throw connectionFailure(error, 'app'); }
       if (actual.rows[0]?.current_user !== 'edupro_staging_app'
         || actual.rows[0]?.rolsuper || actual.rows[0]?.rolbypassrls) throw new Error('STAGING_APP_LOGIN_VERIFICATION_FAILED');
     } finally { await app.end(); }
@@ -90,7 +140,7 @@ function setupHtml(): string {
   <label><input id="confirm" type="checkbox" required> أؤكد تعيين كلمة مرور دور الاختبار المحدود وحفظ الاتصال محليًا مشفّرًا.</label>
   <small>أدخل القيم هنا فقط. لا ترسل كلمة مرور في المحادثة. هذه الصفحة على جهازك ولا تعرِض أي مفتاح خادم.</small>
   <button id="submit">تعيين كلمة مرور الاختبار والتحقق والحفظ المشفّر</button></form><div id="status" role="status"></div></main>
-  <script>document.getElementById('setup').onsubmit=async(e)=>{e.preventDefault();let b=document.getElementById('submit'),s=document.getElementById('status');if(document.getElementById('app').value!==document.getElementById('again').value){s.textContent='كلمتا مرور الاختبار غير متطابقتين.';return;}b.disabled=true;s.textContent='جارٍ التحقق من اتصال Staging وحفظ الإعدادات…';try{let r=await fetch('/configure',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({adminPassword:document.getElementById('admin').value,appPassword:document.getElementById('app').value,appPasswordConfirmation:document.getElementById('again').value,confirmation:'${confirmation}'})});let j=await r.json();s.textContent=j.ok?'تم التحقق من الدخول وحفظ الاتصال مشفّرًا. يمكن الآن استكمال الترحيلات والاختبارات.':'تعذر إكمال الاتصال: '+j.error;if(j.ok){document.getElementById('setup').reset();b.textContent='تم الحفظ والتحقق';}else b.disabled=false;}catch{s.textContent='تعذر الاتصال بخادم الإعداد المحلي.';b.disabled=false;}};</script></html>`;
+  <script>document.getElementById('setup').onsubmit=async(e)=>{e.preventDefault();let b=document.getElementById('submit'),s=document.getElementById('status');if(document.getElementById('app').value!==document.getElementById('again').value){s.textContent='كلمتا مرور الاختبار غير متطابقتين.';return;}b.disabled=true;s.textContent='جارٍ التحقق من اتصال Staging وحفظ الإعدادات…';try{let r=await fetch('/configure',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({adminPassword:document.getElementById('admin').value,appPassword:document.getElementById('app').value,appPasswordConfirmation:document.getElementById('again').value,confirmation:'${confirmation}'})});let j=await r.json();const errors={STAGING_DATABASE_TLS_VALIDATION_FAILED:'تعذر التحقق من شهادة TLS لقاعدة Staging؛ تحقق من ملف شهادة Supabase الرسمي.',STAGING_POSTGRES_PASSWORD_REJECTED:'رفضت قاعدة Staging كلمة مرور postgres. استخدم كلمة المرور الحالية التي عيّنتها في Supabase.',STAGING_APP_ROLE_CREDENTIALS_REJECTED:'لم يقبل دور الاختبار كلمة المرور الجديدة؛ لم يُحفظ الاتصال.',STAGING_DATABASE_CREDENTIALS_REJECTED:'رفضت قاعدة Staging بيانات الاعتماد؛ أعد التحقق منها.',STAGING_DATABASE_NETWORK_UNAVAILABLE:'تعذر الوصول إلى مجمّع قاعدة Staging عبر الشبكة.',STAGING_CA_CERTIFICATE_MISSING:'شهادة Supabase الرسمية غير موجودة في مخزن Staging المحلي.',STAGING_CA_CERTIFICATE_INVALID:'شهادة Supabase المحلية غير صالحة.'};s.textContent=j.ok?'تم التحقق من الدخول وحفظ الاتصال مشفّرًا. يمكن الآن استكمال الترحيلات والاختبارات.':'تعذر إكمال الاتصال: '+(errors[j.error]||j.error);if(j.ok){document.getElementById('setup').reset();b.textContent='تم الحفظ والتحقق';}else b.disabled=false;}catch{s.textContent='تعذر الاتصال بخادم الإعداد المحلي.';b.disabled=false;}};</script></html>`;
 }
 
 export function createStagingSetupServer(configure = configureStagingConnection) {
@@ -122,9 +172,7 @@ export function createStagingSetupServer(configure = configureStagingConnection)
       server.close();
     } catch (error) {
       // Never send a PostgreSQL, URI, filesystem, or supplied-secret error back.
-      const code = error instanceof Error && /^STAGING_[A-Z_]+$/.test(error.message)
-        ? error.message : 'STAGING_DATABASE_AUTH_OR_TLS_FAILED';
-      send(400, { ok: false, error: code });
+      send(400, { ok: false, error: publicSetupError(error) });
     } finally { busy = false; }
   });
   return server;

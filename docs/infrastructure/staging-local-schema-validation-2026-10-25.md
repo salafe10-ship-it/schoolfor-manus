@@ -42,3 +42,9 @@ The empty migration catalog is not evidence that all historical files should be 
 ## Current completion gate
 
 The local connection hand-off is not yet verified until `.env.staging` contains the Staging app and admin URLs and the encrypted DPAPI vault exists. Do not connect to production or use production credentials as a fallback. The local schema checks above can be repeated with the dedicated cluster; live read/write and restore checks remain pending.
+
+## TLS hand-off diagnosis — 2026-10-25
+
+The first owner form submission returned only `STAGING_DATABASE_AUTH_OR_TLS_FAILED`. A credential-free network probe confirmed DNS and TCP reachability to the Staging Supavisor endpoint. A Node.js TLS probe then isolated the cause to `SELF_SIGNED_CERT_IN_CHAIN`. The official Supabase root CA was downloaded from the project Database Settings certificate control, parsed locally as an X.509 CA, and verified by a TLS negotiation that reached the PostgreSQL password challenge. The setup now passes this CA to both PostgreSQL pools while retaining `rejectUnauthorized: true`.
+
+The initial connection failed during TLS negotiation, before any SQL statement ran, so it did not alter the database role password or write `.env.staging`. The certificate is stored outside Git at `%LOCALAPPDATA%\EduPro\schoolfor-manus\staging\prod-ca-2021.crt`. Re-submit the local owner form after restarting/reloading it; confirm success only when it reports encrypted save. Live authentication, vault creation, migration, and Staging data-cycle verification remain pending.
