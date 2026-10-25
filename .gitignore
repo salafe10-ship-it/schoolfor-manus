@@ -17,6 +17,7 @@ backups/
 !.env.example
 !.env.development.example
 !.env.production.example
+!.env.staging.example
 
 # Local runtime artifacts; never publish logs or generated fallback audit data.
 +

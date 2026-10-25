@@ -95,7 +95,7 @@ if (mode[0] === '--typecheck') {
   args = ['run', '--configLoader', 'runner'];
   if (mode[0] === '--fees') {
     const testDirectory = path.join(projectRoot, 'src', '__tests__');
-    const feeTestPattern = /(fee|invoice|receipt|schoolBranding|acc001Implementation003Hardening|studentFeesVisualContracts|financialDocumentReference|financialDocumentSerial|studentFinancialPresentation|financialWritesLocked|financialSnapshotWriteMode|stagingDatabaseSafety|canonicalErpPostingService|dashboardMetrics)/i;
+    const feeTestPattern = /(fee|invoice|receipt|schoolBranding|acc001Implementation003Hardening|studentFeesVisualContracts|financialDocumentReference|financialDocumentSerial|studentFinancialPresentation|financialWritesLocked|financialSnapshotWriteMode|stagingDatabaseSafety|stagingEnvPreparation|canonicalErpPostingService|dashboardMetrics)/i;
     const files = readdirSync(testDirectory)
       .filter((name) => feeTestPattern.test(name) && /\.test\.[cm]?[jt]sx?$/.test(name))
       .map((name) => path.join('src', '__tests__', name));

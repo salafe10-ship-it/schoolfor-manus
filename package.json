@@ -14,6 +14,8 @@
   "scripts": {
     "dev": "tsx server.ts",
     "dev:staging": "tsx scripts/start-staging-local.ts",
+    "staging:prepare": "tsx scripts/prepare-staging-env.ts init",
+    "staging:verify": "tsx scripts/prepare-staging-env.ts verify",
     "build": "vite build --configLoader runner && node scripts/build-server.mjs && node scripts/verify-build-artifact.mjs",
     "build:spa": "vite build --configLoader runner",
     "production:gate": "node scripts/production-release-gate.mjs",
