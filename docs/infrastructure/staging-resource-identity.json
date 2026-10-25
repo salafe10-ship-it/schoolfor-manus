@@ -1,0 +1,17 @@
+{
+  "worker": "schoolfor-manus-staging",
+  "accountId": "8eac6ae301c11ce0e6869933e5d53061",
+  "supabaseProjectRef": "vjcjscqgmijgzagshsca",
+  "supabaseProjectName": "edupro-school-erp-staging",
+  "poolerHost": "aws-1-eu-west-1.pooler.supabase.com",
+  "databaseRole": "edupro_staging_app",
+  "access": {
+    "verified": false,
+    "scope": null,
+    "policyName": null,
+    "verifiedOn": null
+  },
+  "hyperdrive": [],
+  "status": "database-connection-pending",
+  "verifiedOn": "2026-10-24"
+}

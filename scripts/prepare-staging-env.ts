@@ -63,19 +63,20 @@ export function validateStagingEnvironmentValues(values: Record<string, string |
   };
 }
 
-function restrictFilePermissions(filePath: string): void {
+export function restrictFilePermissions(filePath: string): void {
   if (process.platform === 'win32') {
     const currentUser = execFileSync('whoami', { encoding: 'utf8', windowsHide: true }).trim();
     // Remove inherited and prior explicit entries, then grant access only to
     // the current Windows user, SYSTEM, and local Administrators.
     execFileSync('icacls', [filePath, '/reset'], { stdio: 'ignore', windowsHide: true });
     execFileSync('icacls', [filePath, '/inheritance:r'], { stdio: 'ignore', windowsHide: true });
+    const permission = fs.lstatSync(filePath).isDirectory() ? '(OI)(CI)(F)' : '(F)';
     execFileSync('icacls', [
       filePath,
       '/grant:r',
-      `${currentUser}:(F)`,
-      '*S-1-5-18:(F)',
-      '*S-1-5-32-544:(F)',
+      `${currentUser}:${permission}`,
+      `*S-1-5-18:${permission}`,
+      `*S-1-5-32-544:${permission}`,
     ], { stdio: 'ignore', windowsHide: true });
     return;
   }
