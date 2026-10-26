@@ -26,7 +26,8 @@ describe('student fees integrity contract', () => {
     expect(serverSource).toContain('FROM public.student_fee_configurations');
     expect(serverSource).toContain('لا يمكن حذف بند رسوم مستخدم في تخصيصات أو مطالبات مالية');
     expect(financialPortalSource).toContain("method: 'DELETE'");
-    expect(financialPortalSource).toContain('window.confirm(`هل أنت متأكد من حذف بند الرسوم');
+    expect(financialPortalSource).toContain("title: 'تأكيد حذف بند الرسوم'");
+    expect(financialPortalSource).toContain('requestFinancialAction({');
     expect(financialPortalSource).toContain('<span>حذف</span>');
   });
 

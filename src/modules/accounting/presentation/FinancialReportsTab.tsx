@@ -1,8 +1,9 @@
 import { ArrowLeft, ArrowRightLeft, ArrowUpRight, Calculator, ChevronLeft, Coins, Download, FileSpreadsheet, FileText, Layers, Percent, Printer, RefreshCw, Settings, TrendingUp } from 'lucide-react';
 import React, { useState, Fragment } from 'react';
 import { AccountingContext } from '../../../components/GeneralLedgerPortal';
-import { resolveCostCenterStageLogoKey } from '../../../utils/schoolBranding';
+import { resolveCostCenterStageLogoKey, resolveSchoolStageLogoSource } from '../../../utils/schoolBranding';
 import { openPrintWindow } from '../../../utils/openPrintWindow';
+import { amountToArabicWords, getCurrencyConfigForCode } from '../../../utils/currency';
 
 export const FinancialReportsTab = () => {
   const {
@@ -111,16 +112,15 @@ const getSafeSchoolLogoSource = (value: unknown): string => {
   if (/^data:image\/(?:png|jpeg|webp);base64,[a-z0-9+/=\s]+$/i.test(source)) return source;
   try {
     const parsed = new URL(source, window.location.origin);
-    return parsed.protocol === 'https:' && !parsed.username && !parsed.password ? parsed.href : '';
+    const sameOrigin = parsed.origin === window.location.origin;
+    return (sameOrigin || parsed.protocol === 'https:') && !parsed.username && !parsed.password ? parsed.href : '';
   } catch {
     return '';
   }
 };
 const getPrintableSchoolIdentity = (costCenter: unknown) => {
   const stageLogoKey = resolveCostCenterStageLogoKey(costCenter, configuredCostCenters);
-  const logoSource = getSafeSchoolLogoSource(
-    (stageLogoKey && selectedSchool?.stageLogos?.[stageLogoKey]) || selectedSchool?.logo
-  );
+  const logoSource = getSafeSchoolLogoSource(resolveSchoolStageLogoSource(stageLogoKey, selectedSchool?.stageLogos, selectedSchool?.logo));
   const schoolName = escapeHtml(selectedSchool?.name || 'المدرسة');
   const logoMarkup = logoSource
     ? `<img class="print-school-logo" src="${escapeHtml(logoSource)}" alt="شعار ${schoolName}" onerror="this.hidden=true;this.nextElementSibling.hidden=false" /><span class="print-school-logo-fallback" hidden>🏫</span>`
@@ -314,6 +314,40 @@ const handleDrillDownToOriginalDocument = (jv: any) => {
           // Canonical ERP chart rows may arrive without a persisted hierarchy
           // level. Prefer leaf balances when available, otherwise use root
           // balances, so the financial statements never hide real balances.
+          const visibleTrialBalanceAccounts = reportAccounts.filter(
+            account => trialBalanceLevel === 'all' || account.level === trialBalanceLevel
+          );
+          const hasDirectChildren = (account: any) => reportAccounts.some(candidate => {
+            const parentId = String(candidate.parentAccountId ?? candidate.parent_account_id ?? '').trim();
+            return parentId !== '' && (parentId === String(account.id) || parentId === String(account.code));
+          });
+          // Roll-up accounts remain visible in the all-level report, but must
+          // not be counted again beside their children in the grand total.
+          const trialBalanceSummaryAccounts = trialBalanceLevel === 'all'
+            ? (() => {
+                const terminalAccounts = visibleTrialBalanceAccounts.filter(account => !hasDirectChildren(account));
+                return terminalAccounts.length > 0
+                  ? terminalAccounts
+                  : visibleTrialBalanceAccounts.filter(account => Number(account.level) === 1);
+              })()
+            : visibleTrialBalanceAccounts;
+          const getTrialBalanceAmounts = (account: any) => {
+            const balance = Number(account.endingBalance) || 0;
+            const isDebitNature = account.natureType === 'مدين'
+              || account.classification === 'أصول'
+              || account.classification === 'مصروفات';
+            return isDebitNature
+              ? { debit: Math.max(balance, 0), credit: Math.max(-balance, 0) }
+              : { debit: Math.max(-balance, 0), credit: Math.max(balance, 0) };
+          };
+          const trialBalanceTotals = trialBalanceSummaryAccounts.reduce((totals, account) => {
+            const amounts = getTrialBalanceAmounts(account);
+            totals.debit += amounts.debit;
+            totals.credit += amounts.credit;
+            return totals;
+          }, { debit: 0, credit: 0 });
+          const trialBalanceIsBalanced = Math.abs(trialBalanceTotals.debit - trialBalanceTotals.credit) < 0.01;
+
           const sumBalanceSheetClass = (classification: string) => {
             const classified = reportAccounts.filter(a => a.classification === classification);
             const leafAccounts = classified.filter(a => isLeafAccount(a));
@@ -444,9 +478,7 @@ const handleDrillDownToOriginalDocument = (jv: any) => {
             const stageLogoKey = filterCostCenter === 'all' || !selectedCostCenter
               ? null
               : resolveCostCenterStageLogoKey(filterCostCenter, configuredCostCenters);
-            const logoSource = getSafeSchoolLogoSource(
-              (stageLogoKey && selectedSchool?.stageLogos?.[stageLogoKey]) || selectedSchool?.logo
-            );
+            const logoSource = getSafeSchoolLogoSource(resolveSchoolStageLogoSource(stageLogoKey, selectedSchool?.stageLogos, selectedSchool?.logo));
             const schoolDisplayName = String(selectedSchool?.name || 'المدرسة');
             const reportTitleText = escapeHtml(title);
             const reportSubtitleText = escapeHtml(subTitle);
@@ -859,7 +891,7 @@ const handleDrillDownToOriginalDocument = (jv: any) => {
                           {balanceSheetVariance < 0.01 ? 'ميزانية المجمع متطابقة' : 'تحتاج الميزانية إلى تسوية'}
                         </p>
                       </div>
-                      <p className="text-[9px] text-slate-400 text-center mt-1">فارق الميزانية: {balanceSheetVariance.toFixed(2)} د.ل</p>
+                      <p className="text-[9px] text-slate-400 text-center mt-1">فارق الميزانية: {balanceSheetVariance.toFixed(2)} SDG</p>
                     </div>
                   </div>
 
@@ -1378,9 +1410,7 @@ const handleDrillDownToOriginalDocument = (jv: any) => {
                           );
                         }
                         const receiptStageLogoKey = resolveCostCenterStageLogoKey(rv.costCenter || rv.stage, configuredCostCenters);
-                        const receiptLogoSource = getSafeSchoolLogoSource(
-                          (receiptStageLogoKey && selectedSchool?.stageLogos?.[receiptStageLogoKey]) || selectedSchool?.logo
-                        );
+                        const receiptLogoSource = getSafeSchoolLogoSource(resolveSchoolStageLogoSource(receiptStageLogoKey, selectedSchool?.stageLogos, selectedSchool?.logo));
 
                         return (
                           <div className="space-y-6 animate-fade-in">
@@ -1433,7 +1463,7 @@ const handleDrillDownToOriginalDocument = (jv: any) => {
                                   <span className="text-emerald-700 font-black text-sm" dir="ltr">
                                     {rv.amount.toLocaleString(undefined, { minimumFractionDigits: 2 })} {currency}
                                   </span>
-                                  <span className="mr-3 text-[10px] text-slate-400">({rv.amount === 250 ? 'مئتان وخمسون دينار ليبي فقط لا غير' : 'مبلغ الرسوم المحتسبة'})</span>
+                                  <span className="mr-3 text-[10px] text-slate-400">({amountToArabicWords(Number(rv.amount || 0), getCurrencyConfigForCode(currency))})</span>
                                 </div>
 
                                 <div className="flex items-center border-b border-dashed border-slate-200 pb-2">
@@ -1560,9 +1590,7 @@ const handleDrillDownToOriginalDocument = (jv: any) => {
                           );
                         }
                         const paymentStageLogoKey = resolveCostCenterStageLogoKey(pv.costCenter || pv.stage, configuredCostCenters);
-                        const paymentLogoSource = getSafeSchoolLogoSource(
-                          (paymentStageLogoKey && selectedSchool?.stageLogos?.[paymentStageLogoKey]) || selectedSchool?.logo
-                        );
+                        const paymentLogoSource = getSafeSchoolLogoSource(resolveSchoolStageLogoSource(paymentStageLogoKey, selectedSchool?.stageLogos, selectedSchool?.logo));
 
                         return (
                           <div className="space-y-6 animate-fade-in">
@@ -1615,7 +1643,7 @@ const handleDrillDownToOriginalDocument = (jv: any) => {
                                   <span className="text-rose-700 font-black text-sm" dir="ltr">
                                     {pv.amount.toLocaleString(undefined, { minimumFractionDigits: 2 })} {currency}
                                   </span>
-                                  <span className="mr-3 text-[10px] text-slate-400">({pv.amount === 1200 ? 'ألف ومائتان دينار ليبي فقط لا غير' : reportsAreCanonical ? 'مبلغ منصرف ومعتمد من الخزينة' : 'مبلغ معروض من snapshot — غير معتمد'})</span>
+                                  <span className="mr-3 text-[10px] text-slate-400">({amountToArabicWords(Number(pv.amount || 0), getCurrencyConfigForCode(currency))}؛ {reportsAreCanonical ? 'مبلغ منصرف ومعتمد من الخزينة' : 'مبلغ معروض من snapshot — غير معتمد'})</span>
                                 </div>
 
                                 <div className="flex items-center border-b border-dashed border-slate-200 pb-2">
@@ -1786,30 +1814,26 @@ const handleDrillDownToOriginalDocument = (jv: any) => {
                         <button
                           onClick={() => {
                             if (selectedReport === 'trial_balance') {
-                              const headers = ['رمز الحساب', 'اسم الحساب المحاسبي', 'التصنيف', 'طبيعة الحساب', 'أرصدة مدينة (د.ل)', 'أرصدة دائنة (د.ل)'];
-                              const rows = reportAccounts
-                                .filter(a => trialBalanceLevel === 'all' || a.level === trialBalanceLevel)
-                                .map(acc => {
-                                  const isDeb = acc.natureType === 'مدين' || acc.classification === 'أصول' || acc.classification === 'مصروفات';
-                                  const deb = isDeb ? acc.endingBalance : 0;
-                                  const crd = !isDeb ? acc.endingBalance : 0;
-                                  return [acc.code, acc.nameAr, acc.classification, acc.natureType, deb.toFixed(2), crd.toFixed(2)];
-                                });
+                              const headers = ['رمز الحساب', 'اسم الحساب المحاسبي', 'التصنيف', 'طبيعة الحساب', 'أرصدة مدينة (SDG)', 'أرصدة دائنة (SDG)'];
+                              const rows = visibleTrialBalanceAccounts.map(acc => {
+                                const { debit, credit } = getTrialBalanceAmounts(acc);
+                                return [acc.code, acc.nameAr, acc.classification, acc.natureType, debit.toFixed(2), credit.toFixed(2)];
+                              });
                               exportReportExcel('ميزان_المراجعة', headers, rows);
                             } else if (selectedReport === 'income_statement') {
-                              const headers = ['اسم البند المحاسبي', 'تصنيف الحساب', 'الرصيد التشغيلي (د.ل)'];
+                              const headers = ['اسم البند المحاسبي', 'تصنيف الحساب', 'الرصيد التشغيلي (SDG)'];
                               const rows = reportAccounts
                                 .filter(a => (a.classification === 'إيرادات' || a.classification === 'مصروفات') && a.level === 3)
                                 .map(a => [a.nameAr, a.classification, a.endingBalance.toFixed(2)]);
                               exportReportExcel('قائمة_الدخل', headers, rows);
                             } else if (selectedReport === 'balance_sheet') {
-                              const headers = ['اسم البند', 'التصنيف', 'الرصيد المعتمد (د.ل)'];
+                              const headers = ['اسم البند', 'التصنيف', 'الرصيد المعتمد (SDG)'];
                               const rows = reportAccounts
                                 .filter(a => (a.classification === 'أصول' || a.classification === 'خصوم' || a.classification === 'حقوق ملكية') && a.level === 3)
                                 .map(a => [a.nameAr, a.classification, a.endingBalance.toFixed(2)]);
                               exportReportExcel('الميزانية_العمومية', headers, rows);
                             } else if (selectedReport === 'cash_flow') {
-                              const headers = ['بند التدفق النقدي', 'النوع', 'القيمة المتدفقة (د.ل)'];
+                              const headers = ['بند التدفق النقدي', 'النوع', 'القيمة المتدفقة (SDG)'];
                               const rows = [
                                 ['المتحصلات النقدية الموثقة', 'تشغيلي - وارد', cashFlowValue(actualCashInflow)],
                                 ['المدفوعات النقدية الموثقة', 'تشغيلي - صادر', cashFlowValue(actualCashOutflow)],
@@ -1819,7 +1843,7 @@ const handleDrillDownToOriginalDocument = (jv: any) => {
                               exportReportExcel('قائمة_التدفقات_النقدية', headers, rows);
                             } else if (selectedReport === 'account_statement') {
                               const targetAcc = accounts.find(a => a.code === filterAccount);
-                              const headers = ['التاريخ', 'القيد', 'البيان والتفاصيل', 'مدين (د.ل)', 'دائن (د.ل)', 'الرصيد المتراكم'];
+                              const headers = ['التاريخ', 'القيد', 'البيان والتفاصيل', 'مدين (SDG)', 'دائن (SDG)', 'الرصيد المتراكم'];
                               let running = targetAcc ? targetAcc.balance * 0.7 : 0;
                               const rows = [['رصيد افتتاحي', '', 'رصيد مرحل من الفترة السابقة', '', '', running.toFixed(2)]];
                               
@@ -1841,7 +1865,7 @@ const handleDrillDownToOriginalDocument = (jv: any) => {
                               });
                               exportReportExcel(`كشف_حساب_${filterAccount}`, headers, rows);
                             } else if (selectedReport === 'general_ledger') {
-                              const headers = ['رمز الحساب', 'اسم الحساب المحاسبي', 'طبيعة الحساب', 'رصيد افتتاحي (د.ل)', 'حركات مدينة', 'حركات دائنة', 'رصيد ختامي (د.ل)'];
+                              const headers = ['رمز الحساب', 'اسم الحساب المحاسبي', 'طبيعة الحساب', 'رصيد افتتاحي (SDG)', 'حركات مدينة', 'حركات دائنة', 'رصيد ختامي (SDG)'];
                               const rows = reportAccounts.map(a => [
                                 a.code,
                                 a.nameAr,
@@ -1880,16 +1904,8 @@ const handleDrillDownToOriginalDocument = (jv: any) => {
                           onClick={() => {
                             if (selectedReport === 'trial_balance') {
                               let rowsHtml = '';
-                              let totDeb = 0;
-                              let totCrd = 0;
-                              reportAccounts
-                                .filter(a => trialBalanceLevel === 'all' || a.level === trialBalanceLevel)
-                                .forEach(acc => {
-                                  const isDeb = acc.natureType === 'مدين' || acc.classification === 'أصول' || acc.classification === 'مصروفات';
-                                  const deb = isDeb ? acc.endingBalance : 0;
-                                  const crd = !isDeb ? acc.endingBalance : 0;
-                                  totDeb += deb;
-                                  totCrd += crd;
+                              visibleTrialBalanceAccounts.forEach(acc => {
+                                  const { debit: deb, credit: crd } = getTrialBalanceAmounts(acc);
                                   rowsHtml += `
                                     <tr>
                                       <td style="font-family: monospace;">${acc.code}</td>
@@ -1903,8 +1919,8 @@ const handleDrillDownToOriginalDocument = (jv: any) => {
                                 });
                               const summaryHtml = `
                                 <div style="margin-top: 15px; background: #f8fafc; padding: 12px; border-radius: 6px; border: 1px solid #cbd5e1; font-weight: bold; display: flex; justify-content: space-between;">
-                                  <span>الإجمالي العام الموزون:</span>
-                                  <span>مدين: ${totDeb.toLocaleString(undefined, { minimumFractionDigits: 2 })} د.ل | دائن: ${totCrd.toLocaleString(undefined, { minimumFractionDigits: 2 })} د.ل</span>
+                                  <span>إجمالي الأرصدة دون تكرار الحسابات التجميعية (${trialBalanceIsBalanced ? 'متزن' : 'يتطلب المراجعة'}):</span>
+                                  <span>مدين: ${trialBalanceTotals.debit.toLocaleString(undefined, { minimumFractionDigits: 2 })} SDG | دائن: ${trialBalanceTotals.credit.toLocaleString(undefined, { minimumFractionDigits: 2 })} SDG</span>
                                 </div>
                               `;
                               printReportPdf('ميزان المراجعة الشامل (Trial Balance)', 'ميزان إجمالي وتفصيلي مطابق لجميع الدفاتر القيادية والفرعية للفترة المحددة.', ['رمز الحساب', 'اسم الحساب المحاسبي', 'التصنيف', 'طبيعة الحساب', 'رصيد مدين', 'رصيد دائن'], rowsHtml, summaryHtml);
@@ -1918,7 +1934,7 @@ const handleDrillDownToOriginalDocument = (jv: any) => {
                                       <td style="font-family: monospace;">${a.code}</td>
                                       <td style="font-weight: bold;">${a.nameAr}</td>
                                       <td>${a.classification}</td>
-                                      <td style="text-align: left; font-family: monospace;">${a.endingBalance.toLocaleString(undefined, { minimumFractionDigits: 2 })} د.ل</td>
+                                      <td style="text-align: left; font-family: monospace;">${a.endingBalance.toLocaleString(undefined, { minimumFractionDigits: 2 })} SDG</td>
                                     </tr>
                                   `;
                                 });
@@ -1926,15 +1942,15 @@ const handleDrillDownToOriginalDocument = (jv: any) => {
                                 <div style="margin-top: 20px; background: #eff6ff; padding: 15px; border-radius: 8px; border: 1px solid #bfdbfe; font-size: 13px; font-weight: bold; line-height: 1.6;">
                                   <div style="display: flex; justify-content: space-between; color: #1e40af;">
                                     <span>إجمالي الإيرادات للفترة:</span>
-                                    <span>${totalRevenues.toLocaleString(undefined, { minimumFractionDigits: 2 })} د.ل</span>
+                                    <span>${totalRevenues.toLocaleString(undefined, { minimumFractionDigits: 2 })} SDG</span>
                                   </div>
                                   <div style="display: flex; justify-content: space-between; color: #b91c1c; margin-top: 8px;">
                                     <span>إجمالي المصروفات للفترة:</span>
-                                    <span>${totalExpenses.toLocaleString(undefined, { minimumFractionDigits: 2 })} د.ل</span>
+                                    <span>${totalExpenses.toLocaleString(undefined, { minimumFractionDigits: 2 })} SDG</span>
                                   </div>
                                   <div style="display: flex; justify-content: space-between; color: #047857; margin-top: 12px; border-top: 2px solid #bfdbfe; padding-top: 8px;">
                                     <span>صافي الدخل التشغيلي (الفائض المالي):</span>
-                                    <span>${netIncome.toLocaleString(undefined, { minimumFractionDigits: 2 })} د.ل</span>
+                                    <span>${netIncome.toLocaleString(undefined, { minimumFractionDigits: 2 })} SDG</span>
                                   </div>
                                 </div>
                               `;
@@ -1949,7 +1965,7 @@ const handleDrillDownToOriginalDocument = (jv: any) => {
                                       <td style="font-family: monospace;">${a.code}</td>
                                       <td style="font-weight: bold;">${a.nameAr}</td>
                                       <td>${a.classification}</td>
-                                      <td style="text-align: left; font-family: monospace;">${a.endingBalance.toLocaleString(undefined, { minimumFractionDigits: 2 })} د.ل</td>
+                                      <td style="text-align: left; font-family: monospace;">${a.endingBalance.toLocaleString(undefined, { minimumFractionDigits: 2 })} SDG</td>
                                     </tr>
                                   `;
                                 });
@@ -1957,24 +1973,24 @@ const handleDrillDownToOriginalDocument = (jv: any) => {
                                 <div style="margin-top: 20px; border: 1px solid #cbd5e1; border-radius: 8px; overflow: hidden;">
                                   <div style="background: #f1f5f9; padding: 10px; font-weight: bold; font-size: 12px; text-align: center;">تحليل وتطابق المعادلة المحاسبية الميزانية</div>
                                   <div style="padding: 15px; font-size: 11px; font-weight: bold; line-height: 1.6; display: flex; justify-content: space-around;">
-                                    <div style="color: #1e3a8a;">إجمالي الأصول المعتمدة:<br/><span style="font-size: 14px; font-family: monospace;">${totalAssets.toLocaleString(undefined, { minimumFractionDigits: 2 })} د.ل</span></div>
-                                    <div style="color: #b91c1c;">إجمالي الخصوم والالتزامات:<br/><span style="font-size: 14px; font-family: monospace;">${totalLiabilities.toLocaleString(undefined, { minimumFractionDigits: 2 })} د.ل</span></div>
-                                    <div style="color: #4f46e5;">إجمالي حقوق الملكية:<br/><span style="font-size: 14px; font-family: monospace;">${totalEquity.toLocaleString(undefined, { minimumFractionDigits: 2 })} د.ل</span></div>
+                                    <div style="color: #1e3a8a;">إجمالي الأصول المعتمدة:<br/><span style="font-size: 14px; font-family: monospace;">${totalAssets.toLocaleString(undefined, { minimumFractionDigits: 2 })} SDG</span></div>
+                                    <div style="color: #b91c1c;">إجمالي الخصوم والالتزامات:<br/><span style="font-size: 14px; font-family: monospace;">${totalLiabilities.toLocaleString(undefined, { minimumFractionDigits: 2 })} SDG</span></div>
+                                    <div style="color: #4f46e5;">إجمالي حقوق الملكية:<br/><span style="font-size: 14px; font-family: monospace;">${totalEquity.toLocaleString(undefined, { minimumFractionDigits: 2 })} SDG</span></div>
                                   </div>
                                   <div style="background: #eff6ff; padding: 10px; font-weight: bold; text-align: center; color: #1e40af; border-top: 1px solid #cbd5e1;">
-                                    مجموع (الخصوم + حقوق الملكية) = ${(totalLiabilities + totalEquity).toLocaleString(undefined, { minimumFractionDigits: 2 })} د.ل
+                                    مجموع (الخصوم + حقوق الملكية) = ${(totalLiabilities + totalEquity).toLocaleString(undefined, { minimumFractionDigits: 2 })} SDG
                                     <br/>
-                                    <span style="font-size: 10px; color: ${reportsAreCanonical ? '#15803d' : '#b45309'};">${reportsAreCanonical ? `⚖️ تم التحقق والتدقيق: الميزانية متوازنة تماماً. الفارق: ${balanceSheetVariance.toFixed(2)} د.ل` : '⚠️ نسخة عرض غير معتمدة من snapshot؛ لا يمكن إثبات توازن الميزانية.'}</span>
+                                    <span style="font-size: 10px; color: ${reportsAreCanonical ? '#15803d' : '#b45309'};">${reportsAreCanonical ? `⚖️ تم التحقق والتدقيق: الميزانية متوازنة تماماً. الفارق: ${balanceSheetVariance.toFixed(2)} SDG` : '⚠️ نسخة عرض غير معتمدة من snapshot؛ لا يمكن إثبات توازن الميزانية.'}</span>
                                   </div>
                                 </div>
                               `;
                               printReportPdf('الميزانية العمومية والمركز المالي (Balance Sheet)', 'تفريغ معتمد للأصول، والخصوم، وحقوق الملكية من دفاتر الأستاذ العام.', ['رمز الحساب', 'البند المحاسبي', 'التصنيف الرئيسي', 'الرصيد الختامي المعتمد'], rowsHtml, summaryHtml);
                             } else if (selectedReport === 'cash_flow') {
                               const entries = [
-                                ['المتحصلات النقدية الموثقة', 'أنشطة تشغيلية - تدفق وارد', hasVerifiedCashFlow ? actualCashInflow.toLocaleString(undefined, { minimumFractionDigits: 2 }) + ' د.ل' : 'غير متحقق'],
-                                ['المدفوعات النقدية الموثقة', 'أنشطة تشغيلية - تدفق صادر', hasVerifiedCashFlow ? '-' + actualCashOutflow.toLocaleString(undefined, { minimumFractionDigits: 2 }) + ' د.ل' : 'غير متحقق'],
-                                ['التدفقات الاستثمارية الموثقة', 'أنشطة استثمارية', cashFlowValue(0) + (hasVerifiedCashFlow ? ' د.ل' : '')],
-                                ['التدفقات التمويلية الموثقة', 'أنشطة تمويلية', cashFlowValue(0) + (hasVerifiedCashFlow ? ' د.ل' : '')]
+                                ['المتحصلات النقدية الموثقة', 'أنشطة تشغيلية - تدفق وارد', hasVerifiedCashFlow ? actualCashInflow.toLocaleString(undefined, { minimumFractionDigits: 2 }) + ' SDG' : 'غير متحقق'],
+                                ['المدفوعات النقدية الموثقة', 'أنشطة تشغيلية - تدفق صادر', hasVerifiedCashFlow ? '-' + actualCashOutflow.toLocaleString(undefined, { minimumFractionDigits: 2 }) + ' SDG' : 'غير متحقق'],
+                                ['التدفقات الاستثمارية الموثقة', 'أنشطة استثمارية', cashFlowValue(0) + (hasVerifiedCashFlow ? ' SDG' : '')],
+                                ['التدفقات التمويلية الموثقة', 'أنشطة تمويلية', cashFlowValue(0) + (hasVerifiedCashFlow ? ' SDG' : '')]
                               ];
                               let rowsHtml = entries.map(e => `
                                 <tr>
@@ -1984,7 +2000,7 @@ const handleDrillDownToOriginalDocument = (jv: any) => {
                                 </tr>
                               `).join('');
                               const cashNetValue = hasVerifiedCashFlow
-                                ? (actualCashInflow - actualCashOutflow).toLocaleString(undefined, { minimumFractionDigits: 2 }) + ' د.ل'
+                                ? (actualCashInflow - actualCashOutflow).toLocaleString(undefined, { minimumFractionDigits: 2 }) + ' SDG'
                                 : 'غير متحقق';
                               const summaryHtml = `
                                 <div style="margin-top: 20px; background: #f0fdf4; border: 1px solid #bbf7d0; padding: 15px; border-radius: 8px; font-weight: bold; font-size: 12px; display: flex; justify-content: space-between; color: #166534;">
@@ -2003,7 +2019,7 @@ const handleDrillDownToOriginalDocument = (jv: any) => {
                                   <td>قيد رصيد بداية المدة المعتمد</td>
                                   <td style="text-align: left; font-family: monospace;">-</td>
                                   <td style="text-align: left; font-family: monospace;">-</td>
-                                  <td style="text-align: left; font-family: monospace; font-weight: bold;">${running.toLocaleString(undefined, { minimumFractionDigits: 2 })} د.ل</td>
+                                  <td style="text-align: left; font-family: monospace; font-weight: bold;">${running.toLocaleString(undefined, { minimumFractionDigits: 2 })} SDG</td>
                                 </tr>
                               `;
                               let totalDeb = 0;
@@ -2029,7 +2045,7 @@ const handleDrillDownToOriginalDocument = (jv: any) => {
                                         <td>${line.description || entry.description}</td>
                                         <td style="text-align: left; font-family: monospace;">${deb > 0 ? deb.toLocaleString(undefined, { minimumFractionDigits: 2 }) : '-'}</td>
                                         <td style="text-align: left; font-family: monospace;">${crd > 0 ? crd.toLocaleString(undefined, { minimumFractionDigits: 2 }) : '-'}</td>
-                                        <td style="text-align: left; font-family: monospace; font-weight: bold;">${running.toLocaleString(undefined, { minimumFractionDigits: 2 })} د.ل</td>
+                                        <td style="text-align: left; font-family: monospace; font-weight: bold;">${running.toLocaleString(undefined, { minimumFractionDigits: 2 })} SDG</td>
                                       </tr>
                                     `;
                                   }
@@ -2041,15 +2057,15 @@ const handleDrillDownToOriginalDocument = (jv: any) => {
                                 <div style="margin-top: 15px; background: #fafafa; border: 1px solid #e2e8f0; padding: 12px; border-radius: 6px; font-size: 11px; line-height: 1.6; font-weight: bold;">
                                   <div style="display: flex; justify-content: space-between;">
                                     <span>مجموع الحركات المدينة خلال الفترة:</span>
-                                    <span style="font-family: monospace; color: #1d4ed8;">${totalDeb.toLocaleString(undefined, { minimumFractionDigits: 2 })} د.ل</span>
+                                    <span style="font-family: monospace; color: #1d4ed8;">${totalDeb.toLocaleString(undefined, { minimumFractionDigits: 2 })} SDG</span>
                                   </div>
                                   <div style="display: flex; justify-content: space-between; margin-top: 5px;">
                                     <span>مجموع الحركات الدائنة خلال الفترة:</span>
-                                    <span style="font-family: monospace; color: #b91c1c;">${totalCrd.toLocaleString(undefined, { minimumFractionDigits: 2 })} د.ل</span>
+                                    <span style="font-family: monospace; color: #b91c1c;">${totalCrd.toLocaleString(undefined, { minimumFractionDigits: 2 })} SDG</span>
                                   </div>
                                   <div style="display: flex; justify-content: space-between; margin-top: 8px; border-top: 1px dashed #cbd5e1; padding-top: 5px; font-size: 12px; color: #0f172a;">
                                     <span>الرصيد الختامي المتراكم للحساب:</span>
-                                    <span style="font-family: monospace;">${running.toLocaleString(undefined, { minimumFractionDigits: 2 })} د.ل</span>
+                                    <span style="font-family: monospace;">${running.toLocaleString(undefined, { minimumFractionDigits: 2 })} SDG</span>
                                   </div>
                                 </div>
                               `;
@@ -2063,10 +2079,10 @@ const handleDrillDownToOriginalDocument = (jv: any) => {
                                     <td style="font-family: monospace;">${a.code}</td>
                                     <td style="font-weight: bold; padding-right: ${a.level * 12}px;">${a.nameAr}</td>
                                     <td>${a.natureType}</td>
-                                    <td style="text-align: left; font-family: monospace;">${a.openingBalance.toLocaleString(undefined, { minimumFractionDigits: 2 })} د.ل</td>
+                                    <td style="text-align: left; font-family: monospace;">${a.openingBalance.toLocaleString(undefined, { minimumFractionDigits: 2 })} SDG</td>
                                     <td style="text-align: left; font-family: monospace; color: #1d4ed8;">${a.debitMovements > 0 ? a.debitMovements.toLocaleString(undefined, { minimumFractionDigits: 2 }) : '-'}</td>
                                     <td style="text-align: left; font-family: monospace; color: #b91c1c;">${a.creditMovements > 0 ? a.creditMovements.toLocaleString(undefined, { minimumFractionDigits: 2 }) : '-'}</td>
-                                    <td style="text-align: left; font-family: monospace; font-weight: bold;">${a.endingBalance.toLocaleString(undefined, { minimumFractionDigits: 2 })} د.ل</td>
+                                    <td style="text-align: left; font-family: monospace; font-weight: bold;">${a.endingBalance.toLocaleString(undefined, { minimumFractionDigits: 2 })} SDG</td>
                                   </tr>
                                 `;
                               });
@@ -2112,24 +2128,14 @@ const handleDrillDownToOriginalDocument = (jv: any) => {
                                 <th className="p-3 text-right">اسم الحساب الدفتري</th>
                                 <th className="p-3 text-right">المستوى</th>
                                 <th className="p-3 text-right">التصنيف الرئيسي</th>
-                                <th className="p-3 text-left">أرصدة مدينة (د.ل)</th>
-                                <th className="p-3 text-left">أرصدة دائنة (د.ل)</th>
+                                <th className="p-3 text-left">أرصدة مدينة (SDG)</th>
+                                <th className="p-3 text-left">أرصدة دائنة (SDG)</th>
                               </tr>
                             </thead>
                             <tbody className="divide-y divide-slate-100">
-                              {(() => {
-                                let sumDeb = 0;
-                                let sumCrd = 0;
-                                return (
-                                  <>
-                                    {reportAccounts
-                                      .filter(a => trialBalanceLevel === 'all' || a.level === trialBalanceLevel)
-                                      .map(acc => {
-                                        const isDeb = acc.natureType === 'مدين' || acc.classification === 'أصول' || acc.classification === 'مصروفات';
-                                        const debitVal = isDeb ? acc.endingBalance : 0;
-                                        const creditVal = !isDeb ? acc.endingBalance : 0;
-                                        sumDeb += debitVal;
-                                        sumCrd += creditVal;
+                              <>
+                                    {visibleTrialBalanceAccounts.map(acc => {
+                                        const { debit: debitVal, credit: creditVal } = getTrialBalanceAmounts(acc);
 
                                         return (
                                           <tr 
@@ -2167,13 +2173,13 @@ const handleDrillDownToOriginalDocument = (jv: any) => {
                                         );
                                       })}
                                     <tr className="bg-indigo-50/65 font-black text-slate-900 border-t-2 border-indigo-250">
-                                      <td colSpan={4} className="p-3.5 text-center text-sm">الإجمالي الموزون المتطابق لميزان المراجعة ⚖️</td>
-                                      <td className="p-3.5 font-mono text-left text-sm text-emerald-800">{sumDeb.toLocaleString(undefined, { minimumFractionDigits: 2 })} د.ل</td>
-                                      <td className="p-3.5 font-mono text-left text-sm text-indigo-800">{sumCrd.toLocaleString(undefined, { minimumFractionDigits: 2 })} د.ل</td>
+                                      <td colSpan={4} className="p-3.5 text-center text-sm">
+                                        إجمالي الحسابات دون تكرار المجاميع الفرعية · {trialBalanceIsBalanced ? 'متزن' : `فرق ${Math.abs(trialBalanceTotals.debit - trialBalanceTotals.credit).toLocaleString(undefined, { minimumFractionDigits: 2 })} SDG`}
+                                      </td>
+                                      <td className="p-3.5 font-mono text-left text-sm text-emerald-800">{trialBalanceTotals.debit.toLocaleString(undefined, { minimumFractionDigits: 2 })} SDG</td>
+                                      <td className="p-3.5 font-mono text-left text-sm text-indigo-800">{trialBalanceTotals.credit.toLocaleString(undefined, { minimumFractionDigits: 2 })} SDG</td>
                                     </tr>
-                                  </>
-                                );
-                              })()}
+                              </>
                             </tbody>
                           </table>
                         </div>
@@ -2200,13 +2206,13 @@ const handleDrillDownToOriginalDocument = (jv: any) => {
                                       <span className="text-slate-400 font-mono text-[9px]">({a.code})</span>
                                       <span className="opacity-0 group-hover/row:opacity-100 transition-all text-[8px] bg-emerald-200 text-emerald-800 px-1.5 py-0.5 rounded font-sans select-none font-extrabold">كشف حساب 📊</span>
                                     </span>
-                                    <span className="font-mono text-emerald-700 font-semibold" dir="ltr">{periodRevenue(a).toLocaleString(undefined, { minimumFractionDigits: 2 })} د.ل</span>
+                                    <span className="font-mono text-emerald-700 font-semibold" dir="ltr">{periodRevenue(a).toLocaleString(undefined, { minimumFractionDigits: 2 })} SDG</span>
                                   </div>
                                 ))}
                             </div>
                             <div className="border-t border-emerald-200 pt-2 flex justify-between items-center font-bold text-emerald-900 text-xs">
                               <span>إجمالي الإيرادات المقررة:</span>
-                              <span className="font-mono text-sm">{totalRevenues.toLocaleString(undefined, { minimumFractionDigits: 2 })} د.ل</span>
+                              <span className="font-mono text-sm">{totalRevenues.toLocaleString(undefined, { minimumFractionDigits: 2 })} SDG</span>
                             </div>
                           </div>
 
@@ -2226,13 +2232,13 @@ const handleDrillDownToOriginalDocument = (jv: any) => {
                                       <span className="text-slate-400 font-mono text-[9px]">({a.code})</span>
                                       <span className="opacity-0 group-hover/row:opacity-100 transition-all text-[8px] bg-rose-200 text-rose-800 px-1.5 py-0.5 rounded font-sans select-none font-extrabold">كشف حساب 📊</span>
                                     </span>
-                                    <span className="font-mono text-rose-700 font-semibold" dir="ltr">{periodExpense(a).toLocaleString(undefined, { minimumFractionDigits: 2 })} د.ل</span>
+                                    <span className="font-mono text-rose-700 font-semibold" dir="ltr">{periodExpense(a).toLocaleString(undefined, { minimumFractionDigits: 2 })} SDG</span>
                                   </div>
                                 ))}
                             </div>
                             <div className="border-t border-rose-200 pt-2 flex justify-between items-center font-bold text-rose-900 text-xs">
                               <span>إجمالي المصروفات الدفترية:</span>
-                              <span className="font-mono text-sm">{totalExpenses.toLocaleString(undefined, { minimumFractionDigits: 2 })} د.ل</span>
+                              <span className="font-mono text-sm">{totalExpenses.toLocaleString(undefined, { minimumFractionDigits: 2 })} SDG</span>
                             </div>
                           </div>
                         </div>
@@ -2247,7 +2253,7 @@ const handleDrillDownToOriginalDocument = (jv: any) => {
                           </div>
                           <div className="text-center sm:text-left">
                             <span className={`block font-mono text-2xl font-black ${netIncome >= 0 ? 'text-emerald-700' : 'text-rose-700'}`} dir="ltr">
-                              {netIncome >= 0 ? '+' : ''}{netIncome.toLocaleString(undefined, { minimumFractionDigits: 2 })} د.ل
+                              {netIncome >= 0 ? '+' : ''}{netIncome.toLocaleString(undefined, { minimumFractionDigits: 2 })} SDG
                             </span>
                             <span className={`inline-block mt-1 px-3 py-0.5 rounded-full text-[9px] font-bold ${netIncome >= 0 ? 'bg-emerald-200 text-emerald-800' : 'bg-rose-200 text-rose-800'}`}>
                               {netIncome >= 0 ? 'مؤشر ربحي إيجابي 📈' : 'يرجى مراجعة ترشيد النفقات ⚠️'}
@@ -2297,13 +2303,13 @@ const handleDrillDownToOriginalDocument = (jv: any) => {
                                       <span className="text-slate-400 text-[10px]">({a.code})</span>
                                       <span className="opacity-0 group-hover/row:opacity-100 transition-all text-[8px] bg-blue-100 text-blue-850 px-1.5 py-0.5 rounded font-sans select-none font-bold">كشف حساب 📊</span>
                                     </span>
-                                    <span className="font-mono text-emerald-700 font-semibold" dir="ltr">{a.endingBalance.toLocaleString(undefined, { minimumFractionDigits: 2 })} د.ل</span>
+                                    <span className="font-mono text-emerald-700 font-semibold" dir="ltr">{a.endingBalance.toLocaleString(undefined, { minimumFractionDigits: 2 })} SDG</span>
                                   </div>
                                 ))}
                             </div>
                             <div className="border-t border-slate-200 pt-3 flex justify-between items-center font-bold text-slate-900 text-xs">
                               <span>إجمالي الأصول (Assets Total):</span>
-                              <span className="font-mono text-sm text-blue-700">{totalAssets.toLocaleString(undefined, { minimumFractionDigits: 2 })} د.ل</span>
+                              <span className="font-mono text-sm text-blue-700">{totalAssets.toLocaleString(undefined, { minimumFractionDigits: 2 })} SDG</span>
                             </div>
                           </div>
 
@@ -2326,7 +2332,7 @@ const handleDrillDownToOriginalDocument = (jv: any) => {
                                         <span className="text-slate-400 text-[10px]">({a.code})</span>
                                         <span className="opacity-0 group-hover/row:opacity-100 transition-all text-[8px] bg-indigo-100 text-indigo-850 px-1.5 py-0.5 rounded font-sans select-none font-bold">كشف حساب 📊</span>
                                       </span>
-                                      <span className="font-mono text-indigo-700 font-semibold" dir="ltr">{a.endingBalance.toLocaleString(undefined, { minimumFractionDigits: 2 })} د.ل</span>
+                                      <span className="font-mono text-indigo-700 font-semibold" dir="ltr">{a.endingBalance.toLocaleString(undefined, { minimumFractionDigits: 2 })} SDG</span>
                                     </div>
                                   ))}
                               </div>
@@ -2343,7 +2349,7 @@ const handleDrillDownToOriginalDocument = (jv: any) => {
                                         <span className="text-slate-400 text-[10px]">({a.code})</span>
                                         <span className="opacity-0 group-hover/row:opacity-100 transition-all text-[8px] bg-slate-200 text-slate-800 px-1.5 py-0.5 rounded font-sans select-none font-bold">كشف حساب 📊</span>
                                       </span>
-                                      <span className="font-mono text-slate-700 font-semibold" dir="ltr">{a.endingBalance.toLocaleString(undefined, { minimumFractionDigits: 2 })} د.ل</span>
+                                      <span className="font-mono text-slate-700 font-semibold" dir="ltr">{a.endingBalance.toLocaleString(undefined, { minimumFractionDigits: 2 })} SDG</span>
                                     </div>
                                   ))}
                               </div>
@@ -2351,7 +2357,7 @@ const handleDrillDownToOriginalDocument = (jv: any) => {
 
                             <div className="border-t border-slate-200 pt-3 flex justify-between items-center font-bold text-slate-900 text-xs">
                               <span>مجموع (الخصوم + الملكية):</span>
-                              <span className="font-mono text-sm text-indigo-700">{(totalLiabilities + totalEquity).toLocaleString(undefined, { minimumFractionDigits: 2 })} د.ل</span>
+                              <span className="font-mono text-sm text-indigo-700">{(totalLiabilities + totalEquity).toLocaleString(undefined, { minimumFractionDigits: 2 })} SDG</span>
                             </div>
                           </div>
                         </div>
@@ -2382,7 +2388,7 @@ const handleDrillDownToOriginalDocument = (jv: any) => {
                                     <span>المتحصلات النقدية الموثقة من القيود المرحّلة</span>
                                     <span className="opacity-0 group-hover/cf:opacity-100 transition-all text-[8px] bg-emerald-100 text-emerald-800 px-1.5 py-0.5 rounded font-sans select-none font-bold">كشف حساب 📊</span>
                                   </span>
-                                  <span className="font-mono text-emerald-700 font-bold">{hasVerifiedCashFlow ? `+${actualCashInflow.toLocaleString(undefined, { minimumFractionDigits: 2 })} د.ل` : 'غير متحقق'}</span>
+                                  <span className="font-mono text-emerald-700 font-bold">{hasVerifiedCashFlow ? `+${actualCashInflow.toLocaleString(undefined, { minimumFractionDigits: 2 })} SDG` : 'غير متحقق'}</span>
                                 </div>
                                 <div 
                                   className="flex justify-between text-slate-600 hover:bg-slate-100 p-1.5 rounded transition-all cursor-pointer group/cf"
@@ -2394,7 +2400,7 @@ const handleDrillDownToOriginalDocument = (jv: any) => {
                                     <span>المدفوعات النقدية الموثقة من القيود المرحّلة</span>
                                     <span className="opacity-0 group-hover/cf:opacity-100 transition-all text-[8px] bg-rose-100 text-rose-800 px-1.5 py-0.5 rounded font-sans select-none font-bold">كشف حساب 📊</span>
                                   </span>
-                                  <span className="font-mono text-rose-700 font-bold">{hasVerifiedCashFlow ? `-${actualCashOutflow.toLocaleString(undefined, { minimumFractionDigits: 2 })} د.ل` : 'غير متحقق'}</span>
+                                  <span className="font-mono text-rose-700 font-bold">{hasVerifiedCashFlow ? `-${actualCashOutflow.toLocaleString(undefined, { minimumFractionDigits: 2 })} SDG` : 'غير متحقق'}</span>
                                 </div>
                                 <div 
                                   className="flex justify-between text-slate-600 hover:bg-slate-100 p-1.5 rounded transition-all cursor-pointer group/cf"
@@ -2406,7 +2412,7 @@ const handleDrillDownToOriginalDocument = (jv: any) => {
                                     <span>تفصيل إضافي للمصروفات النقدية — غير متاح دون تصنيف موثق</span>
                                     <span className="opacity-0 group-hover/cf:opacity-100 transition-all text-[8px] bg-rose-100 text-rose-800 px-1.5 py-0.5 rounded font-sans select-none font-bold">كشف حساب 📊</span>
                                   </span>
-                                  <span className="font-mono text-rose-700 font-bold">{hasVerifiedCashFlow ? `-${actualCashOutflow.toLocaleString(undefined, { minimumFractionDigits: 2 })} د.ل` : 'غير متحقق'}</span>
+                                  <span className="font-mono text-rose-700 font-bold">{hasVerifiedCashFlow ? `-${actualCashOutflow.toLocaleString(undefined, { minimumFractionDigits: 2 })} SDG` : 'غير متحقق'}</span>
                                 </div>
                               </div>
                             </div>
@@ -2425,7 +2431,7 @@ const handleDrillDownToOriginalDocument = (jv: any) => {
                                     <span>مدفوعات حيازة وتجهيز حافلات ومقاعد مدرسية ثابتة</span>
                                     <span className="opacity-0 group-hover/cf:opacity-100 transition-all text-[8px] bg-rose-100 text-rose-800 px-1.5 py-0.5 rounded font-sans select-none font-bold">كشف حساب 📊</span>
                                   </span>
-                                    <span className="font-mono text-rose-700 font-bold">{cashFlowValue(0)}{hasVerifiedCashFlow ? ' د.ل' : ''}</span>
+                                    <span className="font-mono text-rose-700 font-bold">{cashFlowValue(0)}{hasVerifiedCashFlow ? ' SDG' : ''}</span>
                                 </div>
                               </div>
                             </div>
@@ -2444,7 +2450,7 @@ const handleDrillDownToOriginalDocument = (jv: any) => {
                                     <span>زيادة رأس مال المجمع والتدفق المساهم الجديد</span>
                                     <span className="opacity-0 group-hover/cf:opacity-100 transition-all text-[8px] bg-emerald-100 text-emerald-800 px-1.5 py-0.5 rounded font-sans select-none font-bold">كشف حساب 📊</span>
                                   </span>
-                                    <span className="font-mono text-emerald-700 font-bold">{cashFlowValue(0)}{hasVerifiedCashFlow ? ' د.ل' : ''}</span>
+                                    <span className="font-mono text-emerald-700 font-bold">{cashFlowValue(0)}{hasVerifiedCashFlow ? ' SDG' : ''}</span>
                                 </div>
                               </div>
                             </div>
@@ -2454,7 +2460,7 @@ const handleDrillDownToOriginalDocument = (jv: any) => {
                           <div className="border-t border-slate-200 pt-3 flex justify-between items-center font-bold text-xs text-slate-900 bg-emerald-50 p-3 rounded-lg border border-emerald-200">
                             <span className="text-emerald-800">صافي التغير الإيجابي في النقدية المتاحة بصندوق ومصرف المدارس:</span>
                             <span className="font-mono text-sm text-emerald-700" dir="ltr">
-                              {hasVerifiedCashFlow ? `${(actualCashInflow - actualCashOutflow).toLocaleString(undefined, { minimumFractionDigits: 2 })} د.ل` : 'غير متحقق'}
+                              {hasVerifiedCashFlow ? `${(actualCashInflow - actualCashOutflow).toLocaleString(undefined, { minimumFractionDigits: 2 })} SDG` : 'غير متحقق'}
                             </span>
                           </div>
                         </div>
@@ -2495,9 +2501,9 @@ const handleDrillDownToOriginalDocument = (jv: any) => {
                                 <th className="p-3 text-right">التاريخ</th>
                                 <th className="p-3 text-right">رقم القيد</th>
                                 <th className="p-3 text-right">البيان وتفاصيل المعاملة الدفترية</th>
-                                <th className="p-3 text-left">مدين (د.ل)</th>
-                                <th className="p-3 text-left">دائن (د.ل)</th>
-                                <th className="p-3 text-left bg-purple-50/50">الرصيد التراكمي المستمر (د.ل)</th>
+                                <th className="p-3 text-left">مدين (SDG)</th>
+                                <th className="p-3 text-left">دائن (SDG)</th>
+                                <th className="p-3 text-left bg-purple-50/50">الرصيد التراكمي المستمر (SDG)</th>
                               </tr>
                             </thead>
                             <tbody className="divide-y divide-slate-100">
@@ -2559,7 +2565,7 @@ const handleDrillDownToOriginalDocument = (jv: any) => {
                                       </td>
                                       <td className="p-3 text-left font-mono text-slate-400">-</td>
                                       <td className="p-3 text-left font-mono text-slate-400">-</td>
-                                      <td className="p-3 text-left font-mono text-slate-900 font-black bg-purple-50/35">{runningBalance.toLocaleString(undefined, { minimumFractionDigits: 2 })} د.ل</td>
+                                      <td className="p-3 text-left font-mono text-slate-900 font-black bg-purple-50/35">{runningBalance.toLocaleString(undefined, { minimumFractionDigits: 2 })} SDG</td>
                                     </tr>
 
                                     {matchingLines.map((line, idx) => {
@@ -2599,16 +2605,16 @@ const handleDrillDownToOriginalDocument = (jv: any) => {
                                           </td>
                                           <td className="p-3 font-mono text-left text-emerald-700 font-bold">{line.debit > 0 ? line.debit.toLocaleString(undefined, { minimumFractionDigits: 2 }) : '-'}</td>
                                           <td className="p-3 font-mono text-left text-rose-700 font-bold">{line.credit > 0 ? line.credit.toLocaleString(undefined, { minimumFractionDigits: 2 }) : '-'}</td>
-                                          <td className="p-3 font-mono text-left text-slate-900 font-black bg-purple-50/20">{runningBalance.toLocaleString(undefined, { minimumFractionDigits: 2 })} د.ل</td>
+                                          <td className="p-3 font-mono text-left text-slate-900 font-black bg-purple-50/20">{runningBalance.toLocaleString(undefined, { minimumFractionDigits: 2 })} SDG</td>
                                         </tr>
                                       );
                                     })}
 
                                     <tr className="bg-purple-50 font-black text-slate-900 border-t border-purple-200">
                                       <td colSpan={3} className="p-3.5 text-center text-xs">مجموع الحركة الدورية وصافي الرصيد الختامي للفترة</td>
-                                      <td className="p-3.5 font-mono text-left text-emerald-800">{totalDr.toLocaleString(undefined, { minimumFractionDigits: 2 })} د.ل</td>
-                                      <td className="p-3.5 font-mono text-left text-rose-800">{totalCr.toLocaleString(undefined, { minimumFractionDigits: 2 })} د.ل</td>
-                                      <td className="p-3.5 font-mono text-left bg-purple-100 text-purple-900">{runningBalance.toLocaleString(undefined, { minimumFractionDigits: 2 })} د.ل</td>
+                                      <td className="p-3.5 font-mono text-left text-emerald-800">{totalDr.toLocaleString(undefined, { minimumFractionDigits: 2 })} SDG</td>
+                                      <td className="p-3.5 font-mono text-left text-rose-800">{totalCr.toLocaleString(undefined, { minimumFractionDigits: 2 })} SDG</td>
+                                      <td className="p-3.5 font-mono text-left bg-purple-100 text-purple-900">{runningBalance.toLocaleString(undefined, { minimumFractionDigits: 2 })} SDG</td>
                                     </tr>
                                   </>
                                 );
@@ -2629,10 +2635,10 @@ const handleDrillDownToOriginalDocument = (jv: any) => {
                                 <th className="p-3 text-right">رمز الحساب</th>
                                 <th className="p-3 text-right">البند الحسابي</th>
                                 <th className="p-3 text-right">الطبيعة</th>
-                                <th className="p-3 text-left">رصيد افتتاحي (د.ل)</th>
+                                <th className="p-3 text-left">رصيد افتتاحي (SDG)</th>
                                 <th className="p-3 text-left">الحركات المدينة خلال الفترة</th>
                                 <th className="p-3 text-left">الحركات الدائنة خلال الفترة</th>
-                                <th className="p-3 text-left bg-blue-50">رصيد ختامي معتمد (د.ل)</th>
+                                <th className="p-3 text-left bg-blue-50">رصيد ختامي معتمد (SDG)</th>
                               </tr>
                             </thead>
                             <tbody className="divide-y divide-slate-100">

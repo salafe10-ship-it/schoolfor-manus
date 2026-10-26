@@ -3,8 +3,8 @@ import { resolve } from 'node:path';
 import { describe, expect, it } from 'vitest';
 
 const source = (file: string) => readFileSync(resolve(process.cwd(), file), 'utf8');
-const serviceSource = source('src/database/services/StudentService.ts');
-const serverSource = source('server.ts');
+const serviceSource = source('src/database/services/StudentService.ts').replace(/\r\n/g, '\n');
+const serverSource = source('server.ts').replace(/\r\n/g, '\n');
 
 function bulkServiceBlock(): string {
   const start = serviceSource.indexOf('public static async executeBulkOperation');

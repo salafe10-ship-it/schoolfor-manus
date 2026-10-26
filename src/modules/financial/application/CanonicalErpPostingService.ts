@@ -8,7 +8,8 @@ export const CANONICAL_ERP_TABLES = [
   'erp_general_ledger',
   'erp_expense_accruals',
   'erp_financial_audit_events',
-  'erp_financial_periods'
+  'erp_financial_periods',
+  'erp_financial_document_sequences'
 ] as const;
 
 type FinancialRow = Record<string, unknown>;
@@ -28,6 +29,7 @@ export type CanonicalPostingLine = {
 export type CanonicalPostingDocument = {
   sourceType: PostingSource;
   sourceId: string;
+  sourceDocumentNumber?: string;
   date: string;
   description: string;
   lines: CanonicalPostingLine[];
@@ -173,6 +175,18 @@ function rowValue(row: FinancialRow, ...keys: string[]): unknown {
   return undefined;
 }
 
+function objectValue(value: unknown): FinancialRow {
+  if (typeof value === 'string') {
+    try {
+      const parsed = JSON.parse(value);
+      return parsed && typeof parsed === 'object' && !Array.isArray(parsed) ? parsed as FinancialRow : {};
+    } catch {
+      return {};
+    }
+  }
+  return value && typeof value === 'object' && !Array.isArray(value) ? value as FinancialRow : {};
+}
+
 function textValue(value: unknown, fallback = ''): string {
   if (typeof value === 'string') return value.trim() || fallback;
   if (value === undefined || value === null) return fallback;
@@ -277,6 +291,7 @@ export function buildCanonicalPosting(
     return {
       sourceType,
       sourceId,
+      sourceDocumentNumber: textValue(rowValue(input, 'invoiceNumber', 'documentNumber')) || undefined,
       date: dateValue(rowValue(input, 'invoiceDate', 'date')),
       description: textValue(rowValue(input, 'item', 'description'), `إثبات رسوم الطالب ${sourceId}`),
       fiscalPeriod: fiscalPeriodFor(dateValue(rowValue(input, 'invoiceDate', 'date'))),
@@ -288,7 +303,11 @@ export function buildCanonicalPosting(
   if (sourceType === 'student_receipt') {
     if (normalizedStatus(rowValue(input, 'status')) !== 'posted') return null;
     const amount = positiveAmount(rowValue(input, 'amount'), 'receipt.amount');
-    const rawReceivingAccounts = rowValue(input, 'receivingAccounts', 'receivingAccountLines');
+    const directReceivingAccounts = rowValue(input, 'receivingAccounts', 'receivingAccountLines');
+    const receiptSourcePayload = objectValue(rowValue(input, 'sourcePayload', 'source_payload'));
+    const rawReceivingAccounts = Array.isArray(directReceivingAccounts) && directReceivingAccounts.length > 0
+      ? directReceivingAccounts
+      : rowValue(receiptSourcePayload, 'receivingAccounts', 'receivingAccountLines');
     const receivingAccounts = Array.isArray(rawReceivingAccounts) && rawReceivingAccounts.length > 0
       ? rawReceivingAccounts.map((item: any, index: number) => {
           const accountCode = textValue(item?.accountCode || item?.account || item?.code);
@@ -319,6 +338,7 @@ export function buildCanonicalPosting(
     return {
       sourceType,
       sourceId,
+      sourceDocumentNumber: textValue(rowValue(input, 'receiptVoucherId', 'voucherNumber', 'documentNumber')) || undefined,
       date: dateValue(rowValue(input, 'date', 'receiptDate')),
       description: textValue(rowValue(input, 'against', 'description'), `تحصيل رسوم الطالب ${sourceId}`),
       fiscalPeriod: fiscalPeriodFor(dateValue(rowValue(input, 'date', 'receiptDate'))),
@@ -436,6 +456,7 @@ export function buildCanonicalPosting(
   return {
     sourceType,
     sourceId,
+    sourceDocumentNumber: textValue(rowValue(input, 'paymentVoucherNumber', 'voucherNumber', 'documentNumber')) || undefined,
     date: dateValue(rowValue(input, 'date', 'paymentDate')),
     description: textValue(rowValue(input, 'against', 'description'), `سداد مصروف ${sourceId}`),
     fiscalPeriod: fiscalPeriodFor(dateValue(rowValue(input, 'date', 'paymentDate'))),
@@ -449,6 +470,35 @@ function db(transaction: TransactionLike): TransactionLike {
 }
 
 export class CanonicalErpPostingService {
+  /** Allocate a school/fiscal-year document serial inside the caller's transaction. */
+  public static async allocateDocumentNumber(
+    transaction: TransactionLike,
+    tenantId: string,
+    schoolId: string,
+    kind: 'invoice' | 'journal' | 'payment',
+    documentDate: string
+  ): Promise<string> {
+    const date = dateValue(documentDate);
+    const fiscalYear = Number(date.slice(0, 4));
+    const result = await db(transaction).query<{ last_number: string | number }>(
+      `INSERT INTO public.erp_financial_document_sequences
+        (tenant_id, school_id, document_kind, fiscal_year, last_number)
+       VALUES ($1::uuid, $2::uuid, $3, $4, 1)
+       ON CONFLICT (school_id, document_kind, fiscal_year) DO UPDATE
+         SET last_number = public.erp_financial_document_sequences.last_number + 1,
+             updated_at = now()
+       RETURNING last_number`,
+      [tenantId, schoolId, kind, fiscalYear]
+    );
+    const serial = Number(result.rows[0]?.last_number);
+    if (!Number.isSafeInteger(serial) || serial < 1) {
+      throw new Error(`تعذر تخصيص رقم رسمي متسلسل للمستند المالي (${kind}).`);
+    }
+    const prefix = kind === 'invoice' ? 'INV' : kind === 'payment' ? 'PV' : 'JV';
+    const width = kind === 'payment' ? 4 : 6;
+    return `${prefix}-${fiscalYear}-${String(serial).padStart(width, '0')}`;
+  }
+
   public static async isProvisioned(transaction: TransactionLike): Promise<boolean> {
     const result = await db(transaction).query<{ table_name: string }>(
       `SELECT table_name
@@ -656,8 +706,8 @@ export class CanonicalErpPostingService {
     );
     if (!period.rows[0]) throw new Error(`الفترة المالية ${fiscalPeriod} غير معرفة للمدرسة.`);
     if (period.rows[0].status !== 'open') throw new Error(`الفترة المالية ${fiscalPeriod} مغلقة ولا تقبل الترحيل.`);
-    const existing = await db(transaction).query<{ id: string; total_debit: string | number; total_credit: string | number }>(
-      `SELECT id, total_debit, total_credit
+    const existing = await db(transaction).query<{ id: string; total_debit: string | number; total_credit: string | number; source_document_number: string | null }>(
+      `SELECT id, total_debit, total_credit, source_document_number
          FROM public.erp_journal_entries
         WHERE school_id = $1 AND idempotency_key = $2
         FOR UPDATE`,
@@ -680,16 +730,32 @@ export class CanonicalErpPostingService {
       if (!linesMatch) {
         throw new Error(`تعارض ترحيل: المستند ${document.sourceId} مرتبط بقيد قديم غير مطابق لقاعدة الذمم الكانونية.`);
       }
+      const existingDocumentNumber = String(existing.rows[0].source_document_number || '').trim();
+      if (existingDocumentNumber && document.sourceDocumentNumber && existingDocumentNumber !== document.sourceDocumentNumber) {
+        throw new Error(`تعارض رقم المستند: ${document.sourceId} مرتبط بالرقم ${existingDocumentNumber} ولا يجوز استبداله.`);
+      }
+      if (!existingDocumentNumber && document.sourceDocumentNumber) {
+        await db(transaction).query(
+          `UPDATE public.erp_journal_entries SET source_document_number = $3
+            WHERE school_id = $1 AND id = $2 AND source_document_number IS NULL`,
+          [schoolId, existing.rows[0].id, document.sourceDocumentNumber]
+        );
+      }
       return { created: false, ledgerLines: 0, journalEntryId: existing.rows[0].id };
     }
 
+    const journalNumber = await this.allocateDocumentNumber(
+      transaction, tenantId, schoolId, 'journal', document.date
+    );
+
     await db(transaction).query(
       `INSERT INTO public.erp_journal_entries
-        (tenant_id, school_id, id, entry_date, description, source_type, source_id,
+        (tenant_id, school_id, id, journal_number, source_document_number, entry_date, description, source_type, source_id,
         fiscal_period, idempotency_key, total_debit, total_credit, source_payload, created_by)
-       VALUES ($1::uuid, $2::uuid, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12::jsonb, $13::uuid)`,
-      [tenantId, schoolId, journalEntryId, document.date, document.description, document.sourceType,
-        document.sourceId, fiscalPeriod, idempotencyKey, debitTotal, creditTotal, JSON.stringify(document.sourcePayload || {}), actorId]
+       VALUES ($1::uuid, $2::uuid, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14::jsonb, $15::uuid)`,
+      [tenantId, schoolId, journalEntryId, journalNumber, document.sourceDocumentNumber || null, document.date,
+        document.description, document.sourceType, document.sourceId, fiscalPeriod, idempotencyKey, debitTotal, creditTotal,
+        JSON.stringify(document.sourcePayload || {}), actorId]
     );
 
     const orderedLines = [...document.lines].sort((a, b) => a.accountCode.localeCompare(b.accountCode));
@@ -1138,15 +1204,22 @@ export class CanonicalErpPostingService {
     }
     const reversalId = `ERP-REV-${journalId}`;
     const key = `reversal:${journalId}`;
+    const postingDateResult = await db(transaction).query<{ posting_date: string }>(
+      `SELECT CURRENT_DATE::text AS posting_date`
+    );
+    const reversalDate = dateValue(postingDateResult.rows[0]?.posting_date);
+    const journalNumber = await this.allocateDocumentNumber(
+      transaction, tenantId, schoolId, 'journal', reversalDate
+    );
     await db(transaction).query(
       `INSERT INTO public.erp_journal_entries
-        (tenant_id, school_id, id, entry_date, description, status, source_type, source_id,
+        (tenant_id, school_id, id, journal_number, entry_date, description, status, source_type, source_id,
          fiscal_period, idempotency_key, reversal_of_journal_id, reversal_reason,
          total_debit, total_credit, created_by)
-       VALUES ($1::uuid, $2::uuid, $3, CURRENT_DATE, $4, 'posted', 'reversal', $5,
-         $6, $7, $8, $9, $10, $11, $12::uuid)`,
-      [tenantId, schoolId, reversalId, `عكس القيد ${journalId}: ${cleanReason}`, journalId,
-        fiscalPeriodFor(new Date().toISOString().slice(0, 10)), key, journalId, cleanReason,
+       VALUES ($1::uuid, $2::uuid, $3, $4, $5, $6, 'posted', 'reversal', $7,
+         $8, $9, $10, $11, $12, $13::uuid)`,
+      [tenantId, schoolId, reversalId, journalNumber, reversalDate, `عكس القيد ${journalId}: ${cleanReason}`, journalId,
+        fiscalPeriodFor(reversalDate), key, journalId, cleanReason,
         Number(lines.rows.reduce((sum: number, row: any) => sum + Number(row.credit), 0).toFixed(2)),
         Number(lines.rows.reduce((sum: number, row: any) => sum + Number(row.debit), 0).toFixed(2)), actorId]
     );
@@ -1194,7 +1267,7 @@ export class CanonicalErpPostingService {
     // query contention, and is deprecated for pg@9. Keep the reads ordered on
     // the same consistent transaction snapshot.
     const journals = await db(transaction).query<any>(
-        `SELECT id, entry_date, description, status, source_type, source_id, total_debit, total_credit, created_at
+        `SELECT id, journal_number, source_document_number, entry_date, description, status, source_type, source_id, total_debit, total_credit, created_at
            FROM public.erp_journal_entries WHERE school_id = $1 ORDER BY entry_date DESC, created_at DESC`, [schoolId]
       );
     const lines = await db(transaction).query<any>(
@@ -1282,6 +1355,8 @@ export class CanonicalErpPostingService {
     }
     const journalEntries = journals.rows.map(row => ({
       id: row.id,
+      journalNumber: row.journal_number || undefined,
+      sourceDocumentNumber: row.source_document_number || undefined,
       date: row.entry_date,
       description: row.description,
       status: row.status,

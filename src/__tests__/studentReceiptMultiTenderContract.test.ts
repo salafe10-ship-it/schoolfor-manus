@@ -26,6 +26,15 @@ describe('student receipt multi-tender contract', () => {
     expect(postingSource).toContain('...receivingAccounts.map');
   });
 
+  it('shows every tender in receipt details, printed receipts, exports, and the local journal summary', () => {
+    expect(portalSource).toContain('const getReceiptTenders = (voucher: any) => normalizeReceiptTenders');
+    expect(portalSource).toContain('resolveReceiptTenders');
+    expect(portalSource).toContain('getReceiptTenders(selectedStudRv).map(tender =>');
+    expect(portalSource).toContain('const receiptTenderRowsHtml = getReceiptTenders(v).map(tender =>');
+    expect(portalSource).toContain("'توزيع الحسابات المدينة': getReceiptTenderSummary(v)");
+    expect(portalSource).toContain('${escapePrintHtml(getReceiptTenderSummary(v))}');
+  });
+
   it('keeps the human receipt reference in audit metadata without casting it to UUID', () => {
     expect(serverSource).toContain('const receiptAuditEntityId = randomUUID();');
     expect(serverSource).toContain('databaseActorId, receiptAuditEntityId');

@@ -2,7 +2,7 @@ name: Staging uptime
 
 on:
   schedule:
-    # Set EDUPRO_STAGING_HEALTH_URL after the isolated Cloudflare Worker is live.
+    # Set this repository-level variable after the isolated Cloudflare Worker is live.
     - cron: '*/5 * * * *'
   workflow_dispatch:
 
@@ -17,12 +17,12 @@ concurrency:
 jobs:
   probe:
     name: Probe staging readiness
-    if: ${{ vars.EDUPRO_STAGING_HEALTH_URL != '' }}
     runs-on: ubuntu-latest
     timeout-minutes: 6
     steps:
       - name: Probe readiness endpoint with cold-start tolerance
         id: readiness
+        if: ${{ vars.EDUPRO_STAGING_HEALTH_URL != '' }}
         env:
           HEALTH_URL: ${{ vars.EDUPRO_STAGING_HEALTH_URL }}
         shell: bash

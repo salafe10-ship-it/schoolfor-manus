@@ -19,7 +19,7 @@ jobs:
     runs-on: ubuntu-latest
     timeout-minutes: 8
     env:
-      PRODUCTION_URL: ${{ vars.CLOUDFLARE_PRODUCTION_URL || 'https://schoolfor-manus.salafe10.workers.dev' }}
+      PRODUCTION_URL: https://modern-family-schools.abdalsalamsoft.com
     steps:
       - name: Check health, HTML, and first asset
         id: readiness

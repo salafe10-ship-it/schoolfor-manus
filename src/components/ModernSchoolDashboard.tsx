@@ -129,6 +129,8 @@ export default function ModernSchoolDashboard({
 
   useEffect(() => {
     const controller = new AbortController();
+    setMetrics(null);
+    setMetricsError(null);
     DashboardRepository.getMetrics(controller.signal)
       .then((nextMetrics) => {
         if (!controller.signal.aborted) {
@@ -143,7 +145,7 @@ export default function ModernSchoolDashboard({
         }
       });
     return () => controller.abort();
-  }, []);
+  }, [selectedSchool.id, selectedBranch?.id]);
 
   const roleInfo = useMemo(() => {
     switch (currentRole) {
@@ -175,9 +177,15 @@ export default function ModernSchoolDashboard({
   const revenueMetric = metrics?.revenue || metrics?.finance;
   const expenseMetric = metrics?.expenses || metrics?.finance;
   const revenueExpenseValue = `${formatMetric(revenueMetric)} / ${formatMetric(expenseMetric)}`;
-  const collectionRateDetail = isCustomerProductionPortal
-    ? 'سيظهر المؤشر عند اكتمال بيانات الرسوم.'
-    : 'لا يوجد مصدر مالي حي لنسبة التحصيل حالياً؛ مصدر Audit حي مطلوب.';
+  const collectionRateMetric = metrics?.collectionRate;
+  const collectionRateValue = collectionRateMetric?.status === 'live' && collectionRateMetric.count !== null
+    ? `${collectionRateMetric.count.toLocaleString('ar-EG', { minimumFractionDigits: 1, maximumFractionDigits: 1 })}%`
+    : '—';
+  const collectionRateDetail = collectionRateMetric?.status === 'live'
+    ? 'نسبة المسدد من المطالبات النشطة'
+    : isCustomerProductionPortal
+      ? 'بيانات التحصيل غير متاحة حالياً.'
+      : collectionRateMetric?.message || (metricsError ? 'تعذر تحميل مؤشر التحصيل الآن.' : 'جار التحقق من مصدر التحصيل الحي.');
   const handleNav = (section: string) => {
     if (!canAccessSection(section)) {
       triggerNotification('لا تملك الصلاحية الموثقة لفتح هذه الوحدة.', 'warning');
@@ -262,7 +270,7 @@ export default function ModernSchoolDashboard({
         <MetricCard label="إجمالي المصروفات" value={formatMetric(expenseMetric)} detail={describeMetric(expenseMetric)} icon={Wallet} onClick={() => handleNav('accounts')} />
         <MetricCard label="إجمالي الإيرادات" value={formatMetric(revenueMetric)} detail={describeMetric(revenueMetric)} icon={Coins} onClick={() => handleNav('student_accounts')} />
         <MetricCard label="الإيرادات والمصروفات" value={revenueExpenseValue} detail="الإيرادات / المصروفات" icon={Wallet} onClick={() => handleNav('accounts')} />
-        <MetricCard label="نسبة التحصيل الكلية" value="—" detail={collectionRateDetail} icon={CheckCircle2} onClick={() => handleNav('student_accounts')} />
+        <MetricCard label="نسبة التحصيل الكلية" value={collectionRateValue} detail={collectionRateDetail} icon={CheckCircle2} onClick={() => handleNav('student_accounts')} />
       </section>
 
       <section className="grid grid-cols-1 gap-3 lg:grid-cols-12">

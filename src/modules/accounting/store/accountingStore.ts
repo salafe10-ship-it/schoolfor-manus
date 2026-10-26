@@ -1,5 +1,6 @@
 import { create } from 'zustand';
 import { FallbackStorage } from '../../../database/repositories/FallbackStorage';
+import { toLocalDateInputValue } from '../../../utils/dateOnly';
 
 const initialTab = 'dashboard';
 const readCanonicalLocal = (key: string): string | null =>
@@ -218,7 +219,7 @@ export const useAccountingStore = create<any>((set, get) => ({
   setJvColWidths: (val) => set({ jvColWidths: typeof val === 'function' ? val(get().jvColWidths) : val }),
   activeJvState: {
     id: '',
-    date: new Date().toISOString().split('T')[0],
+    date: toLocalDateInputValue(new Date()),
     description: '',
     type: 'بسيط',
     status: 'مسودة',
@@ -260,7 +261,7 @@ export const useAccountingStore = create<any>((set, get) => ({
   paymentVouchers: (() => { const local = readCanonicalLocal('erp_payment_vouchers_v2'); return local ? JSON.parse(local) : []; })(),
   setPaymentVouchers: (val) => set({ paymentVouchers: typeof val === 'function' ? val(get().paymentVouchers) : val }),
   receiptVoucherForm: {
-    date: new Date().toISOString().split('T')[0],
+    date: toLocalDateInputValue(new Date()),
     school: 'مدرسة الأسرة الحديثة - فرع طرابلس',
     stage: 'الابتدائي',
     costCenter: 'primary',
@@ -275,7 +276,7 @@ export const useAccountingStore = create<any>((set, get) => ({
   },
   setReceiptVoucherForm: (val) => set({ receiptVoucherForm: typeof val === 'function' ? val(get().receiptVoucherForm) : val }),
   paymentVoucherForm: {
-    date: new Date().toISOString().split('T')[0],
+    date: toLocalDateInputValue(new Date()),
     beneficiary: 'شركة البيان للمطبوعات والكتب',
     costCenter: 'primary',
     paidFromAccount: '1101', // صندوق الخزينة الرئيسي (كاش)

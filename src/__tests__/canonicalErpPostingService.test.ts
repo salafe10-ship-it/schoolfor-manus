@@ -44,6 +44,20 @@ describe('canonical ERP accounting mappings', () => {
     expect(posting?.description).toBe('شراء أصل ثابت');
   });
 
+  it('preserves official receipt and payment numbers on their canonical journal source documents', () => {
+    const receipt = buildCanonicalPosting('student_receipt', {
+      id: 'internal-receipt-key', receiptVoucherId: 'RCV-2026-00000033', amount: 125,
+      date: '2026-10-24', status: 'posted'
+    });
+    const payment = buildCanonicalPosting('payment_voucher', {
+      id: 'internal-payment-key', paymentVoucherNumber: 'PV-2026-0016', amount: 250,
+      date: '2026-10-24', status: 'posted', paidToAccount: '5270', paidFromAccount: '1101'
+    });
+
+    expect(receipt?.sourceDocumentNumber).toBe('RCV-2026-00000033');
+    expect(payment?.sourceDocumentNumber).toBe('PV-2026-0016');
+  });
+
   it('keeps student fee invoice and receipt links explicit across the AR workflow', () => {
     const invoice = buildCanonicalPosting('student_fee_invoice', {
       id: 'INV-EXPLICIT-1', amount: 300, invoiceDate: '2026-08-24', status: 'unpaid',
@@ -62,6 +76,25 @@ describe('canonical ERP accounting mappings', () => {
 
     expect(invoice?.lines.map(line => line.accountCode)).toEqual(['1290', '4301']);
     expect(receipt?.lines.map(line => line.accountCode)).toEqual(['1110', '1290']);
+  });
+
+  it('rebuilds historical multi-account receipts from their nested canonical source payload', () => {
+    const receipt = buildCanonicalPosting('student_receipt', {
+      id: 'RV-HISTORICAL-MULTI-1', amount: 2400, date: '2026-10-23', status: 'posted',
+      receivingAccount: '1101',
+      sourcePayload: JSON.stringify({ receivingAccounts: [
+        { accountCode: '1101', amount: 1200, paymentMethod: 'نقدي' },
+        { accountCode: '110201', amount: 1200, paymentMethod: 'تحويل' }
+      ] })
+    });
+
+    expect(receipt?.lines.map(line => [line.accountCode, line.debit, line.credit])).toEqual([
+      ['1101', 1200, 0],
+      ['110201', 1200, 0],
+      ['1201', 0, 2400]
+    ]);
+    expect(receipt?.lines.reduce((sum, line) => sum + line.debit, 0)).toBe(2400);
+    expect(receipt?.lines.reduce((sum, line) => sum + line.credit, 0)).toBe(2400);
   });
 
   it('posts a discounted invoice as receivable plus contra-revenue and tax lines', () => {

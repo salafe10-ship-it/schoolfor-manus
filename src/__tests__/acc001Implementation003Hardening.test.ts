@@ -45,6 +45,27 @@ describe('ACC-001-IMPLEMENTATION-003 accounting hardening', () => {
     expect(reports).not.toContain("onClick={() => ('trial_balance')}");
   });
 
+  it('excludes roll-up accounts from all-level trial balance totals and uses SDG labels', () => {
+    const reports = read('src/modules/accounting/presentation/FinancialReportsTab.tsx');
+    const journal = read('src/modules/accounting/presentation/JournalEntriesTab.tsx');
+    const payment = read('src/modules/accounting/presentation/PaymentVoucherTab.tsx');
+    const branding = read('src/utils/schoolBranding.ts');
+
+    expect(reports).toContain('const hasDirectChildren =');
+    expect(reports).toContain('const trialBalanceSummaryAccounts = trialBalanceLevel === \'all\'');
+    expect(reports).toContain('trialBalanceTotals.debit');
+    expect(reports).toContain('trialBalanceTotals.credit');
+    expect(reports).toContain('إجمالي الحسابات دون تكرار المجاميع الفرعية');
+    expect(reports).not.toContain('د.ل');
+    expect(journal).not.toContain('Cloud SQL Secure');
+    expect(journal).toContain('مصدر دفتر الأستاذ الكانوني المتصل');
+    expect(payment).toContain('min-w-[1280px] w-full text-right');
+    expect(payment).toContain("['posted', 'approved', 'مرحل', 'مرحّل', 'معتمد']");
+    expect(payment).toContain("label: 'مرحل'");
+    expect(payment).toContain('resolveSchoolStageLogoSource(stageLogoKey, selectedSchool?.stageLogos, selectedSchool?.logo)');
+    expect(branding).toContain('`/branding/stages/${stage}.png`');
+  });
+
   it('blocks remaining local write affordances while the ledger is snapshot-only', () => {
     const portal = read('src/components/GeneralLedgerPortal.tsx');
     const journal = read('src/modules/accounting/presentation/JournalEntriesTab.tsx');
@@ -63,6 +84,14 @@ describe('ACC-001-IMPLEMENTATION-003 accounting hardening', () => {
     expect(payment).toContain("status: 'draft'");
     expect(receipt).toContain("status: 'مسودة'");
     expect(payment).toContain("status: 'مسودة'");
+  });
+
+  it('marks a payment voucher and its journal posted only after canonical ledger posting succeeds', () => {
+    const payment = read('src/modules/accounting/presentation/PaymentVoucherTab.tsx');
+
+    expect(payment).toContain("newPv.status = 'posted';");
+    expect(payment).toContain("newJv.status = 'posted';");
+    expect(payment).toContain("status: 'posted' };");
   });
 
   it('keeps receipt voucher rendering safe for partial canonical records', () => {
@@ -84,5 +113,14 @@ describe('ACC-001-IMPLEMENTATION-003 accounting hardening', () => {
     expect(closing).toContain('const closingProofReady =');
     expect(closing).toContain('غير متحقق — قراءة فقط');
     expect(chart).toContain("guardChartWrite('معالجة انحرافات القيود')");
+  });
+
+  it('keeps long voucher preview headers reachable in short viewports', () => {
+    const portal = read('src/components/GeneralLedgerPortal.tsx');
+    expect(portal.match(/fixed inset-0 bg-slate-950\/85 z-\[9999\] flex items-start justify-center/g)).toHaveLength(2);
+    expect(portal.match(/items-start justify-center p-4 backdrop-blur-xs text-right overflow-y-auto animate-fade-in/g)).toHaveLength(2);
+    expect(portal).toContain("resolveFinancialDocumentReference(selectedPaymentVoucher, 'journal').label");
+    expect(portal).toContain('text-[7px] leading-tight whitespace-nowrap');
+    expect(portal.match(/createPortal\(/g)).toHaveLength(2);
   });
 });

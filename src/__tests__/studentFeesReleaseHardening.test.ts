@@ -28,6 +28,28 @@ describe('student-fees release hardening', () => {
     expect(bulk).toContain('allIdempotentReplay');
   });
 
+  it('normalizes PostgreSQL DATE values before checking fee-template validity windows', () => {
+    const templateCheck = section(server, 'const canonicalDatabaseDate =', 'app.get("/api/financial/fee-templates"');
+    expect(templateCheck).toContain('value instanceof Date');
+    expect(templateCheck).toContain('value.toISOString().slice(0, 10)');
+
+    const issue = section(server, 'const issueCanonicalFeeInvoices = async', 'app.post("/api/financial/invoices/:invoiceId/void"');
+    const bulk = section(server, 'app.post("/api/financial/fee-assignments/bulk"', 'app.post("/api/financial/invoices/:invoiceId/installment-plan"');
+    expect(issue).toContain('canonicalDatabaseDate(feeTemplate.effectiveFrom)');
+    expect(issue).toContain('canonicalDatabaseDate(feeTemplate.effectiveTo)');
+    expect(issue).toContain('canonicalDatabaseDate(invoice.due_date)');
+    expect(issue).toContain('canonicalDatabaseDate(invoice.invoice_date)');
+    expect(bulk).toContain('canonicalDatabaseDate(template.effectiveFrom)');
+    expect(bulk).toContain('canonicalDatabaseDate(template.effectiveTo)');
+    expect(bulk).toContain('canonicalDatabaseDate(assignment.dueDate)');
+    expect(bulk).toContain('canonicalDatabaseDate(canonicalInvoice.dueDate)');
+    expect(bulk).toContain('invoiceDate: canonicalDatabaseDate(canonicalInvoice.invoiceDate)');
+    expect(bulk).toContain('ON CONFLICT (school_id, idempotency_key) WHERE idempotency_key IS NOT NULL');
+
+    const reverse = section(server, 'app.post("/api/financial/receipts/:receiptId/reverse"', 'app.get("/api/financial/students/:studentId/account"');
+    expect(reverse).toContain('canonicalDatabaseDate(schedule.dueDate)');
+  });
+
   it('rejects cross-student allocations and installments outside the selected invoice', () => {
     const allocate = section(server, 'app.post("/api/financial/receipts/:receiptId/allocate"', 'app.post("/api/financial/receipts/:receiptId/reverse"');
     expect(allocate).toContain('receipt.rows[0].studentId) !== String(invoice.rows[0].studentId)');
@@ -162,7 +184,9 @@ describe('student-fees release hardening', () => {
     ];
     for (const name of uatVariables) expect(stagingEnvExample).toMatch(new RegExp(`^${name}=$`, 'm'));
     expect(stagingEnvExample).toContain('UAT35_TARGET=schoolfor-manus-staging');
-    expect(stagingEnvExample).toContain('UAT_FINANCIAL_BASE_URL=https://schoolfor-manus-staging.salafe10.workers.dev');
+    expect(stagingEnvExample).toContain('UAT_FINANCIAL_BASE_URL=http://127.0.0.1:4179');
+    expect(stagingEnvExample).toContain('UAT_ALLOW_LOCAL_STAGING=false');
+    expect(stagingEnvExample).toContain('PLATFORM_ADMIN_DATABASE_URL=');
     expect(gitignore).toContain('.env*');
     expect(studentFeesOperations).toContain('نجاح Vitest أو فحص GitHub Actions لا يعني نجاح UAT المالي');
     expect(studentFeesOperations).toContain('pnpm uat:student-fees:staging');

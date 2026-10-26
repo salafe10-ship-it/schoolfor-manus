@@ -4,7 +4,10 @@ import { AccountingContext } from '../../../components/GeneralLedgerPortal';
 import { EnterpriseAuditLogger } from '../../../utils/EnterpriseAuditLogger';
 import { authenticatedRequest } from '../../../utils/authenticatedRequest';
 import { openPrintWindow } from '../../../utils/openPrintWindow';
-import { resolveCostCenterStageLogoKey } from '../../../utils/schoolBranding';
+import { amountToArabicWords, getCurrencyConfigForCode } from '../../../utils/currency';
+import { resolveCostCenterStageLogoKey, resolveSchoolStageLogoSource } from '../../../utils/schoolBranding';
+import { resolveFinancialDocumentReference } from '../../../utils/financialDocumentReference';
+import { toLocalDateInputValue } from '../../../utils/dateOnly';
 
 const RECEIPT_STAGE_LABELS: Record<string, string> = {
   kindergarten: 'الروضة',
@@ -216,9 +219,8 @@ export const ReceiptVoucherTab = () => {
       return;
     }
 
-    const nextIdNum = receiptVouchers.length + 1;
-    const rvId = editingReceiptVoucherId || `RV-2026-${String(nextIdNum).padStart(4, '0')}`;
-    const jvId = `JV-2026-RV-${String(nextIdNum).padStart(4, '0')}`;
+    const rvId = editingReceiptVoucherId || crypto.randomUUID();
+    const jvId = `JV-DRAFT-${crypto.randomUUID()}`;
 
     const revenueAccountCode = receiptVoucherForm.operationType === 'رسوم حافلة' ? '4300' :
                                receiptVoucherForm.operationType === 'رسوم أنشطة' ? '4400' :
@@ -240,11 +242,13 @@ export const ReceiptVoucherTab = () => {
     // 1. Create Receipt Voucher object
     const newRv = {
       id: rvId,
-      date: receiptVoucherForm.date || new Date().toISOString().split('T')[0],
+      date: receiptVoucherForm.date || toLocalDateInputValue(new Date()),
       school: receiptVoucherForm.school,
       studentId: studentId || undefined,
       studentPaymentId: undefined,
       receiptVoucherId: undefined,
+      voucherNumber: undefined,
+      journalNumber: undefined,
       stage: receiptVoucherForm.stage,
       costCenter: selectedCostCenter,
       receivedFrom: String(submitted?.get('receivedFrom') || receiptVoucherForm.receivedFrom || '').trim(),
@@ -261,14 +265,15 @@ export const ReceiptVoucherTab = () => {
       status: 'draft',
       financialPeriod: 'السنة المالية 2026',
       createdAt: new Date().toLocaleDateString('ar-LY') + ' ' + new Date().toLocaleTimeString('ar-LY'),
-      journalEntryId: jvId
+      journalEntryId: jvId,
+      sourceDocumentNumber: undefined
     };
 
     // 2. Create Journal Entry object
     const newJv = {
       id: jvId,
-      date: receiptVoucherForm.date || new Date().toISOString().split('T')[0],
-      description: `توطين قيد سند القبض رقم ${rvId} - ${String(submitted?.get('receivedFrom') || receiptVoucherForm.receivedFrom || '').trim()}`,
+      date: receiptVoucherForm.date || toLocalDateInputValue(new Date()),
+      description: `توطين قيد سند القبض - ${String(submitted?.get('receivedFrom') || receiptVoucherForm.receivedFrom || '').trim()}`,
       debitSum: amt,
       creditSum: amt,
       debitTotal: amt,
@@ -276,6 +281,8 @@ export const ReceiptVoucherTab = () => {
       status: 'مسودة',
       isSystemGenerated: true,
       receiptVoucherId: rvId,
+      journalNumber: undefined,
+      sourceDocumentNumber: undefined,
       lines: [
         {
           id: `${jvId}-1`,
@@ -361,14 +368,19 @@ export const ReceiptVoucherTab = () => {
       if (!canonicalResponse.ok || !canonicalResult.success || !canonicalResult.data?.journalId) {
         throw new Error(canonicalResult.message || canonicalResult.error?.message || canonicalResult.error || 'تعذر إثبات القيد الكانوني لسند القبض.');
       }
+      const postedReceipt = canonicalResult.data.receipt || canonicalResult.data;
       newRv.journalEntryId = canonicalResult.data.journalId;
+      newRv.receiptVoucherId = postedReceipt.receiptVoucherId || postedReceipt.voucherNumber || newRv.receiptVoucherId;
+      newRv.voucherNumber = newRv.receiptVoucherId;
+      newRv.journalNumber = postedReceipt.journalNumber || undefined;
+      newRv.status = 'posted';
       if (isStudentReceipt) {
-        newRv.studentPaymentId = canonicalResult.data.receipt?.id || rvId;
-        newRv.receiptVoucherId = canonicalResult.data.receipt?.receiptVoucherId || rvId;
+        newRv.studentPaymentId = postedReceipt.id || rvId;
         newRv.paymentMethod = studentPaymentMethod;
-        newRv.status = 'posted';
       }
       newJv.id = canonicalResult.data.journalId;
+      newJv.journalNumber = newRv.journalNumber;
+      newJv.sourceDocumentNumber = newRv.receiptVoucherId;
       const receiptAttachment = receiptAttachmentFileRef.current;
       if (receiptAttachment) {
         const attachmentResponse = await authenticatedRequest(`/api/financial/vouchers/${isStudentReceipt ? 'student_fee_receipt' : 'receipt_voucher'}/${encodeURIComponent(String(canonicalResult.data.sourceId || newRv.id))}/attachments?originalFileName=${encodeURIComponent(receiptAttachment.name)}`, {
@@ -406,7 +418,7 @@ export const ReceiptVoucherTab = () => {
 
     // Reset Form
     setReceiptVoucherForm({
-      date: new Date().toISOString().split('T')[0],
+      date: toLocalDateInputValue(new Date()),
       school: 'مدرسة الأسرة الحديثة - فرع طرابلس',
       stage: 'الابتدائي',
       costCenter: 'primary',
@@ -431,9 +443,10 @@ export const ReceiptVoucherTab = () => {
       device: 'نظام الإدارة المالية المركزي'
     });
 
+    const receiptReferenceValue = resolveFinancialDocumentReference(newRv, 'receipt').value;
     triggerNotification(ledgerPostingReady
-      ? `تم إنشاء وترحيل سند القبض ${rvId} عبر خدمة دفتر الأستاذ الكانونية.`
-      : `تم حفظ سند القبض ${rvId} في المصدر المركزي UAT بإصدار موثق؛ لم يُعتمد كترحيل نهائي في دفتر الأستاذ العام.`, 'success');
+      ? `تم إنشاء وترحيل سند القبض ${receiptReferenceValue} عبر خدمة دفتر الأستاذ الكانونية.`
+      : `تم حفظ سند القبض ${receiptReferenceValue} في المصدر المركزي UAT بإصدار موثق؛ لم يُعتمد كترحيل نهائي في دفتر الأستاذ العام.`, 'success');
   };
 
 
@@ -445,6 +458,10 @@ const handlePrintRV = (rv: any) => {
     }
 
     const accountCode = rv.receivingAccount || '1101';
+    const receiptReference = resolveFinancialDocumentReference(rv, 'receipt');
+    const journalReference = resolveFinancialDocumentReference(rv, 'journal');
+    const receiptCurrency = getCurrencyConfigForCode(String(rv.currency || currency || 'SDG'));
+    const receiptAmount = getReceiptAmount(rv);
     const accountName = accountCode === '1101' ? 'صندوق النقدية والخزينة الموحدة' : 'الحساب الجاري بالمصرف';
     const revenueAccountCode = rv.operationType === 'رسوم حافلة' ? '4300' : rv.operationType === 'رسوم أنشطة' ? '4400' : rv.operationType === 'أخرى' ? '4500' : '4101';
     const revenueAccountName = rv.operationType === 'رسوم حافلة' ? 'إيرادات اشتراكات النقل والحافلات' :
@@ -454,8 +471,7 @@ const handlePrintRV = (rv: any) => {
     const stageLabel = RECEIPT_STAGE_LABELS[getReceiptStageKey(rv)] || rv.stage || 'غير محدد';
     const costCenterCode = String(rv.costCenter || 'GENERAL').toUpperCase().replace(/^CC[_-]/, '');
     const stageLogoKey = resolveCostCenterStageLogoKey(rv.costCenter || rv.schoolStage || rv.stageKey || rv.stage, costCenters?.length ? costCenters : undefined);
-    const rawSchoolLogo = String((stageLogoKey && selectedSchool?.stageLogos?.[stageLogoKey]) || selectedSchool?.logo || '').trim();
-    const schoolLogoSource = /^(https:\/\/|data:image\/(?:png|jpeg|webp);base64,[a-z0-9+/=\s]+$)/i.test(rawSchoolLogo) ? rawSchoolLogo : '';
+    const schoolLogoSource = resolveSchoolStageLogoSource(stageLogoKey, selectedSchool?.stageLogos, selectedSchool?.logo);
     const schoolName = String(selectedSchool?.name || rv.school || 'المدرسة');
     const escapePrintValue = (value: unknown) => String(value ?? '—').replace(/[&<>"']/g, char => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[char] || char));
     const schoolLogoMarkup = schoolLogoSource
@@ -471,8 +487,8 @@ const handlePrintRV = (rv: any) => {
             <div><b>رقم معاملة سداد الطلاب:</b> <span style="font-family: monospace;">${escapePrintValue(rv.studentPaymentId)}</span></div>
             <div><b>معرف الطالب:</b> <span style="font-family: monospace;">${escapePrintValue(rv.studentId)}</span></div>
             <div><b>اسم الطالب الرباعي:</b> <span>${escapePrintValue(rv.studentName)}</span></div>
-            <div><b>رقم سند القبض المحاسبي:</b> <span style="font-family: monospace;">${escapePrintValue(rv.receiptVoucherId)}</span></div>
-            <div><b>رقم قيد اليومية المزدوج:</b> <span style="font-family: monospace;">${escapePrintValue(rv.journalEntryId)}</span></div>
+            <div><b>رقم سند القبض:</b> <span style="font-family: monospace;">${escapePrintValue(receiptReference.value)}</span></div>
+            <div><b>${escapePrintValue(journalReference.label)}:</b> <span style="font-family: monospace;">${escapePrintValue(journalReference.value)}</span></div>
             <div><b>الفترة المالية الفعالة:</b> <span>${escapePrintValue(rv.financialPeriod || 'السنة المالية 2026')}</span></div>
           </div>
         </div>
@@ -483,7 +499,7 @@ const handlePrintRV = (rv: any) => {
       <html dir="rtl">
         <head>
           <meta charset="utf-8" />
-          <title>سند قبض رقم ${escapePrintValue(rv.id)}</title>
+          <title>سند قبض ${escapePrintValue(receiptReference.value)}</title>
           <style>
             body {
               font-family: 'Inter', system-ui, sans-serif;
@@ -671,7 +687,7 @@ const handlePrintRV = (rv: any) => {
               </div>
             </div>
             <div class="voucher-meta">
-              <div class="voucher-id">سند قبض رقم: ${escapePrintValue(rv.id)}</div>
+              <div class="voucher-id">سند قبض رقم: ${escapePrintValue(receiptReference.value)}</div>
               <div style="margin-top: 5px;">التاريخ: ${escapePrintValue(rv.date)}</div>
             </div>
           </div>
@@ -699,10 +715,10 @@ const handlePrintRV = (rv: any) => {
           ${studentSection}
 
           <div class="amount-box">
-            <div class="amount-val">${getReceiptAmount(rv).toLocaleString()} د.ل</div>
+            <div class="amount-val">${receiptAmount.toLocaleString()} ${escapePrintValue(receiptCurrency.symbol)}</div>
             <div class="amount-words">
               <span style="font-size: 9px; color: #64748b; display: block; font-weight: normal; margin-bottom: 2px;">التفقيط المالي الرسمي (الأبجدي):</span>
-              فقط مبلغه ${getReceiptAmount(rv).toLocaleString()} دينار ليبي لا غير.
+              ${escapePrintValue(amountToArabicWords(receiptAmount, receiptCurrency))}
             </div>
           </div>
 
@@ -720,14 +736,14 @@ const handlePrintRV = (rv: any) => {
               <tr>
                 <td style="font-family: monospace; color: #4338ca; font-weight: bold;">${escapePrintValue(accountCode)}</td>
                 <td>${escapePrintValue(accountName)}</td>
-                <td style="text-align: center; font-family: monospace; color: #059669; font-weight: bold;">${getReceiptAmount(rv).toLocaleString()} د.ل</td>
+                <td style="text-align: center; font-family: monospace; color: #059669; font-weight: bold;">${receiptAmount.toLocaleString()} ${escapePrintValue(receiptCurrency.symbol)}</td>
                 <td style="text-align: center; font-family: monospace; color: #94a3b8;">0.00</td>
               </tr>
               <tr>
                 <td style="font-family: monospace; color: #4338ca; font-weight: bold;">${escapePrintValue(revenueAccountCode)}</td>
                 <td>${escapePrintValue(revenueAccountName)}</td>
                 <td style="text-align: center; font-family: monospace; color: #94a3b8;">0.00</td>
-                <td style="text-align: center; font-family: monospace; color: #dc2626; font-weight: bold;">${getReceiptAmount(rv).toLocaleString()} د.ل</td>
+                <td style="text-align: center; font-family: monospace; color: #dc2626; font-weight: bold;">${receiptAmount.toLocaleString()} ${escapePrintValue(receiptCurrency.symbol)}</td>
               </tr>
             </tbody>
           </table>
@@ -816,7 +832,7 @@ const handlePrintRV = (rv: any) => {
                   </button>
                   {editingReceiptVoucherId && <span className="rounded-lg bg-amber-100 px-2 py-1 text-[10px] font-black text-amber-800">تعديل {editingReceiptVoucherId}</span>}
                   <span className="mr-auto font-mono text-[10px] bg-slate-100 text-slate-700 px-2 py-0.5 rounded-md font-bold">
-                    السند التالي: RV-2026-{String(receiptVouchers.length + 1).padStart(4, '0')}
+                    الرقم الرسمي يُخصص تلقائيًا عند الترحيل
                   </span>
                 </div>
 
@@ -1204,7 +1220,7 @@ const handlePrintRV = (rv: any) => {
                       <div key={v.id} className="py-2.5 flex items-center justify-between">
                         <span className="text-slate-700 truncate max-w-[150px]">{v.attachmentName}</span>
                         <div className="flex items-center gap-2">
-                          <span className="text-[9px] bg-slate-100 text-slate-600 px-1.5 py-0.5 rounded font-mono">{v.id}</span>
+                          <span className="text-[9px] bg-slate-100 text-slate-600 px-1.5 py-0.5 rounded font-mono" title={`المعرّف الداخلي: ${v.id}`}>{resolveFinancialDocumentReference(v, 'receipt').value}</span>
                           <button 
                             type="button"
                             disabled
@@ -1311,12 +1327,13 @@ const handlePrintRV = (rv: any) => {
                         const matchesCC = receiptCostCenterFilter === 'all' || getReceiptStageKey(v) === receiptCostCenterFilter;
                         const normalizedSearch = String(receiptSearch ?? '').trim().toLowerCase();
                         const matchesSearch = getReceiptReceivedFrom(v).toLowerCase().includes(normalizedSearch) ||
-                                              getReceiptAgainst(v).toLowerCase().includes(normalizedSearch);
+                                              getReceiptAgainst(v).toLowerCase().includes(normalizedSearch) ||
+                                              String(v.receiptVoucherId || v.id || '').toLowerCase().includes(normalizedSearch);
                         return matchesCC && matchesSearch;
                       })
                       .map(v => (
                         <tr key={v.id} className={`hover:bg-slate-50/70 ${v.status === 'ملغى' ? 'bg-red-50/40 text-slate-400 line-through' : ''}`}>
-                          <td className="px-6 py-3.5 font-mono font-black text-emerald-700">{v.id}</td>
+                          <td className="px-6 py-3.5 font-mono font-black text-emerald-700" title={`المعرّف الداخلي: ${v.id}`}>{resolveFinancialDocumentReference(v, 'receipt').value}</td>
                           <td className="px-6 py-3.5 font-mono text-slate-500">{v.date}</td>
                           <td className="px-6 py-3.5 font-bold text-slate-900">
                             {getReceiptReceivedFrom(v)}

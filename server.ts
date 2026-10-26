@@ -5,6 +5,14 @@ import dotenv from "dotenv";
 import helmet from "helmet";
 import { getServerListenHost } from "./server/infrastructure/ServerListenHost.js";
 
+// `server.ts` runs as ESM under tsx in development but is bundled as CommonJS
+// for production. `import.meta.url` is not available in that CommonJS artifact.
+// The staging launcher sets the repository root explicitly; a direct dev run
+// can derive it from argv, while the production bundle uses its colocated dist.
+const applicationRoot = path.resolve(
+  process.env.EDUPRO_SERVER_APPLICATION_ROOT || path.dirname(path.resolve(process.argv[1] || '.')),
+);
+
 dotenv.config();
 
 // ==========================================
@@ -89,6 +97,7 @@ import type { StudentDocumentRequestContext } from "./src/modules/student-docume
 import { tenantScopedDatabaseFilePath } from "./src/security/tenantScopedFilePath.js";
 import { generateStudentExport, STUDENT_EXPORT_CONTENT_TYPE } from "./src/modules/student-export/application/StudentExportService.js";
 import { createStartupReadiness } from "./server/infrastructure/StartupReadiness.js";
+import { calculateFeeCollectionRate } from "./src/components/dashboard/repository/feeCollectionRate.js";
 import { getBuildIdentity } from "./server/infrastructure/BuildIdentity.js";
 import { inspectSupabaseDatabaseTargetAlignment } from "./server/security/SupabaseDatabaseTargetAlignment.js";
 import { FallbackStorage } from "./src/database/repositories/FallbackStorage.js";
@@ -10065,6 +10074,11 @@ export async function createApp(options: { cloudflare?: boolean } = {}): Promise
           .eq('tenant_id', identity.tenantId)
           .eq('school_id', identity.schoolId)
       ]);
+      const feeInvoicesResult = await supabase
+        .from('student_fee_invoices')
+        .select('amount,tax_amount,paid_amount,status')
+        .eq('tenant_id', identity.tenantId)
+        .eq('school_id', identity.schoolId);
 
       const liveMetric = (count: number | null) => ({
         status: 'live' as const,
@@ -10091,6 +10105,17 @@ export async function createApp(options: { cloudflare?: boolean } = {}): Promise
       const financialReadFailed = Boolean(financialAccountsResult.error || financialLedgerResult.error);
       const revenueMetric = financialReadFailed ? unavailableMetric() : liveMetric(Math.max(0, Number(financialTotals.revenue.toFixed(2))));
       const expenseMetric = financialReadFailed ? unavailableMetric() : liveMetric(Math.max(0, Number(financialTotals.expense.toFixed(2))));
+      const collectionRate = feeInvoicesResult.error
+        ? null
+        : calculateFeeCollectionRate(feeInvoicesResult.data || []);
+      const collectionRateMetric = collectionRate === null
+        ? {
+            ...unavailableMetric(),
+            message: feeInvoicesResult.error
+              ? 'بيانات التحصيل غير متاحة حالياً؛ تعذر قراءة المطالبات المالية الموثقة.'
+              : 'لا توجد مطالبات مالية نشطة لاحتساب نسبة التحصيل.'
+          }
+        : liveMetric(collectionRate);
 
       res.setHeader('Cache-Control', 'no-store');
       return res.json({
@@ -10110,6 +10135,7 @@ export async function createApp(options: { cloudflare?: boolean } = {}): Promise
           finance: revenueMetric,
           revenue: revenueMetric,
           expenses: expenseMetric,
+          collectionRate: collectionRateMetric,
           exams: unavailableMetric(),
           notifications: unavailableMetric(),
           activities: unavailableMetric()
@@ -13004,6 +13030,22 @@ export async function createApp(options: { cloudflare?: boolean } = {}): Promise
     }
   });
 
+  async function allocateStudentReceiptVoucherNumber(transaction: any, tenantId: string, schoolId: string, documentDate: string): Promise<string> {
+    const fiscalYear = String(documentDate || '').slice(0, 4);
+    if (!/^\d{4}$/.test(fiscalYear)) throw new ValidationError('تاريخ سند القبض غير صالح لتخصيص رقمه الرسمي.');
+    const sequence = await transaction.query(
+      `INSERT INTO public.student_fee_receipt_sequences (tenant_id, school_id, next_number)
+       VALUES ($1,$2,2)
+       ON CONFLICT (school_id) DO UPDATE
+         SET next_number = public.student_fee_receipt_sequences.next_number + 1, updated_at = now()
+       RETURNING next_number - 1 AS "receiptNumber"`,
+      [tenantId, schoolId]
+    );
+    const number = Number(sequence.rows[0]?.receiptNumber);
+    if (!Number.isSafeInteger(number) || number < 1) throw new DatabaseError('تعذر تخصيص رقم رسمي متسلسل لسند القبض.');
+    return `RCV-${fiscalYear}-${String(number).padStart(8, '0')}`;
+  }
+
   app.post("/api/financial/receipts/post", authenticateRequest, requirePermission(PERMISSIONS.FINANCIAL_WRITE), async (req, res, next) => {
     try {
       const user = (req as any).user;
@@ -13020,6 +13062,7 @@ export async function createApp(options: { cloudflare?: boolean } = {}): Promise
       const document = buildCanonicalPosting('student_receipt', { ...voucher, status: 'posted' });
       if (!document) throw new ValidationError('سند القبض غير صالح للترحيل.');
       let result: Awaited<ReturnType<typeof CanonicalErpPostingService.syncSnapshot>>;
+      let responseData: { journalId: string; sourceId: string; receiptVoucherId: string; journalNumber: string } | null = null;
       await UnitOfWork.runInTransaction(schoolId, {
         operationName: `Post receipt ${document.sourceId}`,
         tenantId, userId: actorId, userName: user.name || 'المستخدم المالي',
@@ -13027,18 +13070,35 @@ export async function createApp(options: { cloudflare?: boolean } = {}): Promise
       }, async () => {
         const transaction = UnitOfWork.getActiveContext()?.databaseTransaction;
         if (!transaction) throw new DatabaseError('المعاملة المالية غير متاحة.');
+        await transaction.query(`SELECT pg_advisory_xact_lock(hashtext($1), hashtext($2))`, [schoolId, `student_receipt:${document.sourceId}`]);
         const actor = await transaction.query<{ id: string }>(
           `SELECT id FROM public.users WHERE tenant_id = $1 AND school_id = $2 AND status = 'active' AND deleted_at IS NULL AND (id = $3 OR auth_user_id = $3) LIMIT 1`,
           [tenantId, schoolId, actorId]
         );
         if (!actor.rows[0]) throw new AuthenticationError('المستخدم المالي غير موجود.');
+        const existing = await transaction.query<{ source_document_number: string | null }>(
+          `SELECT source_document_number FROM public.erp_journal_entries
+            WHERE tenant_id = $1 AND school_id = $2 AND source_type = 'student_receipt' AND source_id = $3
+            FOR UPDATE`,
+          [tenantId, schoolId, document.sourceId]
+        );
+        const receiptVoucherId = String(existing.rows[0]?.source_document_number || '').trim()
+          || await allocateStudentReceiptVoucherNumber(transaction, tenantId, schoolId, document.date);
+        const postedVoucher = { ...voucher, receiptVoucherId, voucherNumber: receiptVoucherId, status: 'posted' };
         result = await CanonicalErpPostingService.syncSnapshot(transaction, tenantId, schoolId, actor.rows[0].id, {
-          receiptVouchers: [{ ...voucher, status: 'posted' }], chartOfAccounts: []
+          receiptVouchers: [postedVoucher], chartOfAccounts: []
         });
+        const link = result.sourceLinks.find(item => item.sourceType === 'student_receipt' && item.sourceId === document.sourceId);
+        if (!link) throw new DatabaseError('تمت المعاملة دون إثبات رابط القيد الكانوني.');
+        const journal = await transaction.query<{ journal_number: string | null }>(
+          `SELECT journal_number FROM public.erp_journal_entries WHERE tenant_id = $1 AND school_id = $2 AND id = $3`,
+          [tenantId, schoolId, link.journalEntryId]
+        );
+        responseData = { journalId: link.journalEntryId, sourceId: document.sourceId, receiptVoucherId,
+          journalNumber: String(journal.rows[0]?.journal_number || '') };
       }, tenantContext);
-      const link = result!.sourceLinks.find(item => item.sourceType === 'student_receipt' && item.sourceId === document.sourceId);
-      if (!link) throw new DatabaseError('تمت المعاملة دون إثبات رابط القيد الكانوني.');
-      res.json({ success: true, data: { journalId: link.journalEntryId, sourceId: document.sourceId }, meta: result });
+      if (!responseData) throw new DatabaseError('تعذر قراءة أرقام سند القبض والقيد بعد الترحيل.');
+      res.json({ success: true, data: responseData, meta: result! });
     } catch (err: any) {
       EnterpriseLogger.error('Canonical receipt posting failed', 'FinancialReceiptRoute', {
         error: err?.message || String(err),
@@ -13064,6 +13124,7 @@ export async function createApp(options: { cloudflare?: boolean } = {}): Promise
       const document = buildCanonicalPosting('payment_voucher', { ...voucher, status: 'posted' });
       if (!document) throw new ValidationError('سند الصرف غير صالح للترحيل.');
       let result: Awaited<ReturnType<typeof CanonicalErpPostingService.syncSnapshot>>;
+      let responseData: { journalId: string; sourceId: string; paymentVoucherNumber: string; journalNumber: string } | null = null;
       await UnitOfWork.runInTransaction(schoolId, {
         operationName: `Post payment ${document.sourceId}`,
         tenantId, userId: actorId, userName: user.name || 'المستخدم المالي',
@@ -13071,18 +13132,35 @@ export async function createApp(options: { cloudflare?: boolean } = {}): Promise
       }, async () => {
         const transaction = UnitOfWork.getActiveContext()?.databaseTransaction;
         if (!transaction) throw new DatabaseError('المعاملة المالية غير متاحة.');
+        await transaction.query(`SELECT pg_advisory_xact_lock(hashtext($1), hashtext($2))`, [schoolId, `payment_voucher:${document.sourceId}`]);
         const actor = await transaction.query<{ id: string }>(
           `SELECT id FROM public.users WHERE tenant_id = $1 AND school_id = $2 AND status = 'active' AND deleted_at IS NULL AND (id = $3 OR auth_user_id = $3) LIMIT 1`,
           [tenantId, schoolId, actorId]
         );
         if (!actor.rows[0]) throw new AuthenticationError('المستخدم المالي غير موجود.');
+        const existing = await transaction.query<{ source_document_number: string | null }>(
+          `SELECT source_document_number FROM public.erp_journal_entries
+            WHERE tenant_id = $1 AND school_id = $2 AND source_type = 'payment_voucher' AND source_id = $3
+            FOR UPDATE`,
+          [tenantId, schoolId, document.sourceId]
+        );
+        const paymentVoucherNumber = String(existing.rows[0]?.source_document_number || '').trim()
+          || await CanonicalErpPostingService.allocateDocumentNumber(transaction, tenantId, schoolId, 'payment', document.date);
+        const postedVoucher = { ...voucher, paymentVoucherNumber, voucherNumber: paymentVoucherNumber, status: 'posted' };
         result = await CanonicalErpPostingService.syncSnapshot(transaction, tenantId, schoolId, actor.rows[0].id, {
-          paymentVouchers: [{ ...voucher, status: 'posted' }], chartOfAccounts: []
+          paymentVouchers: [postedVoucher], chartOfAccounts: []
         });
+        const link = result.sourceLinks.find(item => item.sourceType === 'payment_voucher' && item.sourceId === document.sourceId);
+        if (!link) throw new DatabaseError('تمت المعاملة دون إثبات رابط القيد الكانوني.');
+        const journal = await transaction.query<{ journal_number: string | null }>(
+          `SELECT journal_number FROM public.erp_journal_entries WHERE tenant_id = $1 AND school_id = $2 AND id = $3`,
+          [tenantId, schoolId, link.journalEntryId]
+        );
+        responseData = { journalId: link.journalEntryId, sourceId: document.sourceId, paymentVoucherNumber,
+          journalNumber: String(journal.rows[0]?.journal_number || '') };
       }, tenantContext);
-      const link = result!.sourceLinks.find(item => item.sourceType === 'payment_voucher' && item.sourceId === document.sourceId);
-      if (!link) throw new DatabaseError('تمت المعاملة دون إثبات رابط القيد الكانوني.');
-      res.json({ success: true, data: { journalId: link.journalEntryId, sourceId: document.sourceId }, meta: result });
+      if (!responseData) throw new DatabaseError('تعذر قراءة أرقام سند الصرف والقيد بعد الترحيل.');
+      res.json({ success: true, data: responseData, meta: result! });
     } catch (err: any) {
       EnterpriseLogger.error('Canonical payment posting failed', 'FinancialPaymentRoute', { error: err?.message || String(err) });
       next(err instanceof AuthenticationError || err instanceof DatabaseError || err instanceof ValidationError ? err : new DatabaseError('تعذر ترحيل سند الصرف الكانوني.', err?.message));
@@ -13351,6 +13429,10 @@ export async function createApp(options: { cloudflare?: boolean } = {}): Promise
     if (!/^\d{4}-\d{2}-\d{2}$/.test(value)) return false;
     const parsed = new Date(`${value}T00:00:00.000Z`);
     return Number.isFinite(parsed.getTime()) && parsed.toISOString().slice(0, 10) === value;
+  };
+  const canonicalDatabaseDate = (value: unknown): string => {
+    if (value instanceof Date && Number.isFinite(value.getTime())) return value.toISOString().slice(0, 10);
+    return String(value ?? '').slice(0, 10);
   };
 
   app.get("/api/financial/fee-templates", authenticateRequest, requirePermission(PERMISSIONS.FINANCIAL_READ), async (req, res, next) => {
@@ -13807,8 +13889,8 @@ export async function createApp(options: { cloudflare?: boolean } = {}): Promise
             || String(feeTemplate.academicYearId) !== item.academicYearId
             || String(feeTemplate.financialPeriod) !== item.financialPeriod
             || String(feeTemplate.status).toLowerCase() !== 'active'
-            || String(feeTemplate.effectiveFrom).slice(0, 10) > new Date().toISOString().slice(0, 10)
-            || (feeTemplate.effectiveTo && String(feeTemplate.effectiveTo).slice(0, 10) < item.dueDate)) {
+            || canonicalDatabaseDate(feeTemplate.effectiveFrom) > new Date().toISOString().slice(0, 10)
+            || (feeTemplate.effectiveTo && canonicalDatabaseDate(feeTemplate.effectiveTo) < item.dueDate)) {
             throw new ValidationError('قالب المطالبة غير نشط أو لا يطابق السنة أو الفترة أو الحساب الإيرادي المحدد.');
           }
           continue;
@@ -13866,8 +13948,8 @@ export async function createApp(options: { cloudflare?: boolean } = {}): Promise
             && String(invoice.item || '') === item.description
             && Math.abs(Number(invoice.amount) - item.amount) <= 0.001
             && Math.abs(Number(invoice.tax_amount || 0) - item.taxAmount) <= 0.001
-            && String(invoice.due_date || '').slice(0, 10) === item.dueDate
-            && String(invoice.invoice_date || '').slice(0, 10) === item.invoiceDate
+            && canonicalDatabaseDate(invoice.due_date) === item.dueDate
+            && canonicalDatabaseDate(invoice.invoice_date) === item.invoiceDate
             && String(invoice.template_id || '') === item.templateId
             && String(invoice.academic_year_id || '') === item.academicYearId
             && String(invoice.academic_period_id || '') === item.academicPeriodId
@@ -13887,16 +13969,19 @@ export async function createApp(options: { cloudflare?: boolean } = {}): Promise
             throw new ConflictError('مفتاح إعادة المحاولة مستخدم لمطالبة مختلفة أو ملغاة؛ لم تُجرَ أي تغييرات.');
           }
         } else {
+          const invoiceNumber = await CanonicalErpPostingService.allocateDocumentNumber(
+            transaction, tenantId, schoolId, 'invoice', item.invoiceDate
+          );
           const inserted = await transaction.query(
             `INSERT INTO public.student_fee_invoices
-              (tenant_id, school_id, id, branch_id, student_id, student_name, item, amount, tax_amount, paid_amount,
+              (tenant_id, school_id, id, invoice_number, branch_id, student_id, student_name, item, amount, tax_amount, paid_amount,
                remaining_amount, invoice_date, due_date, status, source_payload, updated_by, template_id,
                academic_year_id, academic_period_id, currency, idempotency_key, version)
-             VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,0,$10,$11,$12,'issued',$13::jsonb,$14,$15,$16,$17,$18,$19,$20,1)
+             VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,0,$11,$12,$13,'issued',$14::jsonb,$15,$16,$17,$18,$19,$20,1)
              RETURNING *`,
-            [tenantId, schoolId, item.invoiceId, branchId || student.branch_id || null, item.studentId, studentName, item.description,
+            [tenantId, schoolId, item.invoiceId, invoiceNumber, branchId || student.branch_id || null, item.studentId, studentName, item.description,
               item.amount, item.taxAmount, item.totalAmount, item.invoiceDate, item.dueDate,
-              JSON.stringify({ command: 'issue', idempotencyKey: item.idempotencyKey, revenueAccount: item.revenueAccount,
+              JSON.stringify({ command: 'issue', idempotencyKey: item.idempotencyKey, invoiceNumber, revenueAccount: item.revenueAccount,
                 receivableAccount: String(item.body.receivableAccount || '1201'), discountAmount: item.discountAmount, grossAmount: item.grossAmount,
                 discountAccount: String(item.body.discountAccount || ''), taxAccount: String(item.body.taxAccount || ''),
                 costCenter: String(item.body.costCenter || ''), academicStageCode: String(item.body.academicStageCode || ''), currency: item.currency,
@@ -14170,8 +14255,8 @@ export async function createApp(options: { cloudflare?: boolean } = {}): Promise
           || String(template.revenueAccount || '') !== String(feeConfig.revenueAccount || '')
           || Math.abs(Number(template.amount) - grossAmount) > 0.001
           || String(template.status || '').toLowerCase() !== 'active'
-          || String(template.effectiveFrom || '').slice(0, 10) > new Date().toISOString().slice(0, 10)
-          || (template.effectiveTo && String(template.effectiveTo).slice(0, 10) < dueDate)) {
+          || canonicalDatabaseDate(template.effectiveFrom) > new Date().toISOString().slice(0, 10)
+          || (template.effectiveTo && canonicalDatabaseDate(template.effectiveTo) < dueDate)) {
           throw new ValidationError('قالب الرسم لا يطابق بند الرسوم أو السنة الدراسية المحددة. أعد تحميل الإعدادات وحاول مجددًا.');
         }
         await assertCanonicalFeeOperationalScope(transaction, tenantId, schoolId, tenantContext, academicYearId, academicPeriodId, String(template.financialPeriod || ''));
@@ -14214,7 +14299,7 @@ export async function createApp(options: { cloudflare?: boolean } = {}): Promise
             && Math.abs(Number(assignment.grossAmount) - grossAmount) <= 0.001
             && Math.abs(Number(assignment.discountAmount) - discountAmount) <= 0.001
             && Math.abs(Number(assignment.netAmount) - Number((grossAmount - discountAmount).toFixed(2))) <= 0.001
-            && String(assignment.dueDate).slice(0, 10) === dueDate;
+            && canonicalDatabaseDate(assignment.dueDate) === dueDate;
           if (!sameAssignment) throw new ConflictError('مفتاح إعادة التوزيع مستخدم لبيانات مختلفة؛ لم يُعدّل أي تخصيص.');
           if (String(assignment.status).toLowerCase() === 'cancelled') throw new ConflictError('لا يمكن إعادة استخدام تخصيص ملغى.');
           const assignmentKey = String(assignment.idempotencyKey || key);
@@ -14222,20 +14307,35 @@ export async function createApp(options: { cloudflare?: boolean } = {}): Promise
           if (body.issueInvoices === true) {
             const invoiceKey = `${assignmentKey}:invoice`;
             const studentName = [student.preferred_name, student.legal_first_name, student.legal_middle_name, student.legal_last_name].filter(Boolean).join(' ');
+            const existingInvoice = await transaction.query<{ invoice_number: string | null; invoice_date: string | null }>(
+              `SELECT invoice_number, invoice_date FROM public.student_fee_invoices
+                WHERE tenant_id = $1 AND school_id = $2 AND idempotency_key = $3 FOR UPDATE`,
+              [tenantId, schoolId, invoiceKey]
+            );
+            const invoiceDate = existingInvoice.rows[0]?.invoice_date
+              ? canonicalDatabaseDate(existingInvoice.rows[0].invoice_date)
+              : String((await transaction.query<{ invoice_date: string }>(
+                `SELECT CURRENT_DATE::text AS invoice_date`
+              )).rows[0]?.invoice_date || '');
+            if (!/^\d{4}-\d{2}-\d{2}$/.test(invoiceDate)) throw new DatabaseError('تعذر تحديد تاريخ المطالبة من قاعدة البيانات.');
+            const invoiceNumber = existingInvoice.rows[0]
+              ? existingInvoice.rows[0].invoice_number
+              : await CanonicalErpPostingService.allocateDocumentNumber(transaction, tenantId, schoolId, 'invoice', invoiceDate);
             const invoice = await transaction.query(
               `INSERT INTO public.student_fee_invoices
-                (tenant_id, school_id, id, student_id, student_name, item, amount, tax_amount, paid_amount, remaining_amount,
+                (tenant_id, school_id, id, invoice_number, student_id, student_name, item, amount, tax_amount, paid_amount, remaining_amount,
                  invoice_date, due_date, status, source_payload, updated_by, template_id, academic_year_id, academic_period_id,
                  currency, idempotency_key, version)
-               VALUES ($1,$2,$3,$4,$5,$6,$7,0,0,$7,CURRENT_DATE,$8,'issued',$9::jsonb,$10,$11,$12,$13,$14,$15,1)
-               ON CONFLICT (school_id, idempotency_key) DO UPDATE SET idempotency_key = EXCLUDED.idempotency_key
-               RETURNING id, student_id AS "studentId", student_name AS "studentName", item, amount, tax_amount AS "taxAmount",
+               VALUES ($1,$2,$3,$4,$5,$6,$7,$8,0,0,$8,$9,$10,'issued',$11::jsonb,$12,$13,$14,$15,$16,$17,1)
+               ON CONFLICT (school_id, idempotency_key) WHERE idempotency_key IS NOT NULL
+               DO UPDATE SET idempotency_key = EXCLUDED.idempotency_key
+               RETURNING id, invoice_number AS "invoiceNumber", student_id AS "studentId", student_name AS "studentName", item, amount, tax_amount AS "taxAmount",
                          paid_amount AS "paidAmount", remaining_amount AS "remainingAmount", invoice_date AS "invoiceDate",
                          due_date AS "dueDate", template_id AS "templateId", academic_year_id AS "academicYearId",
                          academic_period_id AS "academicPeriodId", currency, status, journal_entry_id AS "journalEntryId",
                          source_payload AS "sourcePayload", idempotency_key AS "idempotencyKey"`,
-              [tenantId, schoolId, makeInvoiceId(), studentId, studentName, String(body.description || body.item || `رسوم ${templateId}`), Number((grossAmount - discountAmount).toFixed(2)), dueDate,
-                JSON.stringify({ source, feeConfigId, assignmentId: assignment.id, idempotencyKey: invoiceKey, grossAmount, discountAmount }), databaseActorId, templateId, academicYearId, academicPeriodId, String(body.currency || 'SAR'), invoiceKey]);
+              [tenantId, schoolId, makeInvoiceId(), invoiceNumber, studentId, studentName, String(body.description || body.item || `رسوم ${templateId}`), Number((grossAmount - discountAmount).toFixed(2)), invoiceDate, dueDate,
+                JSON.stringify({ source, feeConfigId, assignmentId: assignment.id, idempotencyKey: invoiceKey, invoiceNumber, grossAmount, discountAmount }), databaseActorId, templateId, academicYearId, academicPeriodId, String(body.currency || 'SAR'), invoiceKey]);
             const canonicalInvoice = invoice.rows[0];
             const invoicePayload = (typeof canonicalInvoice?.sourcePayload === 'string'
               ? (() => { try { return JSON.parse(canonicalInvoice.sourcePayload); } catch { return {}; } })()
@@ -14245,7 +14345,7 @@ export async function createApp(options: { cloudflare?: boolean } = {}): Promise
               || String(canonicalInvoice.academicYearId) !== academicYearId
               || String(canonicalInvoice.academicPeriodId) !== academicPeriodId
               || Math.abs(Number(canonicalInvoice.amount) - Number((grossAmount - discountAmount).toFixed(2))) > 0.001
-              || String(canonicalInvoice.dueDate).slice(0, 10) !== dueDate
+              || canonicalDatabaseDate(canonicalInvoice.dueDate) !== dueDate
               || String(canonicalInvoice.item) !== String(body.description || body.item || `رسوم ${templateId}`)
               || String(canonicalInvoice.currency) !== String(body.currency || 'SAR')
               || (invoicePayload.feeConfigId !== undefined && String(invoicePayload.feeConfigId) !== feeConfigId)
@@ -14264,7 +14364,7 @@ export async function createApp(options: { cloudflare?: boolean } = {}): Promise
               grossAmount: Number(invoicePayload.grossAmount ?? grossAmount),
               discountAmount: Number(invoicePayload.discountAmount ?? discountAmount),
               taxAmount: Number(canonicalInvoice.taxAmount || 0),
-              invoiceDate: String(canonicalInvoice.invoiceDate || '').slice(0, 10),
+              invoiceDate: canonicalDatabaseDate(canonicalInvoice.invoiceDate),
               status: String(canonicalInvoice.status || 'issued'),
               item: String(canonicalInvoice.item || body.description || body.item || `رسوم ${templateId}`),
               revenueAccount: String(feeConfig.revenueAccount || ''),
@@ -14804,9 +14904,11 @@ export async function createApp(options: { cloudflare?: boolean } = {}): Promise
 
         const existingResult = await transaction.query(
           `SELECT id, student_id, amount, status, journal_entry_id, receipt_voucher_id,
-                  receipt_date, payment_method, receiving_account, operational_type, against_text, source_payload
-             FROM public.student_fee_receipts
-            WHERE tenant_id = $1 AND school_id = $2 AND id = $3
+                  receipt_date, payment_method, receiving_account, operational_type, against_text, source_payload,
+                  (SELECT journal.journal_number FROM public.erp_journal_entries journal
+                    WHERE journal.tenant_id = $1 AND journal.school_id = $2 AND journal.id = receipt.journal_entry_id) AS journal_number
+             FROM public.student_fee_receipts receipt
+            WHERE receipt.tenant_id = $1 AND receipt.school_id = $2 AND receipt.id = $3
             FOR UPDATE`,
           [tenantId, schoolId, receiptId]
         );
@@ -14847,7 +14949,7 @@ export async function createApp(options: { cloudflare?: boolean } = {}): Promise
           }
           idempotentReplay = true;
           settlement = {
-            receipt: { id: receiptId, studentId, studentName, amount, receiptDate, paymentMethod: effectivePaymentMethod, receivingAccount: primaryReceivingAccount, receivingAccounts, operationalType, against, status: 'posted', journalEntryId: existing.journal_entry_id, receiptVoucherId: existing.receipt_voucher_id },
+            receipt: { id: receiptId, studentId, studentName, amount, receiptDate, paymentMethod: effectivePaymentMethod, receivingAccount: primaryReceivingAccount, receivingAccounts, operationalType, against, status: 'posted', journalEntryId: existing.journal_entry_id, journalNumber: existing.journal_number, receiptVoucherId: existing.receipt_voucher_id },
             allocations: previousAllocations.rows,
             journalId: existing.journal_entry_id
           };
@@ -14870,14 +14972,7 @@ export async function createApp(options: { cloudflare?: boolean } = {}): Promise
 
         let receiptVoucherId = existing?.receipt_voucher_id ? String(existing.receipt_voucher_id) : '';
         if (!receiptVoucherId) {
-          const sequence = await transaction.query(
-            `INSERT INTO public.student_fee_receipt_sequences (tenant_id, school_id, next_number)
-             VALUES ($1,$2,2)
-             ON CONFLICT (school_id) DO UPDATE SET next_number = public.student_fee_receipt_sequences.next_number + 1, updated_at = now()
-             RETURNING next_number - 1 AS "receiptNumber"`,
-            [tenantId, schoolId]
-          );
-          receiptVoucherId = `RCV-${String(receiptDate).slice(0, 4)}-${String(sequence.rows[0]?.receiptNumber || 1).padStart(8, '0')}`;
+          receiptVoucherId = await allocateStudentReceiptVoucherNumber(transaction, tenantId, schoolId, receiptDate);
         }
 
         if (existing) {
@@ -14989,6 +15084,8 @@ export async function createApp(options: { cloudflare?: boolean } = {}): Promise
             paymentMethod: effectivePaymentMethod,
             receivingAccount: primaryReceivingAccount,
             receivingAccounts,
+            receiptVoucherId,
+            voucherNumber: receiptVoucherId,
             receivableAccount: '1201',
             operationalType,
             against,
@@ -14998,6 +15095,11 @@ export async function createApp(options: { cloudflare?: boolean } = {}): Promise
         });
         const journalId = erpSync.sourceLinks.find(link => link.sourceType === 'student_receipt' && link.sourceId === receiptId)?.journalEntryId || '';
         if (!journalId) throw new DatabaseError('تعذر إثبات رابط القيد المحاسبي لسند القبض.');
+        const journalNumberResult = await transaction.query<{ journal_number: string | null }>(
+          `SELECT journal_number FROM public.erp_journal_entries WHERE tenant_id = $1 AND school_id = $2 AND id = $3`,
+          [tenantId, schoolId, journalId]
+        );
+        const journalNumber = String(journalNumberResult.rows[0]?.journal_number || '');
         await transaction.query(
           `UPDATE public.student_fee_receipts
               SET journal_entry_id = $4, receipt_voucher_id = $5, updated_at = now(), updated_by = $6
@@ -15013,7 +15115,7 @@ export async function createApp(options: { cloudflare?: boolean } = {}): Promise
             JSON.stringify({ receiptId, studentId, amount, paymentMethod: effectivePaymentMethod, receivingAccounts, installmentScheduleId: requestedInstallmentScheduleId, allocationCount: allocations.length, journalId })]
         );
         settlement = {
-          receipt: { id: receiptId, studentId, studentName, amount, receiptDate, paymentMethod: effectivePaymentMethod, receivingAccount: primaryReceivingAccount, receivingAccounts, operationalType, against, status: 'posted', journalEntryId: journalId, receiptVoucherId },
+          receipt: { id: receiptId, studentId, studentName, amount, receiptDate, paymentMethod: effectivePaymentMethod, receivingAccount: primaryReceivingAccount, receivingAccounts, operationalType, against, status: 'posted', journalEntryId: journalId, journalNumber, receiptVoucherId },
           allocations,
           journalId
         };
@@ -15220,7 +15322,7 @@ export async function createApp(options: { cloudflare?: boolean } = {}): Promise
         for (const [scheduleId, allocatedAmount] of allocatedBySchedule) {
           const schedule: any = schedules.get(scheduleId);
           const nextPaid = Number(Math.max(0, Number(schedule.paidAmount || 0) - allocatedAmount).toFixed(2));
-          const nextStatus = nextPaid > 0.001 ? 'partially_paid' : (String(schedule.dueDate).slice(0, 10) <= new Date().toISOString().slice(0, 10) ? 'due' : 'scheduled');
+          const nextStatus = nextPaid > 0.001 ? 'partially_paid' : (canonicalDatabaseDate(schedule.dueDate) <= new Date().toISOString().slice(0, 10) ? 'due' : 'scheduled');
           await transaction.query(
             `UPDATE public.student_fee_installment_schedules
                 SET paid_amount = $4, status = $5, version = version + 1
@@ -15281,7 +15383,7 @@ export async function createApp(options: { cloudflare?: boolean } = {}): Promise
         if (!transaction) throw new DatabaseError('تعذر فتح المعاملة المالية.');
         const student = await transaction.query(`SELECT id, preferred_name, legal_first_name, legal_middle_name, legal_last_name FROM public.students WHERE tenant_id = $1 AND school_id = $2 AND id = $3 AND deleted_at IS NULL`, [tenantId, schoolId, studentId]);
         if (!student.rows[0]) throw new ValidationError('الطالب غير موجود في المدرسة الحالية.');
-        const invoices = await transaction.query(`SELECT id, student_id AS "studentId", student_name AS "studentName", item, amount, tax_amount AS "taxAmount", paid_amount AS "paidAmount", remaining_amount AS "remainingAmount", invoice_date AS "invoiceDate", due_date AS "dueDate", status, currency, source_payload AS "sourcePayload" FROM public.student_fee_invoices WHERE tenant_id = $1 AND school_id = $2 AND student_id = $3 ORDER BY due_date DESC NULLS LAST, invoice_date DESC NULLS LAST`, [tenantId, schoolId, studentId]);
+        const invoices = await transaction.query(`SELECT id, invoice_number AS "invoiceNumber", student_id AS "studentId", student_name AS "studentName", item, amount, tax_amount AS "taxAmount", paid_amount AS "paidAmount", remaining_amount AS "remainingAmount", invoice_date AS "invoiceDate", due_date AS "dueDate", status, currency, source_payload AS "sourcePayload" FROM public.student_fee_invoices WHERE tenant_id = $1 AND school_id = $2 AND student_id = $3 ORDER BY due_date DESC NULLS LAST, invoice_date DESC NULLS LAST`, [tenantId, schoolId, studentId]);
         for (const invoice of invoices.rows) {
           const payload = typeof invoice.sourcePayload === 'string'
             ? (() => { try { return JSON.parse(invoice.sourcePayload); } catch { return {}; } })()
@@ -15613,7 +15715,7 @@ export async function createApp(options: { cloudflare?: boolean } = {}): Promise
           .maybeSingle(),
         canonicalReadClient
           .from('student_fee_invoices')
-          .select('id,student_id,student_name,item,amount,tax_amount,paid_amount,remaining_amount,invoice_date,due_date,status,journal_entry_id,template_id,academic_year_id,academic_period_id,currency,idempotency_key,version,source_payload')
+          .select('id,invoice_number,student_id,student_name,item,amount,tax_amount,paid_amount,remaining_amount,invoice_date,due_date,status,journal_entry_id,template_id,academic_year_id,academic_period_id,currency,idempotency_key,version,source_payload')
           .eq('tenant_id', tenantId)
           .eq('school_id', schoolId)
           .order('invoice_date', { ascending: false })
@@ -15650,6 +15752,7 @@ export async function createApp(options: { cloudflare?: boolean } = {}): Promise
           : row.source_payload || {};
         return {
           id: row.id,
+          invoiceNumber: row.invoice_number || undefined,
           studentId: row.student_id,
           studentName: row.student_name,
           item: row.item,
@@ -15673,24 +15776,40 @@ export async function createApp(options: { cloudflare?: boolean } = {}): Promise
           version: row.version,
         };
       });
-      canonicalFeeReceipts = (receiptResult.data || []).map((row: any) => ({
-        id: row.id,
-        studentId: row.student_id,
-        studentName: row.student_name,
-        receiptDate: row.receipt_date,
-        amount: row.amount,
-        paymentMethod: row.payment_method,
-        receivingAccount: row.receiving_account,
-        operationalType: row.operational_type,
-        against: row.against_text,
-        status: row.status,
-        journalEntryId: row.journal_entry_id,
-        receiptVoucherId: row.receipt_voucher_id,
-        sourcePayload: row.source_payload,
-        createdAt: row.created_at,
-        updatedAt: row.updated_at,
-        updatedBy: row.updated_by,
-      }));
+      canonicalFeeReceipts = (receiptResult.data || []).map((row: any) => {
+        const sourcePayload = typeof row.source_payload === 'string'
+          ? (() => { try { return JSON.parse(row.source_payload); } catch { return {}; } })()
+          : row.source_payload || {};
+        const reversalJournalId = String(sourcePayload.reversalJournalId || '').trim();
+        const reversalReason = String(sourcePayload.reversalReason || '').trim();
+        const reversalNotes = reversalJournalId
+          ? `تم عكس السند وتخصيصاته وأرصدة الفواتير والأقساط ذريًا. رقم القيد العكسي: ${reversalJournalId}${reversalReason ? ` — السبب: ${reversalReason}` : ''}`
+          : String(sourcePayload.notes || sourcePayload.voidReason || '').trim();
+        return {
+          id: row.id,
+          studentId: row.student_id,
+          studentName: row.student_name,
+          receiptDate: row.receipt_date,
+          amount: row.amount,
+          paymentMethod: row.payment_method,
+          receivingAccount: row.receiving_account,
+          operationalType: row.operational_type,
+          against: row.against_text,
+          status: row.status,
+          journalEntryId: row.journal_entry_id,
+          receiptVoucherId: row.receipt_voucher_id,
+          currency: String(sourcePayload.currency || ''),
+          notes: reversalNotes,
+          reversalJournalEntryId: reversalJournalId,
+          voidReason: String(sourcePayload.voidReason || reversalReason || '').trim(),
+          cancelledAt: String(sourcePayload.reversedAt || sourcePayload.voidedAt || sourcePayload.cancelledAt || ''),
+          cancelledBy: String(sourcePayload.reversedBy || sourcePayload.voidedBy || sourcePayload.cancelledBy || ''),
+          sourcePayload,
+          createdAt: row.created_at,
+          updatedAt: row.updated_at,
+          updatedBy: row.updated_by,
+        };
+      });
       const canonicalChartOfAccounts = (chartResult.data || []).map((row: any) => ({
         id: row.account_code,
         code: row.account_code,
@@ -15736,6 +15855,26 @@ export async function createApp(options: { cloudflare?: boolean } = {}): Promise
         ...(canonicalChartOfAccountsAvailable ? { chartOfAccounts: canonicalChartOfAccounts } : {}),
       };
       if (canonicalErpReady && canonicalErpModel) {
+        const financialCurrencyBySource = new Map<string, string>();
+        for (const invoice of financialRecordRows(canonicalFeeInvoices)) {
+          const sourcePayload = typeof invoice.sourcePayload === 'string'
+            ? (() => { try { return JSON.parse(invoice.sourcePayload); } catch { return {}; } })()
+            : invoice.sourcePayload || {};
+          const code = financialText(invoice.currency || sourcePayload.currency).trim().toUpperCase();
+          if (code) financialCurrencyBySource.set(`student_fee_invoice:${financialText(invoice.id)}`, code);
+        }
+        for (const receipt of financialRecordRows(canonicalFeeReceipts)) {
+          const sourcePayload = typeof receipt.sourcePayload === 'string'
+            ? (() => { try { return JSON.parse(receipt.sourcePayload); } catch { return {}; } })()
+            : receipt.sourcePayload || {};
+          const code = financialText(receipt.currency || sourcePayload.currency).trim().toUpperCase();
+          if (code) financialCurrencyBySource.set(`student_receipt:${financialText(receipt.id)}`, code);
+        }
+        const canonicalJournalEntries: Array<Record<string, unknown>> = (canonicalErpModel.journalEntries as Array<Record<string, unknown>>).map(entry => ({
+          ...entry,
+          currency: entry.currency || financialCurrencyBySource.get(`${entry.sourceType}:${entry.sourceId}`)
+        }));
+        const journalBySource = new Map(canonicalJournalEntries.map(entry => [`${entry.sourceType}:${entry.sourceId}`, entry]));
         const sourceLinks = new Map(
           canonicalErpModel.sourceLinks.map(link => [`${link.sourceType}:${link.sourceId}`, link.journalEntryId])
         );
@@ -15746,27 +15885,40 @@ export async function createApp(options: { cloudflare?: boolean } = {}): Promise
             ? { ...row, legacyJournalEntryId: row.journalEntryId, journalEntryId }
             : row;
         });
+        const linkStudentReceipts = (value: unknown) => linkRows(value, 'student_receipt').map(row => {
+          const journal = journalBySource.get(`student_receipt:${financialText(row.id)}`);
+          return journal ? { ...row, canonicalJournalEntry: journal } : row;
+        });
         const linkedPaymentRows = financialRecordRows(snapshotData.paymentVouchers).map(row => {
           const sourceId = financialText(row.id);
           const journalEntryId = sourceLinks.get(`payment_voucher:${sourceId}`) || sourceLinks.get(`expense_accrual:${sourceId}`);
+          const sourceType = sourceLinks.has(`payment_voucher:${sourceId}`) ? 'payment_voucher' : 'expense_accrual';
+          const journal = journalBySource.get(`${sourceType}:${sourceId}`);
+          const canonicalStatus = String(journal?.status || '').trim().toLowerCase();
           return journalEntryId
-            ? { ...row, legacyJournalEntryId: row.journalEntryId, journalEntryId }
+            ? {
+                ...row,
+                ...(canonicalStatus === 'posted' || canonicalStatus === 'reversed' ? { status: canonicalStatus } : {}),
+                ...(journal ? { canonicalJournalEntry: journal } : {}),
+                legacyJournalEntryId: row.journalEntryId,
+                journalEntryId
+              }
             : row;
         });
         responseData = {
           ...responseData,
           invoices: linkRows(responseData.invoices, 'student_fee_invoice'),
-          studentReceiptVouchers: linkRows(responseData.studentReceiptVouchers, 'student_receipt'),
-          receiptVouchers: linkRows(responseData.receiptVouchers, 'student_receipt'),
+          studentReceiptVouchers: linkStudentReceipts(responseData.studentReceiptVouchers),
+          receiptVouchers: linkStudentReceipts(responseData.receiptVouchers),
           paymentVouchers: linkedPaymentRows,
-          journalEntries: canonicalErpModel.journalEntries.length > 0
-            ? canonicalErpModel.journalEntries
+          journalEntries: canonicalJournalEntries.length > 0
+            ? canonicalJournalEntries
             : snapshotData.journalEntries,
           chartOfAccounts: canonicalErpModel.chartOfAccounts.length > 0
             ? canonicalErpModel.chartOfAccounts
             : snapshotData.chartOfAccounts,
           expenseAccruals: canonicalErpModel.expenseAccruals,
-          erpJournalEntries: canonicalErpModel.journalEntries,
+          erpJournalEntries: canonicalJournalEntries,
           erpLedgerEntries: canonicalErpModel.ledgerEntries,
           erpChartOfAccounts: canonicalErpModel.chartOfAccounts,
           erpExpenseAccruals: canonicalErpModel.expenseAccruals,
@@ -16753,6 +16905,7 @@ ${JSON.stringify(snapshot)}
   if (!cloudflareMode && !isProduction) {
     const { createServer: createViteServer } = await import("vite");
     const vite = await createViteServer({
+      root: applicationRoot,
       server: { middlewareMode: true },
       appType: "spa",
     });

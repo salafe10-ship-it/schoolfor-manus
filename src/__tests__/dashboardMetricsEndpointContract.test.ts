@@ -3,6 +3,7 @@ import path from 'node:path';
 import { describe, expect, it } from 'vitest';
 
 const serverSource = fs.readFileSync(path.resolve(process.cwd(), 'server.ts'), 'utf8');
+const dashboardSource = fs.readFileSync(path.resolve(process.cwd(), 'src/components/ModernSchoolDashboard.tsx'), 'utf8');
 const routeStart = serverSource.indexOf("app.get('/api/dashboard/metrics'");
 const routeEnd = serverSource.indexOf('  // ==========================================', routeStart + 1);
 const routeSource = serverSource.slice(routeStart, routeEnd);
@@ -23,6 +24,16 @@ describe('Dashboard live metrics endpoint contract', () => {
     expect(routeSource).not.toContain('tenantId: identity.tenantId');
   });
 
+  it('calculates collection rate from tenant and school scoped active canonical fee invoices', () => {
+    expect(routeSource).toContain("from('student_fee_invoices')");
+    expect(routeSource).toContain(".select('amount,tax_amount,paid_amount,status')");
+    expect(routeSource).toContain(".eq('tenant_id', identity.tenantId)");
+    expect(routeSource).toContain(".eq('school_id', identity.schoolId)");
+    expect(routeSource).toContain('collectionRate: collectionRateMetric');
+    expect(routeSource).toContain('calculateFeeCollectionRate(feeInvoicesResult.data || [])');
+    expect(routeSource).toContain('feeInvoicesResult.error');
+  });
+
   it('does not accept client-selected scope or service-role access', () => {
     expect(routeSource).toContain('identity?.tenantId');
     expect(routeSource).toContain('identity.schoolId');
@@ -30,5 +41,10 @@ describe('Dashboard live metrics endpoint contract', () => {
     expect(routeSource).not.toContain('req.query.schoolId');
     expect(routeSource).not.toContain('req.query.branchId');
     expect(routeSource).not.toContain('service_role');
+  });
+
+  it('refreshes and clears school metrics when the trusted school or branch context changes', () => {
+    expect(dashboardSource).toContain('setMetrics(null);');
+    expect(dashboardSource).toContain('}, [selectedSchool.id, selectedBranch?.id]);');
   });
 });

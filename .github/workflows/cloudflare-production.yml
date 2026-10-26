@@ -43,18 +43,18 @@ jobs:
       - name: Verify identity governance database contract
         run: npm run db:verify-identity-governance
 
-      - name: Verify production application schema contract
-        run: npm run db:verify-production-schema
-
   deploy:
     name: Validate and deploy Cloudflare Worker
     needs: verify-identity-governance
     runs-on: ubuntu-latest
     timeout-minutes: 15
+    environment:
+      name: production-database-migrations
+      deployment: false
     env:
       CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
       CLOUDFLARE_ACCOUNT_ID: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}
-      PRODUCTION_URL: ${{ vars.CLOUDFLARE_PRODUCTION_URL || 'https://schoolfor-manus.salafe10.workers.dev' }}
+      PRODUCTION_URL: https://modern-family-schools.abdalsalamsoft.com
       EXPECTED_BUILD_COMMIT: ${{ github.sha }}
     steps:
       - name: Checkout exact production commit
@@ -90,6 +90,18 @@ jobs:
 
       - name: Verify release artifact
         run: npm run verify:artifact
+
+      - name: Apply official financial document serial migration
+        run: node scripts/apply-production-financial-document-serial-migration.mjs
+        env:
+          PLATFORM_ADMIN_DATABASE_URL: ${{ secrets.PLATFORM_ADMIN_DATABASE_URL }}
+          EDUPRO_ENVIRONMENT: production
+          PRODUCTION_FINANCIAL_MIGRATION_CONFIRM: APPLY_FINANCIAL_DOCUMENT_NUMBERING_202610231100
+
+      - name: Verify production application schema contract
+        run: npm run db:verify-production-schema
+        env:
+          PLATFORM_ADMIN_DATABASE_URL: ${{ secrets.PLATFORM_ADMIN_DATABASE_URL }}
 
       - name: Deploy exact commit to Cloudflare
         run: |

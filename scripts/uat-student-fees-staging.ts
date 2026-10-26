@@ -36,7 +36,7 @@ function requireEnvironment() {
   if (url.origin === 'https://schoolfor-manus-staging.salafe10.workers.dev' && url.pathname === '/') {
     assertCloudflareStagingWorkerUrl(`${url.origin}/`);
   } else if (!['127.0.0.1', 'localhost'].includes(url.hostname)
-    || url.port !== '4179'
+    || !['4179', '4183'].includes(url.port)
     || process.env.UAT_ALLOW_LOCAL_STAGING !== 'true'
     || process.env.EDUPRO_ENVIRONMENT !== 'staging') {
     throw new Error('STUDENT_FEES_UAT_TARGET_MUST_BE_ISOLATED_STAGING');
@@ -71,8 +71,13 @@ async function requireApi(path: string, init: RequestInit = {}) {
   return result;
 }
 
-function isoDate(date: Date) { return date.toISOString().slice(0, 10); }
-function addDays(days: number) { const date = new Date(); date.setUTCDate(date.getUTCDate() + days); return isoDate(date); }
+function isoDate(date: Date) {
+  const year = date.getFullYear();
+  const month = String(date.getMonth() + 1).padStart(2, '0');
+  const day = String(date.getDate()).padStart(2, '0');
+  return `${year}-${month}-${day}`;
+}
+function addDays(days: number) { const date = new Date(); date.setDate(date.getDate() + days); return isoDate(date); }
 
 async function main() {
   requireEnvironment();
@@ -95,6 +100,126 @@ async function main() {
   async function studentAccount(studentId: string) {
     const { body } = await requireApi(`/api/financial/students/${encodeURIComponent(studentId)}/account`);
     return body.data;
+  }
+
+  async function assertJournalIntegrity(
+    journalId: string,
+    sourceType: string,
+    sourceId: string,
+    expectedAmount: number,
+    expectedStatus = 'posted',
+    reversalOfJournalId: string | null = null,
+  ) {
+    const result = await pool.query<{
+      id: string;
+      journal_number: string | null;
+      status: string;
+      source_type: string;
+      source_id: string;
+      reversal_of_journal_id: string | null;
+      total_debit: string;
+      total_credit: string;
+      line_count: number;
+      line_debit: string;
+      line_credit: string;
+      ledger_count: number;
+      ledger_debit: string;
+      ledger_credit: string;
+      journal_lines_missing_ledger: number;
+      mismatched_ledger_rows: number;
+    }>(
+      `SELECT je.id, je.journal_number, je.status, je.source_type, je.source_id, je.reversal_of_journal_id,
+              je.total_debit::text AS total_debit, je.total_credit::text AS total_credit,
+              (SELECT COUNT(*)::int FROM public.erp_journal_lines jl
+                WHERE jl.tenant_id = je.tenant_id AND jl.school_id = je.school_id
+                  AND jl.journal_entry_id = je.id) AS line_count,
+              COALESCE((SELECT SUM(jl.debit) FROM public.erp_journal_lines jl
+                WHERE jl.tenant_id = je.tenant_id AND jl.school_id = je.school_id
+                  AND jl.journal_entry_id = je.id), 0)::text AS line_debit,
+              COALESCE((SELECT SUM(jl.credit) FROM public.erp_journal_lines jl
+                WHERE jl.tenant_id = je.tenant_id AND jl.school_id = je.school_id
+                  AND jl.journal_entry_id = je.id), 0)::text AS line_credit,
+              (SELECT COUNT(*)::int FROM public.erp_general_ledger gl
+                WHERE gl.tenant_id = je.tenant_id AND gl.school_id = je.school_id
+                  AND gl.journal_entry_id = je.id) AS ledger_count,
+              COALESCE((SELECT SUM(gl.debit) FROM public.erp_general_ledger gl
+                WHERE gl.tenant_id = je.tenant_id AND gl.school_id = je.school_id
+                  AND gl.journal_entry_id = je.id), 0)::text AS ledger_debit,
+              COALESCE((SELECT SUM(gl.credit) FROM public.erp_general_ledger gl
+                WHERE gl.tenant_id = je.tenant_id AND gl.school_id = je.school_id
+                  AND gl.journal_entry_id = je.id), 0)::text AS ledger_credit,
+              (SELECT COUNT(*)::int FROM public.erp_journal_lines jl
+                WHERE jl.tenant_id = je.tenant_id AND jl.school_id = je.school_id
+                  AND jl.journal_entry_id = je.id
+                  AND NOT EXISTS (SELECT 1 FROM public.erp_general_ledger gl
+                    WHERE gl.tenant_id = jl.tenant_id AND gl.school_id = jl.school_id
+                      AND gl.journal_entry_id = jl.journal_entry_id AND gl.journal_line_id = jl.id)) AS journal_lines_missing_ledger,
+              (SELECT COUNT(*)::int
+                 FROM public.erp_general_ledger gl
+                 LEFT JOIN public.erp_journal_lines jl
+                   ON jl.tenant_id = gl.tenant_id AND jl.school_id = gl.school_id
+                  AND jl.journal_entry_id = gl.journal_entry_id AND jl.id = gl.journal_line_id
+                WHERE gl.tenant_id = je.tenant_id AND gl.school_id = je.school_id
+                  AND gl.journal_entry_id = je.id
+                  AND (jl.id IS NULL OR jl.account_code <> gl.account_code
+                    OR jl.debit <> gl.debit OR jl.credit <> gl.credit
+                    OR gl.source_type <> je.source_type OR gl.source_id <> je.source_id)) AS mismatched_ledger_rows
+         FROM public.erp_journal_entries je
+        WHERE je.tenant_id = $1 AND je.school_id = $2 AND je.id = $3`,
+      [tenantId, schoolId, journalId],
+    );
+    const row = result.rows[0];
+    assert(row, `canonical journal ${journalId} is missing`);
+    assert(/^JV-\d{4}-\d{6,}$/.test(String(row.journal_number || '')), `canonical journal ${journalId} has no persisted official serial`);
+    assert(row.status === expectedStatus, `canonical journal ${journalId} has unexpected status`);
+    assert(row.source_type === sourceType && row.source_id === sourceId, `canonical journal ${journalId} is linked to the wrong source`);
+    assert((row.reversal_of_journal_id || null) === reversalOfJournalId, `canonical journal ${journalId} has the wrong reversal link`);
+    const expected = Number(expectedAmount.toFixed(2));
+    const totals = [row.total_debit, row.total_credit, row.line_debit, row.line_credit, row.ledger_debit, row.ledger_credit].map(Number);
+    assert(Number(row.line_count) >= 2, `canonical journal ${journalId} has fewer than two journal lines`);
+    assert(Number(row.ledger_count) === Number(row.line_count), `canonical journal ${journalId} does not have one ledger row per journal line`);
+    assert(Number(row.journal_lines_missing_ledger) === 0, `canonical journal ${journalId} has journal lines missing from the general ledger`);
+    assert(totals.every(value => Number.isFinite(value) && Math.abs(value - expected) <= 0.001), `canonical journal ${journalId} debit/credit totals do not match its source amount`);
+    assert(Number(row.mismatched_ledger_rows) === 0, `canonical journal ${journalId} has ledger rows disconnected from its journal lines or source`);
+    return row;
+  }
+
+  async function assertReversalMirrors(originalJournalId: string, reversalJournalId: string, sourceType: string, sourceId: string, amount: number) {
+    await assertJournalIntegrity(originalJournalId, sourceType, sourceId, amount, 'reversed');
+    await assertJournalIntegrity(reversalJournalId, 'reversal', originalJournalId, amount, 'posted', originalJournalId);
+    for (const table of ['erp_journal_lines', 'erp_general_ledger'] as const) {
+      const mirror = await pool.query<{ mismatches: number }>(
+        `WITH account_totals AS (
+           SELECT account_code,
+                  SUM(debit) FILTER (WHERE journal_entry_id = $3) AS original_debit,
+                  SUM(credit) FILTER (WHERE journal_entry_id = $3) AS original_credit,
+                  SUM(debit) FILTER (WHERE journal_entry_id = $4) AS reversal_debit,
+                  SUM(credit) FILTER (WHERE journal_entry_id = $4) AS reversal_credit
+             FROM public.${table}
+            WHERE tenant_id = $1 AND school_id = $2 AND journal_entry_id = ANY($5::text[])
+            GROUP BY account_code
+         )
+         SELECT COUNT(*) FILTER (
+                  WHERE ABS(COALESCE(original_debit, 0) - COALESCE(reversal_credit, 0)) > 0.001
+                     OR ABS(COALESCE(original_credit, 0) - COALESCE(reversal_debit, 0)) > 0.001
+                )::int AS mismatches
+           FROM account_totals`,
+        [tenantId, schoolId, originalJournalId, reversalJournalId, [originalJournalId, reversalJournalId]],
+      );
+      assert(Number(mirror.rows[0]?.mismatches || 0) === 0, `${table} reversal ${reversalJournalId} does not mirror the original journal by account`);
+    }
+  }
+
+  async function persistedInvoice(invoiceId: string) {
+    const result = await pool.query<{ id: string; invoice_number: string | null; journal_entry_id: string | null; total_amount: string }>(
+      `SELECT id, invoice_number, journal_entry_id, (amount + tax_amount)::text AS total_amount
+         FROM public.student_fee_invoices
+        WHERE tenant_id = $1 AND school_id = $2 AND id = $3`, [tenantId, schoolId, invoiceId],
+    );
+    const row = result.rows[0];
+    assert(row?.journal_entry_id, `invoice ${invoiceId} is missing its canonical journal link`);
+    assert(/^INV-\d{4}-\d{6,}$/.test(String(row?.invoice_number || '')), `invoice ${invoiceId} has no persisted official serial`);
+    return row;
   }
 
   async function issueVoid(invoiceId: string, reason: string) {
@@ -177,10 +302,17 @@ async function main() {
     const issuedAgain = secondIssue.body.data.invoices;
     assert(issued.length === 2 && issuedAgain.length === 2, 'atomic invoice batch did not return both invoices');
     assert(issued[0].id === issuedAgain[0].id && issued[1].id === issuedAgain[1].id, 'invoice batch retry created different invoice identities');
+    assert(issued.every((invoice: any) => /^INV-\d{4}-\d{6,}$/.test(String(invoice.invoiceNumber || ''))), 'invoice batch did not return official serials');
+    assert(issued.every((invoice: any, index: number) => invoice.invoiceNumber === issuedAgain[index].invoiceNumber), 'invoice retry changed an official serial');
     assert(secondIssue.body.meta?.idempotentReplay === true, 'invoice batch retry was not reported as idempotent');
     primaryInvoiceId = String(issued[0].id);
     cancelInvoiceId = String(issued[1].id);
+    for (const invoiceId of [primaryInvoiceId, cancelInvoiceId]) {
+      const persisted = await persistedInvoice(invoiceId);
+      await assertJournalIntegrity(persisted.journal_entry_id!, 'student_fee_invoice', invoiceId, Number(persisted.total_amount));
+    }
     completed.push('issue: two invoices in one server transaction and repeated batch with stable identities');
+    completed.push('ledger: invoice journals balance across headers, journal lines, and general-ledger rows');
 
     const atomicInvoiceId = randomUUID();
     const atomicKeys = [`${issuePrefix}:atomic-first`, `${issuePrefix}:atomic-conflict`];
@@ -226,6 +358,16 @@ async function main() {
     account = await studentAccount(STUDENT_ID);
     primary = account.invoices.find((invoice: any) => invoice.id === primaryInvoiceId);
     assert(Number(primary?.paidAmount) === 200 && Number(primary?.remainingAmount) === 0, 'full settlement did not close invoice balance');
+    const postedReceipts = await pool.query<{ id: string; journal_entry_id: string | null; amount: string }>(
+      `SELECT id, journal_entry_id, amount::text FROM public.student_fee_receipts
+        WHERE tenant_id = $1 AND school_id = $2 AND id = ANY($3::text[])`,
+      [tenantId, schoolId, [receiptIds[0], receiptIds[1]]],
+    );
+    assert(postedReceipts.rows.length === 2, 'partial/full receipts are not both persisted canonically');
+    for (const receipt of postedReceipts.rows) {
+      assert(receipt.journal_entry_id, `receipt ${receipt.id} is missing its canonical journal link`);
+      await assertJournalIntegrity(receipt.journal_entry_id!, 'student_receipt', receipt.id, Number(receipt.amount));
+    }
     const installmentPlans = await requireApi(`/api/financial/students/${encodeURIComponent(STUDENT_ID)}/installment-plans`);
     const planRows = installmentPlans.body.data || [];
     assert(planRows.some((row: any) => String(row.invoiceId || row.invoice_id) === primaryInvoiceId), 'installment plan is missing from the canonical read');
@@ -241,8 +383,12 @@ async function main() {
     const bulkRowAgain = bulkSecond.body.data?.[0];
     assert(bulkRow?.id && bulkRowAgain?.id === bulkRow.id, 'bulk assignment retry created a duplicate assignment');
     assert(bulkRow.invoice?.id && bulkRowAgain.invoice?.id === bulkRow.invoice.id, 'bulk assignment retry created a duplicate invoice');
+    assert(/^INV-\d{4}-\d{6,}$/.test(String(bulkRow.invoice?.invoiceNumber || '')), 'bulk invoice did not receive an official serial');
+    assert(bulkRow.invoice?.invoiceNumber === bulkRowAgain.invoice?.invoiceNumber, 'bulk invoice retry changed its official serial');
     assert(bulkSecond.body.meta?.idempotentReplayCount === 1, 'bulk retry did not report the existing canonical invoice');
     bulkInvoiceId = String(bulkRow.invoice.id);
+    const persistedBulkInvoice = await persistedInvoice(bulkInvoiceId);
+    await assertJournalIntegrity(persistedBulkInvoice.journal_entry_id!, 'student_fee_invoice', bulkInvoiceId, Number(persistedBulkInvoice.total_amount));
     completed.push('distribution: same bulk request twice returned the same assignment and invoice');
 
     const isolationReceipt = await requireApi('/api/financial/receipts/manual-settle', {
@@ -251,6 +397,12 @@ async function main() {
         operationalType: 'رسوم دراسية', against: `UAT isolation ${runId}`, costCenter: COST_CENTER, amount: 10 }),
     });
     assert(isolationReceipt.body.data.receipt.status === 'posted', 'isolation receipt was not posted');
+    const isolationReceiptRow = await pool.query<{ journal_entry_id: string | null; amount: string }>(
+      `SELECT journal_entry_id, amount::text FROM public.student_fee_receipts
+        WHERE tenant_id = $1 AND school_id = $2 AND id = $3`, [tenantId, schoolId, receiptIds[2]],
+    );
+    assert(isolationReceiptRow.rows[0]?.journal_entry_id, 'cross-student test receipt is missing its canonical journal link');
+    await assertJournalIntegrity(isolationReceiptRow.rows[0].journal_entry_id!, 'student_receipt', receiptIds[2], Number(isolationReceiptRow.rows[0].amount));
     const crossStudentRetry = await api(`/api/financial/receipts/${encodeURIComponent(receiptIds[2])}/allocate`, {
       method: 'POST', body: JSON.stringify({ invoiceId: bulkInvoiceId, amount: 10 }),
     });
@@ -258,6 +410,11 @@ async function main() {
     completed.push('isolation: receipt for student A cannot be allocated to student B invoice');
 
     for (const receiptId of [receiptIds[2], receiptIds[1], receiptIds[0]]) {
+      const originalReceipt = await pool.query<{ journal_entry_id: string | null; amount: string }>(
+        `SELECT journal_entry_id, amount::text FROM public.student_fee_receipts
+          WHERE tenant_id = $1 AND school_id = $2 AND id = $3`, [tenantId, schoolId, receiptId],
+      );
+      assert(originalReceipt.rows[0]?.journal_entry_id, `receipt ${receiptId} is missing its original journal link`);
       const reversed = await reverseReceipt(receiptId, `UAT reversal ${runId}`);
       assert(reversed.reversalJournalId, 'reversal journal was not returned');
       const replay = await reverseReceipt(receiptId, `UAT reversal ${runId}`);
@@ -268,6 +425,7 @@ async function main() {
           WHERE tenant_id = $1 AND school_id = $2 AND id = $3`, [tenantId, schoolId, receiptId]
       );
       assert(rows.rows[0]?.status === 'cancelled' && rows.rows[0]?.reversal_journal_id === reversed.reversalJournalId, 'receipt reversal is not persisted canonically');
+      await assertReversalMirrors(originalReceipt.rows[0].journal_entry_id!, String(reversed.reversalJournalId), 'student_receipt', receiptId, Number(originalReceipt.rows[0].amount));
       const allocationAudit = await pool.query(
         `SELECT COUNT(*)::int AS total,
                 COUNT(*) FILTER (WHERE reversed_at IS NOT NULL AND reversal_journal_id = $4)::int AS reversed
@@ -287,7 +445,26 @@ async function main() {
     assert(String(voidPrimary.invoice?.status).toLowerCase() === 'cancelled', 'paid-and-reversed invoice did not cancel');
     assert(String(voidSecond.invoice?.status).toLowerCase() === 'cancelled', 'invoice cancellation status was not canonical');
     assert(String(voidBulk.invoice?.status).toLowerCase() === 'cancelled', 'bulk invoice cancellation status was not canonical');
+    const cancelledInvoices = await pool.query<{
+      id: string;
+      status: string;
+      journal_entry_id: string | null;
+      reversal_journal_id: string | null;
+      total_amount: string;
+    }>(
+      `SELECT id, status, journal_entry_id, source_payload->>'reversalJournalId' AS reversal_journal_id,
+              (amount + tax_amount)::text AS total_amount
+         FROM public.student_fee_invoices
+        WHERE tenant_id = $1 AND school_id = $2 AND id = ANY($3::text[])`,
+      [tenantId, schoolId, [primaryInvoiceId, cancelInvoiceId, bulkInvoiceId]],
+    );
+    assert(cancelledInvoices.rows.length === 3, 'voided invoices are not all persisted canonically');
+    for (const invoice of cancelledInvoices.rows) {
+      assert(invoice.status === 'cancelled' && invoice.journal_entry_id && invoice.reversal_journal_id, `voided invoice ${invoice.id} lacks its canonical reversal links`);
+      await assertReversalMirrors(invoice.journal_entry_id!, invoice.reversal_journal_id!, 'student_fee_invoice', invoice.id, Number(invoice.total_amount));
+    }
     completed.push('cancellation: fully reversed invoice, untouched invoice, and distributed invoice voided canonically');
+    completed.push('ledger reversal: receipt and invoice reversals mirror journal lines and general-ledger values by account');
 
     const studentAfter = await studentAccount(STUDENT_ID);
     const secondAfter = await studentAccount(SECOND_STUDENT_ID);

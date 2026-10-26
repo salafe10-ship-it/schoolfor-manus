@@ -4,7 +4,10 @@ import { AccountingContext } from '../../../components/GeneralLedgerPortal';
 import { EnterpriseAuditLogger } from '../../../utils/EnterpriseAuditLogger';
 import { authenticatedRequest } from '../../../utils/authenticatedRequest';
 import { openPrintWindow } from '../../../utils/openPrintWindow';
-import { resolveCostCenterStageLogoKey } from '../../../utils/schoolBranding';
+import { amountToArabicWords, getCurrencyConfigForCode } from '../../../utils/currency';
+import { resolveCostCenterStageLogoKey, resolveSchoolStageLogoSource } from '../../../utils/schoolBranding';
+import { resolveFinancialDocumentReference } from '../../../utils/financialDocumentReference';
+import { toLocalDateInputValue } from '../../../utils/dateOnly';
 
 const VOUCHER_STAGE_LABELS: Record<string, string> = {
   kindergarten: 'الروضة',
@@ -23,6 +26,23 @@ const getVoucherStageKey = (voucher: any): string => {
 const getVoucherCostCenterLabel = (voucher: any): string => {
   const stageKey = getVoucherStageKey(voucher);
   return VOUCHER_STAGE_LABELS[stageKey] || String(voucher.costCenter || 'غير محدد');
+};
+
+const getPaymentVoucherStatusDisplay = (status: unknown) => {
+  const normalized = String(status || '').trim().toLowerCase();
+  if (['posted', 'approved', 'مرحل', 'مرحّل', 'معتمد'].includes(normalized)) {
+    return { label: 'مرحل', className: 'bg-emerald-100 text-emerald-800 border border-emerald-200' };
+  }
+  if (['reversed', 'معكوس'].includes(normalized)) {
+    return { label: 'معكوس', className: 'bg-red-100 text-red-800 border border-red-200' };
+  }
+  if (['voided', 'ملغى'].includes(normalized)) {
+    return { label: 'ملغى', className: 'bg-red-100 text-red-800 border border-red-200' };
+  }
+  if (['draft', 'مسودة'].includes(normalized)) {
+    return { label: 'مسودة', className: 'bg-amber-100 text-amber-800 border border-amber-200' };
+  }
+  return { label: String(status || 'غير محدد'), className: 'bg-slate-100 text-slate-700 border border-slate-200' };
 };
 
 export const PaymentVoucherTab = () => {
@@ -160,9 +180,8 @@ export const PaymentVoucherTab = () => {
       return;
     }
 
-    const nextIdNum = paymentVouchers.length + 1;
-    const pvId = editingPaymentVoucherId || `PV-2026-${String(nextIdNum).padStart(4, '0')}`;
-    const jvId = `JV-2026-PV-${String(nextIdNum).padStart(4, '0')}`;
+    const pvId = editingPaymentVoucherId || crypto.randomUUID();
+    const jvId = `JV-DRAFT-${crypto.randomUUID()}`;
     const creditAccountCode = paymentVoucherForm.paidFromAccount;
     const debitAccountCode = paymentVoucherForm.paidToAccount;
     if (!creditAccountCode || !debitAccountCode || !accounts.some((account: any) => account.code === creditAccountCode) || !accounts.some((account: any) => account.code === debitAccountCode)) {
@@ -173,7 +192,7 @@ export const PaymentVoucherTab = () => {
     // 1. Create Payment Voucher object
     const newPv = {
       id: pvId,
-      date: paymentVoucherForm.date || new Date().toISOString().split('T')[0],
+      date: paymentVoucherForm.date || toLocalDateInputValue(new Date()),
       beneficiary: paymentVoucherForm.beneficiary,
       stage: paymentVoucherForm.stage,
       costCenter: selectedCostCenter,
@@ -188,13 +207,16 @@ export const PaymentVoucherTab = () => {
       status: 'draft',
       financialPeriod: 'السنة المالية 2026',
       createdAt: new Date().toLocaleDateString('ar-LY') + ' ' + new Date().toLocaleTimeString('ar-LY'),
-      journalEntryId: jvId
+      journalEntryId: jvId,
+      paymentVoucherNumber: undefined,
+      voucherNumber: undefined,
+      journalNumber: undefined
     };
 
     // 2. Create Journal Entry object
     const newJv = {
       id: jvId,
-      date: paymentVoucherForm.date || new Date().toISOString().split('T')[0],
+      date: paymentVoucherForm.date || toLocalDateInputValue(new Date()),
       description: `توطين قيد سند صرف رقم ${pvId} - لصالح ${paymentVoucherForm.beneficiary}`,
       debitSum: amt,
       creditSum: amt,
@@ -204,6 +226,8 @@ export const PaymentVoucherTab = () => {
       isSystemGenerated: true,
       stage: paymentVoucherForm.stage,
       paymentVoucherId: pvId,
+      journalNumber: undefined,
+      sourceDocumentNumber: undefined,
       lines: [
         {
           id: `${jvId}-1`,
@@ -264,6 +288,17 @@ export const PaymentVoucherTab = () => {
         }
         newPv.journalEntryId = canonicalResult.data.journalId;
         newJv.id = canonicalResult.data.journalId;
+        newPv.paymentVoucherNumber = canonicalResult.data.paymentVoucherNumber || undefined;
+        newPv.voucherNumber = newPv.paymentVoucherNumber;
+        newPv.journalNumber = canonicalResult.data.journalNumber || undefined;
+        newJv.journalNumber = newPv.journalNumber;
+        newJv.sourceDocumentNumber = newPv.paymentVoucherNumber;
+        newPv.status = 'posted';
+        newJv.status = 'posted';
+        const postedVoucherIndex = updatedPvs.findIndex(item => item.id === pvId);
+        if (postedVoucherIndex >= 0) {
+          updatedPvs[postedVoucherIndex] = { ...updatedPvs[postedVoucherIndex], ...newPv, status: 'posted' };
+        }
         const paymentAttachment = paymentAttachmentFileRef.current;
         if (paymentAttachment) {
           const attachmentResponse = await authenticatedRequest(`/api/financial/vouchers/payment_voucher/${encodeURIComponent(String(canonicalResult.data.sourceId || newPv.id))}/attachments?originalFileName=${encodeURIComponent(paymentAttachment.name)}`, {
@@ -293,7 +328,7 @@ export const PaymentVoucherTab = () => {
 
     // Reset Form
     setPaymentVoucherForm({
-      date: new Date().toISOString().split('T')[0],
+      date: toLocalDateInputValue(new Date()),
       beneficiary: 'شركة البيان للمطبوعات والكتب',
       stage: 'الابتدائي',
       costCenter: 'primary',
@@ -317,16 +352,17 @@ export const PaymentVoucherTab = () => {
       device: 'نظام الإدارة المالية المركزي'
     });
 
+    const paymentReference = resolveFinancialDocumentReference(newPv, 'payment').value;
     triggerNotification(ledgerPostingReady
-      ? `تم إنشاء وترحيل سند الصرف ${pvId} عبر خدمة دفتر الأستاذ الكانونية.`
-      : `تم حفظ سند الصرف ${pvId} في المصدر المركزي UAT بإصدار موثق؛ لم يُعتمد كترحيل نهائي في دفتر الأستاذ العام.`, 'success');
+      ? `تم إنشاء وترحيل سند الصرف ${paymentReference} عبر خدمة دفتر الأستاذ الكانونية.`
+      : `تم حفظ سند الصرف ${paymentReference} في المصدر المركزي UAT بإصدار موثق؛ لم يُعتمد كترحيل نهائي في دفتر الأستاذ العام.`, 'success');
   };
 
   const handleNewPaymentVoucher = () => {
     setEditingPaymentVoucherId(null);
     setPaymentVoucherForm((prev: any) => ({
       ...prev,
-      date: new Date().toISOString().split('T')[0],
+      date: toLocalDateInputValue(new Date()),
       beneficiary: '',
       amount: '',
       against: '',
@@ -356,6 +392,11 @@ const handlePrintPV = (pv: any) => {
     }
 
     const accountCode = pv.paidFromAccount || '1101';
+    const paymentReference = resolveFinancialDocumentReference(pv, 'payment');
+    const journalReference = pv.journalEntryId || pv.canonicalJournalEntry?.id
+      ? resolveFinancialDocumentReference(pv, 'journal')
+      : null;
+    const paymentCurrency = getCurrencyConfigForCode(String(pv.currency || currency || 'SDG'));
     const accountName = accountCode === '1101' ? 'صندوق النقدية والخزينة الموحدة' : 'الحساب الجاري بالمصرف';
     
     const debitAccountCode = pv.paidToAccount || '5270';
@@ -364,8 +405,7 @@ const handlePrintPV = (pv: any) => {
     const stageLabel = VOUCHER_STAGE_LABELS[getVoucherStageKey(pv)] || pv.stage || pv.schoolStage || 'غير محدد';
     const costCenterCode = String(pv.costCenter || 'GENERAL').toUpperCase().replace(/^CC[_-]/, '');
     const stageLogoKey = resolveCostCenterStageLogoKey(pv.costCenter || pv.schoolStage || pv.stageKey || pv.stage, costCenters?.length ? costCenters : undefined);
-    const rawSchoolLogo = String((stageLogoKey && selectedSchool?.stageLogos?.[stageLogoKey]) || selectedSchool?.logo || '').trim();
-    const schoolLogoSource = /^(https:\/\/|data:image\/(?:png|jpeg|webp);base64,[a-z0-9+/=\s]+$)/i.test(rawSchoolLogo) ? rawSchoolLogo : '';
+    const schoolLogoSource = resolveSchoolStageLogoSource(stageLogoKey, selectedSchool?.stageLogos, selectedSchool?.logo);
     const schoolName = String(selectedSchool?.name || pv.school || 'المدرسة');
     const amount = Number(pv.amount || 0);
     const escapePrintValue = (value: unknown) => String(value ?? '—').replace(/[&<>"']/g, char => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[char] || char));
@@ -377,7 +417,7 @@ const handlePrintPV = (pv: any) => {
       <html dir="rtl" lang="ar">
         <head>
           <meta charset="utf-8" />
-          <title>سند صرف رقم ${escapePrintValue(pv.id)}</title>
+          <title>سند صرف ${escapePrintValue(paymentReference.value)}</title>
           <style>
             body {
               font-family: 'Inter', system-ui, sans-serif;
@@ -557,8 +597,9 @@ const handlePrintPV = (pv: any) => {
               </div>
             </div>
             <div class="voucher-meta">
-              <div class="voucher-id">سند صرف رقم: ${escapePrintValue(pv.id)}</div>
+              <div class="voucher-id">سند صرف رقم: ${escapePrintValue(paymentReference.value)}</div>
               <div style="margin-top: 5px;">التاريخ: ${escapePrintValue(pv.date)}</div>
+              <div style="margin-top: 5px;">${escapePrintValue(journalReference?.label || 'رقم القيد')}: ${escapePrintValue(journalReference?.value || 'غير مرحل')}</div>
             </div>
           </div>
 
@@ -583,10 +624,10 @@ const handlePrintPV = (pv: any) => {
           </div>
 
           <div class="amount-box">
-            <div class="amount-val">${amount.toLocaleString()} د.ل</div>
+            <div class="amount-val">${amount.toLocaleString()} ${escapePrintValue(paymentCurrency.symbol)}</div>
             <div class="amount-words">
               <span style="font-size: 9px; color: #64748b; display: block; font-weight: normal; margin-bottom: 2px;">التفقيط المالي الرسمي (الأبجدي):</span>
-              فقط مبلغه ${amount.toLocaleString()} دينار ليبي لا غير.
+              ${escapePrintValue(amountToArabicWords(amount, paymentCurrency))}
             </div>
           </div>
 
@@ -682,7 +723,7 @@ const handlePrintPV = (pv: any) => {
                   </button>
                   {editingPaymentVoucherId && <span className="rounded-lg bg-amber-100 px-2 py-1 text-[10px] font-black text-amber-800">تعديل {editingPaymentVoucherId}</span>}
                   <span className="mr-auto font-mono text-[10px] bg-slate-100 text-slate-700 px-2 py-0.5 rounded-md font-bold">
-                    السند التالي: PV-2026-{String(paymentVouchers.length + 1).padStart(4, '0')}
+                    الرقم الرسمي يُخصص تلقائيًا عند الترحيل
                   </span>
                 </div>
 
@@ -973,7 +1014,7 @@ const handlePrintPV = (pv: any) => {
                       <div key={v.id} className="py-2.5 flex items-center justify-between">
                         <span className="text-slate-700 truncate max-w-[150px]">{v.attachmentName}</span>
                         <div className="flex items-center gap-2">
-                          <span className="text-[9px] bg-slate-100 text-slate-600 px-1.5 py-0.5 rounded font-mono">{v.id}</span>
+                          <span className="text-[9px] bg-slate-100 text-slate-600 px-1.5 py-0.5 rounded font-mono" title={`المعرّف الداخلي: ${v.id}`}>{resolveFinancialDocumentReference(v, 'payment').value}</span>
                           <button 
                             type="button"
                             disabled
@@ -1059,7 +1100,7 @@ const handlePrintPV = (pv: any) => {
               </div>
 
               <div className="overflow-x-auto">
-                <table className="w-full text-right">
+                <table className="min-w-[1280px] w-full text-right">
                   <thead className="bg-slate-50 text-slate-600 font-extrabold border-b border-slate-200">
                     <tr>
                       <th className="px-6 py-3">كود السند</th>
@@ -1079,13 +1120,15 @@ const handlePrintPV = (pv: any) => {
                     {paymentVouchers
                       .filter(v => {
                         const matchesCC = paymentCostCenterFilter === 'all' || getVoucherStageKey(v) === paymentCostCenterFilter;
-                        const matchesSearch = v.beneficiary.toLowerCase().includes(paymentSearch.toLowerCase()) || 
-                                              v.against.toLowerCase().includes(paymentSearch.toLowerCase());
+                        const normalizedSearch = String(paymentSearch || '').trim().toLowerCase();
+                        const matchesSearch = String(v.beneficiary || '').toLowerCase().includes(normalizedSearch) ||
+                                              String(v.against || '').toLowerCase().includes(normalizedSearch) ||
+                                              String(v.voucherNumber || v.id || '').toLowerCase().includes(normalizedSearch);
                         return matchesCC && matchesSearch;
                       })
                       .map(v => (
                         <tr key={v.id} className={`hover:bg-slate-50/70 ${v.status === 'ملغى' ? 'bg-red-50/40 text-slate-400 line-through' : ''}`}>
-                          <td className="px-6 py-3.5 font-mono font-black text-rose-700">{v.id}</td>
+                          <td className="px-6 py-3.5 font-mono font-black text-rose-700" title={`المعرّف الداخلي: ${v.id}`}>{resolveFinancialDocumentReference(v, 'payment').value}</td>
                           <td className="px-6 py-3.5 font-mono text-slate-500">{v.date}</td>
                           <td className="px-6 py-3.5 font-bold text-slate-900">
                             {v.beneficiary}
@@ -1116,12 +1159,8 @@ const handlePrintPV = (pv: any) => {
                             )}
                           </td>
                           <td className="px-6 py-3 text-center">
-                            <span className={`px-2 py-0.5 rounded text-[8px] font-black ${
-                              v.status === 'معتمد' ? 'bg-emerald-100 text-emerald-800 border border-emerald-200' :
-                              v.status === 'ملغى' ? 'bg-red-100 text-red-800 border border-red-200' :
-                              'bg-amber-100 text-amber-800 border border-amber-200'
-                            }`}>
-                              {v.status}
+                            <span className={`px-2 py-0.5 rounded text-[8px] font-black ${getPaymentVoucherStatusDisplay(v.status).className}`}>
+                              {getPaymentVoucherStatusDisplay(v.status).label}
                             </span>
                           </td>
                           <td className="px-6 py-3 text-left">
@@ -1182,7 +1221,7 @@ const handlePrintPV = (pv: any) => {
                                       // Append reverse JV
                                       const reverseJv = {
                                         id: `JV-2026-REV-${String(Math.floor(Math.random() * 899) + 100)}`,
-                                        date: new Date().toISOString().split('T')[0],
+                                        date: toLocalDateInputValue(new Date()),
                                         description: `عكس وإلغاء سند صرف رقم ${v.id} - سبب الإلغاء: ${cancelReason}`,
                                         debitTotal: v.amount,
                                         creditTotal: v.amount,

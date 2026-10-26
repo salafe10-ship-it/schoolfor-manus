@@ -1,7 +1,10 @@
 import { AlertTriangle, ArrowDownLeft, ArrowUpRight, BookOpen, Calculator, Check, CheckCircle2, ChevronLeft, ChevronRight, Copy, CornerUpLeft, Download, Edit, Edit3, Eye, FileDown, FileSpreadsheet, FileText, Filter, Layers, List, Lock as LockIcon, LogOut, Maximize2, Minimize2, Paperclip, Play, Plus, Printer, Save, Search, Settings2, Share2, Table, Trash2, Upload, X } from 'lucide-react';
 import React from 'react';
 import { AccountingContext } from '../../../components/GeneralLedgerPortal';
-import { resolveCostCenterStageLogoKey } from '../../../utils/schoolBranding';
+import { resolveCostCenterStageLogoKey, resolveSchoolStageLogoSource } from '../../../utils/schoolBranding';
+import { getCurrencyConfigForCode } from '../../../utils/currency';
+import { resolveFinancialDocumentReference } from '../../../utils/financialDocumentReference';
+import { toLocalDateInputValue } from '../../../utils/dateOnly';
 export const JournalEntriesTab = () => {
   const {
   activeTab, setActiveTab, activeSidebarItem, setActiveSidebarItem,
@@ -88,6 +91,8 @@ export const JournalEntriesTab = () => {
     .sort((a: any, b: any) => Number(a.order || 0) - Number(b.order || 0));
   const activeAccountingCostCenters = (Array.isArray(costCenters) ? costCenters : [])
     .filter((center: any) => center?.isActive !== false);
+  const activeJvCurrencyCode = String(activeJvState?.currency || currency || selectedSchool?.currencyCode || 'SDG').trim().toUpperCase();
+  const activeJvCurrency = getCurrencyConfigForCode(activeJvCurrencyCode);
   const costCenterLabel = (value: string) => {
     const normalized = String(value || '').toLowerCase().replace(/^cc[_-]/, '').replace(/^stage[_-]/, '');
     const center = activeAccountingCostCenters.find((item: any) => {
@@ -102,6 +107,8 @@ export const JournalEntriesTab = () => {
   const journalWritesAreCanonical = canonicalFinancialWriteMode === 'ledger_ready' || canonicalFinancialWriteMode === 'erp_integrated';
   const journalWritesAreAvailable = journalWritesAreCanonical || canonicalFinancialWriteMode === 'snapshot_write';
   const isPostedJournalStatus = (status: unknown) => ['مرحل', 'مرحّل', 'مُرحّل', 'posted', 'approved', 'معتمد'].includes(String(status || '').trim().toLowerCase());
+  const isCanonicalSourceJournal = (entry: any) => /^(ERP-JV-|ERP-REV-)/.test(String(entry?.id || ''));
+  const activeJvIsCanonicalSourceJournal = isCanonicalSourceJournal(activeJvState);
   const journalWriteBlockedLabel = canonicalFinancialWriteMode === 'snapshot_write'
     ? 'حفظ مركزي UAT — غير معتمد كترحيل GL'
     : 'قراءة فقط';
@@ -123,7 +130,7 @@ const handlePrepareNewJv = () => {
     
     const newState = {
       id: nextId,
-      date: new Date().toISOString().split('T')[0],
+      date: toLocalDateInputValue(new Date()),
       description: '',
       type: 'بسيط',
       status: 'مسودة',
@@ -294,6 +301,10 @@ const handleApproveJv = (jvId: string) => {
     if (!guardJournalWrite('اعتماد القيد')) return;
     const jv = journalEntries.find(j => j.id === jvId);
     if (!jv) return;
+    if (isCanonicalSourceJournal(jv)) {
+      triggerNotification('القيد المصدر الكانوني للقراءة فقط؛ اعتمد أو اعكس المستند من وحدته الأصلية.', 'warning');
+      return;
+    }
 
     // تشغيل الرقابة الجنائية والمالية الشاملة قبل الاعتماد
     const auditResult = validateJvIntegrity(jv);
@@ -323,7 +334,7 @@ const handleCloneJv = (jvId: string) => {
     const cloned = {
       ...jv,
       id: nextId,
-      date: new Date().toISOString().split('T')[0],
+      date: toLocalDateInputValue(new Date()),
       status: 'مسودة',
       description: `نسخة من قيد: ${jv.description}`,
       createdByUser: 'سليمان غازي',
@@ -340,11 +351,16 @@ const handleCloneJv = (jvId: string) => {
   };
 
 const handleExportJv = async (format: string, jvToExport: any = activeJvState) => {
-    const title = `سند قيد تسوية مالي - ${jvToExport.id}`;
-    const headerDetails = `رقم القيد: ${jvToExport.id} | التاريخ: ${jvToExport.date} | الحالة: ${jvToExport.status}`;
+    const journalReference = resolveFinancialDocumentReference(jvToExport, 'journal');
+    const title = `سند قيد تسوية مالي - ${journalReference.value}`;
+    const headerDetails = `${journalReference.label}: ${journalReference.value} | التاريخ: ${jvToExport.date} | الحالة: ${jvToExport.status}`;
+    const exportCurrency = getCurrencyConfigForCode(String(jvToExport.currency || currency || selectedSchool?.currencyCode || 'SDG')).symbol;
     
     if (format === 'csv') {
       let csv = "\uFEFF"; // UTF-8 BOM
+      const csvCell = (value: unknown) => `"${String(value ?? '').replace(/"/g, '""')}"`;
+      csv += `${csvCell(headerDetails)}\n`;
+      csv += `${csvCell('معرّف القيد الداخلي الكامل')},${csvCell(jvToExport.id)}\n\n`;
       csv += "رقم الحساب,اسم بند الحساب,البيان والشرط,مدين,دائن,مركز التكلفة\n";
       jvToExport.lines.forEach((l: any) => {
         csv += `${l.accountCode},"${l.accountName}","${l.description || jvToExport.description}",${l.debit},${l.credit},${l.costCenter}\n`;
@@ -378,7 +394,8 @@ const handleExportJv = async (format: string, jvToExport: any = activeJvState) =
         name: 'الملخص',
         headers: ['الحقل', 'القيمة'],
         rows: [
-          ['رقم القيد', jvToExport.id],
+          ['رقم القيد / معرّف النظام', journalReference.value],
+          ['معرّف القيد الداخلي الكامل', jvToExport.id],
           ['التاريخ', jvToExport.date],
           ['الحالة', jvToExport.status],
           ['الإجمالي المدين', jvToExport.debitTotal],
@@ -402,8 +419,7 @@ const handleExportJv = async (format: string, jvToExport: any = activeJvState) =
       const exportLogoKey = exportedCostCenters.length === 1
         ? resolveCostCenterStageLogoKey(exportedCostCenters[0], costCenters?.length ? costCenters : undefined)
         : null;
-      const rawExportLogo = String((exportLogoKey && selectedSchool?.stageLogos?.[exportLogoKey]) || selectedSchool?.logo || '').trim();
-      const exportLogo = /^(https:\/\/|data:image\/(?:png|jpeg|webp);base64,[a-z0-9+/=\s]+$)/i.test(rawExportLogo) ? rawExportLogo : '';
+      const exportLogo = resolveSchoolStageLogoSource(exportLogoKey, selectedSchool?.stageLogos, selectedSchool?.logo);
       const schoolName = String(selectedSchool?.name || 'المدرسة');
       const logoMarkup = exportLogo
         ? `<img src="${escapeDocHtml(exportLogo)}" alt="شعار ${escapeDocHtml(schoolName)}" style="width:64px;height:64px;object-fit:contain" />`
@@ -413,9 +429,10 @@ const handleExportJv = async (format: string, jvToExport: any = activeJvState) =
         <head><meta charset="utf-8" /></head>
         <body style="direction: rtl; font-family: Times New Roman, serif; padding: 20px;">
           <div style="display:flex;align-items:center;gap:14px;border-bottom:2px solid #c5a15d;padding-bottom:12px">${logoMarkup}<div><h1 style="margin:0 0 6px;text-align:right">${escapeDocHtml(schoolName)}</h1><div>ترخيص المدرسة: ${escapeDocHtml(selectedSchool?.licenseNumber || 'غير محدد')}</div><div>مركز التكلفة: ${escapeDocHtml(exportedCostCenters.length === 1 ? exportedCostCenters[0] : exportedCostCenters.length ? 'مراكز تكلفة متعددة' : 'غير محدد')}</div></div></div>
-          <h2 style="text-align: center; color: #4f46e5;">سند قيد اليومية العامة الموحد</h2>
+          <h2 style="text-align: center; color: #4f46e5;">${escapeDocHtml(title)}</h2>
           <hr />
-          <p><b>رقم القيد المعتمد:</b> ${escapeDocHtml(jvToExport.id)}</p>
+          <p><b>${escapeDocHtml(journalReference.label)}:</b> ${escapeDocHtml(journalReference.value)}</p>
+          <p><b>معرّف القيد الداخلي الكامل:</b> <span dir="ltr" style="font-family:monospace">${escapeDocHtml(jvToExport.id)}</span></p>
           <p><b>التاريخ مالي:</b> ${escapeDocHtml(jvToExport.date)}</p>
           <p><b>البيان العام:</b> ${escapeDocHtml(jvToExport.description)}</p>
           <p><b>الحالة والمركز:</b> ${escapeDocHtml(jvToExport.status)}</p>
@@ -438,15 +455,15 @@ const handleExportJv = async (format: string, jvToExport: any = activeJvState) =
                   <td>${escapeDocHtml(l.accountCode)}</td>
                   <td>${escapeDocHtml(l.accountName)}</td>
                   <td>${escapeDocHtml(l.description || jvToExport.description)}</td>
-                  <td>${Number(l.debit || 0).toLocaleString()} د.ل</td>
-                  <td>${Number(l.credit || 0).toLocaleString()} د.ل</td>
+                  <td>${Number(l.debit || 0).toLocaleString()} ${exportCurrency}</td>
+                  <td>${Number(l.credit || 0).toLocaleString()} ${exportCurrency}</td>
                   <td>${escapeDocHtml(l.costCenter)}</td>
                 </tr>
               `).join('')}
               <tr style="background-color: #e5e7eb; font-weight: bold;">
                 <td colspan="3" style="text-align: center;">الإجمالي العام لقيد التسوية</td>
-                <td>${jvToExport.debitTotal.toLocaleString()} د.ل</td>
-                <td>${jvToExport.creditTotal.toLocaleString()} د.ل</td>
+                <td>${jvToExport.debitTotal.toLocaleString()} ${exportCurrency}</td>
+                <td>${jvToExport.creditTotal.toLocaleString()} ${exportCurrency}</td>
                 <td>-</td>
               </tr>
             </tbody>
@@ -542,8 +559,8 @@ const handleImportJvLinesFromCSV = (csvText: string) => {
                       <div>
                         <h1 className="text-sm font-extrabold tracking-tight text-white">نظام قيود اليومية العامة والأستاذ العام (ERP General Ledger)</h1>
                         <div className="flex items-center gap-3 mt-1 text-[11px] text-slate-300">
-                          <span className="font-bold text-slate-400">رقم القيد الفرعي:</span>
-                          <b className="font-mono text-amber-400 font-extrabold text-[12px]">{activeJvState.id}</b>
+                          <span className="font-bold text-slate-400">{resolveFinancialDocumentReference(activeJvState, 'journal').label}:</span>
+                          <b className="font-mono text-amber-400 font-extrabold text-[12px]" title={`المعرّف الداخلي الكامل: ${activeJvState.id}`}>{resolveFinancialDocumentReference(activeJvState, 'journal').value}</b>
                           <span className="text-slate-600">|</span>
                           <span className="font-bold text-slate-400">تصنيف التسوية:</span>
                           <b className="text-cyan-300 font-black">{activeJvTab === 'simple' ? 'قيد ثنائي بسيط' : 'قيد تسوية مركب متعدد الأطراف'}</b>
@@ -593,11 +610,11 @@ const handleImportJvLinesFromCSV = (csvText: string) => {
 
                       <button
                         onClick={handleSaveJv}
-                        disabled={activeJvState.status === 'معتمد' || !journalWritesAreAvailable}
+                        disabled={activeJvState.status === 'معتمد' || activeJvIsCanonicalSourceJournal || !journalWritesAreAvailable}
                         className={`flex items-center gap-1.5 px-3 py-1.5 rounded-md text-slate-700 transition font-semibold text-[11px] ${
-                          activeJvState.status === 'معتمد' || !journalWritesAreAvailable ? 'opacity-30 cursor-not-allowed' : 'hover:bg-emerald-50 hover:text-emerald-600'
+                          activeJvState.status === 'معتمد' || activeJvIsCanonicalSourceJournal || !journalWritesAreAvailable ? 'opacity-30 cursor-not-allowed' : 'hover:bg-emerald-50 hover:text-emerald-600'
                         }`}
-                        title={journalWritesAreAvailable ? 'حفظ القيد مركزياً' : 'الحفظ متوقف — دفتر الأستاذ للقراءة فقط'}
+                        title={activeJvIsCanonicalSourceJournal ? 'القيد المصدر الكانوني للقراءة فقط' : journalWritesAreAvailable ? 'حفظ القيد مركزياً' : 'الحفظ متوقف — دفتر الأستاذ للقراءة فقط'}
                       >
                         <Save className="w-4 h-4 text-emerald-600" />
                         <span>حفظ</span>
@@ -605,18 +622,20 @@ const handleImportJvLinesFromCSV = (csvText: string) => {
 
                       <button
                         onClick={() => {
-                          if (activeJvState.status === 'معتمد') {
+                          if (activeJvIsCanonicalSourceJournal) {
+                            triggerNotification('❌ القيد المصدر الكانوني للقراءة فقط؛ عدّل المستند من وحدته الأصلية.', 'warning');
+                          } else if (activeJvState.status === 'معتمد') {
                             triggerNotification('❌ لا يمكن تعديل قيد معتمد ومقفل ماليًا', 'warning');
                           } else {
                             setJvEditMode('edit');
                             triggerNotification('✏️ تم تمكين التعديل والتحرير على حقول السند', 'info');
                           }
                         }}
-                        disabled={activeJvState.status === 'معتمد' || !journalWritesAreAvailable}
+                        disabled={activeJvState.status === 'معتمد' || activeJvIsCanonicalSourceJournal || !journalWritesAreAvailable}
                         className={`flex items-center gap-1.5 px-3 py-1.5 rounded-md text-slate-700 transition font-semibold text-[11px] ${
-                          activeJvState.status === 'معتمد' || !journalWritesAreAvailable ? 'opacity-30 cursor-not-allowed' : 'hover:bg-sky-50 hover:text-sky-600'
+                          activeJvState.status === 'معتمد' || activeJvIsCanonicalSourceJournal || !journalWritesAreAvailable ? 'opacity-30 cursor-not-allowed' : 'hover:bg-sky-50 hover:text-sky-600'
                         }`}
-                        title="تعديل القيد المالي"
+                        title={activeJvIsCanonicalSourceJournal ? 'القيد المصدر الكانوني للقراءة فقط' : 'تعديل القيد المالي'}
                       >
                         <Edit3 className="w-4 h-4 text-sky-600" />
                         <span>تعديل</span>
@@ -627,9 +646,9 @@ const handleImportJvLinesFromCSV = (csvText: string) => {
                     <div className="flex items-center gap-1.5 bg-white p-1 rounded-lg border border-slate-200 shadow-xs">
                       <button
                         onClick={() => handleDeleteJv(activeJvState.id)}
-                        disabled={!journalWritesAreAvailable}
-                        className="flex items-center gap-1.5 px-3 py-1.5 rounded-md hover:bg-rose-50 hover:text-rose-600 text-slate-700 transition font-semibold text-[11px]"
-                        title={journalWritesAreAvailable ? 'حذف القيد من المصدر المركزي' : 'الحذف متوقف — دفتر الأستاذ للقراءة فقط'}
+                        disabled={!journalWritesAreAvailable || activeJvIsCanonicalSourceJournal}
+                        className="flex items-center gap-1.5 px-3 py-1.5 rounded-md hover:bg-rose-50 hover:text-rose-600 text-slate-700 transition font-semibold text-[11px] disabled:opacity-40 disabled:cursor-not-allowed"
+                        title={activeJvIsCanonicalSourceJournal ? 'القيد المصدر الكانوني محمي؛ لا يحذف من دفتر الأستاذ.' : journalWritesAreAvailable ? 'حذف القيد من المصدر المركزي' : 'الحذف متوقف — دفتر الأستاذ للقراءة فقط'}
                       >
                         <Trash2 className="w-4 h-4 text-rose-600" />
                         <span>حذف</span>
@@ -701,9 +720,9 @@ const handleImportJvLinesFromCSV = (csvText: string) => {
                     <div className="flex items-center gap-1.5 bg-white p-1 rounded-lg border border-slate-200 shadow-xs">
                       <button
                         onClick={() => handlePostJv(activeJvState.id)}
-                        disabled={activeJvState.status === 'مرحل' || activeJvState.status === 'معتمد' || !journalWritesAreAvailable}
+                        disabled={activeJvState.status === 'مرحل' || activeJvState.status === 'معتمد' || activeJvIsCanonicalSourceJournal || !journalWritesAreAvailable}
                         className={`flex items-center gap-1.5 px-3 py-1.5 rounded-md text-slate-700 transition font-semibold text-[11px] ${
-                          activeJvState.status === 'مرحل' || activeJvState.status === 'معتمد' || !journalWritesAreAvailable ? 'opacity-30 cursor-not-allowed' : 'hover:bg-emerald-50 hover:text-emerald-600'
+                          activeJvState.status === 'مرحل' || activeJvState.status === 'معتمد' || activeJvIsCanonicalSourceJournal || !journalWritesAreAvailable ? 'opacity-30 cursor-not-allowed' : 'hover:bg-emerald-50 hover:text-emerald-600'
                         }`}
                         title={journalWritesAreAvailable ? journalWritesAreCanonical ? 'ترحيل القيد وربطه بالأستاذ العام' : 'حفظ حالة القيد في snapshot UAT — غير مرحّل في GL' : 'الترحيل متوقف — دفتر الأستاذ للقراءة فقط'}
                       >
@@ -713,9 +732,9 @@ const handleImportJvLinesFromCSV = (csvText: string) => {
 
                       <button
                         onClick={() => handleUnpostJv(activeJvState.id)}
-                        disabled={activeJvState.status !== 'مرحل' || !journalWritesAreAvailable}
+                        disabled={activeJvState.status !== 'مرحل' || activeJvIsCanonicalSourceJournal || !journalWritesAreAvailable}
                         className={`flex items-center gap-1.5 px-3 py-1.5 rounded-md text-slate-700 transition font-semibold text-[11px] ${
-                          activeJvState.status !== 'مرحل' || !journalWritesAreAvailable ? 'opacity-30 cursor-not-allowed' : 'hover:bg-amber-50 hover:text-amber-600'
+                          activeJvState.status !== 'مرحل' || activeJvIsCanonicalSourceJournal || !journalWritesAreAvailable ? 'opacity-30 cursor-not-allowed' : 'hover:bg-amber-50 hover:text-amber-600'
                         }`}
                         title={journalWritesAreAvailable ? 'إلغاء الترحيل وإعادته لمسودة' : 'إلغاء الترحيل متوقف — دفتر الأستاذ للقراءة فقط'}
                       >
@@ -725,9 +744,9 @@ const handleImportJvLinesFromCSV = (csvText: string) => {
 
                       <button
                         onClick={() => handleApproveJv(activeJvState.id)}
-                        disabled={activeJvState.status === 'معتمد' || !journalWritesAreAvailable}
+                        disabled={activeJvState.status === 'معتمد' || activeJvIsCanonicalSourceJournal || !journalWritesAreAvailable}
                         className={`flex items-center gap-1.5 px-3 py-1.5 rounded-md text-slate-700 transition font-semibold text-[11px] ${
-                          activeJvState.status === 'معتمد' || !journalWritesAreAvailable ? 'opacity-30 cursor-not-allowed' : 'hover:bg-blue-50 hover:text-blue-600'
+                          activeJvState.status === 'معتمد' || activeJvIsCanonicalSourceJournal || !journalWritesAreAvailable ? 'opacity-30 cursor-not-allowed' : 'hover:bg-blue-50 hover:text-blue-600'
                         }`}
                         title={journalWritesAreAvailable ? journalWritesAreCanonical ? 'اعتماد القيد نهائياً' : 'اعتماد حالة القيد داخل snapshot UAT — غير نهائي للـ GL' : 'الاعتماد متوقف — دفتر الأستاذ للقراءة فقط'}
                       >
@@ -767,10 +786,10 @@ const handleImportJvLinesFromCSV = (csvText: string) => {
                   {/* Metadata Input Section */}
                   <div className="bg-white border border-slate-200/80 rounded-xl p-4 flex flex-wrap items-center gap-5 text-xs text-slate-700 shadow-sm">
                     <div className="flex items-center gap-2">
-                      <span className="font-extrabold text-slate-500">رقم القيد:</span>
+                      <span className="font-extrabold text-slate-500">معرّف القيد بالنظام:</span>
                       <input 
                         type="text" 
-                        value={activeJvState.id}
+                        value={resolveFinancialDocumentReference(activeJvState, 'journal').value}
                         disabled
                         className="w-24 bg-slate-100 border border-slate-200 text-slate-600 rounded-lg px-2.5 py-1.5 font-mono font-bold text-xs text-center" 
                       />
@@ -798,7 +817,7 @@ const handleImportJvLinesFromCSV = (csvText: string) => {
                       <span className="font-extrabold text-slate-500">العملة:</span>
                       <input 
                         type="text" 
-                        value="دينار ليبي (د.ل)"
+                        value={`${activeJvCurrency.name} (${activeJvCurrencyCode})`}
                         disabled
                         className="w-32 bg-slate-100 border border-slate-200 text-slate-500 text-center rounded-lg px-2.5 py-1.5 text-xs font-bold" 
                       />
@@ -1306,12 +1325,12 @@ const handleImportJvLinesFromCSV = (csvText: string) => {
                           <div className="flex items-center gap-5 text-slate-700 font-extrabold">
                             <div className="flex items-center gap-1">
                               <span>إجمالي المدين:</span>
-                              <span className="font-mono text-emerald-800 font-black bg-emerald-50 px-2 py-0.5 rounded border border-emerald-100">{activeJvState.debitTotal.toLocaleString(undefined, {minimumFractionDigits: 2, maximumFractionDigits: 2})} د.ل</span>
+                              <span className="font-mono text-emerald-800 font-black bg-emerald-50 px-2 py-0.5 rounded border border-emerald-100">{activeJvState.debitTotal.toLocaleString(undefined, {minimumFractionDigits: 2, maximumFractionDigits: 2})} {activeJvCurrency.symbol}</span>
                             </div>
                             <span className="text-slate-300">|</span>
                             <div className="flex items-center gap-1">
                               <span>إجمالي الدائن:</span>
-                              <span className="font-mono text-rose-800 font-black bg-rose-50 px-2 py-0.5 rounded border border-rose-100">{activeJvState.creditTotal.toLocaleString(undefined, {minimumFractionDigits: 2, maximumFractionDigits: 2})} د.ل</span>
+                              <span className="font-mono text-rose-800 font-black bg-rose-50 px-2 py-0.5 rounded border border-rose-100">{activeJvState.creditTotal.toLocaleString(undefined, {minimumFractionDigits: 2, maximumFractionDigits: 2})} {activeJvCurrency.symbol}</span>
                             </div>
                             <span className="text-slate-300">|</span>
                             <div className="flex items-center gap-1">
@@ -1321,7 +1340,7 @@ const handleImportJvLinesFromCSV = (csvText: string) => {
                                   ? 'text-emerald-800 bg-emerald-50 border-emerald-100' 
                                   : 'text-rose-600 bg-rose-50 border-rose-200 animate-pulse'
                               }`}>
-                                {Math.abs(activeJvState.debitTotal - activeJvState.creditTotal).toLocaleString(undefined, {minimumFractionDigits: 2, maximumFractionDigits: 2})} د.ل
+                                {Math.abs(activeJvState.debitTotal - activeJvState.creditTotal).toLocaleString(undefined, {minimumFractionDigits: 2, maximumFractionDigits: 2})} {activeJvCurrency.symbol}
                               </span>
                             </div>
                           </div>
@@ -1377,7 +1396,7 @@ const handleImportJvLinesFromCSV = (csvText: string) => {
                   <div className="flex items-center gap-4">
                     <span>عدد بنود التسوية: <b className="text-slate-800 font-mono">{activeJvState.lines.length}</b></span>
                     <span>|</span>
-                    <span>إجمالي القيد: <b className="text-slate-800 font-mono">{activeJvState.debitTotal.toLocaleString()} د.ل</b></span>
+                    <span>إجمالي القيد: <b className="text-slate-800 font-mono">{activeJvState.debitTotal.toLocaleString()} {activeJvCurrency.symbol}</b></span>
                     <span>|</span>
                     <span className="flex items-center gap-1">
                       <span>الرصيد العام للأستاذ:</span>
@@ -1396,7 +1415,7 @@ const handleImportJvLinesFromCSV = (csvText: string) => {
                     <span>|</span>
                     <span className="flex items-center gap-1">
                       <span className="w-2 h-2 rounded-full bg-emerald-400 animate-pulse"></span>
-                      <span>متصل بقاعدة مجمع المدارس الموحد (Cloud SQL Secure)</span>
+                      <span>مصدر دفتر الأستاذ الكانوني المتصل</span>
                     </span>
                   </div>
                 </div>
@@ -1491,7 +1510,7 @@ const handleImportJvLinesFromCSV = (csvText: string) => {
                   <table className="w-full text-right border-collapse">
                     <thead className="bg-slate-800 text-slate-100 font-bold border-b border-slate-300">
                       <tr className="h-[30px]">
-                        <th className="px-3 py-1 w-24 border-l border-slate-700">رقم القيد</th>
+                        <th className="px-3 py-1 w-48 border-l border-slate-700">رقم القيد / معرّف النظام</th>
                         <th className="px-3 py-1 w-28 border-l border-slate-700">تاريخ السند</th>
                         <th className="px-3 py-1 w-28 border-l border-slate-700">النوع مالي</th>
                         <th className="px-3 py-1 border-l border-slate-700">البيان والشرح العام المبرر للقيد</th>
@@ -1503,14 +1522,14 @@ const handleImportJvLinesFromCSV = (csvText: string) => {
                     </thead>
                     <tbody className="divide-y divide-slate-200 font-semibold text-slate-800">
                       {journalEntries.slice((jvPage - 1) * JV_PAGE_SIZE, jvPage * JV_PAGE_SIZE).map((entry, idx) => {
-                        const isCanonicalPostedEntry = String(entry.id || '').startsWith('ERP-JV-') && isPostedJournalStatus(entry.status);
+                        const isCanonicalSourceEntry = isCanonicalSourceJournal(entry);
                         return (
                         <tr 
                           key={entry.id} 
                           className={`h-[28px] hover:bg-slate-50 transition cursor-pointer ${idx % 2 === 1 ? 'bg-slate-50/40' : ''}`}
                           onDoubleClick={() => handleEditJv(entry.id)}
                         >
-                          <td className="px-3 py-1 font-mono font-black text-blue-700 border-l border-slate-200">{entry.id}</td>
+                          <td className="px-3 py-1 font-mono font-black text-blue-700 border-l border-slate-200" title={`المعرّف الداخلي الكامل: ${entry.id}`}>{resolveFinancialDocumentReference(entry as unknown as Record<string, unknown>, 'journal').value}</td>
                           <td className="px-3 py-1 font-mono text-slate-500 border-l border-slate-200">{entry.date}</td>
                           <td className="px-3 py-1 border-l border-slate-200">
                             <span className={`px-1.5 py-0.5 rounded text-[8px] font-black ${
@@ -1539,10 +1558,10 @@ const handleImportJvLinesFromCSV = (csvText: string) => {
                             )}
                           </td>
                           <td className="px-3 py-1 text-center font-mono text-emerald-700 font-black border-l border-slate-200" dir="ltr">
-                            {entry.debitTotal.toLocaleString()} {currency}
+                            {entry.debitTotal.toLocaleString()} {getCurrencyConfigForCode(String(entry.currency || currency || selectedSchool?.currencyCode || 'SDG')).symbol}
                           </td>
                           <td className="px-3 py-1 text-center font-mono text-blue-750 font-black border-l border-slate-200" dir="ltr">
-                            {entry.creditTotal.toLocaleString()} {currency}
+                            {entry.creditTotal.toLocaleString()} {getCurrencyConfigForCode(String(entry.currency || currency || selectedSchool?.currencyCode || 'SDG')).symbol}
                           </td>
                           <td className="px-3 py-1 text-center border-l border-slate-200">
                             <span className={`px-2 py-0.5 rounded text-[9px] font-black border ${
@@ -1559,16 +1578,16 @@ const handleImportJvLinesFromCSV = (csvText: string) => {
                               className="text-blue-600 hover:text-blue-750 font-black hover:underline"
                               title="عرض تفاصيل القيد"
                             >
-                              {isCanonicalPostedEntry ? 'عرض التفاصيل 👁️' : journalWritesAreAvailable ? 'عرض/تحرير 🖥️' : 'عرض فقط 👁️'}
+                              {isCanonicalSourceEntry ? 'عرض فقط 👁️' : journalWritesAreAvailable ? 'عرض/تحرير 🖥️' : 'عرض فقط 👁️'}
                             </button>
                             <span className="text-slate-300">|</span>
                             <button
                               onClick={() => handleDeleteJv(entry.id)}
-                              disabled={!journalWritesAreAvailable || isCanonicalPostedEntry}
+                              disabled={!journalWritesAreAvailable || isCanonicalSourceEntry}
                               className="text-rose-500 hover:text-rose-600 font-bold hover:underline disabled:opacity-40 disabled:no-underline disabled:cursor-not-allowed"
-                              title={isCanonicalPostedEntry ? 'القيد الكانوني محمي؛ استخدم الإلغاء العكسي من مصدر الحركة.' : journalWritesAreAvailable ? 'حذف القيد من المصدر المركزي' : 'الحذف متوقف — دفتر الأستاذ للقراءة فقط'}
+                              title={isCanonicalSourceEntry ? 'القيد المصدر الكانوني محمي؛ اعكسه من وحدة المستند الأصلية ولا تحذفه.' : journalWritesAreAvailable ? 'حذف القيد من المصدر المركزي' : 'الحذف متوقف — دفتر الأستاذ للقراءة فقط'}
                             >
-                              {isCanonicalPostedEntry ? 'محمي — canonical' : journalWritesAreAvailable ? 'حذف 🗑️' : 'حذف — قراءة فقط'}
+                              {isCanonicalSourceEntry ? 'محمي — canonical' : journalWritesAreAvailable ? 'حذف 🗑️' : 'حذف — قراءة فقط'}
                             </button>
                           </td>
                         </tr>
