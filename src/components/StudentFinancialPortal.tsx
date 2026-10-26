@@ -15,7 +15,6 @@ import EnterpriseActionToolbar from './shared/EnterpriseActionToolbar';
 import StudentSearchPicker from './shared/StudentSearchPicker';
 import { EnterpriseAuditLogger } from '../utils/EnterpriseAuditLogger';
 import { StudentAffairsValidationFramework } from '../validation/StudentAffairsValidationFramework';
-import { getTrustedAccessToken } from '../utils/auth';
 import { authenticatedRequest } from '../utils/authenticatedRequest';
 import { feeConfigMatchesStudent, isStudentTuitionFee, resolveStudentFeeContext } from '../utils/studentFeeMatching';
 import { aggregateStudentFinancialSnapshot, buildStudentLedgerRows, createInstallmentPreview, findFeeConfigurationForStage, formatFinancialReference, isFeeConfigurationCompatibleWithStage, resolveReceiptTenders, toLocalDateInputValue } from '../utils/studentFinancialPresentation';
@@ -927,27 +926,54 @@ export default function StudentFinancialPortal({
   // actual student rows and displayed in every financial screen.
   React.useEffect(() => {
     let cancelled = false;
-    if (!selectedSchool?.id || students.some(student => student.schoolId === selectedSchool.id)) {
+    const schoolId = selectedSchool?.id;
+    if (!schoolId) {
       return () => { cancelled = true; };
     }
 
     const loadStudentsForFinancialView = async () => {
       try {
-        const response = await fetch('/api/students?page=1&limit=100&sortBy=name&sortOrder=asc', {
-          headers: {
-            'Authorization': `Bearer ${getTrustedAccessToken()}`,
-            'Accept': 'application/json'
-          },
-          cache: 'no-store'
-        });
-        const result = await response.json().catch(() => ({}));
-        if (!response.ok || !result.success) {
-          throw new Error(result.message || `تعذر تحميل الطلاب الماليين (${response.status})`);
-        }
+        const pageSize = 100;
+        const maximumPages = 1000;
+        const rows: Student[] = [];
+        let page = 1;
+        let totalPages = 1;
+
+        do {
+          const response = await authenticatedRequest(
+            `/api/students?page=${page}&limit=${pageSize}&sortBy=name&sortOrder=asc`,
+            { headers: { Accept: 'application/json' }, cache: 'no-store' }
+          );
+          const result = await response.json().catch(() => ({}));
+          if (!response.ok || !result.success) {
+            throw new Error(result.message || `تعذر تحميل الطلاب الماليين (${response.status})`);
+          }
+          if (cancelled) return;
+
+          const pageRows = Array.isArray(result.data) ? result.data as Student[] : [];
+          rows.push(...pageRows);
+
+          const reportedPages = Number(result.meta?.totalPages);
+          if (Number.isSafeInteger(reportedPages) && reportedPages > 0) {
+            totalPages = reportedPages;
+          } else if (result.meta?.hasNext === true || pageRows.length === pageSize) {
+            totalPages = page + 1;
+          } else {
+            totalPages = page;
+          }
+
+          if (page < totalPages && pageRows.length === 0) {
+            throw new Error('تعذر إكمال صفحات سجل الطلاب المالي؛ أُبقيت البيانات الحالية دون تغيير.');
+          }
+          if (totalPages > maximumPages) {
+            throw new Error('تجاوز سجل الطلاب الحد الآمن للتحميل دفعة واحدة؛ لم تُستبدل البيانات الحالية.');
+          }
+          page += 1;
+        } while (page <= totalPages);
+
         if (cancelled) return;
-        const rows = Array.isArray(result.data) ? result.data : [];
         setStudents(current => [
-          ...current.filter(student => student.schoolId !== selectedSchool.id),
+          ...current.filter(student => student.schoolId !== schoolId),
           ...rows
         ]);
       } catch (error: any) {
@@ -959,7 +985,7 @@ export default function StudentFinancialPortal({
 
     void loadStudentsForFinancialView();
     return () => { cancelled = true; };
-  }, [selectedSchool?.id, students, setStudents, triggerNotification]);
+  }, [selectedSchool?.id, setStudents, triggerNotification]);
 
   // Track the selected student receipt voucher
   const [selectedStudRv, setSelectedStudRv] = useState<any>(null);
@@ -1179,19 +1205,18 @@ export default function StudentFinancialPortal({
       return;
     }
 
-    const classroom = student.classroom || '';
-    const profileCostCenter = String(student.costCenterId || '').trim().toLowerCase().replace(/^cc[_-]/, '');
-    const stageRecord = activeMassStages.find(stage => [stage.id, stage.code, stage.costCenterId, stage.type, stage.name]
-      .some(value => String(value || '').trim() === String(student.stageId || '').trim()));
-    const stageText = String(stageRecord?.name || student.educationLevel || student.stageId || '').trim().toLowerCase();
-    const costCenter = ['kindergarten', 'primary', 'middle', 'secondary'].includes(profileCostCenter) ? profileCostCenter : stageText.includes('روضة') || stageText.includes('تمهيدي') || classroom.includes('روضة') || classroom.includes('تمهيدي') ? 'kindergarten' :
-                       stageText.includes('ابتدائي') || classroom.includes('ابتدائي') || classroom.includes('الأول') || classroom.includes('الثاني') || classroom.includes('الثالث') || classroom.includes('الرابع') || classroom.includes('الخامس') || classroom.includes('السادس') ? 'primary' :
-                       stageText.includes('إعدادي') || stageText.includes('متوسط') || classroom.includes('إعدادي') || classroom.includes('متوسط') || classroom.includes('السابع') || classroom.includes('الثامن') || classroom.includes('التاسع') ? 'middle' :
-                       stageText.includes('ثانوي') || classroom.includes('ثانوي') || classroom.includes('العاشر') || classroom.includes('الحادي عشر') || classroom.includes('الثاني عشر') ? 'secondary' : 'primary';
-
-    const stageLabel = stageRecord?.name || (costCenter === 'kindergarten' ? 'الروضة' :
-                       costCenter === 'primary' ? 'الابتدائي' :
-                       costCenter === 'middle' ? 'الإعدادي' : 'الثانوي');
+    const studentContext = resolveStudentFeeContext(student, stages || [], grades || [], academicClasses || [], costCenters || []);
+    const latestInvoiceContext = financialInvoices.find(invoice => invoice.studentId === studentId && (invoice.costCenter || invoice.academicStageCode || invoice.stage));
+    const costCenter = String(studentContext?.costCenter || latestInvoiceContext?.costCenter || latestInvoiceContext?.academicStageCode || '').trim();
+    const stageType = studentContext?.stageType || resolveStudentFeeContext({
+      ...student,
+      costCenterId: costCenter,
+      stageId: String(latestInvoiceContext?.stageId || latestInvoiceContext?.academicStageCode || student.stageId || '')
+    }, stages || [], grades || [], academicClasses || [], costCenters || [])?.stageType;
+    const stageRecord = stages?.find(stage => String(stage.id) === String(studentContext?.stageId || latestInvoiceContext?.stageId || student.stageId || ''));
+    const stageLabel = stageRecord?.name || (stageType ? ({
+      kindergarten: 'الروضة', primary: 'الابتدائي', middle: 'الإعدادي', secondary: 'الثانوي'
+    } as const)[stageType] : '');
 
     // A student profile is not a financial ledger. Never prefill a receipt
     // from the legacy feesRemaining projection when no canonical invoice
@@ -1204,7 +1229,7 @@ export default function StudentFinancialPortal({
       studentId: student.id,
       studentName: student.name,
       stage: stageLabel,
-      costCenter: costCenter,
+      costCenter,
       amount: remainingBalance > 0 ? remainingBalance : 0,
       receivingAccounts: [{ accountCode: '1101', amount: remainingBalance > 0 ? remainingBalance : 0, paymentMethod: prev.paymentMethod || 'نقدي' }],
       against: `سداد قيمة الرسوم الدراسية للطالب: ${student.name} - المرحلة التعليمية: ${stageLabel}`,
@@ -1339,7 +1364,7 @@ export default function StudentFinancialPortal({
         finalVoucher = {
           ...selectedStudRv,
           ...studRvForm,
-          currency: activeCurrencyCode,
+          currency: selectedStudRv.currency || studRvForm.currency || activeCurrencyCode,
           paymentMethod: receivingAccounts[0].paymentMethod,
           receivingAccount: receivingAccounts[0].accountCode,
           receivingAccounts,
@@ -1982,9 +2007,14 @@ export default function StudentFinancialPortal({
       ? `<img class="school-logo" src="${escape(schoolLogo)}" alt="شعار المدرسة" onerror="this.style.display='none'" />`
       : '<span class="school-logo-fallback" aria-label="شعار المدرسة">🏫</span>';
   };
-  const normalizeFinancialRecordDate = (record: any) => String(
-    record?.date || record?.receiptDate || record?.invoiceDate || record?.dueDate || record?.createdAt || ''
-  ).slice(0, 10);
+  const normalizeFinancialRecordDate = (record: any) => {
+    const raw = String(record?.date || record?.receiptDate || record?.invoiceDate || record?.dueDate || record?.createdAt || '').trim();
+    if (!raw) return '';
+    const isoDate = raw.match(/^\d{4}-\d{2}-\d{2}/)?.[0];
+    if (isoDate) return isoDate;
+    const parsed = new Date(raw);
+    return Number.isFinite(parsed.getTime()) ? toLocalDateInputValue(parsed) : raw;
+  };
 
   const financialReportRows = useMemo(() => {
     const studentsById = new Map(students.map(student => [String(student.id), student]));
@@ -2017,7 +2047,7 @@ export default function StudentFinancialPortal({
         description: voucher.against || '',
         costCenter: normalizeStudentCostCenter(receiptCostCenter(voucher)),
         status: normalizeFinancialRecordStatus(voucher.status, 0, 'receipt'),
-        amount: Number(voucher.amount || 0)
+        amount: Math.abs(Number(voucher.amount || 0))
       }))
     ];
     const search = reportSearch.trim().toLowerCase();
@@ -2260,7 +2290,7 @@ export default function StudentFinancialPortal({
     ));
     const ledgerRows = [
       ...studentInvoices.map(invoice => ({
-        date: invoice.invoiceDate || invoice.dueDate || '',
+        date: normalizeFinancialRecordDate(invoice),
         description: invoice.item || 'مطالبة رسوم',
         debit: Number(invoice.totalAmount ?? Number(invoice.amount || 0) + Number(invoice.taxAmount || 0)),
         credit: 0,
@@ -2268,10 +2298,10 @@ export default function StudentFinancialPortal({
         isCancelled: ['cancelled', 'void'].includes(String(invoice.status || '').toLowerCase())
       })),
       ...postedReceipts.map(voucher => ({
-        date: voucher.date || voucher.receiptDate || '',
+        date: normalizeFinancialRecordDate(voucher),
         description: `سند قبض مرحّل ${voucher.id}${voucher.against ? ` — ${voucher.against}` : ''}`,
         debit: 0,
-        credit: Number(voucher.amount || 0),
+        credit: Math.abs(Number(voucher.amount || 0)),
         isReceipt: true,
         isCancelled: false
       }))
@@ -2575,7 +2605,7 @@ export default function StudentFinancialPortal({
     const receiptNumber = receiptReference.value;
     const receiptStudent = students.find(student => student.id === v.studentId);
     const receiptStudentNumber = receiptStudent?.academicId || receiptStudent?.studentCode || 'غير مسجل';
-    const receiptStudentReferenceLabel = 'رقم الطالب';
+    const receiptStudentReferenceLabel = receiptStudentNumber === 'غير مسجل' ? 'رقم الطالب' : 'الرقم الأكاديمي';
     const journalReference = v.journalEntryId || v.canonicalJournalEntry?.id
       ? resolveFinancialDocumentReference(v, 'journal')
       : null;
@@ -2821,7 +2851,7 @@ export default function StudentFinancialPortal({
               <div class="doc-serial">رقم سند القبض: ${escapePrintHtml(receiptNumber)}</div>
             </div>
             <div class="meta-info">
-              <p>تاريخ السند: <strong>${escapePrintHtml(v.date)}</strong></p>
+              <p>تاريخ السند: <strong>${escapePrintHtml(normalizeFinancialRecordDate(v) || 'غير متاح')}</strong></p>
               <p>العام الأكاديمي: <strong>${escapePrintHtml(academicYearLabel)}</strong></p>
               <p>المستند المرجعي: <strong>سند ترحيل سحابي</strong></p>
             </div>
@@ -3125,7 +3155,7 @@ export default function StudentFinancialPortal({
       const isLegacyReceipt = String(invoice.id || '').startsWith('receipt_');
       return {
         id: String(invoice.id || ''),
-        date: String(invoice.invoiceDate || invoice.dueDate || ''),
+        date: normalizeFinancialRecordDate(invoice),
         description: String(invoice.item || 'رسوم دراسية'),
         amount,
         kind: isLegacyReceipt ? 'receipt' as const : 'invoice' as const,
@@ -3137,7 +3167,7 @@ export default function StudentFinancialPortal({
       .filter(voucher => voucher.studentId === selectedStudent.id && String(voucher.status || '').toLowerCase() === 'posted')
       .map(voucher => ({
         id: String(voucher.id || ''),
-        date: String(voucher.date || voucher.receiptDate || ''),
+        date: normalizeFinancialRecordDate(voucher),
         description: String(voucher.against || 'تحصيل رسوم دراسية'),
         amount: voucher.amount,
         kind: 'receipt' as const,
@@ -3460,6 +3490,15 @@ export default function StudentFinancialPortal({
     }
     if (!financialOperationalContext?.academicYearId || !financialOperationalContext?.academicPeriodId) {
       triggerNotification('لا يمكن إصدار المطالبة قبل حسم السنة والفترة الدراسية النشطتين.', 'warning');
+      return;
+    }
+    const invalidAmountRow = feeRows.find(row => !Number.isFinite(Number(row.amount)) || Number(row.amount) < 0);
+    if (invalidAmountRow) {
+      triggerNotification(`مبلغ بند «${invalidAmountRow.type}» غير صالح؛ يجب أن يكون صفرًا أو مبلغًا موجبًا.`, 'warning');
+      return;
+    }
+    if (!Number.isFinite(Number(manualDiscountAmount)) || Number(manualDiscountAmount) < 0) {
+      triggerNotification('قيمة الخصم الإضافي غير صالحة؛ أدخل صفرًا أو مبلغًا موجبًا.', 'warning');
       return;
     }
     const positiveRows = feeRows.filter(row => Number.isFinite(Number(row.amount)) && Number(row.amount) > 0);
@@ -3994,6 +4033,13 @@ export default function StudentFinancialPortal({
   const selectedReceiptStageLogoAlt = selectedReceiptStageLogoKey
     ? `شعار مرحلة ${STUDENT_COST_CENTER_LABELS[selectedReceiptStageLogoKey] || selectedReceiptStageLogoKey}`
     : 'شعار المدرسة';
+  const feeDemandGross = feeRows.reduce((sum, row) => sum + Math.max(0, Number(row.amount) || 0), 0);
+  const feeDemandDiscount = Math.min(
+    feeDemandGross,
+    feeDemandGross * (Math.max(0, Math.min(100, Number(siblingDiscountPercent) || 0)) / 100) + Math.max(0, Number(manualDiscountAmount) || 0)
+  );
+  const hasInvalidFeeDemandAmount = feeRows.some(row => !Number.isFinite(Number(row.amount)) || Number(row.amount) < 0);
+  const feeDemandHasPositiveRow = feeRows.some(row => Number.isFinite(Number(row.amount)) && Number(row.amount) > 0);
 
   return (
     <div id="student-financial-portal" className={`financial-luxury-shell financial-identity-unified financial-view-${activeSubSec} w-full min-h-screen text-right font-sans dir-rtl select-none p-2 sm:p-4 md:p-6 space-y-6 ${activeSubSec === 'analytics' ? 'financial-analytics-density' : ''} ${activeSubSec === 'management' ? 'financial-reference-management' : ''} ${isFocusMode ? 'portal-focus-mode' : ''}`} dir="rtl">
@@ -5456,6 +5502,15 @@ export default function StudentFinancialPortal({
                         return netVal.toLocaleString(undefined, {minimumFractionDigits: 2});
                       })()}
                     </h5>
+                    {(hasInvalidFeeDemandAmount || !Number.isFinite(Number(manualDiscountAmount)) || Number(manualDiscountAmount) < 0 || (feeDemandGross > 0 && feeDemandGross <= feeDemandDiscount)) && (
+                      <p role="alert" className="mt-2 max-w-xl text-xs font-bold text-rose-700">
+                        {hasInvalidFeeDemandAmount
+                          ? 'توجد قيمة سالبة أو غير صالحة في بنود الرسوم؛ صححها قبل إصدار المطالبة.'
+                          : !Number.isFinite(Number(manualDiscountAmount)) || Number(manualDiscountAmount) < 0
+                            ? 'الخصم الإضافي يجب أن يكون رقمًا موجبًا أو صفرًا.'
+                            : 'الخصم يساوي إجمالي الرسوم أو يتجاوزه؛ خفّض الخصم قبل إصدار المطالبة.'}
+                      </p>
+                    )}
                   </div>
                 </div>
 
@@ -5465,7 +5520,7 @@ export default function StudentFinancialPortal({
                   <button
                     type="button"
                     onClick={() => { void handleIssueStudentFeeDemand(); }}
-                    disabled={financialWritesLocked || financialPersistence !== 'ready' || !selectedStudent || feeRows.length === 0}
+                    disabled={financialWritesLocked || financialPersistence !== 'ready' || !selectedStudent || !feeDemandHasPositiveRow || hasInvalidFeeDemandAmount || !Number.isFinite(Number(manualDiscountAmount)) || Number(manualDiscountAmount) < 0 || feeDemandGross <= feeDemandDiscount}
                     className="fee-management-action fee-management-primary-action text-xs font-black py-3 px-1 transition-transform active:scale-95 text-center cursor-pointer disabled:cursor-not-allowed disabled:opacity-50"
                   >
                     🧾 إصدار المطالبة
@@ -5569,7 +5624,7 @@ export default function StudentFinancialPortal({
 
                   {/* Accounting Ledger Grid */}
                   <div className="overflow-x-auto">
-                    <table className="w-full text-right text-[10px] font-medium">
+                    <table className="w-full text-right text-xs font-medium">
                       <thead className="bg-gradient-to-r from-[#2a1d13] via-[#3a2719] to-[#2a1d13] text-amber-200 font-extrabold">
                         <tr>
                           <th className="px-2 py-1.5 text-right w-16">التاريخ</th>
@@ -5916,7 +5971,11 @@ export default function StudentFinancialPortal({
                   <input
                     type="text"
                     value={rvSearch}
-                    onChange={(e) => setRvSearch(e.target.value)}
+                    onChange={(e) => {
+                      setRvSearch(e.target.value);
+                      setSelectedStudRv(null);
+                      setStudRvMode('view');
+                    }}
                     placeholder="ابحث برقم السند، اسم الطالب، الشرح..."
                     className="block w-full pr-9 pl-3 py-2 text-xs border border-slate-300 bg-transparent focus:focus:outline-none focus:ring-1 focus:ring-[#9a6a1d] focus:border-[#9a6a1d]"
                   />
@@ -5938,7 +5997,11 @@ export default function StudentFinancialPortal({
                         key={tab.id}
                         type="button"
                         aria-pressed={rvStatusFilter === tab.id}
-                        onClick={() => setRvStatusFilter(tab.id)}
+                        onClick={() => {
+                          setRvStatusFilter(tab.id);
+                          setSelectedStudRv(null);
+                          setStudRvMode('view');
+                        }}
                         className={`min-h-9 rounded-lg border px-2 py-1.5 text-xs font-bold transition-all duration-150 cursor-pointer focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[#9a6a1d] focus-visible:ring-offset-1 ${
                           rvStatusFilter === tab.id
                             ? 'border-[#b8892d] bg-white text-[#543b12] shadow-sm ring-1 ring-[#d4af37]/25'
@@ -6058,7 +6121,7 @@ export default function StudentFinancialPortal({
                           </div>
                           <div>
                             <span className="block text-[10px] font-black text-slate-500">مركز التكلفة المرتبط تلقائيًا</span>
-                            <span className="block mt-1 font-mono text-sm font-black text-emerald-800">{STUDENT_COST_CENTER_LABELS[studRvForm.costCenter] || studRvForm.costCenter || 'يظهر تلقائيًا بعد اختيار الطالب'}</span>
+                            <span className="block mt-1 font-mono text-sm font-black text-emerald-800">{studRvForm.costCenter ? studentCostCenterLabel(studRvForm.costCenter) : 'يظهر تلقائيًا بعد اختيار الطالب'}</span>
                           </div>
                         </div>
                       </div>

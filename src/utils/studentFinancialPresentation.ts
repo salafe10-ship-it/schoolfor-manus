@@ -144,7 +144,9 @@ export interface StudentLedgerRow extends StudentLedgerEntryInput {
 export function buildStudentLedgerRows(entries: readonly StudentLedgerEntryInput[]): StudentLedgerRow[] {
   const normalized = entries.map(entry => {
     const parsedAmount = Number(entry.amount);
-    const amount = Number.isFinite(parsedAmount) ? Math.max(0, parsedAmount) : 0;
+    const amount = Number.isFinite(parsedAmount)
+      ? entry.kind === 'receipt' ? Math.abs(parsedAmount) : Math.max(0, parsedAmount)
+      : 0;
     const status = String(entry.status || '').trim().toLowerCase();
     const isCancelled = entry.kind === 'invoice' && ['cancelled', 'void'].includes(status);
     return {

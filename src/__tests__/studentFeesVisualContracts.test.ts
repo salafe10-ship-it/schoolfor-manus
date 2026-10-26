@@ -43,6 +43,12 @@ describe('student fee presentation contracts', () => {
     expect(css).toContain('color: #fff6d2 !important;');
   });
 
+  it('keeps financial utility actions at a readable size and touch target', () => {
+    expect(css).toContain('#student-financial-portal.financial-reference-management .fee-management-utility-action {');
+    expect(css).toContain('min-height: 2.5rem;');
+    expect(css).toContain('font-size: 0.75rem;');
+  });
+
   it('uses the resolved school-stage logo in printable student receipts', () => {
     expect(source).toContain('resolveCostCenterStageLogoKey(');
     expect(source).toContain('selectedSchool?.stageLogos?.[stageLogoKey]');
@@ -145,14 +151,16 @@ describe('student fee presentation contracts', () => {
     expect(source).toContain('v.receiptVoucherId,');
     expect(source).toContain('رقم السند: {resolveFinancialDocumentReference(selectedStudRv, \'receipt\').value}');
     expect(source).toContain('معرّف النظام: {selectedStudRv.id}');
-    expect(source).toContain('معرّف النظام: <strong>${escapePrintHtml(receiptReference.fullId)}</strong>');
+    expect(source).toContain('رقم سند القبض: ${escapePrintHtml(receiptNumber)}');
+    expect(source).not.toContain('receiptReference.fullId');
   });
 
   it('does not label a database student ID as an academic number', () => {
-    expect(source).toContain('const receiptStudentNumber = receiptStudent?.academicId || receiptStudent?.studentCode || \'\';');
-    expect(source).toContain("const receiptStudentReferenceLabel = receiptStudentNumber ? 'الرقم الأكاديمي' : 'معرّف الطالب بالنظام';");
-    expect(source).toContain('${receiptStudentReferenceLabel}: ${escapePrintHtml(receiptStudentNumber || v.studentId)}');
-    expect(source).toContain("'معرّف الطالب بالنظام': v.studentId");
+    expect(source).toContain("const receiptStudentNumber = receiptStudent?.academicId || receiptStudent?.studentCode || 'غير مسجل';");
+    expect(source).toContain("const receiptStudentReferenceLabel = receiptStudentNumber === 'غير مسجل' ? 'رقم الطالب' : 'الرقم الأكاديمي';");
+    expect(source).toContain('${receiptStudentReferenceLabel}: ${escapePrintHtml(receiptStudentNumber)}');
+    expect(source).not.toContain('receiptStudentNumber || v.studentId');
+    expect(source).toContain('`معرّف الطالب بالنظام: ${selectedStudRv.studentId}`');
     expect(source).toContain('selectedReceiptStudentNumber');
   });
 
@@ -187,6 +195,30 @@ describe('student fee presentation contracts', () => {
   it('disables fee configuration save until required values are valid', () => {
     expect(source).toContain('!currFeeType.trim() || !currFeeAccount.trim() || !Number.isFinite(currFeeAmount) || currFeeAmount <= 0');
     expect(source).toContain('const normalizedFeeType = currFeeType.trim();');
+  });
+
+  it('blocks non-positive or over-discounted student fee demands before issue', () => {
+    expect(source).toContain('const invalidAmountRow = feeRows.find(row => !Number.isFinite(Number(row.amount)) || Number(row.amount) < 0);');
+    expect(source).toContain('Number(manualDiscountAmount) < 0');
+    expect(source).toContain('feeDemandGross <= feeDemandDiscount');
+    expect(source).toContain('مبلغ بند «${invalidAmountRow.type}» غير صالح');
+  });
+
+  it('derives receipt stage and cost center from registered student or invoice context without defaulting to primary', () => {
+    expect(source).toContain('resolveStudentFeeContext(student, stages || [], grades || [], academicClasses || [], costCenters || [])');
+    expect(source).toContain('latestInvoiceContext?.costCenter || latestInvoiceContext?.academicStageCode');
+    expect(source).not.toContain("? 'secondary' : 'primary'");
+  });
+
+  it('uses the record creation date when a financial document date is absent', () => {
+    expect(source).toContain('record?.date || record?.receiptDate || record?.invoiceDate || record?.dueDate || record?.createdAt');
+    expect(source).toContain('date: normalizeFinancialRecordDate(voucher)');
+    expect(source).toContain('date: normalizeFinancialRecordDate(invoice)');
+  });
+
+  it('clears the active receipt before applying a new archive search or status filter', () => {
+    expect(source).toMatch(/setRvSearch\(e\.target\.value\);\s+setSelectedStudRv\(null\);\s+setStudRvMode\('view'\);/);
+    expect(source).toMatch(/setRvStatusFilter\(tab\.id\);\s+setSelectedStudRv\(null\);\s+setStudRvMode\('view'\);/);
   });
 
   it('moves the floating assistant away from report amounts on compact browser widths', () => {

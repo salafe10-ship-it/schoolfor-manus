@@ -14,6 +14,15 @@ describe('student financial presentation helpers', () => {
     ]);
   });
 
+  it('normalizes a signed legacy receipt amount to a positive student credit', () => {
+    const rows = buildStudentLedgerRows([
+      { id: 'INV-SIGNED-RECEIPT', date: '2026-10-23', description: 'رسوم دراسية', amount: 100, kind: 'invoice', status: 'unpaid' },
+      { id: 'RV-SIGNED', date: '2026-10-24', description: 'سداد رسوم', amount: -40, kind: 'receipt', status: 'posted' },
+    ]);
+
+    expect(rows[1]).toMatchObject({ id: 'RV-SIGNED', debit: 0, credit: 40, balance: 60, isCancelled: false });
+  });
+
   it('aggregates a verified invoice snapshot independently of operational write readiness', () => {
     const snapshot = aggregateStudentFinancialSnapshot([
       { studentId: 'paid', studentName: 'طالب مكتمل', amount: 1200, paidAmount: 1200, remainingAmount: 0, status: 'paid' },
