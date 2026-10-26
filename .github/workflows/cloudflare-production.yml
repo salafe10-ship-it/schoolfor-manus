@@ -22,6 +22,7 @@ jobs:
       deployment: false
     env:
       PLATFORM_ADMIN_DATABASE_URL: ${{ secrets.PLATFORM_ADMIN_DATABASE_URL }}
+      PLATFORM_ADMIN_DATABASE_CA: ${{ secrets.PLATFORM_ADMIN_DATABASE_CA }}
     steps:
       - name: Checkout exact production commit
         uses: actions/checkout@v5
@@ -39,6 +40,9 @@ jobs:
 
       - name: Install dependencies
         run: npm ci
+
+      - name: Configure trusted production database CA
+        run: bash .github/scripts/configure-postgres-ca.sh
 
       - name: Verify identity governance database contract
         run: npm run db:verify-identity-governance
