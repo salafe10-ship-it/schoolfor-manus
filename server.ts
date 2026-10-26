@@ -1,12 +1,17 @@
 import express from "express";
 import path from "path";
 import fs from "node:fs";
-import { fileURLToPath } from "node:url";
 import dotenv from "dotenv";
 import helmet from "helmet";
 import { getServerListenHost } from "./server/infrastructure/ServerListenHost.js";
 
-const applicationRoot = path.dirname(fileURLToPath(import.meta.url));
+// `server.ts` runs as ESM under tsx in development but is bundled as CommonJS
+// for production. `import.meta.url` is not available in that CommonJS artifact.
+// The staging launcher sets the repository root explicitly; a direct dev run
+// can derive it from argv, while the production bundle uses its colocated dist.
+const applicationRoot = path.resolve(
+  process.env.EDUPRO_SERVER_APPLICATION_ROOT || path.dirname(path.resolve(process.argv[1] || '.')),
+);
 
 dotenv.config();
 

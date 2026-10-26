@@ -22,13 +22,15 @@ export function isConfirmedLoopbackFinancialUat(input: {
   allowLocalStaging: string | undefined;
   confirmation: string | undefined;
   baseUrl: string | undefined;
+  expectedPort: string;
 }): boolean {
   if (input.allowLocalStaging !== 'true' || input.confirmation !== 'RUN_STUDENT_FEES_STAGING_UAT') return false;
   try {
     const url = new URL(String(input.baseUrl || ''));
     return url.protocol === 'http:'
       && ['127.0.0.1', 'localhost'].includes(url.hostname)
-      && url.port === '4179'
+      && ['4179', '4183'].includes(input.expectedPort)
+      && url.port === input.expectedPort
       && url.pathname === '/'
       && !url.search
       && !url.hash;

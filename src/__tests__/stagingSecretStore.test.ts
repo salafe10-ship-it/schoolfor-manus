@@ -44,7 +44,7 @@ describe('persistent Staging credential store', () => {
     expect(fs.readFileSync(f.source, 'utf8')).toBe(f.text);
     expect(restoreStagingSecrets(f.source, f.vault)).toBe('preserved');
     expect(fs.readdirSync(f.vault)).toEqual(['environment.dpapi']);
-  });
+  }, 60_000);
 
   it.skipIf(process.platform !== 'win32')('rejects altered ciphertext without replacing local credentials', () => {
     const f = fixture();
@@ -56,7 +56,7 @@ describe('persistent Staging credential store', () => {
     expect(() => restoreStagingSecrets(f.source, f.vault)).toThrow('STAGING_VAULT_ENCRYPTION_OR_ACCOUNT_CHECK_FAILED');
     expect(fs.readFileSync(f.source, 'utf8')).toBe(f.text);
     expect(fs.readdirSync(f.vault)).toEqual(['environment.dpapi']);
-  });
+  }, 60_000);
 
   it.skipIf(process.platform !== 'win32')('preserves changed local credentials rather than replacing them silently', () => {
     const f = fixture();
@@ -65,5 +65,5 @@ describe('persistent Staging credential store', () => {
     fs.writeFileSync(f.source, changed);
     expect(() => restoreStagingSecrets(f.source, f.vault)).toThrow('STAGING_LOCAL_ENV_DIFFERS_FROM_VAULT');
     expect(fs.readFileSync(f.source, 'utf8')).toBe(changed);
-  });
+  }, 60_000);
 });

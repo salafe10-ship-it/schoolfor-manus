@@ -32,8 +32,11 @@ describe('isolated Cloudflare staging target guard', () => {
       allowLocalStaging: 'true',
       confirmation: 'RUN_STUDENT_FEES_STAGING_UAT',
       baseUrl: 'http://127.0.0.1:4179/',
+      expectedPort: '4179',
     };
     expect(isConfirmedLoopbackFinancialUat(confirmed)).toBe(true);
+    expect(isConfirmedLoopbackFinancialUat({ ...confirmed, baseUrl: 'http://127.0.0.1:4183/', expectedPort: '4183' })).toBe(true);
+    expect(isConfirmedLoopbackFinancialUat({ ...confirmed, baseUrl: 'http://127.0.0.1:4183/' })).toBe(false);
     expect(isConfirmedLoopbackFinancialUat({ ...confirmed, allowLocalStaging: 'false' })).toBe(false);
     expect(isConfirmedLoopbackFinancialUat({ ...confirmed, confirmation: '' })).toBe(false);
     expect(isConfirmedLoopbackFinancialUat({ ...confirmed, baseUrl: 'https://schoolfor-manus-staging.salafe10.workers.dev' })).toBe(false);

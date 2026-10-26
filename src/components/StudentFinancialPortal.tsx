@@ -19,7 +19,7 @@ import { getTrustedAccessToken } from '../utils/auth';
 import { authenticatedRequest } from '../utils/authenticatedRequest';
 import { feeConfigMatchesStudent, isStudentTuitionFee, resolveStudentFeeContext } from '../utils/studentFeeMatching';
 import { aggregateStudentFinancialSnapshot, buildStudentLedgerRows, createInstallmentPreview, findFeeConfigurationForStage, formatFinancialReference, isFeeConfigurationCompatibleWithStage, resolveReceiptTenders, toLocalDateInputValue } from '../utils/studentFinancialPresentation';
-import { resolveFinancialDocumentReference } from '../utils/financialDocumentReference';
+import { formatFinancialDocumentDescriptionForPrint, resolveFinancialDocumentReference } from '../utils/financialDocumentReference';
 import { resolveCostCenterStageLogoKey } from '../utils/schoolBranding';
 
 interface StudentFinancialPortalProps {
@@ -148,6 +148,7 @@ export default function StudentFinancialPortal({
   // Sub-navigation state inside Student Financial Portal (Rethought according to the image)
   const [activeSubSec, setActiveSubSec] = useState<string>('analytics');
   const [receiptPrintPreviewHtml, setReceiptPrintPreviewHtml] = useState<string | null>(null);
+  const [documentPrintPreviewTitle, setDocumentPrintPreviewTitle] = useState('معاينة سند القبض قبل الطباعة');
   const receiptPrintPreviewFrameRef = React.useRef<HTMLIFrameElement | null>(null);
   const [installmentPlanPrintPreview, setInstallmentPlanPrintPreview] = useState<{
     plan: InstallmentPlanView;
@@ -2239,11 +2240,7 @@ export default function StudentFinancialPortal({
       return;
     }
 
-    const printWindow = window.open('', '_blank');
-    if (!printWindow) {
-      triggerNotification('❌ تم حظر فتح نافذة الطباعة التلقائية بواسطة متصفحك. يرجى تفعيل النوافذ المنبثقة.', 'warning');
-      return;
-    }
+    setDocumentPrintPreviewTitle('معاينة كشف حساب الطالب قبل الطباعة');
 
     const schoolName = selectedSchool?.name || 'اسم المدرسة';
     const authorityName = selectedSchool?.educationAuthority || selectedSchool?.educationDepartment || 'الإدارة التعليمية';
@@ -2299,7 +2296,7 @@ export default function StudentFinancialPortal({
     const totalPaid = ledgerRows.filter(row => row.isReceipt).reduce((sum, row) => sum + row.credit, 0);
     const remainingVal = Math.max(0, totalInvoiced - totalPaid);
 
-    printWindow.document.write(`
+    setReceiptPrintPreviewHtml(`
       <html dir="rtl">
         <head>
           <title>كشف حساب مالي - ${escapePrintHtml(selectedStudent.name)}</title>
@@ -2487,7 +2484,7 @@ export default function StudentFinancialPortal({
             </div>
             <div class="student-card-item">
               <span class="student-card-label">الرقم الأكاديمي:</span>
-              <span class="student-card-value">${escapePrintHtml(selectedStudent.academicId || 'ACC-STD-7291')}</span>
+              <span class="student-card-value">${escapePrintHtml(selectedStudent.academicId || selectedStudent.studentCode || 'غير مسجل')}</span>
             </div>
             <div class="student-card-item">
               <span class="student-card-label">الصف الدراسي الحالي:</span>
@@ -2552,15 +2549,9 @@ export default function StudentFinancialPortal({
             </div>
           </div>
 
-          <script>
-            window.onload = function() {
-              window.print();
-            }
-          </script>
         </body>
       </html>
     `);
-    printWindow.document.close();
 
     EnterpriseAuditLogger.log({
       action: 'طباعة',
@@ -2575,6 +2566,7 @@ export default function StudentFinancialPortal({
 
   // Helper to print a single voucher beautifully
   const handlePrintSingleVoucher = (v: any) => {
+    setDocumentPrintPreviewTitle('معاينة سند القبض قبل الطباعة');
     const schoolName = selectedSchool?.name || 'اسم المدرسة';
     const authorityName = selectedSchool?.educationAuthority || selectedSchool?.educationDepartment || 'الإدارة التعليمية';
     const academicYearLabel = financialOperationalContext?.academicYearName || selectedSchool?.academicYear || 'غير محدد';
@@ -2582,8 +2574,8 @@ export default function StudentFinancialPortal({
     const receiptReference = resolveFinancialDocumentReference(v, 'receipt');
     const receiptNumber = receiptReference.value;
     const receiptStudent = students.find(student => student.id === v.studentId);
-    const receiptStudentNumber = receiptStudent?.academicId || receiptStudent?.studentCode || '';
-    const receiptStudentReferenceLabel = receiptStudentNumber ? 'الرقم الأكاديمي' : 'معرّف الطالب بالنظام';
+    const receiptStudentNumber = receiptStudent?.academicId || receiptStudent?.studentCode || 'غير مسجل';
+    const receiptStudentReferenceLabel = 'رقم الطالب';
     const journalReference = v.journalEntryId || v.canonicalJournalEntry?.id
       ? resolveFinancialDocumentReference(v, 'journal')
       : null;
@@ -2832,14 +2824,13 @@ export default function StudentFinancialPortal({
               <p>تاريخ السند: <strong>${escapePrintHtml(v.date)}</strong></p>
               <p>العام الأكاديمي: <strong>${escapePrintHtml(academicYearLabel)}</strong></p>
               <p>المستند المرجعي: <strong>سند ترحيل سحابي</strong></p>
-              ${receiptReference.fullId && receiptReference.fullId !== receiptNumber ? `<p>معرّف النظام: <strong>${escapePrintHtml(receiptReference.fullId)}</strong></p>` : ''}
             </div>
           </div>
 
           <div class="voucher-body">
             <div class="field-row">
               <div class="field-label">استلمنا من الطالب:</div>
-              <div class="field-value" style="color: #1e1b4b;">${escapePrintHtml(v.studentName)} (${receiptStudentReferenceLabel}: ${escapePrintHtml(receiptStudentNumber || v.studentId)})</div>
+              <div class="field-value" style="color: #1e1b4b;">${escapePrintHtml(v.studentName)} (${receiptStudentReferenceLabel}: ${escapePrintHtml(receiptStudentNumber)})</div>
             </div>
             <div class="field-row">
               <div class="field-label">مبلغ وقدره:</div>
@@ -2853,7 +2844,7 @@ export default function StudentFinancialPortal({
             </div>
             <div class="field-row">
               <div class="field-label">وذلك عن (البيان):</div>
-              <div class="field-value" style="font-style: italic; color: #334155;">${escapePrintHtml(v.against || 'سداد الرسوم المدرسية المقررة')}</div>
+              <div class="field-value" style="font-style: italic; color: #334155;">${escapePrintHtml(formatFinancialDocumentDescriptionForPrint(v.against || 'سداد الرسوم المدرسية المقررة'))}</div>
             </div>
             <div class="field-row">
               <div class="field-label">طريقة الدفع:</div>
@@ -2921,17 +2912,10 @@ export default function StudentFinancialPortal({
         return;
       }
       
-      triggerNotification('📊 جاري توليد كشف السندات المفلترة لطباعته كتقرير PDF مجمع...', 'success');
+      triggerNotification('تم فتح معاينة كشف السندات؛ يمكنك طباعته أو حفظه PDF من حوار الطباعة.', 'info');
       const receiptReportStageLogos = buildPrintStageLogos(['primary', 'middle', 'secondary']);
-      
-      setTimeout(() => {
-        const printWindow = window.open('', '_blank');
-        if (!printWindow) {
-          triggerNotification('❌ تم حظر فتح نافذة الطباعة التلقائية. يرجى تفعيل السماح للمواقع المنبثقة.', 'warning');
-          return;
-        }
-
-        printWindow.document.write(`
+      setDocumentPrintPreviewTitle('معاينة كشف سندات القبض قبل الطباعة');
+      setReceiptPrintPreviewHtml(`
           <html dir="rtl">
             <head>
               <title>كشف سندات قبض الطلاب المفلترة</title>
@@ -3013,7 +2997,7 @@ export default function StudentFinancialPortal({
                       <td style="font-family: monospace;">${escapePrintHtml(v.studentId)}</td>
                       <td>${escapePrintHtml(getReceiptTenderSummary(v))}</td>
                       <td>${v.status === 'posted' ? 'مرحل حسابياً' : v.status === 'approved' ? 'معتمد مالياً' : 'مسودة'}</td>
-                      <td style="max-width: 220px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap;">${escapePrintHtml(v.against || '')}</td>
+                      <td style="max-width: 220px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap;">${escapePrintHtml(formatFinancialDocumentDescriptionForPrint(v.against || ''))}</td>
                       <td class="amount">${formatCurrency(v.amount, true)} ${escapePrintHtml(getReceiptCurrencyConfig(v).symbol)}</td>
                     </tr>
                   `).join('')}
@@ -3029,15 +3013,10 @@ export default function StudentFinancialPortal({
               <div class="system-tag">
                 تم التصدير والطباعة إلكترونياً من نظام المدير المالي ERP - تاريخ الطباعة: ${new Date().toLocaleString('ar-SA')} - صفحة 1 من 1
               </div>
-              <script>
-                window.onload = function() { window.print(); }
-              </script>
             </body>
           </html>
         `);
-        printWindow.document.close();
         logAction('EXPORT_PDF', `تصدير كشف مالي لعدد ${filteredReceiptVouchers.length} سند قبض طلاب كتقرير PDF مجمع`, 'الحسابات');
-      }, 800);
     } else {
       triggerNotification('📊 جاري توليد وثيقة السند بصيغة PDF وتصميم الطباعة الفخم...', 'success');
       setTimeout(() => {
@@ -4616,11 +4595,8 @@ export default function StudentFinancialPortal({
               <button
                 type="button"
                 onClick={() => {
-                  const printWindow = window.open('', '_blank');
-                  if (!printWindow) {
-                    triggerNotification('تم حظر فتح نافذة الطباعة من المتصفح', 'warning');
-                    return;
-                  }
+                  const escapePrintHtml = (value: unknown) => String(value ?? '').replace(/[&<>"']/g, char => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[char] || char));
+                  setDocumentPrintPreviewTitle('معاينة إعدادات الرسوم قبل الطباعة');
                   
                   const htmlContent = `
                     <html lang="ar" dir="rtl">
@@ -4640,6 +4616,8 @@ export default function StudentFinancialPortal({
                             margin-bottom: 30px;
                             text-align: center;
                           }
+                          .stage-logo-list { display:flex; justify-content:center; gap:12px; margin-bottom:12px; }
+                          .stage-logo, .school-logo { width:20mm; height:20mm; object-fit:contain; }
                           h1 {
                             font-size: 24px;
                             color: #1e3a8a;
@@ -4685,13 +4663,18 @@ export default function StudentFinancialPortal({
                           }
                           @media print {
                             body { padding: 20px; }
+                            thead { display: table-header-group; }
+                            tr { break-inside: avoid; }
                           }
+                          @page { size: A4; margin: 14mm; }
                         </style>
                       </head>
                       <body>
                         <div class="header">
+                          ${buildPrintStageLogos(['primary', 'middle', 'secondary'])}
+                          <p>${escapePrintHtml(selectedSchool?.name || 'المدرسة')}</p>
                           <h1>تهيئة مبالغ الرسوم الدراسية</h1>
-                          <p class="subtitle">نسخة مطبوعة من وثيقة الموازنة والأسس المالية - المدرسة والأنشطة</p>
+                          <p class="subtitle">العام الدراسي: ${escapePrintHtml(financialOperationalContext?.academicYearName || selectedSchool?.academicYear || 'غير محدد')} — العملة: ${escapePrintHtml(activeCurrencySymbol)}</p>
                         </div>
                         
                         <table>
@@ -4707,34 +4690,26 @@ export default function StudentFinancialPortal({
                           <tbody>
                             ${feeConfigs.map(item => `
                               <tr>
-                                <td style="font-weight: bold; color: #0284c7;">${item.type}</td>
-                                <td style="font-weight: bold; color: #1e293b;">${item.amount.toLocaleString(undefined, { minimumFractionDigits: 1 })}</td>
-                                <td>${item.account}</td>
-                                <td>${item.orderNumber}</td>
-                                <td>${item.activities || '—'}</td>
+                                <td style="font-weight: bold; color: #0284c7;">${escapePrintHtml(item.type)}</td>
+                                <td style="font-weight: bold; color: #1e293b;">${escapePrintHtml(formatLD(item.amount))} ${escapePrintHtml(activeCurrencySymbol)}</td>
+                                <td>${escapePrintHtml(item.account)}</td>
+                                <td>${escapePrintHtml(item.orderNumber)}</td>
+                                <td>${escapePrintHtml(item.activities || '—')}</td>
                               </tr>
                             `).join('')}
                           </tbody>
                         </table>
 
                         <div class="footer">
-                          <p>صنع بفخر - وثيقة صادرة عن البوابة المالية لشركة المدارس الذكية الموحدة في ${new Date().toLocaleDateString('ar')}</p>
+                          <p>كشف إعدادات الرسوم — تاريخ الإصدار: ${new Date().toLocaleDateString('ar')}</p>
                         </div>
-
-                        <script>
-                          window.onload = function() {
-                            window.print();
-                            setTimeout(function() { window.close(); }, 500);
-                          }
-                        </script>
                       </body>
                     </html>
                   `;
                   
-                  printWindow.document.write(htmlContent);
-                  printWindow.document.close();
-                  triggerNotification('تم تجهيز كشف الإعدادات وطباعته بنجاح', 'success');
-                  logAction('PRINT_FEE_SETTINGS', 'طباعة كشف تهيئة مبالغ الرسوم والمطالبات', 'الإعدادات');
+                  setReceiptPrintPreviewHtml(htmlContent);
+                  triggerNotification('تم فتح معاينة إعدادات الرسوم؛ راجعها ثم اختر «طباعة الآن».', 'info');
+                  logAction('PRINT_FEE_SETTINGS', 'فتح معاينة كشف تهيئة مبالغ الرسوم', 'الإعدادات');
                 }}
                 className="financial-fee-module-action financial-fee-module-paper text-xs font-bold px-5 py-2.5 rounded flex items-center gap-1.5 transition-colors cursor-pointer"
               >
@@ -4895,7 +4870,7 @@ export default function StudentFinancialPortal({
                           />
                         </td>
                         <td className="p-3 border-l border-slate-100 font-bold">{student.name}</td>
-                        <td className="p-3 font-mono">{student.id}</td>
+                        <td className="p-3 font-mono" title={`معرّف النظام: ${student.id}`}>{student.academicId || student.studentCode || 'غير مسجل'}</td>
                       </tr>
                     ))}
                   </tbody>
@@ -7157,12 +7132,12 @@ export default function StudentFinancialPortal({
           className="fixed inset-0 z-[10001] flex items-center justify-center overflow-y-auto bg-slate-950/75 p-3 sm:p-6"
           role="dialog"
           aria-modal="true"
-          aria-label="معاينة سند القبض قبل الطباعة"
+          aria-label={documentPrintPreviewTitle}
         >
           <div className="flex max-h-[96vh] w-full max-w-5xl flex-col overflow-hidden rounded-2xl bg-white p-3 text-right text-slate-900 shadow-2xl sm:p-5" dir="rtl">
             <div className="flex flex-wrap items-center justify-between gap-3 border-b border-slate-200 pb-3">
               <div>
-                <h2 className="text-lg font-black text-slate-900">معاينة سند القبض قبل الطباعة</h2>
+                <h2 className="text-lg font-black text-slate-900">{documentPrintPreviewTitle}</h2>
                 <p className="mt-1 text-xs font-bold text-slate-500">راجع شعار المرحلة والرقم والبيان، ثم اختر الطباعة لفتح حوار المتصفح.</p>
               </div>
               <div className="flex flex-wrap gap-2">
@@ -7188,7 +7163,7 @@ export default function StudentFinancialPortal({
             </div>
             <iframe
               ref={receiptPrintPreviewFrameRef}
-              title="ورقة سند القبض — نسختان A4"
+              title={documentPrintPreviewTitle}
               srcDoc={receiptPrintPreviewHtml.replace('</style>', '@media screen { body { zoom: .72; margin: 0 auto; } }</style>')}
               className="mt-3 min-h-[65vh] w-full flex-1 rounded-lg border border-slate-200 bg-white"
             />

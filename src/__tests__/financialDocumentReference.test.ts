@@ -1,7 +1,15 @@
 import { describe, expect, it } from 'vitest';
-import { resolveFinancialDocumentReference } from '../utils/financialDocumentReference';
+import { formatFinancialDocumentDescriptionForPrint, resolveFinancialDocumentReference } from '../utils/financialDocumentReference';
 
 describe('financial document references', () => {
+  it('keeps internal UUIDs out of customer-facing print descriptions', () => {
+    expect(formatFinancialDocumentDescriptionForPrint(
+      'سداد القسط رقم 1 — خطة الأقساط 9294888f-11e2-4b7f-b416-123456789abc — المطالبة d887b716-11e2-4b7f-b416-123456789abc',
+    )).toBe('سداد القسط رقم 1 — خطة الأقساط — المطالبة');
+    expect(formatFinancialDocumentDescriptionForPrint('رسوم رسوم دراسية اختبار — ابتدائي'))
+      .toBe('رسوم دراسية اختبار — ابتدائي');
+  });
+
   it('uses the official receipt voucher number and keeps its internal key available', () => {
     expect(resolveFinancialDocumentReference({
       id: '5a987b85-11e2-4b7f-b416-123456789abc',

@@ -6,9 +6,11 @@ const root = process.cwd();
 const dist = path.join(root, 'dist');
 const indexPath = path.join(dist, 'index.html');
 const identityPath = path.join(dist, 'build-identity.json');
+const serverPath = path.join(dist, 'server.cjs');
 const failures = [];
 
 if (!fs.existsSync(indexPath)) failures.push('DIST_INDEX_MISSING');
+if (!fs.existsSync(serverPath)) failures.push('DIST_SERVER_MISSING');
 const index = fs.existsSync(indexPath) ? fs.readFileSync(indexPath, 'utf8') : '';
 const references = [
   ...[...index.matchAll(/<script[^>]+src="([^"]+)"/g)].map((match) => match[1]),

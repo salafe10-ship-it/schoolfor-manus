@@ -36,7 +36,7 @@ function requireEnvironment() {
   if (url.origin === 'https://schoolfor-manus-staging.salafe10.workers.dev' && url.pathname === '/') {
     assertCloudflareStagingWorkerUrl(`${url.origin}/`);
   } else if (!['127.0.0.1', 'localhost'].includes(url.hostname)
-    || url.port !== '4179'
+    || !['4179', '4183'].includes(url.port)
     || process.env.UAT_ALLOW_LOCAL_STAGING !== 'true'
     || process.env.EDUPRO_ENVIRONMENT !== 'staging') {
     throw new Error('STUDENT_FEES_UAT_TARGET_MUST_BE_ISOLATED_STAGING');

@@ -9,6 +9,13 @@ export interface FinancialDocumentReference {
 
 const asText = (value: unknown): string => String(value ?? '').trim();
 
+/** Keep implementation keys out of customer-facing printed receipt descriptions. */
+export function formatFinancialDocumentDescriptionForPrint(value: unknown): string {
+  return asText(value)
+    .replace(/(خطة الأقساط|المطالبة)\s+[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}/gi, '$1')
+    .replace(/^(رسوم)\s+\1(?=\s|$|[،—-])/u, '$1');
+}
+
 const shortenSystemId = (value: string): string => {
   if (value.length <= 24) return value;
   const uuid = value.match(/[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i);

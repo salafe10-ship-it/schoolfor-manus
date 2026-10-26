@@ -59,7 +59,7 @@ export function validateStagingEnvironmentValues(values: Record<string, string |
     databaseRole: 'edupro_staging_app',
     financialWritesLocked: values.UAT_ALLOW_LOCAL_STAGING !== 'true'
       || values.UAT_STUDENT_FEES_STAGING_CONFIRM !== 'RUN_STUDENT_FEES_STAGING_UAT'
-      || values.UAT_FINANCIAL_BASE_URL !== 'http://127.0.0.1:4179',
+      || !['http://127.0.0.1:4179', 'http://127.0.0.1:4183'].includes(String(values.UAT_FINANCIAL_BASE_URL || '').replace(/\/$/, '')),
   };
 }
 

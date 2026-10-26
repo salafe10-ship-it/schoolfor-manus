@@ -27,7 +27,7 @@
     "staging:schema-replay": "tsx scripts/staging-schema-migration-rehearsal.ts",
     "staging:apply-schema": "tsx scripts/apply-staging-schema.ts",
     "staging:connect": "tsx scripts/staging-connection-setup.ts",
-    "build": "vite build --configLoader runner && node scripts/build-server.mjs && node scripts/verify-build-artifact.mjs",
+    "build": "vite build --configLoader runner && node scripts/build-server.mjs && node scripts/verify-build-artifact.mjs && node scripts/smoke-server-artifact.mjs",
     "build:spa": "vite build --configLoader runner",
     "production:gate": "node scripts/production-release-gate.mjs",
     "uat:student-fees:staging": "tsx scripts/uat-student-fees-staging.ts",
