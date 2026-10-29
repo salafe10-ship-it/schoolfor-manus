@@ -145,6 +145,52 @@ const activeDrillDownUser = currentUserIdentity || {
 const reportsAreCanonical = canonicalFinancialStatus === 'ready'
   && (canonicalFinancialWriteMode === 'ledger_ready' || canonicalFinancialWriteMode === 'erp_integrated');
 
+const buildAccountStatementData = () => {
+  const reportAccounts = getProcessedAccounts({
+    fromDate: filterFromDate,
+    toDate: filterToDate,
+    costCenter: filterCostCenter
+  });
+  const targetAccount = reportAccounts.find((account: any) => account.code === filterAccount || account.id === filterAccount);
+  if (!targetAccount) return null;
+
+  const lines: any[] = [];
+  getNormalizedJournalEntries().forEach((entry: any) => {
+    const status = String(entry.status || '').trim().toLowerCase();
+    if (!['مرحل', 'مرحّل', 'مُرحّل', 'معتمد', 'approved', 'posted'].includes(status)) return;
+    if (entry.date < filterFromDate || entry.date > filterToDate || !Array.isArray(entry.lines)) return;
+    entry.lines.forEach((line: any) => {
+      if (!isAccountOrDescendant(line.accountCode, filterAccount)) return;
+      if (filterCostCenter !== 'all' && (String(line.costCenter || '').trim() || 'unclassified') !== filterCostCenter) return;
+      lines.push({
+        date: entry.date,
+        id: entry.id,
+        description: line.description || entry.description,
+        accountCode: line.accountCode,
+        debit: Number(line.debit) || 0,
+        credit: Number(line.credit) || 0
+      });
+    });
+  });
+  lines.sort((a, b) => String(a.date).localeCompare(String(b.date)) || String(a.id).localeCompare(String(b.id)));
+
+  const isDebitNature = targetAccount.natureType === 'مدين'
+    || targetAccount.classification === 'أصول'
+    || targetAccount.classification === 'مصروفات';
+  let runningBalance = Number(targetAccount.openingBalance) || 0;
+  let totalDebit = 0;
+  let totalCredit = 0;
+  const rows = lines.map(line => {
+    totalDebit += line.debit;
+    totalCredit += line.credit;
+    runningBalance = isDebitNature
+      ? runningBalance + line.debit - line.credit
+      : runningBalance + line.credit - line.debit;
+    return { ...line, runningBalance };
+  });
+  return { targetAccount, openingBalance: Number(targetAccount.openingBalance) || 0, rows, totalDebit, totalCredit, closingBalance: runningBalance };
+};
+
 const [selectedReport, setSelectedReport] = useState<string | null>(null);
 const [drillDownStack, setDrillDownStack] = useState<any[]>([]);
 const [filterFiscalYear, setFilterFiscalYear] = useState<string>('2026');
@@ -1011,15 +1057,18 @@ const handleDrillDownToOriginalDocument = (jv: any) => {
                               }
                             }
                             setSelectedReport('account_statement');
-                            if (accCode !== 'all') {
-                              setDrillDownStack([
-                                {
-                                  level: 'account_statement',
-                                  accountCode: accCode,
-                                  title: `كشف حساب: ${accounts.find(a => a.code === accCode)?.nameAr || accCode}`
-                                }
-                              ]);
-                            }
+                            setDrillDownStack([
+                              {
+                                level: 'report_view',
+                                reportId: 'account_statement',
+                                title: 'كشف الحساب'
+                              },
+                              ...(accCode !== 'all' ? [{
+                                level: 'account_statement',
+                                accountCode: accCode,
+                                title: `كشف حساب: ${accounts.find(a => a.code === accCode)?.nameAr || accCode}`
+                              }] : [])
+                            ]);
                           }}
                           className="flex-1 bg-purple-600 hover:bg-purple-700 text-white font-bold py-2 rounded-lg text-xs transition-colors cursor-pointer text-center"
                         >
@@ -1760,7 +1809,7 @@ const handleDrillDownToOriginalDocument = (jv: any) => {
                       }
                     })()}
 
-                    {currentStep.level === 'report_view' && (
+                    {(currentStep.level === 'report_view' || currentStep.level === 'account_statement') && (
                       <>
                         {/* Sub-view header and export actions */}
                         <div className="flex flex-col sm:flex-row justify-between items-start sm:items-center border-b border-slate-100 pb-4 gap-4">
@@ -1824,7 +1873,7 @@ const handleDrillDownToOriginalDocument = (jv: any) => {
                               const headers = ['اسم البند المحاسبي', 'تصنيف الحساب', 'الرصيد التشغيلي (SDG)'];
                               const rows = reportAccounts
                                 .filter(a => (a.classification === 'إيرادات' || a.classification === 'مصروفات') && a.level === 3)
-                                .map(a => [a.nameAr, a.classification, a.endingBalance.toFixed(2)]);
+                                .map(a => [a.nameAr, a.classification, (a.classification === 'إيرادات' ? periodRevenue(a) : periodExpense(a)).toFixed(2)]);
                               exportReportExcel('قائمة_الدخل', headers, rows);
                             } else if (selectedReport === 'balance_sheet') {
                               const headers = ['اسم البند', 'التصنيف', 'الرصيد المعتمد (SDG)'];
@@ -1837,32 +1886,22 @@ const handleDrillDownToOriginalDocument = (jv: any) => {
                               const rows = [
                                 ['المتحصلات النقدية الموثقة', 'تشغيلي - وارد', cashFlowValue(actualCashInflow)],
                                 ['المدفوعات النقدية الموثقة', 'تشغيلي - صادر', cashFlowValue(actualCashOutflow)],
-                                ['التدفقات الاستثمارية الموثقة', 'استثماري', cashFlowValue(0)],
-                                ['التدفقات التمويلية الموثقة', 'تمويلي', cashFlowValue(0)]
+                                ['التدفقات الاستثمارية', 'استثماري', 'غير متحقق'],
+                                ['التدفقات التمويلية', 'تمويلي', 'غير متحقق']
                               ];
                               exportReportExcel('قائمة_التدفقات_النقدية', headers, rows);
                             } else if (selectedReport === 'account_statement') {
-                              const targetAcc = accounts.find(a => a.code === filterAccount);
                               const headers = ['التاريخ', 'القيد', 'البيان والتفاصيل', 'مدين (SDG)', 'دائن (SDG)', 'الرصيد المتراكم'];
-                              let running = targetAcc ? targetAcc.balance * 0.7 : 0;
-                              const rows = [['رصيد افتتاحي', '', 'رصيد مرحل من الفترة السابقة', '', '', running.toFixed(2)]];
-                              
-                              journalEntries.forEach((entry: any) => {
-                                if (entry.status !== 'مرحل' && entry.status !== 'معتمد') return;
-                                if (entry.date < filterFromDate || entry.date > filterToDate) return;
-                                if (Array.isArray(entry.lines)) {
-                                  entry.lines.forEach((line: any) => {
-                                    if (line.accountCode === filterAccount) {
-                                      if (filterCostCenter !== 'all' && line.costCenter !== filterCostCenter) return;
-                                      const deb = Number(line.debit) || 0;
-                                      const crd = Number(line.credit) || 0;
-                                      const isDeb = targetAcc?.natureType === 'مدين' || targetAcc?.classification === 'أصول';
-                                      running = isDeb ? (running + deb - crd) : (running + crd - deb);
-                                      rows.push([entry.date, entry.id, line.description || entry.description, deb.toFixed(2), crd.toFixed(2), running.toFixed(2)]);
-                                    }
-                                  });
-                                }
-                              });
+                              const statement = buildAccountStatementData();
+                              if (!statement) {
+                                triggerNotification('اختر حساباً صالحاً قبل تصدير كشف الحساب.', 'warning');
+                                return;
+                              }
+                              const rows = [
+                                ['رصيد افتتاحي', '', 'رصيد افتتاحي مرحّل للفترة', '', '', statement.openingBalance.toFixed(2)],
+                                ...statement.rows.map((line: any) => [line.date, line.id, line.description, line.debit.toFixed(2), line.credit.toFixed(2), line.runningBalance.toFixed(2)]),
+                                ['الإجمالي الختامي', '', 'إجمالي الحركة والرصيد الختامي', statement.totalDebit.toFixed(2), statement.totalCredit.toFixed(2), statement.closingBalance.toFixed(2)]
+                              ];
                               exportReportExcel(`كشف_حساب_${filterAccount}`, headers, rows);
                             } else if (selectedReport === 'general_ledger') {
                               const headers = ['رمز الحساب', 'اسم الحساب المحاسبي', 'طبيعة الحساب', 'رصيد افتتاحي (SDG)', 'حركات مدينة', 'حركات دائنة', 'رصيد ختامي (SDG)'];
@@ -1980,7 +2019,7 @@ const handleDrillDownToOriginalDocument = (jv: any) => {
                                   <div style="background: #eff6ff; padding: 10px; font-weight: bold; text-align: center; color: #1e40af; border-top: 1px solid #cbd5e1;">
                                     مجموع (الخصوم + حقوق الملكية) = ${(totalLiabilities + totalEquity).toLocaleString(undefined, { minimumFractionDigits: 2 })} SDG
                                     <br/>
-                                    <span style="font-size: 10px; color: ${reportsAreCanonical ? '#15803d' : '#b45309'};">${reportsAreCanonical ? `⚖️ تم التحقق والتدقيق: الميزانية متوازنة تماماً. الفارق: ${balanceSheetVariance.toFixed(2)} SDG` : '⚠️ نسخة عرض غير معتمدة من snapshot؛ لا يمكن إثبات توازن الميزانية.'}</span>
+                                    <span style="font-size: 10px; color: ${reportsAreCanonical && balanceSheetVariance < 0.01 ? '#15803d' : '#b91c1c'};">${reportsAreCanonical && balanceSheetVariance < 0.01 ? `⚖️ الميزانية متوازنة. الفارق: ${balanceSheetVariance.toFixed(2)} SDG` : reportsAreCanonical ? `⚠️ الميزانية غير متوازنة. الفارق: ${balanceSheetVariance.toFixed(2)} SDG` : '⚠️ نسخة عرض غير معتمدة من snapshot؛ لا يمكن إثبات توازن الميزانية.'}</span>
                                   </div>
                                 </div>
                               `;
@@ -1989,8 +2028,8 @@ const handleDrillDownToOriginalDocument = (jv: any) => {
                               const entries = [
                                 ['المتحصلات النقدية الموثقة', 'أنشطة تشغيلية - تدفق وارد', hasVerifiedCashFlow ? actualCashInflow.toLocaleString(undefined, { minimumFractionDigits: 2 }) + ' SDG' : 'غير متحقق'],
                                 ['المدفوعات النقدية الموثقة', 'أنشطة تشغيلية - تدفق صادر', hasVerifiedCashFlow ? '-' + actualCashOutflow.toLocaleString(undefined, { minimumFractionDigits: 2 }) + ' SDG' : 'غير متحقق'],
-                                ['التدفقات الاستثمارية الموثقة', 'أنشطة استثمارية', cashFlowValue(0) + (hasVerifiedCashFlow ? ' SDG' : '')],
-                                ['التدفقات التمويلية الموثقة', 'أنشطة تمويلية', cashFlowValue(0) + (hasVerifiedCashFlow ? ' SDG' : '')]
+                                ['التدفقات الاستثمارية', 'أنشطة استثمارية', 'غير متحقق'],
+                                ['التدفقات التمويلية', 'أنشطة تمويلية', 'غير متحقق']
                               ];
                               let rowsHtml = entries.map(e => `
                                 <tr>
@@ -2010,67 +2049,23 @@ const handleDrillDownToOriginalDocument = (jv: any) => {
                               `;
                               printReportPdf('قائمة التدفقات النقدية المقارنة (Cash Flow)', 'بيان مصادر واستخدامات النقدية حسب الفئات الثلاث المعتمدة محاسبياً.', ['بند التدفق نقدي والتصنيف الدفتري', 'نوع النشاط', 'القيمة المتدفقة للفترة'], rowsHtml, summaryHtml);
                             } else if (selectedReport === 'account_statement') {
-                              const targetAcc = accounts.find(a => a.code === filterAccount);
-                              let running = targetAcc ? targetAcc.balance * 0.7 : 0;
-                              let rowsHtml = `
-                                <tr>
-                                  <td>-</td>
-                                  <td style="font-weight: bold;">رصيد افتتاحي مرحل</td>
-                                  <td>قيد رصيد بداية المدة المعتمد</td>
-                                  <td style="text-align: left; font-family: monospace;">-</td>
-                                  <td style="text-align: left; font-family: monospace;">-</td>
-                                  <td style="text-align: left; font-family: monospace; font-weight: bold;">${running.toLocaleString(undefined, { minimumFractionDigits: 2 })} SDG</td>
-                                </tr>
-                              `;
-                              let totalDeb = 0;
-                              let totalCrd = 0;
-
-                              journalEntries.forEach((entry: any) => {
-                                if (entry.status !== 'مرحل' && entry.status !== 'معتمد') return;
-                                if (entry.date < filterFromDate || entry.date > filterToDate) return;
-                                if (Array.isArray(entry.lines)) {
-                                  entry.lines.forEach((line: any) => {
-                                  if (line.accountCode === filterAccount) {
-                                    if (filterCostCenter !== 'all' && line.costCenter !== filterCostCenter) return;
-                                    const deb = Number(line.debit) || 0;
-                                    const crd = Number(line.credit) || 0;
-                                    totalDeb += deb;
-                                    totalCrd += crd;
-                                    const isDeb = targetAcc?.natureType === 'مدين' || targetAcc?.classification === 'أصول';
-                                    running = isDeb ? (running + deb - crd) : (running + crd - deb);
-                                    rowsHtml += `
-                                      <tr>
-                                        <td style="font-family: monospace;">${entry.date}</td>
-                                        <td style="font-family: monospace; font-weight: bold;">${entry.id}</td>
-                                        <td>${line.description || entry.description}</td>
-                                        <td style="text-align: left; font-family: monospace;">${deb > 0 ? deb.toLocaleString(undefined, { minimumFractionDigits: 2 }) : '-'}</td>
-                                        <td style="text-align: left; font-family: monospace;">${crd > 0 ? crd.toLocaleString(undefined, { minimumFractionDigits: 2 }) : '-'}</td>
-                                        <td style="text-align: left; font-family: monospace; font-weight: bold;">${running.toLocaleString(undefined, { minimumFractionDigits: 2 })} SDG</td>
-                                      </tr>
-                                    `;
-                                  }
-                                });
-                                }
-                              });
-
+                              const statement = buildAccountStatementData();
+                              if (!statement) {
+                                triggerNotification('اختر حساباً صالحاً قبل طباعة كشف الحساب.', 'warning');
+                                return;
+                              }
+                              const rowsHtml = [
+                                `<tr><td>-</td><td>-</td><td>رصيد افتتاحي مرحّل للفترة</td><td>-</td><td>-</td><td>${statement.openingBalance.toLocaleString(undefined, { minimumFractionDigits: 2 })} SDG</td></tr>`,
+                                ...statement.rows.map((line: any) => `<tr><td>${escapeHtml(line.date)}</td><td>${escapeHtml(line.id)}</td><td>${escapeHtml(line.description)}</td><td>${line.debit ? line.debit.toLocaleString(undefined, { minimumFractionDigits: 2 }) : '-'}</td><td>${line.credit ? line.credit.toLocaleString(undefined, { minimumFractionDigits: 2 }) : '-'}</td><td>${line.runningBalance.toLocaleString(undefined, { minimumFractionDigits: 2 })} SDG</td></tr>`),
+                                `<tr><td colspan="3">الإجمالي الختامي</td><td>${statement.totalDebit.toLocaleString(undefined, { minimumFractionDigits: 2 })} SDG</td><td>${statement.totalCredit.toLocaleString(undefined, { minimumFractionDigits: 2 })} SDG</td><td>${statement.closingBalance.toLocaleString(undefined, { minimumFractionDigits: 2 })} SDG</td></tr>`
+                              ].join('');
                               const summaryHtml = `
                                 <div style="margin-top: 15px; background: #fafafa; border: 1px solid #e2e8f0; padding: 12px; border-radius: 6px; font-size: 11px; line-height: 1.6; font-weight: bold;">
-                                  <div style="display: flex; justify-content: space-between;">
-                                    <span>مجموع الحركات المدينة خلال الفترة:</span>
-                                    <span style="font-family: monospace; color: #1d4ed8;">${totalDeb.toLocaleString(undefined, { minimumFractionDigits: 2 })} SDG</span>
-                                  </div>
-                                  <div style="display: flex; justify-content: space-between; margin-top: 5px;">
-                                    <span>مجموع الحركات الدائنة خلال الفترة:</span>
-                                    <span style="font-family: monospace; color: #b91c1c;">${totalCrd.toLocaleString(undefined, { minimumFractionDigits: 2 })} SDG</span>
-                                  </div>
-                                  <div style="display: flex; justify-content: space-between; margin-top: 8px; border-top: 1px dashed #cbd5e1; padding-top: 5px; font-size: 12px; color: #0f172a;">
-                                    <span>الرصيد الختامي المتراكم للحساب:</span>
-                                    <span style="font-family: monospace;">${running.toLocaleString(undefined, { minimumFractionDigits: 2 })} SDG</span>
-                                  </div>
-                                </div>
-                              `;
-
-                              printReportPdf(`كشف الحساب التفصيلي (${filterAccount} - ${targetAcc?.nameAr || ''})`, 'عرض لجميع القيود وحركات الأستاذ المساعد مع رصيد تراكمي مستمر.', ['التاريخ', 'رقم القيد', 'البيان وتفصيل الحركة المعتمد', 'مدين', 'دائن', 'الرصيد المتراكم'], rowsHtml, summaryHtml);
+                                  <div style="display: flex; justify-content: space-between;"><span>إجمالي الحركة المدينة:</span><span>${statement.totalDebit.toLocaleString(undefined, { minimumFractionDigits: 2 })} SDG</span></div>
+                                  <div style="display: flex; justify-content: space-between; margin-top: 5px;"><span>إجمالي الحركة الدائنة:</span><span>${statement.totalCredit.toLocaleString(undefined, { minimumFractionDigits: 2 })} SDG</span></div>
+                                  <div style="display: flex; justify-content: space-between; margin-top: 8px; border-top: 1px dashed #cbd5e1; padding-top: 5px;"><span>الرصيد الختامي:</span><span>${statement.closingBalance.toLocaleString(undefined, { minimumFractionDigits: 2 })} SDG</span></div>
+                                </div>`;
+                              printReportPdf(`كشف الحساب التفصيلي (${filterAccount} - ${statement.targetAccount.nameAr || ''})`, 'عرض لجميع القيود وحركات الأستاذ المساعد مع رصيد تراكمي مستمر.', ['التاريخ', 'رقم القيد', 'البيان وتفصيل الحركة المعتمد', 'مدين', 'دائن', 'الرصيد المتراكم'], rowsHtml, summaryHtml);
                             } else if (selectedReport === 'general_ledger') {
                               let rowsHtml = '';
                               reportAccounts.forEach(a => {
@@ -2370,7 +2365,7 @@ const handleDrillDownToOriginalDocument = (jv: any) => {
                         <div className="bg-slate-50 border border-slate-200 rounded-xl p-5 space-y-4">
                           <div className="flex items-center justify-between border-b border-slate-200 pb-2">
                             <h4 className="text-xs font-black text-slate-900">تفصيل التدفق المالي الوارد والمنصرف بالأنشطة الأساسية الثلاث</h4>
-                            <span className="text-[9px] bg-indigo-50 text-indigo-750 px-2 py-0.5 rounded font-black">انقر على أي بند لاستعراض كشف الحساب والتحليل الفوري 📊</span>
+                                  <span className="text-[9px] bg-indigo-50 text-indigo-750 px-2 py-0.5 rounded font-black">المبالغ مأخوذة من القيود النقدية المرحلة للفترة</span>
                           </div>
                           
                           <div className="space-y-3">
@@ -2402,17 +2397,11 @@ const handleDrillDownToOriginalDocument = (jv: any) => {
                                   </span>
                                   <span className="font-mono text-rose-700 font-bold">{hasVerifiedCashFlow ? `-${actualCashOutflow.toLocaleString(undefined, { minimumFractionDigits: 2 })} SDG` : 'غير متحقق'}</span>
                                 </div>
-                                <div 
-                                  className="flex justify-between text-slate-600 hover:bg-slate-100 p-1.5 rounded transition-all cursor-pointer group/cf"
-                                  onClick={() => handleDrillDownToAccount('5200')}
-                                  onDoubleClick={() => handleDrillDownToAccount('5200')}
-                                  title="انقر لعرض كشف حساب المصروفات العمومية والإدارية"
-                                >
+                                <div className="flex justify-between text-slate-600 p-1.5 rounded transition-all">
                                   <span className="flex items-center gap-2">
                                     <span>تفصيل إضافي للمصروفات النقدية — غير متاح دون تصنيف موثق</span>
-                                    <span className="opacity-0 group-hover/cf:opacity-100 transition-all text-[8px] bg-rose-100 text-rose-800 px-1.5 py-0.5 rounded font-sans select-none font-bold">كشف حساب 📊</span>
                                   </span>
-                                  <span className="font-mono text-rose-700 font-bold">{hasVerifiedCashFlow ? `-${actualCashOutflow.toLocaleString(undefined, { minimumFractionDigits: 2 })} SDG` : 'غير متحقق'}</span>
+                                  <span className="font-mono text-slate-500 font-bold">غير متاح دون تصنيف محاسبي موثق</span>
                                 </div>
                               </div>
                             </div>
@@ -2421,17 +2410,11 @@ const handleDrillDownToOriginalDocument = (jv: any) => {
                             <div className="space-y-2 border-t border-slate-100 pt-2">
                               <h5 className="text-[11px] font-black text-indigo-700 bg-indigo-50/70 p-1.5 rounded">2. التدفقات النقدية من الأنشطة الاستثمارية (Investing Cash Flows)</h5>
                               <div className="space-y-1.5 pl-3 text-[11px]">
-                                <div 
-                                  className="flex justify-between text-slate-600 hover:bg-slate-100 p-1.5 rounded transition-all cursor-pointer group/cf"
-                                  onClick={() => handleDrillDownToAccount('1300')}
-                                  onDoubleClick={() => handleDrillDownToAccount('1300')}
-                                  title="انقر لعرض كشف حساب الأصول الثابتة"
-                                >
+                                <div className="flex justify-between text-slate-600 p-1.5 rounded transition-all">
                                   <span className="flex items-center gap-2">
                                     <span>مدفوعات حيازة وتجهيز حافلات ومقاعد مدرسية ثابتة</span>
-                                    <span className="opacity-0 group-hover/cf:opacity-100 transition-all text-[8px] bg-rose-100 text-rose-800 px-1.5 py-0.5 rounded font-sans select-none font-bold">كشف حساب 📊</span>
                                   </span>
-                                    <span className="font-mono text-rose-700 font-bold">{cashFlowValue(0)}{hasVerifiedCashFlow ? ' SDG' : ''}</span>
+                                  <span className="font-mono text-slate-500 font-bold">غير متحقق</span>
                                 </div>
                               </div>
                             </div>
@@ -2440,17 +2423,11 @@ const handleDrillDownToOriginalDocument = (jv: any) => {
                             <div className="space-y-2 border-t border-slate-100 pt-2">
                               <h5 className="text-[11px] font-black text-purple-700 bg-purple-50/70 p-1.5 rounded">3. التدفقات النقدية من الأنشطة التمويلية (Financing Cash Flows)</h5>
                               <div className="space-y-1.5 pl-3 text-[11px]">
-                                <div 
-                                  className="flex justify-between text-slate-600 hover:bg-slate-100 p-1.5 rounded transition-all cursor-pointer group/cf"
-                                  onClick={() => handleDrillDownToAccount('3100')}
-                                  onDoubleClick={() => handleDrillDownToAccount('3100')}
-                                  title="انقر لعرض كشف حساب رأس المال"
-                                >
+                                <div className="flex justify-between text-slate-600 p-1.5 rounded transition-all">
                                   <span className="flex items-center gap-2">
                                     <span>زيادة رأس مال المجمع والتدفق المساهم الجديد</span>
-                                    <span className="opacity-0 group-hover/cf:opacity-100 transition-all text-[8px] bg-emerald-100 text-emerald-800 px-1.5 py-0.5 rounded font-sans select-none font-bold">كشف حساب 📊</span>
                                   </span>
-                                    <span className="font-mono text-emerald-700 font-bold">{cashFlowValue(0)}{hasVerifiedCashFlow ? ' SDG' : ''}</span>
+                                  <span className="font-mono text-slate-500 font-bold">غير متحقق</span>
                                 </div>
                               </div>
                             </div>
@@ -2528,7 +2505,8 @@ const handleDrillDownToOriginalDocument = (jv: any) => {
 
                                 const matchingLines: any[] = [];
                                 getNormalizedJournalEntries().forEach((entry: any) => {
-                                  if (entry.status !== 'مرحل' && entry.status !== 'معتمد') return;
+                                  const status = String(entry.status || '').trim().toLowerCase();
+                                  if (!['مرحل', 'مرحّل', 'مُرحّل', 'معتمد', 'approved', 'posted'].includes(status)) return;
                                   if (entry.date < filterFromDate || entry.date > filterToDate) return;
 
                                   if (Array.isArray(entry.lines)) {

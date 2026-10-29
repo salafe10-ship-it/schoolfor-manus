@@ -55,6 +55,7 @@ import { PostingEngine } from '../database/services/PostingEngine';
 import { useCurrency } from '../utils/currency';
 import EnterpriseActionToolbar from './shared/EnterpriseActionToolbar';
 import { buildCanonicalTreasuryProjection } from '../modules/accounting/domain/canonicalTreasuryProjection';
+import { calculateBankReconciliation } from '../modules/accounting/domain/bankReconciliation';
 
 interface TreasuryPlatformPortalProps {
   selectedSchool: { id: string; name: string };
@@ -173,6 +174,7 @@ export default function TreasuryPlatformPortal({
   // Bank Reconciliation State
   const [selectedBankForRecon, setSelectedBankForRecon] = useState<string>('');
   const [bankStatementEndingBalance, setBankStatementEndingBalance] = useState<number>(0);
+  const [bankStatementBalanceProvided, setBankStatementBalanceProvided] = useState(false);
   const [bankStatementDate, setBankStatementDate] = useState<string>(new Date().toISOString().split('T')[0]);
   const [clearedTxIds, setClearedTxIds] = useState<string[]>([]);
 
@@ -575,17 +577,14 @@ export default function TreasuryPlatformPortal({
   // Bank Reconciliation Calculations
   const selectedBankAccount = accounts.find(a => a.id === selectedBankForRecon);
   const bankTxs = transactions.filter(t => t.sourceAccountId === selectedBankForRecon || t.destinationAccountId === selectedBankForRecon);
-  
-  const unclearedDeposits = bankTxs
-    .filter(t => t.type === 'Deposit' && !clearedTxIds.includes(t.id) && t.status !== 'Cancelled')
-    .reduce((sum, t) => sum + t.amount, 0);
-
-  const unpresentedChecks = bankTxs
-    .filter(t => t.type === 'Withdrawal' && !clearedTxIds.includes(t.id) && t.status !== 'Cancelled')
-    .reduce((sum, t) => sum + t.amount, 0);
-
-  const adjustedBookBalance = (selectedBankAccount ? selectedBankAccount.balance : 0) + unclearedDeposits - unpresentedChecks;
-  const reconciliationDifference = adjustedBookBalance - bankStatementEndingBalance;
+  const bankReconciliation = calculateBankReconciliation({
+    bankAccountId: selectedBankForRecon,
+    bankLedgerBalance: selectedBankAccount?.balance || 0,
+    bankStatementBalance: bankStatementEndingBalance,
+    transactions: bankTxs,
+    clearedTransactionIds: clearedTxIds
+  });
+  const { unclearedDeposits, unpresentedChecks, adjustedBankBalance, difference: reconciliationDifference } = bankReconciliation;
 
   // Toggle Cleared Item in Reconciliation
   const toggleClearedTx = (id: string) => {
@@ -600,6 +599,14 @@ export default function TreasuryPlatformPortal({
   const handleFinalizeBankReconciliation = async () => {
     if (!requireCanonicalTreasuryWrite()) return;
     if (!selectedBankAccount) return;
+    if (!bankStatementBalanceProvided) {
+      triggerNotification('أدخل رصيد كشف البنك الخارجي قبل اعتماد المطابقة.', 'warning');
+      return;
+    }
+    if (Math.abs(reconciliationDifference) > 0.01) {
+      triggerNotification('لا يمكن اعتماد المطابقة قبل أن يصبح الفرق بين الرصيد المعدل ودفتر الأستاذ صفراً.', 'warning');
+      return;
+    }
     try {
       for (const id of clearedTxIds) {
         const tx = transactions.find(t => t.id === id);
@@ -1212,22 +1219,26 @@ export default function TreasuryPlatformPortal({
                 <h4 className="font-extrabold text-slate-900 text-xs border-b border-slate-200 pb-2">نتائج الجرد والمطابقة الآلية</h4>
                 
                 <div className="space-y-3 text-xs">
-                  <div className="flex justify-between items-center p-2.5 bg-transparent rounded-lg">
-                    <span className="text-slate-600">الرصيد الدفتري بالنظام:</span>
-                    <span className="font-mono font-bold text-slate-900">{formatCurrency(chestBookBalance, true)}</span>
-                  </div>
-
-                  <div className="flex justify-between items-center p-2.5 bg-transparent rounded-lg">
-                    <span className="text-slate-600">الرصيد الفعلي المجلود:</span>
-                    <span className="font-mono font-bold text-slate-900">{formatCurrency(totalCountedCash, true)}</span>
-                  </div>
-
-                  <div className={`flex justify-between items-center p-3 border ${cashDiscrepancy === 0 ? 'bg-emerald-50 border-emerald-200 text-emerald-800' : cashDiscrepancy > 0 ? 'bg-yellow-50 border-yellow-200 text-yellow-800' : 'bg-rose-50 border-rose-200 text-rose-800'}`}>
-                    <span className="font-bold">حالة المطابقة والفارق:</span>
-                    <span className="font-mono font-black text-sm">
-                      {cashDiscrepancy === 0 ? 'مطابقة تامّة (0.00)' : cashDiscrepancy > 0 ? `زيادة جرد (+${formatCurrency(cashDiscrepancy)})` : `عجز جرد (${formatCurrency(cashDiscrepancy)})`}
-                    </span>
-                  </div>
+                  {selectedChestAccount ? (
+                    <>
+                      <div className="flex justify-between items-center p-2.5 bg-transparent rounded-lg">
+                        <span className="text-slate-600">الرصيد الدفتري بالنظام:</span>
+                        <span className="font-mono font-bold text-slate-900">{formatCurrency(chestBookBalance, true)}</span>
+                      </div>
+                      <div className="flex justify-between items-center p-2.5 bg-transparent rounded-lg">
+                        <span className="text-slate-600">الرصيد الفعلي المجلود:</span>
+                        <span className="font-mono font-bold text-slate-900">{formatCurrency(totalCountedCash, true)}</span>
+                      </div>
+                      <div className={`flex justify-between items-center p-3 border ${cashDiscrepancy === 0 ? 'bg-emerald-50 border-emerald-200 text-emerald-800' : cashDiscrepancy > 0 ? 'bg-yellow-50 border-yellow-200 text-yellow-800' : 'bg-rose-50 border-rose-200 text-rose-800'}`}>
+                        <span className="font-bold">حالة المطابقة والفارق:</span>
+                        <span className="font-mono font-black text-sm">
+                          {cashDiscrepancy === 0 ? 'مطابقة تامّة (0.00)' : cashDiscrepancy > 0 ? `زيادة جرد (+${formatCurrency(cashDiscrepancy)})` : `عجز جرد (${formatCurrency(cashDiscrepancy)})`}
+                        </span>
+                      </div>
+                    </>
+                  ) : (
+                    <p className="p-3 border border-slate-200 bg-slate-50 text-slate-500 text-center">اختر الخزينة وأدخل أعداد الفئات لبدء المطابقة.</p>
+                  )}
                 </div>
               </div>
             </div>
@@ -1254,7 +1265,12 @@ export default function TreasuryPlatformPortal({
 
                   <select 
                     value={selectedBankForRecon}
-                    onChange={(e) => setSelectedBankForRecon(e.target.value)}
+                    onChange={(e) => {
+                      setSelectedBankForRecon(e.target.value);
+                      setBankStatementEndingBalance(0);
+                      setBankStatementBalanceProvided(false);
+                      setClearedTxIds([]);
+                    }}
                     className="bg-transparent rounded-lg p-2 text-xs font-bold focus:focus:outline-none"
                   >
                     <option value="">اختر الحساب البنكي...</option>
@@ -1282,7 +1298,11 @@ export default function TreasuryPlatformPortal({
                           type="number"
                           step="any"
                           value={bankStatementEndingBalance || ''}
-                          onChange={(e) => setBankStatementEndingBalance(parseFloat(e.target.value) || 0)}
+                          onChange={(e) => {
+                            const value = e.target.value;
+                            setBankStatementBalanceProvided(value.trim() !== '');
+                            setBankStatementEndingBalance(parseFloat(value) || 0);
+                          }}
                           placeholder="0.00"
                           className="w-full border border-slate-300 rounded-lg p-2 text-xs font-bold font-mono focus:outline-none"
                         />
@@ -1352,43 +1372,44 @@ export default function TreasuryPlatformPortal({
                 <h4 className="font-extrabold text-slate-900 text-xs border-b border-slate-200 pb-2">خلاصة مذكرة التسوية البنكية</h4>
                 
                 <div className="space-y-2.5 text-xs">
-                  <div className="flex justify-between items-center text-slate-600">
-                    <span>رصيد الحساب البنكي بالنظام:</span>
-                    <span className="font-mono font-bold text-slate-900">{formatCurrency(selectedBankAccount ? selectedBankAccount.balance : 0, true)}</span>
-                  </div>
-
-                  <div className="flex justify-between items-center text-slate-600">
-                    <span>+ إيداعات قيد التحصيل والطريق:</span>
-                    <span className="font-mono font-bold text-emerald-600">{formatCurrency(unclearedDeposits, true)}</span>
-                  </div>
-
-                  <div className="flex justify-between items-center text-slate-600">
-                    <span>- شيكات وسحوبات لم تقدم للصرف:</span>
-                    <span className="font-mono font-bold text-rose-600">{formatCurrency(unpresentedChecks, true)}</span>
-                  </div>
-
-                  <div className="border-t border-slate-200 pt-2 flex justify-between items-center font-bold text-slate-900">
-                    <span>الرصيد الدفتري المعدّل:</span>
-                    <span className="font-mono font-black">{formatCurrency(adjustedBookBalance, true)}</span>
-                  </div>
-
-                  <div className="flex justify-between items-center text-slate-600">
-                    <span>رصيد كشف البنك الخارجي:</span>
-                    <span className="font-mono font-bold text-amber-600">{formatCurrency(bankStatementEndingBalance, true)}</span>
-                  </div>
-
-                  <div className={`p-3 border flex justify-between items-center ${reconciliationDifference === 0 ? 'bg-emerald-50 border-emerald-200 text-emerald-800' : 'bg-rose-50 border-rose-200 text-rose-800'}`}>
-                    <span className="font-bold">فارق المطابقة:</span>
-                    <span className="font-mono font-black">{formatCurrency(reconciliationDifference, true)}</span>
-                  </div>
+                  {selectedBankAccount ? (
+                    <>
+                      <div className="flex justify-between items-center text-slate-600">
+                        <span>رصيد كشف البنك الخارجي:</span>
+                        <span className="font-mono font-bold text-amber-600">{bankStatementBalanceProvided ? formatCurrency(bankStatementEndingBalance, true) : 'لم يُدخل بعد'}</span>
+                      </div>
+                      <div className="flex justify-between items-center text-slate-600">
+                        <span>+ إيداعات قيد التحصيل والطريق:</span>
+                        <span className="font-mono font-bold text-emerald-600">{formatCurrency(unclearedDeposits, true)}</span>
+                      </div>
+                      <div className="flex justify-between items-center text-slate-600">
+                        <span>- شيكات وسحوبات لم تقدم للصرف:</span>
+                        <span className="font-mono font-bold text-rose-600">{formatCurrency(unpresentedChecks, true)}</span>
+                      </div>
+                      <div className="border-t border-slate-200 pt-2 flex justify-between items-center font-bold text-slate-900">
+                        <span>رصيد البنك المعدل:</span>
+                        <span className="font-mono font-black">{bankStatementBalanceProvided ? formatCurrency(adjustedBankBalance, true) : 'بانتظار رصيد الكشف'}</span>
+                      </div>
+                      <div className="flex justify-between items-center text-slate-600">
+                        <span>رصيد حساب البنك في الأستاذ:</span>
+                        <span className="font-mono font-bold text-slate-900">{formatCurrency(selectedBankAccount.balance, true)}</span>
+                      </div>
+                      <div className={`p-3 border flex justify-between items-center ${bankStatementBalanceProvided && Math.abs(reconciliationDifference) <= 0.01 ? 'bg-emerald-50 border-emerald-200 text-emerald-800' : 'bg-rose-50 border-rose-200 text-rose-800'}`}>
+                        <span className="font-bold">فارق المطابقة:</span>
+                        <span className="font-mono font-black">{bankStatementBalanceProvided ? formatCurrency(reconciliationDifference, true) : 'غير متحقق'}</span>
+                      </div>
+                    </>
+                  ) : (
+                    <p className="p-3 border border-slate-200 bg-slate-50 text-slate-500 text-center">اختر حسابًا بنكيًا لبدء المطابقة.</p>
+                  )}
                 </div>
 
                 <button 
                   onClick={handleFinalizeBankReconciliation}
-                  disabled={!selectedBankAccount}
+                  disabled={!selectedBankAccount || !bankStatementBalanceProvided || Math.abs(reconciliationDifference) > 0.01 || canonicalTreasuryReadOnly}
                   className="w-full bg-teal-600 hover:bg-teal-700 disabled:opacity-50 text-white font-bold py-2.5 rounded-lg text-xs cursor-pointer"
                 >
-                  اعتماد قيد مذكرة التسوية البنكية 🔒
+                  اعتماد العناصر المطابقة 🔒
                 </button>
               </div>
             </div>
@@ -1401,6 +1422,11 @@ export default function TreasuryPlatformPortal({
            ========================================================================= */}
         {activeTab === 'instruments' && (
           <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-6">
+            {instruments.length === 0 && (
+              <div className="md:col-span-2 lg:col-span-3 p-8 border border-dashed border-slate-300 bg-white/70 text-center text-sm text-slate-500">
+                لا توجد قنوات دفع مهيأة لهذه المدرسة حتى الآن.
+              </div>
+            )}
             {instruments.map(inst => (
               <div key={inst.instrument} className="p-5 relative overflow-hidden flex flex-col justify-between hover:border-slate-300 transition-all bg-gradient-to-b from-[#fffefc] via-[#fbf8f0] to-[#f5eeea] border-2 border-[#d4af37]/30 hover:border-[#d4af37] rounded-3xl p-4 sm:p-5 shadow-md transition-all duration-300">
                 <div className="flex justify-between items-start">

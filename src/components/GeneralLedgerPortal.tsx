@@ -22,6 +22,7 @@ import { FinancialReportsTab } from '../modules/accounting/presentation/Financia
 import { CalcToolsTab } from '../modules/accounting/presentation/CalcToolsTab';
 import { AccountMappingsTab } from '../modules/accounting/presentation/AccountMappingsTab';
 import { buildAccountingDimensions } from '../modules/accounting/domain/accountingDimensions';
+import { evaluateCalculatorExpression } from '../modules/accounting/domain/calculator';
 import { writeXlsxBuffer } from '../utils/ExcelWorkbookUtils';
 import { resolveCostCenterStageLogoKey, resolveSchoolStageLogoSource } from '../utils/schoolBranding';
 import { openPrintWindow } from '../utils/openPrintWindow';
@@ -212,6 +213,7 @@ export default function GeneralLedgerPortal({
 
   const [calcExpr, setCalcExpr] = useState<string>('');
   const [calcResult, setCalcResult] = useState<number>(0);
+  const [calcJustEvaluated, setCalcJustEvaluated] = useState(false);
   const [fxAmount, setFxAmount] = useState<number>(0);
   const [fxFrom, setFxFrom] = useState<string>('LYD');
   const [fxResult, setFxResult] = useState<number>(0);
@@ -479,19 +481,29 @@ export default function GeneralLedgerPortal({
     return sourceAccounts;
   };
   const handleCalcPress = (expr: string) => {
-    const normalized = String(expr || '').replace(/[^0-9+\-*/().\s]/g, '');
-    if (!normalized.trim()) {
+    const key = String(expr || '');
+    if (key === 'C') {
+      setCalcExpr('');
       setCalcResult(0);
+      setCalcJustEvaluated(false);
       return;
     }
-    try {
-      const result = Function(`"use strict"; return (${normalized})`)();
-      if (!Number.isFinite(result)) throw new Error('invalid result');
-      setCalcExpr(expr);
-      setCalcResult(Number(result));
-    } catch {
-      triggerNotification('تعذر حساب التعبير: الصيغة غير صالحة.', 'warning');
+    if (key === '=') {
+      if (!calcExpr.trim()) return;
+      try {
+        setCalcResult(evaluateCalculatorExpression(calcExpr));
+        setCalcJustEvaluated(true);
+      } catch {
+        triggerNotification('تعذر حساب التعبير: الصيغة غير صالحة.', 'warning');
+      }
+      return;
     }
+    const startsNewExpression = calcJustEvaluated && /^[0-9.]$/.test(key);
+    const continuesFromResult = calcJustEvaluated && /^[+\-*/]$/.test(key);
+    setCalcExpr(current => startsNewExpression
+      ? key
+      : continuesFromResult ? `${calcResult}${key}` : `${current}${key}`);
+    setCalcJustEvaluated(false);
   };
   const isLiquidityAccount = (account: any) => {
     const code = String(account?.code || account?.accountCode || '').trim();
@@ -3118,7 +3130,7 @@ export default function GeneralLedgerPortal({
     assetForm, setAssetForm, maintenanceForm, setMaintenanceForm, transferForm, setTransferForm,
     saleForm, setSaleForm, discardForm, setDiscardForm, activeAssetModal, setActiveAssetModal,
     fixedAssetReportType, setFixedAssetReportType, fixedAssetViewMode, setFixedAssetViewMode,
-    budgets, setBudgets, calcExpr, setCalcExpr, calcResult, setCalcResult,
+    budgets, setBudgets, calcExpr, setCalcExpr, calcResult, setCalcResult, calcJustEvaluated, setCalcJustEvaluated,
     fxAmount, setFxAmount, fxFrom, setFxFrom, fxResult, setFxResult,
     
     // Functions
