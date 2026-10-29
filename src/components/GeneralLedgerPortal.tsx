@@ -2920,7 +2920,7 @@ export default function GeneralLedgerPortal({
     {
       title: "الإعدادات والسياسات",
       items: [
-        { id: 'account_mappings', label: 'خرائط الترحيل المحاسبي', targetTab: 'account_mappings', icon: Link2, badge: canonicalMappingsReady && canonicalFinancialWriteMode !== 'snapshot_read_only' ? 'جاهز' : 'يحتاج استكمالاً' },
+        { id: 'account_mappings', label: 'خرائط الترحيل المحاسبي', targetTab: 'account_mappings', icon: Link2, badge: canonicalMappingsReady ? (canonicalFinancialWriteMode === 'snapshot_read_only' ? 'مكتمل • كتابة مقفلة' : 'جاهز') : 'يحتاج استكمالاً' },
         { id: 'governance', label: 'السياسات المالية', targetTab: 'governance', icon: CheckCircle2, badge: 'نشط' },
         { id: 'closing', label: 'إقفال السنة', targetTab: 'closing', icon: LockIcon },
         { id: 'calc_tools', label: 'أدوات الحسبة', targetTab: 'calc_tools', icon: Calculator },
@@ -3398,7 +3398,7 @@ export default function GeneralLedgerPortal({
                 </p>
                 <div className="mt-4 pt-3 border-t border-slate-100 flex justify-between items-center text-[10px]">
                   <span className="text-slate-400 font-bold">الحالة التشغيلية:</span>
-                  <span className="text-emerald-600 font-black bg-emerald-50 px-2 py-0.5 rounded">✅ جاهز 100% للربط متعدد الفروع</span>
+                  <span className="text-amber-700 font-black bg-amber-50 px-2 py-0.5 rounded">تصميم متعدد الفروع متاح؛ ربط البيانات غير متحقق</span>
                 </div>
               </div>
 

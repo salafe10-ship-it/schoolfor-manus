@@ -176,7 +176,7 @@ export const LedgerDashboardTab = () => {
                   <div className="text-2xl font-black text-amber-600 tracking-tight" dir="ltr">
                     {formatCurrency(financialTotals.liquidity, false)}
                   </div>
-                  <span className="text-[9px] text-amber-600 font-bold">{dashboardFinancialsAreCanonical ? '💳 متاح للصرف والتحكم اليومي' : '⛔ لا يُسمح بالصرف — المصدر للقراءة فقط'}</span>
+                  <span className="text-[9px] text-amber-600 font-bold">{dashboardFinancialsAreCanonical ? 'رصيد دفتر الأستاذ؛ تحقق من صلاحية الصرف والمطابقة' : '⛔ لا يُسمح بالصرف — المصدر للقراءة فقط'}</span>
                 </div>
               </div>
             </div>
@@ -195,9 +195,9 @@ export const LedgerDashboardTab = () => {
                   {/* Item 1 */}
                   <div className="flex justify-between items-center py-3">
                     <span className="text-slate-600 font-semibold">• توازن ميزان المراجعة :</span>
-                    <span className={`flex items-center gap-1.5 font-bold px-2.5 py-1 rounded-md border ${dashboardFinancialsAreCanonical ? 'text-emerald-600 bg-emerald-50 border-emerald-100' : 'text-amber-700 bg-amber-50 border-amber-200'}`}>
-                      <span className={`w-1.5 h-1.5 rounded-full ${dashboardFinancialsAreCanonical ? 'bg-emerald-500' : 'bg-amber-500'}`} />
-                      {dashboardFinancialsAreCanonical ? 'متوازن ✓' : 'غير متحقق — قراءة فقط'}
+                    <span className="flex items-center gap-1.5 rounded-md border border-amber-200 bg-amber-50 px-2.5 py-1 font-bold text-amber-700">
+                      <span className="h-1.5 w-1.5 rounded-full bg-amber-500" />
+                      غير متحقق — يلزم فحص ميزان المراجعة
                     </span>
                   </div>
 
@@ -205,15 +205,15 @@ export const LedgerDashboardTab = () => {
                   <div className="flex justify-between items-center py-3">
                     <span className="text-slate-600 font-semibold">• العمليات غير المرحلة :</span>
                     <span className="text-slate-500 font-bold bg-slate-50 px-2.5 py-1 rounded-md border border-slate-100">
-                      لا يوجد
+                      غير متحقق — يلزم مراجعة القيود غير المرحلة
                     </span>
                   </div>
 
                   {/* Item 3 */}
                   <div className="flex justify-between items-center py-3">
                     <span className="text-slate-600 font-semibold">• اتجاه المصروفات الزائدة :</span>
-                    <span className={`font-bold px-2.5 py-1 rounded-md border ${dashboardFinancialsAreCanonical ? 'text-emerald-700 bg-emerald-50 border-emerald-100' : 'text-amber-700 bg-amber-50 border-amber-200'}`}>
-                      {dashboardFinancialsAreCanonical ? 'ضمن النطاق المعتمد' : 'غير متحقق'}
+                    <span className="rounded-md border border-amber-200 bg-amber-50 px-2.5 py-1 font-bold text-amber-700">
+                      غير متحقق — يلزم ربط موازنة معتمدة
                     </span>
                   </div>
 

@@ -72,9 +72,12 @@ export const CustomersLedgerTab = () => {
 
   const invoiceTotalsByStudent = new Map<string, number>();
   (Array.isArray(invoices) ? invoices : []).forEach((invoice: any) => {
-    const studentId = invoice?.studentId;
+    const studentId = String(invoice?.studentId || '').trim();
     if (!studentId) return;
-    const remaining = Number(invoice.remainingAmount ?? invoice.balanceDue ?? invoice.amount ?? 0);
+    if (['paid', 'cancelled', 'canceled', 'void', 'refunded', 'written_off'].includes(String(invoice?.status || '').trim().toLowerCase())) return;
+    const explicitRemaining = invoice.remainingAmount ?? invoice.balanceDue;
+    const grossAmount = Number(invoice.amount || 0) + Number(invoice.taxAmount || 0);
+    const remaining = Number(explicitRemaining ?? Math.max(0, grossAmount - Number(invoice.paidAmount || 0)));
     if (!Number.isFinite(remaining)) return;
     invoiceTotalsByStudent.set(studentId, (invoiceTotalsByStudent.get(studentId) || 0) + Math.max(0, remaining));
   });
@@ -100,8 +103,10 @@ export const CustomersLedgerTab = () => {
                   </tr>
                 </thead>
                 <tbody className="divide-y divide-slate-100 font-semibold text-slate-800">
-                  {students.map(s => {
-                    const dueAmt = invoiceTotalsByStudent.get(s.id);
+                  {students.length === 0 ? (
+                    <tr><td colSpan={5} className="px-6 py-8 text-center text-slate-500">لا توجد سجلات طلاب مستلمة من المصدر المرتبط؛ تعذر إعداد كشف الذمم.</td></tr>
+                  ) : students.map(s => {
+                    const dueAmt = invoiceTotalsByStudent.get(String(s.id));
                     return (
                       <tr key={s.id} className="hover:bg-slate-50/70">
                         <td className="px-6 py-3 font-mono font-black text-indigo-700">{s.academicId || '—'}</td>

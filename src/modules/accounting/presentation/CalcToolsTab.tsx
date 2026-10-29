@@ -118,7 +118,10 @@ export const CalcToolsTab = () => {
               {/* Card 2: Currency converter */}
               <div className="bg-white rounded-2xl border border-slate-200 p-6 flex flex-col justify-between shadow-xs">
                 <div className="space-y-4">
-                  <h3 className="font-extrabold text-sm text-slate-900">محول أسعار الصرف للعملة الأجنبية والمحلية</h3>
+                  <h3 className="font-extrabold text-sm text-slate-900">محول تقديري للعملات — لا يستخدم للقيد المحاسبي</h3>
+                  <p className="rounded-lg border border-amber-200 bg-amber-50 p-3 text-[11px] leading-5 text-amber-900">
+                    يستخدم هذا المحول معاملات ثابتة داخل الأداة، ولا يمثل سعر صرف حاليًا أو معتمدًا. لا تستخدم نتيجته في قيد أو تسوية؛ اعتمد سعرًا موثقًا بتاريخ العملية من مصدر المدرسة المالي.
+                  </p>
                   
                   <div className="space-y-3">
                     <div>

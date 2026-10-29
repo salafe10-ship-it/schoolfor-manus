@@ -93,7 +93,9 @@ export function AccountMappingsTab({
             <p className="mt-1 text-xs text-slate-300">اربط كل مصدر بحساب فرعي نشط قبل فتح الكتابة المالية. لا ينشئ هذا الإجراء قيداً ولا يغير أرصدة.</p>
           </div>
           <span className={`rounded-full border px-3 py-1 text-xs font-black ${readiness.ready ? 'border-emerald-300/40 bg-emerald-500/15 text-emerald-200' : 'border-amber-300/40 bg-amber-500/15 text-amber-100'}`}>
-            {readiness.ready ? 'الربط مكتمل' : readiness.schemaReady ? 'الربط يحتاج استكمالاً' : 'دفتر الأستاذ غير مهيأ'}
+            {readiness.ready
+              ? canWrite ? 'الخرائط مكتملة والكتابة متاحة' : 'الخرائط مكتملة؛ الكتابة المالية مقفلة'
+              : readiness.schemaReady ? 'الربط يحتاج استكمالاً' : 'دفتر الأستاذ غير مهيأ'}
           </span>
         </div>
       </section>

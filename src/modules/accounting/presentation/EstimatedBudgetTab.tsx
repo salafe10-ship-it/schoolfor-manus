@@ -71,15 +71,6 @@ export const EstimatedBudgetTab = () => {
   isAccountOrDescendant, getProcessedAccounts,
   formatCurrency, triggerNotification
 } = React.useContext(AccountingContext);
-  const performanceData = [
-    { month: 'يناير', real: 15000, estimated: 14000, cumulativeReal: 15000, cumulativeEst: 14000 },
-    { month: 'فبراير', real: 28000, estimated: 29000, cumulativeReal: 43000, cumulativeEst: 43000 },
-    { month: 'مارس', real: 42000, estimated: 45000, cumulativeReal: 85000, cumulativeEst: 88000 },
-    { month: 'أبريل', real: 60000, estimated: 58000, cumulativeReal: 145000, cumulativeEst: 146000 },
-    { month: 'مايو', real: 85000, estimated: 80000, cumulativeReal: 230000, cumulativeEst: 226000 },
-    { month: 'يونيو', real: 110000, estimated: 105000, cumulativeReal: 340000, cumulativeEst: 331000 },
-  ];
-
   return (
     <>
       {activeTab === 'estimated_budget' && (
@@ -102,7 +93,12 @@ export const EstimatedBudgetTab = () => {
             </div>
 
             <div className="grid grid-cols-1 md:grid-cols-2 gap-6">
-              {budgets.map(b => (
+              {budgets.length === 0 ? (
+                <div role="status" className="md:col-span-2 rounded-xl border border-amber-200 bg-amber-50 p-6 text-center">
+                  <p className="text-sm font-black text-amber-900">لا توجد بيانات موازنة سنوية مرتبطة بهذه المدرسة.</p>
+                  <p className="mt-2 text-xs text-amber-800">لن تُعرض قيم أو نسب أداء بديلة. أضف الموازنة المعتمدة أو تحقق من ربط بيانات المدرسة قبل اعتماد هذا التقرير.</p>
+                </div>
+              ) : budgets.map(b => (
                 <div key={b.id} className="bg-white rounded-xl border border-slate-200 p-5 shadow-xs space-y-4">
                   <div className="flex justify-between items-center border-b border-slate-100 pb-2">
                     <span className="font-extrabold text-slate-900 mt-1">{b.category}</span>
