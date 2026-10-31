@@ -15,11 +15,7 @@
   },
   "routes": [
     {
-      "pattern": "abdalsalamsoft.com",
-      "custom_domain": true
-    },
-    {
-      "pattern": "*.abdalsalamsoft.com/*",
+      "pattern": "modern-family-schools.abdalsalamsoft.com/*",
       "zone_name": "abdalsalamsoft.com"
     }
   ],
