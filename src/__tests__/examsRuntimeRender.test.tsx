@@ -984,7 +984,7 @@ describe('ExamsResultsModule runtime', () => {
       };
     }));
 
-    render(
+    const { container } = render(
       <ExamsResultsModule
         students={[student] as any}
         teachers={[]}
@@ -1008,6 +1008,18 @@ describe('ExamsResultsModule runtime', () => {
     expect(studentRow?.textContent).toContain('50%');
     expect(studentRow?.textContent).toContain('راسب (بسبب الغياب)');
     expect(studentRow?.textContent).not.toContain('ناجح');
+
+    fireEvent.click(screen.getByRole('button', { name: 'مراجعة وتعديل الدرجات (ملف الطالب الفردي)' }));
+    const absentStudentReview = await screen.findByRole('button', { name: /طالب غائب مع نتيجة مرتفعة/ });
+    expect(absentStudentReview.textContent).toContain('راسب (بسبب الغياب)');
+    expect(screen.getByText('النتيجة: راسب (بسبب الغياب)')).toBeTruthy();
+
+    fireEvent.click(screen.getByRole('button', { name: 'كشف الدرجات العام (شامل المجموعات)' }));
+    expect(await screen.findByText('راسب (بسبب الغياب)')).toBeTruthy();
+
+    await openExamTab(container, 'processing');
+    const processedAbsentRow = screen.getByText(student.name).closest('tr');
+    expect(processedAbsentRow?.textContent).toContain('راسب (بسبب الغياب)');
   });
 
   it('does not claim the grade sheet was saved when the central source is unavailable', async () => {

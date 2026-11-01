@@ -13,7 +13,7 @@ describe('exam print output safety', () => {
 
     expect(report).toContain('const schoolName = escapeHtml(selectedSchool?.name ||');
     expect(report).toContain('const reportTitle = escapeHtml(title);');
-    for (const field of ['seatNumber', 'name', 'classroom', 'totalEarned', 'totalMax', 'percentage', 'gradeSymbol', 'status']) {
+    for (const field of ['seatNumber', 'name', 'classroom', 'totalEarned', 'totalMax', 'percentage', 'gradeSymbol', 'statusLabel']) {
       expect(report).toContain(`escapeHtml(st.${field})`);
     }
     expect(report).not.toContain('${st.name}');
