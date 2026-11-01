@@ -158,6 +158,13 @@ const getScheduleRulesError = (config: any): string => {
   return '';
 };
 
+const getExamResultDisplayLabel = (resultStatus: string, absentCount = 0): string => {
+  if (resultStatus !== 'راسب' || absentCount <= 0) return resultStatus;
+  return absentCount === 1
+    ? 'راسب (بسبب الغياب)'
+    : `راسب (بسبب الغياب في ${absentCount} مواد)`;
+};
+
 interface ExamModuleProps {
   students: Student[];
   teachers: Teacher[];
@@ -1233,6 +1240,7 @@ export default function ExamsResultsModule({
 
     return canonicalResults.map(result => {
       const st = studentsById.get(result.studentId)!;
+      const absentCount = result.failedSubjects.filter(subject => subject.reason === 'absent').length;
       // Historical performance and attendance require canonical sources. Do
       // not derive either value from the student id or fabricate a warning.
       const previousYearGPA: number | null = null;
@@ -1264,6 +1272,8 @@ export default function ExamsResultsModule({
         percentage: result.percentage,
         gradeSymbol: result.gradeSymbol === 'ممتاز' ? 'ممتاز 🏅' : result.gradeSymbol === 'ضعيف' ? 'ضعيف ❌' : result.gradeSymbol,
         status: result.status === 'passed' ? 'ناجح' : result.status === 'failed' ? 'راسب' : 'غير مكتمل',
+        statusLabel: getExamResultDisplayLabel(result.status === 'passed' ? 'ناجح' : result.status === 'failed' ? 'راسب' : 'غير مكتمل', absentCount),
+        absentCount,
         incompleteSubjectsCount: result.incompleteSubjectsCount,
         failedCount: result.failedSubjectsCount,
         failedSubjects: result.failedSubjects,
@@ -3106,7 +3116,7 @@ export default function ExamsResultsModule({
                   <td>${st.status === 'غير مكتمل' ? 'غير مكتمل' : `${escapeHtml(st.totalEarned)} / ${escapeHtml(st.totalMax)}`}</td>
                   <td>${st.status === 'غير مكتمل' ? 'غير مكتمل' : `${escapeHtml(st.percentage)}%`}</td>
                   <td>${escapeHtml(st.gradeSymbol)}</td>
-                  <td style="color: ${st.status === 'ناجح' ? 'green' : 'red'}; font-weight: bold;">${escapeHtml(st.status)}</td>
+                  <td style="color: ${st.status === 'ناجح' ? 'green' : 'red'}; font-weight: bold;">${escapeHtml(st.statusLabel)}</td>
                 </tr>
               `).join('')}
             </tbody>
@@ -8729,6 +8739,7 @@ export default function ExamsResultsModule({
                         {displayFilteredStudents.map(st => {
                           const m = getStudentReviewMetrics(st.id);
                           const isSelected = selectedStObj && selectedStObj.id === st.id;
+                          const resultLabel = getExamResultDisplayLabel(m.resultStatus, m.absentCount);
 
                           return (
                             <button
@@ -8759,7 +8770,7 @@ export default function ExamsResultsModule({
                                 <span className={`font-black ${
                                   isSelected ? 'text-white' : 'text-amber-700'
                                 }`}>
-                                  {m.percentage === null ? 'غير مكتمل' : `${m.percentage}%`} ({m.resultStatus})
+                                  {m.percentage === null ? 'غير مكتمل' : `${m.percentage}%`} ({resultLabel})
                                 </span>
                               </div>
                             </button>
@@ -8801,7 +8812,7 @@ export default function ExamsResultsModule({
                                       ? 'bg-emerald-500/20 text-emerald-300 border-emerald-500/30'
                                       : 'bg-rose-500/20 text-rose-300 border-rose-500/30'
                                   }`}>
-                                    ناجح / راسب: {m.resultStatus}
+                                  النتيجة: {getExamResultDisplayLabel(m.resultStatus, m.absentCount)}
                                   </span>
                                   <span className="px-2.5 py-1 bg-white/10 text-white border border-white/20 text-[10px] font-black">
                                     المعدل: {m.percentage === null ? 'غير مكتمل' : `${m.percentage}%`}
@@ -8973,6 +8984,7 @@ export default function ExamsResultsModule({
               let pass = true;
               let failedSubjectsCount = 0;
               let pendingCount = 0;
+              let absentCount = 0;
 
               subjects.forEach(sub => {
                 let mark = bulkDraftGrades[studentId]?.[sub.id];
@@ -8983,6 +8995,7 @@ export default function ExamsResultsModule({
                 const reviewedStudent = studentList.find(student => String(student.id) === String(studentId));
                 const attendance = getExamAttendanceStatus(reviewedStudent || {}, sub.id);
                 if (attendance === 'absent') {
+                  absentCount++;
                   mark = 0;
                   pass = false;
                   failedSubjectsCount++;
@@ -9010,7 +9023,7 @@ export default function ExamsResultsModule({
               else if (formattedPercent !== null && formattedPercent >= 65) gradeSymbol = 'جيد';
               else if (formattedPercent !== null && formattedPercent < 50) gradeSymbol = 'ضعيف ❌';
 
-              const resultStatus = !isComplete ? 'غير مكتمل' : pass ? 'ناجح' : 'راسب';
+              const resultStatus = !isComplete ? 'غير مكتمل' : pass && absentCount === 0 ? 'ناجح' : 'راسب';
 
               return {
                 totalScore,
@@ -9020,7 +9033,8 @@ export default function ExamsResultsModule({
                 resultStatus,
                 failedSubjectsCount,
                 pendingCount,
-                isComplete
+                isComplete,
+                absentCount
               };
             };
 
@@ -9088,7 +9102,7 @@ export default function ExamsResultsModule({
                   !m.isComplete ? 'غير مكتمل' : m.totalScore,
                   `"${m.percentage === null ? 'غير مكتمل' : `${m.percentage}%`}"`,
                   `"${m.gradeSymbol}"`,
-                  `"${m.resultStatus}"`,
+                  `"${getExamResultDisplayLabel(m.resultStatus, m.absentCount)}"`,
                   `"${lastMod}"`
                 ].join(",");
               });
@@ -9461,6 +9475,7 @@ export default function ExamsResultsModule({
                         <tbody className="divide-y divide-amber-900/10 bg-white/60 backdrop-blur-sm rounded-b-2xl">
                           {displayFilteredStudents.map((st, idx) => {
                             const m = getStudentReviewMetrics(st.id);
+                            const resultLabel = getExamResultDisplayLabel(m.resultStatus, m.absentCount);
                             const lastMod = gradesLastModified[st.id] || 'لا توجد تعديلات';
                             const rowBgClass = "hover:bg-transparent transition-colors group";
 
@@ -9547,7 +9562,7 @@ export default function ExamsResultsModule({
                                         ? 'bg-rose-50 text-rose-700 border-rose-100'
                                         : 'bg-amber-50 text-amber-700 border-amber-100'
                                   }`}>
-                                    {m.resultStatus}
+                                    {resultLabel}
                                   </span>
                                 </td>
 
@@ -9852,7 +9867,7 @@ export default function ExamsResultsModule({
                               ? 'bg-emerald-100 text-emerald-800 border border-emerald-200'
                               : 'bg-red-100 text-red-800 border border-red-200'
                           }`}>
-                            {st.status}
+                            {st.statusLabel}
                           </span>
                         </td>
                       </tr>
