@@ -11,6 +11,11 @@ const projectRoot = path.dirname(fileURLToPath(import.meta.url));
 export default defineConfig(() => {
   return {
     plugins: [react(), tailwindcss()],
+    // Let browser-side persistence guards distinguish an isolated local
+    // Staging runtime from an ordinary localhost demo with no database.
+    define: {
+      __EDUPRO_ENVIRONMENT__: JSON.stringify(process.env.EDUPRO_ENVIRONMENT || ''),
+    },
     resolve: {
       alias: {
         '@': projectRoot,

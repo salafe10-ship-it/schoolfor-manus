@@ -1,4 +1,4 @@
-import { cleanup, fireEvent, render, screen, waitFor } from '@testing-library/react';
+import { cleanup, fireEvent, render, screen, waitFor, within } from '@testing-library/react';
 import { describe, expect, it, vi } from 'vitest';
 import ExamsResultsModule from '../components/ExamsResultsModule';
 import { readSpreadsheetMatrix } from '../utils/ExcelWorkbookUtils';
@@ -946,6 +946,70 @@ describe('ExamsResultsModule runtime', () => {
     expect(postCount).toBe(0);
   });
 
+  it('uses canonical final results and labels an absent subject without fabricating a zero mark', async () => {
+    cleanup();
+    localStorage.setItem('exams_active_tab', 'grades-entry');
+    const student = {
+      id: 'student-absent-test-1', name: 'طالب غائب مع نتيجة مرتفعة', classroom: 'صف اختبار الغياب',
+      section: 'أ', academicYear: '2026-2027', status: 'active', seatNumber: 42001,
+      hallId: 'hall-absent-test-1', examAttendance: {
+        'subject-absent-test-1': 'absent',
+        'subject-absent-test-2': 'present'
+      }
+    };
+    vi.stubGlobal('fetch', vi.fn().mockImplementation(async (input: RequestInfo | URL) => {
+      const url = String(input);
+      if (url.startsWith('/api/students')) {
+        return { ok: true, json: async () => ({ success: true, data: [student], meta: { hasNext: false } }) };
+      }
+      return {
+        ok: true,
+        json: async () => ({
+          success: true,
+          data: {
+            exams_settings: { academicYear: '2026-2027', semester: 'الفصل الأول', examType: 'الاختبارات النهائية', passMarkPercent: 50 },
+            exams_classes_list: [{ id: 'class-absent-test-1', name: student.classroom, level: 'secondary', sections: ['أ'], capacity: 20 }],
+            exams_subjects: [
+              { id: 'subject-absent-test-1', name: 'مادة غائب اختبارية', maxScore: 100, passScore: 50 },
+              { id: 'subject-absent-test-2', name: 'مادة حاضرة اختبارية', maxScore: 100, passScore: 50 }
+            ],
+            exams_students_enriched: [student],
+            exams_grades_matrix: { [student.id]: { 'subject-absent-test-2': 100 } },
+            exams_halls: [{ id: 'hall-absent-test-1', name: 'قاعة اختبار', capacity: 20 }],
+            exams_schedule: [],
+            exams_schedule_approval_status: { approved: false }
+          },
+          meta: { version: 1 }
+        })
+      };
+    }));
+
+    render(
+      <ExamsResultsModule
+        students={[student] as any}
+        teachers={[]}
+        classes={[]}
+        triggerNotification={vi.fn()}
+        setActiveSection={vi.fn()}
+        selectedSchool={{ id: 'school-1', name: 'مدرسة اختبار الغياب', academicYear: '2026-2027' }}
+        currentRole="SchoolAdmin"
+      />,
+    );
+
+    const absentGradeInput = await screen.findByRole('spinbutton', { name: 'درجة طالب غائب مع نتيجة مرتفعة في مادة غائب اختبارية' }) as HTMLInputElement;
+    const studentRow = screen.getByText(student.name).closest('tr');
+    expect(studentRow).not.toBeNull();
+    const row = within(studentRow!);
+    expect(row.getByRole('spinbutton', { name: 'درجة طالب غائب مع نتيجة مرتفعة في مادة غائب اختبارية' })).toBe(absentGradeInput);
+    expect(absentGradeInput.disabled).toBe(true);
+    expect(absentGradeInput.value).toBe('');
+    expect(absentGradeInput.placeholder).toBe('غياب');
+    expect(studentRow?.textContent).toContain('100');
+    expect(studentRow?.textContent).toContain('50%');
+    expect(studentRow?.textContent).toContain('راسب (بسبب الغياب)');
+    expect(studentRow?.textContent).not.toContain('ناجح');
+  });
+
   it('does not claim the grade sheet was saved when the central source is unavailable', async () => {
     cleanup();
     localStorage.setItem('exams_active_tab', 'grades-entry');
@@ -1261,9 +1325,10 @@ describe('ExamsResultsModule runtime', () => {
 
     await openExamTab(firstView.container, 'proctors');
     const proctorForm = screen.getByRole('button', { name: 'تأكيد التكليف والملاحظة' }).closest('form')!;
-    fireEvent.change(proctorForm.querySelector('select')!, { target: { value: 'معلم اختبار' } });
+    fireEvent.change(proctorForm.querySelector('select')!, { target: { value: 'teacher-test-1' } });
     fireEvent.click(screen.getByRole('button', { name: 'تأكيد التكليف والملاحظة' }));
     await waitFor(() => expect(database.exams_proctors).toHaveLength(1));
+    expect(database.exams_proctors[0]).toMatchObject({ teacherId: 'teacher-test-1', name: 'معلم اختبار' });
 
     await openExamTab(firstView.container, 'distribution');
     fireEvent.click(await screen.findByRole('button', { name: 'التوزيع التلقائي وتوليد الجلوس' }));
@@ -1280,8 +1345,8 @@ describe('ExamsResultsModule runtime', () => {
     fireEvent.change(scheduleSelects[0], { target: { value: 'صف اختبار' } });
     fireEvent.change(scheduleSelects[1], { target: { value: database.exams_subjects[0].id } });
     fireEvent.change(scheduleForm.querySelector('input[type="date"]')!, { target: { value: '2025-10-05' } });
-    fireEvent.change(screen.getByPlaceholderText('08:30'), { target: { value: '08:30' } });
-    fireEvent.change(screen.getByPlaceholderText('10:30'), { target: { value: '10:30' } });
+    fireEvent.change(screen.getByLabelText('وقت بدء الاختبار اليدوي'), { target: { value: '08:30' } });
+    fireEvent.change(screen.getByLabelText('وقت انتهاء الاختبار اليدوي'), { target: { value: '10:30' } });
     fireEvent.change(scheduleSelects[2], { target: { value: database.exams_halls[0].id } });
     fireEvent.change(scheduleSelects[3], { target: { value: 'teacher-test-1' } });
     fireEvent.click(scheduleFormButton);

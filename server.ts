@@ -8465,14 +8465,27 @@ export async function createApp(options: { cloudflare?: boolean } = {}): Promise
       order: Number(grade?.order || index + 1),
       isActive: grade?.isActive !== false
     })) : [];
-    const classes = Array.isArray(structure.classes) ? structure.classes.slice(0, 500).map((item: any, index: number) => ({
-      id: String(item?.id || `class_${index + 1}`).trim(),
-      gradeId: String(item?.gradeId || '').trim(),
-      code: normalizeCode(item?.code || `CLASS_${index + 1}`, `الشعبة رقم ${index + 1}`),
-      name: normalizeName(item?.name, `الشعبة رقم ${index + 1}`),
-      capacity: Math.max(1, Math.min(500, Number(item?.capacity || 30))),
-      isActive: item?.isActive !== false
-    })) : [];
+    const supportedLevels = new Set(['kindergarten', 'primary', 'middle', 'high']);
+    const classes = Array.isArray(structure.classes) ? structure.classes.slice(0, 500).map((item: any, index: number) => {
+      const classCode = normalizeCode(item?.code || `CLASS_${index + 1}`, `الشعبة رقم ${index + 1}`);
+      const explicitLevel = String(item?.level || '').trim().toLowerCase();
+      if (explicitLevel && !supportedLevels.has(explicitLevel)) {
+        throw new ValidationError(`المرحلة الأكاديمية المحددة للشعبة رقم ${index + 1} غير مدعومة.`);
+      }
+      const codeHasKnownLevel = /^(KG|PRI|MID|HIGH)/i.test(classCode);
+      if (item?.isActive !== false && !codeHasKnownLevel && !explicitLevel) {
+        throw new ValidationError(`حدد المرحلة الأكاديمية للشعبة ${String(item?.name || classCode).trim()} لأن رمزها لا يحدد المرحلة.`);
+      }
+      return {
+        id: String(item?.id || `class_${index + 1}`).trim(),
+        gradeId: String(item?.gradeId || '').trim(),
+        code: classCode,
+        name: normalizeName(item?.name, `الشعبة رقم ${index + 1}`),
+        ...(explicitLevel ? { level: explicitLevel } : {}),
+        capacity: Math.max(1, Math.min(500, Number(item?.capacity || 30))),
+        isActive: item?.isActive !== false
+      };
+    }) : [];
     const sections = Array.isArray(structure.sections)
       ? [...new Set(structure.sections.map((section: unknown) => String(section || '').trim()).filter(Boolean))].slice(0, 50)
       : [];
@@ -11422,20 +11435,41 @@ export async function createApp(options: { cloudflare?: boolean } = {}): Promise
           throw new ConflictError('تم تعديل سجلات الموارد البشرية بواسطة مستخدم آخر. أعد المزامنة قبل الحفظ.', { expectedVersion, actualVersion });
         }
         const actorId = canonicalActorId;
-        const { error: writeError } = await platformControl
-          .from('hr_database')
-          .update({
-            country_code: requestedCountryCode,
-            legal_configuration: requestedLegalConfiguration,
-            data: requestedData,
-            version: actualVersion + 1,
-            updated_at: new Date().toISOString(),
-            updated_by: actorId
-          })
-          .eq('tenant_id', tenantId)
-          .eq('school_id', schoolId)
-          .eq('version', actualVersion);
-        if (writeError) throw new DatabaseError('تعذر حفظ سجل الموارد البشرية المركزي.', writeError.message);
+        const nextVersion = actualVersion + 1;
+        const snapshotWrite = current
+          ? await platformControl
+            .from('hr_database')
+            .update({
+              country_code: requestedCountryCode,
+              legal_configuration: requestedLegalConfiguration,
+              data: requestedData,
+              version: nextVersion,
+              updated_at: new Date().toISOString(),
+              updated_by: actorId
+            })
+            .eq('tenant_id', tenantId)
+            .eq('school_id', schoolId)
+            .eq('version', actualVersion)
+            .select('version')
+            .maybeSingle()
+          : await platformControl
+            .from('hr_database')
+            .insert({
+              tenant_id: tenantId,
+              school_id: schoolId,
+              country_code: requestedCountryCode,
+              legal_configuration: requestedLegalConfiguration,
+              data: requestedData,
+              version: nextVersion,
+              updated_at: new Date().toISOString(),
+              updated_by: actorId
+            })
+            .select('version')
+            .maybeSingle();
+        if (snapshotWrite.error) throw new DatabaseError('تعذر حفظ سجل الموارد البشرية المركزي.', snapshotWrite.error.message);
+        if (!snapshotWrite.data || Number(snapshotWrite.data.version) !== nextVersion) {
+          throw new ConflictError('تغير سجل الموارد البشرية أثناء الحفظ. أعد تحميل البيانات قبل المحاولة مرة أخرى.', { expectedVersion, actualVersion });
+        }
         const { error: auditError } = await platformControl.from('audit_events').insert({
           tenant_id: tenantId,
           school_id: schoolId,
@@ -11447,10 +11481,10 @@ export async function createApp(options: { cloudflare?: boolean } = {}): Promise
           source: 'HrDatabaseRoute',
           reason: 'حفظ سجل الموارد البشرية',
           result: 'success',
-          metadata: { expectedVersion, actualVersion, nextVersion: actualVersion + 1, countryCode: requestedCountryCode }
+          metadata: { expectedVersion, actualVersion, nextVersion, countryCode: requestedCountryCode }
         });
         if (auditError) throw new DatabaseError('تم حفظ سجل الموارد البشرية دون اكتمال سجل التدقيق.', auditError.message);
-        res.json({ success: true, data: { updated: true }, meta: { version: actualVersion + 1 } });
+        res.json({ success: true, data: { updated: true }, meta: { version: nextVersion } });
         return;
       }
 

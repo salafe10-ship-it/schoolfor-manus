@@ -7,6 +7,22 @@ export const CLOUDFLARE_STAGING_WORKER_URL = 'https://schoolfor-manus-staging.sa
 export const STAGING_SUPABASE_PROJECT_REF = 'vjcjscqgmijgzagshsca';
 export const STAGING_TARGET_NAME = 'schoolfor-manus-staging';
 
+export function stagingPostgresConnectionOptions(connectionString: string) {
+  const url = new URL(connectionString);
+  if (!['postgres:', 'postgresql:'].includes(url.protocol)
+    || extractPostgresProjectRef(connectionString) !== STAGING_SUPABASE_PROJECT_REF
+    || !(url.hostname === `db.${STAGING_SUPABASE_PROJECT_REF}.supabase.co`
+      || /^[a-z0-9-]+\.pooler\.supabase\.com$/i.test(url.hostname))) {
+    throw new Error('STAGING_DATABASE_CONNECTION_TARGET_INVALID');
+  }
+  if ((url.searchParams.has('sslmode') && url.searchParams.get('sslmode') !== 'verify-full')
+    || url.searchParams.get('ssl') === 'false') {
+    throw new Error('STAGING_DATABASE_TLS_VERIFICATION_REQUIRED');
+  }
+  for (const key of ['sslmode', 'sslrootcert', 'sslcert', 'sslkey', 'uselibpqcompat', 'ssl']) url.searchParams.delete(key);
+  return { connectionString: url.toString() };
+}
+
 export function applyOnlyStagingEnvironmentValues(
   environment: Record<string, string | undefined>,
   stagingValues: Record<string, string>,

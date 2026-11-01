@@ -51,6 +51,20 @@ function storageWith(values: Record<string, string> = {}): SessionStorage {
 }
 
 describe('Wave 1B trusted session manager', () => {
+  it('accepts a successful slow login while retaining a bounded wait', async () => {
+    vi.useFakeTimers();
+    try {
+      const storage = storageWith();
+      const request = vi.fn(() => new Promise<SessionResponse>(resolve => {
+        setTimeout(() => resolve(response(true, sessionBody())), 12_000);
+      }));
+      const manager = new TrustedSessionManager(storage, request);
+      const login = manager.login('user@example.com', 'correct');
+      await vi.advanceTimersByTimeAsync(12_000);
+      await expect(login).resolves.toMatchObject({ id: 'user-1' });
+      expect(storage.getItem(trustedSessionStorageKeys.accessToken)).toBe('access-1');
+    } finally { vi.useRealTimers(); }
+  });
   it.each([9, -9])('uses server time with a device clock offset of %i hours, including after reload', async (hours) => {
     vi.useFakeTimers();
     try {

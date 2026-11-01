@@ -23,7 +23,15 @@ import ExamsCertificatesPanel from './exams/ExamsCertificatesPanel';
 import ExamsDistributionPanel from './exams/ExamsDistributionPanel';
 import ExamsAssessmentPanel from './exams/ExamsAssessmentPanel';
 import { StudentRepository } from './student-affairs/repository/StudentRepository';
-import { canAssignProctorForWeek, canAutoAssignExamProctors } from '../modules/exams/application/ExamSchedulingRules';
+import {
+  addExamDateOnlyDays,
+  canAssignProctorForWeek,
+  canAutoAssignExamProctors,
+  getExamDateOnlyWeekdayIndex,
+  getExamDateOnlyWeekdayName,
+  getSchedulingWeekKey,
+  parseExamDateOnly
+} from '../modules/exams/application/ExamSchedulingRules';
 import {
   AssessmentGradeProjection,
   AssessmentWorkflowState,
@@ -1270,6 +1278,7 @@ export default function ExamsResultsModule({
   };
 
   const processedStudents = computeStudentResults();
+  const processedStudentsById = new Map(processedStudents.map(student => [String(student.id), student]));
   const completedProcessedStudents = processedStudents.filter(student => student.status !== 'غير مكتمل');
   const passedProcessedStudents = completedProcessedStudents.filter(student => student.status === 'ناجح');
   const failedProcessedStudents = completedProcessedStudents.filter(student => student.status === 'راسب');
@@ -1683,7 +1692,12 @@ export default function ExamsResultsModule({
   };
 
   // 5. Proctor assignments
-  const [newProctor, setNewProctor] = useState({ name: '', hallId: halls[0]?.id || '', shift: 'الفترة الأولى' });
+  const [newProctor, setNewProctor] = useState({ teacherId: availableTeachers[0]?.id || '', hallId: halls[0]?.id || '', shift: 'الفترة الأولى' });
+  useEffect(() => {
+    if (!availableTeachers.some(teacher => teacher.id === newProctor.teacherId)) {
+      setNewProctor(current => ({ ...current, teacherId: availableTeachers[0]?.id || '' }));
+    }
+  }, [availableTeachers, newProctor.teacherId]);
   useEffect(() => {
     if (!halls.some(hall => hall.id === newProctor.hallId)) {
       setNewProctor(current => ({ ...current, hallId: halls[0]?.id || '' }));
@@ -1691,21 +1705,25 @@ export default function ExamsResultsModule({
   }, [halls, newProctor.hallId]);
   const handleAddProctor = async (e: React.FormEvent) => {
     e.preventDefault();
-    if (!newProctor.name.trim() || !newProctor.hallId) {
+    const selectedTeacher = availableTeachers.find(teacher => teacher.id === newProctor.teacherId);
+    if (!selectedTeacher || !newProctor.hallId) {
       triggerNotification('اختر مراقباً وقاعة صالحة قبل حفظ التكليف.', 'warning');
       return;
     }
 
     // Proctor Overlap Check for the same shift
-    const hasConflict = proctorAssignments.some(pa => pa.name === newProctor.name && pa.shift === newProctor.shift);
+    const hasConflict = proctorAssignments.some(pa => (
+      pa.teacherId === selectedTeacher.id || (!pa.teacherId && pa.name === selectedTeacher.name)
+    ) && pa.shift === newProctor.shift);
     if (hasConflict) {
-      triggerNotification(`تنبيه: المراقب ${newProctor.name} مكلف بالفعل بمراقبة لجنة أخرى خلال ${newProctor.shift}!`, 'warning');
+      triggerNotification(`تنبيه: المراقب ${selectedTeacher.name} مكلف بالفعل بمراقبة لجنة أخرى خلال ${newProctor.shift}!`, 'warning');
       return;
     }
 
     const item = {
       id: `pa-${Date.now()}`,
-      name: newProctor.name,
+      teacherId: selectedTeacher.id,
+      name: selectedTeacher.name,
       hallId: newProctor.hallId,
       shift: newProctor.shift
     };
@@ -1716,7 +1734,7 @@ export default function ExamsResultsModule({
       return;
     }
     setProctorAssignments(updatedProctors);
-    setNewProctor({ name: '', hallId: halls[0]?.id || '', shift: 'الفترة الأولى' });
+    setNewProctor({ teacherId: availableTeachers[0]?.id || '', hallId: halls[0]?.id || '', shift: 'الفترة الأولى' });
     triggerNotification(`تم تكليف المراقب ${item.name} للمراقبة`, 'success');
     logAction(`تكليف مراقب جديد: ${item.name}`, 'المراقبون والملاحظون');
   };
@@ -1955,6 +1973,11 @@ export default function ExamsResultsModule({
   const [selectedGradeYear, setSelectedGradeYear] = useState(examSettings.academicYear);
   const [selectedGradeSemester, setSelectedGradeSemester] = useState(examSettings.semester);
   const [selectedGradeExamType, setSelectedGradeExamType] = useState(examSettings.examType);
+  useEffect(() => {
+    setSelectedGradeYear(examSettings.academicYear);
+    setSelectedGradeSemester(examSettings.semester);
+    setSelectedGradeExamType(examSettings.examType);
+  }, [examSettings.academicYear, examSettings.semester, examSettings.examType]);
   const [selectedGradeLevel, setSelectedGradeLevel] = useState('الكل');
   const [selectedGradeClass, setSelectedGradeClass] = useState('الكل');
   const [selectedGradeSection, setSelectedGradeSection] = useState('الكل');
@@ -5123,14 +5146,15 @@ export default function ExamsResultsModule({
                   <div className="space-y-1.5">
                     <label className="text-xs font-bold text-amber-200 block">المعلم / الموظف:</label>
                     <select
-                      value={newProctor.name}
-                      onChange={(e) => setNewProctor({...newProctor, name: e.target.value})}
+                      value={newProctor.teacherId}
+                      onChange={(e) => setNewProctor({...newProctor, teacherId: e.target.value})}
                       className="w-full text-xs font-semibold p-2.5 bg-[#130b04] border border-[#d4af37]/40 text-amber-100 focus:ring-2 focus:ring-[#d4af37]/30 outline-none transition-all"
                       required
+                      disabled={availableTeachers.length === 0}
                     >
-                      <option value="">-- اختر معلماً --</option>
+                      <option value="">-- اختر موظفاً نشطاً --</option>
                       {availableTeachers.map(t => (
-                        <option key={t.id} value={t.name}>{t.name} ({t.specialization})</option>
+                        <option key={t.id} value={t.id}>{t.name} ({t.specialization})</option>
                       ))}
                     </select>
                   </div>
@@ -5277,11 +5301,12 @@ export default function ExamsResultsModule({
                               <div className="grid grid-cols-1 sm:grid-cols-3 gap-2">
                                 <select
                                   className="text-xs p-1 border border-[#d4af37]/40 rounded bg-[#130b04] font-semibold text-amber-100 w-full"
-                                  value={editingValues.name}
-                                  onChange={(e) => setEditingValues({ ...editingValues, name: e.target.value })}
+                                  value={editingValues.teacherId}
+                                  onChange={(e) => setEditingValues({ ...editingValues, teacherId: e.target.value })}
+                                  required
                                 >
                                   {availableTeachers.map(t => (
-                                    <option key={t.id} value={t.name}>{t.name} ({t.specialization})</option>
+                                    <option key={t.id} value={t.id}>{t.name} ({t.specialization})</option>
                                   ))}
                                 </select>
                                 <select
@@ -5305,18 +5330,27 @@ export default function ExamsResultsModule({
                               <div className="flex gap-1.5 justify-end">
                                 <button
                                   onClick={async () => {
-                                    const hasConflict = proctorAssignments.some(p => p.id !== pa.id && p.name === editingValues.name && p.shift === editingValues.shift);
-                                    if (!editingValues.name || !editingValues.hallId || hasConflict) {
+                                    const selectedTeacher = availableTeachers.find(teacher => teacher.id === editingValues.teacherId);
+                                    const hasConflict = proctorAssignments.some(p => p.id !== pa.id && (
+                                      p.teacherId === editingValues.teacherId || (!p.teacherId && p.name === selectedTeacher?.name)
+                                    ) && p.shift === editingValues.shift);
+                                    if (!selectedTeacher || !editingValues.hallId || hasConflict) {
                                       triggerNotification(hasConflict ? 'تعذر التعديل: المراقب مكلف في الفترة نفسها.' : 'اختر المراقب والقاعة قبل الحفظ.', 'warning');
                                       return;
                                     }
-                                    const updatedProctors = proctorAssignments.map(p => p.id === pa.id ? { ...p, ...editingValues } : p);
+                                    const updatedProctors = proctorAssignments.map(p => p.id === pa.id ? {
+                                      ...p,
+                                      teacherId: selectedTeacher.id,
+                                      name: selectedTeacher.name,
+                                      hallId: editingValues.hallId,
+                                      shift: editingValues.shift
+                                    } : p);
                                     const persisted = await saveToServerDb(examSettings, halls, subjects, studentList, gradesMatrix, schedule, updatedProctors, approvalStatus, auditLogs, classesList);
                                     if (!persisted) return;
                                     setProctorAssignments(updatedProctors);
                                     setEditingEntityId(null);
                                     triggerNotification('تم تحديث بيانات تكليف الملاحظ بنجاح', 'success');
-                                    logAction(`تعديل تكليف الملاحظ: ${editingValues.name}`, 'المراقبون والملاحظون');
+                                    logAction(`تعديل تكليف الملاحظ: ${selectedTeacher.name}`, 'المراقبون والملاحظون');
                                   }}
                                   className="px-2 py-1 bg-emerald-700 hover:bg-emerald-600 text-white text-[10px] rounded font-bold cursor-pointer"
                                 >
@@ -5343,7 +5377,9 @@ export default function ExamsResultsModule({
                                 <button
                                   onClick={() => {
                                     setEditingEntityId(pa.id);
-                                    setEditingValues({ name: pa.name, hallId: pa.hallId, shift: pa.shift });
+                                    const linkedTeacher = availableTeachers.find(teacher => teacher.id === pa.teacherId);
+                                    const matchingTeachers = availableTeachers.filter(teacher => teacher.name === pa.name);
+                                    setEditingValues({ teacherId: linkedTeacher?.id || (matchingTeachers.length === 1 ? matchingTeachers[0].id : ''), hallId: pa.hallId, shift: pa.shift });
                                   }}
                                   className="p-1 text-amber-300 hover:bg-[#130b04] rounded cursor-pointer"
                                   title="تعديل التكليف"
@@ -5454,7 +5490,12 @@ export default function ExamsResultsModule({
             }
 
             const startStr = currentScheduleConfig.startDate;
-            let currentDate = new Date(startStr);
+            const parsedStartDate = parseExamDateOnly(startStr);
+            if (!parsedStartDate) {
+              triggerNotification('تاريخ بدء الامتحانات غير صالح. أدخل تاريخاً صحيحاً قبل التكوين.', 'warning');
+              return;
+            }
+            let currentDate = parsedStartDate;
             const generatedSchedule: any[] = [];
             const examDatesByClass = new Map<string, string[]>();
             const weeklyExamCountByClass = new Map<string, number>();
@@ -5473,26 +5514,24 @@ export default function ExamsResultsModule({
               dayLoopLimit++;
 
               // Get day details
-              const dayOfWeek = currentDate.getDay(); // 0=Sunday, 1=Monday... 6=Saturday
+              const dayOfWeek = currentDate.getUTCDay(); // 0=Sunday, 1=Monday... 6=Saturday
               // Check if weekend (e.g. Friday index 5, Saturday index 6)
               const isWeekend = currentScheduleConfig.holidayDays.includes(dayOfWeek);
               const dateString = currentDate.toISOString().split('T')[0];
               const isHoliday = currentScheduleConfig.customHolidays.includes(dateString);
 
               if (isWeekend || isHoliday) {
-                currentDate.setDate(currentDate.getDate() + 1);
+                currentDate = addExamDateOnlyDays(currentDate, 1);
                 continue;
               }
 
-              const dayName = ['الأحد', 'الإثنين', 'الثلاثاء', 'الأربعاء', 'الخميس', 'الجمعة', 'السبت'][currentDate.getDay()];
+              const dayName = getExamDateOnlyWeekdayName(dateString);
 
               // Track bookings in each slot for today
               const bookedHallsToday = new Map<string, string[]>(); // slotId -> hallIds
               const bookedProctorsToday = new Map<string, string[]>(); // slotId -> proctorIds
               const scheduledClassCountToday = new Map<string, number>();
-              const weekStart = new Date(currentDate);
-              weekStart.setDate(currentDate.getDate() - currentDate.getDay());
-              const weekKey = weekStart.toISOString().split('T')[0];
+              const weekKey = getSchedulingWeekKey(dateString);
 
               // For each time period/slot
               for (const slot of currentScheduleConfig.dailySlots) {
@@ -5608,7 +5647,7 @@ export default function ExamsResultsModule({
               }
 
               // Advance to next day
-              currentDate.setDate(currentDate.getDate() + 1);
+            currentDate = addExamDateOnlyDays(currentDate, 1);
             }
 
             const persisted = await saveToServerDb(
@@ -5682,9 +5721,17 @@ export default function ExamsResultsModule({
               return;
             }
 
-            const manualDate = new Date(`${manualExam.date}T12:00:00`);
-            const dayOfWeek = manualDate.getDay();
-            const dayName = ['الأحد', 'الإثنين', 'الثلاثاء', 'الأربعاء', 'الخميس', 'الجمعة', 'السبت'][dayOfWeek];
+            const manualDate = parseExamDateOnly(manualExam.date);
+            if (!manualDate) {
+              triggerNotification('تاريخ الامتحان المحدد غير صالح.', 'warning');
+              return;
+            }
+            const dayOfWeek = getExamDateOnlyWeekdayIndex(manualExam.date);
+            if (dayOfWeek === null) {
+              triggerNotification('تاريخ الامتحان المحدد غير صالح.', 'warning');
+              return;
+            }
+            const dayName = getExamDateOnlyWeekdayName(manualExam.date);
             if (scheduleConfig.holidayDays.includes(dayOfWeek) || scheduleConfig.customHolidays.includes(manualExam.date)) {
               triggerNotification('تعذر الإضافة: التاريخ المحدد يوم إجازة في قواعد الجدولة.', 'warning');
               return;
@@ -5709,13 +5756,13 @@ export default function ExamsResultsModule({
               return;
             }
             const weekStart = new Date(manualDate);
-            weekStart.setDate(manualDate.getDate() - manualDate.getDay());
+            weekStart.setUTCDate(manualDate.getUTCDate() - dayOfWeek);
             const weekEnd = new Date(weekStart);
-            weekEnd.setDate(weekStart.getDate() + 6);
+            weekEnd.setUTCDate(weekStart.getUTCDate() + 6);
             const examsForClassInWeek = schedule.filter(existing => {
               if (existing.classroom !== manualExam.classroom) return false;
-              const existingDate = new Date(`${existing.date}T12:00:00`);
-              return existingDate >= weekStart && existingDate <= weekEnd;
+              const existingDate = parseExamDateOnly(existing.date);
+              return Boolean(existingDate && existingDate >= weekStart && existingDate <= weekEnd);
             }).length;
             if (examsForClassInWeek >= scheduleConfig.examsPerWeek) {
               triggerNotification('تعذر الإضافة: بلغ الصف الحد الأقصى للامتحانات الأسبوعية.', 'warning');
@@ -5723,7 +5770,9 @@ export default function ExamsResultsModule({
             }
             const violatesGap = examsForClassOnDay === 0 && schedule.some(existing => {
               if (existing.classroom !== manualExam.classroom) return false;
-              const differenceDays = Math.abs(Math.round((manualDate.getTime() - new Date(`${existing.date}T12:00:00`).getTime()) / 86_400_000));
+              const existingDate = parseExamDateOnly(existing.date);
+              if (!existingDate) return false;
+              const differenceDays = Math.abs(Math.round((manualDate.getTime() - existingDate.getTime()) / 86_400_000));
               return differenceDays > 0 && differenceDays <= scheduleConfig.minGapDays;
             });
             if (violatesGap) {
@@ -6667,33 +6716,44 @@ export default function ExamsResultsModule({
 
                       <form onSubmit={handleAddManualExam} className="grid grid-cols-1 md:grid-cols-3 gap-3">
                         <div className="space-y-1">
-                          <label className="text-[10px] font-bold text-slate-500 block">الصف الدراسي:</label>
+                          <label htmlFor="manual-exam-classroom" className="text-[10px] font-bold text-slate-500 block">الصف الدراسي:</label>
                           <select
+                            id="manual-exam-classroom"
+                            aria-label="الصف الدراسي للاختبار اليدوي"
+                            required
                             disabled={scheduleApprovalStatus.approved}
                             value={manualExam.classroom}
                             onChange={(e) => setManualExam({ ...manualExam, classroom: e.target.value })}
                             className="w-full text-xs font-semibold p-2 bg-transparent border rounded-lg outline-none"
                           >
+                            {!classesList.length && <option value="">لا توجد صفوف مرتبطة</option>}
                             {classesList.map(c => <option key={c.id} value={c.name}>{c.name}</option>)}
                           </select>
                         </div>
 
                         <div className="space-y-1">
-                          <label className="text-[10px] font-bold text-slate-500 block">المادة الدراسية:</label>
+                          <label htmlFor="manual-exam-subject" className="text-[10px] font-bold text-slate-500 block">المادة الدراسية:</label>
                           <select
+                            id="manual-exam-subject"
+                            aria-label="المادة الدراسية للاختبار اليدوي"
+                            required
                             disabled={scheduleApprovalStatus.approved}
                             value={manualExam.subjectId}
                             onChange={(e) => setManualExam({ ...manualExam, subjectId: e.target.value })}
                             className="w-full text-xs font-semibold p-2 bg-transparent border rounded-lg outline-none"
                           >
+                            {!subjects.length && <option value="">لا توجد مواد امتحانية</option>}
                             {subjects.map(s => <option key={s.id} value={s.id}>{s.name}</option>)}
                           </select>
                         </div>
 
                         <div className="space-y-1">
-                          <label className="text-[10px] font-bold text-slate-500 block">تاريخ الامتحان:</label>
+                          <label htmlFor="manual-exam-date" className="text-[10px] font-bold text-slate-500 block">تاريخ الامتحان:</label>
                           <input
+                            id="manual-exam-date"
+                            aria-label="تاريخ الامتحان اليدوي"
                             type="date"
+                            required
                             disabled={scheduleApprovalStatus.approved}
                             value={manualExam.date}
                             onChange={(e) => setManualExam({ ...manualExam, date: e.target.value })}
@@ -6702,10 +6762,13 @@ export default function ExamsResultsModule({
                         </div>
 
                         <div className="space-y-1">
-                          <label className="text-[10px] font-bold text-slate-500 block">وقت البدء:</label>
+                          <label htmlFor="manual-exam-start-time" className="text-[10px] font-bold text-slate-500 block">وقت البدء:</label>
                           <input
-                            type="text"
-                            placeholder="08:30"
+                            id="manual-exam-start-time"
+                            aria-label="وقت بدء الاختبار اليدوي"
+                            type="time"
+                            required
+                            step={60}
                             disabled={scheduleApprovalStatus.approved}
                             value={manualExam.startTime}
                             onChange={(e) => setManualExam({ ...manualExam, startTime: e.target.value })}
@@ -6714,10 +6777,13 @@ export default function ExamsResultsModule({
                         </div>
 
                         <div className="space-y-1">
-                          <label className="text-[10px] font-bold text-slate-500 block">وقت الانتهاء:</label>
+                          <label htmlFor="manual-exam-end-time" className="text-[10px] font-bold text-slate-500 block">وقت الانتهاء:</label>
                           <input
-                            type="text"
-                            placeholder="10:30"
+                            id="manual-exam-end-time"
+                            aria-label="وقت انتهاء الاختبار اليدوي"
+                            type="time"
+                            required
+                            step={60}
                             disabled={scheduleApprovalStatus.approved}
                             value={manualExam.endTime}
                             onChange={(e) => setManualExam({ ...manualExam, endTime: e.target.value })}
@@ -6726,25 +6792,33 @@ export default function ExamsResultsModule({
                         </div>
 
                         <div className="space-y-1">
-                          <label className="text-[10px] font-bold text-slate-500 block">لجنة قاعة الاختبار:</label>
+                          <label htmlFor="manual-exam-hall" className="text-[10px] font-bold text-slate-500 block">لجنة قاعة الاختبار:</label>
                           <select
+                            id="manual-exam-hall"
+                            aria-label="لجنة قاعة الاختبار اليدوي"
+                            required
                             disabled={scheduleApprovalStatus.approved}
                             value={manualExam.hallId}
                             onChange={(e) => setManualExam({ ...manualExam, hallId: e.target.value })}
                             className="w-full text-xs font-semibold p-2 bg-transparent border rounded-lg outline-none"
                           >
+                            {!halls.length && <option value="">لا توجد قاعات اختبار</option>}
                             {halls.map(h => <option key={h.id} value={h.id}>{h.name}</option>)}
                           </select>
                         </div>
 
                         <div className="space-y-1">
-                          <label className="text-[10px] font-bold text-slate-500 block">المراقب المكلف:</label>
+                          <label htmlFor="manual-exam-proctor" className="text-[10px] font-bold text-slate-500 block">المراقب المكلف:</label>
                           <select
+                            id="manual-exam-proctor"
+                            aria-label="المراقب المكلف بالاختبار اليدوي"
+                            required
                             disabled={scheduleApprovalStatus.approved}
                             value={manualExam.proctorId}
                             onChange={(e) => setManualExam({ ...manualExam, proctorId: e.target.value })}
                             className="w-full text-xs font-semibold p-2 bg-transparent border rounded-lg outline-none"
                           >
+                            {!availableTeachers.length && <option value="">لا يوجد مراقبون متاحون</option>}
                             {availableTeachers.map(t => <option key={t.id} value={t.id}>{t.name}</option>)}
                           </select>
                         </div>
@@ -8003,50 +8077,26 @@ export default function ExamsResultsModule({
                           const isPass = isPresent && currentMark !== undefined && currentMark >= passScore;
                           const isOutstanding = isPresent && currentMark !== undefined && (currentMark / maxScore) >= 0.9;
                           const hasUnsavedChanges = modifiedGradesKeys.has(`${st.id}_${selectedGradeSubject}`);
-
-                          // calculate student total across all subjects
-                          const studentMarks = gradesMatrix[st.id] || {};
-                          let totalScore = 0;
-                          let totalPossibleMax = 0;
-                          let hasUnfinishedGrade = subjects.length === 0;
-                          let failedAnySubject = false;
-
-                          subjects.forEach(sub => {
-                            const mk = studentMarks[sub.id];
-                            const subjectAttendance = getExamAttendanceStatus(st, sub.id);
-                            if (subjectAttendance === null || (subjectAttendance === 'present' && !Number.isFinite(mk))) {
-                              hasUnfinishedGrade = true;
-                            }
-                            if (subjectAttendance === 'present' && Number.isFinite(mk)) {
-                              totalScore += mk;
-                            }
-                            totalPossibleMax += sub.maxScore;
-
-                            if (subjectAttendance === 'present' && Number.isFinite(mk) && mk < sub.passScore) {
-                              failedAnySubject = true;
-                            }
-                          });
-
-                          const percentage = totalPossibleMax > 0 ? parseFloat(((totalScore / totalPossibleMax) * 100).toFixed(1)) : 0;
-
-                          let gradeLabel = 'بانتظار الرصد';
-                          let resultText = 'بانتظار الرصد';
-
-                          if (totalPossibleMax <= 0) {
-                            gradeLabel = 'بانتظار إعداد المواد';
-                            resultText = 'غير مكتمل ⏳';
-                          } else if (!hasUnfinishedGrade) {
-                            if (percentage >= 90) gradeLabel = 'ممتاز 🌟';
-                            else if (percentage >= 80) gradeLabel = 'جيد جداً';
-                            else if (percentage >= 65) gradeLabel = 'جيد';
-                            else if (percentage >= 50) gradeLabel = 'مقبول';
-                            else gradeLabel = 'ضعيف';
-
-                            resultText = (!failedAnySubject && percentage >= (examSettings.passMarkPercent || 50)) ? 'ناجح' : 'راسب';
-                          } else {
-                            gradeLabel = 'غير مكتمل';
-                            resultText = 'غير مكتمل ⏳';
-                          }
+                          const canonicalResult = processedStudentsById.get(String(st.id));
+                          const totalScore = canonicalResult?.totalEarned ?? 0;
+                          const totalPossibleMax = canonicalResult?.totalMax ?? 0;
+                          const percentage = canonicalResult?.percentage ?? 0;
+                          const hasUnfinishedGrade = !canonicalResult || canonicalResult.status === 'غير مكتمل';
+                          const gradeLabel = totalPossibleMax <= 0
+                            ? 'بانتظار إعداد المواد'
+                            : hasUnfinishedGrade
+                              ? 'غير مكتمل'
+                              : canonicalResult?.gradeSymbol === 'ممتاز'
+                                ? 'ممتاز 🌟'
+                                : canonicalResult?.gradeSymbol || 'غير مكتمل';
+                          const failedBecauseAbsent = canonicalResult?.failedSubjects.some(subject => subject.reason === 'absent') === true;
+                          const resultText = totalPossibleMax <= 0 || hasUnfinishedGrade
+                            ? 'غير مكتمل ⏳'
+                            : canonicalResult?.status === 'ناجح'
+                              ? 'ناجح'
+                              : failedBecauseAbsent
+                                ? 'راسب (بسبب الغياب)'
+                                : 'راسب';
 
                           // Select background row styling based on status
                           let rowBgClass = "hover:bg-transparent transition-colors group";
@@ -8096,10 +8146,12 @@ export default function ExamsResultsModule({
                                 <div className="flex items-center gap-1.5 relative">
                                   <input
                                     type="number"
-                                    value={isPresent && currentMark !== undefined ? currentMark : isAbsent ? 0 : ''}
+                                    value={isPresent && currentMark !== undefined ? currentMark : ''}
                                     disabled={!isPresent || approvalStatus.approved || !hasSelectedGradeSubject}
                                     onChange={(e) => handleGradeChange(st.id, selectedGradeSubject, e.target.value)}
-                                    placeholder="بانتظار الرصد"
+                                    placeholder={isAbsent ? 'غياب' : 'بانتظار الرصد'}
+                                    aria-label={`درجة ${st.name} في ${subjects.find(subject => subject.id === selectedGradeSubject)?.name || 'المادة المحددة'}`}
+                                    title={isAbsent ? 'الطالب غائب ولا تُسجل له درجة؛ يُحتسب الغياب في النتيجة النهائية.' : undefined}
                                     className={`w-28 p-2 text-center text-xs font-black border transition-all ${
                                       isAbsent
                                         ? 'bg-slate-100 text-slate-400 border-slate-200 cursor-not-allowed'

@@ -32,6 +32,8 @@ import { KPIDefinition, DashboardDefinition } from '../../types';
 import { EnterpriseLogger } from '../services/EnterpriseLogger';
 import { getSupabaseClient } from '../client';
 
+declare const __EDUPRO_ENVIRONMENT__: string | undefined;
+
 function ensureDirectoryExists(filePath: string) {
   if (!isServer || !fs || !path) return;
   const dirname = path.dirname(filePath);
@@ -176,6 +178,9 @@ export class FallbackStorage {
     // EDUPRO_* variables still remain authoritative for server-side startup.
     const browserProduction = typeof window !== 'undefined'
       && !['localhost', '127.0.0.1', '::1'].includes(window.location.hostname);
+    const browserEnvironment = typeof window !== 'undefined' && typeof __EDUPRO_ENVIRONMENT__ !== 'undefined'
+      ? __EDUPRO_ENVIRONMENT__
+      : '';
     const supabaseUrl = runtime?.SUPABASE_URL;
     const supabaseKey = runtime?.SUPABASE_ANON_KEY;
     const hasConfiguredSupabase = Boolean(
@@ -186,6 +191,7 @@ export class FallbackStorage {
     );
 
     return browserProduction ||
+      browserEnvironment === 'staging' ||
       runtime?.NODE_ENV === 'production' ||
       runtime?.EDUPRO_ENVIRONMENT === 'staging' ||
       runtime?.EDUPRO_PERSISTENCE_MODE === 'canonical' ||

@@ -27,6 +27,31 @@ export const canAutoAssignExamProctors = (
 
 const ISO_DATE_PATTERN = /^\d{4}-\d{2}-\d{2}$/;
 const TIME_PATTERN = /^([01]\d|2[0-3]):[0-5]\d$/;
+const ARABIC_WEEKDAYS = ['الأحد', 'الإثنين', 'الثلاثاء', 'الأربعاء', 'الخميس', 'الجمعة', 'السبت'] as const;
+
+/** Parse a date-only exam value as UTC midnight so weekday and date stay aligned in every timezone. */
+export const parseExamDateOnly = (value: string): Date | null => {
+  const normalized = String(value || '').trim();
+  if (!ISO_DATE_PATTERN.test(normalized)) return null;
+  const [year, month, day] = normalized.split('-').map(Number);
+  const parsed = new Date(Date.UTC(year, month - 1, day));
+  return Number.isNaN(parsed.getTime()) || parsed.toISOString().slice(0, 10) !== normalized ? null : parsed;
+};
+
+export const getExamDateOnlyWeekdayIndex = (value: string): number | null => (
+  parseExamDateOnly(value)?.getUTCDay() ?? null
+);
+
+export const getExamDateOnlyWeekdayName = (value: string): string => {
+  const weekday = getExamDateOnlyWeekdayIndex(value);
+  return weekday === null ? '' : ARABIC_WEEKDAYS[weekday];
+};
+
+export const addExamDateOnlyDays = (value: Date, days: number): Date => {
+  const next = new Date(value);
+  next.setUTCDate(next.getUTCDate() + days);
+  return next;
+};
 
 export const examTimeToMinutes = (value: string): number | null => {
   if (!TIME_PATTERN.test(value)) return null;
