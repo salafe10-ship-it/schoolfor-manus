@@ -25,10 +25,13 @@ describe('exams diagnostics truthfulness contract', () => {
     expect(source).not.toContain('{idx + 1 === 1 ?');
   });
 
-  it('does not classify students when the exam has no configured subjects', () => {
-    expect(source).toContain('let hasUnfinishedGrade = subjects.length === 0');
-    expect(source).toContain("if (totalPossibleMax <= 0) {");
-    expect(source).toContain("gradeLabel = 'بانتظار إعداد المواد'");
-    expect(source).toContain("resultText = 'غير مكتمل ⏳'");
+  it('uses canonical results and distinguishes a recorded absence from an unmarked grade', () => {
+    expect(source).toContain('const canonicalResult = processedStudentsById.get(String(st.id))');
+    expect(source).toContain("canonicalResult?.status === 'ناجح'");
+    expect(source).toContain("canonicalResult?.failedSubjects.some(subject => subject.reason === 'absent') === true");
+    expect(source).toContain("placeholder={isAbsent ? 'غياب' : 'بانتظار الرصد'}");
+    expect(source).toContain("'راسب (بسبب الغياب)'");
+    expect(source).toContain("'غير مكتمل ⏳'");
+    expect(source).toContain("'بانتظار إعداد المواد'");
   });
 });

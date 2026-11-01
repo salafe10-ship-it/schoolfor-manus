@@ -19,6 +19,7 @@ type AcademicStructureClass = {
   id?: unknown;
   code?: unknown;
   name?: unknown;
+  level?: unknown;
   capacity?: unknown;
   isActive?: unknown;
 };
@@ -130,6 +131,15 @@ function levelFromCode(code: string): ExamClassLevel {
   throw new ValidationError(`رمز الصف ${code} لا يحدد مرحلة أكاديمية مدعومة.`);
 }
 
+function levelFromClass(item: AcademicStructureClass, code: string, name: string): ExamClassLevel {
+  const declaredLevel = cleanText(item.level).toLowerCase();
+  if (!declaredLevel) return levelFromCode(code);
+  if (['kindergarten', 'primary', 'middle', 'high'].includes(declaredLevel)) {
+    return declaredLevel as ExamClassLevel;
+  }
+  throw new ValidationError(`المرحلة الأكاديمية المحددة للصف ${name} غير مدعومة.`);
+}
+
 /**
  * Converts the school-owned academic structure to the exact class references
  * consumed by the exams workflow. It fails closed on incomplete metadata so a
@@ -165,7 +175,7 @@ export function buildCanonicalExamClassesFromAcademicStructure(structure: unknow
     return {
       id,
       name,
-      level: levelFromCode(code),
+      level: levelFromClass(item, code, name),
       capacity,
       sections: [sectionFromCode(code, allowedSections)]
     };

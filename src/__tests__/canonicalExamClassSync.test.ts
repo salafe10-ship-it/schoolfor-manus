@@ -39,6 +39,28 @@ describe('canonical exam class synchronization', () => {
     })).toThrow('لا يحدد مرحلة أكاديمية مدعومة');
   });
 
+  it('accepts an explicit trusted academic level for a locally named class with a noncanonical code', () => {
+    const classes = buildCanonicalExamClassesFromAcademicStructure({
+      sections: ['أ'],
+      classes: [
+        { id: 'uat-transfer', code: 'UAT_TRANSFER_GSHSCA-A', name: 'UAT Transfer Class GSHSCA', level: 'middle', capacity: 100, isActive: true },
+        { id: 'uat-promotion', code: 'UAT_PROMOTION_GSHSCA-A', name: 'UAT Promotion Class GSHSCA', level: 'high', capacity: 100, isActive: true }
+      ]
+    });
+
+    expect(classes).toEqual(expect.arrayContaining([
+      { id: 'uat-transfer', code: undefined, name: 'UAT Transfer Class GSHSCA', level: 'middle', capacity: 100, sections: ['أ'] },
+      { id: 'uat-promotion', code: undefined, name: 'UAT Promotion Class GSHSCA', level: 'high', capacity: 100, sections: ['أ'] }
+    ]));
+  });
+
+  it('fails closed when a class declares an unsupported explicit academic level', () => {
+    expect(() => buildCanonicalExamClassesFromAcademicStructure({
+      sections: ['أ'],
+      classes: [{ id: 'unknown', code: 'MID1-A', name: 'صف غير مصنف', level: 'tertiary', capacity: 20, isActive: true }]
+    })).toThrow('المرحلة الأكاديمية المحددة للصف صف غير مصنف غير مدعومة');
+  });
+
   it('resolves enrollment references by canonical id, code, or display name', () => {
     const structure = {
       sections: ['أ'],

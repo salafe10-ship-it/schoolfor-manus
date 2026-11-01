@@ -61,7 +61,7 @@ type AcademicSetupDraft = {
   terms: Array<{ code: string; name: string; sequence: number; startsOn: string; endsOn: string; status: 'active' | 'planned' }>;
   stages: Array<{ id: string; code: string; name: string; order: number; isActive: boolean }>;
   grades: Array<{ id: string; stageId: string; code: string; name: string; order: number; isActive: boolean }>;
-  classes: Array<{ id: string; gradeId: string; code: string; name: string; capacity: number; isActive: boolean }>;
+  classes: Array<{ id: string; gradeId: string; code: string; name: string; level?: 'kindergarten' | 'primary' | 'middle' | 'high'; capacity: number; isActive: boolean }>;
   sections: string[];
   catalogue: { subjects: SubjectItem[]; schedulePeriods: SchedulePeriod[]; policies: { passingScore: number; maxClassSize: number } };
 };
@@ -108,6 +108,8 @@ export default function AcademicAffairsPortal({
   const [selectedSemester, setSelectedSemester] = useState<string>('الفصل الدراسي الأول');
   const [academicSetup, setAcademicSetup] = useState<AcademicSetupDraft>(() => emptyAcademicSetup());
   const [academicSetupLoading, setAcademicSetupLoading] = useState(true);
+  const [academicSetupLoaded, setAcademicSetupLoaded] = useState(false);
+  const [academicSetupReload, setAcademicSetupReload] = useState(0);
   const [academicSetupSaving, setAcademicSetupSaving] = useState(false);
 
   // تُحمّل المقررات من الهيكل الأكاديمي المركزي؛ لا تُزرع بيانات تجريبية عند الفتح.
@@ -147,6 +149,8 @@ export default function AcademicAffairsPortal({
   }, [selectedSchool.id, setStages, setGrades, setAcademicClasses]);
 
   useEffect(() => {
+    setAcademicSetupLoaded(false);
+    setAcademicSetupLoading(true);
     if (!FallbackStorage.isCanonicalPersistenceRequired()) {
       setAcademicSetupLoading(false);
       return;
@@ -172,7 +176,7 @@ export default function AcademicAffairsPortal({
           })) : [],
           stages: Array.isArray(structure.stages) ? structure.stages : [],
           grades: Array.isArray(structure.grades) ? structure.grades : [],
-          classes: Array.isArray(structure.classes) ? structure.classes : [],
+          classes: Array.isArray(structure.classes) ? structure.classes.map((item: any) => ({ ...item, level: item.level || undefined })) : [],
           sections: Array.isArray(structure.sections) ? structure.sections.map(String) : [],
           catalogue: {
             subjects: Array.isArray(structure.catalogue?.subjects) ? structure.catalogue.subjects : [],
@@ -185,6 +189,7 @@ export default function AcademicAffairsPortal({
         });
         setSubjects(Array.isArray(structure.catalogue?.subjects) ? structure.catalogue.subjects : []);
         setSchedulePeriods(Array.isArray(structure.catalogue?.schedulePeriods) ? structure.catalogue.schedulePeriods : []);
+        setAcademicSetupLoaded(true);
       } catch (error) {
         if (!cancelled) triggerNotification(error instanceof Error ? error.message : 'تعذر تحميل التهيئة الأكاديمية المرجعية.', 'warning');
       } finally {
@@ -193,13 +198,17 @@ export default function AcademicAffairsPortal({
     };
     void loadAcademicSetup();
     return () => { cancelled = true; };
-  }, [selectedSchool.id, triggerNotification]);
+  }, [selectedSchool.id, triggerNotification, academicSetupReload]);
 
   const updateAcademicSetup = <K extends keyof AcademicSetupDraft>(key: K, value: AcademicSetupDraft[K]) => {
     setAcademicSetup(previous => ({ ...previous, [key]: value }));
   };
 
   const saveAcademicSetup = async () => {
+    if (!academicSetupLoaded) {
+      triggerNotification('تعذر حفظ التهيئة قبل تحميلها من المصدر المركزي. أعد محاولة التحميل.', 'warning');
+      return;
+    }
     if (!FallbackStorage.isCanonicalPersistenceRequired()) {
       triggerNotification('هذه الشاشة تعمل مع المصدر الكانوني فقط.', 'warning');
       return;
@@ -864,6 +873,8 @@ export default function AcademicAffairsPortal({
               </div>
             </div>
 
+            {!academicSetupLoading && !academicSetupLoaded && <div role="alert" className="mt-3 rounded-lg bg-rose-50 p-3 text-sm font-bold text-rose-800">تعذر تحميل التهيئة من المصدر المركزي. <button type="button" onClick={() => setAcademicSetupReload(value => value + 1)} className="underline">إعادة المحاولة</button></div>}
+
             <div className="grid grid-cols-1 md:grid-cols-4 gap-3 mt-4 text-xs">
               <label className="font-black text-slate-700">رمز السنة
                 <input value={academicSetup.year.code} onChange={event => updateAcademicSetup('year', { ...academicSetup.year, code: event.target.value })} placeholder="2026-2027" className="mt-1 w-full border border-slate-300 p-2.5 text-slate-900" />
@@ -902,6 +913,11 @@ export default function AcademicAffairsPortal({
                 <select value={item.gradeId} onChange={event => updateAcademicSetup('classes', academicSetup.classes.map((current, itemIndex) => itemIndex === index ? { ...current, gradeId: event.target.value } : current))} className="border p-2 text-slate-900"><option value="">اختر الصف</option>{academicSetup.grades.map(grade => <option key={grade.id} value={grade.id}>{grade.name}</option>)}</select>
                 <input value={item.code} onChange={event => updateAcademicSetup('classes', academicSetup.classes.map((current, itemIndex) => itemIndex === index ? { ...current, code: event.target.value } : current))} className="border p-2 text-slate-900" placeholder="PRI1-A" />
                 <input value={item.name} onChange={event => updateAcademicSetup('classes', academicSetup.classes.map((current, itemIndex) => itemIndex === index ? { ...current, name: event.target.value } : current))} className="border p-2 text-slate-900" placeholder="أولى ابتدائي أ" />
+                <label className="font-bold text-slate-700">المرحلة الأكاديمية
+                  <select aria-label={`المرحلة الأكاديمية للصف ${item.name || item.code}`} value={item.level || ''} onChange={event => updateAcademicSetup('classes', academicSetup.classes.map((current, itemIndex) => itemIndex === index ? { ...current, level: (event.target.value || undefined) as typeof current.level } : current))} className="mt-1 w-full border p-2 text-slate-900">
+                    <option value="">استنتاج من رمز الصف</option><option value="kindergarten">رياض الأطفال</option><option value="primary">ابتدائية</option><option value="middle">متوسطة</option><option value="high">ثانوية</option>
+                  </select>
+                </label>
                 <input type="number" min={1} max={500} value={item.capacity} onChange={event => updateAcademicSetup('classes', academicSetup.classes.map((current, itemIndex) => itemIndex === index ? { ...current, capacity: Number(event.target.value) } : current))} className="border p-2 text-slate-900" placeholder="السعة" />
                 <button onClick={() => {
                   if (schedulePeriods.some(period => period.classId === item.id || period.className.trim().toLowerCase() === item.name.trim().toLowerCase())) {
@@ -930,7 +946,7 @@ export default function AcademicAffairsPortal({
             </div>
           </div>
 
-          <div className="flex justify-end"><button onClick={saveAcademicSetup} disabled={academicSetupSaving || academicSetupLoading} className="px-6 py-3 bg-gradient-to-r from-emerald-700 to-emerald-500 text-white font-black shadow-lg disabled:opacity-50">{academicSetupSaving ? 'جارٍ الحفظ الذري...' : 'اعتماد التهيئة وربطها بقاعدة البيانات'}</button></div>
+          <div className="flex justify-end"><button onClick={saveAcademicSetup} disabled={academicSetupSaving || academicSetupLoading || !academicSetupLoaded} className="px-6 py-3 bg-gradient-to-r from-emerald-700 to-emerald-500 text-white font-black shadow-lg disabled:opacity-50">{academicSetupSaving ? 'جارٍ الحفظ الذري...' : 'اعتماد التهيئة وربطها بقاعدة البيانات'}</button></div>
         </div>
       )}
 

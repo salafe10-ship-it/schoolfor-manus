@@ -1,13 +1,35 @@
 import { describe, expect, it } from 'vitest';
 import {
+  addExamDateOnlyDays,
   canAssignProctorForWeek,
   canAutoAssignExamProctors,
   countProctorDutiesInWeek,
+  getExamDateOnlyWeekdayIndex,
+  getExamDateOnlyWeekdayName,
   examTimeRangesOverlap,
   findScheduleResourceConflicts,
   getExamIntervalDurationMinutes,
-  getSchedulingWeekKey
+  getSchedulingWeekKey,
+  parseExamDateOnly
 } from '../modules/exams/application/ExamSchedulingRules';
+
+describe('timezone-safe exam date-only rules', () => {
+  it('keeps the stored ISO date and Arabic weekday aligned', () => {
+    expect(getExamDateOnlyWeekdayIndex('2026-11-02')).toBe(1);
+    expect(getExamDateOnlyWeekdayName('2026-11-02')).toBe('الإثنين');
+    expect(getExamDateOnlyWeekdayName('2026-11-01')).toBe('الأحد');
+  });
+
+  it('rejects malformed and impossible calendar dates', () => {
+    expect(parseExamDateOnly('2026-02-30')).toBeNull();
+    expect(getExamDateOnlyWeekdayName('not-a-date')).toBe('');
+  });
+
+  it('increments calendar dates in UTC without shifting the day', () => {
+    const start = parseExamDateOnly('2026-11-02');
+    expect(start && addExamDateOnlyDays(start, 1).toISOString().slice(0, 10)).toBe('2026-11-03');
+  });
+});
 
 describe('approved exam schedule mutation guard', () => {
   it('allows automatic proctor assignment only while both schedule and results are unlocked', () => {

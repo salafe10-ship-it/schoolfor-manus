@@ -1,5 +1,5 @@
 import dotenv from 'dotenv';
-import { applyOnlyStagingEnvironmentValues, assertLocalStagingEnvironment, isConfirmedLoopbackFinancialUat } from './stagingDatabaseSafety.js';
+import { applyOnlyStagingEnvironmentValues, assertLocalStagingEnvironment, isConfirmedLoopbackFinancialUat, stagingPostgresConnectionOptions } from './stagingDatabaseSafety.js';
 
 const loaded = dotenv.config({ path: '.env.staging', override: true });
 if (loaded.error) {
@@ -34,6 +34,10 @@ assertLocalStagingEnvironment({
   runtimeSchemaBootstrap: process.env.RUNTIME_SCHEMA_BOOTSTRAP,
 });
 
+for (const key of ['DATABASE_URL', 'PLATFORM_ADMIN_DATABASE_URL', 'DIRECT_URL']) {
+  if (process.env[key]) process.env[key] = stagingPostgresConnectionOptions(process.env[key]).connectionString;
+}
+
 const enableLocalFinancialUatWrites = isConfirmedLoopbackFinancialUat({
   allowLocalStaging: process.env.UAT_ALLOW_LOCAL_STAGING,
   confirmation: process.env.UAT_STUDENT_FEES_STAGING_CONFIRM,
@@ -58,6 +62,9 @@ process.env.RUNTIME_SCHEMA_BOOTSTRAP = 'false';
 process.env.AUTO_MIGRATE = 'false';
 process.env.AUTO_SEED = 'false';
 process.env.PGSSL_REJECT_UNAUTHORIZED = 'true';
+// Supabase pooler handshakes on a cold staging start can exceed the general
+// platform pool default. Keep strict TLS and allow time for the connection.
+process.env.PG_PLATFORM_CONNECTION_TIMEOUT_MS = '30000';
 process.env.NODE_ENV = 'development';
 // Keep the local review server independent of occupied Vite WebSocket ports.
 // This avoids the React refresh preamble race with the already-open app on 4179.

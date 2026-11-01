@@ -43,6 +43,7 @@ const EXPIRES_AT_KEY = 'edupro_session_expires_at';
 const CLOCK_OFFSET_KEY = 'edupro_session_clock_offset_seconds';
 const ACCESS_TOKEN_EXPIRY_SKEW_SECONDS = 30;
 const SESSION_REQUEST_TIMEOUT_MS = 10_000;
+const LOGIN_REQUEST_TIMEOUT_MS = 35_000;
 
 function isRecord(value: unknown): value is Record<string, any> {
   return typeof value === 'object' && value !== null;
@@ -157,10 +158,10 @@ export class TrustedSessionManager {
     return this.activeStorage;
   }
 
-  private requestWithTimeout(path: string, init?: RequestInit): Promise<SessionResponse> {
+  private requestWithTimeout(path: string, init?: RequestInit, timeoutMs = SESSION_REQUEST_TIMEOUT_MS): Promise<SessionResponse> {
     let timeoutId: ReturnType<typeof setTimeout> | undefined;
     const timeout = new Promise<SessionResponse>((_, reject) => {
-      timeoutId = setTimeout(() => reject(new TrustedSessionError('REQUEST_FAILED', 'انتهت مهلة التحقق من جلسة المدرسة.')), SESSION_REQUEST_TIMEOUT_MS);
+      timeoutId = setTimeout(() => reject(new TrustedSessionError('REQUEST_FAILED', 'انتهت مهلة التحقق من جلسة المدرسة.')), timeoutMs);
     });
     return Promise.race([this.request(path, init), timeout]).finally(() => {
       if (timeoutId) clearTimeout(timeoutId);
@@ -220,7 +221,7 @@ export class TrustedSessionManager {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify(body)
-      });
+      }, path === '/api/auth/login' ? LOGIN_REQUEST_TIMEOUT_MS : SESSION_REQUEST_TIMEOUT_MS);
     } catch {
       throw new TrustedSessionError('REQUEST_FAILED');
     }
