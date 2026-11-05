@@ -5,6 +5,13 @@
   "compatibility_date": "2026-09-16",
   "compatibility_flags": ["nodejs_compat"],
   "workers_dev": true,
+  // The paid Workers plan must keep enough CPU headroom for the first
+  // school-portal request, which initializes the trusted directory connection.
+  // Without an explicit limit, a cold request can be terminated at the
+  // platform default before the login shell receives its school identity.
+  "limits": {
+    "cpu_ms": 30000
+  },
   "vars": {
     "DATABASE_ROLE_EXPECTED": "edupro_app",
     "EDUPRO_ENVIRONMENT": "production",
@@ -16,6 +23,10 @@
   "routes": [
     {
       "pattern": "abdalsalamsoft.com",
+      "custom_domain": true
+    },
+    {
+      "pattern": "modern-family-schools.abdalsalamsoft.com",
       "custom_domain": true
     },
     {
