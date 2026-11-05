@@ -116,7 +116,9 @@ describe('financial document serial release', () => {
     const gate = workflow.slice(workflow.indexOf('- name: Verify production application schema contract'), workflow.indexOf('- name: Deploy exact commit'));
     expect(gate).toContain('PLATFORM_ADMIN_DATABASE_URL: ${{ secrets.PLATFORM_ADMIN_DATABASE_URL }}');
     const uptime = readFileSync('.github/workflows/cloudflare-uptime.yml', 'utf8');
-    expect(uptime).toContain('PRODUCTION_URL: https://modern-family-schools.abdalsalamsoft.com');
+    expect(uptime).toContain("PRODUCTION_URL: ${{ vars.CLOUDFLARE_PRODUCTION_URL || 'https://schoolfor-manus.salafe10.workers.dev' }}");
+    expect(uptime).toContain("PUBLIC_PRODUCTION_URL: ${{ vars.CLOUDFLARE_PUBLIC_PRODUCTION_URL || 'https://modern-family-schools.abdalsalamsoft.com' }}");
+    expect(uptime).toContain('- name: Check the public school domain and asset path');
     const runner = readFileSync('scripts/apply-production-financial-document-serial-migration.mjs', 'utf8');
     expect(runner).toContain('applyFinancialSerialMigrations(client, migrations)');
     expect(runner).toContain("process.env.GITHUB_REF !== 'refs/heads/master'");
