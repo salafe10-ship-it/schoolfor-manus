@@ -433,10 +433,17 @@ export default function StudentFinancialPortal({
   const [financialPersistenceMessage, setFinancialPersistenceMessage] = useState('جارٍ التحقق من مصدر البيانات المالية...');
   const [financialPersistenceVersion, setFinancialPersistenceVersion] = useState(0);
   type FinancialWriteMode = 'snapshot_read_only' | 'snapshot_write' | 'erp_integrated' | 'ledger_ready';
+  type FinancialWriteModeReason =
+    | 'deployment_locked'
+    | 'write_mode_not_configured'
+    | 'financial_write_permission_missing'
+    | 'canonical_erp_not_ready'
+    | 'write_enabled';
   // The server is authoritative. A build-time flag cannot safely unlock a
   // tenant's finance screen because it cannot prove the school mappings or
   // the live canonical ledger state.
   const [financialWriteMode, setFinancialWriteMode] = useState<FinancialWriteMode>('snapshot_read_only');
+  const [financialWriteModeReason, setFinancialWriteModeReason] = useState<FinancialWriteModeReason | null>(null);
   const financialWritesLocked = financialWriteMode === 'snapshot_read_only';
   const financialMutationDisabled = financialWritesLocked || financialPersistence !== 'ready';
   const [financialOperationalContext, setFinancialOperationalContext] = useState<{
@@ -789,6 +796,7 @@ export default function StudentFinancialPortal({
 
         const writeMode = String(res.meta?.writeMode || 'snapshot_read_only') as FinancialWriteMode;
         setFinancialWriteMode(['snapshot_write', 'erp_integrated', 'ledger_ready'].includes(writeMode) ? writeMode : 'snapshot_read_only');
+        setFinancialWriteModeReason((res.meta?.writeModeReason || null) as FinancialWriteModeReason | null);
 
         if (res.data && Object.keys(res.data).length > 0) {
           setFinancialInvoices(res.data.invoices || []);
@@ -5763,7 +5771,15 @@ export default function StudentFinancialPortal({
                 <span className={`text-[11px] font-black px-3 py-1.5 flex items-center gap-1 ${financialWritesLocked ? 'bg-amber-50 text-amber-800' : financialPersistence === 'ready' ? 'bg-emerald-50 text-emerald-800' : financialPersistence === 'loading' ? 'bg-amber-50 text-amber-800' : 'bg-rose-50 text-rose-800'}`}>
                   <span className={`w-2 h-2 rounded-full ${financialWritesLocked ? 'bg-amber-500' : financialPersistence === 'ready' ? 'bg-emerald-500' : financialPersistence === 'loading' ? 'bg-amber-500 animate-pulse' : 'bg-rose-500'}`} />
                   {financialWritesLocked
-                    ? 'المصدر المالي متصل للقراءة فقط — الحفظ والترحيل مقفلان'
+                    ? financialWriteModeReason === 'financial_write_permission_missing'
+                      ? 'الكتابة المالية مقفلة: حسابك لا يملك صلاحية Financial.Write'
+                      : financialWriteModeReason === 'write_mode_not_configured'
+                        ? 'الكتابة المالية مقفلة: وضع الكتابة غير مفعّل في إعدادات التشغيل'
+                        : financialWriteModeReason === 'deployment_locked'
+                          ? 'الكتابة المالية مقفلة من إعدادات النشر'
+                          : financialWriteModeReason === 'canonical_erp_not_ready'
+                            ? 'المصدر الكانوني غير جاهز؛ الحفظ المالي الآمن غير متاح'
+                            : 'المصدر المالي متصل للقراءة فقط — الحفظ والترحيل مقفلان'
                     : financialPersistence === 'ready'
                       ? 'المصدر المالي الموثق متصل'
                       : financialPersistenceMessage || (financialPersistence === 'loading'
