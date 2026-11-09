@@ -160,6 +160,12 @@ import {
 } from './server/infrastructure/LocalStudentAffairsTestMode.js';
 
 type FinancialWriteMode = 'snapshot_read_only' | 'snapshot_write' | 'erp_integrated';
+type FinancialWriteModeReason =
+  | 'deployment_locked'
+  | 'write_mode_not_configured'
+  | 'financial_write_permission_missing'
+  | 'canonical_erp_not_ready'
+  | 'write_enabled';
 
 const deploymentEnvironment = String(process.env.EDUPRO_ENVIRONMENT || '').trim().toLowerCase();
 // Treat explicit staging/production deployments and production Node runtimes
@@ -1708,16 +1714,23 @@ async function recordHrBankDisbursement(
  * This is intentionally not named ledger_ready: the current endpoint does
  * not prove a write into the canonical general_ledger/journal tables.
  */
-function resolveFinancialWriteMode(req: express.Request): FinancialWriteMode {
+function resolveFinancialWriteCapability(req: express.Request): {
+  mode: FinancialWriteMode;
+  reason: FinancialWriteModeReason;
+} {
   // The deployment-level fail-closed switch is authoritative for the UI
   // capability advertised in the read model as well as for mutation routing.
   // Without this check, a canonical ERP flag could make the browser render
   // enabled posting controls while the middleware rejects the same request.
-  if (process.env.FINANCIAL_WRITES_LOCKED !== 'false') return 'snapshot_read_only';
+  if (process.env.FINANCIAL_WRITES_LOCKED !== 'false') {
+    return { mode: 'snapshot_read_only', reason: 'deployment_locked' };
+  }
   const configuredForWrite = (process.env.NODE_ENV !== 'production'
     && process.env.FINANCIAL_SNAPSHOT_WRITE_MODE === 'snapshot_write')
     || process.env.FINANCIAL_ERP_MODE === 'canonical';
-  if (!configuredForWrite) return 'snapshot_read_only';
+  if (!configuredForWrite) {
+    return { mode: 'snapshot_read_only', reason: 'write_mode_not_configured' };
+  }
 
   const user = (req as any).user;
   const decision = authorizationEngine.authorizeTenant(user, PERMISSIONS.FINANCIAL_WRITE, {
@@ -1727,8 +1740,13 @@ function resolveFinancialWriteMode(req: express.Request): FinancialWriteMode {
     method: req.method,
     ipAddress: req.ip || 'unknown'
   });
-  if (!decision.allowed) return 'snapshot_read_only';
-  return (req as any).financialErpReady === true ? 'erp_integrated' : 'snapshot_write';
+  if (!decision.allowed) {
+    return { mode: 'snapshot_read_only', reason: 'financial_write_permission_missing' };
+  }
+  if ((req as any).financialErpReady === true) {
+    return { mode: 'erp_integrated', reason: 'write_enabled' };
+  }
+  return { mode: 'snapshot_write', reason: 'canonical_erp_not_ready' };
 }
 import { ErpProvisioningService } from './src/modules/identity/application/ErpProvisioningService.js';
 import { reviewAndImplement } from './src/services/ai/SolLunaOrchestrator.js';
@@ -16057,6 +16075,7 @@ export async function createApp(options: { cloudflare?: boolean; waitUntil?: (ta
         }, tenantContext);
       }
       (req as any).financialErpReady = canonicalErpReady;
+      const financialWriteCapability = resolveFinancialWriteCapability(req);
       const snapshotData = snapshot?.data || {};
       let responseData: Record<string, any> = {
         ...snapshotData,
@@ -16150,6 +16169,8 @@ export async function createApp(options: { cloudflare?: boolean; waitUntil?: (ta
         canonicalJournalCount: canonicalErpModel?.journalEntries.length || 0,
         invoiceCount: Array.isArray((snapshot?.data as any)?.invoices) ? (snapshot?.data as any).invoices.length : -1,
         receiptCount: Array.isArray((snapshot?.data as any)?.studentReceiptVouchers) ? (snapshot?.data as any).studentReceiptVouchers.length : -1,
+        writeMode: financialWriteCapability.mode,
+        writeModeReason: financialWriteCapability.reason,
       });
 
       res.json({
@@ -16159,7 +16180,8 @@ export async function createApp(options: { cloudflare?: boolean; waitUntil?: (ta
           source: 'supabase',
           version: snapshot?.version || 0,
           updatedAt: snapshot?.updated_at || null,
-          writeMode: resolveFinancialWriteMode(req),
+          writeMode: financialWriteCapability.mode,
+          writeModeReason: financialWriteCapability.reason,
           erpIntegration: canonicalErpReady ? 'ready' : 'not_provisioned',
           canonicalJournalCount: canonicalErpModel?.journalEntries.length || 0,
         },
@@ -16357,6 +16379,7 @@ export async function createApp(options: { cloudflare?: boolean; waitUntil?: (ta
         tenantContext
       );
       (req as any).financialErpReady = canonicalErpReady;
+      const financialWriteCapability = resolveFinancialWriteCapability(req);
 
       // The snapshot transaction has already committed at this point. An
       // unavailable audit_logs sidecar must not make the client report a
@@ -16385,7 +16408,8 @@ export async function createApp(options: { cloudflare?: boolean; waitUntil?: (ta
           source: 'supabase',
           version: nextVersion,
           auditSidecar: 'unavailable',
-          writeMode: resolveFinancialWriteMode(req),
+          writeMode: financialWriteCapability.mode,
+          writeModeReason: financialWriteCapability.reason,
           erpIntegration: canonicalErpReady ? 'ready' : 'not_provisioned',
           erpSync: canonicalErpSync
             ? {
