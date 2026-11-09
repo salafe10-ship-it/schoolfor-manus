@@ -268,6 +268,8 @@ const platformAdminPool = platformAdminConnectionString
       // Hyperdrive already owns the origin-side pool. A separate pg pool per
       // Worker isolate must stay tiny or RBAC/directory reads can wait behind
       // idle connections and be cancelled by the Workers runtime.
+      // Workers cannot reuse a request's socket in another request. Hyperdrive pools upstream connections.
+      ...(process.env.EDUPRO_CLOUDFLARE_HYPERDRIVE === 'true' ? { maxUses: 1 } : {}),
       max: Number(process.env.PG_PLATFORM_POOL_MAX || (process.env.EDUPRO_CLOUDFLARE_HYPERDRIVE === 'true' ? 1 : 5)),
       idleTimeoutMillis: Number(process.env.PG_PLATFORM_IDLE_TIMEOUT_MS || (process.env.EDUPRO_CLOUDFLARE_HYPERDRIVE === 'true' ? 10_000 : 30_000)),
       connectionTimeoutMillis: Number(process.env.PG_PLATFORM_CONNECTION_TIMEOUT_MS || (process.env.EDUPRO_CLOUDFLARE_HYPERDRIVE === 'true' ? 3_000 : 5_000)),
