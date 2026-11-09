@@ -32,6 +32,7 @@ export { AccountingContext };
 export type { AccountNode };
 
 const TreasuryPlatformPortal = React.lazy(() => import('./TreasuryPlatformPortal'));
+const CANONICAL_FINANCIAL_READ_TIMEOUT_MS = 30_000;
 
 interface GeneralLedgerPortalProps {
   students: Student[];
@@ -1195,7 +1196,7 @@ export default function GeneralLedgerPortal({
   useEffect(() => {
     let active = true;
     const controller = new AbortController();
-    const timeoutId = window.setTimeout(() => controller.abort(), 15_000);
+    const timeoutId = window.setTimeout(() => controller.abort(), CANONICAL_FINANCIAL_READ_TIMEOUT_MS);
 
     const loadCanonicalFinancialSnapshot = async () => {
       try {
