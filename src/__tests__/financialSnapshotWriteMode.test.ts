@@ -12,7 +12,8 @@ describe('UAT central financial writer boundary', () => {
     expect(server).toContain("process.env.NODE_ENV !== 'production'");
     expect(server).toContain("process.env.FINANCIAL_SNAPSHOT_WRITE_MODE === 'snapshot_write'");
     expect(server).toContain('authorizationEngine.authorizeTenant');
-    expect(server).toContain("writeMode: resolveFinancialWriteMode(req)");
+    expect(server).toContain('writeMode: financialWriteCapability.mode');
+    expect(server).toContain('writeModeReason: financialWriteCapability.reason');
   });
 
   it('keeps the client distinction between central UAT writes and a real GL writer', () => {

@@ -21,6 +21,8 @@ import { aggregateStudentFinancialSnapshot, buildStudentLedgerRows, createInstal
 import { formatFinancialDocumentDescriptionForPrint, resolveFinancialDocumentReference } from '../utils/financialDocumentReference';
 import { resolveCostCenterStageLogoKey } from '../utils/schoolBranding';
 
+const FINANCIAL_READ_TIMEOUT_MS = 30_000;
+
 interface StudentFinancialPortalProps {
   students: Student[];
   setStudents: React.Dispatch<React.SetStateAction<Student[]>>;
@@ -433,10 +435,17 @@ export default function StudentFinancialPortal({
   const [financialPersistenceMessage, setFinancialPersistenceMessage] = useState('جارٍ التحقق من مصدر البيانات المالية...');
   const [financialPersistenceVersion, setFinancialPersistenceVersion] = useState(0);
   type FinancialWriteMode = 'snapshot_read_only' | 'snapshot_write' | 'erp_integrated' | 'ledger_ready';
+  type FinancialWriteModeReason =
+    | 'deployment_locked'
+    | 'write_mode_not_configured'
+    | 'financial_write_permission_missing'
+    | 'canonical_erp_not_ready'
+    | 'write_enabled';
   // The server is authoritative. A build-time flag cannot safely unlock a
   // tenant's finance screen because it cannot prove the school mappings or
   // the live canonical ledger state.
   const [financialWriteMode, setFinancialWriteMode] = useState<FinancialWriteMode>('snapshot_read_only');
+  const [financialWriteModeReason, setFinancialWriteModeReason] = useState<FinancialWriteModeReason | null>(null);
   const financialWritesLocked = financialWriteMode === 'snapshot_read_only';
   const financialMutationDisabled = financialWritesLocked || financialPersistence !== 'ready';
   const [financialOperationalContext, setFinancialOperationalContext] = useState<{
@@ -761,20 +770,33 @@ export default function StudentFinancialPortal({
         // operational context. A slow context lookup must not hide verified
         // invoices/receipts or make the screen look empty; it only keeps
         // writes blocked until the academic scope is confirmed.
+        const controller = new AbortController();
         const requests = Promise.allSettled([
           authenticatedRequest('/api/financial/database', {
             headers: { 'Accept': 'application/json' },
-            cache: 'no-store'
+            cache: 'no-store',
+            signal: controller.signal
           }),
           authenticatedRequest('/api/financial/operational-context', {
             headers: { 'Accept': 'application/json' },
-            cache: 'no-store'
+            cache: 'no-store',
+            signal: controller.signal
           })
         ] as const);
+        let timeoutId: number | undefined;
         const timeout = new Promise<never>((_, reject) => {
-          window.setTimeout(() => reject(new Error('انتهت مهلة الاتصال بالمصدر المالي.')), 15000);
+          timeoutId = window.setTimeout(() => {
+            controller.abort();
+            reject(new Error('انتهت مهلة الاتصال بالمصدر المالي.'));
+          }, FINANCIAL_READ_TIMEOUT_MS);
         });
-        const [databaseResult, contextResult] = await Promise.race([requests, timeout]);
+        let results: Awaited<typeof requests>;
+        try {
+          results = await Promise.race([requests, timeout]);
+        } finally {
+          if (timeoutId !== undefined) window.clearTimeout(timeoutId);
+        }
+        const [databaseResult, contextResult] = results;
         if (databaseResult.status !== 'fulfilled') {
           throw databaseResult.reason instanceof Error
             ? databaseResult.reason
@@ -789,6 +811,7 @@ export default function StudentFinancialPortal({
 
         const writeMode = String(res.meta?.writeMode || 'snapshot_read_only') as FinancialWriteMode;
         setFinancialWriteMode(['snapshot_write', 'erp_integrated', 'ledger_ready'].includes(writeMode) ? writeMode : 'snapshot_read_only');
+        setFinancialWriteModeReason((res.meta?.writeModeReason || null) as FinancialWriteModeReason | null);
 
         if (res.data && Object.keys(res.data).length > 0) {
           setFinancialInvoices(res.data.invoices || []);
@@ -3306,14 +3329,25 @@ export default function StudentFinancialPortal({
     refreshInFlightRef.current = true;
     setRefreshing(true);
     try {
+      const controller = new AbortController();
       const requests = Promise.all([
-        authenticatedRequest('/api/financial/database', { headers: { 'Accept': 'application/json' }, cache: 'no-store' }),
-        authenticatedRequest('/api/financial/operational-context', { headers: { 'Accept': 'application/json' }, cache: 'no-store' })
+        authenticatedRequest('/api/financial/database', { headers: { 'Accept': 'application/json' }, cache: 'no-store', signal: controller.signal }),
+        authenticatedRequest('/api/financial/operational-context', { headers: { 'Accept': 'application/json' }, cache: 'no-store', signal: controller.signal })
       ]);
+      let timeoutId: number | undefined;
       const timeout = new Promise<never>((_, reject) => {
-        window.setTimeout(() => reject(new Error('انتهت مهلة الاتصال بالمصدر المالي.')), 15000);
+        timeoutId = window.setTimeout(() => {
+          controller.abort();
+          reject(new Error('انتهت مهلة الاتصال بالمصدر المالي.'));
+        }, FINANCIAL_READ_TIMEOUT_MS);
       });
-      const [response, contextResponse] = await Promise.race([requests, timeout]);
+      let responses: Awaited<typeof requests>;
+      try {
+        responses = await Promise.race([requests, timeout]);
+      } finally {
+        if (timeoutId !== undefined) window.clearTimeout(timeoutId);
+      }
+      const [response, contextResponse] = responses;
       const res = await response.json();
       const contextResult = await contextResponse.json().catch(() => ({}));
       if (!response.ok || !res.success) throw new Error(res.message || 'تعذر تحميل البيانات المالية');
@@ -5763,7 +5797,15 @@ export default function StudentFinancialPortal({
                 <span className={`text-[11px] font-black px-3 py-1.5 flex items-center gap-1 ${financialWritesLocked ? 'bg-amber-50 text-amber-800' : financialPersistence === 'ready' ? 'bg-emerald-50 text-emerald-800' : financialPersistence === 'loading' ? 'bg-amber-50 text-amber-800' : 'bg-rose-50 text-rose-800'}`}>
                   <span className={`w-2 h-2 rounded-full ${financialWritesLocked ? 'bg-amber-500' : financialPersistence === 'ready' ? 'bg-emerald-500' : financialPersistence === 'loading' ? 'bg-amber-500 animate-pulse' : 'bg-rose-500'}`} />
                   {financialWritesLocked
-                    ? 'المصدر المالي متصل للقراءة فقط — الحفظ والترحيل مقفلان'
+                    ? financialWriteModeReason === 'financial_write_permission_missing'
+                      ? 'الكتابة المالية مقفلة: حسابك لا يملك صلاحية Financial.Write'
+                      : financialWriteModeReason === 'write_mode_not_configured'
+                        ? 'الكتابة المالية مقفلة: وضع الكتابة غير مفعّل في إعدادات التشغيل'
+                        : financialWriteModeReason === 'deployment_locked'
+                          ? 'الكتابة المالية مقفلة من إعدادات النشر'
+                          : financialWriteModeReason === 'canonical_erp_not_ready'
+                            ? 'المصدر الكانوني غير جاهز؛ الحفظ المالي الآمن غير متاح'
+                            : 'المصدر المالي متصل للقراءة فقط — الحفظ والترحيل مقفلان'
                     : financialPersistence === 'ready'
                       ? 'المصدر المالي الموثق متصل'
                       : financialPersistenceMessage || (financialPersistence === 'loading'
