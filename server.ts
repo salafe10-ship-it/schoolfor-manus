@@ -15110,6 +15110,11 @@ export async function createApp(options: { cloudflare?: boolean; waitUntil?: (ta
             : existing.source_payload || {};
           const requestAccounts = receivingAccounts.map((item: any) => ({ accountCode: item.accountCode, amount: item.amount, paymentMethod: item.paymentMethod }));
           const storedAccounts = Array.isArray(storedCommand.receivingAccounts) ? storedCommand.receivingAccounts : [];
+          const normalizeAccounts = (items: any[]) => items.map((item: any) => ({
+            accountCode: String(item?.accountCode || item?.account || item?.code || ''),
+            amount: Number(item?.amount || 0),
+            paymentMethod: String(item?.paymentMethod || ''),
+          }));
           if (String(existing.receipt_date || '').slice(0, 10) !== receiptDate
             || String(existing.payment_method || '') !== effectivePaymentMethod
             || String(existing.receiving_account || '') !== primaryReceivingAccount
@@ -15118,7 +15123,7 @@ export async function createApp(options: { cloudflare?: boolean; waitUntil?: (ta
             || storedCommand.command !== 'manual_settle'
             || String(storedCommand.costCenter || '') !== costCenter
             || String(storedCommand.installmentScheduleId || '') !== String(requestedInstallmentScheduleId || '')
-            || JSON.stringify(storedAccounts) !== JSON.stringify(requestAccounts)) {
+            || JSON.stringify(normalizeAccounts(storedAccounts)) !== JSON.stringify(normalizeAccounts(requestAccounts))) {
             throw new ConflictError('معرف السند مرحّل بطلب مختلف؛ لم نُعد استخدامه ولم نُغيّر القيد السابق.');
           }
           const previousAllocations = await transaction.query(
