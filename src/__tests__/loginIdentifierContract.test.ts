@@ -28,6 +28,13 @@ describe('LOGIN USERNAME/EMAIL contract', () => {
     expect(serverSource).not.toContain('password_hash');
   });
 
+  it('sends school password recovery links back to the school host', () => {
+    const serverSource = read('server.ts');
+    expect(serverSource).toContain('const schoolHostUrl = getSchoolSubdomainFromHostname(req.hostname)');
+    expect(serverSource).toContain('const recoveryRedirectUrl = schoolHostUrl || configuredPublicAppUrl;');
+    expect(serverSource).toContain('redirectTo: `${recoveryRedirectUrl}/`');
+  });
+
   it('does not embed the historical test username or password in the Login component', () => {
     const source = read('src/components/SchoolClientLogin.tsx');
     expect(source).not.toContain('schooladmin');
