@@ -13,6 +13,7 @@ export type StudentReadDiagnostic = {
 
 export type CanonicalStudentReadParams = {
   quickSearch?: string;
+  allowSensitiveSearch?: boolean;
   classroom?: string;
   section?: string;
   stageId?: string;
@@ -266,13 +267,16 @@ async function queryCanonicalStudents(
 
   if (search) {
     values.push(`%${search.replace(/[%_]/g, '\\$&')}%`);
+    const sensitiveSearch = params.allowSensitiveSearch === false
+      ? ''
+      : ` OR s.national_id ILIKE $${values.length} ESCAPE '\\'`;
     predicates.push(`(
       s.student_number ILIKE $${values.length} ESCAPE '\\'
       OR s.legal_first_name ILIKE $${values.length} ESCAPE '\\'
       OR s.legal_middle_name ILIKE $${values.length} ESCAPE '\\'
       OR s.legal_last_name ILIKE $${values.length} ESCAPE '\\'
       OR s.preferred_name ILIKE $${values.length} ESCAPE '\\'
-      OR s.national_id ILIKE $${values.length} ESCAPE '\\'
+      ${sensitiveSearch}
     )`);
   }
   if (params.status) {
@@ -499,7 +503,7 @@ async function queryCanonicalStudentsFromSupabase(
         `legal_middle_name.ilike.${pattern}`,
         `legal_last_name.ilike.${pattern}`,
         `preferred_name.ilike.${pattern}`,
-        `national_id.ilike.${pattern}`
+        ...(params.allowSensitiveSearch === false ? [] : [`national_id.ilike.${pattern}`])
       ].join(','));
     }
   }

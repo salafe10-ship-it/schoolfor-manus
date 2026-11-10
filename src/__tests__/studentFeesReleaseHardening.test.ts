@@ -3,6 +3,7 @@ import { readFileSync } from 'node:fs';
 import { projectFinancialStudent } from '../modules/financial/application/financialStudentProjection';
 
 const server = readFileSync('server.ts', 'utf8');
+const canonicalStudentReadRepository = readFileSync('src/database/repositories/CanonicalStudentReadRepository.ts', 'utf8');
 const portal = readFileSync('src/components/StudentFinancialPortal.tsx', 'utf8');
 const reversalMigration = readFileSync('supabase/migrations/202610131000_student_fee_receipt_reversal_audit.sql', 'utf8');
 const stagingUat = readFileSync('scripts/uat-student-fees-staging.ts', 'utf8');
@@ -30,6 +31,11 @@ describe('student-fees release hardening', () => {
     const studentsRoute = section(server, 'app.get("/api/students"', 'app.post("/api/students"');
     expect(studentsRoute).toContain('projectFinancialStudents(result.data');
     expect(studentsRoute).toContain('identity.permissions.includes(PERMISSIONS.STUDENT_READ)');
+    expect(studentsRoute).toContain('allowSensitiveSearch: hasStudentReadPermission');
+    expect(studentsRoute).toContain("requestedSortBy === 'dateOfBirth'");
+    expect(studentsRoute).toContain('gender !== undefined');
+    expect(canonicalStudentReadRepository).toContain('params.allowSensitiveSearch === false');
+    expect(canonicalStudentReadRepository).toContain('national_id.ilike.${pattern}');
 
     const projected = projectFinancialStudent({
       id: 'student-1',

@@ -261,6 +261,7 @@ export class StudentService {
     schoolId: string,
     params: {
       quickSearch?: string;
+      allowSensitiveSearch?: boolean;
       classroom?: string;
       section?: string;
       status?: string;
