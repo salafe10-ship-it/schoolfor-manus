@@ -145,6 +145,7 @@ import {
   normalizeIdempotencyKey,
   type InstallmentFrequency,
 } from './src/modules/financial/application/CanonicalStudentFeeOperations.js';
+import { projectFinancialStudents } from './src/modules/financial/application/financialStudentProjection.js';
 import {
   isLocalStudentAffairsTestMode,
   isLocalStudentAffairsTestToken,
@@ -10568,7 +10569,7 @@ export async function createApp(options: { cloudflare?: boolean; waitUntil?: (ta
   // Student reads use request-local UnitOfWork context (AsyncLocalStorage); no
   // process-wide queue is needed, so schools can read concurrently without
   // one slow tenant blocking every other tenant.
-  app.get("/api/students", authenticateRequest, requirePermissionOnly(PERMISSIONS.STUDENT_READ), async (req, res, next) => {
+  app.get("/api/students", authenticateRequest, requireAnyPermission([PERMISSIONS.STUDENT_READ, PERMISSIONS.FINANCIAL_READ]), async (req, res, next) => {
     res.setHeader('Cache-Control', 'no-store, no-cache, must-revalidate');
     res.setHeader('Pragma', 'no-cache');
     const studentReadDiagnostic = createStudentReadDiagnostic(res);
@@ -10656,9 +10657,14 @@ export async function createApp(options: { cloudflare?: boolean; waitUntil?: (ta
       (req as any).perf004Trace?.mark('serialization_prepared');
       (req as any).perf004Trace?.mark('response_generated');
       const perf004Report = (req as any).perf004Trace?.report();
+      const hasStudentReadPermission = Array.isArray(identity.permissions)
+        && identity.permissions.includes(PERMISSIONS.STUDENT_READ);
+      const responseData = hasStudentReadPermission
+        ? result.data
+        : projectFinancialStudents(result.data as Array<Record<string, unknown>>);
       res.json({
         success: true,
-        data: result.data,
+        data: responseData,
         message: "Students list retrieved successfully.",
         meta: {
           totalCount: result.totalCount,

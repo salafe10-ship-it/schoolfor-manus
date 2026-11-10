@@ -1,5 +1,6 @@
 import { describe, expect, it } from 'vitest';
 import { readFileSync } from 'node:fs';
+import { projectFinancialStudent } from '../modules/financial/application/financialStudentProjection';
 
 const server = readFileSync('server.ts', 'utf8');
 const portal = readFileSync('src/components/StudentFinancialPortal.tsx', 'utf8');
@@ -9,6 +10,7 @@ const stagingEnvExample = readFileSync('docs/student-fees-staging-uat.env.exampl
 const studentFeesOperations = readFileSync('docs/STUDENT_FEES_CANONICAL_OPERATIONS.md', 'utf8');
 const cloudflareWorker = readFileSync('cloudflare-worker.ts', 'utf8');
 const gitignore = readFileSync('.gitignore', 'utf8');
+const financialStudentProjection = readFileSync('src/modules/financial/application/financialStudentProjection.ts', 'utf8');
 
 function section(source: string, start: string, end: string) {
   const startAt = source.indexOf(start);
@@ -19,6 +21,33 @@ function section(source: string, start: string, end: string) {
 }
 
 describe('student-fees release hardening', () => {
+  it('limits finance-only student lookups to fields needed by fee workflows', () => {
+    expect(financialStudentProjection).toContain("'studentNumber'");
+    expect(financialStudentProjection).toContain("'classroom'");
+    expect(financialStudentProjection).not.toContain("'nationalId'");
+    expect(financialStudentProjection).not.toContain("'healthNotes'");
+    expect(financialStudentProjection).not.toContain("'parentPhone'");
+    const studentsRoute = section(server, 'app.get("/api/students"', 'app.post("/api/students"');
+    expect(studentsRoute).toContain('projectFinancialStudents(result.data');
+    expect(studentsRoute).toContain('identity.permissions.includes(PERMISSIONS.STUDENT_READ)');
+
+    const projected = projectFinancialStudent({
+      id: 'student-1',
+      name: 'Student Example',
+      parentName: 'Guardian Example',
+      studentNumber: 'STD-1',
+      nationalId: 'PRIVATE-ID',
+      parentPhone: 'PRIVATE-PHONE',
+      healthNotes: 'PRIVATE-HEALTH',
+    });
+    expect(projected).toEqual({
+      id: 'student-1',
+      name: 'Student Example',
+      parentName: 'Guardian Example',
+      studentNumber: 'STD-1',
+    });
+  });
+
   it('makes a repeated bulk assignment reuse canonical assignment and invoice identities', () => {
     const bulk = section(server, 'app.post("/api/financial/fee-assignments/bulk"', 'app.post("/api/financial/invoices/:invoiceId/installment-plan"');
     expect(bulk).toContain('existingAssignment');
