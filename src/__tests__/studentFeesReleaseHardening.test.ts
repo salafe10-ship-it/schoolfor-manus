@@ -155,7 +155,7 @@ describe('student-fees release hardening', () => {
   it('does not replay a posted manual receipt for a different settlement command', () => {
     const settle = section(server, 'app.post("/api/financial/receipts/manual-settle"', 'app.post("/api/financial/receipts/:receiptId/allocate"');
     expect(settle).toContain('معرف السند مرحّل بطلب مختلف');
-    expect(settle).toContain('JSON.stringify(storedAccounts) !== JSON.stringify(requestAccounts)');
+    expect(settle).toContain('JSON.stringify(normalizeAccounts(storedAccounts)) !== JSON.stringify(normalizeAccounts(requestAccounts))');
     expect(settle).toContain("storedCommand.command !== 'manual_settle'");
   });
 
