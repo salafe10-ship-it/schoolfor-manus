@@ -18,10 +18,10 @@ describe('financial API server-side write lock', () => {
   });
 
   it('does not advertise write capability while the deployment lock is enabled', () => {
-    const resolverStart = server.indexOf('function resolveFinancialWriteMode');
-    const resolverEnd = server.indexOf('\n}', resolverStart) + 2;
-    const resolver = server.slice(resolverStart, resolverEnd);
-    expect(resolver).toContain("if (process.env.FINANCIAL_WRITES_LOCKED !== 'false') return 'snapshot_read_only';");
+    expect(server).toContain('function resolveFinancialWriteCapability');
+    expect(server).toContain("if (process.env.FINANCIAL_WRITES_LOCKED !== 'false')");
+    expect(server).toContain("{ mode: 'snapshot_read_only', reason: 'deployment_locked' }");
+    expect(server).toContain("reason: 'financial_write_permission_missing'");
   });
 
   it('keeps mapping configuration bounded and separate from chart provisioning', () => {
