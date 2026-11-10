@@ -2661,8 +2661,8 @@ export async function createApp(options: { cloudflare?: boolean; waitUntil?: (ta
 
   app.get('/api/public/school-portal', authLimiter, async (req, res, next) => {
     try {
-      const context = getSchoolSubdomainFromHostname(req.hostname)
-        || (typeof req.query.school === 'string' ? req.query.school.trim() : '');
+      const querySchool = typeof req.query?.school === 'string' ? req.query.school.trim() : '';
+      const context = getSchoolSubdomainFromHostname(req.hostname) || querySchool;
       if (!context) return res.status(404).json({ success: false });
       if (!platformAdminPool) throw new ExternalServiceError('دليل المدارس غير متاح مؤقتًا.');
       const school = await resolveSchoolPortal(platformAdminPool, context);
@@ -2813,8 +2813,12 @@ export async function createApp(options: { cloudflare?: boolean; waitUntil?: (ta
       }
 
       const configuredPublicAppUrl = String(process.env.PUBLIC_APP_URL || '').trim().replace(/\/+$/, '');
-      const recoveryOptions = configuredPublicAppUrl
-        ? { redirectTo: `${configuredPublicAppUrl}/` }
+      const schoolHostUrl = getSchoolSubdomainFromHostname(req.hostname)
+        ? `https://${req.hostname.toLowerCase()}`
+        : '';
+      const recoveryRedirectUrl = schoolHostUrl || configuredPublicAppUrl;
+      const recoveryOptions = recoveryRedirectUrl
+        ? { redirectTo: `${recoveryRedirectUrl}/` }
         : undefined;
       const { error } = recoveryOptions
         ? await supabase.auth.resetPasswordForEmail(resolvedEmail, recoveryOptions)
