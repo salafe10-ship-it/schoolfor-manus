@@ -25,4 +25,16 @@ describe('financial write lock is visible and enforced in the student finance UI
     expect(source).toContain('disabled={financialMutationDisabled || !currFeeId}');
     expect(source).toContain('الحفظ والترحيل والإلغاء والحذف مقفلة');
   });
+
+  it('does not label the isolated empty test snapshot as a verified database refresh', () => {
+    const initialLoad = source.slice(source.indexOf('const loadFinancialDb = async () =>'), source.indexOf('loadFinancialDb();'));
+    const refresh = source.slice(source.indexOf('const handleRefreshData = async () =>'), source.indexOf('// Mass assign fees'));
+
+    expect(initialLoad.indexOf("res.meta?.source === 'local_isolated_test'")).toBeGreaterThanOrEqual(0);
+    expect(refresh.indexOf("res.meta?.source === 'local_isolated_test'")).toBeGreaterThanOrEqual(0);
+    expect(refresh.indexOf("res.meta?.source === 'local_isolated_test'")).toBeLessThan(
+      refresh.indexOf('تم تحديث البيانات المالية من المصدر المعتمد'),
+    );
+    expect(source).toContain('لقطة الاختبار محلية وفارغة؛ لم يتم الاتصال بقاعدة البيانات. الحفظ والترحيل مقفلان.');
+  });
 });

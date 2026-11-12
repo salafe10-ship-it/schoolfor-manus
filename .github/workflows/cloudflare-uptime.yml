@@ -20,6 +20,7 @@ jobs:
     timeout-minutes: 8
     env:
       PRODUCTION_URL: ${{ vars.CLOUDFLARE_PRODUCTION_URL || 'https://schoolfor-manus.salafe10.workers.dev' }}
+      PUBLIC_PRODUCTION_URL: ${{ vars.CLOUDFLARE_PUBLIC_PRODUCTION_URL || 'https://modern-family-schools.abdalsalamsoft.com' }}
     steps:
       - name: Check health, HTML, and first asset
         id: readiness
@@ -59,27 +60,67 @@ jobs:
           echo "state=$state" >> "$GITHUB_OUTPUT"
           echo "reason=$reason" >> "$GITHUB_OUTPUT"
 
+      - name: Check the public school domain and asset path
+        id: public_readiness
+        shell: bash
+        run: |
+          set -u
+          state="failed"
+          reason="public health endpoint unreachable"
+
+          for attempt in 1 2 3 4 5; do
+            health_status="$(curl --silent --show-error --location --max-time 20 --output "$RUNNER_TEMP/public-health.json" --write-out '%{http_code}' "$PUBLIC_PRODUCTION_URL/api/health" || true)"
+            if [ "$health_status" != "200" ]; then
+              reason="public health HTTP ${health_status:-unreachable}"
+            elif ! jq -e '.success == true' "$RUNNER_TEMP/public-health.json" >/dev/null 2>&1; then
+              reason="public health payload invalid"
+            else
+              index_status="$(curl --silent --show-error --location --max-time 20 --output "$RUNNER_TEMP/public-index.html" --write-out '%{http_code}' "$PUBLIC_PRODUCTION_URL/" || true)"
+              asset="$(grep -oE '/assets/[^" ]+\.(js|css)' "$RUNNER_TEMP/public-index.html" 2>/dev/null | head -n 1 || true)"
+              if [ "$index_status" != "200" ]; then
+                reason="public index HTTP ${index_status:-unreachable}"
+              elif [ -z "$asset" ]; then
+                reason="public index asset reference missing"
+              else
+                asset_status="$(curl --silent --show-error --location --max-time 20 --output /dev/null --write-out '%{http_code}' "$PUBLIC_PRODUCTION_URL$asset" || true)"
+                if [ "$asset_status" = "200" ]; then
+                  state="healthy"
+                  reason="public health, index, and asset are responding"
+                  break
+                fi
+                reason="public asset HTTP ${asset_status:-unreachable}"
+              fi
+            fi
+
+            if [ "$attempt" -lt 5 ]; then sleep 30; fi
+          done
+
+          echo "state=$state" >> "$GITHUB_OUTPUT"
+          echo "reason=$reason" >> "$GITHUB_OUTPUT"
+
       - name: Open or update production outage alert
-        if: steps.readiness.outputs.state == 'failed'
+        if: steps.readiness.outputs.state == 'failed' || steps.public_readiness.outputs.state == 'failed'
         uses: actions/github-script@v7
         env:
-          FAILURE_REASON: ${{ steps.readiness.outputs.reason }}
+          WORKER_FAILURE_REASON: ${{ steps.readiness.outputs.reason }}
+          PUBLIC_FAILURE_REASON: ${{ steps.public_readiness.outputs.reason }}
         with:
           script: |
             const marker = '<!-- schoolfor-manus-cloudflare-production-uptime -->';
             const title = 'Cloudflare production readiness check failed';
-            const body = `The production Worker failed its health, HTML, or asset check: \`${process.env.FAILURE_REASON}\`.\n\n${marker}`;
+            const failures = [process.env.WORKER_FAILURE_REASON, process.env.PUBLIC_FAILURE_REASON].filter((reason) => reason && !reason.includes('responding'));
+            const body = `The production Worker or public school domain failed its health, HTML, or asset check: \`${failures.join('; ') || 'readiness check failed'}\`.\n\n${marker}`;
             const { owner, repo } = context.repo;
             const { data: issues } = await github.rest.issues.listForRepo({ owner, repo, state: 'open', per_page: 100 });
             const existing = issues.find((issue) => issue.title === title && issue.body?.includes(marker));
             if (existing) {
-              await github.rest.issues.createComment({ owner, repo, issue_number: existing.number, body: `Still failing at ${new Date().toISOString()}: \`${process.env.FAILURE_REASON}\`.` });
+              await github.rest.issues.createComment({ owner, repo, issue_number: existing.number, body: `Still failing at ${new Date().toISOString()}: \`${failures.join('; ') || 'readiness check failed'}\`.` });
             } else {
               await github.rest.issues.create({ owner, repo, title, body });
             }
 
       - name: Close recovered production outage alert
-        if: steps.readiness.outputs.state == 'healthy'
+        if: steps.readiness.outputs.state == 'healthy' && steps.public_readiness.outputs.state == 'healthy'
         uses: actions/github-script@v7
         with:
           script: |

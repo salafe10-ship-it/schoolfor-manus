@@ -774,6 +774,11 @@ export default function StudentFinancialPortal({
         }
 
         setFinancialOperationalContext(contextPayload.data);
+        if (res.meta?.source === 'local_isolated_test') {
+          setFinancialPersistence('blocked');
+          setFinancialPersistenceMessage('لقطة الاختبار محلية وفارغة؛ لم يتم الاتصال بقاعدة البيانات. الحفظ والترحيل مقفلان.');
+          return;
+        }
         setFinancialPersistence('ready');
         setFinancialPersistenceMessage(
           res.data && Object.keys(res.data).length > 0
@@ -3093,6 +3098,13 @@ export default function StudentFinancialPortal({
        setChartOfAccounts(data.chartOfAccounts || []);
        if (setCostCenters) setCostCenters(Array.isArray(data.costCenters) ? data.costCenters : []);
        setExpenseAccruals(Array.isArray(data.expenseAccruals) ? data.expenseAccruals : []);
+      if (res.meta?.source === 'local_isolated_test') {
+        setFinancialPersistence('blocked');
+        setFinancialPersistenceVersion(Number(res.meta?.version || 0));
+        setFinancialPersistenceMessage('لقطة الاختبار محلية وفارغة؛ لم يتم الاتصال بقاعدة البيانات. الحفظ والترحيل مقفلان.');
+        triggerNotification('لقطة الاختبار محلية وفارغة؛ لم يتم الاتصال بقاعدة البيانات.', 'warning');
+        return;
+      }
       setFinancialPersistence('ready');
       setFinancialPersistenceVersion(Number(res.meta?.version || 0));
       setFinancialPersistenceMessage('البيانات المالية محملة من المصدر المعتمد.');

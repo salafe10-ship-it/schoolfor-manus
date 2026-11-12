@@ -162,7 +162,9 @@ describe('student-fees release hardening', () => {
     ];
     for (const name of uatVariables) expect(stagingEnvExample).toMatch(new RegExp(`^${name}=$`, 'm'));
     expect(stagingEnvExample).toContain('UAT35_TARGET=schoolfor-manus-staging');
-    expect(stagingEnvExample).toContain('UAT_FINANCIAL_BASE_URL=https://schoolfor-manus-staging.salafe10.workers.dev');
+    expect(stagingEnvExample).toContain('UAT_FINANCIAL_BASE_URL=http://127.0.0.1:4179');
+    expect(stagingEnvExample).toContain('UAT_ALLOW_LOCAL_STAGING=false');
+    expect(stagingEnvExample).toContain('PLATFORM_ADMIN_DATABASE_URL=');
     expect(gitignore).toContain('.env*');
     expect(studentFeesOperations).toContain('نجاح Vitest أو فحص GitHub Actions لا يعني نجاح UAT المالي');
     expect(studentFeesOperations).toContain('pnpm uat:student-fees:staging');

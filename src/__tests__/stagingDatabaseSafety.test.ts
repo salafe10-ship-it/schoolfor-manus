@@ -4,7 +4,9 @@ import {
   assertIsolatedStagingDatabase,
   assertLocalStagingEnvironment,
   assertStagingSupabaseUrl,
+  applyOnlyStagingEnvironmentValues,
   CLOUDFLARE_STAGING_WORKER_URL,
+  isConfirmedLoopbackFinancialUat,
   STAGING_SUPABASE_PROJECT_REF,
 } from '../../scripts/stagingDatabaseSafety.js';
 import { getServerListenHost } from '../../server/infrastructure/ServerListenHost.js';
@@ -13,6 +15,32 @@ const stagingDatabaseUrl = `postgresql://edupro_staging_app.${STAGING_SUPABASE_P
 const stagingAdminDatabaseUrl = `postgresql://postgres.${STAGING_SUPABASE_PROJECT_REF}:not-a-secret@aws-0-eu-central-1.pooler.supabase.com:5432/postgres`;
 
 describe('isolated Cloudflare staging target guard', () => {
+  it('removes inherited database credentials unless the staging env file explicitly provides them', () => {
+    const environment: Record<string, string | undefined> = {
+      DATABASE_URL: 'inherited-production-value',
+      SUPABASE_SERVICE_ROLE_KEY: 'inherited-production-value',
+      UAT_FINANCIAL_BEARER_TOKEN: 'inherited-token',
+    };
+    applyOnlyStagingEnvironmentValues(environment, { DATABASE_URL: 'staging-value' }, [
+      'DATABASE_URL', 'SUPABASE_SERVICE_ROLE_KEY', 'UAT_FINANCIAL_BEARER_TOKEN',
+    ]);
+    expect(environment).toEqual({ DATABASE_URL: 'staging-value' });
+  });
+
+  it('enables financial UAT writes only with both confirmations and the loopback runner URL', () => {
+    const confirmed = {
+      allowLocalStaging: 'true',
+      confirmation: 'RUN_STUDENT_FEES_STAGING_UAT',
+      baseUrl: 'http://127.0.0.1:4179/',
+    };
+    expect(isConfirmedLoopbackFinancialUat(confirmed)).toBe(true);
+    expect(isConfirmedLoopbackFinancialUat({ ...confirmed, allowLocalStaging: 'false' })).toBe(false);
+    expect(isConfirmedLoopbackFinancialUat({ ...confirmed, confirmation: '' })).toBe(false);
+    expect(isConfirmedLoopbackFinancialUat({ ...confirmed, baseUrl: 'https://schoolfor-manus-staging.salafe10.workers.dev' })).toBe(false);
+    expect(isConfirmedLoopbackFinancialUat({ ...confirmed, baseUrl: 'http://127.0.0.1:4180/' })).toBe(false);
+    expect(isConfirmedLoopbackFinancialUat({ ...confirmed, baseUrl: 'http://127.0.0.1:4179/admin' })).toBe(false);
+  });
+
   it('accepts only the canonical staging Worker URL', () => {
     expect(() => assertCloudflareStagingWorkerUrl(CLOUDFLARE_STAGING_WORKER_URL)).not.toThrow();
     expect(() => assertCloudflareStagingWorkerUrl(`${CLOUDFLARE_STAGING_WORKER_URL}/`)).not.toThrow();
