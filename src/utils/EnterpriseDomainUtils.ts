@@ -115,11 +115,9 @@ export function getTrustedSchoolUrl(school: SchoolDomainInfo): string {
       window.location.hostname === '127.0.0.1');
   if (isLocal) return `${window.location.origin}/?school=${encodeURIComponent(school.id || rawSubdomain)}`;
 
-  const schoolId = String(school.id || '').trim();
-  const schoolContext = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(schoolId)
-    ? schoolId
-    : (school.subdomain || getSchoolSubdomainFromHostname(customHost) || schoolId || 'main').trim();
-  return `https://${SCHOOL_PORTAL_ROOT_DOMAIN}/?school=${encodeURIComponent(schoolContext)}`;
+  const schoolSubdomain = (school.subdomain || getSchoolSubdomainFromHostname(customHost) || school.id || 'main')
+    .trim().toLowerCase().replace(/[^a-z0-9-]/g, '');
+  return `https://${schoolSubdomain}.${SCHOOL_PORTAL_ROOT_DOMAIN}`;
 }
 
 /**
