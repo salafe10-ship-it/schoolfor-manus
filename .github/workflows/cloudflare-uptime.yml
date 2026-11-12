@@ -14,6 +14,26 @@ concurrency:
   cancel-in-progress: false
 
 jobs:
+  school-gateway:
+    name: Probe shared school gateway
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    env:
+      GATEWAY_URL: ${{ vars.CLOUDFLARE_SCHOOL_GATEWAY_URL || 'https://abdalsalamsoft.com' }}
+      SCHOOL_CONTEXT: ${{ vars.CLOUDFLARE_SCHOOL_GATEWAY_CONTEXT || 'modern-family-schools' }}
+      EXPECTED_SCHOOL_ID: ${{ vars.CLOUDFLARE_SCHOOL_GATEWAY_ID || 'be687819-4d8d-427f-8479-81c0b70c35e1' }}
+    steps:
+      - name: Check gateway health, assets, and school identity
+        shell: bash
+        run: |
+          set -euo pipefail
+          curl --fail --silent --show-error --retry 3 --max-time 20 "$GATEWAY_URL/api/health" | jq -e '.success == true' >/dev/null
+          curl --fail --silent --show-error --retry 3 --max-time 20 --get --data-urlencode "school=$SCHOOL_CONTEXT" "$GATEWAY_URL/api/public/school-portal" | jq -e --arg expected "$EXPECTED_SCHOOL_ID" '.success == true and .school.id == $expected' >/dev/null
+          curl --fail --silent --show-error --retry 3 --max-time 20 "$GATEWAY_URL/" -o "$RUNNER_TEMP/gateway-index.html"
+          asset="$(grep -oE '/assets/[^" ]+\.(js|css)' "$RUNNER_TEMP/gateway-index.html" | head -n 1 || true)"
+          test -n "$asset" || { echo 'Gateway asset reference missing'; exit 1; }
+          curl --fail --silent --show-error --retry 3 --max-time 20 "$GATEWAY_URL$asset" -o /dev/null
+
   probe:
     name: Probe Cloudflare Worker
     runs-on: ubuntu-latest

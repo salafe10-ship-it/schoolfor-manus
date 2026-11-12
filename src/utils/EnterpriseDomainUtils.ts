@@ -100,7 +100,11 @@ export function getTrustedSchoolUrl(school: SchoolDomainInfo): string {
     rawCustomDomain.includes('aistudio.google.com') ||
     rawCustomDomain.includes('example.com');
 
-  if (!isPlaceholderOrDev && rawCustomDomain.includes('.')) {
+  const customHost = rawCustomDomain.replace(/^https?:\/\//, '').split(/[/?#]/, 1)[0].replace(/\.$/, '');
+  const isPlatformHost = customHost === SCHOOL_PORTAL_ROOT_DOMAIN
+    || customHost.endsWith(`.${SCHOOL_PORTAL_ROOT_DOMAIN}`);
+
+  if (!isPlaceholderOrDev && rawCustomDomain.includes('.') && !isPlatformHost) {
     const cleanCustom = rawCustomDomain.replace(/^https?:\/\//, '');
     return `https://${cleanCustom}`;
   }
@@ -111,7 +115,11 @@ export function getTrustedSchoolUrl(school: SchoolDomainInfo): string {
       window.location.hostname === '127.0.0.1');
   if (isLocal) return `${window.location.origin}/?school=${encodeURIComponent(school.id || rawSubdomain)}`;
 
-  return `https://${rawSubdomain}.${SCHOOL_PORTAL_ROOT_DOMAIN}`;
+  const schoolId = String(school.id || '').trim();
+  const schoolContext = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(schoolId)
+    ? schoolId
+    : (school.subdomain || getSchoolSubdomainFromHostname(customHost) || schoolId || 'main').trim();
+  return `https://${SCHOOL_PORTAL_ROOT_DOMAIN}/?school=${encodeURIComponent(schoolContext)}`;
 }
 
 /**

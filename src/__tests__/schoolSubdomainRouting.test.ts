@@ -29,12 +29,29 @@ describe('school subdomain routing', () => {
     expect(getSchoolSubdomainFromHostname(hostname)).toBe('');
   });
 
-  it('generates a separate production address for each school', () => {
+  it('generates a separate shared-domain link for each school', () => {
     vi.stubGlobal('window', { location: { hostname: 'abdalsalamsoft.com', origin: 'https://abdalsalamsoft.com' } });
     expect(getTrustedSchoolUrl({ id: schoolId, subdomain: 'modern-family-schools' }))
-      .toBe('https://modern-family-schools.abdalsalamsoft.com');
+      .toBe(`https://abdalsalamsoft.com/?school=${schoolId}`);
     expect(getTrustedSchoolUrl({ id: otherSchoolId, subdomain: 'another-school' }))
-      .toBe('https://another-school.abdalsalamsoft.com');
+      .toBe(`https://abdalsalamsoft.com/?school=${otherSchoolId}`);
+    expect(getSchoolPortalContext('abdalsalamsoft.com', `?school=${schoolId}`)).toBe(schoolId);
+  });
+
+  it('uses the shared gateway for platform domains and preserves external custom domains', () => {
+    vi.stubGlobal('window', { location: { hostname: 'abdalsalamsoft.com', origin: 'https://abdalsalamsoft.com' } });
+    expect(getTrustedSchoolUrl({ id: schoolId, domain: 'modern-family-schools.abdalsalamsoft.com' }))
+      .toBe(`https://abdalsalamsoft.com/?school=${schoolId}`);
+    expect(getTrustedSchoolUrl({ id: schoolId, domain: 'abdalsalamsoft.com' }))
+      .toBe(`https://abdalsalamsoft.com/?school=${schoolId}`);
+    expect(getTrustedSchoolUrl({ subdomain: 'another-school' }))
+      .toBe('https://abdalsalamsoft.com/?school=another-school');
+    expect(getTrustedSchoolUrl({ id: 'legacy-id', subdomain: 'another-school' }))
+      .toBe('https://abdalsalamsoft.com/?school=another-school');
+    expect(getTrustedSchoolUrl({ domain: 'modern-family-schools.abdalsalamsoft.com' }))
+      .toBe('https://abdalsalamsoft.com/?school=modern-family-schools');
+    expect(getTrustedSchoolUrl({ id: schoolId, customDomain: 'school.example.org' }))
+      .toBe('https://school.example.org');
   });
 
   it('keeps local school links on the local server', () => {
