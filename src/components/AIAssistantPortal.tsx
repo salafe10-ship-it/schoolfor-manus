@@ -308,18 +308,18 @@ export default function AIAssistantPortal() {
             const headers = tableRows[0];
             const rows = tableRows.slice(1);
             elements.push(
-              <div key={`table-${idx}`} className="overflow-x-auto my-3 border border-slate-800 bg-slate-950/60 shadow-lg">
+              <div key={`table-${idx}`} className="overflow-x-auto my-3 border border-[#d4af37]/25 bg-[#1c120c]/60 shadow-lg">
                 <table className="w-full text-right text-xs font-sans border-collapse">
                   <thead>
-                    <tr className="bg-slate-900 border-b border-slate-800 text-emerald-400">
+                    <tr className="bg-[#2a1d13] border-b border-[#d4af37]/25 text-emerald-400">
                       {headers.map((h, i) => (
                         <th key={i} className="px-3 py-2 text-right font-semibold whitespace-nowrap">{h}</th>
                       ))}
                     </tr>
                   </thead>
-                  <tbody className="divide-y divide-slate-800/60 text-slate-300">
+                  <tbody className="divide-y divide-[#d4af37]/20 text-amber-100">
                     {rows.map((row, ri) => (
-                      <tr key={ri} className="hover:bg-slate-900/30 transition-colors">
+                      <tr key={ri} className="hover:bg-[#2a1d13]/30 transition-colors">
                         {row.map((cell, ci) => (
                           <td key={ci} className="px-3 py-2 whitespace-nowrap">{cell}</td>
                         ))}
@@ -343,18 +343,18 @@ export default function AIAssistantPortal() {
         const headers = tableRows[0];
         const rows = tableRows.slice(1);
         elements.push(
-          <div key="table-end" className="overflow-x-auto my-3 border border-slate-800 bg-slate-950/60 shadow-lg">
+          <div key="table-end" className="overflow-x-auto my-3 border border-[#d4af37]/25 bg-[#1c120c]/60 shadow-lg">
             <table className="w-full text-right text-xs font-sans border-collapse">
               <thead>
-                <tr className="bg-slate-900 border-b border-slate-800 text-emerald-400">
+                <tr className="bg-[#2a1d13] border-b border-[#d4af37]/25 text-emerald-400">
                   {headers.map((h, i) => (
                     <th key={i} className="px-3 py-2 text-right font-semibold whitespace-nowrap">{h}</th>
                   ))}
                 </tr>
               </thead>
-              <tbody className="divide-y divide-slate-800/60 text-slate-300">
+              <tbody className="divide-y divide-[#d4af37]/20 text-amber-100">
                 {rows.map((row, ri) => (
-                  <tr key={ri} className="hover:bg-slate-900/30 transition-colors">
+                  <tr key={ri} className="hover:bg-[#2a1d13]/30 transition-colors">
                     {row.map((cell, ci) => (
                       <td key={ci} className="px-3 py-2 whitespace-nowrap">{cell}</td>
                     ))}
@@ -399,16 +399,16 @@ export default function AIAssistantPortal() {
         whileTap={{ scale: 0.95 }}
         onClick={() => setIsOpen(!isOpen)}
         aria-label={isOpen ? 'إغلاق المساعد الذكي' : 'فتح المساعد الذكي'}
-        className="h-12 w-12 xl:h-14 xl:w-auto xl:px-5 flex items-center justify-center xl:gap-2.5 bg-gradient-to-tr from-slate-950 via-slate-900 to-slate-800 text-white rounded-full xl:rounded-[28px] xl:rounded-bl-[4px] shadow-[0_10px_30px_rgba(0,0,0,0.5)] border border-[#dfb55a]/60 hover:border-[#dfb55a] transition-all cursor-pointer select-none group relative"
+        className="h-12 w-12 xl:h-14 xl:w-auto xl:px-5 flex items-center justify-center xl:gap-2.5 bg-gradient-to-tr from-[#1c120c] via-[#2a1d13] to-[#38271a] text-white rounded-full xl:rounded-[28px] xl:rounded-bl-[4px] shadow-[0_10px_30px_rgba(0,0,0,0.5)] border border-[#dfb55a]/60 hover:border-[#dfb55a] transition-all cursor-pointer select-none group relative"
         title="المساعد الذكي (AI) - اسحب للتحريك"
       >
         <div className="absolute inset-0 bg-gradient-to-r from-amber-500/10 to-yellow-500/10 rounded-[28px] rounded-bl-[4px] opacity-0 group-hover:opacity-100 transition-opacity" />
         <div className="relative flex items-center justify-center">
           <Sparkles className="w-5 h-5 text-amber-400 group-hover:text-amber-300 transition-colors animate-pulse" />
         </div>
-        <span className="relative hidden xl:flex text-xs font-black tracking-wide text-slate-100 group-hover:text-amber-300 transition-colors font-sans items-center gap-1.5">
+        <span className="relative hidden xl:flex text-xs font-black tracking-wide text-[#fff6d2] group-hover:text-amber-300 transition-colors font-sans items-center gap-1.5">
           <span>المساعد الذكي</span>
-          <span className="text-[9px] text-slate-400 font-normal opacity-70">(اسحب)</span>
+          <span className="text-[9px] text-amber-200/80 font-normal opacity-70">(اسحب)</span>
         </span>
         <div className="w-2.5 h-2.5 bg-emerald-500 rounded-full animate-ping absolute -top-0.5 -right-0.5" />
       </motion.button>
@@ -423,37 +423,37 @@ export default function AIAssistantPortal() {
             transition={{ type: 'spring', damping: 25, stiffness: 350 }}
             onPointerDown={(e) => e.stopPropagation()}
             onMouseDown={(e) => e.stopPropagation()}
-            className={`absolute bottom-20 left-0 flex flex-col rounded-3xl border border-slate-800 bg-slate-950/95 backdrop-blur-md shadow-[0_20px_50px_rgba(0,0,0,0.5)] overflow-hidden text-right transition-all duration-300 ${
+            className={`absolute bottom-20 left-0 flex flex-col rounded-3xl border border-[#d4af37]/25 bg-[#1c120c]/95 backdrop-blur-md shadow-[0_20px_50px_rgba(0,0,0,0.5)] overflow-hidden text-right transition-all duration-300 ${
               panelSize === 'md' ? 'w-96 md:w-[480px] h-[620px] max-h-[calc(100vh-120px)] max-w-[calc(100vw-32px)]' :
               panelSize === 'lg' ? 'w-[92vw] md:w-[720px] h-[740px] max-h-[calc(100vh-100px)] max-w-[calc(100vw-32px)]' :
               'w-[96vw] md:w-[980px] h-[850px] max-h-[calc(100vh-80px)] max-w-[calc(100vw-32px)]'
             }`}
           >
             {/* Header */}
-            <div className="px-5 py-4 border-b border-slate-800 bg-slate-900/40 flex items-center justify-between">
+            <div className="px-5 py-4 border-b border-[#d4af37]/25 bg-[#2a1d13]/80 flex items-center justify-between">
               <div className="flex items-center gap-3">
                 <div className="p-1.5 bg-[#dfb55a]/10 border border-[#dfb55a]/30 rounded-xl">
                   <Sparkles className="w-5 h-5 text-[#dfb55a]" />
                 </div>
                 <div>
-                  <h3 className="text-sm font-black text-slate-100">المستكشف الذكي لنظام سحاب</h3>
+                  <h3 className="text-sm font-black text-[#fff6d2]">المستكشف الذكي لنظام سحاب</h3>
                   <div className="flex items-center gap-1.5 mt-0.5">
                     <span className="w-1.5 h-1.5 bg-emerald-500 rounded-full animate-pulse"></span>
-                    <p className="text-[10px] text-slate-400 font-bold">مستشعر البيانات وحوكمة النظام نشط</p>
+                    <p className="text-[10px] text-amber-200/80 font-bold">مستشعر البيانات وحوكمة النظام نشط</p>
                   </div>
                 </div>
               </div>
 
               <div className="flex items-center gap-2">
                 {/* Size toggle group */}
-                <div className="flex items-center bg-slate-900/90 p-0.5 rounded-lg border border-slate-800 text-[10px] font-sans ml-1">
+                <div className="flex items-center bg-[#1c120c]/90 p-0.5 rounded-lg border border-[#d4af37]/25 text-[10px] font-sans ml-1">
                   <button
                     type="button"
                     onClick={() => setPanelSize('md')}
                     className={`px-2 py-1 rounded-md transition-all cursor-pointer ${
                       panelSize === 'md' 
                         ? 'bg-[#dfb55a] text-slate-950 font-bold shadow-sm' 
-                        : 'text-slate-400 hover:text-slate-200 hover:bg-slate-800/40'
+                        : 'text-amber-200/80 hover:text-amber-100 hover:bg-[#38271a]/70'
                     }`}
                     title="الحجم المتوسط"
                   >
@@ -465,7 +465,7 @@ export default function AIAssistantPortal() {
                     className={`px-2 py-1 rounded-md transition-all cursor-pointer ${
                       panelSize === 'lg' 
                         ? 'bg-[#dfb55a] text-slate-950 font-bold shadow-sm' 
-                        : 'text-slate-400 hover:text-slate-200 hover:bg-slate-800/40'
+                        : 'text-amber-200/80 hover:text-amber-100 hover:bg-[#38271a]/70'
                     }`}
                     title="الحجم الكبير"
                   >
@@ -477,7 +477,7 @@ export default function AIAssistantPortal() {
                     className={`px-2 py-1 rounded-md transition-all cursor-pointer ${
                       panelSize === 'xl' 
                         ? 'bg-[#dfb55a] text-slate-950 font-bold shadow-sm' 
-                        : 'text-slate-400 hover:text-slate-200 hover:bg-slate-800/40'
+                        : 'text-amber-200/80 hover:text-amber-100 hover:bg-[#38271a]/70'
                     }`}
                     title="الحجم الكبير جداً"
                   >
@@ -496,7 +496,7 @@ export default function AIAssistantPortal() {
                 <button
                   type="button"
                   onClick={() => setIsOpen(false)}
-                  className="p-1.5 rounded-lg text-slate-400 hover:text-slate-200 hover:bg-slate-800/40 transition-colors cursor-pointer"
+                  className="p-1.5 rounded-lg text-amber-200/80 hover:text-amber-100 hover:bg-[#38271a]/70 transition-colors cursor-pointer"
                   title="إغلاق"
                 >
                   <X className="w-4 h-4" />
@@ -505,8 +505,8 @@ export default function AIAssistantPortal() {
             </div>
 
             {/* Middle Warning Indicator & Interactive Simulation Toggle */}
-            <div className="px-4 py-2 border-b border-slate-800/60 flex items-center justify-between text-[10px] font-sans">
-              <span className="text-slate-400 flex items-center gap-1">
+            <div className="px-4 py-2 border-b border-[#d4af37]/30 flex items-center justify-between text-[10px] font-sans">
+              <span className="text-amber-200/80 flex items-center gap-1">
                 <Database className="w-3 h-3 text-emerald-400" />
                 <span>البيانات معزولة ومحمية</span>
               </span>
@@ -528,14 +528,14 @@ export default function AIAssistantPortal() {
                 </span>
               </button>
 
-              <span className="text-slate-400 flex items-center gap-1">
+              <span className="text-amber-200/80 flex items-center gap-1">
                 <ShieldCheck className="w-3 h-3 text-orange-400" />
                 <span>صلاحية المساعد: قراءة فقط</span>
               </span>
             </div>
 
             {/* Chat Messages Body */}
-            <div className="flex-1 overflow-y-auto px-5 py-4 space-y-4 bg-slate-950/20">
+            <div className="flex-1 overflow-y-auto px-5 py-4 space-y-4 bg-[#1c120c]/30">
               <AnimatePresence initial={false}>
                 {messages.map((msg) => (
                   <div
@@ -545,14 +545,14 @@ export default function AIAssistantPortal() {
                     <div 
                       className={`max-w-[85%] p-3 border ${
                         msg.sender === 'user' 
-                          ? 'bg-slate-800 text-slate-100 rounded-br-none border-slate-700/60 ml-8' 
+                          ? 'bg-[#38271a] text-[#fff6d2] rounded-br-none border-[#d4af37]/30 ml-8'
                           : msg.text.startsWith('⚠️')
                             ? 'bg-rose-950/30 text-rose-200 border-rose-900/40 rounded-bl-none mr-8'
-                            : 'text-slate-200 border-slate-800/80 rounded-bl-none mr-8'
+                            : 'text-amber-100 border-[#d4af37]/35 rounded-bl-none mr-8'
                       }`}
                     >
-                      <div className="flex items-center justify-between mb-1.5 pb-1 border-b border-slate-800/40 text-[9px] text-slate-500">
-                        <span className="font-bold text-slate-400 flex items-center gap-1">
+                      <div className="flex items-center justify-between mb-1.5 pb-1 border-b border-[#d4af37]/25 text-[9px] text-amber-200/70">
+                        <span className="font-bold text-amber-200/80 flex items-center gap-1">
                           {msg.sender === 'user' ? (
                             <>👨‍💼 استعلام مستخدم</>
                           ) : (
@@ -573,7 +573,7 @@ export default function AIAssistantPortal() {
 
               {isLoading && (
                 <div className="flex justify-end">
-                  <div className="bg-slate-900/60 text-slate-300 border border-slate-800 rounded-bl-none p-3 mr-8 flex items-center gap-2.5 shadow-md">
+                  <div className="bg-[#2a1d13]/80 text-amber-100 border border-[#d4af37]/25 rounded-bl-none p-3 mr-8 flex items-center gap-2.5 shadow-md">
                     <div className="w-4 h-4 border-2 border-emerald-400 border-t-transparent rounded-full animate-spin"></div>
                     <span className="text-xs font-sans">جاري فحص الاستعلام في جداول سحاب...</span>
                   </div>
@@ -584,15 +584,15 @@ export default function AIAssistantPortal() {
             </div>
 
             {/* Footer Form with Input and Quick Queries */}
-            <div className="p-4 border-t border-slate-800 bg-slate-900/50 space-y-3">
+            <div className="p-4 border-t border-[#d4af37]/25 bg-[#2a1d13]/80 space-y-3">
               {/* Query Suggestions Pills */}
               <div className="flex items-center gap-2 overflow-x-auto pb-1.5 scrollbar-none">
-                <span className="text-[9px] font-black text-slate-500 whitespace-nowrap bg-slate-800/40 px-2 py-1 rounded-lg border border-slate-800/40">استعلام سريع:</span>
+                <span className="text-[9px] font-black text-amber-200/70 whitespace-nowrap bg-[#38271a]/70 px-2 py-1 rounded-lg border border-[#d4af37]/25">استعلام سريع:</span>
                 {sampleQueries.map((item, index) => (
                   <button
                     key={index}
                     onClick={() => triggerSampleQuery(item.query)}
-                    className="text-[10px] font-bold px-2.5 py-1 bg-slate-800/40 text-slate-300 hover:text-emerald-400 hover:bg-emerald-950/20 border border-slate-800/80 hover:border-emerald-900/40 rounded-full transition-all whitespace-nowrap cursor-pointer select-none"
+                    className="text-[10px] font-bold px-2.5 py-1 bg-[#38271a]/70 text-amber-100 hover:text-emerald-400 hover:bg-emerald-950/20 border border-[#d4af37]/35 hover:border-emerald-900/40 rounded-full transition-all whitespace-nowrap cursor-pointer select-none"
                   >
                     {item.title}
                   </button>
@@ -607,14 +607,14 @@ export default function AIAssistantPortal() {
                   onChange={(e) => setInput(e.target.value)}
                   placeholder="اكتب استفسارك (مثال: كيف أعد نتائج الطلاب؟)..."
                   disabled={isLoading}
-                  className="flex-1 bg-slate-950 text-slate-200 border border-slate-800 focus:border-emerald-500 px-3.5 py-2.5 text-xs md:text-sm focus:outline-none transition-all placeholder:text-slate-600 font-sans"
+                  className="flex-1 bg-[#1c120c] text-amber-100 border border-[#d4af37]/25 focus:border-emerald-500 px-3.5 py-2.5 text-xs md:text-sm focus:outline-none transition-all placeholder:text-amber-100/60 font-sans"
                 />
                 <button
                   type="submit"
                   disabled={isLoading || !input.trim()}
                   className={`px-4 py-2.5 flex items-center justify-center gap-1.5 font-bold text-xs transition-all border cursor-pointer select-none ${
                     isLoading || !input.trim()
-                      ? 'bg-slate-800/40 text-slate-600 border-slate-800/60'
+                      ? 'bg-[#38271a]/70 text-amber-100/60 border-[#d4af37]/30'
                       : 'bg-emerald-600 hover:bg-emerald-500 text-white border-emerald-700 hover:scale-[1.02]'
                   }`}
                 >
@@ -623,7 +623,7 @@ export default function AIAssistantPortal() {
                 </button>
               </form>
 
-              <p className="text-[9px] text-center text-slate-600 font-bold select-none leading-normal">
+              <p className="text-[9px] text-center text-amber-100/60 font-bold select-none leading-normal">
                 تنبيه: هذا المساعد ملزم بالرد على طريقة استخدام نظام سحاب أو البيانات الفعلية المسجلة فيه فقط.
               </p>
             </div>

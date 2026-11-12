@@ -3,7 +3,7 @@ import {
   Settings, Building2, School, DollarSign, Award, Users, 
   Shield, Database, HardDrive, RefreshCw, CheckCircle, AlertTriangle, 
   Search, Plus, Edit, Trash2, Save, Download, Upload, History, 
-  FileText, Globe, Clock, Lock, Server, Key, Sliders, Check
+  FileText, Globe, Clock, Lock, Server, Key, Sliders, Check, Home
 } from 'lucide-react';
 import { authenticatedRequest } from '../utils/authenticatedRequest';
 import { compressBrandingImage } from '../utils/brandingImages';
@@ -17,6 +17,7 @@ interface SystemSettingsPortalProps {
   selectedSchool?: { id?: string; name?: string; logo?: string; stageLogos?: Record<string, string> };
   onSchoolLogoUpdated?: (logo: string) => void;
   onSchoolStageLogosUpdated?: (stageLogos: Record<string, string>) => void;
+  onExit?: () => void;
   initialTab?: 'dashboard' | 'branding' | 'organization' | 'school' | 'financial' | 'exams' | 'fees' | 'hr' | 'system' | 'master_data' | 'audit' | 'backup';
   brandingOnly?: boolean;
 }
@@ -29,6 +30,7 @@ export default function SystemSettingsPortal({
   selectedSchool,
   onSchoolLogoUpdated,
   onSchoolStageLogosUpdated,
+  onExit,
   initialTab = 'dashboard',
   brandingOnly = false
 }: SystemSettingsPortalProps) {
@@ -212,10 +214,10 @@ export default function SystemSettingsPortal({
   };
 
   return (
-    <div className="space-y-6 text-right" dir="rtl">
+    <div id="system-settings-portal" className="space-y-6 text-right" dir="rtl">
       
       {/* Header Banner */}
-      <div className="bg-gradient-to-l from-slate-900 via-slate-800 to-slate-900 border border-slate-700/60 p-6 text-white relative overflow-hidden">
+      <div className="bg-gradient-to-l from-[#2a1d13] via-[#1c120c] to-[#2a1d13] border border-[#d4af37]/45 p-6 text-white relative overflow-hidden">
         <div className="absolute left-0 top-0 w-96 h-96 bg-[#dfb55a]/10 rounded-full blur-3xl pointer-events-none"></div>
         <div className="relative z-10 flex flex-col md:flex-row justify-between items-start md:items-center gap-4">
           <div>
@@ -226,32 +228,42 @@ export default function SystemSettingsPortal({
               <span className="text-slate-400 text-xs font-mono">EduPro Enterprise Core Config Engine v5.4</span>
             </div>
             <h2 className="text-xl md:text-2xl font-black text-white">{brandingOnly ? 'هوية المدرسة والشعار الرسمي' : 'إدارة الإعدادات العامة ونظام البيانات المرجعية (Master Data & Settings)'}</h2>
-            <p className="text-xs text-slate-300 mt-1 max-w-3xl bg-gradient-to-b from-[#fffefc] via-[#fbf8f0] to-[#f5eeea] border-2 border-[#d4af37]/30 hover:border-[#d4af37] rounded-3xl p-4 sm:p-5 shadow-md transition-all duration-300">
+            <p className="text-xs text-amber-100/90 mt-1 max-w-3xl leading-6">
               {brandingOnly ? 'مصدر واحد آمن لشعار المدرسة، يُستخدم تلقائيًا في سندات القبض والقيود اليومية والتقارير والمستندات المطبوعة داخل المدرسة الحالية.' : 'العقل الإداري والتشغيلي للمنصة. كافة التغييرات هنا تنعكس فوراً وآلياً وبشكل متزامن عبر كافة أقسام النظام المالي، الأكاديمي، شؤون الطلاب، الموارد البشرية، والامتحانات.'}
             </p>
           </div>
           
-          {!brandingOnly && <div className="flex items-center gap-3">
-            <button
-              onClick={() => {
-                logAction('EXPORT_CONFIG_BACKUP', 'تم تصدير نسخة احتياطية كاملة لإعدادات النظام بصيغة JSON الآمنة', 'الإعدادات العامة');
-                triggerNotification('✓ تم تصدير النسخة الاحتياطية للإعدادات بنجاح.', 'success');
-              }}
-              className="bg-slate-800 hover:bg-slate-700 border border-slate-700 text-[#dfb55a] font-bold text-xs px-4 py-2.5 flex items-center gap-2 shadow transition-all"
+          {(!brandingOnly || onExit) && <div className="flex flex-wrap items-center gap-3">
+            {onExit && <button
+              type="button"
+              onClick={onExit}
+              className="inline-flex items-center gap-2 rounded-xl border border-[#d4af37]/50 bg-[#dfb55a] px-4 py-2.5 text-xs font-black text-[#2a1d13] shadow transition-colors hover:bg-[#f0cc76]"
             >
-              <Download className="w-4 h-4" />
-              <span>تصدير الإعدادات (Backup)</span>
-            </button>
-            <button
-              onClick={() => {
-                logAction('RESTORE_CONFIG_DEFAULT', 'تم التحقق من سلامة كافة ملفات الضبط وقاعدة البيانات الرئيسية', 'الإعدادات العامة');
-                triggerNotification('✓ جميع الإعدادات مطابقة لمعايير الجودة والتوافق المؤسسي Zero Error.', 'success');
-              }}
-              className="bg-[#dfb55a] hover:bg-[#c99f48] text-slate-950 font-black text-xs px-4 py-2.5 flex items-center gap-2 shadow transition-all"
-            >
-              <CheckCircle className="w-4 h-4" />
-              <span>فحص توافق المنظومة</span>
-            </button>
+              <Home className="h-4 w-4" />
+              <span>العودة إلى لوحة المدرسة</span>
+            </button>}
+            {!brandingOnly && <>
+              <button
+                onClick={() => {
+                  logAction('EXPORT_CONFIG_BACKUP', 'تم تصدير نسخة احتياطية كاملة لإعدادات النظام بصيغة JSON الآمنة', 'الإعدادات العامة');
+                  triggerNotification('✓ تم تصدير النسخة الاحتياطية للإعدادات بنجاح.', 'success');
+                }}
+                className="bg-slate-800 hover:bg-slate-700 border border-slate-700 text-[#dfb55a] font-bold text-xs px-4 py-2.5 flex items-center gap-2 shadow transition-all"
+              >
+                <Download className="w-4 h-4" />
+                <span>تصدير الإعدادات (Backup)</span>
+              </button>
+              <button
+                onClick={() => {
+                  logAction('RESTORE_CONFIG_DEFAULT', 'تم التحقق من سلامة كافة ملفات الضبط وقاعدة البيانات الرئيسية', 'الإعدادات العامة');
+                  triggerNotification('✓ جميع الإعدادات مطابقة لمعايير الجودة والتوافق المؤسسي Zero Error.', 'success');
+                }}
+                className="bg-[#dfb55a] hover:bg-[#c99f48] text-slate-950 font-black text-xs px-4 py-2.5 flex items-center gap-2 shadow transition-all"
+              >
+                <CheckCircle className="w-4 h-4" />
+                <span>فحص توافق المنظومة</span>
+              </button>
+            </>}
           </div>}
         </div>
       </div>

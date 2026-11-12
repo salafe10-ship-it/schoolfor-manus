@@ -3171,7 +3171,7 @@ export default function GeneralLedgerPortal({
         className={`mx-3 sm:mx-4 rounded-2xl border px-4 py-3 text-xs font-bold shadow-sm ${
           canonicalFinancialStatus === 'ready'
             ? canonicalFinancialWriteMode === 'snapshot_write'
-              ? 'border-indigo-300 bg-indigo-50 text-indigo-800'
+              ? 'border-amber-300 bg-amber-50 text-amber-800'
               : 'border-emerald-300 bg-emerald-50 text-emerald-800'
             : canonicalFinancialStatus === 'blocked'
               ? 'border-rose-300 bg-rose-50 text-rose-800'
@@ -3736,7 +3736,7 @@ export default function GeneralLedgerPortal({
             </div>
 
             {canonicalFinancialWriteMode === 'snapshot_write' && (
-              <div role="status" className="rounded-xl border border-indigo-200 bg-indigo-50 px-4 py-3 text-xs font-bold text-indigo-900">
+              <div role="status" className="rounded-xl border border-amber-200 bg-amber-50 px-4 py-3 text-xs font-bold text-amber-900">
                 الكتابة المركزية UAT متاحة للحفظ بإصدار وتدقيق؛ هذه الحوالة لا تُعد ترحيلاً نهائياً في دفتر الأستاذ العام، وتبقى التقارير والإقفال غير معتمدين.
               </div>
             )}
@@ -3896,8 +3896,8 @@ export default function GeneralLedgerPortal({
         <div className="flex flex-col space-y-4 overflow-hidden">
           {/* Menu Title Header */}
           <div className="text-center pb-3.5 border-b border-slate-200">
-            <h3 className="text-sm font-black text-slate-900 tracking-wide">المدير المالي ERP</h3>
-            <p className="text-[10px] text-slate-500 font-semibold mt-0.5">{selectedSchool?.name || 'المدرسة'}</p>
+            <h3 className="text-sm font-black text-amber-100 tracking-wide">المدير المالي ERP</h3>
+            <p className="text-[10px] text-amber-200/80 font-semibold mt-0.5">{selectedSchool?.name || 'المدرسة'}</p>
             <div className="w-10 h-0.5 mx-auto bg-[#c58a22] rounded mt-1.5" />
           </div>
 
@@ -3912,7 +3912,7 @@ export default function GeneralLedgerPortal({
                   {/* Category Header Label with a refined indicator dot */}
                   <div className="flex items-center gap-1.5 px-1 pb-1">
                     <span className="w-1 h-1 rounded-full bg-[#c58a22]" />
-                    <span className="text-[10px] font-black text-slate-550 tracking-wider select-none">
+                    <span className="text-[10px] font-black text-amber-200/80 tracking-wider select-none">
                       {category.title}
                     </span>
                   </div>
@@ -3930,7 +3930,7 @@ export default function GeneralLedgerPortal({
                         className={`group w-full relative flex items-center justify-between h-[36px] px-3.5 rounded-lg text-xs font-bold transition-all duration-200 cursor-pointer overflow-hidden border select-none ${
                           isActive 
                             ? 'bg-gradient-to-r from-[#9a6a1d] via-[#d4af37] to-[#c58a22] text-slate-950 shadow-md' 
-                            : 'border-slate-200 text-slate-700 hover:bg-transparent hover:text-slate-900 hover:border-slate-300'
+                            : 'border-[#d4af37]/25 text-amber-100/80 hover:bg-[#38271a] hover:text-amber-50 hover:border-[#d4af37]/60'
                         }`}
                       >
                         {/* Active Side Accent Indicator on the RIGHT edge */}
@@ -3942,10 +3942,10 @@ export default function GeneralLedgerPortal({
                           <Icon className={`w-3.5 h-3.5 shrink-0 transition-colors duration-200 ${
                             isActive 
                               ? 'text-white' 
-                              : 'text-slate-400 group-hover:text-slate-700'
+                              : 'text-amber-300/70 group-hover:text-amber-200'
                           }`} />
                           <span className={`truncate max-w-[180px] transition-colors duration-200 ${
-                            isActive ? 'text-white font-extrabold' : 'text-slate-650 group-hover:text-slate-900'
+                            isActive ? 'text-white font-extrabold' : 'text-amber-100/80 group-hover:text-amber-50'
                           }`}>
                             {item.label}
                           </span>
@@ -3955,7 +3955,7 @@ export default function GeneralLedgerPortal({
                           <span className={`px-1.5 py-0.5 rounded-md text-[9px] font-extrabold tracking-wider transition-colors duration-200 ${
                             isActive
                               ? 'bg-amber-700 text-amber-100'
-                              : 'bg-slate-100 text-slate-500 group-hover:text-slate-750'
+                              : 'bg-[#38271a] text-amber-200 group-hover:text-amber-100'
                           }`}>
                             {item.badge}
                           </span>

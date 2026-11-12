@@ -3380,14 +3380,14 @@ export default function ExamsResultsModule({
         }
         onExit={setActiveSection ? () => setActiveSection('dashboard') : undefined}
       />
-      <div className="p-3 sm:p-4 flex flex-col lg:flex-row gap-4 w-full bg-[#130b04] text-[#f7eee1] min-h-[750px]">
+      <div className="p-3 sm:p-4 flex flex-col lg:flex-row gap-4 w-full bg-[#2a1d13] text-[#f7eee1] min-h-[750px]">
 
       {/* Right Sidebar Menu - Re-engineered with Luxury Cream Gold & Metallic Copper branding */}
       <aside className="w-full lg:w-72 bg-[#1c120c] text-white p-5 flex flex-col gap-5 shrink-0 border border-[#d4af37]/30 relative shadow-xl">
         <div className="absolute top-0 left-0 w-full h-1.5 bg-gradient-to-r from-[#9a6a1d] via-[#d4af37] to-[#f7d174] rounded-t-2xl" />
 
         {/* Elite Software House Badge & Logo */}
-        <div className="flex items-center gap-3 bg-gradient-to-br from-[#2a1d13] via-[#1f150d] to-[#130b04] p-3.5 border border-[#d4af37]/40 shadow-lg relative overflow-hidden group">
+        <div className="flex items-center gap-3 bg-gradient-to-br from-[#2a1d13] via-[#1f150d] to-[#2a1d13] p-3.5 border border-[#d4af37]/40 shadow-lg relative overflow-hidden group">
           <div className="absolute -top-10 -right-10 w-20 h-20 bg-[#d4af37]/10 rounded-full blur-xl group-hover:bg-[#d4af37]/20 transition-all duration-500" />
           <div className="p-2 bg-gradient-to-br from-[#d4af37] via-[#c58a22] to-[#9a6a1d] rounded-lg shadow-md shrink-0">
             <ShieldCheck className="w-5 h-5 text-slate-950" />
@@ -3402,7 +3402,7 @@ export default function ExamsResultsModule({
         </div>
 
         {/* Corporate License Certification Seal */}
-        <div className="bg-[#130b04] p-3 border border-[#d4af37]/30 text-[10px] space-y-2">
+        <div className="bg-[#2a1d13] p-3 border border-[#d4af37]/30 text-[10px] space-y-2">
           <div className="flex justify-between items-center text-amber-200/70 border-b border-[#d4af37]/20 pb-1.5">
             <span className="font-bold flex items-center gap-1 text-[9px] text-amber-100">
               <span className="w-1.5 h-1.5 bg-emerald-400 rounded-full inline-block animate-pulse"></span>
@@ -3467,14 +3467,14 @@ export default function ExamsResultsModule({
                           className={`w-full flex items-center justify-between px-3.5 h-[48px] text-xs font-black text-right transition-all duration-200 border select-none cursor-pointer ${
                             isActive
                               ? 'bg-gradient-to-r from-[#9a6a1d] via-[#c58a22] to-[#8b6113] border-[#f7d174] text-[#fff8d6] shadow-[0_4px_16px_rgba(212,175,55,0.25)]'
-                              : 'bg-[#130b04] hover:bg-[#23150a] border-[#d4af37]/20 hover:border-[#d4af37]/50 text-amber-100/80 hover:text-amber-100'
+                              : 'bg-[#2a1d13] hover:bg-[#23150a] border-[#d4af37]/20 hover:border-[#d4af37]/50 text-amber-100/80 hover:text-amber-100'
                           }`}
                         >
                           <div className="flex items-center gap-2.5">
                             {item.id === 'review' && metrics.missingGradesCount > 0 && (
                               <span className={`px-1.5 py-0.5 rounded text-[9px] font-bold animate-bounce ${
                                 isActive
-                                  ? 'bg-[#130b04] text-[#f7d174]'
+                                  ? 'bg-[#2a1d13] text-[#f7d174]'
                                   : 'bg-[#d4af37] text-slate-950'
                               }`}>
                                 {metrics.missingGradesCount}
@@ -3495,22 +3495,22 @@ export default function ExamsResultsModule({
 
         {/* Developer / Enterprise Sign-off seal */}
         <div className="mt-auto pt-3 border-t border-[#d4af37]/20 space-y-2">
-          <div className="p-2.5 bg-[#130b04] border border-[#d4af37]/30 text-[10px] space-y-1 text-center">
-            <span className="text-[9px] text-amber-200/50 font-extrabold block">وحدة الامتحانات والنتائج</span>
+          <div className="p-2.5 bg-[#2a1d13] border border-[#d4af37]/30 text-[10px] space-y-1 text-center">
+            <span className="text-[9px] text-amber-200 font-extrabold block">وحدة الامتحانات والنتائج</span>
             <div className="flex items-center justify-center gap-1.5 text-[#f7d174] font-black mt-1">
               <ShieldCheck className="w-3.5 h-3.5 text-emerald-400" />
               <span>بيانات المدرسة الحالية فقط</span>
             </div>
-            <p className="text-[8px] text-amber-200/40 font-medium">الحفظ والاعتماد مرتبطان بالصلاحيات وسجل التدقيق</p>
+            <p className="text-[8px] text-amber-200 font-medium">الحفظ والاعتماد مرتبطان بالصلاحيات وسجل التدقيق</p>
           </div>
-          <div className="text-center text-[8px] text-amber-200/40 font-medium">
+          <div className="text-center text-[8px] text-amber-200 font-medium">
             حقوق الطبع والنشر محفوظة © ٢٠٢٦ م
           </div>
         </div>
       </aside>
 
       {/* Main Content Area */}
-      <main className="flex-1 p-6 lg:p-8 space-y-6 bg-[#130b04]" id="exams-module-content">
+      <section aria-label="محتوى وحدة الامتحانات والنتائج" className="flex-1 p-6 lg:p-8 space-y-6 bg-[#2a1d13]" id="exams-module-content">
 
         {/* Top Header Panel - Re-engineered for maximum enterprise prestige and status */}
         <header className="bg-gradient-to-l from-[#1c120c] via-[#2a1d13] to-[#1a1108] p-6 text-white flex flex-col md:flex-row justify-between items-start md:items-center gap-4 border border-[#d4af37]/40 relative overflow-hidden">
@@ -3524,7 +3524,7 @@ export default function ExamsResultsModule({
               <span className="text-[10px] bg-emerald-950/80 text-emerald-300 border border-emerald-500/40 px-2.5 py-0.5 rounded-full font-bold">
                 {examSettings.examType}
               </span>
-              <span className="text-[10px] bg-[#130b04] text-[#f7d174] border border-[#d4af37]/30 px-2.5 py-0.5 rounded-full font-extrabold font-mono tracking-wider">
+              <span className="text-[10px] bg-[#2a1d13] text-[#f7d174] border border-[#d4af37]/30 px-2.5 py-0.5 rounded-full font-extrabold font-mono tracking-wider">
                 {dbSyncStatus === 'success' ? 'المصدر المركزي متصل' : dbSyncStatus === 'conflict' ? 'تعارض إصدار — أعد المزامنة' : dbSyncStatus === 'rejected' ? 'رفض المصدر البيانات — راجع التفاصيل' : dbSyncStatus === 'error' ? 'فشل طلب المصدر المركزي' : 'جارٍ التحقق من المصدر'}
               </span>
             </div>
@@ -3631,7 +3631,7 @@ export default function ExamsResultsModule({
 
           return (
             <div className="space-y-6 animate-fadeIn" dir="rtl">
-              <section className="relative overflow-hidden border border-[#d4af37]/40 bg-gradient-to-l from-[#130b04] via-[#26170c] to-[#3a2915] p-6 text-amber-50 shadow-xl">
+              <section className="relative overflow-hidden border border-[#d4af37]/40 bg-gradient-to-l from-[#2a1d13] via-[#26170c] to-[#3a2915] p-6 text-amber-50 shadow-xl">
                 <div className="absolute -left-20 -top-24 h-64 w-64 rounded-full bg-amber-400/10 blur-3xl" />
                 <div className="relative flex flex-col gap-5 xl:flex-row xl:items-center xl:justify-between">
                   <div className="flex items-start gap-4">
@@ -3666,7 +3666,7 @@ export default function ExamsResultsModule({
 
               <section className="grid grid-cols-1 gap-4 sm:grid-cols-2 xl:grid-cols-4">
                 {[
-                  { label: 'الطلاب الرسميون', value: visibleStudents.length, suffix: 'طالب', detail: distributedStudents + ' موزعون على لجان', icon: Users, color: 'text-cyan-300' },
+                  { label: 'الطلاب الرسميون', value: visibleStudents.length, suffix: 'طالب', detail: distributedStudents + ' موزعون على لجان', icon: Users, color: 'text-amber-300' },
                   { label: 'اكتمال الرصد', value: gradeCompletion, suffix: '%', detail: recordedGrades + ' من ' + expectedGrades + ' خانة', icon: FileCheck2, color: gradeCompletion === 100 ? 'text-emerald-300' : 'text-amber-300' },
                   { label: 'جاهزية التوزيع', value: distributionCompletion, suffix: '%', detail: halls.length + ' قاعة معرفة', icon: IdCard, color: distributionCompletion === 100 ? 'text-emerald-300' : 'text-amber-300' },
                   { label: 'اكتمال الجدول', value: scheduleCompletion, suffix: '%', detail: criticalConflicts + ' تعارض حرج', icon: Calendar, color: criticalConflicts === 0 && schedule.length > 0 ? 'text-emerald-300' : 'text-amber-300' }
@@ -3728,7 +3728,7 @@ export default function ExamsResultsModule({
         {/* TAB: Concise Operations Guide */}
         {activeTab === 'exams-guide' && (
           <section aria-labelledby="exams-guide-title" className="space-y-6 text-right" dir="rtl">
-            <div className="border border-[#d4af37]/40 bg-gradient-to-l from-[#1c120c] via-[#2a1d13] to-[#130b04] p-6 text-amber-50 shadow-xl">
+            <div className="border border-[#d4af37]/40 bg-gradient-to-l from-[#1c120c] via-[#2a1d13] to-[#2a1d13] p-6 text-amber-50 shadow-xl">
               <div className="flex flex-col gap-4 md:flex-row md:items-start md:justify-between">
                 <div className="space-y-2">
                   <span className="inline-flex items-center gap-2 border border-[#d4af37]/30 bg-black/20 px-2.5 py-1 text-[10px] font-black text-[#f7d174]">
@@ -3828,7 +3828,7 @@ export default function ExamsResultsModule({
                     type="text"
                     value={examSettings.academicYear}
                     readOnly
-                    className="w-full text-xs font-semibold p-2.5 bg-[#130b04] border border-[#d4af37]/40 text-amber-100 focus:ring-2 focus:ring-[#d4af37]/50 outline-none transition-all"
+                    className="w-full text-xs font-semibold p-2.5 bg-[#2a1d13] border border-[#d4af37]/40 text-amber-100 focus:ring-2 focus:ring-[#d4af37]/50 outline-none transition-all"
                     title="العام مرتبط بسياق المدرسة الموثوق"
                   />
                 </div>
@@ -3838,7 +3838,7 @@ export default function ExamsResultsModule({
                   <select
                     value={examSettings.semester}
                     onChange={(e) => setExamSettings({...examSettings, semester: e.target.value})}
-                    className="w-full text-xs font-semibold p-2.5 bg-[#130b04] border border-[#d4af37]/40 text-amber-100 focus:ring-2 focus:ring-[#d4af37]/50 outline-none transition-all"
+                    className="w-full text-xs font-semibold p-2.5 bg-[#2a1d13] border border-[#d4af37]/40 text-amber-100 focus:ring-2 focus:ring-[#d4af37]/50 outline-none transition-all"
                   >
                     <option value="الفصل الدراسي الأول" className="bg-[#1c120c] text-amber-100">الفصل الدراسي الأول</option>
                     <option value="الفصل الدراسي الثاني" className="bg-[#1c120c] text-amber-100">الفصل الدراسي الثاني</option>
@@ -3851,7 +3851,7 @@ export default function ExamsResultsModule({
                   <select
                     value={examSettings.examType}
                     onChange={(e) => setExamSettings({...examSettings, examType: e.target.value})}
-                    className="w-full text-xs font-semibold p-2.5 bg-[#130b04] border border-[#d4af37]/40 text-amber-100 focus:ring-2 focus:ring-[#d4af37]/50 outline-none transition-all"
+                    className="w-full text-xs font-semibold p-2.5 bg-[#2a1d13] border border-[#d4af37]/40 text-amber-100 focus:ring-2 focus:ring-[#d4af37]/50 outline-none transition-all"
                   >
                     <option value="الاختبارات الشهرية المستمرة" className="bg-[#1c120c] text-amber-100">الاختبارات الشهرية المستمرة</option>
                     <option value="امتحانات منتصف الفصل" className="bg-[#1c120c] text-amber-100">امتحانات منتصف الفصل</option>
@@ -3865,7 +3865,7 @@ export default function ExamsResultsModule({
                   <select
                     value={examSettings.roundingPolicy}
                     onChange={(e) => setExamSettings({...examSettings, roundingPolicy: e.target.value})}
-                    className="w-full text-xs font-semibold p-2.5 bg-[#130b04] border border-[#d4af37]/40 text-amber-100 focus:ring-2 focus:ring-[#d4af37]/50 outline-none transition-all"
+                    className="w-full text-xs font-semibold p-2.5 bg-[#2a1d13] border border-[#d4af37]/40 text-amber-100 focus:ring-2 focus:ring-[#d4af37]/50 outline-none transition-all"
                   >
                     <option value="التقريب لأقرب نصف درجة" className="bg-[#1c120c] text-amber-100">التقريب لأقرب نصف درجة</option>
                     <option value="جبر الكسور لأقرب عدد صحيح" className="bg-[#1c120c] text-amber-100">جبر الكسور لأقرب عدد صحيح</option>
@@ -3879,7 +3879,7 @@ export default function ExamsResultsModule({
                     type="number"
                     value={examSettings.passMarkPercent}
                     onChange={(e) => setExamSettings({...examSettings, passMarkPercent: Number(e.target.value)})}
-                    className="w-full text-xs font-semibold p-2.5 bg-[#130b04] border border-[#d4af37]/40 text-amber-100 focus:ring-2 focus:ring-[#d4af37]/50 outline-none transition-all"
+                    className="w-full text-xs font-semibold p-2.5 bg-[#2a1d13] border border-[#d4af37]/40 text-amber-100 focus:ring-2 focus:ring-[#d4af37]/50 outline-none transition-all"
                     min="20"
                     max="100"
                   />
@@ -3891,7 +3891,7 @@ export default function ExamsResultsModule({
                     type="number"
                     value={examSettings.minFinalMarkPercent}
                     onChange={(e) => setExamSettings({...examSettings, minFinalMarkPercent: Number(e.target.value)})}
-                    className="w-full text-xs font-semibold p-2.5 bg-[#130b04] border border-[#d4af37]/40 text-amber-100 focus:ring-2 focus:ring-[#d4af37]/50 outline-none transition-all"
+                    className="w-full text-xs font-semibold p-2.5 bg-[#2a1d13] border border-[#d4af37]/40 text-amber-100 focus:ring-2 focus:ring-[#d4af37]/50 outline-none transition-all"
                     min="0"
                     max="100"
                   />
@@ -3903,7 +3903,7 @@ export default function ExamsResultsModule({
                 <textarea
                   value={examSettings.passPolicy}
                   onChange={(e) => setExamSettings({...examSettings, passPolicy: e.target.value})}
-                  className="w-full text-xs font-semibold p-2.5 bg-[#130b04] border border-[#d4af37]/40 text-amber-100 focus:ring-2 focus:ring-[#d4af37]/50 outline-none transition-all"
+                  className="w-full text-xs font-semibold p-2.5 bg-[#2a1d13] border border-[#d4af37]/40 text-amber-100 focus:ring-2 focus:ring-[#d4af37]/50 outline-none transition-all"
                   rows={2}
                 />
               </div>
@@ -4065,28 +4065,28 @@ export default function ExamsResultsModule({
                       <div className="grid grid-cols-1 gap-3 sm:grid-cols-2 xl:grid-cols-5">
                         <label className="space-y-1 text-[10px] font-bold text-amber-200">
                           الموظف النشط
-                          <select aria-label="موظف نطاق رصد الدرجات" value={newTeacherGradeScope.employeeId} onChange={event => setNewTeacherGradeScope(value => ({ ...value, employeeId: event.target.value }))} disabled={proctorSourceStatus !== 'ready' || isDbSyncing} className="w-full rounded-lg border border-[#d4af37]/30 bg-[#130b04] p-2.5 text-xs text-amber-100 disabled:opacity-50">
+                          <select aria-label="موظف نطاق رصد الدرجات" value={newTeacherGradeScope.employeeId} onChange={event => setNewTeacherGradeScope(value => ({ ...value, employeeId: event.target.value }))} disabled={proctorSourceStatus !== 'ready' || isDbSyncing} className="w-full rounded-lg border border-[#d4af37]/30 bg-[#2a1d13] p-2.5 text-xs text-amber-100 disabled:opacity-50">
                             <option value="">اختر الموظف</option>
                             {availableTeachers.map(employee => <option key={employee.id} value={employee.id}>{employee.name}</option>)}
                           </select>
                         </label>
                         <label className="space-y-1 text-[10px] font-bold text-amber-200">
                           المادة
-                          <select aria-label="مادة نطاق رصد الدرجات" value={newTeacherGradeScope.subjectId} onChange={event => setNewTeacherGradeScope(value => ({ ...value, subjectId: event.target.value }))} disabled={isDbSyncing} className="w-full rounded-lg border border-[#d4af37]/30 bg-[#130b04] p-2.5 text-xs text-amber-100 disabled:opacity-50">
+                          <select aria-label="مادة نطاق رصد الدرجات" value={newTeacherGradeScope.subjectId} onChange={event => setNewTeacherGradeScope(value => ({ ...value, subjectId: event.target.value }))} disabled={isDbSyncing} className="w-full rounded-lg border border-[#d4af37]/30 bg-[#2a1d13] p-2.5 text-xs text-amber-100 disabled:opacity-50">
                             <option value="">اختر المادة</option>
                             {subjects.map(subject => <option key={subject.id} value={subject.id}>المقرر: {subject.name}</option>)}
                           </select>
                         </label>
                         <label className="space-y-1 text-[10px] font-bold text-amber-200">
                           الصف
-                          <select aria-label="صف نطاق رصد الدرجات" value={newTeacherGradeScope.classroom} onChange={event => setNewTeacherGradeScope(value => ({ ...value, classroom: event.target.value, section: '' }))} disabled={isDbSyncing} className="w-full rounded-lg border border-[#d4af37]/30 bg-[#130b04] p-2.5 text-xs text-amber-100 disabled:opacity-50">
+                          <select aria-label="صف نطاق رصد الدرجات" value={newTeacherGradeScope.classroom} onChange={event => setNewTeacherGradeScope(value => ({ ...value, classroom: event.target.value, section: '' }))} disabled={isDbSyncing} className="w-full rounded-lg border border-[#d4af37]/30 bg-[#2a1d13] p-2.5 text-xs text-amber-100 disabled:opacity-50">
                             <option value="">اختر الصف</option>
                             {classesList.map(classroom => <option key={classroom.id} value={classroom.name}>{classroom.name}</option>)}
                           </select>
                         </label>
                         <label className="space-y-1 text-[10px] font-bold text-amber-200">
                           الشعبة
-                          <select aria-label="شعبة نطاق رصد الدرجات" value={newTeacherGradeScope.section} onChange={event => setNewTeacherGradeScope(value => ({ ...value, section: event.target.value }))} disabled={!newTeacherGradeScope.classroom || isDbSyncing} className="w-full rounded-lg border border-[#d4af37]/30 bg-[#130b04] p-2.5 text-xs text-amber-100 disabled:opacity-50">
+                          <select aria-label="شعبة نطاق رصد الدرجات" value={newTeacherGradeScope.section} onChange={event => setNewTeacherGradeScope(value => ({ ...value, section: event.target.value }))} disabled={!newTeacherGradeScope.classroom || isDbSyncing} className="w-full rounded-lg border border-[#d4af37]/30 bg-[#2a1d13] p-2.5 text-xs text-amber-100 disabled:opacity-50">
                             <option value="">اختر الشعبة</option>
                             {selectedScopeSections.map((section: string) => <option key={section} value={section}>{section}</option>)}
                           </select>
@@ -4144,7 +4144,7 @@ export default function ExamsResultsModule({
                         placeholder="مثال: لغة عربية، فيزياء كمية..."
                         value={newSubject.name}
                         onChange={(e) => setNewSubject({...newSubject, name: e.target.value})}
-                        className="w-full text-xs font-semibold p-2.5 bg-[#130b04] border border-[#d4af37]/40 text-amber-100 focus:ring-2 focus:ring-[#d4af37]/50 transition-all outline-none placeholder:text-amber-200/40"
+                        className="w-full text-xs font-semibold p-2.5 bg-[#2a1d13] border border-[#d4af37]/40 text-amber-100 focus:ring-2 focus:ring-[#d4af37]/50 transition-all outline-none placeholder:text-amber-200/40"
                         required
                       />
                     </div>
@@ -4157,7 +4157,7 @@ export default function ExamsResultsModule({
                           min={1}
                           value={newSubject.maxScore}
                           onChange={(e) => setNewSubject({...newSubject, maxScore: Number(e.target.value)})}
-                          className="w-full text-xs font-semibold p-2.5 bg-[#130b04] border border-[#d4af37]/40 text-amber-100 focus:ring-2 focus:ring-[#d4af37]/50 transition-all outline-none"
+                          className="w-full text-xs font-semibold p-2.5 bg-[#2a1d13] border border-[#d4af37]/40 text-amber-100 focus:ring-2 focus:ring-[#d4af37]/50 transition-all outline-none"
                           required
                         />
                       </div>
@@ -4168,7 +4168,7 @@ export default function ExamsResultsModule({
                           min={1}
                           value={newSubject.passScore}
                           onChange={(e) => setNewSubject({...newSubject, passScore: Number(e.target.value)})}
-                          className="w-full text-xs font-semibold p-2.5 bg-[#130b04] border border-[#d4af37]/40 text-amber-100 focus:ring-2 focus:ring-[#d4af37]/50 transition-all outline-none"
+                          className="w-full text-xs font-semibold p-2.5 bg-[#2a1d13] border border-[#d4af37]/40 text-amber-100 focus:ring-2 focus:ring-[#d4af37]/50 transition-all outline-none"
                           required
                         />
                       </div>
@@ -4195,7 +4195,7 @@ export default function ExamsResultsModule({
                         placeholder="البحث عن مادة دراسية محددة..."
                         value={subjectSearch}
                         onChange={(e) => setSubjectSearch(e.target.value)}
-                        className="w-full text-xs font-semibold pr-9 pl-3 py-2.5 bg-[#130b04] border border-[#d4af37]/40 text-amber-100 focus:ring-2 focus:ring-[#d4af37]/50 transition-all outline-none placeholder:text-amber-200/40"
+                        className="w-full text-xs font-semibold pr-9 pl-3 py-2.5 bg-[#2a1d13] border border-[#d4af37]/40 text-amber-100 focus:ring-2 focus:ring-[#d4af37]/50 transition-all outline-none placeholder:text-amber-200/40"
                       />
                     </div>
 
@@ -4231,7 +4231,7 @@ export default function ExamsResultsModule({
                                   <label className="text-[10px] font-bold text-amber-200">اسم المادة:</label>
                                   <input
                                     type="text"
-                                    className="w-full text-xs p-2 bg-[#130b04] border border-[#d4af37]/40 text-amber-100 outline-none focus:ring-2 focus:ring-[#d4af37]/50 transition-all"
+                                    className="w-full text-xs p-2 bg-[#2a1d13] border border-[#d4af37]/40 text-amber-100 outline-none focus:ring-2 focus:ring-[#d4af37]/50 transition-all"
                                     value={editingValues.name}
                                     onChange={(e) => setEditingValues({ ...editingValues, name: e.target.value })}
                                   />
@@ -4241,7 +4241,7 @@ export default function ExamsResultsModule({
                                     <label className="text-[10px] font-bold text-amber-200">النهائية العظمى:</label>
                                     <input
                                       type="number"
-                                      className="w-full text-xs p-2 bg-[#130b04] border border-[#d4af37]/40 text-amber-100 outline-none focus:ring-2 focus:ring-[#d4af37]/50 transition-all"
+                                      className="w-full text-xs p-2 bg-[#2a1d13] border border-[#d4af37]/40 text-amber-100 outline-none focus:ring-2 focus:ring-[#d4af37]/50 transition-all"
                                       value={editingValues.maxScore}
                                       onChange={(e) => setEditingValues({ ...editingValues, maxScore: Number(e.target.value) })}
                                     />
@@ -4250,7 +4250,7 @@ export default function ExamsResultsModule({
                                     <label className="text-[10px] font-bold text-amber-200">النهاية الصغرى:</label>
                                     <input
                                       type="number"
-                                      className="w-full text-xs p-2 bg-[#130b04] border border-[#d4af37]/40 text-amber-100 outline-none focus:ring-2 focus:ring-[#d4af37]/50 transition-all"
+                                      className="w-full text-xs p-2 bg-[#2a1d13] border border-[#d4af37]/40 text-amber-100 outline-none focus:ring-2 focus:ring-[#d4af37]/50 transition-all"
                                       value={editingValues.passScore}
                                       onChange={(e) => setEditingValues({ ...editingValues, passScore: Number(e.target.value) })}
                                     />
@@ -4389,7 +4389,7 @@ export default function ExamsResultsModule({
                         placeholder="مثال: الصف العاشر، الصف الحادي عشر..."
                         value={newClassroom.name}
                         onChange={(e) => setNewClassroom({...newClassroom, name: e.target.value})}
-                        className="w-full rounded-lg border border-[#d4af37]/30 bg-[#130b04] p-2.5 text-xs font-semibold text-amber-50 outline-none transition placeholder:text-amber-100/35 focus:border-[#f7d174] focus:ring-2 focus:ring-[#d4af37]/20"
+                        className="w-full rounded-lg border border-[#d4af37]/30 bg-[#2a1d13] p-2.5 text-xs font-semibold text-amber-50 outline-none transition placeholder:text-amber-100/35 focus:border-[#f7d174] focus:ring-2 focus:ring-[#d4af37]/20"
                         required
                       />
                     </div>
@@ -4400,7 +4400,7 @@ export default function ExamsResultsModule({
                         id="exam-classroom-level"
                         value={newClassroom.level}
                         onChange={(e) => setNewClassroom({...newClassroom, level: e.target.value as any})}
-                        className="w-full rounded-lg border border-[#d4af37]/30 bg-[#130b04] p-2.5 text-xs font-semibold text-amber-50 outline-none transition focus:border-[#f7d174] focus:ring-2 focus:ring-[#d4af37]/20"
+                        className="w-full rounded-lg border border-[#d4af37]/30 bg-[#2a1d13] p-2.5 text-xs font-semibold text-amber-50 outline-none transition focus:border-[#f7d174] focus:ring-2 focus:ring-[#d4af37]/20"
                       >
                         <option value="kindergarten">رياض الأطفال والتمهيدي (KG)</option>
                         <option value="primary">الابتدائية (Primary)</option>
@@ -4418,7 +4418,7 @@ export default function ExamsResultsModule({
                           min={1}
                           value={newClassroom.capacity}
                           onChange={(e) => setNewClassroom({...newClassroom, capacity: Number(e.target.value)})}
-                          className="w-full rounded-lg border border-[#d4af37]/30 bg-[#130b04] p-2.5 text-xs font-semibold text-amber-50 outline-none transition focus:border-[#f7d174] focus:ring-2 focus:ring-[#d4af37]/20"
+                          className="w-full rounded-lg border border-[#d4af37]/30 bg-[#2a1d13] p-2.5 text-xs font-semibold text-amber-50 outline-none transition focus:border-[#f7d174] focus:ring-2 focus:ring-[#d4af37]/20"
                           required
                         />
                       </div>
@@ -4430,7 +4430,7 @@ export default function ExamsResultsModule({
                           placeholder="مثال: أ, ب, ج"
                           value={newClassroom.sections}
                           onChange={(e) => setNewClassroom({...newClassroom, sections: e.target.value})}
-                          className="w-full rounded-lg border border-[#d4af37]/30 bg-[#130b04] p-2.5 text-xs font-semibold text-amber-50 outline-none transition placeholder:text-amber-100/35 focus:border-[#f7d174] focus:ring-2 focus:ring-[#d4af37]/20"
+                          className="w-full rounded-lg border border-[#d4af37]/30 bg-[#2a1d13] p-2.5 text-xs font-semibold text-amber-50 outline-none transition placeholder:text-amber-100/35 focus:border-[#f7d174] focus:ring-2 focus:ring-[#d4af37]/20"
                         />
                       </div>
                     </div>
@@ -4457,7 +4457,7 @@ export default function ExamsResultsModule({
                         placeholder="البحث عن صف أو صف دراسي محدد..."
                         value={classroomSearch}
                         onChange={(e) => setClassroomSearch(e.target.value)}
-                        className="w-full rounded-lg border border-[#d4af37]/25 bg-[#130b04] py-2.5 pl-3 pr-9 text-xs font-semibold text-amber-50 outline-none transition placeholder:text-amber-100/35 focus:border-[#f7d174] focus:ring-2 focus:ring-[#d4af37]/20"
+                        className="w-full rounded-lg border border-[#d4af37]/25 bg-[#2a1d13] py-2.5 pl-3 pr-9 text-xs font-semibold text-amber-50 outline-none transition placeholder:text-amber-100/35 focus:border-[#f7d174] focus:ring-2 focus:ring-[#d4af37]/20"
                       />
                     </div>
 
@@ -4484,7 +4484,7 @@ export default function ExamsResultsModule({
                     <div className="grid grid-cols-1 gap-3 sm:grid-cols-2">
                     {filteredClassrooms.map(cls => {
                         const levelColor = cls.level === 'kindergarten'
-                          ? 'bg-sky-50 text-sky-700 border-sky-200'
+                          ? 'bg-amber-50 text-amber-800 border-amber-200'
                           : cls.level === 'primary'
                           ? 'bg-emerald-50 text-emerald-700 border-emerald-200'
                           : cls.level === 'middle'
@@ -4580,7 +4580,7 @@ export default function ExamsResultsModule({
                                         id={`edit-classroom-${cls.id}-name`}
                                         value={editingClassroomValues.name}
                                         onChange={event => setEditingClassroomValues(values => ({ ...values, name: event.target.value }))}
-                                        className="w-full rounded-lg border border-[#d4af37]/25 bg-[#130b04] px-2.5 py-2 text-xs text-amber-50 outline-none focus:border-[#f7d174]"
+                                        className="w-full rounded-lg border border-[#d4af37]/25 bg-[#2a1d13] px-2.5 py-2 text-xs text-amber-50 outline-none focus:border-[#f7d174]"
                                         required
                                       />
                                     </div>
@@ -4590,7 +4590,7 @@ export default function ExamsResultsModule({
                                         id={`edit-classroom-${cls.id}-level`}
                                         value={editingClassroomValues.level}
                                         onChange={event => setEditingClassroomValues(values => ({ ...values, level: event.target.value as typeof values.level }))}
-                                        className="w-full rounded-lg border border-[#d4af37]/25 bg-[#130b04] px-2.5 py-2 text-xs text-amber-50 outline-none focus:border-[#f7d174]"
+                                        className="w-full rounded-lg border border-[#d4af37]/25 bg-[#2a1d13] px-2.5 py-2 text-xs text-amber-50 outline-none focus:border-[#f7d174]"
                                       >
                                         <option value="kindergarten">رياض الأطفال</option>
                                         <option value="primary">ابتدائي</option>
@@ -4606,7 +4606,7 @@ export default function ExamsResultsModule({
                                         min={1}
                                         value={editingClassroomValues.capacity}
                                         onChange={event => setEditingClassroomValues(values => ({ ...values, capacity: Number(event.target.value) }))}
-                                        className="w-full rounded-lg border border-[#d4af37]/25 bg-[#130b04] px-2.5 py-2 text-xs text-amber-50 outline-none focus:border-[#f7d174]"
+                                        className="w-full rounded-lg border border-[#d4af37]/25 bg-[#2a1d13] px-2.5 py-2 text-xs text-amber-50 outline-none focus:border-[#f7d174]"
                                         required
                                       />
                                     </div>
@@ -4616,7 +4616,7 @@ export default function ExamsResultsModule({
                                         id={`edit-classroom-${cls.id}-sections`}
                                         value={editingClassroomValues.sections}
                                         onChange={event => setEditingClassroomValues(values => ({ ...values, sections: event.target.value }))}
-                                        className="w-full rounded-lg border border-[#d4af37]/25 bg-[#130b04] px-2.5 py-2 text-xs text-amber-50 outline-none focus:border-[#f7d174]"
+                                        className="w-full rounded-lg border border-[#d4af37]/25 bg-[#2a1d13] px-2.5 py-2 text-xs text-amber-50 outline-none focus:border-[#f7d174]"
                                       />
                                     </div>
                                   </div>
@@ -4767,7 +4767,7 @@ export default function ExamsResultsModule({
                         `);
                         win.document.close();
                       }}
-                      className="px-2 py-1 bg-slate-800 hover:bg-slate-950 text-white text-[10px] rounded font-bold flex items-center gap-1 cursor-pointer"
+                      className="px-2 py-1 bg-[#2a1d13] hover:bg-[#1c120c] text-white text-[10px] rounded font-bold flex items-center gap-1 cursor-pointer"
                     >
                       <Printer className="w-3 h-3" />
                       طباعة البيان
@@ -5043,7 +5043,7 @@ export default function ExamsResultsModule({
                 placeholder="ابحث عن بطاقة طالب باسمه، صفّه، أو رقم جلوسه..."
                 value={studentSearch}
                 onChange={(e) => setStudentSearch(e.target.value)}
-                className="w-full text-xs p-2 border border-[#d4af37]/40 rounded-lg bg-[#130b04] text-amber-100 placeholder-amber-200/40"
+                className="w-full text-xs p-2 border border-[#d4af37]/40 rounded-lg bg-[#2a1d13] text-amber-100 placeholder-amber-200/40"
               />
 
               {/* Seating Cards Grid Showcase */}
@@ -5060,7 +5060,7 @@ export default function ExamsResultsModule({
                           <h4 className="font-bold text-[#fce79a] text-sm mt-1">{st.name}</h4>
                           <span className="text-xs text-amber-200/60 font-bold block">{st.classroom} - الشعبة ({st.section})</span>
                         </div>
-                        <div className="bg-[#130b04] p-1.5 rounded-lg border border-[#d4af37]/30">
+                        <div className="bg-[#2a1d13] p-1.5 rounded-lg border border-[#d4af37]/30">
                           <IdCard className="w-8 h-8 text-[#f7d174]" />
                         </div>
                       </div>
@@ -5158,7 +5158,7 @@ export default function ExamsResultsModule({
                     <select
                       value={newProctor.teacherId}
                       onChange={(e) => setNewProctor({...newProctor, teacherId: e.target.value})}
-                      className="w-full text-xs font-semibold p-2.5 bg-[#130b04] border border-[#d4af37]/40 text-amber-100 focus:ring-2 focus:ring-[#d4af37]/30 outline-none transition-all"
+                      className="w-full text-xs font-semibold p-2.5 bg-[#2a1d13] border border-[#d4af37]/40 text-amber-100 focus:ring-2 focus:ring-[#d4af37]/30 outline-none transition-all"
                       required
                       disabled={availableTeachers.length === 0}
                     >
@@ -5174,7 +5174,7 @@ export default function ExamsResultsModule({
                     <select
                       value={newProctor.hallId}
                       onChange={(e) => setNewProctor({...newProctor, hallId: e.target.value})}
-                      className="w-full text-xs font-semibold p-2.5 bg-[#130b04] border border-[#d4af37]/40 text-amber-100 focus:ring-2 focus:ring-[#d4af37]/30 outline-none transition-all"
+                      className="w-full text-xs font-semibold p-2.5 bg-[#2a1d13] border border-[#d4af37]/40 text-amber-100 focus:ring-2 focus:ring-[#d4af37]/30 outline-none transition-all"
                     >
                       {halls.map(h => (
                         <option key={h.id} value={h.id}>{h.name}</option>
@@ -5187,7 +5187,7 @@ export default function ExamsResultsModule({
                     <select
                       value={newProctor.shift}
                       onChange={(e) => setNewProctor({...newProctor, shift: e.target.value})}
-                      className="w-full text-xs font-semibold p-2.5 bg-[#130b04] border border-[#d4af37]/40 text-amber-100 focus:ring-2 focus:ring-[#d4af37]/30 outline-none transition-all"
+                      className="w-full text-xs font-semibold p-2.5 bg-[#2a1d13] border border-[#d4af37]/40 text-amber-100 focus:ring-2 focus:ring-[#d4af37]/30 outline-none transition-all"
                     >
                       <option value="الفترة الأولى">الفترة الأولى (08:30 - 10:30)</option>
                       <option value="الفترة الثانية">الفترة الثانية (11:00 - 13:00)</option>
@@ -5296,7 +5296,7 @@ export default function ExamsResultsModule({
                   placeholder="ابحث عن مراقب باسمه أو اسم القاعة المكلف بها..."
                   value={proctorSearch}
                   onChange={(e) => setProctorSearch(e.target.value)}
-                  className="w-full text-xs p-2 border border-[#d4af37]/40 rounded-lg bg-[#130b04] text-amber-100 placeholder-amber-200/40"
+                  className="w-full text-xs p-2 border border-[#d4af37]/40 rounded-lg bg-[#2a1d13] text-amber-100 placeholder-amber-200/40"
                 />
 
                 <div className="space-y-3">
@@ -5310,7 +5310,7 @@ export default function ExamsResultsModule({
                             <div className="space-y-2">
                               <div className="grid grid-cols-1 sm:grid-cols-3 gap-2">
                                 <select
-                                  className="text-xs p-1 border border-[#d4af37]/40 rounded bg-[#130b04] font-semibold text-amber-100 w-full"
+                                  className="text-xs p-1 border border-[#d4af37]/40 rounded bg-[#2a1d13] font-semibold text-amber-100 w-full"
                                   value={editingValues.teacherId}
                                   onChange={(e) => setEditingValues({ ...editingValues, teacherId: e.target.value })}
                                   required
@@ -5320,7 +5320,7 @@ export default function ExamsResultsModule({
                                   ))}
                                 </select>
                                 <select
-                                  className="text-xs p-1 border border-[#d4af37]/40 rounded bg-[#130b04] font-semibold text-amber-100 w-full"
+                                  className="text-xs p-1 border border-[#d4af37]/40 rounded bg-[#2a1d13] font-semibold text-amber-100 w-full"
                                   value={editingValues.hallId}
                                   onChange={(e) => setEditingValues({ ...editingValues, hallId: e.target.value })}
                                 >
@@ -5329,7 +5329,7 @@ export default function ExamsResultsModule({
                                   ))}
                                 </select>
                                 <select
-                                  className="text-xs p-1 border border-[#d4af37]/40 rounded bg-[#130b04] font-semibold text-amber-100 w-full"
+                                  className="text-xs p-1 border border-[#d4af37]/40 rounded bg-[#2a1d13] font-semibold text-amber-100 w-full"
                                   value={editingValues.shift}
                                   onChange={(e) => setEditingValues({ ...editingValues, shift: e.target.value })}
                                 >
@@ -5368,7 +5368,7 @@ export default function ExamsResultsModule({
                                 </button>
                                 <button
                                   onClick={() => setEditingEntityId(null)}
-                                  className="px-2 py-1 bg-[#130b04] hover:bg-[#38271a] text-amber-200 text-[10px] border border-[#d4af37]/30 rounded font-bold cursor-pointer"
+                                  className="px-2 py-1 bg-[#2a1d13] hover:bg-[#38271a] text-amber-200 text-[10px] border border-[#d4af37]/30 rounded font-bold cursor-pointer"
                                 >
                                   إلغاء
                                 </button>
@@ -5391,7 +5391,7 @@ export default function ExamsResultsModule({
                                     const matchingTeachers = availableTeachers.filter(teacher => teacher.name === pa.name);
                                     setEditingValues({ teacherId: linkedTeacher?.id || (matchingTeachers.length === 1 ? matchingTeachers[0].id : ''), hallId: pa.hallId, shift: pa.shift });
                                   }}
-                                  className="p-1 text-amber-300 hover:bg-[#130b04] rounded cursor-pointer"
+                                  className="p-1 text-amber-300 hover:bg-[#2a1d13] rounded cursor-pointer"
                                   title="تعديل التكليف"
                                 >
                                   <Edit3 className="w-3.5 h-3.5" />
@@ -5906,7 +5906,7 @@ export default function ExamsResultsModule({
                 </div>
 
                 {/* Professional Controls Row */}
-                <div className="flex flex-wrap items-center gap-1.5 bg-[#130b04] p-1.5 border border-[#d4af37]/30">
+                <div className="flex flex-wrap items-center gap-1.5 bg-[#2a1d13] p-1.5 border border-[#d4af37]/30">
                   <button
                     onClick={() => {
                       setScheduleSubTab('prep');
@@ -6004,7 +6004,7 @@ export default function ExamsResultsModule({
 
               {/* DYNAMIC PROGRESS & BULLETINS BENTO CARD */}
               <div className="grid grid-cols-1 md:grid-cols-4 gap-4">
-                <div className="bg-gradient-to-br from-[#2a1d13] via-[#1f150d] to-[#130b04] p-4 text-amber-100 border border-[#d4af37]/40 shadow-lg flex flex-col justify-between">
+                <div className="bg-gradient-to-br from-[#2a1d13] via-[#1f150d] to-[#2a1d13] p-4 text-amber-100 border border-[#d4af37]/40 shadow-lg flex flex-col justify-between">
                   <div>
                     <span className="text-[10px] text-[#f7d174] font-extrabold uppercase tracking-wider block">معدل الإنجاز والأتمتة</span>
                     <h3 className="text-xl font-black text-[#fce79a] mt-1">{schedulingProgress}%</h3>
@@ -6014,7 +6014,7 @@ export default function ExamsResultsModule({
                         : `تمت جدولة ${scheduledExamsCount} مادة من إجمالي ${totalSubjectsToSchedule} مستهدفة بالخطة.`}
                     </p>
                   </div>
-                  <div className="w-full bg-[#130b04] h-1.5 rounded-full overflow-hidden mt-3 border border-[#d4af37]/20">
+                  <div className="w-full bg-[#2a1d13] h-1.5 rounded-full overflow-hidden mt-3 border border-[#d4af37]/20">
                     <div className="h-full bg-gradient-to-r from-[#d4af37] to-[#f7d174] rounded-full transition-all duration-500" style={{ width: `${Math.min(100, schedulingProgress)}%` }} />
                   </div>
                 </div>
@@ -6027,7 +6027,7 @@ export default function ExamsResultsModule({
                       {prepProgressScore === 100 ? 'جميع البيانات مجهزة وصالحة للجدولة الآلية' : 'بعض البيانات الأساسية ناقصة! يرجى تهيئتها'}
                     </p>
                   </div>
-                  <div className="w-full bg-[#130b04] h-1.5 rounded-full overflow-hidden mt-3 border border-[#d4af37]/20">
+                  <div className="w-full bg-[#2a1d13] h-1.5 rounded-full overflow-hidden mt-3 border border-[#d4af37]/20">
                     <div className="h-full bg-[#d4af37] rounded-full transition-all duration-500" style={{ width: `${prepProgressScore}%` }} />
                   </div>
                 </div>
@@ -6068,7 +6068,7 @@ export default function ExamsResultsModule({
                           : 'لا توجد تنبيهات تكرار أو تداخل.'}
                     </p>
                   </div>
-                  <div className="w-full bg-[#130b04] h-1.5 rounded-full overflow-hidden mt-3 border border-[#d4af37]/20">
+                  <div className="w-full bg-[#2a1d13] h-1.5 rounded-full overflow-hidden mt-3 border border-[#d4af37]/20">
                     <div className={`h-full rounded-full ${errorConflicts.length > 0 ? 'bg-rose-500' : !isScheduleComplete ? 'bg-amber-400' : 'bg-emerald-500'}`} style={{ width: `${schedulingProgress}%` }} />
                   </div>
                 </div>
@@ -6093,7 +6093,7 @@ export default function ExamsResultsModule({
                       {scheduleApprovalStatus.approved ? `المعتمد: ${scheduleApprovalStatus.approvedBy}` : 'التغييرات محفوظة كمسودات تفاعلية'}
                     </p>
                   </div>
-                  <div className="w-full bg-[#130b04] h-1.5 rounded-full overflow-hidden mt-3 border border-[#d4af37]/20">
+                  <div className="w-full bg-[#2a1d13] h-1.5 rounded-full overflow-hidden mt-3 border border-[#d4af37]/20">
                     <div className={`h-full rounded-full ${scheduleApprovalStatus.approved ? 'bg-emerald-500' : 'bg-[#d4af37]'}`} style={{ width: '100%' }} />
                   </div>
                 </div>
@@ -7585,7 +7585,7 @@ export default function ExamsResultsModule({
                   </p>
                 </div>
 
-                <div className="flex items-center gap-2 bg-slate-800/80 p-3 border border-slate-700/50 self-start md:self-center">
+                <div className="flex items-center gap-2 bg-[#2a1d13]/80 p-3 border border-[#d4af37]/30 self-start md:self-center">
                   <div className={`w-3 h-3 rounded-full animate-pulse ${approvalStatus.approved ? 'bg-amber-500' : 'bg-emerald-500'}`} />
                   <div className="text-right">
                     <p className="text-[10px] text-slate-400 font-bold">حالة الكنترول الحالي</p>
@@ -7883,7 +7883,7 @@ export default function ExamsResultsModule({
                   <button
                     onClick={() => setShowReviewGradesModal(true)}
                     disabled={!hasSelectedGradeSubject}
-                    className="p-2 bg-slate-800 hover:bg-[#2a1d13] text-[#fce79a] text-xs font-bold flex items-center gap-1.5 cursor-pointer transition-all disabled:cursor-not-allowed disabled:opacity-40"
+                    className="p-2 bg-[#2a1d13] hover:bg-[#2a1d13] text-[#fce79a] text-xs font-bold flex items-center gap-1.5 cursor-pointer transition-all disabled:cursor-not-allowed disabled:opacity-40"
                     title="مراجعة شاملة لدرجات الكشف وإحصائياته"
                   >
                     <CheckCircle className="w-4 h-4 text-amber-400" />
@@ -7960,7 +7960,7 @@ export default function ExamsResultsModule({
 
                   <button
                     onClick={() => void handleExportXlsx()}
-                    className="p-2 bg-cyan-700 hover:bg-cyan-800 text-white text-xs font-bold flex items-center gap-1.5 cursor-pointer transition-all shadow-md shadow-cyan-700/10"
+                    className="p-2 bg-amber-700 hover:bg-amber-800 text-white text-xs font-bold flex items-center gap-1.5 cursor-pointer transition-all shadow-md shadow-amber-700/10"
                     title="تصدير كشف المادة إلى ملف XLSX حقيقي"
                   >
                     <FileSpreadsheet className="w-4 h-4" />
@@ -8270,7 +8270,7 @@ export default function ExamsResultsModule({
                 const avgGrade = hasRecordedGrades ? parseFloat((sum / gradesArray.length).toFixed(1)) : null;
 
                 return (
-                  <div className="fixed inset-0 bg-slate-900/50 backdrop-blur-xs flex items-center justify-center z-50 p-4">
+                  <div className="fixed inset-0 bg-[#1c120c]/50 backdrop-blur-xs flex items-center justify-center z-50 p-4">
                     <div className="rounded-3xl w-full max-w-2xl shadow-2xl p-6 space-y-6 animate-in fade-in zoom-in duration-150 bg-gradient-to-b from-[#fffefc] via-[#fbf8f0] to-[#f5eeea] border-2 border-[#d4af37]/30 rounded-3xl">
 
                       <div className="flex items-center justify-between border-b pb-4">
@@ -8355,7 +8355,7 @@ export default function ExamsResultsModule({
 
               {/* PRINT GRADES MODAL (معاينة كشف الدرجات للطباعة) */}
               {showPrintGradesModal && (
-                <div className="fixed inset-0 bg-slate-900/60 backdrop-blur-xs flex items-center justify-center z-50 p-4">
+                <div className="fixed inset-0 bg-[#1c120c]/60 backdrop-blur-xs flex items-center justify-center z-50 p-4">
                   <div className="rounded-3xl w-full max-w-4xl shadow-2xl p-6 space-y-6 max-h-[90vh] overflow-y-auto bg-gradient-to-b from-[#fffefc] via-[#fbf8f0] to-[#f5eeea] border-2 border-[#d4af37]/30 rounded-3xl">
 
                     <div className="flex items-center justify-between border-b pb-4">
@@ -8939,7 +8939,7 @@ export default function ExamsResultsModule({
                               <div className="flex gap-2 w-full sm:w-auto">
                                 <button
                                   onClick={() => handlePrintSingleStudentGrades(selectedStObj, m)}
-                                  className="px-4 py-2 bg-slate-800 hover:bg-[#2a1d13] text-[#fce79a] text-xs font-black flex items-center gap-1.5 cursor-pointer transition-all w-full sm:w-auto justify-center"
+                                  className="px-4 py-2 bg-[#2a1d13] hover:bg-[#2a1d13] text-[#fce79a] text-xs font-black flex items-center gap-1.5 cursor-pointer transition-all w-full sm:w-auto justify-center"
                                 >
                                   <Printer className="w-3.5 h-3.5" />
                                   <span>طباعة كارت الدرجات</span>
@@ -10017,7 +10017,7 @@ export default function ExamsResultsModule({
         {activeTab === 'quality-governance' && (
           <div className="space-y-6 text-right" dir="rtl">
             {/* Header Banner */}
-            <div className="bg-[#2a1d13] text-[#fce79a] p-6 border border-slate-800 relative overflow-hidden">
+            <div className="bg-[#2a1d13] text-[#fce79a] p-6 border border-[#d4af37]/25 relative overflow-hidden">
               <div className="absolute top-0 left-0 w-64 h-64 bg-amber-500/10 rounded-full blur-3xl pointer-events-none" />
               <div className="relative z-10 flex flex-col md:flex-row justify-between items-start md:items-center gap-4">
                 <div>
@@ -10028,7 +10028,7 @@ export default function ExamsResultsModule({
                   <p className="text-xs text-slate-400 mt-1">تتبع دورة مراجعة الأوراق، تفعيل نظام الإنذار المبكر، إدارة تظلمات الطلاب وإعادة تقدير الدرجات، وحوكمة الصلاحيات.</p>
                 </div>
 
-                <div className="bg-slate-800/80 p-3 border border-slate-700/60 text-xs font-bold text-slate-200">
+                <div className="bg-[#2a1d13]/80 p-3 border border-[#d4af37]/30 text-xs font-bold text-slate-200">
                   الصلاحية الموثوقة الحالية: {currentUserRole === 'admin' ? 'مدير الكنترول' : currentUserRole === 'reviewer' ? 'مراجع فني' : 'مدخل درجات'}
                 </div>
               </div>
@@ -10101,7 +10101,7 @@ export default function ExamsResultsModule({
                             <span className="font-bold text-amber-200/90">نسبة الإنجاز الإجمالية لرصد الكنترول:</span>
                             <span className="font-black text-[#f7d174]">{globalCompletionPct}%</span>
                           </div>
-                          <div className="w-full bg-[#130b04] h-2.5 rounded-full overflow-hidden border border-[#d4af37]/20">
+                          <div className="w-full bg-[#2a1d13] h-2.5 rounded-full overflow-hidden border border-[#d4af37]/20">
                             <div
                               className="bg-gradient-to-r from-[#d4af37] to-[#8b6113] h-full rounded-full transition-all duration-500"
                               style={{ width: `${globalCompletionPct}%` }}
@@ -10140,7 +10140,7 @@ export default function ExamsResultsModule({
                                   <span className="font-medium text-amber-200/80">{stgLabel}</span>
                                   <span className="font-bold text-[#fce79a]">{stgPct}%</span>
                                 </div>
-                                <div className="w-full bg-[#130b04] h-1.5 rounded-full overflow-hidden border border-[#d4af37]/20">
+                                <div className="w-full bg-[#2a1d13] h-1.5 rounded-full overflow-hidden border border-[#d4af37]/20">
                                   <div
                                     className="bg-emerald-500 h-full rounded-full transition-all duration-300"
                                     style={{ width: `${stgPct}%` }}
@@ -10160,7 +10160,7 @@ export default function ExamsResultsModule({
                               <p className="text-[10px] font-bold text-rose-300">مواد لم يبدأ رصدها بعد</p>
                               <p className="text-xs text-amber-200/60 mt-0.5">مواد لم يُسجل فيها أي درجة</p>
                             </div>
-                            <span className="text-xl font-black text-rose-300 bg-[#130b04] w-9 h-9 rounded-full flex items-center justify-center border border-rose-500/40">
+                            <span className="text-xl font-black text-rose-300 bg-[#2a1d13] w-9 h-9 rounded-full flex items-center justify-center border border-rose-500/40">
                               {unenteredCount}
                             </span>
                           </div>
@@ -10171,7 +10171,7 @@ export default function ExamsResultsModule({
                               <p className="text-[10px] font-bold text-[#f7d174]">مواد معلّقة بانتظار المراجعة الفنية</p>
                               <p className="text-xs text-amber-200/60 mt-0.5">مواد لم يتم توقيعها من المراجعين</p>
                             </div>
-                            <span className="text-xl font-black text-[#f7d174] bg-[#130b04] w-9 h-9 rounded-full flex items-center justify-center border border-amber-500/40 font-mono">
+                            <span className="text-xl font-black text-[#f7d174] bg-[#2a1d13] w-9 h-9 rounded-full flex items-center justify-center border border-amber-500/40 font-mono">
                               {unreviewedCount}
                             </span>
                           </div>
@@ -10182,7 +10182,7 @@ export default function ExamsResultsModule({
                               <p className="text-[10px] font-bold text-amber-300">مراحل دراسية غير معتمدة نهائياً</p>
                               <p className="text-xs text-amber-200/60 mt-0.5">مراحل بحاجة إلى تجميد وإقفال</p>
                             </div>
-                            <span className="text-xl font-black text-amber-300 bg-[#130b04] w-9 h-9 rounded-full flex items-center justify-center border border-amber-500/40 font-mono">
+                            <span className="text-xl font-black text-amber-300 bg-[#2a1d13] w-9 h-9 rounded-full flex items-center justify-center border border-amber-500/40 font-mono">
                               {unapprovedStagesCount}
                             </span>
                           </div>
@@ -10208,7 +10208,7 @@ export default function ExamsResultsModule({
                       <label className="text-[10px] font-bold text-amber-200 block mb-1">اختر المادة لتوقيع مراجعتها:</label>
                       <select
                         id="review-subject-select"
-                        className="w-full bg-[#130b04] border border-[#d4af37]/40 rounded-lg p-2 text-xs font-medium text-amber-100"
+                        className="w-full bg-[#2a1d13] border border-[#d4af37]/40 rounded-lg p-2 text-xs font-medium text-amber-100"
                         onChange={(e) => {
                           const val = e.target.value;
                           if (isSubjectReviewed(val)) {
@@ -10431,27 +10431,27 @@ export default function ExamsResultsModule({
                     <div className="grid grid-cols-1 md:grid-cols-2 gap-3">
                       <div>
                         <label className="text-[10px] font-bold text-amber-200/80 block mb-1">الطالب المستفيد:</label>
-                        <select id="rev-student" className="w-full bg-[#130b04] border border-[#d4af37]/40 rounded-lg p-2 text-xs text-amber-100">
+                        <select id="rev-student" className="w-full bg-[#2a1d13] border border-[#d4af37]/40 rounded-lg p-2 text-xs text-amber-100">
                           {studentList.map(s => <option key={s.id} value={s.id}>{s.name} ({s.classroom})</option>)}
                         </select>
                       </div>
                       <div>
                         <label className="text-[10px] font-bold text-amber-200/80 block mb-1">المادة المتظلم فيها:</label>
-                        <select id="rev-subject" className="w-full bg-[#130b04] border border-[#d4af37]/40 rounded-lg p-2 text-xs text-amber-100">
+                        <select id="rev-subject" className="w-full bg-[#2a1d13] border border-[#d4af37]/40 rounded-lg p-2 text-xs text-amber-100">
                           {subjects.map(s => <option key={s.id} value={s.id}>{s.name}</option>)}
                         </select>
                       </div>
                       <div className="md:col-span-2">
                         <label className="text-[10px] font-bold text-amber-200/80 block mb-1">سبب التظلم بالتفصيل:</label>
-                        <input id="rev-reason" type="text" placeholder="مثال: يطالب بمراجعة درجات السؤال المقالي الأخير في ورقة الرياضات" className="w-full bg-[#130b04] border border-[#d4af37]/40 rounded-lg p-2 text-xs text-amber-100 placeholder:text-amber-200/40" />
+                        <input id="rev-reason" type="text" placeholder="مثال: يطالب بمراجعة درجات السؤال المقالي الأخير في ورقة الرياضات" className="w-full bg-[#2a1d13] border border-[#d4af37]/40 rounded-lg p-2 text-xs text-amber-100 placeholder:text-amber-200/40" />
                       </div>
                       <div>
                         <label className="text-[10px] font-bold text-amber-200/80 block mb-1">الدرجة الحالية بالرصد:</label>
-                        <input id="rev-old-grade" type="number" placeholder="مثال: 85" className="w-full bg-[#130b04] border border-[#d4af37]/40 rounded-lg p-2 text-xs text-amber-100 placeholder:text-amber-200/40" />
+                        <input id="rev-old-grade" type="number" placeholder="مثال: 85" className="w-full bg-[#2a1d13] border border-[#d4af37]/40 rounded-lg p-2 text-xs text-amber-100 placeholder:text-amber-200/40" />
                       </div>
                       <div>
                         <label className="text-[10px] font-bold text-amber-200/80 block mb-1">الدرجة المقترحة بعد المراجعة (إن وجدت):</label>
-                        <input id="rev-new-grade" type="number" placeholder="مثال: 88" className="w-full bg-[#130b04] border border-[#d4af37]/40 rounded-lg p-2 text-xs text-amber-100 placeholder:text-amber-200/40" />
+                        <input id="rev-new-grade" type="number" placeholder="مثال: 88" className="w-full bg-[#2a1d13] border border-[#d4af37]/40 rounded-lg p-2 text-xs text-amber-100 placeholder:text-amber-200/40" />
                       </div>
                     </div>
 
@@ -10461,7 +10461,7 @@ export default function ExamsResultsModule({
                           const formEl = document.getElementById('new-rev-form-container');
                           if (formEl) formEl.classList.add('hidden');
                         }}
-                        className="px-3 py-1.5 bg-[#130b04] hover:bg-[#38271a] text-amber-200 border border-[#d4af37]/30 rounded-lg text-xs font-bold cursor-pointer"
+                        className="px-3 py-1.5 bg-[#2a1d13] hover:bg-[#38271a] text-amber-200 border border-[#d4af37]/30 rounded-lg text-xs font-bold cursor-pointer"
                       >
                         إلغاء
                       </button>
@@ -10557,7 +10557,7 @@ export default function ExamsResultsModule({
                             <span className="font-bold text-[#f7d174]">المبرر:</span> {req.reason}
                           </p>
                           {req.decisionDetails && (
-                            <div className="p-2 bg-[#130b04] rounded-lg border border-[#d4af37]/30 text-[10px] text-amber-200 mt-1.5">
+                            <div className="p-2 bg-[#2a1d13] rounded-lg border border-[#d4af37]/30 text-[10px] text-amber-200 mt-1.5">
                               <strong className="block mb-0.5 text-[#f7d174]">قرار اللجنة المشتركة: {req.decision}</strong>
                               <span>{req.decisionDetails}</span>
                             </div>
@@ -10565,7 +10565,7 @@ export default function ExamsResultsModule({
                         </div>
 
                         <div className="flex flex-col items-stretch sm:items-end gap-2 shrink-0 w-full sm:w-auto">
-                          <div className="bg-[#130b04] p-2 rounded-lg border border-[#d4af37]/30 text-center font-mono">
+                          <div className="bg-[#2a1d13] p-2 rounded-lg border border-[#d4af37]/30 text-center font-mono">
                             <p className="text-[9px] text-amber-200/50">الدرجة بالرصد</p>
                             <p className="text-xs font-black text-amber-100">
                               {req.oldGrade} ➔ <span className="text-emerald-400">{req.newGrade}</span>
@@ -10670,7 +10670,7 @@ export default function ExamsResultsModule({
                       >
                         <div className="flex justify-between items-start">
                           <div>
-                            <span className="text-[9px] bg-[#130b04] text-[#f7d174] border border-[#d4af37]/40 px-2 py-0.5 rounded font-black font-mono">
+                            <span className="text-[9px] bg-[#2a1d13] text-[#f7d174] border border-[#d4af37]/40 px-2 py-0.5 rounded font-black font-mono">
                               {closure.isImmutableArchive && /^[0-9a-f]{64}$/i.test(String(closure.signatureHash || '')) ? 'أرشيف خادم غير قابل للتعديل' : 'سجل قديم غير موثق'}
                             </span>
                             <h4 className="text-xs font-black text-[#fce79a] mt-1">{closure.schoolName}</h4>
@@ -10805,13 +10805,13 @@ export default function ExamsResultsModule({
                           </div>
                         </div>
 
-                        <div className="bg-[#130b04] p-2 rounded text-[9px] text-amber-200/60 font-mono select-all truncate border border-[#d4af37]/20">
+                        <div className="bg-[#2a1d13] p-2 rounded text-[9px] text-amber-200/60 font-mono select-all truncate border border-[#d4af37]/20">
                           {closure.signatureHash}
                         </div>
                       </div>
                     ))}
                     {controlClosures.length === 0 && (
-                      <div className="border border-[#d4af37]/20 bg-[#130b04] p-6 text-center text-xs font-semibold text-amber-200/60">
+                      <div className="border border-[#d4af37]/20 bg-[#2a1d13] p-6 text-center text-xs font-semibold text-amber-200/60">
                         لا توجد محاضر إقفال بعد. سيظهر المحضر هنا فقط بعد اعتماد نتائج مكتملة وإنشاء أرشيف الخادم.
                       </div>
                     )}
@@ -10829,7 +10829,7 @@ export default function ExamsResultsModule({
           <div className="space-y-6">
             {/* Data-backed readiness diagnostics for authorized school admins. */}
             {currentUserRole === 'admin' && (
-              <div className="bg-[#2a1d13] text-[#fce79a] p-6 border border-slate-800 space-y-6 relative overflow-hidden text-right" dir="rtl">
+              <div className="bg-[#2a1d13] text-[#fce79a] p-6 border border-[#d4af37]/25 space-y-6 relative overflow-hidden text-right" dir="rtl">
                 <div className="absolute top-0 left-0 w-64 h-64 bg-emerald-500/10 rounded-full blur-3xl pointer-events-none" />
                 <div className="absolute bottom-0 right-0 w-64 h-64 bg-amber-500/10 rounded-full blur-3xl pointer-events-none" />
 
@@ -10838,8 +10838,8 @@ export default function ExamsResultsModule({
                     <span className="text-[10px] bg-emerald-500/20 text-emerald-400 border border-emerald-500/30 px-2 py-0.5 rounded font-bold uppercase tracking-wider">
                       فحص جاهزية الكنترول — بيانات الشاشة الحالية (Diagnostic Suite)
                     </span>
-                    <h3 className="text-lg font-black text-white">فحص مؤشرات دورة الكنترول</h3>
-                    <p className="text-xs text-slate-400">يفحص البيانات المعروضة واتصال المصدر المركزي. لا ينشئ بيانات ولا يحل محل المراجعة والاعتماد النهائي أو التحقق من حفظ كل مسودة.</p>
+                    <h2 className="text-lg font-black text-white">فحص مؤشرات دورة الكنترول</h2>
+                    <p className="text-xs text-slate-300">يفحص البيانات المعروضة واتصال المصدر المركزي. لا ينشئ بيانات ولا يحل محل المراجعة والاعتماد النهائي أو التحقق من حفظ كل مسودة.</p>
                   </div>
 
                   <button
@@ -10847,7 +10847,7 @@ export default function ExamsResultsModule({
                     disabled={testSuiteRunning}
                     className={`px-5 py-3 text-xs font-black flex items-center gap-2 transition-all shadow-lg shrink-0 cursor-pointer ${
                       testSuiteRunning
-                        ? 'bg-slate-800 text-slate-500 cursor-not-allowed'
+                        ? 'bg-[#2a1d13] text-slate-500 cursor-not-allowed'
                         : 'bg-emerald-500 hover:bg-emerald-600 text-slate-950 hover:shadow-emerald-500/20'
                     }`}
                   >
@@ -10867,7 +10867,7 @@ export default function ExamsResultsModule({
 
                 {/* Running Log Console */}
                 {testSuiteRunning && (
-                  <div className="bg-slate-950 p-4 border border-slate-800 font-mono text-xs text-emerald-400 space-y-1.5 max-h-48 overflow-y-auto shadow-inner relative z-10 scrollbar-thin text-right" dir="ltr">
+                  <div className="bg-[#1c120c] p-4 border border-[#d4af37]/30 font-mono text-xs text-emerald-400 space-y-1.5 max-h-48 overflow-y-auto shadow-inner relative z-10 scrollbar-thin text-right" dir="ltr">
                     {testSuiteLogs.map((log, idx) => (
                       <div key={idx} className="flex gap-2 justify-end">
                         <p className="text-right">{log}</p>
@@ -10882,13 +10882,13 @@ export default function ExamsResultsModule({
                 {/* Test Results Status Grid */}
                 {testSuiteResults && !testSuiteRunning && (
                   <div className="space-y-4 relative z-10">
-                    <div className="p-4 bg-slate-950 border border-slate-800/80 flex flex-col sm:flex-row items-center justify-between gap-3">
+                    <div className="p-4 bg-[#1c120c] border border-[#d4af37]/30 flex flex-col sm:flex-row items-center justify-between gap-3">
                       <div>
-                        <h4 className="text-sm font-bold text-white flex items-center gap-2">
+                        <h3 className="text-sm font-bold text-white flex items-center gap-2">
                           <CheckCircle className="w-4 h-4 text-emerald-400" />
                           تقرير حالة الفحص والاختبار العام لمنظومة الكنترول والأداء
-                        </h4>
-                        <p className="text-[11px] text-slate-400 mt-1">تعرض هذه النتيجة حالة البيانات الحالية فقط، ولا تُعد اعتماداً نهائياً ما لم تنجح جميع الفحوص.</p>
+                        </h3>
+                        <p className="text-[11px] text-slate-300 mt-1">تعرض هذه النتيجة حالة البيانات الحالية فقط، ولا تُعد اعتماداً نهائياً ما لم تنجح جميع الفحوص.</p>
                       </div>
                       <div className="text-left shrink-0">
                         <span className="text-xs bg-emerald-500/20 text-emerald-400 border border-emerald-500/30 px-3 py-1 rounded-full font-bold">
@@ -10899,7 +10899,7 @@ export default function ExamsResultsModule({
 
                     <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-5 gap-4">
                       {testSuiteResults.map((res) => (
-                        <div key={res.id} className="p-4 bg-slate-800/40 border border-slate-800 flex flex-col justify-between h-28">
+                        <div key={res.id} className="p-4 bg-[#2a1d13]/50 border border-[#d4af37]/25 flex flex-col justify-between h-28">
                           <div>
                             <div className="flex justify-between items-start">
                               <span className="text-xs font-bold text-slate-200 line-clamp-1">{res.name}</span>
@@ -10911,8 +10911,8 @@ export default function ExamsResultsModule({
                             </div>
                             <p className="text-[10px] text-slate-400 mt-1 line-clamp-2">{res.desc}</p>
                           </div>
-                          <div className="mt-2 pt-2 border-t border-slate-800/60 flex items-center justify-between text-[10px]">
-                            <span className="text-slate-500">الحالة:</span>
+                          <div className="mt-2 pt-2 border-t border-[#d4af37]/25/60 flex items-center justify-between text-[10px]">
+                            <span className="text-slate-200">الحالة:</span>
                             <span className={res.status === 'success' ? 'text-emerald-400 font-extrabold' : 'text-amber-400 font-extrabold'}>
                               {res.status === 'success' ? 'سليم تماماً' : 'تنبيه تنظيم'}
                             </span>
@@ -10928,7 +10928,7 @@ export default function ExamsResultsModule({
             <div className="grid grid-cols-1 lg:grid-cols-3 gap-6">
 
               {/* Historical Archiving & Yearly Comparison (Requirement #9) */}
-              <div className="p-5 space-y-4">
+              <div className="p-5 space-y-4 bg-[#fffefc] border-2 border-[#d4af37]/30 rounded-3xl shadow-md">
                 <div className="flex items-center gap-1.5 border-b pb-2">
                   <Archive className="w-4 h-4 text-amber-600" />
                   <h3 className="font-extrabold text-slate-900 text-sm">أرشيف مقارنة السنوات السابقة 🗄️</h3>
@@ -10939,8 +10939,9 @@ export default function ExamsResultsModule({
 
                 <div className="space-y-3">
                   <div className="space-y-1">
-                    <label className="text-[10px] font-bold text-slate-700 block">اختر السنة الأرشيفية للمطابقة:</label>
+                    <label htmlFor="exam-archive-year-select" className="text-[10px] font-bold text-slate-700 block">اختر السنة الأرشيفية للمطابقة:</label>
                     <select
+                      id="exam-archive-year-select"
                       value={selectedArchiveId}
                       disabled={archiveLoadStatus === 'loading' || archivedData.length === 0}
                       onChange={(e) => {
@@ -10948,7 +10949,8 @@ export default function ExamsResultsModule({
                         const selected = archivedData.find(item => item.archiveId === e.target.value);
                         if (selected) triggerNotification(`تم عرض ملخص أرشيف ${selected.year} — ${selected.semester}`, 'info');
                       }}
-                      className="w-full bg-transparent text-xs font-bold p-2.5 focus:outline-none focus:ring-2 focus:ring-amber-500 cursor-pointer"
+                      aria-label="اختر السنة الأرشيفية للمطابقة"
+                      className="w-full bg-white text-slate-900 text-xs font-bold p-2.5 focus:outline-none focus:ring-2 focus:ring-amber-500 cursor-pointer"
                     >
                       {archivedData.map(archive => (
                         <option key={archive.archiveId} value={archive.archiveId}>
@@ -11054,10 +11056,10 @@ export default function ExamsResultsModule({
               </div>
 
               {/* Canonical server audit trail */}
-              <div className="lg:col-span-2 p-5 space-y-4 bg-gradient-to-b from-[#fffefc] via-[#fbf8f0] to-[#f5eeea] border-2 border-[#d4af37]/30 hover:border-[#d4af37] rounded-3xl p-4 sm:p-5 shadow-md transition-all duration-300">
+              <div className="lg:col-span-2 p-5 space-y-4 bg-[#fffefc] border-2 border-[#d4af37]/30 hover:border-[#d4af37] rounded-3xl shadow-md transition-all duration-300">
                 <h3 className="font-extrabold text-slate-900 text-sm border-b pb-2">سجل تدقيق الخادم للكنترول (Audit Trail)</h3>
 
-                <div className="space-y-2 max-h-96 overflow-y-auto">
+                <div aria-label="سجل تدقيق خادم الامتحانات" role="region" tabIndex={0} className="space-y-2 max-h-96 overflow-y-auto focus:outline-none focus:ring-2 focus:ring-amber-600">
                   {centralAuditLogs.map((log) => (
                     <div key={log.id} className="p-3 bg-transparent rounded-lg text-[11px] space-y-1">
                       <div className="flex justify-between font-bold">
@@ -11083,7 +11085,7 @@ export default function ExamsResultsModule({
           </div>
         )}
 
-      </main>
+      </section>
 
     </div>
     </div>

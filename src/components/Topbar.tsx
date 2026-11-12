@@ -391,9 +391,9 @@ export default function Topbar({
         )}
         
         {/* Trusted role display. Role changes require a new authenticated session. */}
-        <div className="flex items-center gap-1.5 px-3 py-1.5 text-xs text-slate-700 dark:text-slate-200 bg-transparent dark:bg-slate-900 dark:border-slate-800 font-bold">
+        <div className="flex items-center gap-1.5 px-3 py-1.5 text-xs text-amber-100 bg-transparent font-bold">
           <ShieldAlert className="w-3.5 h-3.5 text-amber-500" />
-          <span className="hidden sm:inline text-[10px] text-slate-600 dark:text-slate-300">
+          <span className="hidden sm:inline text-[10px] text-amber-200">
             {getRoleLabel(currentRole)}
           </span>
         </div>
@@ -482,8 +482,8 @@ export default function Topbar({
             {userName.charAt(0)}
           </div>
           <div className="hidden lg:block text-right select-none leading-tight">
-            <p className="text-xs font-black text-slate-800 dark:text-slate-200">{userName}</p>
-            <p className="text-[9px] text-slate-400 dark:text-slate-500">المرجع: {selectedSchool.licenseNumber}</p>
+            <p className="text-xs font-black text-amber-100">{userName}</p>
+            <p className="text-[9px] text-amber-200/80">المرجع: {selectedSchool.licenseNumber}</p>
           </div>
         </div>
 

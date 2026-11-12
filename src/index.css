@@ -2335,8 +2335,8 @@ html:not(.dark) #super-admin-portal button:not(.bg-indigo-600):not(.bg-rose-600)
    Unified luxury identity for accounting and reports
    -------------------------------------------------------------------------- */
 #general-ledger-portal.financial-luxury-accounting-shell {
-  --accounting-ink: #0b1324;
-  --accounting-ink-soft: #172642;
+  --accounting-ink: #2a1d13;
+  --accounting-ink-soft: #1a100a;
   --accounting-gold: #c58a22;
   --accounting-gold-soft: #f4d889;
   --accounting-paper: #fffdf7;
@@ -2346,7 +2346,7 @@ html:not(.dark) #super-admin-portal button:not(.bg-indigo-600):not(.bg-rose-600)
   isolation: isolate;
   background:
     radial-gradient(circle at 8% 0%, rgba(197, 138, 34, 0.12), transparent 30%),
-    radial-gradient(circle at 96% 45%, rgba(23, 38, 66, 0.08), transparent 32%),
+    radial-gradient(circle at 96% 45%, rgba(42, 29, 19, 0.06), transparent 32%),
     linear-gradient(135deg, #f8f5ee 0%, #efe7d8 52%, #e8dfcf 100%) !important;
 }
 
@@ -2391,9 +2391,9 @@ html:not(.dark) #super-admin-portal button:not(.bg-indigo-600):not(.bg-rose-600)
 #general-ledger-portal.financial-luxury-accounting-shell .enterprise-action-toolbar {
   border: 1px solid rgba(197, 138, 34, 0.5) !important;
   border-radius: 1.25rem !important;
-  background: linear-gradient(110deg, #0b1324 0%, #172642 62%, #21140d 100%) !important;
+  background: linear-gradient(110deg, #2a1d13 0%, #1a100a 62%, #2a1d13 100%) !important;
   color: #fff8e7 !important;
-  box-shadow: 0 14px 32px rgba(10, 17, 31, 0.18), inset 0 1px 0 rgba(255, 240, 185, 0.12) !important;
+  box-shadow: 0 14px 32px rgba(42, 29, 19, 0.18), inset 0 1px 0 rgba(255, 240, 185, 0.12) !important;
 }
 
 #general-ledger-portal.financial-luxury-accounting-shell .enterprise-action-toolbar button {
@@ -2457,7 +2457,7 @@ html:not(.dark) #super-admin-portal button:not(.bg-indigo-600):not(.bg-rose-600)
 #general-ledger-portal.financial-luxury-accounting-shell .financial-reports-reference button[class*="bg-rose-600"],
 #general-ledger-portal.financial-luxury-accounting-shell .financial-reports-reference button[class*="bg-sky-600"] {
   border: 1px solid rgba(244, 216, 137, 0.52) !important;
-  background: linear-gradient(110deg, #0b1324, #172642) !important;
+  background: linear-gradient(110deg, #2a1d13, #1a100a) !important;
   color: #fff8e7 !important;
   box-shadow: 0 7px 15px rgba(9, 16, 30, 0.14) !important;
 }
@@ -2495,7 +2495,7 @@ html:not(.dark) #super-admin-portal button:not(.bg-indigo-600):not(.bg-rose-600)
 }
 
 #general-ledger-portal.financial-luxury-accounting-shell .financial-reports-reference table thead tr {
-  background: linear-gradient(110deg, #0b1324 0%, #172642 62%, #21140d 100%) !important;
+  background: linear-gradient(110deg, #2a1d13 0%, #1a100a 62%, #2a1d13 100%) !important;
   color: #f7d174 !important;
 }
 
@@ -4437,4 +4437,73 @@ html:not(.dark) #super-admin-portal button:not(.bg-indigo-600):not(.bg-rose-600)
   #student-financial-portal.financial-identity-unified .financial-analytics-widget-header > span {
     max-width: 100%;
   }
+}
+
+/* Keep the school identity and settings portal on the same coffee, gold, and
+   warm-paper palette used by Student Affairs. */
+#system-settings-portal > div:first-child {
+  background: linear-gradient(110deg, #2a1d13 0%, #1c120c 58%, #2a1d13 100%) !important;
+  border-color: rgba(212, 175, 55, 0.45) !important;
+}
+
+#system-settings-portal > div:nth-child(2) {
+  background: #fffdf7 !important;
+  border-color: rgba(197, 138, 34, 0.32) !important;
+}
+
+#system-settings-portal > div:first-child [class~="text-slate-400"] {
+  color: #f1dba8 !important;
+}
+
+#system-settings-portal > div:first-child [class~="bg-slate-800"] {
+  background-color: #38271a !important;
+  border-color: rgba(212, 175, 55, 0.36) !important;
+}
+
+#system-settings-portal > div:nth-child(2) [class*="text-slate-"],
+#system-settings-portal > div:nth-child(n + 3) [class*="text-slate-"] {
+  color: #60472f !important;
+}
+
+#system-settings-portal > div:nth-child(n + 3) [class~="text-white"] {
+  color: #2a1d13 !important;
+}
+
+#system-settings-portal > div:nth-child(n + 3) [class~="text-amber-200"],
+#system-settings-portal > div:nth-child(n + 3) [class~="text-amber-300"] {
+  color: #8b6113 !important;
+}
+
+#system-settings-portal [class~="bg-slate-900"],
+#system-settings-portal [class~="bg-slate-950"] {
+  background-color: #fffdf7 !important;
+}
+
+#system-settings-portal [class~="bg-slate-800"] {
+  background-color: #38271a !important;
+  color: #fff5d6 !important;
+}
+
+#system-settings-portal [class~="border-slate-700"],
+#system-settings-portal [class~="border-slate-800"] {
+  border-color: rgba(197, 138, 34, 0.34) !important;
+}
+
+#system-settings-portal [class~="border-slate-100"],
+#system-settings-portal [class~="border-slate-200"] {
+  border-color: rgba(197, 138, 34, 0.2) !important;
+}
+
+#system-settings-portal > div:first-child [class~="hover:bg-slate-700"]:hover,
+#system-settings-portal > div:first-child [class~="hover:bg-slate-800"]:hover,
+#system-settings-portal > div:first-child [class~="hover:bg-slate-900"]:hover {
+  background-color: #4a3320 !important;
+  color: #fff5d6 !important;
+}
+
+#system-settings-portal > div:nth-child(n + 2) [class~="hover:bg-slate-700"]:hover,
+#system-settings-portal > div:nth-child(n + 2) [class~="hover:bg-slate-800"]:hover,
+#system-settings-portal > div:nth-child(n + 2) [class~="hover:bg-slate-900"]:hover {
+  background-color: #f3e6c9 !important;
+  color: #38271a !important;
 }

@@ -45,7 +45,7 @@ const enableLocalFinancialUatWrites = isConfirmedLoopbackFinancialUat({
   expectedPort: String(process.argv[2] || '4179'),
 });
 const requestedPort = String(process.argv[2] || '4179');
-if (!['4179', '4183'].includes(requestedPort)) {
+if (!['4179', '4183', '4184', '4185'].includes(requestedPort)) {
   throw new Error('LOCAL_STAGING_PORT_INVALID');
 }
 
@@ -62,8 +62,9 @@ process.env.RUNTIME_SCHEMA_BOOTSTRAP = 'false';
 process.env.AUTO_MIGRATE = 'false';
 process.env.AUTO_SEED = 'false';
 process.env.PGSSL_REJECT_UNAUTHORIZED = 'true';
-// Supabase pooler handshakes on a cold staging start can exceed the general
-// platform pool default. Keep strict TLS and allow time for the connection.
+// Supabase pooler handshakes on a cold staging start can exceed the default
+// timeout on either isolated pool. Keep strict TLS and allow both connections.
+process.env.PG_CONNECTION_TIMEOUT_MS = '30000';
 process.env.PG_PLATFORM_CONNECTION_TIMEOUT_MS = '30000';
 process.env.NODE_ENV = 'development';
 // Keep the local review server independent of occupied Vite WebSocket ports.

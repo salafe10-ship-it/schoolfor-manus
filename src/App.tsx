@@ -1822,6 +1822,7 @@ export default function App() {
                 logAction={logAction}
                 currentRole={currentRole}
                 selectedSchool={selectedSchool}
+                onExit={() => setActiveSection('dashboard')}
                 onSchoolLogoUpdated={(logo) => setSelectedSchool((current) => ({ ...current, logo }))}
                 onSchoolStageLogosUpdated={(stageLogos) => setSelectedSchool((current) => ({ ...current, stageLogos }))}
                 initialTab="branding"
@@ -2337,7 +2338,7 @@ export default function App() {
                   onClick={() => setSettingsTab('comprehensive')}
                   className={`pb-2 px-1 transition-all border-b-2 ${
                     settingsTab === 'comprehensive'
-                      ? 'border-sky-600 text-sky-700 font-black'
+                      ? 'border-amber-600 text-amber-700 font-black'
                       : 'border-transparent text-slate-500 hover:text-slate-800'
                   }`}
                 >
@@ -2347,7 +2348,7 @@ export default function App() {
                   onClick={() => setSettingsTab('rbac')}
                   className={`pb-2 px-1 transition-all border-b-2 ${
                     settingsTab === 'rbac'
-                      ? 'border-sky-600 text-sky-700 font-black'
+                      ? 'border-amber-600 text-amber-700 font-black'
                       : 'border-transparent text-slate-500 hover:text-slate-800'
                   }`}
                 >
@@ -2357,7 +2358,7 @@ export default function App() {
                   onClick={() => setSettingsTab('currency')}
                   className={`pb-2 px-1 transition-all border-b-2 ${
                     settingsTab === 'currency'
-                      ? 'border-sky-600 text-sky-700 font-black'
+                      ? 'border-amber-600 text-amber-700 font-black'
                       : 'border-transparent text-slate-500 hover:text-slate-800'
                   }`}
                 >
@@ -2372,8 +2373,9 @@ export default function App() {
                   logAction={logAction}
                   currentRole={currentRole}
                   selectedSchool={selectedSchool}
-                onSchoolLogoUpdated={(logo) => setSelectedSchool((current) => ({ ...current, logo }))}
-                onSchoolStageLogosUpdated={(stageLogos) => setSelectedSchool((current) => ({ ...current, stageLogos }))}
+                  onExit={() => setActiveSection('dashboard')}
+                  onSchoolLogoUpdated={(logo) => setSelectedSchool((current) => ({ ...current, logo }))}
+                  onSchoolStageLogosUpdated={(stageLogos) => setSelectedSchool((current) => ({ ...current, stageLogos }))}
                 />
               ) : settingsTab === 'rbac' ? (
                 <>
@@ -2391,7 +2393,7 @@ export default function App() {
                           }}
                           className={`p-4 rounded-xl border text-center transition-all flex flex-col justify-between h-40 ${
                             currentRole === r 
-                              ? 'border-sky-600 bg-sky-50/50 shadow-md ring-2 ring-sky-500/20' 
+                              ? 'border-amber-600 bg-amber-50/50 shadow-md ring-2 ring-amber-500/20'
                               : 'border-slate-200 bg-slate-50 hover:bg-slate-100'
                           }`}
                         >
@@ -2420,7 +2422,7 @@ export default function App() {
                           <div>
                             <div className="flex items-center gap-2">
                               <span className="font-mono text-slate-800 font-bold bg-slate-100 px-2 py-0.5 rounded">{p.code}</span>
-                              <span className="bg-sky-50 text-sky-600 px-2 py-0.5 rounded text-[10px] font-bold">{p.module}</span>
+                              <span className="bg-amber-50 text-amber-600 px-2 py-0.5 rounded text-[10px] font-bold">{p.module}</span>
                             </div>
                             <h4 className="font-bold text-slate-800 mt-2">{p.title}</h4>
                             <p className="text-slate-500 mt-1">{p.description}</p>
@@ -2453,7 +2455,7 @@ export default function App() {
                           value={currencyForm?.name || ''}
                           onChange={(e) => setCurrencyForm({ ...currencyForm, name: e.target.value })}
                           placeholder="مثال: الريال السعودي، الجنيه السوداني، د.ل"
-                          className="w-full bg-slate-50 border border-slate-200 text-slate-800 rounded-lg p-2.5 text-xs focus:ring-1 focus:ring-sky-500 focus:outline-none font-bold"
+                          className="w-full bg-slate-50 border border-slate-200 text-slate-800 rounded-lg p-2.5 text-xs focus:ring-1 focus:ring-amber-500 focus:outline-none font-bold"
                         />
                       </div>
 
@@ -2464,7 +2466,7 @@ export default function App() {
                           value={currencyForm?.symbol || ''}
                           onChange={(e) => setCurrencyForm({ ...currencyForm, symbol: e.target.value })}
                           placeholder="مثال: ر.س، ج.س، د.ل، $"
-                          className="w-full bg-slate-50 border border-slate-200 text-slate-800 rounded-lg p-2.5 text-xs focus:ring-1 focus:ring-sky-500 focus:outline-none font-bold"
+                          className="w-full bg-slate-50 border border-slate-200 text-slate-800 rounded-lg p-2.5 text-xs focus:ring-1 focus:ring-amber-500 focus:outline-none font-bold"
                         />
                       </div>
 
@@ -2475,7 +2477,7 @@ export default function App() {
                           value={currencyForm?.fractionName || ''}
                           onChange={(e) => setCurrencyForm({ ...currencyForm, fractionName: e.target.value })}
                           placeholder="مثال: هللة، قرش، درهم، سنت"
-                          className="w-full bg-slate-50 border border-slate-200 text-slate-800 rounded-lg p-2.5 text-xs focus:ring-1 focus:ring-sky-500 focus:outline-none font-bold"
+                          className="w-full bg-slate-50 border border-slate-200 text-slate-800 rounded-lg p-2.5 text-xs focus:ring-1 focus:ring-amber-500 focus:outline-none font-bold"
                         />
                       </div>
 
@@ -2484,7 +2486,7 @@ export default function App() {
                         <select
                           value={currencyForm?.decimalPlaces ?? 2}
                           onChange={(e) => setCurrencyForm({ ...currencyForm, decimalPlaces: Number(e.target.value) })}
-                          className="w-full bg-slate-50 border border-slate-200 text-slate-800 rounded-lg p-2.5 text-xs focus:ring-1 focus:ring-sky-500 focus:outline-none font-bold"
+                          className="w-full bg-slate-50 border border-slate-200 text-slate-800 rounded-lg p-2.5 text-xs focus:ring-1 focus:ring-amber-500 focus:outline-none font-bold"
                         >
                           <option value="0">0 (بدون أجزاء عشرية)</option>
                           <option value="1">1 (منزلة عشرية واحدة)</option>
@@ -2499,7 +2501,7 @@ export default function App() {
                         <select
                           value={currencyForm?.symbolPosition || 'after'}
                           onChange={(e) => setCurrencyForm({ ...currencyForm, symbolPosition: e.target.value })}
-                          className="w-full bg-slate-50 border border-slate-200 text-slate-800 rounded-lg p-2.5 text-xs focus:ring-1 focus:ring-sky-500 focus:outline-none font-bold"
+                          className="w-full bg-slate-50 border border-slate-200 text-slate-800 rounded-lg p-2.5 text-xs focus:ring-1 focus:ring-amber-500 focus:outline-none font-bold"
                         >
                           <option value="after">بعد المبلغ المالي (مثال: 1,250.00 {currencyForm?.symbol || 'ر.س'})</option>
                           <option value="before">قبل المبلغ المالي (مثال: {currencyForm?.symbol || 'ر.س'} 1,250.00)</option>
@@ -2514,7 +2516,7 @@ export default function App() {
                             onChange={(e) => setCurrencyForm({ ...currencyForm, showSymbolInReports: e.target.checked })}
                             className="sr-only peer"
                           />
-                          <div className="w-9 h-5 bg-slate-200 peer-focus:outline-none rounded-full peer peer-checked:after:translate-x-full peer-checked:after:border-white after:content-[''] after:absolute after:top-[2px] after:left-[2px] after:bg-white after:border-slate-300 after:border after:rounded-full after:h-4 after:w-4 after:transition-all peer-checked:bg-sky-600"></div>
+                          <div className="w-9 h-5 bg-slate-200 peer-focus:outline-none rounded-full peer peer-checked:after:translate-x-full peer-checked:after:border-white after:content-[''] after:absolute after:top-[2px] after:left-[2px] after:bg-white after:border-slate-300 after:border after:rounded-full after:h-4 after:w-4 after:transition-all peer-checked:bg-amber-600"></div>
                           <span className="mr-3 text-xs font-bold text-slate-700 select-none">إظهار رمز العملة في التقارير والمطبوعات والمستندات الرسمية</span>
                         </label>
                       </div>
@@ -2527,7 +2529,7 @@ export default function App() {
                           saveCurrency(currencyForm);
                           triggerNotification('تم حفظ إعدادات العملة محلياً فقط؛ لم يتم اعتمادها كمصدر مركزي.', 'warning');
                         }}
-                        className="bg-sky-600 hover:bg-sky-700 text-white font-extrabold text-xs px-6 py-2.5 rounded-lg flex items-center gap-2 shadow transition-all hover:scale-[1.02] cursor-pointer"
+                        className="bg-amber-600 hover:bg-amber-700 text-white font-extrabold text-xs px-6 py-2.5 rounded-lg flex items-center gap-2 shadow transition-all hover:scale-[1.02] cursor-pointer"
                       >
                         <span>حفظ التعديلات وتحديث المنظومة الحية 💾</span>
                       </button>
