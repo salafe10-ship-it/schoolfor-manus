@@ -19,6 +19,7 @@ import { authenticatedRequest } from '../utils/authenticatedRequest';
 import { feeConfigMatchesStudent, isStudentTuitionFee, resolveStudentFeeContext } from '../utils/studentFeeMatching';
 import { aggregateStudentFinancialSnapshot, buildStudentLedgerRows, createInstallmentPreview, findFeeConfigurationForStage, formatFinancialReference, isFeeConfigurationCompatibleWithStage, resolveReceiptTenders, toLocalDateInputValue } from '../utils/studentFinancialPresentation';
 import { formatFinancialDocumentDescriptionForPrint, resolveFinancialDocumentReference } from '../utils/financialDocumentReference';
+import { validateCustomInstallmentSchedule } from '../modules/financial/domain/CustomInstallmentSchedule';
 import { resolveCostCenterStageLogoKey } from '../utils/schoolBranding';
 
 const FINANCIAL_READ_TIMEOUT_MS = 30_000;
@@ -411,7 +412,8 @@ export default function StudentFinancialPortal({
   const [installmentCount, setInstallmentCount] = useState<number>(4);
   const [installmentStartDate, setInstallmentStartDate] = useState<string>(() => toLocalDateInputValue(new Date()));
   const [installmentGracePeriodDays, setInstallmentGracePeriodDays] = useState<number>(0);
-  const [installmentMethod, setInstallmentMethod] = useState<'equal'>('equal');
+  const [installmentMethod, setInstallmentMethod] = useState<'equal' | 'custom'>('equal');
+  const [customInstallments, setCustomInstallments] = useState<Array<{ dueDate: string; amount: string }>>([]);
   const [installmentPlans, setInstallmentPlans] = useState<InstallmentPlanView[]>([]);
   const [selectedPlanInvoiceId, setSelectedPlanInvoiceId] = useState<string>('');
   const [installmentPlansLoading, setInstallmentPlansLoading] = useState<boolean>(false);
@@ -563,6 +565,19 @@ export default function StudentFinancialPortal({
     && Math.abs(selectedPlanScheduleTotal - Number(selectedInvoiceInstallmentPlan.totalAmount || 0)) >= 0.01);
 
   const installmentPlanTotal = Number(selectedPlanInvoice?.remainingAmount ?? selectedPlanInvoice?.amount ?? 0);
+  const customScheduleValidation = useMemo(() => {
+    if (installmentMethod !== 'custom' || !selectedPlanInvoice) return { rows: [], error: '' };
+    try {
+      return { rows: validateCustomInstallmentSchedule({ availableAmount: installmentPlanTotal, schedules: customInstallments }), error: '' };
+    } catch (error: any) {
+      return { rows: [], error: String(error?.message || 'جدول الأقساط المخصصة غير صالح.') };
+    }
+  }, [installmentMethod, selectedPlanInvoice?.id, installmentPlanTotal, customInstallments]);
+
+  React.useEffect(() => {
+    setCustomInstallments([]);
+    setInstallmentMethod('equal');
+  }, [selectedPlanInvoice?.id]);
 
   const [viewingVoucher, setViewingVoucher] = useState<Invoice | null>(financialInvoices[0] || null);
 
@@ -3695,11 +3710,19 @@ export default function StudentFinancialPortal({
 
   React.useEffect(() => {
     if (activeSubSec === 'installments' && installmentPlansReady && !selectedInvoiceInstallmentPlan && selectedPlanInvoice && installmentPlanTotal > 0) {
-      generateInstallments(installmentPlanTotal, installmentPlanType, installmentCount, installmentStartDate, installmentGracePeriodDays);
+      if (installmentMethod === 'custom') {
+        setGeneratedInstallments([]);
+        setCustomInstallments(current => current.length > 0
+          ? current
+          : createInstallmentPreview(installmentPlanTotal, installmentPlanType, installmentCount, installmentStartDate, 0)
+            .map(item => ({ dueDate: item.date, amount: String(item.amount) })));
+      } else {
+        generateInstallments(installmentPlanTotal, installmentPlanType, installmentCount, installmentStartDate, installmentGracePeriodDays);
+      }
     } else if (activeSubSec === 'installments') {
       setGeneratedInstallments([]);
     }
-  }, [activeSubSec, selectedPlanInvoice?.id, installmentPlanTotal, installmentPlanType, installmentCount, installmentStartDate, installmentGracePeriodDays, installmentPlansReady, selectedInvoiceInstallmentPlan?.planId]);
+  }, [activeSubSec, selectedPlanInvoice?.id, installmentPlanTotal, installmentPlanType, installmentCount, installmentStartDate, installmentGracePeriodDays, installmentMethod, installmentPlansReady, selectedInvoiceInstallmentPlan?.planId]);
 
   const handleSaveInstallmentPlan = async () => {
     if (!ensureFinancialWriteReady()) return;
@@ -3719,13 +3742,17 @@ export default function StudentFinancialPortal({
       triggerNotification('لا يمكن حفظ الخطة قبل توثيق السنة والفترة الدراسية النشطتين.', 'warning');
       return;
     }
-    const count = Math.floor(Number(installmentCount));
+    const count = installmentMethod === 'custom' ? customInstallments.length : Math.floor(Number(installmentCount));
     if (!Number.isInteger(count) || count < 1 || count > 60) {
       triggerNotification('عدد الأقساط يجب أن يكون رقمًا صحيحًا بين 1 و60.', 'warning');
       return;
     }
-    if (!/^\d{4}-\d{2}-\d{2}$/.test(installmentStartDate)) {
+    if (installmentMethod === 'equal' && !/^\d{4}-\d{2}-\d{2}$/.test(installmentStartDate)) {
       triggerNotification('تاريخ أول قسط غير صالح.', 'warning');
+      return;
+    }
+    if (installmentMethod === 'custom' && customScheduleValidation.error) {
+      triggerNotification(customScheduleValidation.error, 'warning');
       return;
     }
 
@@ -3737,8 +3764,9 @@ export default function StudentFinancialPortal({
           frequency: installmentPlanType,
           count,
           startDueDate: installmentStartDate,
-          gracePeriodDays: Math.max(0, Math.min(90, Number(installmentGracePeriodDays) || 0)),
+          gracePeriodDays: installmentMethod === 'custom' ? 0 : Math.max(0, Math.min(90, Number(installmentGracePeriodDays) || 0)),
           method: installmentMethod,
+          ...(installmentMethod === 'custom' ? { schedules: customScheduleValidation.rows } : {}),
           penaltyRatePercent: 0,
           flatLateFee: 0,
           allowPenaltyWaiver: true
@@ -3753,7 +3781,7 @@ export default function StudentFinancialPortal({
         planId: String(result.data.plan.planId || result.data.plan.id || ''),
         invoiceId: String(result.data.plan.invoiceId || selectedPlanInvoice.id),
         studentId: String(result.data.plan.studentId || selectedStudent.id),
-        totalAmount: Number(result.data.plan.totalAmount || installmentPlanTotal),
+        totalAmount: Number(result.data.plan.totalAmount ?? installmentPlanTotal),
         installmentCount: Number(result.data.plan.installmentCount || count),
         schedules: Array.isArray(result.data.schedules) ? result.data.schedules : []
       } as InstallmentPlanView;
@@ -5111,34 +5139,65 @@ export default function StudentFinancialPortal({
                 ) : (
                   <>
                 <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-3">
+                  <label className="text-xs font-black text-slate-700">طريقة الجدولة
+                    <select
+                      value={installmentMethod}
+                      onChange={(event) => {
+                        const nextMethod = event.target.value as 'equal' | 'custom';
+                        setInstallmentMethod(nextMethod);
+                        if (nextMethod === 'custom' && customInstallments.length === 0 && installmentPlanTotal > 0) {
+                          setCustomInstallments(createInstallmentPreview(installmentPlanTotal, installmentPlanType, installmentCount, installmentStartDate, 0)
+                            .map(item => ({ dueDate: item.date, amount: String(item.amount) })));
+                        }
+                      }}
+                      className="mt-1 w-full rounded-xl border border-amber-200 bg-white px-3 py-2 text-xs font-bold"
+                    >
+                      <option value="equal">أقساط متساوية</option>
+                      <option value="custom">جدول مخصص من الشيت</option>
+                    </select>
+                  </label>
                   <label className="text-xs font-black text-slate-700">التواتر
-                    <select value={installmentPlanType} onChange={(event) => setInstallmentPlanType(event.target.value as 'monthly' | 'quarterly' | 'yearly')} className="mt-1 w-full rounded-xl border border-amber-200 bg-white px-3 py-2 text-xs font-bold">
+                    <select value={installmentPlanType} onChange={(event) => setInstallmentPlanType(event.target.value as 'monthly' | 'quarterly' | 'yearly')} disabled={installmentMethod === 'custom'} className="mt-1 w-full rounded-xl border border-amber-200 bg-white px-3 py-2 text-xs font-bold disabled:bg-slate-100">
                       <option value="monthly">شهري</option>
                       <option value="quarterly">فصلي</option>
                       <option value="yearly">سنوي</option>
                     </select>
                   </label>
                   <label className="text-xs font-black text-slate-700">عدد الأقساط
-                    <input type="number" min={1} max={60} value={installmentCount} onChange={(event) => setInstallmentCount(Math.max(1, Math.min(60, Number(event.target.value) || 1)))} className="mt-1 w-full rounded-xl border border-amber-200 bg-white px-3 py-2 text-xs font-bold" />
+                    <input type="number" min={1} max={60} value={installmentMethod === 'custom' ? customInstallments.length : installmentCount} onChange={(event) => {
+                      const nextCount = Math.max(1, Math.min(60, Number(event.target.value) || 1));
+                      if (installmentMethod === 'custom') {
+                        setCustomInstallments(current => Array.from({ length: nextCount }, (_, index) => current[index] || { dueDate: installmentStartDate, amount: '' }));
+                      } else {
+                        setInstallmentCount(nextCount);
+                      }
+                    }} className="mt-1 w-full rounded-xl border border-amber-200 bg-white px-3 py-2 text-xs font-bold" />
                   </label>
                   <label className="text-xs font-black text-slate-700">تاريخ أول قسط
-                    <input type="date" value={installmentStartDate} onChange={(event) => setInstallmentStartDate(event.target.value)} className="mt-1 w-full rounded-xl border border-amber-200 bg-white px-3 py-2 text-xs font-bold" />
+                    <input type="date" value={installmentStartDate} onChange={(event) => setInstallmentStartDate(event.target.value)} disabled={installmentMethod === 'custom'} className="mt-1 w-full rounded-xl border border-amber-200 bg-white px-3 py-2 text-xs font-bold disabled:bg-slate-100" />
                   </label>
                   <label className="text-xs font-black text-slate-700">مهلة إضافية (يوم)
-                    <input type="number" min={0} max={90} value={installmentGracePeriodDays} onChange={(event) => setInstallmentGracePeriodDays(Math.max(0, Math.min(90, Number(event.target.value) || 0)))} className="mt-1 w-full rounded-xl border border-amber-200 bg-white px-3 py-2 text-xs font-bold" />
+                    <input type="number" min={0} max={90} value={installmentGracePeriodDays} onChange={(event) => setInstallmentGracePeriodDays(Math.max(0, Math.min(90, Number(event.target.value) || 0)))} disabled={installmentMethod === 'custom'} className="mt-1 w-full rounded-xl border border-amber-200 bg-white px-3 py-2 text-xs font-bold disabled:bg-slate-100" />
                   </label>
                 </div>
 
                 <div className="flex flex-wrap items-center justify-between gap-3 rounded-xl border border-amber-100 bg-amber-50/70 px-3 py-2">
-                  <span className="text-[11px] font-bold text-slate-700">طريقة التوزيع: أقساط متساوية مع معالجة فرق الكسور في القسط الأخير</span>
-                  <span className="rounded-lg bg-amber-200/70 px-2 py-1 text-[10px] font-black text-amber-900">{installmentMethod === 'equal' ? 'متساوية' : installmentMethod}</span>
+                  <span className="text-[11px] font-bold text-slate-700">{installmentMethod === 'custom' ? 'أدخل مبالغ وتواريخ الشيت كما هي. يسمح الجدول بترك جزء من الرصيد غير مجدول.' : 'طريقة التوزيع: أقساط متساوية مع معالجة فرق الكسور في القسط الأخير'}</span>
+                  <span className="rounded-lg bg-amber-200/70 px-2 py-1 text-[10px] font-black text-amber-900">{installmentMethod === 'equal' ? 'متساوية' : 'مخصص'}</span>
                 </div>
 
                 <div className="overflow-x-auto rounded-xl border border-amber-200">
                   <table className="w-full min-w-[560px] text-right text-xs">
                     <thead><tr><th className="px-3 py-2">#</th><th className="px-3 py-2">تاريخ الاستحقاق</th><th className="px-3 py-2">مبلغ القسط</th><th className="px-3 py-2">الحالة عند الإنشاء</th></tr></thead>
                     <tbody>
-                      {generatedInstallments.map((installment, index) => (
+                      {installmentMethod === 'custom' ? customInstallments.map((installment, index) => (
+                        <tr key={`custom-${index}`} className="border-t border-amber-100">
+                          <td className="px-3 py-2 font-black">{index + 1}</td>
+                          <td className="px-3 py-2"><input type="date" value={installment.dueDate} onChange={(event) => setCustomInstallments(current => current.map((row, rowIndex) => rowIndex === index ? { ...row, dueDate: event.target.value } : row))} className="w-full rounded-lg border border-amber-200 px-2 py-1 font-mono" /></td>
+                          <td className="px-3 py-2"><input type="number" min="0.01" step="0.01" value={installment.amount} onChange={(event) => setCustomInstallments(current => current.map((row, rowIndex) => rowIndex === index ? { ...row, amount: event.target.value } : row))} className="w-full rounded-lg border border-amber-200 px-2 py-1 font-mono font-black" /></td>
+                          <td className="px-3 py-2"><button type="button" onClick={() => setCustomInstallments(current => current.filter((_, rowIndex) => rowIndex !== index))} disabled={customInstallments.length <= 1} className="rounded-lg border border-rose-200 px-2 py-1 text-[10px] font-black text-rose-700 disabled:opacity-40">حذف</button></td>
+                        </tr>
+                      )) : generatedInstallments.map((installment, index) => (
                         <tr key={`${installment.date}-${index}`} className="border-t border-amber-100">
                           <td className="px-3 py-2 font-black">{index + 1}</td>
                           <td className="px-3 py-2 font-mono">{installment.date}</td>
@@ -5146,16 +5205,21 @@ export default function StudentFinancialPortal({
                           <td className="px-3 py-2 text-slate-600">مجدول</td>
                         </tr>
                       ))}
-                      {generatedInstallments.length === 0 && <tr><td colSpan={4} className="px-3 py-8 text-center font-bold text-slate-400">اختر مطالبة مفتوحة لإنشاء المعاينة.</td></tr>}
+                      {(installmentMethod === 'custom' ? customInstallments.length === 0 : generatedInstallments.length === 0) && <tr><td colSpan={4} className="px-3 py-8 text-center font-bold text-slate-400">اختر مطالبة مفتوحة لإنشاء المعاينة.</td></tr>}
                     </tbody>
-                    {generatedInstallments.length > 0 && <tfoot><tr className="border-t-2 border-amber-200 bg-amber-50"><td colSpan={2} className="px-3 py-2 font-black">الإجمالي</td><td className="px-3 py-2 font-mono font-black text-amber-900">{formatActiveCurrencyAmount(generatedInstallments.reduce((sum, item) => sum + item.amount, 0))}</td><td className="px-3 py-2 text-[10px] font-bold text-emerald-700">يطابق المتبقي</td></tr></tfoot>}
+                    {(installmentMethod === 'custom' ? customInstallments.length > 0 : generatedInstallments.length > 0) && <tfoot><tr className="border-t-2 border-amber-200 bg-amber-50"><td colSpan={2} className="px-3 py-2 font-black">الإجمالي</td><td className="px-3 py-2 font-mono font-black text-amber-900">{formatActiveCurrencyAmount(installmentMethod === 'custom' ? customInstallments.reduce((sum, item) => sum + (Number(item.amount) || 0), 0) : generatedInstallments.reduce((sum, item) => sum + item.amount, 0))}</td><td className="px-3 py-2 text-[10px] font-bold text-emerald-700">{installmentMethod === 'custom' && customScheduleValidation.error ? customScheduleValidation.error : installmentMethod === 'custom' ? `من المتبقي ${formatActiveCurrencyAmount(installmentPlanTotal)}` : 'يطابق المتبقي'}</td></tr></tfoot>}
                   </table>
                 </div>
+
+                {installmentMethod === 'custom' && <div className="flex items-center justify-between gap-3">
+                  <button type="button" onClick={() => setCustomInstallments(current => [...current, { dueDate: current.at(-1)?.dueDate || installmentStartDate, amount: '' }])} disabled={customInstallments.length >= 60} className="rounded-xl border border-amber-300 bg-white px-3 py-2 text-xs font-black text-amber-900 disabled:opacity-40">إضافة قسط</button>
+                  <span className="text-[10px] font-bold text-slate-500">بعد الحفظ تصبح الخطة معتمدة وتظهر في سجل الأقساط.</span>
+                </div>}
 
                 <button
                   type="button"
                   onClick={() => { void handleSaveInstallmentPlan(); }}
-                  disabled={financialWritesLocked || financialPersistence !== 'ready' || !installmentPlansReady || !selectedPlanInvoice || Boolean(selectedInvoiceInstallmentPlan) || generatedInstallments.length === 0}
+                  disabled={financialWritesLocked || financialPersistence !== 'ready' || !installmentPlansReady || !selectedPlanInvoice || Boolean(selectedInvoiceInstallmentPlan) || (installmentMethod === 'custom' ? customScheduleValidation.rows.length === 0 || Boolean(customScheduleValidation.error) : generatedInstallments.length === 0)}
                   className="w-full rounded-xl border border-amber-300 bg-gradient-to-r from-[#9b6c17] via-[#d4af37] to-[#9b6c17] px-4 py-3 text-sm font-black text-[#24150d] shadow-md disabled:cursor-not-allowed disabled:opacity-50"
                 >
                   حفظ واعتماد خطة الأقساط
@@ -7298,7 +7362,7 @@ export default function StudentFinancialPortal({
               <div><strong className="block text-[10px] text-amber-800">الطالب</strong><span className="font-black">{installmentPlanPrintPreview.student?.name || installmentPlanPrintPreview.plan.studentId}</span></div>
               <div><strong className="block text-[10px] text-amber-800">المطالبة</strong><span className="font-mono font-black">{installmentPlanPrintPreview.plan.invoiceId}</span></div>
               <div><strong className="block text-[10px] text-amber-800">رقم الخطة</strong><span className="font-mono font-black">{installmentPlanPrintPreview.plan.planId}</span></div>
-              <div><strong className="block text-[10px] text-amber-800">الدورية</strong><span className="font-black">{installmentPlanPrintPreview.plan.frequency === 'monthly' ? 'شهري' : installmentPlanPrintPreview.plan.frequency === 'quarterly' ? 'فصلي' : 'سنوي'} — {installmentPlanPrintPreview.plan.installmentCount} أقساط</span></div>
+              <div><strong className="block text-[10px] text-amber-800">طريقة الجدولة</strong><span className="font-black">{installmentPlanPrintPreview.plan.method === 'custom' ? 'مخصص من الشيت' : installmentPlanPrintPreview.plan.frequency === 'monthly' ? 'شهري' : installmentPlanPrintPreview.plan.frequency === 'quarterly' ? 'فصلي' : 'سنوي'} — {installmentPlanPrintPreview.plan.installmentCount} أقساط</span></div>
               <div><strong className="block text-[10px] text-amber-800">إجمالي الخطة ({getCurrencyConfigForCode(String(installmentPlanPrintPreview.plan.currency || activeCurrencyCode)).symbol})</strong><span className="font-mono font-black">{formatLD(installmentPlanPrintPreview.plan.totalAmount)} {getCurrencyConfigForCode(String(installmentPlanPrintPreview.plan.currency || activeCurrencyCode)).symbol}</span></div>
               <div><strong className="block text-[10px] text-amber-800">العام الدراسي</strong><span className="font-black">{financialOperationalContext?.academicYearName || selectedSchool?.academicYear || 'غير محدد'}</span></div>
             </div>
