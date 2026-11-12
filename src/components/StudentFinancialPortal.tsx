@@ -20,11 +20,16 @@ import { feeConfigMatchesStudent, isStudentTuitionFee, resolveStudentFeeContext 
 import { aggregateStudentFinancialSnapshot, buildStudentLedgerRows, createInstallmentPreview, findFeeConfigurationForStage, formatFinancialReference, isFeeConfigurationCompatibleWithStage, resolveReceiptTenders, toLocalDateInputValue } from '../utils/studentFinancialPresentation';
 import { formatFinancialDocumentDescriptionForPrint, resolveFinancialDocumentReference } from '../utils/financialDocumentReference';
 import { validateCustomInstallmentSchedule } from '../modules/financial/domain/CustomInstallmentSchedule';
-MethodInvocationException: 
-Line |
-   2 |  $f=[IO.File]::ReadAllText('C:\Users\admin\Documents\Codex\2026-11-11\ …
-     |  ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
-     | Exception calling "ReadAllText" with "1" argument(s): "Could not find a part of the path 'C:\Users\admin\Documents\Codex\2026-11-11\ig\work\repo\schoolfor-manus\src\components\StudentFinancialPortal.tsx'."
+import {
+  normalizeStudentWorkbookText,
+  parseStudentFeeWorkbook,
+  studentWorkbookNameMatches,
+  workbookGradeOrdinal,
+  workbookRowHasPaymentSource,
+  type StudentFeeWorkbookPaymentRow,
+  type StudentFeeWorkbookRow
+} from '../modules/financial/domain/StudentFeeWorkbookImport';
+import { readSpreadsheetMatrix } from '../utils/ExcelWorkbookUtils';
 
 
 import { resolveCostCenterStageLogoKey } from '../utils/schoolBranding';
@@ -117,11 +122,9 @@ function normalizeReceiptTenders(voucher: any, fallbackAmount = 0, journalEntrie
 const MAX_FEE_CONFIG_IMPORT_FILE_BYTES = 10 * 1024 * 1024;
 const FEE_CONFIG_IMPORT_EXTENSIONS = ['.xlsx', '.csv'];
 const MAX_FEE_CONFIG_IMPORT_ROWS = 500;
-MethodInvocationException: 
-Line |
-   2 |  $f=[IO.File]::ReadAllText('C:\Users\admin\Documents\Codex\2026-11-11\ …
-     |  ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
-     | Exception calling "ReadAllText" with "1" argument(s): "Could not find a part of the path 'C:\Users\admin\Documents\Codex\2026-11-11\ig\work\repo\schoolfor-manus\src\components\StudentFinancialPortal.tsx'."
+const MAX_STUDENT_FEE_WORKBOOK_BYTES = 20 * 1024 * 1024;
+const STUDENT_FEE_WORKBOOK_EXTENSIONS = ['.xlsx', '.csv'];
+const STUDENT_FEE_WORKBOOK_INVOICE_DATE = '2026-09-01';
 
 
 const MAX_STUDENT_RECEIPT_ATTACHMENT_BYTES = 5 * 1024 * 1024;
@@ -473,12 +476,8 @@ export default function StudentFinancialPortal({
     financialPeriod: string;
   } | null>(null);
   const feeImportInputRef = React.useRef<HTMLInputElement | null>(null);
-MethodInvocationException: 
-Line |
-   2 |  $f=[IO.File]::ReadAllText('C:\Users\admin\Documents\Codex\2026-11-11\ …
-     |  ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
-     | Exception calling "ReadAllText" with "1" argument(s): "Could not find a part of the path 'C:\Users\admin\Documents\Codex\2026-11-11\ig\work\repo\schoolfor-manus\src\components\StudentFinancialPortal.tsx'."
-
+const studentFeeWorkbookInputRef = React.useRef<HTMLInputElement | null>(null);
+  
 
   const receiptAttachmentInputRef = React.useRef<HTMLInputElement | null>(null);
 
@@ -2228,14 +2227,6 @@ Line |
       triggerNotification(error?.message || 'تعذر استيراد ملف بنود الرسوم.', 'warning');
     }
   };
-
-MethodInvocationException: 
-Line |
-   2 |  $f=[IO.File]::ReadAllText('C:\Users\admin\Documents\Codex\2026-11-11\ …
-     |  ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
-     | Exception calling "ReadAllText" with "1" argument(s): "Could not find a part of the path 'C:\Users\admin\Documents\Codex\2026-11-11\ig\work\repo\schoolfor-manus\src\components\StudentFinancialPortal.tsx'."
-
-
 
   const handleImportStudentFeeWorkbook = () => {
     studentFeeWorkbookInputRef.current?.click();
@@ -4571,12 +4562,13 @@ Line |
         aria-label="استيراد بنود الرسوم"
         onChange={(event) => { void handleFeeConfigFileChange(event); }}
       />
-MethodInvocationException: 
-Line |
-   2 |  $f=[IO.File]::ReadAllText('C:\Users\admin\Documents\Codex\2026-11-11\ …
-     |  ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
-     | Exception calling "ReadAllText" with "1" argument(s): "Could not find a part of the path 'C:\Users\admin\Documents\Codex\2026-11-11\ig\work\repo\schoolfor-manus\src\components\StudentFinancialPortal.tsx'."
-
+      <input
+        ref={studentFeeWorkbookInputRef}
+        type="file"
+        accept=".xlsx,.csv,text/csv,application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
+        className="hidden"
+        aria-label="استيراد الشيت الموحد المالي"
+        onChange={(event) => { void handleStudentFeeWorkbookFileChange(event); }}
 
        <div id="student-financial-portal-layout" className="financial-workspace-layout grid grid-cols-1 lg:grid-cols-[minmax(0,1fr)_16.5rem] gap-4 w-full p-3 sm:p-4 text-right">
       
