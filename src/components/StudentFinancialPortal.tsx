@@ -1,6 +1,3 @@
-Warning: truncated output (original token count: 101602)
-Total output lines: 6756
-
 import { AlertTriangle, ArrowLeft, BarChart3, CalendarRange, CheckCircle2, ChevronLeft, ClipboardCheck, Coins, DollarSign, Download, FileSpreadsheet, FileText, GraduationCap, Home, Maximize2, Minimize2, Pencil, Percent, Plus, Printer, QrCode, RefreshCw, Save, Search, Settings, Settings2, Trash2, TrendingUp, Undo2, Upload, UserCheck, Users, X } from 'lucide-react';
 /**
  * @license
@@ -23,16 +20,13 @@ import { feeConfigMatchesStudent, isStudentTuitionFee, resolveStudentFeeContext 
 import { aggregateStudentFinancialSnapshot, buildStudentLedgerRows, createInstallmentPreview, findFeeConfigurationForStage, formatFinancialReference, isFeeConfigurationCompatibleWithStage, resolveReceiptTenders, toLocalDateInputValue } from '../utils/studentFinancialPresentation';
 import { formatFinancialDocumentDescriptionForPrint, resolveFinancialDocumentReference } from '../utils/financialDocumentReference';
 import { validateCustomInstallmentSchedule } from '../modules/financial/domain/CustomInstallmentSchedule';
-import {
-  normalizeStudentWorkbookText,
-  parseStudentFeeWorkbook,
-  studentWorkbookNameMatches,
-  workbookGradeOrdinal,
-  workbookRowHasPaymentSource,
-  type StudentFeeWorkbookPaymentRow,
-  type StudentFeeWorkbookRow
-} from '../modules/financial/domain/StudentFeeWorkbookImport';
-import { readSpreadsheetMatrix } from '../utils/ExcelWorkbookUtils';
+MethodInvocationException: 
+Line |
+   2 |  $f=[IO.File]::ReadAllText('C:\Users\admin\Documents\Codex\2026-11-11\ …
+     |  ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+     | Exception calling "ReadAllText" with "1" argument(s): "Could not find a part of the path 'C:\Users\admin\Documents\Codex\2026-11-11\ig\work\repo\schoolfor-manus\src\components\StudentFinancialPortal.tsx'."
+
+
 import { resolveCostCenterStageLogoKey } from '../utils/schoolBranding';
 
 const FINANCIAL_READ_TIMEOUT_MS = 30_000;
@@ -123,9 +117,13 @@ function normalizeReceiptTenders(voucher: any, fallbackAmount = 0, journalEntrie
 const MAX_FEE_CONFIG_IMPORT_FILE_BYTES = 10 * 1024 * 1024;
 const FEE_CONFIG_IMPORT_EXTENSIONS = ['.xlsx', '.csv'];
 const MAX_FEE_CONFIG_IMPORT_ROWS = 500;
-const MAX_STUDENT_FEE_WORKBOOK_BYTES = 20 * 1024 * 1024;
-const STUDENT_FEE_WORKBOOK_EXTENSIONS = ['.xlsx', '.csv'];
-const STUDENT_FEE_WORKBOOK_INVOICE_DATE = '2026-09-01';
+MethodInvocationException: 
+Line |
+   2 |  $f=[IO.File]::ReadAllText('C:\Users\admin\Documents\Codex\2026-11-11\ …
+     |  ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+     | Exception calling "ReadAllText" with "1" argument(s): "Could not find a part of the path 'C:\Users\admin\Documents\Codex\2026-11-11\ig\work\repo\schoolfor-manus\src\components\StudentFinancialPortal.tsx'."
+
+
 const MAX_STUDENT_RECEIPT_ATTACHMENT_BYTES = 5 * 1024 * 1024;
 const STUDENT_RECEIPT_ATTACHMENT_EXTENSIONS = ['.pdf', '.png', '.jpg', '.jpeg'];
 
@@ -475,9 +473,14 @@ export default function StudentFinancialPortal({
     financialPeriod: string;
   } | null>(null);
   const feeImportInputRef = React.useRef<HTMLInputElement | null>(null);
-  const studentFeeWorkbookInputRef = React.useRef<HTMLInputElement | null>(null);
+MethodInvocationException: 
+Line |
+   2 |  $f=[IO.File]::ReadAllText('C:\Users\admin\Documents\Codex\2026-11-11\ …
+     |  ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+     | Exception calling "ReadAllText" with "1" argument(s): "Could not find a part of the path 'C:\Users\admin\Documents\Codex\2026-11-11\ig\work\repo\schoolfor-manus\src\components\StudentFinancialPortal.tsx'."
+
+
   const receiptAttachmentInputRef = React.useRef<HTMLInputElement | null>(null);
-  const [studentFeeWorkbookImportStatus, setStudentFeeWorkbookImportStatus] = useState('');
 
   const runWithLock = async (opName: string, asyncFn: () => Promise<any> | any) => {
     if (activeSaving) {
@@ -2226,269 +2229,13 @@ export default function StudentFinancialPortal({
     }
   };
 
-  const handleImportStudentFeeWorkbook = () => {
-    studentFeeWorkbookInputRef.current?.click();
-  };
+MethodInvocationException: 
+Line |
+   2 |  $f=[IO.File]::ReadAllText('C:\Users\admin\Documents\Codex\2026-11-11\ …
+     |  ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+     | Exception calling "ReadAllText" with "1" argument(s): "Could not find a part of the path 'C:\Users\admin\Documents\Codex\2026-11-11\ig\work\repo\schoolfor-manus\src\components\StudentFinancialPortal.tsx'."
 
-  const handleStudentFeeWorkbookFileChange = async (event: React.ChangeEvent<HTMLInputElement>) => {
-    const file = event.target.files?.[0];
-    event.target.value = '';
-    if (!file || !ensureFinancialWriteReady()) return;
 
-    await runWithLock('IMPORT_STUDENT_FEE_WORKBOOK', async () => {
-      const fileName = file.name.toLowerCase();
-      if (file.size > MAX_STUDENT_FEE_WORKBOOK_BYTES) throw new Error('الحد الأقصى للشيت الموحد المالي 20 ميجابايت.');
-      if (!STUDENT_FEE_WORKBOOK_EXTENSIONS.some(extension => fileName.endsWith(extension))) throw new Error('صيغة الشيت غير مدعومة؛ استخدم XLSX أو CSV.');
-      if (!financialOperationalContext?.academicYearId || !financialOperationalContext.academicPeriodId || !financialOperationalContext.financialPeriod) {
-        throw new Error('لا يمكن الاستيراد قبل اكتمال السنة والفترة المالية ومركز الفرع من المصدر الكانوني.');
-      }
-
-      setStudentFeeWorkbookImportStatus('جارٍ قراءة الشيت والتحقق من المطابقة...');
-      const parsed = parseStudentFeeWorkbook(await readSpreadsheetMatrix(await file.arrayBuffer()));
-      const issues: string[] = [];
-      const resolvedRows: Array<{ workbook: StudentFeeWorkbookRow; student: Student; context: NonNullable<typeof selectedStudentFeeContext>; }> = [];
-      const seenStudentIds = new Set<string>();
-
-      for (const workbookRow of parsed.rows) {
-        const candidates = selectableStudents.filter(student => {
-          if (!studentWorkbookNameMatches(student, workbookRow.name)) return false;
-          const context = resolveStudentFeeContext(student, stages || [], grades || [], academicClasses || [], costCenters || []);
-          if (!context || context.stageType !== 'primary') return false;
-          const expectedGrade = workbookGradeOrdinal(workbookRow.grade);
-          if (expectedGrade && Number(context.gradeOrder || workbookGradeOrdinal(context.gradeText)) !== expectedGrade) return false;
-          return true;
-        });
-        let narrowed = candidates;
-        const nationalId = normalizeStudentWorkbookText(workbookRow.nationalId).replace(/[^\dA-Za-z]/g, '');
-        if (nationalId && nationalId !== '0') {
-          const byNationalId = narrowed.filter(student => normalizeStudentWorkbookText(student.nationalId).replace(/[^\dA-Za-z]/g, '') === nationalId);
-          if (byNationalId.length > 0) narrowed = byNationalId;
-        }
-        const section = normalizeStudentWorkbookText(workbookRow.section);
-        if (section && narrowed.length > 1) {
-          const bySection = narrowed.filter(student => {
-            const studentSection = normalizeStudentWorkbookText(student.section);
-            const classroom = normalizeStudentWorkbookText(student.classroom);
-            return studentSection === section || classroom.includes(section);
-          });
-          if (bySection.length > 0) narrowed = bySection;
-        }
-        if (narrowed.length !== 1) {
-          issues.push(`صف الشيت ${workbookRow.workbookRow}: تعذر تحديد طالب واحد للاسم «${workbookRow.name}» (${narrowed.length} مطابق).`);
-          continue;
-        }
-        const student = narrowed[0];
-        if (seenStudentIds.has(student.id)) {
-          issues.push(`صف الشيت ${workbookRow.workbookRow}: تكرار مالي لنفس الطالب «${student.name}»؛ لم يُكرر القيد.`);
-          continue;
-        }
-        const context = resolveStudentFeeContext(student, stages || [], grades || [], academicClasses || [], costCenters || []);
-        if (!context) {
-          issues.push(`صف الشيت ${workbookRow.workbookRow}: مركز تكلفة الطالب غير موثق.`);
-          continue;
-        }
-        seenStudentIds.add(student.id);
-        resolvedRows.push({ workbook: workbookRow, student, context });
-      }
-
-      if (resolvedRows.length === 0) throw new Error(`لم تُطابق أي صف مالي مع طالب موثق. ${issues.slice(0, 3).join(' ')}`);
-
-      const invoiceByStudent = new Map<string, any>();
-      const safeRows: typeof resolvedRows = [];
-      for (const entry of resolvedRows) {
-        const studentInvoices = financialInvoices.filter(invoice => String(invoice.studentId) === String(entry.student.id));
-        const activeInvoices = studentInvoices.filter(invoice => !['cancelled', 'void', 'refunded', 'written_off'].includes(String(invoice.status || '').toLowerCase()));
-        const matchingInvoices = activeInvoices.filter(invoice => Math.abs(Number(invoice.totalAmount ?? invoice.amount ?? 0) - entry.workbook.netAmount) <= 0.01);
-        if (matchingInvoices.length > 1) {
-          issues.push(`صف الشيت ${entry.workbook.workbookRow}: أكثر من مطالبة بنفس صافي المبلغ للطالب «${entry.student.name}»؛ يلزم مراجعة يدوية.`);
-          continue;
-        }
-        if (matchingInvoices.length === 1) {
-          invoiceByStudent.set(entry.student.id, matchingInvoices[0]);
-          safeRows.push(entry);
-          continue;
-        }
-        if (activeInvoices.length > 0) {
-          issues.push(`صف الشيت ${entry.workbook.workbookRow}: توجد مطالبة مختلفة مسبقًا للطالب «${entry.student.name}»؛ أوقفنا الإضافة منعًا للتكرار.`);
-          continue;
-        }
-        safeRows.push(entry);
-      }
-      if (safeRows.length === 0) throw new Error(`لم توجد صفوف آمنة للكتابة. ${issues.slice(0, 3).join(' ')}`);
-
-      const academicYearId = financialOperationalContext.academicYearId;
-      const academicPeriodId = financialOperationalContext.academicPeriodId;
-      const financialPeriod = financialOperationalContext.financialPeriod;
-      const makeInvoiceCommand = (entry: typeof safeRows[number]) => {
-        const firstPlanDate = entry.workbook.plans[0]?.dueDate || STUDENT_FEE_WORKBOOK_INVOICE_DATE;
-        return {
-          studentId: entry.student.id,
-          description: `رسوم دراسية — الشيت الموحد المالي (${entry.workbook.serial || entry.workbook.workbookRow})`,
-          amount: entry.workbook.netAmount,
-          grossAmount: entry.workbook.grossAmount,
-          discountAmount: entry.workbook.discountAmount,
-          taxAmount: 0,
-          currency: activeCurrencyCode,
-          dueDate: firstPlanDate,
-          invoiceDate: firstPlanDate,
-          academicYearId,
-          academicPeriodId,
-          financialPeriod,
-          revenueAccount: '4101',
-          receivableAccount: STUDENT_RECEIVABLE_ACCOUNT,
-          costCenter: entry.context.stageType,
-          academicStageCode: entry.context.stageId || entry.context.stageType,
-          branchId: entry.student.branchId || financialOperationalContext.branchId,
-          idempotencyKey: `workbook:${entry.student.id}:${academicYearId}:student-fee`
-        };
-      };
-
-      const newInvoiceRows = safeRows.filter(entry => !invoiceByStudent.has(entry.student.id));
-      for (let offset = 0; offset < newInvoiceRows.length; offset += 100) {
-        const chunk = newInvoiceRows.slice(offset, offset + 100);
-        setStudentFeeWorkbookImportStatus(`إصدار المطالبات: ${Math.min(offset + chunk.length, newInvoiceRows.length)} من ${newInvoiceRows.length}...`);
-        const response = await authenticatedRequest('/api/financial/invoices/issue-batch', {
-          method: 'POST',
-          headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({ invoices: chunk.map(makeInvoiceCommand) })
-        });
-        const result = await response.json().catch(() => ({}));
-        const issued = Array.isArray(result.data?.invoices) ? result.data.invoices : [];
-        if (!response.ok || !result.success || issued.length !== chunk.length) throw new Error(result.message || 'تعذر إصدار دفعة المطالبات؛ لم تُعتمد الدفعة الناقصة.');
-        chunk.forEach((entry, index) => invoiceByStudent.set(entry.student.id, issued[index]));
-      }
-
-      let plansCreated = 0;
-      let plansAlreadyPresent = 0;
-      let receiptsPosted = 0;
-      let receiptsAlreadyPresent = 0;
-      const postedReceipts: any[] = [];
-      const currentReceipts = [...studentReceiptVouchers];
-      const invoiceState = new Map<string, any>([...invoiceByStudent.entries()].map(([studentId, invoice]) => [studentId, { ...invoice }]));
-
-      const schedulesMatch = (existing: any, expected: Array<{ amount: number; dueDate: string }>) => {
-        const schedules = Array.isArray(existing?.schedules) ? existing.schedules : [];
-        return schedules.length === expected.length && schedules.every((item: any, index: number) =>
-          String(item.dueDate || '').slice(0, 10) === expected[index].dueDate
-          && Math.abs(Number(item.amount || 0) - expected[index].amount) <= 0.01
-        );
-      };
-
-      for (const entry of safeRows) {
-        if (entry.workbook.plans.length === 0) continue;
-        let planSchedules: Array<{ amount: number; dueDate: string }> = [];
-        try {
-          planSchedules = validateCustomInstallmentSchedule({ availableAmount: entry.workbook.netAmount, schedules: entry.workbook.plans });
-        } catch (error: any) {
-          issues.push(`صف الشيت ${entry.workbook.workbookRow}: خطة «${entry.student.name}» موقوفة: ${error?.message || 'تواريخ أو مبالغ غير صالحة'}.`);
-          continue;
-        }
-        const invoice = invoiceState.get(entry.student.id);
-        if (!invoice?.id) {
-          issues.push(`صف الشيت ${entry.workbook.workbookRow}: لم يعد الخادم بمعرف مطالبة للطالب «${entry.student.name}».`);
-          continue;
-        }
-        const response = await authenticatedRequest(`/api/financial/invoices/${encodeURIComponent(String(invoice.id))}/installment-plan`, {
-          method: 'POST',
-          headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({ frequency: 'monthly', count: planSchedules.length, startDueDate: planSchedules[0].dueDate, gracePeriodDays: 0, method: 'custom', schedules: planSchedules })
-        });
-        const result = await response.json().catch(() => ({}));
-        if (response.ok && result.success) {
-          plansCreated += 1;
-          continue;
-        }
-        if (response.status === 409 || String(result.message || '').includes('مسبقًا')) {
-          const existingResponse = await authenticatedRequest(`/api/financial/students/${encodeURIComponent(entry.student.id)}/installment-plans`, { headers: { Accept: 'application/json' }, cache: 'no-store' });
-          const existingResult = await existingResponse.json().catch(() => ({}));
-          const existingPlan = Array.isArray(existingResult.data) ? existingResult.data.find((plan: any) => String(plan.invoiceId) === String(invoice.id)) : null;
-          if (existingPlan && schedulesMatch(existingPlan, planSchedules)) plansAlreadyPresent += 1;
-          else issues.push(`صف الشيت ${entry.workbook.workbookRow}: خطة موجودة أو متعارضة للطالب «${entry.student.name}»؛ لم نعدلها.`);
-        } else {
-          issues.push(`صف الشيت ${entry.workbook.workbookRow}: تعذر حفظ خطة «${entry.student.name}»: ${result.message || 'خطأ خادمي'}.`);
-        }
-      }
-
-      const resolvePayment = (entry: typeof safeRows[number], payment: StudentFeeWorkbookPaymentRow) => {
-        const bankReference = payment.bankReference.trim();
-        const cashMarker = normalizeStudentWorkbookText(payment.cashMarker);
-        if (bankReference && cashMarker) return null;
-        if (bankReference) return { paymentMethod: 'تحويل', accountCode: '110201', sourceText: `رقم بنكك ${bankReference}` };
-        if (cashMarker.includes('نقد') || cashMarker === 'cash') {
-          const grade = workbookGradeOrdinal(entry.workbook.grade) || 1;
-          return { paymentMethod: 'نقدي', accountCode: grade <= 3 ? '110102' : '110101', sourceText: `نقدي — ${grade <= 3 ? 'خزينة جنيه مناهل عبدالعزيز' : 'خزينة جنيه علا عوض'}` };
-        }
-        return null;
-      };
-
-      for (const entry of safeRows) {
-        const invoice = invoiceState.get(entry.student.id);
-        if (!invoice?.id) continue;
-        for (const payment of entry.workbook.payments) {
-          const source = resolvePayment(entry, payment);
-          if (!source || !workbookRowHasPaymentSource(payment)) {
-            issues.push(`صف الشيت ${entry.workbook.workbookRow} / السداد ${payment.ordinal}: مصدر القبض غير محسوم للطالب «${entry.student.name}»؛ لم يُرحّل.`);
-            continue;
-          }
-          const alreadyListed = currentReceipts.find(receipt => String(receipt.studentId) === String(entry.student.id)
-            && Math.abs(Number(receipt.amount || 0) - payment.amount) <= 0.01
-            && String(receipt.date || receipt.receiptDate || '').slice(0, 10) === payment.date
-            && (payment.bankReference ? String(receipt.against || '').includes(payment.bankReference) : String(receipt.receivingAccount || receipt.receiving_account || '') === source.accountCode));
-          if (alreadyListed && String(alreadyListed.status || '').toLowerCase() === 'posted') {
-            receiptsAlreadyPresent += 1;
-            continue;
-          }
-          const receiptId = `WBK-${entry.student.id}-${payment.ordinal}`;
-          const costCenter = ['kindergarten', 'primary', 'middle', 'secondary'].includes(entry.context.costCenter) ? entry.context.costCenter : entry.context.stageType;
-          const response = await authenticatedRequest('/api/financial/receipts/manual-settle', {
-            method: 'POST',
-            headers: { 'Content-Type': 'application/json' },
-            body: JSON.stringify({
-              receiptId,
-              studentId: entry.student.id,
-              receiptDate: payment.date,
-              amount: payment.amount,
-              paymentMethod: source.paymentMethod,
-              receivingAccount: source.accountCode,
-              receivingAccounts: [{ accountCode: source.accountCode, amount: payment.amount, paymentMethod: source.paymentMethod }],
-              operationalType: 'رسوم دراسية',
-              against: `سداد فعلي من الشيت الموحد — الطالب ${entry.student.name} — ${source.sourceText}`,
-              costCenter,
-              installmentScheduleId: null
-            })
-          });
-          const result = await response.json().catch(() => ({}));
-          if (!response.ok || !result.success || !result.data?.journalId) {
-            issues.push(`صف الشيت ${entry.workbook.workbookRow} / السداد ${payment.ordinal}: تعذر ترحيل سداد «${entry.student.name}»: ${result.message || 'لم يثبت رقم القيد'}.`);
-            continue;
-          }
-          const posted = { ...(result.data.receipt || {}), id: receiptId, studentId: entry.student.id, amount: payment.amount, date: payment.date, status: 'posted', journalEntryId: result.data.journalId, against: `سداد فعلي من الشيت الموحد — ${source.sourceText}`, receivingAccount: source.accountCode, paymentMethod: source.paymentMethod };
-          postedReceipts.push(posted);
-          currentReceipts.push(posted);
-          receiptsPosted += 1;
-          const currentInvoice = invoiceState.get(entry.student.id);
-          if (currentInvoice) {
-            const previousRemaining = Number(currentInvoice.remainingAmount ?? currentInvoice.amount ?? 0);
-            currentInvoice.paidAmount = Number((Number(currentInvoice.paidAmount || 0) + payment.amount).toFixed(2));
-            currentInvoice.remainingAmount = Number(Math.max(0, previousRemaining - payment.amount).toFixed(2));
-            currentInvoice.status = currentInvoice.remainingAmount <= 0.001 ? 'paid' : 'partial';
-          }
-        }
-      }
-
-      const importedInvoices = [...invoiceState.values()];
-      const invoiceMap = new Map(financialInvoices.map(invoice => [invoice.id, invoice]));
-      importedInvoices.forEach(invoice => invoiceMap.set(String(invoice.id), invoice));
-      setFinancialInvoices([...invoiceMap.values()]);
-      setInvoices([...invoiceMap.values()]);
-      if (postedReceipts.length > 0) setStudentReceiptVouchers(current => [...postedReceipts, ...current]);
-      setInstallmentPlansRefreshToken(current => current + 1);
-      const summary = `تمت معالجة ${safeRows.length} طالبًا: مطالبات جديدة ${newInvoiceRows.length}، خطط جديدة ${plansCreated}، خطط موجودة ${plansAlreadyPresent}، سندات مرحّلة ${receiptsPosted}، سندات موجودة ${receiptsAlreadyPresent}، ومراجعات معلقة ${issues.length}.`;
-      setStudentFeeWorkbookImportStatus(summary);
-      logAction('IMPORT_STUDENT_FEE_WORKBOOK', `${summary} الملف: ${file.name}`, 'الحسابات الطلابية');
-      triggerNotification(issues.length === 0 ? `✓ ${summary}` : `✓ اكتمل الاستيراد الآمن مع ${issues.length} بند مراجعة؛ لم تُسجل البنود الموقوفة.`, issues.length === 0 ? 'success' : 'warning');
-    });
-  };
 
   // 8. Toolbar - EXPORT XLSX
   const handleExportExcel = async () => {
@@ -3858,7 +3605,114 @@ export default function StudentFinancialPortal({
         const revenueAccount = String(config?.account || '').trim();
         const accountError = validateFeeRevenueAccount(revenueAccount);
         if (accountError) throw new Error(`بند «${row.type}»: ${accountError}`);
-        const rowDiscount = index === …1602 tokens truncated…جهيز مسودة تحصيل من الرصيد الموثق؛ راجع المبلغ وطريقة السداد قبل الحفظ.', 'info');
+        const rowDiscount = index === positiveRows.length - 1
+          ? remainingDiscount
+          : Number(Math.min(remainingDiscount, (Number(row.amount) / grossTotal) * totalDiscount).toFixed(2));
+        remainingDiscount = Number(Math.max(0, remainingDiscount - rowDiscount).toFixed(2));
+        const netAmount = Number((Number(row.amount) - rowDiscount).toFixed(2));
+        if (netAmount <= 0) continue;
+        const templateId = String(config?.id || '').trim();
+        invoiceCommands.push({
+          studentId: selectedStudent.id,
+          ...(/^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i.test(templateId) ? { templateId } : {}),
+          description: row.remarks.trim() ? `${row.type} — ${row.remarks.trim()}` : row.type,
+          amount: netAmount,
+          grossAmount: Number(row.amount),
+          discountAmount: rowDiscount,
+          taxAmount: 0,
+          currency: activeCurrencyCode,
+          dueDate: massDueDate,
+          invoiceDate: voucherDate,
+          academicYearId: financialOperationalContext.academicYearId,
+          academicPeriodId: financialOperationalContext.academicPeriodId,
+          financialPeriod: financialOperationalContext.financialPeriod,
+          revenueAccount,
+          receivableAccount: STUDENT_RECEIVABLE_ACCOUNT,
+          costCenter: selectedStudentFeeContext.costCenter,
+          academicStageCode: selectedStudentFeeContext.stageId || selectedStudentFeeContext.stageType,
+          branchId: financialOperationalContext.branchId,
+          idempotencyKey: `manual:${selectedStudent.id}:${row.id}:${financialOperationalContext.academicYearId}`
+        });
+      }
+      if (invoiceCommands.length === 0) throw new Error('أصبحت قيمة المطالبة صفرًا بعد الخصومات؛ راجع القيم.');
+      const response = await authenticatedRequest('/api/financial/invoices/issue-batch', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ invoices: invoiceCommands })
+      });
+      const result = await response.json().catch(() => ({}));
+      const createdRows = Array.isArray(result.data?.invoices) ? result.data.invoices : [];
+      if (!response.ok || !result.success || createdRows.length !== invoiceCommands.length) {
+        throw new Error(result.message || result.error || 'تعذر إصدار جميع المطالبات؛ لم تُحفظ أي مطالبة من العملية.');
+      }
+      const issuedInvoices: Invoice[] = createdRows.map((invoice: any, index: number) => {
+        const command = invoiceCommands[index] as any;
+        return {
+          id: String(invoice.id),
+          studentId: String(invoice.student_id || invoice.studentId || selectedStudent.id),
+          studentName: String(invoice.student_name || invoice.studentName || selectedStudent.name),
+          item: String(invoice.item || command.description),
+          amount: Number(invoice.amount || command.amount),
+          taxAmount: Number(invoice.tax_amount || invoice.taxAmount || 0),
+          totalAmount: Number(invoice.amount || command.amount) + Number(invoice.tax_amount || invoice.taxAmount || 0),
+          paidAmount: Number(invoice.paid_amount || invoice.paidAmount || 0),
+          remainingAmount: Number(invoice.remaining_amount || invoice.remainingAmount || (Number(command.amount) + Number(command.taxAmount || 0))),
+          costCenter: selectedStudentFeeContext.costCenter,
+          costCenterId: selectedStudentFeeContext.costCenter,
+          stageId: selectedStudentFeeContext.stageId || undefined,
+          academicStageCode: selectedStudentFeeContext.stageId || selectedStudentFeeContext.stageType,
+          invoiceDate: String(invoice.invoice_date || invoice.invoiceDate || command.invoiceDate),
+          dueDate: String(invoice.due_date || invoice.dueDate || command.dueDate),
+          status: String(invoice.status || 'issued') as any,
+        currency: String(invoice.currency || command.currency || activeCurrencyCode)
+        } as Invoice;
+      });
+      const merged = new Map(financialInvoices.map(invoice => [invoice.id, invoice]));
+      issuedInvoices.forEach(invoice => merged.set(invoice.id, invoice));
+      const nextInvoices = [...merged.values()];
+      setFinancialInvoices(nextInvoices);
+      setInvoices(nextInvoices);
+      setFeeRows([]);
+      setManualDiscountAmount(0);
+      setCustomDiscountText('0.00');
+      triggerNotification(`✓ تم إصدار ${issuedInvoices.length} مطالبة مالية موثقة للطالب ${selectedStudent.name}.`, 'success');
+      logAction('ISSUE_STUDENT_FEE_INVOICE', `إصدار ${issuedInvoices.length} مطالبة للطالب ${selectedStudent.name} بإجمالي صافٍ ${issuedInvoices.reduce((sum, invoice) => sum + Number(invoice.totalAmount || invoice.amount || 0), 0)}`, 'حسابات الطلاب');
+    } catch (error: any) {
+      triggerNotification(error?.message || 'تعذر إصدار المطالبة المالية.', 'warning');
+    }
+  };
+
+  const handlePrepareCollectionDraft = () => {
+    if (!ensureFinancialWriteReady()) return;
+    if (!selectedStudent) {
+      triggerNotification('الرجاء اختيار طالب موثق أولاً.', 'warning');
+      return;
+    }
+    const outstanding = financialInvoices
+      .filter(invoice => invoice.studentId === selectedStudent.id
+        && !['paid', 'cancelled', 'void', 'written_off', 'refunded'].includes(String(invoice.status || '').toLowerCase()))
+      .reduce((sum, invoice) => sum + Number(invoice.remainingAmount ?? invoice.amount ?? 0), 0);
+    if (outstanding <= 0) {
+      triggerNotification('لا توجد مطالبة مفتوحة لهذا الطالب. أصدر المطالبة أولاً.', 'warning');
+      return;
+    }
+    const draftId = createFinancialReference('DRAFT');
+    setStudRvMode('create');
+    setStudRvForm(prev => ({
+      ...prev,
+      id: draftId,
+      date: voucherDate,
+      studentId: selectedStudent.id,
+      studentName: selectedStudent.name,
+      amount: Number(outstanding.toFixed(2)),
+      against: `سداد المطالبات المالية المفتوحة للطالب ${selectedStudent.name}`,
+      installmentScheduleId: '',
+      status: 'draft'
+    }));
+    setReceiptInstallmentScheduleId('');
+    handleStudentSelectInForm(selectedStudent.id);
+    setActiveSubSec('receipts');
+    triggerNotification('تم تجهيز مسودة تحصيل من الرصيد الموثق؛ راجع المبلغ وطريقة السداد قبل الحفظ.', 'info');
   };
 
   // Generate a client preview using the same rounding and calendar rules as
@@ -4434,14 +4288,13 @@ export default function StudentFinancialPortal({
         aria-label="استيراد بنود الرسوم"
         onChange={(event) => { void handleFeeConfigFileChange(event); }}
       />
-      <input
-        ref={studentFeeWorkbookInputRef}
-        type="file"
-        accept=".xlsx,.csv,text/csv,application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
-        className="hidden"
-        aria-label="استيراد الشيت الموحد المالي"
-        onChange={(event) => { void handleStudentFeeWorkbookFileChange(event); }}
-      />
+MethodInvocationException: 
+Line |
+   2 |  $f=[IO.File]::ReadAllText('C:\Users\admin\Documents\Codex\2026-11-11\ …
+     |  ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+     | Exception calling "ReadAllText" with "1" argument(s): "Could not find a part of the path 'C:\Users\admin\Documents\Codex\2026-11-11\ig\work\repo\schoolfor-manus\src\components\StudentFinancialPortal.tsx'."
+
+
        <div id="student-financial-portal-layout" className="financial-workspace-layout grid grid-cols-1 lg:grid-cols-[minmax(0,1fr)_16.5rem] gap-4 w-full p-3 sm:p-4 text-right">
       
       {/* LEFT AREA: Content Window based on nested state */}
@@ -4675,9 +4528,6 @@ export default function StudentFinancialPortal({
               </div>
               
               {/* "FEE CONFIG" Watermark on the left side (RTL) which corresponds to RHS in the view */}
-              <div className="absolute left-6 top-1/2 -translate-y-1/2 select-none pointer-events-none opacity-10 hidden sm:block">
-                <span className="text-4xl font-extrabold tracking-widest font-mono">FEE CONFIG</span>
-              </div>
               <button
                 type="button"
                 onClick={handleImportStudentFeeWorkbook}
@@ -4688,6 +4538,9 @@ export default function StudentFinancialPortal({
                 <Upload className="h-4 w-4" />
                 <span>استيراد الشيت الموحد المالي</span>
               </button>
+              <div className="absolute left-6 top-1/2 -translate-y-1/2 select-none pointer-events-none opacity-10 hidden sm:block">
+                <span className="text-4xl font-extrabold tracking-widest font-mono">FEE CONFIG</span>
+              </div>
             </div>
             {studentFeeWorkbookImportStatus && (
               <div role="status" className="rounded-xl border border-sky-200 bg-sky-50 px-4 py-3 text-xs font-black leading-relaxed text-sky-900">
@@ -5734,7 +5587,970 @@ export default function StudentFinancialPortal({
                           <td className="px-2 py-2 text-center">
                             <button
                               type="button"
-                              onCl       {/* THE PRINTABLE TARGET AREA CARD */}
+                              onClick={() => {
+                                setFeeRows(feeRows.filter(f => f.id !== row.id));
+                              }}
+                              disabled={financialMutationDisabled}
+                              className="text-rose-500 hover:text-rose-700 p-1.5 hover:bg-rose-50 transition-colors"
+                              title="حذف هذا البند"
+                            >
+                              ✕
+                            </button>
+                          </td>
+                        </tr>
+                      ))}
+                      {feeRows.length === 0 && (
+                        <tr>
+                          <td colSpan={4} className="py-6 text-center text-slate-400 font-medium">
+                            لا توجد بنود رسوم مضافة حالياً. انقر على "+ إضافة بند" لإنشاء مطالبة جديدة.
+                          </td>
+                        </tr>
+                      )}
+                    </tbody>
+                  </table>
+                </div>
+
+                {/* Calculation and net panel exactly modeled after the screenshot */}
+                <div className="p-4 bg-transparent/60 border border-slate-150 flex flex-col md:flex-row justify-between items-start md:items-center gap-4">
+                  {/* Left inputs details */}
+                  <div className="space-y-1.5 text-xs">
+                    <div className="text-slate-700 font-bold flex items-center gap-2">
+                      <span>إجمالي الفاتورة:</span>
+                      <span className="font-mono text-slate-900 font-extrabold">
+                        {feeRows.reduce((acc, curr) => acc + curr.amount, 0).toLocaleString(undefined, {minimumFractionDigits: 2})}
+                      </span>
+                    </div>
+                    <div className="text-slate-500 font-bold flex items-center gap-2">
+                      <span>خصم الإخوة (%{siblingDiscountPercent.toFixed(2)}):</span>
+                      <span className="font-mono text-rose-650">
+                        {((feeRows.reduce((acc, curr) => acc + curr.amount, 0) * siblingDiscountPercent) / 100).toLocaleString(undefined, {minimumFractionDigits: 2})}
+                      </span>
+                    </div>
+                    <div className="flex items-center gap-2 font-bold">
+                      <span className="text-slate-700">خصم إضافي:</span>
+                      <input
+                        type="text"
+                        value={customDiscountText}
+                        onChange={(e) => {
+                          setCustomDiscountText(e.target.value);
+                          const parsed = parseFloat(e.target.value);
+                          if (!isNaN(parsed)) setManualDiscountAmount(parsed);
+                        }}
+                        className="w-20 text-center font-bold font-mono rounded py-0.5"
+                      />
+                    </div>
+                  </div>
+
+                  {/* Clean Net Due highlighted in green text with large typeface */}
+                  <div className="text-right">
+                    <span className="text-[11px] font-bold text-slate-400 block uppercase">الصافي المستحق للتحصيل</span>
+                    <h5 className="text-3xl font-black text-[#16a34a] font-mono tracking-tight mt-1">
+                      الصافي المستحق: {(() => {
+                        const sub = feeRows.reduce((acc, curr) => acc + curr.amount, 0);
+                        const siblingDeduct = (sub * siblingDiscountPercent) / 100;
+                        const netVal = Math.max(0, sub - siblingDeduct - manualDiscountAmount);
+                        return netVal.toLocaleString(undefined, {minimumFractionDigits: 2});
+                      })()}
+                    </h5>
+                    {(hasInvalidFeeDemandAmount || !Number.isFinite(Number(manualDiscountAmount)) || Number(manualDiscountAmount) < 0 || (feeDemandGross > 0 && feeDemandGross <= feeDemandDiscount)) && (
+                      <p role="alert" className="mt-2 max-w-xl text-xs font-bold text-rose-700">
+                        {hasInvalidFeeDemandAmount
+                          ? 'توجد قيمة سالبة أو غير صالحة في بنود الرسوم؛ صححها قبل إصدار المطالبة.'
+                          : !Number.isFinite(Number(manualDiscountAmount)) || Number(manualDiscountAmount) < 0
+                            ? 'الخصم الإضافي يجب أن يكون رقمًا موجبًا أو صفرًا.'
+                            : 'الخصم يساوي إجمالي الرسوم أو يتجاوزه؛ خفّض الخصم قبل إصدار المطالبة.'}
+                      </p>
+                    )}
+                  </div>
+                </div>
+
+                {/* Styled 6-column Action group from the image - Colorful buttons */}
+                <div className="fee-management-action-grid grid grid-cols-2 sm:grid-cols-3 md:grid-cols-6 gap-3 pt-3 border-t border-slate-100">
+                  {/* Button 1: حفظ (Save) - Unified Navy */}
+                  <button
+                    type="button"
+                    onClick={() => { void handleIssueStudentFeeDemand(); }}
+                    disabled={financialWritesLocked || financialPersistence !== 'ready' || !selectedStudent || !feeDemandHasPositiveRow || hasInvalidFeeDemandAmount || !Number.isFinite(Number(manualDiscountAmount)) || Number(manualDiscountAmount) < 0 || feeDemandGross <= feeDemandDiscount}
+                    className="fee-management-action fee-management-primary-action text-xs font-black py-3 px-1 transition-transform active:scale-95 text-center cursor-pointer disabled:cursor-not-allowed disabled:opacity-50"
+                  >
+                    🧾 إصدار المطالبة
+                  </button>
+
+                  {/* Button 2: قبض (Collect) - Unified Gold */}
+                  <button
+                    type="button"
+                    onClick={handlePrepareCollectionDraft}
+                    disabled={financialWritesLocked || financialPersistence !== 'ready' || !selectedStudent || !financialInvoices.some(invoice => invoice.studentId === selectedStudent.id && Number(invoice.remainingAmount ?? invoice.amount ?? 0) > 0 && !['paid', 'cancelled', 'void', 'written_off', 'refunded'].includes(String(invoice.status || '').toLowerCase()))}
+                    className="fee-management-action fee-management-collect-action text-xs font-black py-3 px-1 transition-transform active:scale-95 text-center cursor-pointer disabled:cursor-not-allowed disabled:opacity-50"
+                  >
+                    💵 قبض وتحصيل
+                  </button>
+
+                  {/* Button 3: عرض (Show) - Unified Paper */}
+                  <button
+                    type="button"
+                    onClick={() => {
+                      if (!selectedStudent) {
+                        triggerNotification('اختر طالباً موثقاً لعرض كشفه المالي.', 'warning');
+                        return;
+                      }
+                      setActiveSubSec('receipts');
+                      triggerNotification('تم الانتقال إلى سندات القبض لعرض السجلات الموثقة فقط.', 'info');
+                    }}
+                    className="fee-management-action fee-management-secondary-action text-xs font-black py-3 px-1 transition-transform active:scale-95 text-center cursor-pointer"
+                  >
+                    🔍 عرض السند
+                  </button>
+
+                  {/* Button 4: تحديث (Update) - Unified Paper */}
+                  <button
+                    type="button"
+                    onClick={() => {
+                      handleRefreshData();
+                    }}
+                    className="fee-management-action fee-management-secondary-action text-xs font-black py-3 px-1 transition-transform active:scale-95 text-center cursor-pointer"
+                  >
+                    🔄 تحديث ومطابقة
+                  </button>
+
+                  {/* Button 5: تقارير (Reports) - Unified Paper */}
+                  <button
+                    type="button"
+                    onClick={() => {
+                      setActiveSubSec('reports');
+                    }}
+                    className="fee-management-action fee-management-secondary-action text-xs font-black py-3 px-1 transition-transform active:scale-95 text-center cursor-pointer"
+                  >
+                    📊 تقارير مالية
+                  </button>
+
+                  {/* Button 6: تفريغ (Clear) - Soft Danger */}
+                  <button
+                    type="button"
+                    onClick={() => {
+                      setFeeRows([]);
+                      setManualDiscountAmount(0);
+                      setSiblingDiscountPercent(0);
+                      setCustomDiscountText('0.00');
+                      setHasSiblingsDetected(false);
+                      triggerNotification('تم تنظيف نموذج التصفية وإعادة التهيئة المبدئية للبيانات', 'warning');
+                    }}
+                    className="fee-management-action fee-management-danger-action text-xs font-black py-3 px-1 transition-transform active:scale-95 text-center cursor-pointer"
+                  >
+                    🧹 تفريغ النموذج
+                  </button>
+                </div>
+
+              </div>
+              
+              {/* Left Side: Statement and timeline panel metadata (4-cols duration) */}
+              <div className="xl:col-span-4 space-y-6">
+                
+                {/* 1. كشف حساب الطالب Ledger details with printing */}
+                <div className="p-4 space-y-4">
+                  <div className="flex justify-between items-center pb-2 border-b border-slate-100">
+                    <span className="text-xs font-extrabold text-[#d97706] flex items-center gap-1">
+                      <span>📄</span> <span>كشف حساب الطالب</span>
+                    </span>
+                    <span className="text-[9px] font-bold text-slate-500">العملة: {getCurrencyConfigForCode(activeCurrencyCode).symbol}</span>
+                    
+                    {/* Action controls from screenshot */}
+                    <div className="fee-management-utility-actions flex gap-1.5">
+                      <button 
+                        onClick={handlePrintStudentLedger}
+                        className="fee-management-utility-action fee-management-utility-print text-[9px] font-bold px-2 py-1 rounded cursor-pointer"
+                      >
+                        🖨️ طباعة كشف
+                      </button>
+                      <button
+                        type="button"
+                        onClick={handlePrintStudentLedger}
+                        className="fee-management-utility-action fee-management-utility-pdf text-[9px] font-bold px-2 py-1 rounded cursor-pointer"
+                      >
+                        🖨️ معاينة PDF
+                      </button>
+                    </div>
+                  </div>
+
+                  {/* Accounting Ledger Grid */}
+                  <div className="overflow-x-auto">
+                    <table className="w-full text-right text-xs font-medium">
+                      <thead className="bg-gradient-to-r from-[#2a1d13] via-[#3a2719] to-[#2a1d13] text-amber-200 font-extrabold">
+                        <tr>
+                          <th className="px-2 py-1.5 text-right w-16">التاريخ</th>
+                          <th className="px-2 py-1.5 text-right">البيان</th>
+                          <th className="px-2 py-1.5 text-center">مدين</th>
+                          <th className="px-2 py-1.5 text-center">دائن</th>
+                          <th className="px-2 py-1.5 text-center font-bold">الرصيد</th>
+                          <th className="px-2 py-1.5 text-center w-14">الرقابة</th>
+                        </tr>
+                      </thead>
+                      <tbody className="divide-y divide-amber-900/10 bg-slate-50/60 backdrop-blur-sm rounded-b-2xl">
+                        {selectedStudentLedgerRows.map(row => {
+                          const source = row.source as any;
+                          const isReceipt = row.kind === 'receipt';
+                          return (
+                            <tr key={`${row.kind}-${row.id}`} className={`${isReceipt ? 'bg-emerald-50/50 hover:bg-emerald-50' : 'hover:bg-transparent'} ${row.isCancelled ? 'opacity-60 text-slate-400 bg-transparent/50' : ''}`}>
+                              <td className={`px-1.5 py-2 text-slate-500 font-sans ${row.isCancelled ? 'line-through' : ''}`}>{row.date || '—'}</td>
+                              <td className={`px-1.5 py-2 text-slate-800 font-sans font-semibold ${row.isCancelled ? 'line-through' : ''}`}>
+                                <div className="font-sans font-extrabold text-slate-900">
+                                  {isReceipt ? `سند قبض مرحّل ${row.id}` : row.description}
+                                </div>
+                                <div className="text-[9px] text-slate-500">{isReceipt ? row.description : source?.studentPaymentId ? `عملية سداد: ${source.studentPaymentId}` : source?.against || ''}</div>
+                                {!isReceipt && source?.studentPaymentId && (
+                                  <div className="flex flex-wrap items-center gap-1.5 mt-1 text-[9px] font-bold select-none" dir="rtl">
+                                    {source.receiptVoucherId && <button
+                                      type="button"
+                                      onClick={() => {
+                                        setViewingVoucher(source);
+                                        setActiveSubSec('receipts');
+                                        triggerNotification(`جاري عرض سند القبض المحاسبي ${source.receiptVoucherId}`, 'success');
+                                      }}
+                                      className="bg-emerald-50 text-emerald-700 hover:bg-emerald-100/85 hover:text-emerald-900 px-1.5 py-0.5 rounded border border-emerald-150 flex items-center gap-0.5 font-mono font-bold cursor-pointer"
+                                      title="اضغط لعرض السند وطباعته"
+                                    >سند قبض: {source.receiptVoucherId} ↗</button>}
+                                    {source.journalEntryId && <button
+                                      type="button"
+                                      onClick={() => {
+                                        localStorage.setItem('erp_target_journal_entry_id', source.journalEntryId || '');
+                                        setActiveSection('accounts');
+                                        triggerNotification(`جاري التحويل لدفتر القيود لفتح القيد المحاسبي المزدوج ${source.journalEntryId}`, 'info');
+                                      }}
+                                      className="bg-amber-50 text-amber-700 hover:bg-amber-100/85 hover:text-amber-900 px-1.5 py-0.5 rounded border border-amber-150 flex items-center gap-0.5 font-mono font-bold cursor-pointer"
+                                      title="اضغط للذهاب لدفتر قيود اليومية ومعاينة القيد"
+                                    >قيد يومية: {source.journalEntryId} ↗</button>}
+                                  </div>
+                                )}
+                              </td>
+                              <td className={`px-1.5 py-2 text-center text-slate-850 ${row.isCancelled ? 'line-through text-slate-300' : ''}`}>{formatActiveCurrencyAmount(row.debit)}</td>
+                              <td className={`px-1.5 py-2 text-center text-emerald-650 font-bold ${row.isCancelled ? 'line-through text-slate-300' : ''}`}>{formatActiveCurrencyAmount(row.credit)}</td>
+                              <td className="px-1.5 py-2 text-center text-orange-950 font-black">{row.balance === null ? '---' : formatActiveCurrencyAmount(row.balance)}</td>
+                              <td className="px-1.5 py-2 text-center">
+                                {row.isCancelled ? (
+                                  <span className="text-rose-600 bg-rose-50 border border-rose-200/50 rounded px-1.5 py-0.5 text-[8px] font-extrabold cursor-help block max-w-max mx-auto"
+                                    title={`تم الإلغاء بواسطة: ${source?.voidedBy || auditActor}\nالتاريخ: ${source?.voidedAt || ''}\nالسبب: ${source?.voidReason || 'تسوية عكسية للفاتورة'}`}>ملغاة 🚫</span>
+                                ) : isReceipt ? (
+                                  <span className="text-emerald-700 font-black" title="سند مرحّل إلى الحسابات العامة">✓</span>
+                                ) : (
+                                  <button type="button" onClick={() => handleVoidInvoice(row.id)} disabled={financialMutationDisabled}
+                                    className="bg-rose-50 text-rose-600 hover:bg-rose-100 hover:text-rose-800 border border-rose-200 text-[8px] font-extrabold px-1.5 py-0.5 rounded transition-all cursor-pointer"
+                                    title="إلغاء الفاتورة / إجراء تسوية عكسية">إلغاء</button>
+                                )}
+                              </td>
+                            </tr>
+                          );
+                        })}
+                      </tbody>
+                    </table>
+                  </div>
+
+                  <div className="pt-2 text-center bg-transparent p-2.5 border border-slate-100">
+                    <span className="text-[9px] text-slate-400 font-bold block">رصيد الذمة الإجمالي المتبقي</span>
+                    <p className="text-sm font-black text-rose-600 font-mono tracking-wide mt-0.5">
+                      {selectedStudentFinancialView ? formatActiveCurrencyAmount(Number(selectedStudentFinancialView.feesRemaining || 0)) : 'غير متاح'}
+                    </p>
+                  </div>
+                </div>
+
+                {/* 2. الخط الزمني المالي (Financial Timeline) */}
+                <div className="p-4 space-y-3.5">
+                  <span className="text-xs font-black text-slate-800 flex items-center gap-1">
+                    <span>📅</span> <span>الخط الزمني المالي</span>
+                  </span>
+
+                  {!selectedStudent ? (
+                    <div className="rounded-xl border border-dashed border-slate-200 bg-slate-50 p-5 text-center text-xs font-bold text-slate-500">
+                      اختر طالباً لعرض خطه الزمني المالي.
+                    </div>
+                  ) : financialInvoices.filter(invoice => invoice.studentId === selectedStudent.id).length === 0 ? (
+                    <div className="rounded-xl border border-dashed border-slate-200 bg-slate-50 p-5 text-center text-xs font-bold text-slate-500">
+                      لا توجد حركات مالية موثقة لهذا الطالب.
+                    </div>
+                  ) : (
+                    <div className="relative border-r border-slate-150 mr-2.5 pr-4 space-y-4 text-xs font-medium text-slate-700">
+                      {financialInvoices.filter(invoice => invoice.studentId === selectedStudent.id).map(invoice => (
+                        <div key={invoice.id} className="relative">
+                          <span className={`absolute -right-[21px] top-1 w-2.5 h-2.5 rounded-full border-2 border-white shadow-xs ${invoice.status === 'paid' || invoice.status === 'Paid' ? 'bg-emerald-500' : 'bg-orange-600'}`} />
+                          <div className="flex justify-between items-start gap-3">
+                            <div>
+                              <p className="font-extrabold text-slate-900">{invoice.id}</p>
+                              <span className="text-[10px] text-slate-400 font-semibold block mt-0.5">{invoice.item}</span>
+                            </div>
+                            <div className="text-left font-mono shrink-0">
+                              <span className="text-slate-800 font-bold">{formatActiveCurrencyAmount(Number(invoice.totalAmount || invoice.amount || 0))}</span>
+                              <span className="text-[9px] text-slate-400 block">{invoice.invoiceDate || invoice.dueDate || 'بدون تاريخ'}</span>
+                            </div>
+                          </div>
+                        </div>
+                      ))}
+                    </div>
+                  )}
+                </div>
+
+              </div>
+
+            </div>
+          </div>
+        )}
+
+        {/* VIEW 6: سندات القبض الملكية */}
+        {activeSubSec === 'receipts' && (
+          <div className="space-y-6 text-right" dir="rtl">
+            <div className="pb-4 border-b border-slate-200 flex flex-col md:flex-row md:items-center md:justify-between gap-4 no-print">
+              <div>
+                <h3 className="text-base font-extrabold text-slate-900 flex items-center gap-2">
+                  <Coins className="w-5 h-5 text-amber-500" />
+                  <span>👑 بوابـة سندات القبض الماليـة للطلاب</span>
+                </h3>
+                <p className="text-xs text-slate-500 font-semibold mt-1">
+                  عرض وإدارة وطباعة إيصالات الدفع والتحصيل، {financialMutationDisabled
+                    ? 'مع بقاء الحفظ والترحيل مقفلين حتى اعتماد دفتر الأستاذ الكانوني والتحقق من عزل البيانات.'
+                    : 'مع اعتماد السند قبل الترحيل المحاسبي وربطه بدفتر الأستاذ الكانوني.'}
+                </p>
+              </div>
+              <div className="flex items-center gap-2">
+                <span className={`text-[11px] font-black px-3 py-1.5 flex items-center gap-1 ${financialWritesLocked ? 'bg-amber-50 text-amber-800' : financialPersistence === 'ready' ? 'bg-emerald-50 text-emerald-800' : financialPersistence === 'loading' ? 'bg-amber-50 text-amber-800' : 'bg-rose-50 text-rose-800'}`}>
+                  <span className={`w-2 h-2 rounded-full ${financialWritesLocked ? 'bg-amber-500' : financialPersistence === 'ready' ? 'bg-emerald-500' : financialPersistence === 'loading' ? 'bg-amber-500 animate-pulse' : 'bg-rose-500'}`} />
+                  {financialWritesLocked
+                    ? financialWriteModeReason === 'financial_write_permission_missing'
+                      ? 'الكتابة المالية مقفلة: حسابك لا يملك صلاحية Financial.Write'
+                      : financialWriteModeReason === 'write_mode_not_configured'
+                        ? 'الكتابة المالية مقفلة: وضع الكتابة غير مفعّل في إعدادات التشغيل'
+                        : financialWriteModeReason === 'deployment_locked'
+                          ? 'الكتابة المالية مقفلة من إعدادات النشر'
+                          : financialWriteModeReason === 'canonical_erp_not_ready'
+                            ? 'المصدر الكانوني غير جاهز؛ الحفظ المالي الآمن غير متاح'
+                            : 'المصدر المالي متصل للقراءة فقط — الحفظ والترحيل مقفلان'
+                    : financialPersistence === 'ready'
+                      ? 'المصدر المالي الموثق متصل'
+                      : financialPersistenceMessage || (financialPersistence === 'loading'
+                        ? 'جارٍ التحقق من المصدر المالي'
+                        : 'المصدر المالي غير متاح — الحفظ متوقف')}
+                </span>
+              </div>
+            </div>
+
+            {/* 12-Action Financial Toolbar (شريط الأدوات المالي الموحد - 12 وظيفة) */}
+            <div className="financial-receipts-toolbar no-print bg-gradient-to-l from-slate-900 via-slate-800 to-slate-950 p-3 border border-slate-700 shadow-md flex flex-wrap items-center gap-2">
+              
+              {/* جديد */}
+              <button
+                type="button"
+                onClick={handleNewStudRv}
+                disabled={financialWritesLocked || financialPersistence !== 'ready'}
+                className="financial-receipts-action financial-receipts-gold text-xs font-bold px-3 py-2 flex items-center gap-1.5 transition-colors cursor-pointer disabled:cursor-not-allowed disabled:opacity-50"
+                title="إصدار سند مالي جديد"
+              >
+                <Plus className="w-4 h-4" />
+                <span>جديد</span>
+              </button>
+
+              {/* حفظ */}
+              <button
+                type="button"
+                onClick={handleSaveStudRv}
+                disabled={financialWritesLocked || financialPersistence !== 'ready' || studRvMode === 'view'}
+                className={`financial-receipts-action financial-receipts-navy text-xs font-bold px-3 py-2 flex items-center gap-1.5 transition-colors cursor-pointer ${
+                  studRvMode !== 'view'
+                    ? 'bg-emerald-600 hover:bg-emerald-500 text-white'
+                    : 'bg-slate-700 text-slate-400 cursor-not-allowed opacity-50'
+                }`}
+                title="حفظ المسودة الحالية"
+              >
+                <Save className="w-4 h-4" />
+                <span>حفظ</span>
+              </button>
+
+              {/* تعديل */}
+              <button
+                type="button"
+                onClick={() => {
+                  if (!selectedStudRv) {
+                    triggerNotification('الرجاء اختيار سند من القائمة أولاً للتعديل', 'warning');
+                    return;
+                  }
+                  if (selectedStudRv.status === 'posted') {
+                    triggerNotification('❌ لا يمكن تعديل السند بعد ترحيله بالكامل الحسابات العامة لضمان سلامة الدورة الرقابية.', 'warning');
+                    return;
+                  }
+                  if (selectedStudRv.status !== 'saved') {
+                    triggerNotification('❌ لا يمكن تعديل السند بعد اعتماده. ألغِ السند وأصدر مسودة جديدة عند الحاجة.', 'warning');
+                    return;
+                  }
+                  if (selectedStudRv.status === 'cancelled') {
+                    triggerNotification('❌ لا يمكن تعديل سند ملغي.', 'warning');
+                    return;
+                  }
+                  setStudRvMode('edit');
+                  triggerNotification('📝 تم فتح وضع التحرير للسند الحالي.', 'info');
+                }}
+                disabled={financialWritesLocked || financialPersistence !== 'ready' || studRvMode !== 'view' || !selectedStudRv || selectedStudRv.status !== 'saved'}
+                className={`financial-receipts-action financial-receipts-paper text-xs font-bold px-3 py-2 flex items-center gap-1.5 transition-colors cursor-pointer ${
+                  studRvMode === 'view' && selectedStudRv && selectedStudRv.status === 'saved'
+                    ? 'bg-amber-600 hover:bg-amber-500 text-white'
+                    : 'bg-slate-700 text-slate-400 cursor-not-allowed opacity-50'
+                }`}
+                title="تعديل السند المالي"
+              >
+                <Pencil className="w-4 h-4" />
+                <span>تعديل</span>
+              </button>
+
+              {/* اعتماد */}
+              <button
+                type="button"
+                onClick={handleApproveStudRv}
+                disabled={financialWritesLocked || financialPersistence !== 'ready' || studRvMode !== 'view' || !selectedStudRv || selectedStudRv.status === 'approved' || selectedStudRv.status === 'posted' || selectedStudRv.status === 'cancelled'}
+                className={`financial-receipts-action financial-receipts-gold text-xs font-bold px-3 py-2 flex items-center gap-1.5 transition-colors cursor-pointer ${
+                  studRvMode === 'view' && selectedStudRv && selectedStudRv.status === 'saved'
+                    ? 'bg-amber-600 hover:bg-amber-500 text-white'
+                    : 'bg-slate-700 text-slate-400 cursor-not-allowed opacity-50'
+                }`}
+                title="اعتماد السند من قبل المدير المالي"
+              >
+                <CheckCircle2 className="w-4 h-4" />
+                <span>اعتماد</span>
+              </button>
+
+              {/* ترحيل */}
+              <button
+                type="button"
+                onClick={handlePostStudRv}
+                disabled={financialWritesLocked || financialPersistence !== 'ready' || studRvMode !== 'view' || !selectedStudRv || selectedStudRv.status !== 'approved'}
+                className={`financial-receipts-action financial-receipts-navy text-xs font-bold px-3 py-2 flex items-center gap-1.5 transition-colors cursor-pointer ${
+                  studRvMode === 'view' && selectedStudRv && selectedStudRv.status === 'approved'
+                    ? 'bg-purple-600 hover:bg-purple-500 text-white shadow-md shadow-purple-900/30 font-extrabold'
+                    : 'bg-slate-700 text-slate-400 cursor-not-allowed opacity-50'
+                }`}
+                title="ترحيل السند المالي وإنشاء القيد المزدوج بالحسابات العامة"
+              >
+                <RefreshCw className="w-4 h-4 animate-spin-slow" />
+                <span>ترحيل قيد اليومية</span>
+              </button>
+
+              {/* إلغاء / تسوية عكسية */}
+              <button
+                type="button"
+                onClick={() => { void handleCancelStudRv(); }}
+                disabled={financialWritesLocked || financialPersistence !== 'ready' || studRvMode !== 'view' || !selectedStudRv || selectedStudRv.status === 'cancelled'}
+                className={`financial-receipts-action financial-receipts-danger text-xs font-bold px-3 py-2 flex items-center gap-1.5 transition-colors cursor-pointer ${
+                  studRvMode === 'view' && selectedStudRv && selectedStudRv.status !== 'cancelled'
+                    ? 'bg-rose-600 hover:bg-rose-500 text-white'
+                    : 'bg-slate-700 text-slate-400 cursor-not-allowed opacity-50'
+                }`}
+                title="إلغاء السند وعكس آثاره المحاسبية بالكامل"
+              >
+                <Undo2 className="w-4 h-4" />
+                <span>عكس / إلغاء</span>
+              </button>
+
+              {/* حذف */}
+              <button
+                type="button"
+                onClick={() => { void handleDeleteStudRv(); }}
+                disabled={financialWritesLocked || financialPersistence !== 'ready' || studRvMode !== 'view' || !selectedStudRv || String(selectedStudRv.status || '').toLowerCase() !== 'draft'}
+                className={`financial-receipts-action financial-receipts-danger text-xs font-bold px-3 py-2 flex items-center gap-1.5 transition-colors cursor-pointer ${
+                  studRvMode === 'view' && selectedStudRv && String(selectedStudRv.status || '').toLowerCase() === 'draft'
+                    ? 'bg-red-700 hover:bg-red-600 text-white'
+                    : 'bg-slate-700 text-slate-400 cursor-not-allowed opacity-50'
+                }`}
+                title="حذف مسودة غير مرحلة فقط"
+              >
+                <Trash2 className="w-4 h-4" />
+                <span>حذف</span>
+              </button>
+
+              <div className="h-6 w-[1px] bg-slate-700 mx-1 hidden sm:block" />
+
+              {/* تحديث ومزامنة */}
+              <button
+                type="button"
+                onClick={handleRefreshReceipts}
+                className="financial-receipts-action financial-receipts-paper text-xs font-bold px-3 py-2 flex items-center gap-1.5 transition-colors cursor-pointer"
+                title="مزامنة وتحديث البيانات سحابياً"
+              >
+                <RefreshCw className="w-4 h-4" />
+                <span>تحديث</span>
+              </button>
+
+              {/* طباعة */}
+              <button
+                type="button"
+                onClick={() => {
+                  if (!selectedStudRv) {
+                    triggerNotification('الرجاء اختيار سند قبض للطباعة', 'warning');
+                    return;
+                  }
+                  handlePrintSingleVoucher(selectedStudRv);
+                  triggerNotification('تم فتح معاينة السند — راجعها ثم اختر «طباعة الآن».', 'success');
+                }}
+                className="financial-receipts-action financial-receipts-paper text-xs font-bold px-3 py-2 flex items-center gap-1.5 transition-colors cursor-pointer"
+                title="طباعة السند الورقي محلياً"
+              >
+                <Printer className="w-4 h-4 text-emerald-400" />
+                <span>طباعة السند</span>
+              </button>
+
+              {/* تصدير PDF */}
+              <button
+                type="button"
+                onClick={handleExportPdf}
+                className="financial-receipts-action financial-receipts-gold text-xs font-bold px-3 py-2 flex items-center gap-1.5 transition-colors cursor-pointer"
+                title="تصدير السند بصيغة PDF مشفر"
+              >
+                <FileText className="w-4 h-4 text-yellow-400" />
+                <span>تصدير PDF</span>
+              </button>
+
+              {/* تصدير Excel */}
+              <button
+                type="button"
+                onClick={handleExportExcel}
+                className="financial-receipts-action financial-receipts-navy text-xs font-bold px-3 py-2 flex items-center gap-1.5 transition-colors cursor-pointer"
+                title="تصدير كشف السندات كجدول Excel"
+              >
+                <Download className="w-4 h-4 text-amber-400" />
+                <span>Excel</span>
+              </button>
+
+            </div>
+
+            {/* Split Screen Master-Detail Workspace */}
+            <div className="grid grid-cols-1 xl:grid-cols-3 gap-6 items-start">
+              
+              {/* LEFT COLUMN: Sidebar Vouchers List & Quick Filter Tabs */}
+              <div className="no-print xl:col-span-1 p-4 space-y-4 bg-gradient-to-b from-[#fffefc] via-[#fbf8f0] to-[#f5eeea] border-2 border-[#d4af37]/30 hover:border-[#d4af37] rounded-3xl p-4 sm:p-5 shadow-md transition-colors duration-200">
+                
+                {/* Search field */}
+                <div className="relative">
+                  <span className="absolute inset-y-0 right-0 pr-3 flex items-center pointer-events-none">
+                    <Search className="h-4 w-4 text-slate-400" />
+                  </span>
+                  <input
+                    type="text"
+                    value={rvSearch}
+                    onChange={(e) => {
+                      setRvSearch(e.target.value);
+                      setSelectedStudRv(null);
+                      setStudRvMode('view');
+                    }}
+                    placeholder="ابحث برقم السند، اسم الطالب، الشرح..."
+                    className="block w-full pr-9 pl-3 py-2 text-xs border border-slate-300 bg-transparent focus:focus:outline-none focus:ring-1 focus:ring-[#9a6a1d] focus:border-[#9a6a1d]"
+                  />
+                </div>
+
+                {/* Status Tab Filters */}
+                <div>
+                  <label className="text-[10px] font-extrabold text-slate-400 block mb-1.5">تصفية حسب حالة السند:</label>
+                  <div className="grid grid-cols-3 gap-1.5 rounded-xl border border-slate-200 bg-slate-100/80 p-1.5 shadow-inner" role="group" aria-label="تصفية سندات القبض حسب الحالة">
+                    {[
+                      { id: 'all', label: 'الكل' },
+                      { id: 'draft', label: 'مسودة' },
+                      { id: 'saved', label: 'محفوظ' },
+                      { id: 'approved', label: 'معتمد' },
+                      { id: 'posted', label: 'مرحل' },
+                      { id: 'cancelled', label: 'ملغي' }
+                    ].map(tab => (
+                      <button
+                        key={tab.id}
+                        type="button"
+                        aria-pressed={rvStatusFilter === tab.id}
+                        onClick={() => {
+                          setRvStatusFilter(tab.id);
+                          setSelectedStudRv(null);
+                          setStudRvMode('view');
+                        }}
+                        className={`min-h-9 rounded-lg border px-2 py-1.5 text-xs font-bold transition-all duration-150 cursor-pointer focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[#9a6a1d] focus-visible:ring-offset-1 ${
+                          rvStatusFilter === tab.id
+                            ? 'border-[#b8892d] bg-white text-[#543b12] shadow-sm ring-1 ring-[#d4af37]/25'
+                            : 'border-transparent bg-transparent text-slate-600 hover:border-slate-300 hover:bg-white/80 hover:text-slate-900'
+                        }`}
+                      >
+                        {tab.label}
+                      </button>
+                    ))}
+                  </div>
+                </div>
+
+                {/* List Scroll */}
+                <div className="space-y-2 max-h-[480px] overflow-y-auto pr-1">
+                  <h4 className="text-[10px] font-black text-slate-400 border-b border-slate-100 pb-1.5 mb-2">📜 أرشيف المعاملات المحاسبية للتحصيل</h4>
+                  
+                  {filteredReceiptVouchers.length === 0 ? (
+                    <p className="text-center py-6 text-slate-400 text-xs font-semibold">لا توجد سندات تطابق البحث أو التصفية.</p>
+                  ) : (
+                    filteredReceiptVouchers.map((voucher) => (
+                      <div
+                        key={voucher.id}
+                        onClick={() => {
+                          if (studRvMode !== 'view') {
+                            requestFinancialAction({
+                              title: 'مغادرة نموذج السند',
+                              message: 'لديك تغييرات غير محفوظة. إذا تابعت إلى السند المحدد فستغادر وضع التعديل وتفقد التغييرات الحالية.',
+                              confirmLabel: 'مغادرة واستعراض السند',
+                              onConfirm: () => {
+                                setStudRvMode('view');
+                                setSelectedStudRv(voucher);
+                              }
+                            });
+                            return;
+                          }
+                          setSelectedStudRv(voucher);
+                        }}
+                        className={`p-3 border text-xs cursor-pointer transition-all ${
+                          selectedStudRv?.id === voucher.id 
+                            ? 'bg-yellow-50 border-yellow-300 ring-1 ring-yellow-300' 
+                            : 'bg-transparent border-slate-200 hover:bg-slate-100'
+                        }`}
+                      >
+                        <div className="flex justify-between font-bold text-slate-900 mb-1">
+                          <span className="truncate max-w-[150px]">{voucher.studentName}</span>
+                          <span className="font-mono text-emerald-600" dir="ltr">+{Number(voucher.amount ?? 0).toLocaleString()}</span>
+                        </div>
+                        <div className="flex justify-between items-center text-[10px] text-slate-500">
+                          <span
+                            className="max-w-[190px] truncate font-mono font-bold text-slate-700"
+                            dir="auto"
+                            title={`المعرّف الداخلي الكامل: ${resolveFinancialDocumentReference(voucher, 'receipt').fullId}`}
+                            aria-label={`${resolveFinancialDocumentReference(voucher, 'receipt').label}: ${resolveFinancialDocumentReference(voucher, 'receipt').value}. المعرّف الداخلي الكامل: ${resolveFinancialDocumentReference(voucher, 'receipt').fullId}`}
+                          >
+                            {resolveFinancialDocumentReference(voucher, 'receipt').value}
+                          </span>
+                          <span className={`px-1.5 py-0.5 rounded-full text-[9px] font-black ${
+                            voucher.status === 'posted' ? 'bg-emerald-100 text-emerald-800' :
+                            voucher.status === 'approved' ? 'bg-amber-100 text-amber-800' :
+                            voucher.status === 'saved' ? 'bg-orange-100 text-orange-800' :
+                            voucher.status === 'cancelled' ? 'bg-red-100 text-red-800' :
+                            'bg-gray-100 text-gray-800'
+                          }`}>
+                            {voucher.status === 'posted' ? 'مرحل' :
+                             voucher.status === 'approved' ? 'معتمد' :
+                             voucher.status === 'saved' ? 'محفوظ' :
+                             voucher.status === 'cancelled' ? 'ملغي' : 'مسودة'}
+                          </span>
+                        </div>
+                        <div className="text-[9px] text-slate-400 truncate mt-1">
+                          {voucher.against}
+                        </div>
+                      </div>
+                    ))
+                  )}
+                </div>
+
+              </div>
+
+              {/* RIGHT COLUMN: Active Voucher Sheet or Interactive Editing Form */}
+              <div className="xl:col-span-2">
+                
+                {/* A) Form Mode: Create or Edit */}
+                {(studRvMode === 'create' || studRvMode === 'edit') ? (
+                  <div className="p-6 space-y-6 bg-gradient-to-b from-[#fffefc] via-[#fbf8f0] to-[#f5eeea] border-2 border-[#d4af37]/30 hover:border-[#d4af37] rounded-3xl p-4 sm:p-5 shadow-md transition-colors duration-200">
+                    <div className="border-b border-slate-100 pb-3 flex justify-between items-center">
+                      <h4 className="text-sm font-black text-slate-900">
+                        {studRvMode === 'create' ? '📋 نموذج تحرير سند قبض مالي جديد' : `📝 تعديل بيانات سند القبض ${studRvForm.id}`}
+                      </h4>
+                      <span className="text-xs bg-amber-100 text-amber-800 px-2.5 py-1 font-black">
+                        وضع إدخال البيانات الماليـة
+                      </span>
+                    </div>
+
+                    <div className="grid grid-cols-1 md:grid-cols-2 gap-4 text-xs">
+                      
+                      {/* Select Student */}
+                      <div className="space-y-1">
+                        <label className="font-extrabold text-slate-700 block">الطالب المستهدف بالسداد: *</label>
+                        <StudentSearchPicker
+                          students={selectableStudents}
+                          value={studRvForm.studentId}
+                          onChange={(student) => handleStudentSelectInForm(student?.id || '')}
+                          disabled={studRvMode === 'edit'}
+                          placeholder="ابحث باسم الطالب أو رقمه قبل السداد..."
+                          helperText="يتم جلب الصف والمركز المالي والرصيد الموثق تلقائيًا."
+                          getMeta={(student) => {
+                            const financialStudent = financialStudentRows.find(row => row.id === student.id);
+                            const remainingBalance = financialStudent ? Number(financialStudent.feesRemaining || 0) : Number(student.feesRemaining || 0);
+                            return `${student.academicId || student.studentCode || 'دون رقم أكاديمي'} • ${student.classroom || 'الفصل غير محدد'} • المتبقي ${formatActiveCurrencyAmount(remainingBalance)}`;
+                          }}
+                        />
+                        <div className="mt-3 grid grid-cols-1 sm:grid-cols-2 gap-3 rounded-xl border border-emerald-200 bg-emerald-50/70 p-3">
+                          <div>
+                            <span className="block text-[10px] font-black text-slate-500">المرحلة التعليمية المرتبطة</span>
+                            <span className="block mt-1 text-sm font-black text-slate-800">{studRvForm.stage || 'تظهر تلقائيًا بعد اختيار الطالب'}</span>
+                          </div>
+                          <div>
+                            <span className="block text-[10px] font-black text-slate-500">مركز التكلفة المرتبط تلقائيًا</span>
+                            <span className="block mt-1 font-mono text-sm font-black text-emerald-800">{studRvForm.costCenter ? studentCostCenterLabel(studRvForm.costCenter) : 'يظهر تلقائيًا بعد اختيار الطالب'}</span>
+                          </div>
+                        </div>
+                      </div>
+
+                      {/* Date */}
+                      <div className="space-y-1">
+                        <label className="font-extrabold text-slate-700 block">تاريخ تحرير المعاملة: *</label>
+                        <input
+                          type="date"
+                          value={studRvForm.date}
+                          onChange={(e) => setStudRvForm(prev => ({ ...prev, date: e.target.value }))}
+                          className="block w-full border border-slate-300 p-2.5 focus:ring-1 focus:ring-[#9a6a1d] focus:border-[#9a6a1d] focus:outline-none font-bold font-mono"
+                        />
+                      </div>
+
+                      {/* Amount */}
+                      <div className="space-y-1">
+                        <label className="font-extrabold text-slate-700 block">مبلغ السند المقبوض: *</label>
+                        <input
+                          type="number"
+                          value={studRvForm.amount}
+                          onChange={(e) => setStudRvForm(prev => {
+                            const amount = Number(e.target.value);
+                            const receivingAccounts = prev.receivingAccounts.length === 1
+                              ? [{ ...prev.receivingAccounts[0], amount }]
+                              : prev.receivingAccounts;
+                            return { ...prev, amount, receivingAccounts };
+                          })}
+                          className="block w-full border border-slate-300 p-2.5 focus:ring-1 focus:ring-[#9a6a1d] focus:border-[#9a6a1d] focus:outline-none font-bold font-mono text-emerald-600 text-sm"
+                        />
+                        {(() => {
+                          const student = students.find(s => s.id === studRvForm.studentId);
+                          const financialStudent = student ? financialStudentRows.find(row => row.id === student.id) : undefined;
+                          const remainingBalance = financialStudent ? Number(financialStudent.feesRemaining || 0) : Number(student?.feesRemaining || 0);
+                          if (student && studRvForm.amount > remainingBalance) {
+                            return (
+                              <p className="text-[10px] text-amber-600 font-bold flex items-center gap-1">
+                                <AlertTriangle className="w-3.5 h-3.5 shrink-0" />
+                                <span>تنبيه: المبلغ ({studRvForm.amount}) أكبر من المتبقي الموثق على الطالب ({remainingBalance})</span>
+                              </p>
+                            );
+                          }
+                          return null;
+                        })()}
+                      </div>
+
+                      {/* Optional explicit installment allocation. The server still validates ownership, balance and school scope. */}
+                      <div className="space-y-1 md:col-span-2 rounded-xl border border-amber-200 bg-amber-50/60 p-3">
+                        <label className="font-extrabold text-slate-700 block">تخصيص السداد لقسط محدد (اختياري)</label>
+                        <select
+                          value={receiptInstallmentScheduleId}
+                          onChange={(event) => {
+                            const value = event.target.value;
+                            setReceiptInstallmentScheduleId(value);
+                            setStudRvForm(prev => ({ ...prev, installmentScheduleId: value }));
+                          }}
+                          disabled={!studRvForm.studentId || receiptInstallmentPlansLoading || receiptInstallmentSchedules.length === 0}
+                          className="mt-1 block w-full border border-amber-300 bg-white p-2.5 focus:ring-1 focus:ring-[#9a6a1d] focus:border-[#9a6a1d] focus:outline-none font-bold"
+                        >
+                          <option value="">تلقائي: أقدم قسط مستحق أولًا</option>
+                          {receiptInstallmentSchedules.map(schedule => (
+                            <option key={schedule.scheduleId} value={schedule.scheduleId}>
+                              القسط {schedule.installmentNumber} — استحقاق {String(schedule.dueDate || '').slice(0, 10) || 'غير محدد'} — المتبقي {formatLD(Number(schedule.amount) - Number(schedule.paidAmount))} {getCurrencyConfigForCode(activeCurrencyCode).symbol}
+                            </option>
+                          ))}
+                        </select>
+                        <p className="mt-1 text-[10px] font-bold text-amber-800">
+                          {receiptInstallmentPlansLoading ? 'جارٍ تحميل خطة الطالب...' : receiptInstallmentSchedules.length > 0 ? 'سيعطي النظام أولوية للقسط المختار ثم يوزع أي فرق متبقٍ بأقدمية الاستحقاق.' : 'لا توجد خطة أقساط نشطة لهذا الطالب؛ سيُخصّص السداد على المطالبات المفتوحة.'}
+                        </p>
+                      </div>
+
+                      {/* Multi-tender receipt distribution */}
+                      <div className="md:col-span-2 space-y-3 rounded-2xl border-2 border-emerald-200 bg-emerald-50/50 p-4">
+                        <div className="flex flex-wrap items-center justify-between gap-2">
+                          <div>
+                            <label className="font-extrabold text-slate-800 block">توزيع وسيلة القبض على الحسابات *</label>
+                            <p className="text-[10px] font-bold text-slate-500 mt-1">يمكن اختيار كاش فقط، بنك واحد، أو حتى ثلاثة حسابات معًا. الحسابات التجميعية لا تظهر ولا تقبل الترحيل.</p>
+                          </div>
+                          <button
+                            type="button"
+                            disabled={studRvForm.receivingAccounts.length >= RECEIPT_TENDER_MAX}
+                            onClick={() => setStudRvForm(prev => ({
+                              ...prev,
+                              receivingAccounts: [...prev.receivingAccounts, { accountCode: '', amount: 0, paymentMethod: 'نقدي' }]
+                            }))}
+                            className="rounded-lg bg-slate-900 px-3 py-2 text-[10px] font-black text-white disabled:cursor-not-allowed disabled:opacity-40"
+                          >
+                            + إضافة حساب ({studRvForm.receivingAccounts.length}/{RECEIPT_TENDER_MAX})
+                          </button>
+                        </div>
+
+                        <div className="space-y-2">
+                          {studRvForm.receivingAccounts.map((tender, index) => (
+                            <div key={`${index}-${tender.accountCode}`} className="grid grid-cols-1 gap-2 rounded-xl border border-emerald-100 bg-white p-3 md:grid-cols-[1.2fr_1.5fr_0.8fr_auto] md:items-end">
+                              <div className="space-y-1">
+                                <label className="text-[10px] font-black text-slate-600">طريقة القبض {index + 1}</label>
+                                <select
+                                  value={tender.paymentMethod}
+                                  onChange={(event) => setStudRvForm(prev => {
+                                    const receivingAccounts = prev.receivingAccounts.map((item, itemIndex) => itemIndex === index ? { ...item, paymentMethod: event.target.value } : item);
+                                    return { ...prev, paymentMethod: receivingAccounts[0]?.paymentMethod || prev.paymentMethod, receivingAccounts };
+                                  })}
+                                  className="block w-full border border-slate-300 bg-slate-50 p-2.5 text-xs font-bold focus:border-[#9a6a1d] focus:outline-none"
+                                >
+                                  {RECEIPT_PAYMENT_METHODS.map(method => <option key={method.value} value={method.value}>{method.label}</option>)}
+                                </select>
+                              </div>
+                              <div className="space-y-1">
+                                <label className="text-[10px] font-black text-slate-600">الحساب الفرعي المستلم {index + 1}</label>
+                                <select
+                                  value={tender.accountCode}
+                                  onChange={(event) => setStudRvForm(prev => {
+                                    const receivingAccounts = prev.receivingAccounts.map((item, itemIndex) => itemIndex === index ? { ...item, accountCode: event.target.value } : item);
+                                    return { ...prev, receivingAccount: receivingAccounts[0]?.accountCode || prev.receivingAccount, receivingAccounts };
+                                  })}
+                                  className="block w-full border border-slate-300 bg-slate-50 p-2.5 text-xs font-bold focus:border-[#9a6a1d] focus:outline-none"
+                                >
+                                  <option value="">اختر حساب الصندوق أو البنك</option>
+                                  {receiptAccountOptions.map(account => (
+                                    <option key={account.code} value={account.code}>{account.code} — {account.name || 'حساب قبض'} ({account.isCash ? 'كاش' : 'بنك'})</option>
+                                  ))}
+                                  {receiptAccountOptions.length === 0 && <option value="1101">1101 — صندوق النقدية والخزينة</option>}
+                                </select>
+                              </div>
+                              <div className="space-y-1">
+                                <label className="text-[10px] font-black text-slate-600">المبلغ</label>
+                                <input
+                                  type="number"
+                                  min="0"
+                                  step="0.01"
+                                  value={tender.amount}
+                                  onChange={(event) => setStudRvForm(prev => ({
+                                    ...prev,
+                                    receivingAccounts: prev.receivingAccounts.map((item, itemIndex) => itemIndex === index ? { ...item, amount: Number(event.target.value) } : item)
+                                  }))}
+                                  className="block w-full border border-slate-300 p-2.5 text-xs font-black text-emerald-700 focus:border-[#9a6a1d] focus:outline-none"
+                                />
+                              </div>
+                              <button
+                                type="button"
+                                disabled={studRvForm.receivingAccounts.length <= 1}
+                                onClick={() => setStudRvForm(prev => {
+                                  const receivingAccounts = prev.receivingAccounts.filter((_, itemIndex) => itemIndex !== index);
+                                  return { ...prev, paymentMethod: receivingAccounts[0]?.paymentMethod || 'نقدي', receivingAccount: receivingAccounts[0]?.accountCode || '1101', receivingAccounts };
+                                })}
+                                className="rounded-lg border border-rose-200 px-3 py-2 text-xs font-black text-rose-700 disabled:cursor-not-allowed disabled:opacity-30"
+                              >
+                                حذف
+                              </button>
+                            </div>
+                          ))}
+                        </div>
+                        {(() => {
+                          const distributed = Number(studRvForm.receivingAccounts.reduce((sum, item) => sum + Number(item.amount || 0), 0).toFixed(2));
+                          const remaining = Number((Number(studRvForm.amount || 0) - distributed).toFixed(2));
+                          return (
+                            <div className={`flex flex-wrap justify-between gap-2 border-t pt-2 text-xs font-black ${remaining === 0 ? 'border-emerald-200 text-emerald-700' : 'border-amber-200 text-amber-700'}`}>
+                              <span>إجمالي السند: {formatActiveCurrencyAmount(Number(studRvForm.amount || 0))}</span>
+                              <span>الموزع: {formatActiveCurrencyAmount(distributed)}</span>
+                              <span>{remaining === 0 ? '✓ التوزيع متوازن وجاهز للحفظ' : `المتبقي للتوزيع: ${formatActiveCurrencyAmount(Math.abs(remaining))}`}</span>
+                            </div>
+                          );
+                        })()}
+                      </div>
+
+                      {/* Operational Type */}
+                      <div className="space-y-1">
+                        <label className="font-extrabold text-slate-700 block">بند الإيراد / التخصيص التشغيلي: *</label>
+                        <select
+                          value={studRvForm.operationalType}
+                          onChange={(e) => setStudRvForm(prev => ({ ...prev, operationalType: e.target.value }))}
+                          className="block w-full border border-slate-300 p-2.5 focus:ring-1 focus:ring-[#9a6a1d] focus:border-[#9a6a1d] focus:outline-none font-bold bg-slate-50"
+                        >
+                          <option value="رسوم دراسية">رسوم دراسية أساسية</option>
+                          <option value="رسوم حافلة">رسوم اشتراك النقل المدرسي (حافلة)</option>
+                          <option value="رسوم كتب ومطبوعات">كتب ومناهج ومستلزمات دراسية</option>
+                        </select>
+                      </div>
+
+                    </div>
+
+                    {/* Against */}
+                    <div className="space-y-1 text-xs">
+                      <label className="font-extrabold text-slate-700 block">البيان والشرح التفصيلي لأسباب الدفع (لأمر): *</label>
+                      <textarea
+                        value={studRvForm.against}
+                        onChange={(e) => setStudRvForm(prev => ({ ...prev, against: e.target.value }))}
+                        rows={3}
+                        placeholder="اكتب شرحاً تفصيلياً يوضح وجه القيمة المدفوعة والفصل الدراسي والالتزام..."
+                        className="block w-full border border-slate-300 p-2.5 focus:ring-1 focus:ring-[#9a6a1d] focus:border-[#9a6a1d] focus:outline-none font-semibold"
+                      />
+                    </div>
+
+                    {/* Optional bank payment notice attachment */}
+                    <div className="md:col-span-2 space-y-2 rounded-2xl border-2 border-dashed border-sky-200 bg-sky-50/60 p-4">
+                      <div className="flex flex-wrap items-center justify-between gap-3">
+                        <div>
+                          <label className="font-extrabold text-slate-800 block">إرفاق إشعار البنك المدفوع (بنك الخرطوم أو أي بنك آخر) <span className="text-slate-500">(اختياري)</span></label>
+                          <p className="mt-1 text-[10px] font-bold text-slate-500">الصيغ المدعومة: PDF وPNG وJPG — بحد أقصى 5 ميجابايت.</p>
+                        </div>
+                        <input
+                          ref={receiptAttachmentInputRef}
+                          id="student-receipt-bank-attachment"
+                          type="file"
+                          accept=".pdf,.png,.jpg,.jpeg,application/pdf,image/png,image/jpeg"
+                          className="hidden"
+                          onChange={(event) => handleStudentReceiptAttachment(event.target.files?.[0])}
+                        />
+                        <button
+                          type="button"
+                          onClick={() => receiptAttachmentInputRef.current?.click()}
+                          className="inline-flex items-center gap-2 rounded-lg border border-sky-300 bg-white px-4 py-2.5 text-xs font-black text-sky-800 hover:bg-sky-100"
+                        >
+                          <Upload className="h-4 w-4" />
+                          <span>إرفاق إشعار البنك</span>
+                        </button>
+                      </div>
+                      {studRvForm.attachmentName && (
+                        <div className="flex items-center justify-between gap-3 rounded-xl border border-sky-200 bg-white px-3 py-2.5 text-xs font-bold text-slate-700">
+                          <span className="flex min-w-0 items-center gap-2 text-sky-800">
+                            <FileText className="h-4 w-4 shrink-0" />
+                            <span className="truncate">{studRvForm.attachmentName}</span>
+                            {studRvForm.attachmentSize > 0 && <span className="shrink-0 text-[10px] text-slate-400">({(studRvForm.attachmentSize / 1024 / 1024).toFixed(2)} MB)</span>}
+                          </span>
+                          <button
+                            type="button"
+                            onClick={clearStudentReceiptAttachment}
+                            className="rounded-md p-1 text-rose-500 hover:bg-rose-50 hover:text-rose-700"
+                            aria-label="إزالة إشعار البنك المرفق"
+                            title="إزالة المرفق"
+                          >
+                            <X className="h-4 w-4" />
+                          </button>
+                        </div>
+                      )}
+                    </div>
+
+                    {/* Form actions */}
+                    <div className="flex gap-3 justify-end pt-3 border-t border-slate-100 text-xs">
+                      <button
+                        type="button"
+                        onClick={() => {
+                          setStudRvMode('view');
+                          setSelectedStudRv(studentReceiptVouchers[0] || null);
+                          triggerNotification('تم إلغاء التعديل والتراجع.', 'info');
+                        }}
+                        className="bg-slate-100 hover:bg-slate-200 text-slate-700 px-5 py-2.5 font-bold cursor-pointer"
+                      >
+                        إلغاء التراجع
+                      </button>
+                      <button
+                        type="button"
+                        onClick={handleSaveStudRv}
+                        disabled={financialMutationDisabled}
+                        className="bg-emerald-600 hover:bg-emerald-500 text-white px-6 py-2.5 font-black flex items-center gap-1.5 cursor-pointer disabled:cursor-not-allowed disabled:opacity-50"
+                      >
+                        <Save className="w-4 h-4" />
+                        <span>حفظ المسودة</span>
+                      </button>
+                    </div>
+
+                  </div>
+                ) : (
+                  
+                  /* B) View Mode: Royal Printable Document Card */
+                  <div className="space-y-4">
+                    
+                    {selectedStudRv ? (
+                      <div className="space-y-4">
+                        
+                        {/* THE PRINTABLE TARGET AREA CARD */}
                         <div className="printable-area text-slate-900 p-8 shadow-md relative overflow-hidden space-y-6">
                           
                           {/* Top Background Design Accent (hidden in print automatically because of CSS print border none) */}
@@ -6649,4 +7465,3 @@ export default function StudentFinancialPortal({
     </div>
   );
 }
-
