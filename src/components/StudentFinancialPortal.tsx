@@ -20,6 +20,18 @@ import { feeConfigMatchesStudent, isStudentTuitionFee, resolveStudentFeeContext 
 import { aggregateStudentFinancialSnapshot, buildStudentLedgerRows, createInstallmentPreview, findFeeConfigurationForStage, formatFinancialReference, isFeeConfigurationCompatibleWithStage, resolveReceiptTenders, toLocalDateInputValue } from '../utils/studentFinancialPresentation';
 import { formatFinancialDocumentDescriptionForPrint, resolveFinancialDocumentReference } from '../utils/financialDocumentReference';
 import { validateCustomInstallmentSchedule } from '../modules/financial/domain/CustomInstallmentSchedule';
+import {
+  normalizeStudentWorkbookText,
+  parseStudentFeeWorkbook,
+  studentWorkbookNameMatches,
+  workbookGradeOrdinal,
+  workbookRowHasPaymentSource,
+  type StudentFeeWorkbookPaymentRow,
+  type StudentFeeWorkbookRow
+} from '../modules/financial/domain/StudentFeeWorkbookImport';
+import { readSpreadsheetMatrix } from '../utils/ExcelWorkbookUtils';
+
+
 import { resolveCostCenterStageLogoKey } from '../utils/schoolBranding';
 
 const FINANCIAL_READ_TIMEOUT_MS = 30_000;
@@ -110,6 +122,11 @@ function normalizeReceiptTenders(voucher: any, fallbackAmount = 0, journalEntrie
 const MAX_FEE_CONFIG_IMPORT_FILE_BYTES = 10 * 1024 * 1024;
 const FEE_CONFIG_IMPORT_EXTENSIONS = ['.xlsx', '.csv'];
 const MAX_FEE_CONFIG_IMPORT_ROWS = 500;
+const MAX_STUDENT_FEE_WORKBOOK_BYTES = 20 * 1024 * 1024;
+const STUDENT_FEE_WORKBOOK_EXTENSIONS = ['.xlsx', '.csv'];
+const STUDENT_FEE_WORKBOOK_INVOICE_DATE = '2026-09-01';
+
+
 const MAX_STUDENT_RECEIPT_ATTACHMENT_BYTES = 5 * 1024 * 1024;
 const STUDENT_RECEIPT_ATTACHMENT_EXTENSIONS = ['.pdf', '.png', '.jpg', '.jpeg'];
 
@@ -459,7 +476,11 @@ export default function StudentFinancialPortal({
     financialPeriod: string;
   } | null>(null);
   const feeImportInputRef = React.useRef<HTMLInputElement | null>(null);
+const studentFeeWorkbookInputRef = React.useRef<HTMLInputElement | null>(null);
+  
+
   const receiptAttachmentInputRef = React.useRef<HTMLInputElement | null>(null);
+  const [studentFeeWorkbookImportStatus, setStudentFeeWorkbookImportStatus] = useState('');
 
   const runWithLock = async (opName: string, asyncFn: () => Promise<any> | any) => {
     if (activeSaving) {
@@ -2207,6 +2228,289 @@ export default function StudentFinancialPortal({
       triggerNotification(error?.message || 'تعذر استيراد ملف بنود الرسوم.', 'warning');
     }
   };
+
+  const handleImportStudentFeeWorkbook = () => {
+    studentFeeWorkbookInputRef.current?.click();
+  };
+
+  const handleStudentFeeWorkbookFileChange = async (event: React.ChangeEvent<HTMLInputElement>) => {
+    const file = event.target.files?.[0];
+    event.target.value = '';
+    if (!file || !ensureFinancialWriteReady()) return;
+
+    await runWithLock('IMPORT_STUDENT_FEE_WORKBOOK', async () => {
+      const fileName = file.name.toLowerCase();
+      if (file.size > MAX_STUDENT_FEE_WORKBOOK_BYTES) throw new Error('الحد الأقصى للشيت الموحد المالي 20 ميجابايت.');
+      if (!STUDENT_FEE_WORKBOOK_EXTENSIONS.some(extension => fileName.endsWith(extension))) throw new Error('صيغة الشيت غير مدعومة؛ استخدم XLSX أو CSV.');
+      if (!financialOperationalContext?.academicYearId || !financialOperationalContext.academicPeriodId || !financialOperationalContext.financialPeriod) {
+        throw new Error('لا يمكن الاستيراد قبل اكتمال السنة والفترة المالية ومركز الفرع من المصدر الكانوني.');
+      }
+
+      setStudentFeeWorkbookImportStatus('جارٍ قراءة الشيت والتحقق من المطابقة...');
+      const parsed = parseStudentFeeWorkbook(await readSpreadsheetMatrix(await file.arrayBuffer()));
+      const issues: string[] = [];
+      const resolvedRows: Array<{ workbook: StudentFeeWorkbookRow; student: Student; context: NonNullable<typeof selectedStudentFeeContext>; }> = [];
+      const seenStudentIds = new Set<string>();
+
+      for (const workbookRow of parsed.rows) {
+        const candidates = selectableStudents.filter(student => {
+          if (!studentWorkbookNameMatches(student, workbookRow.name)) return false;
+          const context = resolveStudentFeeContext(student, stages || [], grades || [], academicClasses || [], costCenters || []);
+          if (!context || context.stageType !== 'primary') return false;
+          const expectedGrade = workbookGradeOrdinal(workbookRow.grade);
+          if (expectedGrade && Number(context.gradeOrder || workbookGradeOrdinal(context.gradeText)) !== expectedGrade) return false;
+          return true;
+        });
+        let narrowed = candidates;
+        const nationalId = normalizeStudentWorkbookText(workbookRow.nationalId).replace(/[^\dA-Za-z]/g, '');
+        if (nationalId && nationalId !== '0') {
+          const byNationalId = narrowed.filter(student => normalizeStudentWorkbookText(student.nationalId).replace(/[^\dA-Za-z]/g, '') === nationalId);
+          if (byNationalId.length > 0) narrowed = byNationalId;
+        }
+        const section = normalizeStudentWorkbookText(workbookRow.section);
+        if (section && narrowed.length > 1) {
+          const bySection = narrowed.filter(student => {
+            const studentSection = normalizeStudentWorkbookText(student.section);
+            const classroom = normalizeStudentWorkbookText(student.classroom);
+            return studentSection === section || classroom.includes(section);
+          });
+          if (bySection.length > 0) narrowed = bySection;
+        }
+        if (narrowed.length !== 1) {
+          issues.push(`صف الشيت ${workbookRow.workbookRow}: تعذر تحديد طالب واحد للاسم «${workbookRow.name}» (${narrowed.length} مطابق).`);
+          continue;
+        }
+        const student = narrowed[0];
+        if (seenStudentIds.has(student.id)) {
+          issues.push(`صف الشيت ${workbookRow.workbookRow}: تكرار مالي لنفس الطالب «${student.name}»؛ لم يُكرر القيد.`);
+          continue;
+        }
+        const context = resolveStudentFeeContext(student, stages || [], grades || [], academicClasses || [], costCenters || []);
+        if (!context) {
+          issues.push(`صف الشيت ${workbookRow.workbookRow}: مركز تكلفة الطالب غير موثق.`);
+          continue;
+        }
+        seenStudentIds.add(student.id);
+        resolvedRows.push({ workbook: workbookRow, student, context });
+      }
+
+      if (resolvedRows.length === 0) throw new Error(`لم تُطابق أي صف مالي مع طالب موثق. ${issues.slice(0, 3).join(' ')}`);
+
+      const invoiceByStudent = new Map<string, any>();
+      const safeRows: typeof resolvedRows = [];
+      for (const entry of resolvedRows) {
+        const studentInvoices = financialInvoices.filter(invoice => String(invoice.studentId) === String(entry.student.id));
+        const activeInvoices = studentInvoices.filter(invoice => !['cancelled', 'void', 'refunded', 'written_off'].includes(String(invoice.status || '').toLowerCase()));
+        const matchingInvoices = activeInvoices.filter(invoice => Math.abs(Number(invoice.totalAmount ?? invoice.amount ?? 0) - entry.workbook.netAmount) <= 0.01);
+        if (matchingInvoices.length > 1) {
+          issues.push(`صف الشيت ${entry.workbook.workbookRow}: أكثر من مطالبة بنفس صافي المبلغ للطالب «${entry.student.name}»؛ يلزم مراجعة يدوية.`);
+          continue;
+        }
+        if (matchingInvoices.length === 1) {
+          invoiceByStudent.set(entry.student.id, matchingInvoices[0]);
+          safeRows.push(entry);
+          continue;
+        }
+        if (activeInvoices.length > 0) {
+          issues.push(`صف الشيت ${entry.workbook.workbookRow}: توجد مطالبة مختلفة مسبقًا للطالب «${entry.student.name}»؛ أوقفنا الإضافة منعًا للتكرار.`);
+          continue;
+        }
+        safeRows.push(entry);
+      }
+      if (safeRows.length === 0) throw new Error(`لم توجد صفوف آمنة للكتابة. ${issues.slice(0, 3).join(' ')}`);
+
+      const academicYearId = financialOperationalContext.academicYearId;
+      const academicPeriodId = financialOperationalContext.academicPeriodId;
+      const financialPeriod = financialOperationalContext.financialPeriod;
+      const makeInvoiceCommand = (entry: typeof safeRows[number]) => {
+        const firstPlanDate = entry.workbook.plans[0]?.dueDate || STUDENT_FEE_WORKBOOK_INVOICE_DATE;
+        return {
+          studentId: entry.student.id,
+          description: `رسوم دراسية — الشيت الموحد المالي (${entry.workbook.serial || entry.workbook.workbookRow})`,
+          amount: entry.workbook.netAmount,
+          grossAmount: entry.workbook.grossAmount,
+          discountAmount: entry.workbook.discountAmount,
+          taxAmount: 0,
+          currency: activeCurrencyCode,
+          dueDate: firstPlanDate,
+          invoiceDate: firstPlanDate,
+          academicYearId,
+          academicPeriodId,
+          financialPeriod,
+          revenueAccount: '4101',
+          receivableAccount: STUDENT_RECEIVABLE_ACCOUNT,
+          costCenter: entry.context.stageType,
+          academicStageCode: entry.context.stageId || entry.context.stageType,
+          branchId: entry.student.branchId || financialOperationalContext.branchId,
+          idempotencyKey: `workbook:${entry.student.id}:${academicYearId}:student-fee`
+        };
+      };
+
+      const normalizeWorkbookInvoice = (invoice: any, entry: typeof safeRows[number]) => ({
+        ...invoice,
+        id: String(invoice.id),
+        studentId: String(invoice.student_id || invoice.studentId || entry.student.id),
+        studentName: String(invoice.student_name || invoice.studentName || entry.student.name),
+        item: String(invoice.item || 'رسوم دراسية'),
+        amount: Number(invoice.amount || 0),
+        totalAmount: Number(invoice.amount || 0) + Number(invoice.tax_amount || invoice.taxAmount || 0),
+        taxAmount: Number(invoice.tax_amount || invoice.taxAmount || 0),
+        paidAmount: Number(invoice.paid_amount || invoice.paidAmount || 0),
+        remainingAmount: Number(invoice.remaining_amount || invoice.remainingAmount || invoice.amount || 0),
+        invoiceDate: String(invoice.invoice_date || invoice.invoiceDate || ''),
+        dueDate: String(invoice.due_date || invoice.dueDate || ''),
+        status: String(invoice.status || 'issued')
+      });
+
+      const newInvoiceRows = safeRows.filter(entry => !invoiceByStudent.has(entry.student.id));
+      for (let offset = 0; offset < newInvoiceRows.length; offset += 100) {
+        const chunk = newInvoiceRows.slice(offset, offset + 100);
+        setStudentFeeWorkbookImportStatus(`إصدار المطالبات: ${Math.min(offset + chunk.length, newInvoiceRows.length)} من ${newInvoiceRows.length}...`);
+        const response = await authenticatedRequest('/api/financial/invoices/issue-batch', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ invoices: chunk.map(makeInvoiceCommand) })
+        });
+        const result = await response.json().catch(() => ({}));
+        const issued = Array.isArray(result.data?.invoices) ? result.data.invoices : [];
+        if (!response.ok || !result.success || issued.length !== chunk.length) throw new Error(result.message || 'تعذر إصدار دفعة المطالبات؛ لم تُعتمد الدفعة الناقصة.');
+        chunk.forEach((entry, index) => invoiceByStudent.set(entry.student.id, normalizeWorkbookInvoice(issued[index], entry)));
+      }
+
+      let plansCreated = 0;
+      let plansAlreadyPresent = 0;
+      let receiptsPosted = 0;
+      let receiptsAlreadyPresent = 0;
+      const postedReceipts: any[] = [];
+      const currentReceipts = [...studentReceiptVouchers];
+      const invoiceState = new Map<string, any>([...invoiceByStudent.entries()].map(([studentId, invoice]) => [studentId, { ...invoice }]));
+
+      const schedulesMatch = (existing: any, expected: Array<{ amount: number; dueDate: string }>) => {
+        const schedules = Array.isArray(existing?.schedules) ? existing.schedules : [];
+        return schedules.length === expected.length && schedules.every((item: any, index: number) =>
+          String(item.dueDate || '').slice(0, 10) === expected[index].dueDate
+          && Math.abs(Number(item.amount || 0) - expected[index].amount) <= 0.01
+        );
+      };
+
+      for (const entry of safeRows) {
+        if (entry.workbook.plans.length === 0) continue;
+        let planSchedules: Array<{ amount: number; dueDate: string }> = [];
+        try {
+          planSchedules = validateCustomInstallmentSchedule({ availableAmount: entry.workbook.netAmount, schedules: entry.workbook.plans });
+        } catch (error: any) {
+          issues.push(`صف الشيت ${entry.workbook.workbookRow}: خطة «${entry.student.name}» موقوفة: ${error?.message || 'تواريخ أو مبالغ غير صالحة'}.`);
+          continue;
+        }
+        const invoice = invoiceState.get(entry.student.id);
+        if (!invoice?.id) {
+          issues.push(`صف الشيت ${entry.workbook.workbookRow}: لم يعد الخادم بمعرف مطالبة للطالب «${entry.student.name}».`);
+          continue;
+        }
+        const response = await authenticatedRequest(`/api/financial/invoices/${encodeURIComponent(String(invoice.id))}/installment-plan`, {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ frequency: 'monthly', count: planSchedules.length, startDueDate: planSchedules[0].dueDate, gracePeriodDays: 0, method: 'custom', schedules: planSchedules })
+        });
+        const result = await response.json().catch(() => ({}));
+        if (response.ok && result.success) {
+          plansCreated += 1;
+          continue;
+        }
+        if (response.status === 409 || String(result.message || '').includes('مسبقًا')) {
+          const existingResponse = await authenticatedRequest(`/api/financial/students/${encodeURIComponent(entry.student.id)}/installment-plans`, { headers: { Accept: 'application/json' }, cache: 'no-store' });
+          const existingResult = await existingResponse.json().catch(() => ({}));
+          const existingPlan = Array.isArray(existingResult.data) ? existingResult.data.find((plan: any) => String(plan.invoiceId) === String(invoice.id)) : null;
+          if (existingPlan && schedulesMatch(existingPlan, planSchedules)) plansAlreadyPresent += 1;
+          else issues.push(`صف الشيت ${entry.workbook.workbookRow}: خطة موجودة أو متعارضة للطالب «${entry.student.name}»؛ لم نعدلها.`);
+        } else {
+          issues.push(`صف الشيت ${entry.workbook.workbookRow}: تعذر حفظ خطة «${entry.student.name}»: ${result.message || 'خطأ خادمي'}.`);
+        }
+      }
+
+      const resolvePayment = (entry: typeof safeRows[number], payment: StudentFeeWorkbookPaymentRow) => {
+        const bankReference = payment.bankReference.trim();
+        const cashMarker = normalizeStudentWorkbookText(payment.cashMarker);
+        if (bankReference && cashMarker) return null;
+        if (bankReference) return { paymentMethod: 'تحويل', accountCode: '110201', sourceText: `رقم بنكك ${bankReference}` };
+        if (cashMarker.includes('نقد') || cashMarker === 'cash') {
+          const grade = workbookGradeOrdinal(entry.workbook.grade) || 1;
+          return { paymentMethod: 'نقدي', accountCode: grade <= 3 ? '110102' : '110101', sourceText: `نقدي — ${grade <= 3 ? 'خزينة جنيه مناهل عبدالعزيز' : 'خزينة جنيه علا عوض'}` };
+        }
+        return null;
+      };
+
+      for (const entry of safeRows) {
+        const invoice = invoiceState.get(entry.student.id);
+        if (!invoice?.id) continue;
+        for (const payment of entry.workbook.payments) {
+          const source = resolvePayment(entry, payment);
+          if (!source || !workbookRowHasPaymentSource(payment)) {
+            issues.push(`صف الشيت ${entry.workbook.workbookRow} / السداد ${payment.ordinal}: مصدر القبض غير محسوم للطالب «${entry.student.name}»؛ لم يُرحّل.`);
+            continue;
+          }
+          const alreadyListed = currentReceipts.find(receipt => String(receipt.studentId) === String(entry.student.id)
+            && Math.abs(Number(receipt.amount || 0) - payment.amount) <= 0.01
+            && String(receipt.date || receipt.receiptDate || '').slice(0, 10) === payment.date
+            && (payment.bankReference ? String(receipt.against || '').includes(payment.bankReference) : String(receipt.receivingAccount || receipt.receiving_account || '') === source.accountCode));
+          if (alreadyListed && String(alreadyListed.status || '').toLowerCase() === 'posted') {
+            receiptsAlreadyPresent += 1;
+            continue;
+          }
+          const receiptId = `WBK-${entry.student.id}-${payment.ordinal}`;
+          const costCenter = ['kindergarten', 'primary', 'middle', 'secondary'].includes(entry.context.costCenter) ? entry.context.costCenter : entry.context.stageType;
+          const response = await authenticatedRequest('/api/financial/receipts/manual-settle', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({
+              receiptId,
+              studentId: entry.student.id,
+              receiptDate: payment.date,
+              amount: payment.amount,
+              paymentMethod: source.paymentMethod,
+              receivingAccount: source.accountCode,
+              receivingAccounts: [{ accountCode: source.accountCode, amount: payment.amount, paymentMethod: source.paymentMethod }],
+              operationalType: 'رسوم دراسية',
+              against: `سداد فعلي من الشيت الموحد — الطالب ${entry.student.name} — ${source.sourceText}`,
+              costCenter,
+              installmentScheduleId: null
+            })
+          });
+          const result = await response.json().catch(() => ({}));
+          if (!response.ok || !result.success || !result.data?.journalId) {
+            issues.push(`صف الشيت ${entry.workbook.workbookRow} / السداد ${payment.ordinal}: تعذر ترحيل سداد «${entry.student.name}»: ${result.message || 'لم يثبت رقم القيد'}.`);
+            continue;
+          }
+          const posted = { ...(result.data.receipt || {}), id: receiptId, studentId: entry.student.id, amount: payment.amount, date: payment.date, status: 'posted', journalEntryId: result.data.journalId, against: `سداد فعلي من الشيت الموحد — ${source.sourceText}`, receivingAccount: source.accountCode, paymentMethod: source.paymentMethod };
+          postedReceipts.push(posted);
+          currentReceipts.push(posted);
+          receiptsPosted += 1;
+          const currentInvoice = invoiceState.get(entry.student.id);
+          if (currentInvoice) {
+            const previousRemaining = Number(currentInvoice.remainingAmount ?? currentInvoice.amount ?? 0);
+            currentInvoice.paidAmount = Number((Number(currentInvoice.paidAmount || 0) + payment.amount).toFixed(2));
+            currentInvoice.remainingAmount = Number(Math.max(0, previousRemaining - payment.amount).toFixed(2));
+            currentInvoice.status = currentInvoice.remainingAmount <= 0.001 ? 'paid' : 'partial';
+          }
+        }
+      }
+
+      const importedInvoices = [...invoiceState.values()];
+      const invoiceMap = new Map(financialInvoices.map(invoice => [invoice.id, invoice]));
+      importedInvoices.forEach(invoice => invoiceMap.set(String(invoice.id), invoice));
+      setFinancialInvoices([...invoiceMap.values()]);
+      setInvoices([...invoiceMap.values()]);
+      if (postedReceipts.length > 0) setStudentReceiptVouchers(current => [...postedReceipts, ...current]);
+      setInstallmentPlansRefreshToken(current => current + 1);
+      const summary = `تمت معالجة ${safeRows.length} طالبًا: مطالبات جديدة ${newInvoiceRows.length}، خطط جديدة ${plansCreated}، خطط موجودة ${plansAlreadyPresent}، سندات مرحّلة ${receiptsPosted}، سندات موجودة ${receiptsAlreadyPresent}، ومراجعات معلقة ${issues.length}.`;
+      setStudentFeeWorkbookImportStatus(summary);
+      logAction('IMPORT_STUDENT_FEE_WORKBOOK', `${summary} الملف: ${file.name}`, 'الحسابات الطلابية');
+      triggerNotification(issues.length === 0 ? `✓ ${summary}` : `✓ اكتمل الاستيراد الآمن مع ${issues.length} بند مراجعة؛ لم تُسجل البنود الموقوفة.`, issues.length === 0 ? 'success' : 'warning');
+    });
+  };
+
+
+
 
   // 8. Toolbar - EXPORT XLSX
   const handleExportExcel = async () => {
@@ -4259,6 +4563,14 @@ export default function StudentFinancialPortal({
         aria-label="استيراد بنود الرسوم"
         onChange={(event) => { void handleFeeConfigFileChange(event); }}
       />
+      <input
+        ref={studentFeeWorkbookInputRef}
+        type="file"
+        accept=".xlsx,.csv,text/csv,application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
+        className="hidden"
+        aria-label="استيراد الشيت الموحد المالي"
+        onChange={(event) => { void handleStudentFeeWorkbookFileChange(event); }}
+      />
        <div id="student-financial-portal-layout" className="financial-workspace-layout grid grid-cols-1 lg:grid-cols-[minmax(0,1fr)_16.5rem] gap-4 w-full p-3 sm:p-4 text-right">
       
       {/* LEFT AREA: Content Window based on nested state */}
@@ -4478,7 +4790,7 @@ export default function StudentFinancialPortal({
         {activeSubSec === 'settings' && (
           <div className="space-y-6 animate-fadeIn" dir="rtl">
             {/* Header block with solid blue background and watermark */}
-            <div className="financial-fee-module-header relative bg-[#1e40af] text-white p-6 overflow-hidden shadow-md flex justify-between items-center">
+            <div className="financial-fee-module-header relative bg-[#1e40af] text-white p-6 overflow-hidden shadow-md flex flex-wrap justify-between items-center gap-4">
               <div className="z-10">
                 <h3 className="text-xl font-bold flex items-center gap-2">
                   <span className="p-1.5 bg-slate-50/10 rounded-lg">
@@ -4492,10 +4804,25 @@ export default function StudentFinancialPortal({
               </div>
               
               {/* "FEE CONFIG" Watermark on the left side (RTL) which corresponds to RHS in the view */}
+              <button
+                type="button"
+                onClick={handleImportStudentFeeWorkbook}
+                disabled={financialMutationDisabled || Boolean(activeSaving)}
+                className="relative z-10 inline-flex items-center gap-2 rounded-xl border border-amber-200/70 bg-white/10 px-4 py-2.5 text-xs font-black text-amber-50 shadow-sm hover:bg-white/20 disabled:cursor-not-allowed disabled:opacity-50"
+                title="استيراد الشيت المالي الموحد مع منع التكرار ومراجعة الصفوف الملتبسة"
+              >
+                <Upload className="h-4 w-4" />
+                <span>استيراد الشيت الموحد المالي</span>
+              </button>
               <div className="absolute left-6 top-1/2 -translate-y-1/2 select-none pointer-events-none opacity-10 hidden sm:block">
                 <span className="text-4xl font-extrabold tracking-widest font-mono">FEE CONFIG</span>
               </div>
             </div>
+            {studentFeeWorkbookImportStatus && (
+              <div role="status" className="rounded-xl border border-sky-200 bg-sky-50 px-4 py-3 text-xs font-black leading-relaxed text-sky-900">
+                {studentFeeWorkbookImportStatus}
+              </div>
+            )}
 
             {/* Config Form Card */}
             <div className="p-6 shadow-sm">
