@@ -11,7 +11,6 @@ import * as React from 'react';
 import { useState, useMemo, useEffect, useCallback, useRef } from 'react';
 import { lazyWithChunkRecovery } from './utils/lazyWithChunkRecovery';
 import Topbar from './components/Topbar';
-import Sidebar from './components/Sidebar';
 import SuperAdminView from './components/SuperAdminView';
 const StudentFinancialPortal = lazyWithChunkRecovery(() => import('./components/StudentFinancialPortal'));
 const GeneralLedgerPortal = lazyWithChunkRecovery(() => import('./components/GeneralLedgerPortal'));
@@ -578,8 +577,6 @@ export default function App() {
 
   // Supabase Configuration State
   const [supabaseConfig, setSupabaseConfig] = useState(initialSupabaseConfig);
-  const [isSidebarCollapsed, setIsSidebarCollapsed] = useState(false);
-  const isSupabaseConnected = Boolean(supabaseConfig.url && supabaseConfig.anonKey);
   const [showConfigModal, setShowConfigModal] = useState(false);
   const [tempUrl, setTempUrl] = useState(initialSupabaseConfig.url);
   const [tempKey, setTempKey] = useState(initialSupabaseConfig.anonKey);
@@ -1498,18 +1495,6 @@ export default function App() {
     <div className="workspace-shell flex h-screen min-h-0 overflow-hidden bg-slate-50 font-sans text-slate-900 selection:bg-sky-500 selection:text-white w-full" dir="rtl">
       <GlobalNotificationToast notification={activeToast} />
       
-      <Sidebar
-        activeSection={activeSection}
-        setActiveSection={setActiveSection}
-        activeSchool={selectedSchool}
-        currentRole={currentRole}
-        isSupabaseConnected={isSupabaseConnected}
-        isSuperAdminPortalActive={isSuperAdminPortalActive}
-        setIsSuperAdminPortalActive={setIsSuperAdminPortalActive}
-        isCollapsed={isSidebarCollapsed}
-        setIsCollapsed={setIsSidebarCollapsed}
-      />
-
       {/* Main Area Wrapping Topbar and Dynamic Subview Stage */}
       <div className="flex-1 flex flex-col overflow-hidden w-full">
         
