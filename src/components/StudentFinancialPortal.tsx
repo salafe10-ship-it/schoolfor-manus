@@ -4569,7 +4569,7 @@ const studentFeeWorkbookInputRef = React.useRef<HTMLInputElement | null>(null);
         className="hidden"
         aria-label="استيراد الشيت الموحد المالي"
         onChange={(event) => { void handleStudentFeeWorkbookFileChange(event); }}
-
+      />
        <div id="student-financial-portal-layout" className="financial-workspace-layout grid grid-cols-1 lg:grid-cols-[minmax(0,1fr)_16.5rem] gap-4 w-full p-3 sm:p-4 text-right">
       
       {/* LEFT AREA: Content Window based on nested state */}
