@@ -461,7 +461,7 @@ describe('DOC-003 StudentDocumentsPortal', () => {
     render(<StudentDocumentsPortal students={[student]} currentRole="SchoolAdmin" triggerNotification={notify} />);
     fireEvent.click(await screen.findByRole('button', { name: 'تسجيل بيانات مستند جديد' }));
     const dialog = screen.getByRole('dialog');
-    const save = within(dialog).getByRole('button', { name: 'حفظ metadata' });
+    const save = within(dialog).getByRole('button', { name: 'رفع وحفظ المستند' });
     expect((save as HTMLButtonElement).disabled).toBe(true);
     fireEvent.click(save);
     expect(fetchMock.mock.calls.filter(([, init]) => (init as RequestInit | undefined)?.method === 'POST')).toHaveLength(0);
@@ -780,4 +780,35 @@ describe('DOC-003 StudentDocumentsPortal', () => {
     expect(screen.queryByRole('button', { name: 'أرشفة' })).toBeNull();
     expect(screen.queryByRole('button', { name: 'إصدار جديد' })).toBeNull();
   });
+  it('keeps the private file inside the registration form and derives technical fields from it', async () => {
+    vi.stubGlobal('fetch', vi.fn((url: string) => Promise.resolve(
+      url.includes('categories')
+        ? response({ data: [{ id: 'cat-1', display_name: 'هوية' }] })
+        : response({ data: [], meta: { total: 0 } })
+    )));
+    render(<StudentDocumentsPortal students={[student]} currentRole="SchoolAdmin" triggerNotification={notify} />);
+    fireEvent.click(await screen.findByRole('button', { name: 'تسجيل بيانات مستند جديد' }));
+    const dialog = screen.getByRole('dialog');
+    const file = within(dialog).getByLabelText(/اختر الملف الخاص أولاً/) as HTMLInputElement;
+    expect(file.form).toBe(dialog.querySelector('form'));
+    chooseUploadFile();
+    expect((within(dialog).getByLabelText('اسم الملف الوصفي') as HTMLInputElement).value).toBe('id.pdf');
+    for (const label of ['اسم الملف الوصفي', 'نوع المحتوى', 'الحجم بالبايت', 'مرجع سلامة المحتوى']) {
+      expect((within(dialog).getByLabelText(label) as HTMLInputElement).readOnly).toBe(true);
+    }
+    const hash = within(dialog).getByLabelText('مرجع سلامة المحتوى') as HTMLInputElement;
+    expect(hash.value).toBe('');
+    expect(hash.required).toBe(false);
+  });
+
+  it('explains an empty category catalog and offers a retry without fabricating categories', async () => {
+    vi.stubGlobal('fetch', vi.fn(() => Promise.resolve(response({ data: [], meta: { total: 0 } }))));
+    render(<StudentDocumentsPortal students={[student]} currentRole="SchoolAdmin" triggerNotification={notify} />);
+    fireEvent.click(await screen.findByRole('button', { name: 'تسجيل بيانات مستند جديد' }));
+    const dialog = screen.getByRole('dialog');
+    expect(within(dialog).getByRole('alert').textContent).toContain('لا توجد تصنيفات مستندات متاحة');
+    expect(within(dialog).getByRole('button', { name: 'إعادة تحميل التصنيفات' })).toBeTruthy();
+    expect((within(dialog).getAllByLabelText('التصنيف')[0] as HTMLSelectElement).options.length).toBe(1);
+  });
+
 });

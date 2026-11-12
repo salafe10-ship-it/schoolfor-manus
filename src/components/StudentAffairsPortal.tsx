@@ -231,6 +231,9 @@ export default function StudentAffairsPortal({
   // View Profile & ID Card Modal State
   const [viewStudent, setViewStudent] = useState<Student | null>(null);
   const [showIdCardPrint, setShowIdCardPrint] = useState<boolean>(false);
+  const certificateInFlight = useRef(false);
+  const [certificateBusy, setCertificateBusy] = useState(false);
+  const [certificateError, setCertificateError] = useState('');
   const [certificatePreview, setCertificatePreview] = useState<{ issued: any; certificate: any; student: Student } | null>(null);
   const [timelineStudent, setTimelineStudent] = useState<Student | null>(null);
   const [timelineEvents, setTimelineEvents] = useState<StudentTimelineEvent[]>([]);
@@ -826,12 +829,16 @@ export default function StudentAffairsPortal({
       });
     currentSchoolStudents.forEach(student => {
       const rawStudent = student as Student & Record<string, unknown>;
-      const value = String(rawStudent.classId || rawStudent.classroom || '').trim();
-      const gradeId = String(rawStudent.gradeId || '').trim();
-      if (value && (printFilterGrade === 'all' || !gradeId || gradeId === printFilterGrade) && !options.has(value)) options.set(value, value);
+      const placement = resolveStudentAcademicContext(rawStudent, academicClasses, grades);
+      const value = placement.classId || placement.classroom;
+      const gradeId = placement.gradeId;
+      if (placement.classRecord?.isActive === false) return;
+      if (value && (printFilterGrade === 'all' || !gradeId || gradeId === printFilterGrade) && !options.has(value)) {
+        options.set(value, placement.className || placement.classCode || value);
+      }
     });
     return Array.from(options.entries()).map(([value, label]) => ({ value, label }));
-  }, [academicClasses, printFilterGrade, currentSchoolStudents]);
+  }, [academicClasses, grades, printFilterGrade, currentSchoolStudents]);
 
   const printSectionOptions = useMemo(() => {
     const sections = new Set(canonicalSections);
@@ -905,6 +912,8 @@ export default function StudentAffairsPortal({
   };
 
   const handleOpenEnrollmentCertificate = async () => {
+    if (certificateInFlight.current) return;
+    setCertificateError('');
     const student = selectedStudentIds.length > 0
       ? filteredStudents.find(candidate => selectedStudentIds.includes(candidate.id))
       : filteredStudents[0];
@@ -912,6 +921,8 @@ export default function StudentAffairsPortal({
       triggerNotification('لا يوجد طالب محمل لإصدار شهادة القيد.', 'warning');
       return;
     }
+    certificateInFlight.current = true;
+    setCertificateBusy(true);
     try {
       const response = await authenticatedRequest(`/api/students/${encodeURIComponent(student.id)}/certificates/enrollment/issue`, {
         method: 'POST',
@@ -925,7 +936,12 @@ export default function StudentAffairsPortal({
       setCertificatePreview({ issued, certificate, student });
       triggerNotification('تم إصدار شهادة القيد الكانونية بنجاح، وهي جاهزة للمعاينة والطباعة.', 'success');
     } catch (error: any) {
-      triggerNotification(error?.message || 'تعذر إصدار شهادة القيد.', 'warning');
+      const message = error?.message || 'تعذر إصدار شهادة القيد.';
+      setCertificateError(message);
+      triggerNotification(message, 'warning');
+    } finally {
+      certificateInFlight.current = false;
+      setCertificateBusy(false);
     }
   };
 
@@ -2660,12 +2676,13 @@ export default function StudentAffairsPortal({
               <p className="text-[10px] text-slate-500 font-bold">فتح بطاقة الطالب الرسمية من السجل الكانوني ثم إرسالها للطباعة.</p>
             </button>
 
-            <button type="button" className="w-full text-right bg-white border border-amber-200 rounded-2xl p-4 shadow-xs space-y-3 cursor-pointer hover:border-[#d4af37] transition-all" onClick={() => void handleOpenEnrollmentCertificate()}>
+            <button type="button" className="w-full text-right bg-white border border-amber-200 rounded-2xl p-4 shadow-xs space-y-3 cursor-pointer hover:border-[#d4af37] transition-all" disabled={certificateBusy} aria-busy={certificateBusy} onClick={() => void handleOpenEnrollmentCertificate()}>
               <div className="w-10 h-10 rounded-xl bg-[#2a1a0e] text-amber-300 flex items-center justify-center">
                 <FileText className="w-5 h-5" />
               </div>
-              <h4 className="text-xs font-black text-slate-900">شهادة القيد</h4>
+              <h4 className="text-xs font-black text-slate-900">{certificateBusy ? 'جاري إصدار شهادة القيد...' : 'شهادة القيد'}</h4>
               <p className="text-[10px] text-slate-500 font-bold">إصدار نموذج شهادة قيد موثق من المصدر الكانوني وقابل للطباعة.</p>
+              {certificateError && <p role="alert" className="text-xs text-rose-700">{certificateError}</p>}
             </button>
           </div>
         </div>
@@ -2686,7 +2703,7 @@ export default function StudentAffairsPortal({
             <div className="bg-white p-4 rounded-2xl border border-slate-200 space-y-3">
               <span className="block text-slate-800 font-black">مصدر الترقيم التلقائي للطالب</span>
               <div className="w-full bg-slate-100 border border-slate-300 p-2.5 rounded-xl text-xs font-mono text-slate-500" role="status">يُدار مركزيًا عبر مسار التسجيل</div>
-              <p className="text-[10px] text-slate-500">يُنشأ الرقم من السنة والمسلسل المعتمد، ولا يُعدّل يدويًا من هذه الوحدة.</p>
+              <p className="text-[10px] text-slate-500">يُخصّص رقم الطالب تلقائيًا من الخادم داخل المدرسة، ولا يُعدّل يدويًا من هذه الوحدة.</p>
             </div>
 
             <div className="bg-white p-4 rounded-2xl border border-slate-200 space-y-3">
