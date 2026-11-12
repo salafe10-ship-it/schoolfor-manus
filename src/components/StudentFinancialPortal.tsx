@@ -2354,6 +2354,22 @@ Line |
         };
       };
 
+      const normalizeWorkbookInvoice = (invoice: any, entry: typeof safeRows[number]) => ({
+        ...invoice,
+        id: String(invoice.id),
+        studentId: String(invoice.student_id || invoice.studentId || entry.student.id),
+        studentName: String(invoice.student_name || invoice.studentName || entry.student.name),
+        item: String(invoice.item || 'رسوم دراسية'),
+        amount: Number(invoice.amount || 0),
+        totalAmount: Number(invoice.amount || 0) + Number(invoice.tax_amount || invoice.taxAmount || 0),
+        taxAmount: Number(invoice.tax_amount || invoice.taxAmount || 0),
+        paidAmount: Number(invoice.paid_amount || invoice.paidAmount || 0),
+        remainingAmount: Number(invoice.remaining_amount || invoice.remainingAmount || invoice.amount || 0),
+        invoiceDate: String(invoice.invoice_date || invoice.invoiceDate || ''),
+        dueDate: String(invoice.due_date || invoice.dueDate || ''),
+        status: String(invoice.status || 'issued')
+      });
+
       const newInvoiceRows = safeRows.filter(entry => !invoiceByStudent.has(entry.student.id));
       for (let offset = 0; offset < newInvoiceRows.length; offset += 100) {
         const chunk = newInvoiceRows.slice(offset, offset + 100);
@@ -2366,7 +2382,7 @@ Line |
         const result = await response.json().catch(() => ({}));
         const issued = Array.isArray(result.data?.invoices) ? result.data.invoices : [];
         if (!response.ok || !result.success || issued.length !== chunk.length) throw new Error(result.message || 'تعذر إصدار دفعة المطالبات؛ لم تُعتمد الدفعة الناقصة.');
-        chunk.forEach((entry, index) => invoiceByStudent.set(entry.student.id, issued[index]));
+        chunk.forEach((entry, index) => invoiceByStudent.set(entry.student.id, normalizeWorkbookInvoice(issued[index], entry)));
       }
 
       let plansCreated = 0;
