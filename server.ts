@@ -143,8 +143,10 @@ import {
   makePaymentAttemptId,
   makeReceiptId,
   normalizeIdempotencyKey,
+  type InstallmentDraft,
   type InstallmentFrequency,
 } from './src/modules/financial/application/CanonicalStudentFeeOperations.js';
+import { validateCustomInstallmentSchedule } from './src/modules/financial/domain/CustomInstallmentSchedule.js';
 import { projectFinancialStudents } from './src/modules/financial/application/financialStudentProjection.js';
 import {
   isLocalStudentAffairsTestMode,
@@ -14635,6 +14637,11 @@ export async function createApp(options: { cloudflare?: boolean; waitUntil?: (ta
       const body = req.body && typeof req.body === 'object' ? req.body as Record<string, any> : {};
       const frequency = String(body.frequency || 'monthly').toLowerCase() as InstallmentFrequency;
       if (!['monthly', 'quarterly', 'yearly'].includes(frequency)) throw new ValidationError('تواتر الأقساط غير مدعوم.');
+      const method = String(body.method || 'equal').trim().toLowerCase();
+      if (!['equal', 'custom'].includes(method)) throw new ValidationError('طريقة جدولة الأقساط غير مدعومة.');
+      if (method === 'custom' && Number(body.gracePeriodDays || 0) !== 0) {
+        throw new ValidationError('تحدد تواريخ الأقساط المخصصة مباشرة دون مهلة إضافية.');
+      }
       let plan: any = null;
       let schedules: any[] = [];
       await UnitOfWork.runInTransaction(schoolId, {
@@ -14650,13 +14657,26 @@ export async function createApp(options: { cloudflare?: boolean; waitUntil?: (ta
         const existing = await transaction.query(`SELECT id FROM public.student_fee_installment_plans WHERE school_id = $1 AND invoice_id = $2 AND status <> 'cancelled' LIMIT 1`, [schoolId, invoiceId]);
         if (existing.rows[0]) throw new ConflictError('الفاتورة مرتبطة مسبقًا بخطة تقسيط نشطة.');
         const totalAmount = Number(invoice.remaining_amount || Number(invoice.amount) + Number(invoice.tax_amount || 0));
-        const generated = buildInstallmentSchedule({ totalAmount, count: Number(body.count || 1), startDueDate: String(body.startDueDate || invoice.due_date), frequency, gracePeriodDays: Number(body.gracePeriodDays || 0) });
+        let generated: InstallmentDraft[];
+        if (method === 'custom') {
+          try {
+            generated = validateCustomInstallmentSchedule({ availableAmount: totalAmount, schedules: body.schedules });
+          } catch (error: any) {
+            throw new ValidationError(error?.message || 'جدول الأقساط المخصصة غير صالح.');
+          }
+          if (body.count !== undefined && Number(body.count) !== generated.length) {
+            throw new ValidationError('عدد الأقساط لا يطابق الجدول المخصص.');
+          }
+        } else {
+          generated = buildInstallmentSchedule({ totalAmount, count: Number(body.count || 1), startDueDate: String(body.startDueDate || invoice.due_date), frequency, gracePeriodDays: Number(body.gracePeriodDays || 0) });
+        }
+        const planTotalAmount = Number(generated.reduce((sum, item) => sum + item.amount, 0).toFixed(2));
         const insertedPlan = await transaction.query(
           `INSERT INTO public.student_fee_installment_plans
             (tenant_id, school_id, invoice_id, student_id, template_id, total_amount, frequency, method, installment_count, currency, status, policy, created_by)
            VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,'approved',$11::jsonb,$12)
            RETURNING id, invoice_id AS "invoiceId", student_id AS "studentId", total_amount AS "totalAmount", frequency, method, installment_count AS "installmentCount", currency, status`,
-          [tenantId, schoolId, invoiceId, invoice.student_id, invoice.template_id || null, totalAmount, frequency, String(body.method || 'equal'), generated.length, invoice.currency || 'SAR', JSON.stringify({ gracePeriodDays: Number(body.gracePeriodDays || 0), penaltyRatePercent: Number(body.penaltyRatePercent || 0), flatLateFee: Number(body.flatLateFee || 0), allowPenaltyWaiver: Boolean(body.allowPenaltyWaiver) }), databaseActorId]);
+          [tenantId, schoolId, invoiceId, invoice.student_id, invoice.template_id || null, planTotalAmount, frequency, method, generated.length, invoice.currency || 'SAR', JSON.stringify({ gracePeriodDays: Number(body.gracePeriodDays || 0), penaltyRatePercent: Number(body.penaltyRatePercent || 0), flatLateFee: Number(body.flatLateFee || 0), allowPenaltyWaiver: Boolean(body.allowPenaltyWaiver) }), databaseActorId]);
         plan = insertedPlan.rows[0];
         for (const item of generated) {
           const row = await transaction.query(
