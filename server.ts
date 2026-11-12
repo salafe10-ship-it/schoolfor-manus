@@ -268,6 +268,7 @@ const createPlatformAdminPool = (): Pool => new Pool({
   connectionString: platformAdminConnectionString,
   // Hyperdrive maintains the origin pool; a Worker-side pool belongs only
   // to the invocation performing the query or transaction.
+  ...(isCloudflareHyperdrive ? { maxUses: 1 } : {}),
   max: Number(process.env.PG_PLATFORM_POOL_MAX || (isCloudflareHyperdrive ? 1 : 5)),
   idleTimeoutMillis: Number(process.env.PG_PLATFORM_IDLE_TIMEOUT_MS || (isCloudflareHyperdrive ? 10_000 : 30_000)),
   connectionTimeoutMillis: Number(process.env.PG_PLATFORM_CONNECTION_TIMEOUT_MS || (isCloudflareHyperdrive ? 3_000 : 5_000)),
