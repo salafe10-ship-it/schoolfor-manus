@@ -29,7 +29,7 @@ describe('student fee presentation contracts', () => {
   it('fails closed until prior plans have loaded for the selected student', () => {
     expect(source).toContain('installmentPlansLoadedStudentId === selectedStudent.id');
     expect(source).toContain('!installmentPlansReady || installmentPlansLoading');
-    expect(source).toContain('Boolean(selectedInvoiceInstallmentPlan) || generatedInstallments.length === 0');
+    expect(source).toContain("Boolean(selectedInvoiceInstallmentPlan) || (installmentMethod === 'custom' ? customScheduleValidation.rows.length === 0");
   });
 
   it('keeps the full record identifier available while shortening its visible label', () => {
@@ -256,3 +256,4 @@ describe('student fee presentation contracts', () => {
     expect(source).toContain('resolvedStudentContext?.costCenter || resolvedStudentContext?.stageType');
   });
 });
+
