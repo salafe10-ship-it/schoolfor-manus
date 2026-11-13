@@ -483,6 +483,7 @@ const studentFeeWorkbookInputRef = React.useRef<HTMLInputElement | null>(null);
   const receiptAttachmentInputRef = React.useRef<HTMLInputElement | null>(null);
   const [studentFeeWorkbookImportStatus, setStudentFeeWorkbookImportStatus] = useState('');
   const [studentFeeWorkbookPendingFile, setStudentFeeWorkbookPendingFile] = useState<File | null>(null);
+  const [studentFeeWorkbookReviewRows, setStudentFeeWorkbookReviewRows] = useState<StudentFeeWorkbookIssue[]>([]);
 
   const runWithLock = async (opName: string, asyncFn: () => Promise<any> | any) => {
     if (activeSaving) {
@@ -2134,10 +2135,11 @@ const studentFeeWorkbookInputRef = React.useRef<HTMLInputElement | null>(null);
     document.body.appendChild(link);
     link.click();
     document.body.removeChild(link);
-    window.setTimeout(() => URL.revokeObjectURL(url), 0);
+    window.setTimeout(() => URL.revokeObjectURL(url), 1000);
   };
 
   const downloadStudentFeeImportReviewReport = (items: StudentFeeWorkbookIssue[]) => {
+    setStudentFeeWorkbookReviewRows(items);
     if (items.length === 0) return;
     const escapeCell = (value: unknown) => `"${String(value ?? '').replaceAll('"', '""')}"`;
     const categoryLabels: Record<StudentFeeWorkbookIssue['category'], string> = {
@@ -2260,7 +2262,10 @@ const studentFeeWorkbookInputRef = React.useRef<HTMLInputElement | null>(null);
     const file = isFileInputEvent ? eventOrFile.target.files?.[0] : eventOrFile;
     if (isFileInputEvent) eventOrFile.target.value = '';
     if (!file || (commitRequested && !ensureFinancialWriteReady())) return;
-    if (!commitRequested) setStudentFeeWorkbookPendingFile(null);
+    if (!commitRequested) {
+      setStudentFeeWorkbookPendingFile(null);
+      setStudentFeeWorkbookReviewRows([]);
+    }
 
     await runWithLock('IMPORT_STUDENT_FEE_WORKBOOK', async () => {
       const fileName = file.name.toLowerCase();
@@ -4990,6 +4995,18 @@ const studentFeeWorkbookInputRef = React.useRef<HTMLInputElement | null>(null);
                 >
                   <Upload className="h-4 w-4" />
                   <span>اعتماد الاستيراد المالي</span>
+                </button>
+              )}
+              {studentFeeWorkbookReviewRows.length > 0 && (
+                <button
+                  type="button"
+                  onClick={() => downloadStudentFeeImportReviewReport(studentFeeWorkbookReviewRows)}
+                  className="relative z-10 inline-flex items-center gap-2 rounded-xl border border-sky-200 bg-sky-700 px-4 py-2.5 text-xs font-black text-white shadow-sm hover:bg-sky-800"
+                  title="إعادة تنزيل تقرير أسماء الطلاب والصفوف المتروكة للمراجعة"
+                  aria-label={`تنزيل تقرير مراجعة الاستيراد، ${studentFeeWorkbookReviewRows.length} ملاحظة`}
+                >
+                  <FileSpreadsheet className="h-4 w-4" />
+                  <span>تنزيل تقرير المراجعة ({studentFeeWorkbookReviewRows.length})</span>
                 </button>
               )}
               <div className="absolute left-6 top-1/2 -translate-y-1/2 select-none pointer-events-none opacity-10 hidden sm:block">
