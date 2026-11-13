@@ -3,6 +3,13 @@ import fs from 'node:fs';
 import path from 'node:path';
 
 describe('general ledger canonical RBAC read contract', () => {
+  it('offers a source reconnect in the toolbar while the financial source is blocked', () => {
+    const file = fs.readFileSync(path.resolve(process.cwd(), 'src/components/GeneralLedgerPortal.tsx'), 'utf8');
+    const toolbar = file.slice(file.indexOf('<EnterpriseActionToolbar'), file.indexOf('<div\n        role="status"'));
+    expect(toolbar).toContain('onRefresh={refreshCanonicalFinancialData}');
+    expect(toolbar).toContain("isLoading={refreshing || canonicalFinancialStatus === 'loading'}");
+  });
+
   it('uses only the trusted session identity for drill-down authorization', () => {
     const file = fs.readFileSync(path.resolve(process.cwd(), 'src/components/GeneralLedgerPortal.tsx'), 'utf8');
     expect(file).toContain('trustedSessionUser');
