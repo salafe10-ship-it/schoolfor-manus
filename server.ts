@@ -65,6 +65,7 @@ import { GoogleGenAI } from "@google/genai";
 import { createTrustedStudentAuditMetadata } from "./src/security/TrustedStudentAuditMetadata.js";
 import { UnitOfWork } from "./src/database/UnitOfWork.js";
 import { createPostgresTransactionDriverFromEnvironment } from "./server/infrastructure/PostgresTransactionDriver.js";
+import { createInvocationScopedPool } from "./server/infrastructure/InvocationScopedPool.js";
 import {
   getDiagnosticSampleCount,
   isStagingConnectionDiagnosticsEnabled,
@@ -264,19 +265,19 @@ const platformAdminConnectionString = platformAdminConnectionStringRaw
   ? normalizePostgresConnectionString(platformAdminConnectionStringRaw)
   : undefined;
 
+const isCloudflareHyperdrive = process.env.EDUPRO_CLOUDFLARE_HYPERDRIVE === 'true';
+const createPlatformAdminPool = (): Pool => new Pool({
+  connectionString: platformAdminConnectionString,
+  // Hyperdrive maintains the origin pool; a Worker-side pool belongs only
+  // to the invocation performing the query or transaction.
+  ...(isCloudflareHyperdrive ? { maxUses: 1 } : {}),
+  max: Number(process.env.PG_PLATFORM_POOL_MAX || (isCloudflareHyperdrive ? 1 : 5)),
+  idleTimeoutMillis: Number(process.env.PG_PLATFORM_IDLE_TIMEOUT_MS || (isCloudflareHyperdrive ? 10_000 : 30_000)),
+  connectionTimeoutMillis: Number(process.env.PG_PLATFORM_CONNECTION_TIMEOUT_MS || (isCloudflareHyperdrive ? 3_000 : 5_000)),
+  ssl: postgresSslConfig,
+});
 const platformAdminPool = platformAdminConnectionString
-  ? new Pool({
-      connectionString: platformAdminConnectionString,
-      // Hyperdrive already owns the origin-side pool. A separate pg pool per
-      // Worker isolate must stay tiny or RBAC/directory reads can wait behind
-      // idle connections and be cancelled by the Workers runtime.
-      // Workers cannot reuse a request's socket in another request. Hyperdrive pools upstream connections.
-      ...(process.env.EDUPRO_CLOUDFLARE_HYPERDRIVE === 'true' ? { maxUses: 1 } : {}),
-      max: Number(process.env.PG_PLATFORM_POOL_MAX || (process.env.EDUPRO_CLOUDFLARE_HYPERDRIVE === 'true' ? 1 : 5)),
-      idleTimeoutMillis: Number(process.env.PG_PLATFORM_IDLE_TIMEOUT_MS || (process.env.EDUPRO_CLOUDFLARE_HYPERDRIVE === 'true' ? 10_000 : 30_000)),
-      connectionTimeoutMillis: Number(process.env.PG_PLATFORM_CONNECTION_TIMEOUT_MS || (process.env.EDUPRO_CLOUDFLARE_HYPERDRIVE === 'true' ? 3_000 : 5_000)),
-      ssl: postgresSslConfig,
-    })
+  ? (isCloudflareHyperdrive ? createInvocationScopedPool(createPlatformAdminPool) : createPlatformAdminPool())
   : null;
 
 const describePostgresTarget = (value: string | undefined): string => {
