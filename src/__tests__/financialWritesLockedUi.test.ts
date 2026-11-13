@@ -8,6 +8,13 @@ const source = fs.readFileSync(
 );
 
 describe('financial write lock is visible and enforced in the student finance UI', () => {
+  it('refreshes the server write capability before marking refreshed data ready', () => {
+    const refresh = source.slice(source.indexOf('const handleRefreshData'), source.indexOf('// Mass assign fees to selected classroom'));
+    expect(refresh).toContain('setFinancialWriteMode(');
+    expect(refresh).toContain('setFinancialWriteModeReason(');
+    expect(refresh.indexOf('setFinancialWriteMode(')).toBeGreaterThan(refresh.indexOf('if (!contextResponse.ok'));
+  });
+
   it('keeps the canonical financial mutation lock enabled', () => {
     expect(source).toContain("const financialWritesLocked = financialWriteMode === 'snapshot_read_only';");
     expect(source).toContain("const [financialWriteMode, setFinancialWriteMode] = useState<FinancialWriteMode>('snapshot_read_only');");
