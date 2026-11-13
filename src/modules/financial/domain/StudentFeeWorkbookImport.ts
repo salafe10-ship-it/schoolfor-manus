@@ -28,13 +28,23 @@ export type StudentFeeWorkbookRow = {
   payments: StudentFeeWorkbookPaymentRow[];
 };
 
+export type StudentFeeWorkbookIssue = {
+  workbookRow: number;
+  name: string;
+  category: 'identity' | 'claim' | 'installment' | 'payment';
+  message: string;
+};
+
 export type StudentFeeWorkbookParseResult = {
   headerRowIndex: number;
   rows: StudentFeeWorkbookRow[];
+  issues: StudentFeeWorkbookIssue[];
 };
 
 const normalizeText = (value: unknown) => String(value ?? '')
   .normalize('NFKC')
+  .replace(/[٠-٩]/g, digit => String('٠١٢٣٤٥٦٧٨٩'.indexOf(digit)))
+  .replace(/[۰-۹]/g, digit => String('۰۱۲۳۴۵۶۷۸۹'.indexOf(digit)))
   .replace(/[\u064B-\u065F\u0670]/g, '')
   .replace(/[أإآ]/g, 'ا')
   .replace(/ى/g, 'ي')
@@ -45,9 +55,13 @@ const normalizeText = (value: unknown) => String(value ?? '')
 
 const roundMoney = (value: number) => Number(value.toFixed(2));
 
+const normalizeDigits = (value: string) => value
+  .replace(/[٠-٩]/g, digit => String('٠١٢٣٤٥٦٧٨٩'.indexOf(digit)))
+  .replace(/[۰-۹]/g, digit => String('۰۱۲۳۴۵۶۷۸۹'.indexOf(digit)));
+
 const toMoney = (value: unknown) => {
   if (typeof value === 'number') return Number.isFinite(value) ? roundMoney(value) : 0;
-  const text = String(value ?? '').replace(/[٬,]/g, '').trim();
+  const text = normalizeDigits(String(value ?? '')).replace(/[٬,]/g, '').trim();
   if (!text) return 0;
   const amount = Number(text);
   return Number.isFinite(amount) ? roundMoney(amount) : 0;
@@ -90,39 +104,74 @@ export function parseStudentFeeWorkbook(matrix: readonly (readonly unknown[])[])
   if (headerRowIndex < 0) throw new Error('لم نعثر على صف عناوين الشيت الموحد المالي.');
 
   const rows: StudentFeeWorkbookRow[] = [];
+  const issues: StudentFeeWorkbookIssue[] = [];
   matrix.slice(headerRowIndex + 1).forEach((row, offset) => {
-    const name = String(row[1] ?? row[4] ?? '').trim();
+    const workbookRow = headerRowIndex + offset + 2;
+    const primaryName = String(row[1] ?? '').trim();
+    const secondaryName = String(row[4] ?? '').trim();
+    const name = primaryName || secondaryName;
     const grossAmount = toMoney(row[20]);
-    if (!name && grossAmount <= 0) return;
-    if (!name) throw new Error(`الصف ${headerRowIndex + offset + 2} يحتوي قيمة مالية دون اسم طالب.`);
     const discountAmount = toMoney(row[21]);
-    const netAmount = toMoney(row[22] ?? grossAmount - discountAmount);
-    if (grossAmount <= 0 || netAmount <= 0 || discountAmount > grossAmount || Math.abs(roundMoney(grossAmount - discountAmount) - netAmount) > 0.01) {
-      throw new Error(`الصف ${headerRowIndex + offset + 2} يحتوي مطالبة أو خصمًا غير متطابق.`);
+    const netAmount = roundMoney(grossAmount - discountAmount);
+    const hasOtherFinancialData = row.slice(20).some(value => String(value ?? '').trim() !== '');
+    if (!name && grossAmount <= 0 && !hasOtherFinancialData) return;
+    if (!name) {
+      issues.push({ workbookRow, name: 'غير محدد', category: 'identity', message: `الصف ${workbookRow} يحتوي بيانات مالية دون اسم طالب.` });
+      return;
+    }
+    if (primaryName && secondaryName && normalizeText(primaryName) !== normalizeText(secondaryName)) {
+      issues.push({ workbookRow, name: `${primaryName} / ${secondaryName}`, category: 'identity', message: `الصف ${workbookRow} يحتوي اسمين مختلفين في عمودي الاسم؛ تُرك للمراجعة.` });
+      return;
+    }
+
+    // Formula cells are intentionally omitted by the spreadsheet reader. The
+    // net claim is therefore derived from the literal gross and discount
+    // values, and a supplied literal net is checked when one exists.
+    const suppliedNetAmount = String(row[22] ?? '').trim();
+    const suppliedNet = toMoney(row[22]);
+    if (grossAmount <= 0 || netAmount <= 0 || discountAmount < 0 || discountAmount > grossAmount
+      || (suppliedNetAmount !== '' && Math.abs(suppliedNet - netAmount) > 0.01)) {
+      issues.push({ workbookRow, name, category: 'claim', message: `الصف ${workbookRow} يحتوي مطالبة أو خصمًا غير موجب أو غير متطابق؛ لم تُصدر المطالبة.` });
+      return;
     }
 
     const plans: StudentFeeWorkbookPlanRow[] = [];
+    let planIsInvalid = false;
     [27, 29, 31, 33, 35, 37].forEach(amountIndex => {
-      const amount = toMoney(row[amountIndex]);
-      const dueDate = spreadsheetDateToIso(row[amountIndex + 1]);
-      if (amount <= 0 && !dueDate) return;
-      if (amount <= 0 || !dueDate) throw new Error(`الصف ${headerRowIndex + offset + 2} يحتوي قسطًا ناقص المبلغ أو التاريخ.`);
+      const rawAmount = row[amountIndex];
+      const rawDate = row[amountIndex + 1];
+      const amount = toMoney(rawAmount);
+      const dueDate = spreadsheetDateToIso(rawDate);
+      if (!String(rawAmount ?? '').trim() && !String(rawDate ?? '').trim()) return;
+      if (amount <= 0 || !dueDate) {
+        planIsInvalid = true;
+        return;
+      }
       plans.push({ amount, dueDate });
     });
+    if (planIsInvalid) {
+      issues.push({ workbookRow, name, category: 'installment', message: `الصف ${workbookRow} يحتوي قسطًا ناقص المبلغ أو التاريخ؛ تُركت خطة الطالب كاملة دون إنشاء.` });
+      plans.length = 0;
+    }
 
     const payments: StudentFeeWorkbookPaymentRow[] = [];
     [39, 43, 47, 51, 55, 59].forEach((amountIndex, paymentIndex) => {
-      const amount = toMoney(row[amountIndex]);
-      const date = spreadsheetDateToIso(row[amountIndex + 1]);
+      const rawAmount = row[amountIndex];
+      const rawDate = row[amountIndex + 1];
+      const amount = toMoney(rawAmount);
+      const date = spreadsheetDateToIso(rawDate);
       const bankReference = String(row[amountIndex + 2] ?? '').trim();
       const cashMarker = String(row[amountIndex + 3] ?? '').trim();
-      if (amount <= 0 && !date && !bankReference && !cashMarker) return;
-      if (amount <= 0 || !date) throw new Error(`الصف ${headerRowIndex + offset + 2} يحتوي سدادًا ناقص المبلغ أو التاريخ.`);
+      if (!String(rawAmount ?? '').trim() && !String(rawDate ?? '').trim() && !bankReference && !cashMarker) return;
+      if (amount <= 0 || !date) {
+        issues.push({ workbookRow, name, category: 'payment', message: `الصف ${workbookRow} / السداد ${paymentIndex + 1}: مبلغ السداد أو تاريخه ناقص أو غير صالح؛ تُرك هذا السداد.` });
+        return;
+      }
       payments.push({ ordinal: paymentIndex + 1, amount, date, bankReference, cashMarker });
     });
 
     rows.push({
-      workbookRow: headerRowIndex + offset + 2,
+      workbookRow,
       serial: String(row[0] ?? '').trim(),
       name,
       nationalId: String(row[3] ?? '').trim(),
@@ -136,8 +185,26 @@ export function parseStudentFeeWorkbook(matrix: readonly (readonly unknown[])[])
       payments
     });
   });
-  if (rows.length === 0) throw new Error('الشيت لا يحتوي صفوفًا مالية قابلة للاستيراد.');
-  return { headerRowIndex, rows };
+
+  const duplicateRows = new Map<string, StudentFeeWorkbookRow[]>();
+  for (const row of rows) {
+    const key = [row.name, row.stage, row.grade, row.section].map(normalizeText).join('|');
+    const grouped = duplicateRows.get(key) || [];
+    grouped.push(row);
+    duplicateRows.set(key, grouped);
+  }
+  const duplicateRowNumbers = new Set<number>();
+  for (const group of duplicateRows.values()) {
+    if (group.length < 2) continue;
+    for (const row of group) {
+      duplicateRowNumbers.add(row.workbookRow);
+      issues.push({ workbookRow: row.workbookRow, name: row.name, category: 'identity', message: `الصف ${row.workbookRow}: تكرر الاسم والصف والشعبة في الشيت؛ تُركت كل الصفوف المتكررة للمراجعة.` });
+    }
+  }
+
+  const safeRows = rows.filter(row => !duplicateRowNumbers.has(row.workbookRow));
+  if (safeRows.length === 0 && issues.length === 0) throw new Error('الشيت لا يحتوي صفوفًا مالية قابلة للاستيراد.');
+  return { headerRowIndex, rows: safeRows, issues };
 }
 
 export const normalizeStudentWorkbookText = normalizeText;

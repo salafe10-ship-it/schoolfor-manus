@@ -1,4 +1,5 @@
 import ExcelJS from 'exceljs';
+import JSZip from 'jszip';
 
 export type SpreadsheetRow = readonly unknown[];
 
@@ -111,8 +112,47 @@ export async function readSpreadsheetMatrix(data: ArrayBuffer, sheetName?: strin
     return parseCsvMatrix(text);
   }
 
+  let workbookData = data;
+  // ExcelJS expects unprefixed SpreadsheetML element names. Some valid Excel
+  // exports use an explicit `x:` namespace prefix on workbook, worksheet,
+  // styles, and shared-string tags, which ExcelJS otherwise silently fails to
+  // parse. Normalize only those XML element prefixes; leave formulas and cell
+  // values untouched so import paths still treat formula results as untrusted.
+  const zip = await JSZip.loadAsync(data);
+  const workbookXml = zip.file('xl/workbook.xml');
+  const workbookXmlText = workbookXml ? await workbookXml.async('string') : '';
+  if (/<x:workbook\b/.test(workbookXmlText)) {
+    const xmlEntries = Object.values(zip.files).filter(entry => !entry.dir && /^xl\/.*\.xml(?:\.rels)?$/i.test(entry.name));
+    for (const entry of xmlEntries) {
+      const xml = await entry.async('string');
+      let normalized = xml.replace(/(<\/?)(x:)/g, '$1');
+      // ExcelJS indexes comment and VML parts relative to a worksheet. Excel
+      // exports that use package-absolute /xl/... targets are valid OOXML, but
+      // do not match those internal keys; rewrite only worksheet relationship
+      // targets to their equivalent relative form.
+      if (/^xl\/worksheets\/_rels\/.*\.rels$/i.test(entry.name)) {
+        normalized = normalized.replace(/Target="\/xl\/([^"]+)"/g, 'Target="../$1"');
+        // ExcelJS assumes comments and VML notes are optional parser metadata,
+        // but throws when a valid absolute OOXML target is not reconciled to
+        // its internal relative key. They are not cell values, so remove only
+        // these annotation relationships from the in-memory import copy.
+        normalized = normalized.replace(/<Relationship\b(?=[^>]*\bType="[^"]*\/(?:comments|vmlDrawing)")[^>]*\/>/g, '');
+      }
+      if (/^xl\/worksheets\/sheet\d+\.xml$/i.test(entry.name)) {
+        // Remove the dangling VML note reference after annotation relations
+        // are discarded; it has no bearing on worksheet cell data.
+        normalized = normalized.replace(/<legacyDrawing\b[^>]*(?:\/>|>[\s\S]*?<\/legacyDrawing>)/g, '');
+      }
+      if (normalized !== xml) zip.file(entry.name, normalized);
+    }
+    Object.values(zip.files)
+      .filter(entry => !entry.dir && /^xl\/(?:comments\d+\.xml|drawings\/vmlDrawing\d+\.vml)$/i.test(entry.name))
+      .forEach(entry => zip.remove(entry.name));
+    workbookData = await zip.generateAsync({ type: 'arraybuffer' });
+  }
+
   const workbook = new ExcelJS.Workbook();
-  await workbook.xlsx.load(data as unknown as Buffer);
+  await workbook.xlsx.load(workbookData as unknown as Buffer);
   const worksheet = sheetName
     ? workbook.getWorksheet(sheetName)
     : workbook.worksheets[0];

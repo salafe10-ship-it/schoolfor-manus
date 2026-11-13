@@ -13572,6 +13572,7 @@ export async function createApp(options: { cloudflare?: boolean; waitUntil?: (ta
       const operationalContext = {
         academicYearId: String(year.id),
         academicYearName: String(year.name || ''),
+        academicYearStartDate: String(year.starts_on || '').slice(0, 10),
         academicPeriodId: String(term.id),
         academicPeriodName: String(term.name || ''),
         branchId: tenantContext.branchId,
