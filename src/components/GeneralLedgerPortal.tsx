@@ -7,6 +7,11 @@ import { amountToArabicWords, getCurrencyConfigForCode, useCurrency } from '../u
 import EnterpriseActionToolbar from './shared/EnterpriseActionToolbar';
 import { AccountingContext, type AccountNode } from '../modules/accounting/presentation/AccountingContext';
 import { authenticatedRequest } from '../utils/authenticatedRequest';
+import {
+  createFinancialSourceReadHttpError,
+  isTransientFinancialSourceReadError,
+  retryTransientFinancialSourceRead,
+} from '../utils/retryFinancialSourceRead';
 import { PERMISSIONS, permissionRegistry } from '../authorization/PermissionRegistry';
 import { LedgerDashboardTab } from '../modules/accounting/presentation/LedgerDashboardTab';
 import { ChartOfAccountsTab } from '../modules/accounting/presentation/ChartOfAccountsTab';
@@ -33,6 +38,7 @@ export type { AccountNode };
 
 const TreasuryPlatformPortal = React.lazy(() => import('./TreasuryPlatformPortal'));
 const CANONICAL_FINANCIAL_READ_TIMEOUT_MS = 30_000;
+const CANONICAL_FINANCIAL_READ_RETRY_DELAY_MS = 750;
 
 interface GeneralLedgerPortalProps {
   students: Student[];
@@ -1196,31 +1202,67 @@ export default function GeneralLedgerPortal({
   useEffect(() => {
     let active = true;
     const controller = new AbortController();
-    const timeoutId = window.setTimeout(() => controller.abort(), CANONICAL_FINANCIAL_READ_TIMEOUT_MS);
+    setRefreshing(true);
+    setCanonicalFinancialStatus('loading');
+    setCanonicalFinancialWriteMode('snapshot_read_only');
+    setCanonicalMappingsReady(false);
 
     const loadCanonicalFinancialSnapshot = async () => {
       try {
-        const response = await authenticatedRequest('/api/financial/database', {
-          headers: {
-            'Accept': 'application/json',
-          },
-          cache: 'no-store',
+        const { result, mappingsReady } = await retryTransientFinancialSourceRead(async (signal) => {
+          const [response, mappingsResponse] = await Promise.all([
+            authenticatedRequest('/api/financial/database', {
+              headers: { Accept: 'application/json' },
+              cache: 'no-store',
+              signal,
+            }),
+            authenticatedRequest('/api/financial/account-mappings', {
+              headers: { Accept: 'application/json' },
+              cache: 'no-store',
+              signal,
+            }).catch(error => {
+              if (isTransientFinancialSourceReadError(error)) throw error;
+              return null;
+            }),
+          ]);
+          const payload = await response.json().catch(error => {
+            if (isTransientFinancialSourceReadError(error)) throw error;
+            return {};
+          });
+          if (!response.ok || !payload.success) {
+            throw createFinancialSourceReadHttpError(
+              payload.message || `تعذر تحميل المصدر المالي (${response.status})`,
+              response.status,
+            );
+          }
+
+          let mappingsReady = false;
+          if (mappingsResponse) {
+            const mappingsPayload = await mappingsResponse.json().catch(error => {
+              if (isTransientFinancialSourceReadError(error)) throw error;
+              return {};
+            });
+            if (!mappingsResponse.ok && isTransientFinancialSourceReadError({ status: mappingsResponse.status })) {
+              throw createFinancialSourceReadHttpError(
+                mappingsPayload?.message || `تعذر فحص خرائط الحسابات (${mappingsResponse.status})`,
+                mappingsResponse.status,
+              );
+            }
+            mappingsReady = mappingsResponse.ok
+              && mappingsPayload?.success === true
+              && mappingsPayload?.data?.ready === true;
+          }
+
+          return { result: payload, mappingsReady };
+        }, {
+          attempts: 2,
+          // Each attempt gets half the existing overall budget. This allows
+          // one reconnect without making a failed screen wait twice as long.
+          timeoutMs: (CANONICAL_FINANCIAL_READ_TIMEOUT_MS - CANONICAL_FINANCIAL_READ_RETRY_DELAY_MS) / 2,
+          retryDelayMs: CANONICAL_FINANCIAL_READ_RETRY_DELAY_MS,
           signal: controller.signal,
         });
-        const result = await response.json().catch(() => ({}));
-        if (!response.ok || !result.success) {
-          throw new Error(result.message || `تعذر تحميل المصدر المالي (${response.status})`);
-        }
-
         const data = result.data || {};
-        let mappingsReady = false;
-        try {
-          const mappingsResponse = await authenticatedRequest('/api/financial/account-mappings', {
-            headers: { Accept: 'application/json' }, cache: 'no-store', signal: controller.signal
-          });
-          const mappingsPayload = await mappingsResponse.json().catch(() => ({}));
-          mappingsReady = mappingsResponse.ok && mappingsPayload?.success === true && mappingsPayload?.data?.ready === true;
-        } catch { mappingsReady = false; }
         if (!active) return;
         setCanonicalMappingsReady(mappingsReady);
         const canonicalJournalEntries = Array.isArray(data.journalEntries) ? data.journalEntries : [];
@@ -1352,13 +1394,14 @@ export default function GeneralLedgerPortal({
         setCanonicalFinancialMessage(error?.name === 'AbortError'
           ? 'انتهت مهلة الاتصال بالمصدر المالي الموحد. لم تُعرض بيانات غير موثقة؛ اضغط تحديث لإعادة المحاولة.'
           : error?.message || 'تعذر ربط الأستاذ العام بالمصدر المالي الموحد');
+      } finally {
+        if (active) setRefreshing(false);
       }
     };
 
     void loadCanonicalFinancialSnapshot();
     return () => {
       active = false;
-      window.clearTimeout(timeoutId);
       controller.abort();
     };
   }, [selectedSchool?.id, canonicalFinancialRefreshNonce]);
@@ -1418,6 +1461,7 @@ export default function GeneralLedgerPortal({
   }, [costCenters, selectedSchool?.id, setAcademicClasses, setCostCenters, setGrades, setStages, stages, triggerNotification]);
 
   const refreshCanonicalFinancialData = () => {
+    setRefreshing(true);
     setCanonicalFinancialStatus('loading');
     setCanonicalFinancialMessage('جارٍ إعادة تحميل المصدر المالي المركزي...');
     setCanonicalFinancialRefreshNonce(previous => previous + 1);
@@ -3164,6 +3208,8 @@ export default function GeneralLedgerPortal({
         onPrint={handlePrintLedgerView}
         onExportPdf={handleExportLedgerPdf}
         onExportExcel={handleExportLedgerExcel}
+        onRefresh={refreshCanonicalFinancialData}
+        isLoading={refreshing || canonicalFinancialStatus === 'loading'}
         onImportExcel={canonicalFinancialWriteReady ? handleImportLedgerExcel : undefined}
         onDownloadTemplate={handleDownloadLedgerTemplate}
       />
@@ -3182,10 +3228,10 @@ export default function GeneralLedgerPortal({
         {canonicalFinancialStatus === 'ready' ? '✓ ' : canonicalFinancialStatus === 'blocked' ? '⚠ ' : '⏳ '}
         {canonicalFinancialMessage}
       </div>
-      <div id="general-ledger-portal-layout" className="flex flex-col lg:flex-row-reverse gap-4 w-full p-3 sm:p-4 text-right">
+      <div id="general-ledger-portal-layout" className="flex flex-col-reverse lg:flex-row-reverse gap-4 w-full p-3 sm:p-4 text-right">
       
       {/* LEFT AREA: Content Window based on nested state */}
-      <div id="ledger-content-viewport" className="flex-1  bg-gradient-to-b from-[#fffefc] via-[#fbf8f0] to-[#f5eeea] border-2 border-[#d4af37]/30 hover:border-[#d4af37] rounded-3xl p-4 sm:p-5 shadow-md transition-all duration-300  overflow-hidden min-h-[580px] p-6">
+      <div id="ledger-content-viewport" className="flex-1 min-w-0 bg-gradient-to-b from-[#fffefc] via-[#fbf8f0] to-[#f5eeea] border-2 border-[#d4af37]/30 hover:border-[#d4af37] rounded-3xl p-3 sm:p-4 shadow-md transition-all duration-300 overflow-hidden min-h-[580px]">
         
         {/* ========================================================== */}
         {/* VIEW 1: MAIN LEDGER DASHBOARD (Matching screenshot EXACTLY) */}
@@ -3892,7 +3938,7 @@ export default function GeneralLedgerPortal({
       {/* RIGHT SIDEBAR: ERP General accounting Menu (Renders on the right side of the screen due to lg:flex-row-reverse) */}
       <div 
         id="ledger-sidebar-menu" 
-        className="w-full lg:w-85 bg-gradient-to-b from-[#fffefc] via-[#fbf8f0] to-[#f5eeea] border-2 border-[#d4af37]/30 hover:border-[#d4af37] rounded-3xl p-4 sm:p-5 shadow-md transition-all duration-300 text-slate-800 p-5 shadow-xs flex flex-col justify-between shrink-0 h-auto lg:h-[calc(100vh-140px)] lg:sticky lg:top-6 overflow-hidden"
+        className="w-full lg:w-[16.5rem] bg-gradient-to-b from-[#fffefc] via-[#fbf8f0] to-[#f5eeea] border-2 border-[#d4af37]/30 hover:border-[#d4af37] rounded-3xl p-3 sm:p-4 shadow-md transition-all duration-300 text-slate-800 shadow-xs flex flex-col justify-between shrink-0 h-auto lg:h-[calc(100vh-140px)] lg:sticky lg:top-6 overflow-hidden"
       >
         <div className="flex flex-col space-y-4 overflow-hidden">
           {/* Menu Title Header */}
@@ -3928,7 +3974,7 @@ export default function GeneralLedgerPortal({
                       <button
                         key={item.id}
                         onClick={() => handleSidebarItemClick(item)}
-                        className={`group w-full relative flex items-center justify-between h-[36px] px-3.5 rounded-lg text-xs font-bold transition-all duration-200 cursor-pointer overflow-hidden border select-none ${
+                        className={`group w-full relative flex items-center justify-between h-11 px-3.5 rounded-lg text-xs font-bold transition-all duration-200 cursor-pointer overflow-hidden border select-none ${
                           isActive 
                             ? 'bg-gradient-to-r from-[#9a6a1d] via-[#d4af37] to-[#c58a22] text-slate-950 shadow-md' 
                             : 'border-slate-200 text-slate-700 hover:bg-transparent hover:text-slate-900 hover:border-slate-300'

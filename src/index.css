@@ -3021,8 +3021,13 @@ html:not(.dark) #super-admin-portal button:not(.bg-indigo-600):not(.bg-rose-600)
   #student-financial-portal .financial-sidebar-menu {
     min-height: auto;
     grid-column: 1;
-    grid-row: 2;
+    grid-row: 1;
     position: static;
+  }
+
+  #student-financial-portal #financial-content-viewport {
+    grid-column: 1;
+    grid-row: 2;
   }
 
   #student-financial-portal .financial-sidebar-brand {

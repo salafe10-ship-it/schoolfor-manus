@@ -16,6 +16,11 @@ import StudentSearchPicker from './shared/StudentSearchPicker';
 import { EnterpriseAuditLogger } from '../utils/EnterpriseAuditLogger';
 import { StudentAffairsValidationFramework } from '../validation/StudentAffairsValidationFramework';
 import { authenticatedRequest } from '../utils/authenticatedRequest';
+import {
+  createFinancialSourceReadHttpError,
+  isTransientFinancialSourceReadError,
+  retryTransientFinancialSourceRead,
+} from '../utils/retryFinancialSourceRead';
 import { feeConfigMatchesStudent, isStudentTuitionFee, resolveStudentFeeContext } from '../utils/studentFeeMatching';
 import { aggregateStudentFinancialSnapshot, buildStudentLedgerRows, createInstallmentPreview, findFeeConfigurationForStage, formatFinancialReference, isFeeConfigurationCompatibleWithStage, resolveReceiptTenders, toLocalDateInputValue } from '../utils/studentFinancialPresentation';
 import { formatFinancialDocumentDescriptionForPrint, resolveFinancialDocumentReference } from '../utils/financialDocumentReference';
@@ -36,6 +41,7 @@ import { readSpreadsheetMatrix } from '../utils/ExcelWorkbookUtils';
 import { resolveCostCenterStageLogoKey } from '../utils/schoolBranding';
 
 const FINANCIAL_READ_TIMEOUT_MS = 30_000;
+const FINANCIAL_READ_RETRY_DELAY_MS = 750;
 
 interface StudentFinancialPortalProps {
   students: Student[];
@@ -453,6 +459,7 @@ export default function StudentFinancialPortal({
   const [financialDatabaseLoaded, setFinancialDatabaseLoaded] = useState(false);
   const [financialPersistenceMessage, setFinancialPersistenceMessage] = useState('جارٍ التحقق من مصدر البيانات المالية...');
   const [financialPersistenceVersion, setFinancialPersistenceVersion] = useState(0);
+  const financialRefreshControllerRef = React.useRef<AbortController | null>(null);
   type FinancialWriteMode = 'snapshot_read_only' | 'snapshot_write' | 'erp_integrated' | 'ledger_ready';
   type FinancialWriteModeReason =
     | 'deployment_locked'
@@ -802,6 +809,8 @@ const studentFeeWorkbookInputRef = React.useRef<HTMLInputElement | null>(null);
 
   // On mount, load database and sync state fully
   React.useEffect(() => {
+    const controller = new AbortController();
+    let active = true;
     const loadFinancialDb = async () => {
       try {
         // Both endpoints are server-side read-only paths. Run them together,
@@ -809,32 +818,56 @@ const studentFeeWorkbookInputRef = React.useRef<HTMLInputElement | null>(null);
         // operational context. A slow context lookup must not hide verified
         // invoices/receipts or make the screen look empty; it only keeps
         // writes blocked until the academic scope is confirmed.
-        const controller = new AbortController();
-        const requests = Promise.allSettled([
-          authenticatedRequest('/api/financial/database', {
-            headers: { 'Accept': 'application/json' },
-            cache: 'no-store',
-            signal: controller.signal
-          }),
-          authenticatedRequest('/api/financial/operational-context', {
-            headers: { 'Accept': 'application/json' },
-            cache: 'no-store',
-            signal: controller.signal
-          })
-        ] as const);
-        let timeoutId: number | undefined;
-        const timeout = new Promise<never>((_, reject) => {
-          timeoutId = window.setTimeout(() => {
-            controller.abort();
-            reject(new Error('انتهت مهلة الاتصال بالمصدر المالي.'));
-          }, FINANCIAL_READ_TIMEOUT_MS);
+        const { results, databasePayload, contextPayload: loadedContextPayload } = await retryTransientFinancialSourceRead(async (signal) => {
+          const requests = await Promise.allSettled([
+            authenticatedRequest('/api/financial/database', {
+              headers: { 'Accept': 'application/json' },
+              cache: 'no-store',
+              signal,
+            }),
+            authenticatedRequest('/api/financial/operational-context', {
+              headers: { 'Accept': 'application/json' },
+              cache: 'no-store',
+              signal,
+            })
+          ] as const);
+          const [databaseRequest, contextRequest] = requests;
+          if (databaseRequest.status === 'rejected') throw databaseRequest.reason;
+          const databasePayload = await databaseRequest.value.json().catch(error => {
+            if (isTransientFinancialSourceReadError(error)) throw error;
+            return {};
+          });
+          if (!databaseRequest.value.ok && isTransientFinancialSourceReadError({ status: databaseRequest.value.status })) {
+            throw createFinancialSourceReadHttpError(
+              databasePayload.message || `فشل تحميل المصدر المالي (${databaseRequest.value.status})`,
+              databaseRequest.value.status,
+            );
+          }
+          if (contextRequest.status === 'rejected' && isTransientFinancialSourceReadError(contextRequest.reason)) {
+            throw contextRequest.reason;
+          }
+          const contextPayload = contextRequest.status === 'fulfilled'
+            ? await contextRequest.value.json().catch(error => {
+              if (isTransientFinancialSourceReadError(error)) throw error;
+              return {};
+            })
+            : null;
+          if (contextRequest.status === 'fulfilled'
+            && !contextRequest.value.ok
+            && isTransientFinancialSourceReadError({ status: contextRequest.value.status })) {
+            throw createFinancialSourceReadHttpError(
+              contextPayload?.message || `تعذر تحميل السياق الدراسي (${contextRequest.value.status})`,
+              contextRequest.value.status,
+            );
+          }
+          return { results: requests, databasePayload, contextPayload };
+        }, {
+          attempts: 2,
+          timeoutMs: (FINANCIAL_READ_TIMEOUT_MS - FINANCIAL_READ_RETRY_DELAY_MS) / 2,
+          retryDelayMs: FINANCIAL_READ_RETRY_DELAY_MS,
+          signal: controller.signal,
         });
-        let results: Awaited<typeof requests>;
-        try {
-          results = await Promise.race([requests, timeout]);
-        } finally {
-          if (timeoutId !== undefined) window.clearTimeout(timeoutId);
-        }
+        if (!active) return;
         const [databaseResult, contextResult] = results;
         if (databaseResult.status !== 'fulfilled') {
           throw databaseResult.reason instanceof Error
@@ -842,7 +875,7 @@ const studentFeeWorkbookInputRef = React.useRef<HTMLInputElement | null>(null);
             : new Error('تعذر قراءة المصدر المالي المعتمد.');
         }
         const response = databaseResult.value;
-        const res = await response.json();
+        const res = databasePayload;
         if (!response.ok || !res.success) {
           throw new Error(res.message || `فشل تحميل المصدر المالي (${response.status})`);
         }
@@ -886,7 +919,7 @@ const studentFeeWorkbookInputRef = React.useRef<HTMLInputElement | null>(null);
         setFinancialPersistenceVersion(Number(res.meta?.version || 0));
 
         const contextResponse = contextResult.status === 'fulfilled' ? contextResult.value : null;
-        const contextPayload = contextResponse ? await contextResponse.json().catch(() => ({})) : {};
+        const contextPayload = loadedContextPayload || {};
         const contextIsReady = Boolean(contextResponse?.ok
           && contextPayload.success
           && contextPayload.data?.academicYearId
@@ -909,8 +942,11 @@ const studentFeeWorkbookInputRef = React.useRef<HTMLInputElement | null>(null);
             : 'المصدر المعتمد متاح ولا توجد حركات مالية مسجلة بعد.'
         );
       } catch (err: any) {
+        if (!active) return;
         setFinancialPersistence('blocked');
-        const detail = String(err?.message || '').trim();
+        const detail = err?.name === 'AbortError'
+          ? 'انتهت مهلة الاتصال بالمصدر المالي.'
+          : String(err?.message || '').trim();
         setFinancialPersistenceMessage(detail
           ? `تعذر التحقق من المصدر المالي (${detail}). تم تعطيل الحفظ والترحيل حمايةً للبيانات.`
           : 'تعذر التحقق من المصدر المالي. تم تعطيل الحفظ والترحيل حمايةً للبيانات.');
@@ -918,6 +954,11 @@ const studentFeeWorkbookInputRef = React.useRef<HTMLInputElement | null>(null);
       }
     };
     loadFinancialDb();
+    return () => {
+      active = false;
+      controller.abort();
+      financialRefreshControllerRef.current?.abort();
+    };
   }, []);
 
   React.useEffect(() => {
@@ -3814,32 +3855,45 @@ const studentFeeWorkbookInputRef = React.useRef<HTMLInputElement | null>(null);
     if (refreshInFlightRef.current) return;
     refreshInFlightRef.current = true;
     setRefreshing(true);
+    const controller = new AbortController();
+    financialRefreshControllerRef.current = controller;
     try {
-      const controller = new AbortController();
-      const requests = Promise.all([
-        authenticatedRequest('/api/financial/database', { headers: { 'Accept': 'application/json' }, cache: 'no-store', signal: controller.signal }),
-        authenticatedRequest('/api/financial/operational-context', { headers: { 'Accept': 'application/json' }, cache: 'no-store', signal: controller.signal })
-      ]);
-      let timeoutId: number | undefined;
-      const timeout = new Promise<never>((_, reject) => {
-        timeoutId = window.setTimeout(() => {
-          controller.abort();
-          reject(new Error('انتهت مهلة الاتصال بالمصدر المالي.'));
-        }, FINANCIAL_READ_TIMEOUT_MS);
+      const { response, contextResponse, res, contextResult } = await retryTransientFinancialSourceRead(async (signal) => {
+        const [response, contextResponse] = await Promise.all([
+          authenticatedRequest('/api/financial/database', {
+            headers: { 'Accept': 'application/json' }, cache: 'no-store', signal,
+          }),
+          authenticatedRequest('/api/financial/operational-context', {
+            headers: { 'Accept': 'application/json' }, cache: 'no-store', signal,
+          })
+        ]);
+        const res = await response.json().catch(error => {
+          if (isTransientFinancialSourceReadError(error)) throw error;
+          return {};
+        });
+        if (!response.ok || !res.success) {
+          throw createFinancialSourceReadHttpError(
+            res.message || 'تعذر تحميل البيانات المالية.',
+            response.status,
+          );
+        }
+        const contextResult = await contextResponse.json().catch(error => {
+          if (isTransientFinancialSourceReadError(error)) throw error;
+          return {};
+        });
+        if (!contextResponse.ok || !contextResult.success || !contextResult.data?.academicYearId || !contextResult.data?.academicPeriodId) {
+          throw createFinancialSourceReadHttpError(
+            contextResult.message || 'تعذر التحقق من السنة والفترة الدراسية النشطتين.',
+            contextResponse.status,
+          );
+        }
+        return { response, contextResponse, res, contextResult };
+      }, {
+        attempts: 2,
+        timeoutMs: (FINANCIAL_READ_TIMEOUT_MS - FINANCIAL_READ_RETRY_DELAY_MS) / 2,
+        retryDelayMs: FINANCIAL_READ_RETRY_DELAY_MS,
+        signal: controller.signal,
       });
-      let responses: Awaited<typeof requests>;
-      try {
-        responses = await Promise.race([requests, timeout]);
-      } finally {
-        if (timeoutId !== undefined) window.clearTimeout(timeoutId);
-      }
-      const [response, contextResponse] = responses;
-      const res = await response.json();
-      const contextResult = await contextResponse.json().catch(() => ({}));
-      if (!response.ok || !res.success) throw new Error(res.message || 'تعذر تحميل البيانات المالية');
-      if (!contextResponse.ok || !contextResult.success || !contextResult.data?.academicYearId || !contextResult.data?.academicPeriodId) {
-        throw new Error(contextResult.message || 'تعذر التحقق من السنة والفترة الدراسية النشطتين.');
-      }
       const refreshedWriteMode = String(res.meta?.writeMode || 'snapshot_read_only') as FinancialWriteMode;
       setFinancialWriteMode(['snapshot_write', 'erp_integrated', 'ledger_ready'].includes(refreshedWriteMode) ? refreshedWriteMode : 'snapshot_read_only');
       setFinancialWriteModeReason((res.meta?.writeModeReason || null) as FinancialWriteModeReason | null);
@@ -3868,15 +3922,22 @@ const studentFeeWorkbookInputRef = React.useRef<HTMLInputElement | null>(null);
       setFinancialPersistenceMessage('البيانات المالية محملة من المصدر المعتمد.');
       triggerNotification('تم تحديث البيانات المالية من المصدر المعتمد', 'success');
     } catch (error: any) {
+      if (controller.signal.aborted) return;
+      setFinancialWriteMode('snapshot_read_only');
       setFinancialPersistence('blocked');
-      const detail = String(error?.message || '').trim();
+      const detail = error?.name === 'AbortError'
+        ? 'انتهت مهلة الاتصال بالمصدر المالي.'
+        : String(error?.message || '').trim();
       setFinancialPersistenceMessage(detail
         ? `تعذر التحقق من المصدر المالي (${detail}). تم تعطيل الحفظ والترحيل حمايةً للبيانات.`
         : 'تعذر التحقق من المصدر المالي. تم تعطيل الحفظ والترحيل حمايةً للبيانات.');
       triggerNotification(`تعذر تحديث البيانات المالية: ${error.message || 'خطأ غير معروف'}`, 'warning');
     } finally {
+      if (financialRefreshControllerRef.current === controller) {
+        financialRefreshControllerRef.current = null;
+      }
       refreshInFlightRef.current = false;
-      setRefreshing(false);
+      if (!controller.signal.aborted) setRefreshing(false);
     }
   };
 
@@ -4742,10 +4803,10 @@ const studentFeeWorkbookInputRef = React.useRef<HTMLInputElement | null>(null);
         aria-label="استيراد الشيت الموحد المالي"
         onChange={(event) => { void handleStudentFeeWorkbookFileChange(event); }}
       />
-       <div id="student-financial-portal-layout" className="financial-workspace-layout grid grid-cols-1 lg:grid-cols-[minmax(0,1fr)_16.5rem] gap-4 w-full p-3 sm:p-4 text-right">
+      <div id="student-financial-portal-layout" className="financial-workspace-layout grid min-w-0 grid-cols-1 lg:grid-cols-[minmax(0,1fr)_16.5rem] gap-4 w-full p-3 sm:p-4 text-right">
       
       {/* LEFT AREA: Content Window based on nested state */}
-      <div id="financial-content-viewport" className="financial-content-viewport flex-1 bg-gradient-to-b from-[#fffefc] via-[#fbf8f0] to-[#f5eeea] border-2 border-[#d4af37]/30 hover:border-[#d4af37] rounded-3xl p-4 sm:p-5 shadow-md transition-colors duration-200 overflow-hidden min-h-[550px] p-6">
+      <div id="financial-content-viewport" className="financial-content-viewport min-w-0 flex-1 bg-gradient-to-b from-[#fffefc] via-[#fbf8f0] to-[#f5eeea] border-2 border-[#d4af37]/30 hover:border-[#d4af37] rounded-3xl p-3 sm:p-4 shadow-md transition-colors duration-200 overflow-hidden min-h-[550px]">
         
         {/* VIEW 1: لوحة التحكم المالية والتحليلات */}
         {activeSubSec === 'analytics' && (
@@ -7636,7 +7697,7 @@ const studentFeeWorkbookInputRef = React.useRef<HTMLInputElement | null>(null);
                 <button
                   key={item.id}
                   onClick={() => setActiveSubSec(item.id)}
-                    className={`financial-sidebar-button w-full flex items-center justify-between px-4 h-[52px] text-xs font-bold text-right transition-all duration-200 select-none cursor-pointer ${
+                    className={`financial-sidebar-button w-full flex items-center justify-between px-4 h-11 text-xs font-bold text-right transition-all duration-200 select-none cursor-pointer ${
                     isActive 
                       ? 'financial-sidebar-button-active text-white' 
                       : 'text-[#e8d7ad] hover:text-white'
